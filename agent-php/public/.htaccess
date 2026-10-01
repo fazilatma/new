@@ -1,0 +1,77 @@
+# Arena Coding Agent — Apache / LiteSpeed front-controller rules.
+# Everything that is not a real file in public/ is routed to index.php.
+#
+# If your host has NO mod_rewrite, the app still works: it understands
+#   https://example.com/agent/index.php/api/health      (PATH_INFO)
+#   https://example.com/agent/index.php?__path=/api/health
+# and the served HTML is told which prefix to use, so the UI adapts itself.
+
+# Let /index.php/api/... reach PHP (some hosts default this to Off).
+<IfModule mod_env.c>
+    SetEnv HTTP_MOD_REWRITE On
+</IfModule>
+AcceptPathInfo On
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Required by a number of shared hosts before RewriteRule will fire.
+    # Uncomment only if you get a 500 without it AND your host allows it.
+    # Options +FollowSymLinks
+
+    # Installed in a subdirectory? Set it here, e.g. RewriteBase /agent/
+    # RewriteBase /
+
+    # Never rewrite real files (index.html, assets, ...)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
+    # Pass the Authorization header through to PHP (CGI/FastCGI drop it).
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# No mod_rewrite: mod_dir can still funnel unknown URLs to the front
+# controller. The path must be the URL of index.php, so adjust it when the
+# app lives in a subdirectory (e.g. /agent/index.php).
+<IfModule !mod_rewrite.c>
+    <IfModule mod_dir.c>
+        FallbackResource /index.php
+    </IfModule>
+</IfModule>
+
+<IfModule mod_headers.c>
+    # SSE must not be buffered or compressed by the server.
+    <FilesMatch "index\.php$">
+        Header set X-Accel-Buffering "no"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+    SetEnvIfNoCase Request_URI "/api/chat/stream" no-gzip dont-vary
+</IfModule>
+
+# Long agent runs and big catalog/file uploads.
+<IfModule mod_php.c>
+    php_value max_execution_time 0
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value output_buffering 0
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+</IfModule>
+<IfModule mod_php8.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+</IfModule>
+<IfModule lsapi_module>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+</IfModule>
+
+DirectoryIndex index.php index.html
+Options -Indexes

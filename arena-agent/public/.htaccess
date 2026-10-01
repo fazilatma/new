@@ -1,0 +1,20 @@
+# Optional. The app works without this file: every URL it builds is of the
+# form index.php?p=/path, which needs no rewriting at all.
+#
+# If mod_rewrite happens to be available, this turns on the prettier
+# /api/health form as well. If it is not, Apache ignores the block and
+# nothing breaks.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Never serve the state directories, whatever the install layout.
+RedirectMatch 404 /\.(env|git)

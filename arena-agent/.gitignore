@@ -1,0 +1,10 @@
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/master.key
+storage/*
+!storage/.gitkeep
+.env
+tools/node_modules
+.tmp-git-test/
+.devstate/

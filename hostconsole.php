@@ -7,7 +7,10 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.3');
+define('WCP_VERSION', '2.19.1');
+// نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
+define('WCP_EDITION', 'hostconsole');
+define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -199,18 +202,12 @@ function sh_ok($cmd, &$code = null) {
     $o=[]; exec($cmd.' 2>/dev/null',$o,$code); return implode("\n",$o);
 }
 function which($bin) { return trim(sh_ok('command -v '.esc($bin))) !== ''; }
-function which_path(string $bin): string {
-    if ($bin === '') return '';
-    if (($bin[0] === '/' || $bin[0] === '.') && is_executable($bin) && !is_dir($bin)) return $bin;
-    $out = trim((string)sh_ok('command -v ' . esc($bin)));
-    return ($out !== '' && is_executable($out) && !is_dir($out)) ? $out : '';
-}
 function mask_url($u) { return preg_replace('~//([^:@/]+):([^@/]+)@~','//$1:***@',(string)$u); }
 function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon'); wcp_put_contents(DATA_DIR.'/activity.log','['.date('c')."] $who | $m\n",true,FILE_APPEND); }
 function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
 function cfg(): array {
     if (!empty($GLOBALS['__CFG'])) return $GLOBALS['__CFG'];
-    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page'];
+    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>default_project_root(),'fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34,'proxy_mode'=>'auto','proxy_cf_url'=>'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>'','base_domain'=>'','domain_mode'=>'auto','cf_tunnel'=>'wcp-tunnel','gw_enabled'=>true,'gw_token'=>'','gw_allow_private'=>false,'gw_forward_auth'=>false,'gw_allow_hosts'=>'','update_repo'=>'fazilatma/new','update_branch'=>'main','update_token'=>''];
     $j=json_decode((string)@file_get_contents(DATA_DIR.'/config.json'),true); if(is_array($j))$d=array_merge($d,$j); return $GLOBALS['__CFG']=$d;
 }
 function cfg_save(array $new) {
@@ -285,48 +282,6 @@ function wcp_php_cli(): string {
     }
     throw new RuntimeException('No usable PHP CLI with exec/proc_open was found. Install php-cli, or configure an absolute WCP_PHP_CLI path. PHP-FPM/CGI is not PHP CLI.');
 }
-function wcp_find_best_python(): array {
-    $candidates = [
-        'python3.12', '/usr/local/bin/python3.12', '/usr/bin/python3.12',
-        'python3.11', '/usr/local/bin/python3.11', '/usr/bin/python3.11', '/opt/alt/python311/bin/python3', '/opt/cpanel/ea-python311/root/usr/bin/python3',
-        'python3.10', '/usr/local/bin/python3.10', '/usr/bin/python3.10', '/opt/alt/python310/bin/python3', '/opt/cpanel/ea-python310/root/usr/bin/python3',
-        'python3.9',  '/usr/local/bin/python3.9',  '/usr/bin/python3.9',  '/opt/alt/python39/bin/python3',  '/opt/cpanel/ea-python39/root/usr/bin/python3',
-        'python3.8',  '/usr/local/bin/python3.8',  '/usr/bin/python3.8',  '/opt/alt/python38/bin/python3',
-        'python3',    '/usr/local/bin/python3',    '/usr/bin/python3',
-        'python',     '/usr/local/bin/python',     '/usr/bin/python'
-    ];
-    $found = [];
-    foreach ($candidates as $bin) {
-        $path = which_path($bin);
-        if ($path !== '' && !isset($found[$path])) {
-            $verStr = trim((string)sh_ok(esc($path) . ' -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\")" 2>/dev/null'));
-            if ($verStr === '') {
-                $rawVer = trim((string)sh_ok(esc($path) . ' --version 2>&1'));
-                if (preg_match('/Python\s+([0-9.]+)/i', $rawVer, $vm)) {
-                    $verStr = $vm[1];
-                }
-            }
-            if ($verStr !== '') {
-                $parts = explode('.', $verStr);
-                $major = (int)($parts[0] ?? 0);
-                $minor = (int)($parts[1] ?? 0);
-                $found[$path] = [
-                    'path' => $path,
-                    'version' => $verStr,
-                    'major' => $major,
-                    'minor' => $minor,
-                    'is_modern' => ($major >= 3 && $minor >= 9)
-                ];
-            }
-        }
-    }
-    uasort($found, function($a, $b) {
-        if ($a['major'] !== $b['major']) return $b['major'] <=> $a['major'];
-        return $b['minor'] <=> $a['minor'];
-    });
-    return $found;
-}
-
 function wcp_job_alive(array $job): bool {
     $pid = (int)($job['pid'] ?? 0);
     if (!job_pid_alive($pid)) return false;
@@ -759,7 +714,7 @@ function job_stop(array $job) {
     if (is_file($childPidFile)) {
         $childPid = (int)trim((string)@file_get_contents($childPidFile));
     }
-    
+
     // Kill child process tree first
     if ($childPid > 1) {
         wcp_kill_pid_tree($childPid, 15);
@@ -1011,8 +966,30 @@ function gh_repo_branches(string $owner,string $repo,string $token='',?callable 
 function proj_scraper4_runtime(): array {
     return json_decode('{"type":"node","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","port":"8790","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"},"runtime_profile":"scraper4-local-deployer"}',true);
 }
+function proj_openhands_runtime(): array {
+    return [
+        'type'=>'node',
+        'node_version'=>'24',
+        'install_cmd'=>'npm install --no-audit --no-fund',
+        'build_cmd'=>'',
+        'start_cmd'=>'npm start',
+        'port'=>'8000',
+        'auto_start'=>false,
+        'is_daemon'=>true,
+        'env'=>[
+            'NODE_ENV'=>'production',
+            'AGENT_CANVAS_PORT'=>'8000',
+            'PORT'=>'8000'
+        ],
+        'runtime_profile'=>'openhands-agent-canvas'
+    ];
+}
 function gh_apply_runtime_profile(array $app,array $pkg,bool $hasLauncher): array {
-    if($hasLauncher&&($pkg['name']??'')==='scraper4-cloudflare'&&trim((string)($pkg['scripts']['deployer:ui']??''))==='node scripts/local-deployer-ui.mjs'){
+    if(($pkg['name']??'')==='openhands-agent-canvas-host' && in_array('@openhands/agent-canvas', array_keys(array_merge($pkg['dependencies']??[],$pkg['devDependencies']??[])), true)){
+        $app=array_merge($app,proj_openhands_runtime());
+        $app['name']=$pkg['name']??$app['name'];
+        $app['framework']='OpenHands Agent Canvas';
+    } elseif($hasLauncher&&($pkg['name']??'')==='scraper4-cloudflare'&&trim((string)($pkg['scripts']['deployer:ui']??''))==='node scripts/local-deployer-ui.mjs'){
         $app=array_merge($app,proj_scraper4_runtime());$app['framework']='Scraper4 Node + Local Deployer (8790 / 3000)';
     }
     return $app;
@@ -1175,6 +1152,228 @@ function proj_resolve_deploy_path(array $p, ?array $existing = null): string {
     if (!is_dir($path)) @mkdir($path, 0777, true);
     return safe_path($path);
 }
+function wcp_account_home(): string {
+    $uid = function_exists('posix_geteuid') ? posix_geteuid() : null;
+    if ($uid !== null && function_exists('posix_getpwuid')) {
+        $pw = @posix_getpwuid($uid);
+        if (is_array($pw) && !empty($pw['dir']) && $pw['dir'][0] === '/') return rtrim($pw['dir'], '/');
+    }
+    $home = trim((string)getenv('HOME'));
+    return ($home !== '' && $home[0] === '/') ? rtrim($home, '/') : '';
+}
+/** همهٔ نسخه‌های Node نصب‌شده در NVM حساب کاربری، از جدید به قدیم. */
+function wcp_nvm_versions(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    $home = wcp_account_home();
+    if ($home === '' || !is_dir($home . '/.nvm/versions/node')) return $cache;
+    foreach (glob($home . '/.nvm/versions/node/v*/bin') ?: [] as $dir) {
+        if (!is_dir($dir) || !is_executable($dir . '/node') || !is_executable($dir . '/npm')) continue;
+        $ver = ltrim(basename(dirname($dir)), 'vV');
+        if (!preg_match('/^\d+(\.\d+){0,2}/', $ver)) continue;
+        $parts = array_map('intval', explode('.', $ver));
+        $cache[] = ['version' => $ver, 'bin' => $dir,
+                    'major' => $parts[0] ?? 0, 'minor' => $parts[1] ?? 0, 'patch' => $parts[2] ?? 0,
+                    'node_sqlite' => wcp_node_has_sqlite($ver)];
+    }
+    usort($cache, function($a, $b) { return version_compare($b['version'], $a['version']); });
+    return $cache;
+}
+/** node:sqlite بدون فلگ: از 22.13 تا قبل از 23، و از 23.4 به بعد (nodejs/node#55890). */
+function wcp_node_has_sqlite(string $ver): bool {
+    $ver = ltrim(trim($ver), 'vV');
+    if ($ver === '') return false;
+    if (version_compare($ver, '23.0.0', '<')) return version_compare($ver, '22.13.0', '>=');
+    return version_compare($ver, '23.4.0', '>=');
+}
+/** نسخهٔ پیش‌فرض ثبت‌شده در NVM (alias/default) را به یک نسخهٔ واقعی نصب‌شده تبدیل می‌کند. */
+function wcp_nvm_default_alias(): string {
+    $home = wcp_account_home();
+    if ($home === '') return '';
+    $file = $home . '/.nvm/alias/default';
+    $want = is_file($file) ? trim((string)@file_get_contents($file)) : '';
+    if ($want === '') return '';
+    if (strpos($want, 'lts/') === 0 || $want === 'node' || $want === 'stable') {
+        $lts = $home . '/.nvm/alias/' . $want;
+        $want = is_file($lts) ? trim((string)@file_get_contents($lts)) : '';
+    }
+    return ltrim($want, 'vV');
+}
+/**
+ * مسیر bin نسخهٔ Node انتخاب‌شده.
+ * ترتیب: نسخهٔ خواسته‌شدهٔ پروژه → پیش‌فرض کلی کنسول → alias default در NVM → جدیدترین نسخهٔ نصب‌شده.
+ * (قبلاً v20 هاردکد بود و پروژه‌ها هرچه نصب می‌کردی روی Node 20 می‌ماندند.)
+ */
+function wcp_nvm_node_bin(string $want = ''): string {
+    $all = wcp_nvm_versions();
+    if (!$all) return '';
+    $pick = function(string $w) use ($all) {
+        $w = ltrim(trim($w), 'vV');
+        if ($w === '') return '';
+        foreach ($all as $v) {
+            if ($v['version'] === $w) return $v['bin'];
+            if (strpos($v['version'], $w . '.') === 0) return $v['bin'];  // «22» یعنی جدیدترین 22.x
+        }
+        return '';
+    };
+    foreach ([$want, (string)(cfg()['node_version'] ?? ''), wcp_nvm_default_alias()] as $candidate) {
+        $bin = $pick((string)$candidate);
+        if ($bin !== '') return $bin;
+    }
+    return $all[0]['bin'];
+}
+function wcp_node_path(string $want = ''): string {
+    $bin = wcp_nvm_node_bin($want);
+    if ($bin !== '') return $bin . '/node';
+    $path = trim(sh_ok('command -v node'));
+    return $path !== '' ? $path : '';
+}
+function wcp_node_version_of(string $want = ''): string {
+    $bin = wcp_nvm_node_bin($want);
+    if ($bin !== '') { foreach (wcp_nvm_versions() as $v) if ($v['bin'] === $bin) return $v['version']; }
+    return ltrim(trim((string)sh_ok('node -v 2>/dev/null')), 'vV');
+}
+
+/* ============================================================
+ *  Python runtime resolution (shared hosting, no root)
+ *  Mirrors the nvm/Node helpers above. The system python3 on
+ *  CentOS 7 / CloudLinux is 3.6, which cannot even parse modern
+ *  syntax, and there is no sudo to install packages globally.
+ *  So: resolve an interpreter via uv, and run out of a per-project
+ *  virtualenv that we create and populate ourselves.
+ * ============================================================ */
+
+function wcp_uv_bin(): string {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    $cands = [];
+    $home = wcp_account_home();
+    if ($home !== '') { $cands[] = $home . '/.local/bin/uv'; $cands[] = $home . '/.cargo/bin/uv'; }
+    $cands[] = '/usr/local/bin/uv';
+    $cands[] = '/usr/bin/uv';
+    foreach ($cands as $c) { if (@is_file($c) && @is_executable($c)) return $cached = $c; }
+    $w = trim((string)@shell_exec('command -v uv 2>/dev/null'));
+    return $cached = ($w !== '' && @is_file($w)) ? $w : '';
+}
+
+/** Interpreter inside an existing project virtualenv, if any. */
+function wcp_py_venv_python(string $dir): string {
+    if ($dir === '') return '';
+    $dir = rtrim($dir, '/');
+    foreach (['.venv', 'venv', 'env'] as $d) {
+        $p = $dir . '/' . $d . '/bin/python';
+        if (@is_file($p) && @is_executable($p)) return $p;
+    }
+    return '';
+}
+
+/** requirements.txt in the project root, or one level down. */
+function wcp_py_requirements(string $dir): string {
+    if ($dir === '') return '';
+    $dir = rtrim($dir, '/');
+    foreach (['/requirements.txt', '/requirements/base.txt'] as $rel) {
+        if (@is_file($dir . $rel)) return $dir . $rel;
+    }
+    foreach (glob($dir . '/*/requirements.txt') ?: [] as $g) { if (@is_file($g)) return $g; }
+    return '';
+}
+
+/** Python versions uv has already downloaded, newest first. */
+function wcp_uv_pythons(): array {
+    $uv = wcp_uv_bin();
+    if ($uv === '') return [];
+    $out = (string)@shell_exec(escapeshellarg($uv) . ' python list --only-installed 2>/dev/null');
+    $vs = [];
+    foreach (preg_split('/\R/', $out) as $line) {
+        if (preg_match('/(\d+\.\d+\.\d+)/', $line, $m)) $vs[$m[1]] = true;
+    }
+    $vs = array_keys($vs);
+    usort($vs, function ($a, $b) { return version_compare($b, $a); });
+    return $vs;
+}
+
+/**
+ * Resolution order, same shape as wcp_node_version_of():
+ *   project python_version -> console default -> newest uv-managed -> ''
+ */
+function wcp_python_version_of(string $want = ''): string {
+    foreach ([$want, (string)(cfg()['python_version'] ?? '')] as $cand) {
+        $cand = trim($cand);
+        if ($cand !== '' && preg_match('/^\d+(\.\d+){0,2}$/', $cand)) return $cand;
+    }
+    $inst = wcp_uv_pythons();
+    return !empty($inst) ? $inst[0] : '';
+}
+
+/**
+ * Make sure the project has a usable virtualenv and that its
+ * requirements are installed. Returns the interpreter path, or ''
+ * when nothing better than the system python could be arranged.
+ * Safe to call on every start: uv re-checks an up-to-date env in ms.
+ */
+function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = true): string {
+    $dir = rtrim($dir, '/');
+    if ($dir === '' || !@is_dir($dir)) return '';
+    $log = function ($m) { if (function_exists('cli_log')) cli_log($m); };
+    $uv  = wcp_uv_bin();
+    $py  = wcp_py_venv_python($dir);
+
+    if ($py === '' && $uv !== '') {
+        $ver = wcp_python_version_of($want);
+        $log('[python] No virtualenv in project. Creating one with uv' . ($ver !== '' ? " (Python {$ver})" : '') . '...');
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv) . ' venv --seed'
+             . ($ver !== '' ? ' -p ' . escapeshellarg($ver) : '') . ' .venv 2>&1';
+        $rc = null;
+        if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
+        $py = wcp_py_venv_python($dir);
+        if ($py === '') $log('[python] uv could not create a virtualenv; falling back to the system interpreter.');
+    }
+    if ($py === '') return '';
+
+    if ($installDeps) {
+        $req = wcp_py_requirements($dir);
+        if ($req !== '') {
+            $log('[python] Syncing dependencies from ' . basename(dirname($req)) . '/' . basename($req) . '...');
+            $rc = null;
+            // -r before -p: the launcher's own start-command regex latches onto
+            // the first "python <word>" it sees, and --python would feed it a
+            // bogus target. See CHANGELOG 2.16.0.
+            $cmd = $uv !== ''
+                ? 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv)
+                  . ' pip install -r ' . escapeshellarg($req) . ' -p ' . escapeshellarg($py) . ' 2>&1'
+                : 'cd ' . escapeshellarg($dir) . ' && ' . escapeshellarg($py)
+                  . ' -m pip install -r ' . escapeshellarg($req) . ' 2>&1';
+            if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
+            if ($rc !== null && $rc !== 0) {
+                $log('[python] Dependency sync reported errors (exit ' . $rc . '). Starting anyway; see the output above for the offending package.');
+            }
+        }
+    }
+    return $py;
+}
+
+/** Install packages into the project venv. No sudo: it does not exist here. */
+function wcp_py_install_packages(string $dir, array $pkgs, &$rc = null): string {
+    $rc = 1;
+    if (empty($pkgs)) return '';
+    $py = wcp_py_ensure_venv($dir, '', false);
+    $uv = wcp_uv_bin();
+    $args = implode(' ', array_map('escapeshellarg', $pkgs));
+    if ($py !== '' && $uv !== '') {
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv)
+             . ' pip install ' . $args . ' -p ' . escapeshellarg($py) . ' 2>&1';
+    } elseif ($py !== '') {
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && ' . escapeshellarg($py) . ' -m pip install ' . $args . ' 2>&1';
+    } else {
+        // Last resort: user-site install against whatever python3 exists.
+        // --break-system-packages only exists in pip >= 23.0, so probe first.
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && { BSP=""; python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages && BSP=--break-system-packages; '
+             . 'python3 -m pip install --user $BSP ' . $args . '; } 2>&1';
+    }
+    return function_exists('cli_run') ? cli_run($cmd, $rc) : (string)@shell_exec($cmd);
+}
+
 function proj_runtime_env(array $p): array {
     $base = DATA_DIR . '/runtime/' . gh_slug((string)$p['id']);
     foreach ([$base, $base . '/home', $base . '/cache', $base . '/tmp'] as $dir) {
@@ -1183,6 +1382,15 @@ function proj_runtime_env(array $p): array {
         }
     }
     $defaults = ['XDG_CACHE_HOME' => $base . '/cache', 'npm_config_cache' => $base . '/cache/npm', 'PIP_CACHE_DIR' => $base . '/cache/pip', 'TMPDIR' => $base . '/tmp'];
+    // Shared-hosting Node.js support: prefer the account's NVM installation.
+    $nvmHome = wcp_account_home();
+    $nvmDir = $nvmHome !== '' ? $nvmHome . '/.nvm' : '';
+    $nodeBin = wcp_nvm_node_bin((string)($p['node_version'] ?? ''));
+    if ($nvmDir !== '' && is_dir($nvmDir)) $defaults['NVM_DIR'] = $nvmDir;
+    if ($nodeBin !== '') {
+        $defaults['NVM_BIN'] = $nodeBin;
+        $defaults['PATH'] = $nodeBin . ':/usr/local/bin:/usr/bin:/bin:${HOME}/.local/bin:' . (string)getenv('PATH');
+    }
     if (strpos((string)($p['deploy_path'] ?? ''), rtrim(norm_path((string)cfg()['project_root']), '/') . '/') === 0) $defaults['HOME'] = $base . '/home';
     $port = !empty($p['port']) ? (string)$p['port'] : '8000';
     $defaults['PORT'] = $port;
@@ -1194,23 +1402,10 @@ function proj_runtime_env(array $p): array {
     $defaults['UVICORN_PORT'] = $port;
     $defaults['WEB_PORT'] = $port;
     $defaults['PORT_NUMBER'] = $port;
-    $extraPaths = [
-        '/usr/local/bin',
-        '/opt/alt/python312/bin',
-        '/opt/alt/python311/bin',
-        '/opt/alt/python310/bin',
-        '/opt/alt/python39/bin',
-        '/opt/cpanel/ea-python312/root/usr/bin',
-        '/opt/cpanel/ea-python311/root/usr/bin',
-        '/opt/cpanel/ea-python310/root/usr/bin',
-        '/opt/cpanel/ea-python39/root/usr/bin',
-        ($defaults['HOME'] ?? '') . '/.local/bin',
-    ];
-    $currentPath = (string)getenv('PATH');
-    $validExtra = array_filter($extraPaths, fn($d) => $d !== '' && @is_dir($d));
-    if (!empty($validExtra)) {
-        $defaults['PATH'] = implode(':', $validExtra) . ($currentPath !== '' ? ':' . $currentPath : '');
-    }
+    // Bind address: 0.0.0.0 makes the port reachable from outside; 127.0.0.1 when a reverse-proxied domain is used.
+    $bind = trim((string)($p['bind_host'] ?? ''));
+    if ($bind === '') $bind = dom_enabled($p) ? '127.0.0.1' : '0.0.0.0';
+    foreach (['HOST','BIND_HOST','LISTEN_HOST','SERVER_HOST','APP_HOST','SCRAPER_BIND_HOST','DEPLOYER_UI_HOST','UVICORN_HOST','FLASK_RUN_HOST'] as $hk) $defaults[$hk] = $bind;
     if (isset($p['env']['NPM_CONFIG_CACHE'])) unset($defaults['npm_config_cache']);
     return array_merge($defaults, $p['env'] ?? []);
 }
@@ -1220,6 +1415,786 @@ function proj_empty_location(string $path): bool {
     if(!file_exists($path)){for($parent=dirname($path);!file_exists($parent)&&$parent!=='/';$parent=dirname($parent)){}return is_dir($parent)&&is_readable($parent)&&is_executable($parent);}
     if(!is_dir($path)||!is_readable($path))return false;
     $files=@scandir($path);return is_array($files)&&count(array_diff($files,['.','..']))===0;
+}
+
+/* =====================================================================
+ * 🌐 انتشار پروژه روی دامنه/ساب‌دامین به‌جای پورت (Domain Publishing)
+ * ---------------------------------------------------------------------
+ * روی هاست اشتراکی فقط پورت‌های 80/443 از بیرون باز هستند؛ پس اپ Node/Python
+ * که روی 127.0.0.1:3000 گوش می‌دهد از بیرون در دسترس نیست. این ماژول یک
+ * Reverse-Proxy می‌سازد تا همان اپ روی https://app.example.com سرو شود.
+ * حالت‌ها: htaccess (mod_proxy) · phpproxy (همه‌جا کار می‌کند) ·
+ *          apache vhost · nginx vhost · cloudflared tunnel
+ * ===================================================================== */
+define('DOM_MODES', ['auto','htaccess','phpproxy','apache','nginx','cloudflared','manual']);
+
+function dom_marker(string $id, bool $end = false): string {
+    return ($end ? '# <<< WCP-DOMAIN:' : '# >>> WCP-DOMAIN:') . preg_replace('/[^A-Za-z0-9_\-]/', '', $id) . ($end ? ' <<<' : ' >>>');
+}
+function dom_norm_domain(string $d): string {
+    $d = strtolower(trim($d));
+    $d = preg_replace('~^[a-z]+://~', '', $d);
+    $d = explode('/', $d)[0];
+    $d = explode(':', $d)[0];
+    $d = rtrim($d, '.');
+    if ($d === '') return '';
+    if (preg_match('/[^\x20-\x7E]/', $d) && function_exists('idn_to_ascii')) {
+        $p = @idn_to_ascii($d, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+        if (is_string($p) && $p !== '') $d = $p;
+    }
+    if (!preg_match('~^(?=.{1,253}$)([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$~', $d)) {
+        throw new RuntimeException('دامنه نامعتبر است: ' . $d);
+    }
+    return $d;
+}
+function dom_norm_path(string $p): string {
+    $p = trim($p);
+    if ($p === '' || $p === '/') return '/';
+    $p = '/' . trim($p, '/');
+    if (!preg_match('#^/[A-Za-z0-9._~/-]{0,120}$#', $p) || strpos($p, '..') !== false) {
+        throw new RuntimeException('مسیر نصب (Mount Path) نامعتبر است: ' . $p);
+    }
+    return $p;
+}
+function dom_expand_home(string $path): string {
+    $path = trim($path);
+    if ($path === '') return '';
+    if ($path === '~' || strpos($path, '~/') === 0) { $h = wcp_account_home(); if ($h !== '') $path = $h . substr($path, 1); }
+    return $path;
+}
+function dom_enabled(array $p): bool { return !empty($p['domain_enabled']) && trim((string)($p['domain'] ?? '')) !== ''; }
+function dom_mount_path(array $p): string { return dom_norm_path((string)($p['domain_path'] ?? '/')); }
+function dom_backend_port(array $p): int {
+    $port = (int)($p['port'] ?? 0);
+    if ($port < 1 || $port > 65535) throw new RuntimeException('پورت داخلی پروژه تعیین نشده است؛ ابتدا فیلد «پورت» را پر کنید.');
+    return $port;
+}
+function dom_backend_host(array $p): string {
+    $h = trim((string)($p['bind_host'] ?? '127.0.0.1'));
+    if ($h === '' || $h === '0.0.0.0' || $h === '::' || strtolower($h) === 'localhost') $h = '127.0.0.1';
+    if (!preg_match('~^[a-zA-Z0-9.\-]{1,64}$~', $h)) $h = '127.0.0.1';
+    return $h;
+}
+function dom_kind(array $p): string {
+    $k = trim((string)($p['domain_kind'] ?? ''));
+    if (in_array($k, ['subdomain', 'path'], true)) return $k;
+    return dom_mount_path($p) !== '/' ? 'path' : 'subdomain';
+}
+// نام اولین پوشه روی دامنه؛ مثلاً /app یا /shop/api -> app / shop
+function dom_path_segment(array $p): string {
+    $seg = trim(dom_mount_path($p), '/');
+    if ($seg === '') return '';
+    return explode('/', $seg)[0];
+}
+function dom_parent_htaccess(array $p): string {
+    return rtrim(dom_web_root(), '/') . '/.htaccess';
+}
+// در حالت پوشه، قوانین catch-all وردپرس/لاراول ریشه می‌توانند /app را قبل از ما بقاپند.
+function dom_path_exclusion_body(array $p): string {
+    $seg = dom_path_segment($p);
+    if ($seg === '') return '';
+    $id = (string)$p['id'] . '-root';
+    return dom_marker($id) . "\n"
+        . "# پوشهٔ " . $seg . " توسط وب‌کنسول پروکسی می‌شود؛ قوانین بازنویسی سایت اصلی نباید آن را بگیرند.\n"
+        . "<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteRule ^" . $seg . "(/|$) - [L]\n</IfModule>\n"
+        . dom_marker($id, true) . "\n";
+}
+function dom_parent_conflict(array $p): array {
+    $out = ['applies' => false, 'file' => '', 'exists' => false, 'writable' => false,
+            'catch_all' => false, 'protected' => false, 'segment' => '', 'snippet' => ''];
+    if (dom_kind($p) !== 'path') return $out;
+    $seg = dom_path_segment($p);
+    if ($seg === '') return $out;
+    $file = dom_parent_htaccess($p);
+    $out['applies'] = true; $out['file'] = $file; $out['segment'] = $seg;
+    $out['snippet'] = dom_path_exclusion_body($p);
+    $out['exists'] = is_file($file);
+    $out['writable'] = $out['exists'] ? is_writable($file) : wcp_is_dir_writable(dirname($file));
+    if (!$out['exists']) return $out;
+    $body = (string)@file_get_contents($file);
+    $out['protected'] = strpos($body, dom_marker((string)$p['id'] . '-root')) !== false;
+    // قوانین فراگیری که همه چیز را به index.php می‌فرستند (وردپرس، لاراول، جوملا…)
+    $out['catch_all'] = (bool)preg_match('~^\s*RewriteRule\s+\S+\s+(/?index\.php|/?public/)~mi', $body);
+    return $out;
+}
+function dom_fix_parent(array $p): array {
+    $c = dom_parent_conflict($p);
+    if (!$c['applies']) throw new RuntimeException('این پروژه در حالت «پوشه روی دامنه» نیست.');
+    if (!$c['writable']) throw new RuntimeException('فایل .htaccess ریشه قابل نوشتن نیست: ' . $c['file']);
+    $old = is_file($c['file']) ? (string)@file_get_contents($c['file']) : '';
+    if ($old !== '' && !is_file($c['file'] . '.wcp-bak')) @copy($c['file'], $c['file'] . '.wcp-bak');
+    $new = dom_merge_block($old, (string)$p['id'] . '-root', dom_path_exclusion_body($p));
+    if (!wcp_put_contents($c['file'], $new)) throw new RuntimeException('نوشتن .htaccess ریشه ناموفق بود');
+    act_log('domain parent-exclusion ' . $c['segment'] . ' project=' . $p['id']);
+    return ['file' => $c['file'], 'segment' => $c['segment'], 'protected' => true];
+}
+function dom_public_url(array $p): string {
+    if (!dom_enabled($p)) return '';
+    try { $d = dom_norm_domain((string)$p['domain']); } catch (Throwable $e) { return ''; }
+    $path = dom_mount_path($p);
+    $scheme = empty($p['domain_https']) ? 'http' : 'https';
+    return $scheme . '://' . $d . ($path === '/' ? '/' : $path . '/');
+}
+
+/* ---------- محل ریشه وب (Document Root) ---------- */
+function dom_default_web_root(): string {
+    $cands = [];
+    $doc = trim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    if ($doc !== '') $cands[] = rtrim($doc, '/');
+    $home = wcp_account_home();
+    if ($home !== '') foreach (['/public_html', '/www', '/htdocs', '/domains', '/web'] as $s) $cands[] = $home . $s;
+    foreach (['/var/www/html', '/var/www', '/usr/share/nginx/html', '/srv/http'] as $s) $cands[] = $s;
+    foreach ($cands as $c) if ($c !== '' && is_dir($c)) return rtrim($c, '/');
+    return $home !== '' ? $home . '/public_html' : '/var/www/html';
+}
+function dom_web_root(): string {
+    $v = dom_expand_home((string)(cfg()['web_root'] ?? ''));
+    return $v !== '' ? rtrim(norm_path($v), '/') : dom_default_web_root();
+}
+function dom_docroot(array $p): string {
+    $explicit = dom_expand_home((string)($p['domain_docroot'] ?? ''));
+    if ($explicit !== '') return rtrim(norm_path($explicit), '/');
+    $root = dom_web_root();
+    $path = dom_mount_path($p);
+    if ($path !== '/') return rtrim($root, '/') . $path;
+    $domain = dom_norm_domain((string)($p['domain'] ?? ''));
+    $base = strtolower(trim((string)(cfg()['base_domain'] ?? '')));
+    $label = $domain;
+    if ($base !== '' && $domain !== $base && substr($domain, -strlen('.' . $base)) === '.' . $base) {
+        $label = substr($domain, 0, -strlen('.' . $base));
+    }
+    $home = wcp_account_home();
+    $cands = [];
+    if ($home !== '') {
+        $cands[] = $home . '/domains/' . $domain . '/public_html';  // DirectAdmin
+        $cands[] = $home . '/public_html/' . $label;                // cPanel
+        $cands[] = $home . '/' . $domain;                           // Plesk-ish
+    }
+    $cands[] = rtrim($root, '/') . '/' . $label;
+    if ($base !== '' && $domain === $base) array_unshift($cands, rtrim($root, '/'));
+    foreach ($cands as $c) if (is_dir($c)) return rtrim($c, '/');
+    return rtrim($root, '/') . '/' . $label;
+}
+
+/* ---------- تشخیص امکانات سرور ---------- */
+function dom_apache_modules(): string {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = '';
+    foreach (['apache2ctl -M', 'apachectl -M', 'httpd -M'] as $c) { $o = sh_ok($c); if (trim($o) !== '') { $out = $o; break; } }
+    if (trim($out) === '') {
+        foreach (['/etc/apache2/mods-enabled', '/etc/httpd/conf.modules.d'] as $d) {
+            if (is_dir($d)) $out .= "\n" . implode("\n", array_map('basename', glob($d . '/*') ?: []));
+        }
+    }
+    if (trim($out) === '' && function_exists('apache_get_modules')) $out = implode("\n", (array)@apache_get_modules());
+    return $cache = (string)$out;
+}
+function dom_has_sudo(): bool { static $c = null; return $c !== null ? $c : ($c = trim(sh_ok('sudo -n true && echo yes')) === 'yes'); }
+function dom_first_dir(array $list): string { foreach ($list as $d) if (is_dir($d)) return $d; return ''; }
+function dom_sanitize_project_input(array $p): array {
+    foreach (['domain', 'domain_path', 'domain_mode', 'domain_docroot', 'bind_host', 'domain_kind'] as $k) $p[$k] = trim((string)($p[$k] ?? ''));
+    $p['domain_enabled'] = !empty($p['domain_enabled']);
+    if (!in_array($p['domain_kind'], ['subdomain', 'path'], true)) {
+        // سازگاری با پروفایل‌های قدیمی: مسیر غیر از / یعنی حالت پوشه.
+        $p['domain_kind'] = ($p['domain_path'] !== '' && $p['domain_path'] !== '/') ? 'path' : 'subdomain';
+    }
+    if ($p['domain_kind'] === 'path') {
+        if ($p['domain'] === '') $p['domain'] = trim((string)(cfg()['base_domain'] ?? ''));
+        $p['domain_path'] = dom_norm_path($p['domain_path'] !== '' ? $p['domain_path'] : '/');
+        if ($p['domain_enabled'] && $p['domain_path'] === '/') throw new RuntimeException('در حالت «پوشه روی دامنه»، نام پوشه الزامی است؛ مثلاً /app');
+    } else {
+        $p['domain_path'] = '/';
+    }
+    if ($p['domain'] !== '') $p['domain'] = dom_norm_domain($p['domain']);
+    if ($p['domain'] === '') {
+        if ($p['domain_enabled']) throw new RuntimeException($p['domain_kind'] === 'path'
+            ? 'دامنهٔ اصلی سایت را وارد کنید (یا در تب «دامنه» فیلد «دامنه اصلی» را تنظیم کنید).'
+            : 'ساب‌دامین کامل را وارد کنید؛ مثلاً app.example.com');
+        $p['domain_enabled'] = false;
+    }
+    if ($p['domain_mode'] !== '' && !in_array($p['domain_mode'], DOM_MODES, true)) throw new RuntimeException('حالت انتشار دامنه نامعتبر است');
+    if ($p['domain_docroot'] !== '') $p['domain_docroot'] = rtrim(norm_path(dom_expand_home($p['domain_docroot'])), '/');
+    if ($p['bind_host'] !== '' && !preg_match('~^[a-zA-Z0-9.:\-]{1,64}$~', $p['bind_host'])) throw new RuntimeException('Bind Host نامعتبر است');
+    $p['domain_ws'] = !empty($p['domain_ws']);
+    $p['domain_https'] = !isset($p['domain_https']) || !empty($p['domain_https']);
+    $p['domain_timeout'] = max(30, min(900, (int)($p['domain_timeout'] ?? 300)));
+    if ($p['domain_enabled'] && (string)($p['port'] ?? '') === '') throw new RuntimeException('برای انتشار روی دامنه، پورت داخلی پروژه الزامی است.');
+    return $p;
+}
+function dom_detect(): array {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    $root = dom_web_root();
+    $mods = dom_apache_modules();
+    $sw   = (string)($_SERVER['SERVER_SOFTWARE'] ?? '');
+    $isLS = stripos($sw, 'litespeed') !== false || stripos($sw, 'lsws') !== false || is_dir('/usr/local/lsws');
+    $isAp = stripos($sw, 'apache') !== false || trim($mods) !== '' || $isLS;
+    $isNg = stripos($sw, 'nginx') !== false || which('nginx');
+    $ngDir = dom_first_dir(['/etc/nginx/sites-available', '/etc/nginx/conf.d', '/usr/local/nginx/conf/conf.d']);
+    $apDir = dom_first_dir(['/etc/apache2/sites-available', '/etc/httpd/conf.d', '/etc/apache2/conf.d', '/usr/local/apache/conf.d']);
+    $cfBin = trim(sh_ok('command -v cloudflared'));
+    if ($cfBin === '') { $h = wcp_account_home(); foreach ([$h . '/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'] as $c) if ($c !== '' && is_file($c)) { $cfBin = $c; break; } }
+    $sudo = dom_has_sudo();
+    $rootWritable = is_dir($root) && wcp_is_dir_writable($root);
+    $hasProxy   = stripos($mods, 'proxy_http') !== false || stripos($mods, 'proxy_module') !== false || $isLS;
+    $hasRewrite = stripos($mods, 'rewrite') !== false || $isLS;
+    $modes = [
+        ['id' => 'htaccess',   'label' => 'Apache .htaccess (mod_proxy)', 'icon' => '⚡',
+         'available' => $rootWritable && $isAp && $hasProxy,
+         'reason' => !$rootWritable ? 'ریشه وب قابل نوشتن نیست' : (!$isAp ? 'وب‌سرور آپاچی/لایت‌اسپید شناسایی نشد' : (!$hasProxy ? 'ماژول mod_proxy فعال نیست' : '')),
+         'ws' => true, 'root' => false, 'note' => 'سریع‌ترین حالت؛ وب‌سوکت پشتیبانی می‌شود. نیازمند فعال بودن mod_proxy در هاست.'],
+        ['id' => 'phpproxy',   'label' => 'پروکسی PHP (سازگار با همه هاست‌ها)', 'icon' => '🧩',
+         'available' => $rootWritable,
+         'reason' => $rootWritable ? '' : 'ریشه وب قابل نوشتن نیست',
+         'ws' => false, 'root' => false, 'note' => 'روی هر هاست اشتراکی بدون mod_proxy هم کار می‌کند. وب‌سوکت پشتیبانی نمی‌شود (برای چت/سوکت از حالت htaccess یا تونل استفاده کنید).'],
+        ['id' => 'apache',     'label' => 'VirtualHost آپاچی', 'icon' => '🅰️',
+         'available' => $apDir !== '' && ($sudo || wcp_is_dir_writable($apDir)),
+         'reason' => $apDir === '' ? 'پوشه کانفیگ آپاچی پیدا نشد' : 'دسترسی root/sudo لازم است',
+         'ws' => true, 'root' => true, 'note' => 'کانفیگ کامل در سطح سرور؛ نیازمند دسترسی ریشه.'],
+        ['id' => 'nginx',      'label' => 'Server Block انجین‌ایکس', 'icon' => '🟩',
+         'available' => $ngDir !== '' && ($sudo || wcp_is_dir_writable($ngDir)),
+         'reason' => $ngDir === '' ? 'پوشه کانفیگ Nginx پیدا نشد' : 'دسترسی root/sudo لازم است',
+         'ws' => true, 'root' => true, 'note' => 'بهترین گزینه روی VPS؛ وب‌سوکت و استریم کامل.'],
+        ['id' => 'cloudflared','label' => 'تونل کلودفلر (بدون باز کردن پورت)', 'icon' => '☁️',
+         'available' => $cfBin !== '',
+         'reason' => $cfBin === '' ? 'باینری cloudflared نصب نیست' : '',
+         'ws' => true, 'root' => false, 'note' => 'حتی بدون IP ثابت و بدون دسترسی به وب‌سرور کار می‌کند؛ DNS روی کلودفلر ساخته می‌شود.'],
+        ['id' => 'manual',     'label' => 'فقط تولید کانفیگ (دستی)', 'icon' => '📄',
+         'available' => true, 'reason' => '', 'ws' => true, 'root' => false,
+         'note' => 'هیچ فایلی نوشته نمی‌شود؛ فقط کانفیگ آماده برای کپی در پنل هاست تولید می‌شود.'],
+    ];
+    $recommended = 'manual';
+    foreach (['nginx', 'apache', 'htaccess', 'phpproxy', 'cloudflared'] as $pref) {
+        foreach ($modes as $m) if ($m['id'] === $pref && $m['available']) { $recommended = $pref; break 2; }
+    }
+    return $cached = [
+        'web_root' => $root, 'web_root_writable' => $rootWritable, 'account_home' => wcp_account_home(),
+        'server_software' => $sw ?: 'نامشخص (CLI)', 'apache' => $isAp, 'litespeed' => $isLS, 'nginx' => $isNg,
+        'mod_proxy' => $hasProxy, 'mod_rewrite' => $hasRewrite, 'sudo' => $sudo,
+        'nginx_dir' => $ngDir, 'apache_dir' => $apDir, 'cloudflared_bin' => $cfBin,
+        'php_curl' => function_exists('curl_init'), 'php_sockets' => function_exists('fsockopen'),
+        'allow_url_fopen' => (bool)ini_get('allow_url_fopen'),
+        'base_domain' => (string)(cfg()['base_domain'] ?? ''), 'default_mode' => (string)(cfg()['domain_mode'] ?? 'auto'),
+        'web_root_cfg' => (string)(cfg()['web_root'] ?? ''), 'cf_tunnel' => (string)(cfg()['cf_tunnel'] ?? 'wcp-tunnel'),
+        'modes' => $modes, 'recommended' => $recommended,
+        'server_ip' => trim(sh_ok("hostname -I | awk '{print \$1}'")) ?: '',
+    ];
+}
+function dom_mode_for(array $p): string {
+    $m = (string)($p['domain_mode'] ?? '');
+    if ($m === '' || $m === 'inherit') $m = (string)(cfg()['domain_mode'] ?? 'auto');
+    if ($m === 'auto' || !in_array($m, DOM_MODES, true)) { $d = dom_detect(); $m = $d['recommended']; }
+    return $m;
+}
+
+/* ---------- تولید کانفیگ‌ها ---------- */
+function dom_htaccess_body(array $p): string {
+    $id = (string)$p['id']; $host = dom_backend_host($p); $port = dom_backend_port($p);
+    $path = dom_mount_path($p); $ws = !empty($p['domain_ws']); $https = !empty($p['domain_https']);
+    $base = $path === '/' ? '/' : $path . '/';
+    $t = "http://$host:$port";
+    $b  = dom_marker($id) . "\n";
+    $b .= "# پروژه: " . str_replace(["\r", "\n"], ' ', (string)$p['name']) . " — ساخته‌شده توسط وب‌کنسول. بین این دو نشانه را دستی ویرایش نکنید.\n";
+    $b .= "<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteBase $base\n";
+    if ($https) $b .= "  RewriteCond %{HTTPS} !=on\n  RewriteCond %{HTTP:X-Forwarded-Proto} !=https\n  RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]\n";
+    if ($ws) $b .= "  RewriteCond %{HTTP:Upgrade} =websocket [NC]\n  RewriteRule ^(.*)$ ws://$host:$port/\$1 [P,QSA,L]\n  RewriteCond %{HTTP:Upgrade} !=websocket [NC]\n";
+    $b .= "  RewriteRule ^(.*)$ $t/\$1 [P,QSA,L]\n</IfModule>\n";
+    $b .= "<IfModule mod_proxy.c>\n  ProxyPreserveHost On\n  ProxyTimeout 300\n</IfModule>\n";
+    $b .= "<IfModule mod_headers.c>\n  RequestHeader set X-Forwarded-Proto \"https\" env=HTTPS\n  RequestHeader set X-Forwarded-Port \"443\" env=HTTPS\n";
+    if ($path !== '/') $b .= "  RequestHeader set X-Forwarded-Prefix \"$path\"\n";
+    $b .= "</IfModule>\n";
+    $b .= dom_marker($id, true) . "\n";
+    return $b;
+}
+function dom_phpproxy_htaccess(array $p): string {
+    $id = (string)$p['id']; $path = dom_mount_path($p);
+    $base = $path === '/' ? '/' : $path . '/';
+    $b  = dom_marker($id) . "\n";
+    $b .= "<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteBase $base\n";
+    $b .= "  RewriteCond %{REQUEST_URI} !(^|/)wcp-proxy\\.php$\n";
+    $b .= "  RewriteRule ^(.*)$ {$base}wcp-proxy.php [QSA,L]\n</IfModule>\n";
+    $b .= "DirectoryIndex wcp-proxy.php\n";
+    $b .= "<IfModule mod_php.c>\n  php_value max_execution_time 300\n</IfModule>\n";
+    $b .= dom_marker($id, true) . "\n";
+    return $b;
+}
+function dom_phpproxy_body(array $p): string {
+    $tpl = <<<'WCPPROXY'
+<?php
+/* WebConsole Pro — Reverse Proxy Shim (auto-generated, do not edit).
+ * پروژه __WCP_NAME__ روی __WCP_HOST__:__WCP_PORT__ اجرا می‌شود و این فایل
+ * درخواست‌های ساب‌دامین را بدون نیاز به باز بودن پورت، به آن می‌رساند. */
+@ini_set('display_errors', '0');
+@set_time_limit(0);
+@ignore_user_abort(true);
+$T_HOST   = '__WCP_HOST__';
+$T_PORT   = (int)'__WCP_PORT__';
+$PREFIX   = '__WCP_PREFIX__';
+$TIMEOUT  = (int)'__WCP_TIMEOUT__';
+$MAXBODY  = 512 * 1024 * 1024;
+
+if (!in_array($T_HOST, ['127.0.0.1', 'localhost', '::1'], true) && !preg_match('~^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)~', $T_HOST)) {
+    http_response_code(500); exit('Proxy target must be a local address.');
+}
+$uri = $_SERVER['REQUEST_URI'] ?? '/';
+if ($PREFIX !== '' && $PREFIX !== '/' && strpos($uri, $PREFIX) === 0) {
+    $uri = substr($uri, strlen($PREFIX));
+    if ($uri === '' || $uri[0] !== '/') $uri = '/' . $uri;
+}
+$target = 'http://' . $T_HOST . ':' . $T_PORT . $uri;
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+$hopByHop = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'trailers', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'accept-encoding'];
+
+$reqHeaders = [];
+if (function_exists('getallheaders')) {
+    foreach ((array)getallheaders() as $k => $v) if (!in_array(strtolower($k), $hopByHop, true)) $reqHeaders[$k] = $v;
+} else {
+    foreach ($_SERVER as $k => $v) {
+        if (strpos($k, 'HTTP_') !== 0) continue;
+        $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($k, 5)))));
+        if (!in_array(strtolower($name), $hopByHop, true)) $reqHeaders[$name] = $v;
+    }
+    if (!empty($_SERVER['CONTENT_TYPE'])) $reqHeaders['Content-Type'] = $_SERVER['CONTENT_TYPE'];
+}
+$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https' ? 'https' : 'http');
+$publicHost = $_SERVER['HTTP_HOST'] ?? $T_HOST;
+$reqHeaders['Host'] = $publicHost;
+$reqHeaders['X-Forwarded-For'] = trim(($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '') . ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '' ? ', ' : '') . ($_SERVER['REMOTE_ADDR'] ?? ''), ' ,');
+$reqHeaders['X-Forwarded-Proto'] = $scheme;
+$reqHeaders['X-Forwarded-Host']  = $publicHost;
+$reqHeaders['X-Forwarded-Prefix'] = ($PREFIX === '/' ? '' : $PREFIX);
+$reqHeaders['X-Real-IP'] = $_SERVER['REMOTE_ADDR'] ?? '';
+$reqHeaders['Accept-Encoding'] = 'identity';
+
+$body = null;
+if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+    $body = @file_get_contents('php://input', false, null, 0, $MAXBODY);
+    if ($body === false) $body = '';
+}
+while (ob_get_level() > 0) @ob_end_clean();
+
+function wcp_fail($code, $title, $detail) {
+    if (!headers_sent()) { http_response_code($code); header('Content-Type: text/html; charset=utf-8'); header('Cache-Control: no-store'); header('Retry-After: 5'); }
+    echo '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . $code . ' — ' . htmlspecialchars($title) . '</title>';
+    echo '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b1020;color:#e6ecff;font:16px/1.9 system-ui,Tahoma,sans-serif}.b{max-width:560px;padding:32px;background:#121a33;border:1px solid #24304f;border-radius:16px;text-align:center}h1{font-size:44px;margin:0 0 6px;color:#ffb020}p{color:#9fb0d5;margin:8px 0}code{background:#0b1020;padding:2px 8px;border-radius:6px;color:#7ee0a6;direction:ltr;display:inline-block}</style>';
+    echo '<div class="b"><h1>' . $code . '</h1><h2>' . htmlspecialchars($title) . '</h2><p>' . htmlspecialchars($detail) . '</p>';
+    echo '<p>سرویس پروژه احتمالاً متوقف است. از وب‌کنسول &gt; پروژه‌ها، دکمه «اجرا (Start)» را بزنید.</p></div></html>';
+    exit;
+}
+
+if (function_exists('curl_init')) {
+    $ch = curl_init($target);
+    $hdrOut = [];
+    foreach ($reqHeaders as $k => $v) $hdrOut[] = $k . ': ' . $v;
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => $method,
+        CURLOPT_HTTPHEADER => $hdrOut,
+        CURLOPT_RETURNTRANSFER => false,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_HEADER => false,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => $TIMEOUT,
+        CURLOPT_NOSIGNAL => true,
+        CURLOPT_HEADERFUNCTION => function ($ch, $line) use ($T_HOST, $T_PORT, $scheme, $publicHost, $PREFIX) {
+            $len = strlen($line); $trim = trim($line);
+            if ($trim === '') return $len;
+            if (stripos($trim, 'HTTP/') === 0) {
+                $parts = explode(' ', $trim);
+                if (isset($parts[1])) { http_response_code((int)$parts[1]); header('X-WCP-Proxy: 1'); }
+                return $len;
+            }
+            $pos = strpos($trim, ':');
+            if ($pos === false) return $len;
+            $name = strtolower(trim(substr($trim, 0, $pos)));
+            $val  = trim(substr($trim, $pos + 1));
+            if (in_array($name, ['transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'content-length'], true)) return $len;
+            if ($name === 'location') {
+                $base = 'http://' . $T_HOST . ':' . $T_PORT;
+                if (strpos($val, $base) === 0) $val = $scheme . '://' . $publicHost . ($PREFIX === '/' ? '' : $PREFIX) . substr($val, strlen($base));
+                elseif ($PREFIX !== '/' && $PREFIX !== '' && isset($val[0]) && $val[0] === '/') $val = $PREFIX . $val;
+            }
+            header(ucwords($name, '-') . ': ' . $val, $name !== 'set-cookie');
+            return $len;
+        },
+        CURLOPT_WRITEFUNCTION => function ($ch, $chunk) { echo $chunk; @flush(); return strlen($chunk); },
+    ]);
+    if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+    if ($method === 'HEAD') curl_setopt($ch, CURLOPT_NOBODY, true);
+    curl_exec($ch);
+    $err = curl_error($ch);
+    $eno = curl_errno($ch);
+    curl_close($ch);
+    if ($eno && !headers_sent()) wcp_fail(502, 'سرویس پروژه در دسترس نیست', 'اتصال به ' . $T_HOST . ':' . $T_PORT . ' ناموفق بود — ' . $err);
+    exit;
+}
+
+/* --- fallback بدون cURL: سوکت خام (با پشتیبانی chunked) --- */
+$fp = @fsockopen($T_HOST, $T_PORT, $errno, $errstr, 10);
+if (!$fp) wcp_fail(502, 'سرویس پروژه در دسترس نیست', 'اتصال به ' . $T_HOST . ':' . $T_PORT . ' ناموفق بود — ' . $errstr);
+stream_set_timeout($fp, $TIMEOUT);
+$reqHeaders['Connection'] = 'close';
+if ($body !== null) $reqHeaders['Content-Length'] = strlen($body);
+$out = $method . ' ' . $uri . " HTTP/1.1\r\n";
+foreach ($reqHeaders as $k => $v) $out .= $k . ': ' . $v . "\r\n";
+$out .= "\r\n";
+fwrite($fp, $out);
+if ($body !== null && $body !== '') fwrite($fp, $body);
+
+$buf = ''; $sep = false;
+while (!feof($fp)) {
+    $part = fread($fp, 8192);
+    if ($part === false || $part === '') break;
+    $buf .= $part;
+    $sep = strpos($buf, "\r\n\r\n");
+    if ($sep !== false) break;
+    if (strlen($buf) > 262144) break;
+}
+if ($sep === false) { fclose($fp); wcp_fail(502, 'پاسخ نامعتبر از سرویس', 'هدرهای HTTP از ' . $T_HOST . ':' . $T_PORT . ' دریافت نشد.'); }
+$lines   = explode("\r\n", substr($buf, 0, $sep));
+$pending = substr($buf, $sep + 4);
+$status  = array_shift($lines);
+$sp = explode(' ', $status);
+if (isset($sp[1])) { http_response_code((int)$sp[1]); header('X-WCP-Proxy: 1'); }
+$chunked = false;
+foreach ($lines as $l) {
+    $pos = strpos($l, ':'); if ($pos === false) continue;
+    $n = strtolower(trim(substr($l, 0, $pos))); $v = trim(substr($l, $pos + 1));
+    if ($n === 'transfer-encoding') { if (stripos($v, 'chunked') !== false) $chunked = true; continue; }
+    if (in_array($n, ['connection', 'keep-alive', 'upgrade'], true)) continue;
+    if ($n === 'content-length' && $chunked) continue;
+    if ($n === 'location') {
+        $lbase = 'http://' . $T_HOST . ':' . $T_PORT;
+        if (strpos($v, $lbase) === 0) $v = $scheme . '://' . $publicHost . ($PREFIX === '/' ? '' : $PREFIX) . substr($v, strlen($lbase));
+        elseif ($PREFIX !== '/' && $PREFIX !== '' && isset($v[0]) && $v[0] === '/') $v = $PREFIX . $v;
+    }
+    header(ucwords($n, '-') . ': ' . $v, $n !== 'set-cookie');
+}
+if ($method === 'HEAD') { fclose($fp); exit; }
+$finished = false;
+while (true) {
+    if ($chunked) {
+        while (true) {
+            $nl = strpos($pending, "\r\n");
+            if ($nl === false) break;
+            $size = hexdec(trim(explode(';', substr($pending, 0, $nl))[0]));
+            if ($size === 0) { $finished = true; break; }
+            if (strlen($pending) < $nl + 2 + $size + 2) break;
+            echo substr($pending, $nl + 2, $size); @flush();
+            $pending = substr($pending, $nl + 2 + $size + 2);
+        }
+        if ($finished) break;
+    } elseif ($pending !== '') { echo $pending; @flush(); $pending = ''; }
+    if (feof($fp)) break;
+    $part = fread($fp, 8192);
+    if ($part === false || $part === '') break;
+    $pending .= $part;
+}
+fclose($fp);
+WCPPROXY;
+    return strtr($tpl, [
+        '__WCP_NAME__'    => str_replace(["\r", "\n", "'", '*/'], ' ', (string)($p['name'] ?? 'project')),
+        '__WCP_HOST__'    => dom_backend_host($p),
+        '__WCP_PORT__'    => (string)dom_backend_port($p),
+        '__WCP_PREFIX__'  => dom_mount_path($p) === '/' ? '' : dom_mount_path($p),
+        '__WCP_TIMEOUT__' => (string)max(30, min(900, (int)($p['domain_timeout'] ?? 300))),
+    ]);
+}
+function dom_nginx_body(array $p): string {
+    $id = (string)$p['id']; $host = dom_backend_host($p); $port = dom_backend_port($p);
+    $domain = dom_norm_domain((string)$p['domain']); $path = dom_mount_path($p);
+    $loc = $path === '/' ? '/' : $path . '/';
+    $b  = dom_marker($id) . "\n";
+    $b .= "server {\n    listen 80;\n    listen [::]:80;\n    server_name $domain;\n\n";
+    $b .= "    access_log /var/log/nginx/$domain.access.log;\n    error_log  /var/log/nginx/$domain.error.log;\n\n";
+    $b .= "    client_max_body_size 512m;\n\n";
+    $b .= "    location $loc {\n";
+    $b .= "        proxy_pass http://$host:$port" . ($path === '/' ? '' : '/') . ";\n";
+    $b .= "        proxy_http_version 1.1;\n";
+    $b .= "        proxy_set_header Upgrade \$http_upgrade;\n";
+    $b .= "        proxy_set_header Connection \"upgrade\";\n";
+    $b .= "        proxy_set_header Host \$host;\n";
+    $b .= "        proxy_set_header X-Real-IP \$remote_addr;\n";
+    $b .= "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\n";
+    $b .= "        proxy_set_header X-Forwarded-Proto \$scheme;\n";
+    $b .= "        proxy_set_header X-Forwarded-Host \$host;\n";
+    $b .= "        proxy_buffering off;\n        proxy_read_timeout 300s;\n        proxy_send_timeout 300s;\n";
+    $b .= "    }\n}\n" . dom_marker($id, true) . "\n";
+    return $b;
+}
+function dom_apache_body(array $p): string {
+    $id = (string)$p['id']; $host = dom_backend_host($p); $port = dom_backend_port($p);
+    $domain = dom_norm_domain((string)$p['domain']); $path = dom_mount_path($p);
+    $loc = $path === '/' ? '/' : $path . '/';
+    $b  = dom_marker($id) . "\n";
+    $b .= "<VirtualHost *:80>\n    ServerName $domain\n\n";
+    $b .= "    ProxyRequests Off\n    ProxyPreserveHost On\n    ProxyTimeout 300\n\n";
+    $b .= "    RewriteEngine On\n    RewriteCond %{HTTP:Upgrade} =websocket [NC]\n    RewriteRule ^/?(.*) ws://$host:$port/\$1 [P,L]\n\n";
+    $b .= "    ProxyPass $loc http://$host:$port" . ($path === '/' ? '/' : '/') . "\n";
+    $b .= "    ProxyPassReverse $loc http://$host:$port" . ($path === '/' ? '/' : '/') . "\n\n";
+    $b .= "    RequestHeader set X-Forwarded-Proto \"http\"\n";
+    $b .= "    ErrorLog \${APACHE_LOG_DIR}/$domain-error.log\n";
+    $b .= "    CustomLog \${APACHE_LOG_DIR}/$domain-access.log combined\n";
+    $b .= "</VirtualHost>\n" . dom_marker($id, true) . "\n";
+    return $b;
+}
+function dom_cloudflared_body(array $p): string {
+    $host = dom_backend_host($p); $port = dom_backend_port($p);
+    $domain = dom_norm_domain((string)$p['domain']);
+    $tunnel = trim((string)(cfg()['cf_tunnel'] ?? '')) ?: 'wcp-tunnel';
+    $home = wcp_account_home() ?: '~';
+    return "tunnel: $tunnel\ncredentials-file: $home/.cloudflared/$tunnel.json\n\ningress:\n  - hostname: $domain\n    service: http://$host:$port\n    originRequest:\n      noTLSVerify: true\n      connectTimeout: 30s\n  - service: http_status:404\n";
+}
+function dom_config_preview(array $p): array {
+    $mode = dom_mode_for($p);
+    $out = ['mode' => $mode, 'files' => []];
+    if ($mode === 'htaccess')      $out['files'][] = ['path' => dom_docroot($p) . '/.htaccess', 'lang' => 'apache', 'body' => dom_htaccess_body($p)];
+    elseif ($mode === 'phpproxy')  { $out['files'][] = ['path' => dom_docroot($p) . '/.htaccess', 'lang' => 'apache', 'body' => dom_phpproxy_htaccess($p)];
+                                     $out['files'][] = ['path' => dom_docroot($p) . '/wcp-proxy.php', 'lang' => 'php', 'body' => dom_phpproxy_body($p)]; }
+    elseif ($mode === 'nginx')     $out['files'][] = ['path' => dom_nginx_target($p), 'lang' => 'nginx', 'body' => dom_nginx_body($p)];
+    elseif ($mode === 'apache')    $out['files'][] = ['path' => dom_apache_target($p), 'lang' => 'apache', 'body' => dom_apache_body($p)];
+    elseif ($mode === 'cloudflared') $out['files'][] = ['path' => (wcp_account_home() ?: '~') . '/.cloudflared/config.yml', 'lang' => 'yaml', 'body' => dom_cloudflared_body($p)];
+    else {
+        $out['files'][] = ['path' => dom_docroot($p) . '/.htaccess', 'lang' => 'apache', 'body' => dom_htaccess_body($p)];
+        $out['files'][] = ['path' => dom_nginx_target($p), 'lang' => 'nginx', 'body' => dom_nginx_body($p)];
+    }
+    $out['commands'] = dom_commands($p, $mode);
+    return $out;
+}
+function dom_nginx_target(array $p): string {
+    $d = dom_detect(); $dir = $d['nginx_dir'] ?: '/etc/nginx/conf.d';
+    return rtrim($dir, '/') . '/wcp-' . gh_slug(dom_norm_domain((string)$p['domain'])) . '.conf';
+}
+function dom_apache_target(array $p): string {
+    $d = dom_detect(); $dir = $d['apache_dir'] ?: '/etc/apache2/sites-available';
+    $ext = strpos($dir, 'sites-available') !== false ? '.conf' : '.conf';
+    return rtrim($dir, '/') . '/wcp-' . gh_slug(dom_norm_domain((string)$p['domain'])) . $ext;
+}
+function dom_commands(array $p, string $mode): array {
+    $domain = dom_norm_domain((string)$p['domain']);
+    $c = [];
+    if ($mode === 'nginx')       { $c[] = 'sudo nginx -t'; $c[] = 'sudo systemctl reload nginx'; $c[] = 'sudo certbot --nginx -d ' . $domain; }
+    elseif ($mode === 'apache')  { $c[] = 'sudo a2enmod proxy proxy_http proxy_wstunnel rewrite headers'; $c[] = 'sudo a2ensite wcp-' . gh_slug($domain); $c[] = 'sudo apachectl configtest'; $c[] = 'sudo systemctl reload apache2'; $c[] = 'sudo certbot --apache -d ' . $domain; }
+    elseif ($mode === 'cloudflared') { $tunnel = trim((string)(cfg()['cf_tunnel'] ?? '')) ?: 'wcp-tunnel'; $c[] = 'cloudflared tunnel login'; $c[] = 'cloudflared tunnel create ' . $tunnel; $c[] = 'cloudflared tunnel route dns ' . $tunnel . ' ' . $domain; $c[] = 'cloudflared tunnel run ' . $tunnel; }
+    return $c;
+}
+
+/* ---------- نوشتن/برداشتن کانفیگ ---------- */
+function dom_merge_block(string $existing, string $id, string $block): string {
+    $s = preg_quote(dom_marker($id), '~'); $e = preg_quote(dom_marker($id, true), '~');
+    $cleaned = preg_replace('~[ \t]*' . $s . '.*?' . $e . '[ \t]*(\r?\n)?~s', '', $existing);
+    if ($cleaned === null) $cleaned = $existing;
+    $cleaned = ltrim($cleaned, "\r\n");
+    return rtrim($block, "\n") . "\n" . ($cleaned !== '' ? "\n" . $cleaned : '');
+}
+function dom_strip_block(string $existing, string $id): string {
+    $s = preg_quote(dom_marker($id), '~'); $e = preg_quote(dom_marker($id, true), '~');
+    $r = preg_replace('~[ \t]*' . $s . '.*?' . $e . '[ \t]*(\r?\n)?~s', '', $existing);
+    return $r === null ? $existing : $r;
+}
+function dom_write(string $path, string $content, bool $merge, string $id, array &$report) {
+    $dir = dirname($path);
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true)) throw new RuntimeException('امکان ساخت پوشه وجود ندارد: ' . $dir);
+    if (!wcp_is_dir_writable($dir)) throw new RuntimeException('پوشه قابل نوشتن نیست: ' . $dir);
+    $old = is_file($path) ? (string)@file_get_contents($path) : '';
+    if ($old !== '' && !is_file($path . '.wcp-bak')) @copy($path, $path . '.wcp-bak');
+    $new = $merge ? dom_merge_block($old, $id, $content) : $content;
+    if (!wcp_put_contents($path, $new)) throw new RuntimeException('نوشتن فایل ناموفق بود: ' . $path);
+    @chmod($path, substr($path, -4) === '.php' ? 0644 : 0644);
+    $report['files'][] = $path;
+}
+function dom_write_root(string $path, string $content, array &$report) {
+    $tmp = CACHE_DIR . '/dom-' . wcp_random(5) . '.conf';
+    if (!wcp_put_contents($tmp, $content)) throw new RuntimeException('نوشتن فایل موقت ناموفق بود');
+    $dir = dirname($path);
+    if (wcp_is_dir_writable($dir)) { @copy($tmp, $path); @unlink($tmp); $report['files'][] = $path; return; }
+    if (!dom_has_sudo()) { @unlink($tmp); $report['manual'] = true; $report['notes'][] = 'دسترسی root/sudo موجود نیست؛ کانفیگ تولید شد اما نوشته نشد. آن را دستی در ' . $path . ' قرار دهید.'; return; }
+    sh('sudo -n mkdir -p ' . esc($dir) . ' && sudo -n cp ' . esc($tmp) . ' ' . esc($path) . ' && sudo -n chmod 644 ' . esc($path), $code);
+    @unlink($tmp);
+    if ($code !== 0) { $report['manual'] = true; $report['notes'][] = 'کپی با sudo ناموفق بود؛ کانفیگ را دستی در ' . $path . ' قرار دهید.'; return; }
+    $report['files'][] = $path;
+}
+function dom_apply(array $p): array {
+    if (!dom_enabled($p)) throw new RuntimeException('انتشار روی دامنه برای این پروژه فعال نیست.');
+    $domain = dom_norm_domain((string)$p['domain']);
+    $mode = dom_mode_for($p);
+    $id = (string)$p['id'];
+    $kind = dom_kind($p);
+    $report = ['mode' => $mode, 'kind' => $kind, 'domain' => $domain, 'url' => dom_public_url($p), 'files' => [], 'commands' => dom_commands($p, $mode), 'notes' => [], 'manual' => false, 'docroot' => '', 'parent' => null];
+    if ($mode === 'htaccess' || $mode === 'phpproxy') {
+        $docroot = dom_docroot($p);
+        $report['docroot'] = $docroot;
+        if (!is_dir($docroot) && !@mkdir($docroot, 0755, true)) throw new RuntimeException('پوشهٔ مقصد ساخته نشد: ' . $docroot);
+        if ($mode === 'htaccess') {
+            dom_write($docroot . '/.htaccess', dom_htaccess_body($p), true, $id, $report);
+        } else {
+            dom_write($docroot . '/wcp-proxy.php', dom_phpproxy_body($p), false, $id, $report);
+            dom_write($docroot . '/.htaccess', dom_phpproxy_htaccess($p), true, $id, $report);
+        }
+        if ($kind === 'path') {
+            $report['notes'][] = 'حالت پوشه: نیازی به ساخت ساب‌دامین یا رکورد DNS نیست. آدرس ' . $report['url'] . ' بلافاصله از همین دامنهٔ موجود کار می‌کند.';
+            $conflict = dom_parent_conflict($p);
+            $report['parent'] = $conflict;
+            if ($conflict['applies'] && !$conflict['protected']) {
+                if ($conflict['catch_all'] && $conflict['writable']) {
+                    try { dom_fix_parent($p); $report['parent']['protected'] = true; $report['files'][] = $conflict['file'];
+                          $report['notes'][] = 'قانون بازنویسی فراگیر در .htaccess ریشه پیدا شد؛ یک استثنا برای /' . $conflict['segment'] . ' به‌صورت خودکار اضافه شد.'; }
+                    catch (Throwable $e) { $report['manual'] = true; $report['notes'][] = 'افزودن استثنا به .htaccess ریشه ناموفق بود: ' . $e->getMessage(); }
+                } elseif ($conflict['catch_all']) {
+                    $report['manual'] = true;
+                    $report['notes'][] = '.htaccess ریشه قانون فراگیر دارد ولی قابل نوشتن نیست؛ خط «RewriteRule ^' . $conflict['segment'] . '(/|$) - [L]» را دستی بالای قوانین آن اضافه کنید.';
+                }
+            }
+        } else {
+            $report['notes'][] = 'در پنل هاست (cPanel/DirectAdmin) ساب‌دامین ' . $domain . ' را بسازید و Document Root آن را روی ' . $docroot . ' تنظیم کنید.';
+            $report['notes'][] = 'سپس از بخش SSL پنل، گواهی Let\'s Encrypt را برای این ساب‌دامین صادر کنید.';
+        }
+    } elseif ($mode === 'nginx') {
+        $target = dom_nginx_target($p);
+        dom_write_root($target, dom_nginx_body($p), $report);
+        if (!$report['manual']) {
+            $link = '/etc/nginx/sites-enabled/' . basename($target);
+            if (strpos($target, 'sites-available') !== false) sh('sudo -n ln -sf ' . esc($target) . ' ' . esc($link));
+            $test = sh('sudo -n nginx -t', $tc);
+            $report['notes'][] = 'nginx -t: ' . trim($test);
+            if ($tc === 0) { sh('sudo -n systemctl reload nginx || sudo -n service nginx reload'); $report['notes'][] = 'Nginx با موفقیت ری‌لود شد.'; }
+            else { $report['manual'] = true; $report['notes'][] = 'تست کانفیگ Nginx ناموفق بود؛ ری‌لود انجام نشد.'; }
+        }
+    } elseif ($mode === 'apache') {
+        $target = dom_apache_target($p);
+        dom_write_root($target, dom_apache_body($p), $report);
+        if (!$report['manual']) {
+            sh('sudo -n a2enmod proxy proxy_http proxy_wstunnel rewrite headers');
+            if (strpos($target, 'sites-available') !== false) sh('sudo -n a2ensite ' . esc(basename($target, '.conf')));
+            $test = sh('sudo -n apachectl configtest', $tc);
+            $report['notes'][] = 'apachectl configtest: ' . trim($test);
+            if ($tc === 0) { sh('sudo -n systemctl reload apache2 || sudo -n service apache2 reload || sudo -n systemctl reload httpd'); $report['notes'][] = 'آپاچی با موفقیت ری‌لود شد.'; }
+            else { $report['manual'] = true; $report['notes'][] = 'تست کانفیگ آپاچی ناموفق بود؛ ری‌لود انجام نشد.'; }
+        }
+    } elseif ($mode === 'cloudflared') {
+        $home = wcp_account_home() ?: sys_get_temp_dir();
+        $target = $home . '/.cloudflared/config.yml';
+        dom_write($target, dom_cloudflared_body($p), false, $id, $report);
+        $report['notes'][] = 'برای اتصال DNS دستورهای زیر را یک‌بار در ترمینال اجرا کنید.';
+    } else {
+        $report['manual'] = true;
+        $report['notes'][] = 'حالت دستی: هیچ فایلی نوشته نشد؛ از پیش‌نمایش کانفیگ استفاده کنید.';
+    }
+    act_log('domain apply ' . $domain . ' mode=' . $mode . ' project=' . $id);
+    return $report;
+}
+function dom_remove(array $p): array {
+    $id = (string)$p['id'];
+    $report = ['removed' => [], 'notes' => []];
+    $docroot = '';
+    try { $docroot = dom_docroot($p); } catch (Throwable $e) { $report['notes'][] = $e->getMessage(); }
+    foreach ($docroot !== '' ? [$docroot . '/.htaccess'] : [] as $f) {
+        if (is_file($f)) {
+            $new = dom_strip_block((string)@file_get_contents($f), $id);
+            if (trim($new) === '') { @unlink($f); $report['removed'][] = $f; }
+            else { wcp_put_contents($f, $new); $report['removed'][] = $f . ' (بلوک حذف شد)'; }
+        }
+    }
+    $parent = dom_parent_htaccess($p);
+    if (is_file($parent)) {
+        $before = (string)@file_get_contents($parent);
+        $after = dom_strip_block($before, $id . '-root');
+        if ($after !== $before) {
+            if (trim($after) === '') { @unlink($parent); } else { wcp_put_contents($parent, $after); }
+            $report['removed'][] = $parent . ' (استثنای پوشه حذف شد)';
+        }
+    }
+    $proxy = $docroot !== '' ? $docroot . '/wcp-proxy.php' : '';
+    if ($proxy !== '' && is_file($proxy) && strpos((string)@file_get_contents($proxy), 'WebConsole Pro — Reverse Proxy Shim') !== false) { @unlink($proxy); $report['removed'][] = $proxy; }
+    $confs = [];
+    try { $confs[] = dom_nginx_target($p); $confs[] = dom_apache_target($p); } catch (Throwable $e) {}
+    foreach ($confs as $conf) {
+        if (is_file($conf)) {
+            if (wcp_is_dir_writable(dirname($conf))) @unlink($conf);
+            elseif (dom_has_sudo()) sh('sudo -n rm -f ' . esc($conf) . ' ' . esc('/etc/nginx/sites-enabled/' . basename($conf)));
+            $report['removed'][] = $conf;
+        }
+    }
+    if ($report['removed'] && dom_has_sudo()) { sh('sudo -n nginx -t >/dev/null 2>&1 && sudo -n systemctl reload nginx'); sh('sudo -n apachectl configtest >/dev/null 2>&1 && sudo -n systemctl reload apache2'); }
+    act_log('domain remove project=' . $id);
+    return $report;
+}
+
+/* ---------- تست و عیب‌یابی ---------- */
+function dom_probe_local(string $host, int $port, float $timeout = 2.5): array {
+    $t0 = microtime(true);
+    $fp = @fsockopen($host, $port, $errno, $errstr, $timeout);
+    if (!$fp) return ['up' => false, 'ms' => 0, 'error' => $errstr ?: ('اتصال به ' . $host . ':' . $port . ' برقرار نشد')];
+    fclose($fp);
+    return ['up' => true, 'ms' => (int)round((microtime(true) - $t0) * 1000), 'error' => ''];
+}
+function dom_probe_url(string $url, int $timeout = 10): array {
+    $res = ['url' => $url, 'code' => 0, 'proxied' => false, 'error' => '', 'server' => '', 'ms' => 0];
+    $t0 = microtime(true);
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => true, CURLOPT_NOBODY => false, CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => 6, CURLOPT_FOLLOWLOCATION => false, CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT => 'WebConsolePro/' . WCP_VERSION . ' domain-check']);
+        $out = curl_exec($ch);
+        $res['code'] = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $res['error'] = curl_error($ch);
+        curl_close($ch);
+        if (is_string($out)) {
+            $head = substr($out, 0, (int)strpos($out . "\r\n\r\n", "\r\n\r\n"));
+            $res['proxied'] = stripos($head, 'x-wcp-proxy') !== false;
+            if (preg_match('~^server:\s*(.+)$~mi', $head, $m)) $res['server'] = trim($m[1]);
+        }
+    } elseif (ini_get('allow_url_fopen')) {
+        $ctx = stream_context_create(['http' => ['timeout' => $timeout, 'ignore_errors' => true], 'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
+        @file_get_contents($url, false, $ctx);
+        foreach ((array)($http_response_header ?? []) as $h) {
+            if (stripos($h, 'HTTP/') === 0 && preg_match('~\s(\d{3})\s~', $h . ' ', $m)) $res['code'] = (int)$m[1];
+            if (stripos($h, 'x-wcp-proxy') === 0) $res['proxied'] = true;
+            if (stripos($h, 'server:') === 0) $res['server'] = trim(substr($h, 7));
+        }
+    } else {
+        $res['error'] = 'نه cURL و نه allow_url_fopen در PHP فعال است.';
+    }
+    $res['ms'] = (int)round((microtime(true) - $t0) * 1000);
+    return $res;
+}
+function dom_status(array $p, bool $probe = false): array {
+    $st = ['enabled' => dom_enabled($p), 'domain' => trim((string)($p['domain'] ?? '')), 'kind' => dom_kind($p), 'mode' => '', 'url' => '',
+           'docroot' => '', 'files' => [], 'installed' => false, 'backend' => null, 'public' => null, 'dns' => null, 'parent' => null, 'warnings' => []];
+    if (!$st['enabled']) return $st;
+    try { $st['mode'] = dom_mode_for($p); $st['url'] = dom_public_url($p); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); return $st; }
+    try { $st['docroot'] = dom_docroot($p); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); }
+    $check = [];
+    if ($st['mode'] === 'htaccess')      $check[] = $st['docroot'] . '/.htaccess';
+    elseif ($st['mode'] === 'phpproxy')  { $check[] = $st['docroot'] . '/wcp-proxy.php'; $check[] = $st['docroot'] . '/.htaccess'; }
+    elseif ($st['mode'] === 'nginx')     $check[] = dom_nginx_target($p);
+    elseif ($st['mode'] === 'apache')    $check[] = dom_apache_target($p);
+    elseif ($st['mode'] === 'cloudflared') $check[] = (wcp_account_home() ?: '~') . '/.cloudflared/config.yml';
+    $ok = count($check) > 0;
+    foreach ($check as $f) { $ex = is_file($f); $st['files'][] = ['path' => $f, 'exists' => $ex]; if (!$ex) $ok = false; }
+    $st['installed'] = $ok;
+    if ($st['kind'] === 'path') {
+        $st['parent'] = dom_parent_conflict($p);
+        if (!empty($st['parent']['catch_all']) && empty($st['parent']['protected'])) {
+            $st['warnings'][] = '.htaccess ریشه قانون بازنویسی فراگیر دارد و ممکن است /' . $st['parent']['segment'] . ' را قبل از پروکسی بگیرد. دکمهٔ «رفع تداخل» را بزنید.';
+        }
+    }
+    try { $st['backend'] = dom_probe_local(dom_backend_host($p), dom_backend_port($p)); } catch (Throwable $e) { $st['warnings'][] = $e->getMessage(); }
+    if ($probe) {
+        $st['public'] = dom_probe_url($st['url']);
+        $ip = @gethostbyname($st['domain']);
+        if ($st['kind'] === 'path') { $st['dns'] = ['ip' => ($ip !== $st['domain'] ? $ip : ''), 'server_ip' => trim(sh_ok("hostname -I | awk '{print \$1}'")), 'note' => 'در حالت پوشه، DNS همان دامنهٔ اصلی است و تغییری لازم ندارد.']; }
+        $st['dns'] = ['ip' => ($ip !== $st['domain'] ? $ip : ''), 'server_ip' => trim(sh_ok("hostname -I | awk '{print \$1}'"))];
+        if (empty($st['dns']['ip']) && $st['kind'] !== 'path') $st['warnings'][] = 'رکورد DNS برای ' . $st['domain'] . ' پیدا نشد؛ ابتدا A/CNAME را در پنل دامنه تنظیم کنید.';
+    }
+    if (!empty($st['backend']) && empty($st['backend']['up'])) $st['warnings'][] = 'سرویس روی پورت داخلی بالا نیست؛ ابتدا پروژه را Start کنید.';
+    return $st;
+}
+function dom_sync_project(array $p, bool $silent = true): ?array {
+    if (!dom_enabled($p)) return null;
+    try { return dom_apply($p); }
+    catch (Throwable $e) { if (!$silent) throw $e; if (function_exists('cli_log')) @cli_log('[domain] اعمال کانفیگ دامنه ناموفق بود: ' . $e->getMessage()); return null; }
 }
 
 function proj_all(): array {$j=json_decode((string)@file_get_contents(DATA_DIR.'/projects.json'),true);return is_array($j)?$j:[];}
@@ -1338,11 +2313,10 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     cli_log('Deploying ' . $p['name'] . ' -> ' . $dest);
     if (is_dir($repo . '/.git')) {
         $g = 'git -c safe.directory=* -C ' . esc($repo) . ' ';
-        cli_run($g . 'remote set-url origin ' . esc(proj_repo_url($p)), $rcRemote);
-        $fetchCmd = $g . 'fetch --depth=1 origin ' . esc($branch) . ' && ' . $g . 'reset --hard FETCH_HEAD && ' . $g . 'clean -fd';
-        cli_run($fetchCmd, $rc);
+        cli_checked($g . 'remote set-url origin ' . esc(proj_repo_url($p)));
+        cli_run($g . 'fetch origin ' . esc($branch) . ' && ' . $g . 'checkout --detach --force FETCH_HEAD && ' . $g . 'clean -fd', $rc);
         if ($rc !== 0) {
-            cli_log('[git] Fetch/Reset failed. Re-cloning repository...');
+            cli_log('[git] Fetch failed. Re-cloning repository...');
             sh('rm -rf -- ' . esc($repo));
         }
     }
@@ -1457,23 +2431,11 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
             cli_log("[config-guard] Preserved and merged {$cfName} settings successfully.");
         }
     }
-    foreach (['data', 'data/backups', 'data/logs', 'data/workspaces', 'data/uploads', 'data/versions', 'data/sessions', 'logs', 'storage'] as $sub) {
-        $subDir = $dest . '/' . $sub;
-        if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
-    }
-    if (is_dir($dest . '/.venv') && !file_exists($dest . '/.venv/bin/python') && !file_exists($dest . '/.venv/bin/python3')) {
-        cli_log('[python] Removing incomplete/corrupted .venv directory...');
-        sh('rm -rf ' . esc($dest . '/.venv'));
-    }
     foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
-        $script .= "which() { local found=\"\"; for arg in \"\$@\"; do if [ -x \"\$arg\" ] && [ ! -d \"\$arg\" ]; then found=\"\$arg\"; break; fi; local p; p=\$(command -v \"\$arg\" 2>/dev/null || true); if [ -n \"\$p\" ]; then found=\"\$p\"; break; fi; done; if [ -n \"\$found\" ]; then echo \"\$found\"; return 0; fi; return 0; }\n";
         $script .= "pip() { if [ \"\$1\" = \"install\" ] && echo \"\$*\" | grep -q -- \"-r \"; then local req_file=\"\"; local args=(); local skip_next=0; for arg in \"\$@\"; do if [ \"\$skip_next\" -eq 1 ]; then req_file=\"\$arg\"; skip_next=0; elif [ \"\$arg\" = \"-r\" ] || [ \"\$arg\" = \"--requirement\" ]; then skip_next=1; else args+=(\"\$arg\"); fi; done; if [ -n \"\$req_file\" ]; then if [ ! -f \"\$req_file\" ]; then echo \"[pip-smart NOTICE] Requirements file '\$req_file' not present in project directory. Skipping.\"; return 0; fi; if ! command pip \"\$@\" 2>/dev/null; then echo \"[pip-smart] Bulk install encountered platform-incompatible dependencies (e.g. desktop browser binaries on Android/ARM64). Installing compatible packages line-by-line...\"; while IFS= read -r line || [ -n \"\$line\" ]; do pkg=\$(echo \"\$line\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 's/#.*//'); if [ -n \"\$pkg\" ]; then if ! command pip install \"\${args[@]:1}\" \"\$pkg\" --no-warn-script-location 2>/dev/null; then echo \"[pip-smart WARNING] Skipped incompatible package on \$(uname -m): \$pkg\"; fi; fi; done < \"\$req_file\"; echo \"[pip-smart] Resilient package installation completed.\"; return 0; fi; return 0; fi; fi; command pip \"\$@\"; }\n";
         $script .= "pip3() { pip \"\$@\"; }\n";
-        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; if ! command \"\$bin\" \"\$@\" 2>/dev/null; then echo \"[venv-smart] Standard venv failed (ensurepip/system wheel issue). Retrying with --without-pip and bootstrapping pip...\"; rm -rf \"\$vdir\" 2>/dev/null || true; command \"\$bin\" -m venv --without-pip \"\$vdir\" || return 0; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || curl -sS https://bootstrap.pypa.io/pip/3.6/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || true); fi; fi; }\n";
-        $script .= "python3() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python3 \"\$@\"; else command python3 \"\$@\"; fi; }\n";
-        $script .= "python() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python \"\$@\"; else command python \"\$@\"; fi; }\n";
         foreach (proj_runtime_env($p) as $k => $v) $script .= 'export ' . esc($k . '=' . $v) . "\n";
         $script .= str_replace(["\r\n", "\r"], "\n", $cmd) . "\n";
         $script = str_replace(["\r\n", "\r"], "\n", $script);
@@ -1543,6 +2505,14 @@ function public_project(array $p): array {
     $p['app_version'] = $appVer;
     $p['live_commit'] = $liveCommit;
     $p['live_branch'] = $liveBranch;
+
+    $p['node_version']=(string)($p['node_version']??'');
+    $p['python_version']=(string)($p['python_version']??'');
+    if(($p['type']??'')==='python'){$p['python_resolved']=wcp_python_version_of($p['python_version']);$p['python_venv']=wcp_py_venv_python((string)($p['deploy_path']??''));}
+    if(($p['type']??'')==='node'){$p['node_resolved']=wcp_node_version_of($p['node_version']);$p['node_sqlite']=$p['node_resolved']!==''&&wcp_node_has_sqlite($p['node_resolved']);}
+    $p['domain_enabled']=!empty($p['domain_enabled']);$p['domain']=(string)($p['domain']??'');$p['domain_path']=(string)($p['domain_path']??'/');$p['domain_kind']=dom_kind($p);
+    $p['domain_url']=dom_public_url($p);
+    try{$p['domain_mode_effective']=dom_enabled($p)?dom_mode_for($p):'';}catch(Throwable $e){$p['domain_mode_effective']='';}
     return $p;
 }
 function sysinfo(): array {
@@ -1557,13 +2527,12 @@ function sysinfo(): array {
     $a=$parse(@file_get_contents('/proc/stat'));usleep(60000);$b=$parse(@file_get_contents('/proc/stat'));
     $cpu=$a&&$b&&$b[0]>$a[0]?round(100*(1-($b[1]-$a[1])/($b[0]-$a[0])),1):null;
     $load=sys_getloadavg()?:[0,0,0];
-    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice','pm2','ollama']as$t)$tools[$t]=which($t);
+    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice','pm2']as$t)$tools[$t]=which($t);
     $tools['mysqldump']=which('mysqldump')||which('mariadb-dump');
     $nodeVer = $tools['node'] ? trim((string)sh_ok('node -v 2>/dev/null')) : '';
     $npmVer = $tools['npm'] ? trim((string)sh_ok('npm -v 2>/dev/null')) : '';
     $pyVer = $tools['python3'] ? trim(preg_replace('/^Python\s*/i', '', (string)sh_ok('python3 -V 2>/dev/null'))) : '';
     $pm2Ver = $tools['pm2'] ? trim((string)sh_ok('pm2 -v 2>/dev/null | tail -n 1')) : '';
-    $ollamaVer = $tools['ollama'] ? trim((string)sh_ok('ollama -v 2>/dev/null')) : '';
     return [
         'host'=>gethostname()?:'localhost',
         'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),
@@ -1580,7 +2549,7 @@ function sysinfo(): array {
         'term_mode'=>term_mode(),
         'ip'=>client_ip(),
         'tools'=>$tools,
-        'tools_versions'=>['node'=>$nodeVer,'npm'=>$npmVer,'python'=>$pyVer,'pm2'=>$pm2Ver,'ollama'=>$ollamaVer]
+        'tools_versions'=>['node'=>$nodeVer,'npm'=>$npmVer,'python'=>$pyVer,'pm2'=>$pm2Ver]
     ];
 }
 
@@ -1622,6 +2591,14 @@ function create_swap(int $sizeMb = 2048): array {
     return resize_swap($sizeMb);
 }
 
+function wcp_console_source(): string {
+    $configured = trim((string)(cfg()['console_file'] ?? ''));
+    if ($configured !== '' && preg_match('/^[A-Za-z0-9._-]+\.php$/', $configured)) return $configured;
+    $base = basename(__FILE__);
+    // index.php معمولاً کپی فایل اصلی است و نام ادیشن را نمی‌رساند.
+    if ($base !== '' && $base !== 'index.php' && preg_match('/^[A-Za-z0-9._-]+\.php$/', $base)) return $base;
+    return WCP_EDITION . '.php';
+}
 function console_check_update(string $repo = 'fazilatma/new', string $branch = 'main', string $token = ''): array {
     $parts = explode('/', trim($repo, '/'));
     if (count($parts) < 2) throw new RuntimeException('نام مخزن نامعتبر است (الگو: owner/repo)');
@@ -1637,8 +2614,9 @@ function console_check_update(string $repo = 'fazilatma/new', string $branch = '
     $commitDate = (string)($commitData['commit']['author']['date'] ?? '');
     $commitAuthor = (string)($commitData['commit']['author']['name'] ?? 'fazilatma');
     
-    // 2. Fetch remote webconsole.php content to detect version
-    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    // 2. Fetch the remote copy of THIS console file (hostconsole.php / webconsole.php) to detect version
+    $sourceFile = wcp_console_source();
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, $sourceFile, $token);
     $remoteVersion = WCP_VERSION;
     if ($rawPhp && preg_match("/define\(['\"]WCP_VERSION['\"],\s*['\"]([^'\"]+)['\"]\)/", $rawPhp, $vm)) {
         $remoteVersion = $vm[1];
@@ -1647,6 +2625,8 @@ function console_check_update(string $repo = 'fazilatma/new', string $branch = '
     $hasUpdate = version_compare($remoteVersion, WCP_VERSION, '>') || ($rawPhp && md5_file(__FILE__) !== md5($rawPhp));
     return [
         'current_version' => WCP_VERSION,
+        'edition' => WCP_EDITION,
+        'source_file' => $sourceFile,
         'remote_version' => $remoteVersion,
         'has_update' => (bool)$hasUpdate,
         'repo' => $repo,
@@ -1666,9 +2646,10 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
     $branch = trim($branch) ?: 'main';
     $token = $token ?: (string)(cfg()['gh_token'] ?? '');
     
-    $rawPhp = gh_raw_get($owner, $repoName, $branch, 'webconsole.php', $token);
+    $sourceFile = wcp_console_source();
+    $rawPhp = gh_raw_get($owner, $repoName, $branch, $sourceFile, $token);
     if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
-        $apiUrl = "https://api.github.com/repos/{$owner}/{$repoName}/contents/webconsole.php?ref=" . rawurlencode($branch);
+        $apiUrl = "https://api.github.com/repos/{$owner}/{$repoName}/contents/" . rawurlencode($sourceFile) . "?ref=" . rawurlencode($branch);
         $fileJson = gh_http_get($apiUrl, $token);
         if (!empty($fileJson['content']) && ($fileJson['encoding'] ?? '') === 'base64') {
             $rawPhp = base64_decode($fileJson['content']);
@@ -1676,7 +2657,7 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
     }
     
     if (!$rawPhp || strlen($rawPhp) < 10000 || strpos($rawPhp, '<?php') === false) {
-        throw new RuntimeException('دریافت فایل webconsole.php از گیت‌هاب با شکست مواجه شد. لطفاً توکن یا نام مخزن و شاخه را بررسی کنید.');
+        throw new RuntimeException('دریافت فایل ' . $sourceFile . ' از شاخهٔ ' . $branch . ' با شکست مواجه شد. توکن، نام مخزن و شاخه را بررسی کنید.');
     }
     
     $newVer = WCP_VERSION;
@@ -1695,6 +2676,10 @@ function console_self_update(string $repo = 'fazilatma/new', string $branch = 'm
         }
     }
     
+    if (defined('WCP_EDITION') && strpos($rawPhp, "WCP_EDITION', '" . WCP_EDITION . "'") === false && strpos($rawPhp, 'WCP_EDITION') !== false) {
+        @unlink($tmpFile);
+        throw new RuntimeException('فایل دریافتی از ادیشن دیگری است و جایگزین نشد. در تنظیمات، console_file را درست کنید.');
+    }
     $targetFile = __FILE__;
     $indexFile = dirname($targetFile) . '/index.php';
     
@@ -1911,16 +2896,94 @@ function check_file_syntax(string $path, string $content): array {
 
 
 
+/* ───────── Universal Forward Proxy Gateway: تنظیمات و نگهبان SSRF ───────── */
+function gw_cfg(): array {
+    $c = cfg();
+    return [
+        'enabled'       => !isset($c['gw_enabled']) || !empty($c['gw_enabled']),
+        'token'         => trim((string)($c['gw_token'] ?? '')),
+        'allow_private' => !empty($c['gw_allow_private']),
+        'forward_auth'  => !empty($c['gw_forward_auth']),
+        'allow_hosts'   => array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', (string)($c['gw_allow_hosts'] ?? '')) ?: []))),
+    ];
+}
+/** آدرس عمومی خودِ دروازه، بر اساس همین درخواست — تا کاربر حدس نزند کجاست. */
+function gw_public_url(): string {
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+          || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+          || ((int)($_SERVER['SERVER_PORT'] ?? 80) === 443);
+    $host = (string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost');
+    $path = (string)($_SERVER['SCRIPT_NAME'] ?? '/index.php');
+    return ($https ? 'https://' : 'http://') . $host . $path;
+}
+/** آیا این IP در محدوده‌های خصوصی/لوکال/رزروشده است؟ */
+function gw_ip_is_private(string $ip): bool {
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) return false;
+    return true;   // یعنی fail کرد، پس خصوصی/رزروشده است
+}
+/**
+ * اعتبارسنجی مقصد پروکسی. جلوی SSRF را می‌گیرد: localhost، شبکهٔ داخلی،
+ * و 169.254.169.254 (متادیتای ابری) — همان جاهایی که پروژه‌های bind‌شده روی 127.0.0.1 آنجا هستند.
+ */
+function gw_check_target(string $url, array $g, ?string &$err = null): bool {
+    $err = null;
+    $parts = @parse_url($url);
+    if (!$parts || empty($parts['host']) || empty($parts['scheme'])) { $err = 'آدرس مقصد نامعتبر است.'; return false; }
+    if (!in_array(strtolower($parts['scheme']), ['http', 'https'], true)) { $err = 'فقط http و https مجاز است.'; return false; }
+    $host = strtolower($parts['host']);
+    if ($g['allow_hosts']) {
+        $ok = false;
+        foreach ($g['allow_hosts'] as $pat) {
+            $pat = strtolower(ltrim($pat, '.'));
+            if ($host === $pat || (strlen($host) > strlen($pat) && substr($host, -strlen('.' . $pat)) === '.' . $pat)) { $ok = true; break; }
+        }
+        if (!$ok) { $err = 'دامنهٔ «' . $host . '» در فهرست مجاز دروازه نیست.'; return false; }
+    }
+    if ($g['allow_private']) return true;
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) { $ips[] = $host; }
+    else {
+        $ips = array_merge(gethostbynamel($host) ?: [], array_map(function($r){ return $r['ipv6'] ?? ''; }, @dns_get_record($host, DNS_AAAA) ?: []));
+        $ips = array_values(array_filter($ips));
+        if (!$ips) { $err = 'نام دامنهٔ «' . $host . '» قابل resolve نیست.'; return false; }
+    }
+    foreach ($ips as $ip) {
+        if (gw_ip_is_private($ip)) {
+            $err = 'مقصد به یک نشانی داخلی (' . $ip . ') اشاره می‌کند و برای جلوگیری از SSRF مسدود شد.';
+            return false;
+        }
+    }
+    return true;
+}
+/** Location نسبی را به آدرس مطلق تبدیل می‌کند. */
+function gw_absolute_url(string $base, string $rel): string {
+    if (preg_match('#^https?://#i', $rel)) return $rel;
+    $b = @parse_url($base);
+    if (!$b || empty($b['scheme']) || empty($b['host'])) return $rel;
+    $root = $b['scheme'] . '://' . $b['host'] . (isset($b['port']) ? ':' . $b['port'] : '');
+    if ($rel === '') return $base;
+    if ($rel[0] === '/') return $root . $rel;
+    $dir = isset($b['path']) ? preg_replace('#/[^/]*$#', '/', $b['path']) : '/';
+    return $root . $dir . $rel;
+}
+function gw_deny(int $code, string $msg): void {
+    while (ob_get_level() > 0) @ob_end_clean();
+    http_response_code($code);
+    header('Content-Type: text/plain; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo "WebConsole proxy gateway: " . $msg . "\n";
+    exit;
+}
 function handle_universal_proxy(string $targetUrl): void {
     while (ob_get_level() > 0) @ob_end_clean();
     $targetUrl = trim($targetUrl);
-    
+    $gw = gw_cfg();
+
     if (!preg_match('#^https?://#i', $targetUrl)) {
-        http_response_code(400);
-        header('Content-Type: text/plain; charset=utf-8');
-        echo "Error: Invalid target URL. Must begin with http:// or https://";
-        exit;
+        gw_deny(400, 'آدرس مقصد باید با http:// یا https:// شروع شود.');
     }
+    $gwErr = null;
+    if (!gw_check_target($targetUrl, $gw, $gwErr)) gw_deny(403, (string)$gwErr);
     
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
     
@@ -1956,9 +3019,15 @@ function handle_universal_proxy(string $targetUrl): void {
     $hasAccept = false;
     
     $excludedHeaders = ['host', 'connection', 'transfer-encoding', 'content-length', 'accept-encoding'];
+    // اعتبارنامه‌ها به‌صورت پیش‌فرض فوروارد نمی‌شوند؛ وگرنه کوکی نشست خودِ کنسول به سایت مقصد لو می‌رود.
+    if (!$gw['forward_auth']) { $excludedHeaders[] = 'cookie'; $excludedHeaders[] = 'authorization'; $excludedHeaders[] = 'proxy-authorization'; }
     foreach ($incomingHeaders as $hKey => $hVal) {
         $lowKey = strtolower($hKey);
         if (in_array($lowKey, $excludedHeaders, true)) continue;
+        if ($lowKey === 'cookie') {
+            $hVal = trim(implode('; ', array_filter(array_map('trim', explode(';', (string)$hVal)), function($c){ return stripos($c, session_name() . '=') !== 0; })));
+            if ($hVal === '') continue;
+        }
         if ($lowKey === 'user-agent') $hasUserAgent = true;
         if ($lowKey === 'accept') $hasAccept = true;
         $headersToSend[] = "{$hKey}: {$hVal}";
@@ -1981,8 +3050,8 @@ function handle_universal_proxy(string $targetUrl): void {
         $curlOpts = [
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $headersToSend,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_FOLLOWLOCATION => false,   // ریدایرکت‌ها دستی و با اعتبارسنجی مجدد دنبال می‌شوند (ضد SSRF)
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => 600,
             CURLOPT_CONNECTTIMEOUT => 30,
             CURLOPT_SSL_VERIFYPEER => false,
@@ -2034,11 +3103,39 @@ function handle_universal_proxy(string $targetUrl): void {
         };
         
         curl_setopt_array($ch, $curlOpts);
-        curl_exec($ch);
-        $errNo = curl_errno($ch);
-        $errMsg = curl_error($ch);
+        // هر ریدایرکت را قبل از دنبال‌کردن دوباره اعتبارسنجی می‌کنیم تا 302 به 127.0.0.1 بی‌اثر شود.
+        $hops = 0; $current = $targetUrl; $errNo = 0; $errMsg = '';
+        while (true) {
+            $redirectTo = '';
+            $statusSeen = 0;
+            curl_setopt($ch, CURLOPT_URL, $current);
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($c, $headerLine) use (&$redirectTo, &$statusSeen, $curlOpts) {
+                $len = strlen($headerLine); $trimmed = trim($headerLine);
+                if ($trimmed === '') return $len;
+                if (preg_match('#^HTTP/\S+\s+(\d+)\b#i', $trimmed, $m)) { $statusSeen = (int)$m[1]; return $len; }
+                $colon = strpos($trimmed, ':');
+                if ($colon === false) return $len;
+                $name = strtolower(trim(substr($trimmed, 0, $colon)));
+                $value = trim(substr($trimmed, $colon + 1));
+                if ($statusSeen >= 300 && $statusSeen < 400 && $name === 'location') { $redirectTo = $value; return $len; }
+                if ($statusSeen >= 300 && $statusSeen < 400) return $len;   // هدرهای پاسخ موقتِ ریدایرکت را پاس نمی‌دهیم
+                return ($curlOpts[CURLOPT_HEADERFUNCTION])($c, $headerLine);
+            });
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($c, $chunk) use (&$statusSeen, $curlOpts) {
+                if ($statusSeen >= 300 && $statusSeen < 400) return strlen($chunk);   // بدنهٔ ریدایرکت دور ریخته می‌شود
+                return ($curlOpts[CURLOPT_WRITEFUNCTION])($c, $chunk);
+            });
+            curl_exec($ch);
+            $errNo = curl_errno($ch); $errMsg = curl_error($ch);
+            if ($errNo !== 0 || $redirectTo === '') break;
+            if (++$hops > 10) { $errNo = -1; $errMsg = 'Too many redirects'; break; }
+            $next = gw_absolute_url($current, $redirectTo);
+            $hopErr = null;
+            if (!gw_check_target($next, $gw, $hopErr)) { curl_close($ch); gw_deny(403, 'ریدایرکت به مقصد غیرمجاز مسدود شد: ' . (string)$hopErr); }
+            $current = $next;
+        }
         curl_close($ch);
-        
+
         if ($errNo !== 0 && !headers_sent()) {
             http_response_code(502);
             header('Content-Type: text/plain; charset=utf-8');
@@ -2052,7 +3149,7 @@ function handle_universal_proxy(string $targetUrl): void {
                 'content' => $rawBody,
                 'timeout' => 600,
                 'ignore_errors' => true,
-                'follow_location' => 1
+                'follow_location' => 0
             ],
             'ssl' => [
                 'verify_peer' => false,
@@ -2110,20 +3207,75 @@ function handle_api() {
             'node' => 'نصب و ارتقای Node.js 20 LTS و PM2',
             'python_scrapers' => 'نصب Python 3 و پکیج‌های اسکرپینگ',
             'browser_deps' => 'نصب نیازمندی‌های مرورگرهای بدون سر (Puppeteer / Playwright)',
-            'ollama' => 'نصب Ollama و محیط مدل‌های محلی هوش مصنوعی',
             'all' => 'نصب کامل تمامی پیش‌نیازها و محیط‌های اجرایی سرور'
         ];
         $title = $titles[$comp] ?? 'نصب پیش‌نیازهای سرور';
         $job = job_create('install_component', $title, ['component' => $comp]);
         job_start($job);
         jout(true, ['job' => $job['id'], 'title' => $title]);
+    case 'sys.python_versions':
+        $want=trim((string)($in['want']??''));
+        jout(true,['versions'=>wcp_uv_pythons(),'selected'=>wcp_python_version_of($want),
+                   'console_default'=>(string)(cfg()['python_version']??''),
+                   'uv_bin'=>wcp_uv_bin(),'uv_installed'=>(wcp_uv_bin()!==''),
+                   'system_python'=>trim((string)sh_ok('python3 -V 2>&1'))]);
+    case 'sys.python_install':
+        $ver=trim((string)($in['version']??''));
+        if(!preg_match('/^\\d+(\\.\\d+){0,2}$/',$ver))jout(false,null,'نسخهٔ پایتون نامعتبر است؛ مثلاً 3.14 یا 3.12.7');
+        $uv=wcp_uv_bin();
+        if($uv==='')jout(false,null,'uv نصب نیست. اول py-upgrade.sh را اجرا کنید تا uv و پایتون نصب شود.');
+        $job=job_create('python_install','نصب پایتون '.$ver.' با uv',['version'=>$ver]);
+        job_start($job);
+        jout(true,['job'=>$job['id'],'version'=>$ver]);
+    case 'sys.node_versions':
+        $want=trim((string)($in['want']??''));
+        $sel=wcp_nvm_node_bin($want);
+        jout(true,['versions'=>wcp_nvm_versions(),'selected'=>wcp_node_version_of($want),'selected_bin'=>$sel,
+                   'default_alias'=>wcp_nvm_default_alias(),'console_default'=>(string)(cfg()['node_version']??''),
+                   'nvm_dir'=>(wcp_account_home()!==''?wcp_account_home().'/.nvm':''),'nvm_installed'=>(wcp_account_home()!==''&&is_file(wcp_account_home().'/.nvm/nvm.sh')),
+                   'system_node'=>ltrim(trim((string)sh_ok('node -v 2>/dev/null')),'vV')]);
+    case 'sys.nvm_install':
+        $ver=trim((string)($in['version']??'24'));
+        if(!preg_match('/^\d+(\.\d+){0,2}$/',$ver))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
+        $job=job_create('nvm_install','نصب Node.js '.$ver.' با NVM',['version'=>$ver,'set_default'=>!empty($in['set_default'])]);
+        job_start($job);
+        jout(true,['job'=>$job['id'],'version'=>$ver]);
+    case 'gw.info':
+        $g=gw_cfg();
+        jout(true,['enabled'=>$g['enabled'],'has_token'=>$g['token']!=='','allow_private'=>$g['allow_private'],
+                   'forward_auth'=>$g['forward_auth'],'allow_hosts'=>$g['allow_hosts'],
+                   'url'=>gw_public_url(),
+                   'example'=>gw_public_url().'?url='.rawurlencode('https://example.com').($g['token']!==''?'&key='.$g['token']:''),
+                   'curl'=>function_exists('curl_init'),'allow_url_fopen'=>(bool)ini_get('allow_url_fopen'),
+                   'script'=>(string)($_SERVER['SCRIPT_NAME']??''),'host'=>(string)($_SERVER['HTTP_HOST']??'')]);
+    case 'gw.test':
+        $g=gw_cfg();
+        $t=trim((string)($in['target']??'https://api.github.com/zen'));
+        if($t==='')$t='https://api.github.com/zen';
+        if(!$g['enabled'])jout(false,null,'دروازهٔ پروکسی غیرفعال است.');
+        $e=null; if(!gw_check_target($t,$g,$e))jout(false,null,(string)$e);
+        if(!function_exists('curl_init'))jout(false,null,'افزونهٔ cURL روی این هاست نصب نیست؛ دروازه از fallback کندتر استفاده می‌کند.');
+        $ch=curl_init($t);
+        curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_CONNECTTIMEOUT=>10,
+            CURLOPT_FOLLOWLOCATION=>false,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>0,
+            CURLOPT_PROTOCOLS=>CURLPROTO_HTTP|CURLPROTO_HTTPS,CURLOPT_HTTPHEADER=>['User-Agent: WebConsole-Pro/'.WCP_VERSION,'Accept: */*']]);
+        $t0=microtime(true);$body=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$ce=curl_error($ch);curl_close($ch);
+        jout(true,['target'=>$t,'status'=>$code,'ms'=>(int)round((microtime(true)-$t0)*1000),
+                   'error'=>$ce,'bytes'=>is_string($body)?strlen($body):0,
+                   'preview'=>is_string($body)?mb_substr(strip_tags($body),0,200):'']);
     case 'sysinfo': jout(true,sysinfo());
     case 'sys.emergency_rescue': jout(true,emergency_rescue());
     case 'sys.swap_info': jout(true, sysinfo()['swap']);
     case 'sys.create_swap':
     case 'sys.resize_swap': jout(true, resize_swap((int)($in['size_mb'] ?? 2048)));
-    case 'console.check_update': jout(true, console_check_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
-    case 'console.self_update': jout(true, console_self_update((string)($in['repo'] ?? 'fazilatma/new'), (string)($in['branch'] ?? 'main'), (string)($in['token'] ?? '')));
+    case 'console.check_update': case 'console.self_update': {
+        $c = cfg();
+        $repo   = trim((string)($in['repo'] ?? ''))   !== '' ? trim((string)$in['repo'])   : (string)($c['update_repo']   ?? 'fazilatma/new');
+        $branch = trim((string)($in['branch'] ?? '')) !== '' ? trim((string)$in['branch']) : (string)($c['update_branch'] ?? 'main');
+        $token  = trim((string)($in['token'] ?? ''));
+        if ($token === '' || $token === '__KEEP__') $token = (string)($c['update_token'] ?? '');
+        jout(true, $api === 'console.check_update' ? console_check_update($repo, $branch, $token) : console_self_update($repo, $branch, $token));
+    }
     case 'gh.list_contents': jout(true, gh_list_contents((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
     case 'gh.get_file': jout(true, gh_get_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['token'] ?? '')));
     case 'gh.put_file': jout(true, gh_put_file_content((string)($in['repo'] ?? ''), (string)($in['branch'] ?? 'main'), (string)($in['path'] ?? ''), (string)($in['content'] ?? ''), (string)($in['sha'] ?? ''), (string)($in['message'] ?? ''), (string)($in['token'] ?? '')));
@@ -2249,37 +3401,28 @@ function handle_api() {
         $list=proj_all();$p=$in['project']??[];foreach(['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','port','id']as$k)$p[$k]=trim((string)($p[$k]??''));if($p['name']==='')jout(false,null,'Name is required');if($p['repo_url']!==''&&!preg_match('~^(https?://|git@|ssh://|file://|/)~',$p['repo_url']))jout(false,null,'Invalid repository URL');if($p['branch']==='')$p['branch']='main';if($p['branch'][0]==='-'||preg_match('~(^|/)\.\.(/|$)~',$p['subfolder']))jout(false,null,'Invalid branch/subfolder');
         $env=[];foreach(preg_split('/\r\n|\r|\n/',(string)($p['env_text']??''))as$l){$l=trim($l);if($l===''||$l[0]==='#'||strpos($l,'=')===false)continue;[$k,$v]=explode('=',$l,2);$k=trim($k);if(!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/',$k))jout(false,null,'Invalid environment key');$env[$k]=trim($v);}unset($p['env_text']);$p['env']=$env;
         if($api==='proj.quick_deploy')$p=proj_quick_settings($p);
+        $p['node_version']=trim((string)($p['node_version']??''));
+        if($p['node_version']!==''&&!preg_match('/^\d+(\.\d+){0,2}$/',$p['node_version']))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
+        $p['python_version']=trim((string)($p['python_version']??''));
+        if($p['python_version']!==''&&!preg_match('/^\\d+(\\.\\d+){0,2}$/',$p['python_version']))jout(false,null,'نسخهٔ پایتون نامعتبر است؛ مثلاً 3.14 یا 3.12.7');
+        $p=dom_sanitize_project_input($p);
         if(($p['auth_token']??'')==='__KEEP__'||($p['auth_token']??'')==='')unset($p['auth_token']);$p['keep_git']=!empty($p['keep_git']);$p['preserve_configs']=!isset($p['preserve_configs'])||!empty($p['preserve_configs']);$p['auto_start']=!empty($p['auto_start']);$p['is_daemon']=!empty($p['is_daemon']);$p['auto_update']=!empty($p['auto_update']);$p['auto_update_interval']=max(30,min(86400,(int)($p['auto_update_interval']??60)));$existing=$p['id']!==''?proj_find($list,$p['id']):null;if(!$existing)$p['id']=wcp_random(5);$p['deploy_path']=proj_resolve_deploy_path($p,$existing);if($p['deploy_path']==='/')jout(false,null,'Invalid deployment root');
         $found=false;if($p['id']!==''){foreach($list as&$x)if($x['id']===$p['id']){$p=array_merge($x,$p);$x=$p;$found=true;}unset($x);}if(!$found){$p['created']=date('c');$list[]=$p;}proj_save_all($list);
-        if($api==='proj.quick_deploy'){$job=job_create('deploy','دیپلوی: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['project'=>public_project($p),'job'=>$job['id']]);}jout(true,['projects'=>array_map('public_project',proj_all())]);
+        $domain=null;$domainError='';if(dom_enabled($p)){try{$domain=dom_apply($p);}catch(Throwable $e){$domainError=$e->getMessage();}}
+        if($api==='proj.quick_deploy'){$job=job_create('deploy','دیپلوی: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['project'=>public_project($p),'job'=>$job['id'],'domain'=>$domain,'domain_error'=>$domainError]);}jout(true,['projects'=>array_map('public_project',proj_all()),'domain'=>$domain,'domain_error'=>$domainError]);
     case 'proj.delete': cli_stop_service((string)$in['id']);proj_save_all(array_values(array_filter(proj_all(),fn($x)=>$x['id']!==$in['id'])));jout(true);
     case 'proj.toggle_auto_update':
         $list=proj_all();$id=(string)($in['id']??'');$found=false;$p=null;foreach($list as&$x){if($x['id']===$id){$x['auto_update']=empty($x['auto_update']);if(empty($x['auto_update_interval']))$x['auto_update_interval']=60;$found=true;$p=$x;}}unset($x);if(!$found)jout(false,null,'Project not found');proj_save_all($list);
         $pollRes=null;if(!empty($p['auto_update'])){proj_install_cron();$pollRes=proj_poll_auto_updates();}
         jout(true,['project'=>public_project($p),'auto_update'=>$p['auto_update'],'poll'=>$pollRes]);
     case 'proj.check_update':
-        $id = (string)($in['id'] ?? '');
-        $p = proj_find(proj_all(), $id);
-        if (!$p) jout(false, null, 'Project not found');
-        $deployDir = proj_resolve_deploy_path($p);
-        $remote = proj_check_remote_commit($p);
-        $local = $p['last_deploy']['commit'] ?? '';
-        if (empty($local) && !empty($deployDir) && is_dir($deployDir)) {
-            $local = trim(sh_ok('git -c safe.directory=* -C ' . esc($deployDir) . ' rev-parse --short HEAD 2>/dev/null'));
+        $id=(string)($in['id']??'');$p=proj_find(proj_all(),$id);if(!$p)jout(false,null,'Project not found');
+        $remote=proj_check_remote_commit($p);$local=$p['last_deploy']['commit']??'';
+        if(empty($local)&&!empty($p['deploy_path'])&&is_dir(safe_path($p['deploy_path']))){
+            $local=trim(sh_ok('git -c safe.directory=* -C '.esc(safe_path($p['deploy_path'])).' rev-parse --short HEAD 2>/dev/null'));
         }
-        if (empty($local) && !empty($deployDir) && is_file($deployDir . '/.deploy.json')) {
-            $depMeta = @json_decode((string)@file_get_contents($deployDir . '/.deploy.json'), true);
-            if (!empty($depMeta['commit'])) $local = $depMeta['commit'];
-        }
-        $hasUpdate = ($remote && ($local === '' || substr($remote, 0, 7) !== substr($local, 0, 7)));
-        $appVer = wcp_detect_project_version($deployDir);
-        jout(true, [
-            'remote_commit' => $remote,
-            'local_commit' => $local,
-            'has_update' => $hasUpdate,
-            'branch' => $p['branch'] ?: 'main',
-            'app_version' => $appVer
-        ]);
+        $hasUpdate=($remote&&($local===''||substr($remote,0,7)!==substr($local,0,7)));
+        jout(true,['remote_commit'=>$remote,'local_commit'=>$local,'has_update'=>$hasUpdate,'branch'=>$p['branch']?:'main']);
     case 'proj.poll_auto_updates':
         jout(true,proj_poll_auto_updates());
     case 'proj.install_cron':
@@ -2296,6 +3439,43 @@ function handle_api() {
         if($old){foreach(glob(JOBS_DIR.'/*.json')?:[]as$file){$active=json_decode((string)@file_get_contents($file),true);if(($active['params']['project_id']??null)===$id&&in_array($active['type']??'',['deploy','service'],true)&&job_status($active)['status']==='running')jout(false,null,'Stop or finish the active deployment/service before changing its storage location.');}$svc=proj_service_job($old);if($svc&&job_status($svc)['status']==='running')jout(false,null,'Stop the existing service before changing its storage location.');if(!proj_empty_location((string)($old['deploy_path']??'')))jout(false,null,'Existing installation contains data or cannot be inspected. No files were moved. Keep its path, or ask an administrator to migrate the full installation, database, .env.local and vault key first.');}
         $storage=proj_storage_status(true);if(!$storage['ready'])jout(false,null,$storage['error']);
         $path=proj_managed_path((string)($in['name']??($old['name']??'project')),$id?:wcp_random(5));if(file_exists($path)||is_link($path))jout(false,null,'Managed destination already exists; refusing to reuse it.');jout(true,['path'=>$path]);
+    case 'dom.detect':
+        jout(true, dom_detect());
+    case 'dom.list':
+        $rows=[];foreach(proj_all() as $pp){$svc=proj_service_job($pp);$row=public_project($pp);$row['service_running']=$svc&&job_status($svc)['status']==='running';
+            try{$row['status']=dom_status($pp,false);}catch(Throwable $e){$row['status']=['enabled'=>dom_enabled($pp),'warnings'=>[$e->getMessage()]];}
+            $rows[]=$row;}
+        jout(true,['projects'=>$rows,'detect'=>dom_detect()]);
+    case 'dom.status':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        jout(true,dom_status($p,!empty($in['probe'])));
+    case 'dom.preview':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        if(isset($in['override'])&&is_array($in['override']))$p=dom_sanitize_project_input(array_merge($p,$in['override']));
+        if(trim((string)($p['domain']??''))==='')jout(false,null,'ابتدا نام دامنه/ساب‌دامین را وارد کنید');
+        jout(true,dom_config_preview($p));
+    case 'dom.apply':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        if(!dom_enabled($p))jout(false,null,'ابتدا در تنظیمات پروژه، «انتشار روی دامنه» را فعال و ذخیره کنید.');
+        jout(true,dom_apply($p));
+    case 'dom.remove':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        $rep=dom_remove($p);
+        if(!empty($in['disable'])){$list=proj_all();foreach($list as &$x)if($x['id']===$p['id'])$x['domain_enabled']=false;unset($x);proj_save_all($list);}
+        jout(true,$rep);
+    case 'dom.fix_parent':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        jout(true,dom_fix_parent($p));
+    case 'dom.test':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');
+        jout(true,dom_status($p,true));
+    case 'dom.settings':
+        $new=[];
+        if(isset($in['base_domain'])){$bd=trim((string)$in['base_domain']);$new['base_domain']=$bd===''?'':dom_norm_domain($bd);}
+        if(isset($in['web_root'])){$wr=dom_expand_home((string)$in['web_root']);$new['web_root']=$wr===''?'':rtrim(norm_path($wr),'/');}
+        if(isset($in['domain_mode'])){if(!in_array($in['domain_mode'],DOM_MODES,true))jout(false,null,'حالت پیش‌فرض نامعتبر است');$new['domain_mode']=(string)$in['domain_mode'];}
+        if(isset($in['cf_tunnel'])){$new['cf_tunnel']=preg_replace('/[^A-Za-z0-9_\-]/','',(string)$in['cf_tunnel']);}
+        cfg_save($new);jout(true,dom_detect());
     case 'proj.preflight':
         $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');jout(true,proj_preflight($p));
     case 'proj.deploy':
@@ -2305,7 +3485,8 @@ function handle_api() {
         if (!$p) jout(false, null, 'Project not found');
         $act = $in['action'] ?? 'start';
         if (in_array($act, ['stop', 'restart'], true)) cli_stop_service($p['id']);
-        if ($act === 'stop') jout(true);
+        if ($act === 'stop') { proj_set_desired($p['id'], false); jout(true); }
+        proj_set_desired($p['id'], true);
         if (empty($p['start_cmd'])) jout(false, null, 'Start command is empty');
         if ($act === 'restart') usleep(300000);
         $svc = proj_service_job($p);
@@ -2363,7 +3544,7 @@ function handle_api() {
                 'theme', 'layout', 'density', 'project_root', 'fs_start', 'session_minutes',
                 'allowed_ips', 'gh_token', 'gh_repo', 'gh_branch', 'git_name', 'git_email',
                 'split_mb', 'tmux_width', 'tmux_height', 'proxy_mode', 'proxy_cf_url',
-                'cf_proxy', 'cf_proxy_mode'
+                'cf_proxy', 'cf_proxy_mode', 'web_root', 'base_domain', 'domain_mode', 'cf_tunnel'
             ];
             $newCfg = [];
             foreach ($allowedKeys as $k) {
@@ -2416,9 +3597,18 @@ function handle_api() {
         ]);
 
     case 'settings.get':
-        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','noexec'=>$GLOBALS['__NOEXEC']]);
+        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'proxy_mode'=>$c['proxy_mode']??'auto','proxy_cf_url'=>$c['proxy_cf_url']??'https://proxy.fazilat-ma.workers.dev/?url=https://example.com/page','web_root'=>$c['web_root']??'','base_domain'=>$c['base_domain']??'','domain_mode'=>$c['domain_mode']??'auto','cf_tunnel'=>$c['cf_tunnel']??'wcp-tunnel','noexec'=>$GLOBALS['__NOEXEC'],'gw_enabled'=>!isset($c['gw_enabled'])||!empty($c['gw_enabled']),'gw_token'=>(string)($c['gw_token']??''),'gw_allow_private'=>!empty($c['gw_allow_private']),'gw_forward_auth'=>!empty($c['gw_forward_auth']),'gw_allow_hosts'=>(string)($c['gw_allow_hosts']??''),'gw_url'=>gw_public_url(),'update_repo'=>(string)($c['update_repo']??'fazilatma/new'),'update_branch'=>(string)($c['update_branch']??'main'),'update_token_set'=>trim((string)($c['update_token']??''))!=='' ]);
     case 'settings.save':
-        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}cfg_save($new);jout(true);
+        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);if(isset($in['proxy_mode'])){if(!in_array($in['proxy_mode'],['direct','auto','cf_proxy'],true))jout(false,null,'Invalid proxy mode');$new['proxy_mode']=$in['proxy_mode'];}if(isset($in['proxy_cf_url'])){$new['proxy_cf_url']=trim((string)$in['proxy_cf_url']);}if(isset($in['base_domain'])){$bd=trim((string)$in['base_domain']);$new['base_domain']=$bd===''?'':dom_norm_domain($bd);}if(isset($in['web_root'])){$wr=dom_expand_home((string)$in['web_root']);$new['web_root']=$wr===''?'':rtrim(norm_path($wr),'/');}if(isset($in['domain_mode'])){if(!in_array($in['domain_mode'],DOM_MODES,true))jout(false,null,'حالت انتشار نامعتبر است');$new['domain_mode']=(string)$in['domain_mode'];}if(isset($in['cf_tunnel'])){$new['cf_tunnel']=preg_replace('/[^A-Za-z0-9_\-]/','',(string)$in['cf_tunnel']);}
+        if(isset($in['gw_enabled']))$new['gw_enabled']=!empty($in['gw_enabled']);
+        if(isset($in['gw_allow_private']))$new['gw_allow_private']=!empty($in['gw_allow_private']);
+        if(isset($in['gw_forward_auth']))$new['gw_forward_auth']=!empty($in['gw_forward_auth']);
+        if(isset($in['gw_allow_hosts']))$new['gw_allow_hosts']=trim((string)$in['gw_allow_hosts']);
+        if(isset($in['update_repo'])){$r=trim((string)$in['update_repo']);if($r!==''&&!preg_match('~^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$~',$r))jout(false,null,'قالب مخزن باید owner/repo باشد؛ مثلاً fazilatma/new');$new['update_repo']=$r===''?'fazilatma/new':$r;}
+        if(isset($in['update_branch'])){$b=trim((string)$in['update_branch']);if($b!==''&&!preg_match('~^[A-Za-z0-9._/-]{1,120}$~',$b))jout(false,null,'نام شاخه نامعتبر است');$new['update_branch']=$b===''?'main':$b;}
+        if(isset($in['update_token'])){$t=trim((string)$in['update_token']);if($t!=='__KEEP__')$new['update_token']=$t;}
+        if(isset($in['gw_token'])){$t=trim((string)$in['gw_token']);if($t!==''&&!preg_match('/^[A-Za-z0-9_\-]{8,128}$/',$t))jout(false,null,'کلید دروازه باید ۸ تا ۱۲۸ کاراکتر از حروف، عدد، خط تیره یا زیرخط باشد');$new['gw_token']=$t;}
+        cfg_save($new);jout(true);
     case 'proxy.test':
         $testUrl = trim((string)($in['target_url'] ?? 'https://api.github.com/zen'));
         if ($testUrl === '') $testUrl = 'https://api.github.com/zen';
@@ -2513,7 +3703,7 @@ function default_install_cmd(string $type): string {
         case 'node':
             return 'if [ -f package-lock.json ]; then (npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund); elif [ -f package.json ]; then npm install --include=dev --no-audit --no-fund; fi';
         case 'python':
-            return 'if [ -f requirements.txt ]; then if command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ]; then UVBIN=$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv"); $UVBIN venv --clear --seed .venv 2>/dev/null || true; if [ -f ".venv/bin/pip" ]; then ($UVBIN pip install -r requirements.txt 2>/dev/null || .venv/bin/pip install -r requirements.txt 2>/dev/null || true); fi; fi; if [ ! -f ".venv/bin/python3" ] && [ ! -f ".venv/bin/python" ]; then if ! (pip3 install --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages --ignore-installed "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null || pip3 install "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages --ignore-installed . --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null || pip3 install . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages --ignore-installed flask requests beautifulsoup4 lxml python-dotenv basalam-sdk selectolax html5lib psutil --no-warn-script-location 2>/dev/null || true); fi';
+            return 'if [ -f requirements.txt ]; then if ! (pip3 install --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages -r requirements.txt --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages --ignore-installed -r requirements.txt --no-warn-script-location 2>/dev/null); then echo "[deploy-installer] Bulk install failed. Installing packages line-by-line..."; while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then if ! (pip3 install --break-system-packages --ignore-installed "$pkg" --no-warn-script-location 2>/dev/null || pip3 install --user --break-system-packages "$pkg" --no-warn-script-location 2>/dev/null); then echo "[deploy-installer WARNING] Skipped incompatible package: $pkg"; fi; fi; done < requirements.txt; echo "[deploy-installer] Resilient installation completed."; fi; elif [ -f setup.py ] || [ -f pyproject.toml ]; then (pip3 install --break-system-packages --ignore-installed . --no-warn-script-location 2>/dev/null || pip3 install --break-system-packages . --no-warn-script-location 2>/dev/null); elif [ -f scraper4.py ] || [ -f app.py ]; then (pip3 install --break-system-packages --ignore-installed flask requests beautifulsoup4 lxml python-dotenv basalam-sdk selectolax html5lib psutil --no-warn-script-location 2>/dev/null || true); fi';
         default:return '';
     }
 }
@@ -2543,32 +3733,47 @@ function proj_preflight(array $p): array {
     
     // Check runtime engine version for Node.js projects
     if (($p['type'] ?? '') === 'node') {
-        $nodePath = which('node');
+        $want = (string)($p['node_version'] ?? '');
+        $nodePath = wcp_node_path($want);
+        $installHint = 'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm install 24; nvm alias default 24';
         if (!$nodePath) {
-            $add('Node.js runtime', false, 'node is not installed or not in PATH. Install Node 20 LTS: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs');
+            $add('Node.js runtime', false, 'Node.js is not available. On shared hosting install it with NVM (no root needed): ' . $installHint);
         } else {
-            $nodeVer = trim((string)sh_ok('node -v 2>/dev/null'));
-            $nodeMajor = 0;
-            if (preg_match('/v?(\d+)/i', $nodeVer, $nvm)) {
-                $nodeMajor = (int)$nvm[1];
-            }
-            if ($nodeMajor < 18) {
-                $add('Node.js version', false, "Detected {$nodeVer} (Outdated). Packages like Puppeteer/Crawlee/Wrangler require Node >= 20. Run: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs");
+            $nodeVer = ltrim(trim((string)sh_ok(esc($nodePath) . ' -v 2>/dev/null')), 'vV');
+            $nodeMajor = (int)$nodeVer;
+            $source = strpos($nodePath, '/.nvm/') !== false ? ' (NVM)' : ' (system)';
+            if ($want !== '' && $nodeVer !== '' && strpos($nodeVer . '.', ltrim($want, 'vV') . '.') !== 0 && $nodeVer !== ltrim($want, 'vV')) {
+                $add('Node.js version', false, "This project asks for Node {$want} but only {$nodeVer} is installed. Install it: " . str_replace('24', $want, $installHint));
+            } elseif ($nodeMajor < 18) {
+                $add('Node.js version', false, "Detected v{$nodeVer} (outdated). Install a current LTS with NVM: " . $installHint);
             } else {
-                $add('Node.js version', true, "Node.js {$nodeVer} is compatible (>= 18.x / 20.x LTS)");
+                $add('Node.js version', true, "Node.js v{$nodeVer} is compatible (>= 18){$source}");
+            }
+            // node:sqlite بدون فلگ فقط از 22.13+ و 23.4+ در دسترس است.
+            $usesSqlite = false;
+            $dir = (string)($p['deploy_path'] ?? '');
+            foreach (['package.json', 'package-lock.json'] as $pf) {
+                $file = rtrim($dir, '/') . '/' . $pf;
+                if ($dir !== '' && is_file($file) && strpos((string)@file_get_contents($file), 'node:sqlite') !== false) { $usesSqlite = true; break; }
+            }
+            if ($nodeVer !== '' && !wcp_node_has_sqlite($nodeVer)) {
+                $best = '';
+                foreach (wcp_nvm_versions() as $v) if ($v['node_sqlite']) { $best = $v['version']; break; }
+                $msg = "node:sqlite is not usable on v{$nodeVer} (it is unflagged only in 22.13+ and 23.4+). "
+                     . ($best !== '' ? "Node {$best} is already installed — select it in the project dialog." : "Install Node 24: " . $installHint)
+                     . " Alternatively set DATABASE_URL to a PostgreSQL connection string.";
+                $add('node:sqlite support', !$usesSqlite, ($usesSqlite ? '' : 'ℹ️ ') . $msg);
+            } elseif ($nodeVer !== '') {
+                $add('node:sqlite support', true, "v{$nodeVer} ships node:sqlite without a flag.");
             }
         }
     } elseif (($p['type'] ?? '') === 'python') {
-        $pyList = wcp_find_best_python();
-        if (empty($pyList)) {
+        $pyPath = which('python3') || which('python');
+        if (!$pyPath) {
             $add('Python runtime', false, 'python3 is not installed or not in PATH.');
         } else {
-            $best = reset($pyList);
-            if (!$best['is_modern']) {
-                $add('Python version', false, "Detected {$best['version']} at {$best['path']} (Outdated). Modern Python packages (FastAPI, Pydantic, etc.) require Python >= 3.9 / 3.10 / 3.11. Check if higher python is installed (e.g. /usr/local/bin/python3.11 or /opt/alt/python311/bin/python3).");
-            } else {
-                $add('Python version', true, "Python {$best['version']} is compatible ({$best['path']})");
-            }
+            $pyVer = trim((string)sh_ok('python3 --version 2>/dev/null || python --version 2>/dev/null'));
+            $add('Python version', true, $pyVer ?: 'Python is available');
         }
     }
 
@@ -2590,7 +3795,80 @@ function proj_install_cron(): array {
     file_put_contents($tmp, $newCron);
     $out = sh("crontab " . esc($tmp) . " 2>&1", $rc);
     @unlink($tmp);
-    return ['installed' => $rc === 0, 'line' => $cronLine, 'msg' => $rc === 0 ? 'دیده‌بان کران‌جاب لینوکس (هر ۱ دقیقه) با موفقیت فعال شد.' : 'خطا در نصب کران‌جاب: ' . $out];
+    return ['installed' => $rc === 0, 'line' => $cronLine, 'msg' => $rc === 0 ? 'دیده‌بان کران‌جاب لینوکس (هر ۱ دقیقه) فعال شد: هم آپدیت خودکار گیت و هم زنده‌نگه‌داشتن سرویس‌ها.' . 'ل شد.' : 'خطا در نصب کران‌جاب: ' . $out];
+}
+
+/**
+ * Record whether the operator *wants* a service up. The watchdog only revives
+ * services with svc_desired=true, so a deliberate stop stays stopped.
+ */
+function proj_set_desired(string $projectId, bool $desired) {
+    $list = proj_all();
+    foreach ($list as &$p) {
+        if (($p['id'] ?? '') !== $projectId) continue;
+        $p['svc_desired'] = $desired;
+        if ($desired) { unset($p['svc_revive_count']); $p['svc_desired_at'] = time(); }
+        unset($p['svc_last_revive']);
+        proj_save_all($list);
+        return;
+    }
+}
+
+/**
+ * Cron-level keepalive.
+ *
+ * The in-process supervisor started by job_start() can only restart a service
+ * that exited on its own. On shared hosting the account's whole process tree
+ * is periodically culled — CloudLinux LVE limits, CSF/lfd process tracking,
+ * or the host's own reaper — and that takes the supervisor with it. Nothing
+ * inside the account survives to notice.
+ *
+ * Cron does survive: it is started fresh by the system crond every minute.
+ * So liveness is enforced from there instead.
+ */
+function proj_watchdog_services(): array {
+    $running = [];
+    foreach (glob(JOBS_DIR . '/*.json') ?: [] as $jf) {
+        $j = json_decode((string)@file_get_contents($jf), true);
+        if (!$j || ($j['type'] ?? '') !== 'service') continue;
+        $st = job_status($j);
+        if (($st['status'] ?? '') === 'running') $running[$j['params']['project_id'] ?? ''] = true;
+    }
+    $revived = []; $checked = 0; $now = time();
+    $list = proj_all(); $dirty = false;
+    foreach ($list as &$p) {
+        if (empty($p['svc_desired'])) continue;          // never started, or deliberately stopped
+        if (empty($p['is_daemon'])) continue;            // operator opted out of auto-restore
+        if (empty($p['start_cmd'])) continue;
+        $checked++;
+        if (!empty($running[$p['id']])) {
+            // Healthy. Clear the failure counter *and* the timestamp, so the
+            // next cull is acted on at the very next tick rather than being
+            // throttled by the window left over from an earlier revive.
+            if (!empty($p['svc_revive_count']) || !empty($p['svc_last_revive'])) {
+                $p['svc_revive_count'] = 0; $p['svc_last_revive'] = 0; $dirty = true;
+            }
+            continue;
+        }
+        // Back off on a service that will not stay up, so cron does not
+        // respawn a crash-looping process every 60s forever.
+        $fails = (int)($p['svc_revive_count'] ?? 0);
+        $wait  = min(3600, 60 * (1 << min($fails, 6)));   // 60s .. 1h
+        if ($now - (int)($p['svc_last_revive'] ?? 0) < $wait) continue;
+        $p['svc_last_revive'] = $now;
+        $p['svc_revive_count'] = $fails + 1;
+        $dirty = true;
+        try {
+            $job = job_create('service', 'دیده‌بان: ' . ($p['name'] ?? $p['id']), ['project_id' => $p['id'], 'watchdog' => true]);
+            job_start($job);
+            $revived[] = ['project_id' => $p['id'], 'project_name' => $p['name'] ?? '', 'job_id' => $job['id'], 'attempt' => $fails + 1];
+        } catch (Throwable $e) {
+            // A failed revive must not abort the rest of the cron run.
+        }
+    }
+    unset($p);
+    if ($dirty) { try { proj_save_all($list); } catch (Throwable $e) {} }
+    return ['revived' => $revived, 'count' => count($revived), 'watched' => $checked];
 }
 
 function proj_poll_auto_updates(): array {
@@ -2687,6 +3965,7 @@ function cli_start_service(array $p) {
     }
     $job = job_create('service', 'سرویس: ' . $p['name'], ['project_id' => $p['id']]);
     job_start($job);
+    proj_set_desired($p['id'], true);   // deploy-started services are watched too
     cli_log('Service job ' . $job['id'] . ' started');
     return $job;
 }
@@ -2774,6 +4053,10 @@ function cli_stop_service(string $projectId) {
 function cli_service(array $job): int {
     $p = proj_find(proj_all(), $job['params']['project_id'] ?? '');
     if (!$p || empty($p['start_cmd'])) throw new RuntimeException('Missing project/start command');
+    if (dom_enabled($p)) {
+        $rep = dom_sync_project($p);
+        if ($rep) cli_log('[domain] منتشر شد روی ' . $rep['url'] . ' (حالت ' . $rep['mode'] . ')' . (!empty($rep['manual']) ? ' — نیازمند اقدام دستی' : ''));
+    }
     if (!function_exists('proc_open')) throw new RuntimeException('PHP CLI proc_open() is disabled');
     $stop = JOBS_DIR . '/' . $job['id'] . '.stop';
     @unlink($stop);
@@ -2814,15 +4097,6 @@ function cli_service(array $job): int {
                 continue;
             }
 
-            foreach (['data', 'data/backups', 'data/logs', 'data/workspaces', 'data/uploads', 'data/versions', 'data/sessions', 'logs', 'storage'] as $sub) {
-                $subDir = $deployDir . '/' . $sub;
-                if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
-            }
-
-            if (is_dir($deployDir . '/.venv') && !file_exists($deployDir . '/.venv/bin/python') && !file_exists($deployDir . '/.venv/bin/python3')) {
-                cli_log('[python] Removing incomplete/corrupted .venv directory...');
-                sh('rm -rf ' . esc($deployDir . '/.venv'));
-            }
             // 1. Auto-detect all potential ports used by the project
             $portsToFree = [];
             if (!empty($currentP['port']) && ctype_digit((string)$currentP['port'])) {
@@ -2861,10 +4135,16 @@ function cli_service(array $job): int {
             if (!empty($deployDir)) {
                 wcp_kill_directory_procs($deployDir);
             }
-            if (preg_match('/(?:python3?|node)\s+([a-zA-Z0-9_\-\.\/]+)/', $startCmd, $sm)) {
-                $scriptBase = basename($sm[1]);
-                if ($scriptBase !== '' && !in_array($scriptBase, ['python', 'python3', 'node', 'sh', 'bash'], true)) {
+            // Find the entrypoint script to clean up after. Interpreter flags
+            // must be skipped: "python3 -u app.py" used to yield "-u" here, and
+            // `pkill -9 -f -u` matches the command line of unrelated processes.
+            if (preg_match_all('/(?:python3?|node)\s+((?:-{1,2}[A-Za-z0-9_\-]+\s+)*)([A-Za-z0-9_\-\.\/]+)/', $startCmd, $sm, PREG_SET_ORDER)) {
+                foreach ($sm as $hit) {
+                    $scriptBase = basename($hit[2]);
+                    if ($scriptBase === '' || $scriptBase[0] === '-') continue;
+                    if (in_array($scriptBase, ['python', 'python3', 'node', 'sh', 'bash'], true)) continue;
                     @shell_exec("pkill -9 -f " . escapeshellarg($scriptBase) . " 2>/dev/null");
+                    break;
                 }
             }
             usleep(150000);
@@ -2892,6 +4172,24 @@ function cli_service(array $job): int {
                 }
             }
 
+            // Bind Python start commands to a per-project virtualenv.
+            // The bare `python3` on this class of host is often 3.6 and has no
+            // writable site-packages, which is the root cause of both the
+            // SyntaxError-on-modern-syntax and the ModuleNotFoundError loops.
+            $pyInterp = '';
+            $isPyCmd = (bool)preg_match('/^\s*(?:python3?|py)\s+\S/', $startCmd);
+            if (is_dir($deployDir) && ($isPyCmd || ($currentP['type'] ?? '') === 'python')) {
+                $pyInterp = wcp_py_ensure_venv($deployDir, (string)($currentP['python_version'] ?? ''));
+                if ($pyInterp !== '' && $isPyCmd) {
+                    // Callback form: a literal replacement would let $ and \ in the
+                    // interpreter path be read as backreferences.
+                    $startCmd = preg_replace_callback('/^\s*(?:python3?|py)(?=\s)/',
+                        function () use ($pyInterp) { return escapeshellarg($pyInterp); }, $startCmd, 1);
+                    cli_log('[python] Using interpreter: ' . $pyInterp
+                        . ' (' . trim((string)@shell_exec(escapeshellarg($pyInterp) . ' -V 2>&1')) . ')');
+                }
+            }
+
             // Auto-synchronize .env file in project directory with chosen port
             $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (is_dir($deployDir) && !empty($chosenPort)) {
@@ -2912,9 +4210,16 @@ function cli_service(array $job): int {
             $script = "#!/bin/bash\nset -e\ncd " . esc($deployDir) . "\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";
             $script .= 'export PYTHONUSERBASE=/var/www/.local' . "\n";
             $script .= 'export PIP_CACHE_DIR=/tmp/pip_cache' . "\n";
-            $script .= 'for pdir in /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages /home/*/.local/lib/python3*/site-packages /root/.local/lib/python3*/site-packages /var/www/.local/lib/python3*/site-packages /tmp/.local/lib/python3*/site-packages /opt/conda/lib/python3*/site-packages /opt/python/*/lib/python3*/site-packages; do' . "\n";
-            $script .= '    if [ -d "$pdir" ]; then export PYTHONPATH="${pdir}:${PYTHONPATH:-}"; fi' . "\n";
-            $script .= 'done' . "\n";
+            // PYTHONPATH is only a help when there is no virtualenv. With one,
+            // pointing at the system 3.6 dist-packages actively shadows the
+            // venv's own, correctly-built packages.
+            if ($pyInterp !== '') {
+                $script .= 'unset PYTHONPATH' . "\n";
+            } else {
+                $script .= 'for pdir in /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/site-packages /home/*/.local/lib/python3*/site-packages /root/.local/lib/python3*/site-packages /var/www/.local/lib/python3*/site-packages /tmp/.local/lib/python3*/site-packages /opt/conda/lib/python3*/site-packages /opt/python/*/lib/python3*/site-packages; do' . "\n";
+                $script .= '    if [ -d "$pdir" ]; then export PYTHONPATH="${pdir}:${PYTHONPATH:-}"; fi' . "\n";
+                $script .= 'done' . "\n";
+            }
             $script .= 'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/opt/conda/bin:${HOME}/.local/bin:${PATH:-}"' . "\n";
             foreach (proj_runtime_env($currentP) as $k => $v) $script .= "export " . esc($k . '=' . $v) . "\n";
             if (!empty($chosenPort)) {
@@ -3023,7 +4328,12 @@ function cli_service(array $job): int {
                             if ($tok === '' || in_array(strtolower($tok), ['or', 'and', 'pip', 'pip3', 'install', '-r', 'run:', 'run', 'please'], true)) {
                                 continue;
                             }
-                            if (preg_match('/^[a-zA-Z0-9_\-\.\[\]\<\>\=\!]+$/', $tok)) {
+                            // A PyPI name starts alphanumeric and holds only [A-Za-z0-9._-].
+                            // The old pattern also allowed [ ] < > = ! , which made pip's own
+                            // usage text ("[options]", "<requirement", "[-e]", "<vcs") parse as
+                            // package names — each failed run then fed more garbage into the next.
+                            if (preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/', $tok)
+                                && !preg_match('/^(options|requirement|specifier|file|url|path|archive|vcs|project|local|package-index-options)$/i', $tok)) {
                                 $mapped = $modMap[$tok] ?? $tok;
                                 $pkgsToInstall[$mapped] = true;
                             }
@@ -3046,10 +4356,21 @@ function cli_service(array $job): int {
                         cli_log("[auto-installer WARNING] Package(s) " . implode(', ', $pkgList) . " were installed but Python runtime still cannot locate them. Halting auto-restart loop.");
                         $depsAutoInstalled = false;
                     } else {
-                        $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
-                        cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & ignore-installed...");
-                        $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n python3 -m pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || python3 -m pip install --break-system-packages --ignore-installed --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1)';
-                        cli_run($pipCmd, $pipRc);
+                        $req = wcp_py_requirements($deployDir);
+                        cli_log("[auto-installer] Missing Python package(s): " . implode(', ', $pkgList)
+                            . ($req !== '' ? ". Installing from " . basename($req) . " into the project virtualenv..."
+                                           : ". Installing into the project virtualenv..."));
+                        // Install into the project's own virtualenv. There is no sudo on
+                        // shared hosting, and the system interpreter is both too old and
+                        // not writable, so the previous sudo/pip chain could only ever
+                        // fail with exit 127.
+                        $pipRc = null;
+                        if ($req !== '') {
+                            wcp_py_ensure_venv($deployDir, (string)($currentP['python_version'] ?? ''), true);
+                            $pipRc = (wcp_py_venv_python($deployDir) !== '') ? 0 : 1;
+                        } else {
+                            wcp_py_install_packages($deployDir, $pkgList, $pipRc);
+                        }
                         if ($pipRc === 0) {
                             cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));
                             $depsAutoInstalled = true;
@@ -3125,6 +4446,65 @@ function cli_service(array $job): int {
         @unlink(JOBS_DIR . '/' . $job['id'] . '.child_pid');
     }
 }
+/** نصب یک نسخهٔ Node با NVM در هوم حساب کاربری — بدون sudo، مناسب هاست اشتراکی. */
+function cli_python_install(array $job): int {
+    $ver = (string)($job['params']['version'] ?? '');
+    cli_log('=================================================');
+    cli_log('Installing Python ' . $ver . ' with uv');
+    cli_log('=================================================');
+    $uv = wcp_uv_bin();
+    if ($uv === '') {
+        cli_log('[uv] Not found — installing it first...');
+        $home = wcp_account_home();
+        cli_run(($home !== '' ? 'export HOME=' . esc($home) . '; ' : '')
+            . 'curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1', $rc);
+        // wcp_uv_bin() memoises a miss, so probe the known install paths directly.
+        foreach ([$home . '/.local/bin/uv', $home . '/.cargo/bin/uv'] as $cand) {
+            if (@is_file($cand) && @is_executable($cand)) { $uv = $cand; break; }
+        }
+        if ($uv === '') { cli_log('✗ uv installation failed. Run py-upgrade.sh over SSH and try again.'); return 1; }
+    }
+    cli_log('[uv] Binary: ' . $uv);
+    cli_run(escapeshellarg($uv) . ' python install ' . esc($ver) . ' 2>&1', $rc);
+    if ($rc !== 0) { cli_log('✗ Python ' . $ver . ' could not be installed (exit ' . $rc . ').'); return 1; }
+    cli_run(escapeshellarg($uv) . ' python list --only-installed 2>&1', $rc2);
+    cli_log('✓ Python ' . $ver . ' is available. Restart the project to rebuild its virtualenv on it.');
+    return 0;
+}
+
+function cli_nvm_install(array $job): int {
+    $ver = (string)($job['params']['version'] ?? '24');
+    $setDefault = !empty($job['params']['set_default']);
+    $home = wcp_account_home();
+    if ($home === '') { cli_log('✗ Home directory of the hosting account could not be determined.'); return 1; }
+    $nvmDir = $home . '/.nvm';
+    cli_log('=================================================');
+    cli_log('Installing Node.js ' . $ver . ' with NVM');
+    cli_log('NVM_DIR: ' . $nvmDir);
+    cli_log('=================================================');
+    if (!is_file($nvmDir . '/nvm.sh')) {
+        cli_log('[NVM] Not found — installing nvm ' . WCP_NVM_RELEASE . ' first...');
+        cli_run('export HOME=' . esc($home) . '; export PROFILE=/dev/null; '
+            . 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/' . WCP_NVM_RELEASE . '/install.sh | bash', $rc);
+        if (!is_file($nvmDir . '/nvm.sh')) { cli_log('✗ nvm installation failed. Install it over SSH and run this again.'); return 1; }
+    }
+    $script = 'export HOME=' . esc($home) . '; export NVM_DIR=' . esc($nvmDir) . '; . "$NVM_DIR/nvm.sh"; '
+        . 'nvm install ' . esc($ver) . ' --no-progress' . ($setDefault ? ' && nvm alias default ' . esc($ver) : '')
+        . ' && nvm which ' . esc($ver) . ' && "$(nvm which ' . esc($ver) . ')" -v';
+    cli_run('bash -lc ' . esc($script), $rc);
+    clearstatcache();
+    $found = '';
+    foreach (glob($nvmDir . '/versions/node/v' . $ver . '*/bin/node') ?: [] as $cand) $found = $cand;
+    if ($found === '') { cli_log('✗ Node ' . $ver . ' was not found after the install.'); return $rc ?: 1; }
+    $real = ltrim(trim((string)sh_ok(esc($found) . ' -v 2>/dev/null')), 'vV');
+    cli_log('✓ Node ' . $real . ' installed at ' . $found);
+    cli_log(wcp_node_has_sqlite($real)
+        ? '✓ node:sqlite is available without a flag on this version.'
+        : '⚠ node:sqlite still needs --experimental-sqlite here (unflagged in 22.13+ and 23.4+). Install 24 instead.');
+    cli_log('Select it per project in the project dialog, or set it as the console-wide default in Settings.');
+    act_log('nvm install node ' . $real);
+    return 0;
+}
 function cli_install_component(array $job): int {
     $comp = $job['params']['component'] ?? 'all';
     cli_log("=================================================");
@@ -3173,19 +4553,6 @@ function cli_install_component(array $job): int {
         cli_log("✓ Python scraping packages installed successfully.");
     }
 
-    if ($comp === 'ollama' || $comp === 'all') {
-        cli_log("[Ollama] Installing Ollama local AI runtime...");
-        $runCmd("curl -fsSL https://ollama.com/install.sh | sh 2>&1 || true");
-        $runCmd("systemctl enable ollama 2>/dev/null || true");
-        $runCmd("systemctl start ollama 2>/dev/null || true");
-        $ollamaVer = trim(sh_ok('ollama -v 2>/dev/null'));
-        if ($ollamaVer !== '') {
-            cli_log("✓ Ollama " . $ollamaVer . " installed successfully and daemon started on port 11434.");
-        } else {
-            cli_log("Ollama installer executed. If running in a container without systemd, run 'ollama serve &' manually.");
-        }
-    }
-
     cli_log("=================================================");
     cli_log("Component installation completed: " . $comp);
     cli_log("=================================================");
@@ -3197,6 +4564,13 @@ function wcp_cli(array $argv) {
         @set_time_limit(300);
         $res = proj_poll_auto_updates();
         echo "[auto-update] Checked projects. Triggered " . $res['count'] . " deployments.\n";
+        // Same cron tick doubles as the keepalive, so existing installs get it
+        // without touching their crontab.
+        $wd = proj_watchdog_services();
+        echo "[watchdog] Watching " . $wd['watched'] . " service(s). Revived " . $wd['count'] . ".\n";
+        foreach ($wd['revived'] as $r) {
+            echo "[watchdog] Restarted '" . $r['project_name'] . "' (attempt " . $r['attempt'] . ", job " . $r['job_id'] . ").\n";
+        }
         exit(0);
     }
     if(isset($argv[1])&&strpos($argv[1],'--bgjob=')===0){
@@ -3213,7 +4587,7 @@ function wcp_cli(array $argv) {
             wcp_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", false);
         }
         @set_time_limit(0);ini_set('memory_limit','512M');$code=1;cli_log('WebConsole job '.$id.' ('.$job['type'].')');
-        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;default:throw new RuntimeException('Unknown job type');}}
+        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;case 'install_component':$code=cli_install_component($job);break;case 'nvm_install':$code=cli_nvm_install($job);break;case 'python_install':$code=cli_python_install($job);break;default:throw new RuntimeException('Unknown job type');}}
         catch(Throwable $e){cli_log('ERROR: '.mask_url($e->getMessage()));$code=1;}
         $exit=JOBS_DIR.'/'.$id.'.exit';if(!is_file($exit))wcp_put_contents($exit,$code."\n",false);exit($code);
     }
@@ -3228,6 +4602,7 @@ function page_head(){
     $boot = [
         'csrf' => $_SESSION['wcp_csrf'] ?? '',
         'v' => WCP_VERSION,
+        'edition' => WCP_EDITION,
         'theme' => $c['theme'],
         'layout' => $c['layout'],
         'density' => $c['density'],
@@ -4134,7 +5509,7 @@ document.getElementById('lgform').onsubmit=async e=>{e.preventDefault();const p=
 </script>
 <?php return ob_get_clean();}
 function render_body(){ob_start();?>
-<div id="app"><header id="topbar"><div class="top-brand"><span class="brand-mark">W</span><b class="brand-text">وب‌کنسول <span class="brand-sub">Pro</span></b></div><small id="hosttag" class="hosttag-pill"></small><span class="spacer"></span><div class="top-actions"><button class="btn sm chrome-btn" id="palettebtn" title="جستجو (Ctrl+K)"><span class="btn-ic">⌕</span> <span class="btn-lbl">جستجو</span></button><button class="btn sm chrome-btn" id="appearancebtn" title="تنظیم پوسته"><span class="btn-ic">◈</span> <span class="btn-lbl">پوسته‌ها</span></button><button class="btn sm" id="themebtn" aria-label="تغییر روشنایی" title="تغییر تم تاریک/روشن">☀</button><button class="btn sm danger" id="logoutbtn" title="خروج"><span class="btn-lbl">خروج</span> <span class="btn-ic">⎋</span></button></div></header><div id="workspacebar"><span id="viewtitle">داشبورد</span><span class="hint">/ فضای مدیریت سرور</span><span class="tag" id="workspace-version"></span></div><div id="main"><aside id="sidebar"></aside><main id="content"><section class="view on" id="v-dash"><div class="card"><div class="row" style="gap:8px;align-items:center;padding:12px"><span class="spin">⏳</span> <b>در حال بارگذاری اطلاعات داشبورد سرور...</b></div></div></section><section class="view" id="v-term"><div id="termwrap"><div class="row"><button class="btn pri sm" id="newterm">+ شل جدید</button><select class="mini" id="termsel"></select><span class="tag ok" id="term-user-badge" style="font-weight:700;display:inline-flex;align-items:center;gap:4px">👑 Root</span><span id="termstat" class="termstatus"></span><button class="btn sm pri" id="selterm" title="مشاهده و انتخاب متنی کل خروجی ترمینال در موبایل و دسکتاپ">📑 انتخاب متن</button><button class="btn sm" id="copyterm" title="کپی متن انتخاب‌شده یا کل خروجی">📋 کپی</button><button class="btn sm" id="pasteterm" title="چسباندن متن (Paste)">📥 پیست</button><button class="btn sm" id="clrterm" title="پاک‌سازی صفحه (Clear)">🧹 Clear</button><button class="btn sm" id="kbterm">⌨</button><button class="btn danger sm" id="killterm">توقف</button></div><div id="keybar"></div><div id="termbox"></div><div class="mob-dock" id="mob-input-dock"><input class="inp ltr" id="mob-cmd-inp" placeholder="دستور را بنویسید… (Enter برای اجرا)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><button class="btn pri sm" id="mob-send-btn" type="button" title="اجرای دستور">➤</button><button class="btn sm" id="mob-tab-btn" type="button" title="تکمیل خودکار">⇥</button><button class="btn sm" id="mob-ctrlc-btn" type="button" title="توقف Ctrl+C">^C</button><button class="btn sm" id="mob-up-btn" type="button" title="دستور قبلی">↑</button><button class="btn sm" id="mob-down-btn" type="button" title="دستور بعدی">↓</button></div></div></section><section class="view" id="v-files"><div class="row"><button class="btn sm" id="upbtn">⬆ بالا</button><button class="btn sm" id="refbtn">🔄</button><button class="btn sm pri" id="newfbtn">+ جدید</button><button class="btn sm" id="uploadbtn">بارگذاری</button><button class="btn sm" id="searchbtn">جستجو</button><button class="btn sm" id="hiddenbtn">فایل مخفی</button><select id="sortsel" class="mini"><option value="name-1">نام ↑</option><option value="name-0">نام ↓</option><option value="size-0">حجم ↓</option><option value="date-0">تاریخ ↓</option><option value="date-1">تاریخ ↑</option></select></div><div id="crumb"></div><div class="quick" id="quick"></div><div class="view-tools"><input class="inp" id="file-filter" aria-label="فیلتر فایل‌های این پوشه" placeholder="فیلتر سریع فایل‌های نمایش‌داده‌شده…"></div><div id="fmlist" class="card"></div><div id="selbar"><span id="selcnt"></span><button class="btn sm" data-op="copy">کپی</button><button class="btn sm" data-op="move">انتقال</button><button class="btn sm" data-op="zip">ZIP</button><button class="btn sm" data-op="download">دانلود</button><button class="btn sm danger" data-op="delete">حذف</button><button class="btn sm" id="selclear">لغو</button></div><input id="fileinput" type="file" multiple class="hide"></section><section class="view" id="v-proc"></section><section class="view" id="v-backup"></section><section class="view" id="v-proj"></section><section class="view" id="v-jobs"></section><section class="view" id="v-set"></section></main></div><nav id="navbottom"></nav></div><div id="modals"><div class="mback"></div><div class="msheet" role="dialog" aria-modal="true" aria-label="پنجره کنسول" tabindex="-1"></div></div><div id="toasts"></div>
+<div id="app"><header id="topbar"><div class="top-brand"><span class="brand-mark">W</span><b class="brand-text">وب‌کنسول <span class="brand-sub">Pro</span></b></div><small id="hosttag" class="hosttag-pill"></small><span class="spacer"></span><div class="top-actions"><button class="btn sm chrome-btn" id="palettebtn" title="جستجو (Ctrl+K)"><span class="btn-ic">⌕</span> <span class="btn-lbl">جستجو</span></button><button class="btn sm chrome-btn" id="appearancebtn" title="تنظیم پوسته"><span class="btn-ic">◈</span> <span class="btn-lbl">پوسته‌ها</span></button><button class="btn sm" id="themebtn" aria-label="تغییر روشنایی" title="تغییر تم تاریک/روشن">☀</button><button class="btn sm danger" id="logoutbtn" title="خروج"><span class="btn-lbl">خروج</span> <span class="btn-ic">⎋</span></button></div></header><div id="workspacebar"><span id="viewtitle">داشبورد</span><span class="hint">/ فضای مدیریت سرور</span><span class="tag" id="workspace-version"></span></div><div id="main"><aside id="sidebar"></aside><main id="content"><section class="view on" id="v-dash"><div class="card"><div class="row" style="gap:8px;align-items:center;padding:12px"><span class="spin">⏳</span> <b>در حال بارگذاری اطلاعات داشبورد سرور...</b></div></div></section><section class="view" id="v-term"><div id="termwrap"><div class="row"><button class="btn pri sm" id="newterm">+ شل جدید</button><select class="mini" id="termsel"></select><span class="tag ok" id="term-user-badge" style="font-weight:700;display:inline-flex;align-items:center;gap:4px">👑 Root</span><span id="termstat" class="termstatus"></span><button class="btn sm pri" id="selterm" title="مشاهده و انتخاب متنی کل خروجی ترمینال در موبایل و دسکتاپ">📑 انتخاب متن</button><button class="btn sm" id="copyterm" title="کپی متن انتخاب‌شده یا کل خروجی">📋 کپی</button><button class="btn sm" id="pasteterm" title="چسباندن متن (Paste)">📥 پیست</button><button class="btn sm" id="clrterm" title="پاک‌سازی صفحه (Clear)">🧹 Clear</button><button class="btn sm" id="kbterm">⌨</button><button class="btn danger sm" id="killterm">توقف</button></div><div id="keybar"></div><div id="termbox"></div><div class="mob-dock" id="mob-input-dock"><input class="inp ltr" id="mob-cmd-inp" placeholder="دستور را بنویسید… (Enter برای اجرا)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><button class="btn pri sm" id="mob-send-btn" type="button" title="اجرای دستور">➤</button><button class="btn sm" id="mob-tab-btn" type="button" title="تکمیل خودکار">⇥</button><button class="btn sm" id="mob-ctrlc-btn" type="button" title="توقف Ctrl+C">^C</button><button class="btn sm" id="mob-up-btn" type="button" title="دستور قبلی">↑</button><button class="btn sm" id="mob-down-btn" type="button" title="دستور بعدی">↓</button></div></div></section><section class="view" id="v-files"><div class="row"><button class="btn sm" id="upbtn">⬆ بالا</button><button class="btn sm" id="refbtn">🔄</button><button class="btn sm pri" id="newfbtn">+ جدید</button><button class="btn sm" id="uploadbtn">بارگذاری</button><button class="btn sm" id="searchbtn">جستجو</button><button class="btn sm" id="hiddenbtn">فایل مخفی</button><select id="sortsel" class="mini"><option value="name-1">نام ↑</option><option value="name-0">نام ↓</option><option value="size-0">حجم ↓</option><option value="date-0">تاریخ ↓</option><option value="date-1">تاریخ ↑</option></select></div><div id="crumb"></div><div class="quick" id="quick"></div><div class="view-tools"><input class="inp" id="file-filter" aria-label="فیلتر فایل‌های این پوشه" placeholder="فیلتر سریع فایل‌های نمایش‌داده‌شده…"></div><div id="fmlist" class="card"></div><div id="selbar"><span id="selcnt"></span><button class="btn sm" data-op="copy">کپی</button><button class="btn sm" data-op="move">انتقال</button><button class="btn sm" data-op="zip">ZIP</button><button class="btn sm" data-op="download">دانلود</button><button class="btn sm danger" data-op="delete">حذف</button><button class="btn sm" id="selclear">لغو</button></div><input id="fileinput" type="file" multiple class="hide"></section><section class="view" id="v-proc"></section><section class="view" id="v-backup"></section><section class="view" id="v-proj"></section><section class="view" id="v-dom"></section><section class="view" id="v-jobs"></section><section class="view" id="v-set"></section></main></div><nav id="navbottom"></nav></div><div id="modals"><div class="mback"></div><div class="msheet" role="dialog" aria-modal="true" aria-label="پنجره کنسول" tabindex="-1"></div></div><div id="toasts"></div>
 <script>
 'use strict';
 function loadCssAsync(href){try{const l=document.createElement('link');l.rel='stylesheet';l.href=href;document.head.appendChild(l);}catch(e){}}
@@ -4189,8 +5564,8 @@ async function openJob(id,title){
  const poll=async()=>{if(busy||!alive||paused)return;busy=true;try{const d=await api('jobs.log',{id,offset});if(!alive)return;if(d.offset<offset)buffer='';offset=d.offset;if(d.b64)buffer=(buffer+decode(d.b64)).slice(-2000000);paint();const s=d.status||{},map={running:'در حال اجرا',done:'کامل شد',failed:'ناموفق',dead:'قطع شده'};st.textContent=(map[s.status]||s.status)+(s.exit!=null?' · '+s.exit:'');st.className='tag '+(s.status==='done'?'ok':s.status==='running'?'acc':'err');if(s.status==='running'||d.has_more){sh.querySelector('#jstop').classList.toggle('hide',s.status!=='running')}else{alive=false;sh.querySelector('#jstop').classList.add('hide');clearInterval(timer);sh.querySelector('#jpause').disabled=true;}}catch(e){st.textContent=e.message;st.className='tag err'}finally{busy=false}};
  await poll();if(alive)timer=setInterval(poll,1000);
 }
-const TABS=[['dash','داشبورد','🏠'],['term','ترمینال','⌨'],['files','فایل‌ها','📁'],['proc','پردازش‌ها','⚙'],['backup','بکاپ','☁'],['proj','پروژه‌ها','📦'],['jobs','کارها','📜'],['set','تنظیمات','🔧']];let curTab='';const INITS={};
-function navIcon(id){const paths={dash:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',term:'M4 5l6 6-6 6 M13 18h7',files:'M3 7V5h6l2 3h10v12H3z',proc:'M2 12h5l3-8 4 16 3-8h5',backup:'M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5 5 0 0 1 0 11 M12 20V10 M8 14l4-4 4 4',proj:'M3 7l9-4 9 4v11l-9 4-9-4z M3 7l9 4 9-4 M12 11v11',jobs:'M8 3h8v4H8z M8 5H5v16h14V5h-3 M8 12h8 M8 16h5',set:'M3 6h18 M3 12h18 M3 18h18 M8 3v6 M16 9v6 M10 15v6'};return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+paths[id]+'"/></svg>'}
+const TABS=[['dash','داشبورد','🏠'],['term','ترمینال','⌨'],['files','فایل‌ها','📁'],['proc','پردازش‌ها','⚙'],['backup','بکاپ','☁'],['proj','پروژه‌ها','📦'],['dom','دامنه‌ها','🌐'],['jobs','کارها','📜'],['set','تنظیمات','🔧']];let curTab='';const INITS={};
+function navIcon(id){const paths={dash:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',term:'M4 5l6 6-6 6 M13 18h7',files:'M3 7V5h6l2 3h10v12H3z',proc:'M2 12h5l3-8 4 16 3-8h5',backup:'M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5 5 0 0 1 0 11 M12 20V10 M8 14l4-4 4 4',proj:'M3 7l9-4 9 4v11l-9 4-9-4z M3 7l9 4 9-4 M12 11v11',dom:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c2.5 2.7 3.8 5.7 3.8 9S14.5 18.3 12 21 8.2 15.3 8.2 12 9.5 5.7 12 3z',jobs:'M8 3h8v4H8z M8 5H5v16h14V5h-3 M8 12h8 M8 16h5',set:'M3 6h18 M3 12h18 M3 18h18 M8 3v6 M16 9v6 M10 15v6'};return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+paths[id]+'"/></svg>'}
 function buildNav(){for(const sel of ['#sidebar','#navbottom']){$(sel).innerHTML=TABS.map(([id,t,i])=>`<button data-tab="${id}" title="${t}" aria-label="${t}"><span class="nav-icon">${navIcon(id)}</span><span class="nav-caption">${t}</span></button>`).join('');actions($(sel),'data-tab',switchTab)}}
 function switchTab(id){if(!TABS.some(t=>t[0]===id))return;curTab=id;$('#viewtitle').textContent=TABS.find(t=>t[0]===id)[1];$$('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+id));$$('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===id));if(INITS[id]&&!INITS[id].done){INITS[id].done=true;INITS[id].fn()}if(id==='term')setTimeout(fitTerm,80)}
 async function renderDash(){
@@ -4282,7 +5657,7 @@ async function renderDash(){
           </div>
           <button class="btn pri sm" id="dash-inst-all" title="نصب کامل تمامی پکیج‌های نود، پایتون و درایورها">⚡ نصب همگانی پیش‌نیازها</button>
         </div>
-        <div class="grid4" style="gap:10px;margin-top:12px">
+        <div class="grid3" style="gap:10px;margin-top:12px">
           <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
             <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
               <span>🟢 Node.js 20 LTS + PM2</span>
@@ -4306,14 +5681,6 @@ async function renderDash(){
             </div>
             <p class="hint" style="font-size:11px;margin:6px 0">کتابخانه‌های Headless Chrome و دورزدن Cloudflare</p>
             <button class="btn sm" style="width:100%" id="dash-inst-browser">🌐 نصب درایورهای مرورگر</button>
-          </div>
-          <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
-            <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
-              <span>🦙 Ollama & هوش محلی</span>
-              <span class="tag ${tools.ollama?'ok':'warn'}">${tools.ollama?'✓ '+(toolsVer.ollama||'نصب شده'):'✗ نیاز به نصب'}</span>
-            </div>
-            <p class="hint" style="font-size:11px;margin:6px 0">مدل‌های Llama 3.2, Qwen 2.5 Coder, DeepSeek R1</p>
-            <button class="btn sm" style="width:100%" id="dash-inst-ollama">🦙 نصب Ollama سرور</button>
           </div>
         </div>
       </div>
@@ -4347,8 +5714,7 @@ async function renderDash(){
     `;
     const inNode=$('#dash-inst-node');if(inNode)inNode.onclick=async()=>{const d=await api('sys.install_component',{component:'node'});openJob(d.job,d.title);};
     const inPy=$('#dash-inst-py');if(inPy)inPy.onclick=async()=>{const d=await api('sys.install_component',{component:'python_scrapers'});openJob(d.job,d.title);};
-    const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.title?d.job:d.job,d.title);};
-    const inOllama=$('#dash-inst-ollama');if(inOllama)inOllama.onclick=async()=>{const d=await api('sys.install_component',{component:'ollama'});openJob(d.job,d.title);};
+    const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.job,d.title);};
     const inAll=$('#dash-inst-all');if(inAll)inAll.onclick=async()=>{if(!await confirmDlg('نصب کامل تمامی پکیج‌های Node 20، Python 3 و درایورهای مرورگر آغاز شود؟'))return;const d=await api('sys.install_component',{component:'all'});openJob(d.job,d.title);};
     const rBtn=$('#dash-rescue-btn');
     if(rBtn)rBtn.onclick=async()=>{
@@ -5646,7 +7012,13 @@ INITS.proj={
     },25000);
   }
 };let projectList=[];
+/* Which project cards are expanded. Rebuilt from scratch on page load, so
+   cards always start collapsed, but preserved across renderProj() calls —
+   the poll timer re-renders every 25s and would otherwise snap shut a card
+   the operator is reading. */
+let projOpen=new Set();
 function getProjectWebUrl(p){
+  if(p.domain_enabled&&p.domain_url)return p.domain_url;
   if(!p.port)return '';
   const port=p.port;
   const host=window.location.hostname;
@@ -5658,20 +7030,22 @@ function getProjectWebUrl(p){
   return `${proto}//${host}:${port}/`;
 }
 
-async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="agent-php">Arena Coding Agent PHP</option><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
+async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><button class="btn" id="proj-dom-btn" title="انتشار پروژه‌ها روی ساب‌دامین به‌جای پورت">🌐 دامنه‌ها و ساب‌دامین‌ها</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><button class="btn sm" id="proj-expand-all" title="باز یا بسته کردن همهٔ کارت‌ها">🔽 باز کردن همه</button><select class="mini" id="project-preset"><option value="agent-php">Arena Coding Agent PHP</option><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
   const isRunning=p.service?.status==='running';
   const webUrl=getProjectWebUrl(p);
   const commitStr=p.live_commit||p.last_deploy?.commit||'';
   const verStr=p.app_version||p.last_deploy?.version||'';
   return `
   <div class="card project-card compact-proj-card" style="padding:14px 16px;margin-bottom:14px;border-right: 5px solid ${isRunning?'var(--ok)':'var(--line2)'};background:var(--panel)">
-    <div class="proj-card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+    <div class="proj-card-header" data-proj-toggle="${p.id}" role="button" tabindex="0" aria-expanded="${projOpen.has(p.id)?'true':'false'}" title="کلیک برای باز و بسته کردن" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:${projOpen.has(p.id)?'10px':'0'};cursor:pointer;user-select:none">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="proj-chevron" style="display:inline-block;width:14px;font-size:12px;color:var(--muted);transition:transform .15s;transform:rotate(${projOpen.has(p.id)?'90':'0'}deg)">▶</span>
         <span style="font-size:20px">${p.type==='python'?'🐍':p.type==='php'?'🐘':p.type==='node'?'⚡':p.type==='static'?'📄':'📦'}</span>
         <h3 style="margin:0;font-size:16px;font-weight:700">${esc(p.name)}</h3>
         ${verStr?`<span class="tag ok" style="font-weight:700" title="نسخه اپلیکیشن">📦 ${esc(verStr)}</span>`:''}
         <span class="tag ${isRunning?'ok':'warn'}" style="font-weight:700">${isRunning?`🟢 فعال روی پورت ${esc(p.port||'8888')}`:'⚪ متوقف'}</span>
         <span class="tag acc">${(p.type||'other').toUpperCase()}</span>
+        ${p.domain_enabled&&p.domain_url?`<span class="tag ok" title="این پروژه روی ساب‌دامین منتشر شده است">🌐 <span class="ltr">${esc(p.domain)}</span></span>`:''}
         ${p.auto_update?`<span class="tag ok" title="بررسی خودکار هر ${(p.auto_update_interval||60)} ثانیه">🔄 آپدیت خودکار (${Math.round((p.auto_update_interval||60)/60)}د)</span>`:`<span class="tag" style="opacity:0.65">⏸ آپدیت خودکار خاموش</span>`}
       </div>
       ${webUrl?`
@@ -5683,6 +7057,7 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       `:''}
     </div>
 
+    <div class="proj-card-body" ${projOpen.has(p.id)?'':'hidden'}>
     <!-- Compact Details Grid -->
     <div style="background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px">
@@ -5690,7 +7065,7 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
         <div><span style="color:var(--muted)">📂 مسیر:</span> <span class="ltr" style="font-family:monospace">${esc(p.deploy_path||'—')}</span>${p.deploy_path?` <button class="btn mini" style="padding:1px 6px;font-size:11px" onclick="copyText('${esc(p.deploy_path)}','مسیر کپی شد')">📋 کپی</button>`:''}</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px;margin-top:4px">
-        <div><span style="color:var(--muted)">⚙️ پورت:</span> <b>${esc(p.port||'—')}</b> | <span style="color:var(--muted)">فرمان:</span> <code class="ltr" style="background:rgba(0,0,0,0.2);padding:1px 5px;border-radius:4px">${esc(p.start_cmd||'—')}</code></div>
+        <div><span style="color:var(--muted)">⚙️ پورت داخلی:</span> <b>${esc(p.port||'—')}</b>${p.domain_enabled&&p.domain_url?` | <span style="color:var(--muted)">🌐 آدرس عمومی:</span> <a class="ltr" href="${esc(p.domain_url)}" target="_blank" rel="noopener">${esc(p.domain_url)}</a>`:''} | <span style="color:var(--muted)">فرمان:</span> <code class="ltr" style="background:rgba(0,0,0,0.2);padding:1px 5px;border-radius:4px">${esc(p.start_cmd||'—')}</code></div>
         <div>
           <span style="color:var(--muted)">🚀 وضعیت دیپلوی:</span>
           ${commitStr||p.last_deploy?`
@@ -5721,11 +7096,13 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       `:''}
       <button class="btn sm" data-check-update="${p.id}" title="بررسی آنلاین کامیت جدید در گیت‌هاب">🔍 چک آپدیت</button>
       <button class="btn sm ${p.auto_update?'ok':''}" data-toggle-update="${p.id}" title="تغییر وضعیت آپدیت خودکار">${p.auto_update?'🔄 آپدیت: روشن':'⚡ آپدیت خودکار'}</button>
+      <button class="btn sm ${p.domain_enabled?'ok':''}" data-domain="${p.id}" title="انتشار این پروژه روی ساب‌دامین به‌جای پورت">🌐 دامنه</button>
       <button class="btn sm" data-edit="${p.id}" title="ویرایش تنظیمات، پورت و متغیرها">✍️ ویرایش</button>
       <button class="btn sm" data-files="${p.id}" title="مشاهده و مدیریت فایل‌های این پروژه">📁 فایل‌ها</button>
       <button class="btn sm" data-check="${p.id}" title="بررسی دسترسی‌ها و نیازمندی‌ها">🧪 تست</button>
       <button class="btn sm" data-export="${p.id}" title="خروجی پیکربندی JSON">📄 JSON</button>
       <button class="btn danger sm" data-del="${p.id}" title="حذف این پروژه">🗑️ حذف</button>
+    </div>
     </div>
   </div>
   `;
@@ -5739,8 +7116,49 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
     }catch(e){toast(e.message,'err')}
     finally{cronBtn.disabled=false;cronBtn.textContent='⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)';}
   };$('#padd').onclick=()=>projectDlg(null);$('#preset-new').onclick=()=>projectDlg(presetProject($('#project-preset').value));$('#project-filter').oninput=e=>v.querySelectorAll('.project-card').forEach(c=>c.classList.toggle('hide',!c.textContent.toLowerCase().includes(e.target.value.trim().toLowerCase())));actions(v,'data-check',projectPreflight);
+ /* Expand/collapse. Delegated from the list root so it survives re-renders,
+    and toggled in the DOM directly rather than by re-rendering the whole tab —
+    a full renderProj() would refetch and make the click feel laggy. */
+ const setProjOpen=(card,open)=>{
+   const body=card.querySelector('.proj-card-body');
+   const head=card.querySelector('.proj-card-header');
+   const chev=card.querySelector('.proj-chevron');
+   if(!body||!head)return;
+   body.hidden=!open;
+   head.style.marginBottom=open?'10px':'0';
+   head.setAttribute('aria-expanded',open?'true':'false');
+   if(chev)chev.style.transform='rotate('+(open?90:0)+'deg)';
+ };
+ v.querySelectorAll('[data-proj-toggle]').forEach(head=>{
+   const id=head.getAttribute('data-proj-toggle');
+   const card=head.closest('.project-card');
+   const flip=ev=>{
+     /* Let the header's own link and buttons work without folding the card. */
+     if(ev.target.closest('a,button'))return;
+     const open=!projOpen.has(id);
+     if(open)projOpen.add(id); else projOpen.delete(id);
+     setProjOpen(card,open);
+   };
+   head.addEventListener('click',flip);
+   head.addEventListener('keydown',ev=>{
+     if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();flip(ev)}
+   });
+ });
+ const allBtn=$('#proj-expand-all');
+ if(allBtn)allBtn.onclick=()=>{
+   const cards=[...v.querySelectorAll('.project-card')];
+   const anyClosed=cards.some(c=>c.querySelector('.proj-card-body')?.hidden);
+   cards.forEach(c=>{
+     const head=c.querySelector('[data-proj-toggle]');
+     if(!head)return;
+     const id=head.getAttribute('data-proj-toggle');
+     if(anyClosed)projOpen.add(id); else projOpen.delete(id);
+     setProjOpen(c,anyClosed);
+   });
+   allBtn.textContent=anyClosed?'🔼 بستن همه':'🔽 باز کردن همه';
+ };
  actions(v,'data-toggle-update',async id=>{try{const d=await api('proj.toggle_auto_update',{id});if(d.auto_update){if(d.poll?.triggered?.length>0){toast(`🚀 به‌روزرسانی خودکار فعال شد؛ کامیت جدید (${d.poll.triggered[0].remote_commit}) در حال نصب است.`,'ok');openJob(d.poll.triggered[0].job_id,'دیپلوی خودکار');}else{toast('به‌روزرسانی خودکار با موفقیت فعال شد (بررسی منظم برنچ)','ok');}}else{toast('به‌روزرسانی خودکار غیرفعال شد','warn');}renderProj();}catch(e){toast(e.message,'err')}});
- actions(v,'data-check-update',async id=>{try{toast('در حال بررسی مخزن گیت‌هاب...','acc');const d=await api('proj.check_update',{id});if(d.has_update){if(await confirmDlg(`نسخه جدید (${d.remote_commit}) در شاخه ${d.branch} یافت شد (نسخه فعلی: ${d.local_commit}). هم‌اکنون نصب شود؟`)){const dep=await api('proj.deploy',{id});openJob(dep.job,'دیپلوی و به‌روزرسانی پروژه');}}else{toast(`پروژه با شاخه ${d.branch} (کامیت ${d.remote_commit||d.local_commit}) کاملاً به‌روز است`,'ok');}}catch(e){toast(e.message,'err')}});actions(v,'data-export',id=>projectExport(projectList.find(p=>p.id===id)));$('#pref').onclick=renderProj;if($('#proj-ports-btn'))$('#proj-ports-btn').onclick=openPortsSheet;actions(v,'data-deploy',async id=>{if(!await confirmDlg('فایل‌های پروژه به‌روزرسانی شوند؟ از داده‌ها بکاپ داشته باشید.'))return;const d=await api('proj.deploy',{id});openJob(d.job,'دیپلوی پروژه')});for(const action of ['start','stop','restart'])actions(v,'data-'+action,async id=>{const d=await api('proj.service',{id,action});renderProj();if(d?.job)openJob(d.job,'سرویس')});actions(v,'data-log',id=>openJob(id,'لاگ سرویس'));actions(v,'data-copylog',async jid=>{try{toast('در حال دریافت لاگ...','acc');const d=await api('jobs.log',{id:jid,offset:0});const txt=d.b64?decode(d.b64):'';await copyText(txt,'لاگ سرویس پروژه با موفقیت کپی شد');}catch(e){toast(e.message,'err')}});actions(v,'data-edit',id=>projectDlg(projectList.find(p=>p.id===id)));actions(v,'data-files',id=>{switchTab('files');navFm(projectList.find(p=>p.id===id).deploy_path)});actions(v,'data-del',async id=>{if(await confirmDlg('پروفایل حذف و سرویس آن متوقف شود؟ فایل‌ها باقی می‌مانند.')){await api('proj.delete',{id});renderProj()}})}catch(e){toast(e.message,'err')}}
+ actions(v,'data-check-update',async id=>{try{toast('در حال بررسی مخزن گیت‌هاب...','acc');const d=await api('proj.check_update',{id});if(d.has_update){if(await confirmDlg(`نسخه جدید (${d.remote_commit}) در شاخه ${d.branch} یافت شد (نسخه فعلی: ${d.local_commit}). هم‌اکنون نصب شود؟`)){const dep=await api('proj.deploy',{id});openJob(dep.job,'دیپلوی و به‌روزرسانی پروژه');}}else{toast(`پروژه با شاخه ${d.branch} (کامیت ${d.remote_commit||d.local_commit}) کاملاً به‌روز است`,'ok');}}catch(e){toast(e.message,'err')}});actions(v,'data-export',id=>projectExport(projectList.find(p=>p.id===id)));$('#pref').onclick=renderProj;if($('#proj-ports-btn'))$('#proj-ports-btn').onclick=openPortsSheet;if($('#proj-dom-btn'))$('#proj-dom-btn').onclick=()=>switchTab('dom');actions(v,'data-domain',id=>domainDlg(projectList.find(p=>p.id===id)));actions(v,'data-deploy',async id=>{if(!await confirmDlg('فایل‌های پروژه به‌روزرسانی شوند؟ از داده‌ها بکاپ داشته باشید.'))return;const d=await api('proj.deploy',{id});openJob(d.job,'دیپلوی پروژه')});for(const action of ['start','stop','restart'])actions(v,'data-'+action,async id=>{const d=await api('proj.service',{id,action});renderProj();if(d?.job)openJob(d.job,'سرویس')});actions(v,'data-log',id=>openJob(id,'لاگ سرویس'));actions(v,'data-copylog',async jid=>{try{toast('در حال دریافت لاگ...','acc');const d=await api('jobs.log',{id:jid,offset:0});const txt=d.b64?decode(d.b64):'';await copyText(txt,'لاگ سرویس پروژه با موفقیت کپی شد');}catch(e){toast(e.message,'err')}});actions(v,'data-edit',id=>projectDlg(projectList.find(p=>p.id===id)));actions(v,'data-files',id=>{switchTab('files');navFm(projectList.find(p=>p.id===id).deploy_path)});actions(v,'data-del',async id=>{if(await confirmDlg('پروفایل حذف و سرویس آن متوقف شود؟ فایل‌ها باقی می‌مانند.')){await api('proj.delete',{id});renderProj()}})}catch(e){toast(e.message,'err')}}
 // Import is data-only: it never saves, deploys, evaluates, or starts commands.
 const PROJECT_JSON_MAX_BYTES=256*1024;
 function parseProjectJson(text){
@@ -5749,8 +7167,8 @@ function parseProjectJson(text){
  const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
  if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
  if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
- const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token'];
- const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs']);
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind','node_version'];
+ const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs','domain_enabled','domain_ws','domain_https','domain_timeout']);
  for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
  if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
  const out=Object.create(null);
@@ -5760,7 +7178,12 @@ function parseProjectJson(text){
  if(out.deploy_path!==undefined&&out.deploy_path!==''&&(!out.deploy_path.startsWith('/')||out.deploy_path==='/'))throw Error('مسیر نصب باید مطلق و غیر از / باشد');
  if(out.branch?.startsWith('-')||/(^|\/)\.\.(\/|$)/.test(out.subfolder||''))throw Error('شاخه یا زیرپوشه نامعتبر است');
  if(Object.prototype.hasOwnProperty.call(d,'port')){if(!['string','number'].includes(typeof d.port))throw Error('پورت نامعتبر است');const v=String(d.port);if(v!==''&&(!/^\d+$/.test(v)||+v<1||+v>65535))throw Error('پورت باید بین ۱ و ۶۵۵۳۵ باشد');out.port=v}
- for(const k of ['auto_start','is_daemon','preserve_configs'])if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='boolean')throw Error('مقدار '+k+' باید true یا false باشد');out[k]=d[k]}
+ for(const k of ['auto_start','is_daemon','preserve_configs','domain_enabled','domain_ws','domain_https'])if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='boolean')throw Error('مقدار '+k+' باید true یا false باشد');out[k]=d[k]}
+ if(Object.prototype.hasOwnProperty.call(d,'domain_timeout')){const tv=+d.domain_timeout;if(!Number.isFinite(tv)||tv<30||tv>900)throw Error('domain_timeout باید بین ۳۰ و ۹۰۰ ثانیه باشد');out.domain_timeout=tv}
+ if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است');
+ if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد');
+ if(out.node_version&&!/^\d+(\.\d+){0,2}$/.test(out.node_version))throw Error('node_version نامعتبر است؛ مثلاً 24')
+ if(out.python_version&&!/^\d+(\.\d+){0,2}$/.test(out.python_version))throw Error('python_version نامعتبر است؛ مثلاً 3.14')
  if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
  // A portable profile cannot change the identity of the dialog being edited.
  return out;
@@ -5771,6 +7194,11 @@ function applyProjectJson(sh,d){
  if(d.auth_token!==undefined)sh.querySelector('#jq-token').value=d.auth_token;
  if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
  if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;if(d.preserve_configs!==undefined)sh.querySelector('#jq-preserve').checked=d.preserve_configs;
+ if(d.node_version!==undefined){const el=sh.querySelector('#jq-nodever');if(el)el.value=d.node_version}
+ if(d.python_version!==undefined){const el=sh.querySelector('#jq-pyver');if(el)el.value=d.python_version}
+ for(const[k,id]of[['domain','dq-domain'],['domain_mode','dq-mode'],['domain_path','dq-path'],['domain_docroot','dq-docroot'],['bind_host','dq-bind'],['domain_timeout','dq-timeout'],['domain_kind','dq-kind']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.value=d[k]}
+ for(const[k,id]of[['domain_enabled','dq-enabled'],['domain_ws','dq-ws'],['domain_https','dq-https']])if(d[k]!==undefined){const el=sh.querySelector('#'+id);if(el)el.checked=d[k]}
+ const dqBox=sh.querySelector('#dq-box'),dqEn=sh.querySelector('#dq-enabled');if(dqBox&&dqEn)dqBox.classList.toggle('hide',!dqEn.checked);
  if(d.env!==undefined){const box=sh.querySelector('#jq-env');const lines=box.value.split(/\r?\n/).filter(line=>{const i=line.indexOf('=');return i<0||!Object.prototype.hasOwnProperty.call(d.env,line.slice(0,i).trim())});box.value=[...lines.filter(line=>line.trim()!==''),...Object.entries(d.env).map(([k,v])=>k+'='+v)].join('\n')}
 }
 
@@ -5779,7 +7207,7 @@ function compareProjectVersions(a,b){const x=parsedProjectVersion(a),y=parsedPro
 function branchVersion(row,path='*'){const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return apps.map(a=>a.version).filter(v=>parsedProjectVersion(v)).sort(compareProjectVersions)[0]||''}
 function sortedBranchRows(rows,path='*'){return [...rows].sort((a,b)=>compareProjectVersions(branchVersion(a,path),branchVersion(b,path))||a.name.localeCompare(b.name))}
 
-function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div><button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
+function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn ${fresh ? 'pri' : ''}" id="tab-gh">⚡ کاوشگر مخازن گیت‌هاب</button><button class="btn ${!fresh ? 'pri' : ''}" id="tab-man">✍️ تنظیمات دستی</button><button class="btn" id="tab-json">📄 ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="${fresh ? '' : 'hide'}"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp" class="${fresh ? 'hide' : ''}"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div><div id="jq-nodever-wrap"><label class="lb">نسخه Node.js</label><div class="row" style="gap:6px"><select class="inp" id="jq-nodever" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-nodever-install" title="نصب نسخه جدید با NVM">⬇️ نصب</button></div><p class="hint" id="jq-nodever-note" style="font-size:11.5px;margin:4px 0 0"></p></div><div id="jq-pyver-wrap"><label class="lb">نسخه پایتون</label><div class="row" style="gap:6px"><select class="inp" id="jq-pyver" style="flex:1"><option value="">در حال خواندن…</option></select><button class="btn sm" id="jq-pyver-install" title="نصب نسخه جدید با uv">⬇️ نصب</button></div><p class="hint" id="jq-pyver-note" style="font-size:11.5px;margin:4px 0 0"></p></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><label class="lb"><input class="chk" id="jq-autoupdate" type="checkbox" ${p.auto_update?'checked':''}> 🔄 به‌روزرسانی خودکار برنچ گیت‌هاب (Auto-Update)</label><div id="jq-autoupdate-box" class="${p.auto_update?'':'hide'}" style="margin-right:24px;margin-bottom:8px"><label class="lb">فاصله بررسی تغییرات برنچ</label><select class="inp" id="jq-autoupdate-interval"><option value="60" ${p.auto_update_interval===60||!p.auto_update_interval?'selected':''}>هر ۱ دقیقه (پیش‌فرض)</option><option value="120" ${p.auto_update_interval===120?'selected':''}>هر ۲ دقیقه</option><option value="300" ${p.auto_update_interval===300?'selected':''}>هر ۵ دقیقه</option><option value="900" ${p.auto_update_interval===900?'selected':''}>هر ۱۵ دقیقه</option><option value="1800" ${p.auto_update_interval===1800?'selected':''}>هر ۳۰ دقیقه</option><option value="3600" ${p.auto_update_interval===3600?'selected':''}>هر ۱ ساعت</option></select></div><div style="margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line)"><label class="lb" style="margin:0;cursor:pointer"><input class="chk" id="jq-preserve" type="checkbox" ${p.preserve_configs!==false?'checked':''}> 🛡️ حفظ و ادغام تنظیمات، کانفیگ‌ها و دیتابیس محلی هنگام آپدیت</label><p class="hint" style="margin:4px 0 0 0;font-size:12px"><b>فعال (پیش‌فرض):</b> متغیرهای .env، فایل‌های config.json/settings.json، دیتابیس‌ها و توکن‌های محلی سرور ایران در آپدیت‌ها ادغام و حفظ می‌شوند.<br><b>غیرفعال:</b> در هر آپدیت، پروژه کاملاً به نسخه خام مخزن گیت‌هاب ریست می‌شود (Clean Reset).</p></div>${domainFormHtml(p,'dq')}<button class="btn pri" id="jq-save" style="margin-top:10px">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
  const showTab=id=>{for(const tab of ['gh','man','json']){sh.querySelector('#'+tab+'-exp').classList.toggle('hide',tab!==id);sh.querySelector('#tab-'+tab).classList.toggle('pri',tab===id)}};
  const man=()=>showTab('man'),gh=()=>showTab('gh');sh.querySelector('#tab-man').onclick=man;sh.querySelector('#tab-gh').onclick=gh;sh.querySelector('#tab-json').onclick=()=>showTab('json');
  const jsonText=sh.querySelector('#jq-json-text'),jsonStatus=sh.querySelector('#jq-json-status');let jsonEpoch=0;
@@ -5787,6 +7215,70 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#jq-json-file').onchange=async e=>{const epoch=++jsonEpoch,file=e.target.files[0];if(!file)return;try{if(file.size>PROJECT_JSON_MAX_BYTES)throw Error('فایل بزرگ‌تر از ۲۵۶ کیلوبایت است');const text=await file.text();if(epoch!==jsonEpoch||sh.querySelector('#jq-json-text')!==jsonText)return;jsonText.value=text;jsonStatus.textContent='فایل خوانده شد؛ برای اعتبارسنجی و بازبینی دکمه اعمال را بزنید'}catch(error){if(epoch===jsonEpoch&&sh.querySelector('#jq-json-text')===jsonText)jsonStatus.textContent=error.message}};
  sh.querySelector('#jq-json-apply').onclick=()=>{try{const imported=parseProjectJson(jsonText.value);jsonEpoch++;applyProjectJson(sh,imported);man();toast('JSON در فرم اعمال شد؛ دستورات و مسیر را بررسی و سپس ذخیره کنید','ok')}catch(error){jsonStatus.textContent=error.message}};
  const fill=app=>{applyProjectJson(sh,app);sh.querySelector('#jq-type').value=app.type||'node';man()};
+ const nvSel=sh.querySelector('#jq-nodever'),nvNote=sh.querySelector('#jq-nodever-note');
+ const pvSel=sh.querySelector('#jq-pyver'),pvNote=sh.querySelector('#jq-pyver-note');
+ const pyVerSync=()=>sh.querySelector('#jq-pyver-wrap').classList.toggle('hide',sh.querySelector('#jq-type').value!=='python');
+ const loadPyVers=async keep=>{
+   const cur=keep!==undefined?keep:(p.python_version||'');
+   try{
+     const d=await api('sys.python_versions',{want:cur});
+     const opts=['<option value="">خودکار (جدیدترین نصب‌شده'+(d.console_default?' / پیش‌فرض کنسول '+esc(d.console_default):'')+')</option>'];
+     for(const v of (d.versions||[]))opts.push('<option value="'+esc(v)+'" '+(v===cur?'selected':'')+'>'+esc(v)+'</option>');
+     if(cur&&!(d.versions||[]).includes(cur))opts.push('<option value="'+esc(cur)+'" selected>'+esc(cur)+' (نصب‌نشده)</option>');
+     pvSel.innerHTML=opts.join('');
+     pvNote.innerHTML=d.uv_installed
+       ?'uv: <code class="ltr">'+esc(d.uv_bin)+'</code> — انتخاب‌شده: <b>'+esc(d.selected||'—')+'</b><br>پایتون سیستم: <code class="ltr">'+esc(d.system_python||'?')+'</code>. کنسول برای هر پروژه یک virtualenv جدا می‌سازد و requirements.txt را در آن نصب می‌کند.'
+       :'⚠️ uv نصب نیست؛ کنسول مجبور است از پایتون سیستم استفاده کند (<code class="ltr">'+esc(d.system_python||'?')+'</code>). دکمهٔ نصب، uv و نسخهٔ خواسته‌شده را با هم نصب می‌کند.';
+   }catch(e){pvSel.innerHTML='<option value="">خطا در خواندن نسخه‌ها</option>';pvNote.textContent=String(e.message||e)}
+ };
+ const nodeVerSync=()=>sh.querySelector('#jq-nodever-wrap').classList.toggle('hide',sh.querySelector('#jq-type').value!=='node');
+ const loadNodeVers=async(keep)=>{
+   try{
+     const cur=keep!==undefined?keep:(p.node_version||'');
+     const d=await api('sys.node_versions',{want:cur});
+     nvSel.innerHTML='<option value="">خودکار (جدیدترین نسخه نصب‌شده)</option>'+
+       d.versions.map(v=>`<option value="${esc(v.version)}" ${cur===v.version?'selected':''}>v${esc(v.version)}${v.node_sqlite?' ✅ node:sqlite':''}</option>`).join('');
+     if(cur&&!d.versions.some(v=>v.version===cur))nvSel.insertAdjacentHTML('beforeend',`<option value="${esc(cur)}" selected>v${esc(cur)} — نصب نشده!</option>`);
+     nvSel.value=cur;
+     const sq=d.versions.filter(v=>v.node_sqlite);
+     nvNote.innerHTML=!d.versions.length
+       ?'⚠️ هیچ نسخه‌ای از Node در NVM پیدا نشد'+(d.system_node?` (Node سیستمی: v${esc(d.system_node)})`:'')+'. دکمهٔ «نصب» را بزنید.'
+       :(sq.length?`اجرا با <b class="ltr">v${esc(d.selected)}</b>. برای <code class="ltr">node:sqlite</code> نسخهٔ ۲۲.۱۳+ یا ۲۴ لازم است (با ✅ مشخص شده).`
+                  :`⚠️ اجرا با <b class="ltr">v${esc(d.selected)}</b> — هیچ نسخهٔ نصب‌شده‌ای <code class="ltr">node:sqlite</code> را بدون فلگ ندارد؛ Node 24 را نصب کنید.`);
+   }catch(e){nvNote.textContent=e.message}
+ };
+ nodeVerSync();pyVerSync();loadNodeVers();loadPyVers();
+ sh.querySelector('#jq-type').addEventListener('change',()=>{nodeVerSync();pyVerSync()});
+ sh.querySelector('#jq-pyver-install').onclick=async()=>{
+   const v=(prompt('کدام نسخه پایتون نصب شود؟ (پیشنهاد: 3.14)','3.14')||'').trim();
+   if(!v)return;
+   if(!/^\d+(\.\d+){0,2}$/.test(v)){toast('نسخه نامعتبر است','err');return}
+   try{
+     const r=await api('sys.python_install',{version:v});
+     toast('نصب پایتون '+v+' شروع شد؛ لاگ کامل در تب کارها','ok');
+     pvNote.textContent='⏳ در حال نصب پایتون '+v+'…';
+     const poll=setInterval(async()=>{
+       try{const st=await api('jobs.status',{id:r.job});
+         if(st.status!=='running'){clearInterval(poll);await loadPyVers(v);toast('نصب پایتون '+v+' تمام شد','ok')}
+       }catch(e){clearInterval(poll)}
+     },4000);
+   }catch(e){toast(e.message||'نصب پایتون ناموفق بود','err')}
+ };
+ sh.querySelector('#jq-nodever-install').onclick=async()=>{
+   const v=(prompt('کدام نسخه Node نصب شود؟ (پیشنهاد: 24 — شامل node:sqlite بدون فلگ)','24')||'').trim();
+   if(!v)return;
+   if(!/^\d+(\.\d+){0,2}$/.test(v)){toast('نسخه نامعتبر است','err');return}
+   try{
+     const r=await api('sys.nvm_install',{version:v,set_default:false});
+     toast('نصب Node '+v+' شروع شد؛ لاگ کامل در تب کارها','ok');
+     nvNote.textContent='⏳ در حال نصب Node '+v+'… (چند دقیقه طول می‌کشد)';
+     const poll=setInterval(async()=>{
+       try{const st=await api('jobs.status',{id:r.job});
+         if(st.status!=='running'){clearInterval(poll);await loadNodeVers(v);toast('نصب Node '+v+' تمام شد','ok')}
+       }catch(e){clearInterval(poll)}
+     },4000);
+   }catch(e){toast(e.message,'err')}
+ };
  const owner=()=>sh.querySelector('#gh-owner').value.trim()||'fazilatma',repo=()=>sh.querySelector('#gh-repo-sel').value,branch=()=>sh.querySelector('#gh-branch-sel').value;
  const table=sh.querySelector('#gh-branch-table'),progress=sh.querySelector('#gh-branch-progress'),pathSelect=sh.querySelector('#gh-version-path');
  let epoch=0,selection=0,rows=[],snapshot=null;
@@ -5805,14 +7297,330 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#gh-repo-sel').onchange=branches;sh.querySelector('#gh-branch-sel').onchange=inspect;
  sh.querySelector('#jq-managed-path').onclick=async()=>{try{const d=await api('proj.managed_path',{id:p.id||'',name:sh.querySelector('#jq-name').value});sh.querySelector('#jq-deploy_path').value=d.path;toast('مسیر پیشنهادی در فرم قرار گرفت؛ پس از بازبینی ذخیره کنید','ok')}catch(e){toast(e.message,'err')}};
  sh.querySelector('#jq-autoupdate').onchange=e=>sh.querySelector('#jq-autoupdate-box').classList.toggle('hide',!e.target.checked);
- sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');await api('proj.save',{project:q});__closeSheet();renderProj();toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
+ domainFormBind(sh,'dq');
+ sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,node_version:(sh.querySelector('#jq-nodever')||{}).value||'',python_version:(sh.querySelector('#jq-pyver')||{}).value||'',auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();Object.assign(q,domainFormRead(sh,'dq'));if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');const res=await api('proj.save',{project:q});__closeSheet();renderProj();if(res&&res.domain_error)toast('پروژه ذخیره شد اما نگاشت دامنه ناموفق بود: '+res.domain_error,'warn');else if(res&&res.domain)toast('ذخیره شد و دامنه روی '+res.domain.url+' منتشر شد','ok');else toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
  if(fresh){gh();sh.querySelector('#gh-load').click()}
 }
 INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hidden&&!__sheet)renderJobs()},5000)}};
 let jobText="",jobState="";
 async function renderJobs(){try{const d=await api('jobs.list'),v=$('#v-jobs');v.innerHTML='<div class="card"><h3>کارهای پس‌زمینه و خطاهای راه‌اندازی</h3><button class="btn sm" id="jobs-ref">به‌روزرسانی</button></div>'+'<div class="view-tools"><input class="inp" id="job-filter" aria-label="جستجوی کارها" placeholder="فیلتر کارها…" value="'+esc(jobText)+'"><select class="mini" id="job-state">'+[['','همه وضعیت‌ها'],['running','در حال اجرا'],['failed','ناموفق'],['done','کامل'],['dead','قطع شده']].map(([k,t])=>'<option value="'+k+'" '+(jobState===k?'selected':'')+'>'+t+'</option>').join('')+'</select></div>'+d.jobs.map(j=>`<div class="li job-row" data-state="${esc(j.status.status)}"><span class="t"><b>${esc(j.name)}</b><small>${fmtDate(j.created)} · ${esc(j.type)} · ${esc(j.status.status)} ${j.status.exit??''}</small></span><button class="btn sm" data-log="${esc(j.id)}">لاگ</button><button class="btn sm pri" data-copylog="${esc(j.id)}" title="کپی سریع متن لاگ">📋 کپی لاگ</button>${j.status.status==='running'?`<button class="btn danger sm" data-stop="${esc(j.id)}">توقف</button>`:''}</div>`).join('');const filter=()=>v.querySelectorAll('.job-row').forEach(row=>row.classList.toggle('hide',!(row.textContent.toLowerCase().includes(jobText.toLowerCase())&&(!jobState||row.dataset.state===jobState))));$('#job-filter').oninput=e=>{jobText=e.target.value;filter()};$('#job-state').onchange=e=>{jobState=e.target.value;filter()};filter();$('#jobs-ref').onclick=renderJobs;actions(v,'data-log',id=>openJob(id,d.jobs.find(j=>j.id===id).name));actions(v,'data-copylog',async jid=>{try{toast('در حال دریافت لاگ...','acc');const dj=await api('jobs.log',{id:jid,offset:0});const txt=dj.b64?decode(dj.b64):'';await copyText(txt,'لاگ کار با موفقیت کپی شد');}catch(e){toast(e.message,'err')}});actions(v,'data-stop',async id=>{if(await confirmDlg('متوقف شود؟')){await api('jobs.stop',{id});renderJobs()}})}catch(e){toast(e.message,'err')}}
+/* ==========================================================================
+ * 🌐 انتشار پروژه روی دامنه / ساب‌دامین به‌جای پورت
+ * ========================================================================== */
+const DOM_MODE_LABELS={auto:'خودکار (انتخاب کنسول)',htaccess:'Apache .htaccess (mod_proxy)',phpproxy:'پروکسی PHP (سازگار با همه هاست‌ها)',apache:'VirtualHost آپاچی',nginx:'Server Block انجین‌ایکس',cloudflared:'تونل کلودفلر (بدون پورت)',manual:'فقط تولید کانفیگ (دستی)'};
+const DOM_MODE_ORDER=['htaccess','phpproxy','apache','nginx','cloudflared','manual'];
+let domData={detect:null,rows:[]};
+function domModeLabel(m){return DOM_MODE_LABELS[m]||m||'—'}
+
+function domainFormHtml(p,pf){
+  pf=pf||'dq';
+  return `<div style="margin-top:10px;padding:12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line)">
+  <label class="lb" style="margin:0;cursor:pointer;font-weight:700"><input class="chk" id="${pf}-enabled" type="checkbox" ${p.domain_enabled?'checked':''}> 🌐 انتشار روی دامنه/ساب‌دامین به‌جای پورت (Reverse Proxy)</label>
+  <p class="hint" style="margin:5px 0 8px;font-size:12px">روی هاست اشتراکی فقط پورت‌های ۸۰ و ۴۴۳ از بیرون باز هستند، به همین دلیل <b class="ltr">http://your-server:${esc(p.port||'3000')}</b> از اینترنت باز نمی‌شود. با فعال کردن این گزینه، کنسول یک پروکسی معکوس می‌سازد تا همان اپ روی <b class="ltr">https://app.example.com</b> سرو شود؛ پورت داخلی مخفی و امن می‌ماند.</p>
+  <div id="${pf}-box" class="${p.domain_enabled?'':'hide'}">
+    <label class="lb" style="font-weight:700">نوع انتشار</label>
+    <div class="segtabs" style="margin-bottom:8px">
+      <button type="button" class="btn ${(p.domain_kind||'subdomain')!=='path'?'pri':''}" id="${pf}-kind-sub">🔗 ساب‌دامین<br><small class="ltr">app.example.com</small></button>
+      <button type="button" class="btn ${(p.domain_kind||'subdomain')==='path'?'pri':''}" id="${pf}-kind-path">📁 پوشه روی دامنه<br><small class="ltr">example.com/app</small></button>
+    </div>
+    <input type="hidden" id="${pf}-kind" value="${esc(p.domain_kind||'subdomain')}">
+    <p class="hint" id="${pf}-kindnote" style="margin:0 0 8px;font-size:12px"></p>
+    <div style="background:var(--panel);border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+      <span class="hint">آدرس نهایی:</span> <b class="ltr" id="${pf}-preview" style="color:var(--acc)">—</b>
+    </div>
+    <div class="grid2">
+      <div><label class="lb" id="${pf}-domain-lb">دامنه یا ساب‌دامین</label><input class="inp ltr" id="${pf}-domain" placeholder="app.example.com" value="${esc(p.domain||'')}"></div>
+      <div><label class="lb">روش انتشار</label><select class="inp" id="${pf}-mode"><option value="" ${!p.domain_mode?'selected':''}>پیش‌فرض کنسول (تشخیص خودکار)</option>${DOM_MODE_ORDER.map(m=>`<option value="${m}" ${p.domain_mode===m?'selected':''}>${esc(domModeLabel(m))}</option>`).join('')}</select></div>
+      <div id="${pf}-path-wrap"><label class="lb">نام پوشه روی دامنه</label><input class="inp ltr" id="${pf}-path" placeholder="/app" value="${esc(p.domain_path||'/')}"></div>
+      <div><label class="lb">Document Root (خالی = خودکار)</label><input class="inp ltr" id="${pf}-docroot" placeholder="~/public_html/app" value="${esc(p.domain_docroot||'')}"></div>
+      <div><label class="lb">Bind Host اپ (خالی = خودکار)</label><input class="inp ltr" id="${pf}-bind" placeholder="127.0.0.1" value="${esc(p.bind_host||'')}"></div>
+      <div><label class="lb">مهلت پاسخ پروکسی (ثانیه)</label><input class="inp ltr" id="${pf}-timeout" type="number" min="30" max="900" value="${esc(p.domain_timeout||300)}"></div>
+    </div>
+    <label class="lb" style="cursor:pointer"><input class="chk" id="${pf}-https" type="checkbox" ${p.domain_https!==false?'checked':''}> 🔒 ارجاع خودکار HTTP به HTTPS</label>
+    <label class="lb" style="cursor:pointer"><input class="chk" id="${pf}-ws" type="checkbox" ${p.domain_ws?'checked':''}> 🔌 پشتیبانی وب‌سوکت (Socket.io / WS) — فقط در حالت‌های htaccess، Nginx، آپاچی و تونل</label>
+    <p class="hint" style="font-size:11.5px;margin-top:6px">اپ باید مسیرهای نسبی بدهد یا هدر <span class="ltr">X-Forwarded-Prefix</span> را در نظر بگیرد؛ کنسول این هدر را در حالت پوشه می‌فرستد.</p>
+  </div></div>`;
+}
+function domainFormBind(root,pf,baseDomain){
+  pf=pf||'dq';
+  baseDomain=baseDomain||(domData&&domData.detect&&domData.detect.base_domain)||'';
+  const q=id=>root.querySelector('#'+pf+'-'+id);
+  const cb=q('enabled');
+  if(cb)cb.onchange=()=>q('box').classList.toggle('hide',!cb.checked);
+  const kindEl=q('kind');if(!kindEl)return;
+  const paint=()=>{
+    const path=kindEl.value==='path';
+    q('kind-sub').classList.toggle('pri',!path);
+    q('kind-path').classList.toggle('pri',path);
+    q('path-wrap').classList.toggle('hide',!path);
+    q('domain-lb').textContent=path?'دامنهٔ اصلی سایت':'ساب‌دامین کامل';
+    q('domain').placeholder=path?'sabashopping.ir':'app.sabashopping.ir';
+    q('kindnote').innerHTML=path
+      ? '✅ <b>هیچ ساب‌دامین و رکورد DNS لازم نیست.</b> از همان دامنه و همان گواهی SSL موجود استفاده می‌شود؛ فقط یک پوشه در ریشهٔ سایت ساخته می‌شود.'
+      : '⚠️ ساب‌دامین باید <b>قبلاً</b> در پنل هاست یا DNS ساخته شده باشد؛ کنسول آن را نمی‌سازد (به‌جز حالت تونل کلودفلر).';
+    const dom=(q('domain').value.trim()||(path?(baseDomain||'example.com'):'app.example.com')).replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+    let seg=q('path').value.trim().replace(/^\/+|\/+$/g,'');
+    const proto=q('https').checked?'https':'http';
+    q('preview').textContent=proto+'://'+dom+(path?'/'+(seg||'app'):'')+'/';
+  };
+  q('kind-sub').onclick=()=>{
+    kindEl.value='subdomain';
+    const d=q('domain').value.trim().toLowerCase();
+    if(baseDomain&&(d===''||d===baseDomain.toLowerCase())){const seg=(q('path').value.trim().replace(/^\/+|\/+$/g,'').split('/')[0])||'app';q('domain').value=seg+'.'+baseDomain}
+    paint()};
+  q('kind-path').onclick=()=>{kindEl.value='path';if(!q('path').value.trim()||q('path').value.trim()==='/')q('path').value='/app';if(!q('domain').value.trim()&&baseDomain)q('domain').value=baseDomain;paint()};
+  ['domain','path'].forEach(k=>{const el=q(k);if(el)el.oninput=paint});
+  const hs=q('https');if(hs)hs.onchange=paint;
+  paint();
+}
+function domainFormRead(root,pf){
+  pf=pf||'dq';
+  const val=id=>{const el=root.querySelector('#'+pf+'-'+id);return el?el.value.trim():''};
+  const chk=id=>{const el=root.querySelector('#'+pf+'-'+id);return !!(el&&el.checked)};
+  const kindEl=root.querySelector('#'+pf+'-kind');
+  const kind=kindEl?kindEl.value:'subdomain';
+  return {domain_enabled:chk('enabled'),domain_kind:kind,domain:val('domain'),domain_mode:val('mode'),
+    domain_path:kind==='path'?(val('path')||'/app'):'/',
+    domain_docroot:val('docroot'),bind_host:val('bind'),domain_https:chk('https'),domain_ws:chk('ws'),
+    domain_timeout:+val('timeout')||300};
+}
+// ساخت payload کامل برای proj.save تا فیلدهای دیگر پروژه پاک نشوند
+function projectSavePayload(p,ov){
+  const q=Object.assign({},p,ov||{});
+  return {id:q.id||'',name:q.name||'',type:q.type||'node',node_version:q.node_version||'',python_version:q.python_version||'',repo_url:q.repo_url||'',branch:q.branch||'main',
+    subfolder:q.subfolder||'',deploy_path:q.deploy_path||'',install_cmd:q.install_cmd||'',build_cmd:q.build_cmd||'',
+    start_cmd:q.start_cmd||'',port:String(q.port||''),env_text:Object.entries(q.env||{}).map(([k,v])=>k+'='+v).join('\n'),
+    auto_start:!!q.auto_start,is_daemon:!!q.is_daemon,auto_update:!!q.auto_update,
+    auto_update_interval:+q.auto_update_interval||60,keep_git:!!q.keep_git,preserve_configs:q.preserve_configs!==false,
+    domain_enabled:!!q.domain_enabled,domain:q.domain||'',domain_mode:q.domain_mode||'',domain_path:q.domain_path||'/',
+    domain_kind:q.domain_kind||'subdomain',
+    domain_docroot:q.domain_docroot||'',domain_ws:!!q.domain_ws,domain_https:q.domain_https!==false,
+    domain_timeout:+q.domain_timeout||300,bind_host:q.bind_host||''};
+}
+function domReportHtml(r){
+  if(!r)return '';
+  let h=`<div class="card" style="margin:0;border-right:4px solid var(--ok)"><b>✅ نگاشت دامنه اعمال شد</b><div class="hint" style="margin-top:4px">${r.kind==='path'?'نوع: <b>📁 پوشه روی دامنه</b> · ':'نوع: <b>🔗 ساب‌دامین</b> · '}حالت: <b>${esc(domModeLabel(r.mode))}</b>${r.url?` · آدرس: <a class="ltr" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`:''}</div>`;
+  if(r.docroot)h+=`<div class="hint">Document Root: <code class="ltr">${esc(r.docroot)}</code></div>`;
+  if(r.files&&r.files.length)h+=`<div class="hint">فایل‌های نوشته‌شده:<br>${r.files.map(f=>`<code class="ltr">${esc(f)}</code>`).join('<br>')}</div>`;
+  if(r.manual)h+=`<p class="hint" style="color:var(--warn)">⚠️ بخشی از تنظیمات نیاز به اقدام دستی دارد (به یادداشت‌ها نگاه کنید).</p>`;
+  if(r.notes&&r.notes.length)h+=`<ul class="hint" style="margin:6px 18px 0 0;padding:0">${r.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`;
+  if(r.commands&&r.commands.length)h+=`<div style="margin-top:8px"><div class="hint">دستورهای پیشنهادی:</div><pre class="ltr" style="background:var(--panel2);padding:8px;border-radius:8px;font-size:12px;overflow:auto">${esc(r.commands.join('\n'))}</pre></div>`;
+  return h+'</div>';
+}
+async function domPreviewDlg(id,override){
+  const sh=openSheet(sheetHead('پیش‌نمایش کانفیگ دامنه')+'<div id="domprev">در حال تولید کانفیگ…</div>');
+  try{
+    const d=await api('dom.preview',{id,override:override||undefined});
+    sh.querySelector('#domprev').innerHTML=
+      `<p class="hint">حالت انتخاب‌شده: <b>${esc(domModeLabel(d.mode))}</b> — اگر کنسول اجازه نوشتن نداشته باشد، این متن‌ها را دستی در همان مسیر قرار دهید.</p>`+
+      d.files.map((f,i)=>`<div style="margin-bottom:12px"><label class="lb">📄 <span class="ltr">${esc(f.path)}</span></label><textarea class="inp ltr" rows="${Math.min(22,(f.body.split('\n').length+1))}" id="domprev-${i}" spellcheck="false" readonly>${esc(f.body)}</textarea><button class="btn sm" data-copyprev="${i}">📋 کپی محتوای فایل</button></div>`).join('')+
+      (d.commands&&d.commands.length?`<label class="lb">دستورهای لازم در ترمینال</label><pre class="ltr" style="background:var(--panel2);padding:10px;border-radius:8px;font-size:12px;overflow:auto">${esc(d.commands.join('\n'))}</pre><button class="btn sm" data-copycmd="1">📋 کپی دستورها</button>`:'');
+    actions(sh,'data-copyprev',i=>copyText(sh.querySelector('#domprev-'+i).value,'محتوای کانفیگ کپی شد'));
+    actions(sh,'data-copycmd',()=>copyText(d.commands.join('\n'),'دستورها کپی شدند'));
+  }catch(e){sh.querySelector('#domprev').innerHTML=`<p class="err">${esc(e.message)}</p>`}
+}
+async function domTestDlg(id){
+  const sh=openSheet(sheetHead('تست دسترسی دامنه')+'<div id="domtest"><span class="spin">⏳</span> در حال تست DNS، سرویس داخلی و پاسخ دامنه…</div>');
+  try{
+    const s=await api('dom.test',{id});
+    const yes=t=>`<span class="tag ok">✅ ${esc(t)}</span>`,no=t=>`<span class="tag" style="background:rgba(239,68,68,.15);color:#ef4444">❌ ${esc(t)}</span>`;
+    let h='<div class="tblwrap"><table class="tbl"><tbody>';
+    h+=`<tr><td>آدرس عمومی</td><td><a class="ltr" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></td></tr>`;
+    h+=`<tr><td>حالت انتشار</td><td>${esc(domModeLabel(s.mode))}</td></tr>`;
+    h+=`<tr><td>فایل‌های کانفیگ</td><td>${(s.files||[]).map(f=>`${f.exists?'✅':'❌'} <code class="ltr">${esc(f.path)}</code>`).join('<br>')||'—'}</td></tr>`;
+    if(s.backend)h+=`<tr><td>سرویس داخلی پروژه</td><td>${s.backend.up?yes('در حال اجرا ('+s.backend.ms+'ms)'):no(s.backend.error||'خاموش')}</td></tr>`;
+    if(s.dns)h+=`<tr><td>DNS دامنه</td><td>${s.dns.ip?`<span class="ltr">${esc(s.dns.ip)}</span>`:no('رکوردی پیدا نشد')} ${s.dns.server_ip?`<span class="hint ltr">(IP سرور: ${esc(s.dns.server_ip)})</span>`:''}</td></tr>`;
+    if(s.public)h+=`<tr><td>پاسخ HTTP دامنه</td><td>${s.public.code?`<b>${s.public.code}</b>`:no(s.public.error||'بدون پاسخ')} ${s.public.proxied?yes('از پروکسی وب‌کنسول عبور کرد'):''} <span class="hint">${esc(s.public.server||'')} · ${s.public.ms}ms</span></td></tr>`;
+    h+='</tbody></table></div>';
+    if(s.warnings&&s.warnings.length)h+=`<ul class="hint" style="margin:8px 18px 0 0">${s.warnings.map(w=>`<li>⚠️ ${esc(w)}</li>`).join('')}</ul>`;
+    sh.querySelector('#domtest').innerHTML=h;
+  }catch(e){sh.querySelector('#domtest').innerHTML=`<p class="err">${esc(e.message)}</p>`}
+}
+async function domainDlg(p){
+  const sh=openSheet(sheetHead('🌐 دامنه و ساب‌دامین — '+esc(p.name))+
+    `<p class="hint">پورت داخلی فعلی این پروژه: <b class="ltr">${esc(p.port||'—')}</b>${p.port?'':' — ابتدا از «ویرایش پروژه» یک پورت تعیین کنید.'}</p>`+
+    '<div id="dd-warn"></div>'+domainFormHtml(p,'dd')+
+    `<div class="row" style="gap:6px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn pri" id="dd-save">💾 ذخیره و اعمال روی سرور</button>
+      <button class="btn" id="dd-preview">📄 پیش‌نمایش کانفیگ</button>
+      <button class="btn" id="dd-test">🧪 تست دسترسی</button>
+      <button class="btn danger" id="dd-remove">🗑️ حذف نگاشت دامنه</button>
+    </div><div id="dd-result" style="margin-top:12px"></div>`);
+  domainFormBind(sh,'dd');
+  const warnBox=sh.querySelector('#dd-warn');
+  const loadWarn=async()=>{
+    try{
+      const st=await api('dom.status',{id:p.id});
+      const c=st.parent;
+      if(c&&c.applies&&c.catch_all&&!c.protected){
+        warnBox.innerHTML=`<div class="card" style="margin:0 0 10px;border-right:4px solid var(--warn)"><b>⚠️ تداخل با قوانین سایت اصلی</b>
+          <p class="hint" style="margin:4px 0">فایل <code class="ltr">${esc(c.file)}</code> یک قانون بازنویسی فراگیر دارد (وردپرس/لاراول) و ممکن است <code class="ltr">/${esc(c.segment)}</code> را قبل از پروکسی بگیرد.</p>
+          <button class="btn sm pri" id="dd-fixparent">🔧 افزودن استثنا به .htaccess ریشه</button></div>`;
+        const b=sh.querySelector('#dd-fixparent');
+        if(b)b.onclick=async()=>{try{const r=await api('dom.fix_parent',{id:p.id});toast('استثنای /'+r.segment+' اضافه شد','ok');loadWarn()}catch(e){toast(e.message,'err')}};
+      }else if(c&&c.applies&&c.protected){
+        warnBox.innerHTML=`<div class="card" style="margin:0 0 10px;border-right:4px solid var(--ok)"><b>✅ استثنای <code class="ltr">/${esc(c.segment)}</code> در .htaccess ریشه فعال است</b></div>`;
+      }else warnBox.innerHTML='';
+    }catch(e){warnBox.innerHTML=''}
+  };
+  if(p.domain_enabled)loadWarn();
+  sh.querySelector('#dd-preview').onclick=()=>domPreviewDlg(p.id,domainFormRead(sh,'dd'));
+  sh.querySelector('#dd-test').onclick=()=>domTestDlg(p.id);
+  sh.querySelector('#dd-save').onclick=async()=>{
+    const btn=sh.querySelector('#dd-save');btn.disabled=true;btn.textContent='در حال اعمال…';
+    try{
+      const ov=domainFormRead(sh,'dd');
+      const res=await api('proj.save',{project:projectSavePayload(p,ov)});
+      if(res.domain_error)throw Error(res.domain_error);
+      sh.querySelector('#dd-result').innerHTML=domReportHtml(res.domain);
+      loadWarn();
+      toast('تنظیمات دامنه ذخیره و اعمال شد','ok');
+      if(typeof renderProj==='function'&&curTab==='proj')renderProj();
+      if(curTab==='dom')renderDom();
+    }catch(e){sh.querySelector('#dd-result').innerHTML=`<div class="card" style="margin:0;border-right:4px solid var(--warn)"><b>⚠️ ${esc(e.message)}</b></div>`;toast(e.message,'err')}
+    finally{btn.disabled=false;btn.textContent='💾 ذخیره و اعمال روی سرور'}
+  };
+  sh.querySelector('#dd-remove').onclick=async()=>{
+    if(!await confirmDlg('فایل‌های پروکسی این دامنه حذف و انتشار غیرفعال شود؟ (فایل‌های خود پروژه دست‌نخورده می‌مانند)'))return;
+    try{const r=await api('dom.remove',{id:p.id,disable:true});
+      sh.querySelector('#dd-result').innerHTML=`<div class="card" style="margin:0"><b>🗑️ حذف شد</b><div class="hint">${(r.removed||[]).map(x=>`<code class="ltr">${esc(x)}</code>`).join('<br>')||'موردی برای حذف نبود'}</div></div>`;
+      toast('نگاشت دامنه حذف شد','ok');if(curTab==='dom')renderDom();
+    }catch(e){toast(e.message,'err')}
+  };
+}
+async function renderDom(){
+  const v=$('#v-dom');
+  v.innerHTML='<div class="card"><div class="row" style="gap:8px;align-items:center;padding:12px"><span class="spin">⏳</span> <b>در حال بررسی وب‌سرور، ریشه وب و دامنه‌ها…</b></div></div>';
+  try{
+    const d=await api('dom.list');domData={detect:d.detect,rows:d.projects};
+    const t=d.detect;
+    const badge=(ok,yesTxt,noTxt)=>ok?`<span class="tag ok">✅ ${esc(yesTxt)}</span>`:`<span class="tag warn">⚠️ ${esc(noTxt)}</span>`;
+    let h=`<div class="card" style="border-right:3px solid var(--acc)">
+      <h3 style="margin:0">🌐 انتشار پروژه‌ها روی دامنه به‌جای پورت</h3>
+      <p class="hint" style="margin:6px 0">اگر <b class="ltr">http://server:3000</b> از بیرون باز نمی‌شود، دلیلش این است که روی اکثر هاست‌ها فقط پورت ۸۰/۴۴۳ از فایروال عبور می‌کند. این بخش یک پروکسی معکوس می‌سازد تا اپ Node/Python شما روی یک ساب‌دامین (مثلاً <b class="ltr">app.example.com</b>) یا یک پوشه از دامنهٔ فعلی (مثلاً <b class="ltr">example.com/app</b>) و با HTTPS در دسترس باشد؛ بدون باز کردن هیچ پورتی.</p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px">
+        ${badge(t.web_root_writable,'ریشه وب قابل نوشتن','ریشه وب قابل نوشتن نیست')}
+        ${badge(t.apache||t.nginx,(t.litespeed?'LiteSpeed':(t.apache?'Apache':'Nginx'))+' شناسایی شد','وب‌سرور شناسایی نشد')}
+        ${badge(t.mod_proxy,'mod_proxy فعال','mod_proxy غیرفعال')}
+        ${badge(t.php_curl||t.php_sockets,'پروکسی PHP قابل استفاده','امکان پروکسی PHP نیست')}
+        ${badge(t.sudo,'دسترسی sudo موجود','بدون sudo (حالت هاست اشتراکی)')}
+        <span class="tag">وب‌سرور: <span class="ltr">${esc(t.server_software)}</span></span>
+        ${t.server_ip?`<span class="tag">IP سرور: <span class="ltr">${esc(t.server_ip)}</span></span>`:''}
+      </div>
+      <div class="hint" style="margin-top:8px">ریشه وب: <code class="ltr">${esc(t.web_root)}</code> · روش پیشنهادی: <b>${esc(domModeLabel(t.recommended))}</b></div>
+      <button class="btn sm" id="dom-refresh" style="margin-top:8px">🔄 بررسی دوباره سرور</button>
+    </div>`;
+    h+=`<div class="card" style="border-right:3px solid var(--warn)">
+      <h3 style="margin:0 0 6px">❓ آیا ساب‌دامین خودکار ساخته می‌شود؟</h3>
+      <p class="hint" style="margin:0 0 8px"><b>خیر — به‌جز دو مورد.</b> کنسول فقط فایل‌های پروکسی و کانفیگ را می‌نویسد؛ ساخت رکورد DNS و ساب‌دامین کار پنل هاست است. اگر نمی‌خواهید درگیر DNS شوید، از حالت <b>📁 پوشه روی دامنه</b> استفاده کنید.</p>
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>حالت انتشار</th><th>ساخت ساب‌دامین / DNS</th><th>کاری که باید خودتان بکنید</th></tr></thead><tbody>
+        <tr><td><b>📁 پوشه روی دامنه</b> <span class="ltr">(example.com/app)</span></td><td><span class="tag ok">✅ لازم نیست</span></td><td class="hint">هیچ‌چیز. از دامنه و SSL فعلی استفاده می‌شود. فقط اگر ریشهٔ سایت وردپرس/لاراول است، دکمهٔ «رفع تداخل» را بزنید.</td></tr>
+        <tr><td><b>☁️ تونل کلودفلر</b></td><td><span class="tag ok">✅ خودکار</span></td><td class="hint">فقط یک‌بار <code class="ltr">cloudflared tunnel login</code>؛ رکورد DNS را خود تونل می‌سازد.</td></tr>
+        <tr><td><b>🔗 .htaccess / پروکسی PHP</b></td><td><span class="tag warn">❌ دستی</span></td><td class="hint">در cPanel/DirectAdmin ساب‌دامین را بسازید و Document Root آن را روی مسیری که کنسول نشان می‌دهد بگذارید، سپس SSL بگیرید.</td></tr>
+        <tr><td><b>🅰️ Apache / Nginx vhost</b></td><td><span class="tag warn">❌ رکورد DNS دستی</span></td><td class="hint">کنسول فایل vhost را می‌نویسد، ولی رکورد A/CNAME را باید در پنل دامنه بسازید و سرویس را reload کنید.</td></tr>
+      </tbody></table></div>
+    </div>`;
+    h+=`<div class="card"><h3 style="margin:0 0 6px">⚙️ تنظیمات پایه دامنه</h3>
+      <div class="grid2">
+        <div><label class="lb">دامنه اصلی (برای ساخت خودکار ساب‌دامین‌ها)</label><input class="inp ltr" id="dom-base" placeholder="example.com" value="${esc(t.base_domain||'')}"></div>
+        <div><label class="lb">ریشه وب / public_html (خالی = خودکار)</label><input class="inp ltr" id="dom-root" placeholder="${esc(t.web_root)}" value="${esc(t.web_root_cfg||'')}"></div>
+        <div><label class="lb">روش پیش‌فرض انتشار</label><select class="inp" id="dom-mode"><option value="auto" ${t.default_mode==='auto'?'selected':''}>خودکار (${esc(domModeLabel(t.recommended))})</option>${DOM_MODE_ORDER.map(m=>`<option value="${m}" ${t.default_mode===m?'selected':''}>${esc(domModeLabel(m))}</option>`).join('')}</select></div>
+        <div><label class="lb">نام تونل کلودفلر</label><input class="inp ltr" id="dom-tunnel" value="${esc(t.cf_tunnel||'wcp-tunnel')}"></div>
+      </div>
+      <button class="btn pri sm" id="dom-save-settings" style="margin-top:10px">💾 ذخیره تنظیمات پایه</button>
+    </div>`;
+    h+=`<div class="card"><h3 style="margin:0 0 8px">🧭 روش‌های موجود روی این سرور</h3><div class="tblwrap"><table class="tbl"><thead><tr><th>روش</th><th>وضعیت</th><th>وب‌سوکت</th><th>توضیح</th></tr></thead><tbody>`+
+      t.modes.map(m=>`<tr><td><b>${m.icon} ${esc(m.label)}</b></td><td>${m.available?'<span class="tag ok">در دسترس</span>':`<span class="tag warn">${esc(m.reason||'در دسترس نیست')}</span>`}</td><td>${m.ws?'✅':'—'}</td><td class="hint">${esc(m.note)}</td></tr>`).join('')+
+      `</tbody></table></div></div>`;
+    h+=`<div class="card"><h3 style="margin:0 0 8px">📦 پروژه‌ها و دامنه‌های آن‌ها</h3>`;
+    if(!d.projects.length)h+='<p class="empty">هنوز پروژه‌ای تعریف نشده است. ابتدا از بخش «پروژه‌ها» یک پروژه بسازید.</p>';
+    else h+=`<div class="tblwrap"><table class="tbl"><thead><tr><th>پروژه</th><th>پورت داخلی</th><th>آدرس عمومی</th><th>نوع</th><th>روش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>`+
+      d.projects.map(p=>{
+        const st=p.status||{};
+        return `<tr>
+          <td><b>${esc(p.name)}</b><div class="hint">${esc((p.type||'other').toUpperCase())}</div></td>
+          <td><span class="ltr">${esc(p.port||'—')}</span></td>
+          <td>${p.domain_enabled&&p.domain_url?`<a class="ltr" href="${esc(p.domain_url)}" target="_blank" rel="noopener">${esc(p.domain_url)}</a>`:'<span class="hint">تنظیم نشده</span>'}</td>
+          <td>${p.domain_enabled?(p.domain_kind==='path'?'<span class="tag">📁 پوشه</span>':'<span class="tag">🔗 ساب‌دامین</span>'):'—'}</td>
+          <td>${p.domain_enabled?esc(domModeLabel(p.domain_mode_effective||p.domain_mode||'auto')):'—'}</td>
+          <td>${p.domain_enabled?(st.installed?'<span class="tag ok">🟢 نصب‌شده</span>':'<span class="tag warn">⚪ اعمال نشده</span>'):'<span class="tag" style="opacity:.6">خاموش</span>'} ${p.service_running?'<span class="tag ok">سرویس فعال</span>':'<span class="tag warn">سرویس خاموش</span>'}</td>
+          <td><div class="row" style="gap:4px;flex-wrap:wrap">
+            <button class="btn sm pri" data-domedit="${esc(p.id)}">⚙️ تنظیم دامنه</button>
+            ${p.domain_enabled?`<button class="btn sm" data-domapply="${esc(p.id)}">♻️ اعمال دوباره</button><button class="btn sm" data-domtest="${esc(p.id)}">🧪 تست</button><button class="btn sm" data-domprev="${esc(p.id)}">📄 کانفیگ</button>`:''}
+          </div></td></tr>`;
+      }).join('')+`</tbody></table></div>`;
+    h+=`</div>`;
+    h+=`<div class="card"><h3 style="margin:0 0 6px">📘 راهنمای سریع (هاست اشتراکی)</h3><ol class="hint" style="margin:0 18px;line-height:2">
+      <li>در پنل هاست (cPanel / DirectAdmin) ساب‌دامین موردنظر را بسازید؛ مثلاً <b class="ltr">app.example.com</b>.</li>
+      <li>Document Root ساب‌دامین را یادداشت کنید (معمولاً <code class="ltr">~/public_html/app</code>).</li>
+      <li>در همین صفحه روی «⚙️ تنظیم دامنه» پروژه بزنید، نام ساب‌دامین و در صورت نیاز Document Root را وارد و ذخیره کنید.</li>
+      <li>پروژه را از بخش «پروژه‌ها» با دکمه ▶ اجرا کنید (روی پورت داخلی 127.0.0.1).</li>
+      <li>از پنل هاست برای ساب‌دامین SSL رایگان Let's Encrypt صادر کنید و بعد «🧪 تست» را بزنید.</li>
+    </ol><p class="hint" style="margin-top:8px">اگر هاست شما mod_proxy ندارد، حالت «پروکسی PHP» را انتخاب کنید؛ روی تقریباً همه هاست‌های اشتراکی کار می‌کند (فقط وب‌سوکت ندارد).</p></div>`;
+    v.innerHTML=h;
+    $('#dom-refresh').onclick=renderDom;
+    $('#dom-save-settings').onclick=async()=>{
+      try{
+        await api('dom.settings',{base_domain:$('#dom-base').value.trim(),web_root:$('#dom-root').value.trim(),domain_mode:$('#dom-mode').value,cf_tunnel:$('#dom-tunnel').value.trim()});
+        toast('تنظیمات پایه دامنه ذخیره شد','ok');renderDom();
+      }catch(e){toast(e.message,'err')}
+    };
+    actions(v,'data-domedit',id=>domainDlg(domData.rows.find(x=>x.id===id)));
+    actions(v,'data-domtest',id=>domTestDlg(id));
+    actions(v,'data-domprev',id=>domPreviewDlg(id));
+    actions(v,'data-domapply',async id=>{try{const r=await api('dom.apply',{id});toast('کانفیگ دوباره اعمال شد','ok');openSheet(sheetHead('نتیجه اعمال دامنه')+domReportHtml(r));renderDom()}catch(e){toast(e.message,'err')}});
+  }catch(e){v.innerHTML=`<div class="card"><p class="err">${esc(e.message)}</p><button class="btn" onclick="renderDom()">تلاش دوباره</button></div>`}
+}
+INITS.dom={fn:renderDom};
+
 INITS.set={fn:renderSet};
-async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" style="border-right: 3px solid var(--acc)">
+let __setDirty=false,__setDirtyBound=false;
+function setMarkDirty(){
+  if(__setDirty)return;__setDirty=true;
+  const d=$('#set-dirty');if(d)d.innerHTML='<b style="color:var(--warn)">● تغییرات ذخیره‌نشده دارید</b>';
+  const b=$('#set-save-all');if(b)b.style.boxShadow='0 0 0 2px var(--warn)';
+}
+function setClearDirty(){
+  __setDirty=false;
+  const d=$('#set-dirty');if(d)d.textContent='همه تنظیمات این صفحه با یک دکمه ذخیره می‌شوند (به‌جز تغییر رمز).';
+  const b=$('#set-save-all');if(b)b.style.boxShadow='';
+}
+function setBindDirtyOnce(){
+  if(__setDirtyBound)return;__setDirtyBound=true;
+  const v=$('#v-set');if(!v)return;
+  const h=e=>{const id=e.target&&e.target.id;if(id==='pwold'||id==='pwnew')return;setMarkDirty()};
+  v.addEventListener('input',h);v.addEventListener('change',h);
+}
+async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card" id="set-savebar" style="position:sticky;top:0;z-index:5;border-right:3px solid var(--acc);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+  <div><b>💾 ذخیره همه تنظیمات</b><p class="hint" id="set-dirty" style="margin:2px 0 0">همه تنظیمات این صفحه با یک دکمه ذخیره می‌شوند (به‌جز تغییر رمز).</p></div>
+  <div class="row" style="gap:6px"><button class="btn" id="set-reload">↺ بازخوانی</button><button class="btn pri" id="set-save-all">💾 ذخیره همه</button></div>
+</div>
+<div class="card" style="border-right:3px solid ${s.gw_enabled?'var(--warn)':'var(--line2)'}">
+  <h3 style="margin:0">🛡️ دروازه پروکسی سراسری (<span class="ltr">?url=</span>)</h3>
+  <p class="hint" style="margin:6px 0">این دروازه روی <b>همان فایلی که الان بازش کرده‌اید</b> کار می‌کند، نه روی ریشهٔ دامنه. آدرس دقیقش:</p>
+  <div style="background:var(--panel);border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+    <code class="ltr" id="gw-url" style="word-break:break-all;color:var(--acc)">${esc(s.gw_url||'')}?url=https%3A%2F%2Fexample.com</code>
+    <button class="btn sm" id="gw-copy" style="margin-right:8px">📋 کپی</button>
+  </div>
+  <div class="row" style="gap:14px;flex-wrap:wrap">
+    <label class="lb" style="margin:0"><input class="chk" id="gw-enabled" type="checkbox" ${s.gw_enabled?'checked':''}> فعال باشد</label>
+    <label class="lb" style="margin:0"><input class="chk" id="gw-forward-auth" type="checkbox" ${s.gw_forward_auth?'checked':''}> فوروارد کوکی و Authorization</label>
+    <label class="lb" style="margin:0"><input class="chk" id="gw-allow-private" type="checkbox" ${s.gw_allow_private?'checked':''}> اجازه به آدرس‌های داخلی (خطرناک)</label>
+  </div>
+  <div class="grid2" style="margin-top:8px">
+    <div><label class="lb">کلید دسترسی (خالی = بدون کلید، یعنی باز برای همه)</label>
+      <div class="row" style="gap:6px"><input class="inp ltr" id="gw-token" placeholder="بدون کلید" value="${esc(s.gw_token||'')}" style="flex:1"><button class="btn sm" id="gw-gen">🎲 ساخت</button></div></div>
+    <div><label class="lb">فهرست دامنه‌های مجاز (خالی = همه، با کاما جدا کنید)</label>
+      <input class="inp ltr" id="gw-hosts" placeholder="example.com, api.github.com" value="${esc(s.gw_allow_hosts||'')}"></div>
+  </div>
+  <div class="row" style="margin-top:10px;gap:6px">
+    <button class="btn pri sm" id="gw-save">💾 ذخیره دروازه</button>
+    <button class="btn sm" id="gw-test">🧪 تست اتصال خروجی</button>
+  </div>
+  <p class="hint" id="gw-res" style="margin-top:8px"></p>
+  <p class="hint" style="font-size:11.5px;margin-top:4px">⚠️ بدون کلید دسترسی، هر کسی که این آدرس را بداند می‌تواند ترافیک دلخواهش را از هاست شما عبور دهد. آدرس‌های داخلی مثل <span class="ltr">127.0.0.1</span> و <span class="ltr">169.254.169.254</span> همیشه مسدودند مگر تیک بالا را بزنید.</p>
+</div>
+<div class="card" style="border-right: 3px solid var(--acc)">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
     <div>
       <h3 style="margin:0">🔄 به‌روزرسانی و سلف‌آپدیت وب‌کنسول (Console Self-Update)</h3>
@@ -5824,21 +7632,23 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
   <div class="grid2" style="gap:10px;margin-top:10px">
     <div>
       <label class="lb">مخزن گیت‌هاب (GitHub Repository)</label>
-      <input class="inp ltr" id="wcp_up_repo" value="${esc(s.gh_repo || 'fazilatma/new')}">
+      <input class="inp ltr" id="wcp_up_repo" value="${esc(s.update_repo || 'fazilatma/new')}">
     </div>
     <div>
       <label class="lb">شاخه (Branch)</label>
-      <input class="inp ltr" id="wcp_up_branch" value="${esc(s.gh_branch || 'main')}">
+      <input class="inp ltr" id="wcp_up_branch" value="${esc(s.update_branch || 'main')}">
     </div>
   </div>
 
   <label class="lb">توکن گیت‌هاب (Personal Access Token - اختیاری برای مخازن خصوصی)</label>
-  <input class="inp ltr" type="password" id="wcp_up_token" placeholder="${s.gh_token?'توکن ذخیره شده است (برای تغییر تایپ کنید)':''}">
+  <input class="inp ltr" type="password" id="wcp_up_token" placeholder="${s.update_token_set?'توکن ذخیره شده است (خالی بگذارید تا تغییر نکند)':'برای مخازن خصوصی لازم است'}">
 
   <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+    <button class="btn sm pri" id="wcp_up_save_btn">💾 ذخیره تنظیمات آپدیت</button>
     <button class="btn sm" id="wcp_check_up_btn">🔍 بررسی نسخه جدید (Check Updates)</button>
-    <button class="btn sm pri" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
+    <button class="btn sm" id="wcp_self_up_btn">⚡ به‌روزرسانی آنی وب‌کنسول (Self-Update Now)</button>
   </div>
+  <p class="hint" style="font-size:11.5px;margin:6px 0 0">پس از ذخیره، همین مخزن و شاخه برای بررسی نسخه، آپدیت خودکار و دکمه‌های بالا استفاده می‌شود و دیگر لازم نیست هر بار دوباره واردشان کنید.</p>
   <div id="wcp_up_status" style="margin-top:10px;display:none"></div>
 </div><div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>🛡️ پروکسی کلودفلر و رفع تحریم پکیج‌ها (Proxy & Anti-Sanction)</h3><p class="hint">تنظیم حالت عبور ترافیک، کلون مخازن گیت، دانلود پکیج‌ها (Pip / Npm / Composer / Git) و وب‌هوک‌ها از طریق Cloudflare Worker جهت دورزدن تحریم‌ها و فیلترینگ.</p><div style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -5847,7 +7657,7 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
   </div>
   <p class="hint" style="margin:2px 0;font-size:11.5px">دقیقاً با همان فرمت کلودفلر ورکرز؛ عبور تمامی متدهای HTTP، انواع ترافیک، ویدیو/صوت، استریم مالتی‌مدیا و دورزدن تحریم‌ها:</p>
   <div class="row" style="gap:6px;margin-top:6px">
-    <input class="inp ltr" id="wcp-proxy-live-url" value="${window.location.origin}/?url=https://example.com/page" readonly style="font-weight:bold;color:var(--acc)">
+    <input class="inp ltr" id="wcp-proxy-live-url" value="${esc(s.gw_url||'')}?url=https://example.com/page" readonly style="font-weight:bold;color:var(--acc)">
     <button class="btn sm pri" onclick="copyText($('#wcp-proxy-live-url').value, 'آدرس اندپوینت پروکسی کپی شد')">📋 کپی اندپوینت</button>
   </div>
 </div>
@@ -5897,7 +7707,72 @@ async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v
       toast(e.message,'err');
     }
   };
-  $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
+  // ── جمع‌آوری همه تنظیمات این صفحه در یک payload ──
+  const setVal=id=>{const el=$('#'+id);return el?el.value.trim():undefined};
+  const setChk=id=>{const el=$('#'+id);return el?el.checked:undefined};
+  function collectAllSettings(){
+    const p={};
+    const put=(k,v)=>{if(v!==undefined)p[k]=v};
+    put('fs_start',setVal('stfs'));
+    const ses=setVal('stses'); if(ses!==undefined&&ses!=='')p.session_minutes=+ses;
+    put('allowed_ips',setVal('stip'));
+    put('update_repo',setVal('wcp_up_repo'));
+    put('update_branch',setVal('wcp_up_branch'));
+    const ut=setVal('wcp_up_token'); if(ut)p.update_token=ut;      // خالی = بدون تغییر
+    const mode=document.querySelector('input[name="st_proxy_mode"]:checked');
+    if(mode)p.proxy_mode=mode.value;
+    put('proxy_cf_url',setVal('st_proxy_cf_url'));
+    put('gw_enabled',setChk('gw-enabled'));
+    put('gw_forward_auth',setChk('gw-forward-auth'));
+    put('gw_allow_private',setChk('gw-allow-private'));
+    put('gw_token',setVal('gw-token'));
+    put('gw_allow_hosts',setVal('gw-hosts'));
+    return p;
+  }
+  setClearDirty();setBindDirtyOnce();
+  $('#set-save-all').onclick=async()=>{
+    const btn=$('#set-save-all');btn.disabled=true;const old=btn.textContent;btn.textContent='در حال ذخیره…';
+    try{
+      await api('settings.save',collectAllSettings());
+      const t=$('#wcp_up_token');if(t)t.value='';
+      setClearDirty();
+      toast('همه تنظیمات ذخیره شد','ok');
+      const i=await api('gw.info').catch(()=>null);
+      if(i&&$('#gw-url'))$('#gw-url').textContent=i.example;
+    }catch(e){toast(e.message,'err')}finally{btn.disabled=false;btn.textContent=old}
+  };
+  $('#set-reload').onclick=async()=>{
+    if(__setDirty&&!await confirmDlg('تغییرات ذخیره‌نشده از بین می‌رود. ادامه می‌دهید؟'))return;
+    renderSet();
+  };
+  $('#wcp_up_save_btn').onclick=async()=>{
+    const btn=$('#wcp_up_save_btn');btn.disabled=true;
+    try{
+      const p={update_repo:$('#wcp_up_repo').value.trim(),update_branch:$('#wcp_up_branch').value.trim()};
+      const t=$('#wcp_up_token').value.trim(); if(t)p.update_token=t;
+      await api('settings.save',p);
+      $('#wcp_up_token').value='';
+      $('#wcp_up_token').placeholder=t?'توکن ذخیره شده است (خالی بگذارید تا تغییر نکند)':$('#wcp_up_token').placeholder;
+      setClearDirty();
+      toast('تنظیمات آپدیت ذخیره شد','ok');
+    }catch(e){toast(e.message,'err')}finally{btn.disabled=false}
+  };
+  $('#gw-copy').onclick=()=>copyText($('#gw-url').textContent,'آدرس دروازه کپی شد');
+  $('#gw-gen').onclick=()=>{const a=new Uint8Array(24);crypto.getRandomValues(a);$('#gw-token').value=Array.from(a,b=>('0'+b.toString(16)).slice(-2)).join('')};
+  $('#gw-save').onclick=async()=>{try{
+    await api('settings.save',{gw_enabled:$('#gw-enabled').checked,gw_token:$('#gw-token').value.trim(),
+      gw_allow_private:$('#gw-allow-private').checked,gw_forward_auth:$('#gw-forward-auth').checked,
+      gw_allow_hosts:$('#gw-hosts').value.trim()});
+    const i=await api('gw.info');
+    $('#gw-url').textContent=i.example;
+    setClearDirty();toast('تنظیمات دروازه ذخیره شد','ok');
+  }catch(e){toast(e.message,'err')}};
+  $('#gw-test').onclick=async()=>{const box=$('#gw-res');box.innerHTML='<span class="spin">⏳</span> در حال تست…';
+    try{const d=await api('gw.test',{target:'https://api.github.com/zen'});
+      box.innerHTML=d.error?`<span style="color:var(--err)">خطا: ${esc(d.error)}</span>`
+        :`<span style="color:var(--ok)">✅ خروجی هاست سالم است — HTTP ${d.status} در ${d.ms}ms · ${esc(d.preview||'')}</span>`;
+    }catch(e){box.innerHTML=`<span style="color:var(--err)">✗ ${esc(e.message)}</span>`}};
+  $('#st_export_btn').onclick=openExportDlg;$('#st_import_btn').onclick=openImportDlg;$('#st_proxy_save_btn').onclick=async()=>{try{const mode=$('input[name="st_proxy_mode"]:checked')?.value||'auto';const cfUrl=$('#st_proxy_cf_url').value.trim();await api('settings.save',{proxy_mode:mode,proxy_cf_url:cfUrl});setClearDirty();toast('تنظیمات پروکسی کلودفلر با موفقیت ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#st_proxy_test_btn').onclick=async()=>{const box=$('#proxy-test-box');box.style.display='block';box.innerHTML='<div class="row" style="gap:8px;align-items:center"><span class="spin">⏳</span> در حال ارزیابی اتصال مستقیم و پروکسی کلودفلر...</div>';try{const cfUrl=$('#st_proxy_cf_url').value.trim();const d=await api('proxy.test',{proxy_cf_url:cfUrl});let html='<div class="grid grid-2" style="gap:8px;margin-top:8px">';html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.direct.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🌐 اتصال مستقیم:</span><span class="tag ${d.direct.ok?'ok':'danger'}">${d.direct.ok?'موفق ('+d.direct.ms+'ms)':'ناموفق (HTTP '+d.direct.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.direct.preview||d.direct.error||'بدون پاسخ')}</div></div>`;html+=`<div style="padding:10px;border-radius:8px;background:var(--panel2);border:1px solid ${d.proxy.ok?'var(--ok)':'var(--err)'}"><div style="font-weight:700;display:flex;justify-content:space-between"><span>🛡️ پروکسی کلودفلر:</span><span class="tag ${d.proxy.ok?'ok':'danger'}">${d.proxy.ok?'فعال ('+d.proxy.ms+'ms)':'خطا (HTTP '+d.proxy.code+')'}</span></div><div class="hint" style="font-size:11px;margin-top:4px;word-break:break-all">${esc(d.proxy.preview||d.proxy.error||'بدون پاسخ')}</div></div>`;html+='</div>';if(d.proxy.ok){html+='<p class="hint" style="color:var(--ok);margin-top:8px">✅ ارتباط با پروکسی ورکر کلودفلر با موفقیت برقرار شد و آماده استفاده برای دانلود پکیج‌ها و رفع تحریم است.</p>';}else{html+='<p class="hint" style="color:var(--err);margin-top:8px">⚠️ ارتباط با ورکر کلودفلر با خطا مواجه شد. لطفاً آدرس ورکر را بررسی کنید.</p>';}box.innerHTML=html;}catch(e){box.innerHTML=`<p class="hint" style="color:var(--err)">خطا در تست پروکسی: ${esc(e.message)}</p>`;}};$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});setClearDirty();toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');const actText=d.lines.join('\n');const sh=openSheet(sheetHead('گزارش فعالیت')+'<div class="row" style="margin-bottom:8px"><button class="btn sm pri" id="act-copy">📋 کپی گزارش فعالیت</button><button class="btn sm" id="act-dl">دانلود فایل</button></div><pre class="logbox" id="act-log">'+esc(actText)+'</pre>');sh.querySelector('#act-copy').onclick=()=>copyText(actText,'گزارش فعالیت با موفقیت کپی شد');sh.querySelector('#act-dl').onclick=()=>downloadText('activity.log',actText);}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
 const ARENA_AGENT_PHP_PRESET={"name":"Arena Coding Agent PHP","type":"php","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0f16f-new","subfolder":"agent-php","deploy_path":"","port":"8099","install_cmd":"mkdir -p data storage storage/workspaces storage/localai/models; chmod -R 775 data storage 2>/dev/null; \"${PHP_BIN:-php}\" -v && \"${PHP_BIN:-php}\" bin/console.php migrate && (\"${PHP_BIN:-php}\" bin/console.php doctor || true)","build_cmd":"","start_cmd":"\"${PHP_BIN:-php}\" bin/console.php migrate; (\"${PHP_BIN:-php}\" bin/console.php ai:serve >> storage/localai-boot.log 2>&1 || true); (\"${PHP_BIN:-php}\" bin/worker.php --interval 2 >> storage/worker.log 2>&1 &); exec \"${PHP_BIN:-php}\" -S \"${HOST:-0.0.0.0}:${PORT:-8099}\" -t public public/index.php","auto_start":false,"is_daemon":true,"auto_update":true,"auto_update_interval":60,"env":{"PHP_BIN":"php","PHP_CLI_SERVER_WORKERS":"8","AGENT_TZ":"Asia/Tehran","AGENT_MEMORY_LIMIT":"512M","AUTH_ENABLED":"false","CORS_ORIGINS":"*","REQUIRE_FILE_APPROVAL":"false","MAX_CONCURRENT_JOBS":"3","RATE_LIMIT_PER_MINUTE":"200","AGENT_WORKER_AUTOSPAWN":"true","AGENT_LOCALAI_DIR":"storage/localai","OLLAMA_MODELS":"storage/localai/models","AGENT_LOCALAI_HOST":"http://127.0.0.1:11434","OLLAMA_BASE_URL":"http://127.0.0.1:11434","OLLAMA_KEEP_ALIVE":"10m","OLLAMA_MAX_LOADED_MODELS":"1","OLLAMA_NUM_PARALLEL":"1","OLLAMA_FLASH_ATTENTION":"1","OLLAMA_KV_CACHE_TYPE":"q8_0","AGENT_PROXY_ENABLED":"false","AGENT_PROXY_URL":"https://proxy.fazilat-ma.workers.dev/?url={url}","OPENROUTER_API_KEY":"","GEMINI_API_KEY":"","GITHUB_TOKEN":"","GIT_AUTHOR_NAME":"Arena Agent","GIT_AUTHOR_EMAIL":"agent@localhost"}};
 const SCRAPER4_PRESET={"name":"Scraper4 + Deployer","type":"node","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0aa17-new","subfolder":"cloudflare-scraper4","deploy_path":"","port":"8790","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"}};
 const SKINS=[['dark','نیمه‌شب','#101828','#6366f1'],['light','کاغذ روشن','#eef2f9','#5146c7'],['ocean','اقیانوس','#0e253d','#70dbff'],['forest','جنگل','#102b24','#75e5ba'],['amber','کهربا','#302419','#ffd17a']];
@@ -5909,7 +7784,7 @@ function appearanceDlg(){const original=readAppearance();let saved=false;const s
  actions(sh,'data-skin',theme=>{applyAppearance({...readAppearance(),theme});paint()});actions(sh,'data-layout-choice',layout=>{applyAppearance({...readAppearance(),layout});paint()});sh.querySelector('#density-compact').onchange=e=>applyAppearance({...readAppearance(),density:e.target.checked?'compact':'comfortable'});paint();
  sh.querySelector('#appearance-save').onclick=async()=>{const button=sh.querySelector('#appearance-save');button.disabled=true;try{await api('settings.save',readAppearance());saved=true;if(sh.querySelector('#appearance-save')===button)__closeSheet();toast('ظاهر ذخیره شد','ok')}catch(e){toast(e.message,'err')}finally{button.disabled=false}};
 }
-function commandPalette(){const entries=[...TABS.map(([id,label,icon])=>({label:icon+' '+label,keywords:id+' '+({dash:'dashboard server',term:'terminal shell',files:'file manager',proc:'processes',backup:'backups github',proj:'projects deployment',jobs:'queue logs',set:'settings security'}[id]||''),run:()=>switchTab(id)})),{label:'◈ انتخاب پوسته و چیدمان',keywords:'theme layout appearance',run:appearanceDlg},{label:'＋ پروژه جدید / ورود JSON',keywords:'project import json',run:()=>projectDlg(null)}];const sh=openSheet(sheetHead('جستجو و رفتن به بخش‌ها')+'<input class="inp" id="command-query" aria-label="جستجوی بخش" placeholder="نام بخش، theme، project، files…" autocomplete="off"><div id="command-results"></div><p class="hint">Ctrl / ⌘ + K · جستجو فقط در بخش‌ها و فرمان‌های ناوبری؛ هیچ دستور سیستمی اجرا نمی‌شود.</p>');const input=sh.querySelector('#command-query'),box=sh.querySelector('#command-results');const paint=()=>{const q=input.value.trim().toLowerCase();const results=entries.filter(x=>(x.label+' '+x.keywords).toLowerCase().includes(q));box.innerHTML=results.length?results.map((x,i)=>`<button class="btn palette-item" data-command="${i}">${esc(x.label)}</button>`).join(''):'<p class="empty">نتیجه‌ای یافت نشد</p>';actions(box,'data-command',i=>{__closeSheet();results[i].run()});input.onkeydown=e=>{if(e.key==='Enter'&&results.length){e.preventDefault();__closeSheet();results[0].run()}}};input.oninput=paint;paint();input.focus();}
+function commandPalette(){const entries=[...TABS.map(([id,label,icon])=>({label:icon+' '+label,keywords:id+' '+({dash:'dashboard server',term:'terminal shell',files:'file manager',proc:'processes',backup:'backups github',proj:'projects deployment',dom:'domain subdomain proxy ssl port دامنه ساب دامین پروکسی',jobs:'queue logs',set:'settings security'}[id]||''),run:()=>switchTab(id)})),{label:'◈ انتخاب پوسته و چیدمان',keywords:'theme layout appearance',run:appearanceDlg},{label:'＋ پروژه جدید / ورود JSON',keywords:'project import json',run:()=>projectDlg(null)}];const sh=openSheet(sheetHead('جستجو و رفتن به بخش‌ها')+'<input class="inp" id="command-query" aria-label="جستجوی بخش" placeholder="نام بخش، theme، project، files…" autocomplete="off"><div id="command-results"></div><p class="hint">Ctrl / ⌘ + K · جستجو فقط در بخش‌ها و فرمان‌های ناوبری؛ هیچ دستور سیستمی اجرا نمی‌شود.</p>');const input=sh.querySelector('#command-query'),box=sh.querySelector('#command-results');const paint=()=>{const q=input.value.trim().toLowerCase();const results=entries.filter(x=>(x.label+' '+x.keywords).toLowerCase().includes(q));box.innerHTML=results.length?results.map((x,i)=>`<button class="btn palette-item" data-command="${i}">${esc(x.label)}</button>`).join(''):'<p class="empty">نتیجه‌ای یافت نشد</p>';actions(box,'data-command',i=>{__closeSheet();results[i].run()});input.onkeydown=e=>{if(e.key==='Enter'&&results.length){e.preventDefault();__closeSheet();results[0].run()}}};input.oninput=paint;paint();input.focus();}
 function downloadText(name,text,type='text/plain'){const blob=new Blob([text],{type:type+';charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function projectExport(p){const q={};for(const k of ['name','type','branch','subfolder','deploy_path','port','install_cmd','build_cmd','start_cmd'])q[k]=p[k]||'';q.repo_url=p.repo_url||'';try{const u=new URL(q.repo_url);u.username='';u.password='';u.search='';u.hash='';q.repo_url=u.toString()}catch(e){q.repo_url=q.repo_url.replace(/^(https?:\/\/)[^/]*@/i,'$1').split(/[?#]/)[0]}
  q.type=['node','python','php','static','other'].includes(p.type)?p.type:'other';q.auto_start=false;q.is_daemon=!!p.is_daemon;q.auto_update=!!p.auto_update;q.auto_update_interval=p.auto_update_interval||60;
@@ -5929,7 +7804,7 @@ async function projectStorageDlg(){
 function presetProject(kind){const base={name:'My project',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'npm ci --include=dev',build_cmd:'npm run build',start_cmd:'npm start',port:'3000',env:{NODE_ENV:'production'},auto_start:false,is_daemon:true,preserve_configs:true};if(kind==='agent-php')return {...ARENA_AGENT_PHP_PRESET,env:{...ARENA_AGENT_PHP_PRESET.env}};if(kind==='static')return {...base,name:'Static site',type:'static',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},is_daemon:false};if(kind==='scraper4')return {...SCRAPER4_PRESET,env:{...SCRAPER4_PRESET.env}};return base;}
 
 function applyTheme(t){if(!['dark','light','forest','ocean','amber'].includes(t))t='dark';document.documentElement.setAttribute('data-theme',t);$('#themebtn').textContent=t==='light'?'☾':'☀'}
-$('#hosttag').textContent='@'+__BOOT.host;$('#workspace-version').textContent='v'+__BOOT.v;applyAppearance(__BOOT);$('#appearancebtn').onclick=appearanceDlg;$('#palettebtn').onclick=commandPalette;document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!e.target.closest?.('.xterm')){e.preventDefault();if(!__sheet)commandPalette()}if(e.key==='Escape'&&__sheet)__closeSheet()});buildNav();switchTab('dash');
+$('#hosttag').textContent='@'+__BOOT.host;$('#workspace-version').textContent='v'+__BOOT.v+(__BOOT.edition?' · '+__BOOT.edition:'');applyAppearance(__BOOT);$('#appearancebtn').onclick=appearanceDlg;$('#palettebtn').onclick=commandPalette;document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!e.target.closest?.('.xterm')){e.preventDefault();if(!__sheet)commandPalette()}if(e.key==='Escape'&&__sheet)__closeSheet()});buildNav();switchTab('dash');
 // Global background auto-update poller (every 20s)
 setInterval(async()=>{
   if(document.hidden)return;
@@ -5950,7 +7825,16 @@ setInterval(async()=>{
 try {
     // 🌐 Universal Forward Proxy Gateway (?url=https://example.com/page)
     $proxyTarget = $_GET['url'] ?? $_GET['proxy'] ?? ($_REQUEST['url'] ?? '');
-    if (!empty($proxyTarget) && is_string($proxyTarget) && preg_match('#^https?://#i', $proxyTarget)) {
+    if (!empty($proxyTarget) && is_string($proxyTarget)) {
+        $g = gw_cfg();
+        if (!$g['enabled']) gw_deny(403, 'دروازهٔ پروکسی غیرفعال است. آن را از تنظیمات کنسول روشن کنید.');
+        if ($g['token'] !== '') {
+            $key = (string)($_GET['key'] ?? $_SERVER['HTTP_X_WCP_KEY'] ?? '');
+            if ($key === '' || !hash_equals($g['token'], $key))
+                gw_deny(401, 'کلید دسترسی لازم است: &key=... را به آدرس اضافه کنید (یا هدر X-WCP-Key).');
+        }
+        if (!preg_match('#^https?://#i', $proxyTarget))
+            gw_deny(400, 'پارامتر url باید با http:// یا https:// شروع شود. نمونه: ?url=https%3A%2F%2Fexample.com');
         handle_universal_proxy($proxyTarget);
         exit;
     }

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<script>
+/* ------------------------------------------------------------------ *
+ * API base resolution.
+ *
+ * The server injects window.__API_BASE__ before this runs:
+ *   ''                  app owns the domain root, rewriting works
+ *   '/agent'            installed in a subdirectory
+ *   '/agent/index.php'  host has no URL rewriting
+ *
+ * When the page itself was fetched as a plain directory URL we cannot know
+ * server-side whether rewriting works, so the first API call that comes back
+ * as a non-JSON 404 (i.e. the web server's own error page) is retried once
+ * through the front controller, and the working prefix is remembered.
+ * ------------------------------------------------------------------ */
+(function () {
+  var KEY = 'arena_api_base';
+  var MODE_KEY = 'arena_api_mode';
+  try {
+    var saved = sessionStorage.getItem(KEY);
+    if (saved !== null && !window.__API_BASE__) window.__API_BASE__ = saved;
+    var savedMode = sessionStorage.getItem(MODE_KEY);
+    if (savedMode && !window.__API_MODE__) window.__API_MODE__ = savedMode;
+  } catch (e) { /* private mode */ }
+  if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
+  if (window.__API_MODE__ !== 'query') window.__API_MODE__ = 'path';
+
+  // Slashes are legal inside a query value, and keeping them unescaped means
+  // callers can still pattern-match the path (e.g. api() checks for
+  // '/auth/login' to decide whether a 401 should open the login modal).
+  function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); }
+
+  function build(base, mode, p) {
+    if (mode !== 'query') return base + p;
+    var qi = p.indexOf('?');
+    var only = qi === -1 ? p : p.slice(0, qi);
+    var rest = qi === -1 ? '' : p.slice(qi + 1);
+    return base + '?__path=' + encPath(only) + (rest ? '&' + rest : '');
+  }
+
+  window.apiUrl = function (p) {
+    var b = window.__API_BASE__ || '';
+    if (!p) return b || '/';
+    if (/^[a-z]+:\/\//i.test(p)) return p;
+    if (p.charAt(0) !== '/') p = '/' + p;
+    return build(b, window.__API_MODE__, p);
+  };
+
+  // Prefixes to try when the current one 404s at the web-server level. The
+  // server understands three URL shapes; a host may support any subset, so
+  // every remaining one is attempted before giving up:
+  //   1. /api/x                     rewriting enabled
+  //   2. /index.php/api/x           PATH_INFO enabled
+  //   3. /index.php?__path=/api/x   neither
+  function candidates() {
+    var base = window.__API_BASE__ || '';
+    var mode = window.__API_MODE__ || 'path';
+    var isFc = /index\.php$/.test(base);
+    var fc = isFc ? base : (base.replace(/\/+$/, '') + '/index.php');
+    var out = [];
+    if (mode === 'path' && !isFc) out.push({ base: fc, mode: 'path' });
+    if (mode !== 'query') out.push({ base: fc, mode: 'query' });
+    return out;
+  }
+
+  function usable(res) {
+    return res.ok || (res.headers.get('content-type') || '').indexOf('application/json') !== -1;
+  }
+
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var isApi = typeof url === 'string' && /(^|\/)api\//.test(url) && !/^[a-z]+:\/\//i.test(url);
+    var p = nativeFetch(input, init);
+    if (!isApi || (init && init.__arenaRetry)) return p;
+    return p.then(function (res) {
+      if (res.status !== 404) return res;
+      var ct = res.headers.get('content-type') || '';
+      if (ct.indexOf('application/json') !== -1) return res;   // a real API 404
+
+      // Recover the request path relative to the current prefix.
+      var base = window.__API_BASE__ || '';
+      var rel;
+      if (window.__API_MODE__ === 'query') {
+        var m = /[?&]__path=([^&]*)/.exec(url);
+        rel = m ? decodeURIComponent(m[1]) : url;
+      } else {
+        rel = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
+      }
+      if (rel.charAt(0) !== '/') rel = '/' + rel;
+
+      var list = candidates();
+      var retryInit = Object.assign({}, init || {}, { __arenaRetry: true });
+
+      return (function next(i) {
+        if (i >= list.length) return res;                      // nothing worked
+        var c = list[i];
+        return nativeFetch(build(c.base, c.mode, rel), retryInit).then(function (r2) {
+          if (!usable(r2)) return next(i + 1);
+          window.__API_BASE__ = c.base;
+          window.__API_MODE__ = c.mode;
+          try {
+            sessionStorage.setItem(KEY, c.base);
+            sessionStorage.setItem(MODE_KEY, c.mode);
+          } catch (e) { /* ignore */ }
+          return r2;
+        }).catch(function () { return next(i + 1); });
+      })(0);
+    });
+  };
+})();
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>نصب هوش مصنوعی محلی — Arena Coding Agent</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a33; --panel2:#0f1730; --line:#24304f; --txt:#e6ecff;
+    --mut:#93a2c9; --acc:#5b8cff; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; --rad:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#080d1c,#0b1020 260px);color:var(--txt);
+       font:15px/1.8 system-ui,"Segoe UI",Vazirmatn,Tahoma,sans-serif}
+  a{color:var(--acc)}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 80px}
+  header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  header.top h1{font-size:21px;margin:0}
+  .sp{flex:1}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);padding:16px;margin-bottom:16px}
+  .card h2{font-size:16px;margin:0 0 12px}
+  .grid{display:grid;gap:12px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .stat b{display:block;font-size:19px;font-weight:700}
+  .stat span{color:var(--mut);font-size:12.5px}
+  label.lb{display:block;font-size:13px;color:var(--mut);margin:0 0 5px}
+  .inp,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+       border-radius:10px;padding:9px 11px;font:inherit;font-size:14px}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:10px;
+       padding:9px 14px;cursor:pointer;font:inherit;font-size:14px;transition:.15s}
+  .btn:hover{border-color:var(--acc)}
+  .btn.pri{background:linear-gradient(135deg,#3b6ef0,#5b8cff);border-color:transparent;font-weight:700}
+  .btn.ok{background:linear-gradient(135deg,#059669,#10b981);border-color:transparent;font-weight:700}
+  .btn.danger{border-color:#7f1d1d;color:#fca5a5}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.sm{padding:5px 10px;font-size:12.5px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:7px 13px;
+        cursor:pointer;font-size:13.5px;user-select:none}
+  .chip.on{background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:11.5px;color:var(--mut)}
+  .tag.ok{color:#6ee7b7;border-color:#065f46}
+  .tag.warn{color:#fcd34d;border-color:#78350f}
+  .tag.err{color:#fca5a5;border-color:#7f1d1d}
+  .ltr{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .hint{color:var(--mut);font-size:12.5px}
+  .bar{height:8px;background:#1b2440;border-radius:99px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,#3b6ef0,#10b981)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12.5px}
+  .rec{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;background:var(--panel2)}
+  .rec.best{border-color:var(--ok);box-shadow:0 0 0 1px rgba(16,185,129,.25)}
+  .rec h3{margin:0;font-size:16px}
+  .rec ul{margin:8px 0 0;padding-inline-start:18px;color:var(--mut);font-size:12.8px}
+  pre.log{background:#070b16;border:1px solid var(--line);border-radius:10px;padding:10px;
+          max-height:280px;overflow:auto;font-size:12px;direction:ltr;text-align:left}
+  .toast{position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:24px;z-index:99;
+         background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 18px;display:none}
+  .split{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:980px){.split{grid-template-columns:1.15fr .85fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>🧠 نصب و مدیریت هوش مصنوعی محلی</h1>
+    <span class="tag" id="rt-badge">در حال بررسی…</span>
+    <span class="sp"></span>
+    <a class="btn sm" href="/" data-home-link>بازگشت به دستیار</a>
+    <button class="btn sm" id="btn-rescan">🔄 اسکن مجدد سخت‌افزار</button>
+  </header>
+
+  <!-- ─────────────────────────── 1. host -->
+  <section class="card">
+    <h2>۱) سخت‌افزار این هاست</h2>
+    <div class="grid g4" id="host-stats"><div class="hint">در حال خواندن…</div></div>
+    <div class="row" style="margin-top:12px">
+      <span class="hint" id="host-extra"></span>
+    </div>
+  </section>
+
+  <div class="split">
+    <div>
+      <!-- ─────────────────────── 2. wizard -->
+      <section class="card">
+        <h2>۲) می‌خواهید با مدل محلی چه کار کنید؟</h2>
+
+        <label class="lb">کاربرد (چندتایی انتخاب کنید)</label>
+        <div class="chips" id="tasks"></div>
+
+        <div class="grid g2" style="margin-top:14px">
+          <div>
+            <label class="lb">بودجهٔ رم: <b id="ram-val" class="ltr"></b> گیگابایت</label>
+            <input type="range" id="ram" min="1" max="128" step="0.5" class="inp" style="padding:0">
+            <div class="hint" id="ram-hint"></div>
+          </div>
+          <div>
+            <label class="lb">حافظهٔ کارت گرافیک (VRAM) — گیگابایت</label>
+            <input type="number" id="vram" class="inp ltr" min="0" step="0.5" value="0">
+            <div class="hint">۰ یعنی فقط CPU. با GPU، مدل‌های بزرگ‌تر چند برابر سریع‌تر می‌شوند.</div>
+          </div>
+          <div>
+            <label class="lb">فضای دیسک قابل‌استفاده — گیگابایت</label>
+            <input type="number" id="disk" class="inp ltr" min="1" step="1" value="20">
+          </div>
+          <div>
+            <label class="lb">طول پنجرهٔ متن (context)</label>
+            <select id="ctx">
+              <option value="4096">۴هزار توکن — کم‌مصرف</option>
+              <option value="8192" selected>۸هزار توکن — پیش‌فرض متعادل</option>
+              <option value="16384">۱۶هزار توکن</option>
+              <option value="32768">۳۲هزار توکن — فایل‌های بلند</option>
+              <option value="131072">۱۲۸هزار توکن — کل مخزن کد</option>
+            </select>
+          </div>
+          <div>
+            <label class="lb">اولویت شما</label>
+            <select id="priority">
+              <option value="speed">سرعت پاسخ</option>
+              <option value="balanced" selected>متعادل</option>
+              <option value="quality">بالاترین کیفیت</option>
+            </select>
+          </div>
+          <div>
+            <label class="lb">درخواست‌های هم‌زمان</label>
+            <input type="number" id="conc" class="inp ltr" min="1" max="16" value="1">
+            <div class="hint">هر درخواست هم‌زمان یک KV-cache جدا می‌گیرد.</div>
+          </div>
+          <div>
+            <label class="lb">حداقل سرعت قابل‌قبول (توکن بر ثانیه)</label>
+            <input type="number" id="mintps" class="inp ltr" min="0" step="1" value="0">
+            <div class="hint">۰ یعنی محدودیتی ندارم.</div>
+          </div>
+          <div>
+            <label class="lb">زبان‌های مورد نیاز</label>
+            <div class="chips" id="langs"></div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:14px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="tool" checked> ابزارفراخوانی لازم دارم</label>
+          <label class="row" style="gap:6px"><input type="checkbox" id="vision"> درک تصویر</label>
+          <label class="row" style="gap:6px"><input type="checkbox" id="commercial"> فقط لایسنس تجاری</label>
+          <span class="sp"></span>
+          <button class="btn pri" id="btn-rec">🔎 جست‌وجو و انتخاب بهترین مدل</button>
+        </div>
+      </section>
+
+      <!-- ─────────────────────── 3. results -->
+      <section class="card" id="rec-card" style="display:none">
+        <h2>۳) پیشنهادها</h2>
+        <div id="rec-list"></div>
+        <details style="margin-top:8px">
+          <summary class="hint" style="cursor:pointer">مدل‌هایی که رد شدند و دلیلش</summary>
+          <div id="rec-rejected" style="margin-top:8px"></div>
+        </details>
+      </section>
+
+      <!-- ─────────────────────── 4. install -->
+      <section class="card" id="job-card" style="display:none">
+        <h2>۴) نصب</h2>
+        <div id="job-plan"></div>
+        <div class="bar" style="margin:10px 0"><i id="job-bar" style="width:0%"></i></div>
+        <div class="row"><b id="job-status">—</b><span class="sp"></span><span class="hint ltr" id="job-id"></span></div>
+        <pre class="log" id="job-log"></pre>
+      </section>
+    </div>
+
+    <div>
+      <!-- ─────────────────────── runtime -->
+      <section class="card">
+        <h2>موتور محلی</h2>
+        <div id="rt-info" class="hint">در حال بررسی…</div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn sm ok" id="btn-rt-install">⬇️ نصب موتور</button>
+          <button class="btn sm" id="btn-rt-start">▶️ اجرا</button>
+          <button class="btn sm danger" id="btn-rt-stop">⏹ توقف</button>
+        </div>
+        <p class="hint" style="margin-bottom:0">نصب بدون نیاز به root انجام می‌شود؛ باینری و مدل‌ها در پوشهٔ storage/localai پروژه می‌نشینند.</p>
+      </section>
+
+      <!-- ─────────────────────── installed -->
+      <section class="card">
+        <h2>مدل‌های نصب‌شده</h2>
+        <div id="models"><span class="hint">—</span></div>
+      </section>
+
+      <!-- ─────────────────────── search -->
+      <section class="card">
+        <h2>جست‌وجوی دستی مدل</h2>
+        <div class="row">
+          <input class="inp ltr" id="q" placeholder="qwen, llama, embed …" style="flex:1">
+          <button class="btn" id="btn-search">جست‌وجو</button>
+        </div>
+        <div id="search-out" style="margin-top:10px"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fa = (n, d = 1) => Number(n || 0).toLocaleString('fa-IR', { maximumFractionDigits: d });
+
+let toastTimer = null;
+function toast(msg, kind) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  t.style.borderColor = kind === 'err' ? '#7f1d1d' : kind === 'ok' ? '#065f46' : 'var(--line)';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, 4200);
+}
+
+async function api(path, opts = {}) {
+  path = window.apiUrl(path);
+  const res = await fetch(path, {
+    method: opts.method || 'GET',
+    headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    credentials: 'same-origin',
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) throw new Error((data && (data.detail || data.error)) || ('HTTP ' + res.status));
+  return data;
+}
+
+/* ───────────────────────────────────────── task & language chips */
+const TASKS = [
+  ['code', '💻 کدنویسی'], ['agent', '🛠 عامل ابزارمحور'], ['chat', '💬 چت عمومی'],
+  ['reasoning', '🧩 استدلال و ریاضی'], ['summarize', '📝 خلاصه‌سازی'], ['translate', '🌐 ترجمه'],
+  ['vision', '🖼 درک تصویر'], ['embedding', '🔎 امبدینگ / RAG'], ['autocomplete', '⌨️ تکمیل خودکار'],
+];
+const LANGS = [['fa', 'فارسی'], ['en', 'انگلیسی'], ['ar', 'عربی'], ['multi', 'چندزبانه']];
+const picked = { tasks: new Set(['code', 'agent']), langs: new Set(['fa', 'en']) };
+
+function renderChips(el, items, set) {
+  el.innerHTML = items.map(([v, t]) =>
+    `<span class="chip${set.has(v) ? ' on' : ''}" data-v="${v}">${t}</span>`).join('');
+  el.querySelectorAll('.chip').forEach((c) => {
+    c.onclick = () => {
+      const v = c.dataset.v;
+      set.has(v) ? set.delete(v) : set.add(v);
+      c.classList.toggle('on');
+      if (el.id === 'tasks') {
+        $('#tool').checked = set.has('agent');
+        $('#vision').checked = set.has('vision');
+      }
+    };
+  });
+}
+renderChips($('#tasks'), TASKS, picked.tasks);
+renderChips($('#langs'), LANGS, picked.langs);
+
+/* ───────────────────────────────────────── host scan */
+let HOST = null;
+async function loadHost(refresh) {
+  try {
+    HOST = await api('/api/localai/host' + (refresh ? '?refresh=1' : ''));
+  } catch (e) { toast(e.message, 'err'); return; }
+
+  const m = HOST.memory, c = HOST.cpu, g = HOST.gpu, d = HOST.disk;
+  $('#host-stats').innerHTML = `
+    <div class="stat"><b>${fa(m.totalGb)} GB</b><span>رم کل — ${fa(m.availableGb)} GB آزاد</span></div>
+    <div class="stat"><b>${fa(c.cores, 0)} هسته</b><span>${esc(c.arch)}${c.avx2 ? ' · AVX2' : ''}</span></div>
+    <div class="stat"><b>${g.present ? fa(g.vramGb) + ' GB' : '—'}</b><span>${g.present ? esc(g.name) : 'بدون GPU'}</span></div>
+    <div class="stat"><b>${fa(d.freeGb)} GB</b><span>دیسک آزاد برای مدل‌ها</span></div>`;
+  $('#host-extra').textContent =
+    `پیشنهاد بودجهٔ رم: ${fa(HOST.suggestedRamBudgetGb)} گیگ (${fa(HOST.reservedForSystemGb)} گیگ برای سیستم و خود برنامه کنار گذاشته شد) · `
+    + `پهنای باند حافظه: CPU ≈ ${fa(HOST.bandwidthGBs.cpu, 0)} GB/s${g.present ? ' · GPU ≈ ' + fa(HOST.bandwidthGBs.gpu, 0) + ' GB/s' : ''}`;
+
+  const ram = $('#ram');
+  ram.max = Math.max(4, Math.ceil(m.totalGb));
+  ram.value = Math.max(1, HOST.suggestedRamBudgetGb || Math.max(1, m.totalGb - 2));
+  $('#ram-val').textContent = fa(ram.value);
+  $('#ram-hint').textContent = `بیشتر از ${fa(m.availableGb)} گیگ آزاد فعلی انتخاب نکنید.`;
+  $('#vram').value = g.present ? g.vramGb : 0;
+  $('#disk').value = Math.max(1, Math.floor(d.freeGb - 2));
+  renderRuntime(HOST.runtime);
+}
+$('#ram').oninput = (e) => { $('#ram-val').textContent = fa(e.target.value); };
+$('#btn-rescan').onclick = () => loadHost(true);
+
+/* ───────────────────────────────────────── runtime panel */
+function renderRuntime(rt) {
+  if (!rt) return;
+  const badge = $('#rt-badge');
+  badge.className = 'tag ' + (rt.running ? 'ok' : rt.installed ? 'warn' : 'err');
+  badge.textContent = rt.running ? 'موتور در حال اجرا' : rt.installed ? 'نصب است، خاموش' : 'نصب نشده';
+  $('#rt-info').innerHTML = `
+    <div>موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag">نصب داخلی پروژه</span>' : ''}</div>
+    <div class="ltr" style="margin-top:4px">${esc(rt.binary || 'یافت نشد')}</div>
+    <div class="ltr">${esc(rt.host)}</div>
+    <div class="ltr">models: ${esc(rt.modelsDir)} ${rt.modelsDirWritable ? '' : '<span class="tag err">غیرقابل نوشتن</span>'}</div>
+    ${rt.error ? `<div class="tag err" style="margin-top:6px">${esc(rt.error)}</div>` : ''}`;
+  $('#btn-rt-install').disabled = !!rt.installed;
+  $('#btn-rt-start').disabled = !rt.installed || !!rt.running;
+  $('#btn-rt-stop').disabled = !rt.running;
+}
+async function refreshRuntime() {
+  try { renderRuntime(await api('/api/localai/runtime')); } catch (e) { /* ignore */ }
+}
+$('#btn-rt-install').onclick = async () => {
+  toast('در حال دانلود و نصب موتور… چند دقیقه طول می‌کشد');
+  try { await api('/api/localai/runtime/install', { method: 'POST', body: {} }); toast('موتور نصب شد', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+  refreshRuntime();
+};
+$('#btn-rt-start').onclick = async () => {
+  try { await api('/api/localai/runtime/start', { method: 'POST', body: {} }); toast('سرویس اجرا شد', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+  refreshRuntime(); loadModels();
+};
+$('#btn-rt-stop').onclick = async () => {
+  try { await api('/api/localai/runtime/stop', { method: 'POST', body: {} }); toast('سرویس متوقف شد', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+  refreshRuntime();
+};
+
+/* ───────────────────────────────────────── recommendation */
+function profile() {
+  return {
+    tasks: [...picked.tasks],
+    languages: [...picked.langs],
+    ramBudgetGb: parseFloat($('#ram').value || '4'),
+    vramGb: parseFloat($('#vram').value || '0'),
+    diskBudgetGb: parseFloat($('#disk').value || '10'),
+    contextTokens: parseInt($('#ctx').value, 10),
+    priority: $('#priority').value,
+    concurrency: parseInt($('#conc').value || '1', 10),
+    minTokensPerSec: parseFloat($('#mintps').value || '0'),
+    requireToolCalling: $('#tool').checked,
+    requireVision: $('#vision').checked,
+    requireEmbedding: picked.tasks.has('embedding'),
+    allowNonCommercial: !$('#commercial').checked,
+  };
+}
+
+let LAST = null;
+$('#btn-rec').onclick = async () => {
+  const btn = $('#btn-rec');
+  btn.disabled = true; btn.textContent = 'در حال تحلیل…';
+  try {
+    LAST = await api('/api/localai/recommend', { method: 'POST', body: profile() });
+    renderRecs(LAST);
+  } catch (e) { toast(e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🔎 جست‌وجو و انتخاب بهترین مدل';
+};
+
+function renderRecs(d) {
+  $('#rec-card').style.display = '';
+  const list = d.recommendations || [];
+  if (!list.length) {
+    $('#rec-list').innerHTML = '<p class="hint">هیچ مدلی با این محدودیت‌ها جور در نیامد؛ بودجهٔ رم را بالا ببرید یا پنجرهٔ متن را کم کنید.</p>';
+  } else {
+    $('#rec-list').innerHTML = list.map((m, i) => `
+      <div class="rec${i === 0 ? ' best' : ''}">
+        <div class="row">
+          <h3>${i === 0 ? '🏆 ' : ''}${esc(m.name)}</h3>
+          <span class="tag ltr">${esc(m.ref)}</span>
+          <span class="tag">${esc(m.quant)}</span>
+          ${m.toolCalling ? '<span class="tag ok">tool calling</span>' : ''}
+          ${m.vision ? '<span class="tag">vision</span>' : ''}
+          ${m.reasoning ? '<span class="tag">reasoning</span>' : ''}
+          <span class="sp"></span>
+          <span class="tag ${m.scorePct > 70 ? 'ok' : ''}">امتیاز ${fa(m.scorePct, 0)}</span>
+          <button class="btn ok sm" data-install="${esc(m.ref)}">🚀 نصب</button>
+        </div>
+        <div class="bar" style="margin:8px 0"><i style="width:${Math.min(100, m.scorePct)}%"></i></div>
+        <div class="hint">${esc(m.summary)}</div>
+        <div class="row" style="margin-top:6px">
+          <span class="tag">رم ≈ ${fa(m.estimate.ramGb)} GB</span>
+          <span class="tag">دیسک ${fa(m.estimate.diskGb)} GB</span>
+          <span class="tag">≈ ${fa(m.estimate.tokensPerSec)} توکن/ثانیه</span>
+          <span class="tag">KV ${fa(m.estimate.kvCacheGb)} GB</span>
+          <span class="tag">${esc(m.license)}</span>
+          <span class="tag">${esc(m.publisher)}</span>
+        </div>
+        <ul>${(m.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+      </div>`).join('');
+    $('#rec-list').querySelectorAll('[data-install]').forEach((b) => {
+      b.onclick = () => install(b.dataset.install);
+    });
+  }
+  $('#rec-rejected').innerHTML = (d.rejected || []).map((r) =>
+    `<div class="hint">• <span class="ltr">${esc(r.ref)}</span> — ${esc((r.reasons || []).join('؛ '))}</div>`).join('')
+    || '<span class="hint">—</span>';
+  $('#rec-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ───────────────────────────────────────── install + progress */
+let pollTimer = null;
+async function install(ref) {
+  if (!confirm('نصب مدل ' + ref + ' شروع شود؟')) return;
+  $('#job-card').style.display = '';
+  $('#job-log').textContent = '';
+  $('#job-bar').style.width = '0%';
+  $('#job-status').textContent = 'در صف…';
+  try {
+    const res = await api('/api/localai/install', {
+      method: 'POST',
+      body: { ref, profile: profile(), tune: true, register: true, benchmark: true },
+    });
+    $('#job-plan').innerHTML = (res.plan || []).map((s) =>
+      `<div class="hint">• <b>${esc(s.title)}</b> — ${esc(s.detail)}</div>`).join('');
+    const id = res.job && res.job.id;
+    $('#job-id').textContent = id || '';
+    $('#job-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (id) pollJob(id);
+  } catch (e) {
+    toast(e.message, 'err');
+    $('#job-status').textContent = 'خطا: ' + e.message;
+  }
+}
+
+function pollJob(id) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    let j;
+    try { j = await api('/api/jobs/' + encodeURIComponent(id)); }
+    catch (e) { return; }
+    $('#job-bar').style.width = Math.max(2, Number(j.progress || 0)) + '%';
+    $('#job-status').textContent =
+      ({ queued: 'در صف', running: 'در حال اجرا', done: '✅ پایان موفق', failed: '❌ ناموفق', cancelled: 'لغو شد' }[j.status] || j.status)
+      + (j.summary ? ' — ' + j.summary : '') + (j.error ? ' — ' + j.error : '');
+    $('#job-log').textContent = (j.logs || []).map((l) => `[${l.level}] ${l.message}`).join('\n');
+    $('#job-log').scrollTop = $('#job-log').scrollHeight;
+    if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') {
+      clearInterval(pollTimer);
+      loadModels(); refreshRuntime();
+      if (j.status === 'done') toast('مدل نصب و در فهرست ارائه‌دهنده‌ها ثبت شد', 'ok');
+    }
+  }, 2000);
+}
+
+/* ───────────────────────────────────────── installed models */
+async function loadModels() {
+  let d;
+  try { d = await api('/api/localai/models'); } catch (e) { $('#models').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; return; }
+  if (!d.running) { $('#models').innerHTML = `<span class="hint">سرویس محلی خاموش است${d.error ? ' — ' + esc(d.error) : ''}</span>`; return; }
+  if (!d.models.length) { $('#models').innerHTML = '<span class="hint">هنوز مدلی نصب نشده است.</span>'; return; }
+  const loaded = new Set((d.loaded || []).map((m) => m.name));
+  $('#models').innerHTML = `<table><thead><tr><th>مدل</th><th>حجم</th><th>کوانت</th><th></th></tr></thead><tbody>${
+    d.models.map((m) => `<tr>
+      <td class="ltr">${esc(m.name)} ${loaded.has(m.name) ? '<span class="tag ok">بارگذاری‌شده</span>' : ''}</td>
+      <td>${fa(m.sizeGb)} GB</td>
+      <td class="ltr">${esc(m.quantization || '—')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" data-test="${esc(m.name)}">تست</button>
+        <button class="btn sm danger" data-del="${esc(m.name)}">حذف</button>
+      </td></tr>`).join('')}</tbody></table>`;
+  $('#models').querySelectorAll('[data-test]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      try {
+        const r = await api('/api/localai/test', { method: 'POST', body: { model: b.dataset.test } });
+        toast(r.ok ? `سرعت واقعی: ${fa(r.tokensPerSec)} توکن/ثانیه` : ('خطا: ' + r.error), r.ok ? 'ok' : 'err');
+      } catch (e) { toast(e.message, 'err'); }
+      b.disabled = false; b.textContent = 'تست';
+    };
+  });
+  $('#models').querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('مدل ' + b.dataset.del + ' حذف شود؟')) return;
+      try { await api('/api/localai/models/' + b.dataset.del, { method: 'DELETE' }); toast('حذف شد', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+      loadModels();
+    };
+  });
+}
+
+/* ───────────────────────────────────────── manual search */
+$('#btn-search').onclick = async () => {
+  const q = $('#q').value.trim();
+  $('#search-out').innerHTML = '<span class="hint">در حال جست‌وجو…</span>';
+  try {
+    const d = await api('/api/localai/search', { method: 'POST', body: { query: q, limit: 12 } });
+    const cat = (d.catalog || []).flatMap((m) => m.variants.map((v) => ({ ref: v.ref, gb: v.diskGb, src: m.publisher })));
+    const hf = d.huggingface || [];
+    $('#search-out').innerHTML =
+      (cat.length ? `<div class="hint" style="margin-bottom:4px">از کاتالوگ داخلی:</div>` + cat.map((v) =>
+        `<div class="row" style="justify-content:space-between"><span class="ltr">${esc(v.ref)}</span>
+         <span><span class="tag">${fa(v.gb)} GB</span>
+         <button class="btn sm ok" data-i="${esc(v.ref)}">نصب</button></span></div>`).join('') : '')
+      + (hf.length ? `<div class="hint" style="margin:8px 0 4px">Hugging Face (GGUF):</div>` + hf.map((m) =>
+        `<div class="row" style="justify-content:space-between"><span class="ltr">${esc(m.id)}</span>
+         <span><span class="tag">${fa(m.downloads, 0)} دانلود</span>
+         <button class="btn sm" data-i="${esc(m.pullRef)}">نصب</button></span></div>`).join('') : '')
+      || '<span class="hint">چیزی پیدا نشد.</span>';
+    $('#search-out').querySelectorAll('[data-i]').forEach((b) => { b.onclick = () => install(b.dataset.i); });
+  } catch (e) { $('#search-out').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; }
+};
+$('#q').onkeydown = (e) => { if (e.key === 'Enter') $('#btn-search').click(); };
+
+/* ───────────────────────────────────────── boot */
+loadHost(false).then(loadModels);
+setInterval(refreshRuntime, 15000);
+</script>
+<script>
+/* The install prefix is unknown at build time (root, /agent, or no-rewrite
+   /agent/index.php), so resolve home links through window.apiUrl at runtime. */
+(function () {
+  var home = (window.apiUrl ? window.apiUrl('/') : '/');
+  document.querySelectorAll('[data-home-link]').forEach(function (a) { a.setAttribute('href', home); });
+})();
+</script>
+</body>
+</html>

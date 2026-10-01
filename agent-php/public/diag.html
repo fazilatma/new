@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تشخیص اتصال — Arena Agent</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b1220; color:#e8eef8; font:14px/1.7 system-ui,Segoe UI,Tahoma,sans-serif; }
+  main { max-width:880px; margin:auto; padding:22px 16px 60px; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  p.sub { color:#93a4bf; margin:0 0 18px; font-size:13px; }
+  button { background:#4f7df3; color:#fff; border:0; border-radius:8px; padding:11px 18px;
+           font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  button.ghost { background:#1a2942; color:#cdd9ee; }
+  .row { display:flex; gap:9px; flex-wrap:wrap; margin-bottom:18px; }
+  .card { background:#111b2e; border:1px solid #243450; border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .card h2 { font-size:14px; margin:0 0 8px; color:#cfe0ff; }
+  .t { display:flex; gap:9px; align-items:flex-start; padding:5px 0; border-top:1px solid #1c2840; }
+  .t:first-of-type { border-top:0; }
+  .badge { flex:none; width:22px; text-align:center; }
+  .u { font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; color:#9fb3d1;
+       word-break:break-all; direction:ltr; text-align:left; }
+  .ok { color:#5ad19b; } .bad { color:#ff8080; } .warn { color:#f0c674; }
+  pre { background:#08101d; border:1px solid #243450; border-radius:9px; padding:12px;
+        overflow:auto; font:12px/1.6 ui-monospace,Menlo,monospace; direction:ltr; text-align:left;
+        white-space:pre-wrap; word-break:break-all; max-height:420px; }
+  .verdict { border-radius:10px; padding:13px 15px; margin:14px 0; font-weight:600; }
+  .v-ok { background:#10301f; border:1px solid #2d6b4a; color:#8ff0c0; }
+  .v-bad { background:#34151a; border:1px solid #7a2f38; color:#ffb3b3; }
+  .v-warn{ background:#33290f; border:1px solid #7a6320; color:#f5d98b; }
+  code { background:#1a2942; padding:1px 5px; border-radius:4px; direction:ltr; display:inline-block; }
+</style>
+</head>
+<body>
+<main>
+  <h1>تشخیص اتصال Arena Agent</h1>
+  <p class="sub">
+    این صفحه به هیچ فایل دیگری وابسته نیست و هیچ داده‌ای را تغییر نمی‌دهد. هر سه شکل آدرس را
+    امتحان می‌کند و می‌گوید میزبان شما کدام را می‌پذیرد.
+  </p>
+
+  <div class="row">
+    <button id="run">▶ اجرای تشخیص</button>
+    <button id="copy" class="ghost" disabled>📋 کپی گزارش</button>
+  </div>
+
+  <div id="out"></div>
+  <pre id="report" hidden></pre>
+</main>
+
+<script>
+(function () {
+  var out = document.getElementById('report');
+  var live = document.getElementById('out');
+  var lines = [];
+
+  // The page may sit at /, /agent/, or be reached as /agent/index.php/diag.
+  function installDir() {
+    var p = location.pathname;
+    p = p.replace(/\/index\.php(\/.*)?$/, '/');   // strip front controller
+    p = p.replace(/\/(diag|localai|chat)(\.html)?\/?$/, '/');
+    p = p.replace(/\/+$/, '');
+    return p;
+  }
+
+  var DIR = installDir();
+  var SHAPES = [
+    { id: 'rewrite',  label: 'بازنویسی URL (mod_rewrite)', url: DIR + '/api/__diag' },
+    { id: 'pathinfo', label: 'PATH_INFO',                  url: DIR + '/index.php/api/__diag' },
+    { id: 'query',    label: 'پارامتر ?__path=',           url: DIR + '/index.php?__path=/api/__diag' }
+  ];
+
+  function card(title) {
+    var d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = '<h2>' + title + '</h2>';
+    live.appendChild(d);
+    return d;
+  }
+  function line(parent, sym, cls, text, url) {
+    var d = document.createElement('div');
+    d.className = 't';
+    d.innerHTML = '<span class="badge ' + cls + '">' + sym + '</span><span>' +
+      text + (url ? '<div class="u">' + url + '</div>' : '') + '</span>';
+    parent.appendChild(d);
+  }
+  function log(s) { lines.push(s); }
+
+  async function probe(url, init) {
+    var t0 = Date.now();
+    try {
+      var res = await fetch(url, Object.assign({ credentials: 'same-origin' }, init || {}));
+      var ct = res.headers.get('content-type') || '';
+      var body = await res.text();
+      return { status: res.status, ct: ct, body: body, ms: Date.now() - t0,
+               json: ct.indexOf('application/json') !== -1 };
+    } catch (e) {
+      return { status: 0, ct: '', body: String(e && e.message || e), ms: Date.now() - t0, json: false };
+    }
+  }
+
+  function verdict(cls, html) {
+    var d = document.createElement('div');
+    d.className = 'verdict ' + cls;
+    d.innerHTML = html;
+    live.appendChild(d);
+  }
+
+  document.getElementById('run').onclick = async function () {
+    this.disabled = true;
+    live.innerHTML = '';
+    lines = [];
+    log('Arena Agent connectivity report');
+    log('generated: ' + new Date().toISOString());
+    log('page url : ' + location.href);
+    log('install  : ' + (DIR || '(root)'));
+    log('');
+
+    // ---------------- 1. which URL shape reaches the app? ----------------
+    var c1 = card('۱. کدام شکل آدرس به برنامه می‌رسد؟');
+    var working = null, diagInfo = null;
+    log('--- URL shapes (GET /api/__diag) ---');
+    for (var i = 0; i < SHAPES.length; i++) {
+      var s = SHAPES[i];
+      var r = await probe(s.url);
+      var good = r.json && r.status === 200;
+      if (good && !working) {
+        working = s;
+        try { diagInfo = JSON.parse(r.body); } catch (e) {}
+      }
+      line(c1, good ? '✅' : '❌', good ? 'ok' : 'bad',
+        s.label + ' — HTTP ' + r.status + ' · ' + (r.ct.split(';')[0] || 'بدون نوع') + ' · ' + r.ms + 'ms',
+        s.url);
+      log((good ? 'OK  ' : 'FAIL') + ' ' + s.id + '  HTTP ' + r.status +
+          '  ct=' + (r.ct.split(';')[0] || '-') + '  ' + r.ms + 'ms  ' + s.url);
+      if (!good) log('       body: ' + r.body.replace(/\s+/g, ' ').slice(0, 160));
+    }
+
+    if (!working) {
+      verdict('v-bad', 'هیچ‌کدام از سه شکل آدرس به برنامه نرسید. یعنی فایل <code>index.php</code> ' +
+        'در پوشهٔ نصب نیست، یا آدرس این صفحه با محل نصب فرق دارد.');
+      log('\nVERDICT: no shape reached the app.');
+      finish(); return;
+    }
+
+    // ---------------- 2. does a POST survive? ----------------------------
+    var c2 = card('۲. آیا درخواست POST (همان چیزی که درون‌ریزی می‌فرستد) عبور می‌کند؟');
+    function u(path) {
+      return working.id === 'query'
+        ? DIR + '/index.php?__path=' + path
+        : (working.id === 'pathinfo' ? DIR + '/index.php' + path : DIR + path);
+    }
+    var sample = JSON.stringify({ providers: { demo: {
+      name: 'Demo', protocol: 'openai-compatible',
+      url: 'https://api.example.com/v1', apiKey: 'sk-test-0000000000000000',
+      models: [{ id: 'demo-model', name: 'Demo Model' }] } } });
+
+    log('\n--- POST transport (probe mode, nothing is saved) ---');
+    var tests = [
+      { name: 'POST کوچک و بی‌خطر', body: { probe: true, json: '{}' } },
+      { name: 'POST با کلید API و URL (شبیه درون‌ریزی واقعی)', body: { probe: true, json: sample } },
+      { name: 'POST با بدنهٔ base64 (دور زدن فایروال)', body: { probe: true, jsonB64: btoa(unescape(encodeURIComponent(sample))) } },
+      { name: 'POST بزرگ (حدود ۲۵۰ کیلوبایت)', body: { probe: true, json: '{"x":"' + new Array(250000).join('a') + '"}' } }
+    ];
+    var res2 = [];
+    for (var j = 0; j < tests.length; j++) {
+      var t = tests[j];
+      var r2 = await probe(u('/api/providers/import-text'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(t.body)
+      });
+      var good2 = r2.json && r2.status === 200;
+      var note = '';
+      if (!good2) {
+        if (r2.status === 401 || r2.status === 403) note = ' — نیاز به ورود (این خطای مسیریابی نیست)';
+        else if (!r2.json) note = ' — پاسخ HTML بود، یعنی وب‌سرور/فایروال جلوی آن را گرفت';
+        else if (r2.status === 413) note = ' — بدنه بزرگ‌تر از post_max_size بود';
+      }
+      res2.push({ t: t, r: r2, good: good2 });
+      line(c2, good2 ? '✅' : (r2.status === 401 || r2.status === 403 ? '🔒' : '❌'),
+        good2 ? 'ok' : (r2.status === 401 || r2.status === 403 ? 'warn' : 'bad'),
+        t.name + ' — HTTP ' + r2.status + ' · ' + (r2.ct.split(';')[0] || 'بدون نوع') + note);
+      log((good2 ? 'OK  ' : 'FAIL') + ' ' + t.name.replace(/[^\x20-\x7e]/g, '') +
+          '  HTTP ' + r2.status + '  ct=' + (r2.ct.split(';')[0] || '-') + '  size=' +
+          JSON.stringify(t.body).length);
+      if (!good2) log('       body: ' + r2.body.replace(/\s+/g, ' ').slice(0, 200));
+    }
+
+    // ---------------- 3. environment ------------------------------------
+    if (diagInfo) {
+      var c3 = card('۳. وضعیت سرور');
+      var rt = diagInfo.routing || {};
+      line(c3, 'ℹ️', '', 'نسخه: ' + (diagInfo.version || '?') +
+        ' · بازنویسی: ' + (rt.rewriteWorking ? 'فعال' : 'غیرفعال') +
+        ' · پیشوند: ' + (rt.apiBase === '' ? '(ریشه)' : rt.apiBase));
+      var lim = diagInfo.limits || {};
+      line(c3, 'ℹ️', '', 'post_max_size: ' + (lim.postMaxSize || '?') +
+        ' · upload_max_filesize: ' + (lim.uploadMaxFilesize || '?') +
+        ' · memory_limit: ' + (lim.memoryLimit || '?'));
+      log('\n--- server ---');
+      log(JSON.stringify(diagInfo, null, 2));
+    }
+
+    // ---------------- verdict -------------------------------------------
+    var plain = res2[1], b64 = res2[2], big = res2[3];
+    if (res2.every(function (x) { return x.good; })) {
+      verdict('v-ok', 'همه‌چیز سالم است. شکل کارآمد آدرس: <code>' + working.label +
+        '</code>. اگر درون‌ریزی باز خطا داد، مشکل در محتوای فایل JSON است نه در اتصال.');
+      log('\nVERDICT: transport fully healthy via ' + working.id);
+    } else if (plain && !plain.good && b64 && b64.good) {
+      verdict('v-bad', 'فایروال میزبان (mod_security) بدنهٔ حاوی کلید API را مسدود می‌کند، ' +
+        'ولی نسخهٔ base64 عبور می‌کند. نسخهٔ ۱.۴.۰ خودکار همین کار را می‌کند — ' +
+        'فقط فایل‌های جدید را آپلود کنید.');
+      log('\nVERDICT: WAF blocks plain body; base64 passes.');
+    } else if (big && !big.good && plain && plain.good) {
+      verdict('v-warn', 'درخواست‌های کوچک عبور می‌کنند ولی بدنهٔ بزرگ رد می‌شود. ' +
+        '<code>post_max_size</code> را افزایش دهید یا از راه ترمینال درون‌ریزی کنید: ' +
+        '<code>php bin/console.php provider:import providers.json</code>');
+      log('\nVERDICT: large bodies rejected.');
+    } else if (res2.some(function (x) { return x.r.status === 401 || x.r.status === 403; })) {
+      verdict('v-warn', 'مسیریابی سالم است ولی سرور درخواست را بدون ورود نمی‌پذیرد. ' +
+        'اول در برنامه وارد شوید (admin) و بعد این صفحه را دوباره اجرا کنید.');
+      log('\nVERDICT: routing OK, authentication required.');
+    } else {
+      verdict('v-bad', 'درخواست GET می‌رسد ولی POST نمی‌رسد — این الگوی کلاسیک فایروال میزبان است. ' +
+        'گزارش زیر را کپی کنید و برای پشتیبانی بفرستید.');
+      log('\nVERDICT: GET works, POST blocked.');
+    }
+    finish();
+  };
+
+  function finish() {
+    out.hidden = false;
+    out.textContent = lines.join('\n');
+    var c = document.getElementById('copy');
+    c.disabled = false;
+    c.onclick = function () {
+      navigator.clipboard.writeText(lines.join('\n')).then(function () {
+        c.textContent = '✓ کپی شد';
+        setTimeout(function () { c.textContent = '📋 کپی گزارش'; }, 1800);
+      });
+    };
+    document.getElementById('run').disabled = false;
+  }
+})();
+</script>
+</body>
+</html>
