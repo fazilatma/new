@@ -12,6 +12,18 @@ depends on those response shapes.
 
 ---
 
+## [3.0.0] — 2026-10-01
+
+### Added
+- **Full Parity with Arena Agent 3 (Python Edition).** Complete feature parity, API routes, toolset, and UI alignment.
+- **Code Generation Strategy Modes (`smart-auto`, `single-file`, `multi-file`).** Customizable per-project and global code generation modes with automatic asset inlining and bundling for multi-file HTML/CSS/JS applications.
+- **Enhanced Local AI Engine & GGUF Model Search.** Hardware profiling (RAM budget, CPU cores, AVX2/AVX-512, GPU VRAM), category filter tabs (Coding, Chat, Reasoning, Vision, Hugging Face GGUF), instant debounced search, and custom GGUF model pull.
+- **Robust Model Directory Permissions & Auto-Healing.** Diagnostic permissions check and auto-healing API (`/api/localai/runtime/fix-permissions`).
+- **State & Chat Selection Persistence.** Chat provider and model choices persist across page reloads per provider without resetting.
+- **Hardware Profile Persistence.** Dedicated `/api/localai/profiles` endpoints backed by SQLite `app_state`.
+
+---
+
 ## [2.1.0] — 2026-10-01
 
 ### Added

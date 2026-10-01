@@ -6,9 +6,9 @@
     "url": "https://openrouter.ai/api/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_LRrReWvCZIVKP41FKLRsgBr4U2If0T3oi6QusqKc9q2dsfYT88rrnm6W98oYR2c9Sm3gFYo9vYPwvT-kPO4b1bA==",
+    "apiKey": "enc:gAAAAABqvqINaiRT_IOmbZWPX9EULBRkiN5GmzQiCAcPY1acez4nbmZFwPyZ06IxfXoVJct-dBqV_1RNnfohIm5GcgIyiYR4Sw==",
     "apiKeys": [
-      "enc:gAAAAABqvp_LaPwtJpcOaI5ec5mVrhzKO_hpu-tSGdbcUG0x-pWEsN3TTVhEB01_ppoGLNNUkktooyzEsyFmWtpMJOL1yP0pqw=="
+      "enc:gAAAAABqvqIN3t8O5DxUn9Lj8cN8cNWn9kf9iFSH1mIm87KfjtczOjRyNxcVGFhg_5zFKpLmghk-X_1XVG8FaAkk531GLGAT2g=="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",
@@ -51,9 +51,9 @@
     "url": "https://api.deepseek.com/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_L2mUOjKOjCj97HszPTscKD0UKKxdaGUpLxnmy7t_sMu9FK4vaAf3dqmtZGyQj6Fv0zpQBbey93vasCfbVbKoSjA==",
+    "apiKey": "enc:gAAAAABqvqIN7QswTjNBMoZMkRgWH-nygPe4AIDnFMDU0undEpfKEy-bYoIVUYGw8aH4OaYIY1HuqBDHwSTISDNOJGo5KarcLA==",
     "apiKeys": [
-      "enc:gAAAAABqvp_L6cf2QDAXi-3gqdehptsExxB9sBfGd6ZBMBhblD3f4J4PsRayfVdDVyuuIFDpFgPhiEk3LRZ8tYkv3_Tx6t6vWQ=="
+      "enc:gAAAAABqvqINIdDnu5YK-SXwd8iGESa3dMnkdNXdGHd5YMpYaqfRWge9S_E4UrfiFAlm9wBk0Wb56JRmBc0a1avTgLdOwVpHmw=="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",

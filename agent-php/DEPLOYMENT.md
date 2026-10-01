@@ -184,7 +184,7 @@ start immediately when `proc_open()` is available.
 ```bash
 BASE=http://127.0.0.1:8080
 
-curl -s $BASE/health                       # {"status":"ok","version":"2.1.0"}
+curl -s $BASE/health                       # {"status":"ok","version":"3.0.0"}
 curl -s $BASE/api/version
 curl -s $BASE/api/auth/status
 

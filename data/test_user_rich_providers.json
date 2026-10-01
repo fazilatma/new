@@ -6,9 +6,9 @@
     "url": "https://api.openai.com/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_L8BCqVSHtt_fdMdIsPvhLl8UCL7cE3gC6MTXOlPjAk4DA0gdbIPaI4rfbXJfBgjfpRKcjB5E3AQ5D_w2MXTzgeOhIFpJhssiOaE6mcQV0iQg=",
+    "apiKey": "enc:gAAAAABqvqINI5WOCBSp0cJDIUeXCn5Rjf4Ten-zAgOMzgS8LdALaigPpWdi2Ew8qtWiXLR6oh_oORxeV9et7zQctKhfhjYLHqIy2_iHoPJtktfoYelKQAE=",
     "apiKeys": [
-      "enc:gAAAAABqvp_LiAfinPqW7K5X-YJsJe9vrP4hbxntoce2ltRXNMLGRIszRFSWC0wcuhqMGpYa2PGN2Oxw6EJk6q-xiPgwf3-fGSTL5vr-U8VIxPKK20peX7U="
+      "enc:gAAAAABqvqIN7fqs7it7JEbKmNxBFrUdtJqn0s9ZyyHORQG267vDMRnl9xW7Hkp4POHJxcy1NHyAX3r9brL8IUgQPsniUvaAZeFEVZWKGh7ckiYmN3RNsQs="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",
@@ -103,9 +103,9 @@
     "url": "https://api.together.xyz/v1/chat/completions",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_LGWLm8pgA1a9SOuPpUWnAJjYAuu1svLOSRix_8HXQ7bSYk4tI87otTijEK3trcczkDJJ0ImOa6X8jKl-oHc46zQ==",
+    "apiKey": "enc:gAAAAABqvqINEaPHJcQLgIypVl0EyKf_vp69p8wcKx0jR--IX1Ammux7Jn9rZmssHytnBFHrSY2OWnJ_8crRNxxQv1P7-gqiWw==",
     "apiKeys": [
-      "enc:gAAAAABqvp_Lh5pl_E9cFiV1keLqbD8NWEUP3kulD6Xe49wP4EmbHTTsogaw6L6FLlGT0v8d6KZEmE8EKAnSK88Z9rRIUdosDA=="
+      "enc:gAAAAABqvqINIC63evkrNXx_QivO_kyLBmsK7JR781nkkHCv_eL79hcOULt2oChOHyJGj6yMJc4dhfpJZdqtkEDQQVxyGLho4g=="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",
@@ -138,9 +138,9 @@
     "url": "https://api.cloudflare.com/client/v4/accounts/test-acc/ai/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_LQwCMxKZe9QVbccBg7QS9gD6BVLkhKrW4KtQAVoVxxG43wRr8fEgUZV9ZlLaBhOacCnRclcFKrgZH2W8TV-__-w==",
+    "apiKey": "enc:gAAAAABqvqINnw-vn5HtRsf8tyTdi5TsZ-mkQQJYNE09ntEOB2Xcf3leLQThTNhHS0zwRv-TavC1qHrRVEw6166MQTJtgZqidg==",
     "apiKeys": [
-      "enc:gAAAAABqvp_LqP5tGqMdaOlK5SNck7_nT4rFldXwfVvBumQDxdEEopt-MWMgcQTvtm7GwOYPQWQve9OuXbedUujIBm_o34XouA=="
+      "enc:gAAAAABqvqINL1eaH7efd75gXssWiHDIzKkjAuQpPxGvZmJ-faaji1uVKa_lSrBnrmtyvajiDojaY2X78WzHJnSfj-OEq7zAeA=="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",

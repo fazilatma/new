@@ -49,9 +49,9 @@
     "url": "https://openrouter.ai/api/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_LJC-WJS0rRF3363rSrXW2pvOrgfbqZKLUB-qrWG7ARNWXuiZFSF1Oy5Is1Ndw93dYOxb02sJeRrlkSiCzj2Iw0fGMlxRqnl4EoJqSmjaNH6g=",
+    "apiKey": "enc:gAAAAABqvqIN1OW-GMDIqpclINdc880IWJDLihy5jjCvcRU-FYyR8N1mQWwWsxOXSAVyt6sOUr0JLQO7LdlKmtQKpPU3axWHeqGZm9nphe1mjf9sjKolzAI=",
     "apiKeys": [
-      "enc:gAAAAABqvp_LxOvrnV5AmrOsSfFaMRqXhdoQKMTS2wGwvWua9bng6ItCzIvP61AIG7yUB61VkFgTmOKBgsXn8Prazi2FUtQU3qD529hx2cKZBbk2iG0-4Kk="
+      "enc:gAAAAABqvqINoV0LbGGNnUOdosuxyJ3NjPX_RYhnQB3BONI3e-eaYAH8JfoGc-g1y7X1OzIDq5wU_DhSPQn09etBeId40CsH6m5CWFMUXCKRA_sB5fx2B6k="
     ],
     "apiKeyEnv": "",
     "proxyUrl": "",
@@ -315,7 +315,7 @@
     "url": "https://mock-primary.ai/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_LFpmQXbVYio8wDDNipGU3wlnHS54yxlEwHMgIP_d70HkEoSk9Nw6ptQLcXrmhQ_y-8-Brs7Jtpnz4lHBkcVKG-g==",
+    "apiKey": "enc:gAAAAABqvqINRYzwthDsfw0j5KVuU-CaFFzWt3uK-dwzdFK3v_GCH0RY4SbCvje28kNt0XOhMAAkaI6YsV_EM5LXOLtLCbJC_w==",
     "apiKeys": [],
     "apiKeyEnv": "",
     "proxyUrl": "",
@@ -345,7 +345,7 @@
     "url": "https://mock-backup.ai/v1",
     "protocol": "openai-compatible",
     "enabled": true,
-    "apiKey": "enc:gAAAAABqvp_L6KnxFzlf__uTUIrow0jQqMQ9bUZbliE67qQTDaZssGKJr80o7Fid2-oXm4PGBytc4N3K8NGG2EGN-s_dIyKbwA==",
+    "apiKey": "enc:gAAAAABqvqINZNFalfz_f90HatZCsc4B3yO8IyrnxlxDlm12B7uqmZDeOdOAa_KhBFiue-ZO4GhbYJn6tDyIi-HD3ymQHjR3ag==",
     "apiKeys": [],
     "apiKeyEnv": "",
     "proxyUrl": "",

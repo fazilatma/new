@@ -115,7 +115,7 @@
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent v0.11.0</title>
+  <title>Arena PHP Agent 3</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -2251,7 +2251,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Agent v2.1.0</span>
+          <span id="sidebarVersionText">Arena PHP Agent 3 (v3.0.0)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2334,7 +2334,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v2.1.0
+          🚀 v3.0.0
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -6135,20 +6135,46 @@ function renderChatProviders() {
   const pSel = $('#chatProvider');
   if (!pSel) return;
   const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
-  const savedProvider = localStorage.getItem('arena_selected_provider') || STATE.activeProject?.default_provider || providersList[0]?.id;
+  if (!providersList.length) return;
+
+  let savedProvider = localStorage.getItem('arena_selected_provider');
+  if (!savedProvider || !providersList.some(p => p.id === savedProvider)) {
+    savedProvider = STATE.activeProject?.default_provider || providersList[0]?.id;
+  }
 
   pSel.innerHTML = providersList.map(p => `
     <option value="${esc(p.id)}" ${p.id === savedProvider ? 'selected' : ''}>
       ${esc(p.name)} ${p.hasApiKey ? '✓' : ''}
     </option>
   `).join('');
+  pSel.value = savedProvider;
 
-  onChatProviderChange(false);
+  const p = providersList.find(x => x.id === savedProvider) || providersList[0];
+  const mSel = $('#chatModel');
+  if (!mSel) return;
+
+  const models = p?.models || [];
+  let savedModel = localStorage.getItem('arena_selected_model_' + p.id) || localStorage.getItem('arena_selected_model');
+  if (!savedModel || !models.some(m => m.id === savedModel)) {
+    savedModel = STATE.activeProject?.default_model || models[0]?.id || '';
+  }
+
+  mSel.innerHTML = models.map(m => `
+    <option value="${esc(m.id)}" ${m.id === savedModel ? 'selected' : ''}>
+      ${esc(m.name || m.id)}
+    </option>
+  `).join('');
+  if (savedModel && models.some(m => m.id === savedModel)) {
+    mSel.value = savedModel;
+  }
+
+  onChatModelChange(false);
 }
 
 function onChatProviderChange(save = true) {
   const pid = $('#chatProvider')?.value;
-  if (save && pid) {
+  if (!pid) return;
+  if (save) {
     localStorage.setItem('arena_selected_provider', pid);
     flashAutoSave();
   }
@@ -6157,25 +6183,35 @@ function onChatProviderChange(save = true) {
   const p = providersList.find(x => x.id === pid) || providersList[0];
   const mSel = $('#chatModel');
   if (!mSel) return;
-  const savedModel = localStorage.getItem('arena_selected_model') || STATE.activeProject?.default_model || p?.models?.[0]?.id;
 
-  mSel.innerHTML = (p?.models || []).map(m => `
+  const models = p?.models || [];
+  let savedModel = localStorage.getItem('arena_selected_model_' + pid) || localStorage.getItem('arena_selected_model');
+  if (!savedModel || !models.some(m => m.id === savedModel)) {
+    savedModel = STATE.activeProject?.default_model || models[0]?.id || '';
+  }
+
+  mSel.innerHTML = models.map(m => `
     <option value="${esc(m.id)}" ${m.id === savedModel ? 'selected' : ''}>
       ${esc(m.name || m.id)}
     </option>
   `).join('');
+  if (savedModel && models.some(m => m.id === savedModel)) {
+    mSel.value = savedModel;
+  }
 
   onChatModelChange(save);
 }
 
 function onChatModelChange(save = true) {
   const mid = $('#chatModel')?.value;
+  const pid = $('#chatProvider')?.value;
   if (save && mid) {
     localStorage.setItem('arena_selected_model', mid);
+    if (pid) localStorage.setItem('arena_selected_model_' + pid, mid);
     flashAutoSave();
   }
-  const pid = $('#chatProvider')?.value;
-  const p = STATE.providers.find(x => x.id === pid) || STATE.providers[0];
+  const providersList = Array.isArray(STATE.providers) ? STATE.providers : [];
+  const p = providersList.find(x => x.id === pid) || providersList[0];
   const badge = $('#activeProviderBadge');
   if (badge) badge.textContent = `⚡ ${p?.name || 'Agent'} / ${mid || 'Model'}`;
   updateChatControlsSummary();
