@@ -45,24 +45,26 @@
   "openrouter": {
     "id": "openrouter",
     "name": "OpenRouter",
-    "vendor": "openrouter",
+    "vendor": "custom",
     "url": "https://openrouter.ai/api/v1",
     "protocol": "openai-compatible",
-    "enabled": false,
-    "apiKey": "",
-    "apiKeys": [],
-    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvi_aivqFjxa8zq-twznGmG9OftLH0Yt8hHg8tXFdICFDUA6peQwfsn_mDtuejEaY8z0iyhTrYlRBRSAbrTJVqTWRwBYMrX2sXAHVN8FS6kkDpf0=",
+    "apiKeys": [
+      "enc:gAAAAABqvi_aO7D6mK2z1wtSCDh1ia1yPe2bMHsFcTm9D2t4psVTSKyDKcEPdoue3NSM1hMedgln38E83ytsMu7FV9-ZfdP8YSki_BGUW6AcM-QQuu1Qh8U="
+    ],
+    "apiKeyEnv": "",
     "proxyUrl": "",
-    "priority": 1,
+    "priority": 10,
     "timeoutSec": 120,
     "models": [
       {
-        "id": "openai/gpt-oss-120b",
-        "name": "GPT OSS 120B",
+        "id": "anthropic/claude-3.5-sonnet",
+        "name": "Claude 3.5 Sonnet",
         "toolCalling": true,
-        "vision": false,
+        "vision": true,
         "free": false,
-        "maxInputTokens": 131072,
+        "maxInputTokens": 128000,
         "maxOutputTokens": 8192,
         "enabled": true,
         "inputCostPer1M": 0.0,
@@ -70,25 +72,12 @@
         "extra": {}
       },
       {
-        "id": "qwen/qwen3-coder",
-        "name": "Qwen Coder",
+        "id": "google/gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
         "toolCalling": true,
-        "vision": false,
-        "free": false,
-        "maxInputTokens": 131072,
-        "maxOutputTokens": 8192,
-        "enabled": true,
-        "inputCostPer1M": 0.0,
-        "outputCostPer1M": 0.0,
-        "extra": {}
-      },
-      {
-        "id": "deepseek/deepseek-chat",
-        "name": "DeepSeek Chat",
-        "toolCalling": true,
-        "vision": false,
-        "free": false,
-        "maxInputTokens": 131072,
+        "vision": true,
+        "free": true,
+        "maxInputTokens": 128000,
         "maxOutputTokens": 8192,
         "enabled": true,
         "inputCostPer1M": 0.0,
@@ -317,6 +306,66 @@
     "priority": 1,
     "timeoutSec": 120,
     "models": [],
+    "extra": {}
+  },
+  "test-primary": {
+    "id": "test-primary",
+    "name": "Test Primary",
+    "vendor": "custom",
+    "url": "https://mock-primary.ai/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvi_aDKhCmkveAKx4NxhgHfJKFeMyenm1-y9vTtbKMpRWvlGtiPecbQ7mBOCuRxpfhWfYcd101O8Ve7cRf6xLucYftQ==",
+    "apiKeys": [],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "model-prime",
+        "name": "Model Prime",
+        "toolCalling": true,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  },
+  "test-backup": {
+    "id": "test-backup",
+    "name": "Test Backup",
+    "vendor": "custom",
+    "url": "https://mock-backup.ai/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvi_aiRkPrnUBvzC5tLAGQ_y2WlfwKJNDAmgXOX8r3-ULljshzoTBBvbHm8c_FyUJvQuqmjD7zEtUdasAdbQ2b1qJiw==",
+    "apiKeys": [],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "model-verified",
+        "name": "Model Verified",
+        "toolCalling": true,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
     "extra": {}
   }
 }

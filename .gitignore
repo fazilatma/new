@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.tmp
+data/
 agent-python/data/
 agent-python/data/logs/
 agent-python/data/workspaces/
@@ -12,4 +13,5 @@ agent-python/data/uploads/
 *.db
 *.sqlite
 *.sqlite3
-
+stream_heal.py
+auto_heal.py

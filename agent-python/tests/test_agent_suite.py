@@ -33,7 +33,7 @@ from app.changesets import (
 )
 from app.terminal_sandbox import execute_sandboxed_command, is_dangerous_command, list_active_processes
 from app.git_manager import get_git_status, get_git_diff, list_branches
-from app.providers import ProviderStore, CIRCUIT_BREAKER
+from app.providers import ProviderStore, CIRCUIT_BREAKER, PROVIDER_STORE, Provider, ModelSpec
 from app.worker import (
     recover_orphaned_jobs, create_job, get_job_details,
     cancel_job, pause_job, resume_job, retry_job
@@ -42,13 +42,29 @@ from app.browser_automation import BROWSER_MANAGER, validate_url
 from app.observability import log_event, get_logs, get_system_metrics
 from app.browser_automation import validate_url
 
+# Ensure standard test providers exist in store
+PROVIDER_STORE.data["openrouter"] = Provider(
+    id="openrouter",
+    name="OpenRouter",
+    url="https://openrouter.ai/api/v1",
+    protocol="openai-compatible",
+    enabled=True,
+    apiKey="sk-or-v1-mock-key",
+    apiKeys=["sk-or-v1-mock-key"],
+    priority=10,
+    models=[
+        ModelSpec(id="anthropic/claude-3.5-sonnet", name="Claude 3.5 Sonnet", toolCalling=True, vision=True),
+        ModelSpec(id="google/gemini-2.5-flash", name="Gemini 2.5 Flash", toolCalling=True, vision=True, free=True)
+    ]
+)
+
 client = TestClient(app)
 
 def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.16.0"
+    assert APP_VERSION == "0.16.3"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -463,7 +479,20 @@ def test_model_endpoint_testing_and_diagnostics():
     assert "effectiveEndpoint" in single_data["request"]
     assert "response" in single_data
 
-def test_chat_streaming_and_error_diagnostics():
+def test_chat_streaming_and_error_diagnostics(monkeypatch):
+    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "Hello from mock stream!"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Hello from mock stream!"}}
+
+    async def mock_call_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Hello from mock non-stream!"}
+            }]
+        }
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_caller)
+    monkeypatch.setattr("app.chat.call_provider_api", mock_call_caller)
     # Test chat streaming endpoint
     res = client.post(
         "/api/chat/stream",
@@ -938,8 +967,14 @@ def test_quick_project_creation_with_minimal_fields():
     assert pdata["id"] is not None
 
 
-def test_chat_stream_sse_realtime_events():
+def test_chat_stream_sse_realtime_events(monkeypatch):
     """Test /api/chat/stream returns valid text/event-stream headers and events."""
+    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "SSE Event stream response"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "SSE Event stream response"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_caller)
+
     res = client.post("/api/chat/stream", json={
         "provider": "openrouter",
         "model": "google/gemini-2.5-flash",
@@ -1453,6 +1488,148 @@ def test_flexible_provider_import():
     assert len(ds.models) == 2
     assert ds.models[0].id == "deepseek-chat"
 
+
+def test_user_rich_provider_export_import():
+    from app.providers import ProviderStore, resolve_provider_endpoint_url
+    store = ProviderStore(path="data/test_user_rich_providers.json")
+
+    user_payload = """
+    {
+      "openai": {
+        "id": "openai",
+        "name": "OpenAI Official",
+        "vendor": "openai",
+        "url": "https://api.openai.com/v1",
+        "protocol": "openai-compatible",
+        "enabled": true,
+        "apiKeys": [
+          {
+            "key": "sk-proj-abc123xyz456",
+            "label": "Production Key",
+            "enabled": true
+          }
+        ],
+        "models": [
+          {
+            "id": "gpt-4o",
+            "name": "GPT-4o (Omni)",
+            "toolCalling": true,
+            "vision": true,
+            "free": false,
+            "maxInputTokens": 128000,
+            "maxOutputTokens": 16384,
+            "tested": true,
+            "available": true,
+            "pricingMode": "payg",
+            "endpointType": "chat",
+            "testDetails": {
+              "status": 200,
+              "latencyMs": 320
+            }
+          }
+        ]
+      },
+      "ollama": {
+        "id": "ollama",
+        "name": "Ollama (Local AI)",
+        "vendor": "ollama",
+        "url": "http://localhost:11434",
+        "protocol": "ollama",
+        "enabled": false,
+        "apiKeys": [],
+        "models": []
+      },
+      "together": {
+        "id": "together",
+        "name": "Together AI",
+        "url": "https://api.together.xyz/v1/chat/completions",
+        "protocol": "openai-compatible",
+        "enabled": true,
+        "apiKeys": [
+          {
+            "key": "tog-key-998877",
+            "label": "Team Key",
+            "enabled": true
+          }
+        ],
+        "models": [
+          {
+            "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "name": "Llama 3.3 70B Turbo",
+            "toolCalling": true,
+            "vision": false,
+            "tested": true,
+            "available": true
+          }
+        ]
+      },
+      "cloudflare": {
+        "id": "cloudflare",
+        "name": "Cloudflare Workers AI",
+        "url": "https://api.cloudflare.com/client/v4/accounts/test-acc/ai/v1",
+        "protocol": "openai-compatible",
+        "enabled": true,
+        "apiKeys": [
+          {
+            "key": "cf-token-554433",
+            "label": "CF AI Token",
+            "enabled": true
+          }
+        ],
+        "models": [
+          {
+            "id": "@cf/meta/llama-3.3-70b-instruct",
+            "name": "Llama 3.3 70B Instruct",
+            "toolCalling": false
+          }
+        ]
+      }
+    }
+    """
+
+    count = store.import_json(user_payload, replace=True)
+    assert count == 4
+
+    # Check OpenAI
+    openai = store.data.get("openai")
+    assert openai is not None
+    assert openai.apiKey == "sk-proj-abc123xyz456"
+    assert "sk-proj-abc123xyz456" in openai.apiKeys
+    assert len(openai.models) == 1
+    assert openai.models[0].id == "gpt-4o"
+    assert openai.models[0].extra.get("tested") is True
+    assert openai.models[0].extra.get("pricingMode") == "payg"
+    assert openai.models[0].extra.get("testDetails", {}).get("latencyMs") == 320
+
+    # Check Ollama (empty models gets sensible local defaults)
+    ollama = store.data.get("ollama")
+    assert ollama is not None
+    assert ollama.protocol == "ollama"
+    assert len(ollama.models) > 0
+    assert any("llama3.2" in m.id for m in ollama.models)
+
+    # Check Together AI (full completion URL)
+    together = store.data.get("together")
+    assert together is not None
+    assert together.apiKey == "tog-key-998877"
+    assert "tog-key-998877" in together.apiKeys
+    assert len(together.models) == 1
+    assert together.models[0].id == "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
+    # Check Cloudflare
+    cf = store.data.get("cloudflare")
+    assert cf is not None
+    assert cf.apiKey == "cf-token-554433"
+    assert cf.models[0].id == "@cf/meta/llama-3.3-70b-instruct"
+
+    # Check URL resolution
+    assert resolve_provider_endpoint_url("https://api.openai.com/v1", "openai-compatible") == "https://api.openai.com/v1/chat/completions"
+    assert resolve_provider_endpoint_url("https://api.together.xyz/v1/chat/completions", "openai-compatible") == "https://api.together.xyz/v1/chat/completions"
+    assert resolve_provider_endpoint_url("http://localhost:11434", "ollama") == "http://localhost:11434/api/chat"
+    assert resolve_provider_endpoint_url("http://localhost:11434/api/chat", "ollama") == "http://localhost:11434/api/chat"
+    assert resolve_provider_endpoint_url("https://api.anthropic.com", "anthropic") == "https://api.anthropic.com/v1/messages"
+    assert resolve_provider_endpoint_url("https://api.anthropic.com/v1", "anthropic") == "https://api.anthropic.com/v1/messages"
+    assert resolve_provider_endpoint_url("https://api.anthropic.com/v1/messages", "anthropic") == "https://api.anthropic.com/v1/messages"
 
 
 

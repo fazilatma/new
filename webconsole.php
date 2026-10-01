@@ -1385,12 +1385,13 @@ function sysinfo(): array {
     $a=$parse(@file_get_contents('/proc/stat'));usleep(60000);$b=$parse(@file_get_contents('/proc/stat'));
     $cpu=$a&&$b&&$b[0]>$a[0]?round(100*(1-($b[1]-$a[1])/($b[0]-$a[0])),1):null;
     $load=sys_getloadavg()?:[0,0,0];
-    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice','pm2']as$t)$tools[$t]=which($t);
+    $tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid','nice','pm2','ollama']as$t)$tools[$t]=which($t);
     $tools['mysqldump']=which('mysqldump')||which('mariadb-dump');
     $nodeVer = $tools['node'] ? trim((string)sh_ok('node -v 2>/dev/null')) : '';
     $npmVer = $tools['npm'] ? trim((string)sh_ok('npm -v 2>/dev/null')) : '';
     $pyVer = $tools['python3'] ? trim(preg_replace('/^Python\s*/i', '', (string)sh_ok('python3 -V 2>/dev/null'))) : '';
     $pm2Ver = $tools['pm2'] ? trim((string)sh_ok('pm2 -v 2>/dev/null | tail -n 1')) : '';
+    $ollamaVer = $tools['ollama'] ? trim((string)sh_ok('ollama -v 2>/dev/null')) : '';
     return [
         'host'=>gethostname()?:'localhost',
         'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),
@@ -1407,7 +1408,7 @@ function sysinfo(): array {
         'term_mode'=>term_mode(),
         'ip'=>client_ip(),
         'tools'=>$tools,
-        'tools_versions'=>['node'=>$nodeVer,'npm'=>$npmVer,'python'=>$pyVer,'pm2'=>$pm2Ver]
+        'tools_versions'=>['node'=>$nodeVer,'npm'=>$npmVer,'python'=>$pyVer,'pm2'=>$pm2Ver,'ollama'=>$ollamaVer]
     ];
 }
 
@@ -1937,6 +1938,7 @@ function handle_api() {
             'node' => 'نصب و ارتقای Node.js 20 LTS و PM2',
             'python_scrapers' => 'نصب Python 3 و پکیج‌های اسکرپینگ',
             'browser_deps' => 'نصب نیازمندی‌های مرورگرهای بدون سر (Puppeteer / Playwright)',
+            'ollama' => 'نصب Ollama و محیط مدل‌های محلی هوش مصنوعی',
             'all' => 'نصب کامل تمامی پیش‌نیازها و محیط‌های اجرایی سرور'
         ];
         $title = $titles[$comp] ?? 'نصب پیش‌نیازهای سرور';
@@ -2927,6 +2929,19 @@ function cli_install_component(array $job): int {
         cli_log("[Python] Installing advanced scraping & automation libraries...");
         $runCmd("sudo -n python3 -m pip install --break-system-packages --ignore-installed requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed requests curl_cffi cloudscraper undetected-chromedriver playwright selenium beautifulsoup4 lxml aiohttp httpx fastapi uvicorn python-dotenv fake-useragent basalam-sdk selectolax html5lib psutil");
         cli_log("✓ Python scraping packages installed successfully.");
+    }
+
+    if ($comp === 'ollama' || $comp === 'all') {
+        cli_log("[Ollama] Installing Ollama local AI runtime...");
+        $runCmd("curl -fsSL https://ollama.com/install.sh | sh 2>&1 || true");
+        $runCmd("systemctl enable ollama 2>/dev/null || true");
+        $runCmd("systemctl start ollama 2>/dev/null || true");
+        $ollamaVer = trim(sh_ok('ollama -v 2>/dev/null'));
+        if ($ollamaVer !== '') {
+            cli_log("✓ Ollama " . $ollamaVer . " installed successfully and daemon started on port 11434.");
+        } else {
+            cli_log("Ollama installer executed. If running in a container without systemd, run 'ollama serve &' manually.");
+        }
     }
 
     cli_log("=================================================");
@@ -4025,7 +4040,7 @@ async function renderDash(){
           </div>
           <button class="btn pri sm" id="dash-inst-all" title="نصب کامل تمامی پکیج‌های نود، پایتون و درایورها">⚡ نصب همگانی پیش‌نیازها</button>
         </div>
-        <div class="grid3" style="gap:10px;margin-top:12px">
+        <div class="grid4" style="gap:10px;margin-top:12px">
           <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
             <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
               <span>🟢 Node.js 20 LTS + PM2</span>
@@ -4049,6 +4064,14 @@ async function renderDash(){
             </div>
             <p class="hint" style="font-size:11px;margin:6px 0">کتابخانه‌های Headless Chrome و دورزدن Cloudflare</p>
             <button class="btn sm" style="width:100%" id="dash-inst-browser">🌐 نصب درایورهای مرورگر</button>
+          </div>
+          <div style="padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)">
+            <div style="font-weight:700;display:flex;justify-content:space-between;align-items:center">
+              <span>🦙 Ollama & هوش محلی</span>
+              <span class="tag ${tools.ollama?'ok':'warn'}">${tools.ollama?'✓ '+(toolsVer.ollama||'نصب شده'):'✗ نیاز به نصب'}</span>
+            </div>
+            <p class="hint" style="font-size:11px;margin:6px 0">مدل‌های Llama 3.2, Qwen 2.5 Coder, DeepSeek R1</p>
+            <button class="btn sm" style="width:100%" id="dash-inst-ollama">🦙 نصب Ollama سرور</button>
           </div>
         </div>
       </div>
@@ -4082,7 +4105,8 @@ async function renderDash(){
     `;
     const inNode=$('#dash-inst-node');if(inNode)inNode.onclick=async()=>{const d=await api('sys.install_component',{component:'node'});openJob(d.job,d.title);};
     const inPy=$('#dash-inst-py');if(inPy)inPy.onclick=async()=>{const d=await api('sys.install_component',{component:'python_scrapers'});openJob(d.job,d.title);};
-    const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.job,d.title);};
+    const inBr=$('#dash-inst-browser');if(inBr)inBr.onclick=async()=>{const d=await api('sys.install_component',{component:'browser_deps'});openJob(d.title?d.job:d.job,d.title);};
+    const inOllama=$('#dash-inst-ollama');if(inOllama)inOllama.onclick=async()=>{const d=await api('sys.install_component',{component:'ollama'});openJob(d.job,d.title);};
     const inAll=$('#dash-inst-all');if(inAll)inAll.onclick=async()=>{if(!await confirmDlg('نصب کامل تمامی پکیج‌های Node 20، Python 3 و درایورهای مرورگر آغاز شود؟'))return;const d=await api('sys.install_component',{component:'all'});openJob(d.job,d.title);};
     const rBtn=$('#dash-rescue-btn');
     if(rBtn)rBtn.onclick=async()=>{

@@ -20,7 +20,7 @@ from .database import (
     get_conversation_checkpoints, clear_conversation_checkpoints
 )
 from .models import Provider, ModelSpec
-from .providers import PROVIDER_STORE
+from .providers import PROVIDER_STORE, resolve_provider_endpoint_url
 from .workspaces import (
     get_active_workspace, set_active_workspace, list_workspace_files,
     safe_path, create_workspace_from_template, get_workspace_metrics,
@@ -1235,10 +1235,10 @@ async def _execute_model_diagnostic_test(
     connect_sec: float = 2.5
 ) -> Dict[str, Any]:
     base_url = p.url.rstrip("/")
+    direct_url = resolve_provider_endpoint_url(base_url, p.protocol)
     
     # 1. Direct Target Endpoint & Headers Construction
     if p.protocol == "anthropic":
-        direct_url = f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["x-api-key"] = mask_secret(api_key)
@@ -1251,7 +1251,6 @@ async def _execute_model_diagnostic_test(
             "temperature": 0.2
         }
     elif p.protocol == "ollama":
-        direct_url = f"{base_url}/api/chat" if not base_url.endswith("/chat") else base_url
         req_headers = {"Content-Type": "application/json"}
         req_body = {
             "model": m.id,
@@ -1259,7 +1258,6 @@ async def _execute_model_diagnostic_test(
             "stream": False
         }
     elif p.protocol == "azure":
-        direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["api-key"] = mask_secret(api_key)
@@ -1269,7 +1267,6 @@ async def _execute_model_diagnostic_test(
             "temperature": 0.2
         }
     else: # openai-compatible, mistral, cloudflare, openrouter
-        direct_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["Authorization"] = f"Bearer {mask_secret(api_key)}"

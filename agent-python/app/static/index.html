@@ -2262,6 +2262,7 @@
           <button class="btn btn-primary" onclick="openModelTestModal(true)">🧪 تست همه مدل‌ها</button>
           <button class="btn btn-ghost" onclick="copyTestResultsReport()" title="کپی نتایج تست تمام مدل‌های هوش مصنوعی (Markdown Table)">📋 کپی نتایج تست مدل‌ها</button>
           <button class="btn btn-ghost" onclick="openModelTestModal(false)">📊 جدول نتایج</button>
+          <button class="btn btn-ghost" onclick="openLocalModelModal()" style="color:var(--primary);font-weight:600;">🦙 راهنما و نصب مدل‌های محلی</button>
           <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 واردسازی JSON</button>
           <button class="btn btn-ghost" onclick="exportProvidersJson()">📤 خروجی JSON</button>
           <button class="btn btn-primary" onclick="openProviderModal()">+ افزودن ارائه‌دهنده</button>
@@ -2965,6 +2966,84 @@
   </div>
 </div>
 
+<!-- MODAL: LOCAL MODELS & OLLAMA INSTALLATION / SETUP GUIDE -->
+<div class="modal-backdrop" id="localModelModal">
+  <div class="modal-dialog" style="max-width:760px;width:95%;max-height:92vh;display:flex;flex-direction:column;">
+    <div class="modal-header" style="background:var(--bg-elevated);border-bottom:1px solid var(--border-subtle);padding:14px 20px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:24px;">🦙</span>
+        <div>
+          <h3 style="margin:0;font-size:16px;">راهنما و راه‌اندازی مدل‌های محلی (Local AI & Ollama)</h3>
+          <span style="font-size:11.5px;color:var(--text-muted);">اجرای مدل‌های هوش مصنوعی بدون نیاز به اینترنت و بدون هزینه روی سرور یا سیستم شخصی شما</span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeModal('localModelModal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:18px;gap:16px;overflow-y:auto;flex:1;">
+      
+      <!-- 1-Click Quick Add Providers -->
+      <div class="stat-card" style="background:rgba(99, 102, 241, 0.06);border:1px solid rgba(99, 102, 241, 0.2);">
+        <h4 style="margin:0 0 8px 0;font-size:13.5px;display:flex;align-items:center;gap:6px;">
+          <span>⚡</span> افزودن سریع و خودکار ارائه‌دهنده محلی (1-Click Presets)
+        </h4>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px 0;">
+          با کلیک روی هر گزینه، ارائه‌دهنده مربوطه همراه با مدل‌های پیش‌فرض و پروتکل هماهنگ فوراً به کاتالوگ شما اضافه می‌شود:
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="quickAddLocalProvider('ollama')">🦙 افزودن Ollama (127.0.0.1:11434)</button>
+          <button class="btn btn-ghost btn-sm" onclick="quickAddLocalProvider('lmstudio')">🤖 افزودن LM Studio (127.0.0.1:1234)</button>
+          <button class="btn btn-ghost btn-sm" onclick="quickAddLocalProvider('vllm')">🚀 افزودن vLLM / LocalAI (127.0.0.1:8000)</button>
+        </div>
+      </div>
+
+      <!-- Installation Steps -->
+      <div class="stat-card">
+        <h4 style="margin:0 0 10px 0;font-size:13.5px;">📦 دستورات نصب و اجرای Ollama</h4>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text-main);">۱. نصب Ollama روی سرور لینوکس / VPS:</div>
+            <pre style="background:var(--code-bg);padding:8px 12px;border-radius:6px;font-size:11.5px;overflow-x:auto;margin:0;font-family:monospace;user-select:all;cursor:pointer;" title="کلیک برای کپی" onclick="copySnippet('curl -fsSL https://ollama.com/install.sh | sh')">curl -fsSL https://ollama.com/install.sh | sh</pre>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text-main);">۲. دانلود و اجرای مدل‌های پیشنهادی (کم‌حجم و فوق‌سریع):</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">
+              <div style="background:var(--bg-elevated);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);">
+                <div style="font-size:11.5px;font-weight:700;">Llama 3.2 (3B) · عمومی و سریع</div>
+                <code style="font-size:10.5px;color:var(--primary);cursor:pointer;" onclick="copySnippet('ollama run llama3.2')">ollama run llama3.2</code>
+              </div>
+              <div style="background:var(--bg-elevated);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);">
+                <div style="font-size:11.5px;font-weight:700;">Qwen 2.5 Coder (7B) · کدنویسی تخصصی</div>
+                <code style="font-size:10.5px;color:var(--primary);cursor:pointer;" onclick="copySnippet('ollama run qwen2.5-coder:7b')">ollama run qwen2.5-coder:7b</code>
+              </div>
+              <div style="background:var(--bg-elevated);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);">
+                <div style="font-size:11.5px;font-weight:700;">DeepSeek R1 (8B) · استدلال عمیق</div>
+                <code style="font-size:10.5px;color:var(--primary);cursor:pointer;" onclick="copySnippet('ollama run deepseek-r1:8b')">ollama run deepseek-r1:8b</code>
+              </div>
+              <div style="background:var(--bg-elevated);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);">
+                <div style="font-size:11.5px;font-weight:700;">Mistral (7B) · متوازن و دقیق</div>
+                <code style="font-size:10.5px;color:var(--primary);cursor:pointer;" onclick="copySnippet('ollama run mistral')">ollama run mistral</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Test Card -->
+      <div class="stat-card">
+        <h4 style="margin:0 0 8px 0;font-size:13.5px;">🔍 بررسی زنده وضعیت Ollama روی سرور</h4>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="localOllamaTestUrl" class="input-control" value="http://127.0.0.1:11434" style="flex:1;min-width:200px;font-family:monospace;font-size:12px;">
+          <button class="btn btn-primary btn-sm" onclick="checkLocalOllamaStatus()">📡 بررسی اتصال سرور</button>
+        </div>
+        <div id="localOllamaStatusResult" style="margin-top:8px;font-size:12px;color:var(--text-muted);display:none;"></div>
+      </div>
+
+    </div>
+    <div class="modal-footer" style="padding:10px 18px;background:var(--bg-elevated);border-top:1px solid var(--border-subtle);display:flex;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="closeModal('localModelModal')">بستن</button>
+    </div>
+  </div>
+</div>
 <!-- MODAL: CREATE NEW PROJECT (Simplified with Advanced Settings Drawer) -->
 <div class="modal-backdrop" id="newProjectModal">
   <div class="modal-dialog" style="max-width:540px;">
@@ -4213,8 +4292,133 @@ async function handleImportProvidersSubmit(e) {
   }
 }
 
-function exportProvidersJson() {
-  window.location.href = '/api/providers/export';
+async function exportProvidersJson() {
+  try {
+    const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch('/api/providers/export', { headers });
+    if (!res.ok) throw new Error(`Export failed with HTTP ${res.status}`);
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `arena-providers-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('Export Error: ' + err.message);
+  }
+}
+
+function openLocalModelModal() {
+  if ($('#localOllamaStatusResult')) {
+    $('#localOllamaStatusResult').style.display = 'none';
+  }
+  openModal('localModelModal');
+}
+
+function copySnippet(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    alert('دستور در کلیپ‌بورد کپی شد:\n' + text);
+  }).catch(() => {
+    prompt('کپی دستور:', text);
+  });
+}
+
+async function quickAddLocalProvider(kind) {
+  let providerPayload = null;
+  if (kind === 'ollama') {
+    providerPayload = {
+      id: 'ollama',
+      name: 'Ollama (Local AI)',
+      vendor: 'ollama',
+      url: 'http://127.0.0.1:11434',
+      protocol: 'ollama',
+      enabled: true,
+      apiKey: '',
+      apiKeys: [],
+      priority: 10,
+      models: [
+        { id: 'llama3.2', name: 'Llama 3.2 (3B)', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true },
+        { id: 'qwen2.5-coder:7b', name: 'Qwen 2.5 Coder (7B)', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true },
+        { id: 'deepseek-r1:8b', name: 'DeepSeek R1 (8B)', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true },
+        { id: 'mistral', name: 'Mistral (7B)', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true }
+      ]
+    };
+  } else if (kind === 'lmstudio') {
+    providerPayload = {
+      id: 'lmstudio',
+      name: 'LM Studio (Local)',
+      vendor: 'lmstudio',
+      url: 'http://127.0.0.1:1234/v1',
+      protocol: 'openai-compatible',
+      enabled: true,
+      apiKey: 'lm-studio',
+      apiKeys: ['lm-studio'],
+      priority: 9,
+      models: [
+        { id: 'local-model', name: 'Active Loaded Model', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true }
+      ]
+    };
+  } else if (kind === 'vllm') {
+    providerPayload = {
+      id: 'vllm',
+      name: 'vLLM / LocalAI',
+      vendor: 'vllm',
+      url: 'http://127.0.0.1:8000/v1',
+      protocol: 'openai-compatible',
+      enabled: true,
+      apiKey: '',
+      apiKeys: [],
+      priority: 9,
+      models: [
+        { id: 'default', name: 'Default vLLM Model', toolCalling: true, vision: false, free: true, maxInputTokens: 128000, maxOutputTokens: 8192, enabled: true }
+      ]
+    };
+  }
+
+  if (providerPayload) {
+    try {
+      await api('/api/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(providerPayload)
+      });
+      closeModal('localModelModal');
+      await loadProvidersList();
+      renderChatProviders();
+      alert(`ارائه‌دهنده محلی ${providerPayload.name} با موفقیت به لیست اضافه شد!`);
+    } catch (err) {
+      alert('خطا در افزودن ارائه‌دهنده: ' + err.message);
+    }
+  }
+}
+
+async function checkLocalOllamaStatus() {
+  const url = $('#localOllamaTestUrl')?.value?.trim() || 'http://127.0.0.1:11434';
+  const out = $('#localOllamaStatusResult');
+  if (!out) return;
+  out.style.display = 'block';
+  out.innerHTML = `<span style="color:var(--primary)">📡 در حال بررسی وضعیت اتصال به ${esc(url)}...</span>`;
+
+  try {
+    const res = await api('/api/proxy/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url + '/api/tags' })
+    });
+    if (res.connected || res.status_code === 200) {
+      out.innerHTML = `<span style="color:var(--accent-green)">✓ سرور محلی Ollama فعال و پاسخگو است! (کد وضعیت: ${res.status_code || 200})</span>`;
+    } else {
+      out.innerHTML = `<span style="color:var(--danger)">✗ سرور Ollama در این آدرس پاسخگو نیست (${esc(res.error || 'خطای اتصال')}). لطفاً اطمینان حاصل کنید دیمن ollama با دستور <code>ollama serve</code> یا سرویس لینوکس در حال اجراست.</span>`;
+    }
+  } catch (err) {
+    out.innerHTML = `<span style="color:var(--danger)">✗ خطا در اتصال به سرور محلی: ${esc(err.message)}</span>`;
+  }
 }
 
 // -------------------------------------------------------------

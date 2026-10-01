@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.3 - Multi-Key Dict Extraction, Rich Diagnostic Field Preservation & Local Model/Ollama Setup
+
+- **Enriched Provider & Multi-Key Normalization (`app/providers.py`)**:
+  - Added support for object-formatted `apiKeys` arrays (e.g. `[{"key": "sk-...", "label": "Primary", "enabled": true}]`) extracting keys and maintaining multi-key rotation lists.
+  - Full model specification normalization: preserved rich diagnostic metadata (`tested`, `available`, `pricingMode`, `testDetails`, `endpointType`, `nonChat`, etc.) in `ModelSpec.extra` without validation failures.
+  - Resilient local defaults: when `ollama` or local providers have empty `models: []`, default models (`llama3.2`, `qwen2.5-coder:7b`, `deepseek-r1:8b`, `mistral`) are automatically seeded.
+  - Dynamic URL resolution (`resolve_provider_endpoint_url`): gracefully handles full completion URLs (e.g. `https://api.together.xyz/v1/chat/completions`), Anthropic `/v1/messages` endpoints, and Ollama `/api/chat` endpoints.
+- **Dedicated Local AI & Ollama Setup Guide (`static/index.html` & `webconsole.php`)**:
+  - Interactive modal (`#localModelModal`) with 1-click presets for **Ollama (127.0.0.1:11434)**, **LM Studio (127.0.0.1:1234)**, and **vLLM / LocalAI (127.0.0.1:8000)**.
+  - Quick-copy CLI commands for Linux VPS installation and lightweight recommended local models.
+  - Live local server connectivity checker pinging `/api/tags` and verifying local daemon health.
+  - WebConsole 1-click Ollama runtime installer component (`sys.install_component`) for seamless server setup.
+- **Test Suite Expansion**: Added automated pytest verification for user multi-provider rich exports and endpoint URL resolution (41/41 tests passing).
+
 ## 0.16.2 - Universal Resilient Provider Importer & Multi-Format JSON Normalizer
 
 - **Ultra-Flexible Provider Importer (`app/providers.py` & `static/index.html`)**:

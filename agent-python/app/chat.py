@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional, Tuple, AsyncGenerator
 
 from .models import Provider, ModelSpec
 from .config import get_proxy_url, get_proxy_config, get_raw_config
-from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER
+from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER, resolve_provider_endpoint_url
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
 from .workspaces import (
     get_active_workspace, get_conversation_references, list_reference_files,
@@ -150,8 +150,8 @@ async def call_provider_api(
             headers["Authorization"] = f"Bearer {api_key}"
 
     # Build endpoint URL and Body based on protocol
+    url = resolve_provider_endpoint_url(base_url, provider.protocol)
     if provider.protocol == "anthropic":
-        url = f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url
         system_msg = next((m["content"] for m in messages if m["role"] == "system"), "")
         user_msgs = [m for m in messages if m["role"] != "system"]
         body = {
@@ -162,14 +162,12 @@ async def call_provider_api(
             "temperature": 0.2
         }
     elif provider.protocol == "ollama":
-        url = f"{base_url}/api/chat" if not base_url.endswith("/chat") else base_url
         body = {
             "model": model.id,
             "messages": messages,
             "stream": False
         }
     else: # openai-compatible, mistral, azure, cloudflare, openrouter
-        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         body = {
             "model": model.id,
             "messages": messages,
@@ -425,8 +423,8 @@ async def stream_call_provider_api(
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
+    url = resolve_provider_endpoint_url(base_url, provider.protocol)
     if provider.protocol == "anthropic":
-        url = f"{base_url}/v1/messages" if not base_url.endswith("/messages") else base_url
         system_msg = next((m["content"] for m in messages if m["role"] == "system"), "")
         user_msgs = [m for m in messages if m["role"] != "system"]
         body = {
@@ -438,14 +436,12 @@ async def stream_call_provider_api(
             "stream": True
         }
     elif provider.protocol == "ollama":
-        url = f"{base_url}/api/chat" if not base_url.endswith("/chat") else base_url
         body = {
             "model": model.id,
             "messages": messages,
             "stream": True
         }
     else: # openai-compatible, mistral, azure, cloudflare, openrouter
-        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         body = {
             "model": model.id,
             "messages": messages,
