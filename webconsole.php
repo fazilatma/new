@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.1');
+define('WCP_VERSION', '2.9.3');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -568,6 +568,96 @@ function wcp_get_listening_ports(): array {
     return $ports;
 }
 
+function wcp_kill_pid_tree(int $pid, int $sig = 9) {
+    if ($pid <= 1 || $pid === getmypid()) return;
+    $pidsToKill = [$pid];
+    $queue = [$pid];
+    $childrenMap = [];
+
+    // 1. Try ps tool first
+    $psOut = @shell_exec("ps -eo pid,ppid --no-headers 2>/dev/null || (sudo -n ps -eo pid,ppid --no-headers 2>/dev/null)");
+    if ($psOut) {
+        foreach (explode("\n", trim($psOut)) as $line) {
+            $parts = preg_split('/\s+/', trim($line));
+            if (count($parts) >= 2) {
+                $p = (int)$parts[0];
+                $pp = (int)$parts[1];
+                if ($p > 1 && $pp > 0) {
+                    $childrenMap[$pp][] = $p;
+                }
+            }
+        }
+    }
+
+    // 2. Fallback or augment with /proc
+    if (empty($childrenMap)) {
+        foreach (glob('/proc/[0-9]*/stat') ?: [] as $statFile) {
+            $c = (string)@file_get_contents($statFile);
+            if ($c !== '' && preg_match('/^(\d+)\s+\((?:[^\)]+)\)\s+[A-Z]\s+(\d+)/', $c, $m)) {
+                $p = (int)$m[1];
+                $pp = (int)$m[2];
+                if ($p > 1 && $pp > 0) {
+                    $childrenMap[$pp][] = $p;
+                }
+            }
+        }
+    }
+
+    while (!empty($queue)) {
+        $parent = array_shift($queue);
+        if (!empty($childrenMap[$parent])) {
+            foreach ($childrenMap[$parent] as $child) {
+                if (!in_array($child, $pidsToKill, true) && $child !== getmypid()) {
+                    $pidsToKill[] = $child;
+                    $queue[] = $child;
+                }
+            }
+        }
+    }
+
+    // Reverse to kill children/grandchildren first, then parent
+    $pidsToKill = array_reverse($pidsToKill);
+    foreach ($pidsToKill as $kpid) {
+        if ($kpid > 1 && $kpid !== getmypid()) {
+            @shell_exec("kill -{$sig} -- -{$kpid} 2>/dev/null; kill -{$sig} {$kpid} 2>/dev/null; sudo -n kill -{$sig} -- -{$kpid} 2>/dev/null; sudo -n kill -{$sig} {$kpid} 2>/dev/null");
+        }
+    }
+}
+
+function wcp_detect_project_version(?string $dir): ?string {
+    if (empty($dir) || !is_dir($dir)) return null;
+    $vFile = $dir . '/VERSION';
+    if (is_file($vFile)) {
+        $v = trim((string)@file_get_contents($vFile));
+        if ($v !== '') return 'v' . ltrim($v, 'v');
+    }
+    $pkgFile = $dir . '/package.json';
+    if (is_file($pkgFile)) {
+        $pkg = @json_decode((string)@file_get_contents($pkgFile), true);
+        if (!empty($pkg['version'])) return 'v' . ltrim((string)$pkg['version'], 'v');
+    }
+    $pyproject = $dir . '/pyproject.toml';
+    if (is_file($pyproject)) {
+        $toml = (string)@file_get_contents($pyproject);
+        if (preg_match('/version\s*=\s*["\']([^"\']+)["\']/', $toml, $m)) {
+            return 'v' . ltrim($m[1], 'v');
+        }
+    }
+    $cfgFile = $dir . '/app/config.py';
+    if (is_file($cfgFile)) {
+        $cfg = (string)@file_get_contents($cfgFile);
+        if (preg_match('/APP_VERSION\s*=\s*["\']([^"\']+)["\']/', $cfg, $m)) {
+            return 'v' . ltrim($m[1], 'v');
+        }
+    }
+    $depJson = $dir . '/.deploy.json';
+    if (is_file($depJson)) {
+        $meta = @json_decode((string)@file_get_contents($depJson), true);
+        if (!empty($meta['version'])) return 'v' . ltrim((string)$meta['version'], 'v');
+    }
+    return null;
+}
+
 function wcp_kill_port($port) {
     $port = (int)$port;
     if ($port <= 0 || $port > 65535) return;
@@ -578,12 +668,12 @@ function wcp_kill_port($port) {
     if ($ss && preg_match_all("/pid=(\d+)/", $ss, $m)) {
         foreach ($m[1] as $pid) {
             $pid = (int)$pid;
-            if ($pid > 0 && $pid !== getmypid()) {
+            if ($pid > 1 && $pid !== getmypid()) {
                 $svc = wcp_get_pid_systemd_service($pid);
                 if ($svc && $svc !== 'systemd.service') {
                     @shell_exec("systemctl stop " . escapeshellarg($svc) . " 2>/dev/null || sudo -n systemctl stop " . escapeshellarg($svc) . " 2>/dev/null");
                 }
-                @shell_exec("kill -9 {$pid} 2>/dev/null || (sudo -n kill -9 {$pid} 2>/dev/null)");
+                wcp_kill_pid_tree($pid, 9);
             }
         }
     }
@@ -610,12 +700,12 @@ function wcp_kill_port($port) {
                     if ($target && strpos($target, "socket:[{$inode}]") !== false) {
                         if (preg_match("#^/proc/(\d+)/#", $fd, $pm)) {
                             $spid = (int)$pm[1];
-                            if ($spid > 0 && $spid !== getmypid()) {
+                            if ($spid > 1 && $spid !== getmypid()) {
                                 $svc = wcp_get_pid_systemd_service($spid);
                                 if ($svc && $svc !== 'systemd.service') {
                                     @shell_exec("systemctl stop " . escapeshellarg($svc) . " 2>/dev/null || sudo -n systemctl stop " . escapeshellarg($svc) . " 2>/dev/null");
                                 }
-                                @shell_exec("kill -9 {$spid} 2>/dev/null || (sudo -n kill -9 {$spid} 2>/dev/null)");
+                                wcp_kill_pid_tree($spid, 9);
                             }
                         }
                     }
@@ -627,56 +717,97 @@ function wcp_kill_port($port) {
 
 function wcp_kill_directory_procs(string $dir) {
     $dir = rtrim(realpath($dir) ?: $dir, '/');
-    if (empty($dir) || $dir === '/' || $dir === '/root' || $dir === '/home') return;
-    @shell_exec("pkill -9 -f " . escapeshellarg($dir) . " 2>/dev/null");
+    if (empty($dir) || $dir === '/' || $dir === '/root' || $dir === '/home' || $dir === '/var' || $dir === '/var/www') return;
+
+    @shell_exec("pkill -9 -f " . escapeshellarg($dir) . " 2>/dev/null || (sudo -n pkill -9 -f " . escapeshellarg($dir) . " 2>/dev/null)");
+    @shell_exec("fuser -k -9 -m " . escapeshellarg($dir) . " 2>/dev/null || (sudo -n fuser -k -9 -m " . escapeshellarg($dir) . " 2>/dev/null)");
+
     $myPid = getmypid();
     $procDirs = glob("/proc/[0-9]*") ?: [];
     foreach ($procDirs as $pDir) {
         $pid = (int)basename($pDir);
-        if ($pid <= 0 || $pid === $myPid) continue;
+        if ($pid <= 1 || $pid === $myPid) continue;
+
         $cwd = @readlink($pDir . '/cwd');
         if ($cwd && ($cwd === $dir || strpos($cwd, $dir . '/') === 0)) {
-            @shell_exec("kill -9 {$pid} 2>/dev/null");
+            wcp_kill_pid_tree($pid, 9);
             continue;
         }
-        $cmdline = @file_get_contents($pDir . '/cmdline');
-        if ($cmdline && strpos($cmdline, $dir) !== false) {
-            @shell_exec("kill -9 {$pid} 2>/dev/null");
+
+        $cmdline = (string)@file_get_contents($pDir . '/cmdline');
+        if ($cmdline !== '' && strpos($cmdline, $dir) !== false) {
+            wcp_kill_pid_tree($pid, 9);
+            continue;
+        }
+
+        $fds = @glob($pDir . '/fd/*') ?: [];
+        foreach ($fds as $fd) {
+            $target = @readlink($fd);
+            if ($target && strpos($target, $dir . '/') === 0) {
+                wcp_kill_pid_tree($pid, 9);
+                break;
+            }
         }
     }
 }
 
 function job_stop(array $job) {
-    $pid = (int)$job['pid'];
+    $pid = (int)($job['pid'] ?? 0);
     @wcp_put_contents(JOBS_DIR . '/' . $job['id'] . '.stop', "1\n", false);
     $childPidFile = JOBS_DIR . '/' . $job['id'] . '.child_pid';
     $childPid = 0;
     if (is_file($childPidFile)) {
         $childPid = (int)trim((string)@file_get_contents($childPidFile));
     }
-    $k = is_executable('/bin/kill') ? '/bin/kill' : 'kill';
-    if ($childPid > 0 && job_pid_alive($childPid)) {
-        sh($k . ' -TERM -- -' . $childPid . ' 2>/dev/null; ' . $k . ' -TERM ' . $childPid . ' 2>/dev/null');
+    
+    // Kill child process tree first
+    if ($childPid > 1) {
+        wcp_kill_pid_tree($childPid, 15);
+        usleep(100000);
+        wcp_kill_pid_tree($childPid, 9);
+        @unlink($childPidFile);
     }
-    if ($pid > 0 && wcp_job_alive($job)) {
-        sh($k . ' -TERM -- -' . $pid . ' 2>/dev/null; ' . $k . ' -TERM ' . $pid . ' 2>/dev/null');
-        for ($i = 0; $i < 15; $i++) {
+
+    // Kill job main runner process tree
+    if ($pid > 1) {
+        wcp_kill_pid_tree($pid, 15);
+        for ($i = 0; $i < 10; $i++) {
             if (!job_pid_alive($pid)) break;
-            usleep(200000);
+            usleep(150000);
         }
-        if (wcp_job_alive($job)) {
-            sh($k . ' -KILL -- -' . $pid . ' 2>/dev/null; ' . $k . ' -KILL ' . $pid . ' 2>/dev/null');
+        if (job_pid_alive($pid)) {
+            wcp_kill_pid_tree($pid, 9);
         }
     }
-    if ($childPid > 0 && job_pid_alive($childPid)) {
-        sh($k . ' -KILL -- -' . $childPid . ' 2>/dev/null; ' . $k . ' -KILL ' . $childPid . ' 2>/dev/null');
-    }
+
     if (($job['type'] ?? '') === 'service' && !empty($job['params']['project_id'])) {
         $p = proj_find(proj_all(), $job['params']['project_id']);
         if ($p) {
-            if (!empty($p['port'])) wcp_kill_port($p['port']);
             $deployDir = proj_resolve_deploy_path($p);
-            if (!empty($deployDir)) wcp_kill_directory_procs($deployDir);
+            $portsToFree = [];
+            if (!empty($p['port']) && ctype_digit((string)$p['port'])) {
+                $portsToFree[] = (int)$p['port'];
+            }
+            if (!empty($p['start_cmd']) && preg_match_all('/(?:--port|-p|\:)\s*(\d{2,5})|PORT\s*=\s*(\d{2,5})/i', $p['start_cmd'], $pm)) {
+                foreach (array_merge($pm[1], $pm[2]) as $detectedPort) {
+                    if ($detectedPort && ctype_digit($detectedPort)) $portsToFree[] = (int)$detectedPort;
+                }
+            }
+            if (!empty($deployDir) && is_dir($deployDir)) {
+                $envFile = $deployDir . '/.env';
+                if (is_file($envFile)) {
+                    $envContent = (string)@file_get_contents($envFile);
+                    if (preg_match_all('/(?:PORT|PORT_NUMBER|SCRAPER_PORT|DEPLOYER_UI_PORT|FLASK_RUN_PORT|UVICORN_PORT|SERVER_PORT|WEB_PORT)\s*=\s*(\d{2,5})/i', $envContent, $epm)) {
+                        foreach ($epm[1] as $ep) $portsToFree[] = (int)$ep;
+                    }
+                }
+            }
+            foreach (array_unique($portsToFree) as $pt) {
+                if ($pt > 0 && $pt < 65536) wcp_kill_port($pt);
+            }
+            if (!empty($deployDir)) {
+                wcp_kill_directory_procs($deployDir);
+            }
         }
     }
     wcp_put_contents(JOBS_DIR . '/' . $job['id'] . '.exit', "130\n", false);
@@ -1207,10 +1338,11 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     cli_log('Deploying ' . $p['name'] . ' -> ' . $dest);
     if (is_dir($repo . '/.git')) {
         $g = 'git -c safe.directory=* -C ' . esc($repo) . ' ';
-        cli_checked($g . 'remote set-url origin ' . esc(proj_repo_url($p)));
-        cli_run($g . 'fetch origin ' . esc($branch) . ' && ' . $g . 'checkout --detach --force FETCH_HEAD && ' . $g . 'clean -fd', $rc);
+        cli_run($g . 'remote set-url origin ' . esc(proj_repo_url($p)), $rcRemote);
+        $fetchCmd = $g . 'fetch --depth=1 origin ' . esc($branch) . ' && ' . $g . 'reset --hard FETCH_HEAD && ' . $g . 'clean -fd';
+        cli_run($fetchCmd, $rc);
         if ($rc !== 0) {
-            cli_log('[git] Fetch failed. Re-cloning repository...');
+            cli_log('[git] Fetch/Reset failed. Re-cloning repository...');
             sh('rm -rf -- ' . esc($repo));
         }
     }
@@ -1351,10 +1483,18 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
         try { cli_checked('bash ' . esc($f)); } finally { @unlink($f); }
         cli_log($label . ' completed');
     }
+    $appVer = wcp_detect_project_version($dest) ?: wcp_detect_project_version($src);
     $list = proj_all();
     foreach ($list as &$x) {
         if ($x['id'] === $p['id']) {
-            $x['last_deploy'] = ['time' => date('c'), 'commit' => $commit, 'status' => 'ok'];
+            $x['last_deploy'] = [
+                'time' => date('c'),
+                'commit' => $commit,
+                'version' => $appVer,
+                'branch' => $branch,
+                'status' => 'ok'
+            ];
+            $x['app_version'] = $appVer;
             $p = $x;
         }
     }
@@ -1363,6 +1503,7 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     wcp_put_contents($dest . '/.deploy.json', json_encode([
         'project' => $p['name'],
         'commit' => $commit,
+        'version' => $appVer,
         'branch' => $branch,
         'time' => date('c'),
         'by' => 'webconsole'
@@ -1372,7 +1513,38 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
 function proj_service_job(array $p): ?array {
     $jobs=[];foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)@file_get_contents($f),true);if(($j['type']??'')==='service'&&($j['params']['project_id']??'')===$p['id'])$jobs[]=$j;}usort($jobs,fn($a,$b)=>strcmp($b['created'],$a['created']));foreach($jobs as$j)if(job_status($j)['status']==='running')return $j;return $jobs[0]??null;
 }
-function public_project(array $p): array {$p['has_token_hint']=!empty($p['auth_token']);unset($p['auth_token']);return $p;}
+function public_project(array $p): array {
+    $p['has_token_hint'] = !empty($p['auth_token']);
+    unset($p['auth_token']);
+    $deployDir = proj_resolve_deploy_path($p);
+    
+    $liveCommit = $p['last_deploy']['commit'] ?? '';
+    $liveBranch = $p['branch'] ?? 'main';
+    $appVer = $p['last_deploy']['version'] ?? ($p['app_version'] ?? '');
+    
+    if (!empty($deployDir) && is_dir($deployDir)) {
+        if (empty($appVer)) {
+            $appVer = wcp_detect_project_version($deployDir);
+        }
+        if (is_file($deployDir . '/.deploy.json')) {
+            $depMeta = @json_decode((string)@file_get_contents($deployDir . '/.deploy.json'), true);
+            if (!empty($depMeta['commit']) && empty($liveCommit)) $liveCommit = $depMeta['commit'];
+            if (!empty($depMeta['branch'])) $liveBranch = $depMeta['branch'];
+            if (!empty($depMeta['version']) && empty($appVer)) $appVer = $depMeta['version'];
+        }
+        if (is_dir($deployDir . '/.git')) {
+            $gitCommit = trim(sh_ok('git -c safe.directory=* -C ' . esc($deployDir) . ' rev-parse --short HEAD 2>/dev/null'));
+            if ($gitCommit !== '') $liveCommit = $gitCommit;
+            $gitBranch = trim(sh_ok('git -c safe.directory=* -C ' . esc($deployDir) . ' rev-parse --abbrev-ref HEAD 2>/dev/null'));
+            if ($gitBranch !== '' && $gitBranch !== 'HEAD') $liveBranch = $gitBranch;
+        }
+    }
+    
+    $p['app_version'] = $appVer;
+    $p['live_commit'] = $liveCommit;
+    $p['live_branch'] = $liveBranch;
+    return $p;
+}
 function sysinfo(): array {
     $mem=['total'=>0,'avail'=>0];$swap=['total'=>0,'free'=>0];
     foreach(@file('/proc/meminfo')?:[]as$l){
@@ -2086,13 +2258,28 @@ function handle_api() {
         $pollRes=null;if(!empty($p['auto_update'])){proj_install_cron();$pollRes=proj_poll_auto_updates();}
         jout(true,['project'=>public_project($p),'auto_update'=>$p['auto_update'],'poll'=>$pollRes]);
     case 'proj.check_update':
-        $id=(string)($in['id']??'');$p=proj_find(proj_all(),$id);if(!$p)jout(false,null,'Project not found');
-        $remote=proj_check_remote_commit($p);$local=$p['last_deploy']['commit']??'';
-        if(empty($local)&&!empty($p['deploy_path'])&&is_dir(safe_path($p['deploy_path']))){
-            $local=trim(sh_ok('git -c safe.directory=* -C '.esc(safe_path($p['deploy_path'])).' rev-parse --short HEAD 2>/dev/null'));
+        $id = (string)($in['id'] ?? '');
+        $p = proj_find(proj_all(), $id);
+        if (!$p) jout(false, null, 'Project not found');
+        $deployDir = proj_resolve_deploy_path($p);
+        $remote = proj_check_remote_commit($p);
+        $local = $p['last_deploy']['commit'] ?? '';
+        if (empty($local) && !empty($deployDir) && is_dir($deployDir)) {
+            $local = trim(sh_ok('git -c safe.directory=* -C ' . esc($deployDir) . ' rev-parse --short HEAD 2>/dev/null'));
         }
-        $hasUpdate=($remote&&($local===''||substr($remote,0,7)!==substr($local,0,7)));
-        jout(true,['remote_commit'=>$remote,'local_commit'=>$local,'has_update'=>$hasUpdate,'branch'=>$p['branch']?:'main']);
+        if (empty($local) && !empty($deployDir) && is_file($deployDir . '/.deploy.json')) {
+            $depMeta = @json_decode((string)@file_get_contents($deployDir . '/.deploy.json'), true);
+            if (!empty($depMeta['commit'])) $local = $depMeta['commit'];
+        }
+        $hasUpdate = ($remote && ($local === '' || substr($remote, 0, 7) !== substr($local, 0, 7)));
+        $appVer = wcp_detect_project_version($deployDir);
+        jout(true, [
+            'remote_commit' => $remote,
+            'local_commit' => $local,
+            'has_update' => $hasUpdate,
+            'branch' => $p['branch'] ?: 'main',
+            'app_version' => $appVer
+        ]);
     case 'proj.poll_auto_updates':
         jout(true,proj_poll_auto_updates());
     case 'proj.install_cron':
@@ -2506,31 +2693,81 @@ function cli_start_service(array $p) {
 
 function cli_stop_service(string $projectId) {
     $p = proj_find(proj_all(), $projectId);
+    $deployDir = $p ? proj_resolve_deploy_path($p) : '';
+
+    // 1. Collect all candidate ports for this project
+    $portsToFree = [];
+    if ($p) {
+        if (!empty($p['port']) && ctype_digit((string)$p['port'])) {
+            $portsToFree[] = (int)$p['port'];
+        }
+        if (!empty($p['start_cmd']) && preg_match_all('/(?:--port|-p|\:)\s*(\d{2,5})|PORT\s*=\s*(\d{2,5})/i', $p['start_cmd'], $pm)) {
+            foreach (array_merge($pm[1], $pm[2]) as $detectedPort) {
+                if ($detectedPort && ctype_digit($detectedPort)) $portsToFree[] = (int)$detectedPort;
+            }
+        }
+        if (!empty($deployDir) && is_dir($deployDir)) {
+            $envFile = $deployDir . '/.env';
+            if (is_file($envFile)) {
+                $envContent = (string)@file_get_contents($envFile);
+                if (preg_match_all('/(?:PORT|PORT_NUMBER|SCRAPER_PORT|DEPLOYER_UI_PORT|FLASK_RUN_PORT|UVICORN_PORT|SERVER_PORT|WEB_PORT)\s*=\s*(\d{2,5})/i', $envContent, $epm)) {
+                    foreach ($epm[1] as $ep) $portsToFree[] = (int)$ep;
+                }
+            }
+            foreach (glob($deployDir . '/*.py') ?: [] as $pyf) {
+                $pyc = (string)@file_get_contents($pyf);
+                if (preg_match_all('/(?:port\s*=\s*|PORT\s*=\s*)(\d{2,5})/i', $pyc, $spm)) {
+                    foreach ($spm[1] as $sp) $portsToFree[] = (int)$sp;
+                }
+            }
+        }
+    }
+
+    // 2. Kill all background jobs and child processes matching this project
     foreach (glob(JOBS_DIR . '/*.json') ?: [] as $f) {
         $j = json_decode((string)@file_get_contents($f), true);
-        if (($j['type'] ?? '') === 'service' && ($j['params']['project_id'] ?? '') === $projectId) {
+        if (($j['params']['project_id'] ?? '') === $projectId) {
             $childPidFile = JOBS_DIR . '/' . $j['id'] . '.child_pid';
             if (is_file($childPidFile)) {
                 $cpid = (int)trim((string)@file_get_contents($childPidFile));
-                if ($cpid > 0 && job_pid_alive($cpid)) {
-                    @sh('kill -9 -- -' . $cpid . ' 2>/dev/null; kill -9 ' . $cpid . ' 2>/dev/null');
+                if ($cpid > 1) {
+                    wcp_kill_pid_tree($cpid, 9);
                 }
                 @unlink($childPidFile);
             }
-            if (job_status($j)['status'] === 'running') {
-                job_stop($j);
+            $jobPid = (int)($j['pid'] ?? 0);
+            if ($jobPid > 1) {
+                wcp_kill_pid_tree($jobPid, 9);
             }
+            @wcp_put_contents(JOBS_DIR . '/' . $j['id'] . '.stop', "1\n", false);
+            @wcp_put_contents(JOBS_DIR . '/' . $j['id'] . '.exit', "130\n", false);
         }
     }
-    if ($p) {
-        $deployDir = proj_resolve_deploy_path($p);
-        if (!empty($deployDir)) {
-            wcp_kill_directory_procs($deployDir);
-        }
-        if (!empty($p['port'])) {
-            wcp_kill_port($p['port']);
-        }
+
+    // 3. Clean up CLI runner script and pid files
+    $cliPidFile = CACHE_DIR . '/svc-' . $projectId . '.pid';
+    if (is_file($cliPidFile)) {
+        $cliPid = (int)trim((string)@file_get_contents($cliPidFile));
+        if ($cliPid > 1) wcp_kill_pid_tree($cliPid, 9);
+        @unlink($cliPidFile);
     }
+    foreach (glob(CACHE_DIR . '/svc-run-*' . $projectId . '*.sh') ?: [] as $rsh) {
+        @unlink($rsh);
+    }
+
+    // 4. Terminate any PM2 process for this project
+    if ($p && which('pm2')) {
+        @shell_exec('pm2 delete ' . escapeshellarg($p['name']) . ' 2>/dev/null || pm2 stop ' . escapeshellarg($p['name']) . ' 2>/dev/null');
+    }
+
+    // 5. Sweep and kill all candidate ports and directory processes
+    foreach (array_unique($portsToFree) as $pt) {
+        if ($pt > 0 && $pt < 65536) wcp_kill_port($pt);
+    }
+    if (!empty($deployDir)) {
+        wcp_kill_directory_procs($deployDir);
+    }
+
     usleep(250000);
 }
 
@@ -2696,7 +2933,13 @@ function cli_service(array $job): int {
             @chmod($runner, 0755);
             $started = microtime(true);
             cli_log('Starting service attempt ' . (++$attempt));
-            $cmdArr = which('nice') ? ['nice', '-n', '10', 'bash', $runner] : ['bash', $runner];
+            $setsidBin = which('setsid') ? which_path('setsid') : '';
+            $niceBin = which('nice') ? which_path('nice') : '';
+            if ($setsidBin !== '') {
+                $cmdArr = $niceBin !== '' ? [$setsidBin, $niceBin, '-n', '10', 'bash', $runner] : [$setsidBin, 'bash', $runner];
+            } else {
+                $cmdArr = $niceBin !== '' ? [$niceBin, '-n', '10', 'bash', $runner] : ['bash', $runner];
+            }
             $ph = proc_open($cmdArr, [0 => ['file', '/dev/null', 'r'], 1 => ['file', $job['log'], 'a'], 2 => ['file', $job['log'], 'a']], $pipes);
             if (!is_resource($ph)) throw new RuntimeException('Cannot start service');
             $st = proc_get_status($ph);
@@ -2870,9 +3113,8 @@ function cli_service(array $job): int {
     } finally {
         if ($ph && is_resource($ph)) {
             $st = proc_get_status($ph);
-            if ($st['running']) {
-                $k = is_executable('/bin/kill') ? '/bin/kill' : 'kill';
-                if ($st['pid']) sh($k . ' -KILL -- -' . $st['pid'] . ' 2>/dev/null; ' . $k . ' -KILL ' . $st['pid'] . ' 2>/dev/null');
+            if (!empty($st['pid'])) {
+                wcp_kill_pid_tree((int)$st['pid'], 9);
             }
             proc_close($ph);
         }
@@ -5419,12 +5661,15 @@ function getProjectWebUrl(p){
 async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-cron" title="فعال‌سازی دیده‌بان کران‌جاب لینوکس برای آپدیت خودکار حتی در حالت بسته بودن مرورگر">⏰ دیده‌بان کران‌جاب (۱ دقیقه‌ای)</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><button class="btn" id="proj-ports-btn" title="مشاهده و آزادسازی پورت‌های شبکه">🔌 پورت‌های فعال سرور</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 (Direct Server)</option><option value="scraper4-deployer">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>{
   const isRunning=p.service?.status==='running';
   const webUrl=getProjectWebUrl(p);
+  const commitStr=p.live_commit||p.last_deploy?.commit||'';
+  const verStr=p.app_version||p.last_deploy?.version||'';
   return `
   <div class="card project-card compact-proj-card" style="padding:14px 16px;margin-bottom:14px;border-right: 5px solid ${isRunning?'var(--ok)':'var(--line2)'};background:var(--panel)">
     <div class="proj-card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="font-size:20px">${p.type==='python'?'🐍':p.type==='php'?'🐘':p.type==='node'?'⚡':p.type==='static'?'📄':'📦'}</span>
         <h3 style="margin:0;font-size:16px;font-weight:700">${esc(p.name)}</h3>
+        ${verStr?`<span class="tag ok" style="font-weight:700" title="نسخه اپلیکیشن">📦 ${esc(verStr)}</span>`:''}
         <span class="tag ${isRunning?'ok':'warn'}" style="font-weight:700">${isRunning?`🟢 فعال روی پورت ${esc(p.port||'8888')}`:'⚪ متوقف'}</span>
         <span class="tag acc">${(p.type||'other').toUpperCase()}</span>
         ${p.auto_update?`<span class="tag ok" title="بررسی خودکار هر ${(p.auto_update_interval||60)} ثانیه">🔄 آپدیت خودکار (${Math.round((p.auto_update_interval||60)/60)}د)</span>`:`<span class="tag" style="opacity:0.65">⏸ آپدیت خودکار خاموش</span>`}
@@ -5441,16 +5686,17 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
     <!-- Compact Details Grid -->
     <div style="background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px">
-        <div><span style="color:var(--muted)">🌿 ریپو:</span> <span class="ltr" style="font-family:monospace;font-weight:600">${esc(p.repo_url)}</span> <span class="tag sm ok">شاخه: ${esc(p.branch||'main')}</span>${p.subfolder?` <span class="tag sm">📁 ${esc(p.subfolder)}</span>`:''}</div>
+        <div><span style="color:var(--muted)">🌿 ریپو:</span> <span class="ltr" style="font-family:monospace;font-weight:600">${esc(p.repo_url)}</span> <span class="tag sm ok">شاخه: ${esc(p.live_branch||p.branch||'main')}</span>${p.subfolder?` <span class="tag sm">📁 ${esc(p.subfolder)}</span>`:''}</div>
         <div><span style="color:var(--muted)">📂 مسیر:</span> <span class="ltr" style="font-family:monospace">${esc(p.deploy_path||'—')}</span>${p.deploy_path?` <button class="btn mini" style="padding:1px 6px;font-size:11px" onclick="copyText('${esc(p.deploy_path)}','مسیر کپی شد')">📋 کپی</button>`:''}</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px;margin-top:4px">
         <div><span style="color:var(--muted)">⚙️ پورت:</span> <b>${esc(p.port||'—')}</b> | <span style="color:var(--muted)">فرمان:</span> <code class="ltr" style="background:rgba(0,0,0,0.2);padding:1px 5px;border-radius:4px">${esc(p.start_cmd||'—')}</code></div>
         <div>
           <span style="color:var(--muted)">🚀 وضعیت دیپلوی:</span>
-          ${p.last_deploy?`
-            <span class="proj-commit-pill">🔖 ${esc(p.last_deploy.commit||'نامشخص')}</span>
-            <span style="color:var(--muted);font-size:11.5px">(${fmtDate(p.last_deploy.time)})</span>
+          ${commitStr||p.last_deploy?`
+            <span class="proj-commit-pill">🔖 کامیت: ${esc(commitStr||'نامشخص')}</span>
+            ${verStr?`<span class="proj-commit-pill" style="background:rgba(99,102,241,0.15);color:var(--acc2);border:1px solid rgba(99,102,241,0.3)">🏷️ ${esc(verStr)}</span>`:''}
+            ${p.last_deploy?.time?`<span style="color:var(--muted);font-size:11.5px">(${fmtDate(p.last_deploy.time)})</span>`:''}
           `:'<span style="color:var(--warn)">دیپلوی نشده</span>'}
         </div>
       </div>

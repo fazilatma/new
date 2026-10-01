@@ -10,7 +10,7 @@
 #
 # Supports: Android Termux, GitHub Codespaces, Debian, Ubuntu, CentOS, RHEL,
 #           Rocky Linux, AlmaLinux, Fedora, Alpine Linux, Arch Linux
-# Version: 2.8.8 | Repository: fazilatma/new
+# Version: 2.9.3 | Repository: fazilatma/new
 # ==============================================================================
 
 set -euo pipefail

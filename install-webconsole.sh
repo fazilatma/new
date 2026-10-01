@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # WebConsole Pro - Universal Linux 1-Click VPS Auto-Installer
-# Repository: fazilatma/new | Version: 1.6.5
+# Repository: fazilatma/new | Version: 2.9.3
 # Supports: Debian, Ubuntu, Linux Mint, CentOS, RHEL, Rocky Linux,
 #           AlmaLinux, Fedora, Alpine Linux, Arch Linux
 # ==============================================================================

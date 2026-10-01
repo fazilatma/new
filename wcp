@@ -3,7 +3,7 @@
 # WebConsole Pro Universal CLI Tool (wcp)
 # Supports: All Linux Distributions (Debian, Ubuntu, CentOS, RHEL, Rocky,
 #           AlmaLinux, Fedora, Alpine, Arch) and GitHub Codespaces
-# Version: 1.7.0 | Repository: fazilatma/new
+# Version: 2.9.3 | Repository: fazilatma/new
 # ==============================================================================
 
 set -eo pipefail
@@ -144,7 +144,7 @@ check_auto_serve() {
 banner() {
     echo -e "${CLR_CYAN}${CLR_BOLD}"
     echo "================================================================================"
-    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v2.9.2)                     "
+    echo "       🚀 WebConsole Pro Universal CLI Manager (wcp v2.9.3)                     "
     echo "================================================================================"
     echo -e "${CLR_RESET}"
 }
@@ -361,10 +361,12 @@ cmd_stop_proj() {
         return 1
     fi
     python3 -c "
-import json, os, subprocess
+import json, os, subprocess, glob, re
 
 pfile = '$PROJECTS_JSON'
 cache_dir = '$CACHE_DIR'
+data_dir = '$WCP_DATA_DIR'
+jobs_dir = os.path.join(data_dir, 'jobs')
 target = '$target'.strip()
 
 if not os.path.exists(pfile): exit(1)
@@ -378,19 +380,69 @@ if not matched:
 proj = matched[0]
 pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
 
+# 1. Kill background job process trees
+if os.path.exists(jobs_dir):
+    for jf in glob.glob(os.path.join(jobs_dir, '*.json')):
+        try:
+            with open(jf) as f: jdata = json.load(f)
+            if jdata.get('params', {}).get('project_id') == proj['id']:
+                jid = jdata.get('id', '')
+                cpid_file = os.path.join(jobs_dir, f'{jid}.child_pid')
+                if os.path.exists(cpid_file):
+                    try:
+                        with open(cpid_file) as pf:
+                            cpid = pf.read().strip()
+                            if cpid.isdigit() and int(cpid) > 1:
+                                subprocess.run(f'kill -9 -- -{cpid} 2>/dev/null; kill -9 {cpid} 2>/dev/null; sudo -n kill -9 -- -{cpid} 2>/dev/null; sudo -n kill -9 {cpid} 2>/dev/null', shell=True)
+                    except: pass
+                    try: os.remove(cpid_file)
+                    except: pass
+                jpid = jdata.get('pid')
+                if jpid and str(jpid).isdigit() and int(jpid) > 1:
+                    subprocess.run(f'kill -9 -- -{jpid} 2>/dev/null; kill -9 {jpid} 2>/dev/null; sudo -n kill -9 -- -{jpid} 2>/dev/null; sudo -n kill -9 {jpid} 2>/dev/null', shell=True)
+                with open(os.path.join(jobs_dir, f'{jid}.stop'), 'w') as sf: sf.write('1\n')
+                with open(os.path.join(jobs_dir, f'{jid}.exit'), 'w') as ef: ef.write('130\n')
+        except: pass
+
+# 2. Kill runner pid
 if os.path.exists(pid_file):
-    with open(pid_file) as pf:
-        val = pf.read().strip()
-        if val.isdigit():
-            subprocess.run(['kill', '-9', val], stderr=subprocess.DEVNULL)
-            subprocess.run(['pkill', '-P', val], stderr=subprocess.DEVNULL)
+    try:
+        with open(pid_file) as pf:
+            val = pf.read().strip()
+            if val.isdigit() and int(val) > 1:
+                subprocess.run(f'kill -9 -- -{val} 2>/dev/null; kill -9 {val} 2>/dev/null; pkill -9 -P {val} 2>/dev/null; sudo -n kill -9 {val} 2>/dev/null', shell=True)
+    except: pass
     try: os.remove(pid_file)
     except: pass
 
-if proj.get('port'):
-    subprocess.run(f'fuser -k {proj[\"port\"]}/tcp', shell=True, stderr=subprocess.DEVNULL)
+# 3. Terminate ports
+ports_to_kill = set()
+if proj.get('port') and str(proj['port']).isdigit():
+    ports_to_kill.add(int(proj['port']))
 
-print(f'\033[1;33m✓ Project \"{proj.get(\"name\")}\" stopped.\033[0m')
+start_cmd = proj.get('start_cmd', '')
+for m in re.findall(r'(?:--port|-p|\:)\s*(\d{2,5})|PORT\s*=\s*(\d{2,5})', start_cmd, re.I):
+    for group in m:
+        if group and group.isdigit(): ports_to_kill.add(int(group))
+
+deploy_dir = proj.get('deploy_path', '')
+if deploy_dir and os.path.isdir(deploy_dir):
+    env_file = os.path.join(deploy_dir, '.env')
+    if os.path.exists(env_file):
+        try:
+            with open(env_file) as ef:
+                for ep in re.findall(r'(?:PORT|APP_PORT|FLASK_RUN_PORT|SERVER_PORT|SCRAPER_PORT|DEPLOYER_UI_PORT|UVICORN_PORT)\s*=\s*(\d{2,5})', ef.read(), re.I):
+                    if ep.isdigit(): ports_to_kill.add(int(ep))
+        except: pass
+    subprocess.run(f'pkill -9 -f {deploy_dir} 2>/dev/null || (sudo -n pkill -9 -f {deploy_dir} 2>/dev/null)', shell=True)
+    subprocess.run(f'fuser -k -9 -m {deploy_dir} 2>/dev/null || (sudo -n fuser -k -9 -m {deploy_dir} 2>/dev/null)', shell=True)
+
+for pt in ports_to_kill:
+    if 0 < pt < 65536:
+        subprocess.run(f'fuser -k -9 {pt}/tcp 2>/dev/null || (sudo -n fuser -k -9 {pt}/tcp 2>/dev/null)', shell=True)
+        subprocess.run(f'lsof -ti :{pt} 2>/dev/null | xargs -r kill -9 2>/dev/null || (sudo -n lsof -ti :{pt} 2>/dev/null | sudo -n xargs -r kill -9 2>/dev/null)', shell=True)
+
+print(f'\033[1;33m✓ Project \"{proj.get(\"name\")}\" stopped completely.\033[0m')
 "
 }
 
@@ -457,28 +509,79 @@ cmd_stop_all() {
     banner
     echo -e "${CLR_BOLD}🛑 Stopping All Running Project Services...${CLR_RESET}"
     python3 -c "
-import json, os, subprocess
+import json, os, subprocess, glob, re
 
 pfile = '$PROJECTS_JSON'
 cache_dir = '$CACHE_DIR'
+data_dir = '$WCP_DATA_DIR'
+jobs_dir = os.path.join(data_dir, 'jobs')
+
 if not os.path.exists(pfile): exit(0)
 with open(pfile) as f: projects = json.load(f)
 
+# 1. Stop all jobs in jobs directory
+if os.path.exists(jobs_dir):
+    for jf in glob.glob(os.path.join(jobs_dir, '*.json')):
+        try:
+            with open(jf) as f: jdata = json.load(f)
+            jid = jdata.get('id', '')
+            cpid_file = os.path.join(jobs_dir, f'{jid}.child_pid')
+            if os.path.exists(cpid_file):
+                try:
+                    with open(cpid_file) as pf:
+                        cpid = pf.read().strip()
+                        if cpid.isdigit() and int(cpid) > 1:
+                            subprocess.run(f'kill -9 -- -{cpid} 2>/dev/null; kill -9 {cpid} 2>/dev/null; sudo -n kill -9 -- -{cpid} 2>/dev/null; sudo -n kill -9 {cpid} 2>/dev/null', shell=True)
+                except: pass
+                try: os.remove(cpid_file)
+                except: pass
+            jpid = jdata.get('pid')
+            if jpid and str(jpid).isdigit() and int(jpid) > 1:
+                subprocess.run(f'kill -9 -- -{jpid} 2>/dev/null; kill -9 {jpid} 2>/dev/null; sudo -n kill -9 -- -{jpid} 2>/dev/null; sudo -n kill -9 {jpid} 2>/dev/null', shell=True)
+            with open(os.path.join(jobs_dir, f'{jid}.stop'), 'w') as sf: sf.write('1\n')
+            with open(os.path.join(jobs_dir, f'{jid}.exit'), 'w') as ef: ef.write('130\n')
+        except: pass
+
+# 2. Stop each project
 for proj in projects:
     pid_file = os.path.join(cache_dir, f'svc-{proj[\"id\"]}.pid')
     if os.path.exists(pid_file):
         with open(pid_file) as pf:
             val = pf.read().strip()
-            if val.isdigit():
-                subprocess.run(['kill', '-9', val], stderr=subprocess.DEVNULL)
-                subprocess.run(['pkill', '-P', val], stderr=subprocess.DEVNULL)
+            if val.isdigit() and int(val) > 1:
+                subprocess.run(f'kill -9 -- -{val} 2>/dev/null; kill -9 {val} 2>/dev/null; pkill -9 -P {val} 2>/dev/null; sudo -n kill -9 {val} 2>/dev/null', shell=True)
         try: os.remove(pid_file)
         except: pass
-    if proj.get('port'):
-        subprocess.run(f'fuser -k {proj[\"port\"]}/tcp', shell=True, stderr=subprocess.DEVNULL)
+
+    ports_to_kill = set()
+    if proj.get('port') and str(proj['port']).isdigit():
+        ports_to_kill.add(int(proj['port']))
+
+    start_cmd = proj.get('start_cmd', '')
+    for m in re.findall(r'(?:--port|-p|\:)\s*(\d{2,5})|PORT\s*=\s*(\d{2,5})', start_cmd, re.I):
+        for group in m:
+            if group and group.isdigit(): ports_to_kill.add(int(group))
+
+    deploy_dir = proj.get('deploy_path', '')
+    if deploy_dir and os.path.isdir(deploy_dir):
+        env_file = os.path.join(deploy_dir, '.env')
+        if os.path.exists(env_file):
+            try:
+                with open(env_file) as ef:
+                    for ep in re.findall(r'(?:PORT|APP_PORT|FLASK_RUN_PORT|SERVER_PORT|SCRAPER_PORT|DEPLOYER_UI_PORT|UVICORN_PORT)\s*=\s*(\d{2,5})', ef.read(), re.I):
+                        if ep.isdigit(): ports_to_kill.add(int(ep))
+            except: pass
+        subprocess.run(f'pkill -9 -f {deploy_dir} 2>/dev/null || (sudo -n pkill -9 -f {deploy_dir} 2>/dev/null)', shell=True)
+        subprocess.run(f'fuser -k -9 -m {deploy_dir} 2>/dev/null || (sudo -n fuser -k -9 -m {deploy_dir} 2>/dev/null)', shell=True)
+
+    for pt in ports_to_kill:
+        if 0 < pt < 65536:
+            subprocess.run(f'fuser -k -9 {pt}/tcp 2>/dev/null || (sudo -n fuser -k -9 {pt}/tcp 2>/dev/null)', shell=True)
+            subprocess.run(f'lsof -ti :{pt} 2>/dev/null | xargs -r kill -9 2>/dev/null || (sudo -n lsof -ti :{pt} 2>/dev/null | sudo -n xargs -r kill -9 2>/dev/null)', shell=True)
+
     print(f'  • \033[1;33m[Stopped]\033[0m {proj.get(\"name\")}')
 
-print('\033[1;32m✓ All project services stopped.\033[0m\n')
+print('\033[1;32m✓ All project services and background processes stopped cleanly.\033[0m\n')
 "
 }
 
