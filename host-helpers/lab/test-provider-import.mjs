@@ -157,6 +157,15 @@ async function waitForReady(port, child) {
   throw new Error("Timed out waiting for model manager readiness");
 }
 
+async function waitForCondition(predicate, message) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(message);
+}
+
 let child;
 let stdout = "";
 let stderr = "";
@@ -202,6 +211,10 @@ try {
   child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   await waitForReady(managerPort, child);
+  await waitForCondition(
+    () => profiles.get("codestral-startup")?.config?.model === "mistral/codestral-2508",
+    "Timed out waiting for startup import reconciliation",
+  );
   const startupCodestral = profiles.get("codestral-startup")?.config || {};
   assert.equal(startupCodestral.model, "mistral/codestral-2508", "startup must reconcile the last redacted import snapshot");
   assert.equal(startupCodestral.provider_connection_id, mistralConnection.id);
