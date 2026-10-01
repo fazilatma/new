@@ -931,19 +931,19 @@ else:
 print(json.dumps({"members": len(members)}))
 `;
 
-async function downloadFile(url, destination, update, expectedSha = "", maxBytes = 20 * 1024 ** 3, signal = null) {
+async function downloadFile(url, destination, update, expectedSha = "", maxBytes = 20 * 1024 ** 3, signal = null, baseHeaders = {}) {
   const temp = `${destination}.part`;
   const hash = crypto.createHash("sha256");
   let offset = await hashExistingFile(temp, hash, signal);
   if (offset > maxBytes) throw new Error("Existing partial download exceeds the safety limit");
-  const requestHeaders = offset ? { range: `bytes=${offset}-` } : {};
+  const requestHeaders = { ...baseHeaders, ...(offset ? { range: `bytes=${offset}-` } : {}) };
   const timeoutSignal = AbortSignal.timeout(6 * 60 * 60 * 1000);
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   let response = await fetch(url, { redirect: "follow", headers: requestHeaders, signal: requestSignal });
   if (response.status === 416 && offset) {
     fs.rmSync(temp, { force: true });
     offset = 0;
-    response = await fetch(url, { redirect: "follow", signal: requestSignal });
+    response = await fetch(url, { redirect: "follow", headers: baseHeaders, signal: requestSignal });
   }
   if (!response.ok || !response.body) throw new Error(`Download failed with HTTP ${response.status}`);
   const resumed = offset > 0 && response.status === 206;
@@ -991,7 +991,8 @@ async function downloadFile(url, destination, update, expectedSha = "", maxBytes
 
 const STATIC_LLAMA_X64 = Object.freeze({
   name: "llama-server-b11320-linux-x86_64-musl-static.tar.gz",
-  browser_download_url: "https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/runtime/llama-server-b11320-linux-x86_64-musl-static.tar.gz",
+  browser_download_url: "https://api.github.com/repos/fazilatma/new/git/blobs/8908f569deaa5c7a0f44b83932930f7a8a4da6ac",
+  download_headers: Object.freeze({ accept: "application/vnd.github.raw+json" }),
   digest: "sha256:cd78850ae1eb3eea41814837b1781cb656b87e3c698cd0af92247b1fcee15203",
 });
 
@@ -1039,7 +1040,7 @@ async function ensureLlamaRuntime(update, signal = null) {
   }
   if (!reuseArchive) {
     update({ message: `Downloading ${archive.name}…`, progress: 3 });
-    await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3, signal);
+    await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3, signal, archive.download_headers || {});
   } else {
     update({ message: `Using the verified ${archive.name} download…`, progress: 95 });
   }

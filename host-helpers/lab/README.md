@@ -13,7 +13,7 @@ This directory is the permanent, rootless validation environment for changes to 
 5. executes the resulting `llama-server --version` rather than relying on syntax/build success;
 6. packages a normalized archive and writes binary/archive checksums plus a machine-readable result.
 
-The accepted archive is stored in `../runtime/` because release-asset upload is unavailable to the repository GitHub App. The manager downloads that branch artifact and independently enforces its hard-coded SHA-256 before extraction. The compact evidence from the accepted build is in `evidence/`.
+The accepted archive is stored in `../runtime/` because release-asset upload is unavailable to the repository GitHub App. The manager downloads it through its immutable Git blob ID and independently enforces the hard-coded archive SHA-256 before extraction. The compact evidence from the accepted build is in `evidence/`.
 
 ## Provider import integration laboratory
 
