@@ -73,9 +73,46 @@ final class LocalAI
         return self::rootDir() . '/bin';
     }
 
-    /** Resolved `ollama` executable: explicit env → database state → private install → standard paths → PATH. */
-    public static function binary(): ?string
+    /** Resolved engine executable: explicit env → database state → private install → standard paths → PATH. */
+    public static function binary(?string $engine = null): ?string
     {
+        $engine ??= (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+
+        if ($engine === 'llamacpp') {
+            $explicit = (string) (getenv('AGENT_LLAMACPP_BIN') ?: '');
+            if ($explicit !== '' && is_file($explicit)) {
+                return $explicit;
+            }
+            $saved = (string) (Database::state('localai:llamacpp_bin', '') ?? '');
+            if ($saved !== '' && is_file($saved) && is_executable($saved)) {
+                return $saved;
+            }
+            $candidates = [
+                self::binDir() . '/llama-server',
+                self::binDir() . '/llama-cli',
+                self::rootDir() . '/llama-server',
+                '/usr/local/bin/llama-server',
+                '/usr/bin/llama-server',
+            ];
+            foreach ($candidates as $c) {
+                if (is_file($c) && is_executable($c)) {
+                    return $c;
+                }
+            }
+            if (function_exists('proc_open')) {
+                $out = Terminal::rawCapture(['sh', '-lc', 'command -v llama-server 2>/dev/null || command -v llama-cli 2>/dev/null'], null, 5);
+                $path = trim((string) ($out['stdout'] ?? ''));
+                if ($path !== '') {
+                    $first = explode("\n", $path)[0];
+                    if (is_file($first) && is_executable($first)) {
+                        return $first;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // Default: ollama
         $explicit = (string) (getenv('AGENT_OLLAMA_BIN') ?: '');
         if ($explicit !== '' && is_file($explicit)) {
             return $explicit;
@@ -372,22 +409,38 @@ final class LocalAI
     }
 
     /* ================================================================== */
-    /* Runtime (Ollama) lifecycle                                         */
+    /* Runtime (Ollama & llama.cpp) lifecycle                             */
     /* ================================================================== */
 
     public static function runtimeStatus(): array
     {
-        $bin = self::binary();
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        $bin = self::binary($engine) ?? self::binary();
         $version = '';
         if ($bin !== null && function_exists('proc_open')) {
             $out = Terminal::rawCapture([$bin, '--version'], null, 8, self::serverEnv());
-            if (preg_match('/([0-9]+\.[0-9]+\.[0-9]+)/', (string) $out['stdout'] . (string) $out['stderr'], $m)) {
+            if (preg_match('/([0-9]+\.[0-9]+(\.[0-9]+)?)/', (string) $out['stdout'] . (string) $out['stderr'], $m)) {
                 $version = $m[1];
             }
         }
         $up = self::serverUp();
+        $ollamaBin = self::binary('ollama');
+        $llamaBin = self::binary('llamacpp');
+
         return [
-            'engine' => 'ollama',
+            'engine' => $engine,
+            'engines' => [
+                'ollama' => [
+                    'name' => 'Ollama',
+                    'installed' => $ollamaBin !== null,
+                    'binary' => $ollamaBin ?? '',
+                ],
+                'llamacpp' => [
+                    'name' => 'llama.cpp (llama-server)',
+                    'installed' => $llamaBin !== null,
+                    'binary' => $llamaBin ?? '',
+                ],
+            ],
             'installed' => $bin !== null,
             'binary' => $bin ?? '',
             'managed' => $bin !== null && str_starts_with($bin, self::binDir()),
@@ -462,26 +515,36 @@ final class LocalAI
     }
 
     /**
-     * Install the runtime without root: download the official static tarball
-     * into storage/localai/. Falls back to the upstream shell installer only
-     * when the process is actually root.
+     * Install the runtime (Ollama or llama.cpp) without root into storage/localai/.
+     * @param string|array|callable|null $opts
      */
-    public static function installRuntime(?callable $log = null): array
+    public static function installRuntime(mixed $opts = null, ?callable $log = null): array
     {
+        $engine = 'ollama';
+        if (is_callable($opts)) {
+            $log = $opts;
+        } elseif (is_string($opts) && $opts !== '') {
+            $engine = $opts;
+        } elseif (is_array($opts) && !empty($opts['engine'])) {
+            $engine = (string) $opts['engine'];
+        }
         $log ??= static function (string $m): void {
         };
+
         if (!function_exists('proc_open')) {
             throw new HttpError(501, 'proc_open() is disabled — the local AI runtime cannot be installed');
         }
-        $existing = self::binary();
+
+        $existing = self::binary($engine);
         if ($existing !== null) {
-            $log('Ollama is already installed at ' . $existing);
-            return ['installed' => true, 'binary' => $existing, 'skipped' => true];
+            Database::setState('localai:engine', $engine);
+            $log(ucfirst($engine) . ' is already installed at ' . $existing);
+            return ['installed' => true, 'engine' => $engine, 'binary' => $existing, 'skipped' => true];
         }
 
         $cpu = self::readCpu();
         if (PHP_OS_FAMILY !== 'Linux') {
-            throw new HttpError(400, 'Automatic runtime install is only supported on Linux. Install Ollama manually and set AGENT_OLLAMA_BIN.');
+            throw new HttpError(400, 'Automatic runtime install is supported on Linux. Install manually and set AGENT_OLLAMA_BIN or AGENT_LLAMACPP_BIN.');
         }
         $archTag = $cpu['arch'] === 'arm64' ? 'arm64' : 'amd64';
 
@@ -492,30 +555,64 @@ final class LocalAI
         Files::ensureDir($binDir);
         Files::ensureDir($modelsDir);
 
-        // Discover release asset candidate URLs
         $candidates = [];
-        try {
-            $gh = HttpClient::request('GET', 'https://api.github.com/repos/ollama/ollama/releases/latest', ['User-Agent: ArenaAgent/3.0'], null, 8);
-            if (!empty($gh['ok'])) {
-                $j = json_decode((string) ($gh['body'] ?? ''), true);
-                if (is_array($j) && !empty($j['assets']) && is_array($j['assets'])) {
-                    foreach ($j['assets'] as $asset) {
-                        $name = (string) ($asset['name'] ?? '');
-                        $durl = (string) ($asset['browser_download_url'] ?? '');
-                        if (str_contains($name, "linux-{$archTag}.tar.zst") || str_contains($name, "linux-{$archTag}.tgz") || str_contains($name, "linux-{$archTag}.tar.gz")) {
-                            $candidates[] = $durl;
+
+        if ($engine === 'llamacpp') {
+            $log('Discovering llama.cpp / llama-server release assets …');
+            try {
+                $gh = HttpClient::request('GET', 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest', ['User-Agent: ArenaAgent/3.0'], null, 8);
+                if (!empty($gh['ok'])) {
+                    $j = json_decode((string) ($gh['body'] ?? ''), true);
+                    if (is_array($j) && !empty($j['assets']) && is_array($j['assets'])) {
+                        foreach ($j['assets'] as $asset) {
+                            $name = (string) ($asset['name'] ?? '');
+                            $durl = (string) ($asset['browser_download_url'] ?? '');
+                            if (str_contains($name, 'ubuntu') && str_contains($name, $archTag === 'arm64' ? 'arm64' : 'x64') && str_ends_with($name, '.zip')) {
+                                $candidates[] = $durl;
+                            }
                         }
                     }
                 }
+            } catch (\Throwable $e) {
+                $log('llama.cpp GitHub API probe skipped (' . $e->getMessage() . ')');
             }
-        } catch (\Throwable $e) {
-            $log('GitHub API probe skipped (' . $e->getMessage() . '), trying direct endpoints …');
-        }
+            $archZip = $archTag === 'arm64' ? 'arm64' : 'x64';
+            $candidates[] = "https://github.com/ggml-org/llama.cpp/releases/download/b4800/llama-b4800-bin-ubuntu-{$archZip}.zip";
+            $candidates[] = "https://github.com/ggml-org/llama.cpp/releases/download/b4000/llama-b4000-bin-ubuntu-{$archZip}.zip";
+            $candidates[] = "https://github.com/ggml-org/llama.cpp/releases/download/b3900/llama-b3900-bin-ubuntu-{$archZip}.zip";
+            $candidates[] = "https://mirror.ghproxy.com/https://github.com/ggml-org/llama.cpp/releases/download/b4800/llama-b4800-bin-ubuntu-{$archZip}.zip";
+            $candidates[] = "https://ghproxy.net/https://github.com/ggml-org/llama.cpp/releases/download/b4800/llama-b4800-bin-ubuntu-{$archZip}.zip";
+        } else {
+            // Ollama
+            $log('Discovering Ollama release assets …');
+            try {
+                $gh = HttpClient::request('GET', 'https://api.github.com/repos/ollama/ollama/releases/latest', ['User-Agent: ArenaAgent/3.0'], null, 8);
+                if (!empty($gh['ok'])) {
+                    $j = json_decode((string) ($gh['body'] ?? ''), true);
+                    if (is_array($j) && !empty($j['assets']) && is_array($j['assets'])) {
+                        foreach ($j['assets'] as $asset) {
+                            $name = (string) ($asset['name'] ?? '');
+                            $durl = (string) ($asset['browser_download_url'] ?? '');
+                            if (str_contains($name, "linux-{$archTag}.tar.zst") || str_contains($name, "linux-{$archTag}.tgz") || str_contains($name, "linux-{$archTag}.tar.gz")) {
+                                $candidates[] = $durl;
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $log('GitHub API probe skipped (' . $e->getMessage() . '), trying direct endpoints …');
+            }
 
-        $candidates[] = "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{$archTag}.tar.zst";
-        $candidates[] = "https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{$archTag}.tar.zst";
-        $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tar.zst";
-        $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tgz";
+            $candidates[] = "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{$archTag}.tar.zst";
+            $candidates[] = "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{$archTag}.tgz";
+            $candidates[] = "https://github.com/ollama/ollama/releases/download/v0.5.12/ollama-linux-{$archTag}.tar.zst";
+            $candidates[] = "https://github.com/ollama/ollama/releases/download/v0.5.12/ollama-linux-{$archTag}.tgz";
+            $candidates[] = "https://github.com/ollama/ollama/releases/download/v0.3.14/ollama-linux-{$archTag}.tgz";
+            $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tar.zst";
+            $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tgz";
+            $candidates[] = "https://mirror.ghproxy.com/https://github.com/ollama/ollama/releases/download/v0.5.12/ollama-linux-{$archTag}.tar.zst";
+            $candidates[] = "https://ghproxy.net/https://github.com/ollama/ollama/releases/download/v0.5.12/ollama-linux-{$archTag}.tar.zst";
+        }
 
         $unique = array_values(array_unique(array_filter($candidates)));
         $downloadedFile = null;
@@ -524,7 +621,7 @@ final class LocalAI
         foreach ($unique as $url) {
             $log('Attempting download from: ' . $url);
             $parsed = parse_url($url, PHP_URL_PATH);
-            $fname = $parsed ? basename($parsed) : "ollama-linux-{$archTag}.tar.zst";
+            $fname = $parsed ? basename($parsed) : ($engine === 'llamacpp' ? "llama-bin.zip" : "ollama-linux-{$archTag}.tar.zst");
             $dest = $root . '/' . $fname;
 
             // 1. Try curl CLI if available
@@ -564,45 +661,88 @@ final class LocalAI
         }
 
         if ($downloadedFile === null || !file_exists($downloadedFile)) {
-            throw new HttpError(502, 'Could not download Ollama runtime: ' . $lastError);
+            throw new HttpError(502, "Could not download {$engine} runtime: {$lastError}");
         }
 
         // Extract archive
-        $resExtract = Terminal::rawCapture(['tar', '-xf', $downloadedFile, '-C', $root], $root, 900);
+        if (str_ends_with(strtolower($downloadedFile), '.zip')) {
+            $extracted = false;
+            if (function_exists('proc_open')) {
+                $unz = Terminal::rawCapture(['unzip', '-o', $downloadedFile, '-d', $root], $root, 300);
+                if ((int) ($unz['exitCode'] ?? -1) === 0) {
+                    $extracted = true;
+                }
+            }
+            if (!$extracted && class_exists('\ZipArchive')) {
+                $za = new \ZipArchive();
+                if ($za->open($downloadedFile) === true) {
+                    $za->extractTo($root);
+                    $za->close();
+                    $extracted = true;
+                }
+            }
+        } else {
+            Terminal::rawCapture(['tar', '-xf', $downloadedFile, '-C', $root], $root, 900);
+        }
         @unlink($downloadedFile);
 
         // Find extracted binary
-        $targetBin = $binDir . '/ollama';
-        if (!file_exists($targetBin)) {
-            $cand2 = $root . '/ollama';
-            if (file_exists($cand2)) {
-                @rename($cand2, $targetBin);
-            } else {
+        $targetBin = null;
+        if ($engine === 'llamacpp') {
+            $candidatesBin = [
+                $binDir . '/llama-server',
+                $root . '/llama-server',
+                $root . '/build/bin/llama-server',
+            ];
+            foreach ($candidatesBin as $cb) {
+                if (file_exists($cb)) {
+                    $targetBin = $binDir . '/llama-server';
+                    if ($cb !== $targetBin) {
+                        @rename($cb, $targetBin);
+                    }
+                    break;
+                }
+            }
+            if ($targetBin === null) {
+                $found = glob($root . '/**/llama-server');
+                if (!empty($found) && is_file($found[0])) {
+                    $targetBin = $binDir . '/llama-server';
+                    @rename($found[0], $targetBin);
+                }
+            }
+        } else {
+            $candidatesBin = [
+                $binDir . '/ollama',
+                $root . '/ollama',
+                $root . '/bin/ollama',
+            ];
+            foreach ($candidatesBin as $cb) {
+                if (file_exists($cb)) {
+                    $targetBin = $binDir . '/ollama';
+                    if ($cb !== $targetBin) {
+                        @rename($cb, $targetBin);
+                    }
+                    break;
+                }
+            }
+            if ($targetBin === null) {
                 $found = glob($root . '/**/ollama');
                 if (!empty($found) && is_file($found[0])) {
+                    $targetBin = $binDir . '/ollama';
                     @rename($found[0], $targetBin);
                 }
             }
         }
 
-        if (!file_exists($targetBin)) {
-            $candRoot = $root . '/bin/ollama';
-            if (file_exists($candRoot)) {
-                $targetBin = $candRoot;
-            }
-        }
-
-        if (!file_exists($targetBin)) {
-            throw new HttpError(500, 'Extraction completed but binary not found in ' . $root);
+        if ($targetBin === null || !file_exists($targetBin)) {
+            throw new HttpError(500, "Extraction completed but binary for {$engine} not found in {$root}");
         }
 
         @chmod($targetBin, 0755);
-        $bin = self::binary();
-        if ($bin === null) {
-            $bin = $targetBin;
-        }
-        $log('Runtime installed successfully at ' . $bin);
-        return ['installed' => true, 'binary' => $bin, 'skipped' => false];
+        Database::setState('localai:engine', $engine);
+        $bin = self::binary($engine) ?? $targetBin;
+        $log("Runtime {$engine} installed successfully at {$bin}");
+        return ['installed' => true, 'engine' => $engine, 'binary' => $bin, 'skipped' => false];
     }
 
     public static function startServer(array $envOverrides = [], ?callable $log = null): array
@@ -611,12 +751,13 @@ final class LocalAI
         };
         $up = self::serverUp();
         if ($up['ok']) {
-            $log('Ollama server already running at ' . self::host());
+            $log('Local AI server already running at ' . self::host());
             return ['running' => true, 'started' => false, 'host' => self::host()];
         }
-        $bin = self::binary();
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        $bin = self::binary($engine) ?? self::binary();
         if ($bin === null) {
-            throw new HttpError(409, 'Ollama is not installed yet');
+            throw new HttpError(409, 'Local AI engine (' . $engine . ') is not installed yet. Please click "Install Engine" first.');
         }
         Files::ensureDir(self::modelsDir());
         Files::ensureDir(self::rootDir() . '/logs');
@@ -626,19 +767,24 @@ final class LocalAI
         foreach ($env as $k => $v) {
             $exports .= 'export ' . $k . '=' . escapeshellarg((string) $v) . '; ';
         }
-        $logPath = self::rootDir() . '/logs/ollama-server.log';
-        $proc = Terminal::startDetached($exports . escapeshellarg($bin) . ' serve', self::rootDir(), 'localai', $logPath);
+        $logPath = self::rootDir() . '/logs/localai-server.log';
+        if (str_contains(basename($bin), 'llama')) {
+            $cmd = $exports . escapeshellarg($bin) . ' --host 127.0.0.1 --port 11434 --ctx-size 8192';
+        } else {
+            $cmd = $exports . escapeshellarg($bin) . ' serve';
+        }
+        $proc = Terminal::startDetached($cmd, self::rootDir(), 'localai', $logPath);
         Database::setState('localai:server:pid', (string) ($proc['pid'] ?? 0));
 
         for ($i = 0; $i < 40; $i++) {
             usleep(500000);
             if (self::serverUp()['ok']) {
-                $log('Ollama server is up (pid ' . ($proc['pid'] ?? 0) . ')');
-                return ['running' => true, 'started' => true, 'pid' => $proc['pid'] ?? 0, 'host' => self::host(), 'logPath' => $logPath];
+                $log('Local AI server is up (pid ' . ($proc['pid'] ?? 0) . ')');
+                return ['running' => true, 'started' => true, 'pid' => $proc['pid'] ?? 0, 'host' => self::host(), 'logPath' => $logPath, 'engine' => $engine];
             }
         }
         $tail = Terminal::readLog($logPath, 4000);
-        throw new HttpError(500, 'Ollama server did not become ready within 20s. Log: ' . mb_substr($tail, -600));
+        throw new HttpError(500, 'Local AI server did not become ready within 20s. Log: ' . mb_substr($tail, -600));
     }
 
     public static function stopServer(): array
@@ -754,12 +900,25 @@ final class LocalAI
                     'name' => (string) $m['name'],
                     'publisher' => (string) ($m['publisher'] ?? ''),
                     'summary' => (string) ($m['summary'] ?? ''),
+                    'description' => (string) ($m['summary'] ?? ''),
+                    'license' => (string) ($m['license'] ?? 'Open'),
                     'tasks' => (array) ($m['tasks'] ?? []),
+                    'toolCalling' => (bool) ($m['toolCalling'] ?? false),
+                    'vision' => (bool) ($m['vision'] ?? false),
+                    'reasoning' => (bool) ($m['reasoning'] ?? false),
+                    'contextMax' => (int) ($m['contextMax'] ?? 8192),
                     'variants' => array_map(static fn(array $v): array => [
                         'tag' => (string) $v['tag'],
                         'ref' => (string) $m['id'] . ':' . (string) $v['tag'],
                         'diskGb' => (float) $v['diskGb'],
+                        'ramGb' => round((float) $v['diskGb'] * self::WEIGHT_RAM_FACTOR + self::RUNTIME_OVERHEAD_GB + 0.8, 1),
                         'quant' => (string) $v['quant'],
+                        'paramsB' => (float) ($v['paramsB'] ?? 0),
+                        'quality' => (int) ($v['quality'] ?? 50),
+                        'contextMax' => (int) ($m['contextMax'] ?? 8192),
+                        'toolCalling' => (bool) ($m['toolCalling'] ?? false),
+                        'vision' => (bool) ($m['vision'] ?? false),
+                        'reasoning' => (bool) ($m['reasoning'] ?? false),
                     ], (array) ($m['variants'] ?? [])),
                 ];
             }
@@ -776,16 +935,33 @@ final class LocalAI
                     if (!is_array($item)) {
                         continue;
                     }
+                    $modelId = (string) ($item['modelId'] ?? $item['id'] ?? '');
+                    $mLow = strtolower($modelId);
+                    $estDisk = 4.5;
+                    $estRam = 5.8;
+                    if (str_contains($mLow, '0.5b')) { $estDisk = 0.6; $estRam = 1.2; }
+                    elseif (str_contains($mLow, '1.5b') || str_contains($mLow, '1b') || str_contains($mLow, '2b')) { $estDisk = 1.5; $estRam = 2.4; }
+                    elseif (str_contains($mLow, '3b') || str_contains($mLow, '4b')) { $estDisk = 2.5; $estRam = 3.6; }
+                    elseif (str_contains($mLow, '7b') || str_contains($mLow, '8b')) { $estDisk = 4.8; $estRam = 6.2; }
+                    elseif (str_contains($mLow, '14b') || str_contains($mLow, '13b')) { $estDisk = 9.2; $estRam = 11.5; }
+                    elseif (str_contains($mLow, '32b') || str_contains($mLow, '34b')) { $estDisk = 20.0; $estRam = 24.0; }
+                    elseif (str_contains($mLow, '70b') || str_contains($mLow, '72b')) { $estDisk = 42.0; $estRam = 48.0; }
+
                     $hf[] = [
                         'source' => 'huggingface',
-                        'id' => (string) ($item['modelId'] ?? $item['id'] ?? ''),
-                        'name' => (string) ($item['modelId'] ?? $item['id'] ?? ''),
-                        'publisher' => explode('/', (string) ($item['modelId'] ?? '/'))[0],
+                        'id' => $modelId,
+                        'name' => $modelId,
+                        'publisher' => explode('/', $modelId)[0] ?? 'HuggingFace',
                         'downloads' => (int) ($item['downloads'] ?? 0),
                         'likes' => (int) ($item['likes'] ?? 0),
                         'tasks' => array_values(array_filter((array) ($item['tags'] ?? []), 'is_string')),
-                        'pullRef' => 'hf.co/' . (string) ($item['modelId'] ?? ''),
-                        'summary' => 'مخزن GGUF در Hugging Face — با «ollama pull hf.co/<repo>» نصب می‌شود.',
+                        'pullRef' => 'hf.co/' . $modelId,
+                        'diskGb' => $estDisk,
+                        'ramGb' => $estRam,
+                        'toolCalling' => str_contains($mLow, 'tool') || str_contains($mLow, 'function'),
+                        'vision' => str_contains($mLow, 'vision') || str_contains($mLow, 'vl'),
+                        'reasoning' => str_contains($mLow, 'r1') || str_contains($mLow, 'reason') || str_contains($mLow, 'qwq'),
+                        'summary' => 'مخزن GGUF در Hugging Face — با «ollama pull hf.co/' . $modelId . '» نصب می‌شود.',
                     ];
                 }
             } catch (\Throwable $e) {
@@ -1075,6 +1251,82 @@ final class LocalAI
                 'reasons' => $reasons,
                 'url' => (string) ($model['url'] ?? ''),
             ];
+        }
+
+        // Soft matching fallback: if strict criteria filtered out everything, relax constraints so user always gets actionable recommendations
+        if (empty($ranked)) {
+            foreach (self::variants() as $v) {
+                $model = $v['model'];
+                $est = self::estimate($v, $profile, $host);
+                $softReasons = [];
+                $penalty = 1.0;
+
+                if (!$est['fitsRam']) {
+                    $softReasons[] = sprintf('نیازمند %.1f گیگابایت رم (بودجه فعلی: %.1f گیگ)', $est['ramGb'], $profile['ramBudgetGb']);
+                    $penalty *= max(0.2, 1.0 - (($est['ramGb'] - $profile['ramBudgetGb']) / max(1.0, $profile['ramBudgetGb'])));
+                }
+                if ($profile['contextTokens'] > (int) ($model['contextMax'] ?? 8192)) {
+                    $softReasons[] = sprintf('پنجره کانتکست مدل به %d توکن محدود می‌شود', (int) ($model['contextMax'] ?? 8192));
+                    $penalty *= 0.9;
+                }
+                if ($profile['requireToolCalling'] && empty($model['toolCalling'])) {
+                    $softReasons[] = 'فاقد ابزارفراخوانی رسمی (پاسخ متنی و کدنویسی مستقیم)';
+                    $penalty *= 0.7;
+                }
+                if ($profile['requireVision'] && empty($model['vision'])) {
+                    $softReasons[] = 'فاقد قابلیت بینایی';
+                    $penalty *= 0.7;
+                }
+                if ($profile['requireEmbedding'] !== (bool) ($model['embedding'] ?? false)) {
+                    $softReasons[] = $profile['requireEmbedding'] ? 'مدل امبدینگ نیست' : 'فقط مدل امبدینگ است و برای چت/کدنویسی مناسب نیست';
+                    $penalty *= 0.3;
+                }
+
+                $rawQuality = (float) ($v['quality'] ?? 50);
+                $quality = ($rawQuality / 100) ** 1.6;
+                $speed = self::speedScore((float) $est['tokensPerSec']);
+                $task = self::taskMatch($model, $profile['tasks']);
+                $lang = self::languageScore($model, $profile['languages']);
+                $fit = 0.5;
+
+                $score = ($weights['quality'] * $quality
+                    + $weights['speed'] * $speed
+                    + $weights['task'] * $task
+                    + $weights['lang'] * $lang
+                    + $weights['fit'] * $fit) * $penalty;
+
+                $softReasons[] = sprintf('تخمین: %.1f گیگ رم · %.1f گیگ دیسک · تقریباً %.0f توکن بر ثانیه',
+                    $est['ramGb'], $est['diskGb'], $est['tokensPerSec']);
+
+                $ranked[] = [
+                    'ref' => $v['ref'],
+                    'modelId' => $v['modelId'],
+                    'tag' => (string) $v['tag'],
+                    'name' => $v['name'],
+                    'publisher' => (string) ($model['publisher'] ?? ''),
+                    'license' => (string) ($model['license'] ?? ''),
+                    'summary' => (string) ($model['summary'] ?? ''),
+                    'tasks' => (array) ($model['tasks'] ?? []),
+                    'contextMax' => (int) ($model['contextMax'] ?? 8192),
+                    'toolCalling' => (bool) ($model['toolCalling'] ?? false),
+                    'vision' => (bool) ($model['vision'] ?? false),
+                    'embedding' => (bool) ($model['embedding'] ?? false),
+                    'reasoning' => (bool) ($model['reasoning'] ?? false),
+                    'quant' => (string) ($v['quant'] ?? ''),
+                    'paramsB' => (float) ($v['paramsB'] ?? 0),
+                    'moe' => (bool) ($v['moe'] ?? false),
+                    'rawQuality' => $rawQuality,
+                    'score' => round($score, 4),
+                    'scorePct' => (int) round(min(100, $score * 100)),
+                    'breakdown' => [
+                        'quality' => round($quality, 2), 'speed' => round($speed, 2),
+                        'task' => round($task, 2), 'language' => round($lang, 2), 'fit' => round($fit, 2),
+                    ],
+                    'estimate' => $est,
+                    'reasons' => $softReasons,
+                    'url' => (string) ($model['url'] ?? ''),
+                ];
+            }
         }
 
         // Relative-quality demotion: when a clearly stronger model also fits the

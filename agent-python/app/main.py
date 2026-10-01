@@ -1665,12 +1665,23 @@ def get_localai_runtime(user: Dict[str, Any] = Depends(require_viewer)):
     return local_ai.runtime_status()
 
 @app.post("/api/localai/runtime/install")
-def post_localai_runtime_install(user: Dict[str, Any] = Depends(require_admin)):
+def post_localai_runtime_install(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
+    engine = (payload or {}).get("engine") or "ollama"
     try:
-        return local_ai.install_runtime()
+        return local_ai.install_runtime(engine=engine)
     except Exception as e:
         raise HTTPException(500, f"Runtime installation failed: {str(e)}")
+
+@app.post("/api/localai/runtime/engine")
+def post_localai_runtime_engine(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    from .database import set_state
+    engine = str((payload or {}).get("engine") or "ollama")
+    if engine not in ("ollama", "llamacpp"):
+        raise HTTPException(400, f"Unknown engine: {engine}")
+    set_state("localai:engine", engine)
+    return local_ai.runtime_status()
 
 @app.post("/api/localai/runtime/start")
 def post_localai_runtime_start(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):

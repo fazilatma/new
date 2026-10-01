@@ -248,8 +248,11 @@
 
         <div class="grid g2" style="margin-top:14px">
           <div>
-            <label class="lb">بودجهٔ رم: <b id="ram-val" class="ltr"></b> گیگابایت</label>
-            <input type="range" id="ram" min="1" max="128" step="0.5" class="inp" style="padding:0">
+            <label class="lb">بودجهٔ رم (گیگابایت) — هر مقداری قابل تنظیم است</label>
+            <div class="row" style="gap:8px;flex-wrap:nowrap;align-items:center">
+              <input type="range" id="ram" min="0.5" max="128" step="0.5" class="inp" style="padding:0;flex:2">
+              <input type="number" id="ram-num" class="inp ltr" min="0.5" step="0.5" style="flex:1;min-width:90px">
+            </div>
             <div class="hint" id="ram-hint"></div>
           </div>
           <div>
@@ -328,23 +331,33 @@
     <div>
       <!-- ─────────────────────── runtime -->
       <section class="card">
-        <h2>⚙️ وضعیت موتور هوش مصنوعی (Ollama)</h2>
+        <h2>⚙️ موتور هوش مصنوعی محلی</h2>
+
+        <label class="lb">انتخاب موتور برای نصب / اجرا</label>
+        <div class="row" style="gap:8px;flex-wrap:nowrap;margin-bottom:10px">
+          <select id="engine-select" style="flex:1">
+            <option value="ollama">Ollama — ساده و پیشنهادی</option>
+            <option value="llamacpp">llama.cpp (llama-server) — سبک و قابل تنظیم</option>
+          </select>
+        </div>
+
         <div id="rt-info" class="hint">در حال بررسی…</div>
         <div class="rt-btn-grid">
           <button class="btn sm ok" id="btn-rt-install">⬇️ نصب موتور</button>
           <button class="btn sm" id="btn-rt-start">▶️ اجرا</button>
           <button class="btn sm danger" id="btn-rt-stop">⏹ توقف</button>
         </div>
+        <p class="hint" style="margin-top:8px">موتور انتخاب‌شده دانلود، استخراج و به‌صورت محلی (بدون نیاز به دسترسی root) در فضای اختصاصی این سرور نصب می‌شود.</p>
 
         <details style="margin-top:12px">
           <summary class="hint" style="cursor:pointer">⚙️ تنظیمات سفارشی آدرس و باینری موتور</summary>
           <div style="margin-top:8px" class="grid g2">
             <div>
-              <label class="lb">آدرس سرور Ollama</label>
+              <label class="lb">آدرس سرور</label>
               <input class="inp ltr" id="cfg-host" placeholder="http://127.0.0.1:11434">
             </div>
             <div>
-              <label class="lb">مسیر باینری ollama</label>
+              <label class="lb">مسیر باینری موتور</label>
               <input class="inp ltr" id="cfg-bin" placeholder="/usr/local/bin/ollama">
             </div>
           </div>
@@ -475,28 +488,52 @@ async function loadHost(refresh) {
     `پیشنهاد بودجهٔ رم: ${fa(suggestedRam)} گیگابایت · سیستم‌عامل: ${esc(HOST.os || HOST.host?.os || 'Linux')}`;
 
   const ram = $('#ram');
-  ram.max = Math.max(4, Math.ceil(totalGb));
+  const ramNum = $('#ram-num');
+  // Slider max follows host RAM (for a usable drag range), but the number
+  // field next to it has no upper bound — any custom budget can be typed in,
+  // e.g. for remote/clustered setups or future RAM upgrades.
+  ram.max = Math.max(32, Math.ceil(totalGb * 2));
   ram.value = suggestedRam;
-  $('#ram-val').textContent = fa(ram.value);
-  $('#ram-hint').textContent = `حداکثر تا ${fa(availGb)} گیگابایت رم آزاد فعلی پیشنهاد می‌شود.`;
+  ramNum.value = suggestedRam;
+  $('#ram-hint').textContent = `پیشنهاد سیستم: ${fa(suggestedRam)} گیگابایت (رم آزاد فعلی: ${fa(availGb)} GB) — می‌توانید عدد دلخواه را در کادر کناری وارد کنید.`;
   $('#vram').value = vramGb;
   $('#disk').value = Math.max(1, Math.floor(freeDisk - 1));
   renderRuntime(HOST.runtime);
 }
-$('#ram').oninput = (e) => { $('#ram-val').textContent = fa(e.target.value); };
+$('#ram').oninput = (e) => { $('#ram-num').value = e.target.value; };
+$('#ram-num').oninput = (e) => {
+  const v = parseFloat(e.target.value || '0');
+  if (v > parseFloat($('#ram').max)) { $('#ram').max = Math.ceil(v); }
+  $('#ram').value = v;
+};
 $('#btn-rescan').onclick = () => loadHost(true);
 
 /* ───────────────────────────────────────── runtime panel */
+const ENGINE_NAMES = { ollama: 'Ollama', llamacpp: 'llama.cpp (llama-server)', custom: 'سفارشی' };
+let CURRENT_RT = null;
+
 function renderRuntime(rt) {
   if (!rt) return;
+  CURRENT_RT = rt;
   const badge = $('#rt-badge');
   badge.className = 'tag ' + (rt.running ? 'ok' : rt.installed ? 'warn' : 'err');
-  badge.textContent = rt.running ? 'موتور در حال اجرا' : rt.installed ? 'نصب است، خاموش' : 'نصب نشده';
+  const engineName = ENGINE_NAMES[rt.engine] || rt.engine || 'Ollama';
+  badge.textContent = rt.running ? `${engineName} در حال اجرا` : rt.installed ? `${engineName} نصب است، خاموش` : `${engineName} نصب نشده`;
   const permHtml = rt.modelsDirWritable
     ? '<span class="tag ok">قابل نوشتن</span>'
     : '<span class="tag err">غیرقابل نوشتن</span> <button class="btn xs" id="btn-fix-perm" style="margin-right:6px">اصلاح خودکار دسترسی</button>';
+
+  // Per-engine installed/not-installed summary chips
+  const engines = rt.engines || {};
+  const engineChips = Object.keys(engines).map((key) => {
+    const e = engines[key];
+    const isActive = key === rt.engine;
+    return `<span class="tag ${e.installed ? 'ok' : ''}" ${isActive ? 'style="font-weight:700"' : ''}>${esc(e.name || key)}: ${e.installed ? 'نصب شده' : 'نصب‌نشده'}${isActive ? ' (فعال)' : ''}</span>`;
+  }).join(' ');
+
   $('#rt-info').innerHTML = `
-    <div style="margin-bottom:6px">موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب محلی</span>' : ''}</div>
+    <div style="margin-bottom:6px">موتور فعال: <b>${esc(engineName)} ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب محلی</span>' : ''}</div>
+    <div class="row" style="margin-bottom:6px">${engineChips}</div>
     <div class="path-box">${esc(rt.binary || 'یافت نشد')}</div>
     <div class="path-box">${esc(rt.host || 'http://127.0.0.1:11434')}</div>
     <div class="path-box" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">پوشه مدل‌ها: <span>${esc(rt.modelsDir || '')}</span> ${permHtml}</div>
@@ -504,6 +541,7 @@ function renderRuntime(rt) {
 
   if (rt.host) $('#cfg-host').value = rt.host;
   if (rt.binary) $('#cfg-bin').value = rt.binary;
+  if (rt.engine) $('#engine-select').value = rt.engine;
 
   const fixBtn = $('#btn-fix-perm');
   if (fixBtn) {
@@ -532,11 +570,23 @@ async function refreshRuntime() {
   try { renderRuntime(await api('/api/localai/runtime')); } catch (e) { /* ignore */ }
 }
 
-$('#btn-rt-install').onclick = async () => {
-  toast('در حال دانلود و راه‌اندازی موتور هوش مصنوعی…');
+$('#engine-select').onchange = async (e) => {
+  const engine = e.target.value;
   try {
-    await api('/api/localai/runtime/install', { method: 'POST', body: {} });
-    toast('موتور با موفقیت نصب شد', 'ok');
+    await api('/api/localai/runtime/engine', { method: 'POST', body: { engine } });
+    toast('موتور فعال به ' + (ENGINE_NAMES[engine] || engine) + ' تغییر کرد', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  refreshRuntime();
+};
+
+$('#btn-rt-install').onclick = async () => {
+  const engine = $('#engine-select').value || 'ollama';
+  toast('در حال دانلود و راه‌اندازی ' + (ENGINE_NAMES[engine] || engine) + '…');
+  try {
+    await api('/api/localai/runtime/install', { method: 'POST', body: { engine } });
+    toast((ENGINE_NAMES[engine] || engine) + ' با موفقیت نصب شد', 'ok');
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -785,18 +835,32 @@ async function executeSearch() {
               <span class="model-card-title">${esc(m.name)}</span>
               <span class="tag info">${esc(m.publisher || 'Catalog')}</span>
             </div>
-            <div class="model-card-desc">${esc(m.description || '')}</div>
+            <div class="model-card-desc">${esc(m.description || m.summary || '')}</div>
             <div class="model-card-tags">
               ${(m.tasks || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
               <span class="tag">${esc(m.license || '')}</span>
+              ${m.contextMax ? `<span class="tag">📏 ${fa(m.contextMax, 0)} توکن کانتکست</span>` : ''}
+              ${m.toolCalling ? '<span class="tag ok">🛠 ابزارفراخوانی</span>' : ''}
+              ${m.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+              ${m.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
             </div>
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
               ${variants.map((v) => `
-                <div class="model-card-bottom" style="background:rgba(0,0,0,.15);padding:6px 8px;border-radius:6px">
-                  <div class="ltr" style="font-size:12px;font-weight:600">${esc(v.ref)}</div>
-                  <div class="row" style="gap:6px">
-                    <span class="tag">${esc(v.quant)}</span>
-                    <span class="tag">${fa(v.diskGb)} GB</span>
+                <div style="background:rgba(0,0,0,.15);padding:8px;border-radius:6px">
+                  <div class="ltr" style="font-size:12px;font-weight:600;margin-bottom:6px">${esc(v.ref)}</div>
+                  <div class="row" style="gap:6px;margin-bottom:6px">
+                    <span class="tag">کوانت: ${esc(v.quant)}</span>
+                    <span class="tag">📦 حجم فایل: ${fa(v.diskGb)} GB</span>
+                    <span class="tag">🧠 حداقل رم: ${fa(v.ramGb || (v.diskGb * 1.25 + 1))} GB</span>
+                    ${v.paramsB ? `<span class="tag">${fa(v.paramsB)}B پارامتر</span>` : ''}
+                    ${v.quality ? `<span class="tag">کیفیت: ${fa(v.quality, 0)}/100</span>` : ''}
+                  </div>
+                  <div class="row" style="gap:6px;justify-content:space-between">
+                    <div class="row" style="gap:4px">
+                      ${v.toolCalling ? '<span class="tag ok">🛠 ابزار</span>' : ''}
+                      ${v.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+                      ${v.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+                    </div>
                     <button class="btn xs ok" data-pull="${esc(v.ref)}">🚀 نصب</button>
                   </div>
                 </div>
@@ -816,9 +880,17 @@ async function executeSearch() {
               <span class="model-card-title ltr">${esc(m.id || m.pullRef)}</span>
               <span class="tag ok">Hugging Face</span>
             </div>
+            <div class="model-card-desc">${esc(m.summary || '')}</div>
+            <div class="model-card-tags">
+              ${m.diskGb ? `<span class="tag">📦 حجم تقریبی: ${fa(m.diskGb)} GB</span>` : ''}
+              ${m.ramGb ? `<span class="tag">🧠 حداقل رم تقریبی: ${fa(m.ramGb)} GB</span>` : ''}
+              ${m.toolCalling ? '<span class="tag ok">🛠 احتمال ابزارفراخوانی</span>' : ''}
+              ${m.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+              ${m.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+            </div>
             <div class="model-card-bottom">
               <div class="row" style="gap:6px">
-                <span class="tag">${fa(m.downloads || 0, 0)} دانلود</span>
+                <span class="tag">⬇️ ${fa(m.downloads || 0, 0)} دانلود</span>
                 ${m.likes ? `<span class="tag">❤️ ${fa(m.likes, 0)}</span>` : ''}
               </div>
               <button class="btn xs ok" data-pull="${esc(m.pullRef || m.id)}">🚀 نصب GGUF</button>

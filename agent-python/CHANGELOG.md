@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.1.0 - Multi-engine Local AI Runtime, Unbounded RAM Budget, Richer Search Cards
+
+- **Multi-engine Local AI runtime**:
+  - Choose and install either **Ollama** or **llama.cpp (`llama-server`)** from a dropdown in the Local AI panel.
+  - Each engine's installed/running status is tracked independently (`runtime_status()["engines"]`) and the active engine persists in `app_state` (`localai:engine`).
+  - `POST /api/localai/runtime/install` now accepts `{ "engine": "ollama" | "llamacpp" }`; new `POST /api/localai/runtime/engine` switches the active engine without reinstalling.
+- **Unbounded RAM budget input**:
+  - The hardware-profile RAM slider is paired with a free-typing number field with no upper cap, so any custom budget — including values above the host's physical RAM — can be used for recommendations.
+- **Richer manual-search result cards**:
+  - Catalog and Hugging Face search results now include file size, estimated minimum RAM, parameter count, quality score, context window, and tool-calling/vision/reasoning badges per variant.
+
+### Fixed
+- **Empty top-level model recommendations**: `recommend()` no longer returns an empty list when strict hardware/feature constraints reject every catalog variant; it now falls back to a penalty-scored soft match so the user always gets actionable suggestions with clear reasons (including an embedding-task mismatch penalty).
+
 ## 3.0.0 - Code Generation Strategies, Local AI GGUF Search, Hardware Profiling & Full PHP Parity
 
 - **Code Generation Strategy Modes (`smart-auto`, `single-file`, `multi-file`)**:

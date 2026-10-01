@@ -1742,7 +1742,20 @@ final class Routes
 
         $r->post('/api/localai/runtime/install', static function (Request $req): array {
             Auth::requireAdmin($req);
-            return LocalAI::installRuntime();
+            $body = $req->json();
+            $engine = (string) ($body['engine'] ?? 'ollama');
+            return LocalAI::installRuntime($engine !== '' ? $engine : 'ollama');
+        });
+
+        $r->post('/api/localai/runtime/engine', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            $body = $req->json();
+            $engine = (string) ($body['engine'] ?? 'ollama');
+            if (!in_array($engine, ['ollama', 'llamacpp'], true)) {
+                throw new HttpError(400, 'Unknown engine: ' . $engine);
+            }
+            Database::setState('localai:engine', $engine);
+            return LocalAI::runtimeStatus();
         });
 
         $r->post('/api/localai/runtime/start', static function (Request $req): array {

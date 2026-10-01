@@ -16,6 +16,7 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -123,7 +124,30 @@ def bin_dir() -> Path:
     return p
 
 
-def binary() -> Optional[str]:
+def binary(engine: Optional[str] = None) -> Optional[str]:
+    active_engine = engine or get_state("localai:engine") or "ollama"
+    if active_engine == "llamacpp":
+        custom = os.environ.get("AGENT_LLAMACPP_BIN") or get_state("localai:llamacpp_bin")
+        if custom and os.path.isfile(custom) and os.access(custom, os.X_OK):
+            return custom
+        candidates = [
+            str(bin_dir() / "llama-server"),
+            str(bin_dir() / "llama-cli"),
+            str(root_dir() / "llama-server"),
+            "/usr/local/bin/llama-server",
+            "/usr/bin/llama-server",
+            "/opt/llama.cpp/llama-server",
+            str(Path.home() / ".local/bin/llama-server"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        system = shutil.which("llama-server") or shutil.which("llama-cli")
+        if system and os.path.isfile(system) and os.access(system, os.X_OK):
+            return system
+        return None
+
+    # Default: Ollama
     custom = os.environ.get("AGENT_OLLAMA_BIN") or get_state("localai:custom_bin")
     if custom and os.path.isfile(custom) and os.access(custom, os.X_OK):
         return custom
@@ -282,13 +306,37 @@ def host_scan(refresh: bool = False) -> Dict[str, Any]:
 
 
 def runtime_status() -> Dict[str, Any]:
-    b = binary()
+    active_engine = get_state("localai:engine") or "ollama"
+    ollama_bin = binary("ollama")
+    llama_bin = binary("llamacpp")
+    current_bin = binary(active_engine) or binary()
     srv = server_up()
     md = models_dir()
     return {
-        "installed": bool(b),
-        "binary": b or "",
-        "managed": bool(b and str(bin_dir()) in str(b)),
+        "engine": active_engine,
+        "engines": {
+            "ollama": {
+                "name": "Ollama",
+                "installed": bool(ollama_bin),
+                "binary": ollama_bin or "",
+                "managed": bool(ollama_bin and str(bin_dir()) in str(ollama_bin)),
+            },
+            "llamacpp": {
+                "name": "llama.cpp (llama-server)",
+                "installed": bool(llama_bin),
+                "binary": llama_bin or "",
+                "managed": bool(llama_bin and str(bin_dir()) in str(llama_bin)),
+            },
+            "custom": {
+                "name": "Custom / Remote Host",
+                "installed": True,
+                "binary": "",
+                "managed": False,
+            },
+        },
+        "installed": bool(current_bin),
+        "binary": current_bin or "",
+        "managed": bool(current_bin and str(bin_dir()) in str(current_bin)),
         "running": srv["up"],
         "version": srv.get("version", ""),
         "host": host_url(),
@@ -299,10 +347,11 @@ def runtime_status() -> Dict[str, Any]:
     }
 
 
-def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    b = binary()
+def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    engine = engine.strip().lower() if engine else "ollama"
+    b = binary(engine)
     if b:
-        return {"ok": True, "alreadyInstalled": True, "binary": b}
+        return {"ok": True, "alreadyInstalled": True, "binary": b, "engine": engine}
 
     def _log(msg: str):
         if log_fn:
@@ -312,10 +361,12 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
     raw_arch = platform.machine().lower()
     if raw_arch in ("x86_64", "amd64"):
         arch_tag = "amd64"
+        llama_arch = "x64"
     elif raw_arch in ("aarch64", "arm64"):
         arch_tag = "arm64"
+        llama_arch = "arm64"
     else:
-        raise RuntimeError(f"Unsupported architecture for direct Ollama install: {raw_arch}")
+        raise RuntimeError(f"Unsupported architecture for Local AI runtime: {raw_arch}")
 
     rd = root_dir()
     bd = bin_dir()
@@ -324,32 +375,52 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
     bd.mkdir(parents=True, exist_ok=True)
     md.mkdir(parents=True, exist_ok=True)
 
-    # 1. Discover candidates from GitHub latest release or fallbacks
     candidates: List[str] = []
-    try:
-        gh_req = urllib.request.Request(
-            "https://api.github.com/repos/ollama/ollama/releases/latest",
-            headers={"User-Agent": "ArenaAgent/3.0"}
-        )
-        with urllib.request.urlopen(gh_req, timeout=8) as resp:
-            rel_data = json.loads(resp.read().decode("utf-8"))
-            for asset in rel_data.get("assets", []):
-                name = asset.get("name", "")
-                durl = asset.get("browser_download_url", "")
-                if f"linux-{arch_tag}.tar.zst" in name or f"linux-{arch_tag}.tgz" in name or f"linux-{arch_tag}.tar.gz" in name:
-                    candidates.append(durl)
-    except Exception as e:
-        _log(f"GitHub release API probe skipped ({e}), using direct release endpoints...")
 
-    # Fallback standard endpoints
-    candidates.extend([
-        f"https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch_tag}.tar.zst",
-        f"https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{arch_tag}.tar.zst",
-        f"https://ollama.com/download/ollama-linux-{arch_tag}.tar.zst",
-        f"https://ollama.com/download/ollama-linux-{arch_tag}.tgz",
-    ])
+    if engine == "llamacpp":
+        try:
+            gh_req = urllib.request.Request(
+                "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest",
+                headers={"User-Agent": "ArenaAgent/3.0", "Accept": "application/vnd.github.v3+json"}
+            )
+            with urllib.request.urlopen(gh_req, timeout=8) as resp:
+                rel_data = json.loads(resp.read().decode("utf-8"))
+                for asset in rel_data.get("assets", []):
+                    name = asset.get("name", "").lower()
+                    durl = asset.get("browser_download_url", "")
+                    if "bin-ubuntu" in name and llama_arch in name and name.endswith(".zip"):
+                        candidates.append(durl)
+        except Exception as e:
+            _log(f"llama.cpp GitHub release API probe skipped ({e}), using direct endpoints...")
 
-    # De-duplicate while preserving order
+        candidates.extend([
+            f"https://github.com/ggerganov/llama.cpp/releases/latest/download/llama-bin-ubuntu-{llama_arch}.zip",
+            f"https://github.com/ggerganov/llama.cpp/releases/download/b4800/llama-b4800-bin-ubuntu-{llama_arch}.zip",
+            f"https://huggingface.co/ggerganov/llama.cpp/resolve/main/llama-bin-ubuntu-{llama_arch}.zip",
+        ])
+    else:
+        try:
+            gh_req = urllib.request.Request(
+                "https://api.github.com/repos/ollama/ollama/releases/latest",
+                headers={"User-Agent": "ArenaAgent/3.0", "Accept": "application/vnd.github.v3+json"}
+            )
+            with urllib.request.urlopen(gh_req, timeout=8) as resp:
+                rel_data = json.loads(resp.read().decode("utf-8"))
+                for asset in rel_data.get("assets", []):
+                    name = asset.get("name", "")
+                    durl = asset.get("browser_download_url", "")
+                    if f"linux-{arch_tag}.tar.zst" in name or f"linux-{arch_tag}.tgz" in name or f"linux-{arch_tag}.tar.gz" in name:
+                        candidates.append(durl)
+        except Exception as e:
+            _log(f"GitHub release API probe skipped ({e}), using direct release endpoints...")
+
+        candidates.extend([
+            f"https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch_tag}.tar.zst",
+            f"https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{arch_tag}.tar.zst",
+            f"https://ollama.com/download/ollama-linux-{arch_tag}.tar.zst",
+            f"https://ollama.com/download/ollama-linux-{arch_tag}.tgz",
+        ])
+
     seen = set()
     unique_candidates = []
     for c in candidates:
@@ -361,14 +432,13 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
     last_error = "No download candidates succeeded"
 
     for url in unique_candidates:
-        _log(f"Downloading Ollama runtime for {arch_tag} from {url}...")
-        filename = url.split("?")[0].split("/")[-1]
-        if not filename or filename == url:
-            filename = f"ollama-linux-{arch_tag}.tar.zst"
-        dest_path = rd / filename
+        _log(f"Downloading {engine} runtime from {url}...")
+        raw_name = url.split("?")[0].split("/")[-1]
+        ext = ".zip" if url.endswith(".zip") else (".tar.zst" if ".tar.zst" in url else ".tar.gz")
+        dest_filename = raw_name if raw_name else f"{engine}-installer-{arch_tag}{ext}"
+        dest_path = rd / dest_filename
         try:
             dl_ok = False
-            # Try curl CLI first (handles SSL & redirects robustly)
             if shutil.which("curl"):
                 res = subprocess.run(
                     ["curl", "-fSL", "--connect-timeout", "15", "-m", "300", "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url],
@@ -401,15 +471,29 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
                 dest_path.unlink(missing_ok=True)
 
     if not downloaded_file or not downloaded_file.is_file():
-        raise RuntimeError(f"Could not download Ollama runtime: {last_error}")
+        raise RuntimeError(f"Could not download {engine} runtime: {last_error}")
 
     try:
         _log(f"Extracting {downloaded_file.name} into {rd}...")
         extracted = False
-        fname = downloaded_file.name
+        fname = downloaded_file.name.lower()
+
+        # ZIP extraction (llama.cpp release assets)
+        if fname.endswith(".zip"):
+            if shutil.which("unzip"):
+                res = subprocess.run(["unzip", "-o", "-q", str(downloaded_file), "-d", str(rd)], capture_output=True, text=True)
+                if res.returncode == 0:
+                    extracted = True
+            if not extracted:
+                try:
+                    with zipfile.ZipFile(str(downloaded_file), "r") as zip_ref:
+                        zip_ref.extractall(str(rd))
+                    extracted = True
+                except Exception as ze:
+                    _log(f"Python zipfile extraction failed: {ze}")
 
         # Method A: system tar
-        if shutil.which("tar"):
+        if not extracted and shutil.which("tar"):
             tar_cmd = ["tar", "-xf", str(downloaded_file), "-C", str(rd)]
             res = subprocess.run(tar_cmd, capture_output=True, text=True)
             if res.returncode == 0:
@@ -424,7 +508,7 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
             except Exception as e:
                 _log(f"tarfile extraction failed: {e}")
 
-        # Method C: zstandard if python package available
+        # Method C: zstandard if python package available, or CLI fallback
         if not extracted and fname.endswith(".zst"):
             try:
                 import zstandard as zstd
@@ -437,16 +521,42 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
                 decompressed_tar.unlink(missing_ok=True)
                 extracted = True
             except Exception as e:
-                _log(f"zstandard decompression failed: {e}")
+                _log(f"zstandard python decompression failed ({e}), trying CLI...")
+                try:
+                    if shutil.which("unzstd"):
+                        tar_path = rd / "archive.tar"
+                        res = subprocess.run(["unzstd", "-f", str(downloaded_file), "-o", str(tar_path)], capture_output=True, text=True)
+                        if res.returncode == 0 and tar_path.is_file():
+                            with tarfile.open(tar_path, "r:*") as tar:
+                                tar.extractall(path=str(rd))
+                            extracted = True
+                            tar_path.unlink(missing_ok=True)
+                    elif shutil.which("zstd"):
+                        tar_path = rd / "archive.tar"
+                        res = subprocess.run(["zstd", "-d", "-f", str(downloaded_file), "-o", str(tar_path)], capture_output=True, text=True)
+                        if res.returncode == 0 and tar_path.is_file():
+                            with tarfile.open(tar_path, "r:*") as tar:
+                                tar.extractall(path=str(rd))
+                            extracted = True
+                            tar_path.unlink(missing_ok=True)
+                except Exception as e2:
+                    _log(f"zstandard CLI decompression failed: {e2}")
 
         # Look for extracted binary
-        target_bin = bd / "ollama"
+        target_name = "llama-server" if engine == "llamacpp" else "ollama"
+        target_bin = bd / target_name
+
         if not target_bin.is_file():
-            # Search anywhere under rd
-            for candidate in rd.rglob("ollama"):
+            for candidate in rd.rglob(target_name):
                 if candidate.is_file() and not candidate.is_symlink() and candidate != target_bin:
                     target_bin.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(candidate), str(target_bin))
+                    break
+
+        if not target_bin.is_file() and engine == "llamacpp":
+            for candidate in rd.rglob("llama-cli"):
+                if candidate.is_file() and not candidate.is_symlink():
+                    shutil.move(str(candidate), str(bd / "llama-cli"))
                     break
 
         if target_bin.is_file():
@@ -454,10 +564,20 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
                 target_bin.chmod(0o755)
             except Exception:
                 pass
-            _log(f"✓ Ollama runtime installed successfully at {target_bin}")
-            return {"ok": True, "binary": str(target_bin)}
+            set_state("localai:engine", engine)
+            _log(f"\u2713 {engine} runtime installed successfully at {target_bin}")
+            return {"ok": True, "binary": str(target_bin), "engine": engine}
 
-        raise RuntimeError(f"Extraction completed but 'ollama' binary was not found under {rd}")
+        if engine == "llamacpp" and (bd / "llama-cli").is_file():
+            try:
+                (bd / "llama-cli").chmod(0o755)
+            except Exception:
+                pass
+            set_state("localai:engine", engine)
+            _log(f"\u2713 llama.cpp runtime installed successfully at {bd / 'llama-cli'}")
+            return {"ok": True, "binary": str(bd / "llama-cli"), "engine": engine}
+
+        raise RuntimeError(f"Extraction completed but '{target_name}' binary was not found under {rd}")
     finally:
         if downloaded_file and downloaded_file.is_file():
             downloaded_file.unlink(missing_ok=True)
@@ -468,16 +588,22 @@ def start_server(env_overrides: Optional[Dict[str, str]] = None, log_fn: Optiona
     if srv["up"]:
         return {"ok": True, "alreadyRunning": True, "host": host_url(), "version": srv.get("version", "")}
 
-    b = binary()
+    active_engine = get_state("localai:engine") or "ollama"
+    b = binary(active_engine) or binary()
     if not b:
-        install_runtime(log_fn)
-        b = binary()
+        install_runtime(active_engine, log_fn)
+        b = binary(active_engine) or binary()
         if not b:
-            raise RuntimeError("Ollama binary is not installed.")
+            raise RuntimeError(f"{active_engine} binary is not installed.")
 
-    log_path = root_dir() / "ollama.log"
-    cmd = [b, "serve"]
+    log_path = root_dir() / f"{active_engine}.log"
     env = server_env(env_overrides)
+
+    if active_engine == "llamacpp":
+        port = host_url().rsplit(":", 1)[-1] if ":" in host_url().split("//", 1)[-1] else "11434"
+        cmd = [b, "--port", port, "--host", "0.0.0.0"]
+    else:
+        cmd = [b, "serve"]
 
     with open(log_path, "a", encoding="utf-8") as out:
         subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
@@ -487,14 +613,15 @@ def start_server(env_overrides: Optional[Dict[str, str]] = None, log_fn: Optiona
         time.sleep(0.5)
         srv = server_up()
         if srv["up"]:
-            return {"ok": True, "started": True, "host": host_url(), "version": srv.get("version", "")}
+            return {"ok": True, "started": True, "host": host_url(), "version": srv.get("version", ""), "engine": active_engine}
 
-    return {"ok": False, "error": "Server did not respond within 8 seconds", "log": str(log_path)}
+    return {"ok": False, "error": f"{active_engine} server did not respond within 8 seconds", "log": str(log_path)}
 
 
 def stop_server() -> Dict[str, Any]:
-    # Kill any local ollama processes
+    # Kill any local runtime processes (both engines, whichever is active)
     subprocess.run(["pkill", "-f", "ollama serve"], capture_output=True)
+    subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
     time.sleep(0.5)
     return {"ok": True, "running": server_up()["up"]}
 
@@ -825,13 +952,88 @@ def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
             "url": str(model.get("url", "")),
         })
 
+    # Soft matching fallback: if strict criteria filtered out everything, relax
+    # constraints so the user always gets actionable recommendations instead of
+    # an empty list (e.g. an unusually small RAM budget or a rare combination
+    # of required features).
+    if not ranked:
+        for v in variants():
+            model = v.get("model", {})
+            est = estimate(v, profile, host_info)
+            soft_reasons = []
+            penalty = 1.0
+
+            if not est["fitsRam"]:
+                soft_reasons.append(
+                    f"نیازمند {est['ramGb']} گیگابایت رم (بودجه فعلی: {profile['ramBudgetGb']} گیگ)"
+                )
+                over = max(0.0, est["ramGb"] - profile["ramBudgetGb"])
+                penalty *= max(0.2, 1.0 - (over / max(1.0, profile["ramBudgetGb"])))
+            if profile["contextTokens"] > int(model.get("contextMax") or 8192):
+                soft_reasons.append(f"پنجره کانتکست مدل به {model.get('contextMax')} توکن محدود می‌شود")
+                penalty *= 0.9
+            if profile["requireToolCalling"] and not model.get("toolCalling"):
+                soft_reasons.append("فاقد ابزارفراخوانی رسمی (پاسخ متنی و کدنویسی مستقیم)")
+                penalty *= 0.7
+            if profile["requireVision"] and not model.get("vision"):
+                soft_reasons.append("فاقد قابلیت بینایی")
+                penalty *= 0.7
+            if profile["requireEmbedding"] != bool(model.get("embedding", False)):
+                soft_reasons.append(
+                    "مدل امبدینگ نیست" if profile["requireEmbedding"] else "فقط مدل امبدینگ است و برای چت/کدنویسی مناسب نیست"
+                )
+                penalty *= 0.3
+
+            raw_quality = float(v.get("quality", 50))
+            quality = (raw_quality / 100.0) ** 1.6
+            speed = _speed_score(float(est["tokensPerSec"]))
+            task = _task_match(model, profile["tasks"])
+            lang = _language_score(model, profile["languages"])
+            fit = 0.5
+
+            score = (
+                weights["quality"] * quality
+                + weights["speed"] * speed
+                + weights["task"] * task
+                + weights["lang"] * lang
+                + weights["fit"] * fit
+            ) * penalty
+
+            soft_reasons.append(
+                f"تخمین: {est['ramGb']} گیگ رم · {est['diskGb']} گیگ دیسک · تقریباً {int(est['tokensPerSec'])} توکن بر ثانیه"
+            )
+
+            ranked.append({
+                "ref": v["ref"],
+                "modelId": v["modelId"],
+                "tag": str(v.get("tag")),
+                "name": v["name"],
+                "publisher": str(model.get("publisher", "")),
+                "license": str(model.get("license", "")),
+                "summary": str(model.get("summary", "")),
+                "tasks": model.get("tasks", []),
+                "contextMax": int(model.get("contextMax") or 8192),
+                "toolCalling": bool(model.get("toolCalling", False)),
+                "vision": bool(model.get("vision", False)),
+                "embedding": bool(model.get("embedding", False)),
+                "reasoning": bool(model.get("reasoning", False)),
+                "quant": str(v.get("quant", "")),
+                "paramsB": float(v.get("paramsB") or 0.0),
+                "rawQuality": raw_quality,
+                "score": round(score, 4),
+                "scorePct": int(round(min(100.0, score * 100.0))),
+                "estimate": est,
+                "reasons": soft_reasons,
+                "url": str(model.get("url", "")),
+            })
+
     ranked.sort(key=lambda x: x["score"], reverse=True)
 
     return {
         "profile": profile,
         "host": host_info,
-        "recommendations": ranked[:8],
-        "rejected": rejected[:15],
+        "recommendations": ranked[:12],
+        "rejected": rejected[:12],
     }
 
 
@@ -854,13 +1056,26 @@ def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
                 "name": str(m.get("name", "")),
                 "publisher": str(m.get("publisher", "")),
                 "summary": str(m.get("summary", "")),
+                "description": str(m.get("summary", "")),
+                "license": str(m.get("license", "Open")),
                 "tasks": m.get("tasks", []),
+                "toolCalling": bool(m.get("toolCalling", False)),
+                "vision": bool(m.get("vision", False)),
+                "reasoning": bool(m.get("reasoning", False)),
+                "contextMax": int(m.get("contextMax") or 8192),
                 "variants": [
                     {
                         "tag": str(v.get("tag", "")),
                         "ref": f"{m.get('id')}:{v.get('tag')}",
                         "diskGb": float(v.get("diskGb", 0.0)),
+                        "ramGb": round(float(v.get("diskGb", 0.0)) * WEIGHT_RAM_FACTOR + RUNTIME_OVERHEAD_GB + 0.8, 1),
                         "quant": str(v.get("quant", "")),
+                        "paramsB": float(v.get("paramsB") or 0.0),
+                        "quality": int(v.get("quality") or 50),
+                        "contextMax": int(m.get("contextMax") or 8192),
+                        "toolCalling": bool(m.get("toolCalling", False)),
+                        "vision": bool(m.get("vision", False)),
+                        "reasoning": bool(m.get("reasoning", False)),
                     }
                     for v in m.get("variants", [])
                 ],
@@ -879,6 +1094,23 @@ def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
                             continue
                         mid = str(item.get("modelId") or item.get("id") or "")
                         pub = mid.split("/")[0] if "/" in mid else ""
+                        m_low = mid.lower()
+                        est_disk, est_ram = 4.5, 5.8
+                        if "0.5b" in m_low:
+                            est_disk, est_ram = 0.6, 1.2
+                        elif "1.5b" in m_low or "1b" in m_low or "2b" in m_low:
+                            est_disk, est_ram = 1.5, 2.4
+                        elif "3b" in m_low or "4b" in m_low:
+                            est_disk, est_ram = 2.5, 3.6
+                        elif "7b" in m_low or "8b" in m_low:
+                            est_disk, est_ram = 4.8, 6.2
+                        elif "14b" in m_low or "13b" in m_low:
+                            est_disk, est_ram = 9.2, 11.5
+                        elif "32b" in m_low or "34b" in m_low:
+                            est_disk, est_ram = 20.0, 24.0
+                        elif "70b" in m_low or "72b" in m_low:
+                            est_disk, est_ram = 42.0, 48.0
+
                         hf.append({
                             "source": "huggingface",
                             "id": mid,
@@ -888,7 +1120,12 @@ def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
                             "likes": int(item.get("likes") or 0),
                             "tasks": [t for t in item.get("tags", []) if isinstance(t, str)],
                             "pullRef": f"hf.co/{mid}",
-                            "summary": "مخزن GGUF در Hugging Face — با «ollama pull hf.co/<repo>» نصب می‌شود.",
+                            "diskGb": est_disk,
+                            "ramGb": est_ram,
+                            "toolCalling": "tool" in m_low or "function" in m_low,
+                            "vision": "vision" in m_low or "-vl" in m_low,
+                            "reasoning": "r1" in m_low or "reason" in m_low or "qwq" in m_low,
+                            "summary": f"مخزن GGUF در Hugging Face — با «ollama pull hf.co/{mid}» نصب می‌شود.",
                         })
         except Exception as e:
             logger.warning("Hugging Face search skipped: %s", e)

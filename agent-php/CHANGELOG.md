@@ -12,6 +12,18 @@ depends on those response shapes.
 
 ---
 
+## [3.1.0] — 2026-10-01
+
+### Added
+- **Multi-engine Local AI runtime.** Choose and install either **Ollama** or **llama.cpp (`llama-server`)** from a dropdown in the Local AI panel; each engine's installed/running status is tracked independently and the active one is persisted (`/api/localai/runtime/engine`, `POST /api/localai/runtime/install` now accepts `{ engine }`).
+- **Unbounded RAM budget input.** The hardware-profile RAM slider is paired with a free-typing number field with no upper cap, so any custom budget (including values above the host's physical RAM, e.g. for remote/future upgrades) can be used for recommendations.
+- **Richer manual-search result cards.** Catalog and Hugging Face search results now show file size, estimated minimum RAM, parameter count, quality score, context window, and tool-calling/vision/reasoning badges per variant.
+
+### Fixed
+- **Empty top-level model recommendations.** `LocalAI::recommend()` (and the Python equivalent) no longer returns an empty list when strict hardware/feature constraints reject every catalog variant; it now falls back to a penalty-scored soft match so the user always gets actionable suggestions with clear reasons.
+
+---
+
 ## [3.0.0] — 2026-10-01
 
 ### Added
