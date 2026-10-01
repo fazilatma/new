@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.4.0"
+SCRIPT_VERSION="2.4.1"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -370,7 +370,7 @@ function rewriteAssetUrls(input) {
 function rewriteHtml(input) {
   if (basePath === "/") return input;
   const baseJson = JSON.stringify(basePath);
-  const bootstrap = `<script> (function(){window.__AGENT_CANVAS_BASE_PATH__=${baseJson};if(!location.pathname.startsWith(${baseJson}+"/")&&location.pathname!==${baseJson}){history.replaceState(history.state,"",${baseJson}+(location.pathname.startsWith("/")?location.pathname:"/"+location.pathname)+location.search+location.hash);}}());</script>`;
+  const bootstrap = `<script> (function(){const base=${baseJson};window.__AGENT_CANVAS_BASE_PATH__=base;try{const backendsKey="openhands-backends",activeKey="openhands-active-backend",healthKey="openhands-backend-health",host=location.origin+base;let backends=[];const stored=localStorage.getItem(backendsKey);if(stored){const parsed=JSON.parse(stored);if(Array.isArray(parsed))backends=parsed;}let backend=backends.find((item)=>item&&item.id==="default-local");if(!backend){backend={id:"default-local",name:"Local",host,apiKey:"",kind:"local",authMode:"api-key"};backends.unshift(backend);}else{const changed=backend.host!==host;backend.name=backend.name||"Local";backend.host=host;backend.apiKey=typeof backend.apiKey==="string"?backend.apiKey:"";backend.kind="local";backend.authMode="api-key";if(changed)backend.connectionRevision=(Number.isSafeInteger(backend.connectionRevision)?backend.connectionRevision:0)+1;}localStorage.setItem(backendsKey,JSON.stringify(backends));let selection=null;try{selection=JSON.parse(sessionStorage.getItem(activeKey)||localStorage.getItem(activeKey)||"null");}catch{}const selected=selection&&backends.find((item)=>item&&item.id===selection.backendId);if(!selected||selected.id==="no-backend"||(selected.kind==="local"&&(!selected.host||selected.host===location.origin))){const value=JSON.stringify({backendId:backend.id,orgId:null});localStorage.setItem(activeKey,value);sessionStorage.setItem(activeKey,value);}try{const health=JSON.parse(localStorage.getItem(healthKey)||"{}");if(health&&typeof health==="object"&&backend.id in health){delete health[backend.id];if(Object.keys(health).length)localStorage.setItem(healthKey,JSON.stringify(health));else localStorage.removeItem(healthKey);}}catch{}}catch{}if(!location.pathname.startsWith(base+"/")&&location.pathname!==base){history.replaceState(history.state,"",base+(location.pathname.startsWith("/")?location.pathname:"/"+location.pathname)+location.search+location.hash);}}());</script>`;
   let html = rewriteAssetUrls(input)
     .replace(/(["'])\/favicon\.svg/g, `$1${basePath}/favicon.svg`)
     .replace(/"basename":"\/"/g, `"basename":${baseJson}`);
@@ -1373,7 +1373,8 @@ web_check() {
         if grep -Fq '"/assets/' "$tmp/asset" || grep -Fq "'/assets/" "$tmp/asset"; then
             die 'A JavaScript manifest still contains unprefixed root asset URLs.'
         fi
-        grep -Fq "__AGENT_CANVAS_BASE_PATH__=\"$BASE_PATH\"" "$tmp/root" || die 'The frontend base-path runtime configuration is missing.'
+        grep -Fq '__AGENT_CANVAS_BASE_PATH__' "$tmp/root" || die 'The frontend base-path runtime configuration is missing.'
+        grep -Fq 'openhands-backends' "$tmp/root" || die 'The local backend bootstrap configuration is missing.'
         grep -Fq "\"basename\":\"$BASE_PATH\"" "$tmp/root" || die 'The frontend router basename was not rewritten.'
     fi
     [[ "$health_code" == "200" ]] || die 'Authenticated Agent Canvas health check failed.'
