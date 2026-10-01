@@ -2,7 +2,7 @@
   "name": "OpenHands Agent Canvas (Helper Managed, No Docker)",
   "type": "other",
   "repo_url": "https://github.com/fazilatma/new.git",
-  "branch": "main",
+  "branch": "arena/01a0f230-new",
   "subfolder": "",
   "deploy_path": "",
   "port": "8810",
@@ -11,7 +11,7 @@
   "start_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; exec \"$ACCOUNT_HOME/.local/bin/openhands-host\" run --port \"${PORT:-8810}\" --host 0.0.0.0 --access-host \"${OPENHANDS_ACCESS_HOST:-sabashopping.ir}\" --canvas-version \"${OPENHANDS_CANVAS_VERSION:-latest}\"",
   "env": {
     "ACCOUNT_HOME": "/home/sabashop",
-    "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/b3cd30235d24de093066b13a5c915ccdd4d8ecd1/host-helpers/install-openhands-host.sh",
+    "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/install-openhands-host.sh",
     "OPENHANDS_ACCESS_HOST": "sabashopping.ir",
     "OPENHANDS_CANVAS_VERSION": "latest",
     "NODE_ENV": "production",

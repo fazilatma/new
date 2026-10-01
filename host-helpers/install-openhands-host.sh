@@ -6,8 +6,8 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.0.0"
-SELF_URL="https://raw.githubusercontent.com/fazilatma/new/main/host-helpers/install-openhands-host.sh"
+SCRIPT_VERSION="2.0.1"
+SELF_URL="https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
 

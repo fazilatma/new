@@ -179,7 +179,7 @@ The included `open-webui-computer-rootless-project.json` imports the same helper
 Download first, then run it as a separate short command so fragile web terminals do not have to paste one long pipeline:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
 ```
 
 ```bash
