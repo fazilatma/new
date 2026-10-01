@@ -6,8 +6,8 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.1.0"
-SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
+SCRIPT_VERSION="2.1.1"
+SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh?v=2.1.1"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
 
@@ -744,17 +744,15 @@ assert_runtime_ports_free() {
 }
 
 serve_agent() {
-    local output_mode="${1:-background}"
     local -a args=(--public --port "$PORT" --host "$LISTEN_HOST")
     load_runtime_environment
     assert_runtime_ports_free
     record_pid "$$"
 
-    if [[ "$output_mode" == "foreground" ]] && command -v tee >/dev/null 2>&1; then
-        # Keep WebConsole output visible while retaining a helper-owned log.
-        exec > >(tee -a "$LOG_FILE") 2>&1
-    fi
-
+    # Keep stdout/stderr attached directly to WebConsole. Some restricted hosts
+    # do not mount /dev/fd, so Bash process substitution (tee via /dev/fd/N)
+    # fails before Agent Canvas can start. Background mode is already redirected
+    # to the helper log by start_agent.
     log "Starting Agent Canvas in authenticated public mode on $LISTEN_HOST:$PORT"
     exec "$AGENT_BIN" "${args[@]}"
 }
