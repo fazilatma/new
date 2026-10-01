@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.4.1"
+SCRIPT_VERSION="2.4.2"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -1142,7 +1142,7 @@ supervisor_cleanup() {
 
 serve_agent() {
     local -a args=(--public --port "$UPSTREAM_PORT" --host 127.0.0.1)
-    local waited=0 gateway_path="" root_code="" child_status=1
+    local waited=0 gateway_path="" root_code="" child_status=1 health_failures=0
 
     load_runtime_environment
     write_gateway
@@ -1207,7 +1207,19 @@ serve_agent() {
     log "Agent Canvas is ready: $(browser_url)"
 
     while kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null && kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; do
-        sleep 1
+        sleep 5
+        if curl -fsS --max-time 5 \
+            -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
+            "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null 2>&1; then
+            health_failures=0
+        else
+            health_failures=$((health_failures + 1))
+            warn "Agent Server health probe failed ($health_failures/3)."
+            if ((health_failures >= 3)); then
+                warn 'Agent Server stayed unavailable; exiting the supervised stack so WebConsole can restart it cleanly.'
+                return 1
+            fi
+        fi
     done
     if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
         if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
