@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.4.4"
+SCRIPT_VERSION="2.5.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -54,6 +54,7 @@ Actions:
   status           Show installed versions, process state, and health.
   logs             Show the last 120 log lines (use --follow to keep watching).
   access-info      Print the browser URL and the private session API key.
+  pair             Create a five-minute, one-use browser pairing link.
   web-check        Check the frontend, ingress, and real Agent Server backend.
   doctor           Run host, runtime, resource, configuration, and health checks.
   rotate-key       Generate a new API key and restart if currently running.
@@ -86,6 +87,7 @@ After the first installation, use only the short installed command:
   openhands-host status
   openhands-host restart
   openhands-host logs --follow
+  openhands-host pair
   openhands-host access-info
   openhands-host doctor
 
@@ -98,7 +100,7 @@ EOF
 
 while (($#)); do
     case "$1" in
-        install|update|start|stop|restart|run|status|logs|access-info|web-check|doctor|rotate-key|self-update|uninstall|helper-version|_serve)
+        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|rotate-key|self-update|uninstall|helper-version|_serve)
             [[ "$ACTION_SET" == false ]] || die "More than one action was supplied: $1"
             ACTION="$1"; ACTION_SET=true; shift ;;
         --home)
@@ -209,6 +211,7 @@ PID_FILE="$STATE_DIR/agent-canvas.pid"
 PID_START_FILE="$STATE_DIR/agent-canvas.pid.start"
 LOG_FILE="$STATE_DIR/agent-canvas.log"
 READY_FILE="$STATE_DIR/agent-canvas.ready"
+PAIR_FILE="$STATE_DIR/browser-pair.env"
 START_LOCK_DIR="$STATE_DIR/start.lock"
 GATEWAY_SCRIPT="$APP_ROOT/prefix-gateway.mjs"
 UV_BIN="$TOOLS_DIR/uv"
@@ -311,14 +314,20 @@ write_gateway() {
     prepare_dirs
     cat > "$GATEWAY_SCRIPT" <<'EOF_GATEWAY'
 #!/usr/bin/env node
+import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 
 const listenHost = process.env.OH_GATEWAY_HOST || "0.0.0.0";
 const listenPort = Number(process.env.OH_GATEWAY_PORT);
 const upstreamPort = Number(process.env.OH_GATEWAY_UPSTREAM_PORT);
+const pairFile = process.env.OH_GATEWAY_PAIR_FILE || "";
+const secretsFile = process.env.OH_GATEWAY_SECRETS_FILE || "";
 const rawBasePath = process.env.OH_GATEWAY_BASE_PATH || "/open";
 const basePath = rawBasePath === "/" ? "/" : `/${rawBasePath.replace(/^\/+|\/+$/g, "")}`;
+const publicPairPath = `${basePath === "/" ? "" : basePath}/_openhands/pair`;
+const strippedPairPath = "/_openhands/pair";
 
 if (!Number.isInteger(listenPort) || !Number.isInteger(upstreamPort)) {
   console.error("Gateway ports must be integers.");
@@ -380,7 +389,121 @@ function rewriteHtml(input) {
   return html;
 }
 
+function requestPath(rawUrl = "/") {
+  try {
+    return new URL(rawUrl, "http://gateway.invalid").pathname;
+  } catch {
+    return "/";
+  }
+}
+
+function isPairRequest(rawUrl) {
+  const pathname = requestPath(rawUrl);
+  return pathname === publicPairPath || pathname === strippedPairPath;
+}
+
+function pairingHeaders(contentType) {
+  return {
+    "cache-control": "no-store, max-age=0",
+    "content-type": contentType,
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  };
+}
+
+function pairingPage() {
+  const endpointJson = JSON.stringify(publicPairPath);
+  const baseJson = JSON.stringify(basePath);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pair OpenHands</title><style>body{font-family:system-ui,sans-serif;max-width:42rem;margin:12vh auto;padding:1.5rem;background:#111827;color:#f9fafb}main{border:1px solid #374151;border-radius:14px;padding:1.5rem;background:#1f2937}h1{margin-top:0;font-size:1.4rem}p{line-height:1.5}.ok{color:#6ee7b7}.err{color:#fca5a5}</style></head><body><main><h1>Pairing this browser with OpenHands</h1><p id="status">Validating the one-time link…</p></main><script>(async()=>{const status=document.getElementById("status"),token=location.hash.slice(1);history.replaceState(null,"",location.pathname);if(!/^[a-f0-9]{64}$/i.test(token)){status.className="err";status.textContent="This pairing link is missing, invalid, expired, or already used. Run openhands-host pair again.";return;}try{const response=await fetch(${endpointJson},{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token})});const data=await response.json();if(!response.ok||!data.apiKey)throw new Error(data.error||"Pairing failed");const base=${baseJson},backendsKey="openhands-backends",activeKey="openhands-active-backend",healthKey="openhands-backend-health",host=location.origin+(base==="/"?"":base);let backends=[];try{const parsed=JSON.parse(localStorage.getItem(backendsKey)||"[]");if(Array.isArray(parsed))backends=parsed;}catch{}let backend=backends.find(item=>item&&item.id==="default-local");if(!backend){backend={id:"default-local",name:"Local",host,apiKey:data.apiKey,kind:"local",authMode:"api-key",connectionRevision:1};backends.unshift(backend);}else{backend.name=backend.name||"Local";backend.host=host;backend.apiKey=data.apiKey;backend.kind="local";backend.authMode="api-key";backend.connectionRevision=(Number.isSafeInteger(backend.connectionRevision)?backend.connectionRevision:0)+1;}localStorage.setItem(backendsKey,JSON.stringify(backends));const selection=JSON.stringify({backendId:backend.id,orgId:null});localStorage.setItem(activeKey,selection);sessionStorage.setItem(activeKey,selection);try{const health=JSON.parse(localStorage.getItem(healthKey)||"{}");if(health&&typeof health==="object"){delete health[backend.id];if(Object.keys(health).length)localStorage.setItem(healthKey,JSON.stringify(health));else localStorage.removeItem(healthKey);}}catch{}status.className="ok";status.textContent="Paired successfully. Opening OpenHands…";setTimeout(()=>location.replace(base==="/"?"/":base+"/"),250);}catch(error){status.className="err";status.textContent=error instanceof Error?error.message:"Pairing failed";}})();</script></body></html>`;
+}
+
+function readPairRecord() {
+  if (!pairFile) throw new Error("Browser pairing is not configured");
+  const raw = fs.readFileSync(pairFile, "utf8");
+  const hash = raw.match(/^TOKEN_SHA256=([a-f0-9]{64})$/mi)?.[1]?.toLowerCase();
+  const expiresRaw = raw.match(/^EXPIRES_AT=([0-9]+)$/m)?.[1];
+  const expiresAt = Number(expiresRaw);
+  if (!hash || !Number.isSafeInteger(expiresAt)) throw new Error("The pairing record is invalid");
+  return { hash, expiresAt };
+}
+
+function readStoredApiKey() {
+  if (!secretsFile) throw new Error("OpenHands secrets are not configured");
+  const raw = fs.readFileSync(secretsFile, "utf8");
+  const apiKey = raw.match(/^LOCAL_BACKEND_API_KEY=([a-f0-9]{64,})$/mi)?.[1];
+  if (!apiKey) throw new Error("The stored OpenHands API key is invalid");
+  return apiKey;
+}
+
+function consumePairToken(token) {
+  if (!/^[a-f0-9]{64}$/i.test(token)) throw new Error("Invalid pairing token");
+  const record = readPairRecord();
+  if (Math.floor(Date.now() / 1000) > record.expiresAt) {
+    try { fs.unlinkSync(pairFile); } catch {}
+    throw new Error("This pairing link has expired");
+  }
+  const actual = crypto.createHash("sha256").update(token, "utf8").digest();
+  const expected = Buffer.from(record.hash, "hex");
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
+    throw new Error("Invalid pairing token");
+  }
+  const apiKey = readStoredApiKey();
+  // Synchronous validation and deletion happen in one event-loop turn, making
+  // the token single-use even if two POST requests arrive together.
+  fs.unlinkSync(pairFile);
+  return apiKey;
+}
+
+function handlePairRequest(req, res) {
+  if (req.method === "GET" || req.method === "HEAD") {
+    const body = Buffer.from(pairingPage(), "utf8");
+    res.writeHead(200, { ...pairingHeaders("text/html; charset=utf-8"), "content-length": String(body.length) });
+    if (req.method === "HEAD") res.end(); else res.end(body);
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(405, { ...pairingHeaders("application/json; charset=utf-8"), allow: "GET, HEAD, POST" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  const chunks = [];
+  let size = 0;
+  let rejected = false;
+  req.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > 4096) {
+      rejected = true;
+      res.writeHead(413, pairingHeaders("application/json; charset=utf-8"));
+      res.end(JSON.stringify({ error: "Pairing request is too large" }));
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", () => {
+    if (rejected) return;
+    try {
+      const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const apiKey = consumePairToken(String(input?.token || ""));
+      res.writeHead(200, pairingHeaders("application/json; charset=utf-8"));
+      res.end(JSON.stringify({ apiKey }));
+    } catch (error) {
+      const missing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+      const message = error instanceof Error ? error.message : "Pairing failed";
+      res.writeHead(missing ? 410 : 403, pairingHeaders("application/json; charset=utf-8"));
+      res.end(JSON.stringify({ error: missing ? "This pairing link is expired or already used" : message }));
+    }
+  });
+}
+
 function proxyHttp(req, res) {
+  if (isPairRequest(req.url)) {
+    handlePairRequest(req, res);
+    return;
+  }
   const headers = { ...req.headers, "accept-encoding": "identity" };
   headers.host = `127.0.0.1:${upstreamPort}`;
   headers["x-forwarded-host"] ||= req.headers.host || "";
@@ -812,6 +935,19 @@ generate_secret() {
     fi
 }
 
+sha256_value() {
+    local value="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$value" | sha256sum | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        printf '%s' "$value" | openssl dgst -sha256 -r | awk '{print $1}'
+    elif command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$value" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+    else
+        die 'sha256sum, openssl, or Python 3 is required for browser pairing.'
+    fi
+}
+
 write_new_secrets() {
     local api_key secret_key
     prepare_dirs
@@ -899,7 +1035,7 @@ managed_pid() {
         printf '%s\n' "$pid"
         return 0
     fi
-    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE"
+    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE" "$PAIR_FILE"
     return 1
 }
 
@@ -1109,7 +1245,7 @@ cleanup_orphaned_runtime() {
         sleep 1
         waited=$((waited + 1))
     done
-    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE"
+    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE" "$PAIR_FILE"
 }
 
 assert_runtime_ports_free() {
@@ -1134,7 +1270,7 @@ supervisor_cleanup() {
     local pid="" waited=0 recorded=""
     trap - EXIT INT TERM HUP
     set +e
-    rm -f "$READY_FILE"
+    rm -f "$READY_FILE" "$PAIR_FILE"
     for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
         [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null || true
     done
@@ -1204,6 +1340,8 @@ serve_agent() {
     export OH_GATEWAY_PORT="$PORT"
     export OH_GATEWAY_UPSTREAM_PORT="$UPSTREAM_PORT"
     export OH_GATEWAY_BASE_PATH="$BASE_PATH"
+    export OH_GATEWAY_PAIR_FILE="$PAIR_FILE"
+    export OH_GATEWAY_SECRETS_FILE="$SECRETS_FILE"
     log "Starting the prefix-aware public gateway on $LISTEN_HOST:$PORT"
     "$NODE_HOME/bin/node" "$GATEWAY_SCRIPT" &
     SUPERVISED_GATEWAY_PID=$!
@@ -1281,7 +1419,7 @@ start_agent() {
     while ((waited < 180)); do
         if [[ "$(cat "$READY_FILE" 2>/dev/null || true)" == "$pid" ]] && agent_is_healthy; then
             log "Agent Canvas is ready: $(browser_url)"
-            log 'Run openhands-host access-info to display the required API key.'
+            log 'Run openhands-host pair for a secure one-click browser login.'
             return 0
         fi
         if ! pid_belongs_to_canvas "$pid"; then
@@ -1378,6 +1516,38 @@ show_access_info() {
         printf 'For Internet use, terminate TLS in a real reverse proxy, then configure --public-url.\n'
     fi
     printf 'Warning: authenticated agents have this account user\047s filesystem, shell, and network permissions.\n'
+}
+
+pair_browser() {
+    local token="" token_hash="" expires_at="" url="" prefix="" probe="$CACHE_DIR/pair-probe.$$" tmp="$PAIR_FILE.$$"
+    ensure_secrets
+    agent_is_healthy || die 'OpenHands is not ready or its stored API key is out of sync. Restart the WebConsole project, then retry pairing.'
+    url="$(browser_url)"
+    [[ "$url" == https://* ]] || die 'One-click browser pairing requires an HTTPS public URL.'
+
+    prefix="$BASE_PATH"
+    [[ "$prefix" == "/" ]] && prefix=""
+    if ! curl -fsS --max-time 10 "$(local_url)$prefix/_openhands/pair" -o "$probe" || \
+        ! grep -Fq 'Pairing this browser with OpenHands' "$probe"; then
+        rm -f "$probe"
+        die 'The running gateway does not support one-click pairing yet. Deploy/update and restart the existing WebConsole project, then retry.'
+    fi
+    rm -f "$probe"
+
+    token="$(generate_secret)"
+    token_hash="$(sha256_value "$token")"
+    [[ "$token" =~ ^[a-f0-9]{64}$ && "$token_hash" =~ ^[a-f0-9]{64}$ ]] || die 'Secure pairing token generation failed.'
+    expires_at="$(( $(date +%s) + 300 ))"
+    {
+        printf 'TOKEN_SHA256=%s\n' "$token_hash"
+        printf 'EXPIRES_AT=%s\n' "$expires_at"
+    } > "$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$PAIR_FILE"
+
+    printf 'One-time OpenHands pairing link (expires in 5 minutes):\n'
+    printf '%s/_openhands/pair#%s\n' "${url%/}" "$token"
+    printf 'Open this link in the browser that should use OpenHands. The token is single-use; run openhands-host pair again for another browser.\n'
 }
 
 web_check() {
@@ -1621,6 +1791,7 @@ case "$ACTION" in
     status) show_status ;;
     logs) show_logs ;;
     access-info) show_access_info ;;
+    pair) pair_browser ;;
     web-check) web_check ;;
     doctor) doctor ;;
     rotate-key) rotate_key ;;
