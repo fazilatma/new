@@ -13,6 +13,7 @@
     "advancedMetricsPersisted": true,
     "failedResultDetailsVisible": true,
     "blockingCliCompatibilityPassed": true,
+    "bareModelRepairedBeforeTestRun": true,
     "cancellationPassed": true,
     "secretLeakInLogs": false
   },

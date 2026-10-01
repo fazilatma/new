@@ -25,7 +25,7 @@ import asyncio
 class FakeLlm:
     def __init__(self, name):
         self.name = name
-        self.model = {"slow":"openai/slow-model","fast":"mistral/fast-model","bad":"anthropic/bad-model"}[name]
+        self.model = {"slow":"openai/slow-model","fast":"mistral/fast-model","bad":"anthropic/bad-model","bare":"gemini-2.5-flash"}[name]
     def uses_responses_api(self):
         return False
     async def acompletion(self, **kwargs):
@@ -121,6 +121,13 @@ def main() -> int:
         assert parsed["results"][0]["name"] == "fast"
         assert parsed["results"][0]["provider"] == "mistral"
 
+        bare = run_tester(root, {"profiles": ["bare"], "concurrency": 1})
+        assert bare.returncode == 1, bare.stderr
+        bare_result = json.loads(bare.stdout)["results"][0]
+        assert bare_result["ok"] is False
+        assert bare_result["error"]["type"] == "ValueError"
+        assert "provider prefix" in bare_result["error"]["message"]
+
         evidence = {
             "status": "passed",
             "assertions": {
@@ -130,6 +137,7 @@ def main() -> int:
                 "latencyAndQueueMetrics": True,
                 "providerMetadata": True,
                 "credentialRedaction": True,
+                "bareProviderDiagnostic": True,
                 "blockingCompatibility": True,
             },
             "streamEventCount": len(events),

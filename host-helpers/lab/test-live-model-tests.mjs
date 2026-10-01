@@ -14,8 +14,15 @@ const sessionKey = "live-test-session-key";
 const profiles = new Map([
   ["good-profile", { config: { model: "openai/good-model", max_input_tokens: 16384 }, api_key_set: true }],
   ["bad-profile", { config: { model: "anthropic/bad-model", max_input_tokens: 16384 }, api_key_set: true }],
-  ["slow-profile", { config: { model: "mistral/slow-model", max_input_tokens: 32768 }, api_key_set: true }],
+  ["slow-profile", { config: { model: "gemini-2.5-flash-preview-tts", provider_connection_id: "connection-gemini-live", max_input_tokens: 32768 }, api_key_set: true }],
 ]);
+const geminiConnection = {
+  id: "connection-gemini-live",
+  display_name: "Google AI Studio",
+  provider: "gemini",
+  base_url: "https://generativelanguage.googleapis.com/v1beta",
+  api_key_set: true,
+};
 
 function json(res, status, value) {
   const body = Buffer.from(JSON.stringify(value));
@@ -23,20 +30,36 @@ function json(res, status, value) {
   res.end(body);
 }
 
-const backend = http.createServer((req, res) => {
+async function requestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+}
+
+const backend = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://backend.invalid");
   if (req.method === "GET" && url.pathname === "/api/profiles") {
     json(res, 200, { profiles: [...profiles].map(([name, profile]) => ({ name, model: profile.config.model })) });
     return;
   }
-  if (req.method === "GET" && url.pathname.startsWith("/api/profiles/")) {
+  if (url.pathname.startsWith("/api/profiles/")) {
     const name = decodeURIComponent(url.pathname.slice("/api/profiles/".length));
     const profile = profiles.get(name);
-    json(res, profile ? 200 : 404, profile ? { name, ...profile } : { error: "not found" });
-    return;
+    if (req.method === "GET") {
+      json(res, profile ? 200 : 404, profile ? { name, ...profile } : { error: "not found" });
+      return;
+    }
+    if (req.method === "POST" && profile) {
+      const body = await requestBody(req);
+      assert.equal(body.include_secrets, false);
+      assert.ok(!Object.hasOwn(body.llm, "api_key"));
+      profiles.set(name, { config: body.llm, api_key_set: Boolean(body.llm.provider_connection_id || profile.api_key_set) });
+      json(res, 200, { name, ...profiles.get(name) });
+      return;
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/llm/provider-connections") {
-    json(res, 200, []);
+    json(res, 200, [geminiConnection]);
     return;
   }
   if (req.method === "GET" && url.pathname === "/server_info") {
@@ -195,6 +218,11 @@ sys.exit(0 if all(name != "bad-profile" for name in names) else 1)
     body: JSON.stringify({ concurrency: 2 }),
   });
   assert.equal(started.status, 202);
+  assert.equal(
+    profiles.get("slow-profile").config.model,
+    "gemini/gemini-2.5-flash-preview-tts",
+    "starting a test run must repair a bare model ID before LiteLLM is reached",
+  );
   assert.match(started.value.jobId, /^[a-f0-9]{24}$/);
   const recoverableJob = await waitForRecoverableJob(managerPort, started.value.jobId);
   assert.equal(recoverableJob.kind, "profile-test");
@@ -251,6 +279,7 @@ sys.exit(0 if all(name != "bad-profile" for name in names) else 1)
       advancedMetricsPersisted: true,
       failedResultDetailsVisible: true,
       blockingCliCompatibilityPassed: true,
+      bareModelRepairedBeforeTestRun: true,
       cancellationPassed: true,
       secretLeakInLogs: false,
     },

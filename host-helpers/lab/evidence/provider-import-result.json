@@ -13,7 +13,11 @@
     "bareModelProviderNormalized": true,
     "modelLevelEndpointAttached": true,
     "modelLevelCredentialEncrypted": true,
-    "startupSnapshotReconciled": true
+    "startupSnapshotReconciled": true,
+    "linkedBareGeminiRepairedGlobally": true,
+    "googleResourceModelCanonicalized": true,
+    "distinctModelEndpointPreserved": true,
+    "inlineCredentialProfileProtected": true
   },
   "summary": {
     "providers": 1,
@@ -32,7 +36,9 @@
       "openrouter-existing-a",
       "openrouter-new"
     ],
-    "warnings": []
+    "warnings": [
+      "1 inline-key Profile(s) need manual provider-prefix repair to preserve their credential."
+    ]
   },
   "codestralSummary": {
     "providers": 1,
@@ -50,6 +56,8 @@
     "profileNames": [
       "codestral-imported"
     ],
-    "warnings": []
+    "warnings": [
+      "1 inline-key Profile(s) need manual provider-prefix repair to preserve their credential."
+    ]
   }
 }

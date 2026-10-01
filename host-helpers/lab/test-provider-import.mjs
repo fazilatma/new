@@ -29,13 +29,21 @@ const profiles = new Map([
     config: { model: "anthropic/claude-test", max_input_tokens: 16384 },
     api_key_set: false,
   }],
-  ["codestral-imported", {
-    config: { model: "codestral-2508", max_input_tokens: 16384 },
-    api_key_set: false,
-  }],
   ["codestral-startup", {
     config: { model: "codestral-2508", max_input_tokens: 16384 },
     api_key_set: false,
+  }],
+  ["gemini-linked-bare", {
+    config: { model: "gemini-2.5-flash-preview-tts", base_url: "https://generativelanguage.googleapis.com/v1beta", provider_connection_id: "connection-gemini-existing", max_input_tokens: 16384 },
+    api_key_set: true,
+  }],
+  ["gemini-resource-name", {
+    config: { model: "models/gemini-2.5-flash", base_url: "https://generativelanguage.googleapis.com/v1beta", provider_connection_id: "connection-gemini-existing", max_input_tokens: 16384 },
+    api_key_set: true,
+  }],
+  ["gemini-inline-protected", {
+    config: { model: "gemini-private-model", max_input_tokens: 16384 },
+    api_key_set: true,
   }],
 ]);
 let connection = {
@@ -50,6 +58,13 @@ let mistralConnection = {
   display_name: "Mistral AI",
   provider: "mistral",
   base_url: "https://api.mistral.ai/v1",
+  api_key_set: true,
+};
+const geminiConnection = {
+  id: "connection-gemini-existing",
+  display_name: "Google AI Studio",
+  provider: "google-ai-studio",
+  base_url: "https://generativelanguage.googleapis.com/v1beta",
   api_key_set: true,
 };
 
@@ -94,7 +109,7 @@ const backend = http.createServer(async (req, res) => {
     }
   }
   if (req.method === "GET" && url.pathname === "/api/llm/provider-connections") {
-    json(res, 200, [connection, ...(mistralConnection ? [mistralConnection] : [])]);
+    json(res, 200, [connection, ...(mistralConnection ? [mistralConnection] : []), geminiConnection]);
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/llm/provider-connections") {
@@ -212,13 +227,21 @@ try {
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   await waitForReady(managerPort, child);
   await waitForCondition(
-    () => profiles.get("codestral-startup")?.config?.model === "mistral/codestral-2508",
-    "Timed out waiting for startup import reconciliation",
+    () => profiles.get("codestral-startup")?.config?.model === "mistral/codestral-2508"
+      && profiles.get("gemini-linked-bare")?.config?.model === "gemini/gemini-2.5-flash-preview-tts"
+      && profiles.get("gemini-resource-name")?.config?.model === "gemini/gemini-2.5-flash",
+    "Timed out waiting for startup provider-prefix reconciliation",
   );
   const startupCodestral = profiles.get("codestral-startup")?.config || {};
   assert.equal(startupCodestral.model, "mistral/codestral-2508", "startup must reconcile the last redacted import snapshot");
   assert.equal(startupCodestral.provider_connection_id, mistralConnection.id);
   assert.match(startupCodestral.base_url, new RegExp(`/routes/mistral/v1$`));
+  const startupGemini = profiles.get("gemini-linked-bare")?.config || {};
+  assert.equal(startupGemini.model, "gemini/gemini-2.5-flash-preview-tts", "a linked bare Gemini ID must receive its LiteLLM provider prefix automatically");
+  assert.equal(startupGemini.provider_connection_id, geminiConnection.id);
+  assert.equal(startupGemini.base_url, "https://generativelanguage.googleapis.com/v1beta", "provider-prefix repair must not overwrite a model endpoint");
+  assert.equal(profiles.get("gemini-resource-name")?.config?.model, "gemini/gemini-2.5-flash", "Google models/ resource names must be canonicalized for LiteLLM");
+  assert.equal(profiles.get("gemini-inline-protected")?.config?.model, "gemini-private-model", "an unlinked inline credential must never be destroyed by automatic repair");
 
   const document = {
     providers: [{
@@ -253,6 +276,10 @@ try {
   assert.equal(profiles.get("anthropic-untouched").config.provider_connection_id, undefined, "unrelated providers must remain untouched");
   assert.ok(profileWrites.length >= 3, "laboratory must observe real profile API writes");
 
+  profiles.set("codestral-imported", {
+    config: { model: "codestral-2508", max_input_tokens: 16384 },
+    api_key_set: false,
+  });
   const codestralResponse = await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/providers/import`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-session-api-key": sessionKey },
@@ -332,6 +359,10 @@ try {
       modelLevelEndpointAttached: true,
       modelLevelCredentialEncrypted: true,
       startupSnapshotReconciled: true,
+      linkedBareGeminiRepairedGlobally: true,
+      googleResourceModelCanonicalized: true,
+      distinctModelEndpointPreserved: true,
+      inlineCredentialProfileProtected: true,
     },
     summary: result,
     codestralSummary: codestralResult,

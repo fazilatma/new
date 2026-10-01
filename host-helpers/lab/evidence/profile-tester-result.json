@@ -7,6 +7,7 @@
     "latencyAndQueueMetrics": true,
     "providerMetadata": true,
     "credentialRedaction": true,
+    "bareProviderDiagnostic": true,
     "blockingCompatibility": true
   },
   "streamEventCount": 8

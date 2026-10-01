@@ -43,6 +43,8 @@ async def test_profile(name: str, semaphore: asyncio.Semaphore, on_started=None)
             config = load_config()
             llm = get_llm_profile_store().load(name, cipher=config.cipher)
             model = str(llm.model or "") or None
+            if not model or "/" not in model:
+                raise ValueError("Profile model is missing its LiteLLM provider prefix; reconnect it to the correct Provider Connection and retry")
             messages = [
                 Message(role="system", content=[TextContent(text="Reply with exactly: OK")]),
                 Message(role="user", content=[TextContent(text="ping")]),

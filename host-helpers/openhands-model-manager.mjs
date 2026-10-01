@@ -326,14 +326,18 @@ function collectProviderDocuments(document) {
 const ENDPOINT_FIELDS = ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "apiUrl", "api_url", "apiEndpoint", "api_endpoint", "endpoint", "endpointUrl", "endpointURL", "endpoint_url", "url"];
 const PROVIDER_ALIASES = Object.freeze({
   "mistral-ai": "mistral", mistralai: "mistral",
-  "x-ai": "xai", google: "gemini", googleai: "gemini",
+  "x-ai": "xai", google: "gemini", googleai: "gemini", "google-ai": "gemini",
+  "google-ai-studio": "gemini", "google-generative-ai": "gemini", generativeai: "gemini",
+  "google-vertex": "vertex_ai", vertexai: "vertex_ai",
   "open-router": "openrouter", openrouterai: "openrouter",
   "open-ai": "openai", "openai-compatible": "openai", openaicompatible: "openai",
+  fireworks: "fireworks_ai", together: "together_ai",
 });
 const LITELLM_PROVIDERS = new Set([
-  "anthropic", "azure", "bedrock", "cerebras", "cohere", "deepinfra", "fireworks_ai", "gemini",
-  "github", "groq", "huggingface", "mistral", "ollama", "openai", "openrouter", "perplexity",
-  "replicate", "sambanova", "together_ai", "vertex_ai", "vllm", "watsonx", "xai",
+  "ai21", "anthropic", "azure", "bedrock", "cerebras", "cloudflare", "cohere", "databricks",
+  "deepinfra", "deepseek", "fireworks_ai", "friendliai", "gemini", "github", "groq", "huggingface",
+  "mistral", "moonshot", "nvidia_nim", "ollama", "openai", "openrouter", "perplexity", "replicate",
+  "sambanova", "together_ai", "vertex_ai", "vllm", "volcengine", "watsonx", "xai",
 ]);
 
 function endpointFrom(source) {
@@ -415,17 +419,81 @@ function profileBelongsToImportedProvider(config, info) {
 }
 
 function canonicalModel(provider, id) {
-  let model = String(id || "").trim();
+  let model = String(id || "").trim().replace(/^\/+|\/+$/g, "");
   if (!model) return "";
   const prefix = normalizeImportedProvider(provider);
   if (prefix === "openrouter") {
     if (!model.startsWith("openrouter/")) model = `openrouter/${model}`;
     return model;
   }
-  if (model.includes("/")) return model;
-  // LiteLLM requires every model to identify its provider. Never persist a
-  // bare model ID such as codestral-2508.
+  const separator = model.indexOf("/");
+  if (separator > 0) {
+    const rawHead = slug(model.slice(0, separator), "");
+    const explicitProvider = PROVIDER_ALIASES[rawHead] || rawHead;
+    if (LITELLM_PROVIDERS.has(explicitProvider)) return `${explicitProvider}/${model.slice(separator + 1)}`;
+    // Google discovery APIs may return names such as models/gemini-2.5-flash.
+    // `models` is a resource collection, not a LiteLLM provider.
+    if (prefix === "gemini" && rawHead === "models") model = model.slice(separator + 1);
+  }
+  // Organization/model and other provider-native IDs still need an explicit
+  // LiteLLM provider in front. Never persist a bare or ambiguous model ID.
   return `${prefix}/${model}`;
+}
+
+function inferProviderForProfile(config, connection) {
+  const connectionProvider = firstString(connection, ["provider", "provider_name", "type"]);
+  const explicitProvider = firstString(config, ["custom_llm_provider", "customLlmProvider", "litellm_provider", "provider"]);
+  const rawBaseUrl = firstString(config, ["base_url", "baseUrl"]) || firstString(connection, ["base_url", "baseUrl"]);
+  const baseUrl = portableBaseUrl(rawBaseUrl).baseUrl || rawBaseUrl;
+  if (connectionProvider) return normalizeImportedProvider(connectionProvider, baseUrl);
+  if (explicitProvider) return normalizeImportedProvider(explicitProvider, baseUrl);
+  if (baseUrl) return normalizeImportedProvider("", baseUrl);
+  const model = String(config?.model || "").trim().toLowerCase();
+  if (/^(?:models\/)?gemini(?:[-_.]|$)/.test(model)) return "gemini";
+  if (/^claude(?:[-_.]|$)/.test(model)) return "anthropic";
+  if (/^(?:gpt-|chatgpt|o[134](?:-|$)|text-embedding|dall-e|tts-|whisper)/.test(model)) return "openai";
+  if (/^(?:mistral|codestral|pixtral|ministral)(?:[-_.]|$)/.test(model)) return "mistral";
+  if (/^grok(?:[-_.]|$)/.test(model)) return "xai";
+  if (/^command(?:[-_.]|$)/.test(model)) return "cohere";
+  if (/^deepseek(?:[-_.\/]|$)/.test(model)) return "deepseek";
+  return "";
+}
+
+async function reconcileBareProfileModels() {
+  const list = await backendRequest("/api/profiles");
+  const connectionsResponse = await backendRequest("/api/llm/provider-connections");
+  const connections = Array.isArray(connectionsResponse) ? connectionsResponse : (connectionsResponse?.connections || []);
+  const connectionsById = new Map(connections.map((connection) => [String(connection?.id || ""), connection]));
+  const outcome = { normalized: 0, skippedProtected: 0, unresolved: 0, failed: 0 };
+  for (const profile of Array.isArray(list?.profiles) ? list.profiles : []) {
+    const name = String(profile?.name || "");
+    if (!name) continue;
+    try {
+      const detail = await backendRequest(`/api/profiles/${encodeURIComponent(name)}`);
+      const config = detail?.config || {};
+      const currentModel = String(config.model || "").trim();
+      if (!currentModel) { outcome.unresolved += 1; continue; }
+      const connection = config.provider_connection_id
+        ? connectionsById.get(String(config.provider_connection_id))
+        : null;
+      const provider = inferProviderForProfile(config, connection);
+      if (!provider) { outcome.unresolved += 1; continue; }
+      const normalizedModel = canonicalModel(provider, currentModel);
+      if (!normalizedModel || normalizedModel === currentModel) continue;
+      // Updating an inline-key profile without receiving its secret could erase
+      // the credential. Provider-Connection and keyless Profiles are safe.
+      if (detail.api_key_set && !connection) { outcome.skippedProtected += 1; continue; }
+      const llm = { ...config, api_key: undefined, model: normalizedModel };
+      await backendRequest(`/api/profiles/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({ llm, include_secrets: false }),
+      });
+      outcome.normalized += 1;
+    } catch {
+      outcome.failed += 1;
+    }
+  }
+  return outcome;
 }
 
 function numericField(source, names) {
@@ -595,7 +663,8 @@ async function importProviders(body) {
         const detail = await getProfileDetail(profileName);
         existingConfig = detail.config || {};
         if (!overwrite) {
-          const normalizeBareModel = existingConfig.model === model.id && modelId.endsWith(`/${model.id}`);
+          const normalizeBareModel = existingConfig.model === model.id
+            && canonicalModel(modelProvider, existingConfig.model) === modelId;
           if (existingConfig.model !== modelId && !normalizeBareModel) {
             summary.warnings.push(`Name conflict skipped without overwrite: ${profileName}`);
             summary.skipped += 1;
@@ -679,6 +748,12 @@ async function importProviders(body) {
     }
   }
 
+  // Repair any older Profile that is already linked to a Provider Connection
+  // but still carries a bare/ambiguous model ID from an earlier installation.
+  const repairs = await reconcileBareProfileModels();
+  summary.modelsNormalized += repairs.normalized;
+  if (repairs.skippedProtected) summary.warnings.push(`${repairs.skippedProtected} inline-key Profile(s) need manual provider-prefix repair to preserve their credential.`);
+  if (repairs.failed) summary.warnings.push(`${repairs.failed} Profile provider-prefix repair(s) could not be completed.`);
   summary.profileNames = [...new Set(summary.profileNames)];
   // Preserve the submitted shape for auditing/round-tripping, but permanently
   // strip credential fields before it touches disk.
@@ -762,6 +837,7 @@ async function testProfiles(body) {
 }
 
 async function runProfileTests(body) {
+  await reconcileBareProfileModels();
   const list = await backendRequest("/api/profiles");
   const all = (list?.profiles || []).map((profile) => profile.name);
   const requested = Array.isArray(body?.profiles) ? body.profiles.filter((name) => all.includes(name)) : all;
@@ -791,6 +867,7 @@ async function testProfilesLive(body, update, signal) {
 }
 
 async function runProfileTestsLive(body, update, signal) {
+  await reconcileBareProfileModels();
   const list = await backendRequest("/api/profiles");
   const summaries = Array.isArray(list?.profiles) ? list.profiles : [];
   const all = summaries.map((profile) => profile.name);
@@ -2010,6 +2087,11 @@ server.listen(managerPort, "127.0.0.1", async () => {
       console.log(`[openhands-model-manager] Reconciled last import: ${reconciled.modelsNormalized} model provider(s), ${reconciled.endpointsAttached} endpoint(s), ${reconciled.profilesLinked} connection link(s).`);
     }
   } catch (error) { console.error(`[openhands-model-manager] Last provider import reconciliation skipped: ${publicError(error)}`); }
+  try {
+    const repaired = await reconcileBareProfileModels();
+    if (repaired.normalized) console.log(`[openhands-model-manager] Added LiteLLM provider prefixes to ${repaired.normalized} Profile model(s).`);
+    if (repaired.skippedProtected) console.error(`[openhands-model-manager] Skipped ${repaired.skippedProtected} inline-key Profile provider-prefix repair(s) to preserve credentials.`);
+  } catch (error) { console.error(`[openhands-model-manager] Profile provider-prefix reconciliation skipped: ${publicError(error)}`); }
   try {
     const repaired = await reconcileMinimumContextWindows();
     if (repaired) console.log(`[openhands-model-manager] Raised ${repaired} profile context window(s) to ${MIN_CONTEXT_WINDOW}.`);
