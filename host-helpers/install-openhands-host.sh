@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.4.3"
+SCRIPT_VERSION="3.5.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -32,7 +32,7 @@ ASSUME_YES=false
 PURGE_DATA=false
 SKIP_SELF_UPDATE=false
 MANAGER_FILE=""
-MANAGER_IMPORT_SECRETS=false
+MANAGER_IMPORT_SECRETS=true
 MANAGER_OVERWRITE=false
 MANAGER_NAME=""
 MANAGER_MODEL_URL=""
@@ -131,8 +131,8 @@ Options:
   --automation-port PORT  Internal automation port (default: 18811).
   --frontend-port PORT    Internal static frontend port (default: 13810).
   --file PATH             JSON import/export file path.
-  --import-secrets        Import fresh API keys from the local JSON file.
-  --overwrite             Update same-name profiles except protected inline keys.
+  --import-secrets        Compatibility flag; API keys are imported encrypted by default.
+  --overwrite             Update same-name profile settings; credential linking is always non-destructive.
   --name NAME             Local model/endpoint name.
   --model-url URL         Direct HTTPS GGUF URL from Hugging Face or GitHub.
   --hf-repo OWNER/REPO    Hugging Face repository (alternative to --model-url).

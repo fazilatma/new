@@ -1,0 +1,9 @@
+status=passed
+source_commit=b8f96c3e82284028cb077811ed1666caac3c5bac
+source_sha256=74dc3059c66b1d9c92190ec8d54ab5c4c1eea203fbc95cf6027ffa2975a6da55
+runtime_sha256=c9fb725ae51e71f605a57949dc9f296373609dcbb1f82bf2f0cbc8c87541174f
+asset=llama-server-b11320-linux-x86_64-musl-static.tar.gz
+asset_sha256=cd78850ae1eb3eea41814837b1781cb656b87e3c698cd0af92247b1fcee15203
+linkage=static-musl
+glibc_symbols=none
+execution=passed

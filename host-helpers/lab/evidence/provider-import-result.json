@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "assertions": {
+    "connectionRotated": true,
+    "existingProviderProfilesLinked": 2,
+    "importedProfilesLinked": 1,
+    "unrelatedProfileUntouched": true,
+    "inlineProfileSecrets": false,
+    "snapshotSecretLeak": false,
+    "exportSecretLeak": false,
+    "logSecretLeak": false,
+    "failedCredentialErrorRedacted": true
+  },
+  "summary": {
+    "providers": 1,
+    "detectedModels": 2,
+    "connectionsCreated": 0,
+    "connectionsUpdated": 1,
+    "profilesCreated": 1,
+    "profilesExisting": 1,
+    "profilesLinked": 3,
+    "profilesUpdated": 0,
+    "contextWindowsAdjusted": 0,
+    "skipped": 0,
+    "profileNames": [
+      "openrouter-existing-a",
+      "openrouter-new"
+    ],
+    "warnings": []
+  }
+}
