@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.4.0"
+SCRIPT_VERSION="3.4.1"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -1709,6 +1709,76 @@ seed_llm_profiles() {
     fi
 }
 
+migrate_stored_context_windows() {
+    local repaired=""
+    # Repair profile documents before Agent Server reads the selected profile.
+    # Only the numeric context field changes; encrypted or inline credential
+    # values and all unknown fields are retained and are never logged.
+    if ! repaired="$(python3 - "$HOME/.openhands/profiles" "$DATA_DIR/profiles" <<'PY'
+import json
+import math
+import os
+import pathlib
+import tempfile
+import sys
+
+minimum = 16384
+updated = 0
+seen = set()
+for raw_directory in sys.argv[1:]:
+    directory = pathlib.Path(raw_directory).expanduser()
+    try:
+        canonical = directory.resolve()
+    except OSError:
+        continue
+    if canonical in seen or not directory.is_dir():
+        continue
+    seen.add(canonical)
+    for profile in directory.glob("*.json"):
+        if profile.is_symlink() or not profile.is_file():
+            continue
+        try:
+            document = json.loads(profile.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                continue
+            value = document.get("max_input_tokens")
+            if isinstance(value, bool):
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric <= 0 or numeric >= minimum:
+                continue
+            document["max_input_tokens"] = minimum
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{profile.name}.", suffix=".tmp", dir=directory
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                    os.fchmod(output.fileno(), 0o600)
+                    json.dump(document, output, ensure_ascii=False, indent=2)
+                    output.write("\n")
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, profile)
+            except BaseException:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+                raise
+            updated += 1
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+print(updated)
+PY
+)"; then
+        warn 'Stored profile context migration failed; startup will continue without changing profile credentials.'
+        return 0
+    fi
+    if [[ "$repaired" =~ ^[0-9]+$ ]] && ((repaired > 0)); then
+        log "Raised $repaired stored profile context window(s) to 16384 before Agent Server startup."
+    fi
+}
+
 serve_agent() {
     local -a args=(--public --port "$UPSTREAM_PORT" --host 127.0.0.1)
     local waited=0 gateway_path="" root_code="" child_status=1 health_failures=0
@@ -1722,6 +1792,7 @@ serve_agent() {
     trap 'exit 129' HUP
 
     cleanup_orphaned_runtime
+    migrate_stored_context_windows
     assert_runtime_ports_free
     record_pid "$$"
     rm -f "$READY_FILE"
