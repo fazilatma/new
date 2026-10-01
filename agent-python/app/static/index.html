@@ -362,6 +362,20 @@
       font-weight: 500;
     }
 
+    .version-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      font-weight: 700;
+      padding: 3px 9px;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(168, 85, 247, 0.16));
+      color: #818cf8;
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      border-radius: 12px;
+      letter-spacing: 0.3px;
+    }
+
     .autosave-pill {
       font-size: 11px;
       color: var(--accent-green);
@@ -2016,6 +2030,7 @@
       padding: 0 10px;
     }
     header.top-bar.collapsed-bar .status-pill,
+    header.top-bar.collapsed-bar .version-pill,
     header.top-bar.collapsed-bar .provider-pill,
     header.top-bar.collapsed-bar .autosave-pill,
     header.top-bar.collapsed-bar .btn:not(.header-collapse-toggle):not(#topWorkspaceToggleBtn) {
@@ -2086,7 +2101,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span>Coding Agent v0.9.0</span>
+          <span id="sidebarVersionText">Arena Agent v2.0.0</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2111,6 +2126,9 @@
       </button>
       <button class="nav-btn" data-view="providers" onclick="navigate('providers')">
         <span class="icon">🤖</span><span class="nav-text">Providers & Models</span>
+      </button>
+      <button class="nav-btn" data-view="localai" onclick="openLocalAi()" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور (Local AI installer)">
+        <span class="icon">🧠</span><span class="nav-text">Local AI Installer</span>
       </button>
       <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
@@ -2164,6 +2182,9 @@
         <div class="status-pill">
           <div class="status-dot" id="systemHealthDot"></div>
           <span id="systemHealthText">Agent Ready</span>
+        </div>
+        <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
+          🚀 v2.0.0
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -3925,10 +3946,26 @@ function toggleTheme() {
 function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
 
+function openLocalAi() {
+  window.location.href = '/localai';
+}
+
 // -------------------------------------------------------------
 // INITIALIZATION
 // -------------------------------------------------------------
 async function initApp() {
+  // Dynamic application version fetching
+  try {
+    const vData = await api('/api/version');
+    if (vData && vData.version) {
+      const vText = 'v' + vData.version;
+      const hb = $('#headerVersionBadge');
+      if (hb) hb.textContent = '🚀 ' + vText;
+      const sb = $('#sidebarVersionText');
+      if (sb) sb.textContent = 'Arena Agent ' + vText;
+    }
+  } catch (_) {}
+
   // Restore saved theme
   const savedTheme = localStorage.getItem('arena_theme');
   if (savedTheme) {

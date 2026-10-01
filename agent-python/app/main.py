@@ -113,6 +113,14 @@ def chat_ui():
 def ui():
     return FileResponse(STATIC_DIR / "index.html")
 
+@app.get("/localai")
+def localai_page():
+    return FileResponse(STATIC_DIR / "localai.html")
+
+@app.get("/diag")
+def diag_page():
+    return FileResponse(STATIC_DIR / "diag.html")
+
 @app.get("/api/version")
 def version():
     return {"name": "Arena Coding Agent", "version": APP_VERSION, "apiVersion": "v1", "status": "ok"}
