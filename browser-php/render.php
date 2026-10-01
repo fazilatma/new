@@ -425,6 +425,8 @@ if ($path === '/render' && $method === 'POST') {
         'selector'  => (string)($b['selector'] ?? ''),
         'scroll'    => !empty($b['scroll']),
         'blockResources' => !empty($b['blockResources']),
+        'driver'    => in_array(strtolower((string)($b['driver'] ?? '')), ['playwright','selenium'], true)
+            ? strtolower((string)$b['driver']) : '',
     ];
     if (!in_array($opts['waitUntil'], ['load', 'domcontentloaded', 'networkidle'], true)) $opts['waitUntil'] = 'domcontentloaded';
 
@@ -438,7 +440,9 @@ if ($path === '/render' && $method === 'POST') {
         set_time_limit((int)ceil($timeoutMs / 1000) + 60);
 
         $drivers = [];
-        if (rcfg()['driver'] === 'selenium') $drivers = ['selenium'];
+        if ($opts['driver'] === 'selenium') $drivers = ['selenium'];
+        elseif ($opts['driver'] === 'playwright') $drivers = ['cdp', 'selenium'];
+        elseif (rcfg()['driver'] === 'selenium') $drivers = ['selenium'];
         else $drivers = rcfg()['driver'] === 'auto' ? ['cdp', 'selenium'] : ['cdp'];
 
         $lastErr = '';

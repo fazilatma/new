@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.184';
+const APP_VERSION = '10.185';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -340,7 +340,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/08';
+const APP_VERSION_DATE = '1405/07/09';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1113,17 +1113,62 @@ function s4WorkerRunJob(array $job): array {
         $phase = (string)($payload['phase'] ?? 'all');
         if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
         $forceAll = !empty($payload['force_all']);
-        $reserved = '';
-        if (!empty($payload['resume'])) {
-            $prep = extractResumePrepare($pk, loadConnections());
-            if (empty($prep['ok'])) {
-                return ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? '')];
+        $resumeNext = !empty($payload['resume']);
+        $segments = 0;
+        $transientResumes = 0;
+        $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 200)));
+        $maxTransientResumes = max(0, min(10, (int)(loadConnections()['worker_extract_retry_segments'] ?? 3)));
+        $res = ['ok' => false, 'error' => 'worker did not start'];
+        while (true) {
+            $segments++;
+            $reserved = '';
+            $runPhase = $phase;
+            if ($resumeNext) {
+                $prep = extractResumePrepare($pk, loadConnections());
+                if (empty($prep['ok'])) {
+                    $res = ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? ''), 'worker_segments' => $segments];
+                    break;
+                }
+                $runPhase = (string)($prep['phase'] ?? $runPhase);
+                $reserved = (string)($prep['queue_id'] ?? '');
             }
-            $phase = (string)($prep['phase'] ?? $phase);
-            $reserved = (string)($prep['queue_id'] ?? '');
+            s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
+                'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase]);
+            $res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved);
+            $res['worker_segments'] = $segments;
+            $budgetResume = !empty($res['ran_out']);
+            $transientResume = !empty($res['resume_needed']) && !$budgetResume;
+            if ($transientResume) $transientResumes++;
+            $needsResume = !empty($res['ok']) && empty($res['cancelled'])
+                && ($budgetResume || ($transientResume && $transientResumes <= $maxTransientResumes));
+            if (!$needsResume) break;
+            if ($segments >= $maxSegments) {
+                $res['worker_paused_after_segments'] = true;
+                $res['resume_needed'] = true;
+                break;
+            }
+            /* v10.185: در سرویس دائمی، pauseهای بودجه/هاست پایان کار نیستند؛
+               worker بلافاصله از checkpoint ادامه می‌دهد تا عملیات طولانی بعد از
+               چند صفحه متوقف نماند. توقف‌های خطای موقت هم فقط چند بار retry می‌شوند
+               تا اگر سایت واقعاً بلاک کرده، بی‌نهایت چکش نخورد. */
+            try {
+                $pg = readProgress(EXTRACT_PROGRESS_FILE);
+                $lg = array_values((array)($pg['recent_log'] ?? []));
+                $lg[] = $budgetResume
+                    ? ('🧵 worker از checkpoint ادامه می‌دهد — قطعهٔ ' . ($segments + 1))
+                    : ('🧵 worker retry محدود پس از توقف/خطای موقت — تلاش ' . $transientResumes . '/' . $maxTransientResumes);
+                if (count($lg) > 12) $lg = array_slice($lg, -12);
+                writeProgress(EXTRACT_PROGRESS_FILE, array_merge($pg, [
+                    'running' => true, 'done' => false, 'worker' => true,
+                    'last_progress_ts' => time(), 'recent_log' => $lg,
+                    'total_log_count' => max((int)($pg['total_log_count'] ?? 0) + 1, count($lg)),
+                ]));
+            } catch (Throwable $_wCont) {}
+            sleep($budgetResume ? 2 : 10);
+            $resumeNext = true;
+            $phase = 'all';
         }
-        $res = runBackendExtract($pk, 'worker', false, $phase, $forceAll, $reserved);
-        if (!empty($res['ok'])) {
+        if (!empty($res['ok']) && empty($res['resume_needed']) && empty($res['ran_out'])) {
             try {
                 $cnNow = loadConnections(); $profsNow = loadProfiles();
                 notifSourceChanges($cnNow, $res, $profsNow[$pk]['name'] ?? $pk);
@@ -1170,8 +1215,9 @@ function s4WorkerLoopFromCli(): void {
             try {
                 $res = s4WorkerRunJob($job);
                 $ok = !empty($res['ok']);
-                s4WorkerFinishJob($jid, $ok ? 'done' : 'failed', ['ok' => $ok,
-                    'extracted' => (int)($res['extracted'] ?? 0), 'queue_id' => (string)($res['queue_id'] ?? '')],
+                s4WorkerFinishJob($jid, ($ok && empty($res['resume_needed'])) ? 'done' : ($ok ? 'paused' : 'failed'), ['ok' => $ok,
+                    'extracted' => (int)($res['extracted'] ?? 0), 'queue_id' => (string)($res['queue_id'] ?? ''),
+                    'worker_segments' => (int)($res['worker_segments'] ?? 0), 'resume_needed' => !empty($res['resume_needed'])],
                     $ok ? '' : (string)($res['error'] ?? 'job failed'));
                 s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => $ok, 'last_error' => $ok ? '' : (string)($res['error'] ?? '')]);
                 echo '[' . date('Y-m-d H:i:s') . "] job done: $jid ok=" . ($ok ? '1' : '0') . "\n";
@@ -9271,8 +9317,8 @@ function fetch_html(string $url, int $timeout = 25): array {
  * ---------------------------------------------------------------------
  * بعضی سایت‌ها (React/Vue/Nuxt/Next) با واکشِ معمولی فقط یک «پوستهٔ خالی»
  * برمی‌گردانند و محتوایشان با جاوااسکریپت ساخته می‌شود. یک میکروسرویسِ
- * جداگانهٔ Node (پوشهٔ browser/) با Playwright (و در صورت شکست، Selenium)
- * صفحه را واقعاً رندر می‌کند؛ این توابع کلاینتِ آن سرویس‌اند.
+ * جداگانهٔ رندر (browser-php/ بدون Node، یا browser/ به‌صورت اختیاری) با CDP/Playwright
+ * و در صورت شکست Selenium صفحه را واقعاً رندر می‌کند؛ این توابع کلاینتِ آن سرویس‌اند.
  *
  * پیکربندی در connections.json زیر کلیدِ "render":
  *   {"render":{"enabled":true,
@@ -9333,6 +9379,9 @@ function fetch_html_render(string $url, array $rcfg, array $opts = []): array {
         'scroll'    => (bool)($opts['scroll'] ?? ($rcfg['scroll'] ?? false)),
     ];
     if (!empty($opts['selector'])) $payload['selector'] = (string)$opts['selector'];
+    if (!empty($opts['driver']) && in_array((string)$opts['driver'], ['playwright','selenium'], true)) {
+        $payload['driver'] = (string)$opts['driver'];
+    }
     $headers = ['Content-Type: application/json', 'Accept: application/json'];
     if ((string)($rcfg['token'] ?? '') !== '') $headers[] = 'Authorization: Bearer ' . (string)$rcfg['token'];
     $ch = curl_init($base . '/render');
@@ -13824,28 +13873,69 @@ if (!isset($products[$key])) $products[$key] = $p;
 return $products;
 }
 
-/* v10.181: PHP-native extraction-engine layer.  The Node project has a larger
-   engine matrix; this single-file build exposes only engines that can run on the
-   no-apt/no-Node production PHP host, and leaves browser rendering to the
-   existing pure-PHP render service. */
+/* v10.185: Extraction engines. Browser engines are still PHP-controlled:
+   Playwright = the render service's CDP/Playwright-compatible driver, Selenium =
+   raw W3C WebDriver HTTP. No Node/Python dependency is required by scraper4.php. */
 function extractionEngineAllowed(): array {
-    return ['selectors', 'auto', 'heuristic', 'jsonld'];
+    return ['selectors', 'auto', 'heuristic', 'jsonld', 'playwright', 'selenium'];
 }
 function normalizeExtractionEngine($v): string {
     $v = strtolower(trim((string)$v));
     if ($v === '' || $v === 'css' || $v === 'cheerio' || $v === 'htmlrewriter') return 'selectors';
+    if (in_array($v, ['browser','render','js','cdp','chrome','chromium','puppeteer'], true)) return 'playwright';
+    if (in_array($v, ['webdriver','chromedriver'], true)) return 'selenium';
     if (!in_array($v, extractionEngineAllowed(), true)) return 'selectors';
     return $v;
+}
+function extractionEngineUsesRender(string $engine): bool {
+    return in_array(normalizeExtractionEngine($engine), ['playwright','selenium'], true);
+}
+function extractionEngineRenderDriver(string $engine): string {
+    $engine = normalizeExtractionEngine($engine);
+    return $engine === 'selenium' ? 'selenium' : ($engine === 'playwright' ? 'playwright' : '');
 }
 function extractionEngineLabel(string $engine): string {
     $engine = normalizeExtractionEngine($engine);
     $map = [
-        'selectors' => 'CSS selectors (legacy)',
-        'auto'      => 'Auto smart (JSON-LD → heuristic → selectors)',
-        'heuristic' => 'Structural / heuristic cards',
-        'jsonld'    => 'JSON-LD Product',
+        'selectors'  => 'CSS selectors (legacy)',
+        'auto'       => 'Auto smart (JSON-LD → heuristic → selectors)',
+        'heuristic'  => 'Structural / heuristic cards',
+        'jsonld'     => 'JSON-LD Product',
+        'playwright' => 'Playwright/CDP render (Selenium fallback) → Auto parser',
+        'selenium'   => 'Selenium WebDriver render → Auto parser',
     ];
     return $map[$engine] ?? $engine;
+}
+function fetch_html_for_engine(string $url, int $timeout, string $engine, array $sel = []): array {
+    $engine = normalizeExtractionEngine($engine);
+    if (!extractionEngineUsesRender($engine)) return fetch_html_smart($url, $timeout);
+    $rc = renderCfg();
+    $rc['enabled'] = true; // انتخاب موتور browser یعنی رندر اجباری، حتی اگر حالت عمومی خاموش باشد.
+    $opts = ['driver' => extractionEngineRenderDriver($engine)];
+    if (!empty($sel['container'])) $opts['selector'] = (string)$sel['container'];
+    $r = ['ok'=>false,'error'=>'render not attempted','code'=>0,'url'=>$url,'html'=>''];
+    $attempts = max(1, min(3, (int)($rc['engine_retries'] ?? 2)));
+    $lastAttempt = 0;
+    for ($i = 1; $i <= $attempts; $i++) {
+        $lastAttempt = $i;
+        $r = fetch_html_render($url, $rc, $opts);
+        if (!empty($r['ok'])) {
+            $r['forced_render_engine'] = $engine;
+            $r['render_attempts'] = $i;
+            return $r;
+        }
+        $code = (int)($r['code'] ?? 0);
+        $err = strtolower((string)($r['error'] ?? ''));
+        $retryable = in_array($code, [0, 502, 503, 504], true)
+            || strpos($err, 'timeout') !== false || strpos($err, 'busy') !== false || strpos($err, 'queue') !== false;
+        if (!$retryable || $i >= $attempts) break;
+        sleep($i); // کوتاه و محدود: صف/timeout گذرا نباید کل استخراج را بعد از چند صفحه بخواباند.
+    }
+    $r['render_attempts'] = $lastAttempt;
+    $r['error'] = trim((string)($r['error'] ?? '')) !== ''
+        ? ('موتور ' . extractionEngineLabel($engine) . ' شکست خورد: ' . (string)$r['error'])
+        : ('موتور ' . extractionEngineLabel($engine) . ' شکست خورد');
+    return $r;
 }
 function parse_jsonld_products(string $html, string $baseUrl): array {
     [$dom, $xp] = load_dom($html);
@@ -13894,6 +13984,12 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     $engine = normalizeExtractionEngine($engine);
     $usedEngine = $engine;
     $hasSelectors = !empty($sel['container']);
+    if (extractionEngineUsesRender($engine)) {
+        $_inner = '';
+        $rows = parse_list_by_engine($html, $baseUrl, $sel, 'auto', $_inner);
+        $usedEngine = $engine . ($_inner !== '' ? (' → ' . $_inner) : ' → auto');
+        return $rows;
+    }
     if ($engine === 'selectors') {
         $usedEngine = 'selectors';
         return $hasSelectors ? parse_with_selectors($html, $baseUrl, $sel) : [];
@@ -14322,7 +14418,7 @@ $pageUrl = build_page_url_custom($url, $url, $page, $pagType, $pagVal);
 
 /* v10.173: واکش هوشمند — اگر render فعال باشد و صفحه «پوستهٔ JS» بود،
    یک بار هم با مرورگرِ واقعی (Playwright/Selenium) رندر می‌شود. */
-$res = fetch_html_smart($pageUrl, 20);
+$res = fetch_html_for_engine($pageUrl, 20, $streamEngine, is_array($selectors)?$selectors:[]);
 
 send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
 
@@ -15499,7 +15595,7 @@ $releaseResumeReservation();
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'سلکتورِ جزئیات ذخیره نشده'];
 }
 } elseif($extractEngine==='selectors' && (empty($selectors)||empty($selectors['container']))){
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'سلکتورها ذخیره نشده — ابتدا سلکتور بگذارید یا موتور Auto/Heuristic را انتخاب کنید','total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ سلکتورها ذخیره نشده — موتور فعلی به CSS selector نیاز دارد'],'total_log_count'=>1]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'سلکتورها ذخیره نشده — ابتدا سلکتور بگذارید یا موتور Auto/Heuristic/Playwright/Selenium را انتخاب کنید','total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ سلکتورها ذخیره نشده — موتور فعلی به CSS selector نیاز دارد'],'total_log_count'=>1]);
 $releaseResumeReservation();
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'سلکتورها ذخیره نشده'];
 }
@@ -15794,7 +15890,7 @@ if($_listResume && $page===$_startPage && $pagType==='next_selector'){
 
 /* v10.173: مانند مسیر SSE — فهرست با fetch_html_smart واکشی می‌شود تا
    سایت‌های SPA (پوستهٔ خالی بدون رندر) هم محصول بدهند. */
-$res=fetch_html_smart($pageUrl,20);
+$res=fetch_html_for_engine($pageUrl,20,$extractEngine,$selectors);
 $totalPages=$page;
 /* v10.177: نشانیِ کامل + کدِ HTTP در لاگ — نشانی‌های بلندِ پارسی ۶۰ کاراکترِ
    اول هیچ‌چیزی نشان نمی‌دادند و دیباگِ صفحه‌بندی کور می‌ماند.
@@ -27036,7 +27132,7 @@ if (isset($_GET['pag_probe'])) {
     }
     $probeEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (!empty($sel['container']) ? 'selectors' : 'heuristic')));
     $pagProbeFetch = function (string $link) use ($sel, $probeEngine): array {
-        $r = fetch_html_smart($link, 25);
+        $r = fetch_html_for_engine($link, 25, $probeEngine, $sel);
         $html = (string)($r['html'] ?? '');
         $prods = [];
         $samples = [];
@@ -27234,7 +27330,7 @@ if (isset($_GET['engine_benchmark'])) {
             else $pageUrl = build_page_url_custom($u, $u, $page, $pt, $pv);
 
             $fetchStart = microtime(true);
-            $res = fetch_html_smart($pageUrl, 20);
+            $res = fetch_html_for_engine($pageUrl, 20, $engine, $sel);
             $fetchMs = (int)round((microtime(true) - $fetchStart) * 1000);
             $html = (string)($res['html'] ?? '');
             $parseStart = microtime(true);
@@ -35385,9 +35481,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.173', 'پیکربندی رندر از connections.json خوانده می‌شود',
          strpos($selfSrc, "(array)(\$cn['ren" . "der'] ?? [])") !== false);
     // هر دو مسیرِ واکشِ فهرست (SSE و استخراج بک‌اند) به نسخهٔ هوشمند سوییچ شده‌اند
-    $add('10.173', 'هر دو مسیر واکش فهرست از fetch_html_smart استفاده می‌کنند',
-         substr_count($selfSrc, '$res = fetch_html_smart($pageUrl, ' . '20);') === 1
-      && substr_count($selfSrc, '$res=fetch_html_smart($pageUrl,' . '20);') === 1);
+    $add('10.173', 'هر دو مسیر واکش فهرست از لایهٔ واکش موتور-aware استفاده می‌کنند',
+         substr_count($selfSrc, 'fetch_html_for_engine($pageUrl,') >= 2);
     $add('10.173', 'کالِ قدیمیِ fetch_html در مسیر فهرست نمانده',
          substr_count($selfSrc, '$res = fetch_html($pageUrl, ' . '20);') === 0
       && substr_count($selfSrc, '$res=fetch_html($pageUrl,' . '20);') === 0);
@@ -35454,7 +35549,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          build_page_url_custom('https://emalls.ir/list~Category~13145', 'https://emalls.ir/list~Category~13145', 2, 'path_pattern', '~page~{page}') === 'https://emalls.ir/list~Category~13145~page~2');
     $add('10.177', 'اندپوینت آزمایش صفحه‌بندی (pag_probe) هست',
          strpos($selfSrc, "isset(\$_GET['pag_" . "probe'])") !== false
-      && strpos($selfSrc, 'fetch_html_smart($link, 25)') !== false);
+      && strpos($selfSrc, 'fetch_html_for_engine($link, 25,') !== false);
     $add('10.177', 'توقفِ صفرمحصول با علتِ خوانا در لاگ و صف ثبت می‌شود',
          strpos($selfSrc, 'محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد') !== false
       && strpos($selfSrc, "pag_stop" . "_reason") !== false);
@@ -35597,6 +35692,31 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "184'") !== false
       && version_compare(APP_VERSION, '10.' . '184', '>='));
     unset($__cliParserPos184, $__postWorkerPos184);
+
+    /* ---------- v10.185: Playwright/Selenium در موتورهای استخراج + ادامهٔ worker ---------- */
+    $add('10.185', 'Playwright و Selenium در فهرست موتورهای استخراج هستند',
+         in_array('playwright', extractionEngineAllowed(), true)
+      && in_array('selenium', extractionEngineAllowed(), true)
+      && strpos($selfSrc, 'value="playwright"') !== false
+      && strpos($selfSrc, 'value="selenium"') !== false);
+    $add('10.185', 'موتورهای مرورگری رندر را اجباری و driver را به سرویس می‌فرستند',
+         function_exists('fetch_html_for_' . 'engine')
+      && strpos($selfSrc, "\$payload['driver'] = (string)\$opts['driver'];") !== false
+      && strpos($selfSrc, 'forced_render_engine') !== false);
+    $__renderPhp185 = is_file(dirname(__FILE__) . '/browser-php/render.php') ? (string)@file_get_contents(dirname(__FILE__) . '/browser-php/render.php') : '';
+    $__renderNode185 = is_file(dirname(__FILE__) . '/browser/server.js') ? (string)@file_get_contents(dirname(__FILE__) . '/browser/server.js') : '';
+    $add('10.185', 'سرویس‌های render درخواست driver=playwright/selenium را می‌پذیرند',
+         strpos($__renderPhp185, "'driver'    => in_array(strtolower((string)(\$b['driver']") !== false
+      && strpos($__renderPhp185, "\$opts['driver'] === 'selenium'") !== false
+      && strpos($__renderNode185, 'requestedDriver') !== false);
+    $add('10.185', 'worker استخراج pauseهای زمان/هاست را خودکار از checkpoint ادامه می‌دهد',
+         strpos($selfSrc, 'worker_extract_max_segments') !== false
+      && strpos($selfSrc, 'worker_segments') !== false
+      && strpos($selfSrc, 'pauseهای بودجه/هاست پایان کار نیستند') !== false);
+    $add('10.185', 'ورودیِ 10.185 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "185'") !== false
+      && version_compare(APP_VERSION, '10.' . '185', '>='));
+    unset($__renderPhp185, $__renderNode185);
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -59551,10 +59671,12 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
                 <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+                <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
+                <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
             </select>
         </div>
         <div style="font-size:10px;color:#64748b;line-height:1.7;margin:-2px 0 6px">
-            موتورهای Playwright/Puppeteer/Network API پروژهٔ Node به بسته‌های Node نیاز دارند؛ در این نسخهٔ PHP، معادل‌های بدون Node فعال‌اند و رندر مرورگر از بخش «🧩 رندر جاوااسکریپت» انجام می‌شود.
+            Playwright/Selenium اینجا به معنی مسیر رندرِ سرور است: Playwright/CDP اول اجرا می‌شود و Selenium از راه WebDriver HTTP جایگزین است؛ خودِ scraper4.php وابسته به Node یا Python نیست.
         </div>
 
         <div class="row" style="align-items:center;margin-top:4px">
@@ -59896,6 +60018,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
                 <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+                <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
+                <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
             </select>
         </div>
         <div class="row">
@@ -64268,7 +64392,7 @@ function backendExtractFor(url,panelTitle,phase){
         const sels=prof.selectors||{};
         const profEngine=prof.extractionEngine||'selectors';
         if(profEngine==='selectors'&&(!sels.container||sels.container==='')){
-            showToast('⚠️ سلکتورها ذخیره نشده — برای این موتور CSS selector لازم است؛ یا موتور Auto/Heuristic را انتخاب و ذخیره کنید',1);
+            showToast('⚠️ سلکتورها ذخیره نشده — برای موتور CSS selector لازم است؛ یا Auto/Heuristic/Playwright/Selenium را انتخاب و ذخیره کنید',1);
             switchMainTab('selectors');
             return;
         }
@@ -65760,6 +65884,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.185', t:'🎭 موتورهای Playwright/Selenium + ادامهٔ خودکار استخراج‌های طولانی', items:[
+    'Playwright و Selenium به فهرست موتورهای استخراج اضافه شدند؛ انتخاب آن‌ها واقعاً فهرست را از مسیر رندر مرورگر می‌خواند و بعد Auto parser را روی HTML رندرشده اجرا می‌کند',
+    'scraper4.php همچنان وابستگی Node/Python اضافه ندارد: Playwright از مسیر CDP/Chromium سرویس PHP و Selenium از W3C WebDriver HTTP استفاده می‌کند؛ در حالت Auto ترجیح Playwright/CDP و fallback به Selenium حفظ شده است',
+    'سرویس‌های رندر PHP و Node اختیاری حالا driver ارسالی هر درخواست را می‌پذیرند تا بتوان Playwright یا Selenium را از خودِ موتور استخراج اجبار کرد',
+    'worker دائمی، توقف‌های checkpoint/budget را پایان کار حساب نمی‌کند و عملیات‌های طولانی را بلافاصله از همان checkpoint ادامه می‌دهد تا بعد از چند صفحه گیر نمانند',
+  ]},
   {v:'10.184', t:'🧵 اصلاح اجرای CLI worker بعد از parse آرگومان‌ها', items:[
     'مسیر CLI برای php scraper4.php worker بعد از خواندن آرگومان‌ها دوباره بررسی می‌شود؛ چون endpoint HTTP بالاتر از بلوک parse بود و در CLI قبل از set شدن $_GET رد می‌شد',
     'دستور php scraper4.php worker_status هم از CLI خروجی JSON وضعیت worker/queue می‌دهد',

@@ -122,6 +122,7 @@ async function renderWithPlaywright(job) {
       url: page.url(),
       title: await page.title().catch(() => ''),
       html: await page.content(),
+      driver: 'playwright',
     };
   } finally {
     await context.close().catch(() => {});   // صفحهٔ یتیم نمی‌ماند
@@ -211,7 +212,7 @@ async function renderWithSelenium(job) {
     const html = (await wd('/session/' + sid + '/source', 'GET')).value || '';
     const finalUrl = (await wd('/session/' + sid + '/url', 'GET')).value || job.url;
     const title = (await wd('/session/' + sid + '/title', 'GET')).value || '';
-    return { code: 200, url: finalUrl, title, html };
+    return { code: 200, url: finalUrl, title, html, driver: 'selenium' };
   } finally {
     if (sid) await wd('/session/' + sid, 'DELETE').catch(() => {});
   }
@@ -228,8 +229,13 @@ async function chooseDriver() {
   return 'selenium';
 }
 async function doRender(job) {
-  if (job.driver === 'playwright') return renderWithPlaywright(job);
-  return renderWithSelenium(job);
+  if (job.driver === 'selenium') return renderWithSelenium(job);
+  try { return await renderWithPlaywright(job); }
+  catch (e) {
+    if (job.driver === 'playwright') log('⚠ Playwright request failed; trying Selenium fallback:', e.message);
+    else log('⚠ Playwright failed; trying Selenium fallback:', e.message);
+    return renderWithSelenium(Object.assign({}, job, { driver: 'selenium' }));
+  }
 }
 
 /* -------------------------------------------------------------- HTTP */
@@ -287,6 +293,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 422, { ok: false, error: 'invalid url' });
     }
 
+    const requestedDriver = ['playwright', 'selenium'].includes(String(body.driver || '').toLowerCase())
+      ? String(body.driver).toLowerCase() : driverKind;
     const job = {
       url: targetUrl,
       waitUntil: WAIT_UNTILS.has(body.waitUntil) ? body.waitUntil : 'domcontentloaded',
@@ -294,7 +302,7 @@ const server = http.createServer(async (req, res) => {
       timeout: Math.max(5000, Math.min(120000, parseInt(body.timeout, 10) || NAV_TIMEOUT)),
       scroll: body.scroll === true || body.scroll === 'true' || body.scroll === 1,
       blockResources: body.blockResources === true || body.blockResources === 1,
-      driver: driverKind,
+      driver: requestedDriver,
     };
 
     try {
@@ -309,7 +317,7 @@ const server = http.createServer(async (req, res) => {
       const out = await doRender(job);
       return send(res, 200, {
         ok: true, code: out.code, url: out.url, title: out.title,
-        html: out.html, driver: job.driver, took_ms: Date.now() - t0,
+        html: out.html, driver: out.driver || job.driver, took_ms: Date.now() - t0,
       });
     } catch (e) {
       const banned = e && e.message === 'queue_timeout';
