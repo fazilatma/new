@@ -67,10 +67,14 @@ def _normalize_model_spec(item: Any) -> Optional[ModelSpec]:
             return None
         return ModelSpec(id=mid, name=mid, enabled=True)
     if isinstance(item, dict):
-        mid = str(item.get("id") or item.get("name") or item.get("model_id") or item.get("model") or "").strip()
+        mid = str(item.get("id") or item.get("name") or item.get("model_id") or item.get("modelId") or item.get("model") or item.get("slug") or "").strip()
+        name = str(item.get("name") or item.get("title") or item.get("label") or item.get("displayName") or item.get("display_name") or mid).strip()
+        if not name:
+            name = mid
+        if not mid and name:
+            mid = name
         if not mid:
             return None
-        name = str(item.get("name") or item.get("title") or item.get("label") or mid).strip()
         
         enabled_val = item.get("enabled", True)
         if isinstance(enabled_val, str):
@@ -83,33 +87,33 @@ def _normalize_model_spec(item: Any) -> Optional[ModelSpec]:
         free = bool(item.get("free") or False)
         
         try:
-            maxInputTokens = int(item.get("maxInputTokens") or item.get("max_input_tokens") or item.get("context_length") or 128000)
+            maxInputTokens = int(item.get("maxInputTokens") or item.get("max_input_tokens") or item.get("context_length") or item.get("contextLength") or 128000)
         except Exception:
             maxInputTokens = 128000
             
         try:
-            maxOutputTokens = int(item.get("maxOutputTokens") or item.get("max_output_tokens") or 8192)
+            maxOutputTokens = int(item.get("maxOutputTokens") or item.get("max_output_tokens") or item.get("max_tokens") or 8192)
         except Exception:
             maxOutputTokens = 8192
             
         try:
-            inputCost = float(item.get("inputCostPer1M") or item.get("input_cost") or item.get("input_price") or 0.0)
+            inputCost = float(item.get("inputCostPer1M") or item.get("input_cost") or item.get("input_cost_per_1m") or item.get("input_price") or 0.0)
         except Exception:
             inputCost = 0.0
             
         try:
-            outputCost = float(item.get("outputCostPer1M") or item.get("output_cost") or item.get("output_price") or 0.0)
+            outputCost = float(item.get("outputCostPer1M") or item.get("output_cost") or item.get("output_cost_per_1m") or item.get("output_price") or 0.0)
         except Exception:
             outputCost = 0.0
 
         known_keys = {
-            "id", "name", "title", "label", "model_id", "model",
+            "id", "name", "title", "label", "model_id", "modelId", "model", "slug", "displayName", "display_name",
             "enabled", "toolCalling", "tool_calling", "function_calling", "tools",
             "vision", "multimodal", "free",
-            "maxInputTokens", "max_input_tokens", "context_length",
-            "maxOutputTokens", "max_output_tokens",
-            "inputCostPer1M", "input_cost", "input_price",
-            "outputCostPer1M", "output_cost", "output_price",
+            "maxInputTokens", "max_input_tokens", "context_length", "contextLength",
+            "maxOutputTokens", "max_output_tokens", "max_tokens",
+            "inputCostPer1M", "input_cost", "input_cost_per_1m", "input_price",
+            "outputCostPer1M", "output_cost", "output_cost_per_1m", "output_price",
             "extra"
         }
         extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
@@ -136,6 +140,11 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
     if not isinstance(v, dict):
         return None
     
+    # Avoid parsing a standalone model spec as a provider
+    is_provider = any(k in v for k in ("models", "url", "baseUrl", "base_url", "protocol", "apiKey", "api_key", "vendor", "endpoint", "apiKeys", "api_keys"))
+    if not is_provider and any(k in v for k in ("maxInputTokens", "max_input_tokens", "maxOutputTokens", "max_output_tokens", "toolCalling", "tool_calling", "vision", "multimodal", "context_length", "contextLength")):
+        return None
+
     # 1. Resolve ID
     raw_id = str(v.get("id") or v.get("provider_id") or v.get("slug") or v.get("name") or fallback_id or "").strip()
     if not raw_id:
@@ -540,6 +549,14 @@ class ProviderStore:
             raise ValueError("Import data must be a JSON array of providers or an object mapping.")
 
         if not parsed:
+            # Check if input was a model list and attach to active provider
+            if self.data:
+                target_pid = next(iter(self.data))
+                try:
+                    res = self.import_models_for_provider(target_pid, text, replace=replace)
+                    return len(self.data)
+                except Exception:
+                    pass
             raise ValueError("No valid providers could be parsed from the provided input.")
 
         if replace:
@@ -562,8 +579,18 @@ class ProviderStore:
         except Exception:
             try:
                 incoming = ast.literal_eval(clean)
-            except Exception as e:
-                raise ValueError(f"Invalid JSON/format: {str(e)}")
+            except Exception:
+                # Fallback to plain text lines of model IDs
+                lines = [l.strip(" \t\r\n,;\"'") for l in clean.splitlines()]
+                plain_models = []
+                for l in lines:
+                    if not l or l.startswith("#") or l.startswith("//"):
+                        continue
+                    plain_models.append({"id": l, "name": l})
+                if plain_models:
+                    incoming = {"models": plain_models}
+                else:
+                    raise ValueError("Invalid format: input could not be parsed as JSON or a list of models.")
 
         candidates = []
         if isinstance(incoming, dict):
@@ -573,8 +600,18 @@ class ProviderStore:
                 candidates = incoming["models"]
             elif "items" in incoming and isinstance(incoming["items"], list):
                 candidates = incoming["items"]
+            elif "options" in incoming and isinstance(incoming["options"], list):
+                candidates = incoming["options"]
+            elif "results" in incoming and isinstance(incoming["results"], list):
+                candidates = incoming["results"]
+            elif "models" in incoming and isinstance(incoming["models"], dict):
+                candidates = [{"id": k, **(v if isinstance(v, dict) else {"name": str(v)})} for k, v in incoming["models"].items()]
             else:
-                candidates = [incoming]
+                is_dict_of_models = all(isinstance(v, (dict, str)) for v in incoming.values()) and ("url" not in incoming and "baseUrl" not in incoming)
+                if is_dict_of_models and incoming:
+                    candidates = [{"id": k, **(v if isinstance(v, dict) else {"name": str(v)})} for k, v in incoming.items()]
+                else:
+                    candidates = [incoming]
         elif isinstance(incoming, list):
             candidates = incoming
         else:

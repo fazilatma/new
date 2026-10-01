@@ -154,7 +154,14 @@ final class ProviderStore
             }
         }
 
-        $id = (string) ($raw['id'] ?? $raw['model'] ?? $raw['slug'] ?? '');
+        $id = trim((string) ($raw['id'] ?? $raw['model'] ?? $raw['model_id'] ?? $raw['modelId'] ?? $raw['slug'] ?? $raw['name'] ?? ''));
+        $name = trim((string) ($raw['name'] ?? $raw['title'] ?? $raw['label'] ?? $raw['display_name'] ?? $raw['displayName'] ?? $id));
+        if ($name === '') {
+            $name = $id;
+        }
+        if ($id === '' && $name !== '') {
+            $id = $name;
+        }
         $enabled = !array_key_exists('enabled', $raw) || (bool) $raw['enabled'];
         // A model the source catalog marked as "not a chat model" must not end
         // up in the chat picker.
@@ -164,15 +171,15 @@ final class ProviderStore
 
         return [
             'id' => $id,
-            'name' => (string) ($raw['name'] ?? $id),
-            'toolCalling' => (bool) ($raw['toolCalling'] ?? $raw['tools'] ?? false),
-            'vision' => (bool) ($raw['vision'] ?? false),
+            'name' => $name,
+            'toolCalling' => (bool) ($raw['toolCalling'] ?? $raw['tool_calling'] ?? $raw['function_calling'] ?? $raw['tools'] ?? false),
+            'vision' => (bool) ($raw['vision'] ?? $raw['multimodal'] ?? false),
             'free' => (bool) ($raw['free'] ?? false),
-            'maxInputTokens' => (int) ($raw['maxInputTokens'] ?? $raw['contextLength'] ?? 128000),
-            'maxOutputTokens' => (int) ($raw['maxOutputTokens'] ?? 8192),
+            'maxInputTokens' => (int) ($raw['maxInputTokens'] ?? $raw['max_input_tokens'] ?? $raw['contextLength'] ?? $raw['context_length'] ?? 128000),
+            'maxOutputTokens' => (int) ($raw['maxOutputTokens'] ?? $raw['max_output_tokens'] ?? $raw['max_tokens'] ?? 8192),
             'enabled' => $enabled,
-            'inputCostPer1M' => (float) ($raw['inputCostPer1M'] ?? 0),
-            'outputCostPer1M' => (float) ($raw['outputCostPer1M'] ?? 0),
+            'inputCostPer1M' => (float) ($raw['inputCostPer1M'] ?? $raw['input_cost_per_1m'] ?? 0),
+            'outputCostPer1M' => (float) ($raw['outputCostPer1M'] ?? $raw['output_cost_per_1m'] ?? 0),
             'extra' => $extra,
         ];
     }
@@ -580,6 +587,20 @@ final class ProviderStore
         $entries = self::collectProviderEntries($raw);
 
         if (!$entries) {
+            // Check if payload was actually a list of models without provider envelope
+            if (!empty($this->data)) {
+                $targetPid = array_key_first($this->data);
+                try {
+                    $mRes = $this->importModelsForProvider($targetPid, $text, $replace);
+                    return [
+                        'providers' => count($this->data),
+                        'models' => $mRes['modelsCount'],
+                        'created' => [],
+                        'updated' => [$targetPid],
+                        'skipped' => [],
+                    ];
+                } catch (\Throwable) {}
+            }
             throw new HttpError(400, self::importHint($raw));
         }
 
@@ -637,10 +658,28 @@ final class ProviderStore
                 $candidates = $raw['data'];
             } elseif (isset($raw['models']) && is_array($raw['models'])) {
                 $candidates = $raw['models'];
+            } elseif (isset($raw['items']) && is_array($raw['items'])) {
+                $candidates = $raw['items'];
+            } elseif (isset($raw['options']) && is_array($raw['options'])) {
+                $candidates = $raw['options'];
+            } elseif (isset($raw['results']) && is_array($raw['results'])) {
+                $candidates = $raw['results'];
             } elseif (array_is_list($raw)) {
                 $candidates = $raw;
             } else {
-                $candidates = [$raw];
+                // If it's a dict mapping model_id -> spec
+                $isMap = true;
+                foreach ($raw as $k => $v) {
+                    if (!is_array($v) && !is_string($v)) { $isMap = false; break; }
+                }
+                if ($isMap && !isset($raw['url']) && !isset($raw['baseUrl'])) {
+                    $candidates = [];
+                    foreach ($raw as $k => $v) {
+                        $candidates[] = is_array($v) ? array_merge(['id' => (string) $k], $v) : ['id' => (string) $k, 'name' => (string) $v];
+                    }
+                } else {
+                    $candidates = [$raw];
+                }
             }
         }
         foreach ($candidates as $m) {
@@ -697,6 +736,15 @@ final class ProviderStore
     private static function decodeImport(string $text): mixed
     {
         $text = trim($text);
+        if ($text === '') {
+            throw new HttpError(
+                400,
+                'The import payload was empty. If you pasted a large catalog, the web server may have '
+                . 'dropped the request body: raise post_max_size / upload_max_filesize, or import from the '
+                . 'CLI with "php bin/console.php provider:import <file>".'
+            );
+        }
+
         // Tolerate a UTF-8 BOM, smart quotes, and markdown code block wrappers
         $text = preg_replace('/^\xEF\xBB\xBF/', '', $text) ?? $text;
         if (str_starts_with($text, '```')) {
@@ -709,32 +757,39 @@ final class ProviderStore
             }
             $text = trim(implode("\n", $lines));
         }
-        $text = str_replace(["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}"], ['"', '"', "'", "'"], $text);
+        $text = str_replace(["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}", "«", "»", "„"], ['"', '"', "'", "'", '"', '"', '"'], $text);
 
-        if ($text === '') {
-            throw new HttpError(
-                400,
-                'The import payload was empty. If you pasted a large catalog, the web server may have '
-                . 'dropped the request body: raise post_max_size / upload_max_filesize, or import from the '
-                . 'CLI with "php bin/console.php provider:import <file>".'
-            );
-        }
         $decoded = json_decode($text, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
+        if (json_last_error() === JSON_ERROR_NONE && $decoded !== null) {
             return $decoded;
         }
         $relaxed = preg_replace('/,\s*([}\]])/', '$1', $text);
         if (is_string($relaxed)) {
             $decoded = json_decode($relaxed, true);
-            if (json_last_error() === JSON_ERROR_NONE) {
+            if (json_last_error() === JSON_ERROR_NONE && $decoded !== null) {
                 return $decoded;
             }
         }
+
+        // Plain line-by-line model list fallback (e.g. pasted model IDs, or plain text list)
+        $lines = preg_split('/[\r\n]+/', $text);
+        $plainModels = [];
+        foreach ($lines as $line) {
+            $line = trim($line, " \t\r\n,;\"'");
+            if ($line === '' || str_starts_with($line, '#') || str_starts_with($line, '//')) {
+                continue;
+            }
+            $plainModels[] = ['id' => $line, 'name' => $line];
+        }
+        if (!empty($plainModels)) {
+            return ['models' => $plainModels];
+        }
+
         $len = strlen($text);
         $tail = substr($text, -60);
         throw new HttpError(
             400,
-            'The text is not valid JSON (' . json_last_error_msg() . '). Length ' . $len
+            'The text could not be parsed as JSON or a list of models (' . json_last_error_msg() . '). Length ' . $len
             . ' bytes, ends with: ' . $tail
             . ' — a truncated paste is the usual cause; upload the file instead of pasting it.'
         );
@@ -809,7 +864,12 @@ final class ProviderStore
                 return true;
             }
         }
-        // {"id": "...", "name": "..."} with nothing else is still a provider.
+        // If it contains model-specific fields, it is a model spec, not a provider
+        foreach (['maxInputTokens', 'max_input_tokens', 'maxOutputTokens', 'max_output_tokens', 'toolCalling', 'tool_calling', 'vision', 'multimodal', 'contextLength', 'context_length'] as $marker) {
+            if (array_key_exists($marker, $v)) {
+                return false;
+            }
+        }
         return array_key_exists('id', $v) && array_key_exists('name', $v);
     }
 

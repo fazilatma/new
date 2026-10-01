@@ -2284,7 +2284,8 @@
           <button class="btn btn-ghost" onclick="copyTestResultsReport()" title="کپی نتایج تست تمام مدل‌های هوش مصنوعی (Markdown Table)">📋 کپی نتایج تست مدل‌ها</button>
           <button class="btn btn-ghost" onclick="openModelTestModal(false)">📊 جدول نتایج</button>
           <button class="btn btn-ghost" onclick="openLocalModelModal()" style="color:var(--primary);font-weight:600;">🦙 راهنما و نصب مدل‌های محلی</button>
-          <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 واردسازی JSON</button>
+          <button class="btn btn-ghost" onclick="openImportModelsModal()">📥 درون‌ریزی دسته‌ای مدل‌ها</button>
+          <button class="btn btn-ghost" onclick="openImportProvidersModal()">📥 واردسازی کاتالوگ</button>
           <button class="btn btn-ghost" onclick="exportProvidersJson()">📤 خروجی JSON</button>
           <button class="btn btn-primary" onclick="openProviderModal()">+ افزودن ارائه‌دهنده</button>
         </div>
@@ -2962,26 +2963,73 @@
 <div class="modal-backdrop" id="importProvidersModal">
   <div class="modal-dialog">
     <div class="modal-header">
-      <strong>Import Provider Catalog JSON</strong>
+      <strong>واردسازی کاتالوگ ارائه‌دهندگان (Import Providers Catalog)</strong>
       <button class="btn-ghost" onclick="closeModal('importProvidersModal')">✕</button>
     </div>
     <form class="modal-body" onsubmit="handleImportProvidersSubmit(event)">
       <div>
-        <label style="font-size:12px;color:var(--text-dim)">Upload JSON File</label>
+        <label style="font-size:12px;color:var(--text-dim)">انتخاب فایل JSON کاتالوگ</label>
         <input type="file" id="importFileInput" accept=".json,application/json" class="input-control" style="margin-top:4px;" onchange="handleImportFileSelect(event)">
       </div>
-      <div style="text-align:center;font-size:11px;color:var(--text-dim)">— OR PASTE JSON —</div>
+      <div style="text-align:center;font-size:11px;color:var(--text-dim)">— یا متن JSON را پیست کنید —</div>
       <div>
-        <label style="font-size:12px;color:var(--text-dim)">JSON Configuration Text</label>
-        <textarea id="importJsonTextarea" class="input-control" style="height:140px;font-family:monospace;font-size:11px;" placeholder='{"openrouter": {"name": "OpenRouter", "url": "https://...", "models": [...]}}'></textarea>
+        <label style="font-size:12px;color:var(--text-dim)">متن JSON ارائه‌دهندگان و مدل‌ها</label>
+        <textarea id="importJsonTextarea" class="input-control" style="height:140px;font-family:monospace;font-size:11px;direction:ltr;" placeholder='{"openrouter": {"name": "OpenRouter", "url": "https://...", "models": [...]}}'></textarea>
       </div>
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
         <input type="checkbox" id="importReplaceCheck">
-        <span>Replace entire catalog (uncheck to merge/update)</span>
+        <span>جایگزینی کامل کاتالوگ (در صورت عدم انتخاب، اطلاعات جدید ادغام و مرج می‌شوند)</span>
       </label>
       <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;">
-        <button type="button" class="btn btn-ghost" onclick="closeModal('importProvidersModal')">Cancel</button>
-        <button type="submit" class="btn btn-primary">Import Catalog</button>
+        <button type="button" class="btn btn-ghost" onclick="closeModal('importProvidersModal')">انصراف</button>
+        <button type="submit" class="btn btn-primary">📥 درون‌ریزی کاتالوگ</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL: IMPORT MODELS TO SPECIFIC PROVIDER (Universal Format) -->
+<div class="modal-backdrop" id="importModelsModal">
+  <div class="modal-dialog" style="max-width:540px;">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:18px;">📥</span>
+        <strong id="importModelsModalTitle" style="font-size:14.5px;">درون‌ریزی دسته‌ای مدل‌های هوش مصنوعی (Batch Import Models)</strong>
+      </div>
+      <button type="button" class="btn-ghost" onclick="closeModal('importModelsModal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleImportModelsSubmit(event)" style="gap:12px;">
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-main);margin-bottom:4px;display:block;">ارائه‌دهنده مقصد (Target Provider) *</label>
+        <select id="importModelsTargetProvider" class="input-control" required style="font-weight:600;"></select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-dim);margin-bottom:4px;display:block;">انتخاب فایل JSON یا متنی مدل‌ها (File Upload)</label>
+        <input type="file" id="importModelsFileInput" accept=".json,.txt,.csv,application/json,text/plain" class="input-control" onchange="handleImportModelsFileSelect(event)">
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-dim);margin:2px 0;">— یا متن لیست مدل‌ها را پیست کنید —</div>
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-main);margin-bottom:4px;display:block;">متن JSON مدل‌ها یا نام مدل‌ها در هر خط (JSON / Text List)</label>
+        <textarea id="importModelsTextarea" class="input-control" style="height:160px;font-family:monospace;font-size:11.5px;direction:ltr;" placeholder='پشتیبانی سریع از انواع فرمت‌ها:
+1. آرایه JSON مدل‌ها: [{"id": "gpt-4o", "name": "GPT-4o"}, ...]
+2. پاسخ API استاندارد OpenAI: {"data": [{"id": "gpt-4o"}, ...]}
+3. فرمت Ollama / OpenRouter: {"models": [...]}
+4. لیست ساده نام یا شناسه مدل‌ها (یک مدل در هر خط):
+gpt-4o
+gpt-4o-mini
+claude-3-5-sonnet-20241022
+deepseek-chat
+gemini-1.5-pro'></textarea>
+      </div>
+      <div style="background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:8px 12px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+          <input type="checkbox" id="importModelsReplaceCheck">
+          <span><b>جایگزینی کامل مدل‌های قبلی</b> (اگر تیک نزنید، مدل‌های جدید به قبلی‌ها اضافه و مرج می‌شوند)</span>
+        </label>
+      </div>
+      <div class="modal-footer" style="padding:10px 0 0;background:transparent;border:0;display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('importModelsModal')">انصراف (Cancel)</button>
+        <button type="submit" id="importModelsSubmitBtn" class="btn btn-primary" style="font-weight:600;">📥 درون‌ریزی آنی مدل‌ها (Import Models)</button>
       </div>
     </form>
   </div>
@@ -4099,11 +4147,12 @@ function renderProviderCards() {
               </div>
             </div>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;" onclick="event.stopPropagation()">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;" onclick="event.stopPropagation()">
             ${p.circuitBreakerTripped ? `<button class="btn btn-warning btn-sm" onclick="resetCircuitBreaker('${esc(p.id)}')">Reset Circuit</button>` : ''}
-            <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ Add Model</button>
-            <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">Delete</button>
+            <button class="btn btn-ghost btn-sm" onclick="openImportModelsModal('${esc(p.id)}')">📥 درون‌ریزی مدل‌ها</button>
+            <button class="btn btn-ghost btn-sm" onclick="openModelModal('${esc(p.id)}')">+ افزودن مدل</button>
+            <button class="btn btn-ghost btn-sm" onclick="openProviderModal('${esc(p.id)}')">ویرایش</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteProvider('${esc(p.id)}')">حذف</button>
           </div>
         </div>
         
@@ -4283,6 +4332,13 @@ async function handleSaveModelSubmit(e) {
   flashAutoSave();
 }
 
+function sanitizePastedJson(raw) {
+  let t = (raw || '').trim();
+  t = t.replace(/^\uFEFF/, '').replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+  t = t.replace(/[\u201C\u201D\u201E\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u0060]/g, "'");
+  return t;
+}
+
 function openImportProvidersModal() {
   $('#importFileInput').value = '';
   $('#importJsonTextarea').value = '';
@@ -4300,19 +4356,79 @@ function handleImportFileSelect(e) {
   reader.readAsText(file);
 }
 
+function openImportModelsModal(providerId = null) {
+  const pSelect = $('#importModelsTargetProvider');
+  if (pSelect) {
+    pSelect.innerHTML = (STATE.providers || []).map(p => 
+      `<option value="${esc(p.id)}" ${p.id === providerId ? 'selected' : ''}>${esc(p.name)} (${esc(p.id)})</option>`
+    ).join('');
+    if (providerId) pSelect.value = providerId;
+  }
+  $('#importModelsFileInput').value = '';
+  $('#importModelsTextarea').value = '';
+  $('#importModelsReplaceCheck').checked = false;
+  openModal('importModelsModal');
+}
+
+function handleImportModelsFileSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    $('#importModelsTextarea').value = ev.target.result;
+  };
+  reader.readAsText(file);
+}
+
+async function handleImportModelsSubmit(e) {
+  e.preventDefault();
+  const pid = $('#importModelsTargetProvider').value;
+  if (!pid) return alert('لطفاً یک ارائه‌دهنده را انتخاب کنید (Please select a provider).');
+  
+  let raw = $('#importModelsTextarea').value.trim();
+  if (!raw) return alert('لطفاً متن لیست مدل‌ها یا فایل آن را وارد کنید.');
+  
+  raw = sanitizePastedJson(raw);
+  const replace = $('#importModelsReplaceCheck').checked;
+  
+  const submitBtn = $('#importModelsSubmitBtn');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '⏳ در حال درون‌ریزی...';
+  }
+
+  try {
+    const res = await api(`/api/providers/${encodeURIComponent(pid)}/import-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ json: raw, replace: replace })
+    });
+
+    closeModal('importModelsModal');
+    await loadProvidersList();
+    renderChatProviders();
+    flashAutoSave();
+
+    const added = res?.added ?? 0;
+    const updated = res?.updated ?? 0;
+    const total = res?.modelsCount ?? 0;
+    alert(`✅ درون‌ریزی مدل‌ها با موفقیت انجام شد:\n• ${added} مدل جدید اضافه شد\n• ${updated} مدل به‌روزرسانی شد\n• مجموع مدل‌های فعال این ارائه‌دهنده: ${total}`);
+  } catch (err) {
+    alert('خطا در درون‌ریزی مدل‌ها: ' + (err?.message || err));
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '📥 درون‌ریزی آنی مدل‌ها (Import Models)';
+    }
+  }
+}
+
 async function handleImportProvidersSubmit(e) {
   e.preventDefault();
   let rawJson = $('#importJsonTextarea').value.trim();
   if (!rawJson) return alert('Please upload a JSON file or paste JSON configuration text.');
+  rawJson = sanitizePastedJson(rawJson);
   const replace = $('#importReplaceCheck').checked;
-
-  if (rawJson.startsWith('```')) {
-    const lines = rawJson.split('\n');
-    if (lines[0].startsWith('```')) lines.shift();
-    if (lines.length && lines[lines.length - 1].trim().startsWith('```')) lines.pop();
-    rawJson = lines.join('\n').trim();
-  }
-  rawJson = rawJson.replace(/[“”„«»]/g, '"').replace(/[’’`]/g, "'");
 
   try {
     const res = await api('/api/providers/import-text', {
@@ -4323,9 +4439,9 @@ async function handleImportProvidersSubmit(e) {
     closeModal('importProvidersModal');
     await loadProvidersList();
     renderChatProviders();
-    alert(`Providers imported successfully! (${res.count || 'all'} active providers)`);
+    alert(`✅ کاتالوگ ارائه‌دهندگان با موفقیت وارد شد (${res.count || 'همه'} ارائه‌دهنده فعال)`);
   } catch (err) {
-    alert('Import Error: ' + err.message);
+    alert('خطا در واردسازی: ' + err.message);
   }
 }
 
