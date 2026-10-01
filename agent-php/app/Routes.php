@@ -407,12 +407,44 @@ final class Routes
             if ($path === '') {
                 throw new HttpError(400, 'path is required');
             }
-            $ws = self::wsFor(self::q($req, 'conversation_id') ?: null);
+            $convId = self::q($req, 'conversation_id') ?: null;
+            $ws = self::wsFor($convId);
             $abs = Workspaces::safePath($ws, $path);
             if (!is_file($abs)) {
-                throw new HttpError(404, 'File not found');
+                $defaultWs = Workspaces::find('default') ?? Workspaces::fallback();
+                $defAbs = Workspaces::safePath($defaultWs, $path);
+                if (is_file($defAbs)) {
+                    $abs = $defAbs;
+                } else {
+                    $found = null;
+                    $dir = Bootstrap::$workspacesDir;
+                    if (is_dir($dir)) {
+                        $entries = scandir($dir) ?: [];
+                        foreach ($entries as $e) {
+                            if ($e === '.' || $e === '..') continue;
+                            $cand = $dir . '/' . $e . '/' . ltrim($path, '/');
+                            if (is_file($cand)) {
+                                $found = $cand;
+                                break;
+                            }
+                        }
+                    }
+                    if ($found !== null) {
+                        $abs = $found;
+                    } else {
+                        throw new HttpError(404, 'File not found');
+                    }
+                }
             }
-            Response::file($abs, Files::mimeType($abs));
+            $mime = Files::mimeType($abs);
+            $suffix = strtolower(pathinfo($abs, PATHINFO_EXTENSION));
+            if (in_array($suffix, ['html', 'htm'], true)) {
+                $rawHtml = Files::read($abs);
+                $bundled = Files::bundleHtmlPreview($rawHtml, dirname($abs));
+                Response::html($bundled);
+                return;
+            }
+            Response::file($abs, $mime);
         });
 
         $r->get('/api/workspace/file-preview', static function (Request $req): array {
@@ -421,8 +453,18 @@ final class Routes
             if ($path === '') {
                 throw new HttpError(400, 'path is required');
             }
-            $ws = self::wsFor(self::q($req, 'conversation_id') ?: null);
-            return Files::buildPreview(Workspaces::ensureRoot($ws), $path, '/api/workspace/raw?path=');
+            $convId = self::q($req, 'conversation_id') ?: null;
+            $ws = self::wsFor($convId);
+            $abs = Workspaces::safePath($ws, $path);
+            if (!is_file($abs) && !is_dir($abs)) {
+                $defaultWs = Workspaces::find('default') ?? Workspaces::fallback();
+                $defAbs = Workspaces::safePath($defaultWs, $path);
+                if (is_file($defAbs) || is_dir($defAbs)) {
+                    $ws = $defaultWs;
+                }
+            }
+            $rawBase = '/api/workspace/raw?' . ($convId ? 'conversation_id=' . rawurlencode($convId) . '&' : '') . 'path=';
+            return Files::buildPreview(Workspaces::ensureRoot($ws), $path, $rawBase);
         });
 
         $r->get('/api/workspace/reference-files', static function (Request $req): array {

@@ -2504,6 +2504,15 @@
           </div>
 
           <div>
+            <label style="font-size:11px;color:var(--text-dim);">استراتژی تولید کد (Code Generation Mode)</label>
+            <select id="projEditCodeMode" class="input-control" onchange="triggerProjectAutoSave()">
+              <option value="smart-auto">🌟 هوشمند خودکار (Smart Auto) - تک‌فایل برای وب و پیش‌نمایش، چندفایل برای معماری‌های بزرگ</option>
+              <option value="single-file">📄 تک‌فایل مستقل (Single-File) - تمام استایل‌ها و اسکریپت‌ها در یک فایل (رندر ۱۰۰٪ بدون خطای ۴۰۴)</option>
+              <option value="multi-file">📁 چندفایلی ماژولار (Multi-File) - تفکیک ماژول‌ها و استایل‌ها به فایل‌های جداگانه</option>
+            </select>
+          </div>
+
+          <div>
             <label style="font-size:11px;color:var(--text-dim);">Project Instructions (System Prompt Additions)</label>
             <textarea id="projEditInstructions" class="input-control" style="height:90px;" placeholder="Custom instructions for the agent..." oninput="triggerProjectAutoSave()"></textarea>
           </div>
@@ -2950,6 +2959,34 @@
         </div>
       </div>
 
+      <!-- AI Code Generation Mode Configuration Card -->
+      <div class="stat-card" style="margin-bottom:16px;border:1px solid var(--border-color);background:var(--bg-elevated);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:20px;">🧩</span>
+            <div>
+              <div style="font-weight:600;font-size:14px;">استراتژی تولید کد هوش مصنوعی (Code Generation Strategy)</div>
+              <div style="font-size:11px;color:var(--text-dim);">تعیین نحوه ساخت کدهای وب و اسکریپت‌ها به صورت تک‌فایل مستقل (بدون خطای ۴۰۴ در پیش‌نمایش) یا چندفایلی ماژولار</div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-2" style="gap:14px;align-items:start;">
+          <div>
+            <label style="font-size:11.5px;color:var(--text-dim);display:block;margin-bottom:4px;">حالت تولید کد پروژه فعال (Active Code Mode)</label>
+            <select id="settingDefaultCodeMode" class="input-control" onchange="syncCodeModeFromSettings()">
+              <option value="smart-auto">🌟 هوشمند خودکار (Smart Auto) - تک‌فایل برای پیش‌نمایش و اسکریپت‌ها، چندفایل برای پروژه‌های بزرگ</option>
+              <option value="single-file">📄 تک‌فایل مستقل (Single-File) - تمام HTML/CSS/JS در یک فایل (رندر ۱۰۰٪ بدون خطای ۴۰۴)</option>
+              <option value="multi-file">📁 چندفایلی ماژولار (Multi-File) - تفکیک ماژول‌ها و استایل‌ها به فایل‌های جداگانه</option>
+            </select>
+            <span style="font-size:10.5px;color:var(--text-dim);margin-top:4px;display:block;">در حالت تک‌فایل (Single-File)، تمامی استایل‌های CSS درون تگ <code>&lt;style&gt;</code> و اسکریپت‌ها درون <code>&lt;script&gt;</code> قرار می‌گیرند تا پیش‌نمایش زنده فوراً و بدون خطای ۴۰۴ لود شود.</span>
+          </div>
+          <div style="font-size:12px;line-height:1.6;color:var(--text-muted);background:var(--bg-base);padding:10px 12px;border-radius:6px;border:1px solid var(--border-subtle);">
+            <strong style="color:var(--text-main);display:block;margin-bottom:4px;">💡 تحلیل تخصصی ایجنت‌های کدنویسی:</strong>
+            برای اجرای مطمئن، دیباگ خودکار و رندر فوری بدون خطای فایل گم‌شده، حالت <strong>Single-File</strong> یا <strong>Smart Auto</strong> بهترین خروجی را دارد. برای ساخت کتابخانه‌ها یا پکیج‌های چندماژولی، حالت <strong>Multi-File</strong> مناسب است.
+          </div>
+        </div>
+      </div>
+
       <!-- Cross-Chat & Cross-Project References Configuration Card (Moved from Chat to Settings) -->
       <div class="stat-card" style="margin-bottom:16px;border:1px solid var(--border-color);background:var(--bg-elevated);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
@@ -3228,6 +3265,14 @@ gemini-1.5-pro'></textarea>
               <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">برنچ گیت پیش‌فرض</label>
               <input id="newProjBranch" class="input-control" style="font-size:12px;" placeholder="main" value="arena/01a0ed4c-new">
             </div>
+          </div>
+          <div>
+            <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">استراتژی ساخت کد (Code Generation Mode)</label>
+            <select id="newProjCodeMode" class="input-control" style="font-size:12px;">
+              <option value="smart-auto">🌟 هوشمند خودکار (Smart Auto)</option>
+              <option value="single-file">📄 تک‌فایل مستقل (Single-File - بدون خطای ۴۰۴)</option>
+              <option value="multi-file">📁 چندفایلی ماژولار (Multi-File)</option>
+            </select>
           </div>
           <div>
             <label style="font-size:11.5px;color:var(--text-dim);margin-bottom:2px;display:block;">دستورالعمل‌های اختصاصی هوش مصنوعی (System Instructions)</label>
@@ -5213,6 +5258,8 @@ function populateActiveProjectForm() {
   $('#projEditBranch').value = p.default_branch || 'arena/01a0ed4c-new';
   $('#projEditInstructions').value = p.instructions || '';
   $('#projEditRules').value = p.agent_rules || '';
+  if ($('#projEditCodeMode')) $('#projEditCodeMode').value = p.code_generation_mode || 'smart-auto';
+  if ($('#settingDefaultCodeMode')) $('#settingDefaultCodeMode').value = p.code_generation_mode || 'smart-auto';
 
   const pSel = $('#projEditProvider');
   pSel.innerHTML = STATE.providers.map(pr => `<option value="${esc(pr.id)}" ${pr.id === p.default_provider ? 'selected' : ''}>${esc(pr.name)}</option>`).join('');
@@ -5223,11 +5270,13 @@ function triggerProjectAutoSave() {
   clearTimeout(projectAutoSaveTimer);
   projectAutoSaveTimer = setTimeout(async () => {
     if (!STATE.activeProject) return;
+    const codeMode = $('#projEditCodeMode')?.value || 'smart-auto';
     const payload = {
       name: $('#projEditName').value.trim() || STATE.activeProject.name,
       description: $('#projEditDesc').value.trim(),
       default_provider: $('#projEditProvider').value,
       default_branch: $('#projEditBranch').value.trim() || 'arena/01a0ed4c-new',
+      codeGenerationMode: codeMode,
       instructions: $('#projEditInstructions').value.trim(),
       agent_rules: $('#projEditRules').value.trim()
     };
@@ -5237,8 +5286,15 @@ function triggerProjectAutoSave() {
       body: JSON.stringify(payload)
     });
     STATE.activeProject = updated;
+    if ($('#settingDefaultCodeMode')) $('#settingDefaultCodeMode').value = updated.code_generation_mode || codeMode;
     flashAutoSave('projectAutoSave');
   }, 600);
+}
+
+function syncCodeModeFromSettings() {
+  const mode = $('#settingDefaultCodeMode')?.value || 'smart-auto';
+  if ($('#projEditCodeMode')) $('#projEditCodeMode').value = mode;
+  triggerProjectAutoSave();
 }
 
 function renderProjectsList() {
@@ -5253,7 +5309,7 @@ function renderProjectsList() {
             ${p.is_default ? '<span class="tool-status-tag info">Default</span>' : ''}
           </div>
           <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
-            Branch: <b>${esc(p.default_branch || 'main')}</b> · Provider: <b>${esc(p.default_provider || 'openrouter')}</b>
+            Branch: <b>${esc(p.default_branch || 'main')}</b> · Provider: <b>${esc(p.default_provider || 'openrouter')}</b> · Mode: <b>${esc(p.code_generation_mode || 'smart-auto')}</b>
           </div>
         </div>
         <div style="display:flex;gap:6px;">
@@ -5268,6 +5324,7 @@ function renderProjectsList() {
 function openNewProjectModal() {
   const pSel = $('#newProjProvider');
   pSel.innerHTML = STATE.providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  if ($('#newProjCodeMode')) $('#newProjCodeMode').value = STATE.activeProject?.code_generation_mode || 'smart-auto';
   openModal('newProjectModal');
 }
 
@@ -5278,6 +5335,7 @@ async function handleCreateProjectSubmit(e) {
     description: $('#newProjDesc').value.trim(),
     defaultProvider: $('#newProjProvider').value,
     defaultBranch: $('#newProjBranch').value.trim() || 'arena/01a0ed4c-new',
+    codeGenerationMode: $('#newProjCodeMode')?.value || 'smart-auto',
     instructions: $('#newProjInstructions').value.trim(),
     agentRules: $('#newProjRules').value.trim()
   };
@@ -5502,11 +5560,17 @@ function renderMarkdown(md) {
   // Fenced code blocks ```lang ... ```
   html = html.replace(/```([a-zA-Z0-9_\-\.\+]*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const langDisplay = lang ? lang.trim() : 'code';
+    const cleanL = langDisplay.toLowerCase();
+    const isHtmlBlock = cleanL === 'html' || cleanL === 'htm' || code.includes('&lt;!doctype html') || code.includes('&lt;html');
+    const isRunnableBlock = ['python', 'py', 'javascript', 'js', 'bash', 'sh', 'php', 'typescript', 'ts'].includes(cleanL);
+
     return `
       <div class="code-block-card">
         <div class="code-block-header">
           <span class="code-lang-tag">${esc(langDisplay)}</span>
           <div class="code-actions">
+            ${isHtmlBlock ? `<button type="button" class="code-action-btn" onclick="previewCodeSnippet(this)" title="Live HTML Render & Preview (No 404)" style="color:var(--primary);font-weight:600;">👁️ رندر پیش‌نمایش</button>` : ''}
+            ${isRunnableBlock ? `<button type="button" class="code-action-btn" onclick="runCodeSnippetDirectly(this)" title="Execute this code directly">▶️ اجرا</button>` : ''}
             <button type="button" class="code-action-btn" onclick="saveCodeBlockToWorkspace(this)" title="Save this code file directly to the active workspace">💾 ذخیره در ورک‌اسپیس</button>
             <button type="button" class="code-action-btn" onclick="copyCodeSnippet(this)" title="Copy code to clipboard">📋 کپی کد</button>
           </div>
@@ -5546,6 +5610,49 @@ function renderMarkdown(md) {
   html = html.replace(/\n(?![<])/g, '<br/>');
 
   return html;
+}
+
+function previewCodeSnippet(btn) {
+  const card = btn.closest('.code-block-card');
+  const codeEl = card ? card.querySelector('code') : null;
+  if (!codeEl) return;
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = codeEl.innerHTML;
+  const rawCode = tempDiv.textContent || tempDiv.innerText || '';
+  openFullScreenRenderModal({
+    path: 'index.html',
+    content: rawCode,
+    isHtml: true,
+    autoRun: false
+  });
+}
+
+async function runCodeSnippetDirectly(btn) {
+  const card = btn.closest('.code-block-card');
+  const codeEl = card ? card.querySelector('code') : null;
+  if (!codeEl) return;
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = codeEl.innerHTML;
+  const rawCode = tempDiv.textContent || tempDiv.innerText || '';
+  const langTag = card.querySelector('.code-lang-tag')?.textContent?.toLowerCase() || 'py';
+  const ext = (langTag === 'javascript' || langTag === 'js') ? 'js' : ((langTag === 'php') ? 'php' : ((langTag === 'bash' || langTag === 'sh') ? 'sh' : 'py'));
+  const tempFn = `snippet_${Date.now()}.${ext}`;
+
+  try {
+    await api('/api/workspace/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: tempFn, content: rawCode })
+    });
+    openFullScreenRenderModal({
+      path: tempFn,
+      content: rawCode,
+      isHtml: false,
+      autoRun: true
+    });
+  } catch (err) {
+    alert('خطا در اجرای کد: ' + err.message);
+  }
 }
 
 async function saveCodeBlockToWorkspace(btn) {
@@ -7112,17 +7219,23 @@ function renderMultiFormatPreview(data) {
   const previewContent = $('#wsPreviewContent');
   if (!previewContent) return;
 
+  const rawUrl = window.apiUrl ? window.apiUrl(data.rawUrl || `/api/workspace/raw?path=${encodeURIComponent(data.path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`) : (data.rawUrl || `/api/workspace/raw?path=${encodeURIComponent(data.path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
+
   if (data.type === 'html') {
-    previewContent.innerHTML = `<iframe class="ws-preview-frame" src="${esc(data.rawUrl)}"></iframe>`;
+    if (data.content) {
+      previewContent.innerHTML = `<iframe class="ws-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" srcdoc="${esc(data.content)}"></iframe>`;
+    } else {
+      previewContent.innerHTML = `<iframe class="ws-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" src="${esc(rawUrl)}"></iframe>`;
+    }
   } else if (data.type === 'markdown') {
     previewContent.innerHTML = `<div style="padding:24px;overflow:auto;line-height:1.7;font-size:13.5px;" class="markdown-body">${renderMarkdown(data.content)}</div>`;
   } else if (data.type === 'image') {
     previewContent.innerHTML = `
       <div class="ws-image-viewer">
-        <img src="${esc(data.rawUrl)}" alt="${esc(data.filename)}">
+        <img src="${esc(rawUrl)}" alt="${esc(data.filename)}">
         <div style="display:flex;gap:8px;align-items:center;">
           <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)} (${formatFileSize(data.size)})</span>
-          <a href="${esc(data.rawUrl)}" download="${esc(data.filename)}" class="btn btn-ghost btn-sm">📥 Download Image</a>
+          <a href="${esc(rawUrl)}" download="${esc(data.filename)}" class="btn btn-ghost btn-sm">📥 Download Image</a>
         </div>
       </div>
     `;
@@ -7141,19 +7254,19 @@ function renderMultiFormatPreview(data) {
       </div>
     `;
   } else if (data.type === 'pdf') {
-    previewContent.innerHTML = `<embed src="${esc(data.rawUrl)}" type="application/pdf" style="width:100%;height:100%;border:0;">`;
+    previewContent.innerHTML = `<embed src="${esc(rawUrl)}" type="application/pdf" style="width:100%;height:100%;border:0;">`;
   } else if (data.type === 'audio') {
     previewContent.innerHTML = `
       <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px;">
         <div style="font-size:40px;">🎵</div>
         <strong>${esc(data.filename)}</strong>
-        <audio controls src="${esc(data.rawUrl)}" style="width:min(400px, 90%);"></audio>
+        <audio controls src="${esc(rawUrl)}" style="width:min(400px, 90%);"></audio>
       </div>
     `;
   } else if (data.type === 'video') {
     previewContent.innerHTML = `
       <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;background:var(--code-bg);">
-        <video controls src="${esc(data.rawUrl)}" style="max-width:90%;max-height:75vh;border-radius:8px;"></video>
+        <video controls src="${esc(rawUrl)}" style="max-width:90%;max-height:75vh;border-radius:8px;"></video>
         <span style="font-size:12px;color:var(--text-muted);">${esc(data.filename)}</span>
       </div>
     `;
@@ -7476,10 +7589,14 @@ function renderModalPreview(data, filePath) {
   const previewContent = $('#fileModalPreviewContent');
   if (!previewContent) return;
 
-  const rawUrl = `/api/workspace/raw?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`;
+  const rawUrl = window.apiUrl ? window.apiUrl(`/api/workspace/raw?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`) : `/api/workspace/raw?path=${encodeURIComponent(filePath)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`;
 
   if (data.type === 'html') {
-    previewContent.innerHTML = `<iframe class="ws-preview-frame" src="${esc(rawUrl)}" style="min-height:360px;"></iframe>`;
+    if (data.content) {
+      previewContent.innerHTML = `<iframe class="ws-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" srcdoc="${esc(data.content)}" style="min-height:360px;"></iframe>`;
+    } else {
+      previewContent.innerHTML = `<iframe class="ws-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" src="${esc(rawUrl)}" style="min-height:360px;"></iframe>`;
+    }
   } else if (data.type === 'markdown') {
     previewContent.innerHTML = `<div style="padding:20px;overflow:auto;line-height:1.7;font-size:13.5px;" class="markdown-body">${renderMarkdown(data.content || '')}</div>`;
   } else if (data.type === 'image') {
@@ -7831,9 +7948,18 @@ async function openFullScreenRenderModal(options = {}) {
     if (reloadBtn) reloadBtn.style.display = 'inline-flex';
     if (runBtn) runBtn.textContent = '🔄 بروزرسانی رندر';
 
-    const rawUrl = `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
     const iframe = $('#fsPreviewFrame');
-    if (iframe) iframe.src = rawUrl;
+    if (iframe) {
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+      if (options.content) {
+        iframe.removeAttribute('src');
+        iframe.srcdoc = options.content;
+      } else {
+        const rawUrl = window.apiUrl ? window.apiUrl(`/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`) : `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
+        iframe.removeAttribute('srcdoc');
+        iframe.src = rawUrl;
+      }
+    }
     setFsViewport(fsCurrentState.viewport || 'desktop');
   } else {
     if (deviceWrapper) deviceWrapper.style.display = 'none';
@@ -7859,6 +7985,13 @@ async function openFullScreenRenderModal(options = {}) {
         $('#fsCodeEditor').value = previewData.content;
         const lineCount = (previewData.content.split('\n') || []).length;
         if ($('#fsCodeLineCount')) $('#fsCodeLineCount').textContent = `${lineCount} خط`;
+      }
+      if (isHtml) {
+        const iframe = $('#fsPreviewFrame');
+        if (iframe && (!options.content || options.content === '')) {
+          iframe.removeAttribute('src');
+          iframe.srcdoc = previewData.content;
+        }
       }
     }
   } catch (_) {
@@ -8059,13 +8192,24 @@ async function saveAndRunFsCode() {
   }
 }
 
-function refreshFsPreview() {
-  const path = fsCurrentState.path;
+async function refreshFsPreview() {
+  const path = fsCurrentState.path || 'index.html';
   if (!path) return;
   const iframe = $('#fsPreviewFrame');
-  if (iframe) {
-    iframe.src = `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
-  }
+  if (!iframe) return;
+
+  try {
+    const previewData = await api(`/api/workspace/file-preview?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}`);
+    if (previewData && previewData.content !== undefined) {
+      iframe.removeAttribute('src');
+      iframe.srcdoc = previewData.content;
+      return;
+    }
+  } catch (_) {}
+
+  const rawUrl = window.apiUrl ? window.apiUrl(`/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`) : `/api/workspace/raw?path=${encodeURIComponent(path)}&conversation_id=${encodeURIComponent(STATE.activeConversationId || '')}&t=${Date.now()}`;
+  iframe.removeAttribute('srcdoc');
+  iframe.src = rawUrl;
 }
 
 function copyFsOutput() {

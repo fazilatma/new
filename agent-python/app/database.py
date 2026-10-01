@@ -70,6 +70,7 @@ def init_db():
             default_branch TEXT DEFAULT 'main',
             default_provider TEXT DEFAULT 'openrouter',
             default_model TEXT DEFAULT '',
+            code_generation_mode TEXT DEFAULT 'smart-auto',
             instructions TEXT DEFAULT '',
             agent_rules TEXT DEFAULT '',
             env_vars TEXT DEFAULT '{}',
@@ -253,13 +254,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_projects_default ON projects(is_default);
         """)
 
+        try:
+            conn.execute("ALTER TABLE projects ADD COLUMN code_generation_mode TEXT DEFAULT 'smart-auto'")
+        except Exception:
+            pass
+
         # Ensure default project exists
         def_ws_path = str(get_default_workspace())
         proj = conn.execute("SELECT id FROM projects WHERE is_default = 1").fetchone()
         if not proj:
             conn.execute("""
-            INSERT OR IGNORE INTO projects (id, name, description, path, default_branch, default_provider, instructions, agent_rules, is_default)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            INSERT OR IGNORE INTO projects (id, name, description, path, default_branch, default_provider, code_generation_mode, instructions, agent_rules, is_default)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """, (
                 "proj-default",
                 "Primary Project",
@@ -267,6 +273,7 @@ def init_db():
                 def_ws_path,
                 "arena/01a0ed4c-new",
                 "openrouter",
+                "smart-auto",
                 "You are an expert AI Coding Agent working on this project. Inspect existing code before modifying, follow standard patterns, and test your work.",
                 "- Verify dependencies before running tests.\n- Maintain clean modular code structure.\n- Create explicit commit messages."
             ))

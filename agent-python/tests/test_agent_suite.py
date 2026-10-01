@@ -1686,6 +1686,67 @@ def test_truncated_json_repair_and_nested_model_import():
     assert "llama3.3:70b" in groq_model_ids2
     assert "qwen2.5-coder:32b" in groq_model_ids2
 
+def test_code_generation_mode_and_html_bundling():
+    """Test project code_generation_mode configuration and smart HTML bundling without 404s."""
+    # 1. Test Project code_generation_mode creation & update
+    proj_res = client.post("/api/projects", json={
+        "name": "Single File Web App",
+        "description": "App testing single-file artifact mode",
+        "codeGenerationMode": "single-file"
+    })
+    assert proj_res.status_code == 200
+    proj_data = proj_res.json()
+    assert proj_data["code_generation_mode"] == "single-file"
+    proj_id = proj_data["id"]
+
+    # Update to multi-file
+    up_res = client.put(f"/api/projects/{proj_id}", json={
+        "codeGenerationMode": "multi-file"
+    })
+    assert up_res.status_code == 200
+    assert up_res.json()["code_generation_mode"] == "multi-file"
+
+    # 2. Test Smart HTML Preview Bundling (Inlining CSS & JS to prevent 404s)
+    # Create HTML, CSS, and JS in active workspace
+    client.post("/api/workspace/create", json={
+        "path": "test_app/style.css",
+        "content": "body { background: #000; color: #fff; }"
+    })
+    client.post("/api/workspace/create", json={
+        "path": "test_app/app.js",
+        "content": "console.log('App loaded');"
+    })
+    client.post("/api/workspace/create", json={
+        "path": "test_app/index.html",
+        "content": """<!doctype html>
+<html>
+<head>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js"></script>
+</head>
+<body><h1>Hello World</h1></body>
+</html>"""
+    })
+
+    # Fetch raw HTML preview
+    raw_res = client.get("/api/workspace/raw?path=test_app/index.html")
+    assert raw_res.status_code == 200
+    html_out = raw_res.text
+    # Verify CSS and JS were bundled inline
+    assert "data-inlined-from=\"style.css\"" in html_out
+    assert "body { background: #000; color: #fff; }" in html_out
+    assert "data-inlined-from=\"app.js\"" in html_out
+    assert "console.log('App loaded');" in html_out
+
+    # 3. Test File Preview endpoint returns bundled HTML and proper rawUrl
+    prev_res = client.get("/api/workspace/file-preview?path=test_app/index.html")
+    assert prev_res.status_code == 200
+    pdata = prev_res.json()
+    assert pdata["type"] == "html"
+    assert "data-inlined-from=\"style.css\"" in pdata["content"]
+    assert "/api/workspace/raw?path=test_app/index.html" in pdata["rawUrl"]
+
+
 
 
 

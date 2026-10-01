@@ -15,6 +15,7 @@ final class Projects
 
     private static function format(array $r): array
     {
+        $r['code_generation_mode'] = (string) ($r['code_generation_mode'] ?? 'smart-auto');
         $r['env_vars'] = json_decode((string) ($r['env_vars'] ?? '{}'), true) ?: [];
         $r['custom_commands'] = json_decode((string) ($r['custom_commands'] ?? '[]'), true) ?: [];
         $r['is_default'] = (int) ($r['is_default'] ?? 0);
@@ -40,6 +41,7 @@ final class Projects
             'default_branch' => 'main',
             'default_provider' => 'openrouter',
             'default_model' => '',
+            'code_generation_mode' => 'smart-auto',
             'instructions' => '',
             'agent_rules' => '',
             'env_vars' => [],
@@ -84,12 +86,13 @@ final class Projects
             $path = Bootstrap::$workspacesDir . '/' . $projId;
         }
         Files::ensureDir($path);
+        $codeMode = (string) ($data['codeGenerationMode'] ?? $data['code_generation_mode'] ?? 'smart-auto');
 
         Database::run(
             'INSERT INTO projects (
                 id, name, description, path, git_url, default_branch, default_provider,
-                default_model, instructions, agent_rules, env_vars, custom_commands, is_default
-             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)',
+                default_model, code_generation_mode, instructions, agent_rules, env_vars, custom_commands, is_default
+             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)',
             [
                 $projId,
                 trim((string) ($data['name'] ?? 'New Project')),
@@ -99,6 +102,7 @@ final class Projects
                 (string) ($data['defaultBranch'] ?? $data['default_branch'] ?? 'main'),
                 (string) ($data['defaultProvider'] ?? $data['default_provider'] ?? 'openrouter'),
                 (string) ($data['defaultModel'] ?? $data['default_model'] ?? ''),
+                $codeMode,
                 (string) ($data['instructions'] ?? ''),
                 (string) ($data['agentRules'] ?? $data['agent_rules'] ?? ''),
                 json_encode($data['envVars'] ?? $data['env_vars'] ?? [], JSON_UNESCAPED_UNICODE),
@@ -134,7 +138,7 @@ final class Projects
         Database::run(
             "UPDATE projects SET
                 name = ?, description = ?, path = ?, git_url = ?, default_branch = ?,
-                default_provider = ?, default_model = ?, instructions = ?, agent_rules = ?,
+                default_provider = ?, default_model = ?, code_generation_mode = ?, instructions = ?, agent_rules = ?,
                 env_vars = ?, custom_commands = ?, updated_at = datetime('now')
              WHERE id = ?",
             [
@@ -145,6 +149,7 @@ final class Projects
                 $pick($data['defaultBranch'] ?? $data['default_branch'] ?? null, $current['default_branch']),
                 $pick($data['defaultProvider'] ?? $data['default_provider'] ?? null, $current['default_provider']),
                 $pick($data['defaultModel'] ?? $data['default_model'] ?? null, $current['default_model']),
+                $pick($data['codeGenerationMode'] ?? $data['code_generation_mode'] ?? null, $current['code_generation_mode'] ?? 'smart-auto'),
                 $pick($data['instructions'] ?? null, $current['instructions']),
                 $pick($data['agentRules'] ?? $data['agent_rules'] ?? null, $current['agent_rules']),
                 json_encode($pick($data['envVars'] ?? $data['env_vars'] ?? null, $current['env_vars']), JSON_UNESCAPED_UNICODE),

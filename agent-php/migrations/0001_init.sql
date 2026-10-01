@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS projects (
     default_branch TEXT DEFAULT 'main',
     default_provider TEXT DEFAULT 'openrouter',
     default_model TEXT DEFAULT '',
+    code_generation_mode TEXT DEFAULT 'smart-auto',
     instructions TEXT DEFAULT '',
     agent_rules TEXT DEFAULT '',
     env_vars TEXT DEFAULT '{}',

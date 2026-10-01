@@ -1,6 +1,7 @@
 """FastAPI Application Main Entrypoint with full feature routers, lifespan, and security."""
 import asyncio
 import os
+import re
 import json
 import time
 import uuid
@@ -8,6 +9,7 @@ import base64
 import mimetypes
 import csv
 import io
+import urllib.parse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
@@ -262,39 +264,160 @@ def workspace_read(path: str, conversation_id: Optional[str] = None, user: Dict[
     except Exception as e:
         raise HTTPException(400, str(e))
 
-@app.get("/api/workspace/raw")
-def workspace_raw_file(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+def resolve_workspace_file_safe(path: str, conversation_id: Optional[str] = None) -> Optional[Path]:
+    """Resolves a file path across conversation session workspace, active workspace, default workspace, and any session workspace."""
+    # 1. If conversation_id is passed, try that session workspace
     if conversation_id:
         try:
             session_ws = get_or_create_session_workspace(conversation_id)
             set_active_workspace(session_ws["id"])
+            p = safe_path(path)
+            if p.exists() and not p.is_dir():
+                return p
         except Exception:
             pass
+
+    # 2. Try the currently active workspace
     try:
         p = safe_path(path)
-        if not p.exists() or p.is_dir():
-            raise HTTPException(404, "File not found")
-        mime, _ = mimetypes.guess_type(str(p))
-        if not mime:
-            mime = "application/octet-stream"
-        return FileResponse(p, media_type=mime)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(400, str(e))
+        if p.exists() and not p.is_dir():
+            return p
+    except Exception:
+        pass
+
+    # 3. Try the default workspace
+    try:
+        def_ws_root = get_default_workspace()
+        clean = (path or ".").strip().lstrip("/")
+        p = (def_ws_root / clean).resolve()
+        if p.exists() and not p.is_dir():
+            return p
+    except Exception:
+        pass
+
+    # 4. Search all session workspaces
+    try:
+        clean = (path or ".").strip().lstrip("/")
+        from .workspaces import WORKSPACES_ROOT
+        for session_dir in WORKSPACES_ROOT.glob("session_*"):
+            candidate = (session_dir / clean).resolve()
+            if candidate.exists() and not candidate.is_dir():
+                return candidate
+    except Exception:
+        pass
+
+    return None
+
+def bundle_html_preview_content(html_content: str, base_dir: Path, conversation_id: Optional[str] = None) -> str:
+    """Inlines local stylesheets, scripts, and small images in HTML to prevent 404s when previewed in browser iframes."""
+    if not html_content:
+        return html_content
+
+    # 1. Inline <link rel="stylesheet" href="..."> or <link href="..." rel="stylesheet">
+    def replace_css_link(match):
+        full = match.group(0)
+        href_match = re.search(r'href=["\']([^"\']+)["\']', full, re.IGNORECASE)
+        if not href_match:
+            return full
+        href = href_match.group(1).strip()
+        if href.startswith(('http://', 'https://', '//', 'data:')):
+            return full
+        clean_rel = href.split('?')[0].split('#')[0].lstrip('/')
+        css_file = (base_dir / clean_rel).resolve()
+        if css_file.exists() and css_file.is_file():
+            try:
+                css_code = css_file.read_text(encoding='utf-8', errors='replace')
+                return f'<style data-inlined-from="{href}">\n{css_code}\n</style>'
+            except Exception:
+                pass
+        return full
+
+    html_content = re.sub(r'<link\s+[^>]*?rel=["\']stylesheet["\'][^>]*?>', replace_css_link, html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'<link\s+[^>]*?href=["\'][^"\']+\.css(?:\?[^"\']*)?["\'][^>]*?>', replace_css_link, html_content, flags=re.IGNORECASE)
+
+    # 2. Inline <script src="..."></script>
+    def replace_js_script(match):
+        full = match.group(0)
+        src_match = re.search(r'src=["\']([^"\']+)["\']', full, re.IGNORECASE)
+        if not src_match:
+            return full
+        src = src_match.group(1).strip()
+        if src.startswith(('http://', 'https://', '//', 'data:')):
+            return full
+        clean_rel = src.split('?')[0].split('#')[0].lstrip('/')
+        js_file = (base_dir / clean_rel).resolve()
+        if js_file.exists() and js_file.is_file():
+            try:
+                js_code = js_file.read_text(encoding='utf-8', errors='replace')
+                return f'<script data-inlined-from="{src}">\n{js_code}\n</script>'
+            except Exception:
+                pass
+        return full
+
+    html_content = re.sub(r'<script\s+[^>]*?src=["\']([^"\']+\.(?:js|mjs)(?:\?[^"\']*)?)["\'][^>]*?>\s*</script>', replace_js_script, html_content, flags=re.IGNORECASE)
+
+    # 3. Inline images <img src="..."> if local image file exists
+    def replace_img_src(match):
+        prefix = match.group(1)
+        src = match.group(2).strip()
+        suffix = match.group(3)
+        if src.startswith(('http://', 'https://', '//', 'data:')):
+            return match.group(0)
+        clean_rel = src.split('?')[0].split('#')[0].lstrip('/')
+        img_file = (base_dir / clean_rel).resolve()
+        if img_file.exists() and img_file.is_file() and img_file.stat().st_size < 5 * 1024 * 1024:
+            try:
+                mime, _ = mimetypes.guess_type(str(img_file))
+                mime = mime or 'image/png'
+                b64 = base64.b64encode(img_file.read_bytes()).decode('utf-8')
+                return f'{prefix}src="data:{mime};base64,{b64}"{suffix}'
+            except Exception:
+                pass
+        return match.group(0)
+
+    html_content = re.sub(r'(<img\s+[^>]*?)src=["\']([^"\']+)["\']([^>]*?>)', replace_img_src, html_content, flags=re.IGNORECASE)
+
+    return html_content
+
+@app.get("/api/workspace/raw")
+def workspace_raw_file(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    p = resolve_workspace_file_safe(path, conversation_id)
+    if not p or not p.exists() or p.is_dir():
+        # Fallback to safe_path to handle standard errors
+        try:
+            p = safe_path(path)
+            if not p.exists() or p.is_dir():
+                raise HTTPException(404, f"File not found: {path}")
+        except Exception:
+            raise HTTPException(404, f"File not found: {path}")
+
+    suffix = p.suffix.lower()
+    if suffix in (".html", ".htm"):
+        try:
+            raw_html = p.read_text(encoding="utf-8", errors="replace")
+            bundled = bundle_html_preview_content(raw_html, p.parent, conversation_id)
+            return HTMLResponse(content=bundled, status_code=200)
+        except Exception:
+            pass
+
+    mime, _ = mimetypes.guess_type(str(p))
+    if not mime:
+        mime = "application/octet-stream"
+    return FileResponse(p, media_type=mime)
 
 @app.get("/api/workspace/file-preview")
 def workspace_file_preview(path: str, conversation_id: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
-    if conversation_id:
+    p = resolve_workspace_file_safe(path, conversation_id)
+    if not p or not p.exists():
         try:
-            session_ws = get_or_create_session_workspace(conversation_id)
-            set_active_workspace(session_ws["id"])
+            p = safe_path(path)
         except Exception:
-            pass
+            raise HTTPException(404, f"File not found: {path}")
+
+    if not p.exists():
+        raise HTTPException(404, f"File not found: {path}")
+
     try:
-        p = safe_path(path)
-        if not p.exists():
-            raise HTTPException(404, "File not found")
         if p.is_dir():
             return {
                 "path": path,
@@ -312,7 +435,7 @@ def workspace_file_preview(path: str, conversation_id: Optional[str] = None, use
         content_text = None
         csv_data = None
         base64_data = None
-        is_executable = suffix in (".py", ".sh", ".bash", ".js", ".ts", ".html", ".pyw")
+        is_executable = suffix in (".py", ".sh", ".bash", ".js", ".ts", ".html", ".pyw", ".php")
 
         if suffix in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"):
             preview_type = "image"
@@ -330,6 +453,7 @@ def workspace_file_preview(path: str, conversation_id: Optional[str] = None, use
             preview_type = "html"
             try:
                 content_text = p.read_text(encoding="utf-8", errors="replace")
+                content_text = bundle_html_preview_content(content_text, p.parent, conversation_id)
             except Exception:
                 pass
         elif suffix in (".md", ".markdown"):
@@ -356,17 +480,19 @@ def workspace_file_preview(path: str, conversation_id: Optional[str] = None, use
             except Exception:
                 preview_type = "binary"
 
+        raw_qs = f"?path={urllib.parse.quote(path, safe='/')}" + (f"&conversation_id={urllib.parse.quote(conversation_id, safe='')}" if conversation_id else "")
+
         return {
             "path": path,
             "filename": p.name,
-            "size": p.stat().st_size,
+            "size": p.stat().st_size if p.is_file() else 0,
             "type": preview_type,
             "mimeType": mime,
             "isExecutable": is_executable,
             "content": content_text,
             "base64": base64_data,
             "csvData": csv_data,
-            "rawUrl": f"/api/workspace/raw?path={path}"
+            "rawUrl": f"/api/workspace/raw{raw_qs}"
         }
     except HTTPException:
         raise

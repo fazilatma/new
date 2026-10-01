@@ -21,6 +21,7 @@ class ProjectCreateRequest(BaseModel):
     defaultBranch: Optional[str] = "main"
     defaultProvider: Optional[str] = "openrouter"
     defaultModel: Optional[str] = ""
+    codeGenerationMode: Optional[str] = "smart-auto"
     instructions: Optional[str] = ""
     agentRules: Optional[str] = ""
     envVars: Optional[Dict[str, str]] = Field(default_factory=dict)
@@ -34,6 +35,7 @@ class ProjectUpdateRequest(BaseModel):
     defaultBranch: Optional[str] = None
     defaultProvider: Optional[str] = None
     defaultModel: Optional[str] = None
+    codeGenerationMode: Optional[str] = None
     instructions: Optional[str] = None
     agentRules: Optional[str] = None
     envVars: Optional[Dict[str, str]] = None
@@ -41,6 +43,7 @@ class ProjectUpdateRequest(BaseModel):
 
 def _format_project_row(r) -> Dict[str, Any]:
     d = dict(r)
+    d["code_generation_mode"] = d.get("code_generation_mode") or "smart-auto"
     try:
         d["env_vars"] = json.loads(d.get("env_vars") or "{}")
     except Exception:
@@ -74,6 +77,7 @@ def get_active_project() -> Dict[str, Any]:
         "default_branch": "main",
         "default_provider": "openrouter",
         "default_model": "",
+        "code_generation_mode": "smart-auto",
         "instructions": "",
         "agent_rules": "",
         "env_vars": {},
@@ -108,6 +112,7 @@ def get_project(project_id: str) -> Optional[Dict[str, Any]]:
 def create_project(data: ProjectCreateRequest) -> Dict[str, Any]:
     proj_id = f"proj-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     proj_path = data.path or str(get_default_workspace())
+    code_mode = data.codeGenerationMode or "smart-auto"
 
     Path(proj_path).mkdir(parents=True, exist_ok=True)
 
@@ -115,9 +120,9 @@ def create_project(data: ProjectCreateRequest) -> Dict[str, Any]:
         conn.execute("""
         INSERT INTO projects (
             id, name, description, path, git_url, default_branch, default_provider,
-            default_model, instructions, agent_rules, env_vars, custom_commands, is_default
+            default_model, code_generation_mode, instructions, agent_rules, env_vars, custom_commands, is_default
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """, (
             proj_id,
             data.name.strip(),
@@ -127,6 +132,7 @@ def create_project(data: ProjectCreateRequest) -> Dict[str, Any]:
             data.defaultBranch or "main",
             data.defaultProvider or "openrouter",
             data.defaultModel or "",
+            code_mode,
             data.instructions or "",
             data.agentRules or "",
             json.dumps(data.envVars or {}, ensure_ascii=False),
@@ -146,6 +152,7 @@ def update_project(project_id: str, data: ProjectUpdateRequest) -> Dict[str, Any
     default_branch = data.defaultBranch if data.defaultBranch is not None else current["default_branch"]
     default_provider = data.defaultProvider if data.defaultProvider is not None else current["default_provider"]
     default_model = data.defaultModel if data.defaultModel is not None else current["default_model"]
+    code_mode = data.codeGenerationMode if data.codeGenerationMode is not None else current.get("code_generation_mode", "smart-auto")
     instructions = data.instructions if data.instructions is not None else current["instructions"]
     agent_rules = data.agentRules if data.agentRules is not None else current["agent_rules"]
     env_vars = json.dumps(data.envVars if data.envVars is not None else current["env_vars"], ensure_ascii=False)
@@ -155,12 +162,12 @@ def update_project(project_id: str, data: ProjectUpdateRequest) -> Dict[str, Any
         conn.execute("""
         UPDATE projects SET
             name = ?, description = ?, path = ?, git_url = ?, default_branch = ?,
-            default_provider = ?, default_model = ?, instructions = ?, agent_rules = ?,
+            default_provider = ?, default_model = ?, code_generation_mode = ?, instructions = ?, agent_rules = ?,
             env_vars = ?, custom_commands = ?, updated_at = datetime('now')
         WHERE id = ?
         """, (
             name, description, path, git_url, default_branch,
-            default_provider, default_model, instructions, agent_rules,
+            default_provider, default_model, code_mode, instructions, agent_rules,
             env_vars, custom_commands, project_id
         ))
     return get_project(project_id)

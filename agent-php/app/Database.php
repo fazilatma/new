@@ -81,11 +81,15 @@ final class Database
             Observability::log('INFO', 'AUTH', 'Bootstrapped default admin user "admin"');
         }
 
+        try {
+            self::run("ALTER TABLE projects ADD COLUMN code_generation_mode TEXT DEFAULT 'smart-auto'");
+        } catch (\Throwable $e) {}
+
         $projCount = (int) $pdo->query("SELECT COUNT(*) FROM projects WHERE id = 'proj-default'")->fetchColumn();
         if ($projCount === 0) {
             self::run(
-                'INSERT INTO projects (id, name, description, path, is_default) VALUES (?,?,?,?,1)',
-                ['proj-default', 'Primary Project', 'Default project', Bootstrap::$workspacesDir . '/default']
+                'INSERT INTO projects (id, name, description, path, code_generation_mode, is_default) VALUES (?,?,?,?,?,1)',
+                ['proj-default', 'Primary Project', 'Default project', Bootstrap::$workspacesDir . '/default', 'smart-auto']
             );
         }
 

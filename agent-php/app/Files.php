@@ -452,11 +452,81 @@ final class Files
             'type' => $previewType,
             'mimeType' => $mime,
             'isExecutable' => $isExecutable,
-            'content' => $contentText,
+            'content' => $contentText !== null && in_array($suffix, ['.html', '.htm'], true) ? self::bundleHtmlPreview($contentText, dirname($abs)) : $contentText,
             'base64' => $base64,
             'csvData' => $csvData,
             'rawUrl' => $rawUrlBase . rawurlencode($path),
         ];
+    }
+
+    /** Inlines local stylesheets, scripts, and small images in HTML to prevent 404s when previewed in browser iframes. */
+    public static function bundleHtmlPreview(string $htmlContent, string $baseDir): string
+    {
+        if ($htmlContent === '') {
+            return '';
+        }
+
+        // 1. Inline <link rel="stylesheet" href="...">
+        $htmlContent = (string) preg_replace_callback(
+            '/<link\s+[^>]*?href=["\']([^"\']+\.css(?:\?[^"\']*)?)["\'][^>]*?>/i',
+            static function (array $m) use ($baseDir): string {
+                $href = trim($m[1]);
+                if (preg_match('#^(https?:|//|data:)#i', $href)) {
+                    return $m[0];
+                }
+                $clean = ltrim(explode('?', explode('#', $href)[0])[0], '/');
+                $cssFile = $baseDir . '/' . $clean;
+                if (is_file($cssFile)) {
+                    $cssCode = (string) file_get_contents($cssFile);
+                    return '<style data-inlined-from="' . htmlspecialchars($href, ENT_QUOTES) . "\">\n" . $cssCode . "\n</style>";
+                }
+                return $m[0];
+            },
+            $htmlContent
+        );
+
+        // 2. Inline <script src="..."></script>
+        $htmlContent = (string) preg_replace_callback(
+            '/<script\s+[^>]*?src=["\']([^"\']+\.(?:js|mjs)(?:\?[^"\']*)?)["\'][^>]*?>\s*<\/script>/i',
+            static function (array $m) use ($baseDir): string {
+                $src = trim($m[1]);
+                if (preg_match('#^(https?:|//|data:)#i', $src)) {
+                    return $m[0];
+                }
+                $clean = ltrim(explode('?', explode('#', $src)[0])[0], '/');
+                $jsFile = $baseDir . '/' . $clean;
+                if (is_file($jsFile)) {
+                    $jsCode = (string) file_get_contents($jsFile);
+                    return '<script data-inlined-from="' . htmlspecialchars($src, ENT_QUOTES) . "\">\n" . $jsCode . "\n</script>";
+                }
+                return $m[0];
+            },
+            $htmlContent
+        );
+
+        // 3. Inline images <img src="...">
+        $htmlContent = (string) preg_replace_callback(
+            '/(<img\s+[^>]*?)src=["\']([^"\']+)["\']([^>]*?>)/i',
+            static function (array $m) use ($baseDir): string {
+                $prefix = $m[1];
+                $src = trim($m[2]);
+                $suffix = $m[3];
+                if (preg_match('#^(https?:|//|data:)#i', $src)) {
+                    return $m[0];
+                }
+                $clean = ltrim(explode('?', explode('#', $src)[0])[0], '/');
+                $imgFile = $baseDir . '/' . $clean;
+                if (is_file($imgFile) && (filesize($imgFile) ?: 0) < 5 * 1024 * 1024) {
+                    $mime = self::mimeType($imgFile);
+                    $b64 = base64_encode((string) file_get_contents($imgFile));
+                    return $prefix . 'src="data:' . $mime . ';base64,' . $b64 . '"' . $suffix;
+                }
+                return $m[0];
+            },
+            $htmlContent
+        );
+
+        return $htmlContent;
     }
 
     public static function humanSize(int|float $bytes): string

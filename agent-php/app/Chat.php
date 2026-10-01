@@ -135,6 +135,25 @@ final class Chat
             }
         }
 
+        $codeMode = (string) ($proj['code_generation_mode'] ?? 'smart-auto');
+        if ($codeMode === 'single-file') {
+            $prompt .= "\n### 📄 CODE GENERATION STRATEGY: SINGLE-FILE (SELF-CONTAINED):\n"
+                . "- The project/user is configured for SINGLE-FILE code generation.\n"
+                . "- Always generate fully self-contained, standalone single-file code without external local dependencies.\n"
+                . "- For HTML / Web applications: Embed ALL CSS in `<style>` tags and ALL JavaScript in `<script>` tags inside the single HTML file (`index.html`). DO NOT reference external local `.css` or `.js` files via `<link>` or `<script src>` tags. This eliminates 404 missing asset errors and ensures immediate live preview rendering.\n"
+                . "- For Python / Backend scripts: Include all necessary helper classes, functions, and logic within the single script file (`main.py` or script name).\n"
+                . "- Always call `write_file` to save the complete single-file code to the workspace.\n";
+        } elseif ($codeMode === 'multi-file') {
+            $prompt .= "\n### 📁 CODE GENERATION STRATEGY: MULTI-FILE (MODULAR):\n"
+                . "- The project/user is configured for MULTI-FILE modular code generation.\n"
+                . "- Split the application into well-organized separate files (e.g. `index.html`, `style.css`, `app.js` or `main.py`, `utils.py`, `models.py`).\n"
+                . "- Always call `write_file` for EVERY generated file so no component is missing in the workspace.\n";
+        } else { // smart-auto
+            $prompt .= "\n### 🌟 CODE GENERATION STRATEGY: SMART AUTO:\n"
+                . "- For interactive web applications, UI demos, visual prototypes, dashboards, and calculators: Prefer self-contained single files with inline `<style>` and `<script>` inside `index.html` so that live preview and visual rendering work instantly with zero 404 errors.\n"
+                . "- For complex multi-module backend architectures or multi-package projects: Generate structured separate modular files and save each using `write_file`.\n";
+        }
+
         $prompt .= "\n### 🤖 ARENA AGENT WORKFLOW & AGENTIC CODING STANDARD:\n"
             . "You must structure all your multi-step coding, debugging, and implementation responses according to the Arena Agent standard:\n"
             . "1. **اعلام هدف و نیت (Goal & Intent)**: Start immediately with a clear statement of your goal and the approach you will take.\n"
