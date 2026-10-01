@@ -172,6 +172,38 @@ The accepted feature sets are `base`, `mcp`, `agents`, `recommended`, and `all`.
 
 The included `open-webui-computer-rootless-project.json` imports the same helper into WebConsole, installs the newest stable Python automatically, and uses `python-agent run` for foreground process supervision.
 
+## 🤖 OpenHands Agent Canvas on Restricted Hosting (No Docker)
+
+`host-helpers/install-openhands-host.sh` installs the official `@openhands/agent-canvas` package and all required runtimes below the account home. It uses a checksummed user-local Node.js 24 release (including a verified glibc 2.17 compatibility fallback on older x86-64 hosts), user-local `uv`, and npm. It never uses `sudo`, `apt`, Docker, or systemd.
+
+Download first, then run it as a separate short command so fragile web terminals do not have to paste one long pipeline:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
+```
+
+```bash
+bash "$HOME/install-openhands-host.sh" install --home "$HOME" --port 8810 --access-host YOUR_HOST
+```
+
+After installation, use only the permanent helper command:
+
+```bash
+openhands-host status
+openhands-host update
+openhands-host restart
+openhands-host logs --follow
+openhands-host access-info
+openhands-host web-check
+openhands-host doctor
+```
+
+The helper always launches Agent Canvas with `--public` and a locally generated 256-bit API key. Run `openhands-host access-info` to display the URL and key that the browser login screen requires. The default direct URL is plain HTTP; select HTTPS only when a separate reverse proxy actually terminates TLS.
+
+The included `openhands-agent-canvas-project.json` is ready to import in WebConsole's **Create Project** dialog. It uses port `8810`, foreground helper supervision, and the real account home path rather than Docker.
+
+> **Security warning:** direct Agent Canvas execution is not sandboxed. An authenticated agent receives the same filesystem, shell, and network permissions as the hosting account. Do not send the API key over an untrusted plain-HTTP network, and do not expose an account that contains unrelated production credentials.
+
 ## 🐳 Rootless Docker Helper (Provider Features Required)
 
 Restricted Linux hosts can run the prerequisite check and install Docker under the hosting account with the helper below. The host must already provide `newuidmap`, `newgidmap`, subordinate UID/GID ranges, unprivileged user namespaces, and container networking support.
