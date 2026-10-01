@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.0.1"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -455,8 +455,14 @@ function rewriteAssetUrls(input) {
   return input.replace(/(["'`])\/assets\//g, `$1${basePath}/assets/`);
 }
 
+function injectModelManagerLink(input) {
+  const href = `${basePath === "/" ? "" : basePath}/models`;
+  const link = `<a id="openhands-host-model-manager-link" href="${href}" title="Import/export providers, local models, bulk tests, and proxy settings" style="position:fixed;left:16px;bottom:16px;z-index:2147483647;padding:10px 14px;border-radius:999px;background:#0284c7;color:#fff;text-decoration:none;font:700 14px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.25)">⚙ مدیریت مدل‌ها</a>`;
+  return input.includes("</body>") ? input.replace("</body>", `${link}\n</body>`) : `${input}${link}`;
+}
+
 function rewriteHtml(input) {
-  if (basePath === "/") return input;
+  if (basePath === "/") return injectModelManagerLink(input);
   const baseJson = JSON.stringify(basePath);
   const bootstrap = `<script> (function(){const base=${baseJson};window.__AGENT_CANVAS_BASE_PATH__=base;try{const backendsKey="openhands-backends",activeKey="openhands-active-backend",healthKey="openhands-backend-health",host=location.origin+base;let backends=[];const stored=localStorage.getItem(backendsKey);if(stored){const parsed=JSON.parse(stored);if(Array.isArray(parsed))backends=parsed;}let backend=backends.find((item)=>item&&item.id==="default-local");if(!backend){backend={id:"default-local",name:"Local",host,apiKey:"",kind:"local",authMode:"api-key"};backends.unshift(backend);}else{const changed=backend.host!==host;backend.name=backend.name||"Local";backend.host=host;backend.apiKey=typeof backend.apiKey==="string"?backend.apiKey:"";backend.kind="local";backend.authMode="api-key";if(changed)backend.connectionRevision=(Number.isSafeInteger(backend.connectionRevision)?backend.connectionRevision:0)+1;}localStorage.setItem(backendsKey,JSON.stringify(backends));let selection=null;try{selection=JSON.parse(sessionStorage.getItem(activeKey)||localStorage.getItem(activeKey)||"null");}catch{}const selected=selection&&backends.find((item)=>item&&item.id===selection.backendId);if(!selected||selected.id==="no-backend"||(selected.kind==="local"&&(!selected.host||selected.host===location.origin))){const value=JSON.stringify({backendId:backend.id,orgId:null});localStorage.setItem(activeKey,value);sessionStorage.setItem(activeKey,value);}try{const health=JSON.parse(localStorage.getItem(healthKey)||"{}");if(health&&typeof health==="object"&&backend.id in health){delete health[backend.id];if(Object.keys(health).length)localStorage.setItem(healthKey,JSON.stringify(health));else localStorage.removeItem(healthKey);}}catch{}}catch{}if(!location.pathname.startsWith(base+"/")&&location.pathname!==base){history.replaceState(history.state,"",base+(location.pathname.startsWith("/")?location.pathname:"/"+location.pathname)+location.search+location.hash);}}());</script>`;
   let html = rewriteAssetUrls(input)
@@ -465,7 +471,7 @@ function rewriteHtml(input) {
   html = html.includes("</head>")
     ? html.replace("</head>", `${bootstrap}\n</head>`)
     : `${bootstrap}${html}`;
-  return html;
+  return injectModelManagerLink(html);
 }
 
 function requestPath(rawUrl = "/") {
@@ -2027,6 +2033,8 @@ web_check() {
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
     grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The gateway did not return an HTML application.'
+    grep -Fq 'openhands-host-model-manager-link' "$tmp/root" || die 'The visible model-manager link is missing from the Canvas page.'
+    grep -Fq "href=\"$prefix/models\"" "$tmp/root" || die 'The visible model-manager link has the wrong base path.'
     [[ -n "$asset_path" && "$asset_code" == "200" ]] || die 'The base-path JavaScript asset check failed.'
     if [[ "$BASE_PATH" != "/" ]]; then
         if grep -Fq '"/assets/' "$tmp/asset" || grep -Fq "'/assets/" "$tmp/asset"; then
