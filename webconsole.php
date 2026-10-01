@@ -1650,17 +1650,36 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
         $subDir = $dest . '/' . $sub;
         if (!is_dir($subDir)) @mkdir($subDir, 0777, true);
     }
-    if (is_dir($dest . '/.venv') && !file_exists($dest . '/.venv/bin/python') && !file_exists($dest . '/.venv/bin/python3')) {
-        cli_log('[python] Removing incomplete/corrupted .venv directory...');
-        sh('rm -rf ' . esc($dest . '/.venv'));
+    // Pre-deploy sanity check for Python projects: clean broken or obsolete virtualenvs
+    if (is_dir($dest . '/.venv')) {
+        $curVer = '';
+        $cfg = $dest . '/.venv/pyvenv.cfg';
+        if (@file_exists($cfg)) {
+            $content = (string)@file_get_contents($cfg);
+            if (preg_match('/^\s*version(?:_info)?\s*=\s*([0-9\.]+)/mi', $content, $m)) $curVer = trim($m[1]);
+        }
+        $vpy = is_file($dest . '/.venv/bin/python3') ? ($dest . '/.venv/bin/python3') : (is_file($dest . '/.venv/bin/python') ? ($dest . '/.venv/bin/python') : '');
+        if ($curVer !== '' && version_compare($curVer, '3.9.0', '<')) {
+            cli_log('[python] Removing obsolete .venv (Python ' . $curVer . ' < 3.9)...');
+            sh('rm -rf ' . esc($dest . '/.venv'));
+        } elseif ($vpy === '' || (!is_file($dest . '/.venv/bin/pip') && !is_file($dest . '/.venv/bin/pip3'))) {
+            cli_log('[python] Removing incomplete/broken .venv directory...');
+            sh('rm -rf ' . esc($dest . '/.venv'));
+        }
     }
-    foreach (['install' => ($p['install_cmd'] ?: default_install_cmd($p['type'])), 'build' => $p['build_cmd']] as $label => $cmd) {
+
+    $rawInstallCmd = $p['install_cmd'] ?: default_install_cmd($p['type']);
+    if (($p['type'] ?? '') === 'python' && is_file($dest . '/install.sh')) {
+        $rawInstallCmd = 'bash install.sh';
+    }
+
+    foreach (['install' => $rawInstallCmd, 'build' => $p['build_cmd']] as $label => $cmd) {
         if (trim($cmd) === '') continue;
         $script = "#!/bin/bash\nset -e\nset -o pipefail\ncd " . esc($dest) . "\n";
         $script .= "which() { local found=\"\"; for arg in \"\$@\"; do if [ -x \"\$arg\" ] && [ ! -d \"\$arg\" ]; then found=\"\$arg\"; break; fi; local p; p=\$(command -v \"\$arg\" 2>/dev/null || true); if [ -n \"\$p\" ]; then found=\"\$p\"; break; fi; done; if [ -n \"\$found\" ]; then echo \"\$found\"; return 0; fi; return 0; }\n";
         $script .= "pip() { if [ \"\$1\" = \"install\" ] && echo \"\$*\" | grep -q -- \"-r \"; then local req_file=\"\"; local args=(); local skip_next=0; for arg in \"\$@\"; do if [ \"\$skip_next\" -eq 1 ]; then req_file=\"\$arg\"; skip_next=0; elif [ \"\$arg\" = \"-r\" ] || [ \"\$arg\" = \"--requirement\" ]; then skip_next=1; else args+=(\"\$arg\"); fi; done; if [ -n \"\$req_file\" ]; then if [ ! -f \"\$req_file\" ]; then echo \"[pip-smart NOTICE] Requirements file '\$req_file' not present in project directory. Skipping.\"; return 0; fi; if ! command pip \"\$@\" 2>/dev/null; then echo \"[pip-smart] Bulk install encountered platform-incompatible dependencies (e.g. desktop browser binaries on Android/ARM64). Installing compatible packages line-by-line...\"; while IFS= read -r line || [ -n \"\$line\" ]; do pkg=\$(echo \"\$line\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 's/#.*//'); if [ -n \"\$pkg\" ]; then if ! command pip install \"\${args[@]:1}\" \"\$pkg\" --no-warn-script-location 2>/dev/null; then echo \"[pip-smart WARNING] Skipped incompatible package on \$(uname -m): \$pkg\"; fi; fi; done < \"\$req_file\"; echo \"[pip-smart] Resilient package installation completed.\"; return 0; fi; return 0; fi; fi; command pip \"\$@\"; }\n";
         $script .= "pip3() { pip \"\$@\"; }\n";
-        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; if ! command \"\$bin\" \"\$@\" 2>/dev/null; then echo \"[venv-smart] Standard venv failed (ensurepip/system wheel issue). Retrying with --without-pip and bootstrapping pip...\"; rm -rf \"\$vdir\" 2>/dev/null || true; command \"\$bin\" -m venv --without-pip \"\$vdir\" || return 0; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || curl -sS https://bootstrap.pypa.io/pip/3.6/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | \"\$vdir/bin/python\" 2>/dev/null || true); fi; fi; }\n";
+        $script .= "python_venv_safe() { local bin=\"\$1\"; shift; local vdir=\"\${@: -1}\"; echo \"[venv-bootstrap] Initializing virtual environment...\"; rm -rf \"\$vdir\" 2>/dev/null || true; if ! \"\$bin\" -m venv --without-pip \"\$vdir\" 2>/dev/null; then \"\$bin\" -m venv \"\$vdir\" 2>/dev/null || virtualenv -p \"\$bin\" \"\$vdir\" 2>/dev/null || true; fi; if [ -d \"\$vdir\" ] && [ ! -f \"\$vdir/bin/pip\" ] && [ ! -f \"\$vdir/bin/pip3\" ]; then local vpy=\"\$vdir/bin/python3\"; [ -f \"\$vpy\" ] || vpy=\"\$vdir/bin/python\"; (curl -sS https://bootstrap.pypa.io/get-pip.py 2>/dev/null | \"\$vpy\" 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py 2>/dev/null | \"\$vpy\" 2>/dev/null || \"\$vpy\" -m ensurepip --default-pip 2>/dev/null || true); fi; }\n";
         $script .= "python3() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python3 \"\$@\"; else command python3 \"\$@\"; fi; }\n";
         $script .= "python() { if [ \"\$1\" = \"-m\" ] && [ \"\$2\" = \"venv\" ]; then python_venv_safe python \"\$@\"; else command python \"\$@\"; fi; }\n";
         foreach (proj_runtime_env($p) as $k => $v) $script .= 'export ' . esc($k . '=' . $v) . "\n";
