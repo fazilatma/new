@@ -27,9 +27,6 @@
   if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
   if (window.__API_MODE__ !== 'query') window.__API_MODE__ = 'path';
 
-  // Slashes are legal inside a query value, and keeping them unescaped means
-  // callers can still pattern-match the path (e.g. api() checks for
-  // '/auth/login' to decide whether a 401 should open the login modal).
   function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); }
 
   function build(base, mode, p) {
@@ -48,12 +45,6 @@
     return build(b, window.__API_MODE__, p);
   };
 
-  // Prefixes to try when the current one 404s at the web-server level. The
-  // server understands three URL shapes; a host may support any subset, so
-  // every remaining one is attempted before giving up:
-  //   1. /api/x                     rewriting enabled
-  //   2. /index.php/api/x           PATH_INFO enabled
-  //   3. /index.php?__path=/api/x   neither
   function candidates() {
     var base = window.__API_BASE__ || '';
     var mode = window.__API_MODE__ || 'path';
@@ -78,9 +69,8 @@
     return p.then(function (res) {
       if (res.status !== 404) return res;
       var ct = res.headers.get('content-type') || '';
-      if (ct.indexOf('application/json') !== -1) return res;   // a real API 404
+      if (ct.indexOf('application/json') !== -1) return res;
 
-      // Recover the request path relative to the current prefix.
       var base = window.__API_BASE__ || '';
       var rel;
       if (window.__API_MODE__ === 'query') {
@@ -95,7 +85,7 @@
       var retryInit = Object.assign({}, init || {}, { __arenaRetry: true });
 
       return (function next(i) {
-        if (i >= list.length) return res;                      // nothing worked
+        if (i >= list.length) return res;
         var c = list[i];
         return nativeFetch(build(c.base, c.mode, rel), retryInit).then(function (r2) {
           if (!usable(r2)) return next(i + 1);
@@ -114,84 +104,133 @@
 </script>
 
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>نصب هوش مصنوعی محلی — Arena Coding Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>نصب و مدیریت هوش مصنوعی محلی — Arena Coding Agent</title>
 <style>
   :root{
-    --bg:#0b1020; --panel:#121a33; --panel2:#0f1730; --line:#24304f; --txt:#e6ecff;
+    --bg:#0b1020; --panel:#121a33; --panel2:#0f1730; --panel3:#182245; --line:#24304f; --txt:#e6ecff;
     --mut:#93a2c9; --acc:#5b8cff; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; --rad:14px;
   }
   *{box-sizing:border-box}
+  html,body{overflow-x:hidden;max-width:100vw}
   body{margin:0;background:linear-gradient(180deg,#080d1c,#0b1020 260px);color:var(--txt);
-       font:15px/1.8 system-ui,"Segoe UI",Vazirmatn,Tahoma,sans-serif}
-  a{color:var(--acc)}
-  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 80px}
-  header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-  header.top h1{font-size:21px;margin:0}
+       font:14.5px/1.7 system-ui,"Segoe UI",Vazirmatn,Tahoma,sans-serif;-webkit-text-size-adjust:100%}
+  a{color:var(--acc);text-decoration:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 16px 80px;box-sizing:border-box}
+  header.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+  header.top h1{font-size:20px;margin:0;line-height:1.3;display:flex;align-items:center;gap:8px}
   .sp{flex:1}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);padding:16px;margin-bottom:16px}
-  .card h2{font-size:16px;margin:0 0 12px}
+  .top-row-1{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .top-actions{display:flex;align-items:center;gap:8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);padding:16px;margin-bottom:16px;box-sizing:border-box;overflow:hidden}
+  .card h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:6px}
   .grid{display:grid;gap:12px}
-  .g2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
-  .g4{grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
-  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px}
-  .stat b{display:block;font-size:19px;font-weight:700}
-  .stat span{color:var(--mut);font-size:12.5px}
-  label.lb{display:block;font-size:13px;color:var(--mut);margin:0 0 5px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;box-sizing:border-box}
+  .stat b{display:block;font-size:18px;font-weight:700;line-height:1.2}
+  .stat span{color:var(--mut);font-size:12px;display:block;margin-top:3px;word-break:break-word}
+  label.lb{display:block;font-size:13px;color:var(--mut);margin:0 0 5px;font-weight:500}
   .inp,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
-       border-radius:10px;padding:9px 11px;font:inherit;font-size:14px}
+       border-radius:10px;padding:9px 11px;font:inherit;font-size:14px;box-sizing:border-box;transition:border-color .15s}
+  .inp:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc)}
   .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:10px;
-       padding:9px 14px;cursor:pointer;font:inherit;font-size:14px;transition:.15s}
+       padding:9px 14px;cursor:pointer;font:inherit;font-size:14px;transition:.15s;display:inline-flex;align-items:center;justify-content:center;gap:6px;text-align:center;box-sizing:border-box}
   .btn:hover{border-color:var(--acc)}
-  .btn.pri{background:linear-gradient(135deg,#3b6ef0,#5b8cff);border-color:transparent;font-weight:700}
-  .btn.ok{background:linear-gradient(135deg,#059669,#10b981);border-color:transparent;font-weight:700}
-  .btn.danger{border-color:#7f1d1d;color:#fca5a5}
+  .btn.pri{background:linear-gradient(135deg,#3b6ef0,#5b8cff);border-color:transparent;color:#fff;font-weight:700}
+  .btn.ok{background:linear-gradient(135deg,#059669,#10b981);border-color:transparent;color:#fff;font-weight:700}
+  .btn.danger{border-color:#7f1d1d;color:#fca5a5;background:rgba(239,68,68,.08)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
-  .btn.sm{padding:5px 10px;font-size:12.5px}
-  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .btn.sm{padding:6px 11px;font-size:12.5px}
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
   .chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:7px 13px;
-        cursor:pointer;font-size:13.5px;user-select:none}
+        cursor:pointer;font-size:13px;user-select:none;transition:.15s;display:inline-flex;align-items:center}
+  .chip:hover{border-color:var(--mut)}
   .chip.on{background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:11.5px;color:var(--mut)}
-  .tag.ok{color:#6ee7b7;border-color:#065f46}
-  .tag.warn{color:#fcd34d;border-color:#78350f}
-  .tag.err{color:#fca5a5;border-color:#7f1d1d}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .tag{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:11.5px;color:var(--mut);line-height:1.4}
+  .tag.ok{color:#6ee7b7;border-color:#065f46;background:rgba(16,185,129,.08)}
+  .tag.warn{color:#fcd34d;border-color:#78350f;background:rgba(245,158,11,.08)}
+  .tag.err{color:#fca5a5;border-color:#7f1d1d;background:rgba(239,68,68,.08)}
   .ltr{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-  .hint{color:var(--mut);font-size:12.5px}
+  .hint{color:var(--mut);font-size:12.5px;line-height:1.5}
   .bar{height:8px;background:#1b2440;border-radius:99px;overflow:hidden}
-  .bar>i{display:block;height:100%;background:linear-gradient(90deg,#3b6ef0,#10b981)}
-  table{width:100%;border-collapse:collapse;font-size:13.5px}
-  th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
-  th{color:var(--mut);font-weight:600;font-size:12.5px}
-  .rec{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;background:var(--panel2)}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,#3b6ef0,#10b981);transition:width .3s}
+  .tbl-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:6px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:320px}
+  th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle}
+  th{color:var(--mut);font-weight:600;font-size:12px;background:rgba(0,0,0,.15)}
+  .rec{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:var(--panel2);box-sizing:border-box}
   .rec.best{border-color:var(--ok);box-shadow:0 0 0 1px rgba(16,185,129,.25)}
-  .rec h3{margin:0;font-size:16px}
-  .rec ul{margin:8px 0 0;padding-inline-start:18px;color:var(--mut);font-size:12.8px}
+  .rec-header{display:flex;flex-direction:column;gap:8px}
+  .rec-title-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .rec-title-bar h3{margin:0;font-size:15.5px}
+  .rec-actions{display:flex;align-items:center;gap:8px}
+  .rec-tags{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .rec-metrics{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;padding:8px 0;border-top:1px dashed var(--line);border-bottom:1px dashed var(--line)}
+  .rec ul{margin:8px 0 0;padding-inline-start:18px;color:var(--mut);font-size:12.5px;line-height:1.6}
   pre.log{background:#070b16;border:1px solid var(--line);border-radius:10px;padding:10px;
-          max-height:280px;overflow:auto;font-size:12px;direction:ltr;text-align:left}
-  .toast{position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:24px;z-index:99;
-         background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 18px;display:none}
+          max-height:260px;overflow:auto;font-size:11.5px;direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all}
+  .path-box{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+             font-size:12px;background:rgba(0,0,0,.25);padding:4px 8px;border-radius:6px;margin:3px 0;word-break:break-all}
+  .toast{position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:20px;z-index:999;
+         background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;display:none;
+         box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13.5px;max-width:90%;text-align:center}
   .split{display:grid;grid-template-columns:1fr;gap:16px}
-  @media(min-width:980px){.split{grid-template-columns:1.15fr .85fr}}
+  .rt-btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+  .check-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0 8px}
+  .check-item{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;background:var(--panel2);padding:6px 10px;border-radius:8px;border:1px solid var(--line);user-select:none}
+  .search-result-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .search-result-name{font-size:13px;word-break:break-all;flex:1;min-width:180px}
+  .search-result-meta{display:flex;align-items:center;gap:6px;flex-shrink:0}
+
+  @media(min-width:980px){
+    .split{grid-template-columns:1.15fr .85fr}
+  }
+  @media(max-width:768px){
+    .wrap{padding:12px 10px 70px}
+    header.top{flex-direction:column;align-items:stretch;gap:10px}
+    .top-row-1{display:flex;align-items:center;justify-content:space-between;width:100%}
+    .top-actions{display:grid;grid-template-columns:1fr 1fr;width:100%;gap:8px}
+    .top-actions .btn{width:100%;padding:8px 6px;font-size:12px}
+    .g4{grid-template-columns:repeat(2,1fr);gap:8px}
+    .card{padding:14px 12px;border-radius:12px;margin-bottom:12px}
+    .card h2{font-size:15px}
+    .stat{padding:10px}
+    .stat b{font-size:16px}
+    .stat span{font-size:11.5px}
+    #btn-rec{width:100%;padding:11px;font-size:14.5px}
+    .rt-btn-grid{grid-template-columns:1fr 1fr 1fr;gap:6px}
+    .rt-btn-grid .btn{padding:8px 4px;font-size:12px}
+  }
+  @media(max-width:480px){
+    .stat b{font-size:15px}
+    .check-grid{grid-template-columns:1fr}
+    .search-result-item{flex-direction:column;align-items:stretch;gap:6px}
+    .search-result-meta{justify-content:space-between;width:100%}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <header class="top">
-    <h1>🧠 نصب و مدیریت هوش مصنوعی محلی</h1>
-    <span class="tag" id="rt-badge">در حال بررسی…</span>
+    <div class="top-row-1">
+      <h1>🧠 هوش مصنوعی محلی</h1>
+      <span class="tag" id="rt-badge">در حال بررسی…</span>
+    </div>
     <span class="sp"></span>
-    <a class="btn sm" href="/" data-home-link>بازگشت به دستیار</a>
-    <button class="btn sm" id="btn-rescan">🔄 اسکن مجدد سخت‌افزار</button>
+    <div class="top-actions">
+      <a class="btn sm" href="/" data-home-link>🏠 بازگشت به دستیار</a>
+      <button class="btn sm" id="btn-rescan">🔄 اسکن مجدد سخت‌افزار</button>
+    </div>
   </header>
 
   <!-- ─────────────────────────── 1. host -->
   <section class="card">
-    <h2>۱) سخت‌افزار این هاست</h2>
-    <div class="grid g4" id="host-stats"><div class="hint">در حال خواندن…</div></div>
-    <div class="row" style="margin-top:12px">
+    <h2>۱) مشخصات سخت‌افزار سرور</h2>
+    <div class="grid g4" id="host-stats"><div class="hint">در حال خواندن مشخصات سرور…</div></div>
+    <div class="row" style="margin-top:10px">
       <span class="hint" id="host-extra"></span>
     </div>
   </section>
@@ -200,9 +239,9 @@
     <div>
       <!-- ─────────────────────── 2. wizard -->
       <section class="card">
-        <h2>۲) می‌خواهید با مدل محلی چه کار کنید؟</h2>
+        <h2>۲) انتخاب هدف و کاربرد مدل</h2>
 
-        <label class="lb">کاربرد (چندتایی انتخاب کنید)</label>
+        <label class="lb">کاربرد مورد نظر (یک یا چند مورد را لمس کنید)</label>
         <div class="chips" id="tasks"></div>
 
         <div class="grid g2" style="margin-top:14px">
@@ -214,39 +253,37 @@
           <div>
             <label class="lb">حافظهٔ کارت گرافیک (VRAM) — گیگابایت</label>
             <input type="number" id="vram" class="inp ltr" min="0" step="0.5" value="0">
-            <div class="hint">۰ یعنی فقط CPU. با GPU، مدل‌های بزرگ‌تر چند برابر سریع‌تر می‌شوند.</div>
+            <div class="hint">۰ یعنی فقط CPU.</div>
           </div>
           <div>
             <label class="lb">فضای دیسک قابل‌استفاده — گیگابایت</label>
             <input type="number" id="disk" class="inp ltr" min="1" step="1" value="20">
           </div>
           <div>
-            <label class="lb">طول پنجرهٔ متن (context)</label>
+            <label class="lb">طول پنجرهٔ متن (Context)</label>
             <select id="ctx">
               <option value="4096">۴هزار توکن — کم‌مصرف</option>
-              <option value="8192" selected>۸هزار توکن — پیش‌فرض متعادل</option>
+              <option value="8192" selected>۸هزار توکن — متعادل</option>
               <option value="16384">۱۶هزار توکن</option>
               <option value="32768">۳۲هزار توکن — فایل‌های بلند</option>
               <option value="131072">۱۲۸هزار توکن — کل مخزن کد</option>
             </select>
           </div>
           <div>
-            <label class="lb">اولویت شما</label>
+            <label class="lb">اولویت پاسخ</label>
             <select id="priority">
-              <option value="speed">سرعت پاسخ</option>
-              <option value="balanced" selected>متعادل</option>
-              <option value="quality">بالاترین کیفیت</option>
+              <option value="speed">سرعت پاسخ‌دهی</option>
+              <option value="balanced" selected>متعادل (کیفیت و سرعت)</option>
+              <option value="quality">بالاترین کیفیت و استدلال</option>
             </select>
           </div>
           <div>
-            <label class="lb">درخواست‌های هم‌زمان</label>
+            <label class="lb">درخواست‌های هم‌زمان (Concurrency)</label>
             <input type="number" id="conc" class="inp ltr" min="1" max="16" value="1">
-            <div class="hint">هر درخواست هم‌زمان یک KV-cache جدا می‌گیرد.</div>
           </div>
           <div>
-            <label class="lb">حداقل سرعت قابل‌قبول (توکن بر ثانیه)</label>
+            <label class="lb">حداقل سرعت مطلوب (توکن/ثانیه)</label>
             <input type="number" id="mintps" class="inp ltr" min="0" step="1" value="0">
-            <div class="hint">۰ یعنی محدودیتی ندارم.</div>
           </div>
           <div>
             <label class="lb">زبان‌های مورد نیاز</label>
@@ -254,28 +291,30 @@
           </div>
         </div>
 
-        <div class="row" style="margin-top:14px">
-          <label class="row" style="gap:6px"><input type="checkbox" id="tool" checked> ابزارفراخوانی لازم دارم</label>
-          <label class="row" style="gap:6px"><input type="checkbox" id="vision"> درک تصویر</label>
-          <label class="row" style="gap:6px"><input type="checkbox" id="commercial"> فقط لایسنس تجاری</label>
-          <span class="sp"></span>
-          <button class="btn pri" id="btn-rec">🔎 جست‌وجو و انتخاب بهترین مدل</button>
+        <div class="check-grid">
+          <label class="check-item"><input type="checkbox" id="tool" checked> ابزارفراخوانی (Tools)</label>
+          <label class="check-item"><input type="checkbox" id="vision"> درک تصویر (Vision)</label>
+          <label class="check-item"><input type="checkbox" id="commercial"> لایسنس تجاری</label>
+        </div>
+
+        <div style="margin-top:12px">
+          <button class="btn pri" id="btn-rec">🔎 جست‌وجو و پیشنهاد بهترین مدل</button>
         </div>
       </section>
 
       <!-- ─────────────────────── 3. results -->
       <section class="card" id="rec-card" style="display:none">
-        <h2>۳) پیشنهادها</h2>
+        <h2>۳) مدل‌های پیشنهادی متناسب با سرور شما</h2>
         <div id="rec-list"></div>
         <details style="margin-top:8px">
-          <summary class="hint" style="cursor:pointer">مدل‌هایی که رد شدند و دلیلش</summary>
+          <summary class="hint" style="cursor:pointer">مدل‌هایی که رد شدند و دلیل عدم تطابق</summary>
           <div id="rec-rejected" style="margin-top:8px"></div>
         </details>
       </section>
 
       <!-- ─────────────────────── 4. install -->
       <section class="card" id="job-card" style="display:none">
-        <h2>۴) نصب</h2>
+        <h2>۴) وضعیت نصب مدل</h2>
         <div id="job-plan"></div>
         <div class="bar" style="margin:10px 0"><i id="job-bar" style="width:0%"></i></div>
         <div class="row"><b id="job-status">—</b><span class="sp"></span><span class="hint ltr" id="job-id"></span></div>
@@ -286,28 +325,28 @@
     <div>
       <!-- ─────────────────────── runtime -->
       <section class="card">
-        <h2>موتور محلی</h2>
+        <h2>⚙️ وضعیت موتور هوش مصنوعی (Ollama)</h2>
         <div id="rt-info" class="hint">در حال بررسی…</div>
-        <div class="row" style="margin-top:10px">
+        <div class="rt-btn-grid">
           <button class="btn sm ok" id="btn-rt-install">⬇️ نصب موتور</button>
           <button class="btn sm" id="btn-rt-start">▶️ اجرا</button>
           <button class="btn sm danger" id="btn-rt-stop">⏹ توقف</button>
         </div>
-        <p class="hint" style="margin-bottom:0">نصب بدون نیاز به root انجام می‌شود؛ باینری و مدل‌ها در پوشهٔ storage/localai پروژه می‌نشینند.</p>
+        <p class="hint" style="margin-top:10px;margin-bottom:0">نصب بدون نیاز به دسترسی root انجام می‌شود و باینری‌ها در پوشهٔ storage/localai پروژه قرار می‌گیرند.</p>
       </section>
 
       <!-- ─────────────────────── installed -->
       <section class="card">
-        <h2>مدل‌های نصب‌شده</h2>
+        <h2>📦 مدل‌های نصب‌شده روی سرور</h2>
         <div id="models"><span class="hint">—</span></div>
       </section>
 
       <!-- ─────────────────────── search -->
       <section class="card">
-        <h2>جست‌وجوی دستی مدل</h2>
-        <div class="row">
-          <input class="inp ltr" id="q" placeholder="qwen, llama, embed …" style="flex:1">
-          <button class="btn" id="btn-search">جست‌وجو</button>
+        <h2>🔍 جست‌وجوی دستی مدل</h2>
+        <div class="row" style="flex-wrap:nowrap;gap:6px">
+          <input class="inp ltr" id="q" placeholder="qwen, llama, deepseek …" style="flex:1">
+          <button class="btn sm" id="btn-search">جست‌وجو</button>
         </div>
         <div id="search-out" style="margin-top:10px"></div>
       </section>
@@ -382,12 +421,12 @@ async function loadHost(refresh) {
 
   const m = HOST.memory, c = HOST.cpu, g = HOST.gpu, d = HOST.disk;
   $('#host-stats').innerHTML = `
-    <div class="stat"><b>${fa(m.totalGb)} GB</b><span>رم کل — ${fa(m.availableGb)} GB آزاد</span></div>
+    <div class="stat"><b>${fa(m.totalGb)} GB</b><span>رم کل (${fa(m.availableGb)} GB آزاد)</span></div>
     <div class="stat"><b>${fa(c.cores, 0)} هسته</b><span>${esc(c.arch)}${c.avx2 ? ' · AVX2' : ''}</span></div>
-    <div class="stat"><b>${g.present ? fa(g.vramGb) + ' GB' : '—'}</b><span>${g.present ? esc(g.name) : 'بدون GPU'}</span></div>
+    <div class="stat"><b>${g.present ? fa(g.vramGb) + ' GB' : '—'}</b><span>${g.present ? esc(g.name) : 'بدون GPU اختصاصی'}</span></div>
     <div class="stat"><b>${fa(d.freeGb)} GB</b><span>دیسک آزاد برای مدل‌ها</span></div>`;
   $('#host-extra').textContent =
-    `پیشنهاد بودجهٔ رم: ${fa(HOST.suggestedRamBudgetGb)} گیگ (${fa(HOST.reservedForSystemGb)} گیگ برای سیستم و خود برنامه کنار گذاشته شد) · `
+    `پیشنهاد بودجهٔ رم: ${fa(HOST.suggestedRamBudgetGb)} گیگ (${fa(HOST.reservedForSystemGb)} گیگ برای سیستم و برنامه کنار گذاشته شد) · `
     + `پهنای باند حافظه: CPU ≈ ${fa(HOST.bandwidthGBs.cpu, 0)} GB/s${g.present ? ' · GPU ≈ ' + fa(HOST.bandwidthGBs.gpu, 0) + ' GB/s' : ''}`;
 
   const ram = $('#ram');
@@ -409,11 +448,11 @@ function renderRuntime(rt) {
   badge.className = 'tag ' + (rt.running ? 'ok' : rt.installed ? 'warn' : 'err');
   badge.textContent = rt.running ? 'موتور در حال اجرا' : rt.installed ? 'نصب است، خاموش' : 'نصب نشده';
   $('#rt-info').innerHTML = `
-    <div>موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag">نصب داخلی پروژه</span>' : ''}</div>
-    <div class="ltr" style="margin-top:4px">${esc(rt.binary || 'یافت نشد')}</div>
-    <div class="ltr">${esc(rt.host)}</div>
-    <div class="ltr">models: ${esc(rt.modelsDir)} ${rt.modelsDirWritable ? '' : '<span class="tag err">غیرقابل نوشتن</span>'}</div>
-    ${rt.error ? `<div class="tag err" style="margin-top:6px">${esc(rt.error)}</div>` : ''}`;
+    <div style="margin-bottom:6px">موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب داخلی</span>' : ''}</div>
+    <div class="path-box">${esc(rt.binary || 'یافت نشد')}</div>
+    <div class="path-box">${esc(rt.host)}</div>
+    <div class="path-box">models: ${esc(rt.modelsDir)} ${rt.modelsDirWritable ? '' : '<span class="tag err">غیرقابل نوشتن</span>'}</div>
+    ${rt.error ? `<div class="tag err" style="margin-top:6px;width:100%">${esc(rt.error)}</div>` : ''}`;
   $('#btn-rt-install').disabled = !!rt.installed;
   $('#btn-rt-start').disabled = !rt.installed || !!rt.running;
   $('#btn-rt-stop').disabled = !rt.running;
@@ -460,12 +499,12 @@ function profile() {
 let LAST = null;
 $('#btn-rec').onclick = async () => {
   const btn = $('#btn-rec');
-  btn.disabled = true; btn.textContent = 'در حال تحلیل…';
+  btn.disabled = true; btn.textContent = 'در حال تحلیل سخت‌افزار…';
   try {
     LAST = await api('/api/localai/recommend', { method: 'POST', body: profile() });
     renderRecs(LAST);
   } catch (e) { toast(e.message, 'err'); }
-  btn.disabled = false; btn.textContent = '🔎 جست‌وجو و انتخاب بهترین مدل';
+  btn.disabled = false; btn.textContent = '🔎 جست‌وجو و پیشنهاد بهترین مدل';
 };
 
 function renderRecs(d) {
@@ -476,20 +515,25 @@ function renderRecs(d) {
   } else {
     $('#rec-list').innerHTML = list.map((m, i) => `
       <div class="rec${i === 0 ? ' best' : ''}">
-        <div class="row">
-          <h3>${i === 0 ? '🏆 ' : ''}${esc(m.name)}</h3>
-          <span class="tag ltr">${esc(m.ref)}</span>
-          <span class="tag">${esc(m.quant)}</span>
-          ${m.toolCalling ? '<span class="tag ok">tool calling</span>' : ''}
-          ${m.vision ? '<span class="tag">vision</span>' : ''}
-          ${m.reasoning ? '<span class="tag">reasoning</span>' : ''}
-          <span class="sp"></span>
-          <span class="tag ${m.scorePct > 70 ? 'ok' : ''}">امتیاز ${fa(m.scorePct, 0)}</span>
-          <button class="btn ok sm" data-install="${esc(m.ref)}">🚀 نصب</button>
+        <div class="rec-header">
+          <div class="rec-title-bar">
+            <h3>${i === 0 ? '🏆 ' : ''}${esc(m.name)}</h3>
+            <div class="rec-actions">
+              <span class="tag ${m.scorePct > 70 ? 'ok' : ''}">امتیاز ${fa(m.scorePct, 0)}</span>
+              <button class="btn ok sm" data-install="${esc(m.ref)}">🚀 نصب</button>
+            </div>
+          </div>
+          <div class="rec-tags">
+            <span class="tag ltr">${esc(m.ref)}</span>
+            <span class="tag">${esc(m.quant)}</span>
+            ${m.toolCalling ? '<span class="tag ok">tool calling</span>' : ''}
+            ${m.vision ? '<span class="tag">vision</span>' : ''}
+            ${m.reasoning ? '<span class="tag">reasoning</span>' : ''}
+          </div>
         </div>
         <div class="bar" style="margin:8px 0"><i style="width:${Math.min(100, m.scorePct)}%"></i></div>
         <div class="hint">${esc(m.summary)}</div>
-        <div class="row" style="margin-top:6px">
+        <div class="rec-metrics">
           <span class="tag">رم ≈ ${fa(m.estimate.ramGb)} GB</span>
           <span class="tag">دیسک ${fa(m.estimate.diskGb)} GB</span>
           <span class="tag">≈ ${fa(m.estimate.tokensPerSec)} توکن/ثانیه</span>
@@ -504,7 +548,7 @@ function renderRecs(d) {
     });
   }
   $('#rec-rejected').innerHTML = (d.rejected || []).map((r) =>
-    `<div class="hint">• <span class="ltr">${esc(r.ref)}</span> — ${esc((r.reasons || []).join('؛ '))}</div>`).join('')
+    `<div class="hint" style="margin-bottom:4px">• <span class="ltr">${esc(r.ref)}</span> — ${esc((r.reasons || []).join('؛ '))}</div>`).join('')
     || '<span class="hint">—</span>';
   $('#rec-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -559,17 +603,17 @@ async function loadModels() {
   let d;
   try { d = await api('/api/localai/models'); } catch (e) { $('#models').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; return; }
   if (!d.running) { $('#models').innerHTML = `<span class="hint">سرویس محلی خاموش است${d.error ? ' — ' + esc(d.error) : ''}</span>`; return; }
-  if (!d.models.length) { $('#models').innerHTML = '<span class="hint">هنوز مدلی نصب نشده است.</span>'; return; }
+  if (!d.models || !d.models.length) { $('#models').innerHTML = '<span class="hint">هنوز مدلی نصب نشده است.</span>'; return; }
   const loaded = new Set((d.loaded || []).map((m) => m.name));
-  $('#models').innerHTML = `<table><thead><tr><th>مدل</th><th>حجم</th><th>کوانت</th><th></th></tr></thead><tbody>${
+  $('#models').innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>مدل</th><th>حجم</th><th>کوانت</th><th>عملیات</th></tr></thead><tbody>${
     d.models.map((m) => `<tr>
-      <td class="ltr">${esc(m.name)} ${loaded.has(m.name) ? '<span class="tag ok">بارگذاری‌شده</span>' : ''}</td>
-      <td>${fa(m.sizeGb)} GB</td>
+      <td class="ltr" style="word-break:break-all">${esc(m.name)} ${loaded.has(m.name) ? '<span class="tag ok" style="display:inline-block;margin-top:2px">لود شده</span>' : ''}</td>
+      <td style="white-space:nowrap">${fa(m.sizeGb)} GB</td>
       <td class="ltr">${esc(m.quantization || '—')}</td>
       <td style="white-space:nowrap">
         <button class="btn sm" data-test="${esc(m.name)}">تست</button>
         <button class="btn sm danger" data-del="${esc(m.name)}">حذف</button>
-      </td></tr>`).join('')}</tbody></table>`;
+      </td></tr>`).join('')}</tbody></table></div>`;
   $('#models').querySelectorAll('[data-test]').forEach((b) => {
     b.onclick = async () => {
       b.disabled = true; b.textContent = '…';
@@ -599,14 +643,22 @@ $('#btn-search').onclick = async () => {
     const cat = (d.catalog || []).flatMap((m) => m.variants.map((v) => ({ ref: v.ref, gb: v.diskGb, src: m.publisher })));
     const hf = d.huggingface || [];
     $('#search-out').innerHTML =
-      (cat.length ? `<div class="hint" style="margin-bottom:4px">از کاتالوگ داخلی:</div>` + cat.map((v) =>
-        `<div class="row" style="justify-content:space-between"><span class="ltr">${esc(v.ref)}</span>
-         <span><span class="tag">${fa(v.gb)} GB</span>
-         <button class="btn sm ok" data-i="${esc(v.ref)}">نصب</button></span></div>`).join('') : '')
-      + (hf.length ? `<div class="hint" style="margin:8px 0 4px">Hugging Face (GGUF):</div>` + hf.map((m) =>
-        `<div class="row" style="justify-content:space-between"><span class="ltr">${esc(m.id)}</span>
-         <span><span class="tag">${fa(m.downloads, 0)} دانلود</span>
-         <button class="btn sm" data-i="${esc(m.pullRef)}">نصب</button></span></div>`).join('') : '')
+      (cat.length ? `<div class="hint" style="margin-bottom:6px;font-weight:600">از کاتالوگ داخلی:</div>` + cat.map((v) =>
+        `<div class="search-result-item">
+           <div class="search-result-name ltr">${esc(v.ref)}</div>
+           <div class="search-result-meta">
+             <span class="tag">${fa(v.gb)} GB</span>
+             <button class="btn sm ok" data-i="${esc(v.ref)}">نصب</button>
+           </div>
+         </div>`).join('') : '')
+      + (hf.length ? `<div class="hint" style="margin:12px 0 6px;font-weight:600">Hugging Face (GGUF):</div>` + hf.map((m) =>
+        `<div class="search-result-item">
+           <div class="search-result-name ltr">${esc(m.id)}</div>
+           <div class="search-result-meta">
+             <span class="tag">${fa(m.downloads, 0)} دانلود</span>
+             <button class="btn sm ok" data-i="${esc(m.pullRef)}">نصب</button>
+           </div>
+         </div>`).join('') : '')
       || '<span class="hint">چیزی پیدا نشد.</span>';
     $('#search-out').querySelectorAll('[data-i]').forEach((b) => { b.onclick = () => install(b.dataset.i); });
   } catch (e) { $('#search-out').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; }
