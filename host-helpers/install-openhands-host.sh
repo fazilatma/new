@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -726,6 +726,74 @@ port_is_open() {
     (exec 9<>"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
 }
 
+pid_is_canvas_runtime() {
+    local pid="${1:-}" uid_line="" cmdline=""
+    [[ "$pid" =~ ^[0-9]+$ && "$pid" != "$$" && -r "/proc/$pid/status" ]] || return 1
+    uid_line="$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ "$uid_line" == "$(id -u)" ]] || return 1
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ -n "$cmdline" ]] || return 1
+    case "$cmdline" in
+        *"$NPM_ROOT"*|*"$TOOLS_DIR/uvx"*|*"$APP_ROOT/python"*|*"$APP_ROOT/uv-tools"*|*"$CACHE_DIR/uv"*|*"$CANVAS_STATE_DIR"*|*openhands-agent-server*|*openhands.automation*|*openvscode-server*)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+canvas_runtime_pids() {
+    local proc pid
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        pid_is_canvas_runtime "$pid" && printf '%s\n' "$pid"
+    done
+    return 0
+}
+
+cleanup_orphaned_runtime() {
+    local port conflict_ports="" pids="" pid="" waited=0 alive=false
+    local -a ports=("$PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))")
+
+    for port in "${ports[@]}"; do
+        if port_is_open "$port"; then
+            conflict_ports+=" $port"
+        fi
+    done
+    [[ -n "$conflict_ports" ]] || return 0
+
+    pids="$(canvas_runtime_pids | sort -un || true)"
+    if [[ -z "$pids" ]]; then
+        warn "Configured port(s)$conflict_ports are occupied, but no account-owned OpenHands runtime process could be identified."
+        return 0
+    fi
+
+    log "Removing orphaned OpenHands runtime processes on configured port(s):$conflict_ports"
+    for pid in $pids; do
+        pid_is_canvas_runtime "$pid" && kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    while ((waited < 12)); do
+        alive=false
+        for pid in $pids; do
+            if pid_is_canvas_runtime "$pid" && kill -0 "$pid" 2>/dev/null; then
+                alive=true
+                break
+            fi
+        done
+        [[ "$alive" == true ]] || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    for pid in $pids; do
+        if pid_is_canvas_runtime "$pid" && kill -0 "$pid" 2>/dev/null; then
+            warn "Force-stopping orphaned OpenHands process $pid"
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+    rm -f "$PID_FILE" "$PID_START_FILE"
+    sleep 1
+}
+
 assert_runtime_ports_free() {
     local label port
     for label in ingress agent-server automation frontend editor; do
@@ -746,6 +814,7 @@ assert_runtime_ports_free() {
 serve_agent() {
     local -a args=(--public --port "$PORT" --host "$LISTEN_HOST")
     load_runtime_environment
+    cleanup_orphaned_runtime
     assert_runtime_ports_free
     record_pid "$$"
 
