@@ -549,4 +549,71 @@ class ProviderStore:
         self.save()
         return len(parsed)
 
+    def import_models_for_provider(self, provider_id: str, text: str, replace: bool = False) -> Dict[str, Any]:
+        if provider_id not in self.data:
+            raise ValueError(f"Provider '{provider_id}' not found.")
+        clean = _clean_json_text(text)
+        if not clean:
+            raise ValueError("Input JSON is empty.")
+        
+        incoming = None
+        try:
+            incoming = json.loads(clean)
+        except Exception:
+            try:
+                incoming = ast.literal_eval(clean)
+            except Exception as e:
+                raise ValueError(f"Invalid JSON/format: {str(e)}")
+
+        candidates = []
+        if isinstance(incoming, dict):
+            if "data" in incoming and isinstance(incoming["data"], list):
+                candidates = incoming["data"]
+            elif "models" in incoming and isinstance(incoming["models"], list):
+                candidates = incoming["models"]
+            elif "items" in incoming and isinstance(incoming["items"], list):
+                candidates = incoming["items"]
+            else:
+                candidates = [incoming]
+        elif isinstance(incoming, list):
+            candidates = incoming
+        else:
+            candidates = [incoming]
+
+        models = []
+        for item in candidates:
+            m = _normalize_model_spec(item)
+            if m:
+                models.append(m)
+
+        if not models:
+            raise ValueError("No valid models found in the import payload.")
+
+        existing = self.data[provider_id]
+        by_id = {}
+        if not replace:
+            for em in existing.models:
+                by_id[em.id] = em
+
+        added = 0
+        updated = 0
+        for nm in models:
+            if nm.id in by_id:
+                by_id[nm.id] = nm
+                updated += 1
+            else:
+                by_id[nm.id] = nm
+                added += 1
+
+        existing.models = list(by_id.values())
+        self.save()
+        return {
+            "ok": True,
+            "provider": provider_id,
+            "modelsCount": len(existing.models),
+            "added": added,
+            "updated": updated,
+            "replace": replace
+        }
+
 PROVIDER_STORE = ProviderStore()

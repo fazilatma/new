@@ -12,9 +12,10 @@ depends on those response shapes.
 
 ---
 
-## [1.4.1] — 2026-10-01
+## [2.0.0] — 2026-10-01
 
 ### Added
+- **Unified Release & Full Parity with Python Edition (`agent-python` v2.0.0).**
 - **Dedicated Provider Model Catalog Import Endpoint (`/api/providers/{pid}/import-models`).** Allows importing specific model lists directly into existing providers with replace/merge support.
 - **Universal Multi-Format API Key Normalizer.** Accepts dictionary (`{"0": "...", "key": "..."}`), object array (`[{"apiKey": "..."}]`), and comma/newline separated API keys across different catalog formats.
 - **Markdown Code Fence & Smart Quote Sanitization.** Automatically cleans leading/trailing markdown fences (````json ... ````) and curly typographic quotes from pasted JSON imports.

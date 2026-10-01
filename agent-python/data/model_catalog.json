@@ -1,0 +1,1053 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-09-30",
+  "runtime": "ollama",
+  "source": "curated — sizes are the default Q4_K_M/F16 tags published on ollama.com/library; RAM math is an estimate, see LocalAI::estimate()",
+  "taskLabels": {
+    "code": "کدنویسی و تکمیل کد",
+    "agent": "عامل ابزارمحور (tool calling)",
+    "chat": "چت و دستیار عمومی",
+    "reasoning": "استدلال، ریاضی و دیباگ پیچیده",
+    "summarize": "خلاصه‌سازی متن بلند",
+    "translate": "ترجمه و چندزبانگی",
+    "vision": "درک تصویر و اسکرین‌شات",
+    "embedding": "امبدینگ برای جست‌وجو/RAG",
+    "rag": "پاسخ مبتنی بر اسناد (RAG)",
+    "autocomplete": "تکمیل خودکار داخل ادیتور"
+  },
+  "models": [
+    {
+      "id": "qwen2.5-coder",
+      "name": "Qwen2.5 Coder",
+      "publisher": "Alibaba Qwen",
+      "license": "Apache-2.0",
+      "summary": "بهترین انتخاب متن‌باز برای کدنویسی در ردهٔ کوچک و متوسط؛ از fill-in-the-middle و ابزارفراخوانی پشتیبانی می‌کند.",
+      "tasks": [
+        "code",
+        "agent",
+        "chat"
+      ],
+      "contextMax": 32768,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "zh",
+        "multi"
+      ],
+      "faScore": 45,
+      "notes": "",
+      "url": "https://ollama.com/library/qwen2.5-coder",
+      "variants": [
+        {
+          "tag": "0.5b",
+          "paramsB": 0.5,
+          "quant": "Q4_K_M",
+          "diskGb": 0.4,
+          "kvGbPer1k": 0.018,
+          "quality": 40
+        },
+        {
+          "tag": "1.5b",
+          "paramsB": 1.5,
+          "quant": "Q4_K_M",
+          "diskGb": 0.99,
+          "kvGbPer1k": 0.029,
+          "quality": 56
+        },
+        {
+          "tag": "3b",
+          "paramsB": 3.0,
+          "quant": "Q4_K_M",
+          "diskGb": 1.9,
+          "kvGbPer1k": 0.038,
+          "quality": 66
+        },
+        {
+          "tag": "7b",
+          "paramsB": 7.6,
+          "quant": "Q4_K_M",
+          "diskGb": 4.7,
+          "kvGbPer1k": 0.057,
+          "quality": 82
+        },
+        {
+          "tag": "14b",
+          "paramsB": 14.8,
+          "quant": "Q4_K_M",
+          "diskGb": 9.0,
+          "kvGbPer1k": 0.201,
+          "quality": 88
+        },
+        {
+          "tag": "32b",
+          "paramsB": 32.8,
+          "quant": "Q4_K_M",
+          "diskGb": 20.0,
+          "kvGbPer1k": 0.268,
+          "quality": 92
+        }
+      ]
+    },
+    {
+      "id": "qwen3",
+      "name": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "license": "Apache-2.0",
+      "summary": "نسل جدید عمومی با حالت تفکر/بدون تفکر، ابزارفراخوانی قوی و پشتیبانی ۱۰۰+ زبان از جمله فارسی.",
+      "tasks": [
+        "chat",
+        "agent",
+        "reasoning",
+        "code",
+        "translate"
+      ],
+      "contextMax": 40960,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": true,
+      "languages": [
+        "en",
+        "fa",
+        "ar",
+        "zh",
+        "multi"
+      ],
+      "faScore": 78,
+      "notes": "واریانت 30b-a3b از نوع MoE است: حافظه مثل مدل ۳۰B ولی سرعت نزدیک به ۳B.",
+      "url": "https://ollama.com/library/qwen3",
+      "variants": [
+        {
+          "tag": "0.6b",
+          "paramsB": 0.6,
+          "quant": "Q4_K_M",
+          "diskGb": 0.52,
+          "kvGbPer1k": 0.05,
+          "quality": 42
+        },
+        {
+          "tag": "1.7b",
+          "paramsB": 1.7,
+          "quant": "Q4_K_M",
+          "diskGb": 1.4,
+          "kvGbPer1k": 0.1,
+          "quality": 58
+        },
+        {
+          "tag": "4b",
+          "paramsB": 4.0,
+          "quant": "Q4_K_M",
+          "diskGb": 2.6,
+          "kvGbPer1k": 0.15,
+          "quality": 72
+        },
+        {
+          "tag": "8b",
+          "paramsB": 8.2,
+          "quant": "Q4_K_M",
+          "diskGb": 5.2,
+          "kvGbPer1k": 0.151,
+          "quality": 86
+        },
+        {
+          "tag": "14b",
+          "paramsB": 14.8,
+          "quant": "Q4_K_M",
+          "diskGb": 9.3,
+          "kvGbPer1k": 0.168,
+          "quality": 89
+        },
+        {
+          "tag": "30b-a3b",
+          "paramsB": 30.5,
+          "quant": "Q4_K_M",
+          "diskGb": 19.0,
+          "activeGb": 2.1,
+          "kvGbPer1k": 0.1,
+          "quality": 91,
+          "moe": true
+        },
+        {
+          "tag": "32b",
+          "paramsB": 32.8,
+          "quant": "Q4_K_M",
+          "diskGb": 20.0,
+          "kvGbPer1k": 0.268,
+          "quality": 93
+        }
+      ]
+    },
+    {
+      "id": "deepseek-r1",
+      "name": "DeepSeek-R1 (Distill)",
+      "publisher": "DeepSeek",
+      "license": "MIT",
+      "summary": "مدل استدلالی زنجیرهٔ فکر؛ برای مسائل ریاضی، الگوریتمی و دیباگ پیچیده عالی است (خروجی طولانی‌تر و کندتر).",
+      "tasks": [
+        "reasoning",
+        "code",
+        "chat"
+      ],
+      "contextMax": 131072,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": false,
+      "reasoning": true,
+      "languages": [
+        "en",
+        "zh",
+        "multi"
+      ],
+      "faScore": 50,
+      "notes": "ابزارفراخوانی رسمی ندارد؛ برای عاملِ ابزارمحور از qwen3 یا qwen2.5-coder استفاده کنید.",
+      "url": "https://ollama.com/library/deepseek-r1",
+      "variants": [
+        {
+          "tag": "1.5b",
+          "paramsB": 1.5,
+          "quant": "Q4_K_M",
+          "diskGb": 1.1,
+          "kvGbPer1k": 0.029,
+          "quality": 55
+        },
+        {
+          "tag": "7b",
+          "paramsB": 7.6,
+          "quant": "Q4_K_M",
+          "diskGb": 4.7,
+          "kvGbPer1k": 0.057,
+          "quality": 78
+        },
+        {
+          "tag": "8b",
+          "paramsB": 8.0,
+          "quant": "Q4_K_M",
+          "diskGb": 4.9,
+          "kvGbPer1k": 0.134,
+          "quality": 80
+        },
+        {
+          "tag": "14b",
+          "paramsB": 14.8,
+          "quant": "Q4_K_M",
+          "diskGb": 9.0,
+          "kvGbPer1k": 0.201,
+          "quality": 87
+        },
+        {
+          "tag": "32b",
+          "paramsB": 32.8,
+          "quant": "Q4_K_M",
+          "diskGb": 20.0,
+          "kvGbPer1k": 0.268,
+          "quality": 91
+        }
+      ]
+    },
+    {
+      "id": "llama3.1",
+      "name": "Llama 3.1",
+      "publisher": "Meta",
+      "license": "Llama-3.1-Community",
+      "summary": "عمومی و پایدار با ابزارفراخوانی رسمی و پنجرهٔ ۱۲۸هزار توکنی.",
+      "tasks": [
+        "chat",
+        "agent",
+        "summarize"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "multi"
+      ],
+      "faScore": 55,
+      "notes": "",
+      "url": "https://ollama.com/library/llama3.1",
+      "variants": [
+        {
+          "tag": "8b",
+          "paramsB": 8.0,
+          "quant": "Q4_K_M",
+          "diskGb": 4.9,
+          "kvGbPer1k": 0.134,
+          "quality": 79
+        },
+        {
+          "tag": "70b",
+          "paramsB": 70.6,
+          "quant": "Q4_K_M",
+          "diskGb": 43.0,
+          "kvGbPer1k": 0.32,
+          "quality": 94
+        }
+      ]
+    },
+    {
+      "id": "llama3.2",
+      "name": "Llama 3.2",
+      "publisher": "Meta",
+      "license": "Llama-3.2-Community",
+      "summary": "مدل‌های سبک برای سخت‌افزار کم‌رمق و دستگاه‌های لبه.",
+      "tasks": [
+        "chat",
+        "summarize",
+        "agent"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "multi"
+      ],
+      "faScore": 45,
+      "notes": "",
+      "url": "https://ollama.com/library/llama3.2",
+      "variants": [
+        {
+          "tag": "1b",
+          "paramsB": 1.2,
+          "quant": "Q4_K_M",
+          "diskGb": 1.3,
+          "kvGbPer1k": 0.034,
+          "quality": 48
+        },
+        {
+          "tag": "3b",
+          "paramsB": 3.2,
+          "quant": "Q4_K_M",
+          "diskGb": 2.0,
+          "kvGbPer1k": 0.117,
+          "quality": 64
+        }
+      ]
+    },
+    {
+      "id": "gemma3",
+      "name": "Gemma 3",
+      "publisher": "Google DeepMind",
+      "license": "Gemma-Terms",
+      "summary": "چندزبانه و چندوجهی (تصویر از ۴B به بالا) با کیفیت بالا نسبت به اندازه.",
+      "tasks": [
+        "chat",
+        "vision",
+        "translate",
+        "summarize"
+      ],
+      "contextMax": 131072,
+      "toolCalling": false,
+      "vision": true,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "fa",
+        "ar",
+        "multi"
+      ],
+      "faScore": 74,
+      "notes": "واریانت 1b فقط متنی است.",
+      "url": "https://ollama.com/library/gemma3",
+      "variants": [
+        {
+          "tag": "1b",
+          "paramsB": 1.0,
+          "quant": "Q4_K_M",
+          "diskGb": 0.82,
+          "kvGbPer1k": 0.05,
+          "quality": 46
+        },
+        {
+          "tag": "4b",
+          "paramsB": 4.3,
+          "quant": "Q4_K_M",
+          "diskGb": 3.3,
+          "kvGbPer1k": 0.1,
+          "quality": 71
+        },
+        {
+          "tag": "12b",
+          "paramsB": 12.2,
+          "quant": "Q4_K_M",
+          "diskGb": 8.1,
+          "kvGbPer1k": 0.2,
+          "quality": 84
+        },
+        {
+          "tag": "27b",
+          "paramsB": 27.4,
+          "quant": "Q4_K_M",
+          "diskGb": 17.0,
+          "kvGbPer1k": 0.28,
+          "quality": 90
+        }
+      ]
+    },
+    {
+      "id": "phi4",
+      "name": "Phi-4",
+      "publisher": "Microsoft",
+      "license": "MIT",
+      "summary": "تمرکز روی استدلال و ریاضی با اندازهٔ کوچک؛ بازدهٔ بسیار خوب روی CPU.",
+      "tasks": [
+        "reasoning",
+        "chat",
+        "code"
+      ],
+      "contextMax": 16384,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": false,
+      "reasoning": true,
+      "languages": [
+        "en"
+      ],
+      "faScore": 30,
+      "notes": "",
+      "url": "https://ollama.com/library/phi4",
+      "variants": [
+        {
+          "tag": "14b",
+          "paramsB": 14.7,
+          "quant": "Q4_K_M",
+          "diskGb": 9.1,
+          "kvGbPer1k": 0.21,
+          "quality": 85
+        }
+      ]
+    },
+    {
+      "id": "phi4-mini",
+      "name": "Phi-4 Mini",
+      "publisher": "Microsoft",
+      "license": "MIT",
+      "summary": "نسخهٔ جمع‌وجور Phi-4 با ابزارفراخوانی؛ مناسب هاست‌های ۸ گیگ.",
+      "tasks": [
+        "chat",
+        "reasoning",
+        "agent"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "multi"
+      ],
+      "faScore": 35,
+      "notes": "",
+      "url": "https://ollama.com/library/phi4-mini",
+      "variants": [
+        {
+          "tag": "3.8b",
+          "paramsB": 3.8,
+          "quant": "Q4_K_M",
+          "diskGb": 2.5,
+          "kvGbPer1k": 0.09,
+          "quality": 70
+        }
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "publisher": "Mistral AI",
+      "license": "Apache-2.0",
+      "summary": "کلاسیک، سریع و کم‌مصرف؛ گزینهٔ امن برای چت عمومی روی CPU.",
+      "tasks": [
+        "chat",
+        "summarize"
+      ],
+      "contextMax": 32768,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "fr",
+        "multi"
+      ],
+      "faScore": 40,
+      "notes": "",
+      "url": "https://ollama.com/library/mistral",
+      "variants": [
+        {
+          "tag": "7b",
+          "paramsB": 7.2,
+          "quant": "Q4_K_M",
+          "diskGb": 4.4,
+          "kvGbPer1k": 0.134,
+          "quality": 72
+        }
+      ]
+    },
+    {
+      "id": "mistral-nemo",
+      "name": "Mistral Nemo",
+      "publisher": "Mistral AI + NVIDIA",
+      "license": "Apache-2.0",
+      "summary": "۱۲B با پنجرهٔ ۱۲۸هزار توکن و چندزبانگی خوب؛ برای خلاصه‌سازی اسناد بلند.",
+      "tasks": [
+        "chat",
+        "summarize",
+        "translate",
+        "agent"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "fa",
+        "multi"
+      ],
+      "faScore": 62,
+      "notes": "",
+      "url": "https://ollama.com/library/mistral-nemo",
+      "variants": [
+        {
+          "tag": "12b",
+          "paramsB": 12.2,
+          "quant": "Q4_K_M",
+          "diskGb": 7.1,
+          "kvGbPer1k": 0.16,
+          "quality": 82
+        }
+      ]
+    },
+    {
+      "id": "aya-expanse",
+      "name": "Aya Expanse",
+      "publisher": "Cohere for AI",
+      "license": "CC-BY-NC-4.0",
+      "summary": "بهترین کیفیت فارسی در ردهٔ متن‌باز؛ آموزش‌دیده روی ۲۳ زبان شامل فارسی و عربی.",
+      "tasks": [
+        "chat",
+        "translate",
+        "summarize"
+      ],
+      "contextMax": 131072,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "fa",
+        "ar",
+        "tr",
+        "en",
+        "multi"
+      ],
+      "faScore": 95,
+      "notes": "لایسنس غیرتجاری (CC-BY-NC) — برای محصول تجاری بررسی حقوقی لازم است.",
+      "url": "https://ollama.com/library/aya-expanse",
+      "variants": [
+        {
+          "tag": "8b",
+          "paramsB": 8.0,
+          "quant": "Q4_K_M",
+          "diskGb": 5.1,
+          "kvGbPer1k": 0.134,
+          "quality": 80
+        },
+        {
+          "tag": "32b",
+          "paramsB": 32.3,
+          "quant": "Q4_K_M",
+          "diskGb": 20.0,
+          "kvGbPer1k": 0.26,
+          "quality": 90
+        }
+      ]
+    },
+    {
+      "id": "command-r7b",
+      "name": "Command R7B",
+      "publisher": "Cohere",
+      "license": "CC-BY-NC-4.0",
+      "summary": "۷B با RAG و ابزارفراخوانی داخلی و پشتیبانی ۲۳ زبانه.",
+      "tasks": [
+        "agent",
+        "chat",
+        "rag",
+        "translate"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "fa",
+        "en",
+        "multi"
+      ],
+      "faScore": 80,
+      "notes": "",
+      "url": "https://ollama.com/library/command-r7b",
+      "variants": [
+        {
+          "tag": "7b",
+          "paramsB": 7.0,
+          "quant": "Q4_K_M",
+          "diskGb": 5.1,
+          "kvGbPer1k": 0.13,
+          "quality": 79
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5",
+      "name": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "license": "Apache-2.0",
+      "summary": "عمومی و متعادل با ابزارفراخوانی؛ پایهٔ مطمئن برای دستیار چندمنظوره.",
+      "tasks": [
+        "chat",
+        "agent",
+        "summarize",
+        "translate"
+      ],
+      "contextMax": 32768,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "fa",
+        "zh",
+        "multi"
+      ],
+      "faScore": 68,
+      "notes": "",
+      "url": "https://ollama.com/library/qwen2.5",
+      "variants": [
+        {
+          "tag": "1.5b",
+          "paramsB": 1.5,
+          "quant": "Q4_K_M",
+          "diskGb": 0.99,
+          "kvGbPer1k": 0.029,
+          "quality": 55
+        },
+        {
+          "tag": "3b",
+          "paramsB": 3.1,
+          "quant": "Q4_K_M",
+          "diskGb": 1.9,
+          "kvGbPer1k": 0.038,
+          "quality": 66
+        },
+        {
+          "tag": "7b",
+          "paramsB": 7.6,
+          "quant": "Q4_K_M",
+          "diskGb": 4.7,
+          "kvGbPer1k": 0.057,
+          "quality": 80
+        },
+        {
+          "tag": "14b",
+          "paramsB": 14.8,
+          "quant": "Q4_K_M",
+          "diskGb": 9.0,
+          "kvGbPer1k": 0.201,
+          "quality": 87
+        },
+        {
+          "tag": "32b",
+          "paramsB": 32.8,
+          "quant": "Q4_K_M",
+          "diskGb": 20.0,
+          "kvGbPer1k": 0.268,
+          "quality": 91
+        }
+      ]
+    },
+    {
+      "id": "devstral",
+      "name": "Devstral",
+      "publisher": "Mistral AI + All Hands",
+      "license": "Apache-2.0",
+      "summary": "مخصوص عامل‌های مهندسی نرم‌افزار (SWE-bench)؛ برای حلقهٔ ابزار/ویرایش فایل ساخته شده.",
+      "tasks": [
+        "code",
+        "agent"
+      ],
+      "contextMax": 131072,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 30,
+      "notes": "",
+      "url": "https://ollama.com/library/devstral",
+      "variants": [
+        {
+          "tag": "24b",
+          "paramsB": 23.6,
+          "quant": "Q4_K_M",
+          "diskGb": 14.0,
+          "kvGbPer1k": 0.16,
+          "quality": 90
+        }
+      ]
+    },
+    {
+      "id": "codellama",
+      "name": "Code Llama",
+      "publisher": "Meta",
+      "license": "Llama-2-Community",
+      "summary": "قدیمی‌تر ولی سبک و پایدار برای تکمیل کد روی CPU ضعیف.",
+      "tasks": [
+        "code"
+      ],
+      "contextMax": 16384,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 20,
+      "notes": "",
+      "url": "https://ollama.com/library/codellama",
+      "variants": [
+        {
+          "tag": "7b",
+          "paramsB": 6.7,
+          "quant": "Q4_K_M",
+          "diskGb": 3.8,
+          "kvGbPer1k": 0.26,
+          "quality": 60
+        },
+        {
+          "tag": "13b",
+          "paramsB": 13.0,
+          "quant": "Q4_K_M",
+          "diskGb": 7.4,
+          "kvGbPer1k": 0.32,
+          "quality": 68
+        }
+      ]
+    },
+    {
+      "id": "starcoder2",
+      "name": "StarCoder2",
+      "publisher": "BigCode",
+      "license": "BigCode-OpenRAIL-M",
+      "summary": "تکمیل کد (FIM) روی ۶۰۰+ زبان برنامه‌نویسی؛ سبک و سریع برای autocomplete داخل ادیتور.",
+      "tasks": [
+        "code",
+        "autocomplete"
+      ],
+      "contextMax": 16384,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 15,
+      "notes": "",
+      "url": "https://ollama.com/library/starcoder2",
+      "variants": [
+        {
+          "tag": "3b",
+          "paramsB": 3.0,
+          "quant": "Q4_K_M",
+          "diskGb": 1.7,
+          "kvGbPer1k": 0.05,
+          "quality": 58
+        },
+        {
+          "tag": "7b",
+          "paramsB": 7.2,
+          "quant": "Q4_K_M",
+          "diskGb": 4.0,
+          "kvGbPer1k": 0.07,
+          "quality": 66
+        },
+        {
+          "tag": "15b",
+          "paramsB": 16.0,
+          "quant": "Q4_K_M",
+          "diskGb": 9.1,
+          "kvGbPer1k": 0.1,
+          "quality": 74
+        }
+      ]
+    },
+    {
+      "id": "llama3.2-vision",
+      "name": "Llama 3.2 Vision",
+      "publisher": "Meta",
+      "license": "Llama-3.2-Community",
+      "summary": "خواندن تصویر، اسکرین‌شات و نمودار؛ برای بررسی UI و OCR سبک.",
+      "tasks": [
+        "vision",
+        "chat"
+      ],
+      "contextMax": 131072,
+      "toolCalling": false,
+      "vision": true,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "multi"
+      ],
+      "faScore": 35,
+      "notes": "",
+      "url": "https://ollama.com/library/llama3.2-vision",
+      "variants": [
+        {
+          "tag": "11b",
+          "paramsB": 10.7,
+          "quant": "Q4_K_M",
+          "diskGb": 7.9,
+          "kvGbPer1k": 0.15,
+          "quality": 78
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5vl",
+      "name": "Qwen2.5-VL",
+      "publisher": "Alibaba Qwen",
+      "license": "Apache-2.0",
+      "summary": "بینایی قوی با درک سند، جدول و رابط کاربری؛ مناسب اتوماسیون مرورگر.",
+      "tasks": [
+        "vision",
+        "agent",
+        "chat"
+      ],
+      "contextMax": 128000,
+      "toolCalling": true,
+      "vision": true,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en",
+        "zh",
+        "multi"
+      ],
+      "faScore": 45,
+      "notes": "",
+      "url": "https://ollama.com/library/qwen2.5vl",
+      "variants": [
+        {
+          "tag": "3b",
+          "paramsB": 3.7,
+          "quant": "Q4_K_M",
+          "diskGb": 3.2,
+          "kvGbPer1k": 0.04,
+          "quality": 70
+        },
+        {
+          "tag": "7b",
+          "paramsB": 8.3,
+          "quant": "Q4_K_M",
+          "diskGb": 6.0,
+          "kvGbPer1k": 0.06,
+          "quality": 82
+        }
+      ]
+    },
+    {
+      "id": "llava",
+      "name": "LLaVA",
+      "publisher": "LLaVA Team",
+      "license": "Apache-2.0",
+      "summary": "کلاسیک و سبک برای توضیح تصویر؛ کم‌هزینه‌ترین گزینهٔ بینایی.",
+      "tasks": [
+        "vision",
+        "chat"
+      ],
+      "contextMax": 4096,
+      "toolCalling": false,
+      "vision": true,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 15,
+      "notes": "",
+      "url": "https://ollama.com/library/llava",
+      "variants": [
+        {
+          "tag": "7b",
+          "paramsB": 7.0,
+          "quant": "Q4_K_M",
+          "diskGb": 4.7,
+          "kvGbPer1k": 0.134,
+          "quality": 62
+        },
+        {
+          "tag": "13b",
+          "paramsB": 13.0,
+          "quant": "Q4_K_M",
+          "diskGb": 8.0,
+          "kvGbPer1k": 0.2,
+          "quality": 70
+        }
+      ]
+    },
+    {
+      "id": "nomic-embed-text",
+      "name": "Nomic Embed Text",
+      "publisher": "Nomic AI",
+      "license": "Apache-2.0",
+      "summary": "امبدینگ ۷۶۸ بعدی با پنجرهٔ ۸هزار توکن؛ استاندارد سبک برای RAG انگلیسی.",
+      "tasks": [
+        "embedding"
+      ],
+      "contextMax": 8192,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": true,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 25,
+      "notes": "",
+      "url": "https://ollama.com/library/nomic-embed-text",
+      "variants": [
+        {
+          "tag": "v1.5",
+          "paramsB": 0.137,
+          "quant": "F16",
+          "diskGb": 0.274,
+          "kvGbPer1k": 0.004,
+          "quality": 70
+        }
+      ]
+    },
+    {
+      "id": "bge-m3",
+      "name": "BGE-M3",
+      "publisher": "BAAI",
+      "license": "MIT",
+      "summary": "امبدینگ چندزبانهٔ ۱۰۰+ زبان با کیفیت بسیار خوب روی فارسی؛ انتخاب اول برای RAG فارسی.",
+      "tasks": [
+        "embedding"
+      ],
+      "contextMax": 8192,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": true,
+      "reasoning": false,
+      "languages": [
+        "fa",
+        "ar",
+        "en",
+        "multi"
+      ],
+      "faScore": 92,
+      "notes": "",
+      "url": "https://ollama.com/library/bge-m3",
+      "variants": [
+        {
+          "tag": "567m",
+          "paramsB": 0.567,
+          "quant": "F16",
+          "diskGb": 1.2,
+          "kvGbPer1k": 0.006,
+          "quality": 86
+        }
+      ]
+    },
+    {
+      "id": "mxbai-embed-large",
+      "name": "mxbai-embed-large",
+      "publisher": "Mixedbread AI",
+      "license": "Apache-2.0",
+      "summary": "امبدینگ ۱۰۲۴ بعدی با کیفیت بالاتر از nomic روی متون انگلیسی.",
+      "tasks": [
+        "embedding"
+      ],
+      "contextMax": 512,
+      "toolCalling": false,
+      "vision": false,
+      "embedding": true,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 20,
+      "notes": "",
+      "url": "https://ollama.com/library/mxbai-embed-large",
+      "variants": [
+        {
+          "tag": "335m",
+          "paramsB": 0.335,
+          "quant": "F16",
+          "diskGb": 0.67,
+          "kvGbPer1k": 0.004,
+          "quality": 78
+        }
+      ]
+    },
+    {
+      "id": "smollm2",
+      "name": "SmolLM2",
+      "publisher": "Hugging Face",
+      "license": "Apache-2.0",
+      "summary": "فوق‌سبک برای هاست‌های ۲ گیگ و تست دودکشی؛ کیفیت محدود.",
+      "tasks": [
+        "chat"
+      ],
+      "contextMax": 8192,
+      "toolCalling": true,
+      "vision": false,
+      "embedding": false,
+      "reasoning": false,
+      "languages": [
+        "en"
+      ],
+      "faScore": 10,
+      "notes": "",
+      "url": "https://ollama.com/library/smollm2",
+      "variants": [
+        {
+          "tag": "135m",
+          "paramsB": 0.135,
+          "quant": "Q4_K_M",
+          "diskGb": 0.27,
+          "kvGbPer1k": 0.01,
+          "quality": 20
+        },
+        {
+          "tag": "1.7b",
+          "paramsB": 1.7,
+          "quant": "Q4_K_M",
+          "diskGb": 1.8,
+          "kvGbPer1k": 0.05,
+          "quality": 50
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.0 - Unified Release: Local AI Engine, Dedicated Model Importer, Parity with PHP Edition
+
+- **Full Local AI Runtime & Manager (`app/local_ai.py` & API Endpoints)**:
+  - Added dedicated Local AI module with hardware scanning (CPU cores, AVX2, RAM total/available, GPU detection, free disk space).
+  - 1-click user-space Ollama runtime installer without requiring `root` or `sudo` (`POST /api/localai/runtime/install`).
+  - Model recommendation engine scoring 54 quantized variants from `data/model_catalog.json` against hardware budgets and task requirements.
+  - Model pulling, background execution, and automatic provider registration into `providers.json`.
+- **Dedicated Model List Import Endpoint (`POST /api/providers/{pid}/import-models`)**:
+  - Direct import of model lists into existing providers with replace/merge support.
+- **Version Harmonization**:
+  - Unified versioning with Arena Coding Agent PHP edition at version `2.0.0`.
+
 ## 0.16.3 - Multi-Key Dict Extraction, Rich Diagnostic Field Preservation & Local Model/Ollama Setup
 
 - **Enriched Provider & Multi-Key Normalization (`app/providers.py`)**:

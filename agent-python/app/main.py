@@ -1478,6 +1478,85 @@ async def import_providers(file: UploadFile = File(...), replace: bool = False, 
     except Exception as e:
         raise HTTPException(400, f"Import failed: {str(e)}")
 
+@app.post("/api/providers/{pid}/import-models")
+def import_provider_models(pid: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    raw = payload.get("json") or payload.get("text") or payload.get("data") or payload.get("models") or ""
+    replace = bool(payload.get("replace", False))
+    try:
+        return PROVIDER_STORE.import_models_for_provider(pid, str(raw), replace=replace)
+    except Exception as e:
+        raise HTTPException(400, f"Model import failed: {str(e)}")
+
+# Local AI Endpoints
+@app.get("/api/localai/host")
+def get_localai_host(user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.host_scan()
+
+@app.get("/api/localai/runtime")
+def get_localai_runtime(user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.runtime_status()
+
+@app.post("/api/localai/runtime/install")
+def post_localai_runtime_install(user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    try:
+        return local_ai.install_runtime()
+    except Exception as e:
+        raise HTTPException(500, f"Runtime installation failed: {str(e)}")
+
+@app.post("/api/localai/runtime/start")
+def post_localai_runtime_start(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    env_overrides = (payload or {}).get("env")
+    return local_ai.start_server(env_overrides=env_overrides)
+
+@app.post("/api/localai/runtime/stop")
+def post_localai_runtime_stop(user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    return local_ai.stop_server()
+
+@app.get("/api/localai/catalog")
+def get_localai_catalog(user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.catalog()
+
+@app.get("/api/localai/models")
+def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.installed()
+
+@app.post("/api/localai/recommend")
+def post_localai_recommend(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.recommend(payload)
+
+@app.post("/api/localai/pull")
+def post_localai_pull(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    model_name = str(payload.get("model") or "").strip()
+    if not model_name:
+        raise HTTPException(400, "Model name is required")
+    try:
+        return local_ai.pull_model(model_name)
+    except Exception as e:
+        raise HTTPException(500, f"Model pull failed: {str(e)}")
+
+@app.delete("/api/localai/models/{name:path}")
+def delete_localai_model(name: str, user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    return local_ai.remove_model(name)
+
+@app.post("/api/localai/register")
+def post_localai_register(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    model_ref = str(payload.get("model") or "").strip()
+    if not model_ref:
+        raise HTTPException(400, "Model reference is required")
+    meta = payload.get("meta") or {}
+    return local_ai.register_provider(model_ref, meta=meta)
+
 # Environment & Security Config API (Phase 12)
 @app.get("/api/config/environment")
 def get_env_config(user: Dict[str, Any] = Depends(require_admin)):
