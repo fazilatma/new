@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "assertions": {
+    "streamStartedEvent": true,
+    "perProfileRunningEvents": true,
+    "resultsArrivedAsCompleted": true,
+    "latencyAndQueueMetrics": true,
+    "providerMetadata": true,
+    "credentialRedaction": true,
+    "blockingCompatibility": true
+  },
+  "streamEventCount": 8
+}

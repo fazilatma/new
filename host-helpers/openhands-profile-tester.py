@@ -31,12 +31,18 @@ def safe_error(error: BaseException) -> str:
     return message[:800]
 
 
-async def test_profile(name: str, semaphore: asyncio.Semaphore) -> dict[str, Any]:
-    started = time.monotonic()
+async def test_profile(name: str, semaphore: asyncio.Semaphore, on_started=None) -> dict[str, Any]:
+    queued = time.monotonic()
+    model: str | None = None
     async with semaphore:
+        started = time.monotonic()
+        queue_ms = round((started - queued) * 1000)
+        if on_started:
+            on_started(name, queue_ms)
         try:
             config = load_config()
             llm = get_llm_profile_store().load(name, cipher=config.cipher)
+            model = str(llm.model or "") or None
             messages = [
                 Message(role="system", content=[TextContent(text="Reply with exactly: OK")]),
                 Message(role="user", content=[TextContent(text="ping")]),
@@ -47,17 +53,21 @@ async def test_profile(name: str, semaphore: asyncio.Semaphore) -> dict[str, Any
                 await asyncio.wait_for(llm.acompletion(messages=messages, max_tokens=2), timeout=90)
             return {
                 "name": name,
-                "model": llm.model,
+                "model": model,
+                "provider": model.split("/", 1)[0] if model and "/" in model else None,
                 "ok": True,
                 "latencyMs": round((time.monotonic() - started) * 1000),
+                "queueMs": queue_ms,
                 "error": None,
             }
         except Exception as error:  # noqa: BLE001 - every profile must report a result
             return {
                 "name": name,
-                "model": None,
+                "model": model,
+                "provider": model.split("/", 1)[0] if model and "/" in model else None,
                 "ok": False,
                 "latencyMs": round((time.monotonic() - started) * 1000),
+                "queueMs": queue_ms,
                 "error": {"type": type(error).__name__, "message": safe_error(error)},
             }
 
@@ -71,9 +81,24 @@ async def main() -> int:
     concurrency = payload.get("concurrency", 3) if isinstance(payload, dict) else 3
     concurrency = max(1, min(int(concurrency), 5))
     semaphore = asyncio.Semaphore(concurrency)
-    results = await asyncio.gather(*(test_profile(name, semaphore) for name in names))
-    json.dump({"tested": len(results), "results": results}, sys.stdout, ensure_ascii=False)
-    sys.stdout.write("\n")
+    stream = payload.get("stream") is True if isinstance(payload, dict) else False
+
+    def emit_profile_started(name: str, queue_ms: int) -> None:
+        print(json.dumps({"event": "profile-started", "name": name, "queueMs": queue_ms}, ensure_ascii=False), flush=True)
+
+    tasks = [asyncio.create_task(test_profile(name, semaphore, emit_profile_started if stream else None)) for name in names]
+    results: list[dict[str, Any]] = []
+    if stream:
+        print(json.dumps({"event": "started", "total": len(tasks), "concurrency": concurrency}, ensure_ascii=False), flush=True)
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            results.append(result)
+            print(json.dumps({"event": "result", "result": result}, ensure_ascii=False), flush=True)
+        print(json.dumps({"event": "summary", "tested": len(results)}, ensure_ascii=False), flush=True)
+    else:
+        results = await asyncio.gather(*tasks)
+        json.dump({"tested": len(results), "results": results}, sys.stdout, ensure_ascii=False)
+        sys.stdout.write("\n")
     return 0 if all(result["ok"] for result in results) else 1
 
 
