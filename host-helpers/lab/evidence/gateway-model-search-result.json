@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "assertions": {
+    "gatewayInjectionPassed": true,
+    "injectedScriptsParsed": true,
+    "profileAndModelDropdownsTargeted": true,
+    "unicodeSearchFilteringPassed": true,
+    "emptyStatePassed": true,
+    "escapeResetPassed": true,
+    "keyboardSelectionPassed": true,
+    "upstreamBasePathPreserved": true
+  }
+}

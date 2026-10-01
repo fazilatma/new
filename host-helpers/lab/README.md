@@ -29,6 +29,8 @@ The accepted archive is stored in `../runtime/` because release-asset upload is 
 
 The accepted integration result is recorded in `evidence/provider-import-result.json`.
 
-## Live model-test UI laboratory
+## Canvas dropdown and live model-test UI laboratories
+
+`node test-gateway-model-search.mjs` extracts and runs the actual generated prefix gateway against a mock Canvas upstream. It compiles every injected browser script and exercises the searchable model/Profile dropdown with multi-term and Persian-character normalization, empty results, Escape reset, keyboard selection, and base-path preservation. Evidence is recorded in `evidence/gateway-model-search-result.json`.
 
 `python3 test-profile-tester.py` exercises the real tester against dependency-free OpenHands stubs and proves its batch-start, per-Profile running, as-completed result, metric, provider, redaction, and legacy blocking-output contracts. `node test-live-model-tests.mjs` then starts the real manager with three Profiles and a deterministic streaming process. It validates the complete asynchronous job path rather than a static UI fixture: queued/running states, partial results observed before completion, pass/fail counters, latency and queue metrics, persisted results, blocking CLI compatibility, cancellation, and credential-safe logs. It also fetches the generated manager page, compiles its browser JavaScript, and verifies that the accessible modal, filters, table, and mobile breakpoint are present. Evidence is recorded in `evidence/profile-tester-result.json` and `evidence/live-model-tests-result.json`.

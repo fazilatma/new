@@ -5,6 +5,7 @@
     "accessibleDialogAndFocusTrap": true,
     "generatedBrowserScriptParsed": true,
     "responsiveMobileTablePresent": true,
+    "localEndpointGuidanceRendered": true,
     "partialResultsObservedLive": true,
     "activeJobRecoverableAfterRefresh": true,
     "queuedAndRunningStatesObserved": true,

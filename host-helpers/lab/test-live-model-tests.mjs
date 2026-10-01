@@ -184,6 +184,8 @@ sys.exit(0 if all(name != "bad-profile" for name in names) else 1)
   assert.match(page, /\/profiles\/test-jobs/);
   assert.match(page, /@media\(max-width:680px\)/);
   assert.match(page, /data-test-filter="failed"/);
+  assert.match(page, /http:\/\/127\.0\.0\.1:\d+\/v1/);
+  assert.match(page, /Profile با پیشوند <code>local-/);
   const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script, "manager page must contain its interaction script");
   assert.doesNotThrow(() => new Function(script), "generated browser script must parse");
@@ -241,6 +243,7 @@ sys.exit(0 if all(name != "bad-profile" for name in names) else 1)
       accessibleDialogAndFocusTrap: true,
       generatedBrowserScriptParsed: true,
       responsiveMobileTablePresent: true,
+      localEndpointGuidanceRendered: true,
       partialResultsObservedLive: true,
       activeJobRecoverableAfterRefresh: true,
       queuedAndRunningStatesObserved: true,
