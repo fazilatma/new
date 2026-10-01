@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.0.2"
+SCRIPT_VERSION="3.1.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -38,6 +38,23 @@ MANAGER_NAME=""
 MANAGER_MODEL_URL=""
 MANAGER_SHA256=""
 MANAGER_CONTEXT_LENGTH="8192"
+MANAGER_CONTEXT_SET=false
+MANAGER_THREADS=""
+MANAGER_THREADS_SET=false
+MANAGER_BATCH_SIZE="512"
+MANAGER_BATCH_SET=false
+MANAGER_UBATCH_SIZE="256"
+MANAGER_UBATCH_SET=false
+MANAGER_PARALLEL="1"
+MANAGER_PARALLEL_SET=false
+MANAGER_HF_REPO=""
+MANAGER_MODEL_FILENAME=""
+MANAGER_REVISION="main"
+MANAGER_REPLACE=false
+MANAGER_MMAP=true
+MANAGER_MMAP_SET=false
+MANAGER_MLOCK=false
+MANAGER_MLOCK_SET=false
 MANAGER_BASE_URL=""
 MANAGER_MODEL=""
 MANAGER_API_KEY_FILE=""
@@ -74,10 +91,15 @@ Actions:
   providers-import Import the compatible provider JSON format (--file PATH).
   test-models      Run a minimal bulk test against every LLM Profile.
   proxy-config     Configure direct/fallback/proxy-only model routing.
-  local-model-install  Install a GGUF model with managed llama.cpp.
+  local-model-discover List GGUF files and hashes in a Hugging Face repository.
+  local-model-install  Install/resume a GGUF model with managed llama.cpp.
+  local-model-list     Show installed GGUF models and runtime resources.
+  local-model-config   Tune context, threads, batches, and parallel slots.
   local-model-start    Start an installed GGUF model (--name NAME).
   local-model-stop     Stop the active managed GGUF model.
-  local-endpoint-add   Register an existing OpenAI-compatible local endpoint.
+  local-model-delete   Delete a managed GGUF file and its profile (--name NAME).
+  local-endpoint-test  Discover models from an OpenAI-compatible endpoint.
+  local-endpoint-add   Test and register an OpenAI-compatible endpoint.
   rotate-key       Generate a new API key and restart if currently running.
   self-update      Update only this helper from its canonical URL.
   uninstall        Remove runtimes; data/config remain unless --purge-data is used.
@@ -101,9 +123,19 @@ Options:
   --import-secrets        Import fresh API keys from the local JSON file.
   --overwrite             Update same-name profiles except protected inline keys.
   --name NAME             Local model/endpoint name.
-  --model-url URL         HTTPS GGUF URL from Hugging Face or GitHub.
+  --model-url URL         Direct HTTPS GGUF URL from Hugging Face or GitHub.
+  --hf-repo OWNER/REPO    Hugging Face repository (alternative to --model-url).
+  --model-filename PATH   GGUF filename inside --hf-repo.
+  --revision REV          Hugging Face revision (default: main).
   --sha256 HEX            Optional expected GGUF SHA-256.
   --context-length N      Local model context length (default: 8192).
+  --threads N             llama.cpp CPU threads (default: auto).
+  --batch-size N          llama.cpp logical batch size (default: 512).
+  --ubatch-size N         llama.cpp physical micro-batch (default: 256).
+  --parallel N            Concurrent llama.cpp decoding slots (default: 1).
+  --mmap / --no-mmap      Enable or disable model memory mapping.
+  --mlock / --no-mlock    Enable or disable locking the model in RAM.
+  --replace               Replace an installed model; downloads remain resumable.
   --base-url URL          Existing OpenAI-compatible local endpoint URL.
   --model MODEL           Model ID for an existing local endpoint.
   --api-key-file PATH     Owner-readable file containing an endpoint API key.
@@ -135,7 +167,7 @@ EOF
 
 while (($#)); do
     case "$1" in
-        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|models|providers-export|providers-import|test-models|proxy-config|local-model-install|local-model-start|local-model-stop|local-endpoint-add|rotate-key|self-update|uninstall|helper-version|_serve)
+        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|models|providers-export|providers-import|test-models|proxy-config|local-model-discover|local-model-install|local-model-list|local-model-config|local-model-start|local-model-stop|local-model-delete|local-endpoint-test|local-endpoint-add|rotate-key|self-update|uninstall|helper-version|_serve)
             [[ "$ACTION_SET" == false ]] || die "More than one action was supplied: $1"
             ACTION="$1"; ACTION_SET=true; shift ;;
         --home)
@@ -188,12 +220,38 @@ while (($#)); do
         --model-url)
             (($# >= 2)) || die '--model-url requires a URL.'
             MANAGER_MODEL_URL="$2"; shift 2 ;;
+        --hf-repo)
+            (($# >= 2)) || die '--hf-repo requires OWNER/REPO.'
+            MANAGER_HF_REPO="$2"; shift 2 ;;
+        --model-filename)
+            (($# >= 2)) || die '--model-filename requires a path.'
+            MANAGER_MODEL_FILENAME="$2"; shift 2 ;;
+        --revision)
+            (($# >= 2)) || die '--revision requires a value.'
+            MANAGER_REVISION="$2"; shift 2 ;;
         --sha256)
             (($# >= 2)) || die '--sha256 requires a value.'
             MANAGER_SHA256="$2"; shift 2 ;;
         --context-length)
             (($# >= 2)) || die '--context-length requires a value.'
-            MANAGER_CONTEXT_LENGTH="$2"; shift 2 ;;
+            MANAGER_CONTEXT_LENGTH="$2"; MANAGER_CONTEXT_SET=true; shift 2 ;;
+        --threads)
+            (($# >= 2)) || die '--threads requires a value.'
+            MANAGER_THREADS="$2"; MANAGER_THREADS_SET=true; shift 2 ;;
+        --batch-size)
+            (($# >= 2)) || die '--batch-size requires a value.'
+            MANAGER_BATCH_SIZE="$2"; MANAGER_BATCH_SET=true; shift 2 ;;
+        --ubatch-size)
+            (($# >= 2)) || die '--ubatch-size requires a value.'
+            MANAGER_UBATCH_SIZE="$2"; MANAGER_UBATCH_SET=true; shift 2 ;;
+        --parallel)
+            (($# >= 2)) || die '--parallel requires a value.'
+            MANAGER_PARALLEL="$2"; MANAGER_PARALLEL_SET=true; shift 2 ;;
+        --mmap) MANAGER_MMAP=true; MANAGER_MMAP_SET=true; shift ;;
+        --no-mmap) MANAGER_MMAP=false; MANAGER_MMAP_SET=true; shift ;;
+        --mlock) MANAGER_MLOCK=true; MANAGER_MLOCK_SET=true; shift ;;
+        --no-mlock) MANAGER_MLOCK=false; MANAGER_MLOCK_SET=true; shift ;;
+        --replace) MANAGER_REPLACE=true; shift ;;
         --base-url)
             (($# >= 2)) || die '--base-url requires a URL.'
             MANAGER_BASE_URL="$2"; shift 2 ;;
@@ -1113,6 +1171,40 @@ install_uv() {
     log "uv ready: $($UV_BIN --version)"
 }
 
+patch_canvas_profile_limit() {
+    local canvas_tool="$NPM_ROOT/node_modules/@openhands/agent-canvas/tools/canvas_ui_tool.py"
+    [[ -f "$canvas_tool" ]] || die "Agent Canvas compatibility module is missing: $canvas_tool"
+    python3 - "$canvas_tool" <<'PY'
+import pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+begin = "# BEGIN OPENHANDS-HOST UNLIMITED PROFILES"
+end = "# END OPENHANDS-HOST UNLIMITED PROFILES"
+if begin in text:
+    before, remainder = text.split(begin, 1)
+    _, after = remainder.split(end, 1)
+    text = before.rstrip() + "\n" + after.lstrip("\n")
+patch = r'''
+# BEGIN OPENHANDS-HOST UNLIMITED PROFILES
+# The upstream local Agent Server currently hard-codes MAX_PROFILES=50. Its
+# profile store already supports None as an unlimited value. Agent Canvas asks
+# agent-server to import this compatibility module during startup, so adjust
+# the router constant here without forking or exposing the backend.
+try:
+    from openhands.agent_server import profiles_router as _oh_profiles_router
+    _oh_profiles_router.MAX_PROFILES = None
+except Exception:
+    # Keep Canvas startup compatible if an upstream release moves the router;
+    # the helper's authenticated readiness check will still catch a dead server.
+    pass
+# END OPENHANDS-HOST UNLIMITED PROFILES
+'''
+path.write_text(text.rstrip() + "\n\n" + patch.lstrip(), encoding="utf-8")
+PY
+    python3 -m py_compile "$canvas_tool" || die 'The unlimited-profile compatibility patch failed validation.'
+}
+
 install_canvas() {
     node_is_usable "$NODE_HOME/bin/node" || die 'Install Node.js 24+ before Agent Canvas.'
     [[ -x "$UVX_BIN" ]] || die 'Install uv before Agent Canvas.'
@@ -1129,7 +1221,8 @@ install_canvas() {
         "$PACKAGE_NAME@$CANVAS_VERSION"
     [[ -x "$AGENT_BIN" ]] || die "Agent Canvas was not installed at $AGENT_BIN"
     "$AGENT_BIN" --version >/dev/null 2>&1 || die 'Agent Canvas executable validation failed.'
-    log "Agent Canvas ready: $($AGENT_BIN --version)"
+    patch_canvas_profile_limit
+    log "Agent Canvas ready: $($AGENT_BIN --version); local LLM profile limit disabled"
 }
 
 runtime_is_complete() {
@@ -1141,6 +1234,7 @@ runtime_is_complete() {
 
 ensure_runtime_installed() {
     if runtime_is_complete; then
+        patch_canvas_profile_limit
         ensure_secrets
         write_environment
         return 0
@@ -1227,6 +1321,7 @@ load_runtime_environment() {
     [[ -x "$AGENT_BIN" ]] || die 'Agent Canvas is not installed. Run: openhands-host install'
     [[ -x "$UVX_BIN" ]] || die 'Managed uvx is missing. Run: openhands-host install'
     node_is_usable "$NODE_HOME/bin/node" || die 'Managed Node.js 24+ is missing. Run: openhands-host install'
+    patch_canvas_profile_limit
     ensure_secrets
     prepare_dirs
     export HOME
@@ -1781,6 +1876,11 @@ show_status() {
     printf 'Browser base path: %s\n' "$BASE_PATH"
     printf 'Workspace: %s\n' "$WORKSPACE"
     printf 'Mode: public (API key required)\n'
+    if grep -Fq '# BEGIN OPENHANDS-HOST UNLIMITED PROFILES' "$NPM_ROOT/node_modules/@openhands/agent-canvas/tools/canvas_ui_tool.py" 2>/dev/null; then
+        printf 'LLM profile capacity: unlimited\n'
+    else
+        printf 'LLM profile capacity: upstream default (run update)\n'
+    fi
     if pid="$(managed_pid 2>/dev/null)"; then
         printf 'Process: running (PID %s)\n' "$pid"
         if agent_is_healthy; then printf 'Health: OK\n'; else printf 'Health: starting/unavailable\n'; fi
@@ -1952,16 +2052,76 @@ PY
     chmod 600 "$payload"; if ! manager_api PUT '/proxy' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
 }
 
+local_model_discover_cli() {
+    local payload="$CACHE_DIR/local-model-discover.$$"
+    [[ -n "$MANAGER_HF_REPO" ]] || die 'local-model-discover requires --hf-repo OWNER/REPO.'
+    MODEL_REPO="$MANAGER_HF_REPO" MODEL_REVISION="$MANAGER_REVISION" python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'repo': os.environ['MODEL_REPO'], 'revision': os.environ['MODEL_REVISION']}))
+PY
+    chmod 600 "$payload"; if ! manager_api POST '/local/hf-files' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
 local_model_install_cli() {
     local payload="$CACHE_DIR/local-model.$$"
-    [[ -n "$MANAGER_NAME" && -n "$MANAGER_MODEL_URL" ]] || die 'local-model-install requires --name NAME and --model-url HTTPS_URL.'
-    MODEL_NAME="$MANAGER_NAME" MODEL_URL="$MANAGER_MODEL_URL" MODEL_SHA="$MANAGER_SHA256" MODEL_CONTEXT="$MANAGER_CONTEXT_LENGTH" \
-        python3 - <<'PY' > "$payload"
+    [[ -n "$MANAGER_NAME" ]] || die 'local-model-install requires --name NAME.'
+    [[ -n "$MANAGER_MODEL_URL" || ( -n "$MANAGER_HF_REPO" && -n "$MANAGER_MODEL_FILENAME" ) ]] || \
+        die 'Use --model-url URL or both --hf-repo OWNER/REPO and --model-filename PATH.'
+    MODEL_NAME="$MANAGER_NAME" MODEL_URL="$MANAGER_MODEL_URL" MODEL_REPO="$MANAGER_HF_REPO" MODEL_FILENAME="$MANAGER_MODEL_FILENAME" \
+    MODEL_REVISION="$MANAGER_REVISION" MODEL_SHA="$MANAGER_SHA256" MODEL_CONTEXT="$MANAGER_CONTEXT_LENGTH" MODEL_THREADS="$MANAGER_THREADS" \
+    MODEL_BATCH="$MANAGER_BATCH_SIZE" MODEL_UBATCH="$MANAGER_UBATCH_SIZE" MODEL_PARALLEL="$MANAGER_PARALLEL" MODEL_MMAP="$MANAGER_MMAP" \
+    MODEL_MLOCK="$MANAGER_MLOCK" MODEL_REPLACE="$MANAGER_REPLACE" python3 - <<'PY' > "$payload"
 import json, os
-print(json.dumps({'name': os.environ['MODEL_NAME'], 'url': os.environ['MODEL_URL'], 'sha256': os.environ['MODEL_SHA'], 'contextLength': int(os.environ['MODEL_CONTEXT'])}))
+p = {
+    'name': os.environ['MODEL_NAME'], 'url': os.environ['MODEL_URL'], 'repo': os.environ['MODEL_REPO'],
+    'filename': os.environ['MODEL_FILENAME'], 'revision': os.environ['MODEL_REVISION'], 'sha256': os.environ['MODEL_SHA'],
+    'contextLength': int(os.environ['MODEL_CONTEXT']), 'batchSize': int(os.environ['MODEL_BATCH']),
+    'ubatchSize': int(os.environ['MODEL_UBATCH']), 'parallel': int(os.environ['MODEL_PARALLEL']),
+    'mmap': os.environ['MODEL_MMAP'] == 'true', 'mlock': os.environ['MODEL_MLOCK'] == 'true',
+    'replace': os.environ['MODEL_REPLACE'] == 'true',
+}
+if os.environ['MODEL_THREADS']:
+    p['threads'] = int(os.environ['MODEL_THREADS'])
+print(json.dumps(p))
 PY
     chmod 600 "$payload"; if ! manager_api POST '/local/install' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
-    log "The download continues in the model manager. Progress: $(models_url)"
+    log "The resumable download continues in the model manager. Progress: $(models_url)"
+}
+
+local_model_list_cli() {
+    manager_api GET '/local/status'
+}
+
+local_model_config_cli() {
+    local payload="$CACHE_DIR/local-model-config.$$"
+    [[ -n "$MANAGER_NAME" ]] || die 'local-model-config requires --name NAME.'
+    [[ "$MANAGER_CONTEXT_SET" == true || "$MANAGER_THREADS_SET" == true || "$MANAGER_BATCH_SET" == true || \
+       "$MANAGER_UBATCH_SET" == true || "$MANAGER_PARALLEL_SET" == true || "$MANAGER_MMAP_SET" == true || "$MANAGER_MLOCK_SET" == true ]] || \
+        die 'local-model-config requires at least one tuning option.'
+    MODEL_CONTEXT="$MANAGER_CONTEXT_LENGTH" MODEL_CONTEXT_SET="$MANAGER_CONTEXT_SET" MODEL_THREADS="$MANAGER_THREADS" MODEL_THREADS_SET="$MANAGER_THREADS_SET" \
+    MODEL_BATCH="$MANAGER_BATCH_SIZE" MODEL_BATCH_SET="$MANAGER_BATCH_SET" MODEL_UBATCH="$MANAGER_UBATCH_SIZE" MODEL_UBATCH_SET="$MANAGER_UBATCH_SET" \
+    MODEL_PARALLEL="$MANAGER_PARALLEL" MODEL_PARALLEL_SET="$MANAGER_PARALLEL_SET" MODEL_MMAP="$MANAGER_MMAP" MODEL_MMAP_SET="$MANAGER_MMAP_SET" \
+    MODEL_MLOCK="$MANAGER_MLOCK" MODEL_MLOCK_SET="$MANAGER_MLOCK_SET" python3 - <<'PY' > "$payload"
+import json, os
+p = {}
+if os.environ['MODEL_CONTEXT_SET'] == 'true': p['contextLength'] = int(os.environ['MODEL_CONTEXT'])
+if os.environ['MODEL_THREADS_SET'] == 'true': p['threads'] = int(os.environ['MODEL_THREADS'])
+if os.environ['MODEL_BATCH_SET'] == 'true': p['batchSize'] = int(os.environ['MODEL_BATCH'])
+if os.environ['MODEL_UBATCH_SET'] == 'true': p['ubatchSize'] = int(os.environ['MODEL_UBATCH'])
+if os.environ['MODEL_PARALLEL_SET'] == 'true': p['parallel'] = int(os.environ['MODEL_PARALLEL'])
+if os.environ['MODEL_MMAP_SET'] == 'true': p['mmap'] = os.environ['MODEL_MMAP'] == 'true'
+if os.environ['MODEL_MLOCK_SET'] == 'true': p['mlock'] = os.environ['MODEL_MLOCK'] == 'true'
+print(json.dumps(p))
+PY
+    chmod 600 "$payload"
+    if ! manager_api PUT "/local/models/$MANAGER_NAME" "$payload"; then rm -f "$payload"; return 1; fi
+    rm -f "$payload"
+}
+
+local_model_delete_cli() {
+    [[ -n "$MANAGER_NAME" ]] || die 'local-model-delete requires --name NAME.'
+    [[ "$ASSUME_YES" == true ]] || die 'local-model-delete permanently removes the GGUF file; repeat with --yes.'
+    manager_api DELETE "/local/models/$MANAGER_NAME"
 }
 
 local_model_start_cli() {
@@ -1980,6 +2140,24 @@ local_model_stop_cli() {
     if ! manager_api POST '/local/stop' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
 }
 
+local_endpoint_test_cli() {
+    local payload="$CACHE_DIR/local-endpoint-test.$$" api_key=""
+    [[ -n "$MANAGER_BASE_URL" ]] || die 'local-endpoint-test requires --base-url URL.'
+    if [[ -n "$MANAGER_API_KEY_FILE" ]]; then
+        local key_perms=""
+        [[ -r "$MANAGER_API_KEY_FILE" ]] || die 'The --api-key-file is not readable.'
+        key_perms="$(stat -c '%a' "$MANAGER_API_KEY_FILE" 2>/dev/null || true)"
+        [[ -z "$key_perms" || "$key_perms" =~ ^[0-7]00$ ]] || die 'The --api-key-file must not be group/world-readable (use chmod 600).'
+        api_key="$(tr -d '\r\n' < "$MANAGER_API_KEY_FILE")"
+    fi
+    MODEL_BASE="$MANAGER_BASE_URL" MODEL_API_KEY="$api_key" python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'baseUrl': os.environ['MODEL_BASE'], 'apiKey': os.environ['MODEL_API_KEY']}))
+PY
+    unset api_key
+    chmod 600 "$payload"; if ! manager_api POST '/local/probe-endpoint' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
 local_endpoint_add_cli() {
     local payload="$CACHE_DIR/local-endpoint.$$" api_key=""
     [[ -n "$MANAGER_NAME" && -n "$MANAGER_BASE_URL" && -n "$MANAGER_MODEL" ]] || \
@@ -1991,10 +2169,10 @@ local_endpoint_add_cli() {
         [[ -z "$key_perms" || "$key_perms" =~ ^[0-7]00$ ]] || die 'The --api-key-file must not be group/world-readable (use chmod 600).'
         api_key="$(tr -d '\r\n' < "$MANAGER_API_KEY_FILE")"
     fi
-    MODEL_NAME="$MANAGER_NAME" MODEL_BASE="$MANAGER_BASE_URL" MODEL_ID="$MANAGER_MODEL" MODEL_API_KEY="$api_key" \
+    MODEL_NAME="$MANAGER_NAME" MODEL_BASE="$MANAGER_BASE_URL" MODEL_ID="$MANAGER_MODEL" MODEL_API_KEY="$api_key" MODEL_CONTEXT="$MANAGER_CONTEXT_LENGTH" \
         python3 - <<'PY' > "$payload"
 import json, os
-print(json.dumps({'name': os.environ['MODEL_NAME'], 'baseUrl': os.environ['MODEL_BASE'], 'model': os.environ['MODEL_ID'], 'apiKey': os.environ['MODEL_API_KEY']}))
+print(json.dumps({'name': os.environ['MODEL_NAME'], 'baseUrl': os.environ['MODEL_BASE'], 'model': os.environ['MODEL_ID'], 'apiKey': os.environ['MODEL_API_KEY'], 'contextLength': int(os.environ['MODEL_CONTEXT'])}))
 PY
     unset api_key
     chmod 600 "$payload"; if ! manager_api POST '/local/register-endpoint' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
@@ -2049,7 +2227,8 @@ web_check() {
     [[ "$server_info_code" == "200" ]] || die 'Agent Server readiness check failed; the frontend ingress is up but its Python backend is unavailable.'
     [[ "$manager_page_code" == "200" ]] && grep -Fq 'مدیریت ارائه‌دهنده‌ها و مدل‌ها' "$tmp/models" || die 'The model-manager page check failed.'
     [[ "$manager_api_code" == "200" ]] || die 'The authenticated model-manager API check failed.'
-    log 'Web check passed, including Canvas, model manager, API-key validation, and Agent Server readiness.'
+    grep -q '"profileLimit":null' "$tmp/models-status" || die 'The model manager did not report unlimited local profiles.'
+    log 'Web check passed, including Canvas, unlimited profiles, model manager, API-key validation, and Agent Server readiness.'
 }
 
 resource_report() {
@@ -2090,6 +2269,11 @@ doctor() {
     if [[ -x "$AGENT_BIN" ]]; then
         export PATH="$NODE_HOME/bin:$TOOLS_DIR:$HOME/.local/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
         printf 'Agent Canvas: %s\n' "$($AGENT_BIN --version 2>&1 || echo broken)"
+        if grep -Fq '# BEGIN OPENHANDS-HOST UNLIMITED PROFILES' "$NPM_ROOT/node_modules/@openhands/agent-canvas/tools/canvas_ui_tool.py" 2>/dev/null; then
+            printf 'LLM profile capacity: unlimited compatibility patch present\n'
+        else
+            warn 'The unlimited-profile compatibility patch is missing; run openhands-host update.'; failed=1
+        fi
     else
         warn 'Agent Canvas is missing.'; failed=1
     fi
@@ -2261,9 +2445,14 @@ case "$ACTION" in
     providers-import) providers_import_cli ;;
     test-models) test_models_cli ;;
     proxy-config) proxy_config_cli ;;
+    local-model-discover) local_model_discover_cli ;;
     local-model-install) local_model_install_cli ;;
+    local-model-list) local_model_list_cli ;;
+    local-model-config) local_model_config_cli ;;
     local-model-start) local_model_start_cli ;;
     local-model-stop) local_model_stop_cli ;;
+    local-model-delete) local_model_delete_cli ;;
+    local-endpoint-test) local_endpoint_test_cli ;;
     local-endpoint-add) local_endpoint_add_cli ;;
     web-check) web_check ;;
     doctor) doctor ;;

@@ -11,6 +11,7 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import os from "node:os";
 import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import { URL } from "node:url";
@@ -38,10 +39,13 @@ const llamaHome = path.join(toolsDir, "llama.cpp");
 const llamaServerLink = path.join(llamaHome, "llama-server");
 const modelsDir = path.join(dataDir, "models");
 const jobs = new Map();
+const jobControllers = new Map();
 const managedSubprocesses = new Set();
 let localModelProcess = null;
 let localModelName = null;
 let localModelReady = false;
+let localModelStartedAt = null;
+let localModelLastExit = null;
 let profileTestPromise = null;
 
 const DEFAULT_PROXY_TEMPLATE = "https://proxy.fazilat-ma.workers.dev/?url={url}";
@@ -623,24 +627,75 @@ function spawnCollect(command, args, options = {}) {
   });
 }
 
+function localModelOptions(source = {}) {
+  const cpuCount = Math.max(1, os.cpus()?.length || 1);
+  const integer = (name, fallback, minimum, maximum) => {
+    const value = Number(source?.[name]);
+    return Number.isSafeInteger(value) ? Math.max(minimum, Math.min(value, maximum)) : fallback;
+  };
+  const batchSize = integer("batchSize", 512, 1, 4096);
+  return {
+    contextLength: integer("contextLength", 8192, 512, 1048576),
+    threads: integer("threads", Math.max(1, Math.min(cpuCount, Math.ceil(cpuCount * 0.75))), 1, 256),
+    batchSize,
+    ubatchSize: Math.min(batchSize, integer("ubatchSize", Math.min(256, batchSize), 1, 4096)),
+    parallel: integer("parallel", 1, 1, 16),
+    mmap: source?.mmap !== false,
+    mlock: source?.mlock === true,
+  };
+}
+
 function loadRegistry() {
-  const value = readJson(registryFile, { version: 1, active: null, models: [] });
-  return { version: 1, active: typeof value.active === "string" ? value.active : null, models: Array.isArray(value.models) ? value.models : [] };
+  const value = readJson(registryFile, { version: 2, active: null, models: [] });
+  const models = Array.isArray(value.models) ? value.models.map((model) => ({ ...model, ...localModelOptions(model) })) : [];
+  return { version: 2, active: typeof value.active === "string" ? value.active : null, models };
 }
 
 function saveRegistry(registry) {
-  atomicJson(registryFile, registry);
+  atomicJson(registryFile, { ...registry, version: 2 });
+}
+
+function managedModelPath(model) {
+  if (!model?.name || slug(model.name, "") !== model.name) throw new Error("Unsafe managed model name");
+  const expected = path.resolve(modelsDir, `${model.name}.gguf`);
+  if (path.resolve(String(model.file || "")) !== expected) throw new Error(`Unsafe managed model path for ${model.name}`);
+  return expected;
+}
+
+function filesystemStatus() {
+  try {
+    const stats = fs.statfsSync(modelsDir);
+    return { freeBytes: Number(stats.bavail) * Number(stats.bsize), totalBytes: Number(stats.blocks) * Number(stats.bsize) };
+  } catch { return { freeBytes: null, totalBytes: null }; }
 }
 
 function localStatus() {
   const registry = loadRegistry();
+  const running = Boolean(localModelProcess && localModelProcess.exitCode === null);
   return {
     active: registry.active,
-    running: Boolean(localModelProcess && localModelProcess.exitCode === null),
+    running,
     ready: localModelReady,
     runningName: localModelName,
-    logTail: (() => { try { const data = fs.readFileSync(localLogFile); return data.subarray(Math.max(0, data.length - 16000)).toString("utf8"); } catch { return ""; } })(),
-    models: registry.models.map((model) => ({ ...model, file: undefined })),
+    pid: running ? localModelProcess.pid : null,
+    startedAt: localModelStartedAt,
+    lastExit: localModelLastExit,
+    runtimeInstalled: fs.existsSync(llamaServerLink),
+    runtime: readJson(path.join(llamaHome, "runtime.json"), null),
+    resources: {
+      cpuCount: Math.max(1, os.cpus()?.length || 1),
+      totalMemoryBytes: os.totalmem(),
+      freeMemoryBytes: os.freemem(),
+      ...filesystemStatus(),
+    },
+    logTail: (() => { try { const data = fs.readFileSync(localLogFile); return data.subarray(Math.max(0, data.length - 32000)).toString("utf8"); } catch { return ""; } })(),
+    partialDownloads: (() => { try { return fs.readdirSync(modelsDir).filter((name) => name.endsWith(".gguf.part")).map((filename) => ({ name: filename.slice(0, -10), bytes: fs.statSync(path.join(modelsDir, filename)).size })); } catch { return []; } })(),
+    models: registry.models.map((model) => ({
+      ...model,
+      file: undefined,
+      partialBytes: (() => { try { return fs.statSync(`${model.file}.part`).size; } catch { return 0; } })(),
+      filePresent: Boolean(model.file && fs.existsSync(model.file)),
+    })),
   };
 }
 
@@ -651,62 +706,108 @@ function updateJob(id, patch) {
 
 function createJob(kind, task) {
   const id = crypto.randomBytes(12).toString("hex");
+  const controller = new AbortController();
+  jobControllers.set(id, controller);
   jobs.set(id, { id, kind, status: "queued", progress: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   Promise.resolve().then(async () => {
     updateJob(id, { status: "running" });
     try {
-      const result = await task((patch) => updateJob(id, patch));
+      const result = await task((patch) => updateJob(id, patch), controller.signal);
       updateJob(id, { status: "completed", progress: 100, result });
     } catch (error) {
-      updateJob(id, { status: "failed", error: publicError(error) });
+      const cancelled = controller.signal.aborted;
+      updateJob(id, { status: cancelled ? "cancelled" : "failed", error: cancelled ? "Cancelled; the partial download was kept for resume." : publicError(error) });
+    } finally {
+      jobControllers.delete(id);
     }
   });
   return id;
 }
 
-async function downloadFile(url, destination, update, expectedSha = "", maxBytes = 20 * 1024 ** 3) {
-  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60000) });
+function cancelJob(id) {
+  const job = jobs.get(id);
+  const controller = jobControllers.get(id);
+  if (!job || !controller || !["queued", "running"].includes(job.status)) return false;
+  controller.abort(new Error("Cancelled"));
+  updateJob(id, { status: "cancelling", message: "Stopping safely; partial download will be retained…" });
+  return true;
+}
+
+async function hashExistingFile(file, hash, signal) {
+  if (!fs.existsSync(file)) return 0;
+  let bytes = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    if (signal?.aborted) throw signal.reason || new Error("Cancelled");
+    bytes += chunk.length;
+    hash.update(chunk);
+  }
+  return bytes;
+}
+
+async function downloadFile(url, destination, update, expectedSha = "", maxBytes = 20 * 1024 ** 3, signal = null) {
+  const temp = `${destination}.part`;
+  const hash = crypto.createHash("sha256");
+  let offset = await hashExistingFile(temp, hash, signal);
+  if (offset > maxBytes) throw new Error("Existing partial download exceeds the safety limit");
+  const requestHeaders = offset ? { range: `bytes=${offset}-` } : {};
+  const timeoutSignal = AbortSignal.timeout(6 * 60 * 60 * 1000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  let response = await fetch(url, { redirect: "follow", headers: requestHeaders, signal: requestSignal });
+  if (response.status === 416 && offset) {
+    fs.rmSync(temp, { force: true });
+    offset = 0;
+    response = await fetch(url, { redirect: "follow", signal: requestSignal });
+  }
   if (!response.ok || !response.body) throw new Error(`Download failed with HTTP ${response.status}`);
-  const total = Number(response.headers.get("content-length") || "0");
-  if (total > maxBytes) throw new Error("Download exceeds the 20 GiB safety limit");
-  if (typeof fs.statfsSync === "function" && total > 0) {
+  const resumed = offset > 0 && response.status === 206;
+  if (resumed) {
+    const contentRange = response.headers.get("content-range") || "";
+    if (!contentRange.startsWith(`bytes ${offset}-`)) { fs.rmSync(temp, { force: true }); throw new Error("Download server returned an invalid resume range; partial data was removed"); }
+  }
+  if (offset && !resumed) offset = 0;
+  const contentBytes = Number(response.headers.get("content-length") || "0");
+  const total = contentBytes ? offset + contentBytes : 0;
+  if (total > maxBytes) throw new Error(`Download exceeds the ${Math.round(maxBytes / 1024 ** 3)} GiB safety limit`);
+  if (typeof fs.statfsSync === "function" && contentBytes > 0) {
     const stats = fs.statfsSync(path.dirname(destination));
     const free = Number(stats.bavail) * Number(stats.bsize);
-    if (free < total + 512 * 1024 ** 2) throw new Error("Not enough free disk space for this model");
+    if (free < contentBytes + 512 * 1024 ** 2) throw new Error("Not enough free disk space for this model and a 512 MiB reserve");
   }
-  const temp = `${destination}.part`;
-  const output = fs.createWriteStream(temp, { mode: 0o600 });
-  const hash = crypto.createHash("sha256");
-  let received = 0;
+  const effectiveHash = offset ? hash : crypto.createHash("sha256");
+  const output = fs.createWriteStream(temp, { flags: offset ? "a" : "w", mode: 0o600 });
+  let received = offset;
   const input = Readable.fromWeb(response.body);
   await new Promise((resolve, reject) => {
+    const fail = (error) => { output.destroy(); reject(error); };
     input.on("data", (chunk) => {
       received += chunk.length;
-      if (received > maxBytes) { input.destroy(new Error("Download exceeds the 20 GiB safety limit")); return; }
-      hash.update(chunk);
-      if (total) update({ progress: Math.min(95, Math.round((received / total) * 95)), bytesReceived: received, bytesTotal: total });
+      if (signal?.aborted) { input.destroy(signal.reason || new Error("Cancelled")); return; }
+      if (received > maxBytes) { input.destroy(new Error("Download exceeds the safety limit")); return; }
+      effectiveHash.update(chunk);
+      if (total) update({ progress: Math.min(95, Math.round((received / total) * 95)), bytesReceived: received, bytesTotal: total, resumed });
+      else update({ bytesReceived: received, bytesTotal: null, resumed });
     });
-    input.on("error", reject);
+    input.on("error", fail);
     output.on("error", reject);
     output.on("finish", resolve);
     input.pipe(output);
   });
-  const digest = hash.digest("hex");
+  const digest = effectiveHash.digest("hex");
   if (expectedSha && !safeEqual(digest.toLowerCase(), expectedSha.toLowerCase())) {
     fs.rmSync(temp, { force: true });
-    throw new Error("Downloaded file SHA-256 does not match");
+    throw new Error("Downloaded file SHA-256 does not match; corrupt partial data was removed");
   }
   fs.renameSync(temp, destination);
   fs.chmodSync(destination, 0o600);
-  return { sha256: digest, bytes: received };
+  return { sha256: digest, bytes: received, resumed };
 }
 
-async function ensureLlamaRuntime(update) {
+async function ensureLlamaRuntime(update, signal = null) {
   if (fs.existsSync(llamaServerLink)) return llamaServerLink;
   update({ message: "Finding a compatible llama.cpp release…", progress: 1 });
   const response = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10", {
     headers: { "user-agent": "openhands-host-model-manager", accept: "application/vnd.github+json" },
-    signal: AbortSignal.timeout(30000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
   });
   if (!response.ok) throw new Error(`GitHub release lookup failed with HTTP ${response.status}`);
   const releases = await response.json();
@@ -725,7 +826,8 @@ async function ensureLlamaRuntime(update) {
   const archivePath = path.join(llamaHome, path.basename(archive.name));
   const digest = String(archive.digest || "").startsWith("sha256:") ? String(archive.digest).slice(7) : "";
   update({ message: `Downloading ${archive.name}…`, progress: 3 });
-  await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3);
+  await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3, signal);
+  if (signal?.aborted) throw signal.reason || new Error("Cancelled");
   update({ message: "Extracting llama.cpp…", progress: 96 });
   const extractor = `import pathlib,sys,tarfile,zipfile\np=pathlib.Path(sys.argv[1]); d=pathlib.Path(sys.argv[2])\n(zipfile.ZipFile(p).extractall(d) if p.suffix=='.zip' else tarfile.open(p).extractall(d))\n`;
   const extracted = await spawnCollect("python3", ["-c", extractor, archivePath, llamaHome], { timeout: 120000 });
@@ -744,6 +846,14 @@ async function ensureLlamaRuntime(update) {
   if (!binary) throw new Error("The llama.cpp archive did not contain llama-server");
   fs.chmodSync(binary, 0o700);
   try { fs.symlinkSync(binary, llamaServerLink); } catch (error) { if (error.code !== "EEXIST") throw error; }
+  const version = await spawnCollect(llamaServerLink, ["--version"], { timeout: 15000, maxOutput: 32000 });
+  if (version.code !== 0) { fs.rmSync(llamaServerLink, { force: true }); throw new Error(`Downloaded llama.cpp runtime failed validation: ${publicError(version.stderr || version.stdout)}`); }
+  atomicJson(path.join(llamaHome, "runtime.json"), {
+    installedAt: new Date().toISOString(),
+    release: archive.name,
+    version: publicError(`${version.stdout}\n${version.stderr}`.trim()),
+    architecture: process.arch,
+  });
   fs.rmSync(archivePath, { force: true });
   return llamaServerLink;
 }
@@ -751,44 +861,130 @@ async function ensureLlamaRuntime(update) {
 function validateModelUrl(value) {
   const url = new URL(value);
   if (url.protocol !== "https:") throw new Error("Model URL must use HTTPS");
+  if (url.username || url.password || [...url.searchParams.keys()].some((name) => /(token|key|auth|signature|credential)/i.test(name))) {
+    throw new Error("Model URL must not contain credentials or signed secret query parameters");
+  }
+  if (url.hostname.toLowerCase() === "github.com") {
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/);
+    if (match) {
+      url.hostname = "raw.githubusercontent.com";
+      url.pathname = `/${match[1]}/${match[2]}/${match[3]}/${match[4]}`;
+    }
+  }
+  if (url.hostname.toLowerCase() === "huggingface.co") url.pathname = url.pathname.replace("/blob/", "/resolve/");
   const host = url.hostname.toLowerCase();
-  const allowed = host === "huggingface.co" || host === "hf.co" || host === "github.com" || host.endsWith(".huggingface.co");
+  const allowed = host === "huggingface.co" || host === "hf.co" || host === "github.com" || host === "raw.githubusercontent.com" || host.endsWith(".huggingface.co");
   if (!allowed) throw new Error("Model downloads are restricted to Hugging Face or GitHub HTTPS URLs");
   return url.toString();
 }
 
-async function installLocalModel(body, update) {
+function modelDownloadUrl(body) {
+  const repo = String(body?.repo || "").trim();
+  const filename = String(body?.filename || "").trim();
+  const revision = String(body?.revision || "main").trim();
+  if (repo || filename) {
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) throw new Error("Hugging Face repo must use owner/repository format");
+    if (!filename || filename.startsWith("/") || filename.split("/").some((part) => !part || part === "." || part === "..")) throw new Error("A safe GGUF filename is required");
+    if (!/^[A-Za-z0-9._/-]+$/.test(revision) || revision.includes("..")) throw new Error("Invalid Hugging Face revision");
+    const encodedFile = filename.split("/").map(encodeURIComponent).join("/");
+    return validateModelUrl(`https://huggingface.co/${repo}/resolve/${revision}/${encodedFile}?download=true`);
+  }
+  return validateModelUrl(body?.url || "");
+}
+
+async function listHuggingFaceGgufFiles(body) {
+  const repo = String(body?.repo || "").trim();
+  const revision = String(body?.revision || "main").trim();
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) throw new Error("Hugging Face repo must use owner/repository format");
+  if (!/^[A-Za-z0-9._/-]+$/.test(revision) || revision.includes("..")) throw new Error("Invalid Hugging Face revision");
+  const response = await fetch(`https://huggingface.co/api/models/${repo}/tree/${encodeURIComponent(revision)}?recursive=true&expand=false`, {
+    headers: { "user-agent": "openhands-host-model-manager" },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error(`Hugging Face repository lookup failed with HTTP ${response.status}`);
+  const entries = await response.json();
+  const files = (Array.isArray(entries) ? entries : []).filter((item) => item?.type === "file" && /\.gguf$/i.test(String(item.path || ""))).map((item) => ({
+    filename: String(item.path),
+    bytes: Number(item.size || item.lfs?.size || 0) || null,
+    sha256: /^[a-f0-9]{64}$/i.test(String(item.lfs?.oid || "")) ? String(item.lfs.oid).toLowerCase() : null,
+  })).slice(0, 500);
+  return { repo, revision, files, count: files.length };
+}
+
+function readGgufHeader(file) {
+  const descriptor = fs.openSync(file, "r");
+  const header = Buffer.alloc(24);
+  let bytesRead = 0;
+  try { bytesRead = fs.readSync(descriptor, header, 0, header.length, 0); }
+  finally { fs.closeSync(descriptor); }
+  if (bytesRead < header.length || header.subarray(0, 4).toString("ascii") !== "GGUF") throw new Error("Downloaded file is not a valid GGUF model");
+  const version = header.readUInt32LE(4);
+  if (version < 2 || version > 3) throw new Error(`Unsupported GGUF version ${version}`);
+  return { version, tensorCount: header.readBigUInt64LE(8).toString(), metadataCount: header.readBigUInt64LE(16).toString() };
+}
+
+async function installLocalModel(body, update, signal = null) {
   const name = slug(body?.name, "");
   if (!name || name.length > 48) throw new Error("A valid model name is required");
-  const url = validateModelUrl(body?.url || "");
+  const url = modelDownloadUrl(body);
   const sha256 = String(body?.sha256 || "").trim().toLowerCase();
   if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error("SHA-256 must contain 64 hexadecimal characters");
-  const contextLength = Math.max(512, Math.min(Number(body?.contextLength) || 8192, 1048576));
-  await ensureLlamaRuntime(update);
-  const destination = path.join(modelsDir, `${name}.gguf`);
-  if (fs.existsSync(destination)) throw new Error(`Local model ${name} is already installed`);
-  update({ message: `Downloading ${name}.gguf…`, progress: 1 });
-  const downloaded = await downloadFile(url, destination, update, sha256);
-  const descriptor = fs.openSync(destination, "r");
-  const magic = Buffer.alloc(4);
-  try { fs.readSync(descriptor, magic, 0, 4, 0); } finally { fs.closeSync(descriptor); }
-  if (magic.toString("ascii") !== "GGUF") {
-    fs.rmSync(destination, { force: true });
-    throw new Error("Downloaded file is not a GGUF model");
-  }
+  const options = localModelOptions(body);
+  const replace = body?.replace === true;
   const registry = loadRegistry();
-  registry.models.push({ name, filename: `${name}.gguf`, file: destination, sha256: downloaded.sha256, bytes: downloaded.bytes, contextLength, installedAt: new Date().toISOString() });
+  const existingIndex = registry.models.findIndex((model) => model.name === name);
+  const destination = path.join(modelsDir, `${name}.gguf`);
+  if ((existingIndex >= 0 || fs.existsSync(destination)) && !replace) throw new Error(`Local model ${name} already exists; enable replace to reinstall it`);
+  if (localModelName === name && localModelProcess?.exitCode === null) throw new Error("Stop the running model before replacing it");
+  if (replace) fs.rmSync(destination, { force: true });
+  const partialMetadataFile = `${destination}.part.json`;
+  const partialMetadata = readJson(partialMetadataFile, {});
+  if (fs.existsSync(`${destination}.part`) && partialMetadata.url !== url) fs.rmSync(`${destination}.part`, { force: true });
+  atomicJson(partialMetadataFile, { url, expectedSha256: sha256 || null, updatedAt: new Date().toISOString() });
+  await ensureLlamaRuntime(update, signal);
+  update({ message: `Downloading ${name}.gguf (safe resume enabled)…`, progress: 1 });
+  const downloaded = await downloadFile(url, destination, update, sha256, 20 * 1024 ** 3, signal);
+  fs.rmSync(partialMetadataFile, { force: true });
+  let gguf;
+  try { gguf = readGgufHeader(destination); }
+  catch (error) { fs.rmSync(destination, { force: true }); throw error; }
+  const descriptor = {
+    name,
+    filename: `${name}.gguf`,
+    file: destination,
+    source: url,
+    sha256: downloaded.sha256,
+    bytes: downloaded.bytes,
+    gguf,
+    ...options,
+    installedAt: new Date().toISOString(),
+  };
+  if (existingIndex >= 0) registry.models[existingIndex] = descriptor;
+  else registry.models.push(descriptor);
   saveRegistry(registry);
-  await ensureLocalProfile(name, contextLength);
-  return { name, sha256: downloaded.sha256, bytes: downloaded.bytes };
+  await ensureLocalProfile(name, options.contextLength);
+  return { name, sha256: downloaded.sha256, bytes: downloaded.bytes, resumed: downloaded.resumed, gguf, options };
 }
 
 async function ensureLocalProfile(name, contextLength) {
   const list = await backendRequest("/api/profiles");
   const profileName = `local-${name}`.slice(0, 64);
-  if ((list?.profiles || []).some((profile) => profile.name === profileName)) return profileName;
+  const existing = (list?.profiles || []).some((profile) => profile.name === profileName);
+  if (existing) {
+    const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`);
+    if (detail.config?.model !== `openai/${name}`) throw new Error(`Profile ${profileName} already belongs to another model`);
+    await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
+      method: "POST",
+      body: JSON.stringify({
+        llm: { ...detail.config, api_key: undefined, max_input_tokens: contextLength, max_output_tokens: Math.min(8192, Math.floor(contextLength / 2)) },
+        include_secrets: false,
+      }),
+    });
+    return profileName;
+  }
   const displayName = `Local llama.cpp: ${name}`;
-  const connections = await backendRequest("/api/llm/provider-connections");
+  const connectionsResponse = await backendRequest("/api/llm/provider-connections");
+  const connections = Array.isArray(connectionsResponse) ? connectionsResponse : (connectionsResponse?.connections || []);
   let connection = connections.find((item) => item.provider === "openai" && item.display_name === displayName);
   if (!connection) {
     connection = await backendRequest("/api/llm/provider-connections", {
@@ -815,32 +1011,101 @@ async function ensureLocalProfile(name, contextLength) {
   return profileName;
 }
 
-function stopLocalModel() {
-  return new Promise((resolve) => {
-    if (!localModelProcess || localModelProcess.exitCode !== null) { localModelProcess = null; localModelName = null; localModelReady = false; resolve(); return; }
-    const child = localModelProcess;
-    const timer = setTimeout(() => child.kill("SIGKILL"), 8000);
-    child.once("exit", () => { clearTimeout(timer); localModelProcess = null; localModelName = null; localModelReady = false; resolve(); });
+async function stopLocalModel() {
+  if (!localModelProcess || localModelProcess.exitCode !== null) {
+    localModelProcess = null; localModelName = null; localModelReady = false; localModelStartedAt = null;
+    return { stopped: true };
+  }
+  const child = localModelProcess;
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10000);
+    child.once("exit", () => { clearTimeout(timer); resolve(); });
     child.kill("SIGTERM");
   });
+  return { stopped: true };
+}
+
+async function updateLocalModel(name, body) {
+  const registry = loadRegistry();
+  const index = registry.models.findIndex((item) => item.name === name);
+  if (index < 0) throw new Error("Local model was not found");
+  if (localModelName === name && localModelProcess?.exitCode === null) throw new Error("Stop the model before changing runtime settings");
+  const options = localModelOptions({ ...registry.models[index], ...body });
+  registry.models[index] = { ...registry.models[index], ...options, updatedAt: new Date().toISOString() };
+  saveRegistry(registry);
+  await ensureLocalProfile(name, options.contextLength);
+  return { name, options };
+}
+
+async function deleteLocalModel(name) {
+  const registry = loadRegistry();
+  const index = registry.models.findIndex((item) => item.name === name);
+  if (index < 0) throw new Error("Local model was not found");
+  if (localModelName === name && localModelProcess?.exitCode === null) await stopLocalModel();
+  const model = registry.models[index];
+  const modelFile = managedModelPath(model);
+  fs.rmSync(modelFile, { force: true });
+  fs.rmSync(`${modelFile}.part`, { force: true });
+  fs.rmSync(`${modelFile}.part.json`, { force: true });
+  registry.models.splice(index, 1);
+  if (registry.active === name) registry.active = null;
+  saveRegistry(registry);
+  const profileName = `local-${name}`.slice(0, 64);
+  try {
+    const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`);
+    if (detail.config?.model === `openai/${name}`) await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, { method: "DELETE" });
+  } catch (error) {
+    if (!/OpenHands API 404/.test(String(error))) throw error;
+  }
+  return { deleted: name };
 }
 
 async function startLocalModel(name) {
   const registry = loadRegistry();
   const model = registry.models.find((item) => item.name === name);
-  if (!model || !fs.existsSync(model.file)) throw new Error("The selected local model is not installed");
+  if (!model) throw new Error("The selected local model is not installed");
+  const modelFile = managedModelPath(model);
+  if (!fs.existsSync(modelFile)) throw new Error("The selected local model file is missing");
   if (!fs.existsSync(llamaServerLink)) throw new Error("llama.cpp is not installed");
   await stopLocalModel();
+  const options = localModelOptions(model);
+  if (options.mlock && Number(model.bytes || 0) + 512 * 1024 ** 2 > os.freemem()) {
+    throw new Error("mlock was requested but free RAM is smaller than the model plus a 512 MiB safety reserve");
+  }
   if (fs.existsSync(localLogFile) && fs.statSync(localLogFile).size > 5 * 1024 * 1024) fs.renameSync(localLogFile, `${localLogFile}.old`);
   const log = fs.createWriteStream(localLogFile, { flags: "a", mode: 0o600 });
-  const args = ["-m", model.file, "--alias", model.name, "--host", "127.0.0.1", "--port", String(localModelPort), "-c", String(model.contextLength || 8192), "--jinja", "--n-gpu-layers", "0"];
+  const args = [
+    "-m", modelFile,
+    "--alias", model.name,
+    "--host", "127.0.0.1",
+    "--port", String(localModelPort),
+    "--ctx-size", String(options.contextLength),
+    "--threads", String(options.threads),
+    "--batch-size", String(options.batchSize),
+    "--ubatch-size", String(options.ubatchSize),
+    "--parallel", String(options.parallel),
+    "--jinja",
+    "--n-gpu-layers", "0",
+    ...(options.mmap ? [] : ["--no-mmap"]),
+    ...(options.mlock ? ["--mlock"] : []),
+  ];
   const child = spawn(llamaServerLink, args, { cwd: workspace, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.pipe(log, { end: false });
   child.stderr.pipe(log, { end: false });
-  child.once("exit", () => { if (localModelProcess === child) { localModelProcess = null; localModelName = null; localModelReady = false; } log.end(); });
+  child.once("error", (error) => {
+    localModelLastExit = { at: new Date().toISOString(), code: null, signal: null, error: publicError(error) };
+    if (localModelProcess === child) { localModelProcess = null; localModelName = null; localModelReady = false; localModelStartedAt = null; }
+    log.end();
+  });
+  child.once("exit", (code, exitSignal) => {
+    localModelLastExit = { at: new Date().toISOString(), code, signal: exitSignal, error: null };
+    if (localModelProcess === child) { localModelProcess = null; localModelName = null; localModelReady = false; localModelStartedAt = null; }
+    log.end();
+  });
   localModelProcess = child;
   localModelName = name;
   localModelReady = false;
+  localModelStartedAt = new Date().toISOString();
   registry.active = name;
   saveRegistry(registry);
   (async () => {
@@ -852,33 +1117,71 @@ async function startLocalModel(name) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   })();
-  return { name, port: localModelPort, status: "starting" };
+  return { name, port: localModelPort, status: "starting", options };
+}
+
+function validateEndpointBase(value) {
+  const baseUrl = String(value || "").trim().replace(/\/$/, "");
+  const parsed = new URL(baseUrl);
+  if (!/^https?:$/.test(parsed.protocol)) throw new Error("Endpoint must use HTTP or HTTPS");
+  const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname.toLowerCase());
+  if (parsed.protocol === "http:" && !loopback) throw new Error("Plain HTTP endpoints are restricted to localhost; use HTTPS for remote endpoints");
+  return baseUrl;
+}
+
+async function probeEndpoint(body) {
+  const baseUrl = validateEndpointBase(body?.baseUrl);
+  const apiKey = String(body?.apiKey || "");
+  const response = await fetch(`${baseUrl}/models`, {
+    headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Endpoint model discovery failed with HTTP ${response.status}: ${publicError(text)}`);
+  let document;
+  try { document = JSON.parse(text); }
+  catch { throw new Error("Endpoint /models response was not JSON"); }
+  const entries = Array.isArray(document?.data) ? document.data : Array.isArray(document?.models) ? document.models : Array.isArray(document) ? document : [];
+  const models = entries.map((item) => typeof item === "string" ? item : firstString(item, ["id", "model", "name"])).filter(Boolean).slice(0, 500);
+  return { ok: true, baseUrl, models, count: models.length };
 }
 
 async function registerEndpoint(body) {
   const name = slug(body?.name, "");
   const model = String(body?.model || "").trim();
-  const baseUrl = String(body?.baseUrl || "").trim().replace(/\/$/, "");
-  if (!name || !model || !baseUrl) throw new Error("Name, model, and base URL are required");
-  const parsed = new URL(baseUrl);
-  if (!/^https?:$/.test(parsed.protocol)) throw new Error("Endpoint must use HTTP or HTTPS");
+  const baseUrl = validateEndpointBase(body?.baseUrl);
+  if (!name || !model) throw new Error("Name and model are required");
+  const apiKey = String(body?.apiKey || "");
+  const probe = body?.verify === false ? null : await probeEndpoint({ baseUrl, apiKey });
+  if (probe?.models.length && !probe.models.includes(model) && !probe.models.includes(model.replace(/^openai\//, ""))) {
+    throw new Error(`Model ${model} was not advertised by the endpoint`);
+  }
   const list = await backendRequest("/api/profiles");
   const profileName = `local-${name}`.slice(0, 64);
   if ((list?.profiles || []).some((profile) => profile.name === profileName)) throw new Error(`Profile ${profileName} already exists`);
-  const apiKey = String(body?.apiKey || "") || "local-no-key";
   const connection = await backendRequest("/api/llm/provider-connections", {
     method: "POST",
-    body: JSON.stringify({ display_name: `Local endpoint: ${name}`, provider: "openai", api_key: apiKey, base_url: baseUrl }),
+    body: JSON.stringify({ display_name: `Local endpoint: ${name}`, provider: "openai", api_key: apiKey || "local-no-key", base_url: baseUrl }),
   });
   const connectionId = connection.id;
+  const contextLength = localModelOptions(body).contextLength;
   await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
     method: "POST",
     body: JSON.stringify({
-      llm: { model: model.includes("/") ? model : `openai/${model}`, base_url: baseUrl, ...(connectionId ? { provider_connection_id: connectionId } : {}), native_tool_calling: body?.nativeToolCalling !== false, api_mode: "chat", drop_params: true },
+      llm: {
+        model: model.includes("/") ? model : `openai/${model}`,
+        base_url: baseUrl,
+        ...(connectionId ? { provider_connection_id: connectionId } : {}),
+        max_input_tokens: contextLength,
+        max_output_tokens: Math.min(8192, Math.floor(contextLength / 2)),
+        native_tool_calling: body?.nativeToolCalling !== false,
+        api_mode: "chat",
+        drop_params: true,
+      },
       include_secrets: false,
     }),
   });
-  return { profileName, connectionId };
+  return { profileName, connectionId, probe };
 }
 
 function filterProxyHeaders(headers) {
@@ -991,7 +1294,7 @@ async function applyRoute(body) {
       connectionsUpdated.push(connection.id);
     }
   }
-  for (const name of names.slice(0, 50)) {
+  for (const name of names) {
     const detail = await backendRequest(`/api/profiles/${encodeURIComponent(name)}`);
     if (detail.api_key_set && !detail.config?.provider_connection_id) { skipped.push({ name, reason: "inline API key is protected; migrate it to a Provider Connection first" }); continue; }
     const llm = { ...detail.config, api_key: undefined, base_url: adapter };
@@ -1006,23 +1309,39 @@ function managerPage() {
   const home = `${basePath || ""}/`;
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>مدیریت مدل‌های OpenHands</title><style>
 :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#07111f;color:#e5eefb}body{max-width:1100px;margin:auto;padding:22px}a{color:#7dd3fc}.top{display:flex;align-items:center;justify-content:space-between;gap:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}.card{background:#111d2e;border:1px solid #29405f;border-radius:14px;padding:18px;margin:14px 0}h1{font-size:1.55rem}h2{font-size:1.12rem;margin-top:0}label{display:block;margin:.65rem 0 .25rem}input,select,textarea,button{box-sizing:border-box;width:100%;padding:.72rem;border-radius:8px;border:1px solid #49627f;background:#081321;color:#fff}button{background:#0ea5e9;border:0;font-weight:700;cursor:pointer;margin-top:.65rem}button.alt{background:#334155}button.warn{background:#c2410c}.row{display:flex;gap:8px}.row>*{flex:1}.muted{color:#9fb0c5;font-size:.9rem}.ok{color:#86efac}.err{color:#fca5a5}pre{white-space:pre-wrap;word-break:break-word;background:#050b14;padding:12px;border-radius:8px;max-height:360px;overflow:auto}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:7px;border-bottom:1px solid #29405f;text-align:right}.ltr{direction:ltr;text-align:left}input[type=checkbox]{width:auto}.status{min-height:1.4rem}</style></head><body>
-<div class="top"><h1>مدیریت ارائه‌دهنده‌ها و مدل‌ها</h1><a href="${home}">بازگشت به OpenHands</a></div><p class="muted">این صفحه فقط پس از Pair شدن مرورگر کار می‌کند. کلیدها در URL، export یا log قرار نمی‌گیرند.</p><div id="auth" class="status"></div>
+<div class="top"><h1>مدیریت ارائه‌دهنده‌ها و مدل‌ها</h1><a href="${home}">بازگشت به OpenHands</a></div><p class="muted">این صفحه فقط پس از Pair شدن مرورگر کار می‌کند. کلیدها در URL، export یا log قرار نمی‌گیرند.</p><div id="auth" class="status"></div><div id="profile-limit" class="ok"></div>
 <div class="grid"><section class="card"><h2>Import / Export JSON</h2><input id="file" type="file" accept="application/json,.json"><label><input id="secrets" type="checkbox"> درون‌ریزی API keyهای داخل فایل در Provider Connections رمزنگاری‌شده</label><label><input id="overwrite" type="checkbox"> به‌روزرسانی Profileهای هم‌نام؛ Profile دارای inline key هرگز overwrite نمی‌شود</label><button id="import">درون‌ریزی</button><button class="alt" id="export">برون‌ریزی امن بدون secret</button><div id="io-status" class="status"></div></section>
 <section class="card"><h2>Proxy server</h2><p class="muted">در حالت Proxy، سرویس واسط درخواست، محتوای prompt و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند. فقط از Proxy مورد اعتماد استفاده کنید.</p><label>حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select><label>URL template</label><input id="template" class="ltr"><button id="save-proxy">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter">اعمال Route روی همه مدل‌های OpenRouter</button><div id="routes"></div><div id="proxy-status" class="status"></div></section></div>
 <section class="card"><h2>LLM Profileهای موجود</h2><p class="muted">مدل‌های شناسایی‌شده یا درون‌ریزی‌شده در این فهرست نمایش داده می‌شوند. برای مشاهده مدل جدید در Canvas، پس از درون‌ریزی صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles"></div></section>
 <section class="card"><h2>تست جمعی مدل‌ها</h2><p class="muted">برای هر LLM Profile یک درخواست حداکثر دو توکنی ارسال می‌شود و می‌تواند هزینه ناچیزی ایجاد کند.</p><button id="test">تست همه Profileها</button><div id="test-status" class="status"></div><div id="results"></div></section>
-<div class="grid"><section class="card"><h2>نصب مدل GGUF با llama.cpp</h2><label>نام کوتاه</label><input id="gguf-name" placeholder="qwen-small"><label>لینک HTTPS فایل GGUF از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" placeholder="https://huggingface.co/.../model.gguf"><label>SHA-256 اختیاری</label><input id="gguf-sha" class="ltr"><label>Context length</label><input id="gguf-context" type="number" value="8192" min="512"><button id="install">دانلود و نصب</button><div id="install-status" class="status"></div><div id="locals"></div></section>
-<section class="card"><h2>ثبت endpoint لوکال موجود</h2><label>نام</label><input id="ep-name" placeholder="ollama"><label>Base URL سازگار با OpenAI</label><input id="ep-url" class="ltr" placeholder="http://127.0.0.1:11434/v1"><label>Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"><label>API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"><button id="endpoint">ساخت LLM Profile</button><div id="endpoint-status" class="status"></div></section></div>
-<pre id="log"></pre><script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null;try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}q("auth").textContent=key?"مرورگر احراز هویت شده است.":"ابتدا openhands-host pair را اجرا و مرورگر را Pair کنید.";q("auth").className=key?"ok":"err";
+<div class="grid"><section class="card"><h2>مدیریت پیشرفته GGUF و llama.cpp</h2><p class="muted">دانلودها قابل ادامه هستند و فایل ناقص پس از قطع یا لغو نگه‌داری می‌شود. URL مستقیم یا مشخصات مخزن Hugging Face را وارد کنید.</p><div id="resources" class="muted"></div><label>نام کوتاه</label><input id="gguf-name" placeholder="qwen-small"><label>URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" placeholder="https://huggingface.co/.../resolve/main/model.gguf"><label>یا Hugging Face repo</label><input id="gguf-repo" class="ltr" placeholder="Qwen/Qwen3-GGUF"><div class="row"><div><label>نام فایل GGUF</label><input id="gguf-file" class="ltr" placeholder="model-Q4_K_M.gguf"></div><div><label>Revision</label><input id="gguf-revision" class="ltr" value="main"></div></div><button id="hf-files" class="alt">نمایش GGUFهای مخزن</button><div id="hf-results"></div><label>SHA-256 اختیاری</label><input id="gguf-sha" class="ltr"><div class="row"><div><label>Context</label><input id="gguf-context" type="number" value="8192" min="512"></div><div><label>CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div><label>Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div></div><div class="row"><div><label>Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div><label>Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label><input id="gguf-mmap" type="checkbox" checked> استفاده از mmap برای کاهش مصرف RAM</label><label><input id="gguf-mlock" type="checkbox"> قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</label><label><input id="gguf-replace" type="checkbox"> نصب مجدد و جایگزینی مدل هم‌نام</label><button id="install">دانلود/ادامه دانلود و نصب</button><button id="save-local-config" class="alt">ذخیره تنظیمات مدل نصب‌شده</button><button id="stop-local" class="alt">توقف مدل درحال اجرا</button><button id="cancel-install" class="warn" disabled>لغو امن دانلود</button><div id="install-status" class="status"></div><div id="locals"></div></section>
+<section class="card"><h2>endpoint سازگار با OpenAI</h2><p class="muted">پیش از ثبت، مسیر <code>/models</code> بررسی می‌شود. HTTP فقط برای localhost مجاز است؛ endpoint راه‌دور باید HTTPS باشد.</p><label>نام</label><input id="ep-name" placeholder="ollama"><label>Base URL</label><input id="ep-url" class="ltr" placeholder="http://127.0.0.1:11434/v1"><label>Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"><label>Context length</label><input id="ep-context" type="number" value="8192" min="512"><label>API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"><label><input id="ep-tools" type="checkbox" checked> Native tool calling</label><button class="alt" id="probe-endpoint">کشف و تست مدل‌ها</button><button id="endpoint">تست و ساخت LLM Profile</button><div id="endpoint-status" class="status"></div><div id="endpoint-models"></div></section></div>
+<pre id="log"></pre><script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null,currentInstallJob="",hfFiles=[];try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}q("auth").textContent=key?"مرورگر احراز هویت شده است.":"ابتدا openhands-host pair را اجرا و مرورگر را Pair کنید.";q("auth").className=key?"ok":"err";
 async function call(p,o={}){if(!key)throw Error("مرورگر Pair نشده است");const r=await fetch(API+p,{...o,headers:{"X-Session-API-Key":key,...(o.body?{"content-type":"application/json"}:{}),...(o.headers||{})}});const t=await r.text();let d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.error||t||("HTTP "+r.status));return d}function show(id,msg,ok=true){q(id).textContent=msg;q(id).className=ok?"status ok":"status err"}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>c.charCodeAt(0)===34?"&quot;":({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;"}[c]))}
-async function refresh(){const s=await call("/status");state=s;q("log").textContent=s.local.logTail||"";q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";q("profiles").innerHTML=s.profiles.length?"<table><tr><th>نام Profile</th><th>Model ID</th></tr>"+s.profiles.map(p=>"<tr><td class=ltr>"+esc(p.name)+"</td><td class=ltr>"+esc(p.model||"")+"</td></tr>").join("")+"</table>":"<p class=muted>هیچ LLM Profile ثبت نشده است.</p>";q("locals").innerHTML=s.local.models.length?"<table><tr><th>مدل</th><th>حجم</th><th></th></tr>"+s.local.models.map(m=>"<tr><td>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✓":" ⏳"):"")+"</td><td>"+(Number(m.bytes||0)/1073741824).toFixed(2)+" GB</td><td><button data-start="+esc(m.name)+">اجرا</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>";document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});refresh()})}
+function bytes(n){if(n==null)return "نامشخص";const u=["B","KiB","MiB","GiB","TiB"];let v=Number(n),i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(i?2:0)+" "+u[i]}
+function localOptions(){return {contextLength:Number(q("gguf-context").value),threads:Number(q("gguf-threads").value),parallel:Number(q("gguf-parallel").value),batchSize:Number(q("gguf-batch").value),ubatchSize:Number(q("gguf-ubatch").value),mmap:q("gguf-mmap").checked,mlock:q("gguf-mlock").checked}}
+function loadLocalForm(m){q("gguf-name").value=m.name;q("gguf-context").value=m.contextLength;q("gguf-threads").value=m.threads;q("gguf-parallel").value=m.parallel;q("gguf-batch").value=m.batchSize;q("gguf-ubatch").value=m.ubatchSize;q("gguf-mmap").checked=m.mmap!==false;q("gguf-mlock").checked=m.mlock===true;show("install-status","تنظیمات "+m.name+" برای ویرایش بارگذاری شد.")}
+async function refresh(){
+ const s=await call("/status");state=s;q("log").textContent=s.local.logTail||"";q("profile-limit").textContent=s.profileLimit===null?"✓ محدودیت تعداد LLM Profile در این نصب برداشته شده است.":"سقف Profile: "+s.profileLimit;q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";
+ const r=s.local.resources;q("resources").textContent="CPU: "+r.cpuCount+" رشته | RAM آزاد: "+bytes(r.freeMemoryBytes)+" از "+bytes(r.totalMemoryBytes)+" | فضای آزاد: "+bytes(r.freeBytes)+(s.local.runtimeInstalled?" | llama.cpp نصب است":" | llama.cpp هنگام اولین نصب دریافت می‌شود");if(document.activeElement!==q("gguf-threads")&&q("gguf-threads").value==="1")q("gguf-threads").value=Math.max(1,Math.ceil(r.cpuCount*.75));
+ q("profiles").innerHTML=s.profiles.length?"<table><tr><th>نام Profile</th><th>Model ID</th></tr>"+s.profiles.map(p=>"<tr><td class=ltr>"+esc(p.name)+"</td><td class=ltr>"+esc(p.model||"")+"</td></tr>").join("")+"</table>":"<p class=muted>هیچ LLM Profile ثبت نشده است.</p>";
+ const partials=s.local.partialDownloads.length?"<p class=muted>دانلودهای قابل ادامه: "+s.local.partialDownloads.map(p=>esc(p.name)+" ("+bytes(p.bytes)+")").join("، ")+"</p>":"";q("locals").innerHTML=partials+(s.local.models.length?"<table><tr><th>مدل</th><th>حجم/نسخه</th><th>تنظیمات</th><th>عملیات</th></tr>"+s.local.models.map(m=>"<tr><td class=ltr>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✅":" ⏳"):"")+(m.partialBytes?"<br><small>دانلود ناقص: "+bytes(m.partialBytes)+"</small>":"")+"</td><td>"+bytes(m.bytes)+"<br>GGUF v"+esc(m.gguf?.version||"?")+"</td><td>ctx "+esc(m.contextLength)+"<br>threads "+esc(m.threads)+" / batch "+esc(m.batchSize)+"</td><td><button data-start="+esc(m.name)+">اجرا</button><button class=alt data-edit="+esc(m.name)+">تنظیم</button><button class=warn data-delete="+esc(m.name)+">حذف</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>");
+ document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{try{show("install-status","در حال اجرای مدل…");await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});await refresh()}catch(e){show("install-status",e.message,false)}});document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>loadLocalForm(s.local.models.find(m=>m.name===b.dataset.edit)));document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=async()=>{if(!confirm("مدل "+b.dataset.delete+"، فایل GGUF و Profile مدیریت‌شده آن حذف شود؟"))return;try{await call("/local/models/"+encodeURIComponent(b.dataset.delete),{method:"DELETE"});show("install-status","مدل حذف شد.");await refresh()}catch(e){show("install-status",e.message,false)}})
+}
 q("import").onclick=async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,importSecrets:q("secrets").checked,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ اتصال جدید: "+r.connectionsCreated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}};
 q("export").onclick=async()=>{try{const d=await call("/providers/export");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:"application/json"}));a.download="openhands-providers.json";a.click();URL.revokeObjectURL(a.href);show("io-status","فایل امن بدون API key ساخته شد.")}catch(e){show("io-status",e.message,false)}};
 q("save-proxy").onclick=async()=>{try{await call("/proxy",{method:"PUT",body:JSON.stringify({defaultMode:q("mode").value,proxyTemplate:q("template").value})});show("proxy-status","ذخیره شد؛ Routeهای موجود نیز به حالت جدید تغییر کردند.");refresh()}catch(e){show("proxy-status",e.message,false)}};
 q("apply-openrouter").onclick=async()=>{try{if(!state)await refresh();const profiles=(state?.profiles||[]).filter(p=>String(p.model||"").startsWith("openrouter/")).map(p=>p.name);const r=await call("/proxy/apply",{method:"POST",body:JSON.stringify({routeId:"openrouter",basePath:"/api/v1",provider:"openrouter",profiles})});show("proxy-status",r.updated.length+" Profile و "+r.connectionsUpdated.length+" اتصال به Route متصل شد؛ "+r.skipped.length+" مورد رد شد.");refresh()}catch(e){show("proxy-status",e.message,false)}};
 q("test").onclick=async()=>{try{show("test-status","در حال تست؛ این کار ممکن است چند دقیقه طول بکشد…");const d=await call("/profiles/test",{method:"POST",body:JSON.stringify({concurrency:3})});show("test-status",d.tested+" مدل تست شد؛ "+d.results.filter(x=>x.ok).length+" موفق.");q("results").innerHTML="<table><tr><th>Profile</th><th>نتیجه</th><th>زمان</th><th>خطا</th></tr>"+d.results.map(x=>"<tr><td class=ltr>"+esc(x.name)+"</td><td>"+(x.ok?"✅":"❌")+"</td><td>"+esc(x.latencyMs)+" ms</td><td>"+esc(x.error?.message||"")+"</td></tr>").join("")+"</table>"}catch(e){show("test-status",e.message,false)}};
-q("install").onclick=async()=>{try{const d=await call("/local/install",{method:"POST",body:JSON.stringify({name:q("gguf-name").value,url:q("gguf-url").value,sha256:q("gguf-sha").value,contextLength:Number(q("gguf-context").value)})});show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId);show("install-status",j.status+": "+(j.message||"")+" "+(j.progress||0)+"%",j.status!=="failed");if(["completed","failed"].includes(j.status)){clearInterval(timer);refresh()}}catch(e){clearInterval(timer);show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
-q("endpoint").onclick=async()=>{try{const d=await call("/local/register-endpoint",{method:"POST",body:JSON.stringify({name:q("ep-name").value,baseUrl:q("ep-url").value,model:q("ep-model").value,apiKey:q("ep-key").value})});q("ep-key").value="";show("endpoint-status","Profile "+d.profileName+" ساخته شد.")}catch(e){show("endpoint-status",e.message,false)}};refresh().catch(e=>show("auth",e.message,false));})();</script></body></html>`;
+q("hf-files").onclick=async()=>{try{show("install-status","در حال خواندن فهرست مخزن…");const d=await call("/local/hf-files",{method:"POST",body:JSON.stringify({repo:q("gguf-repo").value,revision:q("gguf-revision").value})});hfFiles=d.files;show("install-status",d.count+" فایل GGUF پیدا شد.");q("hf-results").innerHTML=d.files.length?"<table><tr><th>فایل</th><th>حجم</th><th></th></tr>"+d.files.map((f,i)=>"<tr><td class=ltr>"+esc(f.filename)+"</td><td>"+bytes(f.bytes)+"</td><td><button data-hf="+i+">انتخاب</button></td></tr>").join("")+"</table>":"<p class=muted>فایل GGUF عمومی پیدا نشد.</p>";document.querySelectorAll("[data-hf]").forEach(b=>b.onclick=()=>{const f=hfFiles[Number(b.dataset.hf)];q("gguf-file").value=f.filename;if(f.sha256)q("gguf-sha").value=f.sha256;show("install-status","فایل "+f.filename+" انتخاب شد.")})}catch(e){show("install-status",e.message,false)}};
+q("install").onclick=async()=>{try{const payload={name:q("gguf-name").value,url:q("gguf-url").value,repo:q("gguf-repo").value,filename:q("gguf-file").value,revision:q("gguf-revision").value,sha256:q("gguf-sha").value,replace:q("gguf-replace").checked,...localOptions()};const d=await call("/local/install",{method:"POST",body:JSON.stringify(payload)});currentInstallJob=d.jobId;q("cancel-install").disabled=false;show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId);show("install-status",j.status+": "+(j.message||"")+" "+(j.progress||0)+"%"+(j.bytesReceived?" — "+bytes(j.bytesReceived)+(j.bytesTotal?" / "+bytes(j.bytesTotal):""):""),!["failed","cancelled"].includes(j.status));if(["completed","failed","cancelled"].includes(j.status)){clearInterval(timer);currentInstallJob="";q("cancel-install").disabled=true;await refresh()}}catch(e){clearInterval(timer);currentInstallJob="";q("cancel-install").disabled=true;show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
+q("cancel-install").onclick=async()=>{if(!currentInstallJob)return;try{await call("/jobs/"+currentInstallJob+"/cancel",{method:"POST"});show("install-status","در حال لغو امن؛ فایل ناقص برای ادامه بعدی حفظ می‌شود…")}catch(e){show("install-status",e.message,false)}};
+q("save-local-config").onclick=async()=>{try{const name=q("gguf-name").value;if(!name)throw Error("ابتدا یک مدل نصب‌شده را از دکمه تنظیم انتخاب کنید");await call("/local/models/"+encodeURIComponent(name),{method:"PUT",body:JSON.stringify(localOptions())});show("install-status","تنظیمات ذخیره شد.");await refresh()}catch(e){show("install-status",e.message,false)}};
+q("stop-local").onclick=async()=>{try{await call("/local/stop",{method:"POST",body:"{}"});show("install-status","مدل متوقف شد.");await refresh()}catch(e){show("install-status",e.message,false)}};
+function endpointPayload(){return {name:q("ep-name").value,baseUrl:q("ep-url").value,model:q("ep-model").value,apiKey:q("ep-key").value,contextLength:Number(q("ep-context").value),nativeToolCalling:q("ep-tools").checked}}
+q("probe-endpoint").onclick=async()=>{try{show("endpoint-status","در حال بررسی /models…");const d=await call("/local/probe-endpoint",{method:"POST",body:JSON.stringify(endpointPayload())});show("endpoint-status","endpoint سالم است؛ "+d.count+" مدل پیدا شد.");q("endpoint-models").innerHTML=d.models.length?"<p class=muted>"+d.models.map(esc).join("، ")+"</p>":"<p class=muted>پاسخ معتبر بود اما فهرست مدل خالی است.</p>"}catch(e){show("endpoint-status",e.message,false)}};
+q("endpoint").onclick=async()=>{try{const d=await call("/local/register-endpoint",{method:"POST",body:JSON.stringify(endpointPayload())});q("ep-key").value="";show("endpoint-status","Profile "+d.profileName+" پس از تست endpoint ساخته شد.");await refresh()}catch(e){show("endpoint-status",e.message,false)}};
+refresh().catch(e=>show("auth",e.message,false));})();</script></body></html>`;
 }
 
 async function handleApi(req, res, pathname) {
@@ -1030,7 +1349,7 @@ async function handleApi(req, res, pathname) {
   const endpoint = pathname.slice(apiPrefix.length) || "/";
   if (req.method === "GET" && endpoint === "/status") {
     const profiles = await backendRequest("/api/profiles");
-    sendJson(res, 200, { proxy: loadConfig(), local: localStatus(), profiles: profiles?.profiles || [], jobs: [...jobs.values()].slice(-20) });
+    sendJson(res, 200, { profileLimit: null, proxy: loadConfig(), local: localStatus(), profiles: profiles?.profiles || [], jobs: [...jobs.values()].slice(-20) });
     return;
   }
   if (req.method === "POST" && endpoint === "/providers/import") { sendJson(res, 200, await importProviders(await readBody(req))); return; }
@@ -1048,10 +1367,12 @@ async function handleApi(req, res, pathname) {
   }
   if (req.method === "POST" && endpoint === "/proxy/apply") { sendJson(res, 200, await applyRoute(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/profiles/test") { sendJson(res, 200, await testProfiles(await readBody(req))); return; }
+  if (req.method === "GET" && endpoint === "/local/status") { sendJson(res, 200, localStatus()); return; }
+  if (req.method === "POST" && endpoint === "/local/hf-files") { sendJson(res, 200, await listHuggingFaceGgufFiles(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/local/install") {
-    if ([...jobs.values()].some((job) => job.kind === "local-model-install" && ["queued", "running"].includes(job.status))) throw new Error("A local model installation is already running");
+    if ([...jobs.values()].some((job) => job.kind === "local-model-install" && ["queued", "running", "cancelling"].includes(job.status))) throw new Error("A local model installation is already running");
     const body = await readBody(req);
-    const jobId = createJob("local-model-install", (update) => installLocalModel(body, update));
+    const jobId = createJob("local-model-install", (update, signal) => installLocalModel(body, update, signal));
     sendJson(res, 202, { jobId }); return;
   }
   if (req.method === "GET" && endpoint.startsWith("/jobs/")) {
@@ -1059,8 +1380,22 @@ async function handleApi(req, res, pathname) {
     if (!job) { sendJson(res, 404, { error: "Job not found" }); return; }
     sendJson(res, 200, job); return;
   }
+  if (req.method === "POST" && /^\/jobs\/[a-f0-9]{24}\/cancel$/.test(endpoint)) {
+    const id = endpoint.split("/")[2];
+    if (!cancelJob(id)) { sendJson(res, 409, { error: "Job is not running" }); return; }
+    sendJson(res, 202, { id, status: "cancelling" }); return;
+  }
+  if (req.method === "PUT" && endpoint.startsWith("/local/models/")) {
+    const name = slug(decodeURIComponent(endpoint.slice("/local/models/".length)), "");
+    sendJson(res, 200, await updateLocalModel(name, await readBody(req))); return;
+  }
+  if (req.method === "DELETE" && endpoint.startsWith("/local/models/")) {
+    const name = slug(decodeURIComponent(endpoint.slice("/local/models/".length)), "");
+    sendJson(res, 200, await deleteLocalModel(name)); return;
+  }
   if (req.method === "POST" && endpoint === "/local/start") { const body = await readBody(req); sendJson(res, 200, await startLocalModel(String(body.name || ""))); return; }
   if (req.method === "POST" && endpoint === "/local/stop") { await stopLocalModel(); const registry = loadRegistry(); registry.active = null; saveRegistry(registry); sendJson(res, 200, { stopped: true }); return; }
+  if (req.method === "POST" && endpoint === "/local/probe-endpoint") { sendJson(res, 200, await probeEndpoint(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/local/register-endpoint") { sendJson(res, 201, await registerEndpoint(await readBody(req))); return; }
   sendJson(res, 404, { error: "Unknown model-manager API endpoint" });
 }
@@ -1083,6 +1418,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function shutdown() {
+  for (const controller of jobControllers.values()) controller.abort(new Error("Manager shutting down"));
   for (const child of managedSubprocesses) child.kill("SIGTERM");
   await stopLocalModel();
   server.close(() => process.exit(0));

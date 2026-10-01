@@ -67,7 +67,7 @@ async def main() -> int:
     names = payload.get("profiles", []) if isinstance(payload, dict) else []
     if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
         raise ValueError("profiles must be a list of names")
-    names = list(dict.fromkeys(name for name in names if name))[:50]
+    names = list(dict.fromkeys(name for name in names if name))
     concurrency = payload.get("concurrency", 3) if isinstance(payload, dict) else 3
     concurrency = max(1, min(int(concurrency), 5))
     semaphore = asyncio.Semaphore(concurrency)
