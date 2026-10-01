@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.1.0"
+SCRIPT_VERSION="3.2.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -37,7 +37,7 @@ MANAGER_OVERWRITE=false
 MANAGER_NAME=""
 MANAGER_MODEL_URL=""
 MANAGER_SHA256=""
-MANAGER_CONTEXT_LENGTH="8192"
+MANAGER_CONTEXT_LENGTH="16384"
 MANAGER_CONTEXT_SET=false
 MANAGER_THREADS=""
 MANAGER_THREADS_SET=false
@@ -55,6 +55,16 @@ MANAGER_MMAP=true
 MANAGER_MMAP_SET=false
 MANAGER_MLOCK=false
 MANAGER_MLOCK_SET=false
+MANAGER_SEARCH_QUERY=""
+MANAGER_SEARCH_FAMILY=""
+MANAGER_SEARCH_PARAMETER_SIZE=""
+MANAGER_SEARCH_QUANTIZATION=""
+MANAGER_SEARCH_LICENSE=""
+MANAGER_SEARCH_LANGUAGE=""
+MANAGER_SEARCH_AUTHOR=""
+MANAGER_MAX_FILE_SIZE_GB=""
+MANAGER_SEARCH_SORT="downloads"
+MANAGER_SEARCH_LIMIT="20"
 MANAGER_BASE_URL=""
 MANAGER_MODEL=""
 MANAGER_API_KEY_FILE=""
@@ -91,6 +101,7 @@ Actions:
   providers-import Import the compatible provider JSON format (--file PATH).
   test-models      Run a minimal bulk test against every LLM Profile.
   proxy-config     Configure direct/fallback/proxy-only model routing.
+  local-model-search   Search Hugging Face GGUF models by characteristics.
   local-model-discover List GGUF files and hashes in a Hugging Face repository.
   local-model-install  Install/resume a GGUF model with managed llama.cpp.
   local-model-list     Show installed GGUF models and runtime resources.
@@ -127,8 +138,18 @@ Options:
   --hf-repo OWNER/REPO    Hugging Face repository (alternative to --model-url).
   --model-filename PATH   GGUF filename inside --hf-repo.
   --revision REV          Hugging Face revision (default: main).
+  --search TEXT           Hugging Face model-name/keyword search text.
+  --family NAME           Model family or architecture (for example Qwen).
+  --parameter-size SIZE   Parameter size hint (for example 7B or 14B).
+  --quantization NAME     GGUF quantization filename filter (for example Q4_K_M).
+  --license NAME          License tag filter (for example apache-2.0).
+  --language CODE         Language tag filter (for example fa or en).
+  --author NAME           Hugging Face author/organization filter.
+  --max-file-size-gb N    Hide GGUF files larger than this many GiB.
+  --sort FIELD            downloads, likes, or updated (default: downloads).
+  --limit N               Search result limit, 1-50 (default: 20).
   --sha256 HEX            Optional expected GGUF SHA-256.
-  --context-length N      Local model context length (default: 8192).
+  --context-length N      Local model context length (minimum/default: 16384).
   --threads N             llama.cpp CPU threads (default: auto).
   --batch-size N          llama.cpp logical batch size (default: 512).
   --ubatch-size N         llama.cpp physical micro-batch (default: 256).
@@ -167,7 +188,7 @@ EOF
 
 while (($#)); do
     case "$1" in
-        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|models|providers-export|providers-import|test-models|proxy-config|local-model-discover|local-model-install|local-model-list|local-model-config|local-model-start|local-model-stop|local-model-delete|local-endpoint-test|local-endpoint-add|rotate-key|self-update|uninstall|helper-version|_serve)
+        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|models|providers-export|providers-import|test-models|proxy-config|local-model-search|local-model-discover|local-model-install|local-model-list|local-model-config|local-model-start|local-model-stop|local-model-delete|local-endpoint-test|local-endpoint-add|rotate-key|self-update|uninstall|helper-version|_serve)
             [[ "$ACTION_SET" == false ]] || die "More than one action was supplied: $1"
             ACTION="$1"; ACTION_SET=true; shift ;;
         --home)
@@ -229,6 +250,36 @@ while (($#)); do
         --revision)
             (($# >= 2)) || die '--revision requires a value.'
             MANAGER_REVISION="$2"; shift 2 ;;
+        --search)
+            (($# >= 2)) || die '--search requires text.'
+            MANAGER_SEARCH_QUERY="$2"; shift 2 ;;
+        --family)
+            (($# >= 2)) || die '--family requires a value.'
+            MANAGER_SEARCH_FAMILY="$2"; shift 2 ;;
+        --parameter-size)
+            (($# >= 2)) || die '--parameter-size requires a value.'
+            MANAGER_SEARCH_PARAMETER_SIZE="$2"; shift 2 ;;
+        --quantization)
+            (($# >= 2)) || die '--quantization requires a value.'
+            MANAGER_SEARCH_QUANTIZATION="$2"; shift 2 ;;
+        --license)
+            (($# >= 2)) || die '--license requires a value.'
+            MANAGER_SEARCH_LICENSE="$2"; shift 2 ;;
+        --language)
+            (($# >= 2)) || die '--language requires a value.'
+            MANAGER_SEARCH_LANGUAGE="$2"; shift 2 ;;
+        --author)
+            (($# >= 2)) || die '--author requires a value.'
+            MANAGER_SEARCH_AUTHOR="$2"; shift 2 ;;
+        --max-file-size-gb)
+            (($# >= 2)) || die '--max-file-size-gb requires a value.'
+            MANAGER_MAX_FILE_SIZE_GB="$2"; shift 2 ;;
+        --sort)
+            (($# >= 2)) || die '--sort requires a value.'
+            MANAGER_SEARCH_SORT="$2"; shift 2 ;;
+        --limit)
+            (($# >= 2)) || die '--limit requires a value.'
+            MANAGER_SEARCH_LIMIT="$2"; shift 2 ;;
         --sha256)
             (($# >= 2)) || die '--sha256 requires a value.'
             MANAGER_SHA256="$2"; shift 2 ;;
@@ -897,20 +948,24 @@ write_wrapper() {
 }
 
 install_companion() {
-    local filename="$1" destination="$2" source_path="" source_dir="" candidate="" temp=""
+    local filename="$1" destination="$2" source_path="" source_dir="" candidate="" temp="" version_file="${destination}.helper-version" installed_version=""
     source_path="${BASH_SOURCE[0]:-}"
     if [[ "$source_path" != */* ]]; then source_path="$(command -v -- "$source_path" 2>/dev/null || printf '%s' "$source_path")"; fi
     source_dir="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd -P || true)"
     candidate="$source_dir/$filename"
+    installed_version="$(cat "$version_file" 2>/dev/null || true)"
     if [[ -r "$candidate" ]]; then
         cp "$candidate" "$destination"
-    elif [[ ! -s "$destination" ]]; then
+        printf '%s\n' "$SCRIPT_VERSION" > "$version_file"
+    elif [[ ! -s "$destination" || "$installed_version" != "$SCRIPT_VERSION" ]]; then
         temp="$destination.download.$$"
-        secure_curl -o "$temp" "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/$filename"
+        secure_curl -o "$temp" "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/$filename?v=$SCRIPT_VERSION"
         mv -f "$temp" "$destination"
+        printf '%s\n' "$SCRIPT_VERSION" > "$version_file"
     fi
     [[ -s "$destination" ]] || die "OpenHands companion file is missing: $filename"
     chmod 700 "$destination"
+    chmod 600 "$version_file" 2>/dev/null || true
 }
 
 persist_helper() {
@@ -2052,12 +2107,46 @@ PY
     chmod 600 "$payload"; if ! manager_api PUT '/proxy' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
 }
 
+validate_local_search_options() {
+    [[ "$MANAGER_SEARCH_SORT" == downloads || "$MANAGER_SEARCH_SORT" == likes || "$MANAGER_SEARCH_SORT" == updated ]] || \
+        die '--sort must be downloads, likes, or updated.'
+    [[ "$MANAGER_SEARCH_LIMIT" =~ ^[0-9]+$ ]] && ((10#$MANAGER_SEARCH_LIMIT >= 1 && 10#$MANAGER_SEARCH_LIMIT <= 50)) || \
+        die '--limit must be an integer from 1 through 50.'
+    if [[ -n "$MANAGER_MAX_FILE_SIZE_GB" ]]; then
+        python3 - "$MANAGER_MAX_FILE_SIZE_GB" <<'PY' || die '--max-file-size-gb must be a number greater than 0 and at most 20.'
+import math, sys
+try: value = float(sys.argv[1])
+except ValueError: raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and 0 < value <= 20 else 1)
+PY
+    fi
+}
+
+local_model_search_cli() {
+    local payload="$CACHE_DIR/local-model-search.$$"
+    validate_local_search_options
+    SEARCH_QUERY="$MANAGER_SEARCH_QUERY" SEARCH_FAMILY="$MANAGER_SEARCH_FAMILY" SEARCH_PARAMETER_SIZE="$MANAGER_SEARCH_PARAMETER_SIZE" \
+    SEARCH_QUANTIZATION="$MANAGER_SEARCH_QUANTIZATION" SEARCH_LICENSE="$MANAGER_SEARCH_LICENSE" SEARCH_LANGUAGE="$MANAGER_SEARCH_LANGUAGE" \
+    SEARCH_AUTHOR="$MANAGER_SEARCH_AUTHOR" SEARCH_MAX_GB="$MANAGER_MAX_FILE_SIZE_GB" SEARCH_SORT="$MANAGER_SEARCH_SORT" SEARCH_LIMIT="$MANAGER_SEARCH_LIMIT" python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({
+    'query': os.environ['SEARCH_QUERY'], 'family': os.environ['SEARCH_FAMILY'],
+    'parameterSize': os.environ['SEARCH_PARAMETER_SIZE'], 'quantization': os.environ['SEARCH_QUANTIZATION'],
+    'license': os.environ['SEARCH_LICENSE'], 'language': os.environ['SEARCH_LANGUAGE'],
+    'author': os.environ['SEARCH_AUTHOR'], 'maxFileSizeGb': float(os.environ['SEARCH_MAX_GB']) if os.environ['SEARCH_MAX_GB'] else None,
+    'sort': os.environ['SEARCH_SORT'], 'limit': int(os.environ['SEARCH_LIMIT']),
+}))
+PY
+    chmod 600 "$payload"; if ! manager_api POST '/local/hf-search' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
 local_model_discover_cli() {
     local payload="$CACHE_DIR/local-model-discover.$$"
+    validate_local_search_options
     [[ -n "$MANAGER_HF_REPO" ]] || die 'local-model-discover requires --hf-repo OWNER/REPO.'
-    MODEL_REPO="$MANAGER_HF_REPO" MODEL_REVISION="$MANAGER_REVISION" python3 - <<'PY' > "$payload"
+    MODEL_REPO="$MANAGER_HF_REPO" MODEL_REVISION="$MANAGER_REVISION" MODEL_QUANTIZATION="$MANAGER_SEARCH_QUANTIZATION" MODEL_MAX_GB="$MANAGER_MAX_FILE_SIZE_GB" python3 - <<'PY' > "$payload"
 import json, os
-print(json.dumps({'repo': os.environ['MODEL_REPO'], 'revision': os.environ['MODEL_REVISION']}))
+print(json.dumps({'repo': os.environ['MODEL_REPO'], 'revision': os.environ['MODEL_REVISION'], 'quantization': os.environ['MODEL_QUANTIZATION'], 'maxFileSizeGb': float(os.environ['MODEL_MAX_GB']) if os.environ['MODEL_MAX_GB'] else None}))
 PY
     chmod 600 "$payload"; if ! manager_api POST '/local/hf-files' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
 }
@@ -2315,7 +2404,7 @@ refresh_helper() {
     require_command curl
     prepare_dirs
     log 'Checking the canonical helper for an update...'
-    if ! secure_curl "$SELF_URL" -o "$candidate"; then
+    if ! secure_curl "${SELF_URL}?current=${SCRIPT_VERSION}&cachebust=$(date +%s)" -o "$candidate"; then
         warn 'Could not check for a helper update; continuing with this version.'
         rm -f "$candidate"
         return 0
@@ -2445,6 +2534,7 @@ case "$ACTION" in
     providers-import) providers_import_cli ;;
     test-models) test_models_cli ;;
     proxy-config) proxy_config_cli ;;
+    local-model-search) local_model_search_cli ;;
     local-model-discover) local_model_discover_cli ;;
     local-model-install) local_model_install_cli ;;
     local-model-list) local_model_list_cli ;;

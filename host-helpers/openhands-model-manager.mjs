@@ -48,6 +48,7 @@ let localModelStartedAt = null;
 let localModelLastExit = null;
 let profileTestPromise = null;
 
+const MIN_LOCAL_CONTEXT = 16384;
 const DEFAULT_PROXY_TEMPLATE = "https://proxy.fazilat-ma.workers.dev/?url={url}";
 const DEFAULT_CONFIG = {
   version: 1,
@@ -635,7 +636,7 @@ function localModelOptions(source = {}) {
   };
   const batchSize = integer("batchSize", 512, 1, 4096);
   return {
-    contextLength: integer("contextLength", 8192, 512, 1048576),
+    contextLength: integer("contextLength", MIN_LOCAL_CONTEXT, MIN_LOCAL_CONTEXT, 1048576),
     threads: integer("threads", Math.max(1, Math.min(cpuCount, Math.ceil(cpuCount * 0.75))), 1, 256),
     batchSize,
     ubatchSize: Math.min(batchSize, integer("ubatchSize", Math.min(256, batchSize), 1, 4096)),
@@ -892,9 +893,93 @@ function modelDownloadUrl(body) {
   return validateModelUrl(body?.url || "");
 }
 
+async function searchHuggingFaceGgufModels(body) {
+  const query = String(body?.query || "").trim().slice(0, 120);
+  const family = String(body?.family || "").trim().slice(0, 60);
+  const parameterSize = String(body?.parameterSize || "").trim().slice(0, 24);
+  const author = String(body?.author || "").trim().slice(0, 80);
+  const license = String(body?.license || "").trim().toLowerCase().slice(0, 60);
+  const language = String(body?.language || "").trim().toLowerCase().slice(0, 24);
+  const quantization = String(body?.quantization || "").trim().slice(0, 40);
+  const maxFileSizeGbRaw = Number(body?.maxFileSizeGb || 0);
+  const maxFileSizeGb = Number.isFinite(maxFileSizeGbRaw) && maxFileSizeGbRaw > 0 ? Math.min(maxFileSizeGbRaw, 20) : null;
+  const limit = Math.max(1, Math.min(Math.trunc(Number(body?.limit) || 20), 50));
+  const requestedSort = ["downloads", "likes", "updated"].includes(String(body?.sort || "")) ? String(body.sort) : "downloads";
+  const sort = ({ downloads: "downloads", likes: "likes", updated: "lastModified" })[requestedSort];
+  const searchTerms = [query, family, parameterSize].filter(Boolean).join(" ");
+  const url = new URL("https://huggingface.co/api/models");
+  if (searchTerms) url.searchParams.set("search", searchTerms);
+  url.searchParams.set("filter", "gguf");
+  url.searchParams.set("sort", sort);
+  url.searchParams.set("direction", "-1");
+  url.searchParams.set("limit", String(Math.min(100, Math.max(limit * 3, limit))));
+  url.searchParams.set("full", "true");
+  url.searchParams.set("config", "true");
+  const response = await fetch(url, { headers: { "user-agent": "openhands-host-model-manager" }, signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error(`Hugging Face model search failed with HTTP ${response.status}`);
+  const document = await response.json();
+  const candidates = [];
+  for (const item of Array.isArray(document) ? document : []) {
+    const id = firstString(item, ["id", "modelId"]);
+    if (!id || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(id)) continue;
+    const tags = Array.isArray(item.tags) ? item.tags.map(String) : [];
+    const normalizedTags = tags.map((tag) => tag.toLowerCase());
+    const itemLicense = String(item.cardData?.license || normalizedTags.find((tag) => tag.startsWith("license:"))?.slice(8) || "").toLowerCase();
+    const cardLanguages = Array.isArray(item.cardData?.language) ? item.cardData.language : item.cardData?.language ? [item.cardData.language] : [];
+    const itemLanguages = cardLanguages.map((value) => String(value).toLowerCase());
+    for (const tag of normalizedTags) if (tag.startsWith("language:")) itemLanguages.push(tag.slice(9));
+    const architecture = String(item.config?.architectures?.[0] || item.config?.model_type || "");
+    const searchable = `${id} ${architecture} ${tags.join(" ")}`.toLowerCase();
+    if (author && !id.toLowerCase().startsWith(`${author.toLowerCase()}/`)) continue;
+    if (license && itemLicense !== license && !normalizedTags.includes(`license:${license}`)) continue;
+    if (language && !itemLanguages.includes(language) && !normalizedTags.includes(language)) continue;
+    if (family && !searchable.includes(family.toLowerCase())) continue;
+    if (parameterSize && !searchable.includes(parameterSize.toLowerCase())) continue;
+    const parameterTag = tags.find((tag) => /(?:^|[-_ ])\d+(?:\.\d+)?[bm](?:$|[-_ ])/i.test(tag)) || null;
+    candidates.push({
+      id,
+      author: id.split("/")[0],
+      architecture: architecture || null,
+      parameterSize: parameterTag,
+      license: itemLicense || null,
+      languages: [...new Set(itemLanguages)].slice(0, 12),
+      downloads: Number(item.downloads || 0),
+      likes: Number(item.likes || 0),
+      lastModified: item.lastModified || null,
+      pipelineTag: item.pipeline_tag || null,
+    });
+    if (candidates.length >= Math.min(50, limit * 2)) break;
+  }
+  const results = [];
+  if (quantization || maxFileSizeGb) {
+    for (let offset = 0; offset < candidates.length && results.length < limit; offset += 5) {
+      const batch = candidates.slice(offset, offset + 5);
+      const inspected = await Promise.all(batch.map(async (candidate) => {
+        try {
+          const listing = await listHuggingFaceGgufFiles({ repo: candidate.id, revision: "main", quantization, maxFileSizeGb });
+          if (!listing.files.length) return null;
+          return { ...candidate, matchingFileCount: listing.count, suggestedFile: listing.files[0] };
+        } catch { return null; }
+      }));
+      results.push(...inspected.filter(Boolean).slice(0, limit - results.length));
+    }
+  } else {
+    results.push(...candidates.slice(0, limit));
+  }
+  return {
+    criteria: { query, family, parameterSize, quantization, maxFileSizeGb, author, license, language, sort: requestedSort, limit },
+    results,
+    count: results.length,
+  };
+}
+
 async function listHuggingFaceGgufFiles(body) {
   const repo = String(body?.repo || "").trim();
   const revision = String(body?.revision || "main").trim();
+  const quantization = String(body?.quantization || "").trim().toLowerCase().slice(0, 40);
+  const requestedMaxFileSizeGb = Number(body?.maxFileSizeGb || 0);
+  const maxFileSizeGb = Number.isFinite(requestedMaxFileSizeGb) && requestedMaxFileSizeGb > 0 ? Math.min(requestedMaxFileSizeGb, 20) : null;
+  const maxBytes = maxFileSizeGb ? maxFileSizeGb * 1024 ** 3 : null;
   if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) throw new Error("Hugging Face repo must use owner/repository format");
   if (!/^[A-Za-z0-9._/-]+$/.test(revision) || revision.includes("..")) throw new Error("Invalid Hugging Face revision");
   const response = await fetch(`https://huggingface.co/api/models/${repo}/tree/${encodeURIComponent(revision)}?recursive=true&expand=false`, {
@@ -903,12 +988,14 @@ async function listHuggingFaceGgufFiles(body) {
   });
   if (!response.ok) throw new Error(`Hugging Face repository lookup failed with HTTP ${response.status}`);
   const entries = await response.json();
-  const files = (Array.isArray(entries) ? entries : []).filter((item) => item?.type === "file" && /\.gguf$/i.test(String(item.path || ""))).map((item) => ({
+  const allFiles = (Array.isArray(entries) ? entries : []).filter((item) => item?.type === "file" && /\.gguf$/i.test(String(item.path || ""))).map((item) => ({
     filename: String(item.path),
     bytes: Number(item.size || item.lfs?.size || 0) || null,
     sha256: /^[a-f0-9]{64}$/i.test(String(item.lfs?.oid || "")) ? String(item.lfs.oid).toLowerCase() : null,
-  })).slice(0, 500);
-  return { repo, revision, files, count: files.length };
+  }));
+  const files = allFiles.filter((file) => (!quantization || file.filename.toLowerCase().includes(quantization))
+    && (!maxBytes || (file.bytes !== null && file.bytes <= maxBytes))).slice(0, 500);
+  return { repo, revision, quantization: quantization || null, maxFileSizeGb: maxBytes ? maxFileSizeGb : null, totalGgufFiles: allFiles.length, files, count: files.length };
 }
 
 function readGgufHeader(file) {
@@ -1009,6 +1096,45 @@ async function ensureLocalProfile(name, contextLength) {
     }),
   });
   return profileName;
+}
+
+async function reconcileLocalContextWindows() {
+  const registry = loadRegistry();
+  for (const model of registry.models) {
+    try { await ensureLocalProfile(model.name, localModelOptions(model).contextLength); }
+    catch (error) { console.error(`[openhands-model-manager] Could not reconcile managed profile ${model.name}: ${publicError(error)}`); }
+  }
+  const list = await backendRequest("/api/profiles");
+  const connectionsResponse = await backendRequest("/api/llm/provider-connections");
+  const connections = Array.isArray(connectionsResponse) ? connectionsResponse : (connectionsResponse?.connections || []);
+  const byId = new Map(connections.map((connection) => [connection.id, connection]));
+  const managedNames = new Set(loadRegistry().models.map((model) => `local-${model.name}`.slice(0, 64)));
+  let updated = 0;
+  for (const profile of list?.profiles || []) {
+    if (!String(profile.name || "").startsWith("local-") && !managedNames.has(profile.name)) continue;
+    const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`);
+    const config = detail.config || {};
+    const connection = config.provider_connection_id ? byId.get(config.provider_connection_id) : null;
+    const isLocal = managedNames.has(profile.name)
+      || /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(String(config.base_url || connection?.base_url || ""))
+      || String(connection?.display_name || "").startsWith("Local ");
+    if (!isLocal || (detail.api_key_set && !config.provider_connection_id)) continue;
+    if (Number(config.max_input_tokens || 0) >= MIN_LOCAL_CONTEXT) continue;
+    await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`, {
+      method: "POST",
+      body: JSON.stringify({
+        llm: {
+          ...config,
+          api_key: undefined,
+          max_input_tokens: MIN_LOCAL_CONTEXT,
+          max_output_tokens: Math.min(8192, Math.floor(MIN_LOCAL_CONTEXT / 2)),
+        },
+        include_secrets: false,
+      }),
+    });
+    updated += 1;
+  }
+  return updated;
 }
 
 async function stopLocalModel() {
@@ -1314,9 +1440,9 @@ function managerPage() {
 <section class="card"><h2>Proxy server</h2><p class="muted">در حالت Proxy، سرویس واسط درخواست، محتوای prompt و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند. فقط از Proxy مورد اعتماد استفاده کنید.</p><label>حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select><label>URL template</label><input id="template" class="ltr"><button id="save-proxy">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter">اعمال Route روی همه مدل‌های OpenRouter</button><div id="routes"></div><div id="proxy-status" class="status"></div></section></div>
 <section class="card"><h2>LLM Profileهای موجود</h2><p class="muted">مدل‌های شناسایی‌شده یا درون‌ریزی‌شده در این فهرست نمایش داده می‌شوند. برای مشاهده مدل جدید در Canvas، پس از درون‌ریزی صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles"></div></section>
 <section class="card"><h2>تست جمعی مدل‌ها</h2><p class="muted">برای هر LLM Profile یک درخواست حداکثر دو توکنی ارسال می‌شود و می‌تواند هزینه ناچیزی ایجاد کند.</p><button id="test">تست همه Profileها</button><div id="test-status" class="status"></div><div id="results"></div></section>
-<div class="grid"><section class="card"><h2>مدیریت پیشرفته GGUF و llama.cpp</h2><p class="muted">دانلودها قابل ادامه هستند و فایل ناقص پس از قطع یا لغو نگه‌داری می‌شود. URL مستقیم یا مشخصات مخزن Hugging Face را وارد کنید.</p><div id="resources" class="muted"></div><label>نام کوتاه</label><input id="gguf-name" placeholder="qwen-small"><label>URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" placeholder="https://huggingface.co/.../resolve/main/model.gguf"><label>یا Hugging Face repo</label><input id="gguf-repo" class="ltr" placeholder="Qwen/Qwen3-GGUF"><div class="row"><div><label>نام فایل GGUF</label><input id="gguf-file" class="ltr" placeholder="model-Q4_K_M.gguf"></div><div><label>Revision</label><input id="gguf-revision" class="ltr" value="main"></div></div><button id="hf-files" class="alt">نمایش GGUFهای مخزن</button><div id="hf-results"></div><label>SHA-256 اختیاری</label><input id="gguf-sha" class="ltr"><div class="row"><div><label>Context</label><input id="gguf-context" type="number" value="8192" min="512"></div><div><label>CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div><label>Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div></div><div class="row"><div><label>Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div><label>Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label><input id="gguf-mmap" type="checkbox" checked> استفاده از mmap برای کاهش مصرف RAM</label><label><input id="gguf-mlock" type="checkbox"> قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</label><label><input id="gguf-replace" type="checkbox"> نصب مجدد و جایگزینی مدل هم‌نام</label><button id="install">دانلود/ادامه دانلود و نصب</button><button id="save-local-config" class="alt">ذخیره تنظیمات مدل نصب‌شده</button><button id="stop-local" class="alt">توقف مدل درحال اجرا</button><button id="cancel-install" class="warn" disabled>لغو امن دانلود</button><div id="install-status" class="status"></div><div id="locals"></div></section>
-<section class="card"><h2>endpoint سازگار با OpenAI</h2><p class="muted">پیش از ثبت، مسیر <code>/models</code> بررسی می‌شود. HTTP فقط برای localhost مجاز است؛ endpoint راه‌دور باید HTTPS باشد.</p><label>نام</label><input id="ep-name" placeholder="ollama"><label>Base URL</label><input id="ep-url" class="ltr" placeholder="http://127.0.0.1:11434/v1"><label>Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"><label>Context length</label><input id="ep-context" type="number" value="8192" min="512"><label>API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"><label><input id="ep-tools" type="checkbox" checked> Native tool calling</label><button class="alt" id="probe-endpoint">کشف و تست مدل‌ها</button><button id="endpoint">تست و ساخت LLM Profile</button><div id="endpoint-status" class="status"></div><div id="endpoint-models"></div></section></div>
-<pre id="log"></pre><script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null,currentInstallJob="",hfFiles=[];try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}q("auth").textContent=key?"مرورگر احراز هویت شده است.":"ابتدا openhands-host pair را اجرا و مرورگر را Pair کنید.";q("auth").className=key?"ok":"err";
+<div class="grid"><section class="card"><h2>مدیریت پیشرفته GGUF و llama.cpp</h2><p class="muted">دانلودها قابل ادامه هستند و فایل ناقص پس از قطع یا لغو نگه‌داری می‌شود. حداقل Context موردنیاز OpenHands برابر ۱۶٬۳۸۴ است و مقادیر کمتر خودکار اصلاح می‌شوند. URL مستقیم یا مشخصات مخزن Hugging Face را وارد کنید.</p><div id="resources" class="muted"></div><h3>جستجوی مدل براساس مشخصات</h3><label>عبارت جستجو</label><input id="hf-search" class="ltr" placeholder="coder instruct persian"><div class="row"><div><label>خانواده/معماری</label><input id="hf-family" class="ltr" placeholder="Qwen"></div><div><label>اندازه پارامتر</label><input id="hf-params" class="ltr" placeholder="7B"></div></div><div class="row"><div><label>Quantization</label><input id="hf-quant" class="ltr" placeholder="Q4_K_M"></div><div><label>حداکثر حجم فایل (GB)</label><input id="hf-max-gb" type="number" min="0.1" max="20" step="0.1" placeholder="8"></div></div><div class="row"><div><label>License</label><input id="hf-license" class="ltr" placeholder="apache-2.0"></div><div><label>زبان</label><input id="hf-language" class="ltr" placeholder="fa"></div></div><div class="row"><div><label>سازنده/سازمان</label><input id="hf-author" class="ltr" placeholder="bartowski"></div><div><label>مرتب‌سازی</label><select id="hf-sort"><option value="downloads">بیشترین دانلود</option><option value="likes">بیشترین پسند</option><option value="updated">جدیدترین به‌روزرسانی</option></select></div><div><label>تعداد نتیجه</label><input id="hf-limit" type="number" value="20" min="1" max="50"></div></div><button id="hf-search-button">جستجوی مدل‌های GGUF</button><div id="hf-search-results"></div><hr><label>نام کوتاه</label><input id="gguf-name" placeholder="qwen-small"><label>URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" placeholder="https://huggingface.co/.../resolve/main/model.gguf"><label>یا Hugging Face repo</label><input id="gguf-repo" class="ltr" placeholder="Qwen/Qwen3-GGUF"><div class="row"><div><label>نام فایل GGUF</label><input id="gguf-file" class="ltr" placeholder="model-Q4_K_M.gguf"></div><div><label>Revision</label><input id="gguf-revision" class="ltr" value="main"></div></div><button id="hf-files" class="alt">نمایش GGUFهای مخزن</button><div id="hf-results"></div><label>SHA-256 اختیاری</label><input id="gguf-sha" class="ltr"><div class="row"><div><label>Context</label><input id="gguf-context" type="number" value="16384" min="16384"></div><div><label>CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div><label>Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div></div><div class="row"><div><label>Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div><label>Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label><input id="gguf-mmap" type="checkbox" checked> استفاده از mmap برای کاهش مصرف RAM</label><label><input id="gguf-mlock" type="checkbox"> قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</label><label><input id="gguf-replace" type="checkbox"> نصب مجدد و جایگزینی مدل هم‌نام</label><button id="install">دانلود/ادامه دانلود و نصب</button><button id="save-local-config" class="alt">ذخیره تنظیمات مدل نصب‌شده</button><button id="stop-local" class="alt">توقف مدل درحال اجرا</button><button id="cancel-install" class="warn" disabled>لغو امن دانلود</button><div id="install-status" class="status"></div><div id="locals"></div></section>
+<section class="card"><h2>endpoint سازگار با OpenAI</h2><p class="muted">پیش از ثبت، مسیر <code>/models</code> بررسی می‌شود. HTTP فقط برای localhost مجاز است؛ endpoint راه‌دور باید HTTPS باشد.</p><label>نام</label><input id="ep-name" placeholder="ollama"><label>Base URL</label><input id="ep-url" class="ltr" placeholder="http://127.0.0.1:11434/v1"><label>Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"><label>Context length</label><input id="ep-context" type="number" value="16384" min="16384"><label>API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"><label><input id="ep-tools" type="checkbox" checked> Native tool calling</label><button class="alt" id="probe-endpoint">کشف و تست مدل‌ها</button><button id="endpoint">تست و ساخت LLM Profile</button><div id="endpoint-status" class="status"></div><div id="endpoint-models"></div></section></div>
+<pre id="log"></pre><script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null,currentInstallJob="",hfFiles=[],hfSearchResults=[];try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}q("auth").textContent=key?"مرورگر احراز هویت شده است.":"ابتدا openhands-host pair را اجرا و مرورگر را Pair کنید.";q("auth").className=key?"ok":"err";
 async function call(p,o={}){if(!key)throw Error("مرورگر Pair نشده است");const r=await fetch(API+p,{...o,headers:{"X-Session-API-Key":key,...(o.body?{"content-type":"application/json"}:{}),...(o.headers||{})}});const t=await r.text();let d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.error||t||("HTTP "+r.status));return d}function show(id,msg,ok=true){q(id).textContent=msg;q(id).className=ok?"status ok":"status err"}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>c.charCodeAt(0)===34?"&quot;":({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;"}[c]))}
 function bytes(n){if(n==null)return "نامشخص";const u=["B","KiB","MiB","GiB","TiB"];let v=Number(n),i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(i?2:0)+" "+u[i]}
 function localOptions(){return {contextLength:Number(q("gguf-context").value),threads:Number(q("gguf-threads").value),parallel:Number(q("gguf-parallel").value),batchSize:Number(q("gguf-batch").value),ubatchSize:Number(q("gguf-ubatch").value),mmap:q("gguf-mmap").checked,mlock:q("gguf-mlock").checked}}
@@ -1333,7 +1459,9 @@ q("export").onclick=async()=>{try{const d=await call("/providers/export");const 
 q("save-proxy").onclick=async()=>{try{await call("/proxy",{method:"PUT",body:JSON.stringify({defaultMode:q("mode").value,proxyTemplate:q("template").value})});show("proxy-status","ذخیره شد؛ Routeهای موجود نیز به حالت جدید تغییر کردند.");refresh()}catch(e){show("proxy-status",e.message,false)}};
 q("apply-openrouter").onclick=async()=>{try{if(!state)await refresh();const profiles=(state?.profiles||[]).filter(p=>String(p.model||"").startsWith("openrouter/")).map(p=>p.name);const r=await call("/proxy/apply",{method:"POST",body:JSON.stringify({routeId:"openrouter",basePath:"/api/v1",provider:"openrouter",profiles})});show("proxy-status",r.updated.length+" Profile و "+r.connectionsUpdated.length+" اتصال به Route متصل شد؛ "+r.skipped.length+" مورد رد شد.");refresh()}catch(e){show("proxy-status",e.message,false)}};
 q("test").onclick=async()=>{try{show("test-status","در حال تست؛ این کار ممکن است چند دقیقه طول بکشد…");const d=await call("/profiles/test",{method:"POST",body:JSON.stringify({concurrency:3})});show("test-status",d.tested+" مدل تست شد؛ "+d.results.filter(x=>x.ok).length+" موفق.");q("results").innerHTML="<table><tr><th>Profile</th><th>نتیجه</th><th>زمان</th><th>خطا</th></tr>"+d.results.map(x=>"<tr><td class=ltr>"+esc(x.name)+"</td><td>"+(x.ok?"✅":"❌")+"</td><td>"+esc(x.latencyMs)+" ms</td><td>"+esc(x.error?.message||"")+"</td></tr>").join("")+"</table>"}catch(e){show("test-status",e.message,false)}};
-q("hf-files").onclick=async()=>{try{show("install-status","در حال خواندن فهرست مخزن…");const d=await call("/local/hf-files",{method:"POST",body:JSON.stringify({repo:q("gguf-repo").value,revision:q("gguf-revision").value})});hfFiles=d.files;show("install-status",d.count+" فایل GGUF پیدا شد.");q("hf-results").innerHTML=d.files.length?"<table><tr><th>فایل</th><th>حجم</th><th></th></tr>"+d.files.map((f,i)=>"<tr><td class=ltr>"+esc(f.filename)+"</td><td>"+bytes(f.bytes)+"</td><td><button data-hf="+i+">انتخاب</button></td></tr>").join("")+"</table>":"<p class=muted>فایل GGUF عمومی پیدا نشد.</p>";document.querySelectorAll("[data-hf]").forEach(b=>b.onclick=()=>{const f=hfFiles[Number(b.dataset.hf)];q("gguf-file").value=f.filename;if(f.sha256)q("gguf-sha").value=f.sha256;show("install-status","فایل "+f.filename+" انتخاب شد.")})}catch(e){show("install-status",e.message,false)}};
+async function discoverHfFiles(){show("install-status","در حال خواندن و فیلتر فایل‌های مخزن…");const d=await call("/local/hf-files",{method:"POST",body:JSON.stringify({repo:q("gguf-repo").value,revision:q("gguf-revision").value,quantization:q("hf-quant").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null})});hfFiles=d.files;show("install-status",d.count+" فایل مطابق مشخصات از "+d.totalGgufFiles+" فایل GGUF پیدا شد.");q("hf-results").innerHTML=d.files.length?"<table><tr><th>فایل</th><th>حجم</th><th>SHA</th><th></th></tr>"+d.files.map((f,i)=>"<tr><td class=ltr>"+esc(f.filename)+"</td><td>"+bytes(f.bytes)+"</td><td>"+(f.sha256?"✓":"—")+"</td><td><button data-hf="+i+">انتخاب</button></td></tr>").join("")+"</table>":"<p class=muted>فایلی مطابق Quantization و سقف حجم مشخص‌شده پیدا نشد.</p>";document.querySelectorAll("[data-hf]").forEach(b=>b.onclick=()=>{const f=hfFiles[Number(b.dataset.hf)];q("gguf-file").value=f.filename;q("gguf-sha").value=f.sha256||"";show("install-status","فایل "+f.filename+" انتخاب شد و آماده دانلود است.")})}
+q("hf-files").onclick=async()=>{try{await discoverHfFiles()}catch(e){show("install-status",e.message,false)}};
+q("hf-search-button").onclick=async()=>{try{show("install-status","در حال جستجوی مدل‌های GGUF…");const d=await call("/local/hf-search",{method:"POST",body:JSON.stringify({query:q("hf-search").value,family:q("hf-family").value,parameterSize:q("hf-params").value,quantization:q("hf-quant").value,license:q("hf-license").value,language:q("hf-language").value,author:q("hf-author").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null,sort:q("hf-sort").value,limit:Number(q("hf-limit").value)})});hfSearchResults=d.results;show("install-status",d.count+" مخزن مطابق مشخصات پیدا شد.");q("hf-search-results").innerHTML=d.results.length?"<table><tr><th>مخزن</th><th>معماری/مجوز</th><th>دانلود/پسند</th><th></th></tr>"+d.results.map((m,i)=>"<tr><td class=ltr>"+esc(m.id)+"</td><td>"+esc(m.architecture||m.parameterSize||"—")+"<br>"+esc(m.license||"نامشخص")+"</td><td>"+esc(m.downloads)+" / "+esc(m.likes)+"</td><td><button data-hf-repo="+i+">انتخاب و آماده‌سازی دانلود</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی مطابق همه مشخصات پیدا نشد؛ برخی فیلترها را خالی کنید.</p>";document.querySelectorAll("[data-hf-repo]").forEach(b=>b.onclick=async()=>{const m=hfSearchResults[Number(b.dataset.hfRepo)];q("gguf-repo").value=m.id;q("gguf-name").value=m.id.split("/").pop().replace(/-gguf$/i,"").toLowerCase().replace(/[^a-z0-9._-]+/g,"-").slice(0,48);if(m.suggestedFile){q("gguf-file").value=m.suggestedFile.filename||"";q("gguf-sha").value=m.suggestedFile.sha256||""}try{await discoverHfFiles()}catch(e){show("install-status",e.message,false)}})}catch(e){show("install-status",e.message,false)}};
 q("install").onclick=async()=>{try{const payload={name:q("gguf-name").value,url:q("gguf-url").value,repo:q("gguf-repo").value,filename:q("gguf-file").value,revision:q("gguf-revision").value,sha256:q("gguf-sha").value,replace:q("gguf-replace").checked,...localOptions()};const d=await call("/local/install",{method:"POST",body:JSON.stringify(payload)});currentInstallJob=d.jobId;q("cancel-install").disabled=false;show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId);show("install-status",j.status+": "+(j.message||"")+" "+(j.progress||0)+"%"+(j.bytesReceived?" — "+bytes(j.bytesReceived)+(j.bytesTotal?" / "+bytes(j.bytesTotal):""):""),!["failed","cancelled"].includes(j.status));if(["completed","failed","cancelled"].includes(j.status)){clearInterval(timer);currentInstallJob="";q("cancel-install").disabled=true;await refresh()}}catch(e){clearInterval(timer);currentInstallJob="";q("cancel-install").disabled=true;show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
 q("cancel-install").onclick=async()=>{if(!currentInstallJob)return;try{await call("/jobs/"+currentInstallJob+"/cancel",{method:"POST"});show("install-status","در حال لغو امن؛ فایل ناقص برای ادامه بعدی حفظ می‌شود…")}catch(e){show("install-status",e.message,false)}};
 q("save-local-config").onclick=async()=>{try{const name=q("gguf-name").value;if(!name)throw Error("ابتدا یک مدل نصب‌شده را از دکمه تنظیم انتخاب کنید");await call("/local/models/"+encodeURIComponent(name),{method:"PUT",body:JSON.stringify(localOptions())});show("install-status","تنظیمات ذخیره شد.");await refresh()}catch(e){show("install-status",e.message,false)}};
@@ -1368,6 +1496,7 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && endpoint === "/proxy/apply") { sendJson(res, 200, await applyRoute(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/profiles/test") { sendJson(res, 200, await testProfiles(await readBody(req))); return; }
   if (req.method === "GET" && endpoint === "/local/status") { sendJson(res, 200, localStatus()); return; }
+  if (req.method === "POST" && endpoint === "/local/hf-search") { sendJson(res, 200, await searchHuggingFaceGgufModels(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/local/hf-files") { sendJson(res, 200, await listHuggingFaceGgufFiles(await readBody(req))); return; }
   if (req.method === "POST" && endpoint === "/local/install") {
     if ([...jobs.values()].some((job) => job.kind === "local-model-install" && ["queued", "running", "cancelling"].includes(job.status))) throw new Error("A local model installation is already running");
@@ -1431,6 +1560,10 @@ server.listen(managerPort, "127.0.0.1", async () => {
   console.log(`[openhands-model-manager] Internal manager listening on 127.0.0.1:${managerPort}`);
   try { await migrateSeededOpenRouterProfiles(); }
   catch (error) { console.error(`[openhands-model-manager] Seeded profile route migration skipped: ${publicError(error)}`); }
+  try {
+    const repaired = await reconcileLocalContextWindows();
+    if (repaired) console.log(`[openhands-model-manager] Raised ${repaired} local profile context window(s) to ${MIN_LOCAL_CONTEXT}.`);
+  } catch (error) { console.error(`[openhands-model-manager] Local context-window reconciliation skipped: ${publicError(error)}`); }
   const registry = loadRegistry();
   if (registry.active) {
     try { await startLocalModel(registry.active); }
