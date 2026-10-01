@@ -3246,8 +3246,8 @@ function cli_service(array $job): int {
                         $depsAutoInstalled = false;
                     } else {
                         $pkgArgs = implode(' ', array_map('escapeshellarg', $pkgList));
-                        cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing with sudo & ignore-installed...");
-                        $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; (sudo -n python3 -m pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || sudo -n pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || python3 -m pip install --break-system-packages --ignore-installed --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1)';
+                        cli_log("[auto-installer] Detected missing Python package(s): " . implode(', ', $pkgList) . ". Installing into environment...");
+                        $pipCmd = 'export HOME=/tmp; export PIP_CACHE_DIR=/tmp/pip_cache; if [ -f ".venv/bin/pip" ]; then .venv/bin/pip install ' . $pkgArgs . '; elif [ -f ".venv/bin/pip3" ]; then .venv/bin/pip3 install ' . $pkgArgs . '; else (python3 -m pip install --break-system-packages --ignore-installed --user ' . $pkgArgs . ' 2>&1 || pip3 install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1 || (command -v sudo >/dev/null 2>&1 && sudo -n python3 -m pip install --break-system-packages --ignore-installed ' . $pkgArgs . ' 2>&1) || true); fi';
                         cli_run($pipCmd, $pipRc);
                         if ($pipRc === 0) {
                             cli_log("[auto-installer] Successfully installed: " . implode(', ', $pkgList));

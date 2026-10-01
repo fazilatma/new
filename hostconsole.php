@@ -1429,11 +1429,29 @@ function wcp_py_venv_python(string $dir): string {
     return '';
 }
 
+/** Get python version recorded in pyvenv.cfg (instant, reliable, no subshell needed). */
+function wcp_py_venv_version(string $dir): string {
+    $dir = rtrim($dir, '/');
+    foreach (['.venv', 'venv', 'env'] as $d) {
+        $cfg = $dir . '/' . $d . '/pyvenv.cfg';
+        if (@file_exists($cfg)) {
+            $content = (string)@file_get_contents($cfg);
+            if (preg_match('/^\s*version(?:_info)?\s*=\s*([0-9\.]+)/mi', $content, $m)) {
+                return trim($m[1]);
+            }
+        }
+    }
+    return '';
+}
+
 /** Get python version string (e.g. '3.11.2') of a binary. */
 function wcp_py_bin_version(string $pyBin): string {
     if ($pyBin === '' || !@file_exists($pyBin)) return '';
-    $out = trim((string)@shell_exec(escapeshellarg($pyBin) . ' -c "import sys; print(f\'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\')" 2>/dev/null'));
-    return preg_match('/^\d+\.\d+(\.\d+)?$/', $out) ? $out : '';
+    $out = trim((string)@shell_exec(escapeshellarg($pyBin) . ' -c \'import sys; print(str(sys.version_info[0])+"."+str(sys.version_info[1])+"."+str(sys.version_info[2]))\' 2>/dev/null'));
+    if ($out !== '' && preg_match('/^\d+\.\d+(\.\d+)?$/', $out)) return $out;
+    $vOut = trim((string)@shell_exec(escapeshellarg($pyBin) . ' -V 2>&1'));
+    if (preg_match('/Python\s+([0-9\.]+)/i', $vOut, $m)) return $m[1];
+    return '';
 }
 
 /** Find modern Python candidate >= 3.9 on cPanel, CloudLinux, or standard Linux paths. */
@@ -1472,7 +1490,7 @@ function wcp_find_best_python(): string {
                 if ($ver !== '' && version_compare($ver, '3.9.0', '>=')) return $path;
             }
         } else {
-            if (@is_file($cand) && @is_executable($cand)) {
+            if (@is_file($cand) && (@is_executable($cand) || @is_file($cand))) {
                 $ver = wcp_py_bin_version($cand);
                 if ($ver !== '' && version_compare($ver, '3.9.0', '>=')) return $cand;
             }
@@ -1513,7 +1531,7 @@ function wcp_uv_pythons(): array {
 function wcp_python_version_of(string $want = ''): string {
     foreach ([$want, (string)(cfg()['python_version'] ?? '')] as $cand) {
         $cand = trim($cand);
-        if ($cand !== '' && preg_match('/^\d+(\.\d+){0,2}$/', $cand)) return $cand;
+        if ($cand !== '' && preg_match('/^\d+(\.\d+){0,2}$/', $cand) && version_compare($cand, '3.9.0', '>=')) return $cand;
     }
     $inst = wcp_uv_pythons();
     if (!empty($inst)) {
@@ -1542,14 +1560,23 @@ function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = 
     $uv  = wcp_uv_bin();
     $py  = wcp_py_venv_python($dir);
 
-    // Auto-detect and heal obsolete virtualenvs (< 3.9, e.g. system Python 3.6.8)
-    if ($py !== '') {
+    // Auto-detect and heal obsolete virtualenvs (< 3.9, e.g. system Python 3.6.8 or missing pip)
+    $curVer = wcp_py_venv_version($dir);
+    if ($curVer === '' && $py !== '') {
         $curVer = wcp_py_bin_version($py);
-        if ($curVer !== '' && version_compare($curVer, '3.9.0', '<')) {
-            $log("[python] Existing virtualenv Python ({$curVer}) is obsolete (FastAPI & modern tools require >= 3.9). Upgrading .venv...");
-            @sh('rm -rf ' . esc($dir . '/.venv'));
-            $py = '';
-        }
+    }
+
+    $isObsolete = false;
+    if ($curVer !== '' && version_compare($curVer, '3.9.0', '<')) {
+        $isObsolete = true;
+    } elseif ($py !== '' && !is_file($dir . '/.venv/bin/pip') && !is_file($dir . '/.venv/bin/pip3') && !is_file($dir . '/venv/bin/pip')) {
+        $isObsolete = true;
+    }
+
+    if ($isObsolete) {
+        $log('[python] Existing virtualenv Python (' . ($curVer ?: 'legacy/broken') . ') is obsolete (FastAPI & modern tools require >= 3.9). Purging .venv...');
+        @sh('rm -rf ' . esc($dir . '/.venv') . ' ' . esc($dir . '/venv'));
+        $py = '';
     }
 
     if ($py === '' && $uv !== '') {
@@ -1560,7 +1587,19 @@ function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = 
         $rc = null;
         if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
         $py = wcp_py_venv_python($dir);
-        if ($py === '') $log('[python] uv could not create a virtualenv; falling back to resilient Python search.');
+        if ($py === '') {
+            $log('[python] uv could not create a virtualenv; falling back to resilient Python search.');
+        } else {
+            // Verify created venv is >= 3.9
+            $newVer = wcp_py_venv_version($dir) ?: wcp_py_bin_version($py);
+            if ($newVer !== '' && version_compare($newVer, '3.9.0', '<')) {
+                $log('[python] uv created venv with obsolete Python ' . $newVer . '. Retrying with standalone 3.11...');
+                @sh('rm -rf ' . esc($dir . '/.venv'));
+                $cmd311 = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv) . ' venv --seed -p 3.11 .venv 2>&1';
+                if (function_exists('cli_run')) cli_run($cmd311, $rc); else @shell_exec($cmd311);
+                $py = wcp_py_venv_python($dir);
+            }
+        }
     }
 
     if ($py === '') {
@@ -4659,7 +4698,17 @@ function cli_service(array $job): int {
                         $pipRc = null;
                         if ($req !== '') {
                             wcp_py_ensure_venv($deployDir, (string)($currentP['python_version'] ?? ''), true);
-                            $pipRc = (wcp_py_venv_python($deployDir) !== '') ? 0 : 1;
+                            $checkPy = wcp_py_venv_python($deployDir);
+                            if ($checkPy !== '') {
+                                $pkgTestCode = 'import ' . implode(', ', array_map(function($p) use ($modMap) {
+                                    $flipped = array_search($p, $modMap, true);
+                                    return $flipped !== false ? $flipped : preg_replace('/[^a-zA-Z0-9_]/', '_', $p);
+                                }, $pkgList));
+                                $chkErr = trim((string)@shell_exec(escapeshellarg($checkPy) . ' -c ' . escapeshellarg($pkgTestCode) . ' 2>&1'));
+                                $pipRc = ($chkErr === '') ? 0 : 1;
+                            } else {
+                                $pipRc = 1;
+                            }
                         } else {
                             wcp_py_install_packages($deployDir, $pkgList, $pipRc);
                         }
