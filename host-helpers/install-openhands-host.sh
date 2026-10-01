@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.5.1"
+SCRIPT_VERSION="2.6.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -214,6 +214,7 @@ READY_FILE="$STATE_DIR/agent-canvas.ready"
 PAIR_FILE="$STATE_DIR/browser-pair.env"
 START_LOCK_DIR="$STATE_DIR/start.lock"
 GATEWAY_SCRIPT="$APP_ROOT/prefix-gateway.mjs"
+PROFILE_SEED_SCRIPT="$APP_ROOT/seed-llm-profiles.mjs"
 UV_BIN="$TOOLS_DIR/uv"
 UVX_BIN="$TOOLS_DIR/uvx"
 AGENT_BIN="$NPM_ROOT/node_modules/.bin/agent-canvas"
@@ -616,6 +617,103 @@ EOF_GATEWAY
     chmod 700 "$GATEWAY_SCRIPT"
 }
 
+write_profile_seed() {
+    prepare_dirs
+    cat > "$PROFILE_SEED_SCRIPT" <<'EOF_PROFILE_SEED'
+#!/usr/bin/env node
+
+const backendPort = Number(process.env.OH_PROFILE_SEED_BACKEND_PORT);
+const sessionKey = process.env.LOCAL_BACKEND_API_KEY || "";
+const backend = `http://127.0.0.1:${backendPort}`;
+
+if (!Number.isInteger(backendPort) || !sessionKey) {
+  console.error("[openhands-profile-seed] Backend port or session key is missing.");
+  process.exit(2);
+}
+
+// These are deliberately credential-free templates. The API key posted in
+// chat is never written here. Link the profiles to a fresh OpenRouter Provider
+// Connection from Settings > LLM after revoking the exposed key.
+const profiles = [
+  { name: "openrouter-seed-2-1-turbo", model: "openrouter/bytedance-seed/seed-2-1-turbo", maxInput: 262144, maxOutput: 8192 },
+  { name: "openrouter-qwen3-8-2-4t-a95b", model: "openrouter/qwen/qwen3.8-2.4t-a95b", maxInput: 1000000, maxOutput: 8192 },
+  { name: "openrouter-seed-2-0-code", model: "openrouter/bytedance-seed/seed-2.0-code", maxInput: 262144, maxOutput: 8192 },
+  { name: "openrouter-deepseek-v4-pro-0813", model: "openrouter/deepseek/deepseek-v4-pro-0813", maxInput: 1048576, maxOutput: 8192 },
+  { name: "openrouter-grok-4-6", model: "openrouter/x-ai/grok-4.6", maxInput: 500000, maxOutput: 8192 },
+  { name: "openrouter-lfm-2-5-2-6b-free", model: "openrouter/liquid/lfm-2.5-2.6b:free", maxInput: 65536, maxOutput: 8192 },
+  { name: "openrouter-nemotron-3-5-lightning", model: "openrouter/nvidia/nemotron-3.5-lightning", maxInput: 262144, maxOutput: 8192 },
+  { name: "openrouter-nemotron-3-5-lightning-free", model: "openrouter/nvidia/nemotron-3.5-lightning:free", maxInput: 1000000, maxOutput: 8192 },
+  { name: "openrouter-sakana-namazu", model: "openrouter/sakana/sakana-namazu", maxInput: 262144, maxOutput: 8192 },
+  { name: "openrouter-solar-pro4", model: "openrouter/upstage/solar-pro4", maxInput: 524288, maxOutput: 8192 },
+  { name: "openrouter-muse-glimmer-30b", model: "openrouter/meta/muse-glimmer-30b", maxInput: 131072, maxOutput: 8192 },
+  { name: "openrouter-muse-spark-1-2", model: "openrouter/meta/muse-spark-1.2", maxInput: 1048576, maxOutput: 8192 },
+];
+
+async function request(path, options = {}) {
+  const response = await fetch(`${backend}${path}`, {
+    ...options,
+    headers: {
+      "X-Session-API-Key": sessionKey,
+      ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) {
+    const detail = typeof data === "string" ? data : JSON.stringify(data);
+    throw new Error(`HTTP ${response.status}: ${String(detail).slice(0, 500)}`);
+  }
+  return data;
+}
+
+let listed;
+try {
+  listed = await request("/api/profiles");
+} catch (error) {
+  console.error(`[openhands-profile-seed] Could not list LLM profiles: ${error.message}`);
+  process.exit(1);
+}
+
+const existing = new Set(Array.isArray(listed?.profiles) ? listed.profiles.map((profile) => profile?.name).filter(Boolean) : []);
+let added = 0;
+const failures = [];
+for (const profile of profiles) {
+  if (existing.has(profile.name)) continue;
+  const body = {
+    llm: {
+      model: profile.model,
+      base_url: "https://openrouter.ai/api/v1",
+      max_input_tokens: profile.maxInput,
+      max_output_tokens: profile.maxOutput,
+      native_tool_calling: true,
+      api_mode: "chat",
+      drop_params: true,
+    },
+    include_secrets: false,
+  };
+  try {
+    await request(`/api/profiles/${encodeURIComponent(profile.name)}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    added += 1;
+  } catch (error) {
+    failures.push(`${profile.name}: ${error.message}`);
+  }
+}
+
+console.log(`[openhands-profile-seed] OpenRouter profiles present: ${profiles.length - failures.length}/${profiles.length}; newly added: ${added}.`);
+if (failures.length) {
+  for (const failure of failures) console.error(`[openhands-profile-seed] ${failure}`);
+  process.exit(1);
+}
+EOF_PROFILE_SEED
+    chmod 700 "$PROFILE_SEED_SCRIPT"
+}
+
 write_wrapper() {
     {
         printf '#!/usr/bin/env bash\n'
@@ -641,6 +739,7 @@ persist_helper() {
     chmod 700 "$HELPER_COPY"
     write_wrapper
     write_gateway
+    write_profile_seed
 }
 
 save_config() {
@@ -1309,6 +1408,15 @@ supervisor_cleanup() {
     release_startup_lock
 }
 
+seed_llm_profiles() {
+    write_profile_seed
+    if ! OH_PROFILE_SEED_BACKEND_PORT="$BACKEND_PORT" \
+        LOCAL_BACKEND_API_KEY="$LOCAL_BACKEND_API_KEY" \
+        "$NODE_HOME/bin/node" "$PROFILE_SEED_SCRIPT"; then
+        warn 'One or more OpenRouter profile templates could not be seeded; startup will continue.'
+    fi
+}
+
 serve_agent() {
     local -a args=(--public --port "$UPSTREAM_PORT" --host 127.0.0.1)
     local waited=0 gateway_path="" root_code="" child_status=1 health_failures=0
@@ -1348,6 +1456,7 @@ serve_agent() {
         waited=$((waited + 1))
     done
     log "Agent Server backend is ready and accepts the stored API key on 127.0.0.1:$BACKEND_PORT"
+    seed_llm_profiles
 
     export OH_GATEWAY_HOST="$LISTEN_HOST"
     export OH_GATEWAY_PORT="$PORT"
