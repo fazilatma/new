@@ -1735,6 +1735,11 @@ final class Routes
             return LocalAI::runtimeStatus();
         });
 
+        $r->post('/api/localai/runtime/fix-permissions', static function (Request $req): array {
+            Security::requireRole($req, 'admin');
+            return LocalAI::fixPermissions();
+        });
+
         $r->post('/api/localai/runtime/install', static function (Request $req): array {
             Auth::requireAdmin($req);
             return LocalAI::installRuntime();

@@ -630,6 +630,10 @@ final class Routes
             Auth::require($q);
             return LocalAI::runtimeStatus();
         });
+        $r->post('/api/localai/runtime/fix-permissions', static function (Request $q): array {
+            Auth::require($q, 'admin');
+            return LocalAI::fixPermissions();
+        });
         $r->post('/api/localai/runtime/install', static function (Request $q): array {
             Auth::require($q, 'admin');
             return LocalAI::installRuntime();

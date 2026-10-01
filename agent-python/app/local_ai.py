@@ -39,15 +39,80 @@ WEIGHT_RAM_FACTOR = 1.08
 def root_dir() -> Path:
     env_dir = os.environ.get("AGENT_LOCALAI_DIR") or str(DATA_DIR / "localai")
     p = Path(env_dir)
-    p.mkdir(parents=True, exist_ok=True)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(str(p), 0o775)
+        except Exception:
+            pass
+    except Exception:
+        pass
     return p
 
 
 def models_dir() -> Path:
     env_dir = os.environ.get("OLLAMA_MODELS") or str(root_dir() / "models")
     p = Path(env_dir)
-    p.mkdir(parents=True, exist_ok=True)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(str(p), 0o775)
+        except Exception:
+            pass
+    except Exception:
+        pass
     return p
+
+
+def is_dir_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    if not probe.exists():
+        return False
+    try:
+        test_file = probe / f".probe_{os.getpid()}_{int(time.time()*1000)}"
+        test_file.write_text("1")
+        test_file.unlink(missing_ok=True)
+        return True
+    except Exception:
+        try:
+            os.chmod(str(probe), 0o775)
+            test_file = probe / f".probe_{os.getpid()}_{int(time.time()*1000)}"
+            test_file.write_text("1")
+            test_file.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return os.access(str(probe), os.W_OK | os.X_OK)
+
+
+def fix_permissions() -> Dict[str, Any]:
+    md = models_dir()
+    rd = root_dir()
+    errors = []
+    for d in [DATA_DIR, rd, md, rd / "bin"]:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(str(d), 0o775)
+            except Exception:
+                try:
+                    os.chmod(str(d), 0o755)
+                except Exception as e2:
+                    errors.append(f"{d}: {str(e2)}")
+        except Exception as e:
+            errors.append(f"{d}: {str(e)}")
+    writable = is_dir_writable(md)
+    return {
+        "ok": writable,
+        "modelsDir": str(md),
+        "modelsDirWritable": writable,
+        "errors": errors if not writable else [],
+    }
 
 
 def bin_dir() -> Path:
@@ -180,9 +245,13 @@ def host_scan(refresh: bool = False) -> Dict[str, Any]:
         "runtime": {
             "installed": bool(runtime_bin),
             "binary": runtime_bin or "",
+            "managed": bool(runtime_bin and str(bin_dir()) in str(runtime_bin)),
             "running": srv["up"],
             "version": srv.get("version", ""),
             "host": host_url(),
+            "modelsDir": str(models_dir()),
+            "modelsDirWritable": is_dir_writable(models_dir()),
+            "error": "" if srv["up"] else str(srv.get("error", "")),
         }
     }
 
@@ -190,13 +259,18 @@ def host_scan(refresh: bool = False) -> Dict[str, Any]:
 def runtime_status() -> Dict[str, Any]:
     b = binary()
     srv = server_up()
+    md = models_dir()
     return {
         "installed": bool(b),
         "binary": b or "",
+        "managed": bool(b and str(bin_dir()) in str(b)),
         "running": srv["up"],
         "version": srv.get("version", ""),
         "host": host_url(),
-        "modelsDir": str(models_dir()),
+        "modelsDir": str(md),
+        "modelsDirWritable": is_dir_writable(md),
+        "error": "" if srv["up"] else str(srv.get("error", "")),
+        "env": server_env(),
     }
 
 

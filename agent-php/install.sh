@@ -51,8 +51,8 @@ for bin in python3 node npm git docker; do
 done
 
 # ------------------------------------------------------------- directories
-mkdir -p data storage/workspaces/default storage/uploads storage/job_outputs storage/backups
-chmod -R u+rwX data storage
+mkdir -p data data/localai data/localai/models storage/workspaces/default storage/uploads storage/job_outputs storage/backups storage/localai storage/localai/models
+chmod -R 775 data storage 2>/dev/null || chmod -R 755 data storage 2>/dev/null || chmod -R u+rwX data storage 2>/dev/null || true
 ok "data/ and storage/ prepared"
 
 if [ ! -f .env ]; then

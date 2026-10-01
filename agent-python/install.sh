@@ -111,8 +111,8 @@ elif [ -f ".venv/bin/pip3" ]; then
 fi
 
 # 7. Prepare directories & config
-mkdir -p data storage storage/workspaces storage/uploads storage/logs storage/backups
-chmod -R u+rwX data storage 2>/dev/null || true
+mkdir -p data data/localai data/localai/models storage storage/workspaces storage/uploads storage/logs storage/backups storage/localai storage/localai/models
+chmod -R 775 data storage 2>/dev/null || chmod -R 755 data storage 2>/dev/null || chmod -R u+rwX data storage 2>/dev/null || true
 
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env

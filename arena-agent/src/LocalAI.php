@@ -237,8 +237,62 @@ final class LocalAI
             'binary' => $bin,
             'version' => $version,
             'reachable' => $reachable,
+            'running' => $reachable,
+            'installed' => $bin !== null,
+            'managed' => $bin !== null && str_starts_with($bin, self::rootDir()),
             'apiVersion' => $apiVersion,
             'host' => self::host(),
+            'modelsDir' => self::modelsDir(),
+            'modelsDirWritable' => self::dirWritable(self::modelsDir()),
+        ];
+    }
+
+    public static function dirWritable(string $dir): bool
+    {
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $probe = $dir;
+        while ($probe !== '/' && $probe !== '' && !is_dir($probe)) {
+            $probe = dirname($probe);
+        }
+        if ($probe === '') {
+            return false;
+        }
+        if (!is_writable($probe)) {
+            @chmod($probe, 0775);
+        }
+        $test = rtrim($probe, '/') . '/.probe_' . getmypid() . '_' . time();
+        $ok = @file_put_contents($test, '1') !== false;
+        if ($ok) {
+            @unlink($test);
+            return true;
+        }
+        return is_writable($probe);
+    }
+
+    public static function fixPermissions(): array
+    {
+        $md = self::modelsDir();
+        $rd = self::rootDir();
+        $dirs = [$rd, $md, self::binDir()];
+        $errors = [];
+        foreach ($dirs as $d) {
+            if (!is_dir($d)) {
+                @mkdir($d, 0775, true);
+            }
+            if (!@chmod($d, 0775)) {
+                if (!@chmod($d, 0755)) {
+                    $errors[] = "chmod failed for $d";
+                }
+            }
+        }
+        $writable = self::dirWritable($md);
+        return [
+            'ok' => $writable,
+            'modelsDir' => $md,
+            'modelsDirWritable' => $writable,
+            'errors' => $writable ? [] : $errors,
         ];
     }
 

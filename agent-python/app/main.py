@@ -1681,6 +1681,11 @@ def post_localai_runtime_stop(user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
     return local_ai.stop_server()
 
+@app.post("/api/localai/runtime/fix-permissions")
+def post_localai_runtime_fix_permissions(user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    return local_ai.fix_permissions()
+
 @app.get("/api/localai/catalog")
 def get_localai_catalog(user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai

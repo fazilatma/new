@@ -378,12 +378,33 @@ function renderRuntime(rt) {
   const badge = $('#rt-badge');
   badge.className = 'tag ' + (rt.running ? 'ok' : rt.installed ? 'warn' : 'err');
   badge.textContent = rt.running ? 'موتور در حال اجرا' : rt.installed ? 'نصب است، خاموش' : 'نصب نشده';
+  const permHtml = rt.modelsDirWritable
+    ? '<span class="tag ok">قابل نوشتن</span>'
+    : '<span class="tag err">غیرقابل نوشتن</span> <button class="btn sm" id="btn-fix-perm" style="padding:2px 8px;font-size:11px;margin-right:6px">اصلاح خودکار دسترسی</button>';
   $('#rt-info').innerHTML = `
     <div style="margin-bottom:6px">موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب داخلی</span>' : ''}</div>
     <div class="path-box">${esc(rt.binary || 'یافت نشد')}</div>
     <div class="path-box">${esc(rt.host)}</div>
-    <div class="path-box">models: ${esc(rt.modelsDir)} ${rt.modelsDirWritable ? '' : '<span class="tag err">غیرقابل نوشتن</span>'}</div>
+    <div class="path-box" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">models: <span>${esc(rt.modelsDir)}</span> ${permHtml}</div>
     ${rt.error ? `<div class="tag err" style="margin-top:6px;width:100%">${esc(rt.error)}</div>` : ''}`;
+  const fixBtn = $('#btn-fix-perm');
+  if (fixBtn) {
+    fixBtn.onclick = async () => {
+      fixBtn.disabled = true;
+      fixBtn.textContent = '…';
+      try {
+        const res = await api('/api/localai/runtime/fix-permissions', { method: 'POST', body: {} });
+        if (res.ok) {
+          toast('دسترسی پوشه مدل‌ها با موفقیت اصلاح شد', 'ok');
+        } else {
+          toast('امکان تغییر سطح دسترسی از طریق وب وجود نداشت؛ لطفا chmod 775 اجرا کنید', 'warn');
+        }
+      } catch (e) {
+        toast('خطا: ' + e.message, 'err');
+      }
+      refreshRuntime();
+    };
+  }
   $('#btn-rt-install').disabled = !!rt.installed;
   $('#btn-rt-start').disabled = !rt.installed || !!rt.running;
   $('#btn-rt-stop').disabled = !rt.running;
