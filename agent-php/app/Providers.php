@@ -644,11 +644,23 @@ final class ProviderStore
         ];
     }
 
-    /** Import models into a specific existing provider. */
+    /** Import models into a specific provider (auto-creates provider if not already present). */
     public function importModelsForProvider(string $providerId, string $text, bool $replace = false): array
     {
         if (!isset($this->data[$providerId])) {
-            throw new HttpError(404, "Provider '{$providerId}' not found");
+            $name = ucwords(str_replace(['-', '_'], ' ', $providerId));
+            $url = $providerId === 'ollama' ? 'http://localhost:11434' : ($providerId === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+            $protocol = $providerId === 'ollama' ? 'ollama' : ($providerId === 'anthropic' ? 'anthropic' : 'openai-compatible');
+            $this->data[$providerId] = [
+                'id' => $providerId,
+                'name' => $name,
+                'url' => $url,
+                'protocol' => $protocol,
+                'enabled' => true,
+                'models' => [],
+                'apiKeys' => [],
+                'extra' => [],
+            ];
         }
         $raw = self::decodeImport($text);
         $models = [];

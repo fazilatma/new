@@ -1790,11 +1790,17 @@ final class Routes
     private static function serveSpa(): void
     {
         $index = Bootstrap::$publicDir . '/index.html';
-        if (!is_file($index)) {
+        $html = '';
+        if (is_file($index)) {
+            $html = Files::read($index);
+        } elseif (class_exists('Arena\\EmbeddedAssets') && defined('Arena\\EmbeddedAssets::INDEX_HTML')) {
+            $html = EmbeddedAssets::INDEX_HTML;
+        }
+        if ($html === '') {
             Response::html('<h1>Arena Coding Agent</h1><p>public/index.html is missing.</p>', 500);
             return;
         }
-        Response::raw(self::withApiBase(Files::read($index)), 'text/html; charset=utf-8');
+        Response::raw(self::withApiBase($html), 'text/html; charset=utf-8');
     }
 
     /**
@@ -1828,11 +1834,17 @@ final class Routes
         foreach (['/localai', '/local-ai'] as $p) {
             $r->get($p, static function (Request $req): void {
                 $page = Bootstrap::$publicDir . '/localai.html';
-                if (!is_file($page)) {
+                $html = '';
+                if (is_file($page)) {
+                    $html = Files::read($page);
+                } elseif (class_exists('Arena\\EmbeddedAssets') && defined('Arena\\EmbeddedAssets::LOCALAI_HTML')) {
+                    $html = EmbeddedAssets::LOCALAI_HTML;
+                }
+                if ($html === '') {
                     Response::json(['detail' => 'localai.html is missing'], 404);
                     return;
                 }
-                Response::raw(self::withApiBase(Files::read($page)), 'text/html; charset=utf-8');
+                Response::raw(self::withApiBase($html), 'text/html; charset=utf-8');
             });
         }
 
@@ -1841,11 +1853,17 @@ final class Routes
         foreach (['/diag', '/diagnostics'] as $p) {
             $r->get($p, static function (Request $req): void {
                 $page = Bootstrap::$publicDir . '/diag.html';
-                if (!is_file($page)) {
+                $html = '';
+                if (is_file($page)) {
+                    $html = Files::read($page);
+                } elseif (class_exists('Arena\\EmbeddedAssets') && defined('Arena\\EmbeddedAssets::DIAG_HTML')) {
+                    $html = EmbeddedAssets::DIAG_HTML;
+                }
+                if ($html === '') {
                     Response::json(['detail' => 'diag.html is missing'], 404);
                     return;
                 }
-                Response::raw(self::withApiBase(Files::read($page)), 'text/html; charset=utf-8');
+                Response::raw(self::withApiBase($html), 'text/html; charset=utf-8');
             });
         }
 

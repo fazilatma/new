@@ -301,6 +301,11 @@ def catalog() -> Dict[str, Any]:
             return json.loads(cf.read_text(encoding="utf-8"))
         except Exception:
             pass
+    if "EMBEDDED_CATALOG_JSON" in globals() and globals()["EMBEDDED_CATALOG_JSON"]:
+        try:
+            return json.loads(globals()["EMBEDDED_CATALOG_JSON"])
+        except Exception:
+            pass
     return {"families": [], "variants": []}
 
 
@@ -440,3 +445,26 @@ def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
         "recommendations": recommendations[:5],
         "rejected": rejected[:10],
     }
+
+import types as _types
+local_ai = _types.SimpleNamespace(
+    root_dir=root_dir,
+    models_dir=models_dir,
+    bin_dir=bin_dir,
+    binary=binary,
+    host_url=host_url,
+    server_env=server_env,
+    server_up=server_up,
+    host_scan=host_scan,
+    runtime_status=runtime_status,
+    install_runtime=install_runtime,
+    start_server=start_server,
+    stop_server=stop_server,
+    catalog_file=catalog_file,
+    catalog=catalog,
+    installed=installed,
+    remove_model=remove_model,
+    pull_model=pull_model,
+    register_provider=register_provider,
+    recommend=recommend,
+)

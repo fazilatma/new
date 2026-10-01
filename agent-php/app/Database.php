@@ -59,6 +59,8 @@ final class Database
         $sqlFile = Bootstrap::$root . '/migrations/0001_init.sql';
         if (is_file($sqlFile)) {
             $pdo->exec((string) file_get_contents($sqlFile));
+        } elseif (class_exists('Arena\\EmbeddedAssets') && defined('Arena\\EmbeddedAssets::INIT_SQL')) {
+            $pdo->exec(EmbeddedAssets::INIT_SQL);
         }
         self::seed();
     }

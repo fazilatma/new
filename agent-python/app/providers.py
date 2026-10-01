@@ -420,17 +420,75 @@ class ProviderStore:
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
-                return {k: Provider.model_validate(v) for k, v in raw.items()}
+                if raw:
+                    return {k: Provider.model_validate(v) for k, v in raw.items()}
             except Exception:
                 pass
         seed = Path(__file__).parents[1] / "data" / "providers.json"
         if seed.exists():
             try:
                 raw = json.loads(seed.read_text(encoding="utf-8"))
-                return {k: Provider.model_validate(v) for k, v in raw.items()}
+                if raw:
+                    return {k: Provider.model_validate(v) for k, v in raw.items()}
             except Exception:
                 pass
-        return {}
+        return self._default_seed_providers()
+
+    @staticmethod
+    def _default_seed_providers() -> Dict[str, Provider]:
+        return {
+            "openrouter": Provider(
+                id="openrouter",
+                name="OpenRouter",
+                url="https://openrouter.ai/api/v1",
+                protocol="openai-compatible",
+                apiKeyEnv="OPENROUTER_API_KEY",
+                models=[
+                    ModelSpec(id="anthropic/claude-3.7-sonnet", name="Claude 3.7 Sonnet", toolCalling=True, vision=True),
+                    ModelSpec(id="anthropic/claude-3.5-sonnet", name="Claude 3.5 Sonnet", toolCalling=True, vision=True),
+                    ModelSpec(id="openai/gpt-4o", name="GPT-4o", toolCalling=True, vision=True),
+                    ModelSpec(id="deepseek/deepseek-r1", name="DeepSeek R1", toolCalling=True),
+                    ModelSpec(id="deepseek/deepseek-chat", name="DeepSeek V3", toolCalling=True),
+                    ModelSpec(id="meta-llama/llama-3.3-70b-instruct", name="Llama 3.3 70B", toolCalling=True)
+                ]
+            ),
+            "ollama": Provider(
+                id="ollama",
+                name="Ollama (Local AI)",
+                url="http://localhost:11434",
+                protocol="ollama",
+                enabled=True,
+                models=[
+                    ModelSpec(id="llama3.2", name="Llama 3.2 (Local)", toolCalling=True, free=True),
+                    ModelSpec(id="qwen2.5-coder:7b", name="Qwen 2.5 Coder 7B (Local)", toolCalling=True, free=True),
+                    ModelSpec(id="deepseek-r1:8b", name="DeepSeek R1 8B (Local)", toolCalling=True, free=True)
+                ]
+            ),
+            "openai": Provider(
+                id="openai",
+                name="OpenAI Official",
+                url="https://api.openai.com/v1",
+                protocol="openai-compatible",
+                apiKeyEnv="OPENAI_API_KEY",
+                models=[
+                    ModelSpec(id="gpt-4o", name="GPT-4o", toolCalling=True, vision=True),
+                    ModelSpec(id="gpt-4o-mini", name="GPT-4o Mini", toolCalling=True, vision=True),
+                    ModelSpec(id="o3-mini", name="o3-mini", toolCalling=True)
+                ]
+            ),
+            "anthropic": Provider(
+                id="anthropic",
+                name="Anthropic Claude",
+                url="https://api.anthropic.com",
+                protocol="anthropic",
+                apiKeyEnv="ANTHROPIC_API_KEY",
+                models=[
+                    ModelSpec(id="claude-3-7-sonnet-20250219", name="Claude 3.7 Sonnet", toolCalling=True, vision=True),
+                    ModelSpec(id="claude-3-5-sonnet-20241022", name="Claude 3.5 Sonnet", toolCalling=True, vision=True),
+                    ModelSpec(id="claude-3-5-haiku-20241022", name="Claude 3.5 Haiku", toolCalling=True)
+                ]
+            )
+        }
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")
@@ -650,7 +708,16 @@ class ProviderStore:
 
     def import_models_for_provider(self, provider_id: str, text: str, replace: bool = False) -> Dict[str, Any]:
         if provider_id not in self.data:
-            raise ValueError(f"Provider '{provider_id}' not found.")
+            prov_name = provider_id.replace('-', ' ').replace('_', ' ').title()
+            default_url = "http://localhost:11434" if provider_id == "ollama" else ("https://api.anthropic.com" if provider_id == "anthropic" else "https://api.openai.com/v1")
+            default_protocol = "ollama" if provider_id == "ollama" else ("anthropic" if provider_id == "anthropic" else "openai-compatible")
+            self.data[provider_id] = Provider(
+                id=provider_id,
+                name=prov_name,
+                url=default_url,
+                protocol=default_protocol,
+                models=[]
+            )
         incoming = _decode_relaxed_json(text)
 
         candidates = []

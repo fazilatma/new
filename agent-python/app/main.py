@@ -11,7 +11,7 @@ import io
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting, get_proxy_config, mask_secret
@@ -101,25 +101,55 @@ register_auth_routes(app)
 # UI and Static Routes
 STATIC_DIR = Path(__file__).parent / "static"
 
+def _serve_spa(request: Request, filename: str = "index.html") -> Response:
+    file_path = STATIC_DIR / filename
+    html = ""
+    if file_path.exists():
+        html = file_path.read_text(encoding="utf-8")
+    else:
+        # Fallback to embedded constants if running in single-file standalone mode
+        embedded_map = {
+            "index.html": globals().get("EMBEDDED_INDEX_HTML", ""),
+            "localai.html": globals().get("EMBEDDED_LOCALAI_HTML", ""),
+            "diag.html": globals().get("EMBEDDED_DIAG_HTML", ""),
+        }
+        html = embedded_map.get(filename, "")
+
+    if not html:
+        return HTMLResponse(f"<h1>Arena Coding Agent</h1><p>{filename} is missing.</p>", status_code=500)
+    
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    if not root_path:
+        root_path = request.headers.get("x-forwarded-prefix") or request.headers.get("x-script-name") or ""
+        root_path = root_path.rstrip("/")
+    
+    snippet = f'<script>window.__API_BASE__={json.dumps(root_path)};window.__NO_REWRITE__=false;</script>'
+    if "<head>" in html:
+        html = html.replace("<head>", f"<head>\n{snippet}", 1)
+    else:
+        html = f"{snippet}\n{html}"
+    
+    return HTMLResponse(content=html, media_type="text/html; charset=utf-8")
+
 @app.get("/")
-def root():
-    return FileResponse(STATIC_DIR / "index.html")
+def root(request: Request):
+    return _serve_spa(request, "index.html")
 
 @app.get("/chat")
-def chat_ui():
-    return FileResponse(STATIC_DIR / "index.html")
+def chat_ui(request: Request):
+    return _serve_spa(request, "index.html")
 
 @app.get("/ui")
-def ui():
-    return FileResponse(STATIC_DIR / "index.html")
+def ui(request: Request):
+    return _serve_spa(request, "index.html")
 
 @app.get("/localai")
-def localai_page():
-    return FileResponse(STATIC_DIR / "localai.html")
+def localai_page(request: Request):
+    return _serve_spa(request, "localai.html")
 
 @app.get("/diag")
-def diag_page():
-    return FileResponse(STATIC_DIR / "diag.html")
+def diag_page(request: Request):
+    return _serve_spa(request, "diag.html")
 
 @app.get("/api/version")
 def version():

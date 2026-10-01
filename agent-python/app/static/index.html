@@ -1,9 +1,103 @@
 <!doctype html>
 <html lang="fa" dir="rtl" data-theme="dark">
 <head>
+<script>
+/* ------------------------------------------------------------------ *
+ * API base resolution.
+ *
+ * The server injects window.__API_BASE__ before this runs:
+ *   ''                  app owns the domain root, rewriting works
+ *   '/agent'            installed in a subdirectory
+ *   '/agent/index.php'  host has no URL rewriting
+ *
+ * When the page itself was fetched as a plain directory URL we cannot know
+ * server-side whether rewriting works, so the first API call that comes back
+ * as a non-JSON 404 (i.e. the web server's own error page) is retried once
+ * through the front controller, and the working prefix is remembered.
+ * ------------------------------------------------------------------ */
+(function () {
+  var KEY = 'arena_api_base';
+  var MODE_KEY = 'arena_api_mode';
+  try {
+    var saved = sessionStorage.getItem(KEY);
+    if (saved !== null && !window.__API_BASE__) window.__API_BASE__ = saved;
+    var savedMode = sessionStorage.getItem(MODE_KEY);
+    if (savedMode && !window.__API_MODE__) window.__API_MODE__ = savedMode;
+  } catch (e) { /* private mode */ }
+  if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
+  if (window.__API_MODE__ !== 'query') window.__API_MODE__ = 'path';
+
+  function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); }
+
+  function build(base, mode, p) {
+    if (mode !== 'query') return base + p;
+    var qi = p.indexOf('?');
+    var only = qi === -1 ? p : p.slice(0, qi);
+    var rest = qi === -1 ? '' : p.slice(qi + 1);
+    return base + '?__path=' + encPath(only) + (rest ? '&' + rest : '');
+  }
+
+  window.apiUrl = function (p) {
+    var b = window.__API_BASE__ || '';
+    if (!p) return b || '/';
+    if (/^[a-z]+:\/\//i.test(p)) return p;
+    if (p.charAt(0) !== '/') p = '/' + p;
+    return build(b, window.__API_MODE__, p);
+  };
+
+  function candidates() {
+    var base = window.__API_BASE__ || '';
+    var mode = window.__API_MODE__ || 'path';
+    var out = [];
+    if (base && base !== '') {
+      out.push({ base: '', mode: 'path' });
+    }
+    return out;
+  }
+
+  function usable(res) {
+    return res.ok || (res.headers.get('content-type') || '').indexOf('application/json') !== -1;
+  }
+
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var isApi = typeof url === 'string' && /(^|\/)api\//.test(url) && !/^[a-z]+:\/\//i.test(url);
+    var p = nativeFetch(input, init);
+    if (!isApi || (init && init.__arenaRetry)) return p;
+    return p.then(function (res) {
+      if (res.status !== 404) return res;
+      var ct = res.headers.get('content-type') || '';
+      if (ct.indexOf('application/json') !== -1) return res;
+
+      var base = window.__API_BASE__ || '';
+      var rel = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
+      if (rel.charAt(0) !== '/') rel = '/' + rel;
+
+      var list = candidates();
+      var retryInit = Object.assign({}, init || {}, { __arenaRetry: true });
+
+      return (function next(i) {
+        if (i >= list.length) return res;
+        var c = list[i];
+        return nativeFetch(build(c.base, c.mode, rel), retryInit).then(function (r2) {
+          if (!usable(r2)) return next(i + 1);
+          window.__API_BASE__ = c.base;
+          window.__API_MODE__ = c.mode;
+          try {
+            sessionStorage.setItem(KEY, c.base);
+            sessionStorage.setItem(MODE_KEY, c.mode);
+          } catch (e) { /* ignore */ }
+          return r2;
+        }).catch(function () { return next(i + 1); });
+      })(0);
+    });
+  };
+})();
+</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Arena AI Coding Agent v0.11.0</title>
+  <title>Arena AI Coding Agent v2.1.0</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -3839,6 +3933,7 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function api(path, opts = {}) {
+  path = window.apiUrl ? window.apiUrl(path) : path;
   let res;
   const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
   const headers = { ...(opts.headers || {}) };
@@ -3995,7 +4090,7 @@ function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
 
 function openLocalAi() {
-  window.location.href = '/localai';
+  window.location.href = window.apiUrl ? window.apiUrl('/localai') : '/localai';
 }
 
 // -------------------------------------------------------------
@@ -4450,7 +4545,8 @@ async function exportProvidersJson() {
     const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
     const headers = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch('/api/providers/export', { headers });
+    const exportUrl = window.apiUrl ? window.apiUrl('/api/providers/export') : '/api/providers/export';
+    const res = await fetch(exportUrl, { headers });
     if (!res.ok) throw new Error(`Export failed with HTTP ${res.status}`);
     const data = await res.json();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -5271,7 +5367,8 @@ async function processFilesForUpload(fileList) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch('/api/chat/upload', {
+      const uploadUrl = window.apiUrl ? window.apiUrl('/api/chat/upload') : '/api/chat/upload';
+      const res = await fetch(uploadUrl, {
         method: 'POST',
         body: fd
       });
@@ -6412,7 +6509,8 @@ async function streamAgentResponse(retryAttempt = 0) {
     };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const res = await fetch('/api/chat/stream', {
+    const streamUrl = window.apiUrl ? window.apiUrl('/api/chat/stream') : '/api/chat/stream';
+    const res = await fetch(streamUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -6804,7 +6902,7 @@ async function handleRejectFeedbackSubmit(e) {
 }
 
 function downloadChangesetPatch(csId) {
-  window.location.href = `/api/changesets/${csId}/patch`;
+  window.location.href = window.apiUrl ? window.apiUrl(`/api/changesets/${csId}/patch`) : `/api/changesets/${csId}/patch`;
 }
 
 async function rollbackChangeSet(csId) {
@@ -8289,7 +8387,7 @@ async function deleteActiveFile() {
 }
 
 function downloadWorkspaceZip() {
-  window.location.href = '/api/workspace/export-zip';
+  window.location.href = window.apiUrl ? window.apiUrl('/api/workspace/export-zip') : '/api/workspace/export-zip';
 }
 
 async function viewFileVersions() {
@@ -8627,7 +8725,7 @@ async function loadObservabilityData() {
 }
 
 function exportObservabilityLogs(fmt = 'json') {
-  window.location.href = `/api/observability/export?format=${fmt}`;
+  window.location.href = window.apiUrl ? window.apiUrl(`/api/observability/export?format=${fmt}`) : `/api/observability/export?format=${fmt}`;
 }
 
 // -------------------------------------------------------------
