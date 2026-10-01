@@ -896,29 +896,54 @@ async function downloadFile(url, destination, update, expectedSha = "", maxBytes
   return { sha256: digest, bytes: received, resumed };
 }
 
+const SSL_FREE_LLAMA_X64 = Object.freeze({
+  name: "llama-b7716-bin-ubuntu-x64.tar.gz",
+  browser_download_url: "https://github.com/ggml-org/llama.cpp/releases/download/b7716/llama-b7716-bin-ubuntu-x64.tar.gz",
+  digest: "sha256:c784d9cb5c4392ae2d70c7324a07511674e898b4fa2677afe61f5795dccb5c68",
+});
+
+function hostHasSharedLibrary(filename) {
+  const triplet = process.arch === "x64" ? "x86_64-linux-gnu" : process.arch === "arm64" ? "aarch64-linux-gnu" : "";
+  const candidates = new Set([
+    ...(process.env.LD_LIBRARY_PATH || "").split(":").filter(Boolean),
+    "/lib", "/usr/lib", "/lib64", "/usr/lib64", "/usr/local/lib", "/usr/local/lib64",
+    ...(triplet ? [`/lib/${triplet}`, `/usr/lib/${triplet}`, `/usr/local/lib/${triplet}`] : []),
+  ]);
+  return [...candidates].some((directory) => fs.existsSync(path.join(directory, filename)));
+}
+
 async function ensureLlamaRuntime(update, signal = null) {
   if (fs.existsSync(llamaServerLink)) return llamaServerLink;
   update({ message: "Finding a compatible llama.cpp release…", progress: 1 });
-  const response = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10", {
-    headers: { "user-agent": "openhands-host-model-manager", accept: "application/vnd.github+json" },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
-  });
-  if (!response.ok) throw new Error(`GitHub release lookup failed with HTTP ${response.status}`);
-  const releases = await response.json();
   const arch = process.arch === "x64" ? "x64" : process.arch === "arm64" ? "arm64" : "";
   if (!arch) throw new Error(`No managed llama.cpp binary is available for ${process.arch}`);
+  const sslFreeCompatibility = arch === "x64"
+    && (process.env.OH_LLAMA_FORCE_SSL_FREE === "1" || !hostHasSharedLibrary("libssl.so.3"));
   let archive = null;
-  for (const release of Array.isArray(releases) ? releases : []) {
-    archive = (Array.isArray(release.assets) ? release.assets : []).find((asset) => {
-      const name = String(asset.name || "").toLowerCase();
-      return name.includes("bin") && (name.includes(`ubuntu-${arch}`) || name.includes(`linux-${arch}`)) && /\.(zip|tar\.gz|tgz)$/.test(name) && !/(cuda|cudart|rocm|vulkan|sycl|kompute|openvino)/.test(name);
+  if (sslFreeCompatibility) {
+    archive = { ...SSL_FREE_LLAMA_X64 };
+    update({ message: "OpenSSL 3 is unavailable; using the verified official SSL-free llama.cpp compatibility runtime…", progress: 2 });
+  } else {
+    const response = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10", {
+      headers: { "user-agent": "openhands-host-model-manager", accept: "application/vnd.github+json" },
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
     });
-    if (archive) break;
+    if (!response.ok) throw new Error(`GitHub release lookup failed with HTTP ${response.status}`);
+    const releases = await response.json();
+    for (const release of Array.isArray(releases) ? releases : []) {
+      archive = (Array.isArray(release.assets) ? release.assets : []).find((asset) => {
+        const name = String(asset.name || "").toLowerCase();
+        return name.includes("bin") && (name.includes(`ubuntu-${arch}`) || name.includes(`linux-${arch}`)) && /\.(zip|tar\.gz|tgz)$/.test(name) && !/(cuda|cudart|rocm|vulkan|sycl|kompute|openvino)/.test(name);
+      });
+      if (archive) break;
+    }
   }
   if (!archive?.browser_download_url) throw new Error("No compatible CPU llama.cpp release asset was found");
   fs.mkdirSync(llamaHome, { recursive: true, mode: 0o700 });
   for (const item of fs.readdirSync(llamaHome)) {
-    if (item.startsWith(".extract-")) fs.rmSync(path.join(llamaHome, item), { recursive: true, force: true });
+    const itemPath = path.join(llamaHome, item);
+    if (item.startsWith(".extract-") || item.startsWith("runtime-")) fs.rmSync(itemPath, { recursive: true, force: true });
+    else if (/^llama-.*\.(?:zip|tar\.gz|tgz)$/i.test(item) && item !== path.basename(archive.name)) fs.rmSync(itemPath, { force: true });
   }
   const archivePath = path.join(llamaHome, path.basename(archive.name));
   const digest = String(archive.digest || "").startsWith("sha256:") ? String(archive.digest).slice(7) : "";
@@ -978,6 +1003,7 @@ async function ensureLlamaRuntime(update, signal = null) {
     installedAt: new Date().toISOString(),
     release: archive.name,
     digest: digest || null,
+    compatibilityMode: sslFreeCompatibility ? "ssl-free" : "current",
     version: publicError(`${version.stdout}\n${version.stderr}`.trim()),
     architecture: process.arch,
   });
