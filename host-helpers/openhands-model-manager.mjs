@@ -760,6 +760,84 @@ async function hashExistingFile(file, hash, signal) {
   return bytes;
 }
 
+async function sha256File(file, signal = null) {
+  const hash = crypto.createHash("sha256");
+  const bytes = await hashExistingFile(file, hash, signal);
+  return { bytes, sha256: hash.digest("hex") };
+}
+
+const SAFE_ARCHIVE_EXTRACTOR = String.raw`
+import json
+import inspect
+import os
+import pathlib
+import posixpath
+import stat
+import sys
+import tarfile
+import zipfile
+
+archive = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2]).resolve()
+destination.mkdir(parents=True, exist_ok=True)
+max_members = 20000
+max_unpacked = 2 * 1024 ** 3
+
+def contained(name):
+    candidate = (destination / name).resolve()
+    try:
+        return os.path.commonpath((str(destination), str(candidate))) == str(destination)
+    except ValueError:
+        return False
+
+if archive.suffix.lower() == ".zip":
+    with zipfile.ZipFile(archive) as package:
+        members = package.infolist()
+        if len(members) > max_members or sum(item.file_size for item in members) > max_unpacked:
+            raise ValueError("archive exceeds safe extraction limits")
+        for item in members:
+            mode = (item.external_attr >> 16) & 0xFFFF
+            if not contained(item.filename) or stat.S_ISLNK(mode):
+                raise ValueError("archive contains an unsafe path or symbolic link")
+        package.extractall(destination)
+else:
+    with tarfile.open(archive) as package:
+        members = package.getmembers()
+        if len(members) > max_members or sum(item.size for item in members) > max_unpacked:
+            raise ValueError("archive exceeds safe extraction limits")
+        names = set()
+        links = set()
+        for item in members:
+            if item.isdev() or item.isfifo():
+                raise ValueError("archive contains a device or FIFO")
+            if posixpath.isabs(item.name):
+                raise ValueError("archive contains an absolute path")
+            normalized = posixpath.normpath(item.name)
+            if normalized == ".." or normalized.startswith("../") or normalized in names:
+                raise ValueError("archive contains an unsafe or duplicate path")
+            names.add(normalized)
+            if item.issym():
+                links.add(normalized)
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(normalized), item.linkname))
+                if posixpath.isabs(item.linkname) or target == ".." or target.startswith("../"):
+                    raise ValueError("archive contains an unsafe symbolic link")
+            elif item.islnk():
+                target = posixpath.normpath(item.linkname)
+                if posixpath.isabs(item.linkname) or target == ".." or target.startswith("../"):
+                    raise ValueError("archive contains an unsafe hard link")
+        for name in names:
+            parent = posixpath.dirname(name)
+            while parent not in ("", "."):
+                if parent in links:
+                    raise ValueError("archive writes through a symbolic-link directory")
+                parent = posixpath.dirname(parent)
+        if "filter" in inspect.signature(package.extractall).parameters:
+            package.extractall(destination, filter="data")
+        else:
+            package.extractall(destination, members=members)
+print(json.dumps({"members": len(members)}))
+`;
+
 async function downloadFile(url, destination, update, expectedSha = "", maxBytes = 20 * 1024 ** 3, signal = null) {
   const temp = `${destination}.part`;
   const hash = crypto.createHash("sha256");
@@ -839,16 +917,34 @@ async function ensureLlamaRuntime(update, signal = null) {
   }
   if (!archive?.browser_download_url) throw new Error("No compatible CPU llama.cpp release asset was found");
   fs.mkdirSync(llamaHome, { recursive: true, mode: 0o700 });
+  for (const item of fs.readdirSync(llamaHome)) {
+    if (item.startsWith(".extract-")) fs.rmSync(path.join(llamaHome, item), { recursive: true, force: true });
+  }
   const archivePath = path.join(llamaHome, path.basename(archive.name));
   const digest = String(archive.digest || "").startsWith("sha256:") ? String(archive.digest).slice(7) : "";
-  update({ message: `Downloading ${archive.name}…`, progress: 3 });
-  await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3, signal);
+  let reuseArchive = false;
+  if (digest && fs.existsSync(archivePath)) {
+    update({ message: `Checking the existing ${archive.name} download…`, progress: 3 });
+    const existingArchive = await sha256File(archivePath, signal);
+    reuseArchive = safeEqual(existingArchive.sha256.toLowerCase(), digest.toLowerCase());
+    if (!reuseArchive) fs.rmSync(archivePath, { force: true });
+  }
+  if (!reuseArchive) {
+    update({ message: `Downloading ${archive.name}…`, progress: 3 });
+    await downloadFile(archive.browser_download_url, archivePath, update, digest, 2 * 1024 ** 3, signal);
+  } else {
+    update({ message: `Using the verified ${archive.name} download…`, progress: 95 });
+  }
   if (signal?.aborted) throw signal.reason || new Error("Cancelled");
-  update({ message: "Extracting llama.cpp…", progress: 96 });
-  const extractor = `import pathlib,sys,tarfile,zipfile\np=pathlib.Path(sys.argv[1]); d=pathlib.Path(sys.argv[2])\n(zipfile.ZipFile(p).extractall(d) if p.suffix=='.zip' else tarfile.open(p).extractall(d))\n`;
-  const extracted = await spawnCollect("python3", ["-c", extractor, archivePath, llamaHome], { timeout: 120000 });
-  if (extracted.code !== 0) throw new Error(`Could not extract llama.cpp: ${publicError(extracted.stderr)}`);
-  const queue = [llamaHome];
+  update({ message: "Extracting llama.cpp into a clean staging directory…", progress: 96 });
+  const staging = fs.mkdtempSync(path.join(llamaHome, ".extract-"));
+  fs.chmodSync(staging, 0o700);
+  const extracted = await spawnCollect("python3", ["-c", SAFE_ARCHIVE_EXTRACTOR, archivePath, staging], { timeout: 120000 });
+  if (extracted.code !== 0) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw new Error(`Could not safely extract llama.cpp: ${publicError(extracted.stderr || extracted.stdout || "unknown extraction error")}`);
+  }
+  const queue = [staging];
   let binary = "";
   while (queue.length) {
     const directory = queue.shift();
@@ -859,18 +955,34 @@ async function ensureLlamaRuntime(update, signal = null) {
     }
     if (binary) break;
   }
-  if (!binary) throw new Error("The llama.cpp archive did not contain llama-server");
+  if (!binary) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw new Error("The llama.cpp archive did not contain llama-server");
+  }
+  const runtimeId = digest ? digest.slice(0, 16) : slug(archive.name, "release");
+  const runtimeRoot = path.join(llamaHome, `runtime-${runtimeId}`);
+  const relativeBinary = path.relative(staging, binary);
+  fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  fs.renameSync(staging, runtimeRoot);
+  binary = path.join(runtimeRoot, relativeBinary);
   fs.chmodSync(binary, 0o700);
-  try { fs.symlinkSync(binary, llamaServerLink); } catch (error) { if (error.code !== "EEXIST") throw error; }
+  fs.rmSync(llamaServerLink, { force: true });
+  fs.symlinkSync(binary, llamaServerLink);
+  update({ message: "Validating the llama.cpp executable…", progress: 98 });
   const version = await spawnCollect(llamaServerLink, ["--version"], { timeout: 15000, maxOutput: 32000 });
-  if (version.code !== 0) { fs.rmSync(llamaServerLink, { force: true }); throw new Error(`Downloaded llama.cpp runtime failed validation: ${publicError(version.stderr || version.stdout)}`); }
+  if (version.code !== 0) {
+    fs.rmSync(llamaServerLink, { force: true });
+    throw new Error(`Downloaded llama.cpp runtime failed validation: ${publicError(version.stderr || version.stdout || `exit code ${version.code}`)}`);
+  }
   atomicJson(path.join(llamaHome, "runtime.json"), {
     installedAt: new Date().toISOString(),
     release: archive.name,
+    digest: digest || null,
     version: publicError(`${version.stdout}\n${version.stderr}`.trim()),
     architecture: process.arch,
   });
   fs.rmSync(archivePath, { force: true });
+  fs.rmSync(path.join(llamaHome, "build"), { recursive: true, force: true });
   return llamaServerLink;
 }
 
@@ -1476,7 +1588,7 @@ q("test").onclick=()=>busy(q("test"),async()=>{try{show("test-status","در حا
 async function discoverHfFiles(){show("install-status","در حال خواندن و فیلتر فایل‌های مخزن…");const d=await call("/local/hf-files",{method:"POST",body:JSON.stringify({repo:q("gguf-repo").value,revision:q("gguf-revision").value,quantization:q("hf-quant").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null})});hfFiles=d.files;show("install-status",d.count+" فایل مطابق مشخصات از "+d.totalGgufFiles+" فایل GGUF پیدا شد.");q("hf-results").innerHTML=d.files.length?"<table><tr><th>فایل</th><th>حجم</th><th>SHA</th><th></th></tr>"+d.files.map((f,i)=>"<tr><td class=ltr>"+esc(f.filename)+"</td><td>"+bytes(f.bytes)+"</td><td>"+(f.sha256?"✓":"—")+"</td><td><button data-hf="+i+">انتخاب</button></td></tr>").join("")+"</table>":"<p class=muted>فایلی مطابق Quantization و سقف حجم مشخص‌شده پیدا نشد.</p>";document.querySelectorAll("[data-hf]").forEach(b=>b.onclick=()=>{const f=hfFiles[Number(b.dataset.hf)];q("gguf-file").value=f.filename;q("gguf-sha").value=f.sha256||"";show("install-status","فایل "+f.filename+" انتخاب شد و آماده دانلود است.")})}
 q("hf-files").onclick=()=>busy(q("hf-files"),async()=>{try{await discoverHfFiles()}catch(e){show("install-status",e.message,false)}});
 q("hf-search-button").onclick=()=>busy(q("hf-search-button"),async()=>{try{show("hf-search-status","در حال جستجوی مدل‌های GGUF…");const d=await call("/local/hf-search",{method:"POST",body:JSON.stringify({query:q("hf-search").value,family:q("hf-family").value,parameterSize:q("hf-params").value,quantization:q("hf-quant").value,license:q("hf-license").value,language:q("hf-language").value,author:q("hf-author").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null,sort:q("hf-sort").value,limit:Number(q("hf-limit").value)})});hfSearchResults=d.results;show("hf-search-status",d.count+" مخزن مطابق مشخصات پیدا شد.");q("hf-search-results").innerHTML=d.results.length?"<table><tr><th>مخزن</th><th>معماری/مجوز</th><th>دانلود/پسند</th><th></th></tr>"+d.results.map((m,i)=>"<tr><td class=ltr>"+esc(m.id)+"</td><td>"+esc(m.architecture||m.parameterSize||"—")+"<br>"+esc(m.license||"نامشخص")+"</td><td>"+esc(m.downloads)+" / "+esc(m.likes)+"</td><td><button data-hf-repo="+i+">انتخاب و آماده‌سازی دانلود</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی مطابق همه مشخصات پیدا نشد؛ برخی فیلترها را خالی کنید.</p>";document.querySelectorAll("[data-hf-repo]").forEach(b=>b.onclick=async()=>{const m=hfSearchResults[Number(b.dataset.hfRepo)];q("gguf-repo").value=m.id;q("gguf-url").value="";q("gguf-revision").value="main";q("gguf-name").value=m.id.split("/").pop().replace(/-gguf$/i,"").toLowerCase().replace(/[^a-z0-9._-]+/g,"-").slice(0,48);if(m.suggestedFile){q("gguf-file").value=m.suggestedFile.filename||"";q("gguf-sha").value=m.suggestedFile.sha256||""}if(innerWidth<981)q("install-card").scrollIntoView({behavior:"smooth",block:"start"});try{await discoverHfFiles()}catch(e){show("install-status",e.message,false)}})}catch(e){show("hf-search-status",e.message,false)}});
-q("install").onclick=async()=>{if(currentInstallJob)return;try{const payload={name:q("gguf-name").value,url:q("gguf-url").value,repo:q("gguf-repo").value,filename:q("gguf-file").value,revision:q("gguf-revision").value,sha256:q("gguf-sha").value,replace:q("gguf-replace").checked,...localOptions()};const d=await call("/local/install",{method:"POST",body:JSON.stringify(payload)});currentInstallJob=d.jobId;q("install").disabled=true;q("cancel-install").disabled=false;show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId);show("install-status",j.status+": "+(j.message||"")+" "+(j.progress||0)+"%"+(j.bytesReceived?" — "+bytes(j.bytesReceived)+(j.bytesTotal?" / "+bytes(j.bytesTotal):""):""),!["failed","cancelled"].includes(j.status));if(["completed","failed","cancelled"].includes(j.status)){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;await refresh()}}catch(e){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
+q("install").onclick=async()=>{if(currentInstallJob)return;try{const payload={name:q("gguf-name").value,url:q("gguf-url").value,repo:q("gguf-repo").value,filename:q("gguf-file").value,revision:q("gguf-revision").value,sha256:q("gguf-sha").value,replace:q("gguf-replace").checked,...localOptions()};const d=await call("/local/install",{method:"POST",body:JSON.stringify(payload)});currentInstallJob=d.jobId;q("install").disabled=true;q("cancel-install").disabled=false;show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId),detail=j.error||j.message||"";show("install-status",j.status+": "+detail+" "+(j.progress||0)+"%"+(j.bytesReceived?" — "+bytes(j.bytesReceived)+(j.bytesTotal?" / "+bytes(j.bytesTotal):""):""),!["failed","cancelled"].includes(j.status));if(["completed","failed","cancelled"].includes(j.status)){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;await refresh()}}catch(e){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
 q("cancel-install").onclick=async()=>{if(!currentInstallJob)return;try{await call("/jobs/"+currentInstallJob+"/cancel",{method:"POST"});show("install-status","در حال لغو امن؛ فایل ناقص برای ادامه بعدی حفظ می‌شود…")}catch(e){show("install-status",e.message,false)}};
 q("save-local-config").onclick=()=>busy(q("save-local-config"),async()=>{try{const name=q("gguf-name").value;if(!name)throw Error("ابتدا یک مدل نصب‌شده را از دکمه تنظیم انتخاب کنید");await call("/local/models/"+encodeURIComponent(name),{method:"PUT",body:JSON.stringify(localOptions())});show("install-status","تنظیمات ذخیره شد.");await refresh()}catch(e){show("install-status",e.message,false)}});
 q("stop-local").onclick=()=>busy(q("stop-local"),async()=>{try{await call("/local/stop",{method:"POST",body:"{}"});show("install-status","مدل متوقف شد.");await refresh()}catch(e){show("install-status",e.message,false)}});
