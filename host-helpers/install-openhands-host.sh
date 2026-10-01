@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.3.0"
+SCRIPT_VERSION="3.3.1"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -948,7 +948,8 @@ write_wrapper() {
 }
 
 install_companion() {
-    local filename="$1" destination="$2" source_path="" source_dir="" candidate="" temp="" version_file="${destination}.helper-version" installed_version=""
+    local filename="$1" destination="$2" source_path="" source_dir="" candidate="" temp="" installed_version=""
+    local version_file="${destination}.helper-version"
     source_path="${BASH_SOURCE[0]:-}"
     if [[ "$source_path" != */* ]]; then source_path="$(command -v -- "$source_path" 2>/dev/null || printf '%s' "$source_path")"; fi
     source_dir="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd -P || true)"
