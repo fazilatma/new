@@ -19,6 +19,6 @@
     "PORT": "8788",
     "HOST": "0.0.0.0",
     "ENVIRONMENT": "production",
-    "APP_VERSION": "2.0.0"
+    "APP_VERSION": "2.1.0"
   }
 }

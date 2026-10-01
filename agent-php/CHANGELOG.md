@@ -12,6 +12,16 @@ depends on those response shapes.
 
 ---
 
+## [2.1.0] — 2026-10-01
+
+### Added
+- **Dedicated Batch Model Importer UI (`📥 درون‌ریزی مدل‌ها`).** Added dedicated batch import buttons on every provider card and the providers toolbar with replace/merge support.
+- **Universal Multi-Format Model Parser.** Seamlessly imports OpenAI `/v1/models` API responses, OpenRouter/Ollama `{"models": [...]}`, array of objects, dictionary mappings (`{"model_id": {...}}`), and plain text lines (one model name per line).
+- **Header & Sidebar Version Indicators.** Prominent `🚀 v2.1.0` header badge and dynamic `/api/version` synchronization on page load.
+- **Client-Side Sanitizer.** Automatic stripping of markdown fences and smart quotes before submission.
+
+---
+
 ## [2.0.0] — 2026-10-01
 
 ### Added

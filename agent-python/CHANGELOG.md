@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.1.0 - Dedicated Batch Model Importer UI, Universal Multi-Format Model Parser, Dynamic Header Version Badge
+
+- **Dedicated Batch Model Importer Modal (`📥 درون‌ریزی مدل‌ها`)**:
+  - Added dedicated per-provider model import button and top view toolbar button in the Providers view.
+  - Supports instant merging or complete replacement of models for any selected provider.
+- **Universal Multi-Format Model Normalizer (`app/providers.py`)**:
+  - Tolerates OpenAI `/v1/models` JSON responses (`{"data": [...]}`), OpenRouter/Ollama format (`{"models": [...]}`), dictionary maps (`{"model_id": {...}}`), arrays of objects, and plain text line-by-line model names.
+  - Automatic markdown code fence and smart quote sanitization.
+- **Header & Sidebar Version Indicators (`app/static/index.html`)**:
+  - Prominent `🚀 v2.1.0` header badge and dynamic `/api/version` client synchronization.
+- **Local AI & Diagnostic Pages Parity**:
+  - Added `/localai` and `/diag` static endpoints and UI buttons matching the PHP edition.
+
 ## 2.0.0 - Unified Release: Local AI Engine, Dedicated Model Importer, Parity with PHP Edition
 
 - **Full Local AI Runtime & Manager (`app/local_ai.py` & API Endpoints)**:
