@@ -48,7 +48,7 @@ let localModelStartedAt = null;
 let localModelLastExit = null;
 let profileTestPromise = null;
 
-const MIN_LOCAL_CONTEXT = 16384;
+const MIN_CONTEXT_WINDOW = 16384;
 const DEFAULT_PROXY_TEMPLATE = "https://proxy.fazilat-ma.workers.dev/?url={url}";
 const DEFAULT_CONFIG = {
   version: 1,
@@ -402,6 +402,7 @@ async function importProviders(body) {
     profilesExisting: 0,
     profilesLinked: 0,
     profilesUpdated: 0,
+    contextWindowsAdjusted: 0,
     skipped: 0,
     profileNames: [],
     warnings: [],
@@ -443,8 +444,11 @@ async function importProviders(body) {
       const model = modelInfo(rawModel);
       const modelId = canonicalModel(info.provider, model.id);
       if (!modelId) { summary.skipped += 1; continue; }
-      const preferredName = slug(firstString(model.source, ["profileName", "profile_name"]) || `${info.provider}-${model.name || model.id}`, "imported-model").slice(0, 64);
-      const profileName = existing.has(preferredName) ? preferredName : uniqueProfileName(info.provider, model.name || model.id, existing);
+      const requestedProfileName = firstString(model.source, ["profileName", "profile_name"]);
+      const preferredName = slug(requestedProfileName || `${info.provider}-${model.name || model.id}`, "imported-model").slice(0, 64);
+      const profileName = existing.has(preferredName) || requestedProfileName
+        ? preferredName
+        : uniqueProfileName(info.provider, model.name || model.id, existing);
       let existingConfig = {};
       let replacing = false;
 
@@ -459,22 +463,27 @@ async function importProviders(body) {
           }
           summary.profilesExisting += 1;
           summary.profileNames.push(profileName);
-          // The twelve helper-seeded OpenRouter profiles intentionally start
-          // credential-free. A secret import may safely bind those exact
-          // model matches while preserving every other profile field.
-          if (connectionId && SEEDED_OPENROUTER_PROFILES.has(profileName)
-              && !existingConfig.provider_connection_id && !detail.api_key_set) {
+          // A same-model import remains non-destructive, but a context value
+          // that OpenHands itself cannot run is safe to raise when the secret
+          // lives in a Provider Connection (or no inline secret exists).
+          const shortContext = Number(existingConfig.max_input_tokens || 0) > 0
+            && Number(existingConfig.max_input_tokens) < MIN_CONTEXT_WINDOW;
+          const linkSeededProfile = connectionId && SEEDED_OPENROUTER_PROFILES.has(profileName)
+            && !existingConfig.provider_connection_id && !detail.api_key_set;
+          if ((shortContext || linkSeededProfile) && !(detail.api_key_set && !existingConfig.provider_connection_id)) {
             const llm = {
               ...existingConfig,
               api_key: undefined,
-              ...(effectiveBase ? { base_url: effectiveBase } : {}),
-              provider_connection_id: connectionId,
+              ...(shortContext ? { max_input_tokens: MIN_CONTEXT_WINDOW } : {}),
+              ...(linkSeededProfile && effectiveBase ? { base_url: effectiveBase } : {}),
+              ...(linkSeededProfile ? { provider_connection_id: connectionId } : {}),
             };
             await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
               method: "POST",
               body: JSON.stringify({ llm, include_secrets: false }),
             });
-            summary.profilesLinked += 1;
+            if (shortContext) summary.contextWindowsAdjusted += 1;
+            if (linkSeededProfile) summary.profilesLinked += 1;
           }
           continue;
         }
@@ -486,7 +495,13 @@ async function importProviders(body) {
         replacing = true;
       }
 
-      const maxInput = numericField(model.source, ["maxInputTokens", "max_input_tokens", "contextLength", "context_length", "contextWindow", "context_window"]);
+      const suppliedMaxInput = numericField(model.source, ["maxInputTokens", "max_input_tokens", "contextLength", "context_length", "contextWindow", "context_window"]);
+      const existingMaxInput = numericField(existingConfig, ["max_input_tokens"]);
+      const maxInput = Math.max(MIN_CONTEXT_WINDOW, suppliedMaxInput || existingMaxInput || MIN_CONTEXT_WINDOW);
+      if ((suppliedMaxInput && suppliedMaxInput < MIN_CONTEXT_WINDOW)
+          || (!suppliedMaxInput && existingMaxInput && existingMaxInput < MIN_CONTEXT_WINDOW)) {
+        summary.contextWindowsAdjusted += 1;
+      }
       const maxOutput = numericField(model.source, ["maxOutputTokens", "max_output_tokens", "maxTokens", "max_tokens"]);
       const capabilities = model.source.capabilities && typeof model.source.capabilities === "object" ? model.source.capabilities : {};
       const toolCalling = model.source.toolCalling ?? model.source.tool_calling ?? capabilities.toolCalling ?? capabilities.tool_calling ?? capabilities.tools ?? true;
@@ -496,7 +511,7 @@ async function importProviders(body) {
         model: modelId,
         ...(effectiveBase ? { base_url: effectiveBase } : {}),
         ...(connectionId ? { provider_connection_id: connectionId } : {}),
-        ...(maxInput ? { max_input_tokens: maxInput } : {}),
+        max_input_tokens: maxInput,
         ...(maxOutput ? { max_output_tokens: maxOutput } : {}),
         native_tool_calling: Boolean(toolCalling),
         api_mode: "chat",
@@ -636,7 +651,7 @@ function localModelOptions(source = {}) {
   };
   const batchSize = integer("batchSize", 512, 1, 4096);
   return {
-    contextLength: integer("contextLength", MIN_LOCAL_CONTEXT, MIN_LOCAL_CONTEXT, 1048576),
+    contextLength: integer("contextLength", MIN_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW, 1048576),
     threads: integer("threads", Math.max(1, Math.min(cpuCount, Math.ceil(cpuCount * 0.75))), 1, 256),
     batchSize,
     ubatchSize: Math.min(batchSize, integer("ubatchSize", Math.min(256, batchSize), 1, 4096)),
@@ -1098,41 +1113,34 @@ async function ensureLocalProfile(name, contextLength) {
   return profileName;
 }
 
-async function reconcileLocalContextWindows() {
+async function reconcileMinimumContextWindows() {
   const registry = loadRegistry();
   for (const model of registry.models) {
     try { await ensureLocalProfile(model.name, localModelOptions(model).contextLength); }
     catch (error) { console.error(`[openhands-model-manager] Could not reconcile managed profile ${model.name}: ${publicError(error)}`); }
   }
   const list = await backendRequest("/api/profiles");
-  const connectionsResponse = await backendRequest("/api/llm/provider-connections");
-  const connections = Array.isArray(connectionsResponse) ? connectionsResponse : (connectionsResponse?.connections || []);
-  const byId = new Map(connections.map((connection) => [connection.id, connection]));
-  const managedNames = new Set(loadRegistry().models.map((model) => `local-${model.name}`.slice(0, 64)));
   let updated = 0;
   for (const profile of list?.profiles || []) {
-    if (!String(profile.name || "").startsWith("local-") && !managedNames.has(profile.name)) continue;
-    const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`);
-    const config = detail.config || {};
-    const connection = config.provider_connection_id ? byId.get(config.provider_connection_id) : null;
-    const isLocal = managedNames.has(profile.name)
-      || /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(String(config.base_url || connection?.base_url || ""))
-      || String(connection?.display_name || "").startsWith("Local ");
-    if (!isLocal || (detail.api_key_set && !config.provider_connection_id)) continue;
-    if (Number(config.max_input_tokens || 0) >= MIN_LOCAL_CONTEXT) continue;
-    await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`, {
-      method: "POST",
-      body: JSON.stringify({
-        llm: {
-          ...config,
-          api_key: undefined,
-          max_input_tokens: MIN_LOCAL_CONTEXT,
-          max_output_tokens: Math.min(8192, Math.floor(MIN_LOCAL_CONTEXT / 2)),
-        },
-        include_secrets: false,
-      }),
-    });
-    updated += 1;
+    try {
+      const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`);
+      const config = detail.config || {};
+      const context = Number(config.max_input_tokens || 0);
+      if (!Number.isFinite(context) || context <= 0 || context >= MIN_CONTEXT_WINDOW) continue;
+      // Updating an inline-key profile without retrieving its secret could
+      // destroy the credential. Provider-Connection profiles are safe to fix.
+      if (detail.api_key_set && !config.provider_connection_id) continue;
+      await backendRequest(`/api/profiles/${encodeURIComponent(profile.name)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          llm: { ...config, api_key: undefined, max_input_tokens: MIN_CONTEXT_WINDOW },
+          include_secrets: false,
+        }),
+      });
+      updated += 1;
+    } catch (error) {
+      console.error(`[openhands-model-manager] Could not reconcile profile ${profile.name}: ${publicError(error)}`);
+    }
   }
   return updated;
 }
@@ -1440,7 +1448,7 @@ function managerPage() {
 <nav class="tabs-wrap" aria-label="بخش‌های مدیریت"><div class="tabs" role="tablist"><button class="tab" type="button" role="tab" data-tab="overview">نمای کلی</button><button class="tab" type="button" role="tab" data-tab="providers">Import / Export</button><button class="tab" type="button" role="tab" data-tab="proxy">Proxy</button><button class="tab" type="button" role="tab" data-tab="local">GGUF محلی</button><button class="tab" type="button" role="tab" data-tab="endpoint">OpenAI Endpoint</button><button class="tab" type="button" role="tab" data-tab="tests">تست مدل‌ها</button></div></nav>
 <main>
 <section class="panel" data-panel="overview"><div class="section-head"><div><h2>نمای کلی مدل‌ها</h2><p>وضعیت Profileها و مدل‌های محلی این نصب را یک‌جا مشاهده کنید.</p></div></div><div class="grid"><div class="card span-4"><h2>وضعیت نصب</h2><div id="profile-limit" class="status ok"></div><p class="muted">این پنل فقط در مرورگر Pair‌شده فعال است. هیچ کلید یا tokenی در URL، خروجی یا log قرار نمی‌گیرد.</p></div><div class="card span-8"><div class="metric-grid"><div class="metric"><span>LLM Profile</span><strong id="profile-count">—</strong></div><div class="metric"><span>مدل GGUF نصب‌شده</span><strong id="local-count">—</strong></div><div class="metric"><span>وضعیت llama.cpp</span><strong id="runtime-state">—</strong></div></div></div><div class="card span-12"><h2>LLM Profileهای موجود</h2><p class="muted">پس از ایجاد یا Import مدل، برای مشاهده آن در Canvas صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles" class="scroll"></div></div></div></section>
-<section class="panel" data-panel="providers" hidden><div class="section-head"><div><h2>درون‌ریزی و برون‌ریزی</h2><p>فایل JSON ارائه‌دهنده را با کنترل کامل روی secretها مدیریت کنید.</p></div></div><div class="grid"><div class="card span-7"><h2>Import JSON</h2><div class="notice">API key فقط در صورت فعال‌کردن گزینه زیر به Provider Connection رمزنگاری‌شده منتقل می‌شود. snapshot و export همیشه بدون secret هستند.</div><label for="file">فایل JSON ارائه‌دهنده</label><input id="file" type="file" accept="application/json,.json"><label class="check"><input id="secrets" type="checkbox"><span>درون‌ریزی API keyهای فایل در Provider Connections رمزنگاری‌شده</span></label><label class="check"><input id="overwrite" type="checkbox"><span>به‌روزرسانی Profileهای هم‌نام؛ Profile دارای inline key هرگز بازنویسی نمی‌شود</span></label><div class="actions"><button id="import" type="button">درون‌ریزی و بررسی</button></div><div id="io-status" class="status" role="status"></div></div><div class="card span-5"><h2>Export امن</h2><p class="muted">Providerها و Profileها با قالب سازگار و مقدار <code>secretsIncluded=false</code> دریافت می‌شوند.</p><div class="actions"><button class="alt" id="export" type="button">دریافت JSON بدون secret</button></div></div></div></section>
+<section class="panel" data-panel="providers" hidden><div class="section-head"><div><h2>درون‌ریزی و برون‌ریزی</h2><p>فایل JSON ارائه‌دهنده را با کنترل کامل روی secretها مدیریت کنید.</p></div></div><div class="grid"><div class="card span-7"><h2>Import JSON</h2><div class="notice">API key فقط در صورت فعال‌کردن گزینه زیر به Provider Connection رمزنگاری‌شده منتقل می‌شود. snapshot و export همیشه بدون secret هستند. Context خالی یا کمتر از ۱۶٬۳۸۴ هنگام Import خودکار به حداقل قابل‌اجرای OpenHands تبدیل می‌شود.</div><label for="file">فایل JSON ارائه‌دهنده</label><input id="file" type="file" accept="application/json,.json"><label class="check"><input id="secrets" type="checkbox"><span>درون‌ریزی API keyهای فایل در Provider Connections رمزنگاری‌شده</span></label><label class="check"><input id="overwrite" type="checkbox"><span>به‌روزرسانی Profileهای هم‌نام؛ Profile دارای inline key هرگز بازنویسی نمی‌شود</span></label><div class="actions"><button id="import" type="button">درون‌ریزی و بررسی</button></div><div id="io-status" class="status" role="status"></div></div><div class="card span-5"><h2>Export امن</h2><p class="muted">Providerها و Profileها با قالب سازگار و مقدار <code>secretsIncluded=false</code> دریافت می‌شوند.</p><div class="actions"><button class="alt" id="export" type="button">دریافت JSON بدون secret</button></div></div></div></section>
 <section class="panel" data-panel="proxy" hidden><div class="section-head"><div><h2>مسیر خروجی و Proxy</h2><p>اتصال مستقیم، fallback خودکار یا عبور اجباری از Proxy را انتخاب کنید.</p></div></div><div class="grid"><div class="card span-7"><div class="notice">در حالت Proxy، سرویس واسط prompt، پاسخ و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند؛ فقط از واسط مورد اعتماد استفاده کنید.</div><div class="form-grid"><div class="field full"><label for="mode">حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select></div><div class="field full"><label for="template">URL template</label><input id="template" class="ltr" spellcheck="false"></div></div><div class="actions"><button id="save-proxy" type="button">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter" type="button">اعمال روی همه مدل‌های OpenRouter</button></div><div id="proxy-status" class="status" role="status"></div></div><div class="card span-5"><h2>Routeهای فعال</h2><div id="routes"></div></div></div></section>
 <section class="panel" data-panel="local" hidden><div class="section-head"><div><h2>مدل محلی GGUF و llama.cpp</h2><p>مدل مناسب را جست‌وجو، فایل را انتخاب و دانلود قابل‌ادامه را مدیریت کنید.</p></div></div><div class="grid"><div class="card span-12"><div id="resources" class="notice"></div></div><div class="card span-6"><h2>۱. جست‌وجوی Hugging Face</h2><p class="muted">فیلترها اختیاری‌اند. Quantization و سقف حجم روی فایل‌های واقعی هر repository نیز بررسی می‌شوند.</p><div class="form-grid"><div class="field full"><label for="hf-search">عبارت جست‌وجو</label><input id="hf-search" class="ltr" placeholder="coder instruct persian"></div><div class="field"><label for="hf-family">خانواده یا معماری</label><input id="hf-family" class="ltr" placeholder="Qwen"></div><div class="field"><label for="hf-params">اندازه پارامتر</label><input id="hf-params" class="ltr" placeholder="7B"></div><div class="field"><label for="hf-quant">Quantization</label><input id="hf-quant" class="ltr" placeholder="Q4_K_M"></div><div class="field"><label for="hf-max-gb">حداکثر حجم فایل (GB)</label><input id="hf-max-gb" type="number" min="0.1" max="20" step="0.1" placeholder="8"></div><div class="field"><label for="hf-license">License</label><input id="hf-license" class="ltr" placeholder="apache-2.0"></div><div class="field"><label for="hf-language">زبان</label><input id="hf-language" class="ltr" placeholder="fa"></div><div class="field"><label for="hf-author">سازنده یا سازمان</label><input id="hf-author" class="ltr" placeholder="bartowski"></div><div class="field third"><label for="hf-sort">مرتب‌سازی</label><select id="hf-sort"><option value="downloads">بیشترین دانلود</option><option value="likes">بیشترین پسند</option><option value="updated">جدیدترین</option></select></div><div class="field third"><label for="hf-limit">تعداد</label><input id="hf-limit" type="number" value="20" min="1" max="50"></div></div><div class="actions"><button id="hf-search-button" type="button">جست‌وجوی مدل‌های GGUF</button></div><div id="hf-search-status" class="status" role="status"></div><div id="hf-search-results" class="scroll"></div></div>
 <div class="card span-6" id="install-card"><h2>۲. انتخاب فایل و نصب</h2><div class="notice">حداقل Context موردنیاز OpenHands برابر ۱۶٬۳۸۴ است. مقدار کمتر در API و Profile به‌طور خودکار اصلاح می‌شود.</div><div class="form-grid"><div class="field"><label for="gguf-name">نام کوتاه</label><input id="gguf-name" class="ltr" placeholder="qwen-small"></div><div class="field"><label for="gguf-revision">Revision</label><input id="gguf-revision" class="ltr" value="main"></div><div class="field full"><label for="gguf-url">URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" spellcheck="false" placeholder="https://huggingface.co/.../resolve/main/model.gguf"></div><div class="field full"><label for="gguf-repo">یا Hugging Face repository</label><input id="gguf-repo" class="ltr" spellcheck="false" placeholder="Qwen/Qwen3-GGUF"></div><div class="field full"><label for="gguf-file">نام فایل GGUF</label><input id="gguf-file" class="ltr" spellcheck="false" placeholder="model-Q4_K_M.gguf"></div></div><div class="actions"><button id="hf-files" class="alt" type="button">نمایش فایل‌های منطبق مخزن</button></div><div id="hf-results" class="scroll"></div><div class="form-grid"><div class="field full"><label for="gguf-sha">SHA-256 اختیاری</label><input id="gguf-sha" class="ltr" spellcheck="false" maxlength="64"></div><div class="field third"><label for="gguf-context">Context</label><input id="gguf-context" type="number" value="16384" min="16384"></div><div class="field third"><label for="gguf-threads">CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div class="field third"><label for="gguf-parallel">Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div><div class="field"><label for="gguf-batch">Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div class="field"><label for="gguf-ubatch">Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label class="check"><input id="gguf-mmap" type="checkbox" checked><span>استفاده از mmap برای کاهش مصرف RAM</span></label><label class="check"><input id="gguf-mlock" type="checkbox"><span>قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</span></label><label class="check"><input id="gguf-replace" type="checkbox"><span>نصب مجدد و جایگزینی مدل هم‌نام</span></label><div class="actions"><button id="install" type="button">دانلود یا ادامه دانلود و نصب</button><button id="save-local-config" class="alt" type="button">ذخیره تنظیمات</button><button id="stop-local" class="ghost" type="button">توقف مدل</button><button id="cancel-install" class="warn" type="button" disabled>لغو امن دانلود</button></div><div id="install-status" class="status" role="status"></div></div>
@@ -1460,7 +1468,7 @@ async function refresh(){
  const partials=s.local.partialDownloads.length?"<p class=muted>دانلودهای قابل ادامه: "+s.local.partialDownloads.map(p=>esc(p.name)+" ("+bytes(p.bytes)+")").join("، ")+"</p>":"";q("locals").innerHTML=partials+(s.local.models.length?"<table><tr><th>مدل</th><th>حجم/نسخه</th><th>تنظیمات</th><th>عملیات</th></tr>"+s.local.models.map(m=>"<tr><td class=ltr>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✅":" ⏳"):"")+(m.partialBytes?"<br><small>دانلود ناقص: "+bytes(m.partialBytes)+"</small>":"")+"</td><td>"+bytes(m.bytes)+"<br>GGUF v"+esc(m.gguf?.version||"?")+"</td><td>ctx "+esc(m.contextLength)+"<br>threads "+esc(m.threads)+" / batch "+esc(m.batchSize)+"</td><td><button data-start="+esc(m.name)+">اجرا</button><button class=alt data-edit="+esc(m.name)+">تنظیم</button><button class=warn data-delete="+esc(m.name)+">حذف</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>");
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{try{show("install-status","در حال اجرای مدل…");await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});await refresh()}catch(e){show("install-status",e.message,false)}});document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>loadLocalForm(s.local.models.find(m=>m.name===b.dataset.edit)));document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=async()=>{if(!confirm("مدل "+b.dataset.delete+"، فایل GGUF و Profile مدیریت‌شده آن حذف شود؟"))return;try{await call("/local/models/"+encodeURIComponent(b.dataset.delete),{method:"DELETE"});show("install-status","مدل حذف شد.");await refresh()}catch(e){show("install-status",e.message,false)}})
 }
-q("import").onclick=()=>busy(q("import"),async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,importSecrets:q("secrets").checked,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ اتصال جدید: "+r.connectionsCreated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}});
+q("import").onclick=()=>busy(q("import"),async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,importSecrets:q("secrets").checked,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ Context اصلاح‌شده: "+r.contextWindowsAdjusted+"؛ اتصال جدید: "+r.connectionsCreated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}});
 q("export").onclick=()=>busy(q("export"),async()=>{try{const d=await call("/providers/export");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:"application/json"}));a.download="openhands-providers.json";a.hidden=true;document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);show("io-status","فایل امن بدون API key ساخته شد.")}catch(e){show("io-status",e.message,false)}});
 q("save-proxy").onclick=()=>busy(q("save-proxy"),async()=>{try{await call("/proxy",{method:"PUT",body:JSON.stringify({defaultMode:q("mode").value,proxyTemplate:q("template").value})});show("proxy-status","ذخیره شد؛ Routeهای موجود نیز به حالت جدید تغییر کردند.");refresh()}catch(e){show("proxy-status",e.message,false)}});
 q("apply-openrouter").onclick=()=>busy(q("apply-openrouter"),async()=>{try{if(!state)await refresh();const profiles=(state?.profiles||[]).filter(p=>String(p.model||"").startsWith("openrouter/")).map(p=>p.name);const r=await call("/proxy/apply",{method:"POST",body:JSON.stringify({routeId:"openrouter",basePath:"/api/v1",provider:"openrouter",profiles})});show("proxy-status",r.updated.length+" Profile و "+r.connectionsUpdated.length+" اتصال به Route متصل شد؛ "+r.skipped.length+" مورد رد شد.");refresh()}catch(e){show("proxy-status",e.message,false)}});
@@ -1567,9 +1575,9 @@ server.listen(managerPort, "127.0.0.1", async () => {
   try { await migrateSeededOpenRouterProfiles(); }
   catch (error) { console.error(`[openhands-model-manager] Seeded profile route migration skipped: ${publicError(error)}`); }
   try {
-    const repaired = await reconcileLocalContextWindows();
-    if (repaired) console.log(`[openhands-model-manager] Raised ${repaired} local profile context window(s) to ${MIN_LOCAL_CONTEXT}.`);
-  } catch (error) { console.error(`[openhands-model-manager] Local context-window reconciliation skipped: ${publicError(error)}`); }
+    const repaired = await reconcileMinimumContextWindows();
+    if (repaired) console.log(`[openhands-model-manager] Raised ${repaired} profile context window(s) to ${MIN_CONTEXT_WINDOW}.`);
+  } catch (error) { console.error(`[openhands-model-manager] Minimum context-window reconciliation skipped: ${publicError(error)}`); }
   const registry = loadRegistry();
   if (registry.active) {
     try { await startLocalModel(registry.active); }
