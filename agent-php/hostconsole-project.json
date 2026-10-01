@@ -2,7 +2,7 @@
   "name": "Arena Coding Agent PHP",
   "type": "php",
   "repo_url": "https://github.com/fazilatma/new",
-  "branch": "arena/01a0f16f-new",
+  "branch": "arena/01a0ed4c-new",
   "subfolder": "agent-php",
   "deploy_path": "/home/sabashop/public_html/project/.wconsole_data/projects/Arena-Coding-Agent-PHP-d35b99872d",
   "port": "8099",

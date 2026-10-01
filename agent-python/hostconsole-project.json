@@ -1,0 +1,24 @@
+{
+  "name": "Arena Python Agent2",
+  "type": "python",
+  "repo_url": "https://github.com/fazilatma/new",
+  "branch": "arena/01a0ed4c-new",
+  "subfolder": "agent-python",
+  "deploy_path": "",
+  "port": "8788",
+  "install_cmd": "find_python() { for cand in /usr/local/bin/python3.11 /usr/local/bin/python3.10 /opt/alt/python311/bin/python3 /opt/alt/python310/bin/python3 /opt/cpanel/ea-python311/root/usr/bin/python3 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3.9 python3.11 python3.10 python3.9 python3; do if command -v \"$cand\" >/dev/null 2>&1; then command -v \"$cand\"; return 0; elif [ -x \"$cand\" ]; then echo \"$cand\"; return 0; fi; done; echo \"python3\"; }; PYBIN=$(find_python); echo \"[deploy] Using Python: $PYBIN\"; if [ ! -d \".venv\" ]; then ($PYBIN -m venv .venv 2>/dev/null || $PYBIN -m venv --without-pip .venv); fi; if [ ! -f \".venv/bin/pip\" ]; then (curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python3 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py | .venv/bin/python3 2>/dev/null || true); fi; .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
+  "build_cmd": "",
+  "start_cmd": ".venv/bin/python3 main.py",
+  "auto_start": false,
+  "is_daemon": true,
+  "auto_update": true,
+  "auto_update_interval": 60,
+  "preserve_configs": true,
+  "domain_enabled": false,
+  "env": {
+    "PORT": "8788",
+    "HOST": "0.0.0.0",
+    "ENVIRONMENT": "production",
+    "APP_VERSION": "2.0.0"
+  }
+}
