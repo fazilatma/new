@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.4.2"
+SCRIPT_VERSION="2.4.3"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -54,7 +54,7 @@ Actions:
   status           Show installed versions, process state, and health.
   logs             Show the last 120 log lines (use --follow to keep watching).
   access-info      Print the browser URL and the private session API key.
-  web-check        Check the local frontend and authenticated health endpoint.
+  web-check        Check the frontend, ingress, and real Agent Server backend.
   doctor           Run host, runtime, resource, configuration, and health checks.
   rotate-key       Generate a new API key and restart if currently running.
   self-update      Update only this helper from its canonical URL.
@@ -941,11 +941,22 @@ browser_url() {
     fi
 }
 
-agent_is_healthy() {
+agent_server_is_ready() {
     ensure_secrets >/dev/null
+    # The official Canvas ingress has its own /health route, which can remain
+    # HTTP 200 after the Python agent-server behind it has exited. Probe the
+    # agent-server itself so a live frontend cannot mask a dead backend.
     curl -fsS --max-time 5 \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
-        "$(local_url)/health" >/dev/null 2>&1
+        "http://127.0.0.1:$BACKEND_PORT/server_info" >/dev/null 2>&1
+}
+
+agent_is_healthy() {
+    local prefix="$BASE_PATH"
+    [[ "$prefix" == "/" ]] && prefix=""
+    agent_server_is_ready && curl -fsS --max-time 5 \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
+        "$(local_url)$prefix/server_info" >/dev/null 2>&1
 }
 
 port_is_open() {
@@ -1162,19 +1173,22 @@ serve_agent() {
     "$AGENT_BIN" "${args[@]}" &
     SUPERVISED_AGENT_PID=$!
 
-    while ! curl -fsS --max-time 5 \
-        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
-        "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null 2>&1; do
+    # Canvas starts its ingress even when the Python agent-server timed out or
+    # exited, and that ingress keeps /health green. Do not publish the frontend
+    # until the actual backend answers /server_info on its internal port.
+    while ! agent_server_is_ready; do
         if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
             if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
             die "Agent Canvas upstream exited during startup (code $child_status)."
         fi
         if ((waited > 0 && waited % 30 == 0)); then
-            log 'Agent Canvas upstream is still starting (initial Python setup can take several minutes)...'
+            log 'Agent Server is still starting (initial Python setup can take several minutes)...'
         fi
+        ((waited < 900)) || die 'Agent Server did not become ready in 15 minutes; restarting the supervised stack.'
         sleep 1
         waited=$((waited + 1))
     done
+    log "Agent Server backend is ready on 127.0.0.1:$BACKEND_PORT"
 
     export OH_GATEWAY_HOST="$LISTEN_HOST"
     export OH_GATEWAY_PORT="$PORT"
@@ -1208,13 +1222,11 @@ serve_agent() {
 
     while kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null && kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; do
         sleep 5
-        if curl -fsS --max-time 5 \
-            -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
-            "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null 2>&1; then
+        if agent_server_is_ready; then
             health_failures=0
         else
             health_failures=$((health_failures + 1))
-            warn "Agent Server health probe failed ($health_failures/3)."
+            warn "Agent Server readiness probe failed ($health_failures/3) on 127.0.0.1:$BACKEND_PORT."
             if ((health_failures >= 3)); then
                 warn 'Agent Server stayed unavailable; exiting the supervised stack so WebConsole can restart it cleanly.'
                 return 1
@@ -1238,7 +1250,7 @@ start_agent() {
     persist_helper
     if pid="$(managed_pid 2>/dev/null)"; then
         log "Agent Canvas is already running (PID $pid)."
-        agent_is_healthy && log "Health: OK ($(local_url)/health)" || warn 'The process is running but is not healthy yet.'
+        agent_is_healthy && log "Health: OK (Agent Server /server_info)" || warn 'The process is running but the Agent Server is not ready yet.'
         return 0
     fi
     ensure_runtime_installed
@@ -1359,7 +1371,7 @@ show_access_info() {
 }
 
 web_check() {
-    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" asset_code="" asset_path="" prefix=""
+    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" server_info_code="" asset_code="" asset_path="" prefix=""
     ensure_secrets
     mkdir -p "$tmp"
     trap 'rm -rf "$tmp"' RETURN
@@ -1369,6 +1381,8 @@ web_check() {
     root_code="$(curl -sS --max-time 10 -o "$tmp/root" -w '%{http_code}' "$(local_url)$prefix/" || true)"
     health_code="$(curl -sS --max-time 10 -o "$tmp/health" -w '%{http_code}' \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/health" || true)"
+    server_info_code="$(curl -sS --max-time 10 -o "$tmp/server-info" -w '%{http_code}' \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/server_info" || true)"
     asset_path="$(grep -Eo "$prefix/assets/[A-Za-z0-9._~-]+\\.js" "$tmp/root" 2>/dev/null | head -n 1 || true)"
     if [[ -n "$asset_path" ]]; then
         asset_code="$(curl -sS --max-time 10 -o "$tmp/asset" -w '%{http_code}' "$(local_url)$asset_path" || true)"
@@ -1376,7 +1390,8 @@ web_check() {
 
     printf 'Frontend: HTTP %s (%s%s/)\n' "${root_code:-000}" "$(local_url)" "$prefix"
     printf 'Initial JavaScript: HTTP %s (%s%s)\n' "${asset_code:-000}" "$(local_url)" "${asset_path:-/missing-asset}"
-    printf 'Authenticated health: HTTP %s (%s%s/health)\n' "${health_code:-000}" "$(local_url)" "$prefix"
+    printf 'Canvas ingress health: HTTP %s (%s%s/health)\n' "${health_code:-000}" "$(local_url)" "$prefix"
+    printf 'Agent Server readiness: HTTP %s (%s%s/server_info)\n' "${server_info_code:-000}" "$(local_url)" "$prefix"
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
     grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The gateway did not return an HTML application.'
@@ -1389,8 +1404,9 @@ web_check() {
         grep -Fq 'openhands-backends' "$tmp/root" || die 'The local backend bootstrap configuration is missing.'
         grep -Fq "\"basename\":\"$BASE_PATH\"" "$tmp/root" || die 'The frontend router basename was not rewritten.'
     fi
-    [[ "$health_code" == "200" ]] || die 'Authenticated Agent Canvas health check failed.'
-    log 'Web check passed, including prefixed HTML, JavaScript, router, and API routing.'
+    [[ "$health_code" == "200" ]] || die 'Authenticated Canvas ingress health check failed.'
+    [[ "$server_info_code" == "200" ]] || die 'Agent Server readiness check failed; the frontend ingress is up but its Python backend is unavailable.'
+    log 'Web check passed, including prefixed HTML, JavaScript, router, ingress health, and Agent Server readiness.'
 }
 
 resource_report() {
