@@ -9,7 +9,9 @@ import base64
 import mimetypes
 import csv
 import io
+import threading
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
@@ -1690,6 +1692,115 @@ def post_localai_runtime_fix_permissions(user: Dict[str, Any] = Depends(require_
 def get_localai_catalog(user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
     return local_ai.catalog()
+
+@app.post("/api/localai/search")
+def post_localai_search(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    query = str((payload or {}).get("query") or (payload or {}).get("q") or "").strip()
+    limit = int((payload or {}).get("limit") or 25)
+    remote = bool((payload or {}).get("remote", True))
+    return local_ai.search(query=query, limit=limit, remote=remote)
+
+@app.get("/api/localai/search")
+def get_localai_search(q: str = "", limit: int = 25, remote: bool = True, user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.search(query=q, limit=limit, remote=remote)
+
+@app.get("/api/localai/tags/{name:path}")
+def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return {"ok": True, "name": name, "installed": [m for m in local_ai.installed() if m.get("name") == name]}
+
+@app.post("/api/localai/test")
+def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    model = str(payload.get("model") or payload.get("ref") or "").strip()
+    if not model:
+        raise HTTPException(400, "Model name is required")
+    return local_ai.benchmark_test(model)
+
+@app.post("/api/localai/install")
+def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    model_ref = str(payload.get("ref") or payload.get("model") or "").strip()
+    if not model_ref:
+        raise HTTPException(400, "Model reference is required")
+    
+    # Create background job in database
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO jobs (id, title, status, progress, summary, logs, created_at, updated_at)
+               VALUES (?, ?, 'queued', 0, 'در صف نصب', '[]', datetime('now'), datetime('now'))""",
+            (job_id, f"نصب مدل محلی: {model_ref}")
+        )
+        conn.commit()
+
+    def run_install_task():
+        logs = []
+        def append_log(lvl: str, msg: str):
+            logs.append({"level": lvl, "message": msg, "time": datetime.utcnow().isoformat()})
+            with get_db() as c:
+                c.execute(
+                    "UPDATE jobs SET logs = ?, updated_at = datetime('now') WHERE id = ?",
+                    (json.dumps(logs), job_id)
+                )
+                c.commit()
+
+        try:
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'running', progress = 10, summary = 'دانلود و بررسی موتور' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "بررسی و آماده‌سازی موتور هوش مصنوعی…")
+            local_ai.install_runtime(log_fn=lambda m: append_log("INFO", m))
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 30, summary = 'راه‌اندازی سرویس محلی' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "راه‌اندازی سرویس Ollama…")
+            local_ai.start_server(log_fn=lambda m: append_log("INFO", m))
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 50, summary = f'دانلود مدل {model_ref}' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", f"شروع دانلود مدل {model_ref}…")
+            local_ai.pull_model(model_ref)
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 85, summary = 'ثبت در فهرست ارائه‌دهنده‌ها' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", f"ثبت مدل {model_ref} در ارائه‌دهنده‌ها…")
+            local_ai.register_provider(model_ref, meta=payload)
+
+            if payload.get("benchmark", True):
+                with get_db() as c:
+                    c.execute("UPDATE jobs SET progress = 95, summary = 'تست سرعت و بنچمارک' WHERE id = ?", (job_id,))
+                    c.commit()
+                append_log("INFO", "اجرای تست سرعت…")
+                bench = local_ai.benchmark_test(model_ref)
+                append_log("INFO", f"سرعت واقعی: {bench.get('tokensPerSec', 0)} توکن/ثانیه")
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'done', progress = 100, summary = '✅ پایان موفق نصب مدل', updated_at = datetime('now') WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "نصب مدل با موفقیت پایان یافت.")
+        except Exception as e:
+            err_msg = str(e)
+            append_log("ERROR", f"خطا در نصب: {err_msg}")
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'failed', error = ?, summary = '❌ نصب ناموفق', updated_at = datetime('now') WHERE id = ?", (err_msg, job_id))
+                c.commit()
+
+        # Start thread
+    t = threading.Thread(target=run_install_task, daemon=True)
+    t.start()
+
+    return {
+        "ok": True,
+        "job": {"id": job_id, "status": "queued", "progress": 0},
+        "plan": local_ai.plan(payload),
+    }
 
 @app.get("/api/localai/models")
 def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):

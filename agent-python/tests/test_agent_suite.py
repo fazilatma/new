@@ -1747,6 +1747,30 @@ def test_code_generation_mode_and_html_bundling():
     assert "/api/workspace/raw?path=test_app/index.html" in pdata["rawUrl"]
 
 
+def test_localai_search_and_runtime_resilience():
+    """Test local AI catalog search and offline connection error resilience."""
+    # 1. Search endpoint returns catalog models
+    s_res = client.post("/api/localai/search", json={"query": "qwen", "remote": False})
+    assert s_res.status_code == 200
+    s_data = s_res.json()
+    assert "catalog" in s_data
+    assert len(s_data["catalog"]) > 0
+    assert any("qwen" in m["id"].lower() for m in s_data["catalog"])
+
+    # 2. Runtime status when server is offline does not throw [Errno 111] error string
+    rt_res = client.get("/api/localai/runtime")
+    assert rt_res.status_code == 200
+    rt_data = rt_res.json()
+    assert "modelsDir" in rt_data
+    assert "modelsDirWritable" in rt_data
+    assert "Connection refused" not in rt_data.get("error", "")
+
+    # 3. Permission auto-fix endpoint
+    fix_res = client.post("/api/localai/runtime/fix-permissions")
+    assert fix_res.status_code == 200
+    assert fix_res.json()["ok"] is True
+
+
 
 
 

@@ -3942,12 +3942,14 @@ def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
 def server_up() -> Dict[str, Any]:
     url = f"{host_url()}/api/version"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/3.0"})
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return {"up": True, "version": data.get("version", ""), "host": host_url()}
-    except Exception as e:
-        return {"up": False, "version": "", "host": host_url(), "error": str(e)}
+            return {"up": True, "version": data.get("version", ""), "host": host_url(), "error": ""}
+    except urllib.error.URLError:
+        return {"up": False, "version": "", "host": host_url(), "error": ""}
+    except Exception:
+        return {"up": False, "version": "", "host": host_url(), "error": ""}
 
 
 def host_scan(refresh: bool = False) -> Dict[str, Any]:
@@ -4419,6 +4421,140 @@ def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
         "rejected": rejected[:10],
     }
 
+
+def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
+    q = (query or "").strip().lower()
+    cat = catalog()
+    local = []
+    for m in cat.get("models", []):
+        hay = " ".join([
+            str(m.get("id", "")),
+            str(m.get("name", "")),
+            str(m.get("publisher", "")),
+            str(m.get("summary", "")),
+            " ".join(m.get("tasks", []) if isinstance(m.get("tasks"), list) else []),
+        ]).lower()
+        if not q or q in hay:
+            local.append({
+                "source": "catalog",
+                "id": str(m.get("id", "")),
+                "name": str(m.get("name", "")),
+                "publisher": str(m.get("publisher", "")),
+                "summary": str(m.get("summary", "")),
+                "tasks": m.get("tasks", []),
+                "variants": [
+                    {
+                        "tag": str(v.get("tag", "")),
+                        "ref": f"{m.get('id')}:{v.get('tag')}",
+                        "diskGb": float(v.get("diskGb", 0.0)),
+                        "quant": str(v.get("quant", "")),
+                    }
+                    for v in m.get("variants", [])
+                ],
+            })
+
+    hf = []
+    if remote and q:
+        try:
+            hf_url = f"{HF_API}?search={urllib.parse.quote(query)}&filter=gguf&sort=downloads&direction=-1&limit={max(1, min(50, limit))}"
+            req = urllib.request.Request(hf_url, headers={"User-Agent": "ArenaAgent/3.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, list):
+                    for item in data:
+                        if not isinstance(item, dict):
+                            continue
+                        mid = str(item.get("modelId") or item.get("id") or "")
+                        pub = mid.split("/")[0] if "/" in mid else ""
+                        hf.append({
+                            "source": "huggingface",
+                            "id": mid,
+                            "name": mid,
+                            "publisher": pub,
+                            "downloads": int(item.get("downloads") or 0),
+                            "likes": int(item.get("likes") or 0),
+                            "tasks": [t for t in item.get("tags", []) if isinstance(t, str)],
+                            "pullRef": f"hf.co/{mid}",
+                            "summary": "مخزن GGUF در Hugging Face — با «ollama pull hf.co/<repo>» نصب می‌شود.",
+                        })
+        except Exception as e:
+            logger.warning("Hugging Face search skipped: %s", e)
+
+    return {"query": query, "catalog": local, "huggingface": hf[:limit]}
+
+
+def benchmark_test(model: str) -> Dict[str, Any]:
+    srv = server_up()
+    if not srv["up"]:
+        return {"ok": False, "error": "سرویس Ollama در حال اجرا نیست"}
+    try:
+        t0 = time.time()
+        url = f"{host_url()}/api/generate"
+        payload = json.dumps({
+            "model": model,
+            "prompt": "Write a 30-word python function to calculate fibonacci sequence.",
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/3.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            elapsed = max(0.01, time.time() - t0)
+            eval_count = int(data.get("eval_count") or 30)
+            eval_duration_ns = int(data.get("eval_duration") or int(elapsed * 1e9))
+            eval_sec = max(0.01, eval_duration_ns / 1e9)
+            tps = round(eval_count / eval_sec, 2)
+            return {
+                "ok": True,
+                "model": model,
+                "tokensPerSec": tps,
+                "evalCount": eval_count,
+                "durationSec": round(elapsed, 2),
+            }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def plan(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    ref = str(payload.get("ref") or payload.get("model") or "")
+    rt = runtime_status()
+    steps = []
+    if not rt.get("installed"):
+        steps.append({
+            "id": "runtime",
+            "title": "دانلود و نصب موتور هوش مصنوعی (Ollama)",
+            "detail": "دانلود باینری مستقل کاربر بدون نیاز به root",
+        })
+    else:
+        steps.append({
+            "id": "runtime",
+            "title": "بررسی وضعیت موتور Ollama",
+            "detail": f"نسخه {rt.get('version', '')} آماده است",
+        })
+
+    steps.append({
+        "id": "server",
+        "title": "اجرای سرویس هوش مصنوعی محلی",
+        "detail": f"سرویس در آدرس {host_url()} فعال می‌شود",
+    })
+    steps.append({
+        "id": "pull",
+        "title": f"دانلود وزن‌های مدل {ref}",
+        "detail": "دانلود مستقیم لایه‌های GGUF از رجیستری",
+    })
+    steps.append({
+        "id": "register",
+        "title": f"ثبت ارائه‌دهندهٔ مدل {ref}",
+        "detail": "افزودن خودکار مدل به فهرست مدل‌های چت و کدنویسی",
+    })
+    if payload.get("benchmark", True):
+        steps.append({
+            "id": "benchmark",
+            "title": "تست سرعت و بنچمارک توکن بر ثانیه",
+            "detail": "محاسبه سرعت پاسخگویی واقعی سخت‌افزار",
+        })
+    return steps
+
+
 import types as _types
 local_ai = _types.SimpleNamespace(
     root_dir=root_dir,
@@ -4438,6 +4574,9 @@ local_ai = _types.SimpleNamespace(
     installed=installed,
     remove_model=remove_model,
     pull_model=pull_model,
+    search=search,
+    benchmark_test=benchmark_test,
+    plan=plan,
     register_provider=register_provider,
     recommend=recommend,
 )
@@ -6907,7 +7046,9 @@ import base64
 import mimetypes
 import csv
 import io
+import threading
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
@@ -8557,6 +8698,115 @@ def post_localai_runtime_fix_permissions(user: Dict[str, Any] = Depends(require_
 def get_localai_catalog(user: Dict[str, Any] = Depends(require_viewer)):
     # relative import
     return local_ai.catalog()
+
+@app.post("/api/localai/search")
+def post_localai_search(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    # relative import
+    query = str((payload or {}).get("query") or (payload or {}).get("q") or "").strip()
+    limit = int((payload or {}).get("limit") or 25)
+    remote = bool((payload or {}).get("remote", True))
+    return local_ai.search(query=query, limit=limit, remote=remote)
+
+@app.get("/api/localai/search")
+def get_localai_search(q: str = "", limit: int = 25, remote: bool = True, user: Dict[str, Any] = Depends(require_viewer)):
+    # relative import
+    return local_ai.search(query=q, limit=limit, remote=remote)
+
+@app.get("/api/localai/tags/{name:path}")
+def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
+    # relative import
+    return {"ok": True, "name": name, "installed": [m for m in local_ai.installed() if m.get("name") == name]}
+
+@app.post("/api/localai/test")
+def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+    # relative import
+    model = str(payload.get("model") or payload.get("ref") or "").strip()
+    if not model:
+        raise HTTPException(400, "Model name is required")
+    return local_ai.benchmark_test(model)
+
+@app.post("/api/localai/install")
+def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    # relative import
+    model_ref = str(payload.get("ref") or payload.get("model") or "").strip()
+    if not model_ref:
+        raise HTTPException(400, "Model reference is required")
+    
+    # Create background job in database
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO jobs (id, title, status, progress, summary, logs, created_at, updated_at)
+               VALUES (?, ?, 'queued', 0, 'در صف نصب', '[]', datetime('now'), datetime('now'))""",
+            (job_id, f"نصب مدل محلی: {model_ref}")
+        )
+        conn.commit()
+
+    def run_install_task():
+        logs = []
+        def append_log(lvl: str, msg: str):
+            logs.append({"level": lvl, "message": msg, "time": datetime.utcnow().isoformat()})
+            with get_db() as c:
+                c.execute(
+                    "UPDATE jobs SET logs = ?, updated_at = datetime('now') WHERE id = ?",
+                    (json.dumps(logs), job_id)
+                )
+                c.commit()
+
+        try:
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'running', progress = 10, summary = 'دانلود و بررسی موتور' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "بررسی و آماده‌سازی موتور هوش مصنوعی…")
+            local_ai.install_runtime(log_fn=lambda m: append_log("INFO", m))
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 30, summary = 'راه‌اندازی سرویس محلی' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "راه‌اندازی سرویس Ollama…")
+            local_ai.start_server(log_fn=lambda m: append_log("INFO", m))
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 50, summary = f'دانلود مدل {model_ref}' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", f"شروع دانلود مدل {model_ref}…")
+            local_ai.pull_model(model_ref)
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET progress = 85, summary = 'ثبت در فهرست ارائه‌دهنده‌ها' WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", f"ثبت مدل {model_ref} در ارائه‌دهنده‌ها…")
+            local_ai.register_provider(model_ref, meta=payload)
+
+            if payload.get("benchmark", True):
+                with get_db() as c:
+                    c.execute("UPDATE jobs SET progress = 95, summary = 'تست سرعت و بنچمارک' WHERE id = ?", (job_id,))
+                    c.commit()
+                append_log("INFO", "اجرای تست سرعت…")
+                bench = local_ai.benchmark_test(model_ref)
+                append_log("INFO", f"سرعت واقعی: {bench.get('tokensPerSec', 0)} توکن/ثانیه")
+
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'done', progress = 100, summary = '✅ پایان موفق نصب مدل', updated_at = datetime('now') WHERE id = ?", (job_id,))
+                c.commit()
+            append_log("INFO", "نصب مدل با موفقیت پایان یافت.")
+        except Exception as e:
+            err_msg = str(e)
+            append_log("ERROR", f"خطا در نصب: {err_msg}")
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'failed', error = ?, summary = '❌ نصب ناموفق', updated_at = datetime('now') WHERE id = ?", (err_msg, job_id))
+                c.commit()
+
+        # Start thread
+    t = threading.Thread(target=run_install_task, daemon=True)
+    t.start()
+
+    return {
+        "ok": True,
+        "job": {"id": job_id, "status": "queued", "progress": 0},
+        "plan": local_ai.plan(payload),
+    }
 
 @app.get("/api/localai/models")
 def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):
