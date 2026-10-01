@@ -991,7 +991,7 @@ async function downloadFile(url, destination, update, expectedSha = "", maxBytes
 
 const STATIC_LLAMA_X64 = Object.freeze({
   name: "llama-server-b11320-linux-x86_64-musl-static.tar.gz",
-  browser_download_url: "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/runtime/llama-server-b11320-linux-x86_64-musl-static.tar.gz",
+  browser_download_url: "https://raw.githubusercontent.com/fazilatma/new/arena/01a0f230-new/host-helpers/runtime/llama-server-b11320-linux-x86_64-musl-static.tar.gz",
   digest: "sha256:cd78850ae1eb3eea41814837b1781cb656b87e3c698cd0af92247b1fcee15203",
 });
 
