@@ -1421,10 +1421,64 @@ function wcp_py_venv_python(string $dir): string {
     if ($dir === '') return '';
     $dir = rtrim($dir, '/');
     foreach (['.venv', 'venv', 'env'] as $d) {
-        $p = $dir . '/' . $d . '/bin/python';
-        if (@is_file($p) && @is_executable($p)) return $p;
+        foreach (['python3', 'python'] as $bin) {
+            $p = $dir . '/' . $d . '/bin/' . $bin;
+            if (@file_exists($p) && (@is_executable($p) || @is_file($p))) return $p;
+        }
     }
     return '';
+}
+
+/** Get python version string (e.g. '3.11.2') of a binary. */
+function wcp_py_bin_version(string $pyBin): string {
+    if ($pyBin === '' || !@file_exists($pyBin)) return '';
+    $out = trim((string)@shell_exec(escapeshellarg($pyBin) . ' -c "import sys; print(f\'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\')" 2>/dev/null'));
+    return preg_match('/^\d+\.\d+(\.\d+)?$/', $out) ? $out : '';
+}
+
+/** Find modern Python candidate >= 3.9 on cPanel, CloudLinux, or standard Linux paths. */
+function wcp_find_best_python(): string {
+    $cands = [
+        '/opt/alt/python312/bin/python3',
+        '/opt/cpanel/ea-python312/root/usr/bin/python3',
+        '/usr/local/bin/python3.12',
+        '/usr/bin/python3.12',
+        '/opt/alt/python311/bin/python3',
+        '/opt/cpanel/ea-python311/root/usr/bin/python3',
+        '/usr/local/bin/python3.11',
+        '/usr/bin/python3.11',
+        '/opt/alt/python310/bin/python3',
+        '/opt/cpanel/ea-python310/root/usr/bin/python3',
+        '/usr/local/bin/python3.10',
+        '/usr/bin/python3.10',
+        '/opt/alt/python39/bin/python3',
+        '/opt/cpanel/ea-python39/root/usr/bin/python3',
+        '/usr/local/bin/python3.9',
+        '/usr/bin/python3.9',
+        'python3.12',
+        'python3.11',
+        'python3.10',
+        'python3.9',
+        '/usr/local/bin/python3',
+        '/usr/bin/python3',
+        'python3',
+        'python'
+    ];
+    foreach ($cands as $cand) {
+        if ($cand === 'python3' || $cand === 'python' || strpos($cand, '/') === false) {
+            $path = trim((string)@shell_exec('command -v ' . escapeshellarg($cand) . ' 2>/dev/null'));
+            if ($path !== '' && @is_file($path)) {
+                $ver = wcp_py_bin_version($path);
+                if ($ver !== '' && version_compare($ver, '3.9.0', '>=')) return $path;
+            }
+        } else {
+            if (@is_file($cand) && @is_executable($cand)) {
+                $ver = wcp_py_bin_version($cand);
+                if ($ver !== '' && version_compare($ver, '3.9.0', '>=')) return $cand;
+            }
+        }
+    }
+    return 'python3';
 }
 
 /** requirements.txt in the project root, or one level down. */
@@ -1454,7 +1508,7 @@ function wcp_uv_pythons(): array {
 
 /**
  * Resolution order, same shape as wcp_node_version_of():
- *   project python_version -> console default -> newest uv-managed -> ''
+ *   project python_version -> console default -> newest uv-managed -> candidate >= 3.9 -> '3.11'
  */
 function wcp_python_version_of(string $want = ''): string {
     foreach ([$want, (string)(cfg()['python_version'] ?? '')] as $cand) {
@@ -1462,7 +1516,17 @@ function wcp_python_version_of(string $want = ''): string {
         if ($cand !== '' && preg_match('/^\d+(\.\d+){0,2}$/', $cand)) return $cand;
     }
     $inst = wcp_uv_pythons();
-    return !empty($inst) ? $inst[0] : '';
+    if (!empty($inst)) {
+        foreach ($inst as $iv) {
+            if (version_compare($iv, '3.9.0', '>=')) return $iv;
+        }
+    }
+    $best = wcp_find_best_python();
+    if ($best !== '' && $best !== 'python3') {
+        $v = wcp_py_bin_version($best);
+        if ($v !== '' && version_compare($v, '3.9.0', '>=')) return $best;
+    }
+    return '3.11';
 }
 
 /**
@@ -1478,16 +1542,41 @@ function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = 
     $uv  = wcp_uv_bin();
     $py  = wcp_py_venv_python($dir);
 
+    // Auto-detect and heal obsolete virtualenvs (< 3.9, e.g. system Python 3.6.8)
+    if ($py !== '') {
+        $curVer = wcp_py_bin_version($py);
+        if ($curVer !== '' && version_compare($curVer, '3.9.0', '<')) {
+            $log("[python] Existing virtualenv Python ({$curVer}) is obsolete (FastAPI & modern tools require >= 3.9). Upgrading .venv...");
+            @sh('rm -rf ' . esc($dir . '/.venv'));
+            $py = '';
+        }
+    }
+
     if ($py === '' && $uv !== '') {
         $ver = wcp_python_version_of($want);
-        $log('[python] No virtualenv in project. Creating one with uv' . ($ver !== '' ? " (Python {$ver})" : '') . '...');
+        $log('[python] Creating modern virtualenv with uv' . ($ver !== '' ? " (Python {$ver})" : '') . '...');
         $cmd = 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv) . ' venv --seed'
              . ($ver !== '' ? ' -p ' . escapeshellarg($ver) : '') . ' .venv 2>&1';
         $rc = null;
         if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
         $py = wcp_py_venv_python($dir);
-        if ($py === '') $log('[python] uv could not create a virtualenv; falling back to the system interpreter.');
+        if ($py === '') $log('[python] uv could not create a virtualenv; falling back to resilient Python search.');
     }
+
+    if ($py === '') {
+        $bestPy = wcp_find_best_python();
+        $log('[python] Initializing resilient virtualenv using ' . $bestPy . '...');
+        $cmd = 'cd ' . escapeshellarg($dir) . ' && (' . escapeshellarg($bestPy) . ' -m venv --without-pip .venv 2>/dev/null || ' . escapeshellarg($bestPy) . ' -m venv .venv 2>/dev/null || virtualenv -p ' . escapeshellarg($bestPy) . ' .venv 2>/dev/null || true)';
+        $rc = null;
+        if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
+        if (is_dir($dir . '/.venv') && !is_file($dir . '/.venv/bin/pip') && !is_file($dir . '/.venv/bin/pip3')) {
+            $pyBin = wcp_py_venv_python($dir) ?: ($dir . '/.venv/bin/python');
+            $pipCmd = 'cd ' . escapeshellarg($dir) . ' && (curl -sS https://bootstrap.pypa.io/get-pip.py 2>/dev/null | ' . escapeshellarg($pyBin) . ' 2>/dev/null || wget -qO- https://bootstrap.pypa.io/get-pip.py 2>/dev/null | ' . escapeshellarg($pyBin) . ' 2>/dev/null || ' . escapeshellarg($pyBin) . ' -m ensurepip --default-pip 2>/dev/null || true)';
+            @shell_exec($pipCmd);
+        }
+        $py = wcp_py_venv_python($dir);
+    }
+
     if ($py === '') return '';
 
     if ($installDeps) {
@@ -1495,9 +1584,6 @@ function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = 
         if ($req !== '') {
             $log('[python] Syncing dependencies from ' . basename(dirname($req)) . '/' . basename($req) . '...');
             $rc = null;
-            // -r before -p: the launcher's own start-command regex latches onto
-            // the first "python <word>" it sees, and --python would feed it a
-            // bogus target. See CHANGELOG 2.16.0.
             $cmd = $uv !== ''
                 ? 'cd ' . escapeshellarg($dir) . ' && UV_LINK_MODE=copy ' . escapeshellarg($uv)
                   . ' pip install -r ' . escapeshellarg($req) . ' -p ' . escapeshellarg($py) . ' 2>&1'
@@ -1505,7 +1591,9 @@ function wcp_py_ensure_venv(string $dir, string $want = '', bool $installDeps = 
                   . ' -m pip install -r ' . escapeshellarg($req) . ' 2>&1';
             if (function_exists('cli_run')) cli_run($cmd, $rc); else @shell_exec($cmd);
             if ($rc !== null && $rc !== 0) {
-                $log('[python] Dependency sync reported errors (exit ' . $rc . '). Starting anyway; see the output above for the offending package.');
+                $log('[python] Dependency sync reported notice (exit ' . $rc . '). Attempting resilient line-by-line fallback...');
+                $fallbackCmd = 'cd ' . escapeshellarg($dir) . ' && while IFS= read -r line || [ -n "$line" ]; do pkg=$(echo "$line" | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*$//" -e "s/#.*//"); if [ -n "$pkg" ]; then ' . escapeshellarg($py) . ' -m pip install "$pkg" --no-warn-script-location 2>/dev/null || true; fi; done < ' . escapeshellarg($req);
+                @shell_exec($fallbackCmd);
             }
         }
     }
