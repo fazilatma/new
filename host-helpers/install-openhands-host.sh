@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.4.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -18,8 +18,11 @@ CLI_PORT=""
 CLI_LISTEN_HOST=""
 CLI_ACCESS_HOST=""
 CLI_ACCESS_SCHEME=""
+CLI_PUBLIC_URL=""
+CLI_BASE_PATH=""
 CLI_CANVAS_VERSION=""
 CLI_WORKSPACE=""
+CLI_UPSTREAM_PORT=""
 CLI_BACKEND_PORT=""
 CLI_AUTOMATION_PORT=""
 CLI_FRONTEND_PORT=""
@@ -60,12 +63,15 @@ Actions:
 
 Options:
   --home PATH             Writable account home (for example /home/sabashop).
-  --port PORT             Public ingress port (default: 8810).
+  --port PORT             Public prefix-gateway port (default: 8810).
   --host HOST             Bind address (default: 0.0.0.0).
   --access-host HOST      Hostname printed by access-info (no scheme or port).
-  --access-scheme SCHEME  Browser scheme: http (default) or https with a TLS proxy.
+  --access-scheme SCHEME  Direct browser scheme: http (default) or https.
+  --public-url URL        Full externally proxied browser URL (optional).
+  --base-path PATH        External URL prefix (default: /open; use / for root).
   --canvas-version VER    npm version/range (default: latest).
   --workspace PATH        Agent Canvas workspace directory.
+  --upstream-port PORT    Internal Canvas ingress port (default: 18812).
   --backend-port PORT     Internal agent-server port (default: 18810).
   --automation-port PORT  Internal automation port (default: 18811).
   --frontend-port PORT    Internal static frontend port (default: 13810).
@@ -110,12 +116,21 @@ while (($#)); do
         --access-scheme)
             (($# >= 2)) || die '--access-scheme requires a value.'
             CLI_ACCESS_SCHEME="$2"; shift 2 ;;
+        --public-url)
+            (($# >= 2)) || die '--public-url requires a value.'
+            CLI_PUBLIC_URL="$2"; shift 2 ;;
+        --base-path)
+            (($# >= 2)) || die '--base-path requires a value.'
+            CLI_BASE_PATH="$2"; shift 2 ;;
         --canvas-version)
             (($# >= 2)) || die '--canvas-version requires a value.'
             CLI_CANVAS_VERSION="$2"; shift 2 ;;
         --workspace)
             (($# >= 2)) || die '--workspace requires a path.'
             CLI_WORKSPACE="$2"; shift 2 ;;
+        --upstream-port)
+            (($# >= 2)) || die '--upstream-port requires a value.'
+            CLI_UPSTREAM_PORT="$2"; shift 2 ;;
         --backend-port)
             (($# >= 2)) || die '--backend-port requires a value.'
             CLI_BACKEND_PORT="$2"; shift 2 ;;
@@ -193,6 +208,9 @@ SECRETS_FILE="$CONFIG_DIR/secrets.env"
 PID_FILE="$STATE_DIR/agent-canvas.pid"
 PID_START_FILE="$STATE_DIR/agent-canvas.pid.start"
 LOG_FILE="$STATE_DIR/agent-canvas.log"
+READY_FILE="$STATE_DIR/agent-canvas.ready"
+START_LOCK_DIR="$STATE_DIR/start.lock"
+GATEWAY_SCRIPT="$APP_ROOT/prefix-gateway.mjs"
 UV_BIN="$TOOLS_DIR/uv"
 UVX_BIN="$TOOLS_DIR/uvx"
 AGENT_BIN="$NPM_ROOT/node_modules/.bin/agent-canvas"
@@ -201,8 +219,11 @@ PORT="8810"
 LISTEN_HOST="0.0.0.0"
 ACCESS_HOST="${OPENHANDS_ACCESS_HOST:-}"
 ACCESS_SCHEME="http"
+PUBLIC_URL="${OPENHANDS_PUBLIC_URL:-}"
+BASE_PATH="${OPENHANDS_BASE_PATH:-/open}"
 CANVAS_VERSION="latest"
 WORKSPACE="$CANVAS_STATE_DIR/workspaces"
+UPSTREAM_PORT="18812"
 BACKEND_PORT="18810"
 AUTOMATION_PORT="18811"
 FRONTEND_PORT="13810"
@@ -218,8 +239,11 @@ fi
 [[ -z "$CLI_LISTEN_HOST" ]] || LISTEN_HOST="$CLI_LISTEN_HOST"
 [[ -z "$CLI_ACCESS_HOST" ]] || ACCESS_HOST="$CLI_ACCESS_HOST"
 [[ -z "$CLI_ACCESS_SCHEME" ]] || ACCESS_SCHEME="$CLI_ACCESS_SCHEME"
+[[ -z "$CLI_PUBLIC_URL" ]] || PUBLIC_URL="$CLI_PUBLIC_URL"
+[[ -z "$CLI_BASE_PATH" ]] || BASE_PATH="$CLI_BASE_PATH"
 [[ -z "$CLI_CANVAS_VERSION" ]] || CANVAS_VERSION="$CLI_CANVAS_VERSION"
 [[ -z "$CLI_WORKSPACE" ]] || WORKSPACE="$CLI_WORKSPACE"
+[[ -z "$CLI_UPSTREAM_PORT" ]] || UPSTREAM_PORT="$CLI_UPSTREAM_PORT"
 [[ -z "$CLI_BACKEND_PORT" ]] || BACKEND_PORT="$CLI_BACKEND_PORT"
 [[ -z "$CLI_AUTOMATION_PORT" ]] || AUTOMATION_PORT="$CLI_AUTOMATION_PORT"
 [[ -z "$CLI_FRONTEND_PORT" ]] || FRONTEND_PORT="$CLI_FRONTEND_PORT"
@@ -230,16 +254,26 @@ validate_port() {
     ((value >= 1024 && value <= 65535)) || die "$label must be between 1024 and 65535."
 }
 
+normalize_base_path() {
+    local value="$1"
+    [[ -n "$value" ]] || value="/"
+    [[ "$value" == /* ]] || value="/$value"
+    while [[ "$value" != "/" && "$value" == */ ]]; do value="${value%/}"; done
+    printf '%s\n' "$value"
+}
+BASE_PATH="$(normalize_base_path "$BASE_PATH")"
+
 validate_config() {
     local i j
-    local -a labels=('ingress' 'agent-server' 'automation' 'frontend' 'editor')
+    local -a labels=('gateway' 'canvas-ingress' 'agent-server' 'automation' 'frontend' 'editor')
     local -a ports
-    validate_port 'Ingress port' "$PORT"
+    validate_port 'Gateway port' "$PORT"
+    validate_port 'Canvas ingress port' "$UPSTREAM_PORT"
     validate_port 'Agent-server port' "$BACKEND_PORT"
     validate_port 'Automation port' "$AUTOMATION_PORT"
     validate_port 'Frontend port' "$FRONTEND_PORT"
     ((BACKEND_PORT + 1000 <= 65535)) || die 'The agent-server port is too high for its editor sidecar port.'
-    ports=("$PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))")
+    ports=("$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))")
 
     for ((i = 0; i < ${#ports[@]}; i++)); do
         for ((j = i + 1; j < ${#ports[@]}; j++)); do
@@ -251,6 +285,9 @@ validate_config() {
     [[ -n "$LISTEN_HOST" && "$LISTEN_HOST" != *[[:space:]]* ]] || die 'Invalid bind host.'
     [[ -z "$ACCESS_HOST" || ( "$ACCESS_HOST" != *[[:space:]/:]* && "$ACCESS_HOST" != *'://'*) ]] || die '--access-host must be a hostname or IP without scheme/port.'
     [[ "$ACCESS_SCHEME" == "http" || "$ACCESS_SCHEME" == "https" ]] || die '--access-scheme must be http or https.'
+    [[ -z "$PUBLIC_URL" || "$PUBLIC_URL" =~ ^https?://[^[:space:]]+$ ]] || die '--public-url must be a complete http(s) URL without spaces.'
+    [[ "$BASE_PATH" == /* && "$BASE_PATH" != *[[:space:]?#]* ]] || die '--base-path must be a URL path such as /open.'
+    [[ "$BASE_PATH" == "/" || "$BASE_PATH" != */ ]] || die 'Normalized base path must not end with a slash.'
     [[ -n "$CANVAS_VERSION" && "$CANVAS_VERSION" != *[[:space:]]* ]] || die 'Invalid Agent Canvas version.'
     [[ "$WORKSPACE" == /* ]] || die '--workspace must be an absolute path.'
 }
@@ -268,6 +305,179 @@ prepare_dirs() {
         "$STATE_DIR" \
         "$WORKSPACE"
     chmod 700 "$APP_ROOT" "$DATA_DIR" "$CACHE_DIR" "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null || true
+}
+
+write_gateway() {
+    prepare_dirs
+    cat > "$GATEWAY_SCRIPT" <<'EOF_GATEWAY'
+#!/usr/bin/env node
+import http from "node:http";
+import net from "node:net";
+
+const listenHost = process.env.OH_GATEWAY_HOST || "0.0.0.0";
+const listenPort = Number(process.env.OH_GATEWAY_PORT);
+const upstreamPort = Number(process.env.OH_GATEWAY_UPSTREAM_PORT);
+const rawBasePath = process.env.OH_GATEWAY_BASE_PATH || "/open";
+const basePath = rawBasePath === "/" ? "/" : `/${rawBasePath.replace(/^\/+|\/+$/g, "")}`;
+
+if (!Number.isInteger(listenPort) || !Number.isInteger(upstreamPort)) {
+  console.error("Gateway ports must be integers.");
+  process.exit(2);
+}
+
+const backendPrefixes = [
+  "/api",
+  "/sockets",
+  "/alive",
+  "/health",
+  "/ready",
+  "/server_info",
+  "/docs",
+  "/redoc",
+  "/openapi.json",
+  "/vscode",
+];
+
+function matchesPrefix(pathname, prefix) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isBackendPath(pathname) {
+  return backendPrefixes.some((prefix) => matchesPrefix(pathname, prefix));
+}
+
+// WebConsole's domain publisher strips /open before proxying while direct
+// :8810/open requests retain it. Normalize both forms for the official Canvas
+// ingress: backend routes are root-mounted; frontend routes keep the base path.
+function upstreamUrl(rawUrl = "/") {
+  const queryIndex = rawUrl.indexOf("?");
+  const pathname = queryIndex === -1 ? rawUrl : rawUrl.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : rawUrl.slice(queryIndex);
+  if (basePath === "/") return rawUrl;
+
+  const hasBase = pathname === basePath || pathname.startsWith(`${basePath}/`);
+  const withoutBase = hasBase ? pathname.slice(basePath.length) || "/" : pathname;
+  if (isBackendPath(withoutBase)) return `${withoutBase}${query}`;
+  if (hasBase) return rawUrl;
+  return `${basePath}${pathname.startsWith("/") ? pathname : `/${pathname}`}${query}`;
+}
+
+function rewriteAssetUrls(input) {
+  if (basePath === "/") return input;
+  return input.replace(/(["'`])\/assets\//g, `$1${basePath}/assets/`);
+}
+
+function rewriteHtml(input) {
+  if (basePath === "/") return input;
+  const baseJson = JSON.stringify(basePath);
+  const bootstrap = `<script> (function(){window.__AGENT_CANVAS_BASE_PATH__=${baseJson};if(!location.pathname.startsWith(${baseJson}+"/")&&location.pathname!==${baseJson}){history.replaceState(history.state,"",${baseJson}+(location.pathname.startsWith("/")?location.pathname:"/"+location.pathname)+location.search+location.hash);}}());</script>`;
+  let html = rewriteAssetUrls(input)
+    .replace(/(["'])\/favicon\.svg/g, `$1${basePath}/favicon.svg`)
+    .replace(/"basename":"\/"/g, `"basename":${baseJson}`);
+  html = html.includes("</head>")
+    ? html.replace("</head>", `${bootstrap}\n</head>`)
+    : `${bootstrap}${html}`;
+  return html;
+}
+
+function proxyHttp(req, res) {
+  const headers = { ...req.headers, "accept-encoding": "identity" };
+  headers.host = `127.0.0.1:${upstreamPort}`;
+  headers["x-forwarded-host"] ||= req.headers.host || "";
+
+  const proxyReq = http.request(
+    {
+      hostname: "127.0.0.1",
+      port: upstreamPort,
+      method: req.method,
+      path: upstreamUrl(req.url),
+      headers,
+    },
+    (proxyRes) => {
+      const contentType = String(proxyRes.headers["content-type"] || "").toLowerCase();
+      const isHtml = contentType.includes("text/html");
+      const isJavaScript = contentType.includes("javascript");
+      if (req.method === "HEAD" || (!isHtml && !isJavaScript)) {
+        res.writeHead(proxyRes.statusCode || 502, proxyRes.statusMessage, proxyRes.headers);
+        proxyRes.pipe(res);
+        return;
+      }
+
+      const chunks = [];
+      let size = 0;
+      proxyRes.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024) {
+          proxyRes.destroy(new Error("Text response exceeded the gateway limit"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      proxyRes.on("end", () => {
+        const source = Buffer.concat(chunks).toString("utf8");
+        const body = Buffer.from(isHtml ? rewriteHtml(source) : rewriteAssetUrls(source), "utf8");
+        const responseHeaders = { ...proxyRes.headers };
+        delete responseHeaders["content-encoding"];
+        delete responseHeaders["transfer-encoding"];
+        delete responseHeaders.etag;
+        responseHeaders["content-length"] = String(body.length);
+        responseHeaders["cache-control"] = "no-store";
+        res.writeHead(proxyRes.statusCode || 200, proxyRes.statusMessage, responseHeaders);
+        if (req.method === "HEAD") res.end();
+        else res.end(body);
+      });
+      proxyRes.on("error", (error) => {
+        if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+        res.end(`Canvas upstream response failed: ${error.message}`);
+      });
+    },
+  );
+
+  proxyReq.on("error", (error) => {
+    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+    res.end(`Canvas upstream is unavailable: ${error.message}`);
+  });
+  req.pipe(proxyReq);
+}
+
+const server = http.createServer(proxyHttp);
+
+server.on("upgrade", (req, socket, head) => {
+  const upstream = net.connect(upstreamPort, "127.0.0.1");
+  upstream.on("connect", () => {
+    upstream.write(`${req.method} ${upstreamUrl(req.url)} HTTP/${req.httpVersion}\r\n`);
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const name = req.rawHeaders[i];
+      const value = name.toLowerCase() === "host" ? `127.0.0.1:${upstreamPort}` : req.rawHeaders[i + 1];
+      upstream.write(`${name}: ${value}\r\n`);
+    }
+    upstream.write("\r\n");
+    if (head.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+  upstream.on("error", () => {
+    if (!socket.destroyed) socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+  });
+  socket.on("error", () => upstream.destroy());
+});
+
+server.on("clientError", (_error, socket) => {
+  if (!socket.destroyed) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+});
+
+function shutdown() {
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+
+server.listen(listenPort, listenHost, () => {
+  console.log(`[openhands-prefix-gateway] Public gateway listening on http://${listenHost}:${listenPort}${basePath === "/" ? "/" : `${basePath}/`}`);
+  console.log(`[openhands-prefix-gateway] Canvas upstream: http://127.0.0.1:${upstreamPort}${basePath === "/" ? "/" : `${basePath}/`}`);
+});
+EOF_GATEWAY
+    chmod 700 "$GATEWAY_SCRIPT"
 }
 
 write_wrapper() {
@@ -294,6 +504,7 @@ persist_helper() {
 
     chmod 700 "$HELPER_COPY"
     write_wrapper
+    write_gateway
 }
 
 save_config() {
@@ -304,8 +515,11 @@ save_config() {
         printf 'LISTEN_HOST=%q\n' "$LISTEN_HOST"
         printf 'ACCESS_HOST=%q\n' "$ACCESS_HOST"
         printf 'ACCESS_SCHEME=%q\n' "$ACCESS_SCHEME"
+        printf 'PUBLIC_URL=%q\n' "$PUBLIC_URL"
+        printf 'BASE_PATH=%q\n' "$BASE_PATH"
         printf 'CANVAS_VERSION=%q\n' "$CANVAS_VERSION"
         printf 'WORKSPACE=%q\n' "$WORKSPACE"
+        printf 'UPSTREAM_PORT=%q\n' "$UPSTREAM_PORT"
         printf 'BACKEND_PORT=%q\n' "$BACKEND_PORT"
         printf 'AUTOMATION_PORT=%q\n' "$AUTOMATION_PORT"
         printf 'FRONTEND_PORT=%q\n' "$FRONTEND_PORT"
@@ -639,6 +853,7 @@ load_runtime_environment() {
     export OH_CANVAS_SAFE_BACKEND_PORT="$BACKEND_PORT"
     export OH_CANVAS_SAFE_AUTOMATION_PORT="$AUTOMATION_PORT"
     export OH_CANVAS_SAFE_VITE_PORT="$FRONTEND_PORT"
+    export VITE_BASE_PATH="$BASE_PATH"
     export VITE_WORKING_DIR="$WORKSPACE"
     export AUTOMATION_WORKSPACE_BASE="$WORKSPACE"
 }
@@ -665,7 +880,7 @@ pid_belongs_to_canvas() {
     uid_line="$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
     [[ "$uid_line" == "$(id -u)" ]] || return 1
     cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    if [[ "$cmdline" != *"$AGENT_BIN"* && "$cmdline" != *"$HELPER_COPY"* && "$cmdline" != *"$WRAPPER"* ]]; then
+    if [[ "$cmdline" != *"$AGENT_BIN"* && "$cmdline" != *"$HELPER_COPY"* && "$cmdline" != *"$WRAPPER"* && "$cmdline" != *install-openhands-host.sh* ]]; then
         [[ "$cmdline" == *"$NPM_ROOT"* && "$cmdline" == *"agent-canvas"* ]] || return 1
     fi
 
@@ -684,7 +899,7 @@ managed_pid() {
         printf '%s\n' "$pid"
         return 0
     fi
-    rm -f "$PID_FILE" "$PID_START_FILE"
+    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE"
     return 1
 }
 
@@ -703,14 +918,26 @@ browser_host() {
 }
 
 browser_url() {
-    local host
+    local host path
+    if [[ -n "$PUBLIC_URL" ]]; then
+        if [[ "$PUBLIC_URL" == */ ]]; then printf '%s\n' "$PUBLIC_URL"; else printf '%s/\n' "$PUBLIC_URL"; fi
+        return
+    fi
+
     host="$(browser_host)"
-    if [[ "$ACCESS_SCHEME" == "https" && "$PORT" == "443" ]]; then
-        printf 'https://%s/' "$host"
+    path="/"
+    [[ "$BASE_PATH" == "/" ]] || path="$BASE_PATH/"
+
+    # A named host plus a non-root base path denotes WebConsole's HTTPS domain
+    # publisher. Direct port users can override this with --public-url.
+    if [[ -n "$ACCESS_HOST" && "$BASE_PATH" != "/" ]]; then
+        printf 'https://%s%s\n' "$host" "$path"
+    elif [[ "$ACCESS_SCHEME" == "https" && "$PORT" == "443" ]]; then
+        printf 'https://%s%s\n' "$host" "$path"
     elif [[ "$ACCESS_SCHEME" == "http" && "$PORT" == "80" ]]; then
-        printf 'http://%s/' "$host"
+        printf 'http://%s%s\n' "$host" "$path"
     else
-        printf '%s://%s:%s/' "$ACCESS_SCHEME" "$host" "$PORT"
+        printf '%s://%s:%s%s\n' "$ACCESS_SCHEME" "$host" "$PORT" "$path"
     fi
 }
 
@@ -726,18 +953,93 @@ port_is_open() {
     (exec 9<>"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
 }
 
+START_LOCK_HELD=false
+SUPERVISED_AGENT_PID=""
+SUPERVISED_GATEWAY_PID=""
+
+startup_lock_owner_is_live() {
+    local pid="" saved_token="" live_token="" uid_line=""
+    [[ -r "$START_LOCK_DIR/pid" ]] || return 1
+    pid="$(cat "$START_LOCK_DIR/pid" 2>/dev/null || true)"
+    saved_token="$(cat "$START_LOCK_DIR/start" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/status" ]] || return 1
+    uid_line="$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ "$uid_line" == "$(id -u)" ]] || return 1
+    live_token="$(process_start_token "$pid" 2>/dev/null || true)"
+    [[ -n "$live_token" && "$live_token" == "$saved_token" ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+acquire_startup_lock() {
+    local waited=0 owner=""
+    prepare_dirs
+    while ! mkdir "$START_LOCK_DIR" 2>/dev/null; do
+        if ! startup_lock_owner_is_live; then
+            # mkdir is atomic, but its owner metadata is written immediately
+            # afterward. Give that tiny initialization window one full second.
+            sleep 1
+            if ! startup_lock_owner_is_live; then
+                [[ "$START_LOCK_DIR" == "$STATE_DIR/start.lock" ]] || die 'Refusing to remove an unexpected startup lock path.'
+                rm -rf "$START_LOCK_DIR"
+            fi
+            continue
+        fi
+        owner="$(cat "$START_LOCK_DIR/pid" 2>/dev/null || true)"
+        if ((waited == 0)); then
+            log "Waiting for the existing OpenHands launcher (PID $owner) to stop..."
+        fi
+        ((waited < 90)) || die "Another OpenHands launcher still owns the startup lock (PID $owner)."
+        sleep 1
+        waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$START_LOCK_DIR/pid"
+    process_start_token "$$" > "$START_LOCK_DIR/start"
+    chmod 700 "$START_LOCK_DIR" 2>/dev/null || true
+    chmod 600 "$START_LOCK_DIR/pid" "$START_LOCK_DIR/start" 2>/dev/null || true
+    START_LOCK_HELD=true
+}
+
+release_startup_lock() {
+    local owner=""
+    [[ "$START_LOCK_HELD" == true ]] || return 0
+    owner="$(cat "$START_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [[ "$owner" == "$$" && "$START_LOCK_DIR" == "$STATE_DIR/start.lock" ]]; then
+        rm -rf "$START_LOCK_DIR"
+    fi
+    START_LOCK_HELD=false
+}
+
+pid_is_self_or_ancestor() {
+    local target="$1" current="$$" self="$$"
+    # Never select this supervisor or one of its ancestors (for example, the
+    # background `start` action that is waiting for this child to become ready).
+    while [[ "$current" =~ ^[0-9]+$ && "$current" != "0" ]]; do
+        [[ "$target" != "$current" ]] || return 0
+        current="$(awk '/^PPid:/{print $2; exit}' "/proc/$current/status" 2>/dev/null || true)"
+    done
+    # /proc scanning itself creates short-lived Bash/awk/tr descendants whose
+    # command line can contain this helper's name. Exclude the full child tree.
+    current="$target"
+    while [[ "$current" =~ ^[0-9]+$ && "$current" != "0" ]]; do
+        [[ "$current" != "$self" ]] || return 0
+        current="$(awk '/^PPid:/{print $2; exit}' "/proc/$current/status" 2>/dev/null || true)"
+    done
+    return 1
+}
+
 pid_is_canvas_runtime() {
     local pid="${1:-}" uid_line="" cmdline=""
-    [[ "$pid" =~ ^[0-9]+$ && "$pid" != "$$" && -r "/proc/$pid/status" ]] || return 1
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/status" ]] || return 1
     uid_line="$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
     [[ "$uid_line" == "$(id -u)" ]] || return 1
     cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
     [[ -n "$cmdline" ]] || return 1
     case "$cmdline" in
-        *"$NPM_ROOT"*|*"$TOOLS_DIR/uvx"*|*"$APP_ROOT/python"*|*"$APP_ROOT/uv-tools"*|*"$CACHE_DIR/uv"*|*"$CANVAS_STATE_DIR"*|*openhands-agent-server*|*openhands.automation*|*openvscode-server*)
-            return 0 ;;
+        *install-openhands-host.sh*|*"$HELPER_COPY"*|*"$WRAPPER"*|*"$GATEWAY_SCRIPT"*|*"$NPM_ROOT"*agent-canvas*|*"$TOOLS_DIR/uvx"*|*"$APP_ROOT/python"*openhands*|*"$APP_ROOT/uv-tools"*openhands*|*"$CACHE_DIR/uv"*openhands*|*"$CANVAS_STATE_DIR"*|*openhands-agent-server*|*openhands.automation*|*openvscode-server*) ;;
         *) return 1 ;;
     esac
+    pid_is_self_or_ancestor "$pid" && return 1
+    return 0
 }
 
 canvas_runtime_pids() {
@@ -750,80 +1052,171 @@ canvas_runtime_pids() {
 }
 
 cleanup_orphaned_runtime() {
-    local port conflict_ports="" pids="" pid="" waited=0 alive=false
-    local -a ports=("$PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))")
+    local pids="" pid="" waited=0 announced=false
 
-    for port in "${ports[@]}"; do
-        if port_is_open "$port"; then
-            conflict_ports+=" $port"
-        fi
-    done
-    [[ -n "$conflict_ports" ]] || return 0
-
-    pids="$(canvas_runtime_pids | sort -un || true)"
-    if [[ -z "$pids" ]]; then
-        warn "Configured port(s)$conflict_ports are occupied, but no account-owned OpenHands runtime process could be identified."
-        return 0
-    fi
-
-    log "Removing orphaned OpenHands runtime processes on configured port(s):$conflict_ports"
-    for pid in $pids; do
-        pid_is_canvas_runtime "$pid" && kill -TERM "$pid" 2>/dev/null || true
-    done
-
+    # Do not gate cleanup on an already-open port. A launcher from the previous
+    # deployment may still be installing Python and bind several seconds later.
+    # Re-scan while stopping so children spawned during shutdown are caught too.
     while ((waited < 12)); do
-        alive=false
+        pids="$(canvas_runtime_pids | sort -un || true)"
+        [[ -n "$pids" ]] || break
+        if [[ "$announced" == false ]]; then
+            log 'Removing account-owned OpenHands runtime processes from the previous launch...'
+            announced=true
+        fi
         for pid in $pids; do
-            if pid_is_canvas_runtime "$pid" && kill -0 "$pid" 2>/dev/null; then
-                alive=true
-                break
-            fi
+            pid_is_canvas_runtime "$pid" && kill -TERM "$pid" 2>/dev/null || true
         done
-        [[ "$alive" == true ]] || break
         sleep 1
         waited=$((waited + 1))
     done
 
+    pids="$(canvas_runtime_pids | sort -un || true)"
     for pid in $pids; do
         if pid_is_canvas_runtime "$pid" && kill -0 "$pid" 2>/dev/null; then
             warn "Force-stopping orphaned OpenHands process $pid"
             kill -KILL "$pid" 2>/dev/null || true
         fi
     done
-    rm -f "$PID_FILE" "$PID_START_FILE"
-    sleep 1
+
+    waited=0
+    while ((waited < 5)); do
+        pids="$(canvas_runtime_pids | sort -un || true)"
+        [[ -n "$pids" ]] || break
+        for pid in $pids; do
+            pid_is_canvas_runtime "$pid" && kill -KILL "$pid" 2>/dev/null || true
+        done
+        sleep 1
+        waited=$((waited + 1))
+    done
+    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE"
 }
 
 assert_runtime_ports_free() {
     local label port
-    for label in ingress agent-server automation frontend editor; do
+    for label in gateway canvas-ingress agent-server automation frontend editor; do
         case "$label" in
-            ingress) port="$PORT" ;;
+            gateway) port="$PORT" ;;
+            canvas-ingress) port="$UPSTREAM_PORT" ;;
             agent-server) port="$BACKEND_PORT" ;;
             automation) port="$AUTOMATION_PORT" ;;
             frontend) port="$FRONTEND_PORT" ;;
             editor) port="$((BACKEND_PORT + 1000))" ;;
         esac
         if port_is_open "$port"; then
-            die "$label port $port is already in use. Choose different helper ports or stop the conflicting service."
+            die "$label port $port is already in use by an unrecognized process. Choose different helper ports or stop that process."
         fi
     done
     return 0
 }
 
+supervisor_cleanup() {
+    local pid="" waited=0 recorded=""
+    trap - EXIT INT TERM HUP
+    set +e
+    rm -f "$READY_FILE"
+    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null || true
+    done
+    while ((waited < 12)); do
+        local alive=false
+        for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+            if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then alive=true; fi
+        done
+        [[ "$alive" == true ]] || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            warn "Force-stopping supervised OpenHands process $pid"
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+        [[ "$pid" =~ ^[0-9]+$ ]] && wait "$pid" 2>/dev/null || true
+    done
+    cleanup_orphaned_runtime
+    recorded="$(cat "$PID_FILE" 2>/dev/null || true)"
+    [[ "$recorded" != "$$" ]] || rm -f "$PID_FILE" "$PID_START_FILE"
+    release_startup_lock
+}
+
 serve_agent() {
-    local -a args=(--public --port "$PORT" --host "$LISTEN_HOST")
+    local -a args=(--public --port "$UPSTREAM_PORT" --host 127.0.0.1)
+    local waited=0 gateway_path="" root_code="" child_status=1
+
     load_runtime_environment
+    write_gateway
+    acquire_startup_lock
+    trap supervisor_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+
     cleanup_orphaned_runtime
     assert_runtime_ports_free
     record_pid "$$"
+    rm -f "$READY_FILE"
 
-    # Keep stdout/stderr attached directly to WebConsole. Some restricted hosts
-    # do not mount /dev/fd, so Bash process substitution (tee via /dev/fd/N)
-    # fails before Agent Canvas can start. Background mode is already redirected
-    # to the helper log by start_agent.
-    log "Starting Agent Canvas in authenticated public mode on $LISTEN_HOST:$PORT"
-    exec "$AGENT_BIN" "${args[@]}"
+    log "Starting Agent Canvas upstream in authenticated public mode on 127.0.0.1:$UPSTREAM_PORT"
+    log "Canvas browser base path: $BASE_PATH"
+    "$AGENT_BIN" "${args[@]}" &
+    SUPERVISED_AGENT_PID=$!
+
+    while ! curl -fsS --max-time 5 \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
+        "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null 2>&1; do
+        if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
+            if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
+            die "Agent Canvas upstream exited during startup (code $child_status)."
+        fi
+        if ((waited > 0 && waited % 30 == 0)); then
+            log 'Agent Canvas upstream is still starting (initial Python setup can take several minutes)...'
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    export OH_GATEWAY_HOST="$LISTEN_HOST"
+    export OH_GATEWAY_PORT="$PORT"
+    export OH_GATEWAY_UPSTREAM_PORT="$UPSTREAM_PORT"
+    export OH_GATEWAY_BASE_PATH="$BASE_PATH"
+    log "Starting the prefix-aware public gateway on $LISTEN_HOST:$PORT"
+    "$NODE_HOME/bin/node" "$GATEWAY_SCRIPT" &
+    SUPERVISED_GATEWAY_PID=$!
+
+    gateway_path="$BASE_PATH"
+    [[ "$gateway_path" == "/" ]] && gateway_path=""
+    waited=0
+    while :; do
+        root_code="$(curl -sS --max-time 5 -o "$CACHE_DIR/gateway-root.$$" -w '%{http_code}' \
+            "http://127.0.0.1:$PORT$gateway_path/" 2>/dev/null || true)"
+        if [[ "$root_code" == "200" ]] && grep -Eqi '<!doctype html|<html' "$CACHE_DIR/gateway-root.$$"; then
+            break
+        fi
+        if ! kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; then
+            if wait "$SUPERVISED_GATEWAY_PID"; then child_status=0; else child_status=$?; fi
+            die "OpenHands public gateway exited during startup (code $child_status)."
+        fi
+        ((waited < 30)) || die 'OpenHands public gateway did not become ready in 30 seconds.'
+        sleep 1
+        waited=$((waited + 1))
+    done
+    rm -f "$CACHE_DIR/gateway-root.$$"
+    printf '%s\n' "$$" > "$READY_FILE"
+    chmod 600 "$READY_FILE" 2>/dev/null || true
+    log "Agent Canvas is ready: $(browser_url)"
+
+    while kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null && kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; do
+        sleep 1
+    done
+    if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
+        if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
+        warn "Agent Canvas upstream exited (code $child_status)."
+    else
+        if wait "$SUPERVISED_GATEWAY_PID"; then child_status=0; else child_status=$?; fi
+        warn "OpenHands public gateway exited (code $child_status)."
+    fi
+    return "$child_status"
 }
 
 start_agent() {
@@ -838,7 +1231,7 @@ start_agent() {
     fi
     ensure_runtime_installed
     load_runtime_environment
-    assert_runtime_ports_free
+    rm -f "$READY_FILE"
     : > "$LOG_FILE"
     chmod 600 "$LOG_FILE" 2>/dev/null || true
 
@@ -852,7 +1245,7 @@ start_agent() {
     record_pid "$pid"
 
     while ((waited < 180)); do
-        if agent_is_healthy; then
+        if [[ "$(cat "$READY_FILE" 2>/dev/null || true)" == "$pid" ]] && agent_is_healthy; then
             log "Agent Canvas is ready: $(browser_url)"
             log 'Run openhands-host access-info to display the required API key.'
             return 0
@@ -871,38 +1264,34 @@ start_agent() {
 
 stop_agent() {
     local pid="" waited=0 pgid=""
-    if ! pid="$(managed_pid 2>/dev/null)"; then
-        log 'Agent Canvas is not running under this helper.'
-        return 0
-    fi
-
-    log "Stopping Agent Canvas (PID $pid)..."
-    kill -TERM "$pid" 2>/dev/null || true
-    while ((waited < 25)) && kill -0 "$pid" 2>/dev/null; do
-        sleep 1
-        waited=$((waited + 1))
-    done
-    if kill -0 "$pid" 2>/dev/null; then
-        warn 'Graceful shutdown timed out; forcing the main process to stop.'
-        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
-        if [[ "$pgid" == "$pid" ]]; then
-            kill -KILL -- "-$pid" 2>/dev/null || true
-        else
-            kill -KILL "$pid" 2>/dev/null || true
+    if pid="$(managed_pid 2>/dev/null)"; then
+        log "Stopping Agent Canvas (PID $pid)..."
+        kill -TERM "$pid" 2>/dev/null || true
+        while ((waited < 25)) && kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            warn 'Graceful shutdown timed out; forcing the main process to stop.'
+            pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+            if [[ "$pgid" == "$pid" ]]; then
+                kill -KILL -- "-$pid" 2>/dev/null || true
+            else
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
         fi
+    else
+        log 'No live helper supervisor was recorded; checking for orphaned runtimes.'
     fi
-    rm -f "$PID_FILE" "$PID_START_FILE"
+    cleanup_orphaned_runtime
+    rm -f "$PID_FILE" "$PID_START_FILE" "$READY_FILE"
     log 'Agent Canvas stopped.'
 }
 
 run_foreground() {
-    local pid=""
     prepare_dirs
     save_config
     persist_helper
-    if pid="$(managed_pid 2>/dev/null)"; then
-        die "Agent Canvas is already running (PID $pid)."
-    fi
     ensure_runtime_installed
     serve_agent foreground
 }
@@ -922,6 +1311,7 @@ show_status() {
     printf 'uv: %s\n' "$uv_version"
     printf 'Agent Canvas: %s\n' "$canvas_version"
     printf 'Browser URL: %s\n' "$(browser_url)"
+    printf 'Browser base path: %s\n' "$BASE_PATH"
     printf 'Workspace: %s\n' "$WORKSPACE"
     printf 'Mode: public (API key required)\n'
     if pid="$(managed_pid 2>/dev/null)"; then
@@ -947,31 +1337,47 @@ show_access_info() {
     printf 'OpenHands URL: %s\n' "$(browser_url)"
     printf 'Session API key: %s\n' "$LOCAL_BACKEND_API_KEY"
     printf 'Mode: --public (the key is not embedded in the frontend)\n'
-    if [[ "$ACCESS_SCHEME" == "http" ]]; then
-        printf 'Transport: plain HTTP. Do not enter the key over an untrusted network.\n'
-        printf 'For Internet use, terminate TLS in a real reverse proxy, then configure --access-scheme https.\n'
-    else
+    if [[ "$(browser_url)" == https://* ]]; then
         printf 'Transport: HTTPS URL configured; verify that your external proxy really terminates TLS.\n'
+    else
+        printf 'Transport: plain HTTP. Do not enter the key over an untrusted network.\n'
+        printf 'For Internet use, terminate TLS in a real reverse proxy, then configure --public-url.\n'
     fi
     printf 'Warning: authenticated agents have this account user\047s filesystem, shell, and network permissions.\n'
 }
 
 web_check() {
-    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code=""
+    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" asset_code="" asset_path="" prefix=""
     ensure_secrets
     mkdir -p "$tmp"
     trap 'rm -rf "$tmp"' RETURN
+    prefix="$BASE_PATH"
+    [[ "$prefix" == "/" ]] && prefix=""
 
-    root_code="$(curl -sS --max-time 10 -o "$tmp/root" -w '%{http_code}' "$(local_url)/" || true)"
+    root_code="$(curl -sS --max-time 10 -o "$tmp/root" -w '%{http_code}' "$(local_url)$prefix/" || true)"
     health_code="$(curl -sS --max-time 10 -o "$tmp/health" -w '%{http_code}' \
-        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)/health" || true)"
-    printf 'Root: HTTP %s (%s/)\n' "${root_code:-000}" "$(local_url)"
-    printf 'Authenticated health: HTTP %s (%s/health)\n' "${health_code:-000}" "$(local_url)"
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/health" || true)"
+    asset_path="$(grep -Eo "$prefix/assets/[A-Za-z0-9._~-]+\\.js" "$tmp/root" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$asset_path" ]]; then
+        asset_code="$(curl -sS --max-time 10 -o "$tmp/asset" -w '%{http_code}' "$(local_url)$asset_path" || true)"
+    fi
+
+    printf 'Frontend: HTTP %s (%s%s/)\n' "${root_code:-000}" "$(local_url)" "$prefix"
+    printf 'Initial JavaScript: HTTP %s (%s%s)\n' "${asset_code:-000}" "$(local_url)" "${asset_path:-/missing-asset}"
+    printf 'Authenticated health: HTTP %s (%s%s/health)\n' "${health_code:-000}" "$(local_url)" "$prefix"
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
-    grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The ingress root did not return an HTML application.'
+    grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The gateway did not return an HTML application.'
+    [[ -n "$asset_path" && "$asset_code" == "200" ]] || die 'The base-path JavaScript asset check failed.'
+    if [[ "$BASE_PATH" != "/" ]]; then
+        if grep -Fq '"/assets/' "$tmp/asset" || grep -Fq "'/assets/" "$tmp/asset"; then
+            die 'A JavaScript manifest still contains unprefixed root asset URLs.'
+        fi
+        grep -Fq "__AGENT_CANVAS_BASE_PATH__=\"$BASE_PATH\"" "$tmp/root" || die 'The frontend base-path runtime configuration is missing.'
+        grep -Fq "\"basename\":\"$BASE_PATH\"" "$tmp/root" || die 'The frontend router basename was not rewritten.'
+    fi
     [[ "$health_code" == "200" ]] || die 'Authenticated Agent Canvas health check failed.'
-    log 'Web check passed.'
+    log 'Web check passed, including prefixed HTML, JavaScript, router, and API routing.'
 }
 
 resource_report() {
@@ -1015,6 +1421,11 @@ doctor() {
     else
         warn 'Agent Canvas is missing.'; failed=1
     fi
+    if [[ -x "$GATEWAY_SCRIPT" ]]; then
+        printf 'Prefix gateway: present (base path %s)\n' "$BASE_PATH"
+    else
+        warn 'The generated prefix gateway is missing.'; failed=1
+    fi
     if [[ -s "$SECRETS_FILE" ]]; then
         perms="$(stat -c '%a' "$SECRETS_FILE" 2>/dev/null || true)"
         printf 'Secrets file: present (mode %s)\n' "${perms:-unknown}"
@@ -1022,8 +1433,8 @@ doctor() {
     else
         warn 'Secrets file is missing.'; failed=1
     fi
-    printf 'Configured ports: ingress=%s agent=%s automation=%s frontend=%s editor=%s\n' \
-        "$PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))"
+    printf 'Configured ports: gateway=%s canvas-ingress=%s agent=%s automation=%s frontend=%s editor=%s\n' \
+        "$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))"
 
     if pid="$(managed_pid 2>/dev/null)"; then
         printf 'Process: running (PID %s)\n' "$pid"

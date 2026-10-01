@@ -12,6 +12,8 @@
   "env": {
     "ACCOUNT_HOME": "/home/sabashop",
     "OPENHANDS_ACCESS_HOST": "sabashopping.ir",
+    "OPENHANDS_BASE_PATH": "/open",
+    "OPENHANDS_PUBLIC_URL": "https://sabashopping.ir/open/",
     "NODE_ENV": "production",
     "UV_NO_PROGRESS": "1",
     "PYTHONUNBUFFERED": "1"
