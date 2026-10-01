@@ -4186,13 +4186,20 @@ function handleImportFileSelect(e) {
 
 async function handleImportProvidersSubmit(e) {
   e.preventDefault();
-  const rawJson = $('#importJsonTextarea').value.trim();
+  let rawJson = $('#importJsonTextarea').value.trim();
   if (!rawJson) return alert('Please upload a JSON file or paste JSON configuration text.');
   const replace = $('#importReplaceCheck').checked;
 
+  if (rawJson.startsWith('```')) {
+    const lines = rawJson.split('\n');
+    if (lines[0].startsWith('```')) lines.shift();
+    if (lines.length && lines[lines.length - 1].trim().startsWith('```')) lines.pop();
+    rawJson = lines.join('\n').trim();
+  }
+  rawJson = rawJson.replace(/[“”„«»]/g, '"').replace(/[’’`]/g, "'");
+
   try {
-    JSON.parse(rawJson);
-    await api('/api/providers/import-text', {
+    const res = await api('/api/providers/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ json: rawJson, replace })
@@ -4200,9 +4207,9 @@ async function handleImportProvidersSubmit(e) {
     closeModal('importProvidersModal');
     await loadProvidersList();
     renderChatProviders();
-    alert('Providers imported successfully!');
+    alert(`Providers imported successfully! (${res.count || 'all'} active providers)`);
   } catch (err) {
-    alert('Invalid JSON format: ' + err.message);
+    alert('Import Error: ' + err.message);
   }
 }
 

@@ -1406,6 +1406,52 @@ async def test_exponential_backoff_retry_loop_in_stream_chat(monkeypatch):
     assert "done" in event_types
 
 
+def test_flexible_provider_import():
+    from app.providers import ProviderStore
+    store = ProviderStore(data_path="data/test_import_providers.json")
+
+    # Format 1: List with alternative keys (base_url, api_key, models as string list)
+    json_format_1 = """
+    [
+      {
+        "id": "openrouter-test",
+        "name": "OpenRouter Custom",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "sk-or-12345",
+        "models": ["openai/gpt-4o", "anthropic/claude-3.5-sonnet"]
+      }
+    ]
+    """
+    count = store.import_json(json_format_1, replace=True)
+    assert count == 1
+    p = store.data.get("openrouter-test")
+    assert p is not None
+    assert p.url == "https://openrouter.ai/api/v1"
+    assert p.apiKey == "sk-or-12345"
+    assert len(p.models) == 2
+    assert p.models[0].id == "openai/gpt-4o"
+
+    # Format 2: Wrapped in {"providers": [...]} with markdown fences and single quotes
+    json_format_2 = """```json
+    {
+      "providers": {
+        "deepseek": {
+          "title": "DeepSeek API",
+          "endpoint": "https://api.deepseek.com/v1",
+          "token": "sk-ds-9999",
+          "models": "deepseek-chat, deepseek-coder"
+        }
+      }
+    }
+    ```"""
+    count = store.import_json(json_format_2, replace=False)
+    assert "deepseek" in store.data
+    ds = store.data["deepseek"]
+    assert ds.name == "DeepSeek API"
+    assert ds.url == "https://api.deepseek.com/v1"
+    assert ds.apiKey == "sk-ds-9999"
+    assert len(ds.models) == 2
+    assert ds.models[0].id == "deepseek-chat"
 
 
 

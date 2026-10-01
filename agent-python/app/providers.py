@@ -2,6 +2,8 @@
 import os
 import json
 import time
+import re
+import ast
 import httpx
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -9,6 +11,161 @@ from typing import Dict, List, Any, Optional, Tuple
 from .models import Provider, ModelSpec
 from .config import DATA_DIR, get_raw_config, encrypt_secret, decrypt_secret, mask_secret
 from .database import get_db
+
+def _clean_json_text(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    
+    # Replace smart/unicode quotes
+    t = t.replace('“', '"').replace('”', '"').replace('„', '"').replace('«', '"').replace('»', '"')
+    t = t.replace('’', "'").replace('‘', "'").replace('`', "'")
+    return t
+
+def _normalize_model_spec(item: Any) -> Optional[ModelSpec]:
+    if not item:
+        return None
+    if isinstance(item, str):
+        mid = item.strip()
+        if not mid:
+            return None
+        return ModelSpec(id=mid, name=mid, enabled=True)
+    if isinstance(item, dict):
+        mid = str(item.get("id") or item.get("name") or item.get("model_id") or item.get("model") or "").strip()
+        if not mid:
+            return None
+        name = str(item.get("name") or item.get("title") or item.get("label") or mid).strip()
+        enabled = bool(item.get("enabled", True))
+        toolCalling = bool(item.get("toolCalling") or item.get("tool_calling") or item.get("function_calling") or item.get("tools") or False)
+        vision = bool(item.get("vision") or item.get("multimodal") or False)
+        free = bool(item.get("free") or False)
+        maxInputTokens = int(item.get("maxInputTokens") or item.get("max_input_tokens") or item.get("context_length") or 128000)
+        maxOutputTokens = int(item.get("maxOutputTokens") or item.get("max_output_tokens") or 8192)
+        inputCost = float(item.get("inputCostPer1M") or item.get("input_cost") or item.get("input_price") or 0.0)
+        outputCost = float(item.get("outputCostPer1M") or item.get("output_cost") or item.get("output_price") or 0.0)
+        extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+        return ModelSpec(
+            id=mid,
+            name=name,
+            toolCalling=toolCalling,
+            vision=vision,
+            free=free,
+            maxInputTokens=maxInputTokens,
+            maxOutputTokens=maxOutputTokens,
+            enabled=enabled,
+            inputCostPer1M=inputCost,
+            outputCostPer1M=outputCost,
+            extra=extra
+        )
+    return None
+
+def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider]:
+    if not isinstance(v, dict):
+        return None
+    
+    # 1. Resolve ID
+    raw_id = str(v.get("id") or v.get("provider_id") or v.get("slug") or v.get("name") or fallback_id or "").strip()
+    if not raw_id:
+        raw_id = f"provider-{int(time.time()*1000)}"
+    pid = re.sub(r'[^a-zA-Z0-9_\-]', '-', raw_id).strip('-').lower() or f"p-{int(time.time())}"
+
+    # 2. Resolve Name
+    name = str(v.get("name") or v.get("title") or v.get("label") or v.get("provider_name") or raw_id or pid).strip()
+
+    # 3. Resolve URL
+    url = str(v.get("url") or v.get("base_url") or v.get("baseUrl") or v.get("endpoint") or v.get("api_base") or v.get("apiUrl") or v.get("address") or v.get("host") or "").strip()
+    if not url:
+        url = "https://api.openai.com/v1"
+
+    # 4. Resolve Protocol
+    protocol = str(v.get("protocol") or v.get("type") or v.get("provider_type") or v.get("format") or "openai-compatible").strip().lower()
+    if protocol in ("openai", "chatgpt", "openai_compatible", "openai-v1"):
+        protocol = "openai-compatible"
+    elif protocol in ("claude", "anthropic_v1"):
+        protocol = "anthropic"
+    elif protocol in ("google", "google_gemini", "gemini_api"):
+        protocol = "gemini"
+    elif protocol not in ("openai-compatible", "anthropic", "gemini", "ollama", "mistral", "azure", "cloudflare"):
+        protocol = "openai-compatible"
+
+    # 5. Resolve API Key & API Keys
+    api_key = str(v.get("apiKey") or v.get("api_key") or v.get("key") or v.get("token") or v.get("secret") or v.get("auth_token") or "").strip()
+    
+    raw_keys = v.get("apiKeys") or v.get("api_keys") or v.get("keys") or v.get("tokens") or []
+    api_keys = []
+    if isinstance(raw_keys, list):
+        for k in raw_keys:
+            if isinstance(k, str) and k.strip():
+                api_keys.append(k.strip())
+    elif isinstance(raw_keys, str) and raw_keys.strip():
+        api_keys = [k.strip() for k in re.split(r'[,\n;]+', raw_keys) if k.strip()]
+    if api_key and api_key not in api_keys:
+        api_keys.insert(0, api_key)
+
+    # 6. Resolve Enabled
+    enabled_val = v.get("enabled", True)
+    if isinstance(enabled_val, str):
+        enabled = enabled_val.lower() in ("true", "1", "yes", "on", "active")
+    else:
+        enabled = bool(enabled_val)
+
+    # 7. Resolve Models
+    raw_models = v.get("models") or v.get("model_list") or v.get("available_models") or []
+    models = []
+    if isinstance(raw_models, list):
+        for m in raw_models:
+            norm_m = _normalize_model_spec(m)
+            if norm_m and norm_m.id not in [x.id for x in models]:
+                models.append(norm_m)
+    elif isinstance(raw_models, str) and raw_models.strip():
+        for mstr in re.split(r'[,\n;]+', raw_models):
+            norm_m = _normalize_model_spec(mstr)
+            if norm_m and norm_m.id not in [x.id for x in models]:
+                models.append(norm_m)
+    elif isinstance(raw_models, dict):
+        for mk, mv in raw_models.items():
+            if isinstance(mv, dict) and "id" not in mv:
+                mv["id"] = mk
+            norm_m = _normalize_model_spec(mv if isinstance(mv, dict) else mk)
+            if norm_m and norm_m.id not in [x.id for x in models]:
+                models.append(norm_m)
+
+    # If single "model" or "default_model" field exists and models list is empty
+    single_model = str(v.get("model") or v.get("default_model") or v.get("model_id") or "").strip()
+    if single_model and not models:
+        models.append(ModelSpec(id=single_model, name=single_model, enabled=True))
+
+    if not models:
+        models.append(ModelSpec(id="gpt-4o", name="gpt-4o", enabled=True))
+
+    vendor = str(v.get("vendor") or "custom").strip()
+    api_key_env = str(v.get("apiKeyEnv") or v.get("api_key_env") or v.get("env_key") or "").strip()
+    proxy_url = str(v.get("proxyUrl") or v.get("proxy_url") or v.get("proxy") or "").strip()
+    priority = int(v.get("priority") or 1)
+    timeout_sec = int(v.get("timeoutSec") or v.get("timeout_sec") or v.get("timeout") or 120)
+    extra = v.get("extra") if isinstance(v.get("extra"), dict) else {}
+
+    return Provider(
+        id=pid,
+        name=name,
+        vendor=vendor,
+        url=url,
+        protocol=protocol,
+        enabled=enabled,
+        apiKey=api_key,
+        apiKeys=api_keys,
+        apiKeyEnv=api_key_env,
+        proxyUrl=proxy_url,
+        priority=priority,
+        timeoutSec=timeout_sec,
+        models=models,
+        extra=extra
+    )
 
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60.0):
@@ -234,26 +391,50 @@ class ProviderStore:
             dump[k] = d
         return json.dumps(dump, ensure_ascii=False, indent=2)
 
-    def import_json(self, text: str, replace: bool = False):
-        incoming = json.loads(text)
+    def import_json(self, text: str, replace: bool = False) -> int:
+        clean = _clean_json_text(text)
+        if not clean:
+            raise ValueError("Input JSON is empty.")
+        
+        incoming = None
+        try:
+            incoming = json.loads(clean)
+        except Exception:
+            try:
+                # Try AST eval for Python dictionary format (single quotes, True/False)
+                incoming = ast.literal_eval(clean)
+            except Exception as e:
+                raise ValueError(f"Invalid JSON/format: {str(e)}")
+
+        # Unwrap top-level dictionary wrappers like {"providers": [...]}, {"data": [...]}, {"items": [...]}
+        if isinstance(incoming, dict):
+            for wrapper_key in ("providers", "data", "items", "provider_list", "custom_providers", "models", "list"):
+                if wrapper_key in incoming and isinstance(incoming[wrapper_key], (list, dict)):
+                    incoming = incoming[wrapper_key]
+                    break
+
         parsed = {}
         if isinstance(incoming, list):
-            for item in incoming:
-                p = Provider.model_validate(item)
-                parsed[p.id] = p
+            for idx, item in enumerate(incoming):
+                p = _normalize_provider_item(item, fallback_id=f"provider-{idx+1}")
+                if p:
+                    parsed[p.id] = p
         elif isinstance(incoming, dict):
             for k, v in incoming.items():
-                if isinstance(v, dict) and "id" not in v:
-                    v["id"] = k
-                p = Provider.model_validate(v)
-                parsed[p.id] = p
+                p = _normalize_provider_item(v, fallback_id=k)
+                if p:
+                    parsed[p.id] = p
         else:
-            raise ValueError("Import JSON must be an array of providers or an object mapping.")
+            raise ValueError("Import data must be a JSON array of providers or an object mapping.")
+
+        if not parsed:
+            raise ValueError("No valid providers could be parsed from the provided input.")
 
         if replace:
             self.data = parsed
         else:
             self.data.update(parsed)
         self.save()
+        return len(parsed)
 
 PROVIDER_STORE = ProviderStore()

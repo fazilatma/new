@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.2 - Universal Resilient Provider Importer & Multi-Format JSON Normalizer
+
+- **Ultra-Flexible Provider Importer (`app/providers.py` & `static/index.html`)**:
+  - Automatically parses arrays (`[...]`), object mappings (`{"openai": {...}}`), and wrapped dictionaries (`{"providers": [...]}`, `{"data": [...]}`).
+  - Resolves alternative key names: `base_url`/`baseUrl`/`endpoint`/`api_base` -> `url`, `api_key`/`token`/`secret` -> `apiKey`, `api_keys`/`tokens` -> `apiKeys`.
+  - Normalizes string-based models lists (e.g. `["gpt-4o", "claude-3-5-sonnet"]` or `"gpt-4o, gpt-4-turbo"`) into valid `ModelSpec` objects.
+  - Cleans markdown code fences (````json ... ````), Persian/Unicode smart quotes (`“”„«»`), and single-quote Python dictionaries via `ast.literal_eval`.
+  - Added automated test cases in `test_agent_suite.py` covering multi-format import scenarios.
+
 ## 0.16.1 - Resilient Host Deployment, Python Detection & Environment Port Auto-Binding
 
 - **Deployment Script Pipefail Fix in WebConsole (`webconsole.php`)**:
