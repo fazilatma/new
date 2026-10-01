@@ -20,9 +20,9 @@ namespace Arena;
  * APP_API_VERSION is the HTTP contract version and is intentionally pinned:
  * the bundled single-page UI depends on those response shapes.
  */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const APP_API_VERSION = 'v1';
-const PORTED_FROM_VERSION = '0.16.1';
+const PORTED_FROM_VERSION = '0.16.3';
 
 final class Bootstrap
 {

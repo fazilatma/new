@@ -1474,6 +1474,28 @@ final class Routes
             return ['ok' => true, 'count' => count($store->data)] + $report;
         });
 
+        $r->post('/api/providers/{pid}/import-models', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            $pid = $req->param('pid');
+            $p = $req->json();
+            $payload = $p['json'] ?? $p['text'] ?? $p['data'] ?? $p['models'] ?? '';
+            $text = is_array($payload) ? (string) json_encode($payload) : (string) $payload;
+            if ($text === '') {
+                $b64 = $p['jsonB64'] ?? $p['b64'] ?? '';
+                if (is_string($b64) && $b64 !== '') {
+                    $decoded = base64_decode(strtr($b64, '-_', '+/'), true);
+                    if ($decoded !== false) {
+                        $text = $decoded;
+                    }
+                }
+            }
+            if ($text === '') {
+                throw new HttpError(400, 'Model catalog payload is required');
+            }
+            $store = ProviderStore::load();
+            return $store->importModelsForProvider($pid, $text, (bool) ($p['replace'] ?? false));
+        });
+
         $r->post('/api/providers/test-all', static function (Request $req): array {
             Auth::requireDeveloper($req);
             return Models::testAllModels(ProviderStore::load());

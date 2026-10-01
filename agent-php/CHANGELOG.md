@@ -12,6 +12,16 @@ depends on those response shapes.
 
 ---
 
+## [1.4.1] — 2026-10-01
+
+### Added
+- **Dedicated Provider Model Catalog Import Endpoint (`/api/providers/{pid}/import-models`).** Allows importing specific model lists directly into existing providers with replace/merge support.
+- **Universal Multi-Format API Key Normalizer.** Accepts dictionary (`{"0": "...", "key": "..."}`), object array (`[{"apiKey": "..."}]`), and comma/newline separated API keys across different catalog formats.
+- **Markdown Code Fence & Smart Quote Sanitization.** Automatically cleans leading/trailing markdown fences (````json ... ````) and curly typographic quotes from pasted JSON imports.
+- **Dynamic Endpoint URL Resolution.** Clean resolution of Ollama (`/api/chat`), Gemini (`/openai/chat/completions`), and standard OpenAI-compatible endpoints.
+
+---
+
 ## [1.4.0] — 2026-09-30
 
 Import kept failing with the host's own "page not found" page even after

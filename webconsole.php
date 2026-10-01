@@ -650,6 +650,13 @@ function wcp_detect_project_version(?string $dir): ?string {
             return 'v' . ltrim($m[1], 'v');
         }
     }
+    $bootFile = $dir . '/app/Bootstrap.php';
+    if (is_file($bootFile)) {
+        $boot = (string)@file_get_contents($bootFile);
+        if (preg_match('/APP_VERSION\s*=\s*["\']([^"\']+)["\']/', $boot, $m)) {
+            return 'v' . ltrim($m[1], 'v');
+        }
+    }
     $depJson = $dir . '/.deploy.json';
     if (is_file($depJson)) {
         $meta = @json_decode((string)@file_get_contents($depJson), true);

@@ -222,6 +222,29 @@ final class ProviderStore
         }
         $vendor = (string) ($raw['vendor'] ?? 'custom');
         $url = (string) ($raw['url'] ?? $raw['baseUrl'] ?? $raw['base_url'] ?? $raw['endpoint'] ?? '');
+
+        $rawApiKeys = $raw['apiKeys'] ?? $raw['api_keys'] ?? [];
+        $apiKeys = [];
+        if (is_array($rawApiKeys)) {
+            foreach ($rawApiKeys as $k => $v) {
+                if (is_string($v) && trim($v) !== '') {
+                    $apiKeys[] = trim($v);
+                } elseif (is_array($v)) {
+                    $candidate = (string) ($v['key'] ?? $v['apiKey'] ?? $v['api_key'] ?? $v['value'] ?? '');
+                    if (trim($candidate) !== '') {
+                        $apiKeys[] = trim($candidate);
+                    }
+                }
+            }
+        } elseif (is_string($rawApiKeys) && trim($rawApiKeys) !== '') {
+            $apiKeys = array_values(array_filter(array_map('trim', preg_split('/[\r\n,]+/', $rawApiKeys))));
+        }
+
+        $singleKey = (string) ($raw['apiKey'] ?? $raw['api_key'] ?? '');
+        if ($singleKey !== '' && !in_array($singleKey, $apiKeys, true)) {
+            array_unshift($apiKeys, $singleKey);
+        }
+
         return [
             'id' => $id,
             'name' => (string) ($raw['name'] ?? $id),
@@ -229,8 +252,8 @@ final class ProviderStore
             'url' => $url,
             'protocol' => (string) ($raw['protocol'] ?? self::guessProtocol($id, $vendor, $url)),
             'enabled' => (bool) ($raw['enabled'] ?? false),
-            'apiKey' => (string) ($raw['apiKey'] ?? $raw['api_key'] ?? ''),
-            'apiKeys' => array_values(array_map('strval', (array) ($raw['apiKeys'] ?? []))),
+            'apiKey' => $singleKey ?: ($apiKeys[0] ?? ''),
+            'apiKeys' => array_values(array_unique($apiKeys)),
             'apiKeyEnv' => (string) ($raw['apiKeyEnv'] ?? ''),
             'proxyUrl' => (string) ($raw['proxyUrl'] ?? ''),
             'priority' => (int) ($raw['priority'] ?? 1),
@@ -600,12 +623,94 @@ final class ProviderStore
         ];
     }
 
+    /** Import models into a specific existing provider. */
+    public function importModelsForProvider(string $providerId, string $text, bool $replace = false): array
+    {
+        if (!isset($this->data[$providerId])) {
+            throw new HttpError(404, "Provider '{$providerId}' not found");
+        }
+        $raw = self::decodeImport($text);
+        $models = [];
+        $candidates = [];
+        if (is_array($raw)) {
+            if (isset($raw['data']) && is_array($raw['data'])) {
+                $candidates = $raw['data'];
+            } elseif (isset($raw['models']) && is_array($raw['models'])) {
+                $candidates = $raw['models'];
+            } elseif (array_is_list($raw)) {
+                $candidates = $raw;
+            } else {
+                $candidates = [$raw];
+            }
+        }
+        foreach ($candidates as $m) {
+            if (is_string($m) && trim($m) !== '') {
+                $models[] = self::normalizeModel(['id' => trim($m), 'name' => trim($m)]);
+            } elseif (is_array($m)) {
+                $norm = self::normalizeModel($m);
+                if ($norm['id'] !== '') {
+                    $models[] = $norm;
+                }
+            }
+        }
+        if (empty($models)) {
+            throw new HttpError(400, 'No valid models found in the import payload.');
+        }
+
+        $existing = $this->data[$providerId];
+        $byId = [];
+        if (!$replace) {
+            foreach ((array) ($existing['models'] ?? []) as $em) {
+                if (is_array($em) && ($em['id'] ?? '') !== '') {
+                    $byId[(string) $em['id']] = $em;
+                }
+            }
+        }
+        $added = 0;
+        $updated = 0;
+        foreach ($models as $nm) {
+            $mid = (string) $nm['id'];
+            if (isset($byId[$mid])) {
+                $byId[$mid] = array_merge($byId[$mid], $nm, [
+                    'extra' => array_merge((array) ($byId[$mid]['extra'] ?? []), (array) ($nm['extra'] ?? [])),
+                ]);
+                $updated++;
+            } else {
+                $byId[$mid] = $nm;
+                $added++;
+            }
+        }
+        $this->data[$providerId]['models'] = array_values($byId);
+        $this->save();
+
+        return [
+            'ok' => true,
+            'provider' => $providerId,
+            'modelsCount' => count($this->data[$providerId]['models']),
+            'added' => $added,
+            'updated' => $updated,
+            'replace' => $replace,
+        ];
+    }
+
     /** json_decode with an error message that actually locates the problem. */
     private static function decodeImport(string $text): mixed
     {
         $text = trim($text);
-        // Tolerate a UTF-8 BOM and JS-style trailing commas from hand edits.
+        // Tolerate a UTF-8 BOM, smart quotes, and markdown code block wrappers
         $text = preg_replace('/^\xEF\xBB\xBF/', '', $text) ?? $text;
+        if (str_starts_with($text, '```')) {
+            $lines = explode("\n", $text);
+            if (!empty($lines) && str_starts_with(trim($lines[0]), '```')) {
+                array_shift($lines);
+            }
+            if (!empty($lines) && str_starts_with(trim(end($lines)), '```')) {
+                array_pop($lines);
+            }
+            $text = trim(implode("\n", $lines));
+        }
+        $text = str_replace(["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}"], ['"', '"', "'", "'"], $text);
+
         if ($text === '') {
             throw new HttpError(
                 400,

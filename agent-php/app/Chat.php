@@ -211,7 +211,13 @@ final class Chat
         }
 
         if ($protocol === 'ollama') {
-            $url = str_ends_with($baseUrl, '/chat') ? $baseUrl : $baseUrl . '/api/chat';
+            if (str_ends_with($baseUrl, '/api/chat') || str_ends_with($baseUrl, '/chat')) {
+                $url = $baseUrl;
+            } elseif (str_ends_with($baseUrl, '/api')) {
+                $url = $baseUrl . '/chat';
+            } else {
+                $url = ($baseUrl !== '' ? $baseUrl : 'http://127.0.0.1:11434') . '/api/chat';
+            }
             return ['url' => $url, 'headers' => $headers, 'body' => ['model' => $model['id'], 'messages' => $messages, 'stream' => $stream]];
         }
 
@@ -219,10 +225,14 @@ final class Chat
             // Google AI Studio exposes an OpenAI-compatible surface at /openai.
             $url = str_ends_with($baseUrl, '/chat/completions')
                 ? $baseUrl
-                : preg_replace('#/openai$#', '', $baseUrl) . '/openai/chat/completions';
+                : (rtrim((string) preg_replace('#/openai$#', '', $baseUrl), '/') . '/openai/chat/completions');
         } else {
             // openai-compatible, mistral, azure, cloudflare, openrouter, workers-ai
-            $url = str_ends_with($baseUrl, '/chat/completions') ? $baseUrl : $baseUrl . '/chat/completions';
+            if (str_ends_with($baseUrl, '/chat/completions')) {
+                $url = $baseUrl;
+            } else {
+                $url = ($baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1') . '/chat/completions';
+            }
         }
 
         $body = ['model' => $model['id'], 'messages' => $messages, 'temperature' => 0.2];
