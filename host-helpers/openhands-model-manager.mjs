@@ -215,62 +215,130 @@ function firstString(object, names) {
   return "";
 }
 
+const MODEL_ID_FIELDS = ["id", "model", "modelId", "model_id", "modelName", "model_name", "slug", "canonicalSlug", "canonical_slug", "value"];
+const MODEL_COLLECTION_FIELDS = new Set(["models", "modelList", "model_list", "availableModels", "available_models", "modelCatalog", "model_catalog"]);
+const GENERIC_MODEL_COLLECTION_FIELDS = new Set(["data", "items", "results"]);
+const GENERIC_PARENT_NAMES = new Set(["", "root", "imported", "providers", "provider", "data", "items", "results", "models"]);
+
+function modelInfo(source) {
+  if (typeof source === "string") return { id: source.trim(), name: source.trim(), source: {} };
+  if (!source || typeof source !== "object" || Array.isArray(source)) return { id: "", name: "", source: {} };
+  const id = firstString(source, MODEL_ID_FIELDS);
+  const name = firstString(source, ["name", "displayName", "display_name", "label", "title", "modelName", "model_name"]) || id;
+  return { id, name, source };
+}
+
+function normalizeModelCollection(value) {
+  if (Array.isArray(value)) return value.filter((item) => typeof item === "string" || (item && typeof item === "object" && !Array.isArray(item)));
+  if (!value || typeof value !== "object") return [];
+  const models = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") {
+      models.push(/^\d+$/.test(key) ? item : { id: key, name: item });
+    } else if (item === true) {
+      models.push({ id: key, name: key });
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      models.push(modelInfo(item).id || /^\d+$/.test(key) ? item : { id: key, ...item });
+    }
+  }
+  return models;
+}
+
+function looksLikeModelRecord(value) {
+  if (typeof value === "string") return Boolean(value.trim());
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Boolean(modelInfo(value).id);
+}
+
+function hasModelCollection(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && Object.entries(value).some(([name, item]) => (MODEL_COLLECTION_FIELDS.has(name) || GENERIC_MODEL_COLLECTION_FIELDS.has(name))
+      && normalizeModelCollection(item).some(looksLikeModelRecord)));
+}
+
 function collectProviderDocuments(document) {
   const found = [];
   const flatModels = [];
   const seen = new Set();
-  function visit(value, parentName = "", depth = 0) {
-    if (depth > 12 || !value || typeof value !== "object" || seen.has(value)) return;
+
+  function addCandidate(source, collection, parentName) {
+    const models = normalizeModelCollection(collection).filter(looksLikeModelRecord);
+    if (models.length) found.push({ source: source && typeof source === "object" && !Array.isArray(source) ? source : {}, models, parentName });
+  }
+
+  function visit(value, parentName = "imported", depth = 0, owner = null) {
+    if (depth > 14 || !value || typeof value !== "object" || seen.has(value)) return;
     seen.add(value);
     if (Array.isArray(value)) {
-      for (const item of value) visit(item, parentName, depth + 1);
+      const records = value.filter(looksLikeModelRecord);
+      const containsProviders = value.some(hasModelCollection);
+      if (!containsProviders && records.length && records.length === value.filter((item) => item != null).length) {
+        const source = owner && typeof owner === "object" && !Array.isArray(owner) ? owner : {};
+        addCandidate(source, records, parentName);
+        return;
+      }
+      for (const item of value) visit(item, parentName, depth + 1, owner);
       return;
     }
-    const models = Array.isArray(value.models) ? value.models : Array.isArray(value.modelList) ? value.modelList : null;
-    if (models) {
-      const inferred = models[0] && typeof models[0] === "object" ? models[0] : {};
-      found.push({ source: { ...inferred, ...value }, models, parentName });
+
+    const consumed = new Set();
+    for (const [name, collection] of Object.entries(value)) {
+      const direct = MODEL_COLLECTION_FIELDS.has(name);
+      const generic = GENERIC_MODEL_COLLECTION_FIELDS.has(name);
+      if ((direct || generic) && normalizeModelCollection(collection).some(looksLikeModelRecord)) {
+        addCandidate(value, collection, parentName);
+        consumed.add(name);
+      }
     }
-    if (!models && firstString(value, ["id", "model", "modelId", "model_id", "slug"]) && firstString(value, ["provider", "providerName", "type", "baseUrl", "baseURL", "apiBase"])) {
-      flatModels.push(value);
-    }
+    if (!consumed.size && looksLikeModelRecord(value)) flatModels.push(value);
     for (const [name, item] of Object.entries(value)) {
-      if (name !== "models" && name !== "modelList") visit(item, name, depth + 1);
+      if (consumed.has(name)) continue;
+      visit(item, name, depth + 1, value);
     }
   }
+
   visit(document);
   if (!found.length && flatModels.length) {
     const groups = new Map();
     for (const model of flatModels) {
-      const key = [firstString(model, ["provider", "providerName", "type"]) || "Imported", firstString(model, ["baseUrl", "baseURL", "apiBase", "endpoint"]), firstString(model, ["apiKey", "api_key", "key", "token"])].join("\u0000");
+      const key = [firstString(model, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor"]) || "Imported", firstString(model, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "endpoint"]), firstString(model, ["apiKey", "api_key", "key", "token"])].join("\u0000");
       if (!groups.has(key)) groups.set(key, { source: model, models: [], parentName: "imported" });
       groups.get(key).models.push(model);
     }
     found.push(...groups.values());
   }
-  if (!found.length && Array.isArray(document)) found.push({ source: { name: "Imported" }, models: document, parentName: "imported" });
+  if (!found.length && document && typeof document === "object" && !Array.isArray(document)) {
+    const mapped = normalizeModelCollection(document).filter(looksLikeModelRecord);
+    if (mapped.length) found.push({ source: {}, models: mapped, parentName: "imported" });
+  }
   return found;
 }
 
 function providerInfo(candidate) {
-  const source = candidate.source;
-  const displayName = firstString(source, ["name", "displayName", "label", "providerName"]) || candidate.parentName || "Imported Provider";
-  const provider = slug(firstString(source, ["provider", "type", "id", "slug"]) || displayName, "custom");
-  const nested = source.connection || source.credentials || source.config || {};
-  let baseUrl = firstString(source, ["baseUrl", "baseURL", "apiBase", "api_base", "apiUrl", "api_url", "endpoint", "url"]) || firstString(nested, ["baseUrl", "baseURL", "apiBase", "endpoint"]);
+  const source = candidate.source || {};
+  const sample = candidate.models.find((item) => item && typeof item === "object" && !Array.isArray(item)) || {};
+  const nested = source.connection || source.credentials || source.config || source.settings || {};
+  const explicitProvider = firstString(source, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor", "id", "slug"])
+    || firstString(sample, ["provider", "providerName", "provider_name", "providerId", "provider_id", "type", "vendor"]);
+  const parentProvider = GENERIC_PARENT_NAMES.has(String(candidate.parentName || "").toLowerCase()) ? "" : candidate.parentName;
+  let baseUrl = firstString(source, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "apiUrl", "api_url", "endpoint", "url"])
+    || firstString(nested, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "endpoint"])
+    || firstString(sample, ["baseUrl", "baseURL", "base_url", "apiBase", "api_base", "endpoint"]);
+  let providerHint = explicitProvider || parentProvider || "";
+  if (!providerHint && /openrouter\.ai/i.test(baseUrl)) providerHint = "openrouter";
+  if (!providerHint && candidate.models.some((item) => /^openrouter\//i.test(modelInfo(item).id))) providerHint = "openrouter";
+  const displayName = firstString(source, ["name", "displayName", "display_name", "label", "providerName", "provider_name"])
+    || providerHint || candidate.parentName || "Imported Provider";
+  const provider = slug(providerHint || displayName, "custom");
   if (!baseUrl && provider === "openrouter") baseUrl = "https://openrouter.ai/api/v1";
-  let apiKey = firstString(source, ["apiKey", "api_key", "key", "token", "secret"]) || firstString(nested, ["apiKey", "api_key", "key", "token", "secret"]);
-  if (!apiKey && Array.isArray(source.apiKeys) && source.apiKeys.length) {
-    apiKey = typeof source.apiKeys[0] === "string" ? source.apiKeys[0] : firstString(source.apiKeys[0], ["apiKey", "api_key", "key", "token"]);
+  let apiKey = firstString(source, ["apiKey", "api_key", "key", "token", "secret"])
+    || firstString(nested, ["apiKey", "api_key", "key", "token", "secret"])
+    || firstString(sample, ["apiKey", "api_key", "key", "token", "secret"]);
+  const apiKeys = source.apiKeys || source.api_keys || nested.apiKeys || nested.api_keys;
+  if (!apiKey && Array.isArray(apiKeys) && apiKeys.length) {
+    apiKey = typeof apiKeys[0] === "string" ? apiKeys[0] : firstString(apiKeys[0], ["apiKey", "api_key", "key", "token", "value"]);
   }
   return { displayName, provider, baseUrl, apiKey };
-}
-
-function modelInfo(source) {
-  if (typeof source === "string") return { id: source, name: source, source: {} };
-  const id = firstString(source, ["id", "model", "modelId", "model_id", "slug", "value"]);
-  const name = firstString(source, ["name", "displayName", "label", "title"]) || id;
-  return { id, name, source: source && typeof source === "object" ? source : {} };
 }
 
 function canonicalModel(provider, id) {
@@ -316,15 +384,28 @@ async function importProviders(body) {
   const importSecrets = body.importSecrets === true;
   const overwrite = body.overwrite === true;
   const candidates = collectProviderDocuments(document);
-  if (!candidates.length) throw new Error("No provider object with a models array was found");
+  if (!candidates.length) throw new Error("No models were recognized. Use a provider models/modelList object, a data array, a flat model array, or a model-ID map.");
   const list = await backendRequest("/api/profiles");
-  const connections = await backendRequest("/api/llm/provider-connections");
+  const connectionsResponse = await backendRequest("/api/llm/provider-connections");
+  const connections = Array.isArray(connectionsResponse) ? connectionsResponse : (connectionsResponse?.connections || []);
   const existing = new Set((list?.profiles || []).map((profile) => profile.name));
-  const summary = { providers: 0, connectionsCreated: 0, profilesCreated: 0, skipped: 0, warnings: [] };
+  const summary = {
+    providers: 0,
+    detectedModels: candidates.reduce((total, candidate) => total + candidate.models.length, 0),
+    connectionsCreated: 0,
+    profilesCreated: 0,
+    profilesExisting: 0,
+    profilesLinked: 0,
+    profilesUpdated: 0,
+    skipped: 0,
+    profileNames: [],
+    warnings: [],
+  };
 
   for (const candidate of candidates) {
     const info = providerInfo(candidate);
-    const requestedMode = firstString(candidate.source, ["proxyMode", "proxy_mode", "connectionMode"]) || (candidate.source.proxyOnly === true ? "proxy-only" : candidate.source.useProxy === true || candidate.source.proxyEnabled === true ? "direct-fallback" : "");
+    const requestedMode = firstString(candidate.source, ["proxyMode", "proxy_mode", "connectionMode", "connection_mode"])
+      || (candidate.source.proxyOnly === true ? "proxy-only" : candidate.source.useProxy === true || candidate.source.proxyEnabled === true ? "direct-fallback" : "");
     const mode = normalizeMode(requestedMode || loadConfig().defaultMode);
     let effectiveBase = info.baseUrl;
     let routeId = null;
@@ -338,7 +419,7 @@ async function importProviders(body) {
       const reusable = connections.find((item) => item.provider === info.provider && item.display_name === info.displayName);
       if (reusable) {
         connectionId = reusable.id;
-        summary.warnings.push(`Existing connection kept unchanged: ${info.displayName}`);
+        summary.warnings.push(`Existing encrypted connection kept unchanged: ${info.displayName}`);
       } else {
         const created = await backendRequest("/api/llm/provider-connections", {
           method: "POST",
@@ -348,6 +429,8 @@ async function importProviders(body) {
         connections.push(created);
         summary.connectionsCreated += 1;
       }
+    } else if (info.apiKey && !importSecrets) {
+      summary.warnings.push(`Credential found but intentionally not imported for ${info.displayName}; enable secret import to create its encrypted Provider Connection.`);
     }
     summary.providers += 1;
 
@@ -358,20 +441,50 @@ async function importProviders(body) {
       const preferredName = slug(firstString(model.source, ["profileName", "profile_name"]) || `${info.provider}-${model.name || model.id}`, "imported-model").slice(0, 64);
       const profileName = existing.has(preferredName) ? preferredName : uniqueProfileName(info.provider, model.name || model.id, existing);
       let existingConfig = {};
-      if (existing.has(profileName) && !overwrite) { summary.skipped += 1; continue; }
-      if (existing.has(profileName) && overwrite) {
+      let replacing = false;
+
+      if (existing.has(profileName)) {
         const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`);
-        if (detail.api_key_set && !detail.config?.provider_connection_id) {
+        existingConfig = detail.config || {};
+        if (!overwrite) {
+          if (existingConfig.model !== modelId) {
+            summary.warnings.push(`Name conflict skipped without overwrite: ${profileName}`);
+            summary.skipped += 1;
+            continue;
+          }
+          summary.profilesExisting += 1;
+          summary.profileNames.push(profileName);
+          // The twelve helper-seeded OpenRouter profiles intentionally start
+          // credential-free. A secret import may safely bind those exact
+          // model matches while preserving every other profile field.
+          if (connectionId && SEEDED_OPENROUTER_PROFILES.has(profileName)
+              && !existingConfig.provider_connection_id && !detail.api_key_set) {
+            const llm = {
+              ...existingConfig,
+              api_key: undefined,
+              ...(effectiveBase ? { base_url: effectiveBase } : {}),
+              provider_connection_id: connectionId,
+            };
+            await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
+              method: "POST",
+              body: JSON.stringify({ llm, include_secrets: false }),
+            });
+            summary.profilesLinked += 1;
+          }
+          continue;
+        }
+        if (detail.api_key_set && !existingConfig.provider_connection_id) {
           summary.warnings.push(`Skipped inline-key profile to protect its credential: ${profileName}`);
           summary.skipped += 1;
           continue;
         }
-        existingConfig = detail.config || {};
+        replacing = true;
       }
-      const maxInput = numericField(model.source, ["maxInputTokens", "max_input_tokens", "contextLength", "context_length", "contextWindow"]);
+
+      const maxInput = numericField(model.source, ["maxInputTokens", "max_input_tokens", "contextLength", "context_length", "contextWindow", "context_window"]);
       const maxOutput = numericField(model.source, ["maxOutputTokens", "max_output_tokens", "maxTokens", "max_tokens"]);
       const capabilities = model.source.capabilities && typeof model.source.capabilities === "object" ? model.source.capabilities : {};
-      const toolCalling = model.source.toolCalling ?? model.source.tool_calling ?? capabilities.toolCalling ?? capabilities.tools ?? true;
+      const toolCalling = model.source.toolCalling ?? model.source.tool_calling ?? capabilities.toolCalling ?? capabilities.tool_calling ?? capabilities.tools ?? true;
       const llm = {
         ...existingConfig,
         api_key: undefined,
@@ -389,11 +502,14 @@ async function importProviders(body) {
         body: JSON.stringify({ llm, include_secrets: false }),
       });
       existing.add(profileName);
-      summary.profilesCreated += 1;
+      summary.profileNames.push(profileName);
+      if (replacing) summary.profilesUpdated += 1;
+      else summary.profilesCreated += 1;
       if (routeId && !connectionId) summary.warnings.push(`Profile ${profileName} needs a Provider Connection before use.`);
     }
   }
 
+  summary.profileNames = [...new Set(summary.profileNames)];
   // Preserve the submitted shape for auditing/round-tripping, but permanently
   // strip credential fields before it touches disk.
   atomicJson(importedSnapshotFile, { importedAt: new Date().toISOString(), document: redactDocument(document) });
@@ -893,13 +1009,14 @@ function managerPage() {
 <div class="top"><h1>مدیریت ارائه‌دهنده‌ها و مدل‌ها</h1><a href="${home}">بازگشت به OpenHands</a></div><p class="muted">این صفحه فقط پس از Pair شدن مرورگر کار می‌کند. کلیدها در URL، export یا log قرار نمی‌گیرند.</p><div id="auth" class="status"></div>
 <div class="grid"><section class="card"><h2>Import / Export JSON</h2><input id="file" type="file" accept="application/json,.json"><label><input id="secrets" type="checkbox"> درون‌ریزی API keyهای داخل فایل در Provider Connections رمزنگاری‌شده</label><label><input id="overwrite" type="checkbox"> به‌روزرسانی Profileهای هم‌نام؛ Profile دارای inline key هرگز overwrite نمی‌شود</label><button id="import">درون‌ریزی</button><button class="alt" id="export">برون‌ریزی امن بدون secret</button><div id="io-status" class="status"></div></section>
 <section class="card"><h2>Proxy server</h2><p class="muted">در حالت Proxy، سرویس واسط درخواست، محتوای prompt و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند. فقط از Proxy مورد اعتماد استفاده کنید.</p><label>حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select><label>URL template</label><input id="template" class="ltr"><button id="save-proxy">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter">اعمال Route روی همه مدل‌های OpenRouter</button><div id="routes"></div><div id="proxy-status" class="status"></div></section></div>
+<section class="card"><h2>LLM Profileهای موجود</h2><p class="muted">مدل‌های شناسایی‌شده یا درون‌ریزی‌شده در این فهرست نمایش داده می‌شوند. برای مشاهده مدل جدید در Canvas، پس از درون‌ریزی صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles"></div></section>
 <section class="card"><h2>تست جمعی مدل‌ها</h2><p class="muted">برای هر LLM Profile یک درخواست حداکثر دو توکنی ارسال می‌شود و می‌تواند هزینه ناچیزی ایجاد کند.</p><button id="test">تست همه Profileها</button><div id="test-status" class="status"></div><div id="results"></div></section>
 <div class="grid"><section class="card"><h2>نصب مدل GGUF با llama.cpp</h2><label>نام کوتاه</label><input id="gguf-name" placeholder="qwen-small"><label>لینک HTTPS فایل GGUF از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" placeholder="https://huggingface.co/.../model.gguf"><label>SHA-256 اختیاری</label><input id="gguf-sha" class="ltr"><label>Context length</label><input id="gguf-context" type="number" value="8192" min="512"><button id="install">دانلود و نصب</button><div id="install-status" class="status"></div><div id="locals"></div></section>
 <section class="card"><h2>ثبت endpoint لوکال موجود</h2><label>نام</label><input id="ep-name" placeholder="ollama"><label>Base URL سازگار با OpenAI</label><input id="ep-url" class="ltr" placeholder="http://127.0.0.1:11434/v1"><label>Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"><label>API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"><button id="endpoint">ساخت LLM Profile</button><div id="endpoint-status" class="status"></div></section></div>
 <pre id="log"></pre><script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null;try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}q("auth").textContent=key?"مرورگر احراز هویت شده است.":"ابتدا openhands-host pair را اجرا و مرورگر را Pair کنید.";q("auth").className=key?"ok":"err";
-async function call(p,o={}){if(!key)throw Error("مرورگر Pair نشده است");const r=await fetch(API+p,{...o,headers:{"X-Session-API-Key":key,...(o.body?{"content-type":"application/json"}:{}),...(o.headers||{})}});const t=await r.text();let d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.error||t||("HTTP "+r.status));return d}function show(id,msg,ok=true){q(id).textContent=msg;q(id).className=ok?"status ok":"status err"}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
-async function refresh(){const s=await call("/status");state=s;q("log").textContent=s.local.logTail||"";q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";q("locals").innerHTML=s.local.models.length?"<table><tr><th>مدل</th><th>حجم</th><th></th></tr>"+s.local.models.map(m=>"<tr><td>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✓":" ⏳"):"")+"</td><td>"+(Number(m.bytes||0)/1073741824).toFixed(2)+" GB</td><td><button data-start=\""+esc(m.name)+"\">اجرا</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>";document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});refresh()})}
-q("import").onclick=async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,importSecrets:q("secrets").checked,overwrite:q("overwrite").checked})});show("io-status","ساخته شد: "+r.profilesCreated+" Profile و "+r.connectionsCreated+" اتصال؛ ردشده: "+r.skipped);refresh()}catch(e){show("io-status",e.message,false)}};
+async function call(p,o={}){if(!key)throw Error("مرورگر Pair نشده است");const r=await fetch(API+p,{...o,headers:{"X-Session-API-Key":key,...(o.body?{"content-type":"application/json"}:{}),...(o.headers||{})}});const t=await r.text();let d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.error||t||("HTTP "+r.status));return d}function show(id,msg,ok=true){q(id).textContent=msg;q(id).className=ok?"status ok":"status err"}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>c.charCodeAt(0)===34?"&quot;":({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;"}[c]))}
+async function refresh(){const s=await call("/status");state=s;q("log").textContent=s.local.logTail||"";q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";q("profiles").innerHTML=s.profiles.length?"<table><tr><th>نام Profile</th><th>Model ID</th></tr>"+s.profiles.map(p=>"<tr><td class=ltr>"+esc(p.name)+"</td><td class=ltr>"+esc(p.model||"")+"</td></tr>").join("")+"</table>":"<p class=muted>هیچ LLM Profile ثبت نشده است.</p>";q("locals").innerHTML=s.local.models.length?"<table><tr><th>مدل</th><th>حجم</th><th></th></tr>"+s.local.models.map(m=>"<tr><td>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✓":" ⏳"):"")+"</td><td>"+(Number(m.bytes||0)/1073741824).toFixed(2)+" GB</td><td><button data-start="+esc(m.name)+">اجرا</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>";document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});refresh()})}
+q("import").onclick=async()=>{try{const f=q("file").files[0];if(!f)throw Error("فایل JSON را انتخاب کنید");const document=JSON.parse(await f.text());show("io-status","در حال درون‌ریزی…");const r=await call("/providers/import",{method:"POST",body:JSON.stringify({document,importSecrets:q("secrets").checked,overwrite:q("overwrite").checked})});const message="شناسایی: "+r.detectedModels+" مدل؛ جدید: "+r.profilesCreated+"؛ از قبل موجود: "+r.profilesExisting+"؛ متصل به Provider: "+r.profilesLinked+"؛ به‌روزشده: "+r.profilesUpdated+"؛ اتصال جدید: "+r.connectionsCreated+"؛ ردشده: "+r.skipped+(r.warnings.length?" — "+r.warnings.join(" | "):"");show("io-status",message,r.skipped===0);await refresh()}catch(e){show("io-status",e.message,false)}};
 q("export").onclick=async()=>{try{const d=await call("/providers/export");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:"application/json"}));a.download="openhands-providers.json";a.click();URL.revokeObjectURL(a.href);show("io-status","فایل امن بدون API key ساخته شد.")}catch(e){show("io-status",e.message,false)}};
 q("save-proxy").onclick=async()=>{try{await call("/proxy",{method:"PUT",body:JSON.stringify({defaultMode:q("mode").value,proxyTemplate:q("template").value})});show("proxy-status","ذخیره شد؛ Routeهای موجود نیز به حالت جدید تغییر کردند.");refresh()}catch(e){show("proxy-status",e.message,false)}};
 q("apply-openrouter").onclick=async()=>{try{if(!state)await refresh();const profiles=(state?.profiles||[]).filter(p=>String(p.model||"").startsWith("openrouter/")).map(p=>p.name);const r=await call("/proxy/apply",{method:"POST",body:JSON.stringify({routeId:"openrouter",basePath:"/api/v1",provider:"openrouter",profiles})});show("proxy-status",r.updated.length+" Profile و "+r.connectionsUpdated.length+" اتصال به Route متصل شد؛ "+r.skipped.length+" مورد رد شد.");refresh()}catch(e){show("proxy-status",e.message,false)}};
