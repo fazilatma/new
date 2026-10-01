@@ -7170,13 +7170,50 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
 const PROJECT_JSON_MAX_BYTES=256*1024;
 function parseProjectJson(text){
  if(new TextEncoder().encode(text).byteLength>PROJECT_JSON_MAX_BYTES)throw Error('JSON بزرگ‌تر از ۲۵۶ کیلوبایت است');
- let d;try{d=JSON.parse(text.replace(/^\uFEFF/,''))}catch(e){throw Error('JSON معتبر نیست؛ کوتیشن، ویرگول و براکت‌ها را بررسی کنید')}
+ text = text.trim();
+ text = text.replace(/^\uFEFF/, '').replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+ text = text.replace(/[\u201C\u201D\u201E\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u0060]/g, "'");
+ let d;
+ try{
+   d=JSON.parse(text);
+ }catch(e){
+   try {
+     d=JSON.parse(text.replace(/,\s*([}\]])/g, '$1'));
+   }catch(e2){
+     throw Error('JSON معتبر نیست؛ کوتیشن، ویرگول و براکت‌ها را بررسی کنید');
+   }
+ }
  const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
- if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
- if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
- const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind','node_version'];
+ if(Array.isArray(d)){
+   if(d.length===0)throw Error('آرایه JSON وارد شده خالی است');
+   d=d[0];
+ }
+ if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد');
+ if(Object.prototype.hasOwnProperty.call(d,'project')&&record(d.project))d=d.project;
+ if(Object.prototype.hasOwnProperty.call(d,'projects')&&Array.isArray(d.projects)&&d.projects.length>0&&record(d.projects[0]))d=d.projects[0];
+
+ // Normalize field aliases
+ if(!d.name&&(d.projectName||d.title||d.label))d.name=d.projectName||d.title||d.label;
+ if(!d.repo_url&&(d.repoUrl||d.repo||d.repository||d.url))d.repo_url=d.repoUrl||d.repo||d.repository||d.url;
+ if(!d.deploy_path&&(d.deployPath||d.path))d.deploy_path=d.deployPath||d.path;
+ if(!d.install_cmd&&(d.installCmd||d.install))d.install_cmd=d.installCmd||d.install;
+ if(!d.build_cmd&&(d.buildCmd||d.build))d.build_cmd=d.buildCmd||d.build;
+ if(!d.start_cmd&&(d.startCmd||d.start||d.command))d.start_cmd=d.startCmd||d.start||d.command;
+ if(!d.node_version&&(d.nodeVersion||d.node))d.node_version=String(d.nodeVersion||d.node);
+ if(!d.python_version&&(d.pythonVersion||d.python))d.python_version=String(d.pythonVersion||d.python);
+ if(d.autoStart!==undefined&&d.auto_start===undefined)d.auto_start=d.autoStart;
+ if(d.isDaemon!==undefined&&d.is_daemon===undefined)d.is_daemon=d.isDaemon;
+ if(d.autoUpdate!==undefined&&d.auto_update===undefined)d.auto_update=d.autoUpdate;
+ if(d.autoUpdateInterval!==undefined&&d.auto_update_interval===undefined)d.auto_update_interval=d.autoUpdateInterval;
+ if(d.preserveConfigs!==undefined&&d.preserve_configs===undefined)d.preserve_configs=d.preserveConfigs;
+
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','domain','domain_mode','domain_path','domain_docroot','bind_host','domain_kind','node_version','python_version'];
  const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs','domain_enabled','domain_ws','domain_https','domain_timeout']);
- for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
+ for(const k of Object.keys(d)){
+   if(!allowed.has(k)&&!['exported_at','version','created','created_at','by','host','app_version','magic','keep_git','last_deploy','projects'].includes(k)){
+     delete d[k];
+   }
+ }
  if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
  const out=Object.create(null);
  for(const k of strings)if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='string'||/[\r\n\0]/.test(d[k]))throw Error('مقدار تک‌خطی متنی لازم است: '+k);out[k]=d[k]}
@@ -7189,8 +7226,8 @@ function parseProjectJson(text){
  if(Object.prototype.hasOwnProperty.call(d,'domain_timeout')){const tv=+d.domain_timeout;if(!Number.isFinite(tv)||tv<30||tv>900)throw Error('domain_timeout باید بین ۳۰ و ۹۰۰ ثانیه باشد');out.domain_timeout=tv}
  if(out.domain&&!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(out.domain))throw Error('دامنه نامعتبر است');
  if(out.domain_kind!==undefined&&!['subdomain','path'].includes(out.domain_kind))throw Error('domain_kind باید subdomain یا path باشد');
- if(out.node_version&&!/^\d+(\.\d+){0,2}$/.test(out.node_version))throw Error('node_version نامعتبر است؛ مثلاً 24')
- if(out.python_version&&!/^\d+(\.\d+){0,2}$/.test(out.python_version))throw Error('python_version نامعتبر است؛ مثلاً 3.14')
+ if(out.node_version&&!/^\d+(\.\d+){0,2}$/.test(out.node_version))throw Error('node_version نامعتبر است؛ مثلاً 24');
+ if(out.python_version&&!/^\d+(\.\d+){0,2}$/.test(out.python_version))throw Error('python_version نامعتبر است؛ مثلاً 3.11');
  if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
  // A portable profile cannot change the identity of the dialog being edited.
  return out;

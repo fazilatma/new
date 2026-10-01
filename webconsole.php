@@ -2256,6 +2256,10 @@ function handle_api() {
         $list=proj_all();$p=$in['project']??[];foreach(['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','port','id']as$k)$p[$k]=trim((string)($p[$k]??''));if($p['name']==='')jout(false,null,'Name is required');if($p['repo_url']!==''&&!preg_match('~^(https?://|git@|ssh://|file://|/)~',$p['repo_url']))jout(false,null,'Invalid repository URL');if($p['branch']==='')$p['branch']='main';if($p['branch'][0]==='-'||preg_match('~(^|/)\.\.(/|$)~',$p['subfolder']))jout(false,null,'Invalid branch/subfolder');
         $env=[];foreach(preg_split('/\r\n|\r|\n/',(string)($p['env_text']??''))as$l){$l=trim($l);if($l===''||$l[0]==='#'||strpos($l,'=')===false)continue;[$k,$v]=explode('=',$l,2);$k=trim($k);if(!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/',$k))jout(false,null,'Invalid environment key');$env[$k]=trim($v);}unset($p['env_text']);$p['env']=$env;
         if($api==='proj.quick_deploy')$p=proj_quick_settings($p);
+        $p['node_version']=trim((string)($p['node_version']??''));
+        if($p['node_version']!==''&&!preg_match('/^\d+(\.\d+){0,2}$/',$p['node_version']))jout(false,null,'نسخهٔ Node نامعتبر است؛ مثلاً 24 یا 22.13.0');
+        $p['python_version']=trim((string)($p['python_version']??''));
+        if($p['python_version']!==''&&!preg_match('/^\d+(\.\d+){0,2}$/',$p['python_version']))jout(false,null,'نسخهٔ پایتون نامعتبر است؛ مثلاً 3.14 یا 3.12.7');
         if(($p['auth_token']??'')==='__KEEP__'||($p['auth_token']??'')==='')unset($p['auth_token']);$p['keep_git']=!empty($p['keep_git']);$p['preserve_configs']=!isset($p['preserve_configs'])||!empty($p['preserve_configs']);$p['auto_start']=!empty($p['auto_start']);$p['is_daemon']=!empty($p['is_daemon']);$p['auto_update']=!empty($p['auto_update']);$p['auto_update_interval']=max(30,min(86400,(int)($p['auto_update_interval']??60)));$existing=$p['id']!==''?proj_find($list,$p['id']):null;if(!$existing)$p['id']=wcp_random(5);$p['deploy_path']=proj_resolve_deploy_path($p,$existing);if($p['deploy_path']==='/')jout(false,null,'Invalid deployment root');
         $found=false;if($p['id']!==''){foreach($list as&$x)if($x['id']===$p['id']){$p=array_merge($x,$p);$x=$p;$found=true;}unset($x);}if(!$found){$p['created']=date('c');$list[]=$p;}proj_save_all($list);
         if($api==='proj.quick_deploy'){$job=job_create('deploy','دیپلوی: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['project'=>public_project($p),'job'=>$job['id']]);}jout(true,['projects'=>array_map('public_project',proj_all())]);
@@ -5752,13 +5756,50 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
 const PROJECT_JSON_MAX_BYTES=256*1024;
 function parseProjectJson(text){
  if(new TextEncoder().encode(text).byteLength>PROJECT_JSON_MAX_BYTES)throw Error('JSON بزرگ‌تر از ۲۵۶ کیلوبایت است');
- let d;try{d=JSON.parse(text.replace(/^\uFEFF/,''))}catch(e){throw Error('JSON معتبر نیست؛ کوتیشن، ویرگول و براکت‌ها را بررسی کنید')}
+ text = text.trim();
+ text = text.replace(/^\uFEFF/, '').replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+ text = text.replace(/[\u201C\u201D\u201E\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u0060]/g, "'");
+ let d;
+ try{
+   d=JSON.parse(text);
+ }catch(e){
+   try {
+     d=JSON.parse(text.replace(/,\s*([}\]])/g, '$1'));
+   }catch(e2){
+     throw Error('JSON معتبر نیست؛ کوتیشن، ویرگول و براکت‌ها را بررسی کنید');
+   }
+ }
  const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
- if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
- if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
- const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token'];
+ if(Array.isArray(d)){
+   if(d.length===0)throw Error('آرایه JSON وارد شده خالی است');
+   d=d[0];
+ }
+ if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد');
+ if(Object.prototype.hasOwnProperty.call(d,'project')&&record(d.project))d=d.project;
+ if(Object.prototype.hasOwnProperty.call(d,'projects')&&Array.isArray(d.projects)&&d.projects.length>0&&record(d.projects[0]))d=d.projects[0];
+
+ // Normalize field aliases
+ if(!d.name&&(d.projectName||d.title||d.label))d.name=d.projectName||d.title||d.label;
+ if(!d.repo_url&&(d.repoUrl||d.repo||d.repository||d.url))d.repo_url=d.repoUrl||d.repo||d.repository||d.url;
+ if(!d.deploy_path&&(d.deployPath||d.path))d.deploy_path=d.deployPath||d.path;
+ if(!d.install_cmd&&(d.installCmd||d.install))d.install_cmd=d.installCmd||d.install;
+ if(!d.build_cmd&&(d.buildCmd||d.build))d.build_cmd=d.buildCmd||d.build;
+ if(!d.start_cmd&&(d.startCmd||d.start||d.command))d.start_cmd=d.startCmd||d.start||d.command;
+ if(!d.node_version&&(d.nodeVersion||d.node))d.node_version=String(d.nodeVersion||d.node);
+ if(!d.python_version&&(d.pythonVersion||d.python))d.python_version=String(d.pythonVersion||d.python);
+ if(d.autoStart!==undefined&&d.auto_start===undefined)d.auto_start=d.autoStart;
+ if(d.isDaemon!==undefined&&d.is_daemon===undefined)d.is_daemon=d.isDaemon;
+ if(d.autoUpdate!==undefined&&d.auto_update===undefined)d.auto_update=d.autoUpdate;
+ if(d.autoUpdateInterval!==undefined&&d.auto_update_interval===undefined)d.auto_update_interval=d.autoUpdateInterval;
+ if(d.preserveConfigs!==undefined&&d.preserve_configs===undefined)d.preserve_configs=d.preserveConfigs;
+
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token','node_version','python_version'];
  const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon','auto_update','auto_update_interval','preserve_configs']);
- for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
+ for(const k of Object.keys(d)){
+   if(!allowed.has(k)&&!['exported_at','version','created','created_at','by','host','app_version','magic','keep_git','last_deploy','projects'].includes(k)){
+     delete d[k];
+   }
+ }
  if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
  const out=Object.create(null);
  for(const k of strings)if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='string'||/[\r\n\0]/.test(d[k]))throw Error('مقدار تک‌خطی متنی لازم است: '+k);out[k]=d[k]}
@@ -5778,6 +5819,8 @@ function applyProjectJson(sh,d){
  if(d.auth_token!==undefined)sh.querySelector('#jq-token').value=d.auth_token;
  if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
  if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;if(d.preserve_configs!==undefined)sh.querySelector('#jq-preserve').checked=d.preserve_configs;
+ if(d.node_version!==undefined){const el=sh.querySelector('#jq-nodever');if(el)el.value=d.node_version}
+ if(d.python_version!==undefined){const el=sh.querySelector('#jq-pyver');if(el)el.value=d.python_version}
  if(d.env!==undefined){const box=sh.querySelector('#jq-env');const lines=box.value.split(/\r?\n/).filter(line=>{const i=line.indexOf('=');return i<0||!Object.prototype.hasOwnProperty.call(d.env,line.slice(0,i).trim())});box.value=[...lines.filter(line=>line.trim()!==''),...Object.entries(d.env).map(([k,v])=>k+'='+v)].join('\n')}
 }
 
@@ -5812,7 +5855,7 @@ function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'
  sh.querySelector('#gh-repo-sel').onchange=branches;sh.querySelector('#gh-branch-sel').onchange=inspect;
  sh.querySelector('#jq-managed-path').onclick=async()=>{try{const d=await api('proj.managed_path',{id:p.id||'',name:sh.querySelector('#jq-name').value});sh.querySelector('#jq-deploy_path').value=d.path;toast('مسیر پیشنهادی در فرم قرار گرفت؛ پس از بازبینی ذخیره کنید','ok')}catch(e){toast(e.message,'err')}};
  sh.querySelector('#jq-autoupdate').onchange=e=>sh.querySelector('#jq-autoupdate-box').classList.toggle('hide',!e.target.checked);
- sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');await api('proj.save',{project:q});__closeSheet();renderProj();toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,node_version:(sh.querySelector('#jq-nodever')||{}).value||'',python_version:(sh.querySelector('#jq-pyver')||{}).value||'',auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked,auto_update:sh.querySelector('#jq-autoupdate').checked,auto_update_interval:+sh.querySelector('#jq-autoupdate-interval').value||60,preserve_configs:sh.querySelector('#jq-preserve').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');await api('proj.save',{project:q});__closeSheet();renderProj();toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
  if(fresh){gh();sh.querySelector('#gh-load').click()}
 }
 INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hidden&&!__sheet)renderJobs()},5000)}};
