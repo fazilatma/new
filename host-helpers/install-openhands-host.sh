@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.0.2"
+SCRIPT_VERSION="2.1.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -546,6 +546,46 @@ install_canvas() {
     log "Agent Canvas ready: $($AGENT_BIN --version)"
 }
 
+runtime_is_complete() {
+    node_is_usable "$NODE_HOME/bin/node" || return 1
+    [[ -x "$UV_BIN" && -x "$UVX_BIN" && -x "$AGENT_BIN" ]] || return 1
+    PATH="$NODE_HOME/bin:$TOOLS_DIR:$HOME/.local/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}" \
+        "$AGENT_BIN" --version >/dev/null 2>&1
+}
+
+ensure_runtime_installed() {
+    if runtime_is_complete; then
+        ensure_secrets
+        write_environment
+        return 0
+    fi
+
+    log 'Agent Canvas runtime is incomplete; repairing it automatically before startup...'
+    preflight_install
+    prepare_dirs
+    if ! node_is_usable "$NODE_HOME/bin/node"; then
+        install_node
+    else
+        export PATH="$NODE_HOME/bin:$TOOLS_DIR:$HOME/.local/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+        NODE_INSTALLED_VERSION="$($NODE_HOME/bin/node --version)"
+        log "Using the installed managed Node.js: $NODE_INSTALLED_VERSION"
+    fi
+    if [[ ! -x "$UV_BIN" || ! -x "$UVX_BIN" ]]; then
+        install_uv
+    else
+        log "Using the installed managed uv: $($UV_BIN --version)"
+    fi
+    if [[ ! -x "$AGENT_BIN" ]] || ! PATH="$NODE_HOME/bin:$TOOLS_DIR:$HOME/.local/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}" \
+        "$AGENT_BIN" --version >/dev/null 2>&1; then
+        install_canvas
+    fi
+    ensure_secrets
+    save_config
+    write_environment
+    runtime_is_complete || die 'Automatic Agent Canvas runtime repair did not complete successfully.'
+    log 'Automatic runtime repair completed.'
+}
+
 generate_secret() {
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 32
@@ -696,8 +736,11 @@ assert_runtime_ports_free() {
             frontend) port="$FRONTEND_PORT" ;;
             editor) port="$((BACKEND_PORT + 1000))" ;;
         esac
-        port_is_open "$port" && die "$label port $port is already in use. Choose different helper ports or stop the conflicting service."
+        if port_is_open "$port"; then
+            die "$label port $port is already in use. Choose different helper ports or stop the conflicting service."
+        fi
     done
+    return 0
 }
 
 serve_agent() {
@@ -726,6 +769,7 @@ start_agent() {
         agent_is_healthy && log "Health: OK ($(local_url)/health)" || warn 'The process is running but is not healthy yet.'
         return 0
     fi
+    ensure_runtime_installed
     load_runtime_environment
     assert_runtime_ports_free
     : > "$LOG_FILE"
@@ -792,6 +836,7 @@ run_foreground() {
     if pid="$(managed_pid 2>/dev/null)"; then
         die "Agent Canvas is already running (PID $pid)."
     fi
+    ensure_runtime_installed
     serve_agent foreground
 }
 

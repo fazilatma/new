@@ -200,7 +200,7 @@ openhands-host doctor
 
 The helper always launches Agent Canvas with `--public` and a locally generated 256-bit API key. Run `openhands-host access-info` to display the URL and key that the browser login screen requires. The default direct URL is plain HTTP; select HTTPS only when a separate reverse proxy actually terminates TLS.
 
-The included `openhands-agent-canvas-project.json` is ready to import in WebConsole's **Create Project** dialog. It uses port `8810`, foreground helper supervision, and the real account home path rather than Docker.
+The included `openhands-agent-canvas-project.json` is ready to import in WebConsole's **Create Project** dialog. It uses port `8810`, foreground helper supervision, and the real account home path rather than Docker. Every service start refreshes the helper from this branch, and `run` automatically repairs a missing Node.js, uv, or Agent Canvas runtime before launching.
 
 > **Security warning:** direct Agent Canvas execution is not sandboxed. An authenticated agent receives the same filesystem, shell, and network permissions as the hosting account. Do not send the API key over an untrusted plain-HTTP network, and do not expose an account that contains unrelated production credentials.
 

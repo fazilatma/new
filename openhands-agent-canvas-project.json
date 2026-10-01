@@ -8,7 +8,7 @@
   "port": "8810",
   "install_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; mkdir -p \"$ACCOUNT_HOME/.cache/openhands-host\"; HELPER=\"$ACCOUNT_HOME/.cache/openhands-host/install-openhands-host.sh\"; curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \"$HELPER_URL\" -o \"$HELPER\"; chmod 700 \"$HELPER\"; bash \"$HELPER\" install --home \"$ACCOUNT_HOME\" --port \"${PORT:-8810}\" --host 0.0.0.0 --access-host \"${OPENHANDS_ACCESS_HOST:-sabashopping.ir}\" --canvas-version \"${OPENHANDS_CANVAS_VERSION:-latest}\" --no-start",
   "build_cmd": "",
-  "start_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; exec \"$ACCOUNT_HOME/.local/bin/openhands-host\" run --port \"${PORT:-8810}\" --host 0.0.0.0 --access-host \"${OPENHANDS_ACCESS_HOST:-sabashopping.ir}\" --canvas-version \"${OPENHANDS_CANVAS_VERSION:-latest}\"",
+  "start_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; mkdir -p \"$ACCOUNT_HOME/.cache/openhands-host\"; HELPER=\"$ACCOUNT_HOME/.cache/openhands-host/install-openhands-host.sh\"; curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \"$HELPER_URL\" -o \"$HELPER\"; chmod 700 \"$HELPER\"; exec bash \"$HELPER\" run --home \"$ACCOUNT_HOME\" --port \"${PORT:-8810}\" --host 0.0.0.0 --access-host \"${OPENHANDS_ACCESS_HOST:-sabashopping.ir}\" --canvas-version \"${OPENHANDS_CANVAS_VERSION:-latest}\"",
   "env": {
     "ACCOUNT_HOME": "/home/sabashop",
     "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh",
