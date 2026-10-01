@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "0.16.3"
+    assert APP_VERSION == "2.1.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1630,6 +1630,62 @@ def test_user_rich_provider_export_import():
     assert resolve_provider_endpoint_url("https://api.anthropic.com", "anthropic") == "https://api.anthropic.com/v1/messages"
     assert resolve_provider_endpoint_url("https://api.anthropic.com/v1", "anthropic") == "https://api.anthropic.com/v1/messages"
     assert resolve_provider_endpoint_url("https://api.anthropic.com/v1/messages", "anthropic") == "https://api.anthropic.com/v1/messages"
+
+
+def test_truncated_json_repair_and_nested_model_import():
+    from app.providers import ProviderStore, _repair_truncated_json, _decode_relaxed_json
+    store = ProviderStore(path="data/test_truncated_providers.json")
+
+    # 1. Test truncated JSON string repair
+    truncated_json = '{"groq": {"name": "Groq", "url": "https://api.groq.com/openai/v1", "models": [{"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B'
+    repaired = _repair_truncated_json(truncated_json)
+    assert repaired is not None
+    assert "groq" in repaired
+
+    # 2. Test importing truncated JSON
+    count = store.import_json(truncated_json, replace=True)
+    assert count >= 1
+    assert "groq" in store.data
+
+    # 3. Test import_models_for_provider when given a full catalog with nested provider models
+    full_catalog_payload = """
+    {
+      "openrouter": {
+        "name": "OpenRouter",
+        "url": "https://openrouter.ai/api/v1",
+        "models": [
+          {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet"},
+          {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1"}
+        ]
+      },
+      "groq": {
+        "name": "Groq",
+        "url": "https://api.groq.com/openai/v1",
+        "models": [
+          {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B"}
+        ]
+      }
+    }
+    """
+    res = store.import_models_for_provider("groq", full_catalog_payload, replace=False)
+    assert res["ok"] is True
+    assert (res["added"] + res["updated"]) >= 1
+    groq_model_ids = [m.id for m in store.data["groq"].models]
+    assert "llama-3.3-70b-versatile" in groq_model_ids
+
+    # 4. Test plain text lines of model IDs
+    plain_text_models = """
+    # Popular models
+    llama3.3:70b
+    qwen2.5-coder:32b
+    mistral-large:latest
+    """
+    res2 = store.import_models_for_provider("groq", plain_text_models, replace=False)
+    assert res2["ok"] is True
+    groq_model_ids2 = [m.id for m in store.data["groq"].models]
+    assert "llama3.3:70b" in groq_model_ids2
+    assert "qwen2.5-coder:32b" in groq_model_ids2
+
 
 
 

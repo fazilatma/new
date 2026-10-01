@@ -654,7 +654,10 @@ final class ProviderStore
         $models = [];
         $candidates = [];
         if (is_array($raw)) {
-            if (isset($raw['data']) && is_array($raw['data'])) {
+            // Check if specific provider key exists in raw
+            if (isset($raw[$providerId]) && is_array($raw[$providerId]) && isset($raw[$providerId]['models']) && is_array($raw[$providerId]['models'])) {
+                $candidates = $raw[$providerId]['models'];
+            } elseif (isset($raw['data']) && is_array($raw['data'])) {
                 $candidates = $raw['data'];
             } elseif (isset($raw['models']) && is_array($raw['models'])) {
                 $candidates = $raw['models'];
@@ -667,18 +670,31 @@ final class ProviderStore
             } elseif (array_is_list($raw)) {
                 $candidates = $raw;
             } else {
-                // If it's a dict mapping model_id -> spec
-                $isMap = true;
+                // Check if any sub-key has models (e.g. user pasted full catalog to single provider importer)
+                $foundSubModels = [];
                 foreach ($raw as $k => $v) {
-                    if (!is_array($v) && !is_string($v)) { $isMap = false; break; }
-                }
-                if ($isMap && !isset($raw['url']) && !isset($raw['baseUrl'])) {
-                    $candidates = [];
-                    foreach ($raw as $k => $v) {
-                        $candidates[] = is_array($v) ? array_merge(['id' => (string) $k], $v) : ['id' => (string) $k, 'name' => (string) $v];
+                    if (is_array($v) && isset($v['models']) && is_array($v['models'])) {
+                        foreach ($v['models'] as $sm) {
+                            $foundSubModels[] = $sm;
+                        }
                     }
+                }
+                if (!empty($foundSubModels)) {
+                    $candidates = $foundSubModels;
                 } else {
-                    $candidates = [$raw];
+                    // Check if dict mapping model_id -> spec
+                    $isMap = true;
+                    foreach ($raw as $k => $v) {
+                        if (!is_array($v) && !is_string($v)) { $isMap = false; break; }
+                    }
+                    if ($isMap && !isset($raw['url']) && !isset($raw['baseUrl'])) {
+                        $candidates = [];
+                        foreach ($raw as $k => $v) {
+                            $candidates[] = is_array($v) ? array_merge(['id' => (string) $k], $v) : ['id' => (string) $k, 'name' => (string) $v];
+                        }
+                    } else {
+                        $candidates = [$raw];
+                    }
                 }
             }
         }
@@ -732,8 +748,8 @@ final class ProviderStore
         ];
     }
 
-    /** json_decode with an error message that actually locates the problem. */
-    private static function decodeImport(string $text): mixed
+    /** json_decode with tolerant error recovery for truncated/unclosed pastes. */
+    public static function decodeImport(string $text): mixed
     {
         $text = trim($text);
         if ($text === '') {
@@ -771,6 +787,12 @@ final class ProviderStore
             }
         }
 
+        // Auto-repair truncated / cut-off JSON
+        $repaired = self::repairTruncatedJson($text);
+        if ($repaired !== null) {
+            return $repaired;
+        }
+
         // Plain line-by-line model list fallback (e.g. pasted model IDs, or plain text list)
         $lines = preg_split('/[\r\n]+/', $text);
         $plainModels = [];
@@ -793,6 +815,76 @@ final class ProviderStore
             . ' bytes, ends with: ' . $tail
             . ' — a truncated paste is the usual cause; upload the file instead of pasting it.'
         );
+    }
+
+    public static function repairTruncatedJson(string $text): mixed
+    {
+        $t = trim($text);
+        $len = strlen($t);
+        if ($len < 2) return null;
+
+        $inString = false;
+        $escape = false;
+        $stack = [];
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $t[$i];
+            if ($escape) {
+                $escape = false;
+                continue;
+            }
+            if ($ch === '\\') {
+                $escape = true;
+                continue;
+            }
+            if ($ch === '"') {
+                $inString = !$inString;
+                continue;
+            }
+            if (!$inString) {
+                if ($ch === '{' || $ch === '[') {
+                    $stack[] = $ch;
+                } elseif ($ch === '}') {
+                    if (!empty($stack) && end($stack) === '{') array_pop($stack);
+                } elseif ($ch === ']') {
+                    if (!empty($stack) && end($stack) === '[') array_pop($stack);
+                }
+            }
+        }
+
+        $repaired = $t;
+        if ($inString) {
+            $repaired .= '"';
+        }
+
+        $repaired = preg_replace('/,\s*$/', '', $repaired) ?? $repaired;
+        $repaired = preg_replace('/:\s*$/', ': null', $repaired) ?? $repaired;
+        $repaired = preg_replace('/,\s*([}\]])/', '$1', $repaired) ?? $repaired;
+
+        while (!empty($stack)) {
+            $open = array_pop($stack);
+            $repaired = preg_replace('/,\s*$/', '', $repaired) ?? $repaired;
+            if ($open === '{') {
+                if (preg_match('/"[^"]+"\s*:\s*$/', $repaired)) {
+                    $repaired .= 'null';
+                }
+                $repaired .= '}';
+            } elseif ($open === '[') {
+                $repaired .= ']';
+            }
+        }
+
+        $decoded = json_decode($repaired, true);
+        if (json_last_error() === JSON_ERROR_NONE && $decoded !== null) {
+            return $decoded;
+        }
+
+        $lastComma = strrpos($t, ',');
+        if ($lastComma !== false && $lastComma > 10) {
+            return self::repairTruncatedJson(substr($t, 0, $lastComma));
+        }
+
+        return null;
     }
 
     /**

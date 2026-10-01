@@ -58,6 +58,100 @@ def _clean_json_text(text: str) -> str:
     t = t.replace('’', "'").replace('‘', "'").replace('`', "'")
     return t
 
+def _repair_truncated_json(text: str) -> Optional[Any]:
+    t = text.strip()
+    if len(t) < 2:
+        return None
+    in_str = False
+    escape = False
+    stack = []
+    for ch in t:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if not in_str:
+            if ch in ('{', '['):
+                stack.append(ch)
+            elif ch == '}':
+                if stack and stack[-1] == '{':
+                    stack.pop()
+            elif ch == ']':
+                if stack and stack[-1] == '[':
+                    stack.pop()
+
+    repaired = t
+    if in_str:
+        repaired += '"'
+
+    repaired = re.sub(r',\s*$', '', repaired)
+    repaired = re.sub(r':\s*$', ': null', repaired)
+    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+
+    while stack:
+        open_b = stack.pop()
+        repaired = re.sub(r',\s*$', '', repaired)
+        if open_b == '{':
+            if re.search(r'"[^"]+"\s*:\s*$', repaired):
+                repaired += 'null'
+            repaired += '}'
+        elif open_b == '[':
+            repaired += ']'
+
+    try:
+        return json.loads(repaired)
+    except Exception:
+        pass
+
+    last_comma = t.rfind(',')
+    if last_comma > 10:
+        return _repair_truncated_json(t[:last_comma])
+    return None
+
+def _decode_relaxed_json(text: str) -> Any:
+    clean = _clean_json_text(text)
+    if not clean:
+        raise ValueError("Input text is empty.")
+    try:
+        return json.loads(clean)
+    except Exception:
+        pass
+    
+    # Try removing trailing commas
+    relaxed = re.sub(r',\s*([}\]])', r'\1', clean)
+    try:
+        return json.loads(relaxed)
+    except Exception:
+        pass
+
+    # Try auto-repairing truncated JSON
+    repaired = _repair_truncated_json(clean)
+    if repaired is not None:
+        return repaired
+
+    # Try AST literal eval for Python dict syntax
+    try:
+        return ast.literal_eval(clean)
+    except Exception:
+        pass
+
+    # Fallback to plain text line-by-line model list
+    lines = [l.strip(" \t\r\n,;\"'") for l in clean.splitlines()]
+    plain_models = []
+    for l in lines:
+        if not l or l.startswith("#") or l.startswith("//"):
+            continue
+        plain_models.append({"id": l, "name": l})
+    if plain_models:
+        return {"models": plain_models}
+
+    raise ValueError("Invalid format: input could not be parsed as JSON or a list of models.")
+
 def _normalize_model_spec(item: Any) -> Optional[ModelSpec]:
     if not item:
         return None
@@ -513,23 +607,11 @@ class ProviderStore:
         return json.dumps(dump, ensure_ascii=False, indent=2)
 
     def import_json(self, text: str, replace: bool = False) -> int:
-        clean = _clean_json_text(text)
-        if not clean:
-            raise ValueError("Input JSON is empty.")
-        
-        incoming = None
-        try:
-            incoming = json.loads(clean)
-        except Exception:
-            try:
-                # Try AST eval for Python dictionary format (single quotes, True/False)
-                incoming = ast.literal_eval(clean)
-            except Exception as e:
-                raise ValueError(f"Invalid JSON/format: {str(e)}")
+        incoming = _decode_relaxed_json(text)
 
         # Unwrap top-level dictionary wrappers like {"providers": [...]}, {"data": [...]}, {"items": [...]}
         if isinstance(incoming, dict):
-            for wrapper_key in ("providers", "data", "items", "provider_list", "custom_providers", "models", "list"):
+            for wrapper_key in ("providers", "data", "items", "provider_list", "custom_providers", "catalog", "config", "result", "list"):
                 if wrapper_key in incoming and isinstance(incoming[wrapper_key], (list, dict)):
                     incoming = incoming[wrapper_key]
                     break
@@ -542,7 +624,7 @@ class ProviderStore:
                     parsed[p.id] = p
         elif isinstance(incoming, dict):
             for k, v in incoming.items():
-                p = _normalize_provider_item(v, fallback_id=k)
+                p = _normalize_provider_item(v, fallback_id=str(k))
                 if p:
                     parsed[p.id] = p
         else:
@@ -569,32 +651,13 @@ class ProviderStore:
     def import_models_for_provider(self, provider_id: str, text: str, replace: bool = False) -> Dict[str, Any]:
         if provider_id not in self.data:
             raise ValueError(f"Provider '{provider_id}' not found.")
-        clean = _clean_json_text(text)
-        if not clean:
-            raise ValueError("Input JSON is empty.")
-        
-        incoming = None
-        try:
-            incoming = json.loads(clean)
-        except Exception:
-            try:
-                incoming = ast.literal_eval(clean)
-            except Exception:
-                # Fallback to plain text lines of model IDs
-                lines = [l.strip(" \t\r\n,;\"'") for l in clean.splitlines()]
-                plain_models = []
-                for l in lines:
-                    if not l or l.startswith("#") or l.startswith("//"):
-                        continue
-                    plain_models.append({"id": l, "name": l})
-                if plain_models:
-                    incoming = {"models": plain_models}
-                else:
-                    raise ValueError("Invalid format: input could not be parsed as JSON or a list of models.")
+        incoming = _decode_relaxed_json(text)
 
         candidates = []
         if isinstance(incoming, dict):
-            if "data" in incoming and isinstance(incoming["data"], list):
+            if provider_id in incoming and isinstance(incoming[provider_id], dict) and "models" in incoming[provider_id] and isinstance(incoming[provider_id]["models"], list):
+                candidates = incoming[provider_id]["models"]
+            elif "data" in incoming and isinstance(incoming["data"], list):
                 candidates = incoming["data"]
             elif "models" in incoming and isinstance(incoming["models"], list):
                 candidates = incoming["models"]
@@ -607,11 +670,19 @@ class ProviderStore:
             elif "models" in incoming and isinstance(incoming["models"], dict):
                 candidates = [{"id": k, **(v if isinstance(v, dict) else {"name": str(v)})} for k, v in incoming["models"].items()]
             else:
-                is_dict_of_models = all(isinstance(v, (dict, str)) for v in incoming.values()) and ("url" not in incoming and "baseUrl" not in incoming)
-                if is_dict_of_models and incoming:
-                    candidates = [{"id": k, **(v if isinstance(v, dict) else {"name": str(v)})} for k, v in incoming.items()]
+                # Check if any sub-dictionary contains a 'models' array (nested provider dictionary)
+                found_sub_models = []
+                for k, v in incoming.items():
+                    if isinstance(v, dict) and "models" in v and isinstance(v["models"], list):
+                        found_sub_models.extend(v["models"])
+                if found_sub_models:
+                    candidates = found_sub_models
                 else:
-                    candidates = [incoming]
+                    is_dict_of_models = all(isinstance(v, (dict, str)) for v in incoming.values()) and ("url" not in incoming and "baseUrl" not in incoming and "base_url" not in incoming)
+                    if is_dict_of_models and incoming:
+                        candidates = [{"id": k, **(v if isinstance(v, dict) else {"name": str(v)})} for k, v in incoming.items()]
+                    else:
+                        candidates = [incoming]
         elif isinstance(incoming, list):
             candidates = incoming
         else:
