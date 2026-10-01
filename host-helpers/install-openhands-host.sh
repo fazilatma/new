@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.2.1"
+SCRIPT_VERSION="3.3.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -566,8 +566,8 @@ function rewriteAssetUrls(input) {
 
 function injectModelManagerLink(input) {
   const href = `${basePath === "/" ? "" : basePath}/models`;
-  const link = `<a id="openhands-host-model-manager-link" href="${href}" title="Import/export providers, local models, bulk tests, and proxy settings" style="position:fixed;left:16px;bottom:16px;z-index:2147483647;padding:10px 14px;border-radius:999px;background:#0284c7;color:#fff;text-decoration:none;font:700 14px/1.2 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.25)">⚙ مدیریت مدل‌ها</a>`;
-  return input.includes("</body>") ? input.replace("</body>", `${link}\n</body>`) : `${input}${link}`;
+  const integration = `<style id="openhands-host-sidebar-style">a[data-testid="sidebar-model-manager-link"]{text-decoration:none}a[data-testid="sidebar-model-manager-link"]:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}</style><script id="openhands-host-sidebar-script">(()=>{const href=${JSON.stringify(href)},testId="sidebar-model-manager-link",label="مدیریت مدل‌ها",icon='<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>';let queued=false;function install(sidebar){const candidates=Array.from(sidebar.querySelectorAll('a[data-testid="sidebar-skills-link"],a[data-testid="sidebar-conversations-link"]')),source=candidates.find((item)=>item.getAttribute("aria-current")!=="page")||candidates[0];if(!source)return;const nav=source.closest("nav");if(!nav)return;const signature=String(source.className)+"|"+String(sidebar.getAttribute("data-collapsed"));let link=nav.querySelector('a[data-testid="'+testId+'"]');if(link&&link.dataset.sourceSignature!==signature){link.remove();link=null}if(link)return;link=source.cloneNode(true);link.href=href;link.id="";link.dataset.testid=testId;link.dataset.sourceSignature=signature;link.setAttribute("data-testid",testId);link.setAttribute("aria-label",label);link.setAttribute("title",label);link.removeAttribute("aria-current");link.removeAttribute("target");link.removeAttribute("rel");const oldIcon=link.querySelector("svg");if(oldIcon)oldIcon.outerHTML=icon;const textNodes=Array.from(link.querySelectorAll("span")).filter((item)=>!item.querySelector("svg"));if(textNodes.length)textNodes[textNodes.length-1].textContent=label;else link.append(document.createTextNode(label));source.insertAdjacentElement("afterend",link)}function sync(){queued=false;document.querySelectorAll("aside").forEach(install)}function schedule(){if(queued)return;queued=true;requestAnimationFrame(sync)}new MutationObserver(schedule).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["data-collapsed"]});addEventListener("pageshow",schedule);addEventListener("popstate",schedule);schedule()})();<\/script>`;
+  return input.includes("</body>") ? input.replace("</body>", `${integration}\n</body>`) : `${input}${integration}`;
 }
 
 function rewriteHtml(input) {
@@ -2300,8 +2300,9 @@ web_check() {
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
     grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The gateway did not return an HTML application.'
-    grep -Fq 'openhands-host-model-manager-link' "$tmp/root" || die 'The visible model-manager link is missing from the Canvas page.'
-    grep -Fq "href=\"$prefix/models\"" "$tmp/root" || die 'The visible model-manager link has the wrong base path.'
+    grep -Fq 'sidebar-model-manager-link' "$tmp/root" || die 'The native model-manager sidebar integration is missing from the Canvas page.'
+    grep -Fq "const href=\"$prefix/models\"" "$tmp/root" || die 'The native model-manager sidebar item has the wrong base path.'
+    ! grep -Fq 'position:fixed;left:16px;bottom:16px' "$tmp/root" || die 'The obsolete floating model-manager control is still present.'
     [[ -n "$asset_path" && "$asset_code" == "200" ]] || die 'The base-path JavaScript asset check failed.'
     if [[ "$BASE_PATH" != "/" ]]; then
         if grep -Fq '"/assets/' "$tmp/asset" || grep -Fq "'/assets/" "$tmp/asset"; then
@@ -2314,7 +2315,7 @@ web_check() {
     [[ "$health_code" == "200" ]] || die 'Canvas ingress health check failed.'
     [[ "$settings_code" == "200" ]] || die 'The running Agent Server rejected the API key stored by openhands-host.'
     [[ "$server_info_code" == "200" ]] || die 'Agent Server readiness check failed; the frontend ingress is up but its Python backend is unavailable.'
-    [[ "$manager_page_code" == "200" ]] && grep -Fq 'مدیریت ارائه‌دهنده‌ها و مدل‌ها' "$tmp/models" || die 'The model-manager page check failed.'
+    [[ "$manager_page_code" == "200" ]] && grep -Fq 'data-panel="overview"' "$tmp/models" && grep -Fq 'data-tab="local"' "$tmp/models" || die 'The tabbed model-manager page check failed.'
     [[ "$manager_api_code" == "200" ]] || die 'The authenticated model-manager API check failed.'
     grep -q '"profileLimit":null' "$tmp/models-status" || die 'The model manager did not report unlimited local profiles.'
     log 'Web check passed, including Canvas, unlimited profiles, model manager, API-key validation, and Agent Server readiness.'
