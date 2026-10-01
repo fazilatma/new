@@ -179,7 +179,7 @@ The included `open-webui-computer-rootless-project.json` imports the same helper
 Download first, then run it as a separate short command so fragile web terminals do not have to paste one long pipeline:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fazilatma/new/0bbfa3a5cf249fb32824295e050b6eb1df0430ab/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
 ```
 
 ```bash
@@ -200,7 +200,7 @@ openhands-host doctor
 
 The helper always launches Agent Canvas with `--public` and a locally generated 256-bit API key. Run `openhands-host access-info` to display the URL and key that the browser login screen requires. The default direct URL is plain HTTP; select HTTPS only when a separate reverse proxy actually terminates TLS.
 
-The included `openhands-agent-canvas-project.json` is ready to import in WebConsole's **Create Project** dialog. It uses port `8810`, foreground helper supervision, and the real account home path rather than Docker. Every service start refreshes the helper from this branch, and `run` automatically repairs a missing Node.js, uv, or Agent Canvas runtime before launching.
+The included `openhands-agent-canvas-project.json` is ready to import once in WebConsole's **Create Project** dialog. It enables branch auto-update every 60 seconds and executes the helper directly from the deployed branch checkout. Future pushes to `arena/01a0f230-new` are therefore fetched, installed, and restarted automatically without importing another JSON. The profile uses port `8810`, foreground helper supervision, and the real account home path rather than Docker; `run` also repairs a missing Node.js, uv, or Agent Canvas runtime before launching.
 
 > **Security warning:** direct Agent Canvas execution is not sandboxed. An authenticated agent receives the same filesystem, shell, and network permissions as the hosting account. Do not send the API key over an untrusted plain-HTTP network, and do not expose an account that contains unrelated production credentials.
 
