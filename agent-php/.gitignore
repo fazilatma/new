@@ -2,11 +2,17 @@
 .env
 data/environment.json
 data/master.key
+data/providers.json
 
 # Runtime state
-data/agent.db
-data/agent.db-wal
-data/agent.db-shm
+data/*.db*
+data/*.sqlite*
+data/logs/
+data/workspaces/
+data/uploads/
+data/backups/
+data/job_outputs/
+data/versions/
 storage/
 !storage/.gitkeep
 

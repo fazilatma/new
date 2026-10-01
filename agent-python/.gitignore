@@ -13,3 +13,7 @@ __pycache__/
 /data/workspaces/
 /data/uploads/
 /data/runtime-providers.json
+/data/environment.json
+/data/providers.json
+/data/master.key
+storage/

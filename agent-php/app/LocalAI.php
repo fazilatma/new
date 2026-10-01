@@ -73,22 +73,47 @@ final class LocalAI
         return self::rootDir() . '/bin';
     }
 
-    /** Resolved `ollama` executable: explicit env → private install → PATH. */
+    /** Resolved `ollama` executable: explicit env → database state → private install → standard paths → PATH. */
     public static function binary(): ?string
     {
         $explicit = (string) (getenv('AGENT_OLLAMA_BIN') ?: '');
         if ($explicit !== '' && is_file($explicit)) {
             return $explicit;
         }
+        $saved = (string) (Database::state('localai:custom_bin', '') ?? '');
+        if ($saved !== '' && is_file($saved) && is_executable($saved)) {
+            return $saved;
+        }
         $local = self::binDir() . '/ollama';
         if (is_file($local) && is_executable($local)) {
             return $local;
+        }
+        $candRoot = self::rootDir() . '/ollama';
+        if (is_file($candRoot) && is_executable($candRoot)) {
+            return $candRoot;
+        }
+        $candRootBin = self::rootDir() . '/bin/ollama';
+        if (is_file($candRootBin) && is_executable($candRootBin)) {
+            return $candRootBin;
+        }
+        $standard = ['/usr/local/bin/ollama', '/usr/bin/ollama', '/opt/ollama/bin/ollama'];
+        $home = getenv('HOME') ?: '';
+        if ($home !== '') {
+            $standard[] = rtrim($home, '/') . '/.local/bin/ollama';
+        }
+        foreach ($standard as $p) {
+            if (is_file($p) && is_executable($p)) {
+                return $p;
+            }
         }
         if (function_exists('proc_open')) {
             $out = Terminal::rawCapture(['sh', '-lc', 'command -v ollama 2>/dev/null'], null, 5);
             $path = trim((string) ($out['stdout'] ?? ''));
             if ($path !== '') {
-                return explode("\n", $path)[0];
+                $first = explode("\n", $path)[0];
+                if (is_file($first) && is_executable($first)) {
+                    return $first;
+                }
             }
         }
         return null;
@@ -102,6 +127,10 @@ final class LocalAI
             if ($v !== '') {
                 return self::normalizeHost($v);
             }
+        }
+        $saved = (string) (Database::state('localai:custom_host', '') ?? '');
+        if ($saved !== '') {
+            return self::normalizeHost($saved);
         }
         $cfg = trim(Config::raw('OLLAMA_BASE_URL', ''));
         return $cfg !== '' ? self::normalizeHost($cfg) : self::DEFAULT_HOST;

@@ -243,6 +243,12 @@ def init_db():
             PRIMARY KEY (provider_id, model_id)
         );
 
+        CREATE TABLE IF NOT EXISTS app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
         CREATE INDEX IF NOT EXISTS idx_changeset_files_cs ON changeset_files(changeset_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -429,4 +435,49 @@ def clear_conversation_checkpoints(conversation_id: str):
             conn.execute("DELETE FROM conversation_checkpoints WHERE conversation_id = ?", (conversation_id,))
     except Exception:
         pass
+
+
+def get_state(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Retrieve arbitrary key-value state from app_state table."""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+            if row and row["value"] is not None:
+                return str(row["value"])
+            return default
+    except Exception:
+        return default
+
+
+def set_state(key: str, value: str) -> None:
+    """Store arbitrary key-value state into app_state table."""
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+            """, (key, value))
+    except Exception:
+        pass
+
+
+def get_state_json(key: str, default: Any = None) -> Any:
+    """Retrieve and decode JSON value from app_state table."""
+    raw = get_state(key)
+    if raw is None or raw == "":
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def set_state_json(key: str, value: Any) -> None:
+    """Encode JSON and store value into app_state table."""
+    try:
+        raw = json.dumps(value, ensure_ascii=False)
+        set_state(key, raw)
+    except Exception:
+        pass
+
 

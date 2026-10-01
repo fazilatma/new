@@ -19,28 +19,28 @@
   var KEY = 'arena_api_base';
   var MODE_KEY = 'arena_api_mode';
   try {
-    var saved = sessionStorage.getItem(KEY);
-    if (saved !== null && !window.__API_BASE__) window.__API_BASE__ = saved;
-    var savedMode = sessionStorage.getItem(MODE_KEY);
-    if (savedMode && !window.__API_MODE__) window.__API_MODE__ = savedMode;
-  } catch (e) { /* private mode */ }
-  if (typeof window.__API_BASE__ !== 'string') window.__API_BASE__ = '';
-  if (window.__API_MODE__ !== 'query') window.__API_MODE__ = 'path';
-
-  function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); }
+    if (!window.__API_BASE__) {
+      var saved = sessionStorage.getItem(KEY);
+      if (saved) window.__API_BASE__ = saved;
+    }
+    if (!window.__API_MODE__) {
+      var savedMode = sessionStorage.getItem(MODE_KEY);
+      if (savedMode) window.__API_MODE__ = savedMode;
+    }
+  } catch (e) { /* ignore */ }
 
   function build(base, mode, p) {
-    if (mode !== 'query') return base + p;
-    var qi = p.indexOf('?');
-    var only = qi === -1 ? p : p.slice(0, qi);
-    var rest = qi === -1 ? '' : p.slice(qi + 1);
-    return base + '?__path=' + encPath(only) + (rest ? '&' + rest : '');
+    base = base || '';
+    if (p.charAt(0) !== '/') p = '/' + p;
+    if (mode === 'query') {
+      var fc = /index\.php$/.test(base) ? base : (base.replace(/\/+$/, '') + '/index.php');
+      return fc + '?r=' + encodeURIComponent(p);
+    }
+    return base + p;
   }
 
   window.apiUrl = function (p) {
     var b = window.__API_BASE__ || '';
-    if (!p) return b || '/';
-    if (/^[a-z]+:\/\//i.test(p)) return p;
     if (p.charAt(0) !== '/') p = '/' + p;
     return build(b, window.__API_MODE__, p);
   };
@@ -61,22 +61,13 @@
   }
 
   var nativeFetch = window.fetch.bind(window);
-  window.fetch = function (input, init) {
-    var url = typeof input === 'string' ? input : (input && input.url) || '';
-    var isApi = typeof url === 'string' && /(^|\/)api\//.test(url) && !/^[a-z]+:\/\//i.test(url);
-    var p = nativeFetch(input, init);
-    if (!isApi || (init && init.__arenaRetry)) return p;
-    return p.then(function (res) {
-      if (res.status !== 404) return res;
-      var ct = res.headers.get('content-type') || '';
-      if (ct.indexOf('application/json') !== -1) return res;
+  window.fetch = function (url, init) {
+    return nativeFetch(url, init).then(function (res) {
+      if (usable(res) || (init && init.__arenaRetry)) return res;
 
-      var base = window.__API_BASE__ || '';
-      var rel;
-      if (window.__API_MODE__ === 'query') {
-        var m = /[?&]__path=([^&]*)/.exec(url);
-        rel = m ? decodeURIComponent(m[1]) : url;
-      } else {
+      var rel = url;
+      if (typeof url === 'string') {
+        var base = window.__API_BASE__ || '';
         rel = base && url.indexOf(base) === 0 ? url.slice(base.length) : url;
       }
       if (rel.charAt(0) !== '/') rel = '/' + rel;
@@ -116,7 +107,7 @@
   body{margin:0;background:linear-gradient(180deg,#080d1c,#0b1020 260px);color:var(--txt);
        font:14.5px/1.7 system-ui,"Segoe UI",Vazirmatn,Tahoma,sans-serif;-webkit-text-size-adjust:100%}
   a{color:var(--acc);text-decoration:none}
-  .wrap{max-width:1180px;margin:0 auto;padding:18px 16px 80px;box-sizing:border-box}
+  .wrap{max-width:1200px;margin:0 auto;padding:18px 16px 80px;box-sizing:border-box}
   header.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
   header.top h1{font-size:20px;margin:0;line-height:1.3;display:flex;align-items:center;gap:8px}
   .sp{flex:1}
@@ -142,9 +133,10 @@
   .btn.danger{border-color:#7f1d1d;color:#fca5a5;background:rgba(239,68,68,.08)}
   .btn:disabled{opacity:.5;cursor:not-allowed}
   .btn.sm{padding:6px 11px;font-size:12.5px}
+  .btn.xs{padding:3px 8px;font-size:11.5px;border-radius:6px}
   .chips{display:flex;flex-wrap:wrap;gap:7px}
-  .chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:7px 13px;
-        cursor:pointer;font-size:13px;user-select:none;transition:.15s;display:inline-flex;align-items:center}
+  .chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:6px 12px;
+        cursor:pointer;font-size:12.5px;user-select:none;transition:.15s;display:inline-flex;align-items:center;gap:4px}
   .chip:hover{border-color:var(--mut)}
   .chip.on{background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -152,6 +144,7 @@
   .tag.ok{color:#6ee7b7;border-color:#065f46;background:rgba(16,185,129,.08)}
   .tag.warn{color:#fcd34d;border-color:#78350f;background:rgba(245,158,11,.08)}
   .tag.err{color:#fca5a5;border-color:#7f1d1d;background:rgba(239,68,68,.08)}
+  .tag.info{color:#93c5fd;border-color:#1e3a8a;background:rgba(59,130,246,.08)}
   .ltr{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .hint{color:var(--mut);font-size:12.5px;line-height:1.5}
   .bar{height:8px;background:#1b2440;border-radius:99px;overflow:hidden}
@@ -172,7 +165,7 @@
   pre.log{background:#070b16;border:1px solid var(--line);border-radius:10px;padding:10px;
           max-height:260px;overflow:auto;font-size:11.5px;direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all}
   .path-box{direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-             font-size:12px;background:rgba(0,0,0,.25);padding:4px 8px;border-radius:6px;margin:3px 0;word-break:break-all}
+             font-size:12px;background:rgba(0,0,0,.25);padding:6px 10px;border-radius:8px;margin:4px 0;word-break:break-all}
   .toast{position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:20px;z-index:999;
          background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;display:none;
          box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13.5px;max-width:90%;text-align:center}
@@ -180,9 +173,18 @@
   .rt-btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
   .check-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0 8px}
   .check-item{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;background:var(--panel2);padding:6px 10px;border-radius:8px;border:1px solid var(--line);user-select:none}
-  .search-result-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
-  .search-result-name{font-size:13px;word-break:break-all;flex:1;min-width:180px}
-  .search-result-meta{display:flex;align-items:center;gap:6px;flex-shrink:0}
+  .model-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;transition:border-color .15s}
+  .model-card:hover{border-color:var(--acc)}
+  .model-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .model-card-title{font-weight:700;font-size:14px;color:var(--txt)}
+  .model-card-tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+  .model-card-desc{font-size:12px;color:var(--mut);line-height:1.5;margin:4px 0}
+  .model-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.05);flex-wrap:wrap}
+  .filter-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .tab-btn{border:1px solid var(--line);background:var(--panel2);color:var(--mut);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;transition:.15s}
+  .tab-btn:hover{color:var(--txt);border-color:var(--mut)}
+  .tab-btn.active{background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
+  .custom-pull-box{background:rgba(0,0,0,.2);border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:12px}
 
   @media(min-width:980px){
     .split{grid-template-columns:1.15fr .85fr}
@@ -206,8 +208,8 @@
   @media(max-width:480px){
     .stat b{font-size:15px}
     .check-grid{grid-template-columns:1fr}
-    .search-result-item{flex-direction:column;align-items:stretch;gap:6px}
-    .search-result-meta{justify-content:space-between;width:100%}
+    .model-card-top{flex-direction:column;align-items:stretch}
+    .model-card-bottom{flex-direction:column;align-items:stretch;gap:6px}
   }
 </style>
 </head>
@@ -241,7 +243,7 @@
       <section class="card">
         <h2>۲) انتخاب هدف و کاربرد مدل</h2>
 
-        <label class="lb">کاربرد مورد نظر (یک یا چند مورد را لمس کنید)</label>
+        <label class="lb">کاربرد مورد نظر (یک یا چند مورد را انتخاب کنید)</label>
         <div class="chips" id="tasks"></div>
 
         <div class="grid g2" style="margin-top:14px">
@@ -253,7 +255,7 @@
           <div>
             <label class="lb">حافظهٔ کارت گرافیک (VRAM) — گیگابایت</label>
             <input type="number" id="vram" class="inp ltr" min="0" step="0.5" value="0">
-            <div class="hint">۰ یعنی فقط CPU.</div>
+            <div class="hint">۰ یعنی پردازش روی پردازنده اصلی (CPU).</div>
           </div>
           <div>
             <label class="lb">فضای دیسک قابل‌استفاده — گیگابایت</label>
@@ -262,19 +264,19 @@
           <div>
             <label class="lb">طول پنجرهٔ متن (Context)</label>
             <select id="ctx">
-              <option value="4096">۴هزار توکن — کم‌مصرف</option>
-              <option value="8192" selected>۸هزار توکن — متعادل</option>
+              <option value="4096">۴هزار توکن — کم‌مصرف و سریع</option>
+              <option value="8192" selected>۸هزار توکن — متعادل و پیشنهادی</option>
               <option value="16384">۱۶هزار توکن</option>
-              <option value="32768">۳۲هزار توکن — فایل‌های بلند</option>
-              <option value="131072">۱۲۸هزار توکن — کل مخزن کد</option>
+              <option value="32768">۳۲هزار توکن — فایل‌های طولانی</option>
+              <option value="131072">۱۲۸هزار توکن — مخزن کامل کد</option>
             </select>
           </div>
           <div>
             <label class="lb">اولویت پاسخ</label>
             <select id="priority">
-              <option value="speed">سرعت پاسخ‌دهی</option>
+              <option value="speed">بیشترین سرعت پاسخ‌دهی</option>
               <option value="balanced" selected>متعادل (کیفیت و سرعت)</option>
-              <option value="quality">بالاترین کیفیت و استدلال</option>
+              <option value="quality">بالاترین دقت و توان استدلال</option>
             </select>
           </div>
           <div>
@@ -297,8 +299,9 @@
           <label class="check-item"><input type="checkbox" id="commercial"> لایسنس تجاری</label>
         </div>
 
-        <div style="margin-top:12px">
-          <button class="btn pri" id="btn-rec">🔎 جست‌وجو و پیشنهاد بهترین مدل</button>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn pri" id="btn-rec" style="flex:1">🔎 جست‌وجو و پیشنهاد بهترین مدل</button>
+          <button class="btn sm" id="btn-save-prof" title="ذخیره این تنظیمات سخت‌افزاری">💾 ذخیره پروفایل</button>
         </div>
       </section>
 
@@ -332,7 +335,21 @@
           <button class="btn sm" id="btn-rt-start">▶️ اجرا</button>
           <button class="btn sm danger" id="btn-rt-stop">⏹ توقف</button>
         </div>
-        <p class="hint" style="margin-top:10px;margin-bottom:0">نصب بدون نیاز به دسترسی root انجام می‌شود و باینری‌ها در پوشهٔ storage/localai پروژه قرار می‌گیرند.</p>
+
+        <details style="margin-top:12px">
+          <summary class="hint" style="cursor:pointer">⚙️ تنظیمات سفارشی آدرس و باینری موتور</summary>
+          <div style="margin-top:8px" class="grid g2">
+            <div>
+              <label class="lb">آدرس سرور Ollama</label>
+              <input class="inp ltr" id="cfg-host" placeholder="http://127.0.0.1:11434">
+            </div>
+            <div>
+              <label class="lb">مسیر باینری ollama</label>
+              <input class="inp ltr" id="cfg-bin" placeholder="/usr/local/bin/ollama">
+            </div>
+          </div>
+          <p class="hint" style="margin:6px 0 0">نصب بدون نیاز به دسترسی root انجام شده و مدل‌ها در فضای ذخیره‌سازی اختصاصی نگهداری می‌شوند.</p>
+        </details>
       </section>
 
       <!-- ─────────────────────── installed -->
@@ -343,12 +360,33 @@
 
       <!-- ─────────────────────── search -->
       <section class="card">
-        <h2>🔍 جست‌وجوی دستی مدل</h2>
+        <h2>🔍 جست‌وجو و نصب دستی مدل</h2>
+
+        <!-- Category filter tabs -->
+        <div class="filter-tabs" id="search-tabs">
+          <button class="tab-btn active" data-tab="all">✨ همه</button>
+          <button class="tab-btn" data-tab="code">💻 کدنویسی</button>
+          <button class="tab-btn" data-tab="chat">💬 عمومی</button>
+          <button class="tab-btn" data-tab="reasoning">🧩 استدلال</button>
+          <button class="tab-btn" data-tab="vision">🖼 تصویر</button>
+          <button class="tab-btn" data-tab="hf">📦 Hugging Face (GGUF)</button>
+        </div>
+
         <div class="row" style="flex-wrap:nowrap;gap:6px">
-          <input class="inp ltr" id="q" placeholder="qwen, llama, deepseek …" style="flex:1">
+          <input class="inp ltr" id="q" placeholder="جست‌وجوی مدل (qwen, deepseek, llama, codellama …)" style="flex:1">
           <button class="btn sm" id="btn-search">جست‌وجو</button>
         </div>
-        <div id="search-out" style="margin-top:10px"></div>
+
+        <div id="search-out" style="margin-top:12px"></div>
+
+        <!-- Custom pull input -->
+        <div class="custom-pull-box">
+          <label class="lb">🚀 نصب مستقیم مدل با نام دلخواه از Ollama / Hugging Face:</label>
+          <div class="row" style="flex-wrap:nowrap;gap:6px;margin-top:4px">
+            <input class="inp ltr sm" id="custom-pull-ref" placeholder="مثال: qwen2.5-coder:7b یا hf.co/bartowski/..." style="flex:1">
+            <button class="btn sm ok" id="btn-custom-pull">نصب مستقیم</button>
+          </div>
+        </div>
       </section>
     </div>
   </div>
@@ -366,7 +404,7 @@ function toast(msg, kind) {
   const t = $('#toast');
   t.textContent = msg;
   t.style.display = 'block';
-  t.style.borderColor = kind === 'err' ? '#7f1d1d' : kind === 'ok' ? '#065f46' : 'var(--line)';
+  t.style.borderColor = kind === 'err' ? '#7f1d1d' : kind === 'ok' ? '#065f46' : kind === 'warn' ? '#78350f' : 'var(--line)';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.style.display = 'none'; }, 4200);
 }
@@ -419,23 +457,30 @@ async function loadHost(refresh) {
     HOST = await api('/api/localai/host' + (refresh ? '?refresh=1' : ''));
   } catch (e) { toast(e.message, 'err'); return; }
 
-  const m = HOST.memory, c = HOST.cpu, g = HOST.gpu, d = HOST.disk;
+  const m = HOST.memory || {}, c = HOST.cpu || {}, g = (HOST.gpu && HOST.gpu[0]) || HOST.gpu || {}, d = HOST.disk || {};
+  const totalGb = m.totalGb || 4.0;
+  const availGb = m.availableGb || 2.0;
+  const freeDisk = d.freeGb || 10.0;
+  const vramGb = g.vramGb || g.vramTotalGb || 0.0;
+  const isGpu = !!(g.present || vramGb > 0);
+
   $('#host-stats').innerHTML = `
-    <div class="stat"><b>${fa(m.totalGb)} GB</b><span>رم کل (${fa(m.availableGb)} GB آزاد)</span></div>
-    <div class="stat"><b>${fa(c.cores, 0)} هسته</b><span>${esc(c.arch)}${c.avx2 ? ' · AVX2' : ''}</span></div>
-    <div class="stat"><b>${g.present ? fa(g.vramGb) + ' GB' : '—'}</b><span>${g.present ? esc(g.name) : 'بدون GPU اختصاصی'}</span></div>
-    <div class="stat"><b>${fa(d.freeGb)} GB</b><span>دیسک آزاد برای مدل‌ها</span></div>`;
+    <div class="stat"><b>${fa(totalGb)} GB</b><span>رم کل (${fa(availGb)} GB آزاد)</span></div>
+    <div class="stat"><b>${fa(c.cores || 1, 0)} هسته</b><span>${esc(c.arch || 'x86_64')}${c.avx2 ? ' · AVX2' : ''}</span></div>
+    <div class="stat"><b>${isGpu ? fa(vramGb) + ' GB' : '—'}</b><span>${isGpu ? esc(g.name || 'GPU') : 'بدون GPU اختصاصی (CPU)'}</span></div>
+    <div class="stat"><b>${fa(freeDisk)} GB</b><span>فضای دیسک آزاد</span></div>`;
+
+  const suggestedRam = HOST.suggestedRamBudgetGb || Math.max(1, Math.min(availGb, totalGb - 1.5));
   $('#host-extra').textContent =
-    `پیشنهاد بودجهٔ رم: ${fa(HOST.suggestedRamBudgetGb)} گیگ (${fa(HOST.reservedForSystemGb)} گیگ برای سیستم و برنامه کنار گذاشته شد) · `
-    + `پهنای باند حافظه: CPU ≈ ${fa(HOST.bandwidthGBs.cpu, 0)} GB/s${g.present ? ' · GPU ≈ ' + fa(HOST.bandwidthGBs.gpu, 0) + ' GB/s' : ''}`;
+    `پیشنهاد بودجهٔ رم: ${fa(suggestedRam)} گیگابایت · سیستم‌عامل: ${esc(HOST.os || HOST.host?.os || 'Linux')}`;
 
   const ram = $('#ram');
-  ram.max = Math.max(4, Math.ceil(m.totalGb));
-  ram.value = Math.max(1, HOST.suggestedRamBudgetGb || Math.max(1, m.totalGb - 2));
+  ram.max = Math.max(4, Math.ceil(totalGb));
+  ram.value = suggestedRam;
   $('#ram-val').textContent = fa(ram.value);
-  $('#ram-hint').textContent = `بیشتر از ${fa(m.availableGb)} گیگ آزاد فعلی انتخاب نکنید.`;
-  $('#vram').value = g.present ? g.vramGb : 0;
-  $('#disk').value = Math.max(1, Math.floor(d.freeGb - 2));
+  $('#ram-hint').textContent = `حداکثر تا ${fa(availGb)} گیگابایت رم آزاد فعلی پیشنهاد می‌شود.`;
+  $('#vram').value = vramGb;
+  $('#disk').value = Math.max(1, Math.floor(freeDisk - 1));
   renderRuntime(HOST.runtime);
 }
 $('#ram').oninput = (e) => { $('#ram-val').textContent = fa(e.target.value); };
@@ -449,13 +494,17 @@ function renderRuntime(rt) {
   badge.textContent = rt.running ? 'موتور در حال اجرا' : rt.installed ? 'نصب است، خاموش' : 'نصب نشده';
   const permHtml = rt.modelsDirWritable
     ? '<span class="tag ok">قابل نوشتن</span>'
-    : '<span class="tag err">غیرقابل نوشتن</span> <button class="btn sm" id="btn-fix-perm" style="padding:2px 8px;font-size:11px;margin-right:6px">اصلاح خودکار دسترسی</button>';
+    : '<span class="tag err">غیرقابل نوشتن</span> <button class="btn xs" id="btn-fix-perm" style="margin-right:6px">اصلاح خودکار دسترسی</button>';
   $('#rt-info').innerHTML = `
-    <div style="margin-bottom:6px">موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب داخلی</span>' : ''}</div>
+    <div style="margin-bottom:6px">موتور: <b>Ollama ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب محلی</span>' : ''}</div>
     <div class="path-box">${esc(rt.binary || 'یافت نشد')}</div>
-    <div class="path-box">${esc(rt.host)}</div>
-    <div class="path-box" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">models: <span>${esc(rt.modelsDir)}</span> ${permHtml}</div>
+    <div class="path-box">${esc(rt.host || 'http://127.0.0.1:11434')}</div>
+    <div class="path-box" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">پوشه مدل‌ها: <span>${esc(rt.modelsDir || '')}</span> ${permHtml}</div>
     ${rt.error ? `<div class="tag err" style="margin-top:6px;width:100%">${esc(rt.error)}</div>` : ''}`;
+
+  if (rt.host) $('#cfg-host').value = rt.host;
+  if (rt.binary) $('#cfg-bin').value = rt.binary;
+
   const fixBtn = $('#btn-fix-perm');
   if (fixBtn) {
     fixBtn.onclick = async () => {
@@ -464,9 +513,9 @@ function renderRuntime(rt) {
       try {
         const res = await api('/api/localai/runtime/fix-permissions', { method: 'POST', body: {} });
         if (res.ok) {
-          toast('دسترسی پوشه مدل‌ها با موفقیت اصلاح شد', 'ok');
+          toast('دسترسی پوشه مدل‌ها اصلاح شد', 'ok');
         } else {
-          toast('امکان تغییر سطح دسترسی از طریق وب وجود نداشت؛ لطفا chmod 775 اجرا کنید', 'warn');
+          toast('دسترسی تغییر نکرد؛ لطفاً دسترسی chmod 775 را بررسی کنید', 'warn');
         }
       } catch (e) {
         toast('خطا: ' + e.message, 'err');
@@ -478,23 +527,39 @@ function renderRuntime(rt) {
   $('#btn-rt-start').disabled = !rt.installed || !!rt.running;
   $('#btn-rt-stop').disabled = !rt.running;
 }
+
 async function refreshRuntime() {
   try { renderRuntime(await api('/api/localai/runtime')); } catch (e) { /* ignore */ }
 }
+
 $('#btn-rt-install').onclick = async () => {
-  toast('در حال دانلود و نصب موتور… چند دقیقه طول می‌کشد');
-  try { await api('/api/localai/runtime/install', { method: 'POST', body: {} }); toast('موتور نصب شد', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
+  toast('در حال دانلود و راه‌اندازی موتور هوش مصنوعی…');
+  try {
+    await api('/api/localai/runtime/install', { method: 'POST', body: {} });
+    toast('موتور با موفقیت نصب شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
   refreshRuntime();
 };
+
 $('#btn-rt-start').onclick = async () => {
-  try { await api('/api/localai/runtime/start', { method: 'POST', body: {} }); toast('سرویس اجرا شد', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
+  try {
+    await api('/api/localai/runtime/start', { method: 'POST', body: {} });
+    toast('سرویس Ollama اجرا شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
   refreshRuntime(); loadModels();
 };
+
 $('#btn-rt-stop').onclick = async () => {
-  try { await api('/api/localai/runtime/stop', { method: 'POST', body: {} }); toast('سرویس متوقف شد', 'ok'); }
-  catch (e) { toast(e.message, 'err'); }
+  try {
+    await api('/api/localai/runtime/stop', { method: 'POST', body: {} });
+    toast('سرویس متوقف شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
   refreshRuntime();
 };
 
@@ -520,7 +585,7 @@ function profile() {
 let LAST = null;
 $('#btn-rec').onclick = async () => {
   const btn = $('#btn-rec');
-  btn.disabled = true; btn.textContent = 'در حال تحلیل سخت‌افزار…';
+  btn.disabled = true; btn.textContent = 'در حال تحلیل مشخصات سخت‌افزار…';
   try {
     LAST = await api('/api/localai/recommend', { method: 'POST', body: profile() });
     renderRecs(LAST);
@@ -528,11 +593,20 @@ $('#btn-rec').onclick = async () => {
   btn.disabled = false; btn.textContent = '🔎 جست‌وجو و پیشنهاد بهترین مدل';
 };
 
+$('#btn-save-prof').onclick = async () => {
+  const name = prompt('نام این پروفایل سخت‌افزاری را وارد کنید:', 'default');
+  if (!name) return;
+  try {
+    await api('/api/localai/profiles', { method: 'POST', body: { name: name, profile: profile() } });
+    toast('پروفایل با موفقیت ذخیره شد', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+
 function renderRecs(d) {
   $('#rec-card').style.display = '';
   const list = d.recommendations || [];
   if (!list.length) {
-    $('#rec-list').innerHTML = '<p class="hint">هیچ مدلی با این محدودیت‌ها جور در نیامد؛ بودجهٔ رم را بالا ببرید یا پنجرهٔ متن را کم کنید.</p>';
+    $('#rec-list').innerHTML = '<p class="hint">هیچ مدلی با این محدودیت‌ها هم‌خوانی نداشت؛ بودجهٔ رم را افزایش دهید یا طول پنجره متن را کمتر کنید.</p>';
   } else {
     $('#rec-list').innerHTML = list.map((m, i) => `
       <div class="rec${i === 0 ? ' best' : ''}">
@@ -547,9 +621,9 @@ function renderRecs(d) {
           <div class="rec-tags">
             <span class="tag ltr">${esc(m.ref)}</span>
             <span class="tag">${esc(m.quant)}</span>
-            ${m.toolCalling ? '<span class="tag ok">tool calling</span>' : ''}
-            ${m.vision ? '<span class="tag">vision</span>' : ''}
-            ${m.reasoning ? '<span class="tag">reasoning</span>' : ''}
+            ${m.toolCalling ? '<span class="tag ok">ابزارمحور (Tools)</span>' : ''}
+            ${m.vision ? '<span class="tag info">تصویر (Vision)</span>' : ''}
+            ${m.reasoning ? '<span class="tag warn">استدلال</span>' : ''}
           </div>
         </div>
         <div class="bar" style="margin:8px 0"><i style="width:${Math.min(100, m.scorePct)}%"></i></div>
@@ -577,25 +651,31 @@ function renderRecs(d) {
 /* ───────────────────────────────────────── install + progress */
 let pollTimer = null;
 async function install(ref) {
-  if (!confirm('نصب مدل ' + ref + ' شروع شود؟')) return;
-  $('#job-card').style.display = '';
+  if (!ref) return;
+  if (!confirm(`آیا مدل ${ref} دانلود و نصب شود؟`)) return;
+  const card = $('#job-card');
+  card.style.display = '';
+  $('#job-status').textContent = 'در حال ارسال درخواست…';
+  $('#job-bar').style.width = '3%';
   $('#job-log').textContent = '';
-  $('#job-bar').style.width = '0%';
-  $('#job-status').textContent = 'در صف…';
+  $('#job-plan').innerHTML = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   try {
-    const res = await api('/api/localai/install', {
-      method: 'POST',
-      body: { ref, profile: profile(), tune: true, register: true, benchmark: true },
-    });
-    $('#job-plan').innerHTML = (res.plan || []).map((s) =>
-      `<div class="hint">• <b>${esc(s.title)}</b> — ${esc(s.detail)}</div>`).join('');
-    const id = res.job && res.job.id;
-    $('#job-id').textContent = id || '';
-    $('#job-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (id) pollJob(id);
+    const res = await api('/api/localai/install', { method: 'POST', body: { model: ref } });
+    if (res.job && res.job.id) {
+      $('#job-id').textContent = res.job.id;
+      if (res.plan && res.plan.length) {
+        $('#job-plan').innerHTML = `<div class="hint" style="margin-bottom:8px">مراحل نصب:</div>`
+          + res.plan.map((s, i) => `<div class="hint" style="margin-bottom:3px"><b>${i+1}. ${esc(s.title)}</b>: ${esc(s.detail)}</div>`).join('');
+      }
+      pollJob(res.job.id);
+    } else {
+      toast('درخواست نصب ارسال شد', 'ok');
+    }
   } catch (e) {
-    toast(e.message, 'err');
-    $('#job-status').textContent = 'خطا: ' + e.message;
+    toast('خطای شروع نصب: ' + e.message, 'err');
+    $('#job-status').textContent = '❌ خطا: ' + e.message;
   }
 }
 
@@ -614,7 +694,7 @@ function pollJob(id) {
     if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') {
       clearInterval(pollTimer);
       loadModels(); refreshRuntime();
-      if (j.status === 'done') toast('مدل نصب و در فهرست ارائه‌دهنده‌ها ثبت شد', 'ok');
+      if (j.status === 'done') toast('مدل نصب شد و در ارائه‌دهنده‌ها قرار گرفت', 'ok');
     }
   }, 2000);
 }
@@ -632,8 +712,8 @@ async function loadModels() {
       <td style="white-space:nowrap">${fa(m.sizeGb)} GB</td>
       <td class="ltr">${esc(m.quantization || '—')}</td>
       <td style="white-space:nowrap">
-        <button class="btn sm" data-test="${esc(m.name)}">تست</button>
-        <button class="btn sm danger" data-del="${esc(m.name)}">حذف</button>
+        <button class="btn xs" data-test="${esc(m.name)}">تست</button>
+        <button class="btn xs danger" data-del="${esc(m.name)}">حذف</button>
       </td></tr>`).join('')}</tbody></table></div>`;
   $('#models').querySelectorAll('[data-test]').forEach((b) => {
     b.onclick = async () => {
@@ -655,39 +735,141 @@ async function loadModels() {
   });
 }
 
-/* ───────────────────────────────────────── manual search */
-$('#btn-search').onclick = async () => {
-  const q = $('#q').value.trim();
-  $('#search-out').innerHTML = '<span class="hint">در حال جست‌وجو…</span>';
+/* ───────────────────────────────────────── manual search & categories */
+let activeCategory = 'all';
+let searchDebounceTimer = null;
+
+$('#search-tabs').querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.onclick = () => {
+    $('#search-tabs').querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeCategory = btn.dataset.tab;
+    executeSearch();
+  };
+});
+
+async function executeSearch() {
+  const q = ($('#q').value || '').trim();
+  const out = $('#search-out');
+  out.innerHTML = '<span class="hint">در حال جست‌وجو در کاتالوگ و Hugging Face…</span>';
   try {
-    const d = await api('/api/localai/search', { method: 'POST', body: { query: q, limit: 12 } });
-    const cat = (d.catalog || []).flatMap((m) => m.variants.map((v) => ({ ref: v.ref, gb: v.diskGb, src: m.publisher })));
-    const hf = d.huggingface || [];
-    $('#search-out').innerHTML =
-      (cat.length ? `<div class="hint" style="margin-bottom:6px;font-weight:600">از کاتالوگ داخلی:</div>` + cat.map((v) =>
-        `<div class="search-result-item">
-           <div class="search-result-name ltr">${esc(v.ref)}</div>
-           <div class="search-result-meta">
-             <span class="tag">${fa(v.gb)} GB</span>
-             <button class="btn sm ok" data-i="${esc(v.ref)}">نصب</button>
-           </div>
-         </div>`).join('') : '')
-      + (hf.length ? `<div class="hint" style="margin:12px 0 6px;font-weight:600">Hugging Face (GGUF):</div>` + hf.map((m) =>
-        `<div class="search-result-item">
-           <div class="search-result-name ltr">${esc(m.id)}</div>
-           <div class="search-result-meta">
-             <span class="tag">${fa(m.downloads, 0)} دانلود</span>
-             <button class="btn sm ok" data-i="${esc(m.pullRef)}">نصب</button>
-           </div>
-         </div>`).join('') : '')
-      || '<span class="hint">چیزی پیدا نشد.</span>';
-    $('#search-out').querySelectorAll('[data-i]').forEach((b) => { b.onclick = () => install(b.dataset.i); });
-  } catch (e) { $('#search-out').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; }
+    const d = await api('/api/localai/search', { method: 'POST', body: { query: q, limit: 16 } });
+    let catModels = d.catalog || [];
+    let hfModels = d.huggingface || [];
+
+    // Filter by category
+    if (activeCategory === 'code') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('code'));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('code'));
+    } else if (activeCategory === 'chat') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('chat'));
+    } else if (activeCategory === 'reasoning') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('reasoning') || (m.name || '').toLowerCase().includes('deepseek-r1') || (m.name || '').toLowerCase().includes('qwq'));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('r1') || (m.id || '').toLowerCase().includes('reasoning'));
+    } else if (activeCategory === 'vision') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('vision') || (m.variants || []).some((v) => v.vision));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('vision') || (m.id || '').toLowerCase().includes('vl'));
+    } else if (activeCategory === 'hf') {
+      catModels = [];
+    }
+
+    let html = '';
+
+    if (catModels.length) {
+      html += `<div class="hint" style="margin-bottom:8px;font-weight:700">مدل‌های کاتالوگ بهینه‌شده (${fa(catModels.length, 0)}):</div>`;
+      catModels.forEach((m) => {
+        const variants = m.variants || [];
+        html += `
+          <div class="model-card">
+            <div class="model-card-top">
+              <span class="model-card-title">${esc(m.name)}</span>
+              <span class="tag info">${esc(m.publisher || 'Catalog')}</span>
+            </div>
+            <div class="model-card-desc">${esc(m.description || '')}</div>
+            <div class="model-card-tags">
+              ${(m.tasks || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
+              <span class="tag">${esc(m.license || '')}</span>
+            </div>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+              ${variants.map((v) => `
+                <div class="model-card-bottom" style="background:rgba(0,0,0,.15);padding:6px 8px;border-radius:6px">
+                  <div class="ltr" style="font-size:12px;font-weight:600">${esc(v.ref)}</div>
+                  <div class="row" style="gap:6px">
+                    <span class="tag">${esc(v.quant)}</span>
+                    <span class="tag">${fa(v.diskGb)} GB</span>
+                    <button class="btn xs ok" data-pull="${esc(v.ref)}">🚀 نصب</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    if (hfModels.length && activeCategory !== 'code' && activeCategory !== 'chat') {
+      html += `<div class="hint" style="margin:14px 0 8px;font-weight:700">مخازن Hugging Face GGUF (${fa(hfModels.length, 0)}):</div>`;
+      hfModels.forEach((m) => {
+        html += `
+          <div class="model-card">
+            <div class="model-card-top">
+              <span class="model-card-title ltr">${esc(m.id || m.pullRef)}</span>
+              <span class="tag ok">Hugging Face</span>
+            </div>
+            <div class="model-card-bottom">
+              <div class="row" style="gap:6px">
+                <span class="tag">${fa(m.downloads || 0, 0)} دانلود</span>
+                ${m.likes ? `<span class="tag">❤️ ${fa(m.likes, 0)}</span>` : ''}
+              </div>
+              <button class="btn xs ok" data-pull="${esc(m.pullRef || m.id)}">🚀 نصب GGUF</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    if (!html) {
+      html = '<span class="hint">مدلی با این مشخصات یافت نشد. می‌توانید نام مدل را در کادر زیر وارد کنید.</span>';
+    }
+
+    out.innerHTML = html;
+    out.querySelectorAll('[data-pull]').forEach((b) => {
+      b.onclick = () => install(b.dataset.pull);
+    });
+  } catch (e) {
+    out.innerHTML = `<span class="tag err">${esc(e.message)}</span>`;
+  }
+}
+
+$('#btn-search').onclick = executeSearch;
+$('#q').oninput = () => {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(executeSearch, 350);
 };
-$('#q').onkeydown = (e) => { if (e.key === 'Enter') $('#btn-search').click(); };
+$('#q').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    clearTimeout(searchDebounceTimer);
+    executeSearch();
+  }
+};
+
+$('#btn-custom-pull').onclick = () => {
+  const ref = ($('#custom-pull-ref').value || '').trim();
+  if (!ref) {
+    toast('لطفاً نام یا آدرس مدل را وارد کنید', 'warn');
+    return;
+  }
+  install(ref);
+};
+$('#custom-pull-ref').onkeydown = (e) => {
+  if (e.key === 'Enter') $('#btn-custom-pull').click();
+};
 
 /* ───────────────────────────────────────── boot */
-loadHost(false).then(loadModels);
+loadHost(false).then(() => {
+  loadModels();
+  executeSearch();
+});
 setInterval(refreshRuntime, 15000);
 </script>
 <script>

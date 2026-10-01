@@ -5,6 +5,7 @@ Parity with agent-php/app/LocalAI.php.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import DATA_DIR
+from .database import get_state, set_state, get_state_json, set_state_json
 from .providers import ModelSpec, Provider, PROVIDER_STORE
 
 logger = logging.getLogger("arena.local_ai")
@@ -122,12 +124,22 @@ def bin_dir() -> Path:
 
 
 def binary() -> Optional[str]:
-    custom = os.environ.get("AGENT_OLLAMA_BIN")
+    custom = os.environ.get("AGENT_OLLAMA_BIN") or get_state("localai:custom_bin")
     if custom and os.path.isfile(custom) and os.access(custom, os.X_OK):
         return custom
     local = str(bin_dir() / "ollama")
     if os.path.isfile(local) and os.access(local, os.X_OK):
         return local
+    cand_root = str(root_dir() / "ollama")
+    if os.path.isfile(cand_root) and os.access(cand_root, os.X_OK):
+        return cand_root
+    cand_root_bin = str(root_dir() / "bin" / "ollama")
+    if os.path.isfile(cand_root_bin) and os.access(cand_root_bin, os.X_OK):
+        return cand_root_bin
+    standard = ["/usr/local/bin/ollama", "/usr/bin/ollama", "/opt/ollama/bin/ollama", str(Path.home() / ".local/bin/ollama")]
+    for p in standard:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
     system = shutil.which("ollama")
     if system and os.path.isfile(system) and os.access(system, os.X_OK):
         return system
@@ -135,7 +147,18 @@ def binary() -> Optional[str]:
 
 
 def host_url() -> str:
-    return (os.environ.get("AGENT_LOCALAI_HOST") or os.environ.get("OLLAMA_BASE_URL") or DEFAULT_HOST).rstrip("/")
+    custom = (
+        os.environ.get("AGENT_LOCALAI_HOST")
+        or os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or get_state("localai:custom_host")
+    )
+    if custom:
+        h = str(custom).strip()
+        if not h.startswith("http://") and not h.startswith("https://"):
+            h = f"http://{h}"
+        return h.rstrip("/")
+    return DEFAULT_HOST
 
 
 def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -586,56 +609,229 @@ def register_provider(model_ref: str, meta: Optional[Dict[str, Any]] = None) -> 
     return {"ok": True, "providerId": pid, "modelId": model_id}
 
 
-def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
+def variants() -> List[Dict[str, Any]]:
+    rows = []
+    for model in catalog().get("models", []):
+        for v in model.get("variants", []):
+            row = dict(v)
+            row["modelId"] = str(model.get("id"))
+            row["ref"] = f"{model.get('id')}:{v.get('tag')}"
+            row["name"] = f"{model.get('name')} {str(v.get('tag')).upper()}"
+            row["model"] = model
+            rows.append(row)
+    return rows
+
+
+def normalize_profile(raw: Dict[str, Any]) -> Dict[str, Any]:
     scan = host_scan()
-    host_info = scan["host"]
-    
-    ram_budget = float(raw_profile.get("ramBudgetGb") or host_info["memory"]["suggestedBudgetGb"])
-    tasks = raw_profile.get("tasks") or ["code", "agent"]
-    languages = raw_profile.get("languages") or ["fa", "en"]
-    priority = raw_profile.get("priority") or "balanced"
+    h = scan.get("host", {})
+    mem = h.get("memory", {})
+    disk = h.get("disk", {})
+    suggested_ram = float(mem.get("suggestedBudgetGb", 4.0))
 
-    cat = catalog()
-    families = {f["id"]: f for f in cat.get("families", [])}
-    variants = cat.get("variants", [])
-
-    recommendations = []
-    rejected = []
-
-    for v in variants:
-        fam = families.get(v.get("familyId", "")) or {}
-        size_gb = float(v.get("diskGb") or 4.0)
-        req_ram = round((size_gb * WEIGHT_RAM_FACTOR) + RUNTIME_OVERHEAD_GB + 0.5, 2)
-        
-        if req_ram > ram_budget:
-            rejected.append({"id": v.get("id"), "reason": f"Requires {req_ram} GB RAM (budget: {ram_budget} GB)"})
-            continue
-
-        score = float(fam.get("qualityScore", 70))
-        if "code" in tasks and "coding" in fam.get("tags", []):
-            score += 15
-        if "fa" in languages and "multilingual" in fam.get("tags", []):
-            score += 10
-        if priority == "speed":
-            score += max(0, 100 - size_gb * 5)
-        else:
-            score += min(30, size_gb * 2)
-
-        recommendations.append({
-            "variant": v,
-            "family": fam,
-            "score": round(score, 1),
-            "requiredRamGb": req_ram,
-            "estimatedSpeedTokensSec": max(5, round(25 - size_gb * 1.2, 1)),
-            "pullTag": v.get("pullTag") or v.get("id"),
-        })
-
-    recommendations.sort(key=lambda x: x["score"], reverse=True)
+    tasks = [str(t) for t in raw.get("tasks", ["code", "agent"])]
+    priority = str(raw.get("priority", "balanced"))
+    if priority not in ("balanced", "speed", "quality"):
+        priority = "balanced"
 
     return {
+        "tasks": tasks,
+        "ramBudgetGb": round(max(0.5, float(raw.get("ramBudgetGb") or suggested_ram)), 2),
+        "vramGb": round(max(0.0, float(raw.get("vramGb") or 0.0)), 2),
+        "diskBudgetGb": round(max(0.5, float(raw.get("diskBudgetGb") or max(10.0, disk.get("freeGb", 10.0) * 0.8))), 2),
+        "contextTokens": max(1024, min(1048576, int(raw.get("contextTokens") or 8192))),
+        "languages": [str(l).lower() for l in raw.get("languages", ["fa", "en"])],
+        "priority": priority,
+        "concurrency": max(1, min(16, int(raw.get("concurrency") or 1))),
+        "requireToolCalling": bool(raw.get("requireToolCalling") if "requireToolCalling" in raw else "agent" in tasks),
+        "requireVision": bool(raw.get("requireVision") if "requireVision" in raw else "vision" in tasks),
+        "requireEmbedding": bool(raw.get("requireEmbedding") if "requireEmbedding" in raw else "embedding" in tasks),
+        "minTokensPerSec": float(raw.get("minTokensPerSec") or 0.0),
+        "allowNonCommercial": bool(raw.get("allowNonCommercial", True)),
+    }
+
+
+def estimate(v: Dict[str, Any], profile: Dict[str, Any], host: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    host = host or host_scan().get("host", {})
+    disk = float(v.get("diskGb") or 0.0)
+    weights = disk * WEIGHT_RAM_FACTOR
+    active = float(v.get("activeGb") or disk) * WEIGHT_RAM_FACTOR
+
+    kv_scale = 1.0 if server_env().get("OLLAMA_KV_CACHE_TYPE", "").lower() == "f16" else 0.5
+    ctx_k = profile["contextTokens"] / 1024
+    kv = float(v.get("kvGbPer1k") or 0.05) * ctx_k * kv_scale * max(1, int(profile["concurrency"]))
+
+    ram_gb = round(weights + kv + RUNTIME_OVERHEAD_GB, 2)
+    vram = float(profile["vramGb"])
+    gpu_bw = 320.0 if vram > 0 else 0.0
+    cpu_bw = 28.0
+
+    offload = max(0.0, min(1.0, (vram - kv - 0.5) / max(0.1, weights))) if (vram > 0 and gpu_bw > 0) else 0.0
+    if offload >= 0.999:
+        bandwidth = gpu_bw
+    elif offload > 0:
+        bandwidth = 1.0 / ((offload / max(1.0, gpu_bw)) + ((1.0 - offload) / max(1.0, cpu_bw)))
+    else:
+        bandwidth = cpu_bw
+
+    tps = (bandwidth / active) * 0.72 if active > 0 else 0.0
+    cores = int((host.get("cpu") or {}).get("cores") or 4)
+    tps = min(tps, 20.0 * max(1, cores) * (6 if offload > 0.5 else 1))
+
+    return {
+        "weightsGb": round(weights, 2),
+        "activeGb": round(active, 2),
+        "kvCacheGb": round(kv, 2),
+        "overheadGb": RUNTIME_OVERHEAD_GB,
+        "ramGb": ram_gb,
+        "diskGb": round(disk, 2),
+        "gpuOffloadRatio": round(offload, 2),
+        "effectiveBandwidthGBs": round(bandwidth, 1),
+        "tokensPerSec": round(tps, 1),
+        "fitsRam": ram_gb <= float(profile["ramBudgetGb"]),
+        "fitsDisk": disk <= float(profile["diskBudgetGb"]),
+    }
+
+
+def _speed_score(tps: float) -> float:
+    import math
+    s = min(1.0, math.log(1 + tps / 2.5) / math.log(1 + 14 / 2.5))
+    return s * 0.5 if tps < 1.5 else s
+
+
+def _task_match(model: Dict[str, Any], tasks: List[str]) -> float:
+    have = [str(t) for t in model.get("tasks", [])]
+    if not tasks:
+        return 0.5
+    hits = 0
+    for t in tasks:
+        if t in have:
+            hits += 1
+        elif t == "agent" and model.get("toolCalling"):
+            hits += 1
+        elif t == "vision" and model.get("vision"):
+            hits += 1
+        elif t == "reasoning" and model.get("reasoning"):
+            hits += 1
+    return hits / max(1, len(tasks))
+
+
+def _language_score(model: Dict[str, Any], languages: List[str]) -> float:
+    if not languages:
+        return 0.7
+    have = [str(l).lower() for l in model.get("languages", [])]
+    total = 0.0
+    for lang in languages:
+        if lang == "fa":
+            total += float(model.get("faScore") or 0.0) / 100.0
+        elif lang in have or "multi" in have:
+            total += 1.0
+        else:
+            total += 0.25
+    return total / max(1, len(languages))
+
+
+def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
+    profile = normalize_profile(raw_profile)
+    scan = host_scan()
+    host_info = scan.get("host", {})
+
+    weights = {
+        "speed": {"quality": 0.18, "speed": 0.42, "task": 0.20, "lang": 0.10, "fit": 0.10},
+        "quality": {"quality": 0.48, "speed": 0.08, "task": 0.22, "lang": 0.10, "fit": 0.12},
+    }.get(profile["priority"], {"quality": 0.34, "speed": 0.22, "task": 0.22, "lang": 0.10, "fit": 0.12})
+
+    ranked = []
+    rejected = []
+
+    for v in variants():
+        model = v.get("model", {})
+        est = estimate(v, profile, host_info)
+        reasons = []
+        blockers = []
+
+        if not est["fitsRam"]:
+            blockers.append(f"به {est['ramGb']} گیگ رم نیاز دارد (بودجه: {profile['ramBudgetGb']})")
+        if not est["fitsDisk"]:
+            blockers.append(f"به {est['diskGb']} گیگ دیسک نیاز دارد (آزاد: {profile['diskBudgetGb']})")
+        if profile["contextTokens"] > int(model.get("contextMax") or 8192):
+            blockers.append(f"حداکثر پنجرهٔ این مدل {model.get('contextMax')} توکن است")
+        if profile["requireToolCalling"] and not model.get("toolCalling"):
+            blockers.append("ابزارفراخوانی (tool calling) ندارد")
+        if profile["requireVision"] and not model.get("vision"):
+            blockers.append("قابلیت بینایی ندارد")
+        if profile["requireEmbedding"] != bool(model.get("embedding", False)):
+            blockers.append("نوع تسک امبدینگ با درخواست همخوانی ندارد")
+        if profile["minTokensPerSec"] > 0 and est["tokensPerSec"] < profile["minTokensPerSec"]:
+            blockers.append(f"سرعت تخمینی {est['tokensPerSec']} توکن/ثانیه کمتر از حداقل است")
+        if not profile["allowNonCommercial"] and "NC" in str(model.get("license", "")).upper():
+            blockers.append("لایسنس غیرتجاری است")
+
+        if blockers:
+            rejected.append({"ref": v["ref"], "name": v["name"], "reasons": blockers, "estimate": est})
+            continue
+
+        raw_quality = float(v.get("quality", 50))
+        quality = (raw_quality / 100.0) ** 1.6
+        speed = _speed_score(float(est["tokensPerSec"]))
+        task = _task_match(model, profile["tasks"])
+        lang = _language_score(model, profile["languages"])
+        ratio = est["ramGb"] / max(0.1, float(profile["ramBudgetGb"]))
+        fit = (ratio / 0.85) if ratio <= 0.85 else max(0.0, 1.0 - (ratio - 0.85) * 4.0)
+
+        score = (
+            weights["quality"] * quality
+            + weights["speed"] * speed
+            + weights["task"] * task
+            + weights["lang"] * lang
+            + weights["fit"] * fit
+        )
+
+        if model.get("toolCalling") and "agent" in profile["tasks"]:
+            score += 0.04
+            reasons.append("ابزارفراخوانی رسمی دارد و با حلقهٔ عامل این برنامه کاملا سازگار است")
+        if est["gpuOffloadRatio"] >= 0.99:
+            score += 0.03
+            reasons.append("کاملاً روی حافظه گرافیکی VRAM جا می‌شود")
+        elif est["gpuOffloadRatio"] > 0.1:
+            reasons.append(f"حدود {int(est['gpuOffloadRatio'] * 100)}% روی GPU بارگذاری می‌شود")
+        if task >= 0.99:
+            reasons.append("دقیقاً برای وظیفه انتخاب‌شده ساخته شده است")
+        if "fa" in profile["languages"]:
+            reasons.append(f"امتیاز زبان فارسی: {int(model.get('faScore') or 0)} از ۱۰۰")
+        reasons.append(f"حدود {est['ramGb']} گیگ رم و {est['diskGb']} گیگ دیسک؛ تقریبا {int(est['tokensPerSec'])} توکن/ثانیه")
+
+        ranked.append({
+            "ref": v["ref"],
+            "modelId": v["modelId"],
+            "tag": str(v.get("tag")),
+            "name": v["name"],
+            "publisher": str(model.get("publisher", "")),
+            "license": str(model.get("license", "")),
+            "summary": str(model.get("summary", "")),
+            "tasks": model.get("tasks", []),
+            "contextMax": int(model.get("contextMax") or 8192),
+            "toolCalling": bool(model.get("toolCalling", False)),
+            "vision": bool(model.get("vision", False)),
+            "embedding": bool(model.get("embedding", False)),
+            "reasoning": bool(model.get("reasoning", False)),
+            "quant": str(v.get("quant", "")),
+            "paramsB": float(v.get("paramsB") or 0.0),
+            "rawQuality": raw_quality,
+            "score": round(score, 4),
+            "scorePct": int(round(min(100.0, score * 100.0))),
+            "estimate": est,
+            "reasons": reasons,
+            "url": str(model.get("url", "")),
+        })
+
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+
+    return {
+        "profile": profile,
         "host": host_info,
-        "recommendations": recommendations[:5],
-        "rejected": rejected[:10],
+        "recommendations": ranked[:8],
+        "rejected": rejected[:15],
     }
 
 
@@ -772,6 +968,34 @@ def plan(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return steps
 
 
+def save_profile(name: str, profile_dict: Dict[str, Any]) -> Dict[str, Any]:
+    all_profiles = get_state_json("localai:profiles", {}) or {}
+    norm = normalize_profile(profile_dict)
+    all_profiles[name] = {
+        "name": name,
+        "profile": norm,
+        "savedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    set_state_json("localai:profiles", all_profiles)
+    return {"profiles": list(all_profiles.values())}
+
+
+def list_profiles() -> Dict[str, Any]:
+    all_profiles = get_state_json("localai:profiles", {}) or {}
+    default_ref = get_state("localai:default", "") or ""
+    return {
+        "profiles": list(all_profiles.values()),
+        "default": default_ref,
+    }
+
+
+def delete_profile(name: str) -> Dict[str, Any]:
+    all_profiles = get_state_json("localai:profiles", {}) or {}
+    all_profiles.pop(name, None)
+    set_state_json("localai:profiles", all_profiles)
+    return {"profiles": list(all_profiles.values())}
+
+
 import types as _types
 local_ai = _types.SimpleNamespace(
     root_dir=root_dir,
@@ -796,4 +1020,7 @@ local_ai = _types.SimpleNamespace(
     plan=plan,
     register_provider=register_provider,
     recommend=recommend,
+    save_profile=save_profile,
+    list_profiles=list_profiles,
+    delete_profile=delete_profile,
 )

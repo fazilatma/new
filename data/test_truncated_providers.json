@@ -1,0 +1,71 @@
+{
+  "groq": {
+    "id": "groq",
+    "name": "Groq",
+    "vendor": "custom",
+    "url": "https://api.groq.com/openai/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "",
+    "apiKeys": [],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "llama-3.3-70b-versatile",
+        "name": "Llama 3.3 70B",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "llama3.3:70b",
+        "name": "llama3.3:70b",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "qwen2.5-coder:32b",
+        "name": "qwen2.5-coder:32b",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "mistral-large:latest",
+        "name": "mistral-large:latest",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  }
+}

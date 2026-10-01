@@ -1837,6 +1837,25 @@ def post_localai_register(payload: Dict[str, Any], user: Dict[str, Any] = Depend
     meta = payload.get("meta") or {}
     return local_ai.register_provider(model_ref, meta=meta)
 
+@app.get("/api/localai/profiles")
+def get_localai_profiles(user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.list_profiles()
+
+@app.post("/api/localai/profiles")
+def post_localai_profiles(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
+    from . import local_ai
+    name = str(payload.get("name") or "").strip()
+    profile_data = payload.get("profile") or {}
+    if not name:
+        raise HTTPException(400, "Profile name is required")
+    return local_ai.save_profile(name, profile_data)
+
+@app.delete("/api/localai/profiles/{name:path}")
+def delete_localai_profile(name: str, user: Dict[str, Any] = Depends(require_developer)):
+    from . import local_ai
+    return local_ai.delete_profile(name)
+
 # Environment & Security Config API (Phase 12)
 @app.get("/api/config/environment")
 def get_env_config(user: Dict[str, Any] = Depends(require_admin)):

@@ -1,0 +1,92 @@
+{
+  "openrouter-test": {
+    "id": "openrouter-test",
+    "name": "OpenRouter Custom",
+    "vendor": "custom",
+    "url": "https://openrouter.ai/api/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvp_LRrReWvCZIVKP41FKLRsgBr4U2If0T3oi6QusqKc9q2dsfYT88rrnm6W98oYR2c9Sm3gFYo9vYPwvT-kPO4b1bA==",
+    "apiKeys": [
+      "enc:gAAAAABqvp_LaPwtJpcOaI5ec5mVrhzKO_hpu-tSGdbcUG0x-pWEsN3TTVhEB01_ppoGLNNUkktooyzEsyFmWtpMJOL1yP0pqw=="
+    ],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "openai/gpt-4o",
+        "name": "openai/gpt-4o",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "anthropic/claude-3.5-sonnet",
+        "name": "anthropic/claude-3.5-sonnet",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  },
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek API",
+    "vendor": "custom",
+    "url": "https://api.deepseek.com/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvp_L2mUOjKOjCj97HszPTscKD0UKKxdaGUpLxnmy7t_sMu9FK4vaAf3dqmtZGyQj6Fv0zpQBbey93vasCfbVbKoSjA==",
+    "apiKeys": [
+      "enc:gAAAAABqvp_L6cf2QDAXi-3gqdehptsExxB9sBfGd6ZBMBhblD3f4J4PsRayfVdDVyuuIFDpFgPhiEk3LRZ8tYkv3_Tx6t6vWQ=="
+    ],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "deepseek-chat",
+        "name": "deepseek-chat",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "deepseek-coder",
+        "name": "deepseek-coder",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  }
+}

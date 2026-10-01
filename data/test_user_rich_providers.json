@@ -1,0 +1,166 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI Official",
+    "vendor": "openai",
+    "url": "https://api.openai.com/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvp_L8BCqVSHtt_fdMdIsPvhLl8UCL7cE3gC6MTXOlPjAk4DA0gdbIPaI4rfbXJfBgjfpRKcjB5E3AQ5D_w2MXTzgeOhIFpJhssiOaE6mcQV0iQg=",
+    "apiKeys": [
+      "enc:gAAAAABqvp_LiAfinPqW7K5X-YJsJe9vrP4hbxntoce2ltRXNMLGRIszRFSWC0wcuhqMGpYa2PGN2Oxw6EJk6q-xiPgwf3-fGSTL5vr-U8VIxPKK20peX7U="
+    ],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "gpt-4o",
+        "name": "GPT-4o (Omni)",
+        "toolCalling": true,
+        "vision": true,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 16384,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {
+          "tested": true,
+          "available": true,
+          "pricingMode": "payg",
+          "endpointType": "chat",
+          "testDetails": {
+            "status": 200,
+            "latencyMs": 320
+          }
+        }
+      }
+    ],
+    "extra": {}
+  },
+  "ollama": {
+    "id": "ollama",
+    "name": "Ollama (Local AI)",
+    "vendor": "ollama",
+    "url": "http://localhost:11434",
+    "protocol": "ollama",
+    "enabled": false,
+    "apiKey": "",
+    "apiKeys": [],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "llama3.2",
+        "name": "Llama 3.2 (Local)",
+        "toolCalling": true,
+        "vision": false,
+        "free": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "qwen2.5-coder:7b",
+        "name": "Qwen 2.5 Coder 7B (Local)",
+        "toolCalling": true,
+        "vision": false,
+        "free": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      },
+      {
+        "id": "deepseek-r1:8b",
+        "name": "DeepSeek R1 8B (Local)",
+        "toolCalling": true,
+        "vision": false,
+        "free": true,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  },
+  "together": {
+    "id": "together",
+    "name": "Together AI",
+    "vendor": "custom",
+    "url": "https://api.together.xyz/v1/chat/completions",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvp_LGWLm8pgA1a9SOuPpUWnAJjYAuu1svLOSRix_8HXQ7bSYk4tI87otTijEK3trcczkDJJ0ImOa6X8jKl-oHc46zQ==",
+    "apiKeys": [
+      "enc:gAAAAABqvp_Lh5pl_E9cFiV1keLqbD8NWEUP3kulD6Xe49wP4EmbHTTsogaw6L6FLlGT0v8d6KZEmE8EKAnSK88Z9rRIUdosDA=="
+    ],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "name": "Llama 3.3 70B Turbo",
+        "toolCalling": true,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {
+          "tested": true,
+          "available": true
+        }
+      }
+    ],
+    "extra": {}
+  },
+  "cloudflare": {
+    "id": "cloudflare",
+    "name": "Cloudflare Workers AI",
+    "vendor": "custom",
+    "url": "https://api.cloudflare.com/client/v4/accounts/test-acc/ai/v1",
+    "protocol": "openai-compatible",
+    "enabled": true,
+    "apiKey": "enc:gAAAAABqvp_LQwCMxKZe9QVbccBg7QS9gD6BVLkhKrW4KtQAVoVxxG43wRr8fEgUZV9ZlLaBhOacCnRclcFKrgZH2W8TV-__-w==",
+    "apiKeys": [
+      "enc:gAAAAABqvp_LqP5tGqMdaOlK5SNck7_nT4rFldXwfVvBumQDxdEEopt-MWMgcQTvtm7GwOYPQWQve9OuXbedUujIBm_o34XouA=="
+    ],
+    "apiKeyEnv": "",
+    "proxyUrl": "",
+    "priority": 1,
+    "timeoutSec": 120,
+    "models": [
+      {
+        "id": "@cf/meta/llama-3.3-70b-instruct",
+        "name": "Llama 3.3 70B Instruct",
+        "toolCalling": false,
+        "vision": false,
+        "free": false,
+        "maxInputTokens": 128000,
+        "maxOutputTokens": 8192,
+        "enabled": true,
+        "inputCostPer1M": 0.0,
+        "outputCostPer1M": 0.0,
+        "extra": {}
+      }
+    ],
+    "extra": {}
+  }
+}
