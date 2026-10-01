@@ -1003,6 +1003,35 @@ function spawnCollect(command, args, options = {}) {
   });
 }
 
+const LOCAL_BIND_HOSTS = Object.freeze(["127.0.0.1", "0.0.0.0", "::1", "::"]);
+const RESERVED_PORTS = Object.freeze([managerPort, backendPort, backendPort + 1000]);
+
+function normalizeLocalHost(value, fallback = "127.0.0.1") {
+  const host = String(value || "").trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host) return fallback;
+  if (host === "localhost") return "127.0.0.1";
+  if (LOCAL_BIND_HOSTS.includes(host)) return host;
+  // Any other value must be an address this host actually owns; llama.cpp
+  // cannot bind an address that does not exist on a local interface.
+  const owned = Object.values(os.networkInterfaces())
+    .flat()
+    .filter(Boolean)
+    .map((item) => String(item.address || "").toLowerCase());
+  if (owned.includes(host)) return host;
+  throw new Error(`Bind address ${host} does not belong to this host. Use 127.0.0.1, 0.0.0.0, or an address of a local interface.`);
+}
+
+function localClientHost(host) {
+  const value = normalizeLocalHost(host);
+  if (value === "0.0.0.0") return "127.0.0.1";
+  if (value === "::" || value === "::1") return "[::1]";
+  return value;
+}
+
+function localModelBaseUrl(options) {
+  return `http://${localClientHost(options?.host)}:${options?.port || localModelPort}/v1`;
+}
+
 function localModelOptions(source = {}) {
   const cpuCount = Math.max(1, os.cpus()?.length || 1);
   const integer = (name, fallback, minimum, maximum) => {
@@ -1010,12 +1039,18 @@ function localModelOptions(source = {}) {
     return Number.isSafeInteger(value) ? Math.max(minimum, Math.min(value, maximum)) : fallback;
   };
   const batchSize = integer("batchSize", 512, 1, 4096);
+  const port = integer("port", localModelPort, 1024, 65535);
+  if (port !== localModelPort && RESERVED_PORTS.includes(port)) {
+    throw new Error(`Port ${port} is already reserved by the OpenHands runtime. Choose another port.`);
+  }
   return {
     contextLength: integer("contextLength", MIN_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW, 1048576),
     threads: integer("threads", Math.max(1, Math.min(cpuCount, Math.ceil(cpuCount * 0.75))), 1, 256),
     batchSize,
     ubatchSize: Math.min(batchSize, integer("ubatchSize", Math.min(256, batchSize), 1, 4096)),
     parallel: integer("parallel", 1, 1, 16),
+    host: normalizeLocalHost(source?.host),
+    port,
     mmap: source?.mmap !== false,
     mlock: source?.mlock === true,
   };
@@ -1066,8 +1101,10 @@ function localStatus() {
     },
     logTail: (() => { try { const data = fs.readFileSync(localLogFile); return data.subarray(Math.max(0, data.length - 32000)).toString("utf8"); } catch { return ""; } })(),
     partialDownloads: (() => { try { return fs.readdirSync(modelsDir).filter((name) => name.endsWith(".gguf.part")).map((filename) => ({ name: filename.slice(0, -10), bytes: fs.statSync(path.join(modelsDir, filename)).size })); } catch { return []; } })(),
+    defaults: { host: "127.0.0.1", port: localModelPort },
     models: registry.models.map((model) => ({
       ...model,
+      baseUrl: localModelBaseUrl(model),
       file: undefined,
       partialBytes: (() => { try { return fs.statSync(`${model.file}.part`).size; } catch { return 0; } })(),
       filePresent: Boolean(model.file && fs.existsSync(model.file)),
@@ -1558,17 +1595,31 @@ async function installLocalModel(body, update, signal = null) {
   return { name, sha256: downloaded.sha256, bytes: downloaded.bytes, resumed: downloaded.resumed, gguf, options };
 }
 
-async function ensureLocalProfile(name, contextLength) {
+async function ensureLocalProfile(name, contextLength, options = {}) {
   const list = await backendRequest("/api/profiles");
   const profileName = `local-${name}`.slice(0, 64);
+  const baseUrl = localModelBaseUrl(options);
   const existing = (list?.profiles || []).some((profile) => profile.name === profileName);
   if (existing) {
     const detail = await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`);
     if (detail.config?.model !== `openai/${name}`) throw new Error(`Profile ${profileName} already belongs to another model`);
+    if (detail.config?.provider_connection_id && detail.config.base_url !== baseUrl) {
+      // Keep the encrypted Provider Connection pointing at the configured
+      // address; the key itself is never read back or logged.
+      try {
+        await backendRequest(`/api/llm/provider-connections/${encodeURIComponent(detail.config.provider_connection_id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ base_url: baseUrl }),
+          sensitive: true,
+        });
+      } catch (error) {
+        console.error(`[openhands-model-manager] Could not update the local Provider Connection address: ${publicError(error)}`);
+      }
+    }
     await backendRequest(`/api/profiles/${encodeURIComponent(profileName)}`, {
       method: "POST",
       body: JSON.stringify({
-        llm: { ...detail.config, api_key: undefined, max_input_tokens: contextLength, max_output_tokens: Math.min(8192, Math.floor(contextLength / 2)) },
+        llm: { ...detail.config, api_key: undefined, base_url: baseUrl, max_input_tokens: contextLength, max_output_tokens: Math.min(8192, Math.floor(contextLength / 2)) },
         include_secrets: false,
       }),
     });
@@ -1581,7 +1632,7 @@ async function ensureLocalProfile(name, contextLength) {
   if (!connection) {
     connection = await backendRequest("/api/llm/provider-connections", {
       method: "POST",
-      body: JSON.stringify({ display_name: displayName, provider: "openai", api_key: "local-no-key", base_url: `http://127.0.0.1:${localModelPort}/v1` }),
+      body: JSON.stringify({ display_name: displayName, provider: "openai", api_key: "local-no-key", base_url: baseUrl }),
       sensitive: true,
     });
   }
@@ -1590,7 +1641,7 @@ async function ensureLocalProfile(name, contextLength) {
     body: JSON.stringify({
       llm: {
         model: `openai/${name}`,
-        base_url: `http://127.0.0.1:${localModelPort}/v1`,
+        base_url: baseUrl,
         provider_connection_id: connection.id,
         max_input_tokens: contextLength,
         max_output_tokens: Math.min(8192, Math.floor(contextLength / 2)),
@@ -1607,7 +1658,7 @@ async function ensureLocalProfile(name, contextLength) {
 async function reconcileMinimumContextWindows() {
   const registry = loadRegistry();
   for (const model of registry.models) {
-    try { await ensureLocalProfile(model.name, localModelOptions(model).contextLength); }
+    try { const options = localModelOptions(model); await ensureLocalProfile(model.name, options.contextLength, options); }
     catch (error) { console.error(`[openhands-model-manager] Could not reconcile managed profile ${model.name}: ${publicError(error)}`); }
   }
   const list = await backendRequest("/api/profiles");
@@ -1658,8 +1709,16 @@ async function updateLocalModel(name, body) {
   const options = localModelOptions({ ...registry.models[index], ...body });
   registry.models[index] = { ...registry.models[index], ...options, updatedAt: new Date().toISOString() };
   saveRegistry(registry);
-  await ensureLocalProfile(name, options.contextLength);
-  return { name, options };
+  await ensureLocalProfile(name, options.contextLength, options);
+  const exposed = !["127.0.0.1", "::1"].includes(options.host);
+  return {
+    name,
+    options,
+    baseUrl: localModelBaseUrl(options),
+    warning: exposed
+      ? `Bind address ${options.host} is not loopback-only. The model answers on every interface that address covers; only non-public ports stay protected.`
+      : null,
+  };
 }
 
 async function deleteLocalModel(name) {
@@ -1702,8 +1761,8 @@ async function startLocalModel(name) {
   const args = [
     "-m", modelFile,
     "--alias", model.name,
-    "--host", "127.0.0.1",
-    "--port", String(localModelPort),
+    "--host", options.host,
+    "--port", String(options.port),
     "--ctx-size", String(options.contextLength),
     "--threads", String(options.threads),
     "--batch-size", String(options.batchSize),
@@ -1736,13 +1795,13 @@ async function startLocalModel(name) {
   (async () => {
     for (let attempt = 0; attempt < 300 && localModelProcess === child && child.exitCode === null; attempt += 1) {
       try {
-        const response = await fetch(`http://127.0.0.1:${localModelPort}/health`, { signal: AbortSignal.timeout(2000) });
+        const response = await fetch(`http://${localClientHost(options.host)}:${options.port}/health`, { signal: AbortSignal.timeout(2000) });
         if (response.ok) { localModelReady = true; return; }
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   })();
-  return { name, port: localModelPort, status: "starting", options };
+  return { name, host: options.host, port: options.port, baseUrl: localModelBaseUrl(options), status: "starting", options };
 }
 
 function validateEndpointBase(value) {
@@ -1942,8 +2001,8 @@ function managerPage() {
 <section class="panel" data-panel="overview"><div class="section-head"><div><h2>نمای کلی مدل‌ها</h2><p>وضعیت Profileها و مدل‌های محلی این نصب را یک‌جا مشاهده کنید.</p></div></div><div class="grid"><div class="card span-4"><h2>وضعیت نصب</h2><div id="profile-limit" class="status ok"></div><p class="muted">این پنل فقط در مرورگر Pair‌شده فعال است. هیچ کلید یا tokenی در URL، خروجی یا log قرار نمی‌گیرد.</p></div><div class="card span-8"><div class="metric-grid"><div class="metric"><span>LLM Profile</span><strong id="profile-count">—</strong></div><div class="metric"><span>مدل GGUF نصب‌شده</span><strong id="local-count">—</strong></div><div class="metric"><span>وضعیت llama.cpp</span><strong id="runtime-state">—</strong></div></div></div><div class="card span-12"><h2>LLM Profileهای موجود</h2><p class="muted">پس از ایجاد یا Import مدل، برای مشاهده آن در Canvas صفحه اصلی را تازه‌سازی کنید.</p><div id="profiles" class="scroll"></div></div></div></section>
 <section class="panel" data-panel="providers" hidden><div class="section-head"><div><h2>درون‌ریزی و برون‌ریزی</h2><p>فایل JSON ارائه‌دهنده را با انتقال خودکار و امن secretها مدیریت کنید.</p></div></div><div class="grid"><div class="card span-7"><h2>Import JSON</h2><div class="notice">هر API key موجود در فایل به‌طور خودکار داخل Provider Connection رمزنگاری‌شده ذخیره و به همه مدل‌های مرتبط متصل می‌شود. endpoint هر مدل نیز به همان Profile الصاق و شناسه‌های بدون Provider به قالب LiteLLM مثل mistral/codestral-2508 تبدیل می‌شوند. کلید هرگز وارد snapshot، export یا log نمی‌شود. Context خالی یا کمتر از ۱۶٬۳۸۴ نیز خودکار به حداقل قابل‌اجرای OpenHands تبدیل می‌شود.</div><label for="file">فایل JSON ارائه‌دهنده</label><input id="file" type="file" accept="application/json,.json"><label class="check"><input id="overwrite" type="checkbox"><span>به‌روزرسانی تنظیمات Profileهای هم‌نام؛ اتصال credential بدون این گزینه نیز انجام می‌شود</span></label><div class="actions"><button id="import" type="button">درون‌ریزی و بررسی</button></div><div id="io-status" class="status" role="status"></div></div><div class="card span-5"><h2>Export امن</h2><p class="muted">Providerها و Profileها با قالب سازگار و مقدار <code>secretsIncluded=false</code> دریافت می‌شوند.</p><div class="actions"><button class="alt" id="export" type="button">دریافت JSON بدون secret</button></div></div></div></section>
 <section class="panel" data-panel="proxy" hidden><div class="section-head"><div><h2>مسیر خروجی و Proxy</h2><p>اتصال مستقیم، fallback خودکار یا عبور اجباری از Proxy را انتخاب کنید.</p></div></div><div class="grid"><div class="card span-7"><div class="notice">در حالت Proxy، سرویس واسط prompt، پاسخ و هدر احراز هویت ارائه‌دهنده را دریافت می‌کند؛ فقط از واسط مورد اعتماد استفاده کنید.</div><div class="form-grid"><div class="field full"><label for="mode">حالت پیش‌فرض</label><select id="mode"><option value="direct">اتصال مستقیم</option><option value="direct-fallback">مستقیم، سپس Proxy در صورت خطا</option><option value="proxy-only">فقط Proxy</option></select></div><div class="field full"><label for="template">URL template</label><input id="template" class="ltr" spellcheck="false"></div></div><div class="actions"><button id="save-proxy" type="button">ذخیره تنظیمات</button><button class="alt" id="apply-openrouter" type="button">اعمال روی همه مدل‌های OpenRouter</button></div><div id="proxy-status" class="status" role="status"></div></div><div class="card span-5"><h2>Routeهای فعال</h2><div id="routes"></div></div></div></section>
-<section class="panel" data-panel="local" hidden><div class="section-head"><div><h2>مدل محلی GGUF و llama.cpp</h2><p>مدل مناسب را جست‌وجو، فایل را انتخاب و دانلود قابل‌ادامه را مدیریت کنید.</p></div></div><div class="grid"><div class="card span-12"><div id="resources" class="notice"></div><p class="muted">Endpoint داخلی مدل مدیریت‌شده: <code class="ltr">http://127.0.0.1:${localModelPort}/v1</code> — این آدرس فقط داخل همان هاست در دسترس است. پس از اجرای مدل و آماده‌شدن آن، Profile با پیشوند <code>local-</code> را در انتخاب‌گر مدل Canvas انتخاب کنید؛ واردکردن IP عمومی لازم نیست.</p></div><div class="card span-6"><h2>۱. جست‌وجوی Hugging Face</h2><p class="muted">فیلترها اختیاری‌اند. Quantization و سقف حجم روی فایل‌های واقعی هر repository نیز بررسی می‌شوند.</p><div class="form-grid"><div class="field full"><label for="hf-search">عبارت جست‌وجو</label><input id="hf-search" class="ltr" placeholder="coder instruct persian"></div><div class="field"><label for="hf-family">خانواده یا معماری</label><input id="hf-family" class="ltr" placeholder="Qwen"></div><div class="field"><label for="hf-params">اندازه پارامتر</label><input id="hf-params" class="ltr" placeholder="7B"></div><div class="field"><label for="hf-quant">Quantization</label><input id="hf-quant" class="ltr" placeholder="Q4_K_M"></div><div class="field"><label for="hf-max-gb">حداکثر حجم فایل (GB)</label><input id="hf-max-gb" type="number" min="0.1" max="20" step="0.1" placeholder="8"></div><div class="field"><label for="hf-license">License</label><input id="hf-license" class="ltr" placeholder="apache-2.0"></div><div class="field"><label for="hf-language">زبان</label><input id="hf-language" class="ltr" placeholder="fa"></div><div class="field"><label for="hf-author">سازنده یا سازمان</label><input id="hf-author" class="ltr" placeholder="bartowski"></div><div class="field third"><label for="hf-sort">مرتب‌سازی</label><select id="hf-sort"><option value="downloads">بیشترین دانلود</option><option value="likes">بیشترین پسند</option><option value="updated">جدیدترین</option></select></div><div class="field third"><label for="hf-limit">تعداد</label><input id="hf-limit" type="number" value="20" min="1" max="50"></div></div><div class="actions"><button id="hf-search-button" type="button">جست‌وجوی مدل‌های GGUF</button></div><div id="hf-search-status" class="status" role="status"></div><div id="hf-search-results" class="scroll"></div></div>
-<div class="card span-6" id="install-card"><h2>۲. انتخاب فایل و نصب</h2><div class="notice">حداقل Context موردنیاز OpenHands برابر ۱۶٬۳۸۴ است. مقدار کمتر در API و Profile به‌طور خودکار اصلاح می‌شود.</div><div class="form-grid"><div class="field"><label for="gguf-name">نام کوتاه</label><input id="gguf-name" class="ltr" placeholder="qwen-small"></div><div class="field"><label for="gguf-revision">Revision</label><input id="gguf-revision" class="ltr" value="main"></div><div class="field full"><label for="gguf-url">URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" spellcheck="false" placeholder="https://huggingface.co/.../resolve/main/model.gguf"></div><div class="field full"><label for="gguf-repo">یا Hugging Face repository</label><input id="gguf-repo" class="ltr" spellcheck="false" placeholder="Qwen/Qwen3-GGUF"></div><div class="field full"><label for="gguf-file">نام فایل GGUF</label><input id="gguf-file" class="ltr" spellcheck="false" placeholder="model-Q4_K_M.gguf"></div></div><div class="actions"><button id="hf-files" class="alt" type="button">نمایش فایل‌های منطبق مخزن</button></div><div id="hf-results" class="scroll"></div><div class="form-grid"><div class="field full"><label for="gguf-sha">SHA-256 اختیاری</label><input id="gguf-sha" class="ltr" spellcheck="false" maxlength="64"></div><div class="field third"><label for="gguf-context">Context</label><input id="gguf-context" type="number" value="16384" min="16384"></div><div class="field third"><label for="gguf-threads">CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div class="field third"><label for="gguf-parallel">Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div><div class="field"><label for="gguf-batch">Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div class="field"><label for="gguf-ubatch">Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label class="check"><input id="gguf-mmap" type="checkbox" checked><span>استفاده از mmap برای کاهش مصرف RAM</span></label><label class="check"><input id="gguf-mlock" type="checkbox"><span>قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</span></label><label class="check"><input id="gguf-replace" type="checkbox"><span>نصب مجدد و جایگزینی مدل هم‌نام</span></label><div class="actions"><button id="install" type="button">دانلود یا ادامه دانلود و نصب</button><button id="save-local-config" class="alt" type="button">ذخیره تنظیمات</button><button id="stop-local" class="ghost" type="button">توقف مدل</button><button id="cancel-install" class="warn" type="button" disabled>لغو امن دانلود</button></div><div id="install-status" class="status" role="status"></div></div>
+<section class="panel" data-panel="local" hidden><div class="section-head"><div><h2>مدل محلی GGUF و llama.cpp</h2><p>مدل مناسب را جست‌وجو، فایل را انتخاب و دانلود قابل‌ادامه را مدیریت کنید.</p></div></div><div class="grid"><div class="card span-12"><div id="resources" class="notice"></div><p class="muted">Endpoint پیش‌فرض مدل مدیریت‌شده: <code class="ltr">http://127.0.0.1:${localModelPort}/v1</code>. آدرس و پورت هر مدل در جدول «مدل‌های نصب‌شده» نمایش داده می‌شود و از همان‌جا با دکمه «تنظیم» قابل تغییر است. پس از اجرای مدل و آماده‌شدن آن، Profile با پیشوند <code>local-</code> را در انتخاب‌گر مدل Canvas انتخاب کنید؛ واردکردن IP عمومی لازم نیست.</p></div><div class="card span-6"><h2>۱. جست‌وجوی Hugging Face</h2><p class="muted">فیلترها اختیاری‌اند. Quantization و سقف حجم روی فایل‌های واقعی هر repository نیز بررسی می‌شوند.</p><div class="form-grid"><div class="field full"><label for="hf-search">عبارت جست‌وجو</label><input id="hf-search" class="ltr" placeholder="coder instruct persian"></div><div class="field"><label for="hf-family">خانواده یا معماری</label><input id="hf-family" class="ltr" placeholder="Qwen"></div><div class="field"><label for="hf-params">اندازه پارامتر</label><input id="hf-params" class="ltr" placeholder="7B"></div><div class="field"><label for="hf-quant">Quantization</label><input id="hf-quant" class="ltr" placeholder="Q4_K_M"></div><div class="field"><label for="hf-max-gb">حداکثر حجم فایل (GB)</label><input id="hf-max-gb" type="number" min="0.1" max="20" step="0.1" placeholder="8"></div><div class="field"><label for="hf-license">License</label><input id="hf-license" class="ltr" placeholder="apache-2.0"></div><div class="field"><label for="hf-language">زبان</label><input id="hf-language" class="ltr" placeholder="fa"></div><div class="field"><label for="hf-author">سازنده یا سازمان</label><input id="hf-author" class="ltr" placeholder="bartowski"></div><div class="field third"><label for="hf-sort">مرتب‌سازی</label><select id="hf-sort"><option value="downloads">بیشترین دانلود</option><option value="likes">بیشترین پسند</option><option value="updated">جدیدترین</option></select></div><div class="field third"><label for="hf-limit">تعداد</label><input id="hf-limit" type="number" value="20" min="1" max="50"></div></div><div class="actions"><button id="hf-search-button" type="button">جست‌وجوی مدل‌های GGUF</button></div><div id="hf-search-status" class="status" role="status"></div><div id="hf-search-results" class="scroll"></div></div>
+<div class="card span-6" id="install-card"><h2>۲. انتخاب فایل و نصب</h2><div class="notice">حداقل Context موردنیاز OpenHands برابر ۱۶٬۳۸۴ است. مقدار کمتر در API و Profile به‌طور خودکار اصلاح می‌شود.</div><div class="form-grid"><div class="field"><label for="gguf-name">نام کوتاه</label><input id="gguf-name" class="ltr" placeholder="qwen-small"></div><div class="field"><label for="gguf-revision">Revision</label><input id="gguf-revision" class="ltr" value="main"></div><div class="field full"><label for="gguf-url">URL مستقیم HTTPS از Hugging Face یا GitHub</label><input id="gguf-url" class="ltr" spellcheck="false" placeholder="https://huggingface.co/.../resolve/main/model.gguf"></div><div class="field full"><label for="gguf-repo">یا Hugging Face repository</label><input id="gguf-repo" class="ltr" spellcheck="false" placeholder="Qwen/Qwen3-GGUF"></div><div class="field full"><label for="gguf-file">نام فایل GGUF</label><input id="gguf-file" class="ltr" spellcheck="false" placeholder="model-Q4_K_M.gguf"></div></div><div class="actions"><button id="hf-files" class="alt" type="button">نمایش فایل‌های منطبق مخزن</button></div><div id="hf-results" class="scroll"></div><div class="form-grid"><div class="field full"><label for="gguf-sha">SHA-256 اختیاری</label><input id="gguf-sha" class="ltr" spellcheck="false" maxlength="64"></div><div class="field third"><label for="gguf-context">Context</label><input id="gguf-context" type="number" value="16384" min="16384"></div><div class="field third"><label for="gguf-threads">CPU threads</label><input id="gguf-threads" type="number" value="1" min="1"></div><div class="field third"><label for="gguf-parallel">Parallel slots</label><input id="gguf-parallel" type="number" value="1" min="1" max="16"></div><div class="field"><label for="gguf-host">IP اتصال (bind address)</label><input id="gguf-host" class="ltr" value="127.0.0.1" spellcheck="false" placeholder="127.0.0.1"></div><div class="field"><label for="gguf-port">پورت</label><input id="gguf-port" type="number" min="1024" max="65535" value="${localModelPort}"></div><div class="field"><label for="gguf-batch">Batch size</label><input id="gguf-batch" type="number" value="512" min="1"></div><div class="field"><label for="gguf-ubatch">Micro batch</label><input id="gguf-ubatch" type="number" value="256" min="1"></div></div><label class="check"><input id="gguf-mmap" type="checkbox" checked><span>استفاده از mmap برای کاهش مصرف RAM</span></label><label class="check"><input id="gguf-mlock" type="checkbox"><span>قفل‌کردن مدل در RAM؛ فقط در صورت RAM کافی</span></label><label class="check"><input id="gguf-replace" type="checkbox"><span>نصب مجدد و جایگزینی مدل هم‌نام</span></label><div class="actions"><button id="install" type="button">دانلود یا ادامه دانلود و نصب</button><button id="save-local-config" class="alt" type="button">ذخیره تنظیمات</button><button id="stop-local" class="ghost" type="button">توقف مدل</button><button id="cancel-install" class="warn" type="button" disabled>لغو امن دانلود</button></div><div id="install-status" class="status" role="status"></div></div>
 <div class="card span-12"><h2>مدل‌های نصب‌شده</h2><div id="locals" class="scroll"></div><details><summary>مشاهده log مدل محلی</summary><pre id="log"></pre></details></div></div></section>
 <section class="panel" data-panel="endpoint" hidden><div class="section-head"><div><h2>endpoint سازگار با OpenAI</h2><p>Ollama، LM Studio، vLLM، llama.cpp یا هر endpoint سازگار دیگر را بررسی و ثبت کنید.</p></div></div><div class="grid"><div class="card span-7"><div class="notice">مسیر <code>/models</code> پیش از ثبت بررسی می‌شود. HTTP فقط برای localhost مجاز است و endpoint راه‌دور باید HTTPS باشد.</div><div class="form-grid"><div class="field"><label for="ep-name">نام اتصال</label><input id="ep-name" class="ltr" placeholder="ollama"></div><div class="field"><label for="ep-context">Context length</label><input id="ep-context" type="number" value="16384" min="16384"></div><div class="field full"><label for="ep-url">Base URL</label><input id="ep-url" class="ltr" spellcheck="false" placeholder="http://127.0.0.1:11434/v1"></div><div class="field full"><label for="ep-model">Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"></div><div class="field full"><label for="ep-key">API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"></div></div><label class="check"><input id="ep-tools" type="checkbox" checked><span>Native tool calling</span></label><div class="actions"><button class="alt" id="probe-endpoint" type="button">کشف و تست مدل‌ها</button><button id="endpoint" type="button">تست و ساخت LLM Profile</button></div><div id="endpoint-status" class="status" role="status"></div></div><div class="card span-5"><h2>مدل‌های کشف‌شده</h2><div id="endpoint-models" class="scroll"><p class="muted">پس از تست endpoint، مدل‌های اعلام‌شده اینجا نمایش داده می‌شوند.</p></div></div></div></section>
 <section class="panel" data-panel="tests" hidden><div class="section-head"><div><h2>آزمایش زنده مدل‌ها</h2><p>تمام Profileها بدون محدودیت تعداد آزمایش می‌شوند و نتیجه هر مدل همان لحظه در جدول نمایش داده می‌شود.</p></div></div><div class="card"><div class="notice">برای هر LLM Profile یک درخواست حداکثر دو توکنی ارسال می‌شود و ممکن است هزینه ناچیزی ایجاد کند. کلیدها و پاسخ خام هرگز در جدول یا log نمایش داده نمی‌شوند.</div><div class="test-launch"><div><label for="test-concurrency">تعداد تست هم‌زمان</label><select id="test-concurrency"><option value="1">۱ — کم‌فشار</option><option value="2">۲</option><option value="3" selected>۳ — پیشنهادی</option><option value="4">۴</option><option value="5">۵ — سریع</option></select></div><div class="actions"><button id="test" type="button">شروع و نمایش جدول زنده</button></div></div><div id="test-status" class="status" role="status">آماده آزمایش همه Profileهای ذخیره‌شده.</div></div></section>
@@ -1952,13 +2011,13 @@ function managerPage() {
 <script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null,currentInstallJob="",currentTestJob="",testRows=[],testFilter="all",testPollToken=0,testLastFocus=null,hfFiles=[],hfSearchResults=[];try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}const tabs=[...document.querySelectorAll("[data-tab]")],panels=[...document.querySelectorAll("[data-panel]")],validTabs=new Set(tabs.map(t=>t.dataset.tab));function activateTab(name,focus=false){if(!validTabs.has(name))name="overview";tabs.forEach(t=>{const active=t.dataset.tab===name;t.setAttribute("aria-selected",String(active));t.tabIndex=active?0:-1});panels.forEach(p=>p.hidden=p.dataset.panel!==name);try{localStorage.setItem("openhands-model-manager-tab",name)}catch{}if(location.hash!=="#"+name)history.replaceState(history.state,"","#"+name);if(focus)tabs.find(t=>t.dataset.tab===name)?.focus()}tabs.forEach((tab,index)=>{const name=tab.dataset.tab,panel=panels.find(item=>item.dataset.panel===name);tab.id="manager-tab-"+name;tab.setAttribute("aria-controls","manager-panel-"+name);if(panel){panel.id="manager-panel-"+name;panel.setAttribute("role","tabpanel");panel.setAttribute("aria-labelledby",tab.id)}tab.onclick=()=>activateTab(name);tab.onkeydown=e=>{if(!["ArrowRight","ArrowLeft","Home","End"].includes(e.key))return;e.preventDefault();let next=e.key==="Home"?0:e.key==="End"?tabs.length-1:(index+(e.key==="ArrowRight"?-1:1)+tabs.length)%tabs.length;activateTab(tabs[next].dataset.tab,true)}});let initial=location.hash.slice(1);try{if(!validTabs.has(initial))initial=localStorage.getItem("openhands-model-manager-tab")||"overview"}catch{}activateTab(initial);q("auth").textContent=key?"مرورگر احراز هویت شده است":"مرورگر Pair نشده است";q("auth").className=key?"auth-pill ok":"auth-pill err";
 async function call(p,o={}){if(!key)throw Error("مرورگر Pair نشده است");const r=await fetch(API+p,{...o,headers:{"X-Session-API-Key":key,...(o.body?{"content-type":"application/json"}:{}),...(o.headers||{})}});const t=await r.text();let d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.error||t||("HTTP "+r.status));return d}function show(id,msg,ok=true){q(id).textContent=msg;q(id).className=ok?"status ok":"status err"}async function busy(button,work){if(button.disabled||button.dataset.busy)return;button.dataset.busy="1";const old=button.textContent;button.disabled=true;button.textContent="لطفاً صبر کنید…";try{return await work()}finally{delete button.dataset.busy;button.disabled=false;button.textContent=old}}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>c.charCodeAt(0)===34?"&quot;":({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;"}[c]))}
 function bytes(n){if(n==null)return "نامشخص";const u=["B","KiB","MiB","GiB","TiB"];let v=Number(n),i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(i?2:0)+" "+u[i]}
-function localOptions(){return {contextLength:Number(q("gguf-context").value),threads:Number(q("gguf-threads").value),parallel:Number(q("gguf-parallel").value),batchSize:Number(q("gguf-batch").value),ubatchSize:Number(q("gguf-ubatch").value),mmap:q("gguf-mmap").checked,mlock:q("gguf-mlock").checked}}
-function loadLocalForm(m){q("gguf-name").value=m.name;q("gguf-context").value=m.contextLength;q("gguf-threads").value=m.threads;q("gguf-parallel").value=m.parallel;q("gguf-batch").value=m.batchSize;q("gguf-ubatch").value=m.ubatchSize;q("gguf-mmap").checked=m.mmap!==false;q("gguf-mlock").checked=m.mlock===true;show("install-status","تنظیمات "+m.name+" برای ویرایش بارگذاری شد.")}
+function localOptions(){return {contextLength:Number(q("gguf-context").value),threads:Number(q("gguf-threads").value),parallel:Number(q("gguf-parallel").value),batchSize:Number(q("gguf-batch").value),ubatchSize:Number(q("gguf-ubatch").value),host:q("gguf-host").value.trim(),port:Number(q("gguf-port").value),mmap:q("gguf-mmap").checked,mlock:q("gguf-mlock").checked}}
+function loadLocalForm(m){q("gguf-name").value=m.name;q("gguf-context").value=m.contextLength;q("gguf-threads").value=m.threads;q("gguf-parallel").value=m.parallel;q("gguf-batch").value=m.batchSize;q("gguf-ubatch").value=m.ubatchSize;q("gguf-host").value=m.host||"127.0.0.1";q("gguf-port").value=m.port;q("gguf-mmap").checked=m.mmap!==false;q("gguf-mlock").checked=m.mlock===true;show("install-status","تنظیمات "+m.name+" برای ویرایش بارگذاری شد؛ IP و پورت نیز قابل تغییرند.")}
 async function refresh(){
  const s=await call("/status");state=s;q("log").textContent=s.local.logTail||"";q("profile-count").textContent=String(s.profiles.length);q("local-count").textContent=String(s.local.models.length);q("runtime-state").textContent=s.local.running?(s.local.ready?"آماده":"در حال اجرا"):(s.local.runtimeInstalled?"نصب‌شده":"نیازمند نصب");q("profile-limit").textContent=s.profileLimit===null?"✓ محدودیت تعداد LLM Profile در این نصب برداشته شده است.":"سقف Profile: "+s.profileLimit;q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";
  const r=s.local.resources;q("resources").textContent="CPU: "+r.cpuCount+" رشته | RAM آزاد: "+bytes(r.freeMemoryBytes)+" از "+bytes(r.totalMemoryBytes)+" | فضای آزاد: "+bytes(r.freeBytes)+(s.local.runtimeInstalled?" | llama.cpp نصب است":" | llama.cpp هنگام اولین نصب دریافت می‌شود");if(document.activeElement!==q("gguf-threads")&&q("gguf-threads").value==="1")q("gguf-threads").value=Math.max(1,Math.ceil(r.cpuCount*.75));
  q("profiles").innerHTML=s.profiles.length?"<table><tr><th>نام Profile</th><th>Model ID</th></tr>"+s.profiles.map(p=>"<tr><td class=ltr>"+esc(p.name)+"</td><td class=ltr>"+esc(p.model||"")+"</td></tr>").join("")+"</table>":"<p class=muted>هیچ LLM Profile ثبت نشده است.</p>";
- const partials=s.local.partialDownloads.length?"<p class=muted>دانلودهای قابل ادامه: "+s.local.partialDownloads.map(p=>esc(p.name)+" ("+bytes(p.bytes)+")").join("، ")+"</p>":"";q("locals").innerHTML=partials+(s.local.models.length?"<table><tr><th>مدل</th><th>حجم/نسخه</th><th>تنظیمات</th><th>عملیات</th></tr>"+s.local.models.map(m=>"<tr><td class=ltr>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✅":" ⏳"):"")+(m.partialBytes?"<br><small>دانلود ناقص: "+bytes(m.partialBytes)+"</small>":"")+"</td><td>"+bytes(m.bytes)+"<br>GGUF v"+esc(m.gguf?.version||"?")+"</td><td>ctx "+esc(m.contextLength)+"<br>threads "+esc(m.threads)+" / batch "+esc(m.batchSize)+"</td><td><button data-start="+esc(m.name)+">اجرا</button><button class=alt data-edit="+esc(m.name)+">تنظیم</button><button class=warn data-delete="+esc(m.name)+">حذف</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>");
+ const partials=s.local.partialDownloads.length?"<p class=muted>دانلودهای قابل ادامه: "+s.local.partialDownloads.map(p=>esc(p.name)+" ("+bytes(p.bytes)+")").join("، ")+"</p>":"";q("locals").innerHTML=partials+(s.local.models.length?"<table><tr><th>مدل</th><th>حجم/نسخه</th><th>IP و پورت</th><th>تنظیمات</th><th>عملیات</th></tr>"+s.local.models.map(m=>"<tr><td class=ltr>"+esc(m.name)+(s.local.runningName===m.name?(s.local.ready?" ✅":" ⏳"):"")+(m.partialBytes?"<br><small>دانلود ناقص: "+bytes(m.partialBytes)+"</small>":"")+"</td><td>"+bytes(m.bytes)+"<br>GGUF v"+esc(m.gguf?.version||"?")+"</td><td class=ltr>"+esc(m.host)+":"+esc(m.port)+"<br><small>"+esc(m.baseUrl)+"</small></td><td>ctx "+esc(m.contextLength)+"<br>threads "+esc(m.threads)+" / batch "+esc(m.batchSize)+"</td><td><button data-start="+esc(m.name)+">اجرا</button><button class=alt data-edit="+esc(m.name)+">تنظیم</button><button class=warn data-delete="+esc(m.name)+">حذف</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی نصب نشده است.</p>");
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=async()=>{try{show("install-status","در حال اجرای مدل…");await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});await refresh()}catch(e){show("install-status",e.message,false)}});document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>loadLocalForm(s.local.models.find(m=>m.name===b.dataset.edit)));document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=async()=>{if(!confirm("مدل "+b.dataset.delete+"، فایل GGUF و Profile مدیریت‌شده آن حذف شود؟"))return;try{await call("/local/models/"+encodeURIComponent(b.dataset.delete),{method:"DELETE"});show("install-status","مدل حذف شد.");await refresh()}catch(e){show("install-status",e.message,false)}});
  const activeTest=[...(s.jobs||[])].reverse().find(j=>j.kind==="profile-test"&&["queued","running","cancelling"].includes(j.status));if(activeTest&&!currentTestJob){currentTestJob=activeTest.id;renderTestJob(activeTest);const token=++testPollToken;pollTestJob(currentTestJob,token)}
 }
@@ -1979,7 +2038,7 @@ q("hf-files").onclick=()=>busy(q("hf-files"),async()=>{try{await discoverHfFiles
 q("hf-search-button").onclick=()=>busy(q("hf-search-button"),async()=>{try{show("hf-search-status","در حال جستجوی مدل‌های GGUF…");const d=await call("/local/hf-search",{method:"POST",body:JSON.stringify({query:q("hf-search").value,family:q("hf-family").value,parameterSize:q("hf-params").value,quantization:q("hf-quant").value,license:q("hf-license").value,language:q("hf-language").value,author:q("hf-author").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null,sort:q("hf-sort").value,limit:Number(q("hf-limit").value)})});hfSearchResults=d.results;show("hf-search-status",d.count+" مخزن مطابق مشخصات پیدا شد.");q("hf-search-results").innerHTML=d.results.length?"<table><tr><th>مخزن</th><th>معماری/مجوز</th><th>دانلود/پسند</th><th></th></tr>"+d.results.map((m,i)=>"<tr><td class=ltr>"+esc(m.id)+"</td><td>"+esc(m.architecture||m.parameterSize||"—")+"<br>"+esc(m.license||"نامشخص")+"</td><td>"+esc(m.downloads)+" / "+esc(m.likes)+"</td><td><button data-hf-repo="+i+">انتخاب و آماده‌سازی دانلود</button></td></tr>").join("")+"</table>":"<p class=muted>مدلی مطابق همه مشخصات پیدا نشد؛ برخی فیلترها را خالی کنید.</p>";document.querySelectorAll("[data-hf-repo]").forEach(b=>b.onclick=async()=>{const m=hfSearchResults[Number(b.dataset.hfRepo)];q("gguf-repo").value=m.id;q("gguf-url").value="";q("gguf-revision").value="main";q("gguf-name").value=m.id.split("/").pop().replace(/-gguf$/i,"").toLowerCase().replace(/[^a-z0-9._-]+/g,"-").slice(0,48);if(m.suggestedFile){q("gguf-file").value=m.suggestedFile.filename||"";q("gguf-sha").value=m.suggestedFile.sha256||""}if(innerWidth<981)q("install-card").scrollIntoView({behavior:"smooth",block:"start"});try{await discoverHfFiles()}catch(e){show("install-status",e.message,false)}})}catch(e){show("hf-search-status",e.message,false)}});
 q("install").onclick=async()=>{if(currentInstallJob)return;try{const payload={name:q("gguf-name").value,url:q("gguf-url").value,repo:q("gguf-repo").value,filename:q("gguf-file").value,revision:q("gguf-revision").value,sha256:q("gguf-sha").value,replace:q("gguf-replace").checked,...localOptions()};const d=await call("/local/install",{method:"POST",body:JSON.stringify(payload)});currentInstallJob=d.jobId;q("install").disabled=true;q("cancel-install").disabled=false;show("install-status","Job "+d.jobId+" شروع شد.");const timer=setInterval(async()=>{try{const j=await call("/jobs/"+d.jobId),detail=j.error||j.message||"";show("install-status",j.status+": "+detail+" "+(j.progress||0)+"%"+(j.bytesReceived?" — "+bytes(j.bytesReceived)+(j.bytesTotal?" / "+bytes(j.bytesTotal):""):""),!["failed","cancelled"].includes(j.status));if(["completed","failed","cancelled"].includes(j.status)){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;await refresh()}}catch(e){clearInterval(timer);currentInstallJob="";q("install").disabled=false;q("cancel-install").disabled=true;show("install-status",e.message,false)}},1500)}catch(e){show("install-status",e.message,false)}};
 q("cancel-install").onclick=async()=>{if(!currentInstallJob)return;try{await call("/jobs/"+currentInstallJob+"/cancel",{method:"POST"});show("install-status","در حال لغو امن؛ فایل ناقص برای ادامه بعدی حفظ می‌شود…")}catch(e){show("install-status",e.message,false)}};
-q("save-local-config").onclick=()=>busy(q("save-local-config"),async()=>{try{const name=q("gguf-name").value;if(!name)throw Error("ابتدا یک مدل نصب‌شده را از دکمه تنظیم انتخاب کنید");await call("/local/models/"+encodeURIComponent(name),{method:"PUT",body:JSON.stringify(localOptions())});show("install-status","تنظیمات ذخیره شد.");await refresh()}catch(e){show("install-status",e.message,false)}});
+q("save-local-config").onclick=()=>busy(q("save-local-config"),async()=>{try{const name=q("gguf-name").value;if(!name)throw Error("ابتدا یک مدل نصب‌شده را از دکمه تنظیم انتخاب کنید");const d=await call("/local/models/"+encodeURIComponent(name),{method:"PUT",body:JSON.stringify(localOptions())});show("install-status","تنظیمات ذخیره شد. Endpoint: "+d.baseUrl+(d.warning?" — هشدار: این آدرس فقط loopback نیست.":""),!d.warning);await refresh()}catch(e){show("install-status",e.message,false)}});
 q("stop-local").onclick=()=>busy(q("stop-local"),async()=>{try{await call("/local/stop",{method:"POST",body:"{}"});show("install-status","مدل متوقف شد.");await refresh()}catch(e){show("install-status",e.message,false)}});
 function endpointPayload(){return {name:q("ep-name").value,baseUrl:q("ep-url").value,model:q("ep-model").value,apiKey:q("ep-key").value,contextLength:Number(q("ep-context").value),nativeToolCalling:q("ep-tools").checked}}
 q("probe-endpoint").onclick=()=>busy(q("probe-endpoint"),async()=>{try{show("endpoint-status","در حال بررسی /models…");const d=await call("/local/probe-endpoint",{method:"POST",body:JSON.stringify(endpointPayload())});show("endpoint-status","endpoint سالم است؛ "+d.count+" مدل پیدا شد.");q("endpoint-models").innerHTML=d.models.length?"<p class=muted>"+d.models.map(esc).join("، ")+"</p>":"<p class=muted>پاسخ معتبر بود اما فهرست مدل خالی است.</p>"}catch(e){show("endpoint-status",e.message,false)}});

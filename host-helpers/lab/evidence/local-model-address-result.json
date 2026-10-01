@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "assertions": {
+    "tableReportsHostAndPort": true,
+    "addressFieldsRendered": true,
+    "defaultLoopbackAddress": true,
+    "portChangePersisted": true,
+    "profileEndpointFollowsAddress": true,
+    "providerConnectionEndpointFollowsAddress": true,
+    "credentialNeverResent": true,
+    "allInterfacesBindWarned": true,
+    "unownedAddressRejected": true,
+    "reservedPortRejected": true,
+    "rejectedChangeLeftConfigIntact": true,
+    "sessionKeyLeak": false
+  },
+  "endpoint": {
+    "host": "0.0.0.0",
+    "port": 41039,
+    "baseUrl": "http://127.0.0.1:41039/v1"
+  }
+}
