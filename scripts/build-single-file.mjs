@@ -188,10 +188,10 @@ namespace Arena {
 
   const fullPhp = `<?php
 /**
- * Arena AI Coding Agent — Single-File Standalone Distribution.
- * Version: 2.1.0
+ * Arena AI Coding Agent — Arena PHP Agent 3 Standalone Distribution.
+ * Version: 3.0.0
  *
- * Fully self-contained single-file agent with embedded SPA UI, SQLite database,
+ * Fully self-contained single-file agent with embedded SPA UI, SQLite WAL database,
  * multi-provider routing, local AI management, code sandbox, and terminal execution.
  *
  * Usage:
@@ -291,14 +291,14 @@ if __name__ == "__main__":
     init_db()
     port = int(os.getenv("PORT", "8788"))
     host = os.getenv("HOST", "0.0.0.0")
-    print(f"🚀 Arena Python Agent2 v{APP_VERSION} (Single-File Standalone)")
+    print(f"🚀 Arena Python Agent 3 v{APP_VERSION} (Single-File Standalone)")
     print(f"📡 Serving on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
 `;
 
   const fullPython = `"""
-Arena AI Coding Agent — Single-File Standalone Python Distribution.
-Version: 2.1.0
+Arena AI Coding Agent — Arena Python Agent 3 Standalone Distribution.
+Version: 3.0.0
 
 Fully self-contained single-file agent with embedded FastAPI backend, SQLite WAL database,
 multi-provider LLM routing, local AI runtime management, code execution sandbox,

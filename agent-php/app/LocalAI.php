@@ -454,36 +454,125 @@ final class LocalAI
         if (PHP_OS_FAMILY !== 'Linux') {
             throw new HttpError(400, 'Automatic runtime install is only supported on Linux. Install Ollama manually and set AGENT_OLLAMA_BIN.');
         }
-        $asset = $cpu['arch'] === 'arm64' ? 'ollama-linux-arm64.tgz' : 'ollama-linux-amd64.tgz';
-        $url = 'https://ollama.com/download/' . $asset;
+        $archTag = $cpu['arch'] === 'arm64' ? 'arm64' : 'amd64';
 
         $root = self::rootDir();
+        $binDir = self::binDir();
+        $modelsDir = self::modelsDir();
         Files::ensureDir($root);
-        Files::ensureDir(self::binDir());
-        Files::ensureDir(self::modelsDir());
+        Files::ensureDir($binDir);
+        Files::ensureDir($modelsDir);
 
-        $tgz = $root . '/' . $asset;
-        $log('Downloading ' . $url . ' …');
-        $proxy = Config::proxyConfig($url);
-        $dl = HttpClient::download($proxy['effectiveUrl'], $tgz, 1800, $proxy['proxyClient']);
-        if (empty($dl['ok'])) {
-            @unlink($tgz);
-            throw new HttpError(502, 'Download failed: ' . (string) ($dl['error'] ?? 'unknown error'));
+        // Discover release asset candidate URLs
+        $candidates = [];
+        try {
+            $gh = HttpClient::request('GET', 'https://api.github.com/repos/ollama/ollama/releases/latest', ['User-Agent: ArenaAgent/3.0'], null, 8);
+            if (!empty($gh['ok'])) {
+                $j = json_decode((string) ($gh['body'] ?? ''), true);
+                if (is_array($j) && !empty($j['assets']) && is_array($j['assets'])) {
+                    foreach ($j['assets'] as $asset) {
+                        $name = (string) ($asset['name'] ?? '');
+                        $durl = (string) ($asset['browser_download_url'] ?? '');
+                        if (str_contains($name, "linux-{$archTag}.tar.zst") || str_contains($name, "linux-{$archTag}.tgz") || str_contains($name, "linux-{$archTag}.tar.gz")) {
+                            $candidates[] = $durl;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $log('GitHub API probe skipped (' . $e->getMessage() . '), trying direct endpoints …');
         }
-        $log('Downloaded ' . Files::humanSize((int) (@filesize($tgz) ?: 0)) . ', extracting …');
 
-        $res = Terminal::rawCapture(['tar', '-xzf', $tgz, '-C', $root], $root, 900);
-        @unlink($tgz);
-        if ((int) $res['exitCode'] !== 0) {
-            throw new HttpError(500, 'Extraction failed: ' . trim((string) $res['stderr']));
+        $candidates[] = "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{$archTag}.tar.zst";
+        $candidates[] = "https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{$archTag}.tar.zst";
+        $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tar.zst";
+        $candidates[] = "https://ollama.com/download/ollama-linux-{$archTag}.tgz";
+
+        $unique = array_values(array_unique(array_filter($candidates)));
+        $downloadedFile = null;
+        $lastError = 'No download sources available';
+
+        foreach ($unique as $url) {
+            $log('Attempting download from: ' . $url);
+            $parsed = parse_url($url, PHP_URL_PATH);
+            $fname = $parsed ? basename($parsed) : "ollama-linux-{$archTag}.tar.zst";
+            $dest = $root . '/' . $fname;
+
+            // 1. Try curl CLI if available
+            $dlOk = false;
+            $res = Terminal::rawCapture(['curl', '-fSL', '--connect-timeout', '15', '-m', '300', '-A', 'Mozilla/5.0 (ArenaAgent/3.0)', '-o', $dest, $url], $root, 310);
+            if ((int) ($res['exitCode'] ?? -1) === 0 && file_exists($dest) && filesize($dest) > 1000) {
+                $dlOk = true;
+            }
+
+            // 2. Try wget CLI
+            if (!$dlOk) {
+                $res2 = Terminal::rawCapture(['wget', '-q', '-T', '15', '-t', '2', '-U', 'Mozilla/5.0 (ArenaAgent/3.0)', '-O', $dest, $url], $root, 310);
+                if ((int) ($res2['exitCode'] ?? -1) === 0 && file_exists($dest) && filesize($dest) > 1000) {
+                    $dlOk = true;
+                }
+            }
+
+            // 3. Try HttpClient with proxy
+            if (!$dlOk) {
+                $proxy = Config::proxyConfig($url);
+                $dl = HttpClient::download($proxy['effectiveUrl'], $dest, 1800, $proxy['proxyClient']);
+                if (!empty($dl['ok']) && file_exists($dest) && filesize($dest) > 1000) {
+                    $dlOk = true;
+                } else {
+                    $lastError = (string) ($dl['error'] ?? 'HTTP download failed');
+                }
+            }
+
+            if ($dlOk) {
+                $log('Downloaded ' . basename($dest) . ' (' . Files::humanSize((int) filesize($dest)) . '), extracting …');
+                $downloadedFile = $dest;
+                break;
+            } else {
+                $log('Candidate failed, trying next mirror …');
+                @unlink($dest);
+            }
         }
-        @chmod(self::binDir() . '/ollama', 0755);
 
+        if ($downloadedFile === null || !file_exists($downloadedFile)) {
+            throw new HttpError(502, 'Could not download Ollama runtime: ' . $lastError);
+        }
+
+        // Extract archive
+        $resExtract = Terminal::rawCapture(['tar', '-xf', $downloadedFile, '-C', $root], $root, 900);
+        @unlink($downloadedFile);
+
+        // Find extracted binary
+        $targetBin = $binDir . '/ollama';
+        if (!file_exists($targetBin)) {
+            $cand2 = $root . '/ollama';
+            if (file_exists($cand2)) {
+                @rename($cand2, $targetBin);
+            } else {
+                $found = glob($root . '/**/ollama');
+                if (!empty($found) && is_file($found[0])) {
+                    @rename($found[0], $targetBin);
+                }
+            }
+        }
+
+        if (!file_exists($targetBin)) {
+            $candRoot = $root . '/bin/ollama';
+            if (file_exists($candRoot)) {
+                $targetBin = $candRoot;
+            }
+        }
+
+        if (!file_exists($targetBin)) {
+            throw new HttpError(500, 'Extraction completed but binary not found in ' . $root);
+        }
+
+        @chmod($targetBin, 0755);
         $bin = self::binary();
         if ($bin === null) {
-            throw new HttpError(500, 'Ollama binary not found after extraction');
+            $bin = $targetBin;
         }
-        $log('Runtime installed at ' . $bin);
+        $log('Runtime installed successfully at ' . $bin);
         return ['installed' => true, 'binary' => $bin, 'skipped' => false];
     }
 

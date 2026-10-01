@@ -315,38 +315,68 @@ final class LocalAI
         }
 
         $cpu = self::readCpu();
-        if (!in_array($cpu['arch'], ['arm64', 'amd64'], true)) {
-            throw new HttpError(400,
-                "Automatic install is not available for CPU architecture '{$cpu['arch']}'. "
-                . 'Install Ollama manually and set AGENT_OLLAMA_BIN.');
-        }
-        $asset = $cpu['arch'] === 'arm64' ? 'ollama-linux-arm64.tgz' : 'ollama-linux-amd64.tgz';
-        $url = 'https://ollama.com/download/' . $asset;
+        $archTag = $cpu['arch'] === 'arm64' ? 'arm64' : 'amd64';
 
         $root = self::rootDir();
+        $binDir = self::binDir();
+        $modelsDir = self::modelsDir();
         self::ensureDir($root);
-        self::ensureDir(self::binDir());
-        self::ensureDir(self::modelsDir());
+        self::ensureDir($binDir);
+        self::ensureDir($modelsDir);
 
-        $tgz = $root . '/' . $asset;
-        self::download($url, $tgz, 1800);
+        $candidates = [
+            "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{$archTag}.tar.zst",
+            "https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{$archTag}.tar.zst",
+            "https://ollama.com/download/ollama-linux-{$archTag}.tar.zst",
+            "https://ollama.com/download/ollama-linux-{$archTag}.tgz",
+        ];
 
-        $res = self::exec(['tar', '-xzf', $tgz, '-C', $root], $root, 900);
-        @unlink($tgz);
+        $downloadedFile = null;
+        foreach ($candidates as $url) {
+            $fname = "ollama-linux-{$archTag}.tar.zst";
+            $dest = $root . '/' . $fname;
+            $res = self::exec(['curl', '-fSL', '--connect-timeout', '15', '-m', '300', '-A', 'Mozilla/5.0 (ArenaAgent/3.0)', '-o', $dest, $url], $root, 310);
+            if ($res['exitCode'] === 0 && file_exists($dest) && filesize($dest) > 1000) {
+                $downloadedFile = $dest;
+                break;
+            }
+            @unlink($dest);
+        }
+
+        if ($downloadedFile === null) {
+            throw new HttpError(502, 'Could not download Ollama runtime archive.');
+        }
+
+        $res = self::exec(['tar', '-xf', $downloadedFile, '-C', $root], $root, 900);
+        @unlink($downloadedFile);
         if ($res['exitCode'] !== 0) {
             throw new HttpError(500, 'Extraction failed: ' . trim($res['stderr']));
         }
 
         // Official tarball may unpack as bin/ollama or just ollama.
-        $candidates = [
-            self::binDir() . '/ollama',
+        $candBins = [
+            $binDir . '/ollama',
             $root . '/bin/ollama',
             $root . '/ollama',
-            $root . '/bin/ollama-linux-' . $cpu['arch'],
         ];
         $bin = null;
-        foreach ($candidates as $c) {
+        foreach ($candBins as $c) {
             if (is_file($c)) {
+                $bin = $c;
+                if ($c !== $binDir . '/ollama') {
+                    @rename($c, $binDir . '/ollama');
+                    $bin = $binDir . '/ollama';
+                }
+                break;
+            }
+        }
+        if ($bin === null) {
+            throw new HttpError(500, 'Installed Ollama binary was not found after extraction.');
+        }
+        @chmod($bin, 0755);
+
+        return ['installed' => true, 'binary' => $bin, 'skipped' => false];
+    }
                 @chmod($c, 0755);
                 // Normalise into binDir.
                 $target = self::binDir() . '/ollama';

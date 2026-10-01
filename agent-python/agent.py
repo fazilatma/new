@@ -1,6 +1,6 @@
 """
-Arena AI Coding Agent — Single-File Standalone Python Distribution.
-Version: 2.1.0
+Arena AI Coding Agent — Arena Python Agent 3 Standalone Distribution.
+Version: 3.0.0
 
 Fully self-contained single-file agent with embedded FastAPI backend, SQLite WAL database,
 multi-provider LLM routing, local AI runtime management, code execution sandbox,
@@ -127,7 +127,7 @@ ENV_FILE = DATA_DIR / "environment.json"
 MASTER_KEY_FILE = DATA_DIR / "master.key"
 
 # Version
-APP_VERSION = "2.1.0"
+APP_VERSION = "3.0.0"
 
 # Secret Encryption (Fernet / AES)
 def get_or_create_master_key() -> bytes:
@@ -4067,42 +4067,158 @@ def install_runtime(log_fn: Optional[Callable[[str], None]] = None) -> Dict[str,
             log_fn(msg)
         logger.info(msg)
 
-    arch = platform.machine().lower()
-    if arch in ("x86_64", "amd64"):
-        asset = "ollama-linux-amd64.tgz"
-    elif arch in ("aarch64", "arm64"):
-        asset = "ollama-linux-arm64.tgz"
+    raw_arch = platform.machine().lower()
+    if raw_arch in ("x86_64", "amd64"):
+        arch_tag = "amd64"
+    elif raw_arch in ("aarch64", "arm64"):
+        arch_tag = "arm64"
     else:
-        raise RuntimeError(f"Unsupported architecture for direct Ollama install: {arch}")
+        raise RuntimeError(f"Unsupported architecture for direct Ollama install: {raw_arch}")
 
-    url = f"https://github.com/ollama/ollama/releases/latest/download/{asset}"
-    _log(f"Downloading Ollama runtime for {arch} from {url}...")
+    rd = root_dir()
+    bd = bin_dir()
+    md = models_dir()
+    rd.mkdir(parents=True, exist_ok=True)
+    bd.mkdir(parents=True, exist_ok=True)
+    md.mkdir(parents=True, exist_ok=True)
 
-    tar_path = root_dir() / asset
+    # 1. Discover candidates from GitHub latest release or fallbacks
+    candidates: List[str] = []
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=120) as resp, open(tar_path, "wb") as out:
-            shutil.copyfileobj(resp, out)
-        _log("Unpacking binary archive into local directory...")
-        with tarfile.open(tar_path, "r:*") as tar:
-            tar.extractall(path=str(root_dir()))
+        gh_req = urllib.request.Request(
+            "https://api.github.com/repos/ollama/ollama/releases/latest",
+            headers={"User-Agent": "ArenaAgent/3.0"}
+        )
+        with urllib.request.urlopen(gh_req, timeout=8) as resp:
+            rel_data = json.loads(resp.read().decode("utf-8"))
+            for asset in rel_data.get("assets", []):
+                name = asset.get("name", "")
+                durl = asset.get("browser_download_url", "")
+                if f"linux-{arch_tag}.tar.zst" in name or f"linux-{arch_tag}.tgz" in name or f"linux-{arch_tag}.tar.gz" in name:
+                    candidates.append(durl)
+    except Exception as e:
+        _log(f"GitHub release API probe skipped ({e}), using direct release endpoints...")
+
+    # Fallback standard endpoints
+    candidates.extend([
+        f"https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch_tag}.tar.zst",
+        f"https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-{arch_tag}.tar.zst",
+        f"https://ollama.com/download/ollama-linux-{arch_tag}.tar.zst",
+        f"https://ollama.com/download/ollama-linux-{arch_tag}.tgz",
+    ])
+
+    # De-duplicate while preserving order
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            unique_candidates.append(c)
+
+    downloaded_file: Optional[Path] = None
+    last_error = "No download candidates succeeded"
+
+    for url in unique_candidates:
+        _log(f"Downloading Ollama runtime for {arch_tag} from {url}...")
+        filename = url.split("?")[0].split("/")[-1]
+        if not filename or filename == url:
+            filename = f"ollama-linux-{arch_tag}.tar.zst"
+        dest_path = rd / filename
+        try:
+            dl_ok = False
+            # Try curl CLI first (handles SSL & redirects robustly)
+            if shutil.which("curl"):
+                res = subprocess.run(
+                    ["curl", "-fSL", "--connect-timeout", "15", "-m", "300", "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url],
+                    capture_output=True, text=True
+                )
+                if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
+                    dl_ok = True
+            if not dl_ok and shutil.which("wget"):
+                res = subprocess.run(
+                    ["wget", "-q", "-T", "15", "-t", "2", "-U", "Mozilla/5.0 (ArenaAgent/3.0)", "-O", str(dest_path), url],
+                    capture_output=True, text=True
+                )
+                if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
+                    dl_ok = True
+            if not dl_ok:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ArenaAgent/3.0)"})
+                with urllib.request.urlopen(req, timeout=180) as resp, open(dest_path, "wb") as out:
+                    shutil.copyfileobj(resp, out)
+                if dest_path.is_file() and dest_path.stat().st_size > 1000:
+                    dl_ok = True
+
+            if dl_ok:
+                _log(f"Downloaded {dest_path.name} ({round(dest_path.stat().st_size / (1024*1024), 2)} MB).")
+                downloaded_file = dest_path
+                break
+        except Exception as dl_err:
+            last_error = f"{url}: {dl_err}"
+            _log(f"Download candidate failed ({dl_err}), trying next candidate...")
+            if dest_path.is_file():
+                dest_path.unlink(missing_ok=True)
+
+    if not downloaded_file or not downloaded_file.is_file():
+        raise RuntimeError(f"Could not download Ollama runtime: {last_error}")
+
+    try:
+        _log(f"Extracting {downloaded_file.name} into {rd}...")
+        extracted = False
+        fname = downloaded_file.name
+
+        # Method A: system tar
+        if shutil.which("tar"):
+            tar_cmd = ["tar", "-xf", str(downloaded_file), "-C", str(rd)]
+            res = subprocess.run(tar_cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                extracted = True
+
+        # Method B: python tarfile (for .tgz / .tar.gz)
+        if not extracted and (fname.endswith(".tgz") or fname.endswith(".tar.gz")):
+            try:
+                with tarfile.open(downloaded_file, "r:*") as tar:
+                    tar.extractall(path=str(rd))
+                extracted = True
+            except Exception as e:
+                _log(f"tarfile extraction failed: {e}")
+
+        # Method C: zstandard if python package available
+        if not extracted and fname.endswith(".zst"):
+            try:
+                import zstandard as zstd
+                dctx = zstd.ZstdDecompressor()
+                decompressed_tar = rd / "archive.tar"
+                with open(downloaded_file, "rb") as ifh, open(decompressed_tar, "wb") as ofh:
+                    dctx.copy_stream(ifh, ofh)
+                with tarfile.open(decompressed_tar, "r:*") as tar:
+                    tar.extractall(path=str(rd))
+                decompressed_tar.unlink(missing_ok=True)
+                extracted = True
+            except Exception as e:
+                _log(f"zstandard decompression failed: {e}")
 
         # Look for extracted binary
-        cand = root_dir() / "bin" / "ollama"
-        if not cand.is_file():
-            cand2 = root_dir() / "ollama"
-            if cand2.is_file():
-                cand.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(cand2), str(cand))
+        target_bin = bd / "ollama"
+        if not target_bin.is_file():
+            # Search anywhere under rd
+            for candidate in rd.rglob("ollama"):
+                if candidate.is_file() and not candidate.is_symlink() and candidate != target_bin:
+                    target_bin.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(candidate), str(target_bin))
+                    break
 
-        if cand.is_file():
-            cand.chmod(0o755)
-            _log("✓ Ollama runtime installed successfully.")
-            return {"ok": True, "binary": str(cand)}
-        raise RuntimeError("Extracted archive did not contain an 'ollama' binary.")
+        if target_bin.is_file():
+            try:
+                target_bin.chmod(0o755)
+            except Exception:
+                pass
+            _log(f"✓ Ollama runtime installed successfully at {target_bin}")
+            return {"ok": True, "binary": str(target_bin)}
+
+        raise RuntimeError(f"Extraction completed but 'ollama' binary was not found under {rd}")
     finally:
-        if tar_path.is_file():
-            tar_path.unlink()
+        if downloaded_file and downloaded_file.is_file():
+            downloaded_file.unlink(missing_ok=True)
 
 
 def start_server(env_overrides: Optional[Dict[str, str]] = None, log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
@@ -8553,7 +8669,7 @@ if __name__ == "__main__":
     init_db()
     port = int(os.getenv("PORT", "8788"))
     host = os.getenv("HOST", "0.0.0.0")
-    print(f"🚀 Arena Python Agent2 v{APP_VERSION} (Single-File Standalone)")
+    print(f"🚀 Arena Python Agent 3 v{APP_VERSION} (Single-File Standalone)")
     print(f"📡 Serving on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
 
