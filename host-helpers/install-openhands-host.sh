@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.6.0"
+SCRIPT_VERSION="3.0.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -31,6 +31,18 @@ FOLLOW_LOG=false
 ASSUME_YES=false
 PURGE_DATA=false
 SKIP_SELF_UPDATE=false
+MANAGER_FILE=""
+MANAGER_IMPORT_SECRETS=false
+MANAGER_OVERWRITE=false
+MANAGER_NAME=""
+MANAGER_MODEL_URL=""
+MANAGER_SHA256=""
+MANAGER_CONTEXT_LENGTH="8192"
+MANAGER_BASE_URL=""
+MANAGER_MODEL=""
+MANAGER_API_KEY_FILE=""
+MANAGER_PROXY_MODE=""
+MANAGER_PROXY_URL=""
 
 log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
 warn() { printf '[%s] WARNING: %s\n' "$SCRIPT_NAME" "$*" >&2; }
@@ -57,6 +69,15 @@ Actions:
   pair             Create a five-minute browser pairing code.
   web-check        Check the frontend, ingress, and real Agent Server backend.
   doctor           Run host, runtime, resource, configuration, and health checks.
+  models           Print the authenticated browser model-manager URL.
+  providers-export Export provider/model JSON without API keys (--file PATH).
+  providers-import Import the compatible provider JSON format (--file PATH).
+  test-models      Run a minimal bulk test against every LLM Profile.
+  proxy-config     Configure direct/fallback/proxy-only model routing.
+  local-model-install  Install a GGUF model with managed llama.cpp.
+  local-model-start    Start an installed GGUF model (--name NAME).
+  local-model-stop     Stop the active managed GGUF model.
+  local-endpoint-add   Register an existing OpenAI-compatible local endpoint.
   rotate-key       Generate a new API key and restart if currently running.
   self-update      Update only this helper from its canonical URL.
   uninstall        Remove runtimes; data/config remain unless --purge-data is used.
@@ -76,6 +97,18 @@ Options:
   --backend-port PORT     Internal agent-server port (default: 18810).
   --automation-port PORT  Internal automation port (default: 18811).
   --frontend-port PORT    Internal static frontend port (default: 13810).
+  --file PATH             JSON import/export file path.
+  --import-secrets        Import fresh API keys from the local JSON file.
+  --overwrite             Update same-name profiles except protected inline keys.
+  --name NAME             Local model/endpoint name.
+  --model-url URL         HTTPS GGUF URL from Hugging Face or GitHub.
+  --sha256 HEX            Optional expected GGUF SHA-256.
+  --context-length N      Local model context length (default: 8192).
+  --base-url URL          Existing OpenAI-compatible local endpoint URL.
+  --model MODEL           Model ID for an existing local endpoint.
+  --api-key-file PATH     Owner-readable file containing an endpoint API key.
+  --proxy-mode MODE       direct, direct-fallback, or proxy-only.
+  --proxy-url TEMPLATE    HTTPS URL template containing {url}.
   --no-start              Install/update/rotate without starting afterward.
   --follow                Follow output with the logs action.
   --yes                   Confirm non-interactive uninstall.
@@ -88,6 +121,8 @@ After the first installation, use only the short installed command:
   openhands-host restart
   openhands-host logs --follow
   openhands-host pair
+  openhands-host models
+  openhands-host test-models
   openhands-host access-info
   openhands-host doctor
 
@@ -100,7 +135,7 @@ EOF
 
 while (($#)); do
     case "$1" in
-        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|rotate-key|self-update|uninstall|helper-version|_serve)
+        install|update|start|stop|restart|run|status|logs|access-info|pair|web-check|doctor|models|providers-export|providers-import|test-models|proxy-config|local-model-install|local-model-start|local-model-stop|local-endpoint-add|rotate-key|self-update|uninstall|helper-version|_serve)
             [[ "$ACTION_SET" == false ]] || die "More than one action was supplied: $1"
             ACTION="$1"; ACTION_SET=true; shift ;;
         --home)
@@ -142,6 +177,38 @@ while (($#)); do
         --frontend-port)
             (($# >= 2)) || die '--frontend-port requires a value.'
             CLI_FRONTEND_PORT="$2"; shift 2 ;;
+        --file)
+            (($# >= 2)) || die '--file requires a path.'
+            MANAGER_FILE="$2"; shift 2 ;;
+        --import-secrets) MANAGER_IMPORT_SECRETS=true; shift ;;
+        --overwrite) MANAGER_OVERWRITE=true; shift ;;
+        --name)
+            (($# >= 2)) || die '--name requires a value.'
+            MANAGER_NAME="$2"; shift 2 ;;
+        --model-url)
+            (($# >= 2)) || die '--model-url requires a URL.'
+            MANAGER_MODEL_URL="$2"; shift 2 ;;
+        --sha256)
+            (($# >= 2)) || die '--sha256 requires a value.'
+            MANAGER_SHA256="$2"; shift 2 ;;
+        --context-length)
+            (($# >= 2)) || die '--context-length requires a value.'
+            MANAGER_CONTEXT_LENGTH="$2"; shift 2 ;;
+        --base-url)
+            (($# >= 2)) || die '--base-url requires a URL.'
+            MANAGER_BASE_URL="$2"; shift 2 ;;
+        --model)
+            (($# >= 2)) || die '--model requires a value.'
+            MANAGER_MODEL="$2"; shift 2 ;;
+        --api-key-file)
+            (($# >= 2)) || die '--api-key-file requires a path.'
+            MANAGER_API_KEY_FILE="$2"; shift 2 ;;
+        --proxy-mode)
+            (($# >= 2)) || die '--proxy-mode requires a value.'
+            MANAGER_PROXY_MODE="$2"; shift 2 ;;
+        --proxy-url)
+            (($# >= 2)) || die '--proxy-url requires a template.'
+            MANAGER_PROXY_URL="$2"; shift 2 ;;
         --no-start) NO_START=true; shift ;;
         --follow) FOLLOW_LOG=true; shift ;;
         --yes) ASSUME_YES=true; shift ;;
@@ -215,6 +282,10 @@ PAIR_FILE="$STATE_DIR/browser-pair.env"
 START_LOCK_DIR="$STATE_DIR/start.lock"
 GATEWAY_SCRIPT="$APP_ROOT/prefix-gateway.mjs"
 PROFILE_SEED_SCRIPT="$APP_ROOT/seed-llm-profiles.mjs"
+MODEL_MANAGER_SCRIPT="$APP_ROOT/model-manager.mjs"
+PROFILE_TESTER_SCRIPT="$APP_ROOT/profile-tester.py"
+MODEL_MANAGER_CONFIG_FILE="$CONFIG_DIR/model-manager.json"
+MODEL_MANAGER_DATA_DIR="$DATA_DIR/model-manager"
 UV_BIN="$TOOLS_DIR/uv"
 UVX_BIN="$TOOLS_DIR/uvx"
 AGENT_BIN="$NPM_ROOT/node_modules/.bin/agent-canvas"
@@ -231,6 +302,8 @@ UPSTREAM_PORT="18812"
 BACKEND_PORT="18810"
 AUTOMATION_PORT="18811"
 FRONTEND_PORT="13810"
+MODEL_MANAGER_PORT="18819"
+LOCAL_MODEL_PORT="18820"
 NODE_INSTALLED_VERSION=""
 
 # Only helper-generated, account-private configuration is sourced.
@@ -269,15 +342,17 @@ BASE_PATH="$(normalize_base_path "$BASE_PATH")"
 
 validate_config() {
     local i j
-    local -a labels=('gateway' 'canvas-ingress' 'agent-server' 'automation' 'frontend' 'editor')
+    local -a labels=('gateway' 'canvas-ingress' 'agent-server' 'automation' 'frontend' 'editor' 'model-manager' 'local-model')
     local -a ports
     validate_port 'Gateway port' "$PORT"
     validate_port 'Canvas ingress port' "$UPSTREAM_PORT"
     validate_port 'Agent-server port' "$BACKEND_PORT"
     validate_port 'Automation port' "$AUTOMATION_PORT"
     validate_port 'Frontend port' "$FRONTEND_PORT"
+    validate_port 'Model manager port' "$MODEL_MANAGER_PORT"
+    validate_port 'Local model port' "$LOCAL_MODEL_PORT"
     ((BACKEND_PORT + 1000 <= 65535)) || die 'The agent-server port is too high for its editor sidecar port.'
-    ports=("$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))")
+    ports=("$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))" "$MODEL_MANAGER_PORT" "$LOCAL_MODEL_PORT")
 
     for ((i = 0; i < ${#ports[@]}; i++)); do
         for ((j = i + 1; j < ${#ports[@]}; j++)); do
@@ -304,11 +379,12 @@ prepare_dirs() {
         "$TOOLS_DIR" \
         "$DATA_DIR" \
         "$CANVAS_STATE_DIR" \
+        "$MODEL_MANAGER_DATA_DIR" \
         "$CACHE_DIR" \
         "$CONFIG_DIR" \
         "$STATE_DIR" \
         "$WORKSPACE"
-    chmod 700 "$APP_ROOT" "$DATA_DIR" "$CACHE_DIR" "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null || true
+    chmod 700 "$APP_ROOT" "$DATA_DIR" "$MODEL_MANAGER_DATA_DIR" "$CACHE_DIR" "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null || true
 }
 
 write_gateway() {
@@ -323,6 +399,7 @@ import net from "node:net";
 const listenHost = process.env.OH_GATEWAY_HOST || "0.0.0.0";
 const listenPort = Number(process.env.OH_GATEWAY_PORT);
 const upstreamPort = Number(process.env.OH_GATEWAY_UPSTREAM_PORT);
+const managerPort = Number(process.env.OH_GATEWAY_MODEL_MANAGER_PORT);
 const pairFile = process.env.OH_GATEWAY_PAIR_FILE || "";
 const secretsFile = process.env.OH_GATEWAY_SECRETS_FILE || "";
 const rawBasePath = process.env.OH_GATEWAY_BASE_PATH || "/open";
@@ -331,8 +408,8 @@ const publicPairPath = `${basePath === "/" ? "" : basePath}/_openhands/pair`;
 const publicPairPagePath = `${basePath === "/" ? "" : basePath}/pair`;
 const pairPaths = new Set([publicPairPath, publicPairPagePath, "/_openhands/pair", "/pair"]);
 
-if (!Number.isInteger(listenPort) || !Number.isInteger(upstreamPort)) {
-  console.error("Gateway ports must be integers.");
+if (!Number.isInteger(listenPort) || !Number.isInteger(upstreamPort) || !Number.isInteger(managerPort)) {
+  console.error("Gateway and model-manager ports must be integers.");
   process.exit(2);
 }
 
@@ -401,6 +478,34 @@ function requestPath(rawUrl = "/") {
 
 function isPairRequest(rawUrl) {
   return pairPaths.has(requestPath(rawUrl));
+}
+
+function pathWithoutBase(rawUrl) {
+  const queryIndex = rawUrl.indexOf("?");
+  const pathname = queryIndex === -1 ? rawUrl : rawUrl.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : rawUrl.slice(queryIndex);
+  if (basePath !== "/" && (pathname === basePath || pathname.startsWith(`${basePath}/`))) {
+    return `${pathname.slice(basePath.length) || "/"}${query}`;
+  }
+  return `${pathname}${query}`;
+}
+
+function isModelManagerRequest(rawUrl) {
+  const pathname = requestPath(pathWithoutBase(rawUrl));
+  return pathname === "/models" || pathname === "/models/" || pathname.startsWith("/_openhands/models-api/") || pathname === "/_openhands/models-api";
+}
+
+function proxyModelManager(req, res) {
+  const headers = { ...req.headers, "accept-encoding": "identity", host: `127.0.0.1:${managerPort}` };
+  const managerReq = http.request({ hostname: "127.0.0.1", port: managerPort, method: req.method, path: pathWithoutBase(req.url || "/"), headers }, (managerRes) => {
+    res.writeHead(managerRes.statusCode || 502, managerRes.statusMessage, managerRes.headers);
+    managerRes.pipe(res);
+  });
+  managerReq.on("error", (error) => {
+    if (!res.headersSent) res.writeHead(502, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    res.end(JSON.stringify({ error: `Model manager is unavailable: ${error.message}` }));
+  });
+  req.pipe(managerReq);
 }
 
 function pairingHeaders(contentType) {
@@ -514,6 +619,10 @@ function handlePairRequest(req, res) {
 }
 
 function proxyHttp(req, res) {
+  if (isModelManagerRequest(req.url || "/")) {
+    proxyModelManager(req, res);
+    return;
+  }
   if (isPairRequest(req.url)) {
     handlePairRequest(req, res);
     return;
@@ -623,10 +732,11 @@ write_profile_seed() {
 #!/usr/bin/env node
 
 const backendPort = Number(process.env.OH_PROFILE_SEED_BACKEND_PORT);
+const modelManagerPort = Number(process.env.OH_PROFILE_SEED_MODEL_MANAGER_PORT || "18819");
 const sessionKey = process.env.LOCAL_BACKEND_API_KEY || "";
 const backend = `http://127.0.0.1:${backendPort}`;
 
-if (!Number.isInteger(backendPort) || !sessionKey) {
+if (!Number.isInteger(backendPort) || !Number.isInteger(modelManagerPort) || !sessionKey) {
   console.error("[openhands-profile-seed] Backend port or session key is missing.");
   process.exit(2);
 }
@@ -685,7 +795,7 @@ for (const profile of profiles) {
   const body = {
     llm: {
       model: profile.model,
-      base_url: "https://openrouter.ai/api/v1",
+      base_url: `http://127.0.0.1:${modelManagerPort}/routes/openrouter/api/v1`,
       max_input_tokens: profile.maxInput,
       max_output_tokens: profile.maxOutput,
       native_tool_calling: true,
@@ -722,6 +832,23 @@ write_wrapper() {
     chmod 700 "$WRAPPER"
 }
 
+install_companion() {
+    local filename="$1" destination="$2" source_path="" source_dir="" candidate="" temp=""
+    source_path="${BASH_SOURCE[0]:-}"
+    if [[ "$source_path" != */* ]]; then source_path="$(command -v -- "$source_path" 2>/dev/null || printf '%s' "$source_path")"; fi
+    source_dir="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd -P || true)"
+    candidate="$source_dir/$filename"
+    if [[ -r "$candidate" ]]; then
+        cp "$candidate" "$destination"
+    elif [[ ! -s "$destination" ]]; then
+        temp="$destination.download.$$"
+        secure_curl -o "$temp" "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/$filename"
+        mv -f "$temp" "$destination"
+    fi
+    [[ -s "$destination" ]] || die "OpenHands companion file is missing: $filename"
+    chmod 700 "$destination"
+}
+
 persist_helper() {
     local source_path="${BASH_SOURCE[0]:-}" source_real="" helper_real=""
     prepare_dirs
@@ -740,6 +867,8 @@ persist_helper() {
     write_wrapper
     write_gateway
     write_profile_seed
+    install_companion 'openhands-model-manager.mjs' "$MODEL_MANAGER_SCRIPT"
+    install_companion 'openhands-profile-tester.py' "$PROFILE_TESTER_SCRIPT"
 }
 
 save_config() {
@@ -758,6 +887,8 @@ save_config() {
         printf 'BACKEND_PORT=%q\n' "$BACKEND_PORT"
         printf 'AUTOMATION_PORT=%q\n' "$AUTOMATION_PORT"
         printf 'FRONTEND_PORT=%q\n' "$FRONTEND_PORT"
+        printf 'MODEL_MANAGER_PORT=%q\n' "$MODEL_MANAGER_PORT"
+        printf 'LOCAL_MODEL_PORT=%q\n' "$LOCAL_MODEL_PORT"
         printf 'NODE_INSTALLED_VERSION=%q\n' "$NODE_INSTALLED_VERSION"
     } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
@@ -1224,6 +1355,7 @@ port_is_open() {
 START_LOCK_HELD=false
 SUPERVISED_AGENT_PID=""
 SUPERVISED_GATEWAY_PID=""
+SUPERVISED_MODEL_MANAGER_PID=""
 
 startup_lock_owner_is_live() {
     local pid="" saved_token="" live_token="" uid_line=""
@@ -1303,7 +1435,7 @@ pid_is_canvas_runtime() {
     cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
     [[ -n "$cmdline" ]] || return 1
     case "$cmdline" in
-        *install-openhands-host.sh*|*"$HELPER_COPY"*|*"$WRAPPER"*|*"$GATEWAY_SCRIPT"*|*"$NPM_ROOT"*agent-canvas*|*"$TOOLS_DIR/uvx"*|*"$APP_ROOT/python"*openhands*|*"$APP_ROOT/uv-tools"*openhands*|*"$CACHE_DIR/uv"*openhands*|*"$CANVAS_STATE_DIR"*|*openhands-agent-server*|*openhands.automation*|*openvscode-server*) ;;
+        *install-openhands-host.sh*|*"$HELPER_COPY"*|*"$WRAPPER"*|*"$GATEWAY_SCRIPT"*|*"$MODEL_MANAGER_SCRIPT"*|*"$TOOLS_DIR/llama.cpp"*llama-server*|*"$NPM_ROOT"*agent-canvas*|*"$TOOLS_DIR/uvx"*|*"$APP_ROOT/python"*openhands*|*"$APP_ROOT/uv-tools"*openhands*|*"$CACHE_DIR/uv"*openhands*|*"$CANVAS_STATE_DIR"*|*openhands-agent-server*|*openhands.automation*|*openvscode-server*) ;;
         *) return 1 ;;
     esac
     pid_is_self_or_ancestor "$pid" && return 1
@@ -1362,7 +1494,7 @@ cleanup_orphaned_runtime() {
 
 assert_runtime_ports_free() {
     local label port
-    for label in gateway canvas-ingress agent-server automation frontend editor; do
+    for label in gateway canvas-ingress agent-server automation frontend editor model-manager local-model; do
         case "$label" in
             gateway) port="$PORT" ;;
             canvas-ingress) port="$UPSTREAM_PORT" ;;
@@ -1370,6 +1502,8 @@ assert_runtime_ports_free() {
             automation) port="$AUTOMATION_PORT" ;;
             frontend) port="$FRONTEND_PORT" ;;
             editor) port="$((BACKEND_PORT + 1000))" ;;
+            model-manager) port="$MODEL_MANAGER_PORT" ;;
+            local-model) port="$LOCAL_MODEL_PORT" ;;
         esac
         if port_is_open "$port"; then
             die "$label port $port is already in use by an unrecognized process. Choose different helper ports or stop that process."
@@ -1383,19 +1517,19 @@ supervisor_cleanup() {
     trap - EXIT INT TERM HUP
     set +e
     rm -f "$READY_FILE" "$PAIR_FILE"
-    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_MODEL_MANAGER_PID" "$SUPERVISED_AGENT_PID"; do
         [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null || true
     done
     while ((waited < 12)); do
         local alive=false
-        for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+        for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_MODEL_MANAGER_PID" "$SUPERVISED_AGENT_PID"; do
             if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then alive=true; fi
         done
         [[ "$alive" == true ]] || break
         sleep 1
         waited=$((waited + 1))
     done
-    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_AGENT_PID"; do
+    for pid in "$SUPERVISED_GATEWAY_PID" "$SUPERVISED_MODEL_MANAGER_PID" "$SUPERVISED_AGENT_PID"; do
         if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
             warn "Force-stopping supervised OpenHands process $pid"
             kill -KILL "$pid" 2>/dev/null || true
@@ -1411,6 +1545,7 @@ supervisor_cleanup() {
 seed_llm_profiles() {
     write_profile_seed
     if ! OH_PROFILE_SEED_BACKEND_PORT="$BACKEND_PORT" \
+        OH_PROFILE_SEED_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT" \
         LOCAL_BACKEND_API_KEY="$LOCAL_BACKEND_API_KEY" \
         "$NODE_HOME/bin/node" "$PROFILE_SEED_SCRIPT"; then
         warn 'One or more OpenRouter profile templates could not be seeded; startup will continue.'
@@ -1458,9 +1593,37 @@ serve_agent() {
     log "Agent Server backend is ready and accepts the stored API key on 127.0.0.1:$BACKEND_PORT"
     seed_llm_profiles
 
+    log "Starting the authenticated model manager on 127.0.0.1:$MODEL_MANAGER_PORT"
+    OH_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT" \
+        OH_LOCAL_MODEL_PORT="$LOCAL_MODEL_PORT" \
+        OH_MODEL_MANAGER_BACKEND_PORT="$BACKEND_PORT" \
+        OH_GATEWAY_BASE_PATH="$BASE_PATH" \
+        OH_MODEL_MANAGER_CONFIG_FILE="$MODEL_MANAGER_CONFIG_FILE" \
+        OH_MODEL_MANAGER_DATA_DIR="$MODEL_MANAGER_DATA_DIR" \
+        OH_MODEL_MANAGER_TOOLS_DIR="$TOOLS_DIR" \
+        OH_MODEL_MANAGER_UV_BIN="$UV_BIN" \
+        OH_MODEL_MANAGER_TESTER="$PROFILE_TESTER_SCRIPT" \
+        OH_MODEL_MANAGER_WORKSPACE="$WORKSPACE" \
+        OH_PERSISTENCE_DIR="$DATA_DIR" \
+        LOCAL_BACKEND_API_KEY="$LOCAL_BACKEND_API_KEY" \
+        OH_SECRET_KEY="$OH_SECRET_KEY" \
+        "$NODE_HOME/bin/node" "$MODEL_MANAGER_SCRIPT" &
+    SUPERVISED_MODEL_MANAGER_PID=$!
+    waited=0
+    while ! curl -fsS --max-time 3 "http://127.0.0.1:$MODEL_MANAGER_PORT/health" >/dev/null 2>&1; do
+        if ! kill -0 "$SUPERVISED_MODEL_MANAGER_PID" 2>/dev/null; then
+            if wait "$SUPERVISED_MODEL_MANAGER_PID"; then child_status=0; else child_status=$?; fi
+            die "OpenHands model manager exited during startup (code $child_status)."
+        fi
+        ((waited < 30)) || die 'OpenHands model manager did not become ready in 30 seconds.'
+        sleep 1
+        waited=$((waited + 1))
+    done
+
     export OH_GATEWAY_HOST="$LISTEN_HOST"
     export OH_GATEWAY_PORT="$PORT"
     export OH_GATEWAY_UPSTREAM_PORT="$UPSTREAM_PORT"
+    export OH_GATEWAY_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT"
     export OH_GATEWAY_BASE_PATH="$BASE_PATH"
     export OH_GATEWAY_PAIR_FILE="$PAIR_FILE"
     export OH_GATEWAY_SECRETS_FILE="$SECRETS_FILE"
@@ -1490,7 +1653,7 @@ serve_agent() {
     chmod 600 "$READY_FILE" 2>/dev/null || true
     log "Agent Canvas is ready: $(browser_url)"
 
-    while kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null && kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; do
+    while kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null && kill -0 "$SUPERVISED_MODEL_MANAGER_PID" 2>/dev/null && kill -0 "$SUPERVISED_GATEWAY_PID" 2>/dev/null; do
         sleep 5
         if agent_server_is_ready; then
             health_failures=0
@@ -1506,6 +1669,9 @@ serve_agent() {
     if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
         if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
         warn "Agent Canvas upstream exited (code $child_status)."
+    elif ! kill -0 "$SUPERVISED_MODEL_MANAGER_PID" 2>/dev/null; then
+        if wait "$SUPERVISED_MODEL_MANAGER_PID"; then child_status=0; else child_status=$?; fi
+        warn "OpenHands model manager exited (code $child_status)."
     else
         if wait "$SUPERVISED_GATEWAY_PID"; then child_status=0; else child_status=$?; fi
         warn "OpenHands public gateway exited (code $child_status)."
@@ -1605,6 +1771,7 @@ show_status() {
     printf 'uv: %s\n' "$uv_version"
     printf 'Agent Canvas: %s\n' "$canvas_version"
     printf 'Browser URL: %s\n' "$(browser_url)"
+    printf 'Model manager: %s\n' "$(models_url)"
     printf 'Browser base path: %s\n' "$BASE_PATH"
     printf 'Workspace: %s\n' "$WORKSPACE"
     printf 'Mode: public (API key required)\n'
@@ -1676,8 +1843,159 @@ pair_browser() {
     printf 'The code is single-use. Run openhands-host pair again for another browser.\n'
 }
 
+models_url() {
+    printf '%smodels\n' "$(browser_url)"
+}
+
+require_model_manager() {
+    load_runtime_environment
+    curl -fsS --max-time 5 "http://127.0.0.1:$MODEL_MANAGER_PORT/health" >/dev/null 2>&1 || \
+        die 'The model manager is unavailable. Restart the WebConsole project and retry.'
+}
+
+manager_api() {
+    local method="$1" endpoint="$2" payload_file="${3:-}" output_file="${4:-}"
+    require_model_manager
+    MANAGER_METHOD="$method" MANAGER_ENDPOINT="$endpoint" MANAGER_PAYLOAD_FILE="$payload_file" \
+        MANAGER_OUTPUT_FILE="$output_file" MANAGER_PORT_VALUE="$MODEL_MANAGER_PORT" \
+        LOCAL_BACKEND_API_KEY="$LOCAL_BACKEND_API_KEY" python3 - <<'PY'
+import json, os, pathlib, sys, tempfile, urllib.error, urllib.request
+method = os.environ['MANAGER_METHOD']
+endpoint = os.environ['MANAGER_ENDPOINT']
+payload_file = os.environ.get('MANAGER_PAYLOAD_FILE', '')
+output_file = os.environ.get('MANAGER_OUTPUT_FILE', '')
+data = pathlib.Path(payload_file).read_bytes() if payload_file else None
+request = urllib.request.Request(
+    f"http://127.0.0.1:{os.environ['MANAGER_PORT_VALUE']}/_openhands/models-api{endpoint}",
+    data=data,
+    method=method,
+    headers={
+        'X-Session-API-Key': os.environ['LOCAL_BACKEND_API_KEY'],
+        **({'Content-Type': 'application/json'} if data is not None else {}),
+    },
+)
+try:
+    with urllib.request.urlopen(request, timeout=1000) as response:
+        body = response.read()
+except urllib.error.HTTPError as error:
+    message = error.read().decode('utf-8', 'replace')
+    try: message = json.loads(message).get('error', message)
+    except Exception: pass
+    print(f"Model manager HTTP {error.code}: {message}", file=sys.stderr)
+    raise SystemExit(1)
+if output_file:
+    target = pathlib.Path(output_file).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=target.name + '.', dir=target.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'wb') as stream: stream.write(body)
+        pathlib.Path(temp).replace(target)
+    except Exception:
+        try: os.close(fd)
+        except OSError: pass
+        pathlib.Path(temp).unlink(missing_ok=True)
+        raise
+else:
+    try: print(json.dumps(json.loads(body), ensure_ascii=False, indent=2))
+    except Exception: sys.stdout.buffer.write(body)
+PY
+}
+
+providers_export_cli() {
+    [[ -n "$MANAGER_FILE" ]] || die 'providers-export requires --file PATH.'
+    manager_api GET '/providers/export' '' "$MANAGER_FILE"
+    log "Safe provider JSON exported without API keys: $MANAGER_FILE"
+}
+
+providers_import_cli() {
+    local payload="$CACHE_DIR/provider-import.$$"
+    [[ -r "$MANAGER_FILE" ]] || die 'providers-import requires a readable --file PATH.'
+    if [[ "$MANAGER_IMPORT_SECRETS" == true ]]; then
+        local perms=""
+        perms="$(stat -c '%a' "$MANAGER_FILE" 2>/dev/null || true)"
+        [[ -z "$perms" || "$perms" =~ ^[0-7]00$ ]] || die 'A JSON file containing API keys must not be group/world-readable (use chmod 600).'
+    fi
+    PAYLOAD_SOURCE="$MANAGER_FILE" IMPORT_SECRETS="$MANAGER_IMPORT_SECRETS" IMPORT_OVERWRITE="$MANAGER_OVERWRITE" \
+        python3 - <<'PY' > "$payload"
+import json, os, pathlib
+source = json.loads(pathlib.Path(os.environ['PAYLOAD_SOURCE']).read_text())
+print(json.dumps({'document': source, 'importSecrets': os.environ['IMPORT_SECRETS']=='true', 'overwrite': os.environ['IMPORT_OVERWRITE']=='true'}))
+PY
+    chmod 600 "$payload"
+    if ! manager_api POST '/providers/import' "$payload"; then rm -f "$payload"; return 1; fi
+    rm -f "$payload"
+}
+
+test_models_cli() {
+    local payload="$CACHE_DIR/test-models.$$"
+    printf '{"concurrency":3}\n' > "$payload"; chmod 600 "$payload"
+    if ! manager_api POST '/profiles/test' "$payload"; then rm -f "$payload"; return 1; fi
+    rm -f "$payload"
+}
+
+proxy_config_cli() {
+    local payload="$CACHE_DIR/proxy-config.$$"
+    [[ "$MANAGER_PROXY_MODE" == direct || "$MANAGER_PROXY_MODE" == direct-fallback || "$MANAGER_PROXY_MODE" == proxy-only ]] || \
+        die 'proxy-config requires --proxy-mode direct, direct-fallback, or proxy-only.'
+    [[ -n "$MANAGER_PROXY_URL" ]] || MANAGER_PROXY_URL='https://proxy.fazilat-ma.workers.dev/?url={url}'
+    PROXY_MODE="$MANAGER_PROXY_MODE" PROXY_URL="$MANAGER_PROXY_URL" python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'defaultMode': os.environ['PROXY_MODE'], 'proxyTemplate': os.environ['PROXY_URL']}))
+PY
+    chmod 600 "$payload"; if ! manager_api PUT '/proxy' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
+local_model_install_cli() {
+    local payload="$CACHE_DIR/local-model.$$"
+    [[ -n "$MANAGER_NAME" && -n "$MANAGER_MODEL_URL" ]] || die 'local-model-install requires --name NAME and --model-url HTTPS_URL.'
+    MODEL_NAME="$MANAGER_NAME" MODEL_URL="$MANAGER_MODEL_URL" MODEL_SHA="$MANAGER_SHA256" MODEL_CONTEXT="$MANAGER_CONTEXT_LENGTH" \
+        python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'name': os.environ['MODEL_NAME'], 'url': os.environ['MODEL_URL'], 'sha256': os.environ['MODEL_SHA'], 'contextLength': int(os.environ['MODEL_CONTEXT'])}))
+PY
+    chmod 600 "$payload"; if ! manager_api POST '/local/install' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+    log "The download continues in the model manager. Progress: $(models_url)"
+}
+
+local_model_start_cli() {
+    local payload="$CACHE_DIR/local-model-start.$$"
+    [[ -n "$MANAGER_NAME" ]] || die 'local-model-start requires --name NAME.'
+    MODEL_NAME="$MANAGER_NAME" python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'name': os.environ['MODEL_NAME']}))
+PY
+    chmod 600 "$payload"; if ! manager_api POST '/local/start' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
+local_model_stop_cli() {
+    local payload="$CACHE_DIR/local-model-stop.$$"
+    printf '{}\n' > "$payload"; chmod 600 "$payload"
+    if ! manager_api POST '/local/stop' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
+local_endpoint_add_cli() {
+    local payload="$CACHE_DIR/local-endpoint.$$" api_key=""
+    [[ -n "$MANAGER_NAME" && -n "$MANAGER_BASE_URL" && -n "$MANAGER_MODEL" ]] || \
+        die 'local-endpoint-add requires --name, --base-url, and --model.'
+    if [[ -n "$MANAGER_API_KEY_FILE" ]]; then
+        local key_perms=""
+        [[ -r "$MANAGER_API_KEY_FILE" ]] || die 'The --api-key-file is not readable.'
+        key_perms="$(stat -c '%a' "$MANAGER_API_KEY_FILE" 2>/dev/null || true)"
+        [[ -z "$key_perms" || "$key_perms" =~ ^[0-7]00$ ]] || die 'The --api-key-file must not be group/world-readable (use chmod 600).'
+        api_key="$(tr -d '\r\n' < "$MANAGER_API_KEY_FILE")"
+    fi
+    MODEL_NAME="$MANAGER_NAME" MODEL_BASE="$MANAGER_BASE_URL" MODEL_ID="$MANAGER_MODEL" MODEL_API_KEY="$api_key" \
+        python3 - <<'PY' > "$payload"
+import json, os
+print(json.dumps({'name': os.environ['MODEL_NAME'], 'baseUrl': os.environ['MODEL_BASE'], 'model': os.environ['MODEL_ID'], 'apiKey': os.environ['MODEL_API_KEY']}))
+PY
+    unset api_key
+    chmod 600 "$payload"; if ! manager_api POST '/local/register-endpoint' "$payload"; then rm -f "$payload"; return 1; fi; rm -f "$payload"
+}
+
 web_check() {
-    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" settings_code="" server_info_code="" asset_code="" asset_path="" prefix=""
+    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" settings_code="" server_info_code="" manager_page_code="" manager_api_code="" asset_code="" asset_path="" prefix=""
     ensure_secrets
     mkdir -p "$tmp"
     trap 'rm -rf "$tmp"' RETURN
@@ -1691,6 +2009,9 @@ web_check() {
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/api/settings" || true)"
     server_info_code="$(curl -sS --max-time 10 -o "$tmp/server-info" -w '%{http_code}' \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/server_info" || true)"
+    manager_page_code="$(curl -sS --max-time 10 -o "$tmp/models" -w '%{http_code}' "$(local_url)$prefix/models" || true)"
+    manager_api_code="$(curl -sS --max-time 10 -o "$tmp/models-status" -w '%{http_code}' \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/_openhands/models-api/status" || true)"
     asset_path="$(grep -Eo "$prefix/assets/[A-Za-z0-9._~-]+\\.js" "$tmp/root" 2>/dev/null | head -n 1 || true)"
     if [[ -n "$asset_path" ]]; then
         asset_code="$(curl -sS --max-time 10 -o "$tmp/asset" -w '%{http_code}' "$(local_url)$asset_path" || true)"
@@ -1701,6 +2022,8 @@ web_check() {
     printf 'Canvas ingress health: HTTP %s (%s%s/health)\n' "${health_code:-000}" "$(local_url)" "$prefix"
     printf 'Stored API key validation: HTTP %s (%s%s/api/settings)\n' "${settings_code:-000}" "$(local_url)" "$prefix"
     printf 'Agent Server readiness: HTTP %s (%s%s/server_info)\n' "${server_info_code:-000}" "$(local_url)" "$prefix"
+    printf 'Model manager page: HTTP %s (%s%s/models)\n' "${manager_page_code:-000}" "$(local_url)" "$prefix"
+    printf 'Authenticated model manager API: HTTP %s\n' "${manager_api_code:-000}"
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
     grep -Eqi '<!doctype html|<html' "$tmp/root" || die 'The gateway did not return an HTML application.'
@@ -1716,7 +2039,9 @@ web_check() {
     [[ "$health_code" == "200" ]] || die 'Canvas ingress health check failed.'
     [[ "$settings_code" == "200" ]] || die 'The running Agent Server rejected the API key stored by openhands-host.'
     [[ "$server_info_code" == "200" ]] || die 'Agent Server readiness check failed; the frontend ingress is up but its Python backend is unavailable.'
-    log 'Web check passed, including prefixed HTML, JavaScript, router, API-key validation, and Agent Server readiness.'
+    [[ "$manager_page_code" == "200" ]] && grep -Fq 'مدیریت ارائه‌دهنده‌ها و مدل‌ها' "$tmp/models" || die 'The model-manager page check failed.'
+    [[ "$manager_api_code" == "200" ]] || die 'The authenticated model-manager API check failed.'
+    log 'Web check passed, including Canvas, model manager, API-key validation, and Agent Server readiness.'
 }
 
 resource_report() {
@@ -1765,6 +2090,11 @@ doctor() {
     else
         warn 'The generated prefix gateway is missing.'; failed=1
     fi
+    if [[ -x "$MODEL_MANAGER_SCRIPT" && -x "$PROFILE_TESTER_SCRIPT" ]]; then
+        printf 'Model manager: present (%s/models)\n' "${BASE_PATH%/}"
+    else
+        warn 'Model manager companion files are missing.'; failed=1
+    fi
     if [[ -s "$SECRETS_FILE" ]]; then
         perms="$(stat -c '%a' "$SECRETS_FILE" 2>/dev/null || true)"
         printf 'Secrets file: present (mode %s)\n' "${perms:-unknown}"
@@ -1772,8 +2102,8 @@ doctor() {
     else
         warn 'Secrets file is missing.'; failed=1
     fi
-    printf 'Configured ports: gateway=%s canvas-ingress=%s agent=%s automation=%s frontend=%s editor=%s\n' \
-        "$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))"
+    printf 'Configured ports: gateway=%s canvas-ingress=%s agent=%s automation=%s frontend=%s editor=%s model-manager=%s local-model=%s\n' \
+        "$PORT" "$UPSTREAM_PORT" "$BACKEND_PORT" "$AUTOMATION_PORT" "$FRONTEND_PORT" "$((BACKEND_PORT + 1000))" "$MODEL_MANAGER_PORT" "$LOCAL_MODEL_PORT"
 
     if pid="$(managed_pid 2>/dev/null)"; then
         printf 'Process: running (PID %s)\n' "$pid"
@@ -1918,6 +2248,15 @@ case "$ACTION" in
     logs) show_logs ;;
     access-info) show_access_info ;;
     pair) pair_browser ;;
+    models) printf '%s\n' "$(models_url)" ;;
+    providers-export) providers_export_cli ;;
+    providers-import) providers_import_cli ;;
+    test-models) test_models_cli ;;
+    proxy-config) proxy_config_cli ;;
+    local-model-install) local_model_install_cli ;;
+    local-model-start) local_model_start_cli ;;
+    local-model-stop) local_model_stop_cli ;;
+    local-endpoint-add) local_endpoint_add_cli ;;
     web-check) web_check ;;
     doctor) doctor ;;
     rotate-key) rotate_key ;;

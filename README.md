@@ -194,6 +194,8 @@ openhands-host update
 openhands-host restart
 openhands-host logs --follow
 openhands-host pair
+openhands-host models
+openhands-host test-models
 openhands-host access-info
 openhands-host web-check
 openhands-host doctor
@@ -202,6 +204,28 @@ openhands-host doctor
 The helper always launches Agent Canvas with `--public` and a locally generated 256-bit API key. The preferred login flow is `openhands-host pair`: it prints a short, five-minute pairing code. Open the fixed HTTPS `/open/pair` page, enter that code, and the browser configures the correct local backend and API key before immediately invalidating the code. Only a SHA-256 digest is stored on disk, each code allows at most eight attempts, and the API key is returned only after a same-origin POST validates it; neither secret is embedded in ordinary public HTML or placed in a URL. `openhands-host access-info` remains available as a manual fallback. The browser gateway also creates or repairs the local backend profile with the correct same-origin `/open` URL. The default browser base path is `/open` (override it with `--base-path`), matching WebConsole's HTTPS publisher. A generated Node gateway listens on public port `8810`, while the official Canvas ingress uses internal port `18812`. The gateway supports both WebConsole's prefix-stripping proxy and direct `/open/` requests, rewrites the prebuilt HTML/router and JavaScript manifest asset URLs, and preserves API and WebSocket routing below the prefix. `openhands-host web-check` verifies the prefixed HTML, initial JavaScript, router configuration, protected settings access, and backend readiness.
 
 Every supervised startup also idempotently seeds 12 credential-free OpenRouter LLM Profiles with the official `openrouter/<model-id>` naming: Seed 2.1 Turbo, Qwen3.8 2.4T A95B, Seed-2.0-Code, DeepSeek V4 Pro 0813, Grok 4.6, LFM2.5-2.6B free, both Nemotron 3.5 Lightning variants, Sakana Namazu, Solar Pro 4, Muse Glimmer 30B, and Muse Spark 1.2. A profile whose name already exists is never overwritten, so user edits survive restarts and future updates. The templates intentionally contain no API key and ignore third-party diagnostics such as `available`, `rateLimited`, `testDetails`, `raw`, and Worker errors. Revoke any key ever pasted into chat, create a fresh OpenRouter key, and save it only through Agent Canvas **Settings > LLM > Provider Connections**; then associate the desired profiles with that connection.
+
+Version 3 adds an authenticated model manager at `/open/models`, available after the normal browser pairing flow. It imports both provider objects containing `models` arrays and the previously supplied flat per-model JSON shape, while mapping only supported fields into official Provider Connections and LLM Profiles. API keys are imported only when the user explicitly enables secret import; OpenHands encrypts them at rest, the sanitized source snapshot strips credential fields, and exports always set `secretsIncluded` to `false`. Existing profiles are skipped by default, and even explicit overwrite refuses to touch profiles that hold protected inline keys. The page and matching helper actions also export compatible provider JSON, run a two-token concurrency-limited test across all persisted profiles, and redact credentials from every test error.
+
+The manager provides three outbound modes: `direct`, `direct-fallback`, and `proxy-only`. Its default URL-wrapper is `https://proxy.fazilat-ma.workers.dev/?url={url}`. A loopback-only adapter reconstructs each complete provider URL before wrapping it, so OpenAI-compatible paths such as `/chat/completions` remain inside the encoded `url` parameter; the public gateway never publishes these internal routes. Unmodified seeded OpenRouter profiles are migrated to this route automatically; other existing OpenRouter profiles can be attached from the manager page without losing their remaining fields. Provider Connections are updated through the official API rather than exposing their keys. Any URL-wrapper proxy necessarily receives the provider authorization header and prompt/response content, so enable proxy routing only when that intermediary is trusted.
+
+Local models support both requested paths. The GGUF installer discovers a current CPU-only `llama.cpp` release, verifies GitHub's asset digest when provided, enforces HTTPS/host, size, free-space, and optional SHA-256 checks, and downloads into account-private storage. One selected GGUF model is served on loopback port `18820` and receives an automatic `local-<name>` profile. The page can also register an existing Ollama, LM Studio, vLLM, llama.cpp, or other OpenAI-compatible endpoint. CPU inference on shared hosting can be slow and is limited by the account's RAM, disk, and process quotas.
+
+Helper automation examples:
+
+```bash
+openhands-host models
+openhands-host providers-export --file "$HOME/openhands-providers.json"
+openhands-host providers-import --file "$HOME/openhands-providers.json"
+openhands-host test-models
+openhands-host proxy-config --proxy-mode direct-fallback
+openhands-host local-model-install --name qwen-small --model-url 'https://huggingface.co/OWNER/REPO/resolve/main/model.gguf' --context-length 8192
+openhands-host local-model-start --name qwen-small
+openhands-host local-model-stop
+openhands-host local-endpoint-add --name ollama --base-url http://127.0.0.1:11434/v1 --model qwen2.5-coder
+```
+
+Use `--import-secrets` only with a fresh credential file protected by mode `600`; use `--api-key-file` rather than placing an endpoint key in shell history.
 
 The included `openhands-agent-canvas-project.json` is ready to import once in WebConsole's **Create Project** dialog. It enables branch auto-update every 60 seconds and executes the helper directly from the deployed branch checkout. Future pushes to `arena/01a0f230-new` are therefore fetched, installed, and restarted automatically without importing another JSON. The profile uses port `8810`, foreground helper supervision, and the real account home path rather than Docker. On each launch, `run` takes an atomic account-local startup lock, removes all recognizable account-owned OpenHands launchers and runtimes from the preceding deployment even if they have not bound a port yet, confirms that any remaining port owner is unknown and leaves it untouched, and then starts one supervised Canvas/gateway pair. A continuous readiness watchdog probes the Python Agent Server's own internal `/server_info` and protected `/api/settings` endpoints instead of trusting the Canvas ingress `/health` route (which can stay green after its backend dies). The protected request also verifies that the running backend accepts the API key currently stored by the helper. Startup is not published until both probes succeed, and three consecutive runtime or key-synchronization failures terminate the whole pair so WebConsole's daemon supervision restarts a clean stack instead of leaving a frontend that returns `502 Bad Gateway` or `Invalid API key`. Key rotation writes the replacement secret before stopping the old process, preventing an immediate WebConsole relaunch from racing ahead with the retired key.
 
