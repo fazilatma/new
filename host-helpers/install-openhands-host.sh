@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="2.4.3"
+SCRIPT_VERSION="2.4.4"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -941,12 +941,21 @@ browser_url() {
     fi
 }
 
-agent_server_is_ready() {
+agent_server_accepts_key() {
     ensure_secrets >/dev/null
-    # The official Canvas ingress has its own /health route, which can remain
-    # HTTP 200 after the Python agent-server behind it has exited. Probe the
-    # agent-server itself so a live frontend cannot mask a dead backend.
+    # /server_info is intentionally public. Match Canvas's own connection
+    # validation by probing protected settings with the currently stored key.
     curl -fsS --max-time 5 \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
+        "http://127.0.0.1:$BACKEND_PORT/api/settings" >/dev/null 2>&1
+}
+
+agent_server_is_ready() {
+    # The official Canvas ingress has its own /health route, which can remain
+    # HTTP 200 after the Python agent-server behind it has exited. Probe both
+    # the backend identity and protected settings so a live frontend or a
+    # stale runtime key cannot masquerade as a usable backend.
+    agent_server_accepts_key && curl -fsS --max-time 5 \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
         "http://127.0.0.1:$BACKEND_PORT/server_info" >/dev/null 2>&1
 }
@@ -956,7 +965,7 @@ agent_is_healthy() {
     [[ "$prefix" == "/" ]] && prefix=""
     agent_server_is_ready && curl -fsS --max-time 5 \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" \
-        "$(local_url)$prefix/server_info" >/dev/null 2>&1
+        "$(local_url)$prefix/api/settings" >/dev/null 2>&1
 }
 
 port_is_open() {
@@ -1175,7 +1184,8 @@ serve_agent() {
 
     # Canvas starts its ingress even when the Python agent-server timed out or
     # exited, and that ingress keeps /health green. Do not publish the frontend
-    # until the actual backend answers /server_info on its internal port.
+    # until the actual backend answers /server_info and accepts the stored key
+    # at /api/settings on its internal port.
     while ! agent_server_is_ready; do
         if ! kill -0 "$SUPERVISED_AGENT_PID" 2>/dev/null; then
             if wait "$SUPERVISED_AGENT_PID"; then child_status=0; else child_status=$?; fi
@@ -1188,7 +1198,7 @@ serve_agent() {
         sleep 1
         waited=$((waited + 1))
     done
-    log "Agent Server backend is ready on 127.0.0.1:$BACKEND_PORT"
+    log "Agent Server backend is ready and accepts the stored API key on 127.0.0.1:$BACKEND_PORT"
 
     export OH_GATEWAY_HOST="$LISTEN_HOST"
     export OH_GATEWAY_PORT="$PORT"
@@ -1226,7 +1236,7 @@ serve_agent() {
             health_failures=0
         else
             health_failures=$((health_failures + 1))
-            warn "Agent Server readiness probe failed ($health_failures/3) on 127.0.0.1:$BACKEND_PORT."
+            warn "Agent Server readiness/API-key probe failed ($health_failures/3) on 127.0.0.1:$BACKEND_PORT."
             if ((health_failures >= 3)); then
                 warn 'Agent Server stayed unavailable; exiting the supervised stack so WebConsole can restart it cleanly.'
                 return 1
@@ -1371,7 +1381,7 @@ show_access_info() {
 }
 
 web_check() {
-    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" server_info_code="" asset_code="" asset_path="" prefix=""
+    local tmp="$CACHE_DIR/web-check.$$" root_code="" health_code="" settings_code="" server_info_code="" asset_code="" asset_path="" prefix=""
     ensure_secrets
     mkdir -p "$tmp"
     trap 'rm -rf "$tmp"' RETURN
@@ -1381,6 +1391,8 @@ web_check() {
     root_code="$(curl -sS --max-time 10 -o "$tmp/root" -w '%{http_code}' "$(local_url)$prefix/" || true)"
     health_code="$(curl -sS --max-time 10 -o "$tmp/health" -w '%{http_code}' \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/health" || true)"
+    settings_code="$(curl -sS --max-time 10 -o "$tmp/settings" -w '%{http_code}' \
+        -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/api/settings" || true)"
     server_info_code="$(curl -sS --max-time 10 -o "$tmp/server-info" -w '%{http_code}' \
         -H "X-Session-API-Key: $LOCAL_BACKEND_API_KEY" "$(local_url)$prefix/server_info" || true)"
     asset_path="$(grep -Eo "$prefix/assets/[A-Za-z0-9._~-]+\\.js" "$tmp/root" 2>/dev/null | head -n 1 || true)"
@@ -1391,6 +1403,7 @@ web_check() {
     printf 'Frontend: HTTP %s (%s%s/)\n' "${root_code:-000}" "$(local_url)" "$prefix"
     printf 'Initial JavaScript: HTTP %s (%s%s)\n' "${asset_code:-000}" "$(local_url)" "${asset_path:-/missing-asset}"
     printf 'Canvas ingress health: HTTP %s (%s%s/health)\n' "${health_code:-000}" "$(local_url)" "$prefix"
+    printf 'Stored API key validation: HTTP %s (%s%s/api/settings)\n' "${settings_code:-000}" "$(local_url)" "$prefix"
     printf 'Agent Server readiness: HTTP %s (%s%s/server_info)\n' "${server_info_code:-000}" "$(local_url)" "$prefix"
 
     [[ "$root_code" == "200" ]] || die 'Agent Canvas frontend check failed.'
@@ -1404,9 +1417,10 @@ web_check() {
         grep -Fq 'openhands-backends' "$tmp/root" || die 'The local backend bootstrap configuration is missing.'
         grep -Fq "\"basename\":\"$BASE_PATH\"" "$tmp/root" || die 'The frontend router basename was not rewritten.'
     fi
-    [[ "$health_code" == "200" ]] || die 'Authenticated Canvas ingress health check failed.'
+    [[ "$health_code" == "200" ]] || die 'Canvas ingress health check failed.'
+    [[ "$settings_code" == "200" ]] || die 'The running Agent Server rejected the API key stored by openhands-host.'
     [[ "$server_info_code" == "200" ]] || die 'Agent Server readiness check failed; the frontend ingress is up but its Python backend is unavailable.'
-    log 'Web check passed, including prefixed HTML, JavaScript, router, ingress health, and Agent Server readiness.'
+    log 'Web check passed, including prefixed HTML, JavaScript, router, API-key validation, and Agent Server readiness.'
 }
 
 resource_report() {
@@ -1513,9 +1527,12 @@ refresh_helper() {
 rotate_key() {
     local was_running=false
     managed_pid >/dev/null 2>&1 && was_running=true
-    [[ "$was_running" == false ]] || stop_agent
+    # Persist the replacement before stopping. WebConsole may relaunch a
+    # supervised service immediately after TERM; writing first guarantees that
+    # any racing replacement process can only load the new key.
     write_new_secrets
     log 'A new Agent Canvas API key was generated; the previous key is invalid.'
+    [[ "$was_running" == false ]] || stop_agent
     if [[ "$NO_START" == false && "$was_running" == true ]]; then start_agent; fi
     show_access_info
 }
