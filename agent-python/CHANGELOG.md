@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.3.9 - Chatting With a Local AI Model Burned Through 4 Useless "Network" Retries Whenever Its Server Wasn't Already Running
+
+### Fixed
+- **Sending a message to a locally-imported Ollama/llama.cpp model showed a misleading retry countdown and then failed**, even on a perfectly healthy machine with no network problems at all:
+  ```
+  ⏳ تایمر تلاش مجدد (3/4): قطع ارتباط شبکه یا تایم‌اوت (ConnectError). تلاش مجدد در 4 ثانیه...
+  ```
+  Root cause: this app manages the Ollama/llama.cpp server process's entire lifecycle itself (installing it, launching it, keeping track of which model is loaded), but the chat engine never actually checked whether that process was still alive before trying to talk to it -- it just opened an HTTP connection straight to `127.0.0.1` and, if nothing was listening (the server was never started yet, had crashed, or was killed when the hosting container/process last restarted -- a detached child process does not necessarily outlive its parent's host environment), treated that exactly like a flaky network and burned through the full retry-with-backoff loop before finally giving up. No amount of retrying a connection to a port nothing is listening on could ever have succeeded.
+- `stream_complete_chat()` and `complete_chat()` now check whether a local Ollama/llama.cpp provider's server is actually running *before* the first attempt, and start it automatically if it isn't -- turning a cold local model into either an instant, successful first reply, or (if the engine genuinely can't start, e.g. the shared-library bug fixed in 3.3.8, or no model is selected) a single clear, actionable error shown immediately instead of four rounds of a misleading "network disconnected" countdown first.
+- This check is scoped tightly to providers this app actually manages itself (a loopback URL *and* an `ollama`/`llamacpp` protocol-or-vendor signal) so a provider pointing at a genuinely remote Ollama host, or at some other local server this app doesn't own (e.g. LM Studio), is never touched.
+- Verified with 4 new regression tests covering the provider-detection logic, the start-only-when-down behavior, a full `stream_complete_chat()` run against a "cold" local model that now succeeds on the first attempt with zero retry events, and a run against a genuinely broken local install that now surfaces the real startup error immediately instead of retrying first. 70 backend tests passing.
+
 ## 3.3.8 - Importing/Activating a llama.cpp Model Failed Forever: "error while loading shared libraries: libllama.so: cannot open shared object file"
 
 ### Fixed

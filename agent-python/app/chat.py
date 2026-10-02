@@ -39,6 +39,64 @@ from .database import (
 MAX_NETWORK_RETRY_ATTEMPTS = int(os.getenv("MAX_NETWORK_RETRY_ATTEMPTS", "4"))
 MAX_NETWORK_RETRY_DELAY_SEC = float(os.getenv("MAX_NETWORK_RETRY_DELAY_SEC", "8"))
 
+
+def _looks_like_local_ai_provider(p: Provider) -> bool:
+    """True for providers that talk to an Ollama/llama.cpp server this app
+    itself owns the lifecycle of, as opposed to a genuine external network
+    endpoint. For these, a ConnectError almost always means the local
+    server process simply isn't running right now (never started, crashed,
+    or was killed when the hosting process/container last restarted) --
+    not that the internet/network is flaky.
+
+    Deliberately requires BOTH a loopback URL AND an ollama/llamacpp
+    protocol/vendor signal: a user-configured provider pointing at a
+    genuinely *remote* Ollama host (protocol="ollama" but a real network
+    URL) must never trigger this -- start_server() only ever launches a
+    process on THIS machine, so "fixing" a remote server's reachability by
+    spawning an unrelated local one would be actively wrong, not helpful.
+    """
+    url_l = (p.url or "").lower()
+    is_loopback = "127.0.0.1" in url_l or "localhost" in url_l
+    if not is_loopback:
+        return False
+    return p.protocol == "ollama" or p.vendor in ("llamacpp", "ollama")
+
+
+async def _ensure_local_ai_server_running(p: Provider) -> None:
+    """Make sure a local Ollama/llama.cpp provider's server process is
+    actually alive before the retry loop below ever tries to talk to it,
+    launching it if it isn't.
+
+    Without this, a local model that wasn't currently running looked
+    identical, from chat's point of view, to a flaky network: every single
+    turn burned through the full MAX_NETWORK_RETRY_ATTEMPTS ConnectError
+    backoff loop (several seconds of "تایمر تلاش مجدد" countdown messages)
+    before finally failing -- even though retrying a connection to a port
+    nothing is listening on can never succeed no matter how many times you
+    try. Checking (and auto-starting) here turns that into either an
+    instant, successful first attempt, or a single clear error describing
+    exactly why the local engine itself couldn't start (e.g. "No .gguf
+    model is selected" or a broken llama.cpp install) instead of a vague,
+    misleading "network disconnected" message repeated four times.
+    """
+    if not _looks_like_local_ai_provider(p):
+        return
+    from . import local_ai
+    engine = "llamacpp" if p.vendor == "llamacpp" else "ollama"
+    try:
+        srv = await asyncio.to_thread(local_ai.server_up, engine)
+    except Exception:
+        srv = {"up": False}
+    if srv.get("up"):
+        return
+    # start_server() blocks (subprocess launch + up to ~20s of readiness
+    # polling) and raises RuntimeError with a specific, actionable message
+    # on failure -- run it off the event loop and let that exception
+    # propagate up into the existing per-candidate error handling below,
+    # which already surfaces the real error text to the user/fallback chain.
+    await asyncio.to_thread(local_ai.start_server)
+
+
 def build_system_prompt(
     conversation_id: Optional[str] = None,
     referenced_items: Optional[List[Dict[str, Any]]] = None,
@@ -926,6 +984,7 @@ async def stream_complete_chat(
             }
 
         try:
+            await _ensure_local_ai_server_running(p)
             for step_idx in range(max_steps):
                 last_msg = None
 
@@ -1352,6 +1411,7 @@ async def complete_chat(
             continue
 
         try:
+            await _ensure_local_ai_server_running(p)
             for step_idx in range(max_steps):
                 resp = None
                 # See MAX_NETWORK_RETRY_ATTEMPTS/MAX_NETWORK_RETRY_DELAY_SEC

@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.8"
+    assert APP_VERSION == "3.3.9"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -2763,3 +2763,180 @@ def test_start_server_repairs_broken_llamacpp_binary_instead_of_failing_forever(
         "start_server() must repair the broken binary and relaunch with the "
         "newly-installed healthy one, not keep using the broken path"
     )
+
+
+def test_looks_like_local_ai_provider_requires_loopback_url_and_ollama_signal():
+    """_looks_like_local_ai_provider() must only ever match a provider that
+    is unambiguously THIS app's own locally-managed Ollama/llama.cpp
+    process -- never a provider merely using the "ollama" protocol against
+    a genuinely remote host, since start_server() only ever launches a
+    process on this machine and would do nothing useful (and nothing the
+    user asked for) for a remote server."""
+    from app.chat import _looks_like_local_ai_provider
+    from app.providers import Provider
+
+    local_ollama = Provider(id="ollama", name="Ollama (Local AI)", vendor="ollama", url="http://127.0.0.1:11434", protocol="ollama")
+    assert _looks_like_local_ai_provider(local_ollama) is True
+
+    local_llamacpp = Provider(id="llamacpp-local", name="llama.cpp (local)", vendor="llamacpp", url="http://localhost:11434/v1", protocol="openai-compatible")
+    assert _looks_like_local_ai_provider(local_llamacpp) is True
+
+    remote_ollama = Provider(id="remote-ollama", name="Remote Ollama Box", vendor="custom", url="http://192.168.1.50:11434", protocol="ollama")
+    assert _looks_like_local_ai_provider(remote_ollama) is False, (
+        "a genuinely remote Ollama host must never trigger a local start_server() call"
+    )
+
+    local_but_unrelated = Provider(id="lmstudio", name="LM Studio", vendor="custom", url="http://127.0.0.1:1234/v1", protocol="openai-compatible")
+    assert _looks_like_local_ai_provider(local_but_unrelated) is False, (
+        "some other local server (e.g. LM Studio) this app doesn't manage must not be touched"
+    )
+
+    cloud_provider = Provider(id="openrouter", name="OpenRouter", vendor="openrouter", url="https://openrouter.ai/api/v1", protocol="openai-compatible")
+    assert _looks_like_local_ai_provider(cloud_provider) is False
+
+
+@pytest.mark.anyio
+async def test_ensure_local_ai_server_running_starts_server_only_when_down(monkeypatch):
+    """_ensure_local_ai_server_running() must be a no-op for non-local
+    providers and for an already-running local server, and must launch the
+    server exactly once when it's down."""
+    from app import chat as chat_module
+    from app import local_ai
+    from app.providers import Provider
+
+    calls = {"server_up": 0, "start_server": 0}
+
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: (calls.__setitem__("server_up", calls["server_up"] + 1), {"up": False})[1])
+    monkeypatch.setattr(local_ai, "start_server", lambda **kw: (calls.__setitem__("start_server", calls["start_server"] + 1), {"ok": True})[1])
+
+    cloud_provider = Provider(id="openrouter", name="OpenRouter", vendor="openrouter", url="https://openrouter.ai/api/v1", protocol="openai-compatible")
+    await chat_module._ensure_local_ai_server_running(cloud_provider)
+    assert calls["server_up"] == 0 and calls["start_server"] == 0, "must not touch local_ai at all for a non-local provider"
+
+    local_provider = Provider(id="llamacpp-local", name="llama.cpp (local)", vendor="llamacpp", url="http://127.0.0.1:11434/v1", protocol="openai-compatible")
+    await chat_module._ensure_local_ai_server_running(local_provider)
+    assert calls["server_up"] == 1
+    assert calls["start_server"] == 1, "a down local server must be started"
+
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: (calls.__setitem__("server_up", calls["server_up"] + 1), {"up": True})[1])
+    await chat_module._ensure_local_ai_server_running(local_provider)
+    assert calls["start_server"] == 1, "an already-running local server must not be relaunched"
+
+
+@pytest.mark.anyio
+async def test_stream_complete_chat_starts_dead_local_llamacpp_server_before_first_attempt(monkeypatch):
+    """Regression test for the real-world report: sending a chat message to
+    a locally-imported llama.cpp model that wasn't currently running
+    produced four consecutive
+      ⏳ تایمر تلاش مجدد (N/4): قطع ارتباط شبکه یا تایم‌اوت (ConnectError)...
+    messages before finally failing -- even though no amount of retrying a
+    connection to a port nothing listens on could ever succeed.
+    stream_complete_chat() must now start the dead server BEFORE the first
+    attempt, so a normal chat message against a model that simply wasn't
+    running yet succeeds immediately with zero retry_countdown events."""
+    from app import local_ai
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    calls = {"start_server": 0}
+
+    def fake_server_up(engine=None):
+        # Reports running only AFTER start_server() has been called once,
+        # simulating a server that genuinely wasn't up yet.
+        return {"up": calls["start_server"] > 0}
+
+    def fake_start_server(**kwargs):
+        calls["start_server"] += 1
+        return {"ok": True, "started": True}
+
+    monkeypatch.setattr(local_ai, "server_up", fake_server_up)
+    monkeypatch.setattr(local_ai, "start_server", fake_start_server)
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "Hello from llama.cpp"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Hello from llama.cpp"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+
+    store = ProviderStore()
+    provider = Provider(
+        id="llamacpp-local", name="llama.cpp (local)", vendor="llamacpp",
+        url="http://127.0.0.1:11434/v1", protocol="openai-compatible",
+        enabled=True, apiKey="local-llamacpp",
+        models=[ModelSpec(id="my-model", name="My Model", toolCalling=False)],
+    )
+    store.data = {"llamacpp-local": provider}
+    monkeypatch.setattr(store, "get_api_key", lambda p: "local-llamacpp")
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="llamacpp-local",
+        model_id="my-model",
+        messages=[{"role": "user", "content": "Hi"}],
+        max_steps=3,
+    ):
+        events.append(evt)
+
+    assert calls["start_server"] == 1, "the dead local server must be started exactly once"
+    event_types = [e.get("type") for e in events]
+    assert "retry_countdown" not in event_types, (
+        "no ConnectError retry loop should ever run once the server has been started proactively"
+    )
+    assert "error" not in event_types
+    assert "done" in event_types
+
+
+@pytest.mark.anyio
+async def test_stream_complete_chat_surfaces_real_local_ai_startup_failure_immediately(monkeypatch):
+    """When the local engine genuinely can't start (e.g. the llama.cpp
+    shared-library bug, or no model selected), the user must see that
+    specific, actionable error immediately -- not four rounds of a
+    misleading generic 'network disconnected' retry countdown first."""
+    from app import local_ai
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    def fake_server_up(engine=None):
+        return {"up": False}
+
+    def fake_start_server(**kwargs):
+        raise RuntimeError(
+            "Local AI server did not become ready within 20s. Log: "
+            "llama-server: error while loading shared libraries: libllama.so: cannot open shared object file"
+        )
+
+    monkeypatch.setattr(local_ai, "server_up", fake_server_up)
+    monkeypatch.setattr(local_ai, "start_server", fake_start_server)
+
+    async def mock_stream_provider_never_called(*a, **kw):
+        raise AssertionError("stream_call_provider_api must not be reached when the local server can't even start")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider_never_called)
+
+    store = ProviderStore()
+    provider = Provider(
+        id="llamacpp-local", name="llama.cpp (local)", vendor="llamacpp",
+        url="http://127.0.0.1:11434/v1", protocol="openai-compatible",
+        enabled=True, apiKey="local-llamacpp",
+        models=[ModelSpec(id="my-model", name="My Model", toolCalling=False)],
+    )
+    store.data = {"llamacpp-local": provider}
+    monkeypatch.setattr(store, "get_api_key", lambda p: "local-llamacpp")
+
+    events = []
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="llamacpp-local",
+        model_id="my-model",
+        messages=[{"role": "user", "content": "Hi"}],
+        max_steps=3,
+    ):
+        events.append(evt)
+
+    event_types = [e.get("type") for e in events]
+    assert "retry_countdown" not in event_types
+    assert "error" in event_types
+    err_evt = next(e for e in events if e.get("type") == "error")
+    assert "libllama.so" in err_evt["errorDetails"]["error"]
