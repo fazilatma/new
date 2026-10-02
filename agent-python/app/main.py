@@ -13,7 +13,7 @@ import threading
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Response, Depends
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import read_environment, write_environment, is_auth_enabled, get_raw_config, get_default_workspace, APP_VERSION, UPLOADS_DIR, DEFAULT_PROXY_URL, parse_proxy_setting, get_proxy_config, mask_secret
 from .database import (
     get_db, init_db, get_latest_conversation_checkpoint,
-    get_conversation_checkpoints, clear_conversation_checkpoints
+    get_conversation_checkpoints, clear_conversation_checkpoints, get_job_events_since
 )
 from .models import Provider, ModelSpec
 from .providers import PROVIDER_STORE, resolve_provider_endpoint_url
@@ -62,7 +62,10 @@ from .github_workspace import (
 )
 from .browser_automation import BROWSER_MANAGER
 from .chat import complete_chat, stream_complete_chat, call_provider_api
-from .worker import persistent_worker_loop, create_job, get_job_details, list_all_jobs, cancel_job, pause_job, resume_job, retry_job, delete_old_jobs
+from .worker import (
+    persistent_worker_loop, create_job, get_job_details, list_all_jobs, cancel_job, pause_job, resume_job,
+    retry_job, delete_old_jobs, execute_job_task, subscribe_to_job, unsubscribe_from_job, CHAT_JOB_TYPE
+)
 from .observability import log_event, get_logs, get_system_metrics
 from .auth import auth_middleware, register_auth_routes, get_current_user, require_admin, require_developer, require_viewer
 
@@ -1101,43 +1104,136 @@ async def chat_endpoint(payload: Dict[str, Any], user: Dict[str, Any] = Depends(
     except Exception as e:
         raise HTTPException(400, str(e))
 
+def _job_sse_headers() -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+
+
+async def _tail_job_events(job_id: str, since_seq: int = 0):
+    """Shared SSE tail: replay every persisted event after `since_seq`, then
+    keep streaming new ones live until the job reaches a terminal state.
+
+    Subscribing to the live queue *before* draining the backlog (and before
+    the caller even schedules the job's execution task, for a brand new job)
+    means no event can ever be missed, whichever order things actually run
+    in: anything published after we subscribe lands in the queue; anything
+    published before is already in `job_events` and gets replayed by the
+    backlog drain. Sequence numbers de-duplicate the overlap between the two.
+
+    Because this generator holds no reference to the job's own execution —
+    it only *observes* durably-persisted state — a client disconnecting
+    here (closed tab, dropped network) has zero effect on the job itself,
+    which keeps running server-side regardless.
+    """
+    queue = subscribe_to_job(job_id)
+    last_seq = since_seq
+    try:
+        while True:
+            backlog = get_job_events_since(job_id, since_seq=last_seq)
+            for ev in backlog:
+                last_seq = ev["seq"]
+                out = dict(ev["data"])
+                out["seq"] = ev["seq"]
+                yield f"event: {ev['type']}\ndata: {json.dumps(out, ensure_ascii=False)}\n\n"
+                if ev["type"] in ("done", "error"):
+                    return
+
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                details = get_job_details(job_id)
+                if details and details.get("status") in ("done", "failed", "cancelled"):
+                    # Drain once more in case the terminal event was
+                    # persisted right before the status flip landed.
+                    for ev in get_job_events_since(job_id, since_seq=last_seq):
+                        out = dict(ev["data"]); out["seq"] = ev["seq"]
+                        yield f"event: {ev['type']}\ndata: {json.dumps(out, ensure_ascii=False)}\n\n"
+                    return
+                continue
+
+            seq = event.get("seq", 0)
+            if seq and seq <= last_seq:
+                continue  # already delivered via the backlog drain above
+            if seq:
+                last_seq = seq
+            event_type = event.get("type", "message")
+            yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if event_type in ("done", "error"):
+                return
+    finally:
+        unsubscribe_from_job(job_id, queue)
+
+
 @app.post("/api/chat/stream")
 async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: Dict[str, Any] = Depends(require_developer)):
     messages = payload.get("messages") or [{"role": "user", "content": str(payload.get("message", ""))}]
     provider_id = str(payload.get("provider", "openrouter"))
     model_id = str(payload.get("model", ""))
     max_steps = int(payload.get("maxSteps") or 30)
-    conversation_id = payload.get("conversationId") or payload.get("conversation_id")
+    conversation_id = str(payload.get("conversationId") or payload.get("conversation_id") or "")
     references = payload.get("references")
 
-    async def event_generator():
-        try:
-            async for event in stream_complete_chat(
-                PROVIDER_STORE, provider_id, model_id, messages,
-                max_steps=max_steps, user_id=user.get("username", "user"),
-                conversation_id=conversation_id, references=references
-            ):
-                event_type = event.get("type", "message")
-                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            err_meta = {
-                "provider": provider_id,
-                "model": model_id,
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-                "remediation": "1. Check provider API key and internet connectivity.\n2. In Providers & Models, test your model connection.\n3. Verify your proxy server settings."
-            }
-            yield f"event: error\ndata: {json.dumps({'error': str(e), 'errorDetails': err_meta}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+    # The agent loop is created as a server-side job and scheduled as a
+    # detached asyncio task *before* this request returns anything -- it is
+    # not a child of this HTTP connection. Closing the browser tab, losing
+    # network, or navigating away only stops *watching*; the job keeps
+    # running (and, if the whole server restarts mid-run, resumes from its
+    # last checkpoint -- see worker.py's recover_orphaned_jobs()).
+    job = create_job(
+        title=(str(payload.get("message", "")) or "Chat")[:80],
+        provider_id=provider_id,
+        model_id=model_id,
+        payload={
+            "messages": messages,
+            "maxSteps": max_steps,
+            "conversationId": conversation_id,
+            "references": references,
+        },
+        user_id=user.get("username", "user"),
+        max_steps=max_steps,
+        max_timeout_sec=int(payload.get("timeoutSec") or 1800),
+        conversation_id=conversation_id,
+        job_type=CHAT_JOB_TYPE,
     )
+    job_id = job["id"]
+
+    async def event_generator():
+        yield f"event: job\ndata: {json.dumps({'jobId': job_id, 'conversationId': conversation_id}, ensure_ascii=False)}\n\n"
+        # Scheduled *after* the 'job' event above is prepared but the
+        # subscriber queue inside _tail_job_events() is created before any
+        # events can be published, so nothing emitted by the task is ever
+        # lost even if this generator is slow to start iterating.
+        asyncio.create_task(execute_job_task(job_id))
+        async for chunk in _tail_job_events(job_id, since_seq=0):
+            yield chunk
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=_job_sse_headers())
+
+
+@app.get("/api/chat/stream/{job_id}")
+async def chat_stream_reattach(job_id: str, since: int = 0, user: Dict[str, Any] = Depends(require_viewer)):
+    """Re-attach to an already-running (or already-finished) chat job's live
+    stream. This is what makes reconnecting after a dropped connection work:
+    the frontend remembers the jobId, and on reload/reconnect calls this
+    with `since` set to the last event seq it actually rendered."""
+    job = get_job_details(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return StreamingResponse(_tail_job_events(job_id, since_seq=int(since or 0)), media_type="text/event-stream", headers=_job_sse_headers())
+
+
+@app.get("/api/conversations/{conv_id}/active-job")
+def get_conversation_active_job(conv_id: str, user: Dict[str, Any] = Depends(require_viewer)):
+    """Lets the frontend discover, on page load/reconnect, whether this
+    conversation has a chat job still queued/running/paused so it can
+    re-attach to the live stream instead of showing an idle composer while
+    the agent is actually still working server-side."""
+    jobs = list_all_jobs(conversation_id=conv_id, job_type=CHAT_JOB_TYPE, limit=5)
+    active = next((j for j in jobs if j.get("status") in ("queued", "running", "paused")), None)
+    return {"active": active}
 
 @app.post("/api/chat/upload")
 async def chat_upload_file(file: UploadFile = File(...), user: Dict[str, Any] = Depends(require_developer)):
@@ -1332,7 +1428,9 @@ def create_chat_job(payload: Dict[str, Any], user: Dict[str, Any] = Depends(requ
         payload=payload,
         user_id=user.get("username", "user"),
         max_steps=int(payload.get("maxSteps", 8)),
-        max_timeout_sec=int(payload.get("timeoutSec", 600))
+        max_timeout_sec=int(payload.get("timeoutSec", 600)),
+        conversation_id=str(payload.get("conversationId") or payload.get("conversation_id") or ""),
+        job_type=CHAT_JOB_TYPE,
     )
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -1571,13 +1669,29 @@ async def _execute_model_diagnostic_test(
 async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_developer)):
     payload = payload or {}
     selected_pid = payload.get("provider")
-    tasks = []
-    sem = asyncio.Semaphore(15)
 
-    async def _test_worker(p: Provider, m: ModelSpec, api_key: str):
-        async with sem:
-            return await _execute_model_diagnostic_test(p, m, api_key, timeout_sec=4.0, connect_sec=2.0)
+    def _as_exception_result(r: Exception) -> Dict[str, Any]:
+        return {
+            "provider": "unknown",
+            "providerName": "Unknown",
+            "model": "unknown",
+            "modelName": "Unknown",
+            "ok": False,
+            "latencyMs": 0,
+            "protocol": "unknown",
+            "error": str(r),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        }
 
+    # Per-provider queues of (provider, model, api_key), in provider display
+    # order -- and *round-robin interleaved* across providers below, rather
+    # than exhausted one provider at a time. Hammering a single provider
+    # with every one of its models back-to-back is exactly what trips most
+    # providers' per-key rate limits; testing model #1 of every provider,
+    # then model #2 of every provider, and so on naturally spreads repeat
+    # hits to the same provider apart by however long a full round across
+    # every other provider takes.
+    provider_queues: List[List[Tuple[Provider, ModelSpec, str]]] = []
     for pid, p in list(PROVIDER_STORE.data.items()):
         if selected_pid and pid != selected_pid:
             continue
@@ -1585,29 +1699,24 @@ async def test_all_models(payload: Optional[Dict[str, Any]] = None, user: Dict[s
             api_key = PROVIDER_STORE.get_api_key(p)
         except Exception:
             api_key = ""
-        for m in (p.models or []):
-            tasks.append(_test_worker(p, m, api_key))
+        queue = [(p, m, api_key) for m in (p.models or [])]
+        if queue:
+            provider_queues.append(queue)
 
-    if tasks:
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-        results = []
-        for r in raw_results:
-            if isinstance(r, Exception):
-                results.append({
-                    "provider": "unknown",
-                    "providerName": "Unknown",
-                    "model": "unknown",
-                    "modelName": "Unknown",
-                    "ok": False,
-                    "latencyMs": 0,
-                    "protocol": "unknown",
-                    "error": str(r),
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                })
-            elif isinstance(r, dict):
-                results.append(r)
-    else:
-        results = []
+    results: List[Dict[str, Any]] = []
+    if provider_queues:
+        max_models = max(len(q) for q in provider_queues)
+        for round_idx in range(max_models):
+            round_tasks = [
+                _execute_model_diagnostic_test(p, m, api_key, timeout_sec=4.0, connect_sec=2.0)
+                for q in provider_queues if round_idx < len(q)
+                for (p, m, api_key) in [q[round_idx]]
+            ]
+            if not round_tasks:
+                continue
+            round_results = await asyncio.gather(*round_tasks, return_exceptions=True)
+            for r in round_results:
+                results.append(_as_exception_result(r) if isinstance(r, Exception) else r)
 
     return {"results": results}
 
@@ -1647,8 +1756,16 @@ def import_providers_text(payload: Dict[str, Any], user: Dict[str, Any] = Depend
     raw = payload.get("json", "")
     replace = bool(payload.get("replace", False))
     try:
-        PROVIDER_STORE.import_json(raw, replace=replace)
-        return {"ok": True, "count": len(PROVIDER_STORE.data)}
+        report = PROVIDER_STORE.import_json_report(raw, replace=replace)
+        return {
+            "ok": True,
+            "count": len(PROVIDER_STORE.data),
+            "providersInPayload": report["providersInPayload"],
+            "created": report.get("created", []),
+            "updated": report.get("updated", []),
+            "modelsAdded": report.get("modelsAdded", 0),
+            "modelsUpdated": report.get("modelsUpdated", 0),
+        }
     except Exception as e:
         raise HTTPException(400, f"Import failed: {str(e)}")
 
@@ -1656,8 +1773,16 @@ def import_providers_text(payload: Dict[str, Any], user: Dict[str, Any] = Depend
 async def import_providers(file: UploadFile = File(...), replace: bool = False, user: Dict[str, Any] = Depends(require_admin)):
     try:
         content = (await file.read()).decode("utf-8")
-        PROVIDER_STORE.import_json(content, replace=replace)
-        return {"ok": True, "count": len(PROVIDER_STORE.data)}
+        report = PROVIDER_STORE.import_json_report(content, replace=replace)
+        return {
+            "ok": True,
+            "count": len(PROVIDER_STORE.data),
+            "providersInPayload": report["providersInPayload"],
+            "created": report.get("created", []),
+            "updated": report.get("updated", []),
+            "modelsAdded": report.get("modelsAdded", 0),
+            "modelsUpdated": report.get("modelsUpdated", 0),
+        }
     except Exception as e:
         raise HTTPException(400, f"Import failed: {str(e)}")
 
@@ -1778,8 +1903,8 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
     init_db()
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO jobs (id, title, status, progress, summary, created_at, updated_at)
-               VALUES (?, ?, 'running', 0, 'در صف نصب', datetime('now'), datetime('now'))""",
+            """INSERT INTO jobs (id, title, status, progress, summary, job_type, created_at, updated_at)
+               VALUES (?, ?, 'running', 0, 'در صف نصب', 'localai_install', datetime('now'), datetime('now'))""",
             (job_id, f"نصب مدل محلی: {model_ref}")
         )
         conn.commit()
@@ -1913,8 +2038,8 @@ def post_localai_import(payload: Dict[str, Any], user: Dict[str, Any] = Depends(
     init_db()
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO jobs (id, title, status, progress, summary, created_at, updated_at)
-               VALUES (?, ?, 'running', 0, 'در صف درون‌ریزی', datetime('now'), datetime('now'))""",
+            """INSERT INTO jobs (id, title, status, progress, summary, job_type, created_at, updated_at)
+               VALUES (?, ?, 'running', 0, 'در صف درون‌ریزی', 'localai_import', datetime('now'), datetime('now'))""",
             (job_id, f"درون‌ریزی مدل محلی: {name}")
         )
         conn.commit()

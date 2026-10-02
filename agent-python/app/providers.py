@@ -15,14 +15,8 @@ from .database import get_db
 def resolve_provider_endpoint_url(base_url: str, protocol: str, model_id: str = "") -> str:
     url = (base_url or "").strip().rstrip("/")
     if not url:
-        if protocol == "ollama":
-            url = "http://localhost:11434"
-        elif protocol == "anthropic":
-            url = "https://api.anthropic.com"
-        elif protocol in ("cloudflare", "cloudflare-workers-ai", "workers-ai"):
-            url = "https://api.cloudflare.com/client/v4"
-        else:
-            url = "https://api.openai.com/v1"
+        canon = "cloudflare" if protocol in ("cloudflare", "cloudflare-workers-ai", "workers-ai") else protocol
+        url = _default_provider_url(canon)
 
     if protocol == "anthropic":
         if url.endswith("/v1/messages") or url.endswith("/messages"):
@@ -244,7 +238,74 @@ def _normalize_model_spec(item: Any) -> Optional[ModelSpec]:
         )
     return None
 
-def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider]:
+def _guess_protocol(pid: str, vendor: str, url: str) -> str:
+    """Best-effort protocol sniffing for catalogs that omit the field --
+    mirrors agent-php's Providers::guessProtocol() so a pasted/imported
+    provider that only carries an id/vendor/url (the shape every real
+    provider export actually has -- see e.g. the "ollama"/"vendor":
+    "ollama-models" entries real users paste) still resolves to the right
+    wire protocol instead of silently defaulting to openai-compatible."""
+    hay = f"{pid} {vendor} {url}".lower()
+    for needle, protocol in (
+        ("ollama", "ollama"),
+        ("anthropic", "anthropic"),
+        ("claude", "anthropic"),
+        ("generativelanguage", "gemini"),
+        ("gemini", "gemini"),
+        ("mistral", "mistral"),
+        ("azure", "azure"),
+        ("cloudflare", "cloudflare"),
+        ("workers-ai", "cloudflare"),
+        ("workersai", "cloudflare"),
+    ):
+        if needle in hay:
+            return protocol
+    return "openai-compatible"
+
+def _canonical_protocol(protocol: str) -> str:
+    """Canonicalize legacy/alias protocol identifiers to the values the
+    request-building code in chat.py actually branches on. A raw value that
+    doesn't match any known branch (e.g. a previous catalog revision's
+    'cloudflare-workers-ai') silently falls through to the generic
+    openai-compatible builder -- wrong URL shape, wrong body shape. Run
+    every protocol value (freshly imported or already persisted) through
+    this so it self-heals."""
+    p = (protocol or "").strip().lower()
+    aliases = {
+        "cloudflare-workers-ai": "cloudflare",
+        "cloudflare_workers_ai": "cloudflare",
+        "cf": "cloudflare",
+        "cf-ai": "cloudflare",
+        "workersai": "cloudflare",
+        "openai": "openai-compatible",
+        "chatgpt": "openai-compatible",
+        "openai_compatible": "openai-compatible",
+        "openai-v1": "openai-compatible",
+        "claude": "anthropic",
+        "anthropic_v1": "anthropic",
+        "google": "gemini",
+        "google_gemini": "gemini",
+        "gemini_api": "gemini",
+    }
+    return aliases.get(p, p) or "openai-compatible"
+
+def _default_provider_url(protocol: str) -> str:
+    if protocol == "ollama":
+        return "http://localhost:11434"
+    if protocol == "anthropic":
+        return "https://api.anthropic.com"
+    if protocol == "cloudflare":
+        return "https://api.cloudflare.com/client/v4"
+    if protocol == "gemini":
+        # Google's officially-documented OpenAI-compatible endpoint (see
+        # https://ai.google.dev/gemini-api/docs/openai) -- the generic
+        # openai-compatible request builder in chat.py already produces the
+        # right body/headers shape for this, so gemini never needed its own
+        # bespoke request builder, only this correct default base URL.
+        return "https://generativelanguage.googleapis.com/v1beta/openai"
+    return "https://api.openai.com/v1"
+
+def _normalize_provider_item(v: Any, fallback_id: str = "", prefer_fallback_id: bool = False) -> Optional[Provider]:
     if not isinstance(v, dict):
         return None
     
@@ -253,8 +314,21 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
     if not is_provider and any(k in v for k in ("maxInputTokens", "max_input_tokens", "maxOutputTokens", "max_output_tokens", "toolCalling", "tool_calling", "vision", "multimodal", "context_length", "contextLength")):
         return None
 
-    # 1. Resolve ID
-    raw_id = str(v.get("id") or v.get("provider_id") or v.get("slug") or v.get("name") or fallback_id or "").strip()
+    # 1. Resolve ID. When the payload is a dict keyed by provider id (the
+    # overwhelmingly common real-world shape -- {"mistral": {"name": "Mistral
+    # AI", ...}}, exactly what this app's own import-modal placeholder shows)
+    # that key is the deliberate, stable identity and must win over a
+    # display "name" field. Previously "name" was checked before
+    # fallback_id, so re-importing e.g. {"mistral": {"name": "Mistral AI",
+    # ...}} silently produced a NEW provider "mistral-ai" instead of merging
+    # into the existing "mistral" -- the existing provider the user was
+    # looking at never changed, making the import look like it added
+    # nothing. Mirrors PHP's Providers::normalizeProvider(), which resolves
+    # id as `id ?? slug ?? fallbackId` and never considers "name" at all.
+    if prefer_fallback_id and fallback_id:
+        raw_id = str(v.get("id") or v.get("provider_id") or v.get("slug") or fallback_id or v.get("name") or "").strip()
+    else:
+        raw_id = str(v.get("id") or v.get("provider_id") or v.get("slug") or v.get("name") or fallback_id or "").strip()
     if not raw_id:
         raw_id = f"provider-{int(time.time()*1000)}"
     pid = re.sub(r'[^a-zA-Z0-9_\-]', '-', raw_id).strip('-').lower() or f"p-{int(time.time())}"
@@ -262,30 +336,29 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
     # 2. Resolve Name
     name = str(v.get("name") or v.get("title") or v.get("label") or v.get("provider_name") or raw_id or pid).strip()
 
-    # 3. Resolve Protocol
-    protocol = str(v.get("protocol") or v.get("type") or v.get("provider_type") or v.get("format") or "openai-compatible").strip().lower()
-    if protocol in ("openai", "chatgpt", "openai_compatible", "openai-v1"):
-        protocol = "openai-compatible"
-    elif protocol in ("claude", "anthropic_v1"):
-        protocol = "anthropic"
-    elif protocol in ("google", "google_gemini", "gemini_api"):
-        protocol = "gemini"
-    elif protocol in ("cloudflare-workers-ai", "cloudflare_workers_ai", "cf", "cf-ai", "workersai"):
-        protocol = "cloudflare"
-    elif protocol not in ("openai-compatible", "anthropic", "gemini", "ollama", "mistral", "azure", "cloudflare"):
-        protocol = "openai-compatible"
-
-    # 4. Resolve URL
+    # 2b. Resolve Vendor & URL early -- both feed protocol guessing below.
+    vendor_hint = str(v.get("vendor") or "").strip()
     url = str(v.get("url") or v.get("base_url") or v.get("baseUrl") or v.get("endpoint") or v.get("api_base") or v.get("apiUrl") or v.get("address") or v.get("host") or "").strip()
+
+    # 3. Resolve Protocol. Real-world provider exports (including the exact
+    # shape users paste/re-import, e.g. {"id": "ollama", "vendor":
+    # "ollama-models", "url": "...", "models": [...]}) very often omit an
+    # explicit protocol/type field entirely. Previously that silently
+    # defaulted every such provider to "openai-compatible" -- wrong request
+    # shape, wrong default URL, wrong auth header -- which is exactly why
+    # Ollama/Anthropic/Gemini/Cloudflare entries re-imported without an
+    # explicit "protocol" key would stop working. Only fall back to
+    # guessing from id/vendor/url when the field is truly absent.
+    explicit_protocol = v.get("protocol") or v.get("type") or v.get("provider_type") or v.get("format")
+    if explicit_protocol:
+        protocol = _canonical_protocol(str(explicit_protocol))
+    else:
+        protocol = _guess_protocol(pid, vendor_hint, url)
+
+    # 4. Resolve URL (fall back to the correct default for the now-resolved
+    # protocol, not just the generic OpenAI URL).
     if not url:
-        if protocol == "ollama":
-            url = "http://localhost:11434"
-        elif protocol == "anthropic":
-            url = "https://api.anthropic.com"
-        elif protocol == "cloudflare":
-            url = "https://api.cloudflare.com/client/v4"
-        else:
-            url = "https://api.openai.com/v1"
+        url = _default_provider_url(protocol)
 
     # 5. Resolve API Key & API Keys
     api_key = str(v.get("apiKey") or v.get("api_key") or v.get("key") or v.get("token") or v.get("secret") or v.get("auth_token") or "").strip()
@@ -398,6 +471,78 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
         models=models,
         extra=extra
     )
+
+def _merge_provider(existing: Provider, incoming: Provider, raw_incoming: Dict[str, Any]) -> Tuple[Provider, int, int]:
+    """Merge an imported provider into an already-configured one without
+    losing local state -- mirrors agent-php's Providers::mergeProvider().
+
+    A plain `self.data.update(parsed)` (the previous behaviour) replaced the
+    *entire* existing Provider object with whatever the import payload
+    contained. In practice that meant: re-importing a provider whose
+    "models" list was empty, or whose "apiKey" was blank (exactly what
+    `export_json()` itself produces, since it strips keys for security)
+    silently wiped the real, working configuration -- which is exactly what
+    made catalog import look like it "succeeded" while visibly adding
+    nothing useful. Blank/absent incoming fields now fall back to the
+    existing value instead of overwriting it, and models are merged by id
+    rather than replacing the whole list.
+    """
+    data = existing.model_dump()
+    incoming_data = incoming.model_dump()
+
+    data["name"] = incoming_data["name"] or existing.name
+    if incoming_data.get("vendor") and incoming_data["vendor"] != "custom":
+        data["vendor"] = incoming_data["vendor"]
+    data["protocol"] = incoming_data["protocol"]
+
+    for key in ("apiKey", "apiKeyEnv", "proxyUrl", "url"):
+        if incoming_data.get(key):
+            data[key] = incoming_data[key]
+    if incoming_data.get("apiKeys"):
+        data["apiKeys"] = incoming_data["apiKeys"]
+
+    # A missing "enabled" key in the raw payload must never silently flip an
+    # already-enabled provider off (or vice versa) just because the
+    # normalizer defaults it.
+    if "enabled" in raw_incoming:
+        data["enabled"] = incoming_data["enabled"]
+
+    if any(k in raw_incoming for k in ("priority",)):
+        data["priority"] = incoming_data["priority"]
+    if any(k in raw_incoming for k in ("timeoutSec", "timeout_sec", "timeout")):
+        data["timeoutSec"] = incoming_data["timeoutSec"]
+
+    data["extra"] = {**(existing.extra or {}), **(incoming.extra or {})}
+
+    # _normalize_provider_item() fills in a handful of sensible placeholder
+    # models (e.g. llama3.2 for a brand-new ollama provider) whenever the
+    # raw payload's "models" is missing/empty -- a helpful default for a
+    # first-time import, but wrong here: we're merging into an *existing*
+    # provider that may already have its own real, already-tested model
+    # list, and an incoming payload that genuinely says "no models" (or
+    # omits the field) must never erase that.
+    raw_models = raw_incoming.get("models") or raw_incoming.get("model_list") or raw_incoming.get("available_models")
+    models_added = 0
+    models_updated = 0
+    if raw_models:
+        existing_ids = {m.id for m in existing.models}
+        incoming_ids = {m.id for m in incoming.models}
+        # Only models the payload actually mentioned count as added/updated
+        # here -- existing models that simply survive the merge untouched
+        # (because the incoming payload didn't mention them) must not be
+        # miscounted as "updated".
+        models_added = len(incoming_ids - existing_ids)
+        models_updated = len(incoming_ids & existing_ids)
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for m in existing.models:
+            by_id[m.id] = m.model_dump()
+        for m in incoming.models:
+            by_id[m.id] = m.model_dump()
+        data["models"] = list(by_id.values())
+    else:
+        data["models"] = [m.model_dump() for m in existing.models]
+
+    return Provider.model_validate(data), models_added, models_updated
 
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60.0):
@@ -683,6 +828,14 @@ class ProviderStore:
         return json.dumps(dump, ensure_ascii=False, indent=2)
 
     def import_json(self, text: str, replace: bool = False) -> int:
+        report = self.import_json_report(text, replace=replace)
+        return report["providersInPayload"]
+
+    def import_json_report(self, text: str, replace: bool = False) -> Dict[str, Any]:
+        """Parse and apply an imported provider catalog, returning a detailed
+        report (created/updated provider ids, models added/updated across
+        the whole import). `import_json()` wraps this and keeps returning a
+        plain int for backward compatibility with existing callers/tests."""
         incoming = _decode_relaxed_json(text)
 
         # Unwrap top-level dictionary wrappers like {"providers": [...]}, {"data": [...]}, {"items": [...]}
@@ -692,17 +845,20 @@ class ProviderStore:
                     incoming = incoming[wrapper_key]
                     break
 
-        parsed = {}
+        # Keep each normalized Provider paired with its *raw* source dict --
+        # the merge step below needs to know whether a field (e.g. "enabled")
+        # was actually present in the payload, not just its normalized value.
+        parsed: Dict[str, Tuple[Provider, Dict[str, Any]]] = {}
         if isinstance(incoming, list):
             for idx, item in enumerate(incoming):
                 p = _normalize_provider_item(item, fallback_id=f"provider-{idx+1}")
-                if p:
-                    parsed[p.id] = p
+                if p and isinstance(item, dict):
+                    parsed[p.id] = (p, item)
         elif isinstance(incoming, dict):
             for k, v in incoming.items():
-                p = _normalize_provider_item(v, fallback_id=str(k))
-                if p:
-                    parsed[p.id] = p
+                p = _normalize_provider_item(v, fallback_id=str(k), prefer_fallback_id=True)
+                if p and isinstance(v, dict):
+                    parsed[p.id] = (p, v)
         else:
             raise ValueError("Import data must be a JSON array of providers or an object mapping.")
 
@@ -712,17 +868,50 @@ class ProviderStore:
                 target_pid = next(iter(self.data))
                 try:
                     res = self.import_models_for_provider(target_pid, text, replace=replace)
-                    return len(self.data)
+                    return {
+                        "providersInPayload": 0, "created": [], "updated": [],
+                        "modelsAdded": res.get("added", 0), "modelsUpdated": res.get("updated", 0),
+                        "attachedToProvider": target_pid,
+                    }
                 except Exception:
                     pass
             raise ValueError("No valid providers could be parsed from the provided input.")
 
+        created: List[str] = []
+        updated: List[str] = []
+        models_added = 0
+        models_updated = 0
+
         if replace:
-            self.data = parsed
+            # Explicit full-catalog replace: apply exactly what was given,
+            # no merge -- this is the one case where wholesale overwrite is
+            # actually what the user asked for.
+            self.data = {pid: p for pid, (p, _raw) in parsed.items()}
+            created = list(self.data.keys())
+            for p in self.data.values():
+                models_added += len(p.models)
         else:
-            self.data.update(parsed)
+            for pid, (incoming_p, raw) in parsed.items():
+                existing_p = self.data.get(pid)
+                if existing_p is None:
+                    self.data[pid] = incoming_p
+                    created.append(pid)
+                    models_added += len(incoming_p.models)
+                else:
+                    merged, added_count, updated_count = _merge_provider(existing_p, incoming_p, raw)
+                    self.data[pid] = merged
+                    updated.append(pid)
+                    models_added += added_count
+                    models_updated += updated_count
+
         self.save()
-        return len(parsed)
+        return {
+            "providersInPayload": len(parsed),
+            "created": created,
+            "updated": updated,
+            "modelsAdded": models_added,
+            "modelsUpdated": models_updated,
+        }
 
     def import_models_for_provider(self, provider_id: str, text: str, replace: bool = False) -> Dict[str, Any]:
         if provider_id not in self.data:

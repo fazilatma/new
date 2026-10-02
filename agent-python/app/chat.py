@@ -167,8 +167,6 @@ async def call_provider_api(
     custom_connect_sec: Optional[float] = None
 ) -> Dict[str, Any]:
     base_url = provider.url.rstrip("/")
-    proxy_url = provider.proxyUrl or get_raw_config("AGENT_PROXY_URL", "https://proxy.fazilat-ma.workers.dev/?url={url}")
-    proxy_enabled = get_raw_config("AGENT_PROXY_ENABLED", "true").lower() in ("1", "true", "yes")
 
     headers = {
         "Content-Type": "application/json"

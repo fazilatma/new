@@ -888,6 +888,20 @@
       color: var(--text-muted);
       font-weight: 600;
     }
+    .model-test-table th[data-sort-key] {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .model-test-table th[data-sort-key]:hover {
+      color: var(--text, #fff);
+    }
+    .model-test-table .sort-indicator {
+      display: inline-block;
+      font-size: 10px;
+      color: var(--primary, #818cf8);
+      margin-left: 2px;
+    }
     .model-test-table td {
       padding: 8px 12px;
       border-bottom: 1px solid var(--border-subtle);
@@ -2195,7 +2209,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.2.0)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.0)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2221,8 +2235,8 @@
       <button class="nav-btn" data-view="providers" onclick="navigate('providers')">
         <span class="icon">🤖</span><span class="nav-text">Providers & Models</span>
       </button>
-      <button class="nav-btn" data-view="localai" onclick="openLocalAi()" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور (Local AI installer)">
-        <span class="icon">🧠</span><span class="nav-text">Local AI Installer</span>
+      <button type="button" class="nav-btn" data-view="localai" onclick="openLocalAi()" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور - در تب جدید باز می‌شود (Local AI installer - opens in a new tab)">
+        <span class="icon">🧠</span><span class="nav-text">Local AI Installer ↗</span>
       </button>
       <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
@@ -2278,7 +2292,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.2.0
+          🚀 v3.3.0
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -3498,7 +3512,7 @@ gemini-1.5-pro'></textarea>
 
 <!-- MODAL: MODEL TEST RESULTS TABLE (v0.9.0) -->
 <div class="modal-backdrop" id="modelTestModal">
-  <div class="modal-dialog" style="max-width:960px;width:95%;">
+  <div class="modal-dialog" style="max-width:none;width:98vw;height:94vh;max-height:94vh;">
     <div class="modal-header">
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:18px;">🧪</span>
@@ -3509,9 +3523,9 @@ gemini-1.5-pro'></textarea>
       </div>
       <button class="btn-ghost" onclick="closeModal('modelTestModal')">✕</button>
     </div>
-    <div class="modal-body" style="padding:16px;gap:12px;">
+    <div class="modal-body" style="padding:16px;gap:12px;flex:1;min-height:0;">
       <!-- Summary Bar & Controls -->
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;background:var(--bg-elevated);padding:12px;border-radius:8px;border:1px solid var(--border-subtle);">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;background:var(--bg-elevated);padding:12px;border-radius:8px;border:1px solid var(--border-subtle);flex-shrink:0;">
         <div style="display:flex;gap:14px;align-items:center;">
           <span style="font-size:12px;">Total: <b id="testSummaryTotal">0</b></span>
           <span style="font-size:12px;color:var(--accent-green);">Passed: <b id="testSummaryPassed">0</b></span>
@@ -3527,16 +3541,16 @@ gemini-1.5-pro'></textarea>
       </div>
 
       <!-- Test Results Table -->
-      <div style="max-height:420px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:6px;">
-        <table class="model-test-table">
+      <div style="flex:1;min-height:0;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:6px;">
+        <table class="model-test-table" id="modelTestTable">
           <thead>
             <tr>
-              <th style="width:140px;">Provider</th>
-              <th style="width:200px;">Model</th>
-              <th style="width:100px;">Status</th>
-              <th style="width:90px;">Latency</th>
-              <th>Diagnostics / Response</th>
-              <th style="width:80px;text-align:right;">Action</th>
+              <th style="width:16%;" data-sort-key="providerName" onclick="sortTestResultsTable('providerName')">Provider<span class="sort-indicator" data-sort-indicator-for="providerName"></span></th>
+              <th style="width:22%;" data-sort-key="model" onclick="sortTestResultsTable('model')">Model<span class="sort-indicator" data-sort-indicator-for="model"></span></th>
+              <th style="width:10%;" data-sort-key="ok" onclick="sortTestResultsTable('ok')">Status<span class="sort-indicator" data-sort-indicator-for="ok"></span></th>
+              <th style="width:10%;" data-sort-key="latencyMs" onclick="sortTestResultsTable('latencyMs')">Latency<span class="sort-indicator" data-sort-indicator-for="latencyMs"></span></th>
+              <th data-sort-key="diag" onclick="sortTestResultsTable('diag')">Diagnostics / Response<span class="sort-indicator" data-sort-indicator-for="diag"></span></th>
+              <th style="width:8%;text-align:right;">Action</th>
             </tr>
           </thead>
           <tbody id="modelTestTableBody">
@@ -4135,7 +4149,21 @@ function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
 
 function openLocalAi() {
-  window.location.href = window.apiUrl ? window.apiUrl('/localai') : '/localai';
+  // Local AI Installer is a full standalone page (not an SPA view), so this
+  // must be a real top-level navigation. When this app itself is rendered
+  // inside an embedding iframe (e.g. a live-preview/sandbox viewer), an
+  // in-place `location.href` navigation to a different path is exactly the
+  // kind of top-level navigation such embeds block/bounce — which looked
+  // like the button "doing nothing" and landing back on the first page.
+  // Opening it in a new tab sidesteps that restriction entirely and, as a
+  // bonus, no longer throws away whatever chat/project the user was on.
+  const url = window.apiUrl ? window.apiUrl('/localai') : '/localai';
+  const win = window.open(url, '_blank', 'noopener');
+  if (!win) {
+    // Popup blocked by the browser: fall back to the old same-tab behavior
+    // rather than silently doing nothing.
+    window.location.href = url;
+  }
 }
 
 // -------------------------------------------------------------
@@ -4579,7 +4607,17 @@ async function handleImportProvidersSubmit(e) {
     closeModal('importProvidersModal');
     await loadProvidersList();
     renderChatProviders();
-    alert(`✅ کاتالوگ ارائه‌دهندگان با موفقیت وارد شد (${res.count || 'همه'} ارائه‌دهنده فعال)`);
+    const createdCount = (res.created || []).length;
+    const updatedCount = (res.updated || []).length;
+    const modelsAdded = res.modelsAdded || 0;
+    const modelsUpdated = res.modelsUpdated || 0;
+    alert(
+      `✅ وارد‌سازی کاتالوگ انجام شد:\n` +
+      `• ${createdCount} ارائه‌دهنده جدید اضافه شد${createdCount ? ' (' + res.created.join(', ') + ')' : ''}\n` +
+      `• ${updatedCount} ارائه‌دهنده موجود به‌روزرسانی شد${updatedCount ? ' (' + res.updated.join(', ') + ')' : ''}\n` +
+      `• ${modelsAdded} مدل جدید اضافه شد، ${modelsUpdated} مدل به‌روزرسانی شد\n` +
+      `• مجموع ارائه‌دهندگان: ${res.count}`
+    );
   } catch (err) {
     alert('خطا در واردسازی: ' + err.message);
   }
@@ -4827,9 +4865,48 @@ async function runAllModelTests() {
   }
 }
 
+let testResultsSortState = { key: null, dir: 1 };
+
+function sortTestResultsTable(key) {
+  if (testResultsSortState.key === key) {
+    testResultsSortState.dir = -testResultsSortState.dir;
+  } else {
+    testResultsSortState.key = key;
+    testResultsSortState.dir = 1;
+  }
+  renderTestResultsTable();
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll('#modelTestTable .sort-indicator').forEach(el => {
+    const key = el.getAttribute('data-sort-indicator-for');
+    el.textContent = testResultsSortState.key === key ? (testResultsSortState.dir === 1 ? ' ▲' : ' ▼') : '';
+  });
+}
+
+function sortResultsRows(rows) {
+  const { key, dir } = testResultsSortState;
+  if (!key) return rows;
+  const withDiag = rows.map(r => ({ ...r, diag: r.ok ? (r.message || 'OK (200)') : (r.error || 'Unknown failure') }));
+  withDiag.sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (key === 'providerName') { av = a.providerName || a.provider || ''; bv = b.providerName || b.provider || ''; }
+    if (key === 'ok') { av = a.ok ? 1 : 0; bv = b.ok ? 1 : 0; }
+    if (typeof av === 'string' && typeof bv === 'string') {
+      return av.localeCompare(bv) * dir;
+    }
+    av = Number(av) || 0;
+    bv = Number(bv) || 0;
+    return (av - bv) * dir;
+  });
+  return withDiag;
+}
+
 function renderTestResultsTable() {
   const filterPid = $('#testProviderFilter') ? $('#testProviderFilter').value : '';
-  const filtered = filterPid ? lastModelTestResults.filter(r => r.provider === filterPid) : lastModelTestResults;
+  let filtered = filterPid ? lastModelTestResults.filter(r => r.provider === filterPid) : lastModelTestResults;
+  filtered = sortResultsRows(filtered);
+  updateSortIndicators();
 
   const total = filtered.length;
   const passed = filtered.filter(r => r.ok).length;
@@ -6036,6 +6113,10 @@ async function selectConversation(convId) {
     renderChatMessages();
     await loadConversationReferences(convId);
     await refreshFileTree();
+    // If a chat job for this conversation is still queued/running/paused
+    // server-side (browser was closed, network dropped, or the server
+    // itself restarted mid-generation), re-attach to its live stream.
+    reattachActiveJobIfAny(convId).catch(() => {});
   } catch (_) {}
 }
 
@@ -6218,18 +6299,143 @@ let abortController = null;
 let activeRetryTimer = null;
 let mentionMatches = [];
 let selectedMentionIdx = 0;
+// The server-side job id backing the currently streaming/reattached chat
+// turn (if any). Set as soon as the 'job' SSE event (or the active-job
+// discovery endpoint, on reattach) reveals it, and used so Stop actually
+// cancels the job server-side instead of only detaching the browser.
+let currentChatJobId = null;
 
 function stopStreaming() {
   if (activeRetryTimer) {
     clearInterval(activeRetryTimer);
     activeRetryTimer = null;
   }
+  // The agent loop keeps running server-side as a job even if we only
+  // abort our local fetch, so tell the server to actually cancel it.
+  if (currentChatJobId) {
+    const jobToCancel = currentChatJobId;
+    api(`/api/jobs/${jobToCancel}/cancel`, { method: 'POST' }).catch(() => {});
+  }
   if (abortController) {
     abortController.abort();
     abortController = null;
   }
+  currentChatJobId = null;
   $('#sendBtn').style.display = 'inline-flex';
   $('#stopBtn').style.display = 'none';
+}
+
+// --- Shared SSE chat-event handling (used by both a fresh send and a
+// reattach to an already-running job) -------------------------------------
+
+function makeStreamCtx(bubble, assistantMsgEl = null) {
+  return {
+    bubble,
+    assistantMsgEl,
+    accumulated: '',
+    accumulatedReasoning: '',
+    isError: false,
+    errorData: null,
+    fallbackDetails: null,
+    execResults: [],
+    renderPreviews: []
+  };
+}
+
+function renderStreamCtx(ctx, suffix = '') {
+  const fullDisplay = (ctx.accumulatedReasoning ? `<think>${ctx.accumulatedReasoning}</think>\n` : '') +
+    (ctx.accumulated || '') + suffix;
+  ctx.bubble.innerHTML = renderMarkdown(fullDisplay);
+  const container = $('#chatMessages');
+  if (container) container.scrollTop = container.scrollHeight;
+}
+
+function applyChatStreamEvent(ctx, data, defaults = {}) {
+  // The initial 'job' event (and any job_id echoed later) tells us which
+  // server-side job backs this stream, so Stop/reattach can target it.
+  if (data.jobId) {
+    currentChatJobId = data.jobId;
+  }
+  if (data.reasoning) {
+    ctx.accumulatedReasoning += data.reasoning;
+    renderStreamCtx(ctx);
+  }
+  if (data.text) {
+    ctx.accumulated += data.text;
+    renderStreamCtx(ctx);
+  }
+  if (data.type === 'tool_executing' || data.tool) {
+    const toolName = data.tool || 'agent_tool';
+    renderStreamCtx(ctx, `\n\n> ⚙️ *در حال اجرای ابزار \`${toolName}\`...*`);
+  }
+  if (data.type === 'execution_running') {
+    renderStreamCtx(ctx, `\n\n> ⚙️ *در حال اجرای خودکار فایل \`${data.path}\` (تلاش ${data.attempt})...*`);
+  }
+  if (data.type === 'execution_fixing') {
+    renderStreamCtx(ctx, `\n\n> 🔧 *خطای اجرا در \`${data.path}\` (Exit ${data.exitCode}). در حال ارسال خطا به مدل و اصلاح خودکار فایل (تلاش ${data.attempt} از ${data.maxAttempts})...*`);
+  }
+  if (data.type === 'execution_healed') {
+    renderStreamCtx(ctx, `\n\n> ✨ *کد با موفقیت اصلاح و بدون خطا اجرا شد (Exit 0).*`);
+  }
+  if (data.type === 'checkpoint_resumed') {
+    renderStreamCtx(ctx, `\n\n> 💾 **ادامه اجرای خودکار از چک‌پوینت ذخیره شده (مرحله ${data.stepIndex + 1})**...`);
+  }
+  if (data.type === 'retry_countdown') {
+    const suffix = `\n\n> ⏳ **تایمر تلاش مجدد ({attempt}/${data.maxAttempts})**: ${data.reason || 'تلاش مجدد در جریان است...'}`
+      .replace('{attempt}', data.attempt || 1);
+    renderStreamCtx(ctx, suffix);
+  }
+  if (data.type === 'model_switched_rate_limit') {
+    renderStreamCtx(ctx, `\n\n> 🔀 **سوییچ هوشمند ارائه‌دهنده به علت ریت‌لیمیت**: ${data.reason || `تغییر مدل به ${data.newModel} از ${data.newProvider}`}`);
+  }
+  if (data.type === 'execution_result') {
+    ctx.execResults.push(data);
+  }
+  if (data.type === 'render_preview_ready') {
+    ctx.renderPreviews.push(data);
+  }
+  if (data.fallbackDetails || data.type === 'fallback_activated') {
+    ctx.fallbackDetails = data.fallbackDetails;
+  }
+  if (data.approvals && data.approvals.length > 0) {
+    renderInlineApprovalCard(ctx.assistantMsgEl || null, data.approvals[0]);
+    checkPendingApprovals();
+  }
+  if (data.errorDetails) {
+    ctx.isError = true;
+    ctx.errorData = data.errorDetails;
+  }
+  if (data.error) {
+    ctx.isError = true;
+    ctx.errorData = data.errorDetails || {
+      provider: defaults.pid,
+      model: defaults.mid,
+      error: data.error,
+      timestamp: new Date().toISOString(),
+      remediation: 'Check provider API key and connectivity.'
+    };
+  }
+}
+
+async function pumpSseIntoCtx(reader, ctx, defaults = {}) {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(trimmed.slice(6));
+          applyChatStreamEvent(ctx, data, defaults);
+        } catch (_) {}
+      }
+    }
+  }
 }
 
 function clearChat() {
@@ -6601,12 +6807,8 @@ async function streamAgentResponse(retryAttempt = 0) {
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
 
   abortController = new AbortController();
-  let accumulated = '';
-  let errorData = null;
-  let isError = false;
-  let fallbackDetails = null;
-  let execResults = [];
-  let renderPreviews = [];
+  currentChatJobId = null;
+  const ctx = makeStreamCtx(bubble, assistantMsgEl);
 
   try {
     const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
@@ -6643,121 +6845,11 @@ async function streamAgentResponse(retryAttempt = 0) {
     }
 
     const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     bubble.textContent = '';
-    let accumulatedReasoning = '';
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
+    await pumpSseIntoCtx(reader, ctx, { pid, mid });
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(trimmed.slice(6));
-            if (data.reasoning) {
-              accumulatedReasoning += data.reasoning;
-              const fullDisplay = `<think>${accumulatedReasoning}</think>\n` + (accumulated || '');
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.text) {
-              accumulated += data.text;
-              const fullDisplay = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'tool_executing' || data.tool) {
-              const toolName = data.tool || 'agent_tool';
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> ⚙️ *در حال اجرای ابزار \`${toolName}\`...*`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'execution_running') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> ⚙️ *در حال اجرای خودکار فایل \`${data.path}\` (تلاش ${data.attempt})...*`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'execution_fixing') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> 🔧 *خطای اجرا در \`${data.path}\` (Exit ${data.exitCode}). در حال ارسال خطا به مدل و اصلاح خودکار فایل (تلاش ${data.attempt} از ${data.maxAttempts})...*`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'execution_healed') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> ✨ *کد با موفقیت اصلاح و بدون خطا اجرا شد (Exit 0).*`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'checkpoint_resumed') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> 💾 **ادامه اجرای خودکار از چک‌پوینت ذخیره شده (مرحله ${data.stepIndex + 1})**...`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'retry_countdown') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> ⏳ **تایمر تلاش مجدد ({attempt}/${maxAttempts})**: ${data.reason || 'تلاش مجدد در جریان است...'}`
-                .replace('{attempt}', data.attempt || 1)
-                .replace('{maxAttempts}', data.maxAttempts || 10);
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'model_switched_rate_limit') {
-              const fullDisplay = (accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n` : '') + 
-                (accumulated || '') + `\n\n> 🔀 **سوییچ هوشمند ارائه‌دهنده به علت ریت‌لیمیت**: ${data.reason || `تغییر مدل به ${data.newModel} از ${data.newProvider}`}`;
-              bubble.innerHTML = renderMarkdown(fullDisplay);
-              const container = $('#chatMessages');
-              container.scrollTop = container.scrollHeight;
-            }
-            if (data.type === 'execution_result') {
-              execResults.push(data);
-            }
-            if (data.type === 'render_preview_ready') {
-              renderPreviews.push(data);
-            }
-            if (data.fallbackDetails || data.type === 'fallback_activated') {
-              fallbackDetails = data.fallbackDetails;
-            }
-            if (data.approvals && data.approvals.length > 0) {
-              renderInlineApprovalCard(assistantMsgEl, data.approvals[0]);
-              checkPendingApprovals();
-            }
-            if (data.errorDetails) {
-              isError = true;
-              errorData = data.errorDetails;
-            }
-            if (data.error) {
-              isError = true;
-              errorData = data.errorDetails || {
-                provider: pid,
-                model: mid,
-                error: data.error,
-                timestamp: new Date().toISOString(),
-                remediation: 'Check provider API key and connectivity.'
-              };
-            }
-          } catch (_) {}
-        }
-      }
-    }
-
+    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
     const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
 
     if (!finalContent && isError) {
@@ -6877,11 +6969,112 @@ async function streamAgentResponse(retryAttempt = 0) {
       $('#sendBtn').style.display = 'inline-flex';
       $('#stopBtn').style.display = 'none';
       abortController = null;
+      currentChatJobId = null;
       if (STATE.activeConversationId) {
         loadConversationReferences(STATE.activeConversationId).catch(() => {});
       }
       refreshFileTree().catch(() => {});
     }
+  }
+}
+
+// Called on page load and whenever a conversation is opened: discovers
+// whether this conversation still has a chat job queued/running/paused on
+// the server (e.g. the browser was closed, lost network, or the server
+// itself restarted mid-generation) and, if so, re-attaches to its live SSE
+// stream -- replaying everything that already happened via `since=0` --
+// instead of leaving the composer looking idle while the agent is still
+// working.
+async function reattachActiveJobIfAny(convId) {
+  if (!convId) return;
+  let job = null;
+  try {
+    const data = await api(`/api/conversations/${convId}/active-job`);
+    job = data && data.active;
+  } catch (_) {
+    return;
+  }
+  if (!job || !job.id || !['queued', 'running', 'paused'].includes(job.status)) return;
+  // Don't stomp on a stream the user is already actively watching.
+  if (abortController) return;
+
+  currentChatJobId = job.id;
+  abortController = new AbortController();
+  $('#sendBtn').style.display = 'none';
+  $('#stopBtn').style.display = 'inline-flex';
+
+  const assistantMsgEl = appendMessage('assistant', '🔄 در حال اتصال مجدد به اجرای در حال انجام روی سرور...');
+  const bubble = assistantMsgEl.querySelector('.msg-bubble');
+  const ctx = makeStreamCtx(bubble, assistantMsgEl);
+
+  try {
+    const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
+    const headers = { 'Accept': 'text/event-stream' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const streamUrl = window.apiUrl ? window.apiUrl(`/api/chat/stream/${job.id}?since=0`) : `/api/chat/stream/${job.id}?since=0`;
+    const res = await fetch(streamUrl, { headers, signal: abortController.signal });
+    if (!res.ok) {
+      if (assistantMsgEl.parentNode) assistantMsgEl.parentNode.removeChild(assistantMsgEl);
+      return;
+    }
+
+    bubble.textContent = '';
+    const reader = res.body.getReader();
+    await pumpSseIntoCtx(reader, ctx, { pid: job.provider_id, mid: job.model_id });
+
+    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
+    const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
+
+    if (!finalContent && isError) {
+      bubble.innerHTML = renderMarkdown(`⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`);
+    }
+    if (isError && errorData) {
+      bubble.classList.add('is-error');
+      bubble.title = 'کلیک برای مشاهده لاگ خطای تشخیصی';
+      bubble.onclick = () => openChatErrorModal(errorData);
+      const badge = document.createElement('div');
+      badge.className = 'error-diag-badge';
+      badge.innerHTML = '🔍 مشاهده لاگ تشخیصی و راهنمای حل خطا';
+      badge.onclick = (e) => {
+        e.stopPropagation();
+        openChatErrorModal(errorData);
+      };
+      bubble.appendChild(badge);
+    }
+
+    if (finalContent || accumulated) {
+      chatHistory.push({
+        role: 'assistant',
+        content: finalContent || accumulated,
+        isFallback: Boolean(fallbackDetails),
+        fallbackDetails: fallbackDetails,
+        execResults: execResults,
+        renderPreviews: renderPreviews
+      });
+      localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
+      if (STATE.activeConversationId) {
+        api(`/api/conversations/${STATE.activeConversationId}/messages/sync`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: chatHistory })
+        }).catch(() => {});
+      }
+      renderChatMessages();
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError' && assistantMsgEl.parentNode) {
+      assistantMsgEl.parentNode.removeChild(assistantMsgEl);
+    }
+  } finally {
+    $('#sendBtn').style.display = 'inline-flex';
+    $('#stopBtn').style.display = 'none';
+    abortController = null;
+    currentChatJobId = null;
+    if (STATE.activeConversationId) {
+      loadConversationReferences(STATE.activeConversationId).catch(() => {});
+    }
+    refreshFileTree().catch(() => {});
   }
 }
 

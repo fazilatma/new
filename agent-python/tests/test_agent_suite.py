@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.2.0"
+    assert APP_VERSION == "3.3.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -478,6 +478,49 @@ def test_model_endpoint_testing_and_diagnostics():
     assert "directEndpoint" in single_data["request"]
     assert "effectiveEndpoint" in single_data["request"]
     assert "response" in single_data
+
+def test_provider_test_all_interleaves_round_robin_not_provider_by_provider(monkeypatch):
+    """Regression test: /api/providers/test-all must test model #1 of every
+    provider, then model #2 of every provider, and so on -- never every
+    model of provider A followed by every model of provider B -- so that
+    repeat hits against any single provider (the actual trigger for its
+    rate limiting) are spread as far apart in time as possible."""
+    from app.models import Provider, ModelSpec
+    from app import main as main_module
+
+    call_order = []
+
+    async def fake_diagnostic(p, m, api_key, timeout_sec=4.0, connect_sec=2.0):
+        call_order.append((p.id, m.id))
+        return {
+            "provider": p.id, "providerName": p.name, "model": m.id, "modelName": m.name,
+            "ok": True, "latencyMs": 1, "protocol": p.protocol, "message": "OK",
+            "timestamp": "now"
+        }
+
+    monkeypatch.setattr(main_module, "_execute_model_diagnostic_test", fake_diagnostic)
+
+    fake_providers = {
+        "alpha": Provider(id="alpha", name="Alpha", url="https://a.example", protocol="openai-compatible", enabled=True,
+                           models=[ModelSpec(id="a1", name="A1"), ModelSpec(id="a2", name="A2"), ModelSpec(id="a3", name="A3")]),
+        "beta": Provider(id="beta", name="Beta", url="https://b.example", protocol="openai-compatible", enabled=True,
+                          models=[ModelSpec(id="b1", name="B1"), ModelSpec(id="b2", name="B2")]),
+        "gamma": Provider(id="gamma", name="Gamma", url="https://c.example", protocol="openai-compatible", enabled=True,
+                           models=[ModelSpec(id="c1", name="C1")]),
+    }
+    monkeypatch.setattr(main_module.PROVIDER_STORE, "data", fake_providers)
+    monkeypatch.setattr(main_module.PROVIDER_STORE, "get_api_key", lambda p: "test-key")
+
+    res = client.post("/api/providers/test-all", json={})
+    assert res.status_code == 200
+    assert len(call_order) == 6
+
+    # Round 0: model #1 of every provider, in provider order.
+    assert call_order[0:3] == [("alpha", "a1"), ("beta", "b1"), ("gamma", "c1")]
+    # Round 1: model #2 of every provider that still has one (gamma doesn't).
+    assert call_order[3:5] == [("alpha", "a2"), ("beta", "b2")]
+    # Round 2: model #3 of every provider that still has one (only alpha).
+    assert call_order[5:6] == [("alpha", "a3")]
 
 def test_chat_streaming_and_error_diagnostics(monkeypatch):
     async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
@@ -1358,6 +1401,204 @@ async def test_checkpoint_resumption_in_stream_chat(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_chat_job_runs_to_completion_with_no_http_connection_alive(monkeypatch):
+    """Regression test for 'the agent loop must be server-side': this drives
+    a chat job through the exact same worker.execute_job_task() the
+    persistent_worker_loop uses, with *no* HTTP request/SSE connection
+    involved at all -- proving the agent loop's execution is not a child of,
+    or dependent on, any particular browser connection. On completion the
+    assistant's answer must be durably saved to the conversation's message
+    history (not just handed back over a connection that may never have
+    been there to receive it), so a browser that was closed the whole time
+    still sees the result when it reopens the conversation.
+    """
+    from app.worker import create_job, execute_job_task, CHAT_JOB_TYPE
+    from app.database import get_job_events_since
+    from app.providers import PROVIDER_STORE
+
+    conv_id = f"test-detached-{int(time.time()*1000)}"
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "Detached job response"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Detached job response"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+    monkeypatch.setattr(PROVIDER_STORE, "get_api_key", lambda p: "sk-mock-key")
+
+    job = create_job(
+        title="Detached chat job",
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        payload={"messages": [{"role": "user", "content": "Hello"}]},
+        conversation_id=conv_id,
+        job_type=CHAT_JOB_TYPE,
+    )
+
+    # No fetch(), no StreamingResponse, no browser -- just the worker.
+    await execute_job_task(job["id"])
+
+    details = get_job_details(job["id"])
+    assert details["status"] == "done"
+
+    events = get_job_events_since(job["id"], since_seq=0)
+    assert any(e["type"] == "done" for e in events)
+
+    msgs = client.get(f"/api/conversations/{conv_id}/messages").json()["messages"]
+    assert any(m["role"] == "assistant" and "Detached job response" in m["content"] for m in msgs)
+
+
+def test_conversation_active_job_discovery_endpoint(monkeypatch):
+    """The frontend uses this to notice, on page load/reconnect, that a
+    conversation already has a chat job running server-side -- so it can
+    re-attach to the live stream instead of showing an idle composer while
+    the agent is still actually working."""
+    from app.worker import create_job, CHAT_JOB_TYPE
+    from app.database import get_db
+
+    conv_id = f"test-activejob-{int(time.time()*1000)}"
+    res = client.get(f"/api/conversations/{conv_id}/active-job")
+    assert res.status_code == 200
+    assert res.json()["active"] is None
+
+    job = create_job(
+        title="Still running",
+        provider_id="openrouter",
+        model_id="x",
+        payload={"messages": []},
+        conversation_id=conv_id,
+        job_type=CHAT_JOB_TYPE,
+    )
+    with get_db() as conn:
+        conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job["id"],))
+
+    res2 = client.get(f"/api/conversations/{conv_id}/active-job")
+    active = res2.json()["active"]
+    assert active is not None
+    assert active["id"] == job["id"]
+
+    with get_db() as conn:
+        conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job["id"],))
+    res3 = client.get(f"/api/conversations/{conv_id}/active-job")
+    assert res3.json()["active"] is None
+
+
+def test_chat_stream_reattach_replays_full_event_history():
+    """A client that disconnects and reconnects to the same job (by jobId)
+    must see the exact same event sequence it would have seen if it had
+    never disconnected -- this is what makes 'closed the tab mid-answer,
+    reopened it' safe instead of losing the in-progress response."""
+    from app.worker import create_job, publish_job_event, CHAT_JOB_TYPE
+
+    job = create_job(
+        title="Reattach test",
+        provider_id="openrouter",
+        model_id="x",
+        payload={"messages": []},
+        job_type=CHAT_JOB_TYPE,
+    )
+    publish_job_event(job["id"], {"type": "status", "status": "started"})
+    publish_job_event(job["id"], {"type": "token", "text": "hello "})
+    publish_job_event(job["id"], {"type": "token", "text": "world"})
+    publish_job_event(job["id"], {"type": "done", "steps": 1})
+
+    res = client.get(f"/api/chat/stream/{job['id']}?since=0")
+    assert res.status_code == 200
+    text = res.text
+    assert "event: status" in text
+    assert "event: token" in text
+    assert "hello " in text and "world" in text
+    assert "event: done" in text
+
+    # Reconnecting with since=2 (already saw status + first token) must only
+    # replay what came after.
+    res2 = client.get(f"/api/chat/stream/{job['id']}?since=2")
+    text2 = res2.text
+    assert "hello " not in text2
+    assert "world" in text2
+    assert "event: done" in text2
+
+
+def test_recover_orphaned_jobs_resumes_chat_but_fails_non_chat_job_types():
+    """A chat job interrupted by a server restart (status still 'running'
+    from the previous process) must be re-queued so it resumes from its
+    checkpoint. A Local AI install/import job interrupted the same way runs
+    in a daemon thread whose state is gone forever -- recover_orphaned_jobs()
+    must fail it with a clear message instead of (the old, buggy behaviour)
+    silently re-running it through the chat-completion executor."""
+    from app.worker import create_job, recover_orphaned_jobs
+    from app.database import get_db
+
+    chat_job = create_job(title="Interrupted chat", provider_id="openrouter", model_id="x", payload={}, job_type="chat")
+    localai_job = create_job(title="Interrupted install", provider_id="", model_id="", payload={}, job_type="localai-install")
+    with get_db() as conn:
+        conn.execute("UPDATE jobs SET status = 'running' WHERE id IN (?, ?)", (chat_job["id"], localai_job["id"]))
+
+    recover_orphaned_jobs()
+
+    chat_after = get_job_details(chat_job["id"])
+    localai_after = get_job_details(localai_job["id"])
+
+    assert chat_after["status"] == "queued", "chat jobs must be re-queued to resume from their checkpoint"
+    assert localai_after["status"] == "failed", "non-chat jobs must not be silently re-run as a chat job"
+    assert "retry" in localai_after["error"].lower() or "restart" in localai_after["error"].lower()
+
+
+@pytest.mark.anyio
+async def test_chat_job_resumes_from_checkpoint_after_simulated_server_restart(monkeypatch):
+    """End-to-end version of the checkpoint-resume guarantee, driven through
+    the actual job system (create_job -> [server restart] -> recover_orphaned_jobs
+    -> execute_job_task) rather than calling stream_complete_chat directly,
+    so it also exercises the job status transitions a real restart would."""
+    from app.worker import create_job, recover_orphaned_jobs, execute_job_task, CHAT_JOB_TYPE
+    from app.database import save_conversation_checkpoint, get_job_events_since, get_db, clear_conversation_checkpoints
+    from app.providers import PROVIDER_STORE
+
+    conv_id = f"test-restart-resume-{int(time.time()*1000)}"
+    save_conversation_checkpoint(
+        conversation_id=conv_id,
+        step_index=0,
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        chat_history=[
+            {"role": "user", "content": "Initial prompt"},
+            {"role": "assistant", "content": "Step 1 output"},
+        ],
+        status="in_progress",
+    )
+
+    job = create_job(
+        title="Crashed mid-run",
+        provider_id="openrouter",
+        model_id="google/gemini-2.5-flash",
+        payload={"messages": [{"role": "user", "content": "Initial prompt"}]},
+        conversation_id=conv_id,
+        job_type=CHAT_JOB_TYPE,
+    )
+    # Simulate: the previous server process died while this job was running.
+    with get_db() as conn:
+        conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job["id"],))
+
+    # Simulate: the new server process boots and runs its startup recovery.
+    recover_orphaned_jobs()
+    assert get_job_details(job["id"])["status"] == "queued"
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        yield {"type": "token", "text": "Resumed Step 2 Completed"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Resumed Step 2 Completed"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+    monkeypatch.setattr(PROVIDER_STORE, "get_api_key", lambda p: "sk-mock-key")
+
+    # Simulate: persistent_worker_loop picks the re-queued job back up.
+    await execute_job_task(job["id"])
+
+    assert get_job_details(job["id"])["status"] == "done"
+    events = get_job_events_since(job["id"], since_seq=0)
+    assert any(e["type"] == "checkpoint_resumed" for e in events), "must resume from the checkpoint, not restart the conversation from scratch"
+    clear_conversation_checkpoints(conv_id)
+
+
+@pytest.mark.anyio
 async def test_smart_fallback_on_rate_limit_429_in_stream_chat(monkeypatch):
     """Test that a 429 rate limit immediately switches to the next verified candidate and yields model_switched_rate_limit."""
     from app.chat import stream_complete_chat
@@ -1487,6 +1728,112 @@ def test_flexible_provider_import():
     assert ds.apiKey == "sk-ds-9999"
     assert len(ds.models) == 2
     assert ds.models[0].id == "deepseek-chat"
+
+
+def test_catalog_reimport_merges_instead_of_wiping_existing_config():
+    """Regression test for the exact user-reported bug: re-importing a
+    provider catalog (replace=False, the default) said "success" but
+    visibly added/changed nothing useful, because a blank re-imported
+    apiKey/models wiped the already-configured, working provider. Also
+    covers protocol inference for the real-world shape users paste: a
+    provider keyed by a well-known id (e.g. "ollama") with a "vendor" hint
+    but no explicit "protocol" field."""
+    import json as _json
+    from app.providers import ProviderStore
+
+    store = ProviderStore(path="data/test_catalog_reimport_merge.json")
+    store.data = {}
+
+    # Seed a fully-configured, working ollama provider (as if the user had
+    # already set it up through the UI).
+    seed_payload = _json.dumps({
+        "ollama": {
+            "id": "ollama", "name": "Ollama", "protocol": "ollama",
+            "url": "http://127.0.0.1:11434", "apiKey": "", "enabled": True,
+            "models": [{"id": "llama3.2", "name": "Llama 3.2"}]
+        },
+        "openrouter": {
+            "id": "openrouter", "name": "OpenRouter", "protocol": "openai-compatible",
+            "url": "https://openrouter.ai/api/v1", "apiKey": "sk-or-real-working-key",
+            "enabled": True,
+            "models": [{"id": "anthropic/claude-3.7-sonnet", "name": "Claude 3.7 Sonnet"}]
+        }
+    }, ensure_ascii=False)
+    store.import_json(seed_payload, replace=True)
+    assert store.data["openrouter"].apiKey == "sk-or-real-working-key"
+
+    # Now re-import the exact shape a real user pastes: no explicit
+    # "protocol" field (only "vendor"), a blank apiKey (exactly what
+    # export_json() itself produces), and only a subset of models.
+    reimport_payload = _json.dumps({
+        "ollama": {
+            "id": "ollama", "name": "Ollama", "vendor": "ollama-models",
+            "url": "http://127.0.0.1:11434", "apiKey": "", "enabled": False, "models": []
+        },
+        "openrouter": {
+            "id": "openrouter", "name": "OpenRouter", "vendor": "openrouter",
+            "url": "https://openrouter.ai/api/v1", "apiKey": "",
+            "models": [{"id": "openai/gpt-4o", "name": "GPT-4o"}]
+        }
+    }, ensure_ascii=False)
+    report = store.import_json_report(reimport_payload, replace=False)
+
+    assert "ollama" in report["updated"] and "openrouter" in report["updated"]
+
+    ollama = store.data["ollama"]
+    assert ollama.protocol == "ollama", "protocol must be guessed from id/vendor when the field is absent, not default to openai-compatible"
+    assert [m.id for m in ollama.models] == ["llama3.2"], "a blank incoming models list must not wipe existing models"
+
+    openrouter = store.data["openrouter"]
+    assert openrouter.apiKey == "sk-or-real-working-key", "a blank incoming apiKey must never wipe an already-configured real key"
+    assert {m.id for m in openrouter.models} == {"anthropic/claude-3.7-sonnet", "openai/gpt-4o"}, "models must be merged by id, not replaced wholesale"
+    assert report["modelsAdded"] == 1
+    assert openrouter.enabled is True, "enabled must be preserved when the incoming payload for an EXISTING provider omits the field"
+
+
+def test_catalog_reimport_without_explicit_id_merges_by_json_key_not_by_name():
+    """Regression test for the second half of the exact user-reported bug:
+    "fetching the catalog doesn't import any models" even after the merge
+    fix above. Root cause: when a catalog entry has no explicit "id" field
+    (the overwhelmingly common shape -- {"mistral": {"name": "Mistral AI",
+    ...}}, exactly what this app's own import-modal placeholder shows), the
+    provider's identity used to be derived from the "name" field instead of
+    the dict key, so re-importing into an *existing* "mistral" provider
+    silently created a brand-new orphaned "mistral-ai" duplicate instead of
+    merging into the one the user was actually looking at -- which, from the
+    existing provider's model list, looked exactly like zero models were
+    imported. Mirrors PHP's Providers::normalizeProvider(), which resolves
+    id as `id ?? slug ?? fallbackId` and never considers "name" at all."""
+    import json as _json
+    from app.providers import ProviderStore
+
+    store = ProviderStore(path="data/test_catalog_reimport_by_key.json")
+    store.data = {}
+    store.import_json(_json.dumps({
+        "mistral": {"id": "mistral", "name": "Mistral", "url": "https://api.mistral.ai/v1",
+                    "models": [{"id": "mistral-small-latest", "name": "Mistral Small"}]}
+    }), replace=True)
+    assert "mistral" in store.data
+
+    # Real-world re-import shape: no "id" field at all, just the dict key
+    # ("mistral") and a human display "name" ("Mistral AI") that does NOT
+    # slugify back to the existing provider's id.
+    report = store.import_json_report(_json.dumps({
+        "mistral": {
+            "name": "Mistral AI", "url": "https://api.mistral.ai/v1",
+            "models": [
+                {"id": "mistral-large-latest", "name": "Mistral Large"},
+                {"id": "codestral-latest", "name": "Codestral"}
+            ]
+        }
+    }), replace=False)
+
+    assert "mistral-ai" not in store.data, "must never silently fork a same-content duplicate provider under a name-derived id"
+    assert report["updated"] == ["mistral"]
+    assert report["created"] == []
+    mistral = store.data["mistral"]
+    assert {m.id for m in mistral.models} == {"mistral-small-latest", "mistral-large-latest", "codestral-latest"}
+    assert report["modelsAdded"] == 2
 
 
 def test_user_rich_provider_export_import():

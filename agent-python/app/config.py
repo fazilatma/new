@@ -33,7 +33,7 @@ ENV_FILE = DATA_DIR / "environment.json"
 MASTER_KEY_FILE = DATA_DIR / "master.key"
 
 # Version
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 
 # Secret Encryption (Fernet / AES)
 def get_or_create_master_key() -> bytes:
@@ -118,16 +118,32 @@ def get_proxy_config(target_url: str, custom_proxy_url: Optional[str] = None) ->
     Return (effective_url, proxy_client_url).
     If custom_proxy_url is provided, it is parsed directly.
     Otherwise, reads AGENT_PROXY_ENABLED and AGENT_PROXY_URL from config.
+
+    Defaults to DIRECT (no proxy): this is a server-side Python backend
+    making its own outbound httpx calls, not a browser subject to CORS, so
+    there is no structural reason to route every provider request through a
+    third-party Cloudflare Worker by default. The PHP edition already
+    defaults AGENT_PROXY_ENABLED to false for the same reason (see
+    Config.php's `rawBool('AGENT_PROXY_ENABLED', false)`); defaulting to
+    "1"/enabled here was a porting regression that silently sent every
+    single provider request (chat and diagnostics alike) through
+    proxy.fazilat-ma.workers.dev, whose own WAF/security policy rejects a
+    large fraction of them with a 403 "Access denied by security policy" --
+    indistinguishable, from the UI, from the model/provider itself being
+    broken. Proxying remains available, just opt-in (set
+    AGENT_PROXY_ENABLED=true, or configure a per-provider proxyUrl) for
+    deployments that genuinely sit behind an egress restriction.
     """
     if custom_proxy_url:
         return parse_proxy_setting(custom_proxy_url, target_url)
 
-    enabled_val = get_raw_config("AGENT_PROXY_ENABLED", "1").lower()
-    if enabled_val in ("0", "false", "no", "off"):
+    enabled_val = get_raw_config("AGENT_PROXY_ENABLED", "0").lower()
+    if enabled_val not in ("1", "true", "yes", "on"):
         return target_url, None
 
     proxy_val = get_raw_config("AGENT_PROXY_URL", DEFAULT_PROXY_URL).strip()
     return parse_proxy_setting(proxy_val, target_url)
+
 
 def get_proxy_url(target_url: str) -> Optional[str]:
     """Return proxied URL if URL rewriting proxy is enabled, otherwise None."""

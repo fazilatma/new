@@ -179,6 +179,22 @@ def init_db():
             FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
         );
 
+        -- Durable, ordered record of every SSE-style event a server-side job
+        -- produces (chat tokens, tool calls, status changes, errors, ...).
+        -- This is what makes a browser tab closing/reconnecting a non-event:
+        -- a client can always ask "give me everything since seq N" and get
+        -- back exactly the live stream it would have seen, including
+        -- everything that happened while it was disconnected.
+        CREATE TABLE IF NOT EXISTS job_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            data TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             workspace_id TEXT DEFAULT '',
@@ -254,6 +270,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
         CREATE INDEX IF NOT EXISTS idx_job_steps_job ON job_steps(job_id);
         CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id);
+        CREATE INDEX IF NOT EXISTS idx_job_events_job_seq ON job_events(job_id, seq);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_conv_refs ON conversation_references(conversation_id);
         CREATE INDEX IF NOT EXISTS idx_conv_checkpoints ON conversation_checkpoints(conversation_id);
@@ -262,6 +279,20 @@ def init_db():
 
         try:
             conn.execute("ALTER TABLE projects ADD COLUMN code_generation_mode TEXT DEFAULT 'smart-auto'")
+        except Exception:
+            pass
+
+        # 'chat' (asyncio-task based, resumable via conversation_checkpoints)
+        # vs 'localai-install' / 'localai-import' (daemon-thread based, not
+        # checkpoint-resumable). The persistent worker loop and the restart
+        # recovery routine both need this to avoid misdispatching a Local AI
+        # job through the chat-completion executor (or vice versa).
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT DEFAULT 'chat'")
+        except Exception:
+            pass
+        try:
+            conn.execute("UPDATE jobs SET job_type = 'chat' WHERE job_type IS NULL OR job_type = ''")
         except Exception:
             pass
 
@@ -435,6 +466,77 @@ def clear_conversation_checkpoints(conversation_id: str):
             conn.execute("DELETE FROM conversation_checkpoints WHERE conversation_id = ?", (conversation_id,))
     except Exception:
         pass
+
+
+def persist_chat_message(conversation_id: str, role: str, content: str, tool_calls: Optional[Any] = None) -> str:
+    """Append one message to a conversation's durable history. Used by the
+    server-side chat job executor so the assistant's final answer is saved
+    even if no browser ever reconnects to see it (the client-driven
+    '/messages/sync' full-replace endpoint remains the path for everything
+    the user types/edits locally)."""
+    if not conversation_id:
+        return ""
+    msg_id = f"msg-{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}"
+    tc_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO conversations (id, title) VALUES (?, 'Conversation')",
+                (conversation_id,)
+            )
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, tool_calls) VALUES (?, ?, ?, ?, ?)",
+                (msg_id, conversation_id, role, content, tc_json)
+            )
+            conn.execute("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?", (conversation_id,))
+        return msg_id
+    except Exception:
+        return ""
+
+
+def append_job_event(job_id: str, event_type: str, data: Dict[str, Any]) -> int:
+    """Durably persist one event from a server-side job's execution, in
+    order. Returns the event's sequence number (monotonic per job, starting
+    at 1), which a client uses as a resume cursor: 'give me everything with
+    seq > N' always reconstructs exactly what a live-connected client would
+    have seen, whether the gap was one second or a full server restart."""
+    if not job_id:
+        return 0
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM job_events WHERE job_id = ?", (job_id,)).fetchone()
+            next_seq = int(row["m"] or 0) + 1
+            conn.execute(
+                "INSERT INTO job_events (job_id, seq, event_type, data) VALUES (?, ?, ?, ?)",
+                (job_id, next_seq, event_type, json.dumps(data, ensure_ascii=False))
+            )
+            return next_seq
+    except Exception:
+        return 0
+
+
+def get_job_events_since(job_id: str, since_seq: int = 0, limit: int = 5000) -> List[Dict[str, Any]]:
+    """Replay every event recorded for a job after `since_seq` (0 = from the
+    very start). Used both by reconnecting SSE clients and by the 'attach to
+    an already-running job' endpoint."""
+    if not job_id:
+        return []
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT seq, event_type, data, created_at FROM job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+                (job_id, int(since_seq or 0), limit)
+            ).fetchall()
+            out = []
+            for r in rows:
+                try:
+                    data = json.loads(r["data"] or "{}")
+                except Exception:
+                    data = {}
+                out.append({"seq": r["seq"], "type": r["event_type"], "data": data, "createdAt": r["created_at"]})
+            return out
+    except Exception:
+        return []
 
 
 def get_state(key: str, default: Optional[str] = None) -> Optional[str]:
