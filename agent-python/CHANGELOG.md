@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.17 - diagnose_full() now reports tool availability + a direct GitHub/ollama.com reachability probe
+
+### Added
+- `GET /api/localai/diagnose` now also returns `tools` (whether `curl`/`wget`/`unzip`/`tar`/`zstd`/`unzstd`/`ldd` are actually present on the host -- the download/extraction code silently falls back through several of these, so it was previously impossible to tell from the outside which path was actually being used) and `network` (a direct, bounded ≤8s-per-target HEAD-request reachability probe against `github.com`, `api.github.com`, `objects.githubusercontent.com`, and `ollama.com` -- the exact hosts engine downloads depend on). Added after discovering, live on a real affected host, that an engine install can get stuck for many minutes with no visible cause; this makes a genuine network/CDN connectivity problem (as opposed to a code bug) directly visible in one diagnostic call instead of only inferable from a stuck install.
+- Verified with the full existing suite (the diagnose endpoint test now also asserts these two new fields are present). 92 backend tests passing.
+
 ## 3.3.16 - Fixed engine downloads hanging for up to 5 minutes per candidate on filtered/sanctioned networks
 
 ### Fixed

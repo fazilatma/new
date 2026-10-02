@@ -33,7 +33,7 @@ ENV_FILE = DATA_DIR / "environment.json"
 MASTER_KEY_FILE = DATA_DIR / "master.key"
 
 # Version
-APP_VERSION = "3.3.16"
+APP_VERSION = "3.3.17"
 
 # Secret Encryption (Fernet / AES)
 def get_or_create_master_key() -> bytes:

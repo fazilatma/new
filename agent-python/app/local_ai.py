@@ -2135,6 +2135,32 @@ def _engine_health_report(engine: str) -> Dict[str, Any]:
     return report
 
 
+def _network_probe() -> Dict[str, Any]:
+    """Quick, bounded-time (≤8s each) reachability probe against the hosts
+    engine downloads actually depend on. Exists because a real connectivity
+    problem (e.g. a filtered/sanctioned network that can reach github.com's
+    main site/API fine but has the separate release-asset CDN silently
+    black-holed) otherwise only shows up indirectly, as a stuck or
+    extremely slow install -- this surfaces it directly in diagnose_full().
+    """
+    targets = [
+        ("github.com", "https://github.com"),
+        ("api.github.com", "https://api.github.com"),
+        ("objects.githubusercontent.com", "https://objects.githubusercontent.com"),
+        ("ollama.com", "https://ollama.com"),
+    ]
+    results: Dict[str, Any] = {}
+    for label, url in targets:
+        t0 = time.time()
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "ArenaAgent/3.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                results[label] = {"ok": True, "status": resp.status, "ms": round((time.time() - t0) * 1000)}
+        except Exception as e:
+            results[label] = {"ok": False, "error": str(e), "ms": round((time.time() - t0) * 1000)}
+    return results
+
+
 def diagnose_full() -> Dict[str, Any]:
     """Single comprehensive, read-only diagnostic snapshot of the whole
     Local AI subsystem -- hardware, both engines' install/health/ABI
@@ -2177,8 +2203,12 @@ def diagnose_full() -> Dict[str, Any]:
     except Exception as e:
         models = {"error": str(e)}
 
+    tools = {name: bool(shutil.which(name)) for name in ("curl", "wget", "unzip", "tar", "zstd", "unzstd", "ldd")}
+
     return {
         "activeEngine": active_engine,
+        "tools": tools,
+        "network": _network_probe(),
         "running": srv.get("up", False),
         "serverError": str(srv.get("error") or ""),
         "host": host.get("host", {}),

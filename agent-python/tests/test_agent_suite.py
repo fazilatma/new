@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.16"
+    assert APP_VERSION == "3.3.17"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3633,10 +3633,12 @@ def test_localai_diagnose_endpoint_returns_comprehensive_snapshot(monkeypatch):
     monkeypatch.setattr(local_ai, "installed", lambda: {"running": False, "models": [], "loaded": [], "error": ""})
     monkeypatch.setattr(local_ai, "read_engine_log_tail", lambda engine=None: {"log": ""})
 
+    monkeypatch.setattr(local_ai, "_network_probe", lambda: {})
+
     res = client.get("/api/localai/diagnose")
     assert res.status_code == 200
     data = res.json()
-    for key in ("activeEngine", "running", "host", "engines", "recommendation", "modelsDir", "models", "logTail"):
+    for key in ("activeEngine", "running", "host", "engines", "recommendation", "modelsDir", "models", "logTail", "tools", "network"):
         assert key in data, f"expected '{key}' in /api/localai/diagnose response"
     assert data["activeEngine"] == "llamacpp"
     assert "ollama" in data["engines"] and "llamacpp" in data["engines"]
