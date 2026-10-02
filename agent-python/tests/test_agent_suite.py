@@ -65,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.21"
+    assert APP_VERSION == "3.3.22"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3481,8 +3481,14 @@ def test_runtime_is_healthy_detects_missing_ollama_lib_dir(monkeypatch, tmp_path
     lib_dir.mkdir(parents=True, exist_ok=True)
     assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is False
 
-    # lib/ollama with actual runner files -> healthy.
+    # lib/ollama with other runner files but NOT llama-server itself -> still
+    # unhealthy (observed live: a truncated ~1.4GB archive download left
+    # lib/ollama non-empty but missing the one file that actually matters).
     (lib_dir / "libggml-base.so").write_bytes(b"\x7fELF-fake")
+    assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is False
+
+    # lib/ollama with the actual llama-server runner present -> healthy.
+    (lib_dir / "llama-server").write_bytes(b"\x7fELF-fake-llama-server")
     assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is True
 
     # The llamacpp engine never needs/checks lib/ollama at all.
@@ -3517,6 +3523,7 @@ def test_install_runtime_preserves_ollama_lib_dir_when_binary_found_via_rglob(mo
     (nested_bin / "ollama").write_bytes(b"fake-ollama-binary")
     (nested_lib / "libggml-base.so").write_bytes(b"\x7fELF-fake-libggml-base")
     (nested_lib / "libllama.so").write_bytes(b"\x7fELF-fake-libllama")
+    (nested_lib / "llama-server").write_bytes(b"\x7fELF-fake-llama-server")
 
     padding = b"x" * 1200
 
@@ -3981,3 +3988,158 @@ def test_install_runtime_download_has_hard_python_level_subprocess_timeout(monke
     for kwargs in captured_kwargs:
         assert kwargs.get("timeout"), "every subprocess.run() download call must pass an explicit hard timeout="
         assert kwargs["timeout"] <= 330, "the Python-level timeout must not be looser than curl's own -m cap plus a small grace margin"
+
+
+def test_install_runtime_rejects_truncated_download_by_size_mismatch(monkeypatch, tmp_path):
+    """Regression test for a real-world failure found live: the official
+    ollama-linux-amd64.tar.zst is ~1.4GB, and on a slow/flaky connection a
+    download can get cut short yet still pass a naive '>1000 bytes' sanity
+    check -- silently installing a truncated archive (the small top-level
+    `ollama` binary extracted fine while the much larger lib/ollama/ runner
+    payload, which comes later in the stream, was incomplete; the server
+    then started and reported healthy, but every model load failed with
+    'llama-server binary not found'). When the GitHub release API tells us
+    an asset's real size, a download that doesn't match it must be
+    rejected and NOT handed to the extraction step."""
+    from app import local_ai
+    import io
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+
+    expected_size = 1_427_765_407  # the real v0.35.0 ollama-linux-amd64.tar.zst size
+
+    class _FakeGhResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            import json as _json
+            return _json.dumps({
+                "assets": [
+                    {
+                        "name": "ollama-linux-amd64.tar.zst",
+                        "browser_download_url": "https://github.com/ollama/ollama/releases/download/v0.35.0/ollama-linux-amd64.tar.zst",
+                        "size": expected_size,
+                    }
+                ]
+            }).encode("utf-8")
+
+    def fake_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "api.github.com" in url:
+            return _FakeGhResp()
+        raise Exception("no network access in test (urllib fallback should not be reached)")
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
+
+    def fake_run(cmd, **kwargs):
+        url = cmd[-1]
+        dest_path = cmd[cmd.index("-o") + 1]
+        if url.endswith(".tgz"):
+            # The legacy .tgz fallback candidate (no size known for it --
+            # recent ollama releases don't even publish one) simply isn't
+            # reachable in this test, same as it failing for a real reason.
+            class _R:
+                returncode = 1
+                stdout = ""
+                stderr = "404"
+            return _R()
+        # Every .tar.zst candidate: simulate curl "succeeding" (exit 0) but
+        # only ever writing a truncated, far-too-small file -- exactly what
+        # a connection that drops mid-transfer but still lets curl exit
+        # cleanly would produce.
+        with open(dest_path, "wb") as f:
+            f.write(b"x" * 5000)  # way short of expected_size
+        class _R2:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _R2()
+
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Could not download"):
+        local_ai.install_runtime("ollama")
+
+
+def test_install_runtime_fails_loudly_when_llama_server_runner_missing_after_extraction(monkeypatch, tmp_path):
+    """Regression test for the exact live production bug this session: a
+    truncated/incomplete extraction can leave the top-level `ollama` binary
+    present and working while lib/ollama/llama-server (the runner every
+    single model load depends on) never made it -- the archive contained
+    *some* other lib/ollama files, just not that one. install_runtime()
+    must raise instead of reporting {"ok": True} in that state, which is
+    exactly what silently happened before this fix: the server then
+    started fine and only failed much later, confusingly, on every real
+    generate call."""
+    from app import local_ai
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "shutil", __import__("shutil"))
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: None)
+
+    rd = local_ai.root_dir()
+    bd = local_ai.bin_dir()
+
+    nested_root = rd / "ollama-linux-amd64"
+    nested_bin = nested_root / "bin"
+    nested_lib = nested_root / "lib" / "ollama"
+    nested_bin.mkdir(parents=True, exist_ok=True)
+    nested_lib.mkdir(parents=True, exist_ok=True)
+    (nested_bin / "ollama").write_bytes(b"fake-ollama-binary")
+    # Some OTHER lib/ollama file is present (so the old "just non-empty"
+    # check would have wrongly passed) but llama-server itself is missing --
+    # simulating a truncated download that cut off partway through this
+    # much larger payload.
+    (nested_lib / "libggml-base.so").write_bytes(b"\x7fELF-fake-libggml-base")
+
+    padding = b"x" * 1200
+    orig_run = local_ai.subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] in ("curl", "wget", "unzip", "tar"):
+            class _R:
+                returncode = 1
+                stdout = ""
+                stderr = "not available in test"
+            return _R()
+        return orig_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self._pos = 0
+
+        def read(self, n=-1):
+            if n is None or n < 0:
+                chunk = self._data[self._pos:]
+                self._pos = len(self._data)
+                return chunk
+            chunk = self._data[self._pos:self._pos + n]
+            self._pos += len(chunk)
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen2(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "api.github.com" in url:
+            raise Exception("no network access in test")
+        return _FakeResp(b"\x7fELF-placeholder-not-a-real-archive" + padding)
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen2)
+
+    with pytest.raises(RuntimeError, match="llama-server"):
+        local_ai.install_runtime("ollama")

@@ -621,10 +621,21 @@ def _runtime_is_healthy(path: str, engine: str) -> bool:
     if engine == "ollama":
         lib_dir = ollama_lib_dir()
         try:
-            return lib_dir.is_dir() and any(lib_dir.iterdir())
+            # Checking the directory is merely non-empty is not enough: a
+            # download that got truncated partway through extraction (the
+            # ~1.4GB official linux-amd64 archive on a slow/flaky
+            # connection) can leave lib/ollama/ containing *some* files
+            # (e.g. a partial cuda_v* subfolder) while the one file that
+            # actually matters -- the llama-server runner every model load
+            # depends on -- never made it. That was observed live: lib/
+            # ollama existed and was non-empty, "healthy" was reported
+            # true, yet every single generate call failed with
+            # "llama-server binary not found". Require the actual file.
+            return lib_dir.is_dir() and (lib_dir / "llama-server").is_file()
         except Exception:
             return False
     return True
+
 
 
 def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
@@ -673,6 +684,15 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
     md.mkdir(parents=True, exist_ok=True)
 
     candidates: List[str] = []
+    # Expected byte size of each candidate, when the GitHub release API told
+    # us (asset["size"]). The official ollama-linux-amd64.tar.zst is ~1.4GB
+    # -- on a slow/flaky connection a download can get cut short yet still
+    # pass a naive ">1000 bytes" sanity check, silently installing a
+    # truncated archive (observed live: the small top-level `ollama` binary
+    # extracted fine while the much larger lib/ollama/ runner payload was
+    # incomplete, so the server started but every model load then failed).
+    # Comparing the final size against this catches that immediately.
+    candidate_sizes: Dict[str, int] = {}
 
     if engine == "llamacpp":
         try:
@@ -708,6 +728,14 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
                     durl = asset.get("browser_download_url", "")
                     if f"linux-{arch_tag}.tar.zst" in name or f"linux-{arch_tag}.tgz" in name or f"linux-{arch_tag}.tar.gz" in name:
                         candidates.append(durl)
+                        if isinstance(asset.get("size"), int) and asset["size"] > 0:
+                            # Keyed by filename, not the full URL: several of
+                            # the hardcoded fallback mirrors below (e.g. the
+                            # "latest/download/..." vs pinned-version path)
+                            # point at the exact same release asset under a
+                            # different URL, and must get the same size
+                            # validation the API told us about for this one.
+                            candidate_sizes[name] = asset["size"]
         except Exception as e:
             _log(f"GitHub release API probe skipped ({e}), using direct release endpoints...")
 
@@ -729,65 +757,125 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
     last_error = "No download candidates succeeded"
 
     for url in unique_candidates:
-        _log(f"Downloading {engine} runtime from {url}...")
         raw_name = url.split("?")[0].split("/")[-1]
+        expected_size = candidate_sizes.get(raw_name)
+        _log(
+            f"Downloading {engine} runtime from {url}..."
+            + (f" (expected {round(expected_size / (1024*1024), 1)} MB)" if expected_size else "")
+        )
         ext = ".zip" if url.endswith(".zip") else (".tar.zst" if ".tar.zst" in url else ".tar.gz")
         dest_filename = raw_name if raw_name else f"{engine}-installer-{arch_tag}{ext}"
         dest_path = rd / dest_filename
+
+        # The official ollama-linux-amd64.tar.zst is ~1.4GB. On a slow
+        # (but genuinely working, not dead) connection this can legitimately
+        # take many minutes -- confirmed live: one install eventually
+        # succeeded after ~18 minutes once left to run uninterrupted. A
+        # short overall cap would abort a real, progressing download before
+        # it finishes, which is just as bad as never timing out a dead one.
+        # --speed-limit/--speed-time below still independently aborts a
+        # truly stalled/dead connection in ~20-35s regardless of this cap,
+        # so raising it for large files does not reintroduce the original
+        # indefinite-hang risk -- it only gives slow-but-alive transfers
+        # enough room to actually finish.
+        is_large = bool(expected_size and expected_size > 50 * 1024 * 1024)
+        overall_timeout = 2700 if is_large else 300  # 45 min vs 5 min
+        subprocess_timeout = overall_timeout + 30
+
         try:
             dl_ok = False
             if shutil.which("curl"):
                 res = subprocess.run(
                     [
-                        "curl", "-fSL", "--connect-timeout", "15", "-m", "300",
+                        "curl", "-fSL", "--connect-timeout", "15", "-m", str(overall_timeout),
                         # Some hosts (e.g. sanctioned/filtered networks) can
                         # reach github.com fine but then have the actual
                         # release-asset CDN redirect (release-assets.
                         # githubusercontent.com) silently black-holed -- the
                         # TCP/TLS connection succeeds but no bytes ever
-                        # really flow, so --connect-timeout never kicks in
-                        # and the download otherwise hangs for the entire
-                        # -m 300 (5 minute) cap before failing over to the
-                        # next candidate. --speed-limit/--speed-time aborts
-                        # as soon as the sustained transfer rate drops below
-                        # 1 KB/s for 20s, so a genuinely dead/filtered
-                        # candidate fails over in ~20-35s instead, while a
-                        # merely slow (but actually progressing) connection
-                        # is left alone up to the full -m 300 cap.
+                        # really flow, so --connect-timeout never kicks in.
+                        # --speed-limit/--speed-time aborts as soon as the
+                        # sustained transfer rate drops below 1 KB/s for
+                        # 20s, so a genuinely dead/filtered candidate fails
+                        # over in ~20-35s instead, while a merely slow (but
+                        # actually progressing) connection is left alone up
+                        # to the full -m cap above.
                         "--speed-limit", "1024", "--speed-time", "20",
+                        # Resume a previous partial download of this exact
+                        # URL instead of restarting from byte 0 -- on a slow
+                        # connection that previously got cut off (e.g. by an
+                        # earlier, stricter timeout), this can turn several
+                        # wasted multi-minute attempts into one that
+                        # actually finishes.
+                        "-C", "-",
                         "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url,
                     ],
                     # Belt-and-suspenders Python-level hard kill, in case
                     # curl's own -m/--speed-limit enforcement doesn't fire
-                    # as expected on a given host's curl build/platform --
-                    # observed live on a real host: curl still hadn't
-                    # returned (no error, no success) well past 300s with
-                    # these exact flags present, so this is a real,
-                    # confirmed-necessary backstop, not just defensive
-                    # paranoia. subprocess.run(timeout=...) kills the child
-                    # process outright if it's still running at the deadline.
-                    capture_output=True, text=True, timeout=330,
+                    # as expected on a given host's curl build/platform.
+                    # subprocess.run(timeout=...) kills the child process
+                    # outright if it's still running at the deadline.
+                    capture_output=True, text=True, timeout=subprocess_timeout,
                 )
-                if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
-                    dl_ok = True
+                if res.returncode == 0 and dest_path.is_file():
+                    actual_size = dest_path.stat().st_size
+                    if expected_size and actual_size != expected_size:
+                        _log(
+                            f"Downloaded file size mismatch for {dest_path.name}: got "
+                            f"{actual_size} bytes, expected {expected_size} -- treating as "
+                            f"incomplete, not installing a truncated archive."
+                        )
+                    elif actual_size > 1000:
+                        dl_ok = True
             if not dl_ok and shutil.which("wget"):
                 res = subprocess.run(
-                    ["wget", "-q", "-T", "15", "-t", "2", "-U", "Mozilla/5.0 (ArenaAgent/3.0)", "-O", str(dest_path), url],
-                    capture_output=True, text=True, timeout=45,
+                    [
+                        "wget", "-q", "-c", "-T", "15", "-t", "2",
+                        "-U", "Mozilla/5.0 (ArenaAgent/3.0)", "-O", str(dest_path), url,
+                    ],
+                    capture_output=True, text=True, timeout=subprocess_timeout,
                 )
-                if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
-                    dl_ok = True
+                if res.returncode == 0 and dest_path.is_file():
+                    actual_size = dest_path.stat().st_size
+                    if expected_size and actual_size != expected_size:
+                        _log(
+                            f"Downloaded file size mismatch for {dest_path.name}: got "
+                            f"{actual_size} bytes, expected {expected_size} -- treating as "
+                            f"incomplete, not installing a truncated archive."
+                        )
+                    elif actual_size > 1000:
+                        dl_ok = True
             if not dl_ok:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ArenaAgent/3.0)"})
                 with urllib.request.urlopen(req, timeout=180) as resp, open(dest_path, "wb") as out:
                     shutil.copyfileobj(resp, out)
-                if dest_path.is_file() and dest_path.stat().st_size > 1000:
-                    dl_ok = True
+                if dest_path.is_file():
+                    actual_size = dest_path.stat().st_size
+                    if expected_size and actual_size != expected_size:
+                        _log(
+                            f"Downloaded file size mismatch for {dest_path.name}: got "
+                            f"{actual_size} bytes, expected {expected_size} -- treating as "
+                            f"incomplete, not installing a truncated archive."
+                        )
+                    elif actual_size > 1000:
+                        dl_ok = True
 
             if dl_ok:
                 _log(f"Downloaded {dest_path.name} ({round(dest_path.stat().st_size / (1024*1024), 2)} MB).")
                 downloaded_file = dest_path
                 break
+            elif dest_path.is_file():
+                # Not a confirmed-good file (size mismatch) -- don't let a
+                # truncated/corrupt archive linger under a name a future
+                # resume attempt would trust.
+                dest_path.unlink(missing_ok=True)
+        except subprocess.TimeoutExpired as dl_err:
+            last_error = f"{url}: timed out after {subprocess_timeout}s"
+            _log(f"Download candidate timed out after {subprocess_timeout}s, trying next candidate...")
+            # Deliberately keep the partial file on disk (unlike other
+            # failure modes below) -- curl's -C - / wget's -c above can
+            # resume from it on a future attempt at the same URL instead of
+            # re-downloading everything from byte 0 again.
         except Exception as dl_err:
             last_error = f"{url}: {dl_err}"
             _log(f"Download candidate failed ({dl_err}), trying next candidate...")
@@ -966,6 +1054,22 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
             if engine == "llamacpp":
                 abi_reason = _binary_abi_incompatibility_reason(str(target_bin))
             else:
+                # The ~1.4GB official linux-amd64 archive on a slow/flaky
+                # connection can finish downloading/extracting *just* the
+                # small top-level `ollama` binary while the much larger
+                # lib/ollama/ payload (which contains the llama-server
+                # runner every model load actually depends on) is
+                # truncated/incomplete -- observed live: this used to be
+                # reported as a successful install, and the server would
+                # start and respond to /api/version fine, but every single
+                # chat/generate call failed with "llama-server binary not
+                # found". Fail loudly here instead of claiming success.
+                if not (ollama_lib_dir() / "llama-server").is_file():
+                    raise RuntimeError(
+                        "استخراج ناقص بود: فایل اجرایی داخلی llama-server در lib/ollama یافت نشد "
+                        "(معمولاً به دلیل قطع‌شدن دانلود آرشیو ~۱.۴ گیگابایتی پیش از پایان کامل روی یک "
+                        "اتصال کند/ناپایدار). لطفاً دوباره تلاش کنید."
+                    )
                 # Check Ollama's OWN bundled runner too (just preserved
                 # above), not just the `ollama` executable itself -- the
                 # top-level binary can be perfectly fine while its internal

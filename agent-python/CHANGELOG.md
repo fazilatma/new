@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.3.22 - Real root cause found and fixed: truncated ~1.4GB Ollama download silently installed as "healthy"
+
+### Fixed
+- **This is why Ollama was reportedly "installed and running" but every actual chat/generate call still failed with "llama-server binary not found".** The official `ollama-linux-amd64.tar.zst` release asset is ~1.4GB (confirmed via the GitHub API: 1,427,765,407 bytes for v0.35.0). On a slow/flaky connection, a download can get cut short yet still pass the old, naive ">1000 bytes" sanity check -- the small top-level `ollama` binary (which appears early in the archive) extracts and runs fine, while the much larger `lib/ollama/` payload (which contains the `llama-server` runner every single model load actually depends on) is incomplete. The server then starts, responds to `/api/version`/`/api/tags` normally, and was reported "healthy" -- but every real generate call failed.
+- `_runtime_is_healthy()` now requires the actual `lib/ollama/llama-server` file to exist, not just that the `lib/ollama` directory is non-empty (a truncated extraction can still leave *some* other file behind).
+- `install_runtime()` now explicitly fails with a clear Persian error if `lib/ollama/llama-server` is missing after extraction, instead of reporting `{"ok": true}` on a broken install.
+- Download validation: when the GitHub release API reports an asset's real size, every download candidate for that filename (including the hardcoded mirror fallbacks, not just the API-discovered URL) is now checked against it; a size mismatch is treated as a failed candidate instead of being silently accepted.
+- Large files (>50MB) now get a much longer overall download timeout (45 min, up from 5 min) -- confirmed live that a real install can legitimately take ~18 minutes on a slow-but-working connection, and the stricter 3.3.21 timeout could have aborted a transfer that was actually still making progress. The `--speed-limit`/`--speed-time` stall-detector (3.3.16) still independently aborts a truly dead/stalled connection in ~20-35s regardless of this larger cap, so this does not reintroduce the original indefinite-hang risk.
+- curl (`-C -`) and wget (`-c`) now resume a previous partial download of the same URL instead of restarting from byte 0 -- a partial file from a timed-out attempt is now kept on disk (not deleted) specifically to make this possible.
+- Added regression tests `test_install_runtime_rejects_truncated_download_by_size_mismatch` and `test_install_runtime_fails_loudly_when_llama_server_runner_missing_after_extraction`; updated `test_runtime_is_healthy_detects_missing_ollama_lib_dir` and `test_install_runtime_preserves_ollama_lib_dir_when_binary_found_via_rglob` for the stricter check.
+- 97 backend tests passing.
+
 ## 3.3.21 - Added a hard Python-level subprocess timeout as a backstop for curl/wget downloads
 
 ### Fixed
