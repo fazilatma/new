@@ -174,6 +174,80 @@ def _normalize_cloudflare_response(data: Dict[str, Any]) -> Dict[str, Any]:
     text = result if isinstance(result, str) else (result or {}).get("response", "")
     return {"choices": [{"message": {"role": "assistant", "content": text}}]}
 
+
+def _extract_error_detail_text(raw_text: str) -> str:
+    """Pull the most specific human-readable message out of a provider's
+    error response body. Handles the OpenAI/Anthropic-style nested shape
+    (`{"error": {"message": "..."}}`), a flatter `{"error"/"message"/
+    "detail": "..."}`, and falls back to the raw (truncated) body for
+    anything else, e.g. llama-server's plain-text error responses."""
+    if not raw_text:
+        return ""
+    try:
+        parsed = json.loads(raw_text)
+    except Exception:
+        return raw_text.strip()[:500]
+    if isinstance(parsed, dict):
+        err = parsed.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or err.get("error") or "").strip()
+            if msg:
+                return msg
+        elif isinstance(err, str) and err.strip():
+            return err.strip()
+        msg = str(parsed.get("message") or parsed.get("detail") or "").strip()
+        if msg:
+            return msg
+    return raw_text.strip()[:500]
+
+
+def _httpx_status_error_detail(e: "httpx.HTTPStatusError") -> str:
+    """Turn an httpx.HTTPStatusError into the most useful message we can
+    show the user, instead of its default generic text (e.g. "Server error
+    '500 Internal Server Error' for url '...'"). That default discards the
+    response body entirely, which is exactly where a local llama.cpp/Ollama
+    server (or any OpenAI-compatible provider) puts the real, actionable
+    diagnosis -- e.g. "llama-server process has terminated: signal: killed"
+    (almost always the OS OOM-killer: the selected model needs more RAM
+    than the server has), a validation error, an auth failure reason, etc.
+    See _describe_http_error() in app/local_ai.py for the analogous fix on
+    the urllib-based Local AI install/test code path.
+    """
+    resp = e.response
+    try:
+        raw_text = resp.text
+    except Exception:
+        raw_text = ""
+    detail = _extract_error_detail_text(raw_text)
+    if detail and "signal: killed" in detail.lower():
+        detail += (
+            " -- این معمولاً یعنی سیستم‌عامل به دلیل کمبود حافظه (RAM) فرآیند مدل را متوقف کرده است؛ "
+            "مدل انتخابی برای رم این سرور مناسب نیست. یک مدل کوچک‌تر یا کوانتیزه‌تر (مثلاً Q4) امتحان کنید."
+        )
+    if detail:
+        return f"HTTP {resp.status_code} {resp.reason_phrase}: {detail}"
+    return f"HTTP {resp.status_code}: {resp.reason_phrase}"
+
+
+async def _httpx_stream_status_error_detail(resp) -> str:
+    """Same as _httpx_status_error_detail(), but for a streaming response
+    whose body hasn't been read yet (client.stream(...) is lazy) -- the
+    body must be explicitly read before it is available."""
+    try:
+        body = await resp.aread()
+        raw_text = body.decode("utf-8", errors="replace") if body else ""
+    except Exception:
+        raw_text = ""
+    detail = _extract_error_detail_text(raw_text)
+    if detail and "signal: killed" in detail.lower():
+        detail += (
+            " -- این معمولاً یعنی سیستم‌عامل به دلیل کمبود حافظه (RAM) فرآیند مدل را متوقف کرده است؛ "
+            "مدل انتخابی برای رم این سرور مناسب نیست. یک مدل کوچک‌تر یا کوانتیزه‌تر (مثلاً Q4) امتحان کنید."
+        )
+    if detail:
+        return f"HTTP {resp.status_code} {resp.reason_phrase}: {detail}"
+    return f"HTTP {resp.status_code}: {resp.reason_phrase}"
+
 async def call_provider_api(
     provider: Provider,
     model: ModelSpec,
@@ -251,7 +325,10 @@ async def call_provider_api(
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False, proxy=proxy_client) as client:
             r = await client.post(target_url, headers=headers, json=body)
-            r.raise_for_status()
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as status_err:
+                raise RuntimeError(_httpx_status_error_detail(status_err)) from status_err
             data = r.json()
             latency = (time.perf_counter() - started) * 1000
 
@@ -289,7 +366,10 @@ async def call_provider_api(
             try:
                 async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
                     r = await direct_client.post(direct_url, headers=headers, json=body)
-                    r.raise_for_status()
+                    try:
+                        r.raise_for_status()
+                    except httpx.HTTPStatusError as status_err:
+                        raise RuntimeError(_httpx_status_error_detail(status_err)) from status_err
                     data = r.json()
                     latency = (time.perf_counter() - started) * 1000
                     CIRCUIT_BREAKER.record_success(provider.id)
@@ -539,7 +619,14 @@ async def stream_call_provider_api(
 
         async with httpx.AsyncClient(timeout=timeout, verify=False, proxy=client_proxy) as client:
             async with client.stream("POST", request_url, headers=headers, json=body) as resp:
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    # A streaming response's body isn't read yet at this point
+                    # (client.stream() is lazy), so resp.raise_for_status()'s
+                    # default message can't see it either -- read it explicitly
+                    # so the real provider error (e.g. a local llama-server's
+                    # "process has terminated: signal: killed", almost always
+                    # an OOM kill) is shown instead of a generic reason phrase.
+                    raise RuntimeError(await _httpx_stream_status_error_detail(resp))
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line or line.startswith(":"):

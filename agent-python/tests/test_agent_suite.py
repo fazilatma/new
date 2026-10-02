@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.5"
+    assert APP_VERSION == "3.3.6"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1735,6 +1735,58 @@ async def test_network_retry_fails_fast_not_for_minutes(monkeypatch):
         assert e["delaySec"] <= MAX_NETWORK_RETRY_DELAY_SEC
     # Worst-case total sleep must stay well under what used to be ~4 minutes.
     assert elapsed < 20, f"retry loop took {elapsed:.1f}s, expected a fast failure"
+
+
+@pytest.mark.anyio
+async def test_stream_call_provider_api_surfaces_real_error_body_not_generic_500(monkeypatch):
+    """Regression test for a local llama.cpp/Ollama (or any OpenAI-compatible)
+    provider returning a non-2xx with a real diagnostic body: a user reported
+    the "Test" button already surfacing the real error after the local_ai.py
+    fix (v3.3.5), but chat itself still showed a useless generic message
+    ("models produce no response ... as if not even connected to the
+    endpoint") because app/chat.py's streaming path used
+    `resp.raise_for_status()` directly, whose default message
+    ("Server error '500 Internal Server Error' for url ...") discards the
+    response body -- exactly where llama-server puts the real, actionable
+    diagnosis (e.g. "llama-server process has terminated: signal: killed",
+    almost always an OOM kill). stream_call_provider_api() must now surface
+    that real body text instead."""
+    import httpx
+    from app.chat import stream_call_provider_api
+    from app.providers import Provider, ModelSpec
+
+    error_body = b'{"error": "llama-server process has terminated: signal: killed"}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=error_body, headers={"Content-Type": "application/json"})
+
+    mock_transport = httpx.MockTransport(handler)
+
+    original_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = mock_transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.chat.httpx.AsyncClient", patched_async_client)
+
+    provider = Provider(id="llamacpp-local", name="llama.cpp (local)", protocol="openai-compatible", url="http://127.0.0.1:8081/v1", apiKey="local-llamacpp", enabled=True)
+    model = ModelSpec(id="some-model.gguf", name="Some Model")
+
+    caught = None
+    try:
+        async for _chunk in stream_call_provider_api(provider, model, [{"role": "user", "content": "hi"}], "local-llamacpp"):
+            pass
+    except Exception as e:
+        caught = e
+
+    assert caught is not None, "a 500 response must raise, not be silently swallowed"
+    msg = str(caught)
+    assert "llama-server process has terminated: signal: killed" in msg
+    assert "Server error '500 Internal Server Error' for url" not in msg
+    # OOM-kill-specific guidance should be appended for this exact signature.
+    assert "کمبود حافظه" in msg
 
 
 def test_flexible_provider_import():
