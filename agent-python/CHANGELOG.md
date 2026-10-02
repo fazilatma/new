@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.25 - /api/localai/test now also accepts GET, for the same remote-diagnosis convenience as auto-repair
+
+### Changed
+- `/api/localai/test` now accepts both GET (`?model=...`) and POST, matching `/api/localai/auto-repair`'s existing GET+POST support -- trivially triggerable from a single URL for quick remote diagnosis without driving the UI, same rationale as that endpoint.
+- 99 backend tests passing (no behavior change to the async start/poll contract introduced in 3.3.24).
+
 ## 3.3.24 - Model test button no longer blocks a single HTTP request for minutes (same class of fix as auto-repair's 3.3.20)
 
 ### Fixed

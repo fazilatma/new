@@ -1951,8 +1951,8 @@ def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
     return {"ok": True, "name": name, "installed": [m for m in (local_ai.installed() or {}).get("models", []) if m.get("name") == name]}
 
-@app.post("/api/localai/test")
-def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+@app.api_route("/api/localai/test", methods=["GET", "POST"])
+def post_localai_test(payload: Optional[Dict[str, Any]] = None, model: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
     """Start a model test (benchmark) in the background and return
     immediately. A test against a cold/unloaded model can legitimately
     take well over a minute (confirmed live: >120s just to load a small
@@ -1960,12 +1960,18 @@ def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(re
     synchronously inside this request risks the browser, a reverse proxy,
     or the hosting panel's own proxy killing the connection with a
     confusing 502/504 long before the test itself finishes. Poll
-    GET /api/localai/test/last for progress and the final result."""
+    GET /api/localai/test/last for progress and the final result.
+
+    Exposed under both GET and POST like /api/localai/auto-repair: GET
+    makes it trivially triggerable from a single URL (?model=...) for
+    quick remote diagnosis without driving the UI; POST is the
+    conventional method the model list's "تست" button uses."""
     from . import local_ai
-    model = str(payload.get("model") or payload.get("ref") or "").strip()
-    if not model:
+    m = model or (payload or {}).get("model") or (payload or {}).get("ref") or ""
+    m = str(m).strip()
+    if not m:
         raise HTTPException(400, "Model name is required")
-    return local_ai.start_model_test_async(model)
+    return local_ai.start_model_test_async(m)
 
 @app.get("/api/localai/test/last")
 def get_localai_test_last(user: Dict[str, Any] = Depends(require_viewer)):
