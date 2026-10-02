@@ -148,9 +148,25 @@ try {
   assert.match(script, /activeInstall/, "the page must adopt an installation that is already running");
   assert.match(page, /@media\(max-width:680px\)/, "the page must keep its mobile rules");
 
+  assert.match(page, /id="version"/, "the header must show the running helper version");
+  assert.match(page, /data-tab="changes"/, "the page must offer a changelog tab");
+  assert.match(page, /id="changelog"/, "the changelog panel must exist");
+  assert.match(script, /function renderVersion/, "the page must render the version and changelog from /status");
+  for (const id of ["test-rerun-failed", "test-export", "test-export-csv", "test-copy-report"]) {
+    assert.ok(page.includes(`id="${id}"`), `the test modal must offer the ${id} control`);
+  }
+  assert.match(script, /function testRowDiagnostics/, "each test row must produce copyable diagnostics");
+  assert.match(script, /data-copy-row/, "each test row must expose a copy button");
+  assert.match(script, /function downloadTestResults/, "test results must be exportable");
+  assert.match(script, /profiles:only/, "re-running failed tests must send only the selected Profiles");
+  assert.match(page, /@media\(max-width:760px\)/, "the test modal must get more room on phones");
+
   const status = await (await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/status`, {
     headers: { "x-session-api-key": sessionKey },
   })).json();
+  assert.match(String(status.version || ""), /^\d+\.\d+\.\d+$|^dev$/, "/status must report the running helper version");
+  assert.ok(Array.isArray(status.changelog) && status.changelog.length > 0, "/status must report the changelog");
+  assert.ok(status.changelog.every((entry) => entry.version && Array.isArray(entry.items)), "each changelog entry must list its changes");
   assert.ok(Array.isArray(status.profiles), "/status must list Profiles for the overview table");
   assert.ok(Array.isArray(status.jobs), "/status must expose jobs so running work can be adopted");
   const model = status.local.models[0];
@@ -178,6 +194,12 @@ try {
       threadSuggestionNotClobbered: true,
       installJobRecoverable: true,
       statusContractComplete: true,
+      versionVisibleInUi: true,
+      changelogPanelRendered: true,
+      failedOnlyRerun: true,
+      perRowDiagnostics: true,
+      resultsExportable: true,
+      roomierTestModalOnMobile: true,
       apiStaysAuthenticated: true,
       sessionKeyLeak: false,
     },

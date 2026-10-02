@@ -4,6 +4,19 @@ set -Eeuo pipefail
 LAB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${1:-${LAB_DIR}/output}"
 mkdir -p "${OUTPUT_DIR}"
+ROOT="$(cd -- "${LAB_DIR}/../.." && pwd)"
+version_guard() {
+  local helper_version changelog_version doc_version
+  helper_version="$(grep -m1 '^SCRIPT_VERSION=' "$ROOT/host-helpers/install-openhands-host.sh" | cut -d'"' -f2)"
+  changelog_version="$(grep -m1 -oE '"[0-9]+\.[0-9]+\.[0-9]+"' "$ROOT/host-helpers/openhands-model-manager.mjs" | tr -d '"')"
+  doc_version="$(grep -m1 -oE '^## [0-9]+\.[0-9]+\.[0-9]+' "$ROOT/CHANGELOG.md" | awk '{print $2}')"
+  if [[ "$helper_version" != "$changelog_version" || "$helper_version" != "$doc_version" ]]; then
+    echo "version mismatch: helper=$helper_version manager-changelog=$changelog_version CHANGELOG.md=$doc_version" >&2
+    exit 1
+  fi
+  echo "version guard ok: $helper_version"
+}
+version_guard
 node --check "${LAB_DIR}/../openhands-model-manager.mjs"
 node --check "${LAB_DIR}/test-gateway-model-search.mjs"
 node --check "${LAB_DIR}/test-local-model-address.mjs"

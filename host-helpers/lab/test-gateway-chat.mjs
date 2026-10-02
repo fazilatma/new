@@ -62,7 +62,9 @@ class FakeElement {
     this.listeners = new Map();
     this.dataset = {};
     this.style = {};
+    this.className = "";
     this.textContent = "";
+    this.dispatched = [];
     this.disabled = false;
     this.focused = false;
     this.blurred = 0;
@@ -97,10 +99,32 @@ class FakeElement {
   emit(type, event = {}) {
     for (const listener of this.listeners.get(type) || []) listener(event);
   }
+  cloneNode() {
+    const copy = new FakeElement(this.tagName);
+    copy.textContent = this.textContent;
+    copy.className = this.className;
+    for (const [name, value] of this.attributes) copy.setAttribute(name, value);
+    for (const child of this.children) copy.append(child.cloneNode ? child.cloneNode(true) : child);
+    return copy;
+  }
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((item) => item !== this);
+  }
+  dispatchEvent(value) { this.dispatched.push(value); this.emit(value.type, value); return true; }
   focus() { this.focused = true; }
   blur() { this.blurred += 1; this.focused = false; }
   click() { this.clicked += 1; }
   matches(selector) {
+    if (selector.includes("rounded-xl")) {
+      if (this.tagName !== "DIV") return false;
+      if (!String(this.className).includes("rounded-xl") || !String(this.className).includes("flex-col")) return false;
+      let ancestor = this.parentElement;
+      while (ancestor) {
+        if (ancestor.getAttribute("data-testid") === "chat-scroll-container") return true;
+        ancestor = ancestor.parentElement;
+      }
+      return false;
+    }
     for (const part of selector.split(",").map((item) => item.trim())) {
       const attributeOnly = part.match(/^\[([^=\]]+)\]$/);
       if (attributeOnly && this.attributes.has(attributeOnly[1])) return true;
@@ -155,6 +179,13 @@ function buildCanvas() {
   scroller.scrollHeight = 4000;
   scroller.clientHeight = 600;
   scroller.scrollTop = 0;
+  const userMessage = new FakeElement("div");
+  userMessage.className = "rounded-xl relative w-fit max-w-full flex flex-col mt-6 bg-tertiary self-end px-4 py-2.5";
+  userMessage.textContent = "سلام، این پیام کاربر است";
+  const agentMessage = new FakeElement("div");
+  agentMessage.className = "rounded-xl relative w-fit max-w-full flex flex-col mt-6 w-full bg-transparent";
+  agentMessage.textContent = "پاسخ ایجنت";
+  scroller.append(userMessage, agentMessage);
   const pre = new FakeElement("pre");
   const code = new FakeElement("code");
   code.textContent = "echo 'hello'";
@@ -171,7 +202,7 @@ function buildCanvas() {
   submit.setAttribute("data-testid", "submit-button");
   chat.append(scrollHost, inputWrapper, submit);
   root.append(chat);
-  return { root, chat, scroller, scrollHost, input, inputHost, inputWrapper, submit, pre };
+  return { root, chat, scroller, scrollHost, input, inputHost, inputWrapper, submit, pre, userMessage, agentMessage };
 }
 
 function runChatScript(script, dom) {
@@ -196,6 +227,7 @@ function runChatScript(script, dom) {
       windowListeners.set(type, listeners);
     },
     navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } },
+    InputEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     console,
   };
   context.window = context;
@@ -243,6 +275,8 @@ try {
   const dom = buildCanvas();
   const runtime = runChatScript(chatScript, dom);
 
+  assert.ok(/data-openhands-helper/.test(chatScript), "the injected script must publish the helper version");
+  assert.equal(dom.root.getAttribute("data-openhands-helper"), "dev", "the page must carry the running helper version");
   assert.equal(dom.input.getAttribute("dir"), "auto", "the chat input must use automatic text direction");
 
   const jump = dom.scrollHost.querySelector("[data-oh-chat-jump]");
@@ -262,6 +296,32 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(runtime.copied, ["echo 'hello'"], "the copy button must copy only that code block");
 
+  const userActions = dom.userMessage.querySelector("[data-oh-msg-actions]");
+  assert.ok(userActions, "a user message must receive its own action row");
+  const [userCopy, userEdit, userResend] = userActions.children;
+  assert.deepEqual([userCopy.textContent, userEdit.textContent, userResend.textContent], ["کپی", "ویرایش", "ارسال دوباره"]);
+  userCopy.emit("click", event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(runtime.copied.includes("سلام، این پیام کاربر است"), "copying a user message must copy only its text");
+  userEdit.emit("click", event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(dom.input.textContent, "سلام، این پیام کاربر است", "editing must place the message back in the chat box");
+  assert.equal(dom.input.focused, true, "editing must focus the chat box");
+  assert.ok(dom.input.dispatched.some((item) => item.type === "input"), "Canvas must be notified about the restored text");
+
+  const agentActions = dom.agentMessage.querySelector("[data-oh-msg-actions]");
+  assert.ok(agentActions, "an agent message must receive its own action row");
+  const [agentCopy, agentRetry] = agentActions.children;
+  assert.deepEqual([agentCopy.textContent, agentRetry.textContent], ["کپی", "تلاش مجدد"]);
+  agentCopy.emit("click", event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(runtime.copied.includes("پاسخ ایجنت"), "copying an agent message must copy its answer");
+  const clicksBeforeRetry = dom.submit.clicked;
+  agentRetry.emit("click", event("click"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(dom.input.textContent, "سلام، این پیام کاربر است", "retry must resend the preceding user message");
+  assert.equal(dom.submit.clicked, clicksBeforeRetry + 1, "retry must submit the restored message");
+
   const counter = dom.inputWrapper.querySelector("[data-oh-chat-counter]");
   assert.ok(counter, "a long-message counter must exist");
   assert.equal(counter.getAttribute("data-oh-visible"), "0", "the counter must stay hidden for short messages");
@@ -269,15 +329,16 @@ try {
   dom.input.emit("input", {});
   assert.equal(counter.getAttribute("data-oh-visible"), "1", "the counter must appear for long messages");
 
+  const clicksBeforeShortcut = dom.submit.clicked;
   const send = event("Enter", { ctrlKey: true, target: dom.input });
   runtime.dispatch("keydown", send);
   assert.equal(send.defaultPrevented, true, "Ctrl+Enter must be handled by the gateway");
-  assert.equal(dom.submit.clicked, 1, "Ctrl+Enter must send the message");
+  assert.equal(dom.submit.clicked, clicksBeforeShortcut + 1, "Ctrl+Enter must send the message");
 
   dom.submit.disabled = true;
   const blocked = event("Enter", { ctrlKey: true, target: dom.input });
   runtime.dispatch("keydown", blocked);
-  assert.equal(dom.submit.clicked, 1, "a disabled send button must never be clicked");
+  assert.equal(dom.submit.clicked, clicksBeforeShortcut + 1, "a disabled send button must never be clicked");
   assert.equal(blocked.defaultPrevented, false, "a blocked shortcut must fall through to Canvas");
   dom.submit.disabled = false;
 
@@ -319,6 +380,11 @@ try {
       escapeStopsGeneration: true,
       escapeReleasesInput: true,
       focusShortcutWorks: true,
+      userMessageCopyAndEdit: true,
+      userMessageResend: true,
+      agentMessageCopy: true,
+      agentMessageRetry: true,
+      helperVersionExposed: true,
     },
   }, null, 2)}\n`);
 } finally {

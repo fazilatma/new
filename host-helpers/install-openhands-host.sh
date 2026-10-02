@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="openhands-host"
-SCRIPT_VERSION="3.6.5"
+SCRIPT_VERSION="3.7.0"
 SELF_URL="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh"
 NODE_MAJOR="24"
 PACKAGE_NAME="@openhands/agent-canvas"
@@ -509,6 +509,7 @@ const listenHost = process.env.OH_GATEWAY_HOST || "0.0.0.0";
 const listenPort = Number(process.env.OH_GATEWAY_PORT);
 const upstreamPort = Number(process.env.OH_GATEWAY_UPSTREAM_PORT);
 const managerPort = Number(process.env.OH_GATEWAY_MODEL_MANAGER_PORT);
+const helperVersion = process.env.OH_GATEWAY_HELPER_VERSION || "dev";
 const pairFile = process.env.OH_GATEWAY_PAIR_FILE || "";
 const secretsFile = process.env.OH_GATEWAY_SECRETS_FILE || "";
 const rawBasePath = process.env.OH_GATEWAY_BASE_PATH || "/open";
@@ -572,7 +573,8 @@ function injectModelManagerLink(input) {
 }
 
 function injectChatEnhancements(input) {
-  const integration = `<style id="openhands-host-chat-style">[data-testid="chat-input"]{unicode-bidi:plaintext;text-align:start;overflow-wrap:anywhere}[data-testid="chat-scroll-container"]{overscroll-behavior:contain;scroll-behavior:smooth}[data-testid="chat-interface"] p,[data-testid="chat-interface"] li,[data-testid="chat-interface"] blockquote{unicode-bidi:plaintext}[data-testid="chat-interface"] pre{position:relative;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}[data-testid="chat-interface"] :not(pre)>code{overflow-wrap:anywhere}[data-testid="chat-interface"] table{display:block;max-width:100%;overflow-x:auto}[data-testid="chat-interface"] a:focus-visible,[data-testid="chat-input"]:focus-visible,[data-oh-chat-jump]:focus-visible,[data-oh-code-copy]:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}button[data-oh-code-copy]{position:absolute;top:6px;inset-inline-end:6px;z-index:2;padding:3px 8px;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:rgba(15,23,42,.82);color:#e2e8f0;font:inherit;font-size:11px;line-height:1.6;cursor:pointer;opacity:0;transition:opacity .15s ease}[data-testid="chat-interface"] pre:hover button[data-oh-code-copy],button[data-oh-code-copy]:focus-visible{opacity:1}button[data-oh-code-copy][data-oh-copied="1"]{border-color:#34d399;color:#34d399}[data-oh-chat-jump]{position:absolute;inset-inline-start:50%;bottom:14px;transform:translateX(-50%);z-index:5;display:none;align-items:center;gap:6px;padding:6px 12px;border:1px solid rgba(148,163,184,.4);border-radius:999px;background:rgba(15,23,42,.92);color:#e2e8f0;font:inherit;font-size:12px;cursor:pointer;box-shadow:0 6px 18px rgba(2,6,23,.45)}[data-oh-chat-jump][data-oh-visible="1"]{display:inline-flex}[data-oh-chat-counter]{display:none;margin:2px 4px 0;color:#94a3b8;font-size:11px;text-align:end;direction:ltr}[data-oh-chat-counter][data-oh-visible="1"]{display:block}@media(max-width:680px){[data-testid="chat-interface"] pre{font-size:12px}button[data-oh-code-copy]{opacity:1;padding:5px 10px}[data-oh-chat-jump]{bottom:10px;font-size:13px;padding:8px 14px}}@media(prefers-reduced-motion:reduce){[data-testid="chat-scroll-container"]{scroll-behavior:auto}button[data-oh-code-copy]{transition:none}}</style><script id="openhands-host-chat-script">(()=>{const INPUT='[data-testid="chat-input"]',SCROLLER='[data-testid="chat-scroll-container"]',SUBMIT='[data-testid="submit-button"]',STOP='[data-testid="stop-button"]',NATIVE_JUMP='[data-testid="scroll-to-bottom"]';let queued=false;
+  const integration = `<style id="openhands-host-chat-style">[data-testid="chat-input"]{unicode-bidi:plaintext;text-align:start;overflow-wrap:anywhere}[data-testid="chat-scroll-container"]{overscroll-behavior:contain;scroll-behavior:smooth}[data-testid="chat-interface"] p,[data-testid="chat-interface"] li,[data-testid="chat-interface"] blockquote{unicode-bidi:plaintext}[data-testid="chat-interface"] pre{position:relative;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}[data-testid="chat-interface"] :not(pre)>code{overflow-wrap:anywhere}[data-testid="chat-interface"] table{display:block;max-width:100%;overflow-x:auto}[data-testid="chat-interface"] a:focus-visible,[data-testid="chat-input"]:focus-visible,[data-oh-chat-jump]:focus-visible,[data-oh-code-copy]:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}button[data-oh-code-copy]{position:absolute;top:6px;inset-inline-end:6px;z-index:2;padding:3px 8px;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:rgba(15,23,42,.82);color:#e2e8f0;font:inherit;font-size:11px;line-height:1.6;cursor:pointer;opacity:0;transition:opacity .15s ease}[data-testid="chat-interface"] pre:hover button[data-oh-code-copy],button[data-oh-code-copy]:focus-visible{opacity:1}button[data-oh-code-copy][data-oh-copied="1"]{border-color:#34d399;color:#34d399}[data-oh-msg-actions]{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0;opacity:.35;transition:opacity .15s ease}[data-oh-msg-actions]:hover,[data-oh-msg-actions]:focus-within{opacity:1}[data-oh-msg-actions] button{padding:3px 9px;border:1px solid rgba(148,163,184,.4);border-radius:999px;background:transparent;color:inherit;font:inherit;font-size:11px;line-height:1.7;cursor:pointer}[data-oh-msg-actions] button:hover{border-color:#60a5fa;color:#bfdbfe}[data-oh-msg-actions] button:focus-visible{outline:2px solid #38bdf8;outline-offset:2px}@media(max-width:680px){[data-oh-msg-actions]{opacity:1}[data-oh-msg-actions] button{padding:6px 12px;font-size:12px}}[data-oh-chat-jump]{position:absolute;inset-inline-start:50%;bottom:14px;transform:translateX(-50%);z-index:5;display:none;align-items:center;gap:6px;padding:6px 12px;border:1px solid rgba(148,163,184,.4);border-radius:999px;background:rgba(15,23,42,.92);color:#e2e8f0;font:inherit;font-size:12px;cursor:pointer;box-shadow:0 6px 18px rgba(2,6,23,.45)}[data-oh-chat-jump][data-oh-visible="1"]{display:inline-flex}[data-oh-chat-counter]{display:none;margin:2px 4px 0;color:#94a3b8;font-size:11px;text-align:end;direction:ltr}[data-oh-chat-counter][data-oh-visible="1"]{display:block}@media(max-width:680px){[data-testid="chat-interface"] pre{font-size:12px}button[data-oh-code-copy]{opacity:1;padding:5px 10px}[data-oh-chat-jump]{bottom:10px;font-size:13px;padding:8px 14px}}@media(prefers-reduced-motion:reduce){[data-testid="chat-scroll-container"]{scroll-behavior:auto}button[data-oh-code-copy]{transition:none}}</style><script id="openhands-host-chat-script">(()=>{const HELPER_VERSION=${JSON.stringify(helperVersion)},INPUT='[data-testid="chat-input"]',SCROLLER='[data-testid="chat-scroll-container"]',SUBMIT='[data-testid="submit-button"]',STOP='[data-testid="stop-button"]',NATIVE_JUMP='[data-testid="scroll-to-bottom"]',MESSAGE='[data-testid="chat-scroll-container"] div[class*="rounded-xl"][class*="flex-col"]';let queued=false;
+try{document.documentElement.setAttribute("data-openhands-helper",HELPER_VERSION)}catch{}
 function chatInput(){return document.querySelector(INPUT)}
 function scroller(){return document.querySelector(SCROLLER)}
 function atBottom(node){return node.scrollHeight-node.scrollTop-node.clientHeight<56}
@@ -588,7 +590,19 @@ if(!input.dataset.ohChatCounter){input.dataset.ohChatCounter="1";input.addEventL
 update()}
 function installCopyButtons(){document.querySelectorAll('[data-testid="chat-interface"] pre').forEach(block=>{if(block.dataset.ohCodeCopy)return;block.dataset.ohCodeCopy="1";const button=document.createElement("button");button.type="button";button.setAttribute("data-oh-code-copy","");button.setAttribute("aria-label","کپی این قطعه کد");button.textContent="کپی";button.addEventListener("click",async event=>{event.preventDefault();event.stopPropagation();const code=block.querySelector("code"),text=String((code||block).textContent||"");try{await navigator.clipboard.writeText(text);button.textContent="کپی شد";button.setAttribute("data-oh-copied","1")}catch{button.textContent="کپی نشد"}
 setTimeout(()=>{button.textContent="کپی";button.removeAttribute("data-oh-copied")},2000)});block.append(button)})}
-function install(){queued=false;const input=chatInput();if(input&&input.getAttribute("dir")!=="auto")input.setAttribute("dir","auto");installJump();installCounter();installCopyButtons()}
+function messageText(node){const clone=node.cloneNode(true);clone.querySelectorAll("[data-oh-msg-actions],[data-oh-code-copy]").forEach(item=>item.remove());return String(clone.textContent||"").trim()}
+function fillInput(text){const input=chatInput();if(!input)return false;input.focus();input.textContent=text;input.dispatchEvent(new InputEvent("input",{bubbles:true,data:text,inputType:"insertText"}));return true}
+function sendInput(){const submit=document.querySelector(SUBMIT);if(submit&&!submit.disabled){submit.click();return true}return false}
+function actionButton(label,hint,handler){const button=document.createElement("button");button.type="button";button.textContent=label;button.setAttribute("aria-label",hint);button.addEventListener("click",async event=>{event.preventDefault();event.stopPropagation();const original=label;try{const result=await handler();button.textContent=result||"انجام شد"}catch{button.textContent="ناموفق"}setTimeout(()=>{button.textContent=original},1600)});return button}
+function previousUserText(node){const messages=document.querySelectorAll(MESSAGE);let seen=false;for(let index=messages.length-1;index>=0;index-=1){const item=messages[index];if(item===node){seen=true;continue}if(seen&&isUser(item))return messageText(item)}return ""}
+function isUser(node){return String(node.className||"").includes("self-end")}
+function installMessageActions(){document.querySelectorAll(MESSAGE).forEach(node=>{if(node.dataset.ohMsgActions)return;node.dataset.ohMsgActions="1";const row=document.createElement("div");row.setAttribute("data-oh-msg-actions","");row.setAttribute("role","group");
+ row.append(actionButton("کپی","کپی متن این پیام",async()=>{await navigator.clipboard.writeText(messageText(node));return "کپی شد"}));
+ if(isUser(node)){row.append(actionButton("ویرایش","ویرایش این پیام در کادر نوشتن",async()=>{fillInput(messageText(node));return "آماده ویرایش"}));
+  row.append(actionButton("ارسال دوباره","ارسال دوباره همین پیام",async()=>{fillInput(messageText(node));return sendInput()?"ارسال شد":"آماده ارسال"}))}
+ else{row.append(actionButton("تلاش مجدد","ارسال دوباره آخرین پیام کاربر",async()=>{const text=previousUserText(node);if(!text)return "پیامی نبود";fillInput(text);return sendInput()?"ارسال شد":"آماده ارسال"}))}
+ node.append(row)})}
+function install(){queued=false;const input=chatInput();if(input&&input.getAttribute("dir")!=="auto")input.setAttribute("dir","auto");installJump();installCounter();installCopyButtons();installMessageActions()}
 function schedule(){if(queued)return;queued=true;requestAnimationFrame(install)}
 addEventListener("keydown",event=>{if(event.defaultPrevented)return;const accelerator=event.ctrlKey||event.metaKey;const input=chatInput();
 if(accelerator&&event.key==="Enter"&&inInput(event.target)){const submit=document.querySelector(SUBMIT);if(submit&&!submit.disabled){event.preventDefault();event.stopPropagation();submit.click();return}}
@@ -1851,7 +1865,8 @@ serve_agent() {
     seed_llm_profiles
 
     log "Starting the authenticated model manager on 127.0.0.1:$MODEL_MANAGER_PORT"
-    OH_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT" \
+    OH_HELPER_VERSION="$SCRIPT_VERSION" \
+        OH_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT" \
         OH_LOCAL_MODEL_PORT="$LOCAL_MODEL_PORT" \
         OH_MODEL_MANAGER_BACKEND_PORT="$BACKEND_PORT" \
         OH_GATEWAY_BASE_PATH="$BASE_PATH" \
@@ -1882,6 +1897,7 @@ serve_agent() {
     export OH_GATEWAY_UPSTREAM_PORT="$UPSTREAM_PORT"
     export OH_GATEWAY_MODEL_MANAGER_PORT="$MODEL_MANAGER_PORT"
     export OH_GATEWAY_BASE_PATH="$BASE_PATH"
+    export OH_GATEWAY_HELPER_VERSION="$SCRIPT_VERSION"
     export OH_GATEWAY_PAIR_FILE="$PAIR_FILE"
     export OH_GATEWAY_SECRETS_FILE="$SECRETS_FILE"
     log "Starting the prefix-aware public gateway on $LISTEN_HOST:$PORT"

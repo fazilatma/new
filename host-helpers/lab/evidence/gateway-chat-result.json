@@ -14,6 +14,11 @@
     "plainEnterUntouched": true,
     "escapeStopsGeneration": true,
     "escapeReleasesInput": true,
-    "focusShortcutWorks": true
+    "focusShortcutWorks": true,
+    "userMessageCopyAndEdit": true,
+    "userMessageResend": true,
+    "agentMessageCopy": true,
+    "agentMessageRetry": true,
+    "helperVersionExposed": true
   }
 }
