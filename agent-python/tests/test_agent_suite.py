@@ -1883,6 +1883,35 @@ def test_localai_search_and_runtime_resilience():
     assert fix_res.json()["ok"] is True
 
 
+def test_localai_host_endpoint_returns_flat_shape_for_frontend():
+    """Regression test: the Local AI dashboard JS (mirrored from the PHP
+    edition, whose LocalAI::hostScan() returns memory/cpu/gpu/disk/
+    suggestedRamBudgetGb/runtime as TOP-LEVEL keys) reads
+    HOST.memory / HOST.cpu / HOST.gpu / HOST.disk / HOST.suggestedRamBudgetGb
+    directly off the /api/localai/host response. The Python backend's
+    internal local_ai.host_scan() nests those same fields one level deeper
+    under "host", and the route used to return that nested shape verbatim —
+    so every one of those frontend reads silently resolved to undefined and
+    fell back to hardcoded placeholder values (4GB total RAM, 2GB available,
+    no GPU, 10GB disk, ~2GB suggested budget) instead of the real scan,
+    which is exactly the "hardware recommendation looks wrong/empty" symptom
+    reported for the Local AI section. The HTTP response must be flat.
+    """
+    res = client.get("/api/localai/host")
+    assert res.status_code == 200
+    data = res.json()
+
+    # These must be top-level, not nested under a "host" key.
+    for key in ("os", "arch", "cpu", "memory", "disk", "gpu", "suggestedRamBudgetGb", "runtime"):
+        assert key in data, f"expected top-level '{key}' in /api/localai/host response"
+    assert "host" not in data, "/api/localai/host must not nest fields under a 'host' key"
+
+    assert "totalGb" in data["memory"]
+    assert "availableGb" in data["memory"]
+    assert data["suggestedRamBudgetGb"] == data["memory"].get("suggestedBudgetGb")
+    assert "modelsDir" in data["runtime"]
+
+
 
 
 

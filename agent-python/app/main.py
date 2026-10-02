@@ -1672,9 +1672,26 @@ def import_provider_models(pid: str, payload: Dict[str, Any], user: Dict[str, An
 
 # Local AI Endpoints
 @app.get("/api/localai/host")
-def get_localai_host(user: Dict[str, Any] = Depends(require_viewer)):
+def get_localai_host(refresh: bool = False, user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
-    return local_ai.host_scan()
+    scan = local_ai.host_scan(refresh=refresh)
+    host_info = scan.get("host", {}) or {}
+    # The Local AI dashboard markup/JS is mirrored verbatim from the PHP
+    # edition, whose LocalAI::hostScan() returns a FLAT payload
+    # (os/cpu/memory/disk/gpu/suggestedRamBudgetGb/runtime all top-level).
+    # local_ai.host_scan() here nests those same fields one level deeper
+    # under "host" (kept as-is since recommend()/normalize_profile() already
+    # consume that nested shape internally) — returning it unflattened to
+    # the HTTP API silently broke every frontend read of HOST.memory/
+    # HOST.cpu/HOST.gpu/HOST.disk/HOST.suggestedRamBudgetGb (all undefined),
+    # so the hardware panel and the recommend-profile defaults always fell
+    # back to hardcoded placeholder values (4GB total / 2GB available / no
+    # GPU / 10GB disk / 2GB suggested budget) instead of the real scan.
+    return {
+        **host_info,
+        "suggestedRamBudgetGb": (host_info.get("memory") or {}).get("suggestedBudgetGb", 0.0),
+        "runtime": scan.get("runtime", {}),
+    }
 
 @app.get("/api/localai/runtime")
 def get_localai_runtime(user: Dict[str, Any] = Depends(require_viewer)):
