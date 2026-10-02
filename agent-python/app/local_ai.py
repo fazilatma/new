@@ -1816,6 +1816,25 @@ def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
     return {"query": query, "catalog": local, "huggingface": hf[:limit]}
 
 
+def read_engine_log_tail(engine: Optional[str] = None, max_chars: int = 6000) -> Dict[str, Any]:
+    """Return the tail of the raw stdout/stderr log file we redirect the
+    managed engine subprocess (ollama/llama-server) into, so the UI's
+    troubleshooting panel can show -- and let the user copy -- the real
+    crash output instead of just the one-line HTTP error summary (which is
+    often just a generic "process has terminated: exit status N" with no
+    further context).
+    """
+    engine = engine or get_state("localai:engine") or "ollama"
+    log_path = root_dir() / f"{engine}.log"
+    text = ""
+    if log_path.is_file():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="ignore")[-max_chars:]
+        except Exception:
+            text = ""
+    return {"engine": engine, "logPath": str(log_path), "log": text}
+
+
 def benchmark_llamacpp(model: str, prompt: str = "Say OK.", num_predict: int = 48) -> Dict[str, Any]:
     index = llamacpp_index()
     path = str((index.get(model) or {}).get("path") or "")
@@ -1832,7 +1851,13 @@ def benchmark_llamacpp(model: str, prompt: str = "Say OK.", num_predict: int = 4
         with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return {"ok": False, "model": model, "error": _describe_http_error(e), "latencyMs": round((time.time() - t0) * 1000, 1)}
+        return {
+            "ok": False,
+            "model": model,
+            "error": _describe_http_error(e),
+            "latencyMs": round((time.time() - t0) * 1000, 1),
+            "logTail": read_engine_log_tail("llamacpp").get("log", ""),
+        }
 
     wall_ms = round((time.time() - t0) * 1000, 1)
     timings = data.get("timings") or {}
@@ -1858,7 +1883,7 @@ def benchmark_test(model: str) -> Dict[str, Any]:
 
     srv = server_up("ollama")
     if not srv["up"]:
-        return {"ok": False, "error": "سرویس Ollama در حال اجرا نیست"}
+        return {"ok": False, "error": "سرویس Ollama در حال اجرا نیست", "logTail": read_engine_log_tail("ollama").get("log", "")}
     try:
         t0 = time.time()
         url = f"{host_url()}/api/generate"
@@ -1883,7 +1908,11 @@ def benchmark_test(model: str) -> Dict[str, Any]:
                 "durationSec": round(elapsed, 2),
             }
     except Exception as e:
-        return {"ok": False, "error": _describe_http_error(e)}
+        return {
+            "ok": False,
+            "error": _describe_http_error(e),
+            "logTail": read_engine_log_tail("ollama").get("log", ""),
+        }
 
 
 def default_scan_roots() -> List[str]:

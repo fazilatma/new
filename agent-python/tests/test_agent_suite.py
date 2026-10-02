@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.11"
+    assert APP_VERSION == "3.3.12"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3242,3 +3242,185 @@ async def test_stream_complete_chat_forwards_debug_request_events_when_enabled(m
         events2.append(evt)
     assert received_debug_log_arg["value"] is None
     assert not [e for e in events2 if e.get("type") == "debug_request"]
+
+
+def test_read_engine_log_tail_returns_file_tail(monkeypatch, tmp_path):
+    """read_engine_log_tail() must return the tail of the managed engine's
+    raw stdout/stderr log file (root_dir()/{engine}.log) so the new Local AI
+    troubleshooting panel can show -- and let the user copy -- the real
+    crash output instead of just a one-line HTTP error summary."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+
+    # No log file yet -> empty string, not an exception.
+    result = local_ai.read_engine_log_tail("ollama")
+    assert result["engine"] == "ollama"
+    assert result["log"] == ""
+
+    log_file = tmp_path / "ollama.log"
+    log_file.write_text("line one\nline two\npanic: out of memory\n", encoding="utf-8")
+    result2 = local_ai.read_engine_log_tail("ollama")
+    assert "panic: out of memory" in result2["log"]
+    assert result2["logPath"] == str(log_file)
+
+    # No explicit engine -> falls back to the configured engine (get_state).
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "llamacpp" if key == "localai:engine" else None)
+    (tmp_path / "llamacpp.log").write_text("llama-server: exit status 1\n", encoding="utf-8")
+    result3 = local_ai.read_engine_log_tail(None)
+    assert result3["engine"] == "llamacpp"
+    assert "exit status 1" in result3["log"]
+
+    # max_chars truncates from the end (the tail), matching the "tail -c" semantics used elsewhere.
+    big_log = tmp_path / "ollama.log"
+    big_log.write_text("x" * 5000 + "THE_IMPORTANT_TAIL", encoding="utf-8")
+    result4 = local_ai.read_engine_log_tail("ollama", max_chars=20)
+    assert result4["log"] == "THE_IMPORTANT_TAIL"[-20:] or result4["log"].endswith("THE_IMPORTANT_TAIL")
+
+
+def test_benchmark_failures_include_log_tail_for_troubleshooting(monkeypatch, tmp_path):
+    """Both the Ollama and llama.cpp branches of the model 'Test' button
+    (benchmark_test / benchmark_llamacpp) must attach the real engine log
+    tail on failure, not just the short HTTP error summary -- this is what
+    lets the new troubleshooting modal show the *actual* crash reason
+    (e.g. an OOM or GPU error inside Ollama's own log) instead of a bare
+    'exit status 1' with no further context."""
+    import urllib.error
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    (tmp_path / "ollama.log").write_text("time=... level=ERROR msg=\"llama runner process has terminated: exit status 1\"\ncuda error: out of memory\n", encoding="utf-8")
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+
+    def fake_urlopen(req, timeout=None):
+        err = urllib.error.HTTPError(url=req.full_url, code=500, msg="Internal Server Error", hdrs=None, fp=None)
+        err.read = lambda: b'{"error":"llama runner process has terminated: exit status 1"}'
+        raise err
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    result = local_ai.benchmark_test("tiny-model:latest")
+    assert result["ok"] is False
+    assert "logTail" in result
+    assert "cuda error: out of memory" in result["logTail"]
+
+    # Ollama not even running -> still useful to see whatever was last logged.
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": False})
+    result_down = local_ai.benchmark_test("tiny-model:latest")
+    assert result_down["ok"] is False
+    assert "logTail" in result_down
+
+    # llama.cpp branch. active_path already matches the model's indexed path,
+    # so benchmark_llamacpp() skips straight to the (failing) completion call
+    # instead of trying to (re)activate/start the server.
+    (tmp_path / "llamacpp.log").write_text("error while loading model: invalid magic\n", encoding="utf-8")
+
+    def fake_get_state(key, *a, **kw):
+        if key == "localai:engine":
+            return "llamacpp"
+        if key == "localai:llamacpp:active_path":
+            return "/tmp/tiny.gguf"
+        return None
+
+    monkeypatch.setattr(local_ai, "get_state", fake_get_state)
+    monkeypatch.setattr(local_ai, "llamacpp_index", lambda: {"tiny-model": {"path": "/tmp/tiny.gguf"}})
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+    result_llamacpp = local_ai.benchmark_llamacpp("tiny-model")
+    assert result_llamacpp["ok"] is False
+    assert "invalid magic" in result_llamacpp["logTail"]
+
+
+def test_localai_logs_endpoint_returns_engine_log_tail(monkeypatch, tmp_path):
+    """GET /api/localai/logs backs the troubleshooting modal's '🔄 بروزرسانی
+    لاگ' refresh and the install-job card's '📋 کپی همه لاگ‌ها' button."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    (tmp_path / "ollama.log").write_text("hello from the engine log\n", encoding="utf-8")
+
+    res = client.get("/api/localai/logs?engine=ollama")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["engine"] == "ollama"
+    assert "hello from the engine log" in data["log"]
+
+    # Missing log file for an engine that was never started -> empty, 200 OK.
+    res2 = client.get("/api/localai/logs?engine=llamacpp")
+    assert res2.status_code == 200
+    assert res2.json()["log"] == ""
+
+
+def test_localai_install_job_stop_button_actually_halts_the_background_thread(monkeypatch, tmp_path):
+    """Regression test for the new '⏹ توقف' button on the install-status
+    card: POST /api/jobs/{id}/cancel must not just cosmetically flip the DB
+    status while the install keeps running in its background thread to
+    completion and silently overwrites it back to done/failed -- the thread
+    itself must observe the cancellation and stop doing further work."""
+    import time as time_mod
+    from app import local_ai
+    from app.worker import get_job_details, JOB_CONTROL_FLAGS
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "bin_dir", lambda: tmp_path / "bin")
+    monkeypatch.setattr(local_ai, "models_dir", lambda: tmp_path / "models")
+
+    install_started = {"flag": False}
+
+    def fake_install_runtime(engine="ollama", log_fn=None):
+        install_started["flag"] = True
+        return {"ok": True, "alreadyInstalled": True, "binary": "/fake/ollama", "engine": engine}
+
+    download_calls = {"n": 0}
+
+    def fake_pull_model(model_name, on_progress=None, timeout=7200):
+        # Simulate a long multi-chunk download: each progress tick gives the
+        # cancelling thread a chance to flip the flag before the next tick,
+        # same shape as the real urllib streaming loop in pull_model().
+        for _ in range(20):
+            download_calls["n"] += 1
+            if on_progress:
+                on_progress({"status": "pulling"})
+            time_mod.sleep(0.02)
+        return {"ok": True, "model": model_name}
+
+    monkeypatch.setattr(local_ai, "install_runtime", fake_install_runtime)
+    monkeypatch.setattr(local_ai, "pull_model", fake_pull_model)
+    monkeypatch.setattr(local_ai, "start_server", lambda log_fn=None: {"ok": True, "running": True})
+
+    res = client.post("/api/localai/install", json={"model": "tiny-model:latest", "engine": "ollama", "benchmark": False, "register": False})
+    assert res.status_code == 200
+    job_id = res.json()["job"]["id"]
+
+    # Give the background thread a moment to actually start (it needs to at
+    # least reach install_runtime() before we cancel).
+    for _ in range(50):
+        if install_started["flag"]:
+            break
+        time_mod.sleep(0.02)
+    assert install_started["flag"], "background install thread never started"
+
+    cancel_res = client.post(f"/api/jobs/{job_id}/cancel")
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["ok"] is True
+
+    # Wait for the background thread to unwind in response to the flag,
+    # instead of running the full simulated 20-tick download to completion.
+    for _ in range(100):
+        if download_calls["n"] < 20:
+            time_mod.sleep(0.05)
+            if JOB_CONTROL_FLAGS.get(job_id) is None:
+                break
+        else:
+            break
+    time_mod.sleep(0.2)
+
+    assert download_calls["n"] < 20, "pull_model should have been interrupted by the cancel request, not run to completion"
+
+    job = get_job_details(job_id)
+    assert job["status"] == "cancelled", f"expected 'cancelled', the background thread must not overwrite it with 'failed'/'done' (got {job['status']!r})"
+    assert job_id not in JOB_CONTROL_FLAGS, "JOB_CONTROL_FLAGS entry must be cleaned up once the thread exits"

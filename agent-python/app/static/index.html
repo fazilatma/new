@@ -3242,6 +3242,10 @@
         <div id="job-plan"></div>
         <div class="bar" style="margin:10px 0"><i id="job-bar" style="width:0%"></i></div>
         <div class="row"><b id="job-status">—</b><span class="sp"></span><span class="hint ltr" id="job-id"></span></div>
+        <div class="row" style="gap:8px;margin:8px 0">
+          <button class="btn xs danger" id="btn-job-stop">⏹ توقف</button>
+          <button class="btn xs" id="btn-job-copy-logs">📋 کپی همه لاگ‌ها</button>
+        </div>
         <pre class="log" id="job-log"></pre>
       </section>
     </div>
@@ -4290,6 +4294,43 @@ gemini-1.5-pro'></textarea>
         <button class="btn btn-ghost btn-sm" onclick="navigate('providers');closeModal('chatErrorModal');">⚙️ Configure Providers</button>
       </div>
       <button class="btn btn-ghost" onclick="closeModal('chatErrorModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: LOCAL AI TROUBLESHOOTING (عیب‌یابی هوش مصنوعی محلی) -->
+<div class="modal-backdrop" id="localaiTroubleshootModal">
+  <div class="modal-dialog" style="max-width:720px;width:95%;">
+    <div class="modal-header" style="border-bottom:1px solid rgba(239, 68, 68, 0.3);">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;color:var(--accent-red);">🛠</span>
+        <div>
+          <strong style="font-size:15px;color:var(--accent-red);">عیب‌یابی هوش مصنوعی محلی</strong>
+          <div style="font-size:11px;color:var(--text-dim);">خطای واقعی و کامل گزارش‌شده توسط موتور محلی، برای تشخیص علت واقعی مشکل</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeModal('localaiTroubleshootModal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px;gap:14px;">
+      <div style="font-size:12px;color:var(--text-dim);" id="laTrContext">—</div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);font-weight:600;">پیام خطا</label>
+        <pre id="laTrError" style="max-height:120px;overflow:auto;background:var(--code-bg);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:10px;border-radius:6px;font-family:monospace;font-size:12px;white-space:pre-wrap;margin-top:4px;"></pre>
+      </div>
+
+      <div>
+        <label style="font-size:11px;color:var(--text-dim);font-weight:600;">لاگ کامل موتور (stdout/stderr)</label>
+        <pre id="laTrLog" class="ltr" style="max-height:260px;overflow:auto;background:var(--code-bg);border:1px solid var(--border-subtle);padding:10px;border-radius:6px;font-family:monospace;font-size:11px;white-space:pre-wrap;margin-top:4px;direction:ltr;text-align:left;">در حال دریافت لاگ…</pre>
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-sm danger" onclick="laTrStopEngine()">⏹ توقف موتور</button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshLocalAiTroubleshootLog()">🔄 بروزرسانی لاگ</button>
+        <button class="btn btn-ghost btn-sm" onclick="laTrCopyAll()">📋 کپی همه لاگ‌ها</button>
+      </div>
+      <button class="btn btn-ghost" onclick="closeModal('localaiTroubleshootModal')">بستن</button>
     </div>
   </div>
 </div>
@@ -10142,6 +10183,7 @@ $('#btn-rt-start').onclick = async () => {
     toast('سرویس Ollama اجرا شد', 'ok');
   } catch (e) {
     toast(e.message, 'err');
+    openLocalAiTroubleshoot('اجرای موتور هوش مصنوعی محلی', e.message, '', $('#engine-select').value);
   }
   refreshRuntime(); loadModels();
 };
@@ -10155,6 +10197,78 @@ $('#btn-rt-stop').onclick = async () => {
   }
   refreshRuntime();
 };
+
+/* ───────────────────────────────────────── local AI troubleshooting panel */
+function copyTextToClipboard(text, okMsg) {
+  const done = () => toast(okMsg || 'در حافظه کپی شد', 'ok');
+  const fail = () => toast('کپی ناموفق بود', 'err');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (e) { fail(); }
+    });
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch (e) { fail(); }
+  }
+}
+
+let laTrState = { context: '', error: '', log: '', engine: 'ollama' };
+function openLocalAiTroubleshoot(context, error, logTail, engine) {
+  laTrState = {
+    context: context || '—',
+    error: error || '—',
+    log: logTail || '',
+    engine: engine || $('#engine-select').value || 'ollama',
+  };
+  $('#laTrContext').textContent = laTrState.context;
+  $('#laTrError').textContent = laTrState.error;
+  $('#laTrLog').textContent = laTrState.log || 'در حال دریافت لاگ…';
+  openModal('localaiTroubleshootModal');
+  if (!laTrState.log) refreshLocalAiTroubleshootLog();
+}
+
+async function refreshLocalAiTroubleshootLog() {
+  $('#laTrLog').textContent = 'در حال دریافت لاگ…';
+  try {
+    const d = await api('/api/localai/logs?engine=' + encodeURIComponent(laTrState.engine));
+    laTrState.log = d.log || '(هیچ لاگی برای این موتور ثبت نشده است)';
+    $('#laTrLog').textContent = laTrState.log;
+  } catch (e) {
+    laTrState.log = 'خطا در دریافت لاگ: ' + e.message;
+    $('#laTrLog').textContent = laTrState.log;
+  }
+}
+
+async function laTrStopEngine() {
+  if (!confirm('موتور هوش مصنوعی محلی (' + (ENGINE_NAMES[laTrState.engine] || laTrState.engine) + ') متوقف شود؟')) return;
+  try {
+    await api('/api/localai/runtime/stop', { method: 'POST', body: {} });
+    toast('موتور متوقف شد', 'ok');
+    refreshRuntime(); loadModels();
+  } catch (e) {
+    toast('خطا: ' + e.message, 'err');
+  }
+}
+
+function laTrCopyAll() {
+  const text = `=== زمینه ===\n${laTrState.context}\n\n=== پیام خطا ===\n${laTrState.error}\n\n=== لاگ کامل موتور (${laTrState.engine}) ===\n${laTrState.log || '(خالی)'}`;
+  copyTextToClipboard(text, 'همه لاگ‌ها کپی شد');
+}
 
 /* ───────────────────────────────────────── recommendation */
 function profile() {
@@ -10252,6 +10366,7 @@ async function install(ref, extra) {
   $('#job-bar').style.width = '3%';
   $('#job-log').textContent = '';
   $('#job-plan').innerHTML = '';
+  $('#btn-job-stop').disabled = false;
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
@@ -10286,11 +10401,46 @@ function pollJob(id) {
     $('#job-log').scrollTop = $('#job-log').scrollHeight;
     if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') {
       clearInterval(pollTimer);
+      $('#btn-job-stop').disabled = true;
       loadModels(); refreshRuntime();
       if (j.status === 'done') toast('مدل نصب شد و در ارائه‌دهنده‌ها قرار گرفت', 'ok');
+      if (j.status === 'failed') {
+        openLocalAiTroubleshoot(
+          'نصب مدل (Job ' + id + ')',
+          j.error || j.summary || 'نصب با خطا متوقف شد',
+          (j.logs || []).map((l) => `[${l.level}] ${l.message}`).join('\n'),
+          $('#engine-select').value
+        );
+      }
     }
   }, 2000);
 }
+
+$('#btn-job-stop').onclick = async () => {
+  const id = ($('#job-id').textContent || '').trim();
+  if (!id) { toast('هیچ کار نصب فعالی یافت نشد', 'err'); return; }
+  if (!confirm('نصب در حال انجام متوقف شود؟')) return;
+  try {
+    await api('/api/jobs/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+    toast('درخواست توقف ارسال شد', 'ok');
+  } catch (e) {
+    toast('خطا: ' + e.message, 'err');
+  }
+};
+
+$('#btn-job-copy-logs').onclick = async () => {
+  const jobId = ($('#job-id').textContent || '—').trim();
+  const jobLog = $('#job-log').textContent || '(خالی)';
+  let engineLog = '(در حال دریافت…)';
+  try {
+    const d = await api('/api/localai/logs?engine=' + encodeURIComponent($('#engine-select').value || 'ollama'));
+    engineLog = d.log || '(هیچ لاگی ثبت نشده است)';
+  } catch (e) {
+    engineLog = 'خطا در دریافت لاگ موتور: ' + e.message;
+  }
+  const full = `=== لاگ نصب (Job ${jobId}) ===\n${jobLog}\n\n=== لاگ کامل موتور ===\n${engineLog}`;
+  copyTextToClipboard(full, 'همه لاگ‌ها کپی شد');
+};
 
 /* ───────────────────────────────────────── installed models */
 async function loadModels() {
@@ -10317,8 +10467,16 @@ async function loadModels() {
       b.disabled = true; b.textContent = '…';
       try {
         const r = await api('/api/localai/test', { method: 'POST', body: { model: b.dataset.test } });
-        toast(r.ok ? `سرعت واقعی: ${fa(r.tokensPerSec)} توکن/ثانیه` : ('خطا: ' + r.error), r.ok ? 'ok' : 'err');
-      } catch (e) { toast(e.message, 'err'); }
+        if (r.ok) {
+          toast(`سرعت واقعی: ${fa(r.tokensPerSec)} توکن/ثانیه`, 'ok');
+        } else {
+          toast('خطا: ' + r.error, 'err');
+          openLocalAiTroubleshoot('تست مدل «' + b.dataset.test + '»', r.error, r.logTail, $('#engine-select').value);
+        }
+      } catch (e) {
+        toast(e.message, 'err');
+        openLocalAiTroubleshoot('تست مدل «' + b.dataset.test + '»', e.message, '', $('#engine-select').value);
+      }
       b.disabled = false; b.textContent = 'تست';
     };
   });

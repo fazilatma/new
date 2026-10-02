@@ -64,7 +64,8 @@ from .browser_automation import BROWSER_MANAGER
 from .chat import complete_chat, stream_complete_chat, call_provider_api
 from .worker import (
     persistent_worker_loop, create_job, get_job_details, list_all_jobs, cancel_job, pause_job, resume_job,
-    retry_job, delete_old_jobs, execute_job_task, subscribe_to_job, unsubscribe_from_job, CHAT_JOB_TYPE
+    retry_job, delete_old_jobs, execute_job_task, subscribe_to_job, unsubscribe_from_job, CHAT_JOB_TYPE,
+    JOB_CONTROL_FLAGS,
 )
 from .observability import log_event, get_logs, get_system_metrics
 from .auth import auth_middleware, register_auth_routes, get_current_user, require_admin, require_developer, require_viewer
@@ -1935,11 +1936,23 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
 
     engine = str(payload.get("engine") or get_state("localai:engine") or "ollama")
 
+    class _InstallCancelled(Exception):
+        """Raised internally to unwind run_install_task() as soon as the
+        user clicks "⏹ توقف" -- cancel_job() already flipped the DB status
+        and JOB_CONTROL_FLAGS, this just makes the background thread
+        actually stop doing work instead of ignoring the request."""
+
     def run_install_task():
+        def check_cancel():
+            if JOB_CONTROL_FLAGS.get(job_id) == "cancel":
+                raise _InstallCancelled("نصب توسط کاربر متوقف شد")
+
         def append_log(lvl: str, msg: str):
+            check_cancel()
             log_job_message(job_id, lvl, msg)
 
         def set_progress(pct: float, summary: str):
+            check_cancel()
             with get_db() as c:
                 c.execute("UPDATE jobs SET progress = ?, summary = ? WHERE id = ?", (pct, summary, job_id))
                 c.commit()
@@ -1956,6 +1969,7 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
                 append_log("INFO", f"شروع دانلود مدل {model_ref}…")
 
                 def on_dl_progress(status: str, pct: float, done: float, total: float):
+                    check_cancel()
                     set_progress(25 + pct * 0.45, f"دانلود مدل — {pct:.0f}٪")
 
                 pulled = local_ai.pull_gguf(model_ref, explicit_file=(payload.get("file") or None), on_progress=on_dl_progress)
@@ -1996,7 +2010,7 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
                     c.execute("UPDATE jobs SET progress = 50, summary = ? WHERE id = ?", (f"دانلود مدل {model_ref}", job_id))
                     c.commit()
                 append_log("INFO", f"شروع دانلود مدل {model_ref}…")
-                local_ai.pull_model(model_ref)
+                local_ai.pull_model(model_ref, on_progress=lambda d: check_cancel())
 
                 with get_db() as c:
                     c.execute("UPDATE jobs SET progress = 85, summary = 'ثبت در فهرست ارائه‌دهنده‌ها' WHERE id = ?", (job_id,))
@@ -2017,12 +2031,22 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
                 c.execute("UPDATE jobs SET status = 'done', progress = 100, summary = '✅ پایان موفق نصب مدل', updated_at = datetime('now') WHERE id = ?", (job_id,))
                 c.commit()
             append_log("INFO", "نصب مدل با موفقیت پایان یافت.")
+        except _InstallCancelled:
+            # cancel_job() already set status = 'cancelled' in the DB the
+            # moment the user clicked Stop -- don't clobber that with
+            # 'failed' just because the thread's in-flight call raised.
+            log_job_message(job_id, "WARNING", "نصب در پاسخ به درخواست توقف کاربر متوقف شد.")
         except Exception as e:
             err_msg = str(e)
-            append_log("ERROR", f"خطا در نصب: {err_msg}")
-            with get_db() as c:
-                c.execute("UPDATE jobs SET status = 'failed', error = ?, summary = '❌ نصب ناموفق', updated_at = datetime('now') WHERE id = ?", (err_msg, job_id))
-                c.commit()
+            if JOB_CONTROL_FLAGS.get(job_id) == "cancel":
+                log_job_message(job_id, "WARNING", "نصب در پاسخ به درخواست توقف کاربر متوقف شد.")
+            else:
+                log_job_message(job_id, "ERROR", f"خطا در نصب: {err_msg}")
+                with get_db() as c:
+                    c.execute("UPDATE jobs SET status = 'failed', error = ?, summary = '❌ نصب ناموفق', updated_at = datetime('now') WHERE id = ?", (err_msg, job_id))
+                    c.commit()
+        finally:
+            JOB_CONTROL_FLAGS.pop(job_id, None)
 
         # Start thread
     t = threading.Thread(target=run_install_task, daemon=True)
@@ -2111,6 +2135,15 @@ def post_localai_llamacpp_activate(payload: Dict[str, Any], user: Dict[str, Any]
 def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
     return local_ai.installed()
+
+@app.get("/api/localai/logs")
+def get_localai_logs(engine: Optional[str] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    """Tail of the managed engine's (ollama/llama-server) raw stdout+stderr
+    log file -- used by the Local AI troubleshooting panel so the user can
+    see/copy the real crash output, not just the short HTTP error summary.
+    """
+    from . import local_ai
+    return local_ai.read_engine_log_tail(engine)
 
 @app.post("/api/localai/recommend")
 def post_localai_recommend(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):

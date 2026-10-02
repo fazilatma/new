@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.12 - Local AI troubleshooting: real Stop + Copy-all-logs controls, and the Test button now surfaces the engine's actual crash log
+
+### Added
+- A new **"🛠 عیب‌یابی هوش مصنوعی محلی"** troubleshooting modal, opened automatically whenever testing a local model, starting the engine, or an install job fails. It shows the short error message plus the **full raw stdout/stderr tail of the managed engine process** (`ollama.log` / `llamacpp.log`), and has two requested actions: **"⏹ توقف موتور"** (stops the Ollama/llama.cpp runtime immediately, for when it's hung or crash-looping) and **"📋 کپی همه لاگ‌ها"** (copies the context + error + full log tail to the clipboard in one go, for sharing with support) -- plus a "🔄 بروزرسانی لاگ" button to pull a fresh tail on demand.
+- The install-status card (**"④ وضعیت نصب مدل"**) also got its own **"⏹ توقف"** and **"📋 کپی همه لاگ‌ها"** buttons directly under the progress bar, so a stuck/runaway install can be stopped and its full log (install-job log + engine log) copied without waiting for it to time out.
+- Backend: new `local_ai.read_engine_log_tail(engine)` helper and `GET /api/localai/logs` endpoint expose the tail of the engine's own log file. `benchmark_test()` and `benchmark_llamacpp()` (the "Test" button's backend) now attach this tail as `logTail` on every failure response, so a bare `HTTP 500 Internal Server Error: llama runner process has terminated: exit status 1` (Ollama's own generic crash message, with no further detail) is immediately followed by the engine's real log -- e.g. the actual OOM/GPU/corrupt-model line that explains *why* it terminated -- instead of leaving the user stuck on a one-line, unactionable summary.
+
+### Fixed
+- **The new "⏹ توقف" button on the install-status card was not cosmetic-only**: `POST /api/jobs/{id}/cancel` previously only flipped the job's DB status to `cancelled`, but the actual install ran in a plain background thread that never checked that flag -- it kept downloading/installing to completion regardless and then silently overwrote the status back to `done`/`failed`. `run_install_task()` (`app/main.py`) now checks the cancellation flag between every stage and inside the GGUF/Ollama download progress callbacks, unwinds immediately once the user clicks Stop, and leaves the job's status as `cancelled` instead of clobbering it.
+- Verified with 4 new regression tests: `read_engine_log_tail()` tailing behaviour (missing file, engine fallback via `get_state`, `max_chars` truncation); both `benchmark_test()` (Ollama) and `benchmark_llamacpp()` failure paths attaching the real `logTail`; the new `/api/localai/logs` endpoint; and an end-to-end test that starts a real install job with a mocked long-running download, cancels it mid-flight via the actual `/api/jobs/{id}/cancel` endpoint, and asserts the background thread stops before the simulated download finishes and the job is left `cancelled` (not silently overwritten). 80 backend tests passing.
+
 ## 3.3.11 - Added "حالت تشخیص عیب" (Diagnostic/Debug Mode): a DevTools-Network-tab-style inspector for every real chat request
 
 ### Added
