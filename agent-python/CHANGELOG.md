@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.21 - Added a hard Python-level subprocess timeout as a backstop for curl/wget downloads
+
+### Fixed
+- Even after 3.3.20 moved auto-repair into a background thread (ruling out the worker-process-killed theory), live polling on the real affected host still showed the exact same download candidate stuck for 380+ seconds -- well past curl's own `-m 300` cap plus the `--speed-limit`/`--speed-time` stall detection added in 3.3.16. This means curl's own internal timeout enforcement was not reliably firing on that host's curl build/platform for whatever reason (undetermined without shell access to that host). Every `subprocess.run()` call in the download loop (curl and wget) now also passes an explicit Python-level `timeout=` (330s for curl, 45s for wget), so `subprocess.run()` itself force-kills a runaway child process as a backstop that does not depend on the child binary's own timeout flags actually working correctly.
+- Added regression test `test_install_runtime_download_has_hard_python_level_subprocess_timeout` asserting every download subprocess call carries an explicit hard `timeout=`.
+- 95 backend tests passing.
+
 ## 3.3.20 - auto-repair now runs in the background instead of blocking the HTTP request (root cause of the real stuck install)
 
 ### Fixed

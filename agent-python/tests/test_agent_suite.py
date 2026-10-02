@@ -65,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.20"
+    assert APP_VERSION == "3.3.21"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3938,3 +3938,46 @@ def test_install_runtime_curl_download_aborts_on_stalled_connection(monkeypatch,
     for cmd in captured_cmds:
         assert "--speed-limit" in cmd, "curl must abort stalled/black-holed downloads instead of hanging for the full -m 300"
         assert "--speed-time" in cmd
+
+
+def test_install_runtime_download_has_hard_python_level_subprocess_timeout(monkeypatch, tmp_path):
+    """Regression test for a second real-world hang observed live on the
+    same affected host even AFTER curl was given --speed-limit/--speed-time:
+    curl's own -m/--speed-limit enforcement did not reliably fire on that
+    host/curl build -- the subprocess.run() call for curl still hadn't
+    returned (no success, no error) well past the 300s -m cap. Every
+    subprocess.run() call in the download loop (curl and wget) must pass an
+    explicit Python-level `timeout=` so subprocess.run() forcibly kills a
+    runaway child itself, as a backstop that does not depend on the child
+    binary's own timeout flags actually working."""
+    from app import local_ai
+    import inspect
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+
+    captured_kwargs = []
+
+    def fake_which(name):
+        return f"/usr/bin/{name}" if name in ("curl", "wget") else None
+
+    def fake_run(cmd, **kwargs):
+        captured_kwargs.append(kwargs)
+        class _R:
+            returncode = 1
+            stdout = ""
+            stderr = "simulated failure"
+        return _R()
+
+    monkeypatch.setattr(local_ai.shutil, "which", fake_which)
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", lambda req, timeout=None: (_ for _ in ()).throw(Exception("no network in test")))
+
+    with pytest.raises(RuntimeError, match="Could not download"):
+        local_ai.install_runtime("ollama")
+
+    assert captured_kwargs, "curl/wget should have been invoked for at least one candidate"
+    for kwargs in captured_kwargs:
+        assert kwargs.get("timeout"), "every subprocess.run() download call must pass an explicit hard timeout="
+        assert kwargs["timeout"] <= 330, "the Python-level timeout must not be looser than curl's own -m cap plus a small grace margin"

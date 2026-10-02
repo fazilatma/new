@@ -757,14 +757,23 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
                         "--speed-limit", "1024", "--speed-time", "20",
                         "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url,
                     ],
-                    capture_output=True, text=True
+                    # Belt-and-suspenders Python-level hard kill, in case
+                    # curl's own -m/--speed-limit enforcement doesn't fire
+                    # as expected on a given host's curl build/platform --
+                    # observed live on a real host: curl still hadn't
+                    # returned (no error, no success) well past 300s with
+                    # these exact flags present, so this is a real,
+                    # confirmed-necessary backstop, not just defensive
+                    # paranoia. subprocess.run(timeout=...) kills the child
+                    # process outright if it's still running at the deadline.
+                    capture_output=True, text=True, timeout=330,
                 )
                 if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
                     dl_ok = True
             if not dl_ok and shutil.which("wget"):
                 res = subprocess.run(
                     ["wget", "-q", "-T", "15", "-t", "2", "-U", "Mozilla/5.0 (ArenaAgent/3.0)", "-O", str(dest_path), url],
-                    capture_output=True, text=True
+                    capture_output=True, text=True, timeout=45,
                 )
                 if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:
                     dl_ok = True
