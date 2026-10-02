@@ -208,8 +208,11 @@ function buildCanvas() {
 function runChatScript(script, dom) {
   const copied = [];
   const frames = [];
+  const body = new FakeElement("body");
+  dom.root.append(body);
   const document = {
     documentElement: dom.root,
+    body,
     createElement: (name) => new FakeElement(name),
     querySelector: (selector) => dom.root.querySelector(selector),
     querySelectorAll: (selector) => dom.root.querySelectorAll(selector),
@@ -226,14 +229,14 @@ function runChatScript(script, dom) {
       listeners.push(listener);
       windowListeners.set(type, listeners);
     },
-    navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } },
+    navigator: { onLine: true, clipboard: { writeText: async (text) => { copied.push(text); } } },
     InputEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } },
     console,
   };
   context.window = context;
   vm.runInNewContext(script, context, { filename: "injected-canvas-chat.js" });
   const dispatch = (type, value) => { for (const listener of windowListeners.get(type) || []) listener(value); };
-  return { copied, dispatch, windowListeners };
+  return { copied, dispatch, windowListeners, setOnline: (value) => { context.navigator.onLine = value; } };
 }
 
 let gateway;
@@ -295,6 +298,17 @@ try {
   copy.emit("click", event("click"));
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(runtime.copied, ["echo 'hello'"], "the copy button must copy only that code block");
+
+  const banner = dom.root.querySelector("[data-oh-offline]");
+  assert.ok(banner, "the chat must be able to explain a dropped connection");
+  assert.equal(banner.getAttribute("data-oh-visible"), "0", "the banner stays hidden while the browser is online");
+  runtime.setOnline(false);
+  runtime.dispatch("offline", {});
+  assert.equal(banner.getAttribute("data-oh-visible"), "1", "losing the connection must tell the user the agent keeps working server-side");
+  assert.match(banner.textContent, /روی سرور/, "the banner must say the work continues on the server");
+  runtime.setOnline(true);
+  runtime.dispatch("online", {});
+  assert.equal(banner.getAttribute("data-oh-visible"), "0", "reconnecting must clear the banner");
 
   const userActions = dom.userMessage.querySelector("[data-oh-msg-actions]");
   assert.ok(userActions, "a user message must receive its own action row");
@@ -385,6 +399,7 @@ try {
       agentMessageCopy: true,
       agentMessageRetry: true,
       helperVersionExposed: true,
+      offlineBannerExplainsServerSideWork: true,
     },
   }, null, 2)}\n`);
 } finally {

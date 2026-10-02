@@ -50,6 +50,12 @@ let profileTestPromise = null;
 
 const helperVersion = process.env.OH_HELPER_VERSION || "dev";
 const CHANGELOG = Object.freeze([
+  { version: "3.9.0", items: [
+    "تداوم اجرای سمت سرور: نگهبان گفتگوها هر ۲۰ ثانیه کار نیمه‌کاره را روی سرور از سر می‌گیرد",
+    "گفتگوی قطع‌شده پس از restart سرویس هم خودکار ادامه پیدا می‌کند و وضعیت نگهبان پس از restart حفظ می‌شود",
+    "تب «تداوم اجرا» با کلید روشن/خاموش، جدول گفتگوها، دکمه ادامه دستی و گزارش رویدادها",
+    "بنر چت: هنگام قطع اینترنت اعلام می‌کند کار روی سرور ادامه دارد و ایجنت متوقف نشده است",
+  ] },
   { version: "3.8.1", items: [
     "نسخه‌بندی و گزارش تغییرات به یک قرارداد دائمی و خودکار تبدیل شد",
     "اسکریپت check-version-bump.sh: هر تغییر در helper بدون bump نسخه و ورودی CHANGELOG رد می‌شود",
@@ -2081,7 +2087,7 @@ function managerPage() {
 .empty-test{padding:40px;text-align:center;color:var(--muted)}@keyframes pulse{50%{opacity:.35;transform:scale(.8)}}@keyframes row-in{from{background:rgba(59,130,246,.18)}to{background:transparent}}@media(max-width:980px){.span-4,.span-5,.span-6,.span-7,.span-8{grid-column:1/-1}}@media(max-width:680px){.shell{padding:12px 12px 36px}.list-head input{width:100%}.alert{flex-direction:column;align-items:stretch}.alert button{width:100%}.stack-table table{min-width:0;border-spacing:0 8px}.stack-table thead{display:none}.stack-table tbody,.stack-table tr,.stack-table td{display:block;width:100%}.stack-table tr{margin-bottom:10px;padding:9px 11px;border:1px solid var(--border);border-radius:12px;background:#151518}.stack-table td{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px;padding:7px 0;border:0;text-align:right}.stack-table td:before{content:attr(data-label);color:#71717a;font-size:.72rem;font-weight:700}.stack-table td.ltr{text-align:left}.stack-table td.actions-cell{grid-template-columns:1fr}.stack-table td.actions-cell button{width:100%;margin:3px 0}.app-header{align-items:flex-start}.brand p{display:none}.header-actions{flex-direction:column;align-items:stretch}.auth-pill,.back-link{min-height:34px;padding:6px 9px}.tabs-wrap{margin-inline:-4px}.card{padding:14px}.field,.field.third{grid-column:1/-1}.metric-grid{grid-template-columns:1fr}.section-head{display:block}.actions button{flex:1 1 150px}table{min-width:560px}.test-launch{grid-template-columns:1fr}.modal{padding:0;place-items:stretch}.modal-dialog{width:100%;height:100dvh;max-height:none;border:0;border-radius:0}.modal-head{padding:14px}.test-summary{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px 12px 6px}.progress-shell{margin-inline:12px}.test-toolbar{grid-template-columns:1fr;padding:4px 12px 10px}.test-filter{overflow:auto}.test-filter button{flex:1;white-space:nowrap}.test-table{margin:0 12px 10px;border:0;background:transparent}.test-table table{min-width:0;border-spacing:0 8px}.test-table thead{display:none}.test-table tbody,.test-table tr,.test-table td{display:block;width:100%}.test-table tr{margin-bottom:10px;padding:9px 11px;border:1px solid var(--border);border-radius:12px;background:#151518}.test-table td{display:grid;grid-template-columns:82px minmax(0,1fr);gap:8px;padding:7px 0;border:0;text-align:right}.test-table td:before{content:attr(data-label);color:#71717a;font-size:.72rem;font-weight:700}.test-table td.ltr{text-align:left}.test-table td.error-cell{max-width:none}.modal-foot{padding:10px 12px;flex-wrap:wrap}.modal-foot button{flex:1}.modal-foot .status{width:100%;order:-1}}
 </style></head><body><div class="shell">
 <header class="app-header"><div class="brand"><div class="brand-mark" aria-hidden="true">OH</div><div><h1>مدیریت مدل‌ها</h1><p>ارائه‌دهنده‌ها، Profileها، Proxy و مدل‌های محلی OpenHands</p></div></div><div class="header-actions"><span id="version" class="auth-pill" title="نسخه helper در حال اجرا">نسخه …</span><span id="updated" class="updated"></span><button id="refresh" class="alt" type="button" title="به‌روزرسانی وضعیت (Ctrl+Alt+R)">به‌روزرسانی</button><span id="auth" class="auth-pill">در حال بررسی اتصال…</span><a class="back-link" href="${home}">بازگشت به OpenHands ←</a></div></header>
-<nav class="tabs-wrap" aria-label="بخش‌های مدیریت"><div class="tabs" role="tablist"><button class="tab" type="button" role="tab" data-tab="overview">نمای کلی</button><button class="tab" type="button" role="tab" data-tab="providers">Import / Export</button><button class="tab" type="button" role="tab" data-tab="proxy">Proxy</button><button class="tab" type="button" role="tab" data-tab="local">GGUF محلی</button><button class="tab" type="button" role="tab" data-tab="endpoint">OpenAI Endpoint</button><button class="tab" type="button" role="tab" data-tab="tests">تست مدل‌ها</button><button class="tab" type="button" role="tab" data-tab="changes">تغییرات</button></div></nav>
+<nav class="tabs-wrap" aria-label="بخش‌های مدیریت"><div class="tabs" role="tablist"><button class="tab" type="button" role="tab" data-tab="overview">نمای کلی</button><button class="tab" type="button" role="tab" data-tab="providers">Import / Export</button><button class="tab" type="button" role="tab" data-tab="proxy">Proxy</button><button class="tab" type="button" role="tab" data-tab="local">GGUF محلی</button><button class="tab" type="button" role="tab" data-tab="endpoint">OpenAI Endpoint</button><button class="tab" type="button" role="tab" data-tab="tests">تست مدل‌ها</button><button class="tab" type="button" role="tab" data-tab="continuity">تداوم اجرا</button><button class="tab" type="button" role="tab" data-tab="changes">تغییرات</button></div></nav>
 <main>
 <div id="alert" class="alert" role="alert" hidden><span id="alert-text"></span><button id="alert-retry" class="alt" type="button">تلاش دوباره</button></div>
 <section class="panel" data-panel="overview"><div class="section-head"><div><h2>نمای کلی مدل‌ها</h2><p>وضعیت Profileها و مدل‌های محلی این نصب را یک‌جا مشاهده کنید.</p></div></div><div class="grid"><div class="card span-4"><h2>وضعیت نصب</h2><div id="profile-limit" class="status ok"></div><p class="muted">این پنل فقط در مرورگر Pair‌شده فعال است. هیچ کلید یا tokenی در URL، خروجی یا log قرار نمی‌گیرد.</p></div><div class="card span-8"><div class="metric-grid"><div class="metric"><span>LLM Profile</span><strong id="profile-count">—</strong></div><div class="metric"><span>مدل GGUF نصب‌شده</span><strong id="local-count">—</strong></div><div class="metric"><span>وضعیت llama.cpp</span><strong id="runtime-state">—</strong></div></div></div><div class="card span-12"><h2>LLM Profileهای موجود</h2><p class="muted">پس از ایجاد یا Import مدل، برای مشاهده آن در Canvas صفحه اصلی را تازه‌سازی کنید.</p><div class="list-head"><input id="profile-search" type="search" placeholder="جستجوی Profile یا Model ID…" aria-label="جستجو در LLM Profileها" autocomplete="off"><span class="spacer"></span><p id="profile-summary" class="muted"></p></div><div id="profiles" class="scroll stack-table"></div></div></div></section>
@@ -2092,8 +2098,15 @@ function managerPage() {
 <div class="card span-12"><h2>مدل‌های نصب‌شده</h2><div id="locals" class="scroll stack-table"></div><details><summary>مشاهده log مدل محلی</summary><pre id="log"></pre></details></div></div></section>
 <section class="panel" data-panel="endpoint" hidden><div class="section-head"><div><h2>endpoint سازگار با OpenAI</h2><p>Ollama، LM Studio، vLLM، llama.cpp یا هر endpoint سازگار دیگر را بررسی و ثبت کنید.</p></div></div><div class="grid"><div class="card span-7"><div class="notice">مسیر <code>/models</code> پیش از ثبت بررسی می‌شود. HTTP فقط برای localhost مجاز است و endpoint راه‌دور باید HTTPS باشد.</div><div class="form-grid"><div class="field"><label for="ep-name">نام اتصال</label><input id="ep-name" class="ltr" placeholder="ollama"></div><div class="field"><label for="ep-context">Context length</label><input id="ep-context" type="number" value="16384" min="16384"></div><div class="field full"><label for="ep-url">Base URL</label><input id="ep-url" class="ltr" spellcheck="false" placeholder="http://127.0.0.1:11434/v1"></div><div class="field full"><label for="ep-model">Model ID</label><input id="ep-model" class="ltr" placeholder="qwen2.5-coder"></div><div class="field full"><label for="ep-key">API key اختیاری</label><input id="ep-key" type="password" autocomplete="new-password"></div></div><label class="check"><input id="ep-tools" type="checkbox" checked><span>Native tool calling</span></label><div class="actions"><button class="alt" id="probe-endpoint" type="button">کشف و تست مدل‌ها</button><button id="endpoint" type="button">تست و ساخت LLM Profile</button></div><div id="endpoint-status" class="status" role="status"></div></div><div class="card span-5"><h2>مدل‌های کشف‌شده</h2><div id="endpoint-models" class="scroll"><p class="muted">پس از تست endpoint، مدل‌های اعلام‌شده اینجا نمایش داده می‌شوند.</p></div></div></div></section>
 <section class="panel" data-panel="tests" hidden><div class="section-head"><div><h2>آزمایش زنده مدل‌ها</h2><p>تمام Profileها بدون محدودیت تعداد آزمایش می‌شوند و نتیجه هر مدل همان لحظه در جدول نمایش داده می‌شود.</p></div></div><div class="card"><div class="notice">برای هر LLM Profile یک درخواست حداکثر دو توکنی ارسال می‌شود و ممکن است هزینه ناچیزی ایجاد کند. کلیدها و پاسخ خام هرگز در جدول یا log نمایش داده نمی‌شوند.</div><div class="test-launch"><div><label for="test-concurrency">تعداد تست هم‌زمان</label><select id="test-concurrency"><option value="1">۱ — کم‌فشار</option><option value="2">۲</option><option value="3" selected>۳ — پیشنهادی</option><option value="4">۴</option><option value="5">۵</option><option value="6">۶</option><option value="8">۸ — سریع</option></select></div><div><label for="test-attempts">تعداد تلاش برای هر مدل</label><select id="test-attempts"><option value="1">۱ — بدون تلاش مجدد</option><option value="2">۲</option><option value="3" selected>۳ — پیشنهادی</option><option value="4">۴</option><option value="5">۵ — سخت‌گیرانه</option></select><p class="muted">خطاهای گذرا مثل 429 یا timeout با فاصله فزاینده دوباره تلاش می‌شوند؛ خطای کلید یا مدل ناموجود تکرار نمی‌شود.</p></div><div><label for="test-timeout">مهلت هر درخواست (ثانیه)</label><select id="test-timeout"><option value="60">۶۰</option><option value="120" selected>۱۲۰ — پیشنهادی</option><option value="180">۱۸۰</option><option value="300">۳۰۰ — مدل‌های کند</option></select></div><div class="actions"><button id="test" type="button">شروع و نمایش جدول زنده</button></div></div><div id="test-status" class="status" role="status">آماده آزمایش همه Profileهای ذخیره‌شده.</div></div></section>
+<section class="panel" data-panel="continuity" hidden><div class="section-head"><div><h2>تداوم اجرای سمت سرور</h2><p>حلقه ایجنت داخل Agent Server روی سرور اجرا می‌شود؛ بستن مرورگر یا قطع اینترنت کار را متوقف نمی‌کند. این بخش مراقب است که اگر سرویس restart شد یا اجرای یک گفتگو نیمه‌کاره ماند، همان‌جا روی سرور از سر گرفته شود.</p></div></div>
+<div class="card"><div class="notice">نگهبان گفتگوها فقط گفتگوهایی را ادامه می‌دهد که قبلاً در حال اجرا بوده‌اند و حالا paused یا error شده‌اند؛ هرگز کار جدیدی شروع نمی‌کند و حداکثر ۵ بار در ساعت برای هر گفتگو تلاش می‌کند.</div>
+<label class="check"><input type="checkbox" id="keeper-enabled" checked> نگهبان گفتگوها فعال باشد (پیشنهاد می‌شود همیشه روشن بماند)</label>
+<div class="list-head"><strong>وضعیت: <span id="keeper-state">…</span></strong><span class="spacer"></span><button class="alt" id="keeper-run" type="button">بررسی فوری</button></div>
+<div class="scroll stack-table"><table><thead><tr><th>گفتگو</th><th>وضعیت</th><th>ادامه‌دادن‌ها</th><th>آخرین ادامه</th><th>اقدام</th></tr></thead><tbody id="keeper-rows"><tr><td colspan="5" class="empty-test">هنوز گفتگویی دیده نشده است.</td></tr></tbody></table></div>
+<h3 class="subcard">رویدادهای اخیر نگهبان</h3><pre id="keeper-log">—</pre>
+<div id="keeper-status" class="status" role="status"></div></div></section>
 <section class="panel" data-panel="changes" hidden><h2>نسخه و گزارش تغییرات</h2><p class="hint">نسخه فعال helper و فهرست تغییرات هر نسخه؛ پس از هر Auto-Update این شماره باید بالاتر برود.</p><div class="list-head"><strong>نسخه در حال اجرا: <span id="changes-version">…</span></strong><button class="alt" id="changes-copy" type="button">کپی گزارش</button></div><div id="changelog" class="changelog"></div></section>
-</main><nav class="bottom-nav" aria-label="پیمایش سریع بخش‌ها"><button type="button" data-nav="overview"><span class="nav-dot" aria-hidden="true"></span>نمای کلی</button><button type="button" data-nav="providers"><span class="nav-dot" aria-hidden="true"></span>Import</button><button type="button" data-nav="proxy"><span class="nav-dot" aria-hidden="true"></span>Proxy</button><button type="button" data-nav="local"><span class="nav-dot" aria-hidden="true"></span>GGUF</button><button type="button" data-nav="endpoint"><span class="nav-dot" aria-hidden="true"></span>Endpoint</button><button type="button" data-nav="tests"><span class="nav-dot" aria-hidden="true"></span>تست</button><button type="button" data-nav="changes"><span class="nav-dot" aria-hidden="true"></span>تغییرات</button></nav><div class="footer">OpenHands Host Model Manager · تمام APIها نیازمند Session API Key هستند.</div></div>
+</main><nav class="bottom-nav" aria-label="پیمایش سریع بخش‌ها"><button type="button" data-nav="overview"><span class="nav-dot" aria-hidden="true"></span>نمای کلی</button><button type="button" data-nav="providers"><span class="nav-dot" aria-hidden="true"></span>Import</button><button type="button" data-nav="proxy"><span class="nav-dot" aria-hidden="true"></span>Proxy</button><button type="button" data-nav="local"><span class="nav-dot" aria-hidden="true"></span>GGUF</button><button type="button" data-nav="endpoint"><span class="nav-dot" aria-hidden="true"></span>Endpoint</button><button type="button" data-nav="tests"><span class="nav-dot" aria-hidden="true"></span>تست</button><button type="button" data-nav="continuity"><span class="nav-dot" aria-hidden="true"></span>تداوم</button><button type="button" data-nav="changes"><span class="nav-dot" aria-hidden="true"></span>تغییرات</button></nav><div class="footer">OpenHands Host Model Manager · تمام APIها نیازمند Session API Key هستند.</div></div>
 <div class="modal" id="test-modal" hidden aria-hidden="true"><div class="modal-backdrop" data-test-close></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="test-modal-title" tabindex="-1"><header class="modal-head"><div><h2 id="test-modal-title">نتایج زنده آزمایش مدل‌ها</h2><p id="test-modal-subtitle">در حال آماده‌سازی صف آزمایش…</p></div><button class="icon-button" id="test-close" type="button" aria-label="بستن">×</button></header><div class="test-summary"><div class="test-stat"><span>کل Profileها</span><strong id="test-total">۰</strong></div><div class="test-stat"><span>تکمیل‌شده</span><strong id="test-completed">۰</strong></div><div class="test-stat good"><span>موفق</span><strong id="test-passed">۰</strong></div><div class="test-stat bad"><span>ناموفق</span><strong id="test-failed">۰</strong></div></div><div class="progress-shell" aria-hidden="true"><div class="progress-bar" id="test-progress"></div></div><div class="test-toolbar"><input id="test-search" type="search" placeholder="جستجو در Profile، مدل یا خطا…" aria-label="جستجو در نتایج"><div class="test-filter" role="group" aria-label="فیلتر نتایج"><button type="button" class="active" data-test-filter="all">همه</button><button type="button" data-test-filter="running">در حال اجرا</button><button type="button" data-test-filter="passed">موفق</button><button type="button" data-test-filter="failed">ناموفق</button></div><button class="alt" id="test-rerun" type="button" disabled>اجرای دوباره همه</button><button class="alt" id="test-rerun-failed" type="button" disabled>اجرای دوباره ناموفق‌ها</button><button class="alt" id="test-export" type="button" disabled>خروجی JSON</button><button class="alt" id="test-export-csv" type="button" disabled>خروجی CSV</button><button class="alt" id="test-copy-report" type="button" disabled>کپی گزارش عیب‌یابی</button></div><div class="test-table" role="region" aria-label="جدول نتایج زنده" tabindex="0"><table><thead><tr><th>وضعیت</th><th>Profile</th><th>مدل</th><th>Provider</th><th>زمان پاسخ</th><th>زمان صف</th><th>جزئیات</th></tr></thead><tbody id="test-result-body"><tr><td colspan="7" class="empty-test">هنوز آزمایشی شروع نشده است.</td></tr></tbody></table></div><footer class="modal-foot"><div id="test-live-status" class="status" role="status" aria-live="polite">آماده</div><div><button class="warn" id="test-cancel" type="button" disabled>توقف آزمایش</button><button class="alt" id="test-done" type="button">بستن</button></div></footer></section></div>
 <script>(()=>{const API=${JSON.stringify(api)},q=id=>document.getElementById(id);let key="",state=null,currentInstallJob="",currentTestJob="",testRows=[],testFilter="all",testPollToken=0,testLastFocus=null,hfFiles=[],hfSearchResults=[],threadsSeeded=false,autoTimer=0,refreshing=false,installPollTimer=0;try{const list=JSON.parse(localStorage.getItem("openhands-backends")||"[]"),sel=JSON.parse(sessionStorage.getItem("openhands-active-backend")||localStorage.getItem("openhands-active-backend")||"null");key=(list.find(x=>x&&x.id===(sel?.backendId||"default-local"))||{}).apiKey||"";}catch{}const tabs=[...document.querySelectorAll("[data-tab]")],panels=[...document.querySelectorAll("[data-panel]")],validTabs=new Set(tabs.map(t=>t.dataset.tab));const navButtons=[...document.querySelectorAll("[data-nav]")];
 function activateTab(name,focus=false){if(!validTabs.has(name))name="overview";tabs.forEach(t=>{const active=t.dataset.tab===name;t.setAttribute("aria-selected",String(active));t.tabIndex=active?0:-1});navButtons.forEach(b=>b.setAttribute("aria-selected",String(b.dataset.nav===name)));panels.forEach(p=>p.hidden=p.dataset.panel!==name);try{localStorage.setItem("openhands-model-manager-tab",name)}catch{}if(location.hash!=="#"+name)history.replaceState(history.state,"","#"+name);if(focus)tabs.find(t=>t.dataset.tab===name)?.focus()}tabs.forEach((tab,index)=>{const name=tab.dataset.tab,panel=panels.find(item=>item.dataset.panel===name);tab.id="manager-tab-"+name;tab.setAttribute("aria-controls","manager-panel-"+name);if(panel){panel.id="manager-panel-"+name;panel.setAttribute("role","tabpanel");panel.setAttribute("aria-labelledby",tab.id)}tab.onclick=()=>activateTab(name);tab.onkeydown=e=>{if(!["ArrowRight","ArrowLeft","Home","End"].includes(e.key))return;e.preventDefault();let next=e.key==="Home"?0:e.key==="End"?tabs.length-1:(index+(e.key==="ArrowRight"?-1:1)+tabs.length)%tabs.length;activateTab(tabs[next].dataset.tab,true)}});navButtons.forEach(button=>{button.setAttribute("role","tab");button.onclick=()=>{activateTab(button.dataset.nav);scrollTo({top:0,behavior:"smooth"})}});let initial=location.hash.slice(1);try{if(!validTabs.has(initial))initial=localStorage.getItem("openhands-model-manager-tab")||"overview"}catch{}activateTab(initial);q("auth").textContent=key?"مرورگر احراز هویت شده است":"مرورگر Pair نشده است";q("auth").className=key?"auth-pill ok":"auth-pill err";
@@ -2120,9 +2133,13 @@ function renderLocals(){const local=state?.local||{models:[],partialDownloads:[]
  document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>busy(b,async()=>{try{show("install-status","در حال اجرای مدل…");await call("/local/start",{method:"POST",body:JSON.stringify({name:b.dataset.start})});show("install-status","مدل در حال بالا آمدن است؛ وضعیت آماده‌شدن به‌صورت خودکار به‌روزرسانی می‌شود.");await refresh()}catch(e){show("install-status",e.message,false)}}));
  document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{const model=(state?.local?.models||[]).find(m=>m.name===b.dataset.edit);if(model){loadLocalForm(model);q("install-card").scrollIntoView({behavior:"smooth",block:"start"})}});
  document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=async()=>{if(!confirm("مدل "+b.dataset.delete+"، فایل GGUF و Profile مدیریت‌شده آن حذف شود؟"))return;try{await call("/local/models/"+encodeURIComponent(b.dataset.delete),{method:"DELETE"});show("install-status","مدل حذف شد.");await refresh()}catch(e){show("install-status",e.message,false)}})}
+function renderKeeper(k){if(!k)return;q("keeper-enabled").checked=k.enabled!==false;q("keeper-state").textContent=(k.enabled?"فعال":"خاموش")+" — آخرین بررسی: "+(k.lastRunAt?new Date(k.lastRunAt).toLocaleTimeString("fa-IR"):"—")+(k.lastError?" — خطا: "+k.lastError:"")+" — مجموع ادامه‌دادن‌ها: "+(k.resumedTotal||0);
+const rows=(k.watched||[]);q("keeper-rows").innerHTML=rows.length?rows.map(row=>"<tr><td data-label=گفتگو class=ltr>"+esc(row.id)+"</td><td data-label=وضعیت>"+esc(row.lastStatus||"—")+"</td><td data-label=ادامه>"+esc(row.resumes||0)+"</td><td data-label=آخرین>"+esc(row.lastResumeAt?new Date(row.lastResumeAt).toLocaleString("fa-IR"):"—")+"</td><td data-label=اقدام class=actions-cell><button class='alt' type='button' data-resume='"+esc(row.id)+"'>ادامه بده</button></td></tr>").join(""):"<tr><td colspan=5 class=empty-test>هنوز گفتگویی دیده نشده است.</td></tr>";
+q("keeper-rows").querySelectorAll("[data-resume]").forEach(button=>{button.onclick=()=>busy(button,async()=>{try{await call("/keeper/resume",{method:"POST",body:JSON.stringify({id:button.dataset.resume})});show("keeper-status","درخواست ادامه ارسال شد.");await refresh()}catch(e){show("keeper-status",e.message,false)}})});
+q("keeper-log").textContent=(k.log||[]).map(entry=>new Date(entry.at).toLocaleTimeString("fa-IR")+" · "+entry.action+(entry.conversationId?" · "+entry.conversationId:"")+" · "+(entry.ok?"ok":"failed")+(entry.detail?" · "+entry.detail:"")).join("\\n")||"—"}
 function renderVersion(s){const version=String(s&&s.version||"dev");q("version").textContent="نسخه "+version;q("changes-version").textContent=version;const log=Array.isArray(s&&s.changelog)?s.changelog:[];q("changelog").innerHTML=log.map(entry=>"<article><h3>نسخه "+esc(entry.version)+"</h3><ul>"+(entry.items||[]).map(item=>"<li>"+esc(item)+"</li>").join("")+"</ul></article>").join("")||"<p class=muted>گزارش تغییراتی ثبت نشده است.</p>"}
 async function refresh(){
- const s=await call("/status");state=s;renderVersion(s);q("log").textContent=s.local.logTail||"";q("profile-count").textContent=String(s.profiles.length);q("local-count").textContent=String(s.local.models.length);q("runtime-state").textContent=s.local.running?(s.local.ready?"آماده":"در حال اجرا"):(s.local.runtimeInstalled?"نصب‌شده":"نیازمند نصب");q("profile-limit").textContent=s.profileLimit===null?"✓ محدودیت تعداد LLM Profile در این نصب برداشته شده است.":"سقف Profile: "+s.profileLimit;q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";
+ const s=await call("/status");state=s;renderVersion(s);renderKeeper(s.keeper);q("log").textContent=s.local.logTail||"";q("profile-count").textContent=String(s.profiles.length);q("local-count").textContent=String(s.local.models.length);q("runtime-state").textContent=s.local.running?(s.local.ready?"آماده":"در حال اجرا"):(s.local.runtimeInstalled?"نصب‌شده":"نیازمند نصب");q("profile-limit").textContent=s.profileLimit===null?"✓ محدودیت تعداد LLM Profile در این نصب برداشته شده است.":"سقف Profile: "+s.profileLimit;q("mode").value=s.proxy.defaultMode;q("template").value=s.proxy.proxyTemplate;q("routes").innerHTML="<p class=muted>Routeها: "+Object.values(s.proxy.routes).map(r=>esc(r.name)+" ("+esc(r.mode)+")").join("، ")+"</p>";
  const r=s.local.resources;q("resources").textContent="CPU: "+r.cpuCount+" رشته | RAM آزاد: "+bytes(r.freeMemoryBytes)+" از "+bytes(r.totalMemoryBytes)+" | فضای آزاد: "+bytes(r.freeBytes)+(s.local.runtimeInstalled?" | llama.cpp نصب است":" | llama.cpp هنگام اولین نصب دریافت می‌شود");if(!threadsSeeded&&q("gguf-threads").value==="1"){threadsSeeded=true;q("gguf-threads").value=Math.max(1,Math.ceil(r.cpuCount*.75))}
  renderProfiles();
  renderLocals();
@@ -2147,6 +2164,8 @@ async function startLiveTests(options){const only=options&&Array.isArray(options
 q("test").onclick=()=>startLiveTests();q("test-rerun").onclick=()=>startLiveTests();
 q("test-rerun-failed").onclick=()=>{const failed=testRows.filter(row=>row.status==="failed").map(row=>row.name);if(!failed.length)return;startLiveTests({profiles:failed})};
 q("test-export").onclick=()=>downloadTestResults("json");q("test-export-csv").onclick=()=>downloadTestResults("csv");
+q("keeper-enabled").onchange=async()=>{try{const k=await call("/keeper",{method:"PUT",body:JSON.stringify({enabled:q("keeper-enabled").checked})});renderKeeper(k);show("keeper-status",k.enabled?"نگهبان فعال شد.":"نگهبان خاموش شد؛ گفتگوهای نیمه‌کاره پس از restart خودکار ادامه نمی‌یابند.",k.enabled)}catch(e){show("keeper-status",e.message,false)}};
+q("keeper-run").onclick=()=>busy(q("keeper-run"),async()=>{try{const k=await call("/keeper/run",{method:"POST",body:"{}"});renderKeeper(k);show("keeper-status","بررسی انجام شد.")}catch(e){show("keeper-status",e.message,false)}});
 q("changes-copy").onclick=async()=>{const text=(state&&Array.isArray(state.changelog)?state.changelog:[]).map(entry=>"نسخه "+entry.version+"\\n"+(entry.items||[]).map(item=>"- "+item).join("\\n")).join("\\n\\n");try{await navigator.clipboard.writeText("نسخه در حال اجرا: "+(state&&state.version||"dev")+"\\n\\n"+text);q("changes-copy").textContent="کپی شد"}catch{q("changes-copy").textContent="کپی ناموفق"}setTimeout(()=>{q("changes-copy").textContent="کپی گزارش"},1600)};
 q("test-copy-report").onclick=async()=>{const rows=visibleTestRows();if(!rows.length)return;const text=rows.map(testRowDiagnostics).join("\\n\\n");try{await navigator.clipboard.writeText(text);q("test-live-status").textContent="گزارش عیب‌یابی کپی شد."}catch{q("test-live-status").textContent="کپی در این مرورگر ممکن نشد."}};q("test-cancel").onclick=async()=>{if(!currentTestJob)return;try{await call("/jobs/"+currentTestJob+"/cancel",{method:"POST"});q("test-cancel").disabled=true;q("test-live-status").textContent="در حال توقف امن آزمایش‌ها…"}catch(e){q("test-live-status").textContent=e.message;q("test-live-status").className="status err"}};q("test-close").onclick=closeTestModal;q("test-done").onclick=closeTestModal;document.querySelectorAll("[data-test-close]").forEach(el=>el.onclick=closeTestModal);q("test-search").oninput=renderTestRows;document.querySelectorAll("[data-test-filter]").forEach(button=>button.onclick=()=>{testFilter=button.dataset.testFilter;document.querySelectorAll("[data-test-filter]").forEach(item=>item.classList.toggle("active",item===button));renderTestRows()});document.addEventListener("keydown",event=>{const modal=q("test-modal");if(modal.hidden)return;if(event.key==="Escape"){closeTestModal();return}if(event.key==="Tab"){const focusable=[...modal.querySelectorAll("button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])")].filter(el=>el.offsetParent!==null);if(!focusable.length)return;const first=focusable[0],last=focusable[focusable.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}}});
 async function discoverHfFiles(){show("install-status","در حال خواندن و فیلتر فایل‌های مخزن…");const d=await call("/local/hf-files",{method:"POST",body:JSON.stringify({repo:q("gguf-repo").value,revision:q("gguf-revision").value,quantization:q("hf-quant").value,maxFileSizeGb:Number(q("hf-max-gb").value)||null})});hfFiles=d.files;show("install-status",d.count+" فایل مطابق مشخصات از "+d.totalGgufFiles+" فایل GGUF پیدا شد.");q("hf-results").innerHTML=d.files.length?"<table><tr><th>فایل</th><th>حجم</th><th>SHA</th><th></th></tr>"+d.files.map((f,i)=>"<tr><td class=ltr>"+esc(f.filename)+"</td><td>"+bytes(f.bytes)+"</td><td>"+(f.sha256?"✓":"—")+"</td><td><button data-hf='"+i+"'>انتخاب</button></td></tr>").join("")+"</table>":"<p class=muted>فایلی مطابق Quantization و سقف حجم مشخص‌شده پیدا نشد.</p>";document.querySelectorAll("[data-hf]").forEach(b=>b.onclick=()=>{const f=hfFiles[Number(b.dataset.hf)];q("gguf-file").value=f.filename;q("gguf-sha").value=f.sha256||"";show("install-status","فایل "+f.filename+" انتخاب شد و آماده دانلود است.")})}
@@ -2179,7 +2198,7 @@ async function handleApi(req, res, pathname) {
   const endpoint = pathname.slice(apiPrefix.length) || "/";
   if (req.method === "GET" && endpoint === "/status") {
     const profiles = await backendRequest("/api/profiles");
-    sendJson(res, 200, { version: helperVersion, changelog: CHANGELOG, profileLimit: null, proxy: loadConfig(), local: localStatus(), profiles: profiles?.profiles || [], jobs: [...jobs.values()].slice(-20) });
+    sendJson(res, 200, { version: helperVersion, changelog: CHANGELOG, keeper: keeperSummary(), profileLimit: null, proxy: loadConfig(), local: localStatus(), profiles: profiles?.profiles || [], jobs: [...jobs.values()].slice(-20) });
     return;
   }
   if (req.method === "POST" && endpoint === "/providers/import") { sendJson(res, 200, await importProviders(await readBody(req))); return; }
@@ -2202,6 +2221,27 @@ async function handleApi(req, res, pathname) {
     const body = await readBody(req);
     const jobId = createJob("profile-test", (update, signal) => testProfilesLive(body, update, signal));
     sendJson(res, 202, { jobId }); return;
+  }
+  if (req.method === "GET" && endpoint === "/keeper") { sendJson(res, 200, keeperSummary()); return; }
+  if (req.method === "PUT" && endpoint === "/keeper") {
+    const body = await readBody(req);
+    const state = loadKeeper();
+    state.enabled = body?.enabled !== false;
+    keeperLog(state, { action: state.enabled ? "enabled" : "disabled", ok: true, detail: "changed from the manager UI" });
+    saveKeeper(state);
+    if (state.enabled) keeperTick().catch(() => {});
+    sendJson(res, 200, keeperSummary()); return;
+  }
+  if (req.method === "POST" && endpoint === "/keeper/run") { await keeperTick(true); sendJson(res, 200, keeperSummary()); return; }
+  if (req.method === "POST" && endpoint === "/keeper/resume") {
+    const body = await readBody(req);
+    const id = String(body?.id || "");
+    if (!id) throw new Error("A conversation id is required");
+    const outcome = await resumeConversation(id);
+    const state = loadKeeper();
+    keeperLog(state, { conversationId: id, action: "manual-resume", ok: outcome.resumed, detail: outcome.detail });
+    saveKeeper(state);
+    sendJson(res, outcome.resumed ? 200 : 502, { id, ...outcome }); return;
   }
   if (req.method === "GET" && endpoint === "/model-health") {
     const stored = readJson(testResultsFile, { results: [] });
@@ -2247,6 +2287,123 @@ async function handleApi(req, res, pathname) {
   sendJson(res, 404, { error: "Unknown model-manager API endpoint" });
 }
 
+
+// ---------------------------------------------------------------------------
+// Conversation keeper: the agent loop runs inside the Agent Server, so closing
+// the browser never stops it. What *can* stop it is a process restart or a
+// crashed run task, which leaves the conversation persisted as paused/error.
+// The keeper watches every conversation server-side and resumes exactly those,
+// so work continues without any browser attached.
+// ---------------------------------------------------------------------------
+const keeperFile = path.join(dataDir, "conversation-keeper.json");
+const KEEPER_INTERVAL_MS = Number(process.env.OH_KEEPER_INTERVAL_MS) || 20000;
+const KEEPER_MAX_RESUMES = 5;
+const KEEPER_RESUME_WINDOW_MS = 60 * 60 * 1000;
+const KEEPER_RESUMABLE = new Set(["paused", "error", "stuck"]);
+let keeperTimer = null;
+let keeperRunning = false;
+
+function loadKeeper() {
+  const stored = readJson(keeperFile, null);
+  const state = stored && typeof stored === "object" ? stored : {};
+  return {
+    enabled: state.enabled !== false,
+    lastRunAt: state.lastRunAt || null,
+    lastError: state.lastError || null,
+    watched: state.watched && typeof state.watched === "object" ? state.watched : {},
+    log: Array.isArray(state.log) ? state.log.slice(-40) : [],
+  };
+}
+
+function saveKeeper(state) {
+  atomicJson(keeperFile, { ...state, watched: state.watched, log: state.log.slice(-40) });
+}
+
+function keeperLog(state, entry) {
+  state.log.push({ at: new Date().toISOString(), ...entry });
+  state.log = state.log.slice(-40);
+}
+
+async function resumeConversation(id) {
+  try {
+    await backendRequest(`/api/conversations/${encodeURIComponent(id)}/run`, { method: "POST", body: "{}" });
+    return { resumed: true, detail: "resumed" };
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (message.includes("409")) return { resumed: true, detail: "already running" };
+    return { resumed: false, detail: publicError(message) };
+  }
+}
+
+async function keeperTick(force = false) {
+  if (keeperRunning) return null;
+  keeperRunning = true;
+  const state = loadKeeper();
+  try {
+    if (!state.enabled && !force) return state;
+    const page = await backendRequest("/api/conversations/search?limit=100&sort_order=CREATED_AT_DESC");
+    const items = Array.isArray(page?.items) ? page.items : [];
+    const now = Date.now();
+    const seen = new Set();
+    for (const item of items) {
+      const id = String(item?.id || "");
+      if (!id) continue;
+      seen.add(id);
+      const status = String(item?.execution_status || "").toLowerCase();
+      const record = state.watched[id] || { resumes: 0, windowStartedAt: now, lastStatus: null, wasRunning: false };
+      if (now - (record.windowStartedAt || 0) > KEEPER_RESUME_WINDOW_MS) {
+        record.resumes = 0;
+        record.windowStartedAt = now;
+      }
+      const interrupted = record.wasRunning && KEEPER_RESUMABLE.has(status);
+      record.lastStatus = status;
+      if (status === "running") record.wasRunning = true;
+      if (interrupted && record.resumes < KEEPER_MAX_RESUMES) {
+        record.resumes += 1;
+        record.lastResumeAt = new Date().toISOString();
+        const outcome = await resumeConversation(id);
+        record.wasRunning = outcome.resumed;
+        keeperLog(state, { conversationId: id, action: "resume", ok: outcome.resumed, detail: outcome.detail, attempt: record.resumes });
+      } else if (interrupted) {
+        record.wasRunning = false;
+        keeperLog(state, { conversationId: id, action: "give-up", ok: false, detail: `reached ${KEEPER_MAX_RESUMES} resume attempts in one hour`, attempt: record.resumes });
+      }
+      if (["finished", "idle"].includes(status)) record.wasRunning = false;
+      state.watched[id] = record;
+    }
+    for (const id of Object.keys(state.watched)) if (!seen.has(id)) delete state.watched[id];
+    state.lastRunAt = new Date().toISOString();
+    state.lastError = null;
+  } catch (error) {
+    state.lastError = publicError(String(error?.message || error));
+  } finally {
+    keeperRunning = false;
+    saveKeeper(state);
+  }
+  return state;
+}
+
+function keeperSummary() {
+  const state = loadKeeper();
+  const watched = Object.entries(state.watched).map(([id, record]) => ({ id, ...record }));
+  return {
+    enabled: state.enabled,
+    intervalMs: KEEPER_INTERVAL_MS,
+    maxResumes: KEEPER_MAX_RESUMES,
+    lastRunAt: state.lastRunAt,
+    lastError: state.lastError,
+    watched,
+    resumedTotal: watched.reduce((total, record) => total + (record.resumes || 0), 0),
+    log: state.log.slice(-20).reverse(),
+  };
+}
+
+function startKeeper() {
+  if (keeperTimer) clearInterval(keeperTimer);
+  keeperTimer = setInterval(() => { keeperTick().catch(() => {}); }, KEEPER_INTERVAL_MS);
+  if (keeperTimer.unref) keeperTimer.unref();
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const parsed = new URL(req.url || "/", "http://model-manager.invalid");
@@ -2276,6 +2433,11 @@ process.on("SIGINT", shutdown);
 
 server.listen(managerPort, "127.0.0.1", async () => {
   console.log(`[openhands-model-manager] Internal manager listening on 127.0.0.1:${managerPort}`);
+  try {
+    const resumed = await keeperTick();
+    if (resumed) console.log(`[openhands-model-manager] Conversation keeper is ${resumed.enabled ? "on" : "off"}; watching ${Object.keys(resumed.watched).length} conversation(s)`);
+  } catch (error) { console.error(`[openhands-model-manager] Conversation keeper startup sweep skipped: ${publicError(error)}`); }
+  startKeeper();
   try { await migrateSeededOpenRouterProfiles(); }
   catch (error) { console.error(`[openhands-model-manager] Seeded profile route migration skipped: ${publicError(error)}`); }
   try {

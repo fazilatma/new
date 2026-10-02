@@ -22,6 +22,7 @@
     "safeAreaAndReducedMotion": true,
     "retryBudgetExposed": true,
     "modelHealthEndpointAuthenticated": true,
+    "continuityPanelPresent": true,
     "apiStaysAuthenticated": true,
     "sessionKeyLeak": false
   }

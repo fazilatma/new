@@ -171,6 +171,10 @@ try {
   assert.match(page, /id="test-timeout"/, "the tester must expose a per-request timeout");
   assert.match(script, /attempts:Number\(q\("test-attempts"\)/, "retry and timeout settings must reach the API");
 
+  assert.match(page, /data-panel="continuity"/, "the manager must expose the server-side continuity section");
+  assert.match(page, /id="keeper-enabled"/, "the continuity section must let the keeper be switched off");
+  assert.match(script, /function renderKeeper/, "the page must render the keeper state from /status");
+
   const health = await (await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/model-health`, {
     headers: { "x-session-api-key": sessionKey },
   })).json();
@@ -221,6 +225,7 @@ try {
       safeAreaAndReducedMotion: true,
       retryBudgetExposed: true,
       modelHealthEndpointAuthenticated: true,
+      continuityPanelPresent: true,
       apiStaysAuthenticated: true,
       sessionKeyLeak: false,
     },

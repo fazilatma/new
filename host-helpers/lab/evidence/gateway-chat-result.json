@@ -19,6 +19,7 @@
     "userMessageResend": true,
     "agentMessageCopy": true,
     "agentMessageRetry": true,
-    "helperVersionExposed": true
+    "helperVersionExposed": true,
+    "offlineBannerExplainsServerSideWork": true
   }
 }
