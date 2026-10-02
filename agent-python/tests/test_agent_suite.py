@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.9"
+    assert APP_VERSION == "3.3.10"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -2940,3 +2940,145 @@ async def test_stream_complete_chat_surfaces_real_local_ai_startup_failure_immed
     assert "error" in event_types
     err_evt = next(e for e in events if e.get("type") == "error")
     assert "libllama.so" in err_evt["errorDetails"]["error"]
+
+
+def test_binary_abi_incompatibility_reason_detects_glibc_version_mismatch(monkeypatch, tmp_path):
+    """Regression test for the real-world report: testing a model on an
+    older hosting-panel OS failed with
+
+      llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not
+      found (required by .../libggml-rpc.so)
+      llama-server: /lib64/libc.so.6: version `GLIBC_2.32' not found
+      (required by .../libggml-rpc.so)
+
+    _binary_abi_incompatibility_reason() must recognize this specific
+    "binary needs a newer glibc/libstdc++ than the host has" failure mode
+    -- distinct from a plain missing .so file -- and return a clear,
+    actionable explanation naming the exact required version."""
+    import subprocess
+    from app.local_ai import _binary_abi_incompatibility_reason
+
+    fake_bin = tmp_path / "llama-server"
+    fake_bin.write_text("placeholder")
+    fake_bin.chmod(0o755)
+
+    class _Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.stderr = ""
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ldd" if name == "ldd" else None)
+
+    glibcxx_output = (
+        "llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not found "
+        "(required by .../libggml-rpc.so)\n"
+        "llama-server: /lib64/libc.so.6: version `GLIBC_2.32' not found "
+        "(required by .../libggml-rpc.so)\n"
+    )
+    monkeypatch.setattr(subprocess, "run", lambda cmd, capture_output=None, text=None, timeout=None: _Result(glibcxx_output))
+    reason = _binary_abi_incompatibility_reason(str(fake_bin))
+    assert reason is not None
+    assert "GLIBCXX_3.4.29" in reason
+    assert "Ollama" in reason  # must suggest the actionable workaround
+
+    # A plain missing-shared-object-file failure (fixed by re-extracting,
+    # not a host incompatibility) must NOT be classified as ABI-incompatible.
+    missing_file_output = "libllama.so => not found\n"
+    monkeypatch.setattr(subprocess, "run", lambda cmd, capture_output=None, text=None, timeout=None: _Result(missing_file_output))
+    assert _binary_abi_incompatibility_reason(str(fake_bin)) is None
+
+    # A perfectly healthy ldd resolution must not be flagged either.
+    healthy_output = "libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0)\n"
+    monkeypatch.setattr(subprocess, "run", lambda cmd, capture_output=None, text=None, timeout=None: _Result(healthy_output))
+    assert _binary_abi_incompatibility_reason(str(fake_bin)) is None
+
+    # No ldd available -> can't tell, must not false-positive.
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert _binary_abi_incompatibility_reason(str(fake_bin)) is None
+
+
+def test_install_runtime_surfaces_abi_incompatibility_without_reinstall_loop(monkeypatch, tmp_path):
+    """Regression test: once a llama-server binary is known to be
+    ABI-incompatible with the host's glibc/libstdc++, install_runtime()
+    must raise the actionable error immediately -- NOT delete it and
+    attempt to redownload/reinstall, since that would just fetch the exact
+    same incompatible official binary again (wasting a network round-trip
+    and still ending in the identical failure)."""
+    from app import local_ai
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    bin_dir_path = tmp_path / "localai" / "bin"
+    bin_dir_path.mkdir(parents=True, exist_ok=True)
+    existing_bin = bin_dir_path / "llama-server"
+    existing_bin.write_text("placeholder")
+    existing_bin.chmod(0o755)
+
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        local_ai, "_binary_abi_incompatibility_reason",
+        lambda path: "GLIBCXX_3.4.29 required but not available on this host" if path == str(existing_bin) else None,
+    )
+    monkeypatch.setattr(local_ai, "_binary_is_healthy", lambda path: False)
+
+    network_calls = {"count": 0}
+
+    def fail_if_called(*a, **kw):
+        network_calls["count"] += 1
+        raise AssertionError("install_runtime() must not attempt a network download for an ABI-incompatible binary")
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fail_if_called)
+
+    with pytest.raises(RuntimeError, match="GLIBCXX_3.4.29"):
+        local_ai.install_runtime("llamacpp")
+
+    assert network_calls["count"] == 0, "no redownload attempt should ever be made"
+    assert existing_bin.is_file(), "the (unusable but harmless) existing binary must be left alone, not deleted"
+
+
+def test_start_server_surfaces_abi_incompatibility_immediately_without_repair_attempt(monkeypatch, tmp_path):
+    """Regression test: start_server() must surface the actionable
+    glibc/libstdc++ incompatibility message immediately -- without ever
+    attempting install_runtime() (which would just redownload the same
+    incompatible binary) or subprocess.Popen() (launching a binary already
+    known to be unable to run)."""
+    import subprocess
+    from app import local_ai
+
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"fake-gguf-contents")
+
+    broken_bin = str(tmp_path / "bin" / "llama-server")
+    os.makedirs(os.path.dirname(broken_bin), exist_ok=True)
+    Path(broken_bin).write_text("broken-binary-wrong-glibc")
+
+    install_runtime_calls = {"count": 0}
+    popen_calls = {"count": 0}
+
+    def fake_install_runtime(engine, log_fn=None):
+        install_runtime_calls["count"] += 1
+        return {"ok": True}
+
+    def fake_popen(cmd, stdout=None, stderr=None, env=None, start_new_session=None):
+        popen_calls["count"] += 1
+        class _P:
+            pid = 1
+        return _P()
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "llamacpp" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": False})
+    monkeypatch.setattr(local_ai, "binary", lambda engine=None: broken_bin)
+    monkeypatch.setattr(local_ai, "_binary_is_healthy", lambda path: False)
+    monkeypatch.setattr(
+        local_ai, "_binary_abi_incompatibility_reason",
+        lambda path: "GLIBC_2.32 required but not available on this host",
+    )
+    monkeypatch.setattr(local_ai, "install_runtime", fake_install_runtime)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(RuntimeError, match="GLIBC_2.32"):
+        local_ai.start_server(model_path=str(model_path))
+
+    assert install_runtime_calls["count"] == 0, "must not attempt to reinstall an ABI-incompatible binary"
+    assert popen_calls["count"] == 0, "must not attempt to launch a binary already known to be unable to run"

@@ -143,6 +143,19 @@ def bin_dir() -> Path:
     return p
 
 
+def _ldd_output(path: str) -> Optional[str]:
+    """Run `ldd` on a binary and return its combined stdout+stderr, or None
+    if `ldd` isn't available / the check itself failed to run."""
+    ldd = shutil.which("ldd")
+    if not ldd:
+        return None
+    try:
+        res = subprocess.run([ldd, path], capture_output=True, text=True, timeout=5)
+        return f"{res.stdout}\n{res.stderr}"
+    except Exception:
+        return None
+
+
 def _binary_is_healthy(path: str) -> bool:
     """A binary can sit on disk with the executable bit set and still be
     completely unusable -- e.g. llama.cpp's release builds are dynamically
@@ -157,19 +170,55 @@ def _binary_is_healthy(path: str) -> bool:
     itself. Use `ldd` (cheap, a few ms) to actually verify every shared
     library the binary depends on can be resolved before trusting it.
     """
-    ldd = shutil.which("ldd")
-    if not ldd:
+    combined = _ldd_output(path)
+    if combined is None:
         return True  # can't verify on this system; assume OK rather than loop-reinstalling
-    try:
-        res = subprocess.run([ldd, path], capture_output=True, text=True, timeout=5)
-        combined = f"{res.stdout}\n{res.stderr}"
-        return "not found" not in combined
-    except Exception:
-        return True
+    return "not found" not in combined
+
+
+_GLIBC_VERSION_RE = re.compile(r"version `(GLIBC(?:XX|_[A-Z]+)?_[0-9][0-9.]*)' not found")
+
+
+def _binary_abi_incompatibility_reason(path: str) -> Optional[str]:
+    """Detect the specific, unfixable-by-reinstalling failure mode where a
+    prebuilt binary needs a newer glibc/libstdc++ symbol version than this
+    host's own operating system ships -- very common on older hosting-panel
+    environments (e.g. a CentOS/RHEL-based panel) that llama.cpp's official
+    Ubuntu release builds were never built to run on:
+
+      llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not
+      found (required by .../libggml-rpc.so)
+
+    Unlike a plain missing shared library (fixed by re-extracting the whole
+    archive, see _binary_is_healthy() above), redownloading and
+    reinstalling the exact same official binary reproduces this identical
+    failure every single time -- it is a fundamental incompatibility
+    between that prebuilt binary and the host OS, not a broken/incomplete
+    install, so auto-repair-by-reinstalling must never be attempted for it.
+    Returns a short, actionable, user-facing explanation if incompatible,
+    else None.
+    """
+    combined = _ldd_output(path)
+    if not combined:
+        return None
+    m = _GLIBC_VERSION_RE.search(combined)
+    if not m:
+        return None
+    return (
+        f"سیستم‌عامل این سرور میزبان نسخه‌ی قدیمی‌تری از کتابخانه‌های پایه (glibc/libstdc++) دارد و "
+        f"باینری رسمی llama.cpp به نسخه‌ی جدیدتری ({m.group(1)}) نیاز دارد که روی این سرور موجود نیست. "
+        f"نصب دوباره یا تلاش مجدد این مشکل را حل نمی‌کند، چون باینری دانلودی همیشه همین نیاز نسخه را خواهد داشت. "
+        f"راه‌حل‌های پیشنهادی: "
+        f"۱) برای این مدل از موتور Ollama استفاده کنید (سازگاری بسیار بیشتری با سیستم‌عامل‌های قدیمی دارد)، "
+        f"۲) از پشتیبانی هاست خود بخواهید سیستم‌عامل/glibc سرور را به‌روزرسانی کند، "
+        f"۳) اگر ابزارهای کامپایل (gcc/g++/cmake) روی سرور موجود است، یک نسخه‌ی llama-server سفارشی از سورس بسازید و "
+        f"مسیر آن را در تنظیمات Local AI (AGENT_LLAMACPP_BIN) وارد کنید."
+    )
 
 
 def binary(engine: Optional[str] = None) -> Optional[str]:
     active_engine = engine or get_state("localai:engine") or "ollama"
+
     if active_engine == "llamacpp":
         custom = os.environ.get("AGENT_LLAMACPP_BIN") or get_state("localai:llamacpp_bin")
         if custom and os.path.isfile(custom) and os.access(custom, os.X_OK):
@@ -482,6 +531,12 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
     if b and _binary_is_healthy(b):
         return {"ok": True, "alreadyInstalled": True, "binary": b, "engine": engine}
     if b and not _binary_is_healthy(b):
+        abi_reason = _binary_abi_incompatibility_reason(b)
+        if abi_reason:
+            # Redownloading would just fetch the identical, still-incompatible
+            # official binary -- don't loop-reinstall forever on every single
+            # activation attempt; surface the real, actionable explanation now.
+            raise RuntimeError(abi_reason)
         # Broken leftover install (e.g. missing shared libraries) -- remove
         # it so the extraction step below is guaranteed to replace it with a
         # working copy instead of silently keeping the broken one in place.
@@ -737,6 +792,13 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
                 target_bin.chmod(0o755)
             except Exception:
                 pass
+            abi_reason = _binary_abi_incompatibility_reason(str(target_bin)) if engine == "llamacpp" else None
+            if abi_reason:
+                # The binary extracted fine, but this host's own glibc/
+                # libstdc++ is too old to run it -- don't report a false
+                # "installed successfully" only for start_server() to hit
+                # the exact same raw dynamic-linker error a moment later.
+                raise RuntimeError(abi_reason)
             set_state("localai:engine", engine)
             _log(f"\u2713 {engine} runtime installed successfully at {target_bin}")
             return {"ok": True, "binary": str(target_bin), "engine": engine}
@@ -783,6 +845,13 @@ def start_server(
 
     b = binary(active_engine) or binary()
     if b and not _binary_is_healthy(b):
+        abi_reason = _binary_abi_incompatibility_reason(b)
+        if abi_reason:
+            # This host's own glibc/libstdc++ is simply too old for the
+            # official binary -- reinstalling would just redownload the
+            # identical, still-incompatible build. Surface the real,
+            # actionable reason now instead of silently "repairing" forever.
+            raise RuntimeError(abi_reason)
         # Broken install from before this was fixed (e.g. llama-server
         # copied without its libllama.so/libggml*.so) -- repair it instead
         # of handing the user the same cryptic

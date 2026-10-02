@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.3.10 - Testing a Local Model on an Older Hosting Panel Looped on "Repairing" an Unfixable glibc/libstdc++ Incompatibility
+
+### Fixed
+- **Testing a small locally-imported model failed with a raw, scary dynamic-linker dump** instead of a real explanation, on hosting-panel environments running an older OS (e.g. a CentOS/RHEL-based panel):
+  ```
+  Local AI server did not become ready within 20s. Log:
+  llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not found (required by .../libggml-rpc.so)
+  llama-server: /lib64/libc.so.6: version `GLIBC_2.32' not found (required by .../libggml-rpc.so)
+  ```
+  Root cause: llama.cpp's official prebuilt binary is built against a recent Ubuntu's glibc/libstdc++ and simply cannot run at all on a host whose own system libraries are older -- this is a fundamental ABI incompatibility between that specific binary and the host OS, not a broken or incomplete install. Worse, the self-healing "broken binary" repair logic added in 3.3.8 (which is exactly right for a *missing* shared library) could not tell this apart from that case, so it would delete the "broken" binary and silently redownload... the exact same official, still-incompatible build, over and over, on every single activation attempt, each time burning a full download + extraction + ~20s readiness wait before failing with the identical raw error again.
+- Added `_binary_abi_incompatibility_reason()`, which recognizes this specific "binary needs a newer glibc/libstdc++ symbol version than this host has" failure pattern (distinct from a plain missing `.so` file) via `ldd`, and short-circuits straight to a single clear, actionable error -- naming the exact missing version and explaining that reinstalling will never fix it -- instead of attempting a pointless repair loop. The message suggests concrete next steps: switch this model to the Ollama engine (far more portable across older distros), ask the host to update glibc, or supply a self-compiled `llama-server` via `AGENT_LLAMACPP_BIN` if build tools are available on the server.
+- This check now runs at every point a llama.cpp binary is trusted: right after a fresh extraction, before reusing an already-installed one, and immediately before launching it in `start_server()`.
+- Verified with 3 new regression tests: unit coverage of the glibc/libstdc++ detection pattern (including the negative cases -- a plain missing-file failure and a perfectly healthy binary must never be misclassified), a test confirming `install_runtime()` raises the actionable error immediately without attempting any network download, and a test confirming `start_server()` surfaces the error immediately without attempting to reinstall or launch the known-broken binary. 73 backend tests passing.
+
 ## 3.3.9 - Chatting With a Local AI Model Burned Through 4 Useless "Network" Retries Whenever Its Server Wasn't Already Running
 
 ### Fixed
