@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.3.24 - Model test button no longer blocks a single HTTP request for minutes (same class of fix as auto-repair's 3.3.20)
+
+### Fixed
+- Applying the same debugging method used for the `/api/localai/auto-repair` fix (3.3.20) to the "تست" (test) button next to every installed model: `POST /api/localai/test` previously called `benchmark_test()`/`benchmark_llamacpp()` *synchronously* inside the request handler and only returned once the whole test finished. Live testing after the 3.3.22/3.3.23 fixes confirmed a real cold-model test on a loaded host can take well over 2-3 minutes just to load the weights and start generating -- a request held open that long risks the browser, any reverse proxy, or the hosting panel's own proxy killing the connection with a confusing 502/504 long before the Python code itself finishes, indistinguishable from the server actually being broken.
+- `POST /api/localai/test` now starts the test in a background daemon thread and returns immediately (`{"ok": true, "started": true}`), guarded against two tests racing each other at once (mirrors `start_auto_repair_async()`'s same lock).
+- New `GET /api/localai/test/last` polls for the in-progress/final result, so the real outcome (success + tokens/sec, or a real error with log tail) is always reachable no matter how long the underlying test actually takes.
+- Updated the model list's "تست" button to start the test then poll every 2s (showing elapsed seconds on the button itself) instead of awaiting one single long-lived fetch.
+- The `/api/localai/import` flow's own benchmark step was already safe (it already runs inside that endpoint's existing background job thread from 3.3.? and a benchmark failure there was already non-fatal to the import) -- no change needed there.
+- 99 backend tests passing (2 new regression tests covering the background-thread-and-overlap-guard behavior and persisted-failure polling).
+
 ## 3.3.23 - Diagnostic benchmark test timeout raised to match the real chat path (fixes false-negative after the 3.3.22 fix)
 
 ### Fixed

@@ -1953,14 +1953,27 @@ def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
 
 @app.post("/api/localai/test")
 def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
+    """Start a model test (benchmark) in the background and return
+    immediately. A test against a cold/unloaded model can legitimately
+    take well over a minute (confirmed live: >120s just to load a small
+    model's weights before generation even starts) -- running that
+    synchronously inside this request risks the browser, a reverse proxy,
+    or the hosting panel's own proxy killing the connection with a
+    confusing 502/504 long before the test itself finishes. Poll
+    GET /api/localai/test/last for progress and the final result."""
     from . import local_ai
     model = str(payload.get("model") or payload.get("ref") or "").strip()
     if not model:
         raise HTTPException(400, "Model name is required")
-    try:
-        return local_ai.benchmark_test(model)
-    except Exception as e:
-        raise HTTPException(500, f"Model test failed: {str(e)}")
+    return local_ai.start_model_test_async(model)
+
+@app.get("/api/localai/test/last")
+def get_localai_test_last(user: Dict[str, Any] = Depends(require_viewer)):
+    """Read back the most recent /api/localai/test run's progress or final
+    outcome -- for polling after a test that's slow enough to outlive a
+    client-side or proxy-level timeout on the original POST."""
+    from . import local_ai
+    return local_ai.last_model_test_result()
 
 @app.post("/api/localai/install")
 def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):

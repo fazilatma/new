@@ -10501,20 +10501,47 @@ async function loadModels() {
       </td></tr>`).join('')}</tbody></table></div>`;
   $('#models').querySelectorAll('[data-test]').forEach((b) => {
     b.onclick = async () => {
+      const modelName = b.dataset.test;
       b.disabled = true; b.textContent = '…';
+      // A cold model test can legitimately take well over a minute (a real
+      // first-load on a slow/loaded host has been observed to exceed 2-3
+      // minutes just to load the weights before generation even starts).
+      // Start the test in the background and poll for the result instead
+      // of awaiting one single long-lived fetch -- a request held open
+      // that long risks a browser, reverse-proxy, or hosting-panel-level
+      // timeout killing the connection with a confusing error long before
+      // the test itself actually finishes or fails.
+      let startRes;
       try {
-        const r = await api('/api/localai/test', { method: 'POST', body: { model: b.dataset.test } });
+        startRes = await api('/api/localai/test', { method: 'POST', body: { model: modelName } });
+      } catch (e) {
+        toast(e.message, 'err');
+        openLocalAiTroubleshoot('تست مدل «' + modelName + '»', e.message, '', $('#engine-select').value);
+        b.disabled = false; b.textContent = 'تست';
+        return;
+      }
+      if (startRes && startRes.started === false) {
+        toast(startRes.error || 'یک تست دیگر از قبل در حال اجراست', 'err');
+        b.disabled = false; b.textContent = 'تست';
+        return;
+      }
+      const startedAt = Date.now();
+      const poll = setInterval(async () => {
+        const secs = Math.round((Date.now() - startedAt) / 1000);
+        b.textContent = `… (${fa(secs)} ث)`;
+        let r;
+        try { r = await api('/api/localai/test/last'); }
+        catch (e) { return; } // transient network hiccup — keep polling
+        if (!r || r.done !== true) return;
+        clearInterval(poll);
         if (r.ok) {
           toast(`سرعت واقعی: ${fa(r.tokensPerSec)} توکن/ثانیه`, 'ok');
         } else {
-          toast('خطا: ' + r.error, 'err');
-          openLocalAiTroubleshoot('تست مدل «' + b.dataset.test + '»', r.error, r.logTail, $('#engine-select').value);
+          toast('خطا: ' + (r.error || 'تست ناموفق بود'), 'err');
+          openLocalAiTroubleshoot('تست مدل «' + modelName + '»', r.error, r.logTail, $('#engine-select').value);
         }
-      } catch (e) {
-        toast(e.message, 'err');
-        openLocalAiTroubleshoot('تست مدل «' + b.dataset.test + '»', e.message, '', $('#engine-select').value);
-      }
-      b.disabled = false; b.textContent = 'تست';
+        b.disabled = false; b.textContent = 'تست';
+      }, 2000);
     };
   });
   $('#models').querySelectorAll('[data-del]').forEach((b) => {

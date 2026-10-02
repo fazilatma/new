@@ -65,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.23"
+    assert APP_VERSION == "3.3.24"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -4143,3 +4143,79 @@ def test_install_runtime_fails_loudly_when_llama_server_runner_missing_after_ext
 
     with pytest.raises(RuntimeError, match="llama-server"):
         local_ai.install_runtime("ollama")
+
+
+def test_start_model_test_async_runs_in_background_and_guards_against_overlap(monkeypatch):
+    """start_model_test_async() must return immediately instead of blocking
+    on the real benchmark_test() call, and must refuse to start a second
+    test while one is already in flight -- mirroring
+    start_auto_repair_async()'s same guard for the same reason: a real
+    model test against a cold model has been observed live to take well
+    over 2-3 minutes, far longer than a typical reverse-proxy/hosting-panel
+    request timeout can tolerate held open synchronously."""
+    from app import local_ai
+    import time as _time
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def slow_benchmark_test(model):
+        entered.set()
+        release.wait(timeout=5)
+        return {"ok": True, "model": model, "tokensPerSec": 9.9}
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "benchmark_test", slow_benchmark_test)
+    local_ai._model_test_running = False
+
+    res1 = local_ai.start_model_test_async("llama3.2:1b")
+    assert res1["ok"] is True
+    assert res1["started"] is True
+
+    assert entered.wait(timeout=2), "background thread never called benchmark_test()"
+
+    # A second call while the first is still running must be rejected, not
+    # silently start a racing second test.
+    res2 = local_ai.start_model_test_async("llama3.2:1b")
+    assert res2["ok"] is False
+    assert res2["started"] is False
+
+    release.set()
+    for _ in range(50):
+        if not local_ai._model_test_running:
+            break
+        _time.sleep(0.05)
+    assert local_ai._model_test_running is False
+
+    final = local_ai.last_model_test_result()
+    assert final["ok"] is True
+    assert final["done"] is True
+    assert final["tokensPerSec"] == 9.9
+
+
+def test_start_model_test_async_persists_failure_for_polling(monkeypatch):
+    """A failed model test (e.g. the runner crashed) must still be visible
+    via last_model_test_result() -- the whole point of backgrounding this
+    is so the caller can poll for the outcome after their own HTTP request
+    may have already timed out waiting."""
+    from app import local_ai
+    import time as _time
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "benchmark_test", lambda model: {"ok": False, "error": "llama runner process has terminated", "logTail": "boom"})
+    local_ai._model_test_running = False
+
+    res = local_ai.start_model_test_async("broken-model:latest")
+    assert res["ok"] is True
+    assert res["started"] is True
+
+    for _ in range(50):
+        if not local_ai._model_test_running:
+            break
+        _time.sleep(0.05)
+
+    final = local_ai.last_model_test_result()
+    assert final["done"] is True
+    assert final["ok"] is False
+    assert "llama runner" in final["error"]
+    assert final["model"] == "broken-model:latest"

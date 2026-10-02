@@ -2227,6 +2227,83 @@ def benchmark_test(model: str) -> Dict[str, Any]:
         }
 
 
+def _persist_model_test_result(model: str, result: Dict[str, Any]) -> None:
+    try:
+        payload = dict(result)
+        payload["model"] = model
+        payload["at"] = datetime.datetime.utcnow().isoformat() + "Z"
+        set_state_json("localai:last_model_test", payload)
+    except Exception:
+        pass
+
+
+def last_model_test_result() -> Dict[str, Any]:
+    """Read back the most recent /api/localai/test run's progress/outcome.
+
+    Needed because a single model test -- especially the very first call
+    into a model that Ollama hasn't loaded yet -- can legitimately take
+    well over a minute on a loaded/slow host (confirmed live: >120s just to
+    load a 630M-parameter model's weights, before any generation even
+    starts). A plain synchronous request/response for that is fragile: the
+    browser, any reverse proxy in front of this app, or the hosting panel's
+    own proxy can all impose their own much shorter timeout (commonly
+    30-60s) and kill the connection with a confusing 502/504 long before
+    the Python code itself would ever time out -- indistinguishable from
+    the server actually being broken. Polling this fast, separate,
+    read-only GET instead means the real result (or still-running state)
+    is always reachable no matter how long the underlying test takes.
+    """
+    return get_state_json("localai:last_model_test", {}) or {}
+
+
+_model_test_lock = threading.Lock()
+_model_test_running = False
+
+
+def start_model_test_async(model: str) -> Dict[str, Any]:
+    """Kick off benchmark_test()/benchmark_llamacpp() in a background daemon
+    thread and return immediately, instead of blocking the calling HTTP
+    request for however long the real test takes.
+
+    Mirrors start_auto_repair_async() for the exact same reason: a model
+    test that runs synchronously inside a request handler can run well
+    past typical reverse-proxy/panel timeouts (observed live: a single
+    cold-model test exceeded 3 minutes). Returning immediately and doing
+    the real work in a daemon thread means the test keeps running
+    regardless of any single request's lifetime; progress/outcome is
+    visible via GET /api/localai/test/last.
+    """
+    global _model_test_running
+    with _model_test_lock:
+        if _model_test_running:
+            return {
+                "ok": False,
+                "started": False,
+                "error": "یک تست مدل از قبل در حال اجراست؛ نتیجه را از /api/localai/test/last پیگیری کنید.",
+            }
+        _model_test_running = True
+
+    _persist_model_test_result(model, {"ok": None, "done": False})
+
+    def _run():
+        global _model_test_running
+        try:
+            engine = get_state("localai:engine") or "ollama"
+            result = benchmark_llamacpp(model) if engine == "llamacpp" else benchmark_test(model)
+            result = dict(result)
+            result["done"] = True
+            _persist_model_test_result(model, result)
+        except Exception as e:
+            logger.exception(f"model test background thread crashed: {e}")
+            _persist_model_test_result(model, {"ok": False, "done": True, "error": str(e)})
+        finally:
+            with _model_test_lock:
+                _model_test_running = False
+
+    threading.Thread(target=_run, daemon=True, name="model-test").start()
+    return {"ok": True, "started": True, "model": model}
+
+
 def _engine_health_report(engine: str) -> Dict[str, Any]:
     """One engine's slice of diagnose_full(): everything needed to judge,
     from a single JSON field, whether it is installed/healthy/usable on
