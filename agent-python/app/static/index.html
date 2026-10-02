@@ -2329,7 +2329,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.3)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.4)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2412,7 +2412,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.3.3
+          🚀 v3.3.4
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -7264,11 +7264,19 @@ async function streamAgentResponse(retryAttempt = 0) {
     await pumpSseIntoCtx(reader, ctx, { pid, mid });
 
     const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
-    const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
+    // `finalContent` must be mutable: when the stream produced no text at
+    // all (e.g. the provider was unreachable and failed before emitting a
+    // single token) we fill in a fallback error message below. This used
+    // to reassign the destructured `accumulated` *const*, which threw
+    // "Assignment to constant variable" and masked the real backend error
+    // behind a useless generic failure message -- this was the actual
+    // cause of chats silently "producing no response" whenever a provider
+    // failed without streaming any tokens first.
+    let finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
 
     if (!finalContent && isError) {
-      accumulated = `⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`;
-      bubble.innerHTML = renderMarkdown(accumulated);
+      finalContent = `⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`;
+      bubble.innerHTML = renderMarkdown(finalContent);
     }
 
     if (isError && errorData) {
@@ -7438,10 +7446,16 @@ async function reattachActiveJobIfAny(convId) {
     await pumpSseIntoCtx(reader, ctx, { pid: job.provider_id, mid: job.model_id });
 
     const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
-    const finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
+    // Mutable on purpose -- see the matching comment in streamAgentResponse().
+    // Previously this was `const`, and the no-token-error branch below set
+    // the bubble's HTML directly without updating it, so the error text was
+    // never saved into chatHistory (and the `if (finalContent || accumulated)`
+    // guard could skip the push entirely, losing the message on reload).
+    let finalContent = accumulatedReasoning ? `<think>${accumulatedReasoning}</think>\n${accumulated}` : accumulated;
 
     if (!finalContent && isError) {
-      bubble.innerHTML = renderMarkdown(`⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`);
+      finalContent = `⚠️ **خطا در دریافت پاسخ**: ${errorData?.error || 'ارتباط با ارائه‌دهنده مدل برقرار نشد.'}`;
+      bubble.innerHTML = renderMarkdown(finalContent);
     }
     if (isError && errorData) {
       bubble.classList.add('is-error');
@@ -7457,10 +7471,10 @@ async function reattachActiveJobIfAny(convId) {
       bubble.appendChild(badge);
     }
 
-    if (finalContent || accumulated) {
+    if (finalContent) {
       chatHistory.push({
         role: 'assistant',
-        content: finalContent || accumulated,
+        content: finalContent,
         isFallback: Boolean(fallbackDetails),
         fallbackDetails: fallbackDetails,
         execResults: execResults,

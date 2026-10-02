@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.3"
+    assert APP_VERSION == "3.3.4"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1678,8 +1678,63 @@ async def test_exponential_backoff_retry_loop_in_stream_chat(monkeypatch):
     assert "retry_countdown" in event_types
     retry_evt = next(e for e in events if e.get("type") == "retry_countdown")
     assert retry_evt["attempt"] == 1
-    assert retry_evt["maxAttempts"] == 10
+    from app.chat import MAX_NETWORK_RETRY_ATTEMPTS
+    assert retry_evt["maxAttempts"] == MAX_NETWORK_RETRY_ATTEMPTS
     assert "done" in event_types
+
+
+@pytest.mark.anyio
+async def test_network_retry_fails_fast_not_for_minutes(monkeypatch):
+    """Regression test: a persistently unreachable provider (e.g. a local
+    Ollama server that never started) used to be retried 10 times with
+    delays of 1,2,4,8,16,32,60,60,60s (~4 minutes) before a single error
+    was ever surfaced to the user -- which, compounded across any
+    configured fallback providers, looked indistinguishable from "the
+    model produces no response at all". It must now fail fast (a handful
+    of short-delay attempts) and still raise/report a terminal error."""
+    import time
+    from app.chat import stream_complete_chat, MAX_NETWORK_RETRY_ATTEMPTS, MAX_NETWORK_RETRY_DELAY_SEC
+    from app.providers import ProviderStore, Provider, ModelSpec
+
+    store = ProviderStore()
+    p = Provider(id="prov_dead", name="Dead Provider", protocol="openai", url="https://api.dead.example/v1", apiKey="sk-d", enabled=True, priority=10, models=[
+        ModelSpec(id="model-d", name="Model D")
+    ])
+    store.data = {"prov_dead": p}
+
+    attempt_count = 0
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+        nonlocal attempt_count
+        attempt_count += 1
+        raise ConnectionError("Connection refused")
+        yield  # pragma: no cover - make this an async generator
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+
+    events = []
+    t0 = time.monotonic()
+    async for evt in stream_complete_chat(
+        store=store,
+        provider_id="prov_dead",
+        model_id="model-d",
+        messages=[{"role": "user", "content": "hi"}]
+    ):
+        events.append(evt)
+    elapsed = time.monotonic() - t0
+
+    # Exactly MAX_NETWORK_RETRY_ATTEMPTS tries, and a terminal error event
+    # (no silent death / no infinite hang).
+    assert attempt_count == MAX_NETWORK_RETRY_ATTEMPTS
+    event_types = [e.get("type") for e in events]
+    assert "error" in event_types
+    retry_events = [e for e in events if e.get("type") == "retry_countdown"]
+    assert len(retry_events) == MAX_NETWORK_RETRY_ATTEMPTS - 1
+    for e in retry_events:
+        assert e["maxAttempts"] == MAX_NETWORK_RETRY_ATTEMPTS
+        assert e["delaySec"] <= MAX_NETWORK_RETRY_DELAY_SEC
+    # Worst-case total sleep must stay well under what used to be ~4 minutes.
+    assert elapsed < 20, f"retry loop took {elapsed:.1f}s, expected a fast failure"
 
 
 def test_flexible_provider_import():

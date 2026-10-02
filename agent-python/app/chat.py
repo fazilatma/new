@@ -22,6 +22,23 @@ from .database import (
     clear_conversation_checkpoints
 )
 
+# Network/timeout retry tuning for provider calls.
+#
+# Previously this was 10 attempts with delay = min(2**(attempt-1), 60),
+# i.e. sleeps of 1,2,4,8,16,32,60,60,60s (~243s = ~4 minutes) before a
+# SINGLE unreachable/misconfigured candidate (e.g. a local Ollama server
+# that isn't actually running) gave up and raised an error. Because this
+# loop runs again for every fallback candidate, a user with several
+# providers configured could wait 10-20+ minutes before ever seeing an
+# error message, which looks indistinguishable from "the model produces
+# no response at all". A connection that is actively refused (service not
+# running) will not start working just because we waited a minute, so we
+# now fail fast: a handful of quick retries (to absorb a brief blip, e.g.
+# a local server that is a second away from finishing startup) and then
+# surface the error so the user/the fallback chain can react immediately.
+MAX_NETWORK_RETRY_ATTEMPTS = int(os.getenv("MAX_NETWORK_RETRY_ATTEMPTS", "4"))
+MAX_NETWORK_RETRY_DELAY_SEC = float(os.getenv("MAX_NETWORK_RETRY_DELAY_SEC", "8"))
+
 def build_system_prompt(
     conversation_id: Optional[str] = None,
     referenced_items: Optional[List[Dict[str, Any]]] = None,
@@ -780,8 +797,13 @@ async def stream_complete_chat(
             for step_idx in range(max_steps):
                 last_msg = None
 
-                # Exponential backoff retry loop (1s, 2s, 4s, 8s, 16s... up to 10 attempts) for network drop/timeout
-                for attempt in range(1, 11):
+                # Short exponential backoff retry loop for network drop/timeout.
+                # Kept intentionally brief (see MAX_NETWORK_RETRY_ATTEMPTS/
+                # MAX_NETWORK_RETRY_DELAY_SEC docstring above): a connection
+                # that is actively refused will not fix itself by waiting
+                # minutes, and a long silent retry storm is what used to look
+                # like "the model never responds".
+                for attempt in range(1, MAX_NETWORK_RETRY_ATTEMPTS + 1):
                     try:
                         async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
                             if chunk["type"] == "token":
@@ -809,16 +831,16 @@ async def stream_complete_chat(
                             "network" in err_str or "disconnected" in err_str or "remote protocol" in err_str
                         )
 
-                        if not is_network_or_timeout or attempt >= 10:
+                        if not is_network_or_timeout or attempt >= MAX_NETWORK_RETRY_ATTEMPTS:
                             raise stream_err
 
-                        delay_sec = min(2 ** (attempt - 1), 60)
-                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", "60"))
+                        delay_sec = min(2 ** (attempt - 1), MAX_NETWORK_RETRY_DELAY_SEC)
+                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", str(MAX_NETWORK_RETRY_DELAY_SEC)))
                         actual_delay = min(delay_sec, max_sleep)
                         yield {
                             "type": "retry_countdown",
                             "attempt": attempt,
-                            "maxAttempts": 10,
+                            "maxAttempts": MAX_NETWORK_RETRY_ATTEMPTS,
                             "delaySec": delay_sec,
                             "provider": p.name,
                             "model": target_model.name,
@@ -1200,7 +1222,11 @@ async def complete_chat(
         try:
             for step_idx in range(max_steps):
                 resp = None
-                for attempt in range(1, 11):
+                # See MAX_NETWORK_RETRY_ATTEMPTS/MAX_NETWORK_RETRY_DELAY_SEC
+                # docstring near the top of this file: kept short on purpose
+                # so an unreachable provider fails fast instead of stalling
+                # the chat for minutes before any error is shown.
+                for attempt in range(1, MAX_NETWORK_RETRY_ATTEMPTS + 1):
                     try:
                         resp = await call_provider_api(p, target_model, chat_msgs, api_key)
                         break
@@ -1218,10 +1244,10 @@ async def complete_chat(
                             "520" in err_str or "521" in err_str or "522" in err_str or "524" in err_str or
                             "network" in err_str or "disconnected" in err_str
                         )
-                        if is_rate_limit or not is_network_or_timeout or attempt >= 10:
+                        if is_rate_limit or not is_network_or_timeout or attempt >= MAX_NETWORK_RETRY_ATTEMPTS:
                             raise req_err
-                        delay_sec = min(2 ** (attempt - 1), 60)
-                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", "60"))
+                        delay_sec = min(2 ** (attempt - 1), MAX_NETWORK_RETRY_DELAY_SEC)
+                        max_sleep = float(os.getenv("MAX_RETRY_SLEEP_SEC", str(MAX_NETWORK_RETRY_DELAY_SEC)))
                         actual_delay = min(delay_sec, max_sleep)
                         if actual_delay > 0:
                             await asyncio.sleep(actual_delay)
