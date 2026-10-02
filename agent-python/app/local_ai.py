@@ -256,6 +256,43 @@ def _http_probe(url: str, timeout: float = 4.0) -> bool:
         return False
 
 
+def _describe_http_error(e: Exception) -> str:
+    """Turn a urllib exception into the most useful message we can show the
+    user, instead of the bare, generic HTTP reason phrase.
+
+    `str(urllib.error.HTTPError)` renders as e.g. "HTTP Error 500: Internal
+    Server Error" -- that "Internal Server Error" is just the generic text
+    for the status *code*, not anything Ollama/llama.cpp actually said. Both
+    engines put the real, actionable diagnosis (e.g. "model requires more
+    system memory than is available", "llama runner process has
+    terminated: exit status 2", an out-of-VRAM message, etc.) in the
+    response *body*, which str() on the exception silently discards. This
+    reads that body (JSON `{"error": ...}` shape if present, else raw text)
+    and appends it so the real cause is visible instead of a useless
+    generic "Internal Server Error".
+    """
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            raw = e.read()
+            body = raw.decode("utf-8", errors="replace").strip() if raw else ""
+        except Exception:
+            body = ""
+        detail = ""
+        if body:
+            try:
+                parsed = json.loads(body)
+                if isinstance(parsed, dict):
+                    detail = str(parsed.get("error") or parsed.get("message") or parsed.get("detail") or "").strip()
+            except Exception:
+                pass
+            if not detail:
+                detail = body[:500]
+        if detail:
+            return f"HTTP {e.code} {e.reason}: {detail}"
+        return f"HTTP {e.code}: {e.reason}"
+    return str(e) or type(e).__name__
+
+
 def server_up(engine: Optional[str] = None) -> Dict[str, Any]:
     engine = engine or get_state("localai:engine") or "ollama"
     if engine == "llamacpp":
@@ -903,28 +940,42 @@ def remove_model(model_name: str) -> Dict[str, Any]:
     url = f"{host_url()}/api/delete"
     payload = json.dumps({"name": model_name}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/1.0"}, method="DELETE")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return {"ok": resp.status in (200, 204), "model": model_name}
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return {"ok": resp.status in (200, 204), "model": model_name}
+    except Exception as e:
+        raise RuntimeError(_describe_http_error(e)) from e
 
 
 def pull_model(model_name: str, on_progress: Optional[Callable[[Dict[str, Any]], None]] = None, timeout: int = 7200) -> Dict[str, Any]:
     url = f"{host_url()}/api/pull"
     payload = json.dumps({"name": model_name, "stream": True}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/1.0"})
-    
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        for line in resp:
-            line_str = line.decode("utf-8").strip()
-            if not line_str:
-                continue
-            try:
-                data = json.loads(line_str)
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for line in resp:
+                line_str = line.decode("utf-8").strip()
+                if not line_str:
+                    continue
+                try:
+                    data = json.loads(line_str)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                # Ollama often reports a pull failure (e.g. unknown model tag,
+                # "pull model manifest: file does not exist") as a normal
+                # HTTP 200 stream line containing an "error" field rather
+                # than a non-2xx HTTP status, so this must be checked
+                # explicitly -- otherwise the loop silently finishes and the
+                # caller sees a false "ok": True.
+                if data.get("error"):
+                    raise RuntimeError(str(data["error"]))
                 if on_progress:
                     on_progress(data)
                 if data.get("status") == "success":
                     return {"ok": True, "model": model_name}
-            except Exception:
-                pass
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        raise RuntimeError(_describe_http_error(e)) from e
     return {"ok": True, "model": model_name}
 
 
@@ -1630,7 +1681,7 @@ def benchmark_llamacpp(model: str, prompt: str = "Say OK.", num_predict: int = 4
         with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return {"ok": False, "model": model, "error": str(e), "latencyMs": round((time.time() - t0) * 1000, 1)}
+        return {"ok": False, "model": model, "error": _describe_http_error(e), "latencyMs": round((time.time() - t0) * 1000, 1)}
 
     wall_ms = round((time.time() - t0) * 1000, 1)
     timings = data.get("timings") or {}
@@ -1681,7 +1732,7 @@ def benchmark_test(model: str) -> Dict[str, Any]:
                 "durationSec": round(elapsed, 2),
             }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": _describe_http_error(e)}
 
 
 def default_scan_roots() -> List[str]:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.5 - Local Model "Test" (and Install/Delete) Showed a Useless "HTTP Error 500: Internal Server Error" Instead of Ollama's Real Diagnosis
+
+### Fixed
+- **Clicking "تست" (Test) on a freshly-installed local model reported a bare, useless `خطا: HTTP Error 500: Internal Server Error`** with no indication of what actually went wrong, even after the 3.3.4 chat-reliability fixes. Root cause: `urllib.request.urlopen()` raises `urllib.error.HTTPError` when Ollama/llama.cpp respond with a non-2xx status, and Python's `str()` of that exception renders as just `"HTTP Error <code>: <generic reason phrase>"` (e.g. "Internal Server Error" for any 500, regardless of cause) — it completely discards the response **body**, which is exactly where Ollama/llama.cpp put the actual, actionable diagnosis (e.g. `"model requires more system memory (6.2 GiB) than is available (4.1 GiB)"`, `"llama runner process has terminated: exit status 2"`, an out-of-VRAM message, an unknown-model-tag error, etc.). `benchmark_test()`/`benchmark_llamacpp()` (the "Test" button), `remove_model()` (the "حذف" / Delete button), and `pull_model()` (model install) now read and surface that body instead of the generic reason phrase, so the real cause is visible and actionable. `pull_model()` additionally now detects Ollama's other common failure shape — an `{"error": ...}` line streamed back with an ordinary HTTP 200 status (e.g. "pull model manifest: file does not exist" for a mistyped/nonexistent model tag) — which previously made the installer silently report success with nothing actually installed.
+- Verified with a reproduction of the exact Ollama failure response shape (JSON `{"error": "..."}` body on a 500) through `_describe_http_error()` and through `benchmark_test()` end-to-end, confirming the real diagnostic message is now shown instead of "Internal Server Error"; 2 new regression tests added (60 total, all passing).
+
 ## 3.3.4 - Chat Produced "No Response" on Any Provider Failure (Frontend Crash + ~4-Minute Silent Retry Storm)
 
 ### Fixed

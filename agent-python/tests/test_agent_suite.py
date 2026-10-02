@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.4"
+    assert APP_VERSION == "3.3.5"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -2348,3 +2348,63 @@ def test_localai_server_env_always_has_a_usable_home(monkeypatch):
     monkeypatch.setenv("HOME", tempfile.gettempdir())
     env3 = local_ai.server_env()
     assert env3["HOME"] == tempfile.gettempdir()
+
+
+def test_describe_http_error_surfaces_real_ollama_error_body():
+    """Regression test: clicking "Test" on a freshly-installed local model
+    (or Install/Delete hitting a failing Ollama/llama.cpp endpoint) reported
+    a bare, useless 'HTTP Error 500: Internal Server Error' -- that text is
+    just the generic reason phrase for the status code, discarding the real,
+    actionable diagnosis Ollama/llama.cpp actually put in the response body
+    (e.g. "model requires more system memory than is available", "llama
+    runner process has terminated"). _describe_http_error() must read and
+    surface that body instead of the generic reason phrase."""
+    import urllib.error
+    from app import local_ai
+
+    # JSON error body shape, exactly what Ollama sends.
+    err = urllib.error.HTTPError(url="http://127.0.0.1:11434/api/generate", code=500, msg="Internal Server Error", hdrs=None, fp=None)
+    err.read = lambda: b'{"error":"model requires more system memory (6.2 GiB) than is available (4.1 GiB)"}'
+    result = local_ai._describe_http_error(err)
+    assert "model requires more system memory" in result
+    assert result != "HTTP Error 500: Internal Server Error"
+
+    # Plain-text (non-JSON) error body must still come through.
+    err2 = urllib.error.HTTPError(url="http://127.0.0.1:11434/api/generate", code=500, msg="Internal Server Error", hdrs=None, fp=None)
+    err2.read = lambda: b"llama runner process has terminated: exit status 2"
+    result2 = local_ai._describe_http_error(err2)
+    assert "llama runner process has terminated" in result2
+
+    # No body at all must still degrade gracefully (not crash).
+    err3 = urllib.error.HTTPError(url="http://127.0.0.1:11434/api/generate", code=404, msg="Not Found", hdrs=None, fp=None)
+    err3.read = lambda: b""
+    result3 = local_ai._describe_http_error(err3)
+    assert "404" in result3
+
+    # Non-HTTPError exceptions still fall back to str(e) unchanged.
+    assert local_ai._describe_http_error(ConnectionError("refused")) == "refused"
+
+
+def test_benchmark_test_surfaces_real_ollama_error_not_generic_500(monkeypatch):
+    """End-to-end regression test for the actual 'Test' button flow
+    (POST /api/localai/test -> benchmark_test()): a 500 from Ollama's
+    /api/generate must bubble up as the real diagnostic message, not the
+    bare 'HTTP Error 500: Internal Server Error'."""
+    import urllib.error
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+
+    def fake_urlopen(req, timeout=None):
+        err = urllib.error.HTTPError(url=req.full_url, code=500, msg="Internal Server Error", hdrs=None, fp=None)
+        err.read = lambda: b'{"error":"model requires more system memory (6.2 GiB) than is available (4.1 GiB)"}'
+        raise err
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    result = local_ai.benchmark_test("some-model:latest")
+    assert result["ok"] is False
+    assert "model requires more system memory" in result["error"]
+    assert result["error"] != "HTTP Error 500: Internal Server Error"
