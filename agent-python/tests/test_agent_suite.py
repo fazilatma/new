@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.14"
+    assert APP_VERSION == "3.3.15"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3616,3 +3616,137 @@ def test_benchmark_test_detects_abi_mismatch_in_ollama_crash_log(monkeypatch):
     # Must NOT recommend "switch to Ollama" -- that's actively wrong when
     # it's Ollama's own bundled runner that's incompatible.
     assert "موتور Ollama استفاده کنید" not in result["error"]
+
+
+def test_localai_diagnose_endpoint_returns_comprehensive_snapshot(monkeypatch):
+    """Regression test for the new GET /api/localai/diagnose endpoint: a
+    single read-only call must return everything needed to judge the whole
+    Local AI subsystem's health (hardware, both engines' install/health/ABI
+    status, active engine's running state + log tail, installed models) in
+    one response, instead of needing to cross-reference several separate
+    endpoints/screenshots."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "llamacpp" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "binary", lambda engine=None: None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": False, "error": ""})
+    monkeypatch.setattr(local_ai, "installed", lambda: {"running": False, "models": [], "loaded": [], "error": ""})
+    monkeypatch.setattr(local_ai, "read_engine_log_tail", lambda engine=None: {"log": ""})
+
+    res = client.get("/api/localai/diagnose")
+    assert res.status_code == 200
+    data = res.json()
+    for key in ("activeEngine", "running", "host", "engines", "recommendation", "modelsDir", "models", "logTail"):
+        assert key in data, f"expected '{key}' in /api/localai/diagnose response"
+    assert data["activeEngine"] == "llamacpp"
+    assert "ollama" in data["engines"] and "llamacpp" in data["engines"]
+    assert data["engines"]["llamacpp"]["installed"] is False
+
+
+def test_engine_health_report_surfaces_abi_incompatibility(monkeypatch, tmp_path):
+    """_engine_health_report() must surface the glibc/libstdc++ ABI
+    incompatibility (not just a generic 'unhealthy') so diagnose_full()'s
+    recommendation logic can tell an unfixable host-level incompatibility
+    apart from a simple broken/incomplete install."""
+    from app import local_ai
+
+    fake_bin = str(tmp_path / "llama-server")
+    Path(fake_bin).write_text("fake")
+    monkeypatch.setattr(local_ai, "binary", lambda engine=None: fake_bin)
+    monkeypatch.setattr(local_ai, "_runtime_is_healthy", lambda path, engine: False)
+    monkeypatch.setattr(local_ai, "_binary_abi_incompatibility_reason", lambda path: "سیستم‌عامل این سرور میزبان نسخه‌ی قدیمی‌تری... (GLIBC_2.29)")
+
+    report = local_ai._engine_health_report("llamacpp")
+    assert report["installed"] is True
+    assert report["healthy"] is False
+    assert report["abiIncompatible"] is True
+    assert "GLIBC_2.29" in report["abiReason"]
+
+
+def test_auto_repair_runs_full_install_start_test_sequence_and_reports_each_step(monkeypatch):
+    """Regression test for the new auto_repair()/POST+GET /api/localai/auto-repair
+    flow: switching engine -> install -> start -> test must all run in one
+    call and the response must include a step-by-step report, so the whole
+    sequence can be driven and inspected from a single API call instead of
+    four separate UI actions."""
+    from app import local_ai
+
+    calls = {"set_state": [], "install": [], "start": 0}
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "llamacpp" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "set_state", lambda key, val: calls["set_state"].append((key, val)))
+
+    def fake_install_runtime(engine, log_fn=None):
+        calls["install"].append(engine)
+        return {"ok": True, "binary": "/fake/ollama", "engine": engine}
+
+    def fake_start_server(log_fn=None):
+        calls["start"] += 1
+        return {"ok": True, "running": True, "started": True, "host": "http://127.0.0.1:11434", "engine": "ollama"}
+
+    def fake_benchmark_test(model):
+        return {"ok": True, "model": model, "tokensPerSec": 12.3}
+
+    monkeypatch.setattr(local_ai, "install_runtime", fake_install_runtime)
+    monkeypatch.setattr(local_ai, "start_server", fake_start_server)
+    monkeypatch.setattr(local_ai, "benchmark_test", fake_benchmark_test)
+
+    result = local_ai.auto_repair(target_engine="ollama", test_model="llama3.2:1b")
+    assert result["ok"] is True
+    assert result["engine"] == "ollama"
+    step_names = [s["step"] for s in result["steps"]]
+    assert step_names == ["select-engine", "install", "start", "test"]
+    assert all(s["ok"] for s in result["steps"])
+    assert calls["set_state"] == [("localai:engine", "ollama")]
+    assert calls["install"] == ["ollama"]
+    assert calls["start"] == 1
+
+
+def test_auto_repair_stops_and_reports_on_install_failure(monkeypatch):
+    """If install_runtime() raises (e.g. the unfixable ABI-incompatibility
+    RuntimeError), auto_repair() must stop immediately and report exactly
+    which step failed and why, instead of attempting to start/test a
+    runtime that was never actually installed."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+
+    def failing_install(engine, log_fn=None):
+        raise RuntimeError("این سرور glibc قدیمی دارد")
+
+    started = {"n": 0}
+
+    def should_not_be_called(*a, **kw):
+        started["n"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(local_ai, "install_runtime", failing_install)
+    monkeypatch.setattr(local_ai, "start_server", should_not_be_called)
+
+    result = local_ai.auto_repair(target_engine="ollama")
+    assert result["ok"] is False
+    assert result["steps"][-1]["step"] == "install"
+    assert result["steps"][-1]["ok"] is False
+    assert "glibc" in result["steps"][-1]["error"]
+    assert started["n"] == 0, "start_server() must never be called after install fails"
+
+
+def test_auto_repair_endpoint_accepts_both_get_and_post(monkeypatch):
+    """The /api/localai/auto-repair endpoint must be triggerable via a
+    simple GET (a single URL fetch, for quick remote diagnosis/repair
+    without needing to drive the UI through four separate buttons) as well
+    as the conventional POST."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "auto_repair", lambda target_engine=None, test_model=None: {
+        "ok": True, "engine": target_engine or "ollama", "steps": [{"step": "select-engine", "ok": True}],
+    })
+
+    res_get = client.get("/api/localai/auto-repair?engine=ollama")
+    assert res_get.status_code == 200
+    assert res_get.json()["ok"] is True
+
+    res_post = client.post("/api/localai/auto-repair?engine=ollama&model=llama3.2:1b")
+    assert res_post.status_code == 200
+    assert res_post.json()["engine"] == "ollama"

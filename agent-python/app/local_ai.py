@@ -2086,10 +2086,147 @@ def benchmark_test(model: str) -> Dict[str, Any]:
         }
 
 
+def _engine_health_report(engine: str) -> Dict[str, Any]:
+    """One engine's slice of diagnose_full(): everything needed to judge,
+    from a single JSON field, whether it is installed/healthy/usable on
+    this specific host -- without having to separately cross-reference
+    `ldd`, log tails, and the lib/ollama directory by hand.
+    """
+    b = binary(engine)
+    report: Dict[str, Any] = {
+        "installed": bool(b),
+        "binary": b or "",
+        "healthy": False,
+        "abiIncompatible": False,
+        "abiReason": "",
+    }
+    if not b:
+        return report
+    report["healthy"] = _runtime_is_healthy(b, engine)
+    if engine == "ollama":
+        lib_dir = ollama_lib_dir()
+        report["libOllamaDir"] = str(lib_dir)
+        report["libOllamaPresent"] = lib_dir.is_dir() and any(lib_dir.iterdir()) if lib_dir.is_dir() else False
+    if not report["healthy"]:
+        abi_reason = _binary_abi_incompatibility_reason(b)
+        if not abi_reason and engine == "ollama":
+            abi_reason = _ollama_runner_abi_reason(ollama_lib_dir())
+        if abi_reason:
+            report["abiIncompatible"] = True
+            report["abiReason"] = abi_reason
+    return report
+
+
+def diagnose_full() -> Dict[str, Any]:
+    """Single comprehensive, read-only diagnostic snapshot of the whole
+    Local AI subsystem -- hardware, both engines' install/health/ABI
+    status, the currently active engine's running state, its recent log
+    tail, and the installed-models list -- in one JSON response instead of
+    several separate screenshots/endpoint calls. Meant to be hit directly
+    (e.g. by an operator or this app's own maintainer) to get the full
+    picture of a broken Local AI setup in a single request.
+    """
+    active_engine = get_state("localai:engine") or "ollama"
+    srv = server_up(active_engine)
+    host = host_scan()
+    engines = {
+        "ollama": _engine_health_report("ollama"),
+        "llamacpp": _engine_health_report("llamacpp"),
+    }
+    recommendation = ""
+    active_report = engines.get(active_engine, {})
+    if active_report.get("abiIncompatible"):
+        other = "ollama" if active_engine == "llamacpp" else "llamacpp"
+        other_report = engines.get(other, {})
+        if other_report.get("abiIncompatible"):
+            recommendation = (
+                f"هر دو موتور ({active_engine} و {other}) روی این سرور به دلیل قدیمی‌بودن glibc/libstdc++ "
+                f"سیستم‌عامل غیرقابل‌اجرا هستند. به‌روزرسانی سیستم‌عامل یا کامپایل از سورس تنها راه‌حل است."
+            )
+        elif other_report.get("healthy") or not other_report.get("installed"):
+            recommendation = (
+                f"موتور فعال ({active_engine}) روی این سرور به دلیل ناسازگاری glibc/libstdc++ قابل اجرا نیست. "
+                f"موتور «{other}» گزینه‌ی بهتری برای این سرور است -- آن را فعال/نصب کنید "
+                f"(یا از اندپوینت POST /api/localai/auto-repair با engine={other} استفاده کنید)."
+            )
+    elif not active_report.get("installed"):
+        recommendation = f"موتور فعال ({active_engine}) هنوز نصب نشده است."
+    elif not active_report.get("healthy"):
+        recommendation = f"موتور فعال ({active_engine}) نصب شده ولی ناسالم است (نیاز به تعمیر/نصب مجدد)."
+
+    try:
+        models = installed()
+    except Exception as e:
+        models = {"error": str(e)}
+
+    return {
+        "activeEngine": active_engine,
+        "running": srv.get("up", False),
+        "serverError": str(srv.get("error") or ""),
+        "host": host.get("host", {}),
+        "engines": engines,
+        "recommendation": recommendation,
+        "modelsDir": str(models_dir()),
+        "modelsDirWritable": is_dir_writable(models_dir()),
+        "models": models,
+        "logTail": read_engine_log_tail(active_engine).get("log", ""),
+    }
+
+
+def auto_repair(target_engine: Optional[str] = None, test_model: Optional[str] = None, log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    """One-shot diagnose-and-repair flow: switch to `target_engine` (or keep
+    the currently active one), (re)install it, start it, and optionally
+    benchmark-test a model -- all in a single call, returning a
+    step-by-step report of exactly what happened at each stage. Exists so
+    the whole "switch engine -> install -> start -> test" sequence (four
+    separate UI actions/screenshots) can be driven and inspected from one
+    API call/response instead.
+    """
+    def _log(msg: str):
+        if log_fn:
+            log_fn(msg)
+        logger.info(msg)
+
+    engine = (target_engine or get_state("localai:engine") or "ollama").strip().lower()
+    if engine not in ("ollama", "llamacpp"):
+        return {"ok": False, "error": f"Unknown engine: {engine}", "steps": []}
+
+    steps: List[Dict[str, Any]] = []
+
+    if target_engine:
+        set_state("localai:engine", engine)
+    steps.append({"step": "select-engine", "ok": True, "detail": {"engine": engine}})
+
+    try:
+        install_result = install_runtime(engine, _log)
+        steps.append({"step": "install", "ok": True, "detail": install_result})
+    except Exception as e:
+        steps.append({"step": "install", "ok": False, "error": str(e)})
+        return {"ok": False, "engine": engine, "steps": steps}
+
+    try:
+        start_result = start_server(log_fn=_log)
+        steps.append({"step": "start", "ok": True, "detail": start_result})
+    except Exception as e:
+        steps.append({"step": "start", "ok": False, "error": str(e), "logTail": read_engine_log_tail(engine).get("log", "")})
+        return {"ok": False, "engine": engine, "steps": steps}
+
+    if test_model:
+        try:
+            bench = benchmark_test(test_model) if engine == "ollama" else benchmark_llamacpp(test_model)
+            steps.append({"step": "test", "ok": bool(bench.get("ok")), "detail": bench})
+        except Exception as e:
+            steps.append({"step": "test", "ok": False, "error": str(e)})
+
+    overall_ok = all(s["ok"] for s in steps)
+    return {"ok": overall_ok, "engine": engine, "steps": steps}
+
+
 def default_scan_roots() -> List[str]:
     roots = []
     home = os.environ.get("HOME") or ""
     if home:
+
         roots.append(home.rstrip("/"))
     for p in ["/root", "/home", "/opt", "/srv", "/data", "/mnt", "/media", "/var/www", "/workspace"]:
         if os.path.isdir(p):

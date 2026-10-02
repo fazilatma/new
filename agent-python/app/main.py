@@ -1830,6 +1830,36 @@ def get_localai_runtime(user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
     return local_ai.runtime_status()
 
+@app.get("/api/localai/diagnose")
+def get_localai_diagnose(user: Dict[str, Any] = Depends(require_viewer)):
+    """Single comprehensive, read-only diagnostic snapshot of the whole
+    Local AI subsystem (hardware, both engines' install/health/ABI status,
+    active engine's running state + log tail, installed models) in one
+    response -- so a broken setup can be inspected/shared from one API
+    call instead of several separate screenshots of different panels."""
+    from . import local_ai
+    try:
+        return local_ai.diagnose_full()
+    except Exception as e:
+        raise HTTPException(500, f"Diagnostic collection failed: {str(e)}")
+
+@app.api_route("/api/localai/auto-repair", methods=["GET", "POST"])
+def post_localai_auto_repair(
+    engine: Optional[str] = None,
+    model: Optional[str] = None,
+    user: Dict[str, Any] = Depends(require_admin),
+):
+    """One-shot diagnose-and-repair: switch to `engine` (if given, else keep
+    the currently active one), (re)install it, start it, and optionally
+    benchmark-test `model` -- all in a single call. Exposed under both GET
+    and POST: GET makes it trivially triggerable from a single URL fetch
+    for quick remote diagnosis/repair without needing to drive the UI
+    through four separate buttons; POST is the conventional method for the
+    equivalent UI action. Returns a step-by-step report of exactly what
+    happened at each stage."""
+    from . import local_ai
+    return local_ai.auto_repair(target_engine=engine, test_model=model)
+
 @app.post("/api/localai/runtime/install")
 def post_localai_runtime_install(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai

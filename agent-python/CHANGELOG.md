@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.15 - Added one-shot Local AI diagnostics/repair API endpoints (GET /api/localai/diagnose, GET+POST /api/localai/auto-repair)
+
+### Added
+- **`GET /api/localai/diagnose`**: a single read-only call that returns a full snapshot of the Local AI subsystem -- hardware, both engines' install/health/ABI-incompatibility status (including the `lib/ollama` runner-directory check added in 3.3.14), the active engine's running state, its recent log tail, the installed-models list, and a plain-language `recommendation` field -- instead of having to cross-reference the hardware page, the runtime status endpoint, the logs endpoint, and the troubleshooting modal separately to diagnose a broken setup.
+- **`GET`/`POST /api/localai/auto-repair`** (`engine`, `model` query params): runs the full "switch engine -> (re)install -> start -> benchmark-test" sequence in one call and returns a step-by-step report of exactly what happened (and where it stopped, if something failed) -- the four separate UI actions/screenshots this used to take collapse into one request/response. Registered under both GET and POST so it can be triggered from a single URL fetch for quick remote diagnosis/repair, not just from a UI button.
+- Both endpoints reuse the existing `require_viewer`/`require_admin` role checks, so they behave identically to every other Local AI endpoint on deployments where authentication is enabled.
+- Verified with 5 new regression tests (`/api/localai/diagnose`'s response shape, `_engine_health_report()` surfacing an ABI incompatibility, `auto_repair()`'s full step sequence on success, `auto_repair()` stopping cleanly and reporting the failed step when install fails, and the `/api/localai/auto-repair` endpoint accepting both GET and POST). 89 backend tests passing.
+
 ## 3.3.14 - Fixed "llama-server process has terminated: exit status 1" when Testing an Ollama model (wrong runner picked up via a shared PATH)
 
 ### Fixed
