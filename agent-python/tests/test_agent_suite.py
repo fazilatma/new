@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.6"
+    assert APP_VERSION == "3.3.7"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1787,6 +1787,126 @@ async def test_stream_call_provider_api_surfaces_real_error_body_not_generic_500
     assert "Server error '500 Internal Server Error' for url" not in msg
     # OOM-kill-specific guidance should be appended for this exact signature.
     assert "کمبود حافظه" in msg
+
+
+def test_sanitize_messages_for_request_strips_ui_bookkeeping_fields():
+    """Unit test for the sanitizer itself: it must drop every client-side/
+    internal bookkeeping field while preserving the fields an actual
+    provider API needs."""
+    from app.chat import _sanitize_messages_for_request
+
+    messages = [
+        {"role": "system", "content": "You are a helpful agent."},
+        {"role": "user", "content": "build me an app"},
+        {
+            "role": "assistant",
+            "content": "Done! Here's the app.",
+            "isFallback": True,
+            "fallbackDetails": {
+                "used": True, "originalProvider": "Mistral AI", "originalModel": "mistral-large-latest",
+                "activeProvider": "Mistral AI", "activeModel": "codestral-2508",
+            },
+            "execResults": [{"type": "execution_result", "path": "app.js", "status": "success", "exitCode": 0}],
+            "renderPreviews": [{"type": "render_preview_ready", "path": "index.html", "previewType": "html"}],
+            "reasoning_content": "thinking about the app...",
+        },
+        {"role": "tool", "content": '{"ok": true}', "tool_call_id": "call_1"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "run", "arguments": "{}"}}]},
+    ]
+
+    clean = _sanitize_messages_for_request(messages)
+    assert len(clean) == len(messages)
+    for entry in clean:
+        for key in entry:
+            assert key in {"role", "content", "tool_calls", "tool_call_id", "name"}
+
+    # The fallback-badge assistant message: UI fields gone, real content intact.
+    assistant_msg = clean[2]
+    assert assistant_msg == {"role": "assistant", "content": "Done! Here's the app."}
+    assert "isFallback" not in assistant_msg
+    assert "fallbackDetails" not in assistant_msg
+    assert "execResults" not in assistant_msg
+    assert "renderPreviews" not in assistant_msg
+    assert "reasoning_content" not in assistant_msg
+
+    # The tool-result message keeps its required tool_call_id.
+    assert clean[3] == {"role": "tool", "content": '{"ok": true}', "tool_call_id": "call_1"}
+
+    # The tool-calling assistant message keeps its tool_calls and a None content.
+    assert clean[4]["tool_calls"][0]["function"]["name"] == "run"
+    assert clean[4]["content"] is None
+
+
+@pytest.mark.anyio
+async def test_mistral_422_extra_forbidden_scenario_no_longer_happens(monkeypatch):
+    """End-to-end regression test for the exact real-world failure reported:
+    a multi-turn conversation whose history (as persisted/resent by the
+    frontend) contains an assistant message decorated with isFallback/
+    fallbackDetails/execResults/renderPreviews -- resending that full
+    history to Mistral used to get the *entire* request rejected with
+    HTTP 422 `extra_forbidden` (one violation per extra field), which
+    surfaced as "خطا در دریافت پاسخ: HTTP 422 ... extra_forbidden ..." and,
+    because conversation history is resent every turn, permanently broke
+    that conversation. The outgoing request body must now only contain
+    messages with provider-recognized fields."""
+    import httpx
+    from app.chat import stream_call_provider_api
+    from app.providers import Provider, ModelSpec
+
+    captured_body = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content.decode("utf-8")))
+        # Simulate Mistral's real strict-schema 422 if any extra message
+        # field slips through, so the test fails loudly (not just silently
+        # passing) if the sanitizer regresses.
+        for m in captured_body.get("messages", []):
+            extra = set(m.keys()) - {"role", "content", "tool_calls", "tool_call_id", "name"}
+            if extra:
+                err_body = json.dumps([{"type": "extra_forbidden", "loc": ["body", "messages", 0, m.get("role"), list(extra)[0]], "msg": "Extra inputs are not permitted"}]).encode()
+                return httpx.Response(422, content=err_body, headers={"Content-Type": "application/json"})
+        body = json.dumps({"choices": [{"delta": {"content": "ok"}}]}).encode()
+        return httpx.Response(200, content=b'data: ' + body + b'\n\ndata: [DONE]\n\n', headers={"Content-Type": "text/event-stream"})
+
+    mock_transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = mock_transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.chat.httpx.AsyncClient", patched_async_client)
+
+    provider = Provider(id="mistral", name="Mistral AI", protocol="openai-compatible", url="https://api.mistral.ai/v1", apiKey="sk-m", enabled=True)
+    model = ModelSpec(id="codestral-2508", name="Codestral")
+
+    dirty_history = [
+        {"role": "user", "content": "build me an app"},
+        {
+            "role": "assistant",
+            "content": "Done! Here's the app.",
+            "isFallback": True,
+            "fallbackDetails": {"used": True, "originalProvider": "Mistral AI", "originalModel": "mistral-large-latest", "activeProvider": "Mistral AI", "activeModel": "codestral-2508"},
+            "execResults": [{"type": "execution_result", "path": "app.js", "status": "success", "exitCode": 0}],
+            "renderPreviews": [{"type": "render_preview_ready", "path": "index.html", "previewType": "html"}],
+        },
+        {"role": "user", "content": "now add a login page"},
+    ]
+
+    caught = None
+    chunks = []
+    try:
+        async for chunk in stream_call_provider_api(provider, model, dirty_history, "sk-m"):
+            chunks.append(chunk)
+    except Exception as e:
+        caught = e
+
+    assert caught is None, f"request was rejected: {caught}"
+    assert any(c.get("type") == "token" for c in chunks)
+    # The actual outgoing body must contain only clean messages.
+    for m in captured_body["messages"]:
+        assert set(m.keys()) <= {"role", "content", "tool_calls", "tool_call_id", "name"}
 
 
 def test_flexible_provider_import():

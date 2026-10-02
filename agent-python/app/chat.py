@@ -248,6 +248,49 @@ async def _httpx_stream_status_error_detail(resp) -> str:
         return f"HTTP {resp.status_code} {resp.reason_phrase}: {detail}"
     return f"HTTP {resp.status_code}: {resp.reason_phrase}"
 
+
+# Fields an actual provider's chat-completions API recognizes on a message
+# object. Everything else is UI/bookkeeping metadata this app itself attaches
+# to messages for rendering and persistence (see below) and must never be
+# forwarded upstream.
+_ALLOWED_PROVIDER_MESSAGE_KEYS = {"role", "content", "tool_calls", "tool_call_id", "name"}
+
+
+def _sanitize_messages_for_request(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Strip everything except the fields an actual provider API recognizes
+    from each message before it is sent upstream.
+
+    Two independent sources put extra keys onto message dicts that are only
+    ever meant for this app's own UI/persistence, not for the wire:
+      1. The frontend's chat history objects carry `isFallback`,
+         `fallbackDetails`, `execResults`, `renderPreviews`, `isError`,
+         `errorDetails`, etc. (for rendering fallback/execution/preview
+         badges) and resend the *entire* history -- including those keys --
+         on every subsequent turn.
+      2. This app's own streaming code attaches `reasoning_content` to an
+         assistant message to carry a reasoning/thinking model's thoughts
+         through a multi-step tool-calling loop.
+    Most providers silently ignore unrecognized fields, but some (observed
+    with Mistral) run strict schema validation and reject the *entire*
+    request with HTTP 422 `extra_forbidden` for every single extra field --
+    and because the full conversation history is resent every turn, this
+    permanently broke that conversation the moment it contained any
+    fallback/execution/preview metadata, surfacing as the cryptic-looking
+    "خطا در دریافت پاسخ: HTTP 422 ... extra_forbidden ..." error.
+    """
+    clean: List[Dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        entry = {k: v for k, v in m.items() if k in _ALLOWED_PROVIDER_MESSAGE_KEYS}
+        if not entry.get("tool_calls"):
+            entry.pop("tool_calls", None)
+        if "content" not in entry or entry["content"] is None:
+            entry["content"] = "" if "tool_calls" not in entry else None
+        entry.setdefault("role", m.get("role", "user"))
+        clean.append(entry)
+    return clean
+
 async def call_provider_api(
     provider: Provider,
     model: ModelSpec,
@@ -258,6 +301,7 @@ async def call_provider_api(
     custom_connect_sec: Optional[float] = None
 ) -> Dict[str, Any]:
     base_url = provider.url.rstrip("/")
+    messages = _sanitize_messages_for_request(messages)
 
     headers = {
         "Content-Type": "application/json"
@@ -551,6 +595,7 @@ async def stream_call_provider_api(
       {"type": "full_message", "message": {...}}
     """
     base_url = provider.url.rstrip("/")
+    messages = _sanitize_messages_for_request(messages)
     headers = {"Content-Type": "application/json"}
     if api_key:
         if provider.protocol == "anthropic":
