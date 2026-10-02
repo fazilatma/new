@@ -401,6 +401,21 @@
           </div>
         </div>
       </section>
+
+      <!-- ─────────────────────── drive scan -->
+      <section class="card">
+        <h2>🗂 اسکن دیسک برای مدل‌های موجود</h2>
+        <p class="hint" style="margin-top:0">
+          اگر فایل‌های مدل (gguf, ggml, safetensors …) از قبل روی سرور دانلود شده باشند — مثلاً از نصب‌های قبلی یا آپلود دستی —
+          می‌توانید بدون دانلود مجدد آن‌ها را پیدا و مستقیماً به فهرست مدل‌های محلی اضافه کنید.
+        </p>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <input class="inp ltr sm" id="scan-root" placeholder="مسیر دلخواه (اختیاری — مثال: /home/user یا /data/models)" style="flex:1;min-width:220px">
+          <button class="btn sm" id="btn-scan-quick">🔎 اسکن سریع (پوشه‌های رایج)</button>
+          <button class="btn sm" id="btn-scan-full">🔎 اسکن کامل دیسک (کندتر)</button>
+        </div>
+        <div id="scan-out" style="margin-top:12px"></div>
+      </section>
     </div>
   </div>
 </div>
@@ -700,7 +715,7 @@ function renderRecs(d) {
 
 /* ───────────────────────────────────────── install + progress */
 let pollTimer = null;
-async function install(ref) {
+async function install(ref, extra) {
   if (!ref) return;
   if (!confirm(`آیا مدل ${ref} دانلود و نصب شود؟`)) return;
   const card = $('#job-card');
@@ -712,7 +727,7 @@ async function install(ref) {
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    const res = await api('/api/localai/install', { method: 'POST', body: { model: ref } });
+    const res = await api('/api/localai/install', { method: 'POST', body: Object.assign({ model: ref }, extra || {}) });
     if (res.job && res.job.id) {
       $('#job-id').textContent = res.job.id;
       if (res.plan && res.plan.length) {
@@ -758,10 +773,14 @@ async function loadModels() {
   const loaded = new Set((d.loaded || []).map((m) => m.name));
   $('#models').innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>مدل</th><th>حجم</th><th>کوانت</th><th>عملیات</th></tr></thead><tbody>${
     d.models.map((m) => `<tr>
-      <td class="ltr" style="word-break:break-all">${esc(m.name)} ${loaded.has(m.name) ? '<span class="tag ok" style="display:inline-block;margin-top:2px">لود شده</span>' : ''}</td>
+      <td class="ltr" style="word-break:break-all">${esc(m.name)}
+        ${loaded.has(m.name) ? '<span class="tag ok" style="display:inline-block;margin-top:2px">لود شده</span>' : ''}
+        ${m.missing ? '<span class="tag err" style="display:inline-block;margin-top:2px">فایل روی دیسک یافت نشد</span>' : ''}
+      </td>
       <td style="white-space:nowrap">${fa(m.sizeGb)} GB</td>
       <td class="ltr">${esc(m.quantization || '—')}</td>
       <td style="white-space:nowrap">
+        ${m.path && !loaded.has(m.name) && !m.missing ? `<button class="btn xs ok" data-activate="${esc(m.path)}">▶️ فعال‌سازی</button>` : ''}
         <button class="btn xs" data-test="${esc(m.name)}">تست</button>
         <button class="btn xs danger" data-del="${esc(m.name)}">حذف</button>
       </td></tr>`).join('')}</tbody></table></div>`;
@@ -783,10 +802,21 @@ async function loadModels() {
       loadModels();
     };
   });
+  $('#models').querySelectorAll('[data-activate]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      try {
+        await api('/api/localai/llamacpp/activate', { method: 'POST', body: { path: b.dataset.activate } });
+        toast('مدل فعال و بارگذاری شد', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      loadModels();
+    };
+  });
 }
 
 /* ───────────────────────────────────────── manual search & categories */
 let activeCategory = 'all';
+let hfQuantMap = {};
 let searchDebounceTimer = null;
 
 $('#search-tabs').querySelectorAll('.tab-btn').forEach((btn) => {
@@ -802,6 +832,7 @@ async function executeSearch() {
   const q = ($('#q').value || '').trim();
   const out = $('#search-out');
   out.innerHTML = '<span class="hint">در حال جست‌وجو در کاتالوگ و Hugging Face…</span>';
+  hfQuantMap = {};
   try {
     const d = await api('/api/localai/search', { method: 'POST', body: { query: q, limit: 16 } });
     let catModels = d.catalog || [];
@@ -872,31 +903,39 @@ async function executeSearch() {
     }
 
     if (hfModels.length && activeCategory !== 'code' && activeCategory !== 'chat') {
-      html += `<div class="hint" style="margin:14px 0 8px;font-weight:700">مخازن Hugging Face GGUF (${fa(hfModels.length, 0)}):</div>`;
-      hfModels.forEach((m) => {
+      html += `<div class="hint" style="margin:14px 0 8px;font-weight:700">مخازن Hugging Face GGUF (${fa(hfModels.length, 0)}) — فقط کوانت‌هایی که واقعاً در مخزن موجودند پیشنهاد می‌شوند:</div>`;
+      hfModels.forEach((m, mi) => {
+        const quants = m.quantOptions && m.quantOptions.length ? m.quantOptions : [{ quant: m.quant, ref: m.pullRef, filename: '', diskGb: m.diskGb, ramGb: m.ramGb, split: false }];
+        const cardId = `hf-${mi}`;
         html += `
-          <div class="model-card">
+          <div class="model-card" data-hf-card="${cardId}">
             <div class="model-card-top">
               <span class="model-card-title ltr">${esc(m.id || m.pullRef)}</span>
               <span class="tag ok">Hugging Face</span>
             </div>
             <div class="model-card-desc">${esc(m.summary || '')}</div>
             <div class="model-card-tags">
-              ${m.diskGb ? `<span class="tag">📦 حجم تقریبی: ${fa(m.diskGb)} GB</span>` : ''}
-              ${m.ramGb ? `<span class="tag">🧠 حداقل رم تقریبی: ${fa(m.ramGb)} GB</span>` : ''}
               ${m.toolCalling ? '<span class="tag ok">🛠 احتمال ابزارفراخوانی</span>' : ''}
               ${m.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
               ${m.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+            </div>
+            <div style="margin-top:8px">
+              <label class="lb">کوانت برای نصب (${fa(quants.length, 0)} گزینهٔ تأییدشده)</label>
+              <select class="inp ltr sm" data-quant-select="${cardId}">
+                ${quants.map((q, qi) => `<option value="${qi}" ${q.quant === m.quant ? 'selected' : ''}>${esc(q.quant)} — ${fa(q.diskGb)} GB${q.split ? ' (چندبخشی)' : ''}</option>`).join('')}
+              </select>
             </div>
             <div class="model-card-bottom">
               <div class="row" style="gap:6px">
                 <span class="tag">⬇️ ${fa(m.downloads || 0, 0)} دانلود</span>
                 ${m.likes ? `<span class="tag">❤️ ${fa(m.likes, 0)}</span>` : ''}
+                <span class="tag" data-quant-ram="${cardId}">🧠 رم ≈ ${fa(quants[0].ramGb)} GB</span>
               </div>
-              <button class="btn xs ok" data-pull="${esc(m.pullRef || m.id)}">🚀 نصب GGUF</button>
+              <button class="btn xs ok" data-pull-hf="${cardId}">🚀 نصب GGUF</button>
             </div>
           </div>
         `;
+        hfQuantMap[cardId] = quants;
       });
     }
 
@@ -907,6 +946,22 @@ async function executeSearch() {
     out.innerHTML = html;
     out.querySelectorAll('[data-pull]').forEach((b) => {
       b.onclick = () => install(b.dataset.pull);
+    });
+    out.querySelectorAll('[data-quant-select]').forEach((sel) => {
+      sel.onchange = () => {
+        const id = sel.dataset.quantSelect;
+        const q = hfQuantMap[id][parseInt(sel.value, 10)];
+        const ramTag = out.querySelector(`[data-quant-ram="${id}"]`);
+        if (ramTag) ramTag.textContent = `🧠 رم ≈ ${fa(q.ramGb)} GB`;
+      };
+    });
+    out.querySelectorAll('[data-pull-hf]').forEach((b) => {
+      b.onclick = () => {
+        const id = b.dataset.pullHf;
+        const sel = out.querySelector(`[data-quant-select="${id}"]`);
+        const q = hfQuantMap[id][parseInt(sel ? sel.value : '0', 10)];
+        install(q.ref, { file: q.filename || undefined, estimateRamGb: q.ramGb, estimateDiskGb: q.diskGb });
+      };
     });
   } catch (e) {
     out.innerHTML = `<span class="tag err">${esc(e.message)}</span>`;
@@ -935,6 +990,64 @@ $('#btn-custom-pull').onclick = () => {
 };
 $('#custom-pull-ref').onkeydown = (e) => {
   if (e.key === 'Enter') $('#btn-custom-pull').click();
+};
+
+/* ───────────────────────────────────────── drive scan */
+async function runScan(full) {
+  const out = $('#scan-out');
+  const root = ($('#scan-root').value || '').trim();
+  out.innerHTML = `<span class="hint">${full ? 'در حال اسکن کامل دیسک — ممکن است کمی طول بکشد…' : 'در حال اسکن پوشه‌های رایج…'}</span>`;
+  $('#btn-scan-quick').disabled = true;
+  $('#btn-scan-full').disabled = true;
+  try {
+    const body = { full: !!full };
+    if (root) body.roots = [root];
+    const d = await api('/api/localai/scan', { method: 'POST', body });
+    if (!d.results || !d.results.length) {
+      out.innerHTML = `<span class="hint">هیچ فایل مدلی پیدا نشد${root ? ' در «' + esc(root) + '»' : ''}. (${fa(d.tookSec)} ثانیه)</span>`;
+      return;
+    }
+    out.innerHTML = `<div class="hint" style="margin-bottom:8px">${fa(d.results.length, 0)} فایل پیدا شد (${fa(d.tookSec)} ثانیه)${d.truncated ? ' — فهرست به بزرگ‌ترین‌ها محدود شد' : ''}:</div>`
+      + `<div class="tbl-wrap"><table><thead><tr><th>مسیر</th><th>حجم</th><th>کوانت</th><th>عملیات</th></tr></thead><tbody>${
+        d.results.map((r) => `<tr>
+          <td class="ltr" style="word-break:break-all;font-size:12px">${esc(r.path)}</td>
+          <td style="white-space:nowrap">${fa(r.sizeGb, 2)} GB</td>
+          <td class="ltr">${esc(r.quant || '—')}</td>
+          <td style="white-space:nowrap"><button class="btn xs ok" data-import="${esc(r.path)}">➕ درون‌ریزی</button></td>
+        </tr>`).join('')
+      }</tbody></table></div>`;
+    out.querySelectorAll('[data-import]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('فایل زیر به فهرست مدل‌های محلی اضافه شود؟\n' + b.dataset.import)) return;
+        b.disabled = true;
+        b.textContent = '…';
+        try {
+          const res = await api('/api/localai/import', { method: 'POST', body: { path: b.dataset.import } });
+          toast('درون‌ریزی آغاز شد', 'ok');
+          if (res.job && res.job.id) {
+            $('#job-card').style.display = '';
+            $('#job-id').textContent = res.job.id;
+            $('#job-status').textContent = 'در حال درون‌ریزی…';
+            $('#job-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            pollJob(res.job.id);
+          }
+        } catch (e) {
+          toast(e.message, 'err');
+          b.disabled = false;
+          b.textContent = '➕ درون‌ریزی';
+        }
+      };
+    });
+  } catch (e) {
+    out.innerHTML = `<span class="tag err">${esc(e.message)}</span>`;
+  }
+  $('#btn-scan-quick').disabled = false;
+  $('#btn-scan-full').disabled = false;
+}
+$('#btn-scan-quick').onclick = () => runScan(false);
+$('#btn-scan-full').onclick = () => {
+  if (!confirm('اسکن کامل تمام دیسک ممکن است چند دقیقه طول بکشد. ادامه می‌دهید؟')) return;
+  runScan(true);
 };
 
 /* ───────────────────────────────────────── boot */

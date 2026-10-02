@@ -1800,6 +1800,26 @@ final class Routes
             return LocalAI::enqueueInstall($req->json(), (string) ($user['id'] ?? 'user'));
         });
 
+        $r->post('/api/localai/scan', static function (Request $req): array {
+            Auth::requireViewer($req);
+            return LocalAI::scanDrive($req->json());
+        });
+
+        $r->post('/api/localai/import', static function (Request $req): array {
+            $user = Auth::requireAdmin($req);
+            return LocalAI::enqueueImport($req->json(), (string) ($user['id'] ?? 'user'));
+        });
+
+        $r->post('/api/localai/llamacpp/activate', static function (Request $req): array {
+            Auth::requireAdmin($req);
+            $body = $req->json();
+            $path = (string) ($body['path'] ?? '');
+            if ($path === '') {
+                throw new HttpError(400, 'path is required');
+            }
+            return LocalAI::activateLlamaCppModel($path, isset($body['contextTokens']) ? (int) $body['contextTokens'] : null);
+        });
+
         $r->get('/api/localai/models', static function (Request $req): array {
             Auth::requireViewer($req);
             return LocalAI::installed();

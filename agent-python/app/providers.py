@@ -12,13 +12,15 @@ from .models import Provider, ModelSpec
 from .config import DATA_DIR, get_raw_config, encrypt_secret, decrypt_secret, mask_secret
 from .database import get_db
 
-def resolve_provider_endpoint_url(base_url: str, protocol: str) -> str:
+def resolve_provider_endpoint_url(base_url: str, protocol: str, model_id: str = "") -> str:
     url = (base_url or "").strip().rstrip("/")
     if not url:
         if protocol == "ollama":
             url = "http://localhost:11434"
         elif protocol == "anthropic":
             url = "https://api.anthropic.com"
+        elif protocol in ("cloudflare", "cloudflare-workers-ai", "workers-ai"):
+            url = "https://api.cloudflare.com/client/v4"
         else:
             url = "https://api.openai.com/v1"
 
@@ -38,7 +40,19 @@ def resolve_provider_endpoint_url(base_url: str, protocol: str) -> str:
         if url.endswith("/chat/completions"):
             return url
         return f"{url}/chat/completions"
-    else: # openai-compatible, mistral, cloudflare, gemini, openrouter, custom
+    elif protocol in ("cloudflare", "cloudflare-workers-ai", "workers-ai"):
+        # Cloudflare Workers AI's native REST API takes the model as a *path
+        # segment* (`/ai/run/{model}`), never a body field. Strip any
+        # `/ai/run/...` or `/ai/v1...` suffix a previously-configured base
+        # URL may already carry (e.g. copy-pasted from Cloudflare's docs with
+        # a sample model baked in) so the account root can be recombined with
+        # whichever model is actually selected — this is what used to make
+        # every Cloudflare request hit the exact same hardcoded model
+        # regardless of which one the caller picked.
+        account_root = re.sub(r'/ai/(run|v1)(/.*)?$', '', url)
+        model_path = (model_id or "").strip().lstrip("/")
+        return f"{account_root}/ai/run/{model_path}" if model_path else f"{account_root}/ai/run"
+    else: # openai-compatible, mistral, gemini, openrouter, custom
         if url.endswith("/chat/completions"):
             return url
         return f"{url}/chat/completions"
@@ -256,6 +270,8 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
         protocol = "anthropic"
     elif protocol in ("google", "google_gemini", "gemini_api"):
         protocol = "gemini"
+    elif protocol in ("cloudflare-workers-ai", "cloudflare_workers_ai", "cf", "cf-ai", "workersai"):
+        protocol = "cloudflare"
     elif protocol not in ("openai-compatible", "anthropic", "gemini", "ollama", "mistral", "azure", "cloudflare"):
         protocol = "openai-compatible"
 
@@ -266,6 +282,8 @@ def _normalize_provider_item(v: Any, fallback_id: str = "") -> Optional[Provider
             url = "http://localhost:11434"
         elif protocol == "anthropic":
             url = "https://api.anthropic.com"
+        elif protocol == "cloudflare":
+            url = "https://api.cloudflare.com/client/v4"
         else:
             url = "https://api.openai.com/v1"
 

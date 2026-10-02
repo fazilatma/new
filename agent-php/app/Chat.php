@@ -245,8 +245,28 @@ final class Chat
             $url = str_ends_with($baseUrl, '/chat/completions')
                 ? $baseUrl
                 : (rtrim((string) preg_replace('#/openai$#', '', $baseUrl), '/') . '/openai/chat/completions');
+        } elseif ($protocol === 'cloudflare' || $protocol === 'workers-ai') {
+            // Cloudflare Workers AI native REST API: the model is a *path
+            // segment* (`/ai/run/{model}`), never a body field. Strip any
+            // `/ai/run/...` or `/ai/v1...` suffix a previously-configured
+            // base URL may already carry (e.g. copy-pasted from Cloudflare's
+            // docs with a sample model baked in) so the account root can be
+            // recombined with whichever model is actually selected — this is
+            // what used to make every Cloudflare request hit the exact same
+            // hardcoded model regardless of the one the user picked.
+            $accountRoot = rtrim((string) preg_replace('#/ai/(run|v1)(/.*)?$#', '', $baseUrl), '/');
+            $url = ($accountRoot !== '' ? $accountRoot : 'https://api.cloudflare.com/client/v4') . '/ai/run/' . $model['id'];
+            $cfMessages = [];
+            foreach ($messages as $m2) {
+                $cfMessages[] = ['role' => (string) ($m2['role'] ?? 'user'), 'content' => (string) ($m2['content'] ?? '')];
+            }
+            $body = ['messages' => $cfMessages];
+            if ($stream) {
+                $body['stream'] = true;
+            }
+            return ['url' => $url, 'headers' => $headers, 'body' => $body];
         } else {
-            // openai-compatible, mistral, azure, cloudflare, openrouter, workers-ai
+            // openai-compatible, mistral, azure, openrouter
             if (str_ends_with($baseUrl, '/chat/completions')) {
                 $url = $baseUrl;
             } else {
@@ -303,6 +323,11 @@ final class Chat
         }
         if ($protocol === 'ollama') {
             return ['choices' => [['message' => $data['message'] ?? ['role' => 'assistant', 'content' => '']]]];
+        }
+        if ($protocol === 'cloudflare' || $protocol === 'workers-ai') {
+            $result = $data['result'] ?? null;
+            $text = is_string($result) ? $result : (string) ($result['response'] ?? '');
+            return ['choices' => [['message' => ['role' => 'assistant', 'content' => $text]]]];
         }
         return $data;
     }
@@ -509,6 +534,16 @@ final class Chat
                             $fullReasoning[] = (string) $delta['thinking'];
                             yield ['type' => 'reasoning', 'reasoning' => (string) $delta['thinking']];
                         }
+                    }
+                    continue;
+                }
+
+                // Cloudflare Workers AI native stream: `data: {"response": "..."}`
+                if ($protocol === 'cloudflare' || $protocol === 'workers-ai') {
+                    $cText = (string) ($chunk['response'] ?? '');
+                    if ($cText !== '') {
+                        $fullContent[] = $cText;
+                        yield ['type' => 'token', 'text' => $cText];
                     }
                     continue;
                 }

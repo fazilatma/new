@@ -148,6 +148,15 @@ def build_system_prompt(
 
     return prompt
 
+def _normalize_cloudflare_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Cloudflare Workers AI's native REST response is `{result: {response: "..."}}`
+    (or occasionally `result` as a bare string); normalize it into the
+    OpenAI-ish `choices[0].message.content` shape the rest of the app expects.
+    """
+    result = data.get("result")
+    text = result if isinstance(result, str) else (result or {}).get("response", "")
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
 async def call_provider_api(
     provider: Provider,
     model: ModelSpec,
@@ -174,7 +183,7 @@ async def call_provider_api(
             headers["Authorization"] = f"Bearer {api_key}"
 
     # Build endpoint URL and Body based on protocol
-    url = resolve_provider_endpoint_url(base_url, provider.protocol)
+    url = resolve_provider_endpoint_url(base_url, provider.protocol, model.id)
     if provider.protocol == "anthropic":
         system_msg = next((m["content"] for m in messages if m["role"] == "system"), "")
         user_msgs = [m for m in messages if m["role"] != "system"]
@@ -191,7 +200,13 @@ async def call_provider_api(
             "messages": messages,
             "stream": False
         }
-    else: # openai-compatible, mistral, azure, cloudflare, openrouter
+    elif provider.protocol == "cloudflare":
+        # Native REST API: the model is already a path segment (see
+        # resolve_provider_endpoint_url above), never a body field.
+        body = {
+            "messages": [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in messages]
+        }
+    else: # openai-compatible, mistral, azure, openrouter
         body = {
             "model": model.id,
             "messages": messages,
@@ -250,6 +265,8 @@ async def call_provider_api(
                         "message": msg_dict
                     }]
                 }
+            elif provider.protocol == "cloudflare":
+                return _normalize_cloudflare_response(data)
             return data
     except Exception as proxy_or_direct_err:
         # 2. Adaptive Direct Fallback: If proxy was used and failed, retry directly without proxy
@@ -269,6 +286,8 @@ async def call_provider_api(
                         if thinking_text:
                             msg_dict["reasoning_content"] = thinking_text
                         return {"choices": [{"message": msg_dict}]}
+                    elif provider.protocol == "cloudflare":
+                        return _normalize_cloudflare_response(data)
                     return data
             except Exception:
                 pass
@@ -447,7 +466,7 @@ async def stream_call_provider_api(
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
-    url = resolve_provider_endpoint_url(base_url, provider.protocol)
+    url = resolve_provider_endpoint_url(base_url, provider.protocol, model.id)
     if provider.protocol == "anthropic":
         system_msg = next((m["content"] for m in messages if m["role"] == "system"), "")
         user_msgs = [m for m in messages if m["role"] != "system"]
@@ -465,7 +484,14 @@ async def stream_call_provider_api(
             "messages": messages,
             "stream": True
         }
-    else: # openai-compatible, mistral, azure, cloudflare, openrouter
+    elif provider.protocol == "cloudflare":
+        # Native REST API: the model is already a path segment (see
+        # resolve_provider_endpoint_url above), never a body field.
+        body = {
+            "messages": [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in messages],
+            "stream": True
+        }
+    else: # openai-compatible, mistral, azure, openrouter
         body = {
             "model": model.id,
             "messages": messages,
@@ -510,6 +536,14 @@ async def stream_call_provider_api(
                             break
                         try:
                             chunk = json.loads(data_str)
+
+                            if provider.protocol == "cloudflare":
+                                c_text = chunk.get("response") or ""
+                                if c_text:
+                                    full_content.append(c_text)
+                                    yield {"type": "token", "text": c_text}
+                                continue
+
                             choices = chunk.get("choices") or []
                             if not choices:
                                 continue
@@ -974,7 +1008,11 @@ async def stream_complete_chat(
             return
 
         except Exception as e:
-            err_text = str(e)
+            # httpx's own Timeout/Connect exceptions often carry no message
+            # (str(e) == ""), which silently defeated both the rate-limit
+            # sniffing below and the error shown to the user. Fall back to
+            # the exception's class name so it is never blank.
+            err_text = str(e) or type(e).__name__
             CIRCUIT_BREAKER.record_failure(p.id)
             store.record_metric(p.id, target_model.id, 0, is_error=True)
 
@@ -1311,7 +1349,11 @@ async def complete_chat(
             }
 
         except Exception as e:
-            err_text = str(e)
+            # httpx's own Timeout/Connect exceptions often carry no message
+            # (str(e) == ""), which silently defeated both the rate-limit
+            # sniffing below and the error shown to the user. Fall back to
+            # the exception's class name so it is never blank.
+            err_text = str(e) or type(e).__name__
             CIRCUIT_BREAKER.record_failure(p.id)
             store.record_metric(p.id, target_model.id, 0, is_error=True)
 

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tarfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -37,6 +38,24 @@ BPW = {
 
 RUNTIME_OVERHEAD_GB = 0.6
 WEIGHT_RAM_FACTOR = 1.08
+
+# Preference order used to pick a sane default quantisation out of whatever
+# a Hugging Face repo actually ships (mirrors agent-php/app/LocalAI.php).
+QUANT_PRIORITY = [
+    "Q4_K_M", "Q4_K_S", "Q4_0", "Q4_1", "Q5_K_M", "Q5_K_S", "Q5_0", "Q5_1",
+    "Q6_K", "Q8_0", "Q3_K_M", "Q3_K_S", "Q3_K_L", "Q2_K", "IQ4_XS", "IQ4_NL",
+    "IQ3_XS", "F16", "BF16", "F32",
+]
+
+# File extensions the drive scanner looks for.
+SCAN_EXTENSIONS = ["gguf", "ggml", "safetensors", "bin"]
+
+# Directory names the drive scanner never descends into.
+SCAN_EXCLUDE_NAMES = [
+    "proc", "sys", "dev", "run", "node_modules", ".git", ".cache", "__pycache__",
+    ".venv", "venv", ".npm", ".cargo", ".rustup", ".next", ".nuxt", "dist", "build",
+    ".Trash", "$RECYCLE.BIN",
+]
 
 
 def root_dir() -> Path:
@@ -203,7 +222,24 @@ def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     return env
 
 
-def server_up() -> Dict[str, Any]:
+def _http_probe(url: str, timeout: float = 4.0) -> bool:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/3.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def server_up(engine: Optional[str] = None) -> Dict[str, Any]:
+    engine = engine or get_state("localai:engine") or "ollama"
+    if engine == "llamacpp":
+        # llama-server exposes /health on recent builds; fall back to the
+        # OpenAI-compatible /v1/models route for older ones.
+        if _http_probe(f"{host_url()}/health", 4.0) or _http_probe(f"{host_url()}/v1/models", 4.0):
+            return {"up": True, "version": "", "host": host_url(), "error": ""}
+        return {"up": False, "version": "", "host": host_url(), "error": ""}
+
     url = f"{host_url()}/api/version"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/3.0"})
@@ -310,7 +346,7 @@ def runtime_status() -> Dict[str, Any]:
     ollama_bin = binary("ollama")
     llama_bin = binary("llamacpp")
     current_bin = binary(active_engine) or binary()
-    srv = server_up()
+    srv = server_up(active_engine)
     md = models_dir()
     return {
         "engine": active_engine,
@@ -583,47 +619,94 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
             downloaded_file.unlink(missing_ok=True)
 
 
-def start_server(env_overrides: Optional[Dict[str, str]] = None, log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    srv = server_up()
-    if srv["up"]:
-        return {"ok": True, "alreadyRunning": True, "host": host_url(), "version": srv.get("version", "")}
+def start_server(
+    env_overrides: Optional[Dict[str, str]] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
+    model_path: Optional[str] = None,
+    ctx_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    def _log(msg: str):
+        if log_fn:
+            log_fn(msg)
 
     active_engine = get_state("localai:engine") or "ollama"
+    if model_path is None and active_engine == "llamacpp":
+        model_path = get_state("localai:llamacpp:active_path") or None
+
+    srv = server_up(active_engine)
+    if srv["up"]:
+        loaded_path = get_state("localai:llamacpp:loaded_path") or ""
+        if active_engine != "llamacpp" or not model_path or model_path == loaded_path:
+            _log(f"Local AI server already running at {host_url()}")
+            return {"ok": True, "running": True, "started": False, "host": host_url(), "version": srv.get("version", ""), "engine": active_engine}
+        # llama.cpp can only ever serve the one model it was started with —
+        # switching models means restarting it against the new file.
+        _log("Switching the loaded model: restarting llama-server…")
+        stop_server()
+
     b = binary(active_engine) or binary()
     if not b:
         install_runtime(active_engine, log_fn)
         b = binary(active_engine) or binary()
         if not b:
-            raise RuntimeError(f"{active_engine} binary is not installed.")
+            raise RuntimeError(f"{active_engine} binary is not installed. Please click \"Install Engine\" first.")
 
+    if active_engine == "llamacpp" and (not model_path or not os.path.isfile(model_path)):
+        raise RuntimeError("No .gguf model is selected for llama.cpp yet. Install or activate one first.")
+
+    models_dir().mkdir(parents=True, exist_ok=True)
     log_path = root_dir() / f"{active_engine}.log"
     env = server_env(env_overrides)
 
+    parsed = urllib.parse.urlparse(host_url())
+    bind_host = parsed.hostname or "127.0.0.1"
+    bind_port = parsed.port or 11434
+
     if active_engine == "llamacpp":
-        port = host_url().rsplit(":", 1)[-1] if ":" in host_url().split("//", 1)[-1] else "11434"
-        cmd = [b, "--port", port, "--host", "0.0.0.0"]
+        ctx = ctx_size or 8192
+        cmd = [b, "--host", str(bind_host), "--port", str(bind_port), "--model", str(model_path), "--ctx-size", str(int(ctx)), "--no-webui"]
     else:
         cmd = [b, "serve"]
 
     with open(log_path, "a", encoding="utf-8") as out:
-        subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    set_state("localai:server:pid", str(proc.pid))
 
     # Wait for server to listen
-    for _ in range(15):
+    for _ in range(40):
         time.sleep(0.5)
-        srv = server_up()
+        srv = server_up(active_engine)
         if srv["up"]:
-            return {"ok": True, "started": True, "host": host_url(), "version": srv.get("version", ""), "engine": active_engine}
+            _log(f"Local AI server is up (pid {proc.pid})")
+            if active_engine == "llamacpp" and model_path:
+                set_state("localai:llamacpp:loaded_path", model_path)
+            return {"ok": True, "running": True, "started": True, "pid": proc.pid, "host": host_url(), "version": srv.get("version", ""), "logPath": str(log_path), "engine": active_engine}
 
-    return {"ok": False, "error": f"{active_engine} server did not respond within 8 seconds", "log": str(log_path)}
+    tail = ""
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="ignore")[-600:]
+    except Exception:
+        pass
+    raise RuntimeError(f"Local AI server did not become ready within 20s. Log: {tail}")
 
 
 def stop_server() -> Dict[str, Any]:
-    # Kill any local runtime processes (both engines, whichever is active)
+    pid = int(get_state("localai:server:pid") or 0)
+    killed = False
+    if pid > 0:
+        try:
+            os.killpg(os.getpgid(pid), 15)
+            killed = True
+        except Exception:
+            pass
+        set_state("localai:server:pid", "0")
+    # Best-effort cleanup in case the pid was lost (e.g. after a restart).
     subprocess.run(["pkill", "-f", "ollama serve"], capture_output=True)
     subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
+    set_state("localai:llamacpp:loaded_path", "")
     time.sleep(0.5)
-    return {"ok": True, "running": server_up()["up"]}
+    return {"ok": True, "stopped": killed, "pid": pid, "running": server_up()["up"]}
+
 
 
 def catalog_file() -> Path:
@@ -651,21 +734,147 @@ def catalog() -> Dict[str, Any]:
     return {"families": [], "variants": []}
 
 
-def installed() -> List[Dict[str, Any]]:
-    srv = server_up()
+def installed() -> Dict[str, Any]:
+    engine = get_state("localai:engine") or "ollama"
+    if engine == "llamacpp":
+        return installed_llamacpp()
+
+    srv = server_up("ollama")
     if not srv["up"]:
-        return []
+        return {"running": False, "models": [], "loaded": [], "error": str(srv.get("error") or "")}
     try:
-        url = f"{host_url()}/api/tags"
-        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("models", [])
+        tags_req = urllib.request.Request(f"{host_url()}/api/tags", headers={"User-Agent": "ArenaAgent/1.0"})
+        with urllib.request.urlopen(tags_req, timeout=20) as resp:
+            tags = json.loads(resp.read().decode("utf-8"))
+        ps_data: Dict[str, Any] = {}
+        try:
+            ps_req = urllib.request.Request(f"{host_url()}/api/ps", headers={"User-Agent": "ArenaAgent/1.0"})
+            with urllib.request.urlopen(ps_req, timeout=10) as resp:
+                ps_data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            ps_data = {}
+
+        models = []
+        for m in tags.get("models", []) or []:
+            details = m.get("details") or {}
+            models.append({
+                "name": str(m.get("name") or ""),
+                "sizeGb": round(float(m.get("size") or 0) / 1073741824, 2),
+                "modifiedAt": str(m.get("modified_at") or ""),
+                "family": str(details.get("family") or ""),
+                "parameterSize": str(details.get("parameter_size") or ""),
+                "quantization": str(details.get("quantization_level") or ""),
+                "digest": str(m.get("digest") or "")[:12],
+            })
+        loaded = []
+        for m in ps_data.get("models", []) or []:
+            loaded.append({
+                "name": str(m.get("name") or ""),
+                "sizeGb": round(float(m.get("size") or 0) / 1073741824, 2),
+                "sizeVramGb": round(float(m.get("size_vram") or 0) / 1073741824, 2),
+                "expiresAt": str(m.get("expires_at") or ""),
+            })
+        return {"running": True, "version": str(srv.get("version") or ""), "models": models, "loaded": loaded, "error": ""}
+    except Exception as e:
+        return {"running": False, "models": [], "loaded": [], "error": str(e)}
+
+
+def llamacpp_index_file() -> Path:
+    return root_dir() / "llamacpp-models.json"
+
+
+def llamacpp_index() -> Dict[str, Dict[str, Any]]:
+    f = llamacpp_index_file()
+    if not f.is_file():
+        return {}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return []
+        return {}
+
+
+def _llamacpp_index_save(index: Dict[str, Dict[str, Any]]) -> None:
+    root_dir().mkdir(parents=True, exist_ok=True)
+    llamacpp_index_file().write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def llamacpp_index_add(name: str, entry: Dict[str, Any]) -> None:
+    index = llamacpp_index()
+    index[name] = {"name": name, **entry}
+    _llamacpp_index_save(index)
+
+
+def llamacpp_index_remove(name: str) -> None:
+    index = llamacpp_index()
+    index.pop(name, None)
+    _llamacpp_index_save(index)
+
+
+def installed_llamacpp() -> Dict[str, Any]:
+    """Same shape as the Ollama branch of installed(), backed by the local file index instead of an API."""
+    srv = server_up("llamacpp")
+    active_path = get_state("localai:llamacpp:active_path") or ""
+    index = llamacpp_index()
+    models = []
+    loaded = []
+    for name, entry in index.items():
+        path = str(entry.get("path") or "")
+        exists = bool(path) and os.path.isfile(path)
+        size_gb = round(os.path.getsize(path) / 1073741824, 2) if exists else float(entry.get("sizeGb") or 0)
+        models.append({
+            "name": str(name),
+            "sizeGb": size_gb,
+            "modifiedAt": str(entry.get("addedAt") or ""),
+            "family": "",
+            "parameterSize": "",
+            "quantization": str(entry.get("quant") or ""),
+            "digest": "",
+            "path": path,
+            "missing": not exists,
+        })
+        if srv["up"] and path == active_path and active_path:
+            loaded.append({"name": str(name), "sizeGb": size_gb, "sizeVramGb": 0.0, "expiresAt": ""})
+    return {
+        "running": srv["up"],
+        "version": str(srv.get("version") or ""),
+        "models": models,
+        "loaded": loaded,
+        "error": "" if srv["up"] else str(srv.get("error") or ""),
+    }
+
+
+def activate_llamacpp_model(path: str, ctx_size: Optional[int] = None, log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+    """Point llama-server at a specific .gguf on disk, (re)starting it if a
+    different model is currently loaded. This is the only way to "install" a
+    second model with this engine without losing the first — llama.cpp
+    serves exactly one model per process."""
+    if not os.path.isfile(path):
+        raise RuntimeError(f"Model file not found on disk: {path}")
+    set_state("localai:llamacpp:active_path", path)
+    return start_server(log_fn=log_fn, model_path=path, ctx_size=ctx_size)
 
 
 def remove_model(model_name: str) -> Dict[str, Any]:
+    engine = get_state("localai:engine") or "ollama"
+    if engine == "llamacpp":
+        index = llamacpp_index()
+        entry = index.get(model_name)
+        if entry is None:
+            raise RuntimeError(f"Unknown local model: {model_name}")
+        path = str(entry.get("path") or "")
+        active_path = get_state("localai:llamacpp:active_path") or ""
+        if path and path == active_path:
+            stop_server()
+            set_state("localai:llamacpp:active_path", "")
+        llamacpp_index_remove(model_name)
+        if entry.get("owned") and path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        return {"ok": True, "model": model_name}
+
     url = f"{host_url()}/api/delete"
     payload = json.dumps({"name": model_name}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/1.0"}, method="DELETE")
@@ -694,14 +903,90 @@ def pull_model(model_name: str, on_progress: Optional[Callable[[Dict[str, Any]],
     return {"ok": True, "model": model_name}
 
 
+def pull_gguf(
+    ref: str,
+    explicit_file: Optional[str] = None,
+    on_progress: Optional[Callable[[str, float, float, float], None]] = None,
+    timeout: int = 7200,
+) -> Dict[str, Any]:
+    """llama.cpp equivalent of pull_model(): there is no registry protocol, so
+    this downloads one concrete, already-verified GGUF file straight from
+    Hugging Face into storage/localai/models/llamacpp/."""
+    resolved = resolve_gguf_download(ref, explicit_file)
+    sub = safe_repo_dir_name(resolved["repo"]) if resolved["repo"] else "custom"
+    dest_dir = models_dir() / "llamacpp" / sub
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / os.path.basename(resolved["filename"])
+
+    req = urllib.request.Request(resolved["url"], headers={"User-Agent": "ArenaAgent/3.0"})
+    last_pct = -1.0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        total = int(resp.headers.get("Content-Length") or 0)
+        downloaded = 0
+        with open(dest, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                downloaded += len(chunk)
+                if on_progress is not None:
+                    pct = round(downloaded / total * 100, 1) if total > 0 else -1.0
+                    if pct != last_pct:
+                        on_progress("downloading", pct if pct >= 0 else 0.0, float(downloaded), float(total))
+                        last_pct = pct
+
+    return {
+        "ok": True,
+        "repo": resolved["repo"],
+        "filename": resolved["filename"],
+        "quant": resolved["quant"],
+        "path": str(dest),
+        "sizeGb": round(dest.stat().st_size / 1073741824, 2),
+    }
+
+
+def register_llamacpp_provider(model_ref: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    meta = meta or {}
+    pid = "llamacpp-local"
+    existing = PROVIDER_STORE.data.get(pid)
+    provider = existing or Provider(id=pid, name="llama.cpp (local)", vendor="llamacpp", url="")
+    provider.url = host_url().rstrip("/") + "/v1"
+    provider.enabled = True
+    provider.apiKey = "local-llamacpp"
+    provider.timeoutSec = max(300, provider.timeoutSec or 120)
+
+    model = ModelSpec(
+        id=model_ref,
+        name=str(meta.get("name") or model_ref),
+        toolCalling=bool(meta.get("toolCalling", False)),
+        vision=bool(meta.get("vision", False)),
+        free=True,
+        maxInputTokens=int(meta.get("contextTokens") or 8192),
+        maxOutputTokens=int(meta.get("maxOutputTokens") or 4096),
+        enabled=True,
+        extra={"local": True, "runtime": "llamacpp", "installedAt": datetime.datetime.utcnow().isoformat() + "Z", "modelPath": str(meta.get("path") or "")},
+    )
+    # Only one process-resident model → replace the whole list, don't append.
+    provider.models = [model]
+
+    PROVIDER_STORE.upsert(provider)
+    return {"ok": True, "providerId": pid, "provider": pid, "model": model_ref, "modelId": model_ref, "url": provider.url}
+
+
 def register_provider(model_ref: str, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    meta = meta or {}
+    engine = str(meta.get("engine") or get_state("localai:engine") or "ollama")
+    if engine == "llamacpp":
+        return register_llamacpp_provider(model_ref, meta)
+
     pid = "ollama"
-    existing = PROVIDER_STORE.get(pid)
+    existing = PROVIDER_STORE.data.get(pid)
     models = list(existing.models) if existing else []
-    
+
     model_id = model_ref
-    m_name = (meta or {}).get("name") or model_ref
-    
+    m_name = meta.get("name") or model_ref
+
     # Check if model exists
     found = False
     for m in models:
@@ -714,8 +999,8 @@ def register_provider(model_ref: str, meta: Optional[Dict[str, Any]] = None) -> 
             id=model_id,
             name=m_name,
             toolCalling=True,
-            vision=bool((meta or {}).get("vision", False)),
-            maxInputTokens=int((meta or {}).get("num_ctx") or 32768),
+            vision=bool(meta.get("vision", False)),
+            maxInputTokens=int(meta.get("num_ctx") or 32768),
             maxOutputTokens=8192,
             enabled=True,
             free=True,
@@ -1037,6 +1322,149 @@ def recommend(raw_profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def quant_bits(quant: str) -> float:
+    """Approximate bits-per-weight for a GGUF quantisation code."""
+    q = (quant or "").strip().upper()
+    if q in BPW:
+        return BPW[q]
+    if q.startswith("BF16") or q == "F16":
+        return 16.0
+    if q == "F32":
+        return 32.0
+    m = re.match(r"^I?Q(\d)", q)
+    if m:
+        return {2: 2.6, 3: 3.9, 4: 4.85, 5: 5.7, 6: 6.6, 8: 8.5}.get(int(m.group(1)), 4.85)
+    return 4.85
+
+
+_GGUF_QUANT_RE = re.compile(r"(?:^|[._-])(i?q[0-9](?:_[a-z0-9]+)*|bf16|fp?16|fp?32)$", re.IGNORECASE)
+_GGUF_SPLIT_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$", re.IGNORECASE)
+_GGUF_SPLIT_FILENAME_RE = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
+
+
+def extract_gguf_quant(filename: str) -> Optional[str]:
+    """Pull the quantisation code (Q4_K_M, IQ3_XS, F16, …) out of a .gguf file name."""
+    base = re.sub(r"\.gguf$", "", (filename or "").strip(), flags=re.IGNORECASE)
+    base = _GGUF_SPLIT_SUFFIX_RE.sub("", base)  # drop multi-part suffix
+    m = _GGUF_QUANT_RE.search(base)
+    if not m:
+        return None
+    tag = m.group(1).upper()
+    return {"FP16": "F16", "FP32": "F32"}.get(tag, tag)
+
+
+def is_split_gguf_filename(filename: str) -> bool:
+    """Multi-part GGUF releases ship as name-00001-of-00004.gguf; those need every shard pulled together."""
+    return bool(_GGUF_SPLIT_FILENAME_RE.search(filename or ""))
+
+
+def safe_repo_dir_name(repo: str) -> str:
+    """Safe, filesystem-friendly directory name for a Hugging Face owner/repo id."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (repo or "").strip("/"))
+    return safe or "model"
+
+
+_hf_repo_files_cache: Dict[str, List[str]] = {}
+
+
+def hf_repo_files(repo: str) -> List[str]:
+    """Fetch the live file list of a Hugging Face repo so we only ever offer
+    quantisations that actually exist — this is what stops the installer
+    from pulling a reference that 404s."""
+    if repo in _hf_repo_files_cache:
+        return _hf_repo_files_cache[repo]
+    url = f"{HF_API}/{repo}?" + urllib.parse.urlencode({"expand[]": "siblings"})
+    files: List[str] = []
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ArenaAgent/3.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for sib in data.get("siblings", []) or []:
+            name = str((sib or {}).get("rfilename") or "")
+            if name:
+                files.append(name)
+    except Exception as e:
+        logger.warning("Hugging Face repo file listing failed for %s: %s", repo, e)
+    _hf_repo_files_cache[repo] = files
+    return files
+
+
+def quant_map_from_files(files: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Build the quant -> file map for a Hugging Face repo, preferring the
+    single consolidated file over split shards when both exist."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for fname in files:
+        if not fname.lower().endswith(".gguf"):
+            continue
+        quant = extract_gguf_quant(fname)
+        if quant is None:
+            continue
+        split = is_split_gguf_filename(fname)
+        if quant not in out or (out[quant]["split"] and not split):
+            out[quant] = {"filename": fname, "split": split}
+    return out
+
+
+def default_quant(quant_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """Pick the best default quant out of what a repo actually ships."""
+    if not quant_map:
+        return None
+    for cand in QUANT_PRIORITY:
+        if cand in quant_map:
+            return cand
+    return next(iter(quant_map))
+
+
+def resolve_gguf_download(ref: str, explicit_file: Optional[str] = None) -> Dict[str, str]:
+    """Resolve a "download request" for the llama.cpp engine into an exact,
+    verified {repo, filename, quant, url} — llama.cpp has no /api/pull, so
+    unlike Ollama it only ever gets a concrete file to fetch, never an
+    ambiguous repo reference.
+
+    Accepted `ref` shapes:
+      - "hf.co/{owner}/{repo}:{QUANT}"  (as produced by search())
+      - "hf.co/{owner}/{repo}"          (no quant -> pick the best default)
+      - "{owner}/{repo}"                (bare HF id)
+      - a direct "https://.../*.gguf" URL (downloaded verbatim)
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        raise ValueError("A model reference is required")
+
+    if re.match(r"^https?://", ref, re.IGNORECASE):
+        if not ref.lower().endswith(".gguf"):
+            raise ValueError("Direct URLs must point at a .gguf file")
+        filename = os.path.basename(urllib.parse.urlparse(ref).path) or "model.gguf"
+        return {"repo": "", "filename": filename, "quant": extract_gguf_quant(filename) or "CUSTOM", "url": ref}
+
+    repo = re.sub(r"^hf\.co/", "", ref, flags=re.IGNORECASE)
+    quant = None
+    if ":" in repo:
+        repo, quant = repo.split(":", 1)
+        quant = quant.strip().upper()
+    repo = repo.strip("/")
+    if "/" not in repo:
+        raise ValueError(f'Could not understand model reference "{ref}" — expected "owner/repo" or "hf.co/owner/repo:QUANT"')
+
+    filename = explicit_file
+    if filename is None:
+        files = hf_repo_files(repo)
+        quant_map = quant_map_from_files(files)
+        if not quant_map:
+            raise ValueError(f'No .gguf files were found in Hugging Face repo "{repo}" (it may be a non-GGUF or private repo).')
+        quant = quant or default_quant(quant_map)
+        if quant not in quant_map:
+            available = ", ".join(quant_map.keys())
+            raise ValueError(f'Quantisation "{quant}" does not exist in "{repo}". Available: {available}')
+        filename = quant_map[quant]["filename"]
+    quant = quant or extract_gguf_quant(filename) or "CUSTOM"
+
+    url = "https://huggingface.co/" + repo + "/resolve/main/" + "/".join(
+        urllib.parse.quote(part) for part in filename.split("/")
+    )
+    return {"repo": repo, "filename": filename, "quant": quant, "url": url}
+
+
 def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
     q = (query or "").strip().lower()
     cat = catalog()
@@ -1084,57 +1512,124 @@ def search(query: str, limit: int = 25, remote: bool = True) -> Dict[str, Any]:
     hf = []
     if remote and q:
         try:
-            hf_url = f"{HF_API}?search={urllib.parse.quote(query)}&filter=gguf&sort=downloads&direction=-1&limit={max(1, min(50, limit))}"
+            hf_url = (
+                f"{HF_API}?"
+                + urllib.parse.urlencode({
+                    "search": query, "filter": "gguf", "sort": "downloads", "direction": -1,
+                    "limit": max(1, min(50, limit)),
+                })
+                + "&expand[]=siblings&expand[]=downloads&expand[]=likes"
+            )
             req = urllib.request.Request(hf_url, headers={"User-Agent": "ArenaAgent/3.0", "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if isinstance(data, list):
-                    for item in data:
-                        if not isinstance(item, dict):
-                            continue
-                        mid = str(item.get("modelId") or item.get("id") or "")
-                        pub = mid.split("/")[0] if "/" in mid else ""
-                        m_low = mid.lower()
-                        est_disk, est_ram = 4.5, 5.8
-                        if "0.5b" in m_low:
-                            est_disk, est_ram = 0.6, 1.2
-                        elif "1.5b" in m_low or "1b" in m_low or "2b" in m_low:
-                            est_disk, est_ram = 1.5, 2.4
-                        elif "3b" in m_low or "4b" in m_low:
-                            est_disk, est_ram = 2.5, 3.6
-                        elif "7b" in m_low or "8b" in m_low:
-                            est_disk, est_ram = 4.8, 6.2
-                        elif "14b" in m_low or "13b" in m_low:
-                            est_disk, est_ram = 9.2, 11.5
-                        elif "32b" in m_low or "34b" in m_low:
-                            est_disk, est_ram = 20.0, 24.0
-                        elif "70b" in m_low or "72b" in m_low:
-                            est_disk, est_ram = 42.0, 48.0
+            for item in data if isinstance(data, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                mid = str(item.get("modelId") or item.get("id") or "")
+                if not mid:
+                    continue
+                m_low = mid.lower()
 
-                        hf.append({
-                            "source": "huggingface",
-                            "id": mid,
-                            "name": mid,
-                            "publisher": pub,
-                            "downloads": int(item.get("downloads") or 0),
-                            "likes": int(item.get("likes") or 0),
-                            "tasks": [t for t in item.get("tags", []) if isinstance(t, str)],
-                            "pullRef": f"hf.co/{mid}",
-                            "diskGb": est_disk,
-                            "ramGb": est_ram,
-                            "toolCalling": "tool" in m_low or "function" in m_low,
-                            "vision": "vision" in m_low or "-vl" in m_low,
-                            "reasoning": "r1" in m_low or "reason" in m_low or "qwq" in m_low,
-                            "summary": f"مخزن GGUF در Hugging Face — با «ollama pull hf.co/{mid}» نصب می‌شود.",
-                        })
+                params_b = 0.0
+                pm = re.search(r"(\d+(?:\.\d+)?)\s*b(?:\b|[-_])", m_low, re.IGNORECASE)
+                if pm:
+                    params_b = float(pm.group(1))
+
+                # Only offer repos whose file list actually contains a usable
+                # .gguf — this is what guarantees the "Install" button can
+                # never 404.
+                siblings = [str((s or {}).get("rfilename") or "") for s in (item.get("siblings") or [])]
+                siblings = [s for s in siblings if s]
+                quant_map = quant_map_from_files(siblings)
+                if not quant_map:
+                    continue
+
+                quant_options = []
+                for quant, info in quant_map.items():
+                    disk = round(params_b * 1e9 * quant_bits(quant) / 8 / 1073741824, 2) if params_b > 0 else 4.5
+                    ram = round(disk * WEIGHT_RAM_FACTOR + RUNTIME_OVERHEAD_GB + 0.8, 1)
+                    quant_options.append({
+                        "quant": quant,
+                        "filename": info["filename"],
+                        "split": info["split"],
+                        "ref": f"hf.co/{mid}:{quant}",
+                        "diskGb": disk,
+                        "ramGb": ram,
+                    })
+                quant_options.sort(key=lambda o: o["diskGb"])
+
+                default_q = default_quant(quant_map)
+                default = next((o for o in quant_options if o["quant"] == default_q), None) or quant_options[0]
+
+                hf.append({
+                    "source": "huggingface",
+                    "id": mid,
+                    "name": mid,
+                    "publisher": mid.split("/")[0] if "/" in mid else "",
+                    "downloads": int(item.get("downloads") or 0),
+                    "likes": int(item.get("likes") or 0),
+                    "tasks": [t for t in item.get("tags", []) if isinstance(t, str)],
+                    "pullRef": default["ref"],
+                    "diskGb": default["diskGb"],
+                    "ramGb": default["ramGb"],
+                    "quant": default["quant"],
+                    "quantOptions": quant_options,
+                    "paramsB": params_b,
+                    "toolCalling": "tool" in m_low or "function" in m_low,
+                    "vision": "vision" in m_low or "-vl" in m_low,
+                    "reasoning": "r1" in m_low or "reason" in m_low or "qwq" in m_low,
+                    "summary": "مخزن GGUF در Hugging Face — {} کوانت موجود، پیش‌فرض {} ({:.1f} گیگابایت).".format(
+                        len(quant_options), default["quant"], default["diskGb"]
+                    ),
+                })
         except Exception as e:
             logger.warning("Hugging Face search skipped: %s", e)
 
     return {"query": query, "catalog": local, "huggingface": hf[:limit]}
 
 
+def benchmark_llamacpp(model: str, prompt: str = "Say OK.", num_predict: int = 48) -> Dict[str, Any]:
+    index = llamacpp_index()
+    path = str((index.get(model) or {}).get("path") or "")
+    active_path = get_state("localai:llamacpp:active_path") or ""
+    if path and path != active_path:
+        activate_llamacpp_model(path)
+    elif not server_up("llamacpp")["up"]:
+        start_server()
+
+    t0 = time.time()
+    try:
+        payload = json.dumps({"prompt": prompt, "n_predict": num_predict, "stream": False}).encode("utf-8")
+        req = urllib.request.Request(f"{host_url()}/completion", data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/3.0"})
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "model": model, "error": str(e), "latencyMs": round((time.time() - t0) * 1000, 1)}
+
+    wall_ms = round((time.time() - t0) * 1000, 1)
+    timings = data.get("timings") or {}
+    tps = float(timings.get("predicted_per_second") or 0)
+    tokens = int(timings.get("predicted_n") or 0)
+    if tps <= 0 and tokens > 0 and timings.get("predicted_ms"):
+        tps = round(tokens / (float(timings["predicted_ms"]) / 1000), 1)
+    return {
+        "ok": True,
+        "model": model,
+        "response": str(data.get("content") or "")[:400],
+        "tokens": tokens,
+        "tokensPerSec": round(tps, 1),
+        "firstTokenMs": round(float(timings.get("prompt_ms") or 0), 1),
+        "latencyMs": wall_ms,
+    }
+
+
 def benchmark_test(model: str) -> Dict[str, Any]:
-    srv = server_up()
+    engine = get_state("localai:engine") or "ollama"
+    if engine == "llamacpp":
+        return benchmark_llamacpp(model)
+
+    srv = server_up("ollama")
     if not srv["up"]:
         return {"ok": False, "error": "سرویس Ollama در حال اجرا نیست"}
     try:
@@ -1162,6 +1657,213 @@ def benchmark_test(model: str) -> Dict[str, Any]:
             }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def default_scan_roots() -> List[str]:
+    roots = []
+    home = os.environ.get("HOME") or ""
+    if home:
+        roots.append(home.rstrip("/"))
+    for p in ["/root", "/home", "/opt", "/srv", "/data", "/mnt", "/media", "/var/www", "/workspace"]:
+        if os.path.isdir(p):
+            roots.append(p)
+    roots.append(str(root_dir()))
+    seen = set()
+    out = []
+    for r in roots:
+        r = r.rstrip("/") or "/"
+        if os.path.isdir(r) and r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def _scan_dir_find(root: str, exts: List[str], timeout_sec: int, results: List[Dict[str, Any]], max_results: int) -> None:
+    """Fast path: shell out to `find`, pruning noisy directories as it walks."""
+    name_expr: List[str] = []
+    for i, e in enumerate(exts):
+        if i > 0:
+            name_expr.append("-o")
+        name_expr += ["-iname", f"*.{e}"]
+    prune_expr: List[str] = []
+    for name in SCAN_EXCLUDE_NAMES:
+        prune_expr += ["-name", name, "-prune", "-o"]
+    cmd = ["timeout", str(timeout_sec), "find", root, "-xdev"] + prune_expr + ["("] + name_expr + [")"] + ["-type", "f", "-printf", "%s|%T@|%p\\n"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 5)
+        out = proc.stdout
+    except Exception:
+        out = ""
+    for line in out.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        size_str, mtime_str, path = parts
+        results.append({
+            "path": path,
+            "sizeGb": round(float(size_str) / 1073741824, 3),
+            "ext": os.path.splitext(path)[1].lstrip(".").lower(),
+            "mtime": int(float(mtime_str)),
+            "name": os.path.basename(path),
+            "quant": extract_gguf_quant(os.path.basename(path)),
+        })
+        if len(results) >= max_results:
+            return
+
+
+def _scan_dir_walk(root: str, exts: List[str], results: List[Dict[str, Any]], max_results: int, started: float, time_budget: int) -> None:
+    """Fallback for hosts without a `find` binary: a depth-first walk with a hard time/size budget."""
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, onerror=lambda e: None):
+        if time.time() - started > time_budget or len(results) >= max_results:
+            return
+        dirnames[:] = [d for d in dirnames if d not in SCAN_EXCLUDE_NAMES]
+        for fname in filenames:
+            if time.time() - started > time_budget or len(results) >= max_results:
+                return
+            ext = os.path.splitext(fname)[1].lstrip(".").lower()
+            if ext not in exts:
+                continue
+            full = os.path.join(dirpath, fname)
+            try:
+                st = os.stat(full)
+            except Exception:
+                continue
+            results.append({
+                "path": full,
+                "sizeGb": round(st.st_size / 1073741824, 3),
+                "ext": ext,
+                "mtime": int(st.st_mtime),
+                "name": fname,
+                "quant": extract_gguf_quant(fname),
+            })
+
+
+def scan_drive(opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Walk the filesystem looking for model files (.gguf, .ggml, .safetensors,
+    …). Uses `find` when available (fast, handles millions of files) and
+    falls back to a budgeted os.walk() otherwise. Always bounded by a result
+    cap and a wall-clock budget so a "scan the whole drive" request can never
+    hang the request indefinitely."""
+    opts = opts or {}
+    full = bool(opts.get("full", False))
+    roots = [str(r) for r in (opts.get("roots") or []) if str(r).strip()]
+    if not roots:
+        roots = ["/"] if full else default_scan_roots()
+    max_results = max(1, min(2000, int(opts.get("maxResults") or 300)))
+    time_budget = max(5, min(120, int(opts.get("timeBudgetSec") or 25)))
+    exts = [str(e).lower() for e in (opts.get("extensions") or SCAN_EXTENSIONS)] or SCAN_EXTENSIONS
+
+    started = time.time()
+    results: List[Dict[str, Any]] = []
+    has_find = shutil.which("find") is not None
+
+    for root in roots:
+        elapsed = time.time() - started
+        if elapsed > time_budget or len(results) >= max_results:
+            break
+        if not os.path.isdir(root) or not os.access(root, os.R_OK):
+            continue
+        remaining = int(max(3, min(60, time_budget - elapsed)))
+        if has_find:
+            _scan_dir_find(root, exts, remaining, results, max_results)
+        else:
+            _scan_dir_walk(root, exts, results, max_results, started, time_budget)
+
+    results.sort(key=lambda r: r["sizeGb"], reverse=True)
+    truncated = len(results) > max_results
+    results = results[:max_results]
+
+    return {
+        "roots": roots,
+        "full": full,
+        "count": len(results),
+        "truncated": truncated,
+        "tookSec": round(time.time() - started, 2),
+        "results": results,
+    }
+
+
+def suggest_name_from_file(path: str) -> str:
+    base = re.sub(r"\.(gguf|ggml|bin|safetensors)$", "", os.path.basename(path), flags=re.IGNORECASE)
+    base = _GGUF_SPLIT_SUFFIX_RE.sub("", base).strip()
+    return base or os.path.basename(path)
+
+
+def run_import_job(job_id: str, engine: str, path: str, name: str, context_tokens: int, register: bool, benchmark: bool, set_default: bool,
+                    log_fn: Callable[[str], None], progress_fn: Callable[[float, str], None]) -> Dict[str, Any]:
+    """Point the agent at a model file that is already on disk — no network
+    involved. Works for both engines:
+      - Ollama: `ollama create <name> -f Modelfile` (Modelfile: `FROM <path>`)
+      - llama.cpp: the file is referenced in place and loaded directly
+    """
+    if not os.path.isfile(path):
+        raise RuntimeError(f"File no longer exists: {path}")
+
+    if engine == "llamacpp":
+        install_runtime("llamacpp", log_fn)
+        progress_fn(15, "موتور llama.cpp آماده شد")
+
+        llamacpp_index_add(name, {
+            "path": path,
+            "quant": extract_gguf_quant(os.path.basename(path)) or "",
+            "repo": "",
+            "sizeGb": round(os.path.getsize(path) / 1073741824, 2),
+            "owned": False,  # the file lives wherever the user put it — never delete it on removal
+            "addedAt": datetime.datetime.utcnow().isoformat() + "Z",
+        })
+        progress_fn(40, "فایل به فهرست اضافه شد")
+
+        activate_llamacpp_model(path, context_tokens, log_fn)
+        progress_fn(70, "مدل در llama-server بارگذاری شد")
+
+        if benchmark:
+            bench = benchmark_llamacpp(name, "In one short sentence, say that the local model is ready.")
+            log_fn(f"Benchmark: {bench.get('tokensPerSec', 0):.1f} tok/s" if bench.get("ok") else f"Benchmark failed: {bench.get('error', '')}")
+        progress_fn(85, "تست سلامت انجام شد")
+
+        if register:
+            register_llamacpp_provider(name, {"name": name, "contextTokens": context_tokens, "path": path})
+            if set_default:
+                set_state("localai:default", name)
+    else:
+        install_runtime("ollama", log_fn)
+        progress_fn(15, "موتور Ollama آماده شد")
+        start_server(log_fn=log_fn)
+        progress_fn(25, "سرویس محلی در حال اجراست")
+
+        safe_name = re.sub(r"[^a-z0-9._-]+", "-", name.strip("-").lower()).strip("-") or "imported-model"
+        modelfile = root_dir() / f"Modelfile-{safe_name}-{os.urandom(4).hex()}"
+        modelfile.write_text(f"FROM {path}\n", encoding="utf-8")
+
+        b = binary("ollama")
+        if not b:
+            modelfile.unlink(missing_ok=True)
+            raise RuntimeError("Ollama binary not found after install")
+        log_fn(f"Importing with `ollama create {safe_name}` (this copies/converts the weights into Ollama's own store) …")
+        try:
+            out = subprocess.run([b, "create", safe_name, "-f", str(modelfile)], cwd=str(root_dir()), capture_output=True, text=True, timeout=1800, env=server_env())
+        finally:
+            modelfile.unlink(missing_ok=True)
+        if out.returncode != 0:
+            raise RuntimeError(f"`ollama create` failed: {(out.stderr or out.stdout or '').strip()[-800:]}")
+        progress_fn(70, "مدل در Ollama ساخته شد")
+
+        if benchmark:
+            bench = benchmark_test(safe_name)
+            log_fn(f"Benchmark: {bench.get('tokensPerSec', 0):.1f} tok/s" if bench.get("ok") else f"Benchmark failed: {bench.get('error', '')}")
+        progress_fn(85, "تست سلامت انجام شد")
+
+        if register:
+            register_provider(safe_name, meta={"name": name, "engine": "ollama"})
+            if set_default:
+                set_state("localai:default", safe_name)
+        name = safe_name
+
+    progress_fn(100, "✅ درون‌ریزی با موفقیت پایان یافت")
+    return {"ok": True, "name": name, "path": path, "engine": engine}
 
 
 def plan(payload: Dict[str, Any]) -> List[Dict[str, Any]]:

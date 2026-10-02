@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.1.0"
+    assert APP_VERSION == "3.2.0"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -1630,6 +1630,118 @@ def test_user_rich_provider_export_import():
     assert resolve_provider_endpoint_url("https://api.anthropic.com", "anthropic") == "https://api.anthropic.com/v1/messages"
     assert resolve_provider_endpoint_url("https://api.anthropic.com/v1", "anthropic") == "https://api.anthropic.com/v1/messages"
     assert resolve_provider_endpoint_url("https://api.anthropic.com/v1/messages", "anthropic") == "https://api.anthropic.com/v1/messages"
+
+
+def test_cloudflare_workers_ai_endpoint_uses_selected_model():
+    """Regression test: every Cloudflare Workers AI request used to resolve
+    to the exact same hardcoded `/ai/run/@cf/meta/llama-3.1-8b-instruct`
+    endpoint no matter which model was actually selected, because (1) the
+    bundled catalog shipped the unrecognized protocol literal
+    "cloudflare-workers-ai" which matched none of the protocol-specific
+    branches, and (2) even the "cloudflare" branch didn't exist at all, so
+    every Cloudflare request silently fell through to the generic
+    openai-compatible builder, which just reused whatever model happened to
+    already be baked into the configured base URL and ignored the model the
+    caller actually asked for.
+    """
+    from app.providers import resolve_provider_endpoint_url
+    from app.models import Provider
+
+    # 1. Legacy/alias protocol strings self-heal to the canonical "cloudflare"
+    #    value both on the Provider pydantic model and through JSON import.
+    p = Provider(id="cf", name="Cloudflare", url="https://api.cloudflare.com/client/v4/accounts/abc123", protocol="cloudflare-workers-ai")
+    assert p.protocol == "cloudflare"
+    for alias in ("cf", "cf-ai", "workersai", "CLOUDFLARE_WORKERS_AI"):
+        assert Provider(id="cf", name="Cloudflare", url="x", protocol=alias).protocol == "cloudflare"
+
+    # "workers-ai" is intentionally left as its own distinct recognized
+    # literal (not canonicalized away) since request-building code treats it
+    # as an alias of "cloudflare" wherever the protocol is branched on.
+    assert resolve_provider_endpoint_url(
+        "https://api.cloudflare.com/client/v4/accounts/abc123", "workers-ai", "@cf/aura-1"
+    ) == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/aura-1"
+
+    # 2. The seed catalogs (PHP + Python) no longer use the unrecognized literal.
+    import json as _json
+    for seed_path in ("data/providers.json", "../agent-php/data/providers.json"):
+        try:
+            seed = _json.loads(open(seed_path, encoding="utf-8").read())
+        except FileNotFoundError:
+            continue
+        assert seed["cloudflare"]["protocol"] == "cloudflare", seed_path
+
+    # 3. The model actually requested must appear in the resolved URL, and
+    #    different models must resolve to *different* URLs — previously
+    #    every one of these produced the identical endpoint.
+    base = "https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/meta/llama-3.1-8b-instruct"
+    urls = {
+        model: resolve_provider_endpoint_url(base, "cloudflare", model)
+        for model in ("@cf/meta/llama-3.1-8b-instruct", "@cf/aura-1", "@cf/openai/gpt-oss-120b", "@cf/flux")
+    }
+    assert len(set(urls.values())) == 4, f"expected 4 distinct URLs, got {urls}"
+    for model, url in urls.items():
+        assert url == f"https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/{model}"
+
+    # 4. A base URL that is already a clean account root, or one that uses
+    #    the OpenAI-compatible `/ai/v1` suffix, both resolve correctly too.
+    assert resolve_provider_endpoint_url("https://api.cloudflare.com/client/v4/accounts/abc123", "cloudflare", "@cf/aura-1") \
+        == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/aura-1"
+    assert resolve_provider_endpoint_url("https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1", "cloudflare", "@cf/flux") \
+        == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/flux"
+
+
+def test_cloudflare_workers_ai_request_and_response_shape():
+    """The native Cloudflare Workers AI endpoint takes `{"messages": [...]}`
+    (no `model` field — the model is a URL path segment) and returns
+    `{"result": {"response": "..."}}`, not the OpenAI `choices[...]` shape.
+    """
+    import asyncio
+    from app.models import Provider, ModelSpec
+    from app.chat import _normalize_cloudflare_response
+
+    provider = Provider(
+        id="cloudflare", name="Cloudflare", protocol="cloudflare",
+        url="https://api.cloudflare.com/client/v4/accounts/abc123",
+        apiKey="tok_abc",
+    )
+    model = ModelSpec(id="@cf/aura-1", name="Aura 1")
+
+    normalized = _normalize_cloudflare_response({"result": {"response": "Hello there"}, "success": True})
+    assert normalized == {"choices": [{"message": {"role": "assistant", "content": "Hello there"}}]}
+
+    # Bare-string `result` (seen on some Cloudflare model families) also works.
+    normalized2 = _normalize_cloudflare_response({"result": "plain text result"})
+    assert normalized2["choices"][0]["message"]["content"] == "plain text result"
+
+
+@pytest.mark.anyio
+async def test_diagnostic_test_never_returns_a_blank_error_on_timeout(monkeypatch):
+    """Regression test: httpx's own Timeout/Connect exceptions (ReadTimeout,
+    ConnectTimeout, PoolTimeout, ConnectError...) very commonly carry an empty
+    message (str(e) == ""). The diagnostic "Test Model" / "Test All" harness
+    matched against str(e) alone to produce a friendly error, so whenever the
+    real exception had no message the "Timeout"/"ConnectError" substring
+    checks both missed and the user was shown a completely blank error field
+    — this is exactly the "blank-error timeouts" pattern reported for
+    multiple providers (e.g. Gemini) in bulk connectivity tests.
+    """
+    import httpx
+    from app.main import _execute_model_diagnostic_test
+    from app.providers import Provider, ModelSpec
+
+    p = Provider(id="prov_blank_timeout", name="Blank Timeout Provider", protocol="openai-compatible",
+                 url="https://api.blank-timeout.example/v1", apiKey="sk-x", enabled=True)
+    m = ModelSpec(id="model-x", name="Model X")
+
+    async def mock_call_provider_api(*args, **kwargs):
+        raise httpx.ReadTimeout("")  # empty message, as httpx frequently raises
+
+    monkeypatch.setattr("app.main.call_provider_api", mock_call_provider_api)
+
+    result = await _execute_model_diagnostic_test(p, m, "sk-x")
+    assert result["ok"] is False
+    assert result["error"], "error field must never be blank"
+    assert result["error"] != ""
 
 
 def test_truncated_json_repair_and_nested_model_import():

@@ -297,7 +297,7 @@
     "name": "Cloudflare Workers AI",
     "vendor": "cloudflare",
     "url": "",
-    "protocol": "cloudflare-workers-ai",
+    "protocol": "cloudflare",
     "enabled": false,
     "apiKey": "",
     "apiKeys": [],

@@ -1401,7 +1401,7 @@ async def _execute_model_diagnostic_test(
     connect_sec: float = 2.5
 ) -> Dict[str, Any]:
     base_url = p.url.rstrip("/")
-    direct_url = resolve_provider_endpoint_url(base_url, p.protocol)
+    direct_url = resolve_provider_endpoint_url(base_url, p.protocol, m.id)
     
     # 1. Direct Target Endpoint & Headers Construction
     if p.protocol == "anthropic":
@@ -1432,7 +1432,17 @@ async def _execute_model_diagnostic_test(
             "messages": [{"role": "user", "content": "Reply with 'OK' only."}],
             "temperature": 0.2
         }
-    else: # openai-compatible, mistral, cloudflare, openrouter
+    elif p.protocol == "cloudflare":
+        # Native REST API: the model is already a path segment in direct_url
+        # above, never a body field — this is what used to make every
+        # Cloudflare model test hit the exact same hardcoded endpoint.
+        req_headers = {"Content-Type": "application/json"}
+        if api_key:
+            req_headers["Authorization"] = f"Bearer {mask_secret(api_key)}"
+        req_body = {
+            "messages": [{"role": "user", "content": "Reply with 'OK' only."}]
+        }
+    else: # openai-compatible, mistral, openrouter
         req_headers = {"Content-Type": "application/json"}
         if api_key:
             req_headers["Authorization"] = f"Bearer {mask_secret(api_key)}"
@@ -1524,11 +1534,18 @@ async def _execute_model_diagnostic_test(
         }
     except Exception as e:
         latency = round((time.perf_counter() - started) * 1000)
-        err_str = str(e)
+        # httpx's own Timeout/Connect exceptions (ReadTimeout, ConnectTimeout,
+        # PoolTimeout, ConnectError...) very often carry no message at all —
+        # str(e) is "" — so matching against str(e) alone silently produced a
+        # *blank* error field instead of a helpful one. Fall back to the
+        # exception's class name, which always carries the real signal.
+        err_str = str(e) or type(e).__name__
         if "ConnectError" in err_str or "Connection refused" in err_str or "All connection attempts failed" in err_str:
             err_str = f"Connection refused/unreachable: {p.url}"
         elif "Timeout" in err_str:
             err_str = f"Connection timeout to {p.url}"
+        elif not err_str:
+            err_str = f"{type(e).__name__}: request failed for an unknown reason"
         PROVIDER_STORE.record_metric(p.id, m.id, latency, is_error=True)
         return {
             "provider": p.id,
@@ -1720,7 +1737,7 @@ def get_localai_search(q: str = "", limit: int = 25, remote: bool = True, user: 
 @app.get("/api/localai/tags/{name:path}")
 def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
-    return {"ok": True, "name": name, "installed": [m for m in local_ai.installed() if m.get("name") == name]}
+    return {"ok": True, "name": name, "installed": [m for m in (local_ai.installed() or {}).get("models", []) if m.get("name") == name]}
 
 @app.post("/api/localai/test")
 def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
@@ -1733,64 +1750,102 @@ def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(re
 @app.post("/api/localai/install")
 def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
+    from .database import get_state, set_state
     model_ref = str(payload.get("ref") or payload.get("model") or "").strip()
     if not model_ref:
         raise HTTPException(400, "Model reference is required")
     
     # Create background job in database
+    from .worker import log_job_message
     job_id = f"job-{uuid.uuid4().hex[:12]}"
     init_db()
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO jobs (id, title, status, progress, summary, logs, created_at, updated_at)
-               VALUES (?, ?, 'queued', 0, 'در صف نصب', '[]', datetime('now'), datetime('now'))""",
+            """INSERT INTO jobs (id, title, status, progress, summary, created_at, updated_at)
+               VALUES (?, ?, 'running', 0, 'در صف نصب', datetime('now'), datetime('now'))""",
             (job_id, f"نصب مدل محلی: {model_ref}")
         )
         conn.commit()
 
+    engine = str(payload.get("engine") or get_state("localai:engine") or "ollama")
+
     def run_install_task():
-        logs = []
         def append_log(lvl: str, msg: str):
-            logs.append({"level": lvl, "message": msg, "time": datetime.utcnow().isoformat()})
+            log_job_message(job_id, lvl, msg)
+
+        def set_progress(pct: float, summary: str):
             with get_db() as c:
-                c.execute(
-                    "UPDATE jobs SET logs = ?, updated_at = datetime('now') WHERE id = ?",
-                    (json.dumps(logs), job_id)
-                )
+                c.execute("UPDATE jobs SET progress = ?, summary = ? WHERE id = ?", (pct, summary, job_id))
                 c.commit()
 
         try:
             with get_db() as c:
                 c.execute("UPDATE jobs SET status = 'running', progress = 10, summary = 'دانلود و بررسی موتور' WHERE id = ?", (job_id,))
                 c.commit()
-            append_log("INFO", "بررسی و آماده‌سازی موتور هوش مصنوعی…")
-            local_ai.install_runtime(log_fn=lambda m: append_log("INFO", m))
+            append_log("INFO", f"بررسی و آماده‌سازی موتور هوش مصنوعی ({engine})…")
+            local_ai.install_runtime(engine=engine, log_fn=lambda m: append_log("INFO", m))
 
-            with get_db() as c:
-                c.execute("UPDATE jobs SET progress = 30, summary = 'راه‌اندازی سرویس محلی' WHERE id = ?", (job_id,))
-                c.commit()
-            append_log("INFO", "راه‌اندازی سرویس Ollama…")
-            local_ai.start_server(log_fn=lambda m: append_log("INFO", m))
+            if engine == "llamacpp":
+                set_progress(25, f"دانلود فایل GGUF برای {model_ref}")
+                append_log("INFO", f"شروع دانلود مدل {model_ref}…")
 
-            with get_db() as c:
-                c.execute("UPDATE jobs SET progress = 50, summary = f'دانلود مدل {model_ref}' WHERE id = ?", (job_id,))
-                c.commit()
-            append_log("INFO", f"شروع دانلود مدل {model_ref}…")
-            local_ai.pull_model(model_ref)
+                def on_dl_progress(status: str, pct: float, done: float, total: float):
+                    set_progress(25 + pct * 0.45, f"دانلود مدل — {pct:.0f}٪")
 
-            with get_db() as c:
-                c.execute("UPDATE jobs SET progress = 85, summary = 'ثبت در فهرست ارائه‌دهنده‌ها' WHERE id = ?", (job_id,))
-                c.commit()
-            append_log("INFO", f"ثبت مدل {model_ref} در ارائه‌دهنده‌ها…")
-            local_ai.register_provider(model_ref, meta=payload)
+                pulled = local_ai.pull_gguf(model_ref, explicit_file=(payload.get("file") or None), on_progress=on_dl_progress)
+                append_log("INFO", f"فایل دانلود شد: {pulled['path']} ({pulled['sizeGb']} GB, {pulled['quant']})")
 
-            if payload.get("benchmark", True):
+                set_progress(75, "بارگذاری مدل در llama-server")
+                ctx_tokens = int(payload.get("contextTokens") or 8192)
+                local_ai.llamacpp_index_add(str(payload.get("displayName") or model_ref), {
+                    "path": pulled["path"], "quant": pulled["quant"], "repo": pulled["repo"],
+                    "sizeGb": pulled["sizeGb"], "owned": True,
+                    "addedAt": datetime.utcnow().isoformat() + "Z",
+                })
+                local_ai.activate_llamacpp_model(pulled["path"], ctx_tokens, lambda m: append_log("INFO", m))
+
+                display_name = str(payload.get("displayName") or model_ref)
+                if payload.get("benchmark", True):
+                    set_progress(90, "تست سرعت و بنچمارک")
+                    append_log("INFO", "اجرای تست سرعت…")
+                    bench = local_ai.benchmark_llamacpp(display_name)
+                    append_log("INFO", f"سرعت واقعی: {bench.get('tokensPerSec', 0)} توکن/ثانیه" if bench.get("ok") else f"بنچمارک ناموفق: {bench.get('error')}")
+
+                if payload.get("register", True):
+                    set_progress(95, "ثبت در فهرست ارائه‌دهنده‌ها")
+                    local_ai.register_llamacpp_provider(display_name, {
+                        "name": display_name, "contextTokens": ctx_tokens, "path": pulled["path"],
+                        "toolCalling": payload.get("toolCalling", False), "vision": payload.get("vision", False),
+                    })
+                    if payload.get("setDefault"):
+                        set_state("localai:default", display_name)
+            else:
                 with get_db() as c:
-                    c.execute("UPDATE jobs SET progress = 95, summary = 'تست سرعت و بنچمارک' WHERE id = ?", (job_id,))
+                    c.execute("UPDATE jobs SET progress = 30, summary = 'راه‌اندازی سرویس محلی' WHERE id = ?", (job_id,))
                     c.commit()
-                append_log("INFO", "اجرای تست سرعت…")
-                bench = local_ai.benchmark_test(model_ref)
-                append_log("INFO", f"سرعت واقعی: {bench.get('tokensPerSec', 0)} توکن/ثانیه")
+                append_log("INFO", "راه‌اندازی سرویس Ollama…")
+                local_ai.start_server(log_fn=lambda m: append_log("INFO", m))
+
+                with get_db() as c:
+                    c.execute("UPDATE jobs SET progress = 50, summary = ? WHERE id = ?", (f"دانلود مدل {model_ref}", job_id))
+                    c.commit()
+                append_log("INFO", f"شروع دانلود مدل {model_ref}…")
+                local_ai.pull_model(model_ref)
+
+                with get_db() as c:
+                    c.execute("UPDATE jobs SET progress = 85, summary = 'ثبت در فهرست ارائه‌دهنده‌ها' WHERE id = ?", (job_id,))
+                    c.commit()
+                append_log("INFO", f"ثبت مدل {model_ref} در ارائه‌دهنده‌ها…")
+                if payload.get("register", True):
+                    local_ai.register_provider(model_ref, meta=payload)
+
+                if payload.get("benchmark", True):
+                    with get_db() as c:
+                        c.execute("UPDATE jobs SET progress = 95, summary = 'تست سرعت و بنچمارک' WHERE id = ?", (job_id,))
+                        c.commit()
+                    append_log("INFO", "اجرای تست سرعت…")
+                    bench = local_ai.benchmark_test(model_ref)
+                    append_log("INFO", f"سرعت واقعی: {bench.get('tokensPerSec', 0)} توکن/ثانیه")
 
             with get_db() as c:
                 c.execute("UPDATE jobs SET status = 'done', progress = 100, summary = '✅ پایان موفق نصب مدل', updated_at = datetime('now') WHERE id = ?", (job_id,))
@@ -1809,9 +1864,79 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
 
     return {
         "ok": True,
-        "job": {"id": job_id, "status": "queued", "progress": 0},
-        "plan": local_ai.plan(payload),
+        "job": {"id": job_id, "status": "running", "progress": 0},
+        "plan": local_ai.plan(dict(payload, engine=engine)),
     }
+
+@app.post("/api/localai/scan")
+def post_localai_scan(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_viewer)):
+    from . import local_ai
+    return local_ai.scan_drive(payload or {})
+
+@app.post("/api/localai/import")
+def post_localai_import(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    from .database import get_state
+    path = str(payload.get("path") or "").strip()
+    if not path or not os.path.isfile(path):
+        raise HTTPException(400, f"فایل انتخاب‌شده روی دیسک پیدا نشد: {path}")
+    ext = os.path.splitext(path)[1].lstrip(".").lower()
+    if ext not in ("gguf", "ggml"):
+        raise HTTPException(400, "فقط فایل‌های gguf/ggml قابل درون‌ریزی مستقیم هستند؛ safetensors ابتدا باید به gguf تبدیل شود.")
+
+    engine = str(payload.get("engine") or get_state("localai:engine") or "ollama")
+    name = str(payload.get("name") or "").strip() or local_ai.suggest_name_from_file(path)
+    context_tokens = int(payload.get("contextTokens") or 8192)
+    register = bool(payload.get("register", True))
+    benchmark = bool(payload.get("benchmark", True))
+    set_default = bool(payload.get("setDefault", False))
+
+    from .worker import log_job_message
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    init_db()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO jobs (id, title, status, progress, summary, created_at, updated_at)
+               VALUES (?, ?, 'running', 0, 'در صف درون‌ریزی', datetime('now'), datetime('now'))""",
+            (job_id, f"درون‌ریزی مدل محلی: {name}")
+        )
+        conn.commit()
+
+    def run_import_task():
+        def append_log(lvl: str, msg: str):
+            log_job_message(job_id, lvl, msg)
+
+        def set_progress(pct: float, summary: str):
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'running', progress = ?, summary = ? WHERE id = ?", (pct, summary, job_id))
+                c.commit()
+
+        try:
+            local_ai.run_import_job(job_id, engine, path, name, context_tokens, register, benchmark, set_default, lambda m: append_log("INFO", m), set_progress)
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'done', progress = 100, summary = '✅ پایان موفق درون‌ریزی', updated_at = datetime('now') WHERE id = ?", (job_id,))
+                c.commit()
+        except Exception as e:
+            err_msg = str(e)
+            append_log("ERROR", f"خطا در درون‌ریزی: {err_msg}")
+            with get_db() as c:
+                c.execute("UPDATE jobs SET status = 'failed', error = ?, summary = '❌ درون‌ریزی ناموفق', updated_at = datetime('now') WHERE id = ?", (err_msg, job_id))
+                c.commit()
+
+    t = threading.Thread(target=run_import_task, daemon=True)
+    t.start()
+    return {"ok": True, "job": {"id": job_id, "status": "running", "progress": 0}}
+
+@app.post("/api/localai/llamacpp/activate")
+def post_localai_llamacpp_activate(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
+    from . import local_ai
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(400, "path is required")
+    try:
+        return local_ai.activate_llamacpp_model(path, int(payload["contextTokens"]) if payload.get("contextTokens") else None)
+    except Exception as e:
+        raise HTTPException(409, str(e))
 
 @app.get("/api/localai/models")
 def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):
@@ -1837,7 +1962,10 @@ def post_localai_pull(payload: Dict[str, Any], user: Dict[str, Any] = Depends(re
 @app.delete("/api/localai/models/{name:path}")
 def delete_localai_model(name: str, user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
-    return local_ai.remove_model(name)
+    try:
+        return local_ai.remove_model(name)
+    except Exception as e:
+        raise HTTPException(404, str(e))
 
 @app.post("/api/localai/register")
 def post_localai_register(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):

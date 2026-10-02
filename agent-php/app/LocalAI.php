@@ -38,6 +38,16 @@ final class LocalAI
     /** Weights need a little more RAM than they take on disk. */
     public const WEIGHT_RAM_FACTOR = 1.08;
 
+    /** Preferred default quantisation when a Hugging Face repo ships several. */
+    public const QUANT_PRIORITY = [
+        'Q4_K_M', 'Q4_K_S', 'Q4_0', 'Q4_1', 'Q5_K_M', 'Q5_K_S', 'Q5_0', 'Q5_1',
+        'Q6_K', 'Q8_0', 'Q3_K_M', 'Q3_K_S', 'Q3_K_L', 'Q2_K',
+        'IQ4_XS', 'IQ4_NL', 'IQ3_XS', 'IQ3_M', 'IQ2_M', 'F16', 'BF16', 'F32',
+    ];
+
+    /** File extensions the drive scanner and the importer both recognise. */
+    public const SCAN_EXTENSIONS = ['gguf', 'ggml', 'safetensors', 'bin'];
+
     /* ================================================================== */
     /* Paths & configuration                                              */
     /* ================================================================== */
@@ -504,8 +514,23 @@ final class LocalAI
     }
 
     /** @return array{ok:bool, error?:string, version?:string} */
-    public static function serverUp(): array
+    public static function serverUp(?string $engine = null): array
     {
+        $engine ??= (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            // llama-server exposes /health on recent builds; fall back to the
+            // OpenAI-compatible /v1/models route for older ones.
+            $r = HttpClient::request('GET', self::host() . '/health', [], null, 4);
+            if ($r['ok']) {
+                return ['ok' => true, 'version' => ''];
+            }
+            $r2 = HttpClient::request('GET', self::host() . '/v1/models', [], null, 4);
+            if ($r2['ok']) {
+                return ['ok' => true, 'version' => ''];
+            }
+            return ['ok' => false, 'error' => $r['error'] ?? ('HTTP ' . $r['status'])];
+        }
+
         $r = HttpClient::request('GET', self::host() . '/api/version', [], null, 4);
         if (!$r['ok']) {
             return ['ok' => false, 'error' => $r['error'] ?? ('HTTP ' . $r['status'])];
@@ -745,19 +770,40 @@ final class LocalAI
         return ['installed' => true, 'engine' => $engine, 'binary' => $bin, 'skipped' => false];
     }
 
-    public static function startServer(array $envOverrides = [], ?callable $log = null): array
-    {
+    /**
+     * @param array $envOverrides        extra OLLAMA_* env vars (ignored by llama.cpp)
+     * @param string|null $modelPath     required for the llama.cpp engine: absolute path of the .gguf to load
+     * @param int|null $ctxSize          llama.cpp context window (ignored by Ollama, which takes it per-request)
+     */
+    public static function startServer(
+        array $envOverrides = [],
+        ?callable $log = null,
+        ?string $modelPath = null,
+        ?int $ctxSize = null
+    ): array {
         $log ??= static function (string $m): void {
         };
-        $up = self::serverUp();
-        if ($up['ok']) {
-            $log('Local AI server already running at ' . self::host());
-            return ['running' => true, 'started' => false, 'host' => self::host()];
-        }
         $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        $modelPath ??= $engine === 'llamacpp' ? (string) (Database::state('localai:llamacpp:active_path', '') ?? '') : null;
+
+        $up = self::serverUp($engine);
+        if ($up['ok']) {
+            if ($engine !== 'llamacpp' || $modelPath === '' || $modelPath === (string) (Database::state('localai:llamacpp:loaded_path', '') ?? '')) {
+                $log('Local AI server already running at ' . self::host());
+                return ['running' => true, 'started' => false, 'host' => self::host(), 'engine' => $engine];
+            }
+            // llama.cpp can only ever serve the one model it was started with —
+            // switching models means restarting it against the new file.
+            $log('Switching the loaded model: restarting llama-server…');
+            self::stopServer();
+        }
+
         $bin = self::binary($engine) ?? self::binary();
         if ($bin === null) {
             throw new HttpError(409, 'Local AI engine (' . $engine . ') is not installed yet. Please click "Install Engine" first.');
+        }
+        if ($engine === 'llamacpp' && ($modelPath === null || $modelPath === '' || !is_file($modelPath))) {
+            throw new HttpError(409, 'No .gguf model is selected for llama.cpp yet. Install or activate one first.');
         }
         Files::ensureDir(self::modelsDir());
         Files::ensureDir(self::rootDir() . '/logs');
@@ -768,8 +814,18 @@ final class LocalAI
             $exports .= 'export ' . $k . '=' . escapeshellarg((string) $v) . '; ';
         }
         $logPath = self::rootDir() . '/logs/localai-server.log';
-        if (str_contains(basename($bin), 'llama')) {
-            $cmd = $exports . escapeshellarg($bin) . ' --host 127.0.0.1 --port 11434 --ctx-size 8192';
+        $parsedHost = parse_url(self::host());
+        $bindHost = (string) ($parsedHost['host'] ?? '127.0.0.1');
+        $bindPort = (int) ($parsedHost['port'] ?? 11434);
+
+        if ($engine === 'llamacpp') {
+            $ctx = $ctxSize ?? 8192;
+            $cmd = $exports . escapeshellarg($bin)
+                . ' --host ' . escapeshellarg($bindHost)
+                . ' --port ' . $bindPort
+                . ' --model ' . escapeshellarg($modelPath)
+                . ' --ctx-size ' . (int) $ctx
+                . ' --no-webui';
         } else {
             $cmd = $exports . escapeshellarg($bin) . ' serve';
         }
@@ -778,8 +834,11 @@ final class LocalAI
 
         for ($i = 0; $i < 40; $i++) {
             usleep(500000);
-            if (self::serverUp()['ok']) {
+            if (self::serverUp($engine)['ok']) {
                 $log('Local AI server is up (pid ' . ($proc['pid'] ?? 0) . ')');
+                if ($engine === 'llamacpp' && $modelPath !== null) {
+                    Database::setState('localai:llamacpp:loaded_path', $modelPath);
+                }
                 return ['running' => true, 'started' => true, 'pid' => $proc['pid'] ?? 0, 'host' => self::host(), 'logPath' => $logPath, 'engine' => $engine];
             }
         }
@@ -795,6 +854,7 @@ final class LocalAI
             $killed = Terminal::killTree($pid);
             Database::setState('localai:server:pid', '0');
         }
+        Database::setState('localai:llamacpp:loaded_path', '');
         return ['stopped' => $killed, 'pid' => $pid, 'running' => self::serverUp()['ok']];
     }
 
@@ -879,6 +939,185 @@ final class LocalAI
         return $bytes > 0 ? round($bytes / 1073741824, 2) : null;
     }
 
+    /** Approximate bits-per-weight for a quant code, used to size files we have no exact byte count for. */
+    private static function quantBits(string $quant): float
+    {
+        $q = strtoupper(trim($quant));
+        if (isset(self::BPW[$q])) {
+            return self::BPW[$q];
+        }
+        if (str_starts_with($q, 'BF16') || $q === 'F16') {
+            return 16.0;
+        }
+        if ($q === 'F32') {
+            return 32.0;
+        }
+        if (preg_match('/^I?Q(\d)/', $q, $m)) {
+            return match ((int) $m[1]) {
+                2 => 2.6, 3 => 3.9, 4 => 4.85, 5 => 5.7, 6 => 6.6, 8 => 8.5,
+                default => 4.85,
+            };
+        }
+        return 4.85;
+    }
+
+    /** Pull the quantisation code (Q4_K_M, IQ3_XS, F16, …) out of a `.gguf` file name. */
+    private static function extractGgufQuant(string $filename): ?string
+    {
+        $base = (string) preg_replace('/\.gguf$/i', '', trim($filename));
+        $base = (string) preg_replace('/-\d{5}-of-\d{5}$/i', '', $base); // drop multi-part suffix
+        if (preg_match('/(?:^|[._-])(i?q[0-9](?:_[a-z0-9]+)*|bf16|fp?16|fp?32)$/i', $base, $m)) {
+            $tag = strtoupper($m[1]);
+            return match ($tag) {
+                'FP16' => 'F16',
+                'FP32' => 'F32',
+                default => $tag,
+            };
+        }
+        return null;
+    }
+
+    /** Multi-part GGUF releases ship as `name-00001-of-00004.gguf`; those need every shard pulled together. */
+    private static function isSplitGgufFilename(string $filename): bool
+    {
+        return (bool) preg_match('/-\d{5}-of-\d{5}\.gguf$/i', $filename);
+    }
+
+    /** Safe, filesystem-friendly directory name for a Hugging Face `owner/repo` id. */
+    private static function safeRepoDirName(string $repo): string
+    {
+        $safe = (string) preg_replace('/[^A-Za-z0-9._-]+/', '_', trim($repo, '/'));
+        return $safe !== '' ? $safe : 'model';
+    }
+
+    /**
+     * Fetch the live file list of a Hugging Face repo (cached per request) so
+     * we only ever offer quantisations that actually exist — this is what
+     * stops the installer from pulling a reference that 404s.
+     *
+     * @return array<int,string> raw file names (siblings)
+     */
+    private static function hfRepoFiles(string $repo): array
+    {
+        static $cache = [];
+        if (isset($cache[$repo])) {
+            return $cache[$repo];
+        }
+        $url = self::HF_API . '/' . $repo;
+        $proxy = Config::proxyConfig($url);
+        $r = HttpClient::getJson($proxy['effectiveUrl'] . '?' . http_build_query(['expand[]' => 'siblings']), ['Accept' => 'application/json'], 15, $proxy['proxyClient']);
+        $files = [];
+        foreach ((array) ($r['json']['siblings'] ?? []) as $sib) {
+            $name = (string) ($sib['rfilename'] ?? '');
+            if ($name !== '') {
+                $files[] = $name;
+            }
+        }
+        $cache[$repo] = $files;
+        return $files;
+    }
+
+    /**
+     * Build the quant → file map for a Hugging Face repo, preferring the
+     * single consolidated file over split shards when both exist.
+     *
+     * @param array<int,string> $files
+     * @return array<string,array{filename:string,split:bool}>
+     */
+    private static function quantMapFromFiles(array $files): array
+    {
+        $map = [];
+        foreach ($files as $fname) {
+            if (!str_ends_with(strtolower($fname), '.gguf')) {
+                continue;
+            }
+            $quant = self::extractGgufQuant($fname);
+            if ($quant === null) {
+                continue;
+            }
+            $split = self::isSplitGgufFilename($fname);
+            if (!isset($map[$quant]) || ($map[$quant]['split'] && !$split)) {
+                $map[$quant] = ['filename' => $fname, 'split' => $split];
+            }
+        }
+        return $map;
+    }
+
+    /** Pick the best default quant out of what a repo actually ships. */
+    private static function defaultQuant(array $quantMap): ?string
+    {
+        if (!$quantMap) {
+            return null;
+        }
+        foreach (self::QUANT_PRIORITY as $cand) {
+            if (isset($quantMap[$cand])) {
+                return $cand;
+            }
+        }
+        return array_key_first($quantMap);
+    }
+
+    /**
+     * Resolve a "download request" for the llama.cpp engine into an exact,
+     * verified `{repo, filename, quant, url}` — llama.cpp has no `/api/pull`,
+     * so unlike Ollama it only ever gets a concrete file to fetch, never an
+     * ambiguous repo reference.
+     *
+     * Accepted `$ref` shapes:
+     *   - "hf.co/{owner}/{repo}:{QUANT}"  (as produced by search())
+     *   - "hf.co/{owner}/{repo}"          (no quant → pick the best default)
+     *   - "{owner}/{repo}"                (bare HF id)
+     *   - a direct "https://…/*.gguf" URL (downloaded verbatim)
+     */
+    public static function resolveGgufDownload(string $ref, ?string $explicitFile = null): array
+    {
+        $ref = trim($ref);
+        if ($ref === '') {
+            throw new HttpError(400, 'A model reference is required');
+        }
+
+        if (preg_match('#^https?://#i', $ref)) {
+            if (!str_ends_with(strtolower($ref), '.gguf')) {
+                throw new HttpError(400, 'Direct URLs must point at a .gguf file');
+            }
+            $filename = basename(parse_url($ref, PHP_URL_PATH) ?: 'model.gguf');
+            return ['repo' => '', 'filename' => $filename, 'quant' => self::extractGgufQuant($filename) ?? 'CUSTOM', 'url' => $ref];
+        }
+
+        $repo = preg_replace('#^hf\.co/#i', '', $ref);
+        $quant = null;
+        if (str_contains($repo, ':')) {
+            [$repo, $quant] = explode(':', $repo, 2);
+            $quant = strtoupper(trim($quant));
+        }
+        $repo = trim($repo, '/');
+        if (!str_contains($repo, '/')) {
+            throw new HttpError(400, "Could not understand model reference \"{$ref}\" — expected \"owner/repo\" or \"hf.co/owner/repo:QUANT\"");
+        }
+
+        $filename = $explicitFile;
+        if ($filename === null) {
+            $files = self::hfRepoFiles($repo);
+            $map = self::quantMapFromFiles($files);
+            if (!$map) {
+                throw new HttpError(404, "No .gguf files were found in Hugging Face repo \"{$repo}\" (it may be a non-GGUF or private repo).");
+            }
+            $quant ??= self::defaultQuant($map);
+            if (!isset($map[$quant])) {
+                $available = implode(', ', array_keys($map));
+                throw new HttpError(404, "Quantisation \"{$quant}\" does not exist in \"{$repo}\". Available: {$available}");
+            }
+            $filename = $map[$quant]['filename'];
+        }
+        $quant ??= self::extractGgufQuant($filename) ?? 'CUSTOM';
+
+        $url = 'https://huggingface.co/' . $repo . '/resolve/main/' . rawurlencode($filename);
+        // rawurlencode also escapes '/', which some repos use in sub-paths.
+        $url = 'https://huggingface.co/' . $repo . '/resolve/main/' . implode('/', array_map('rawurlencode', explode('/', $filename)));
+
+        return ['repo' => $repo, 'filename' => $filename, 'quant' => $quant, 'url' => $url];
+    }
+
     /**
      * Search: curated catalog first (rich metadata), then Hugging Face GGUF
      * repositories as a long tail. Never throws — offline hosts get the
@@ -927,25 +1166,67 @@ final class LocalAI
         $hf = [];
         if ($remote && $q !== '') {
             try {
-                $url = self::HF_API . '?search=' . rawurlencode($query)
-                    . '&filter=gguf&sort=downloads&direction=-1&limit=' . max(1, min(50, $limit));
+                $url = self::HF_API . '?' . http_build_query([
+                    'search' => $query,
+                    'filter' => 'gguf',
+                    'sort' => 'downloads',
+                    'direction' => -1,
+                    'limit' => max(1, min(50, $limit)),
+                ]) . '&expand[]=siblings&expand[]=downloads&expand[]=likes';
                 $proxy = Config::proxyConfig($url);
-                $r = HttpClient::getJson($proxy['effectiveUrl'], ['Accept' => 'application/json'], 15, $proxy['proxyClient']);
+                $r = HttpClient::getJson($proxy['effectiveUrl'], ['Accept' => 'application/json'], 20, $proxy['proxyClient']);
                 foreach ((array) ($r['json'] ?? []) as $item) {
                     if (!is_array($item)) {
                         continue;
                     }
                     $modelId = (string) ($item['modelId'] ?? $item['id'] ?? '');
+                    if ($modelId === '') {
+                        continue;
+                    }
                     $mLow = strtolower($modelId);
-                    $estDisk = 4.5;
-                    $estRam = 5.8;
-                    if (str_contains($mLow, '0.5b')) { $estDisk = 0.6; $estRam = 1.2; }
-                    elseif (str_contains($mLow, '1.5b') || str_contains($mLow, '1b') || str_contains($mLow, '2b')) { $estDisk = 1.5; $estRam = 2.4; }
-                    elseif (str_contains($mLow, '3b') || str_contains($mLow, '4b')) { $estDisk = 2.5; $estRam = 3.6; }
-                    elseif (str_contains($mLow, '7b') || str_contains($mLow, '8b')) { $estDisk = 4.8; $estRam = 6.2; }
-                    elseif (str_contains($mLow, '14b') || str_contains($mLow, '13b')) { $estDisk = 9.2; $estRam = 11.5; }
-                    elseif (str_contains($mLow, '32b') || str_contains($mLow, '34b')) { $estDisk = 20.0; $estRam = 24.0; }
-                    elseif (str_contains($mLow, '70b') || str_contains($mLow, '72b')) { $estDisk = 42.0; $estRam = 48.0; }
+
+                    $paramsB = 0.0;
+                    if (preg_match('/(\d+(?:\.\d+)?)\s*b(?:\b|[-_])/i', $mLow, $pm)) {
+                        $paramsB = (float) $pm[1];
+                    }
+
+                    // Only offer repos whose file list actually contains a usable .gguf —
+                    // this is what guarantees the "Install" button can never 404.
+                    $siblings = array_values(array_filter(array_map(
+                        static fn($s) => (string) ($s['rfilename'] ?? ''),
+                        (array) ($item['siblings'] ?? [])
+                    )));
+                    $quantMap = self::quantMapFromFiles($siblings);
+                    if (!$quantMap) {
+                        continue;
+                    }
+
+                    $quantOptions = [];
+                    foreach ($quantMap as $quant => $info) {
+                        $disk = $paramsB > 0
+                            ? round($paramsB * 1e9 * self::quantBits($quant) / 8 / 1073741824, 2)
+                            : 4.5;
+                        $ram = round($disk * self::WEIGHT_RAM_FACTOR + self::RUNTIME_OVERHEAD_GB + 0.8, 1);
+                        $quantOptions[] = [
+                            'quant' => $quant,
+                            'filename' => $info['filename'],
+                            'split' => $info['split'],
+                            'ref' => 'hf.co/' . $modelId . ':' . $quant,
+                            'diskGb' => $disk,
+                            'ramGb' => $ram,
+                        ];
+                    }
+                    usort($quantOptions, static fn(array $a, array $b): int => $a['diskGb'] <=> $b['diskGb']);
+
+                    $defaultQuant = self::defaultQuant($quantMap);
+                    $default = null;
+                    foreach ($quantOptions as $qo) {
+                        if ($qo['quant'] === $defaultQuant) {
+                            $default = $qo;
+                            break;
+                        }
+                    }
+                    $default ??= $quantOptions[0];
 
                     $hf[] = [
                         'source' => 'huggingface',
@@ -955,13 +1236,21 @@ final class LocalAI
                         'downloads' => (int) ($item['downloads'] ?? 0),
                         'likes' => (int) ($item['likes'] ?? 0),
                         'tasks' => array_values(array_filter((array) ($item['tags'] ?? []), 'is_string')),
-                        'pullRef' => 'hf.co/' . $modelId,
-                        'diskGb' => $estDisk,
-                        'ramGb' => $estRam,
+                        'pullRef' => $default['ref'],
+                        'diskGb' => $default['diskGb'],
+                        'ramGb' => $default['ramGb'],
+                        'quant' => $default['quant'],
+                        'quantOptions' => $quantOptions,
+                        'paramsB' => $paramsB,
                         'toolCalling' => str_contains($mLow, 'tool') || str_contains($mLow, 'function'),
                         'vision' => str_contains($mLow, 'vision') || str_contains($mLow, 'vl'),
                         'reasoning' => str_contains($mLow, 'r1') || str_contains($mLow, 'reason') || str_contains($mLow, 'qwq'),
-                        'summary' => 'مخزن GGUF در Hugging Face — با «ollama pull hf.co/' . $modelId . '» نصب می‌شود.',
+                        'summary' => sprintf(
+                            'مخزن GGUF در Hugging Face — %d کوانت موجود، پیش‌فرض %s (%.1f گیگابایت).',
+                            count($quantOptions),
+                            $default['quant'],
+                            $default['diskGb']
+                        ),
                     ];
                 }
             } catch (\Throwable $e) {
@@ -1361,12 +1650,74 @@ final class LocalAI
     }
 
     /* ================================================================== */
+    /* llama.cpp local file index — llama-server has no pull/tags/delete  */
+    /* API at all, so Ollama's are mirrored here against a JSON index of  */
+    /* files that live wherever the user put them (downloaded or scanned).*/
+    /* ================================================================== */
+
+    public static function llamaCppIndexFile(): string
+    {
+        return self::rootDir() . '/llamacpp-models.json';
+    }
+
+    /** @return array<string,array{name:string,path:string,quant:string,repo:string,addedAt:string}> */
+    public static function llamaCppIndex(): array
+    {
+        $file = self::llamaCppIndexFile();
+        if (!is_file($file)) {
+            return [];
+        }
+        $data = json_decode(Files::read($file), true);
+        return is_array($data) ? $data : [];
+    }
+
+    private static function llamaCppIndexSave(array $index): void
+    {
+        Files::ensureDir(self::rootDir());
+        Files::write(self::llamaCppIndexFile(), (string) json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    public static function llamaCppIndexAdd(string $name, array $entry): void
+    {
+        $index = self::llamaCppIndex();
+        $index[$name] = array_merge(['name' => $name], $entry);
+        self::llamaCppIndexSave($index);
+    }
+
+    public static function llamaCppIndexRemove(string $name): void
+    {
+        $index = self::llamaCppIndex();
+        unset($index[$name]);
+        self::llamaCppIndexSave($index);
+    }
+
+    /**
+     * Point llama-server at a specific `.gguf` on disk, (re)starting it if a
+     * different model is currently loaded. This is the only way to "install"
+     * a second model with this engine without losing the first — llama.cpp
+     * serves exactly one model per process.
+     */
+    public static function activateLlamaCppModel(string $path, ?int $ctxSize = null, ?callable $log = null): array
+    {
+        if (!is_file($path)) {
+            throw new HttpError(404, 'Model file not found on disk: ' . $path);
+        }
+        Database::setState('localai:llamacpp:active_path', $path);
+        return self::startServer([], $log, $path, $ctxSize);
+    }
+
+    /* ================================================================== */
     /* Installed models                                                   */
     /* ================================================================== */
 
     public static function installed(): array
     {
-        $up = self::serverUp();
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            return self::installedLlamaCpp();
+        }
+
+        $up = self::serverUp('ollama');
         if (!$up['ok']) {
             return ['running' => false, 'models' => [], 'loaded' => [], 'error' => (string) ($up['error'] ?? '')];
         }
@@ -1396,12 +1747,69 @@ final class LocalAI
         return ['running' => true, 'version' => (string) ($up['version'] ?? ''), 'models' => $models, 'loaded' => $loaded, 'error' => ''];
     }
 
+    /** Same shape as the Ollama branch of installed(), backed by the local file index instead of an API. */
+    public static function installedLlamaCpp(): array
+    {
+        $up = self::serverUp('llamacpp');
+        $activePath = (string) (Database::state('localai:llamacpp:active_path', '') ?? '');
+        $index = self::llamaCppIndex();
+        $models = [];
+        $loaded = [];
+        foreach ($index as $name => $entry) {
+            $path = (string) ($entry['path'] ?? '');
+            $exists = $path !== '' && is_file($path);
+            $sizeGb = $exists ? round(filesize($path) / 1073741824, 2) : (float) ($entry['sizeGb'] ?? 0);
+            $models[] = [
+                'name' => (string) $name,
+                'sizeGb' => $sizeGb,
+                'modifiedAt' => (string) ($entry['addedAt'] ?? ''),
+                'family' => '',
+                'parameterSize' => '',
+                'quantization' => (string) ($entry['quant'] ?? ''),
+                'digest' => '',
+                'path' => $path,
+                'missing' => !$exists,
+            ];
+            if ($up['ok'] && $path === $activePath && $activePath !== '') {
+                $loaded[] = ['name' => (string) $name, 'sizeGb' => $sizeGb, 'sizeVramGb' => 0.0, 'expiresAt' => ''];
+            }
+        }
+        return [
+            'running' => $up['ok'],
+            'version' => (string) ($up['version'] ?? ''),
+            'models' => $models,
+            'loaded' => $loaded,
+            'error' => $up['ok'] ? '' : (string) ($up['error'] ?? ''),
+        ];
+    }
+
     public static function remove(string $model): array
     {
         $model = trim($model);
         if ($model === '') {
             throw new HttpError(400, 'Model name is required');
         }
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            $index = self::llamaCppIndex();
+            $entry = $index[$model] ?? null;
+            if ($entry === null) {
+                throw new HttpError(404, 'Unknown local model: ' . $model);
+            }
+            $path = (string) ($entry['path'] ?? '');
+            $activePath = (string) (Database::state('localai:llamacpp:active_path', '') ?? '');
+            if ($path !== '' && $path === $activePath) {
+                self::stopServer();
+                Database::setState('localai:llamacpp:active_path', '');
+            }
+            if (!empty($entry['owned']) && $path !== '' && is_file($path)) {
+                @unlink($path);
+            }
+            self::llamaCppIndexRemove($model);
+            Observability::log('INFO', 'LOCALAI', 'Removed local llama.cpp model ' . $model);
+            return ['ok' => true, 'removed' => $model];
+        }
+
         $r = HttpClient::request(
             'DELETE',
             self::host() . '/api/delete',
@@ -1468,6 +1876,48 @@ final class LocalAI
     }
 
     /**
+     * llama.cpp equivalent of pull(): there is no registry protocol, so this
+     * downloads one concrete, already-verified GGUF file straight from
+     * Hugging Face into storage/localai/models/llamacpp/.
+     *
+     * @param callable(string,float,float,float):void|null $onProgress (status, pct, downloadedBytes, totalBytes)
+     */
+    public static function pullGguf(string $ref, ?string $explicitFile, ?callable $onProgress = null, int $timeout = 7200): array
+    {
+        $resolved = self::resolveGgufDownload($ref, $explicitFile);
+        $dir = self::modelsDir() . '/llamacpp/' . ($resolved['repo'] !== '' ? self::safeRepoDirName($resolved['repo']) : 'custom');
+        $dest = $dir . '/' . basename($resolved['filename']);
+        Files::ensureDir($dir);
+
+        $lastPct = -1.0;
+        $proxy = Config::proxyConfig($resolved['url']);
+        $dl = HttpClient::downloadProgress(
+            $proxy['effectiveUrl'],
+            $dest,
+            $timeout,
+            $proxy['proxyClient'],
+            $onProgress === null ? null : static function (float $downloaded, float $total) use ($onProgress, &$lastPct): void {
+                $pct = $total > 0 ? round($downloaded / $total * 100, 1) : -1.0;
+                if ($pct !== $lastPct) {
+                    $onProgress('downloading', $pct < 0 ? 0.0 : $pct, $downloaded, $total);
+                    $lastPct = $pct;
+                }
+            }
+        );
+        if (!$dl['ok']) {
+            throw new HttpError(502, 'Download failed for ' . $resolved['url'] . ': ' . ($dl['error'] ?? ('HTTP ' . $dl['status'])));
+        }
+        return [
+            'ok' => true,
+            'repo' => $resolved['repo'],
+            'filename' => $resolved['filename'],
+            'quant' => $resolved['quant'],
+            'path' => $dest,
+            'sizeGb' => round((float) filesize($dest) / 1073741824, 2),
+        ];
+    }
+
+    /**
      * Derive a tuned copy of a model with the context window and sampling the
      * wizard asked for, so the agent never has to pass them per request.
      */
@@ -1492,6 +1942,11 @@ final class LocalAI
     /** Short generation used both as a smoke test and as a throughput measurement. */
     public static function benchmark(string $model, string $prompt = 'Say OK.', int $numPredict = 48): array
     {
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            return self::benchmarkLlamaCpp($model, $prompt, $numPredict);
+        }
+
         $started = microtime(true);
         $r = HttpClient::postJson(self::host() . '/api/generate', [
             'model' => $model,
@@ -1517,6 +1972,45 @@ final class LocalAI
         ];
     }
 
+    /** llama-server's native `/completion` reports its own timings — no manual math needed. */
+    public static function benchmarkLlamaCpp(string $model, string $prompt = 'Say OK.', int $numPredict = 48): array
+    {
+        $index = self::llamaCppIndex();
+        $path = (string) ($index[$model]['path'] ?? '');
+        if ($path !== '' && $path !== (string) (Database::state('localai:llamacpp:active_path', '') ?? '')) {
+            self::activateLlamaCppModel($path);
+        } elseif (!self::serverUp('llamacpp')['ok']) {
+            self::startServer();
+        }
+
+        $started = microtime(true);
+        $r = HttpClient::postJson(self::host() . '/completion', [
+            'prompt' => $prompt,
+            'n_predict' => $numPredict,
+            'stream' => false,
+        ], [], 600);
+        $wall = round((microtime(true) - $started) * 1000, 1);
+        if (!$r['ok']) {
+            return ['ok' => false, 'model' => $model, 'error' => $r['error'] ?? ('HTTP ' . $r['status']), 'latencyMs' => $wall];
+        }
+        $j = (array) ($r['json'] ?? []);
+        $timings = (array) ($j['timings'] ?? []);
+        $tps = (float) ($timings['predicted_per_second'] ?? 0);
+        $tokens = (int) ($timings['predicted_n'] ?? 0);
+        if ($tps <= 0 && $tokens > 0 && !empty($timings['predicted_ms'])) {
+            $tps = round($tokens / ((float) $timings['predicted_ms'] / 1000), 1);
+        }
+        return [
+            'ok' => true,
+            'model' => $model,
+            'response' => mb_substr((string) ($j['content'] ?? ''), 0, 400),
+            'tokens' => $tokens,
+            'tokensPerSec' => round($tps, 1),
+            'firstTokenMs' => round((float) ($timings['prompt_ms'] ?? 0), 1),
+            'latencyMs' => $wall,
+        ];
+    }
+
     /* ================================================================== */
     /* Provider registration                                              */
     /* ================================================================== */
@@ -1524,6 +2018,11 @@ final class LocalAI
     /** Make the freshly pulled model selectable in the chat UI. */
     public static function registerProvider(string $modelRef, array $meta = []): array
     {
+        $engine = (string) ($meta['engine'] ?? (Database::state('localai:engine', 'ollama') ?? 'ollama'));
+        if ($engine === 'llamacpp') {
+            return self::registerLlamaCppProvider($modelRef, $meta);
+        }
+
         $store = ProviderStore::reload();
         $provider = $store->get('ollama') ?? ProviderStore::normalizeProvider([
             'id' => 'ollama',
@@ -1568,6 +2067,45 @@ final class LocalAI
         return ['provider' => 'ollama', 'model' => $modelRef, 'url' => self::host()];
     }
 
+    /**
+     * llama-server only ever has one model loaded, so (unlike Ollama) the
+     * provider's model list always contains exactly that one entry — picking
+     * an older llama.cpp model in the chat UI after switching would otherwise
+     * silently talk to whatever is actually in memory.
+     */
+    public static function registerLlamaCppProvider(string $modelRef, array $meta = []): array
+    {
+        $store = ProviderStore::reload();
+        $provider = $store->get('llamacpp-local') ?? ProviderStore::normalizeProvider([
+            'id' => 'llamacpp-local',
+            'name' => 'llama.cpp (local)',
+            'vendor' => 'llamacpp',
+        ]);
+        $provider['url'] = rtrim(self::host(), '/') . '/v1';
+        $provider['enabled'] = true;
+        $provider['apiKey'] = 'local-llamacpp';
+        $provider['timeoutSec'] = max(300, (int) ($provider['timeoutSec'] ?? 120));
+
+        $model = ProviderStore::normalizeModel([
+            'id' => $modelRef,
+            'name' => (string) ($meta['name'] ?? $modelRef),
+            'toolCalling' => (bool) ($meta['toolCalling'] ?? false),
+            'vision' => (bool) ($meta['vision'] ?? false),
+            'free' => true,
+            'maxInputTokens' => (int) ($meta['contextTokens'] ?? 8192),
+            'maxOutputTokens' => (int) ($meta['maxOutputTokens'] ?? 4096),
+            'enabled' => true,
+            'extra' => ['local' => true, 'runtime' => 'llamacpp', 'installedAt' => gmdate('c'), 'modelPath' => (string) ($meta['path'] ?? '')],
+        ]);
+        // Only one process-resident model → replace the whole list, don't append.
+        $provider['models'] = [$model];
+
+        $store->upsert($provider);
+        Config::invalidate();
+        Observability::log('INFO', 'LOCALAI', 'Registered local llama.cpp model as provider entry', ['model' => $modelRef]);
+        return ['provider' => 'llamacpp-local', 'model' => $modelRef, 'url' => $provider['url']];
+    }
+
     /* ================================================================== */
     /* Install pipeline (background job)                                  */
     /* ================================================================== */
@@ -1580,6 +2118,7 @@ final class LocalAI
             throw new HttpError(400, 'A model reference (e.g. "qwen2.5-coder:7b") is required');
         }
         $profile = self::normalizeProfile((array) ($req['profile'] ?? []));
+        $engine = (string) (Database::state('localai:engine', 'ollama') ?? 'ollama');
 
         $variant = null;
         foreach (self::variants() as $v) {
@@ -1588,6 +2127,40 @@ final class LocalAI
                 break;
             }
         }
+
+        if ($engine === 'llamacpp') {
+            if ($variant !== null) {
+                throw new HttpError(400, 'مدل‌های کاتالوگ Ollama با موتور llama.cpp قابل نصب نیستند — موتور را به Ollama تغییر دهید یا از نتایج Hugging Face / اسکن درایو استفاده کنید.');
+            }
+            $payload = [
+                'kind' => 'localai_install',
+                'engine' => 'llamacpp',
+                'ref' => $ref,
+                'hfFile' => (string) ($req['file'] ?? '') ?: null,
+                'profile' => $profile,
+                'estimate' => [
+                    'ramGb' => (float) ($req['estimateRamGb'] ?? 0),
+                    'diskGb' => (float) ($req['estimateDiskGb'] ?? 0),
+                ],
+                'register' => (bool) ($req['register'] ?? true),
+                'setDefault' => (bool) ($req['setDefault'] ?? false),
+                'benchmark' => (bool) ($req['benchmark'] ?? true),
+                'toolCalling' => (bool) ($req['toolCalling'] ?? false),
+                'vision' => (bool) ($req['vision'] ?? false),
+                'displayName' => (string) ($req['displayName'] ?? $ref),
+            ];
+            $job = Jobs::create([
+                'title' => 'نصب مدل محلی (llama.cpp): ' . $ref,
+                'userId' => $userId,
+                'providerId' => 'llamacpp-local',
+                'modelId' => $ref,
+                'maxSteps' => 4,
+                'maxTimeoutSec' => (int) ($req['timeoutSec'] ?? 7200),
+                'payload' => $payload,
+            ]);
+            return ['job' => $job, 'plan' => self::plan($payload), 'estimate' => $payload['estimate'], 'profile' => $profile];
+        }
+
         $estimate = $variant !== null ? self::estimate($variant, $profile) : null;
         if ($estimate !== null && !$estimate['fitsRam'] && empty($req['force'])) {
             throw new HttpError(409, sprintf(
@@ -1599,6 +2172,7 @@ final class LocalAI
 
         $payload = [
             'kind' => 'localai_install',
+            'engine' => 'ollama',
             'ref' => $ref,
             'profile' => $profile,
             'estimate' => $estimate,
@@ -1627,6 +2201,24 @@ final class LocalAI
     /** Human-readable step list, shown in the UI before the user confirms. */
     public static function plan(array $payload): array
     {
+        $engine = (string) ($payload['engine'] ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            $rt = self::runtimeStatus();
+            $steps = [];
+            $steps[] = ['id' => 'runtime', 'title' => 'آماده‌سازی موتور llama.cpp',
+                        'detail' => ($rt['engines']['llamacpp']['installed'] ?? false) ? 'نصب است' : 'دانلود و نصب بدون نیاز به root در ' . self::binDir()];
+            $steps[] = ['id' => 'pull', 'title' => 'دانلود فایل GGUF برای ' . (string) $payload['ref'],
+                        'detail' => sprintf('حدود %.1f گیگابایت — دانلود مستقیم از Hugging Face', (float) ($payload['estimate']['diskGb'] ?? 0))];
+            $steps[] = ['id' => 'server', 'title' => 'بارگذاری مدل در llama-server', 'detail' => self::host()];
+            if (!empty($payload['benchmark'])) {
+                $steps[] = ['id' => 'benchmark', 'title' => 'تست سلامت و سنجش سرعت', 'detail' => 'یک تولید کوتاه برای اندازه‌گیری توکن بر ثانیه'];
+            }
+            if (!empty($payload['register'])) {
+                $steps[] = ['id' => 'register', 'title' => 'ثبت به‌عنوان ارائه‌دهنده', 'detail' => 'اضافه شدن به فهرست مدل‌های چت'];
+            }
+            return $steps;
+        }
+
         $rt = self::runtimeStatus();
         $steps = [];
         $steps[] = ['id' => 'runtime', 'title' => 'آماده‌سازی موتور Ollama',
@@ -1652,6 +2244,12 @@ final class LocalAI
      */
     public static function runInstallJob(string $jobId, array $payload): void
     {
+        $engine = (string) ($payload['engine'] ?? Database::state('localai:engine', 'ollama') ?? 'ollama');
+        if ($engine === 'llamacpp') {
+            self::runInstallJobLlamaCpp($jobId, $payload);
+            return;
+        }
+
         $ref = (string) ($payload['ref'] ?? '');
         $profile = (array) ($payload['profile'] ?? []);
         $log = static function (string $msg, string $level = 'INFO') use ($jobId): void {
@@ -1774,6 +2372,116 @@ final class LocalAI
         }
     }
 
+    /** llama.cpp has no pull/tune API: download one verified file, point llama-server at it, done. */
+    public static function runInstallJobLlamaCpp(string $jobId, array $payload): void
+    {
+        $ref = (string) ($payload['ref'] ?? '');
+        $profile = (array) ($payload['profile'] ?? []);
+        $log = static function (string $msg, string $level = 'INFO') use ($jobId): void {
+            Jobs::log($jobId, $level, $msg);
+        };
+        $progress = static function (float $pct, string $summary = '') use ($jobId): void {
+            Database::run(
+                "UPDATE jobs SET progress = ?, summary = CASE WHEN ? = '' THEN summary ELSE ? END, updated_at = datetime('now') WHERE id = ?",
+                [round($pct, 1), $summary, $summary, $jobId]
+            );
+        };
+        $step = 0;
+        $result = ['ref' => $ref, 'steps' => []];
+        $started = microtime(true);
+
+        try {
+            /* 1 ─ runtime */
+            $t = microtime(true);
+            $log('Checking the llama.cpp runtime…');
+            $rt = self::installRuntime('llamacpp', $log);
+            Jobs::recordStep($jobId, $step++, 'localai.runtime', ['engine' => 'llamacpp'], $rt, 'success', (microtime(true) - $t) * 1000);
+            $result['steps']['runtime'] = $rt;
+            $progress(10, 'موتور llama.cpp آماده شد');
+
+            /* 2 ─ download the exact gguf file (never an ambiguous repo ref) */
+            $t = microtime(true);
+            $log('Resolving and downloading ' . $ref . ' …');
+            $lastLogged = 0.0;
+            $pull = self::pullGguf($ref, (string) ($payload['hfFile'] ?? '') ?: null, static function (string $status, float $pct, float $done, float $total) use ($progress, $log, &$lastLogged): void {
+                $overall = 10 + ($pct * 0.7);
+                $progress($overall, sprintf('دانلود فایل: %.0f%%', $pct));
+                if ($pct - $lastLogged >= 10 || ($pct >= 100 && $lastLogged < 100)) {
+                    $lastLogged = $pct;
+                    $log(sprintf('%s — %.0f%% (%s / %s)', $status, $pct, Files::humanSize((int) $done), Files::humanSize((int) $total)));
+                }
+            });
+            Jobs::recordStep($jobId, $step++, 'localai.pull', ['model' => $ref], $pull, 'success', (microtime(true) - $t) * 1000);
+            $result['steps']['pull'] = $pull;
+            $progress(80, 'فایل مدل دانلود شد');
+
+            $modelName = (string) ($payload['displayName'] ?? ($pull['repo'] !== '' ? $pull['repo'] . ':' . $pull['quant'] : basename($pull['filename'])));
+            self::llamaCppIndexAdd($modelName, [
+                'path' => $pull['path'],
+                'quant' => $pull['quant'],
+                'repo' => $pull['repo'],
+                'sizeGb' => $pull['sizeGb'],
+                'owned' => true,
+                'addedAt' => gmdate('c'),
+            ]);
+
+            /* 3 ─ activate: llama-server can only serve one model, so load this one now */
+            $t = microtime(true);
+            $srv = self::activateLlamaCppModel($pull['path'], (int) ($profile['contextTokens'] ?? 8192), $log);
+            Jobs::recordStep($jobId, $step++, 'localai.server', [], $srv, 'success', (microtime(true) - $t) * 1000);
+            $result['steps']['server'] = $srv;
+            $progress(88, 'مدل در llama-server بارگذاری شد');
+
+            /* 4 ─ benchmark */
+            if (!empty($payload['benchmark'])) {
+                $t = microtime(true);
+                $bench = self::benchmarkLlamaCpp($modelName, 'In one short sentence, say that the local model is ready.');
+                $log($bench['ok']
+                    ? sprintf('Benchmark: %.1f tok/s (%d tokens)', (float) ($bench['tokensPerSec'] ?? 0), (int) ($bench['tokens'] ?? 0))
+                    : 'Benchmark failed: ' . (string) ($bench['error'] ?? ''), $bench['ok'] ? 'INFO' : 'WARNING');
+                Jobs::recordStep($jobId, $step++, 'localai.benchmark', ['model' => $modelName], $bench, $bench['ok'] ? 'success' : 'error', (microtime(true) - $t) * 1000);
+                $result['steps']['benchmark'] = $bench;
+            }
+            $progress(94, 'تست سلامت انجام شد');
+
+            /* 5 ─ register */
+            if (!empty($payload['register'])) {
+                $t = microtime(true);
+                $reg = self::registerLlamaCppProvider($modelName, [
+                    'name' => (string) ($payload['displayName'] ?? $modelName),
+                    'toolCalling' => (bool) ($payload['toolCalling'] ?? false),
+                    'vision' => (bool) ($payload['vision'] ?? false),
+                    'contextTokens' => (int) ($profile['contextTokens'] ?? 8192),
+                    'path' => $pull['path'],
+                ]);
+                if (!empty($payload['setDefault'])) {
+                    Database::setState('localai:default', $modelName);
+                }
+                Jobs::recordStep($jobId, $step++, 'localai.register', ['model' => $modelName], $reg, 'success', (microtime(true) - $t) * 1000);
+                $result['steps']['register'] = $reg;
+            }
+
+            $result['model'] = $modelName;
+            $result['durationSec'] = round(microtime(true) - $started, 1);
+            $ref2 = Jobs::saveArtifact($jobId, $result);
+            Database::run(
+                "UPDATE jobs SET status='done', progress=100.0, step_count=?, result_ref=?, summary=?,
+                 finished_at=datetime('now'), updated_at=datetime('now') WHERE id = ?",
+                [$step, $ref2, 'مدل ' . $modelName . ' با موفقیت نصب و فعال شد', $jobId]
+            );
+            $log('Local model install finished in ' . $result['durationSec'] . 's');
+            Observability::log('INFO', 'LOCALAI', 'Local llama.cpp model installed', ['model' => $modelName, 'job' => $jobId]);
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            Database::run(
+                "UPDATE jobs SET status='failed', error=?, finished_at=datetime('now'), updated_at=datetime('now') WHERE id = ?",
+                [$msg, $jobId]
+            );
+            $log('Install failed: ' . $msg, 'ERROR');
+            Observability::log('ERROR', 'LOCALAI', 'Local llama.cpp model install failed', ['model' => $ref, 'error' => $msg]);
+        }
+    }
+
     /* ================================================================== */
     /* Saved wizard profiles                                              */
     /* ================================================================== */
@@ -1798,5 +2506,359 @@ final class LocalAI
         unset($all[$name]);
         Database::setStateJson('localai:profiles', $all);
         return ['profiles' => array_values($all)];
+    }
+
+    /* ================================================================== */
+    /* Drive scan & local import — find model files the user already has  */
+    /* on disk (downloaded by hand, by another tool, or in another app's  */
+    /* model cache) and use them without re-downloading anything.         */
+    /* ================================================================== */
+
+    /** Directories that are almost never worth descending into. */
+    private const SCAN_EXCLUDE_NAMES = [
+        'proc', 'sys', 'dev', 'run', 'node_modules', '.git', '.cache', '__pycache__',
+        '.venv', 'venv', '.npm', '.cargo', '.rustup', '.next', '.nuxt', 'dist', 'build',
+        '.Trash', '$RECYCLE.BIN',
+    ];
+
+    public static function defaultScanRoots(): array
+    {
+        $roots = [];
+        $home = (string) (getenv('HOME') ?: '');
+        if ($home !== '') {
+            $roots[] = rtrim($home, '/');
+        }
+        foreach (['/root', '/home', '/opt', '/srv', '/data', '/mnt', '/media', '/var/www', '/workspace'] as $p) {
+            if (is_dir($p)) {
+                $roots[] = $p;
+            }
+        }
+        $roots[] = self::rootDir();
+        $roots[] = Bootstrap::$root;
+        return array_values(array_unique(array_filter(array_map(static fn($p) => rtrim((string) $p, '/'), $roots), 'is_dir')));
+    }
+
+    /**
+     * Walk the filesystem looking for model files (`.gguf`, `.ggml`,
+     * `.safetensors`, …). Uses `find` when a real shell is available (fast,
+     * handles millions of files) and falls back to a budgeted PHP iterator
+     * otherwise. Always bounded by a result cap and a wall-clock budget so a
+     * "scan the whole drive" request can never hang the request indefinitely.
+     *
+     * @return array{roots:array,full:bool,count:int,truncated:bool,tookSec:float,results:array}
+     */
+    public static function scanDrive(array $opts = []): array
+    {
+        $full = (bool) ($opts['full'] ?? false);
+        $roots = array_values(array_filter(array_map('strval', (array) ($opts['roots'] ?? []))));
+        if (!$roots) {
+            $roots = $full ? ['/'] : self::defaultScanRoots();
+        }
+        $maxResults = max(1, min(2000, (int) ($opts['maxResults'] ?? 300)));
+        $timeBudget = max(5, min(120, (int) ($opts['timeBudgetSec'] ?? 25)));
+        $exts = array_values(array_filter(array_map('strtolower', (array) ($opts['extensions'] ?? self::SCAN_EXTENSIONS)))) ?: self::SCAN_EXTENSIONS;
+
+        $started = microtime(true);
+        $results = [];
+        $hasShell = function_exists('proc_open');
+
+        foreach ($roots as $root) {
+            $elapsed = microtime(true) - $started;
+            if ($elapsed > $timeBudget || count($results) >= $maxResults) {
+                break;
+            }
+            if (!is_dir($root) || !is_readable($root)) {
+                continue;
+            }
+            $remaining = (int) max(3, min(60, $timeBudget - $elapsed));
+            if ($hasShell) {
+                self::scanDirFind($root, $exts, $remaining, $results, $maxResults);
+            } else {
+                self::scanDirPhp($root, $exts, $results, $maxResults, $started, $timeBudget);
+            }
+        }
+
+        usort($results, static fn(array $a, array $b): int => $b['sizeGb'] <=> $a['sizeGb']);
+        $truncated = count($results) > $maxResults;
+        $results = array_slice($results, 0, $maxResults);
+
+        return [
+            'roots' => $roots,
+            'full' => $full,
+            'count' => count($results),
+            'truncated' => $truncated,
+            'tookSec' => round(microtime(true) - $started, 2),
+            'results' => $results,
+        ];
+    }
+
+    /** Fast path: shell out to `find`, pruning noisy directories as it walks. */
+    private static function scanDirFind(string $root, array $exts, int $timeoutSec, array &$results, int $maxResults): void
+    {
+        $nameExpr = [];
+        foreach ($exts as $i => $e) {
+            if ($i > 0) {
+                $nameExpr[] = '-o';
+            }
+            $nameExpr[] = '-iname';
+            $nameExpr[] = '*.' . $e;
+        }
+        $pruneExpr = [];
+        foreach (self::SCAN_EXCLUDE_NAMES as $name) {
+            $pruneExpr[] = '-name';
+            $pruneExpr[] = $name;
+            $pruneExpr[] = '-prune';
+            $pruneExpr[] = '-o';
+        }
+        $cmd = array_merge(
+            ['timeout', (string) $timeoutSec, 'find', $root, '-xdev'],
+            $pruneExpr,
+            ['('], $nameExpr, [')'],
+            ['-type', 'f', '-printf', '%s|%T@|%p\n']
+        );
+        $out = Terminal::rawCapture($cmd, null, $timeoutSec + 5);
+        foreach (explode("\n", (string) ($out['stdout'] ?? '')) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $parts = explode('|', $line, 3);
+            if (count($parts) < 3) {
+                continue;
+            }
+            [$sizeStr, $mtimeStr, $path] = $parts;
+            $results[] = [
+                'path' => $path,
+                'sizeGb' => round(((float) $sizeStr) / 1073741824, 3),
+                'ext' => strtolower((string) pathinfo($path, PATHINFO_EXTENSION)),
+                'mtime' => (int) (float) $mtimeStr,
+                'name' => basename($path),
+                'quant' => self::extractGgufQuant(basename($path)),
+            ];
+            if (count($results) >= $maxResults) {
+                return;
+            }
+        }
+    }
+
+    /** Fallback for hosts without proc_open(): a depth-first iterator with a hard time/size budget. */
+    private static function scanDirPhp(string $root, array $exts, array &$results, int $maxResults, float $started, int $timeBudget): void
+    {
+        try {
+            $dirIter = new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS);
+            // A RecursiveCallbackFilterIterator decides *before* descending,
+            // so excluded directories are never walked at all (unlike calling
+            // getChildren() reactively, which only affects traversal order).
+            $filtered = new \RecursiveCallbackFilterIterator($dirIter, static function ($current) {
+                if ($current->isDir()) {
+                    return !in_array($current->getFilename(), self::SCAN_EXCLUDE_NAMES, true);
+                }
+                return true;
+            });
+            $it = new \RecursiveIteratorIterator($filtered, \RecursiveIteratorIterator::LEAVES_ONLY);
+        } catch (\Throwable) {
+            return;
+        }
+        foreach ($it as $path => $info) {
+            if (microtime(true) - $started > $timeBudget || count($results) >= $maxResults) {
+                return;
+            }
+            try {
+                if (!$info->isFile()) {
+                    continue;
+                }
+                $ext = strtolower($info->getExtension());
+                if (!in_array($ext, $exts, true)) {
+                    continue;
+                }
+                $results[] = [
+                    'path' => $path,
+                    'sizeGb' => round($info->getSize() / 1073741824, 3),
+                    'ext' => $ext,
+                    'mtime' => $info->getMTime(),
+                    'name' => $info->getFilename(),
+                    'quant' => self::extractGgufQuant($info->getFilename()),
+                ];
+            } catch (\Throwable) {
+                continue; // permission denied, broken symlink, etc.
+            }
+        }
+    }
+
+    /** Best-effort display name derived from a scanned/imported file path. */
+    private static function suggestNameFromFile(string $path): string
+    {
+        $base = (string) preg_replace('/\.(gguf|ggml|bin|safetensors)$/i', '', basename($path));
+        $base = trim((string) preg_replace('/-\d{5}-of-\d{5}$/i', '', $base));
+        return $base !== '' ? $base : basename($path);
+    }
+
+    /**
+     * Point the agent at a model file that is already on disk — no network
+     * involved. Works for both engines:
+     *   - Ollama: `ollama create <name> -f Modelfile` (Modelfile: `FROM <path>`)
+     *   - llama.cpp: the file is referenced in place and loaded directly
+     */
+    public static function enqueueImport(array $req, string $userId = 'user'): array
+    {
+        $path = trim((string) ($req['path'] ?? ''));
+        if ($path === '' || !is_file($path)) {
+            throw new HttpError(400, 'فایل انتخاب‌شده روی دیسک پیدا نشد: ' . $path);
+        }
+        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['gguf', 'ggml'], true)) {
+            throw new HttpError(400, 'فقط فایل‌های gguf/ggml قابل درون‌ریزی مستقیم هستند؛ safetensors ابتدا باید به gguf تبدیل شود.');
+        }
+        $engine = (string) ($req['engine'] ?? Database::state('localai:engine', 'ollama') ?? 'ollama');
+        $name = trim((string) ($req['name'] ?? '')) ?: self::suggestNameFromFile($path);
+
+        $payload = [
+            'kind' => 'localai_import',
+            'engine' => $engine,
+            'path' => $path,
+            'name' => $name,
+            'register' => (bool) ($req['register'] ?? true),
+            'benchmark' => (bool) ($req['benchmark'] ?? true),
+            'setDefault' => (bool) ($req['setDefault'] ?? false),
+            'contextTokens' => (int) ($req['contextTokens'] ?? 8192),
+        ];
+        $job = Jobs::create([
+            'title' => 'درون‌ریزی مدل محلی: ' . $name,
+            'userId' => $userId,
+            'providerId' => $engine === 'ollama' ? 'ollama' : 'llamacpp-local',
+            'modelId' => $name,
+            'maxSteps' => 4,
+            'maxTimeoutSec' => (int) ($req['timeoutSec'] ?? 3600),
+            'payload' => $payload,
+        ]);
+        return ['job' => $job];
+    }
+
+    /** Executed by bin/worker.php (via Jobs::execute) — never in a web request. */
+    public static function runImportJob(string $jobId, array $payload): void
+    {
+        $engine = (string) ($payload['engine'] ?? 'ollama');
+        $path = (string) ($payload['path'] ?? '');
+        $name = (string) ($payload['name'] ?? '');
+        $log = static function (string $msg, string $level = 'INFO') use ($jobId): void {
+            Jobs::log($jobId, $level, $msg);
+        };
+        $progress = static function (float $pct, string $summary = '') use ($jobId): void {
+            Database::run(
+                "UPDATE jobs SET progress = ?, summary = CASE WHEN ? = '' THEN summary ELSE ? END, updated_at = datetime('now') WHERE id = ?",
+                [round($pct, 1), $summary, $summary, $jobId]
+            );
+        };
+        $step = 0;
+        $started = microtime(true);
+        $result = ['path' => $path, 'name' => $name, 'steps' => []];
+
+        try {
+            if (!is_file($path)) {
+                throw new HttpError(404, 'File no longer exists: ' . $path);
+            }
+
+            if ($engine === 'llamacpp') {
+                $t = microtime(true);
+                $rt = self::installRuntime('llamacpp', $log);
+                Jobs::recordStep($jobId, $step++, 'localai.runtime', ['engine' => 'llamacpp'], $rt, 'success', (microtime(true) - $t) * 1000);
+                $progress(15, 'موتور llama.cpp آماده شد');
+
+                self::llamaCppIndexAdd($name, [
+                    'path' => $path,
+                    'quant' => self::extractGgufQuant(basename($path)) ?? '',
+                    'repo' => '',
+                    'sizeGb' => round((float) filesize($path) / 1073741824, 2),
+                    'owned' => false, // the file lives wherever the user put it — never delete it on removal
+                    'addedAt' => gmdate('c'),
+                ]);
+                $progress(40, 'فایل به فهرست اضافه شد');
+
+                $t = microtime(true);
+                $srv = self::activateLlamaCppModel($path, (int) ($payload['contextTokens'] ?? 8192), $log);
+                Jobs::recordStep($jobId, $step++, 'localai.server', [], $srv, 'success', (microtime(true) - $t) * 1000);
+                $progress(70, 'مدل در llama-server بارگذاری شد');
+
+                if (!empty($payload['benchmark'])) {
+                    $bench = self::benchmarkLlamaCpp($name, 'In one short sentence, say that the local model is ready.');
+                    $log($bench['ok'] ? sprintf('Benchmark: %.1f tok/s', (float) ($bench['tokensPerSec'] ?? 0)) : 'Benchmark failed: ' . (string) ($bench['error'] ?? ''));
+                }
+                $progress(85, 'تست سلامت انجام شد');
+
+                if (!empty($payload['register'])) {
+                    self::registerLlamaCppProvider($name, [
+                        'name' => $name,
+                        'contextTokens' => (int) ($payload['contextTokens'] ?? 8192),
+                        'path' => $path,
+                    ]);
+                    if (!empty($payload['setDefault'])) {
+                        Database::setState('localai:default', $name);
+                    }
+                }
+            } else {
+                // Ollama: a one-line Modelfile pointing at the existing weights.
+                $t = microtime(true);
+                $rt = self::installRuntime('ollama', $log);
+                Jobs::recordStep($jobId, $step++, 'localai.runtime', ['engine' => 'ollama'], $rt, 'success', (microtime(true) - $t) * 1000);
+                $progress(15, 'موتور Ollama آماده شد');
+
+                self::startServer([], $log);
+                $progress(25, 'سرویس محلی در حال اجراست');
+
+                $safeName = strtolower((string) preg_replace('/[^a-z0-9._-]+/i', '-', trim($name, '-')));
+                $safeName = trim($safeName, '-') ?: 'imported-model';
+                $modelfile = self::rootDir() . '/Modelfile-' . $safeName . '-' . substr(md5($path), 0, 8);
+                Files::write($modelfile, 'FROM ' . $path . "\n");
+
+                $bin = self::binary('ollama');
+                if ($bin === null) {
+                    throw new HttpError(409, 'Ollama binary not found after install');
+                }
+                $log('Importing with `ollama create ' . $safeName . '` (this copies/converts the weights into Ollama\'s own store) …');
+                $out = Terminal::rawCapture([$bin, 'create', $safeName, '-f', $modelfile], self::rootDir(), 1800, self::serverEnv());
+                @unlink($modelfile);
+                if ((int) ($out['exitCode'] ?? 1) !== 0) {
+                    throw new HttpError(500, 'ollama create failed: ' . mb_substr((string) ($out['stderr'] ?: $out['stdout']), 0, 600));
+                }
+                $progress(70, 'مدل درون‌ریزی شد');
+                $name = $safeName;
+
+                if (!empty($payload['benchmark'])) {
+                    $bench = self::benchmark($name, 'In one short sentence, say that the local model is ready.');
+                    $log($bench['ok'] ? sprintf('Benchmark: %.1f tok/s', (float) ($bench['tokensPerSec'] ?? 0)) : 'Benchmark failed: ' . (string) ($bench['error'] ?? ''));
+                }
+                $progress(85, 'تست سلامت انجام شد');
+
+                if (!empty($payload['register'])) {
+                    self::registerProvider($name, [
+                        'name' => $name,
+                        'contextTokens' => (int) ($payload['contextTokens'] ?? 8192),
+                        'engine' => 'ollama',
+                    ]);
+                    if (!empty($payload['setDefault'])) {
+                        Database::setState('localai:default', $name);
+                    }
+                }
+            }
+
+            $result['model'] = $name;
+            $result['durationSec'] = round(microtime(true) - $started, 1);
+            $ref2 = Jobs::saveArtifact($jobId, $result);
+            Database::run(
+                "UPDATE jobs SET status='done', progress=100.0, step_count=?, result_ref=?, summary=?,
+                 finished_at=datetime('now'), updated_at=datetime('now') WHERE id = ?",
+                [$step, $ref2, 'مدل ' . $name . ' با موفقیت درون‌ریزی و فعال شد', $jobId]
+            );
+            $log('Import finished in ' . $result['durationSec'] . 's');
+            Observability::log('INFO', 'LOCALAI', 'Local model imported', ['model' => $name, 'job' => $jobId]);
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            Database::run(
+                "UPDATE jobs SET status='failed', error=?, finished_at=datetime('now'), updated_at=datetime('now') WHERE id = ?",
+                [$msg, $jobId]
+            );
+            $log('Import failed: ' . $msg, 'ERROR');
+            Observability::log('ERROR', 'LOCALAI', 'Local model import failed', ['path' => $path, 'error' => $msg]);
+        }
     }
 }

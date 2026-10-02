@@ -84,6 +84,24 @@ final class Models
             ];
         }
 
+        if ($provider['protocol'] === 'cloudflare' || $provider['protocol'] === 'workers-ai') {
+            if ($apiKey !== '') {
+                $headers['Authorization'] = 'Bearer ' . $apiKey;
+            }
+            // Native REST API: model is a path segment, never a body field.
+            // Strip any `/ai/run/...` or `/ai/v1...` suffix already present
+            // on the configured base URL so the account root is recombined
+            // with the model actually under test, instead of silently
+            // reusing whatever model happened to be baked into the URL.
+            $accountRoot = rtrim((string) preg_replace('#/ai/(run|v1)(/.*)?$#', '', $base), '/');
+            $url = ($accountRoot !== '' ? $accountRoot : 'https://api.cloudflare.com/client/v4') . '/ai/run/' . $model['id'];
+            return [
+                'url' => $url,
+                'headers' => $headers,
+                'body' => ['messages' => [['role' => 'user', 'content' => self::TEST_PROMPT]]],
+            ];
+        }
+
         if ($provider['protocol'] === 'azure') {
             $headers['api-key'] = $apiKey;
         } elseif ($apiKey !== '') {
@@ -122,6 +140,11 @@ final class Models
         }
         if ($protocol === 'ollama') {
             return ['text' => (string) ($data['message']['content'] ?? ''), 'reasoning' => ''];
+        }
+        if ($protocol === 'cloudflare' || $protocol === 'workers-ai') {
+            $result = $data['result'] ?? null;
+            $text = is_string($result) ? $result : (string) ($result['response'] ?? '');
+            return ['text' => $text, 'reasoning' => ''];
         }
         if ($protocol === 'gemini') {
             $text = '';

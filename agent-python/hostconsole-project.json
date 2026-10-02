@@ -19,7 +19,7 @@
     "PORT": "8788",
     "HOST": "0.0.0.0",
     "ENVIRONMENT": "production",
-    "APP_VERSION": "3.1.0",
+    "APP_VERSION": "3.2.0",
     "AGENT_LOCALAI_HOST": "http://127.0.0.1:11434",
     "OLLAMA_BASE_URL": "http://127.0.0.1:11434"
   }

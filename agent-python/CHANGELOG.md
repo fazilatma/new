@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.0 - Cloudflare Workers AI Protocol Fix, Blank Timeout Error Fix
+
+### Fixed
+- **Cloudflare Workers AI ignored the selected model**: the bundled provider catalog shipped the protocol literal `cloudflare-workers-ai`, which matched none of the protocol-specific branches in `chat.py`/`providers.py`/`main.py`, so every Cloudflare request silently fell back to the generic OpenAI-compatible builder — reusing whatever model happened to already be baked into the configured base URL and ignoring the model actually selected (confirmed from a bulk connectivity report where 70+ distinct Cloudflare model slugs all resolved to the exact same hardcoded `/ai/run/@cf/meta/llama-3.1-8b-instruct` endpoint). Cloudflare's native REST API (`/ai/run/{model}`, model as a URL path segment, `{"messages": [...]}` request body, `{"result": {"response": "..."}}` response body) is now implemented end-to-end — non-streaming, streaming, and the `/api/providers/{pid}/models/{mid}/test` / `test-all` diagnostic harness — and any already-persisted provider record using the old protocol literal (or other legacy aliases such as `cf`, `cf-ai`, `cloudflare_workers_ai`) self-heals to the canonical `cloudflare` protocol on next load via a pydantic validator on `Provider.protocol`.
+- **Blank error messages on provider timeouts**: the chat engine (`call_provider_api`, `stream_call_provider_api`) and the model diagnostic/`test-all` harness built their user-facing error text from `str(exception)` alone; `httpx`'s own timeout and connection exceptions (`ReadTimeout`, `ConnectTimeout`, `PoolTimeout`, `ConnectError`, …) very commonly carry no message at all, so the friendly "Connection timeout…" / "Connection refused…" substring matches both missed *and* the raw error shown to the user — and used for rate-limit/fallback detection — was silently empty. All three now fall back to the exception's class name whenever the raw message is blank.
+
 ## 3.1.0 - Multi-engine Local AI Runtime, Unbounded RAM Budget, Richer Search Cards
 
 - **Multi-engine Local AI runtime**:

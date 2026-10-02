@@ -195,6 +195,56 @@ final class HttpClient
         return ['ok' => $error === null && $status < 400, 'status' => $status, 'error' => $error, 'path' => $destination];
     }
 
+    /**
+     * Same as {@see download()} but reports `(downloadedBytes, totalBytes)` to
+     * `$onProgress` every time curl ticks — used for the Hugging Face GGUF
+     * downloader so the install job can show a real percentage.
+     */
+    public static function downloadProgress(
+        string $url,
+        string $destination,
+        int $timeout = 1800,
+        ?string $proxy = null,
+        ?callable $onProgress = null
+    ): array {
+        Files::ensureDir(dirname($destination));
+        $fh = fopen($destination, 'wb');
+        if (!$fh) {
+            throw new HttpError(500, 'Unable to open destination file');
+        }
+        $ch = curl_init();
+        $opts = [
+            CURLOPT_URL => $url,
+            CURLOPT_FILE => $fh,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (ArenaAgent/3.1)',
+        ];
+        if ($onProgress !== null) {
+            $opts[CURLOPT_NOPROGRESS] = false;
+            $opts[CURLOPT_PROGRESSFUNCTION] = static function ($res, $downloadTotal, $downloaded, $uploadTotal, $uploaded) use ($onProgress): int {
+                $onProgress((float) $downloaded, (float) $downloadTotal);
+                return 0;
+            };
+        }
+        curl_setopt_array($ch, $opts);
+        if ($proxy) {
+            curl_setopt($ch, CURLOPT_PROXY, $proxy);
+        }
+        curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $error = curl_errno($ch) !== 0 ? curl_error($ch) : null;
+        curl_close($ch);
+        fclose($fh);
+        $ok = $error === null && $status < 400;
+        if (!$ok) {
+            @unlink($destination);
+        }
+        return ['ok' => $ok, 'status' => $status, 'error' => $error, 'path' => $destination];
+    }
+
     private static function flattenHeaders(array $headers): array
     {
         $out = [];

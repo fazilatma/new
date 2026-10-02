@@ -12,6 +12,13 @@ depends on those response shapes.
 
 ---
 
+## [3.2.0] — 2026-10-02
+
+### Fixed
+- **Cloudflare Workers AI ignored the selected model.** The bundled provider catalog shipped the protocol literal `cloudflare-workers-ai`, which matched none of the protocol-specific branches in the chat/model-test engines, so every Cloudflare request silently fell back to the generic OpenAI-compatible builder — reusing whatever model happened to already be baked into the configured base URL and ignoring the model actually selected (confirmed from a bulk connectivity report where 70+ distinct Cloudflare model slugs all resolved to the exact same hardcoded `/ai/run/@cf/meta/llama-3.1-8b-instruct` endpoint). Cloudflare's native REST API (`/ai/run/{model}`, model as a URL path segment, `{"messages":[...]}` request body, `{"result":{"response":"..."}}` response body) is now implemented end-to-end — request building, streaming, non-streaming, and the "Test Model"/"Test All" diagnostic harness — and any already-persisted provider record using the old protocol literal (or other legacy aliases such as `cf`, `cf-ai`, `cloudflare_workers_ai`) self-heals to the canonical `cloudflare` protocol on next load.
+
+---
+
 ## [3.1.0] — 2026-10-01
 
 ### Added

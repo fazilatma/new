@@ -327,6 +327,11 @@ final class Jobs
             self::clearControlFlag($jobId);
             return;
         }
+        if ($kind === 'localai_import') {
+            LocalAI::runImportJob($jobId, $payload);
+            self::clearControlFlag($jobId);
+            return;
+        }
 
         $messages = $payload['messages'] ?? [['role' => 'user', 'content' => (string) ($payload['message'] ?? $job['title'] ?? '')]];
         $timeoutSec = (int) ($job['max_timeout_sec'] ?? self::DEFAULT_TIMEOUT_SEC);

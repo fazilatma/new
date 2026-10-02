@@ -206,6 +206,31 @@ final class ProviderStore
         return 'openai-compatible';
     }
 
+    /**
+     * Canonicalize legacy/alias protocol identifiers to the values the
+     * request-building and response-parsing code actually branches on.
+     *
+     * `cloudflare-workers-ai` was shipped in a previous catalog revision and
+     * does not match any protocol branch in Chat.php/Models.php, so every
+     * such provider silently fell through to the generic openai-compatible
+     * builder (wrong URL shape, wrong body shape, ignores the selected
+     * model). Any raw value — whether from the bundled seed catalog, a
+     * user's persisted providers.json, or an imported JSON blob — is run
+     * through this map so already-saved data self-heals on next load.
+     */
+    public static function canonicalProtocol(string $protocol): string
+    {
+        $p = strtolower(trim($protocol));
+        static $aliases = [
+            'cloudflare-workers-ai' => 'cloudflare',
+            'cloudflare_workers_ai' => 'cloudflare',
+            'cf' => 'cloudflare',
+            'cf-ai' => 'cloudflare',
+            'workersai' => 'cloudflare',
+        ];
+        return $aliases[$p] ?? $protocol;
+    }
+
     public static function normalizeProvider(array $raw, string $fallbackId = ''): array
     {
         $id = trim((string) ($raw['id'] ?? $raw['slug'] ?? $fallbackId));
@@ -257,7 +282,7 @@ final class ProviderStore
             'name' => (string) ($raw['name'] ?? $id),
             'vendor' => $vendor,
             'url' => $url,
-            'protocol' => (string) ($raw['protocol'] ?? self::guessProtocol($id, $vendor, $url)),
+            'protocol' => self::canonicalProtocol((string) ($raw['protocol'] ?? self::guessProtocol($id, $vendor, $url))),
             'enabled' => (bool) ($raw['enabled'] ?? false),
             'apiKey' => $singleKey ?: ($apiKeys[0] ?? ''),
             'apiKeys' => array_values(array_unique($apiKeys)),
