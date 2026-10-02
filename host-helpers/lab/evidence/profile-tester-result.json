@@ -8,7 +8,11 @@
     "providerMetadata": true,
     "credentialRedaction": true,
     "bareProviderDiagnostic": true,
-    "blockingCompatibility": true
+    "blockingCompatibility": true,
+    "rateLimitRetried": true,
+    "parameterFallbackRetried": true,
+    "permanentFailureNotRetried": true,
+    "errorClassification": true
   },
   "streamEventCount": 8
 }

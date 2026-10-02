@@ -22,17 +22,24 @@ def load_config():
 PERSISTENCE = """
 import asyncio
 
+ATTEMPTS = {}
+
 class FakeLlm:
     def __init__(self, name):
         self.name = name
-        self.model = {"slow":"openai/slow-model","fast":"mistral/fast-model","bad":"anthropic/bad-model","bare":"gemini-2.5-flash"}[name]
+        self.model = {"slow":"openai/slow-model","fast":"mistral/fast-model","bad":"anthropic/bad-model","bare":"gemini-2.5-flash","flaky":"openrouter/flaky-model","reasoner":"openrouter/reasoning-model"}[name]
     def uses_responses_api(self):
         return False
     async def acompletion(self, **kwargs):
-        await asyncio.sleep({"slow":0.12,"fast":0.02,"bad":0.01}[self.name])
+        await asyncio.sleep({"slow":0.12,"fast":0.02,"bad":0.01,"flaky":0.01,"reasoner":0.01}[self.name])
+        ATTEMPTS[self.name] = ATTEMPTS.get(self.name, 0) + 1
         if self.name == "bad":
             secret_marker = "laboratory" + "-credential-marker"
             raise RuntimeError("authorization=" + secret_marker + " provider rejected the request")
+        if self.name == "flaky" and ATTEMPTS[self.name] < 3:
+            raise RuntimeError("429 Too Many Requests: rate limit exceeded, please retry")
+        if self.name == "reasoner" and kwargs.get("max_tokens", 0) < 16:
+            raise RuntimeError("Invalid request: max_tokens must be at least 16 for this reasoning model")
         return {"ok": True}
 
 class Store:
@@ -98,7 +105,8 @@ def main() -> int:
         secret_marker = "laboratory" + "-credential-marker"
         assert secret_marker not in streamed.stdout
         events = [json.loads(line) for line in streamed.stdout.splitlines() if line.strip()]
-        assert events[0] == {"event": "started", "total": 3, "concurrency": 2}
+        assert events[0]["event"] == "started" and events[0]["total"] == 3 and events[0]["concurrency"] == 2
+        assert events[0]["attempts"] >= 1 and events[0]["timeoutSeconds"] >= 15
         assert events[-1] == {"event": "summary", "tested": 3}
         started = [event for event in events if event.get("event") == "profile-started"]
         results = [event["result"] for event in events if event.get("event") == "result"]
@@ -113,6 +121,27 @@ def main() -> int:
         assert secret_marker not in failed["error"]["message"]
         assert all(isinstance(result["latencyMs"], int) for result in results)
         assert all(isinstance(result["queueMs"], int) for result in results)
+
+        # A rate-limited model must be retried with backoff instead of being reported as broken.
+        flaky = run_tester(root, {"profiles": ["flaky"], "concurrency": 1, "attempts": 4})
+        assert flaky.returncode == 0, flaky.stderr
+        flaky_result = json.loads(flaky.stdout)["results"][0]
+        assert flaky_result["ok"] is True, flaky_result
+        assert flaky_result["attempts"] == 3, flaky_result
+
+        # A reasoning model that rejects the two-token probe must be retried with a roomier request.
+        reasoner = run_tester(root, {"profiles": ["reasoner"], "concurrency": 1})
+        assert reasoner.returncode == 0, reasoner.stderr
+        reasoner_result = json.loads(reasoner.stdout)["results"][0]
+        assert reasoner_result["ok"] is True, reasoner_result
+        assert reasoner_result["attempts"] == 2, reasoner_result
+
+        # A genuine credential failure must stay a failure and must be classified.
+        auth = run_tester(root, {"profiles": ["bad"], "concurrency": 1, "attempts": 4})
+        auth_result = json.loads(auth.stdout)["results"][0]
+        assert auth_result["ok"] is False
+        assert auth_result["attempts"] == 1, auth_result
+        assert auth_result["errorClass"] in {"auth", "error"}, auth_result
 
         blocking = run_tester(root, {"profiles": ["fast"], "concurrency": 1})
         assert blocking.returncode == 0, blocking.stderr
@@ -139,6 +168,10 @@ def main() -> int:
                 "credentialRedaction": True,
                 "bareProviderDiagnostic": True,
                 "blockingCompatibility": True,
+                "rateLimitRetried": True,
+                "parameterFallbackRetried": True,
+                "permanentFailureNotRetried": True,
+                "errorClassification": True,
             },
             "streamEventCount": len(events),
         }

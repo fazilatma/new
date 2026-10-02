@@ -6,6 +6,9 @@
     "profileAndModelDropdownsTargeted": true,
     "unicodeSearchFilteringPassed": true,
     "emptyStatePassed": true,
+    "passedModelsHighlightedFirst": true,
+    "failedModelsAfterDivider": true,
+    "healthRequestAuthenticated": true,
     "escapeResetPassed": true,
     "keyboardSelectionPassed": true,
     "upstreamBasePathPreserved": true

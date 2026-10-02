@@ -161,6 +161,23 @@ try {
   assert.match(script, /profiles:only/, "re-running failed tests must send only the selected Profiles");
   assert.match(page, /@media\(max-width:760px\)/, "the test modal must get more room on phones");
 
+  assert.match(page, /class="bottom-nav"/, "phones must get a bottom navigation bar");
+  assert.ok((page.match(/data-nav="/g) || []).length >= 7, "every section must be reachable from the bottom navigation");
+  assert.match(script, /navButtons/, "the bottom navigation must follow the active section");
+  assert.match(page, /@media\(max-width:860px\)/, "the page must ship its mobile-first layout rules");
+  assert.match(page, /env\(safe-area-inset-bottom\)/, "the mobile layout must respect the phone safe area");
+  assert.match(page, /@media\(prefers-reduced-motion:reduce\)/, "animations must be reducible");
+  assert.match(page, /id="test-attempts"/, "the tester must expose a retry budget");
+  assert.match(page, /id="test-timeout"/, "the tester must expose a per-request timeout");
+  assert.match(script, /attempts:Number\(q\("test-attempts"\)/, "retry and timeout settings must reach the API");
+
+  const health = await (await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/model-health`, {
+    headers: { "x-session-api-key": sessionKey },
+  })).json();
+  assert.ok(Array.isArray(health.passed) && Array.isArray(health.failed), "/model-health must group the last test results");
+  const healthUnauthorized = await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/model-health`);
+  assert.equal(healthUnauthorized.status, 401, "/model-health must stay authenticated");
+
   const status = await (await fetch(`http://127.0.0.1:${managerPort}/_openhands/models-api/status`, {
     headers: { "x-session-api-key": sessionKey },
   })).json();
@@ -200,6 +217,10 @@ try {
       perRowDiagnostics: true,
       resultsExportable: true,
       roomierTestModalOnMobile: true,
+      mobileBottomNavigation: true,
+      safeAreaAndReducedMotion: true,
+      retryBudgetExposed: true,
+      modelHealthEndpointAuthenticated: true,
       apiStaysAuthenticated: true,
       sessionKeyLeak: false,
     },

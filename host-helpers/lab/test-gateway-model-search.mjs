@@ -56,6 +56,7 @@ class FakeElement {
     this.textContent = "";
     this.focused = false;
     this.clicked = 0;
+    this.parentElement = null;
   }
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
@@ -65,8 +66,26 @@ class FakeElement {
     }
   }
   getAttribute(name) { return this.attributes.has(name) ? this.attributes.get(name) : null; }
-  append(...nodes) { this.children.push(...nodes); }
-  prepend(node) { this.children.unshift(node); }
+  append(...nodes) { for (const node of nodes) { this.detach(node); node.parentElement = this; this.children.push(node); } }
+  prepend(node) { this.detach(node); node.parentElement = this; this.children.unshift(node); }
+  detach(node) { if (node.parentElement) node.parentElement.children = node.parentElement.children.filter((item) => item !== node); }
+  insertBefore(node, reference) {
+    this.detach(node);
+    node.parentElement = this;
+    const index = this.children.indexOf(reference);
+    this.children.splice(index < 0 ? 0 : index, 0, node);
+  }
+  insertAdjacentElement(position, node) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    parent.detach(node);
+    node.parentElement = parent;
+    const index = parent.children.indexOf(this);
+    parent.children.splice(position === "afterend" ? index + 1 : index, 0, node);
+  }
+  removeAttribute(name) { this.attributes.delete(name); }
+  remove() { if (this.parentElement) this.parentElement.detach(this); }
+  closest(selector) { let node = this; while (node) { if (node.matches(selector)) return node; node = node.parentElement; } return null; }
   addEventListener(type, listener) {
     const listeners = this.listeners.get(type) || [];
     listeners.push(listener);
@@ -80,6 +99,7 @@ class FakeElement {
   matches(selector) {
     if (selector === "aside") return this.tagName === "ASIDE";
     if (selector === "input") return this.tagName === "INPUT";
+    if (selector === "li") return this.tagName === "LI";
     const present = selector.match(/^\[([^=\]]+)\]$/);
     if (present) return this.attributes.has(present[1]);
     const exact = selector.match(/^\[([^=\]]+)="([^"]*)"\]$/);
@@ -142,8 +162,23 @@ function validateInjectedSearch(script) {
     querySelectorAll: (selector) => root.querySelectorAll(selector),
   };
   class FakeMutationObserver { constructor(callback) { this.callback = callback; } observe() {} }
+  const storage = (map) => ({ getItem: (name) => (name in map ? map[name] : null), setItem: (name, value) => { map[name] = String(value); } });
+  const healthCalls = [];
   const context = {
     document,
+    localStorage: storage({ "openhands-backends": JSON.stringify([{ id: "default-local", apiKey: "lab-session-key" }]) }),
+    sessionStorage: storage({}),
+    fetch: async (url, init) => {
+      healthCalls.push({ url, key: init && init.headers && init.headers["x-session-api-key"] });
+      return {
+        ok: true,
+        json: async () => ({
+          testedAt: new Date().toISOString(),
+          passed: [{ name: "local-qwen", model: "openai/qwen-local" }],
+          failed: [{ name: "openrouter-deepseek", model: "openrouter/deepseek/v4", errorClass: "auth" }],
+        }),
+      };
+    },
     MutationObserver: FakeMutationObserver,
     requestAnimationFrame: (callback) => { callback(); return 1; },
     addEventListener: () => {},
@@ -199,6 +234,27 @@ function validateInjectedSearch(script) {
   const enter = event("Enter");
   input.emit("keydown", enter);
   assert.equal(local.clicked, 1);
+  return { healthCalls, menu, local, remote, persian };
+}
+
+async function validateHealthGrouping(state) {
+  const { healthCalls, menu, local, remote, persian } = state;
+  assert.ok(healthCalls.length > 0, "the dropdown must ask the manager for the last test results");
+  assert.match(healthCalls[0].url, /\/_openhands\/models-api\/model-health$/, "health must come from the authenticated manager API");
+  assert.equal(healthCalls[0].key, "lab-session-key", "the health request must be authenticated from local storage, never from the HTML");
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(local.getAttribute("data-oh-health"), "passed", "a model that passed its test must be marked as passed");
+  assert.equal(remote.getAttribute("data-oh-health"), "failed", "a model that failed its test must be marked as failed");
+  assert.equal(persian.getAttribute("data-oh-health"), null, "an untested model must stay neutral");
+  const order = menu.children.filter((node) => node.getAttribute("data-oh-model-group") || node.getAttribute("data-testid"));
+  const labels = order.map((node) => node.getAttribute("data-oh-model-group") || node.getAttribute("data-testid"));
+  assert.deepEqual(labels, [
+    "passed",
+    "chat-input-llm-profile-option-local-qwen",
+    "chat-input-llm-profile-option-persian-model",
+    "failed",
+    "chat-input-llm-profile-option-openrouter-deepseek",
+  ], "passing models must come first, failing models must come after the divider");
   return true;
 }
 
@@ -243,7 +299,7 @@ try {
   for (const script of scripts) assert.doesNotThrow(() => new Function(script), "every injected browser script must parse");
   const enhancement = html.match(/<script id="openhands-host-sidebar-script">([\s\S]*?)<\/script>/)?.[1];
   assert.ok(enhancement);
-  validateInjectedSearch(enhancement);
+  await validateHealthGrouping(validateInjectedSearch(enhancement));
   assert.equal(gatewayStderr, "");
 
   process.stdout.write(`${JSON.stringify({
@@ -254,6 +310,9 @@ try {
       profileAndModelDropdownsTargeted: true,
       unicodeSearchFilteringPassed: true,
       emptyStatePassed: true,
+    passedModelsHighlightedFirst: true,
+    failedModelsAfterDivider: true,
+    healthRequestAuthenticated: true,
       escapeResetPassed: true,
       keyboardSelectionPassed: true,
       upstreamBasePathPreserved: true,

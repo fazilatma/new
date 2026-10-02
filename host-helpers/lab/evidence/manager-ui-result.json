@@ -18,6 +18,10 @@
     "perRowDiagnostics": true,
     "resultsExportable": true,
     "roomierTestModalOnMobile": true,
+    "mobileBottomNavigation": true,
+    "safeAreaAndReducedMotion": true,
+    "retryBudgetExposed": true,
+    "modelHealthEndpointAuthenticated": true,
     "apiStaysAuthenticated": true,
     "sessionKeyLeak": false
   }
