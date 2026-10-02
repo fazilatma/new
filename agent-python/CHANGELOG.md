@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.16 - Fixed engine downloads hanging for up to 5 minutes per candidate on filtered/sanctioned networks
+
+### Fixed
+- **Discovered live on a real affected host** (via the new `/api/localai/auto-repair` endpoint from 3.3.15): `install_runtime()`'s `curl` download could hang for the *entire* 5-minute (`-m 300`) timeout on every single download candidate before failing over to the next one, making one install/repair attempt potentially take 20+ minutes. Root cause: on some networks (e.g. sanctioned/filtered hosting), `github.com` itself is reachable, but the actual release-asset CDN it redirects to (`release-assets.githubusercontent.com`) can be silently black-holed -- the TCP/TLS connection succeeds and curl's `--connect-timeout` never triggers, but essentially zero bytes ever actually flow.
+- `curl` is now invoked with `--speed-limit 1024 --speed-time 20`, which aborts a download as soon as its sustained transfer rate drops below 1 KB/s for 20 seconds -- a genuinely dead/filtered candidate now fails over to the next one in ~20-35s instead of hanging for 5 minutes, while a merely slow (but actually progressing) connection is left alone up to the full timeout.
+- Verified with a new regression test asserting every `curl` invocation includes the `--speed-limit`/`--speed-time` flags, plus the full existing suite. 92 backend tests passing.
+
 ## 3.3.15 - Added one-shot Local AI diagnostics/repair API endpoints (GET /api/localai/diagnose, GET+POST /api/localai/auto-repair)
 
 ### Added

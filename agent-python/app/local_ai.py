@@ -737,7 +737,25 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
             dl_ok = False
             if shutil.which("curl"):
                 res = subprocess.run(
-                    ["curl", "-fSL", "--connect-timeout", "15", "-m", "300", "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url],
+                    [
+                        "curl", "-fSL", "--connect-timeout", "15", "-m", "300",
+                        # Some hosts (e.g. sanctioned/filtered networks) can
+                        # reach github.com fine but then have the actual
+                        # release-asset CDN redirect (release-assets.
+                        # githubusercontent.com) silently black-holed -- the
+                        # TCP/TLS connection succeeds but no bytes ever
+                        # really flow, so --connect-timeout never kicks in
+                        # and the download otherwise hangs for the entire
+                        # -m 300 (5 minute) cap before failing over to the
+                        # next candidate. --speed-limit/--speed-time aborts
+                        # as soon as the sustained transfer rate drops below
+                        # 1 KB/s for 20s, so a genuinely dead/filtered
+                        # candidate fails over in ~20-35s instead, while a
+                        # merely slow (but actually progressing) connection
+                        # is left alone up to the full -m 300 cap.
+                        "--speed-limit", "1024", "--speed-time", "20",
+                        "-A", "Mozilla/5.0 (ArenaAgent/3.0)", "-o", str(dest_path), url,
+                    ],
                     capture_output=True, text=True
                 )
                 if res.returncode == 0 and dest_path.is_file() and dest_path.stat().st_size > 1000:

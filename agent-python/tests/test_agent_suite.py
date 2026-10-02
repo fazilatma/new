@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.15"
+    assert APP_VERSION == "3.3.16"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3795,3 +3795,48 @@ def test_auto_repair_last_endpoint_returns_persisted_state(monkeypatch):
     data = res.json()
     assert data["ok"] is True
     assert data["engine"] == "ollama"
+
+
+def test_install_runtime_curl_download_aborts_on_stalled_connection(monkeypatch, tmp_path):
+    """Regression test for a real-world hang observed on a filtered/sanctioned
+    network: github.com itself is reachable, but the actual release-asset
+    CDN redirect can be silently black-holed -- the TCP/TLS connection
+    succeeds yet no bytes ever really flow, so curl's --connect-timeout
+    never triggers and the download used to hang for the full 5-minute
+    -m 300 cap on every single candidate before failing over, making one
+    install/repair attempt take 20+ minutes. curl must be invoked with
+    --speed-limit/--speed-time so a stalled transfer aborts in ~20-35s."""
+    from app import local_ai
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+
+    captured_cmds = []
+
+    def fake_which(name):
+        return f"/usr/bin/{name}" if name == "curl" else None
+
+    def fake_run(cmd, capture_output=None, text=None, timeout=None):
+        captured_cmds.append(cmd)
+        class _R:
+            returncode = 1
+            stdout = ""
+            stderr = "simulated stall timeout"
+        return _R()
+
+    monkeypatch.setattr(local_ai.shutil, "which", fake_which)
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+
+    def fake_urlopen(req, timeout=None):
+        raise Exception("no network access in test")
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="Could not download"):
+        local_ai.install_runtime("ollama")
+
+    assert captured_cmds, "curl should have been invoked for at least one candidate"
+    for cmd in captured_cmds:
+        assert "--speed-limit" in cmd, "curl must abort stalled/black-holed downloads instead of hanging for the full -m 300"
+        assert "--speed-time" in cmd
