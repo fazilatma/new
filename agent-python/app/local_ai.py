@@ -2146,6 +2146,12 @@ def _network_probe() -> Dict[str, Any]:
     targets = [
         ("github.com", "https://github.com"),
         ("api.github.com", "https://api.github.com"),
+        # The actual bytes behind every GitHub Releases browser_download_url
+        # (what install_runtime()'s candidates really download from after
+        # github.com redirects) are served from THIS separate CDN hostname
+        # -- not objects.githubusercontent.com (raw blobs/LFS) -- so it must
+        # be probed specifically to catch a release-asset-CDN-only block.
+        ("release-assets.githubusercontent.com", "https://release-assets.githubusercontent.com"),
         ("objects.githubusercontent.com", "https://objects.githubusercontent.com"),
         ("ollama.com", "https://ollama.com"),
     ]

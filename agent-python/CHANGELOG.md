@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.18 - Network probe now tests the actual release-asset CDN hostname, not objects.githubusercontent.com
+
+### Fixed
+- The 3.3.17 reachability probe tested `objects.githubusercontent.com` (raw git blobs/LFS), but every GitHub Releases `browser_download_url` -- what `install_runtime()`'s download candidates actually redirect to -- is served from the separate `release-assets.githubusercontent.com` hostname. On the real affected host this was found on, `github.com`/`api.github.com` and even `objects.githubusercontent.com` all probed fine while the actual release-asset CDN was the one with the problem, which the old probe list could never have caught. `release-assets.githubusercontent.com` is now probed explicitly (keeping `objects.githubusercontent.com` too, since it's still informative).
+- 92 backend tests passing (no behavioral test changes needed beyond the existing diagnose-shape test).
+
 ## 3.3.17 - diagnose_full() now reports tool availability + a direct GitHub/ollama.com reachability probe
 
 ### Added
