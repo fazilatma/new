@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "assertions": {
+    "modalRendered": true,
+    "accessibleDialogAndFocusTrap": true,
+    "generatedBrowserScriptParsed": true,
+    "responsiveMobileTablePresent": true,
+    "localEndpointGuidanceRendered": true,
+    "partialResultsObservedLive": true,
+    "activeJobRecoverableAfterRefresh": true,
+    "queuedAndRunningStatesObserved": true,
+    "queuedToRunningTransitionObserved": true,
+    "advancedMetricsPersisted": true,
+    "failedResultDetailsVisible": true,
+    "blockingCliCompatibilityPassed": true,
+    "bareModelRepairedBeforeTestRun": true,
+    "cancellationPassed": true,
+    "secretLeakInLogs": false
+  },
+  "final": {
+    "total": 3,
+    "completed": 3,
+    "passed": 2,
+    "failed": 1,
+    "progress": 100
+  }
+}

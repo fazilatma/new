@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "assertions": {
+    "runningConversationObserved": true,
+    "interruptedConversationResumed": true,
+    "idleConversationLeftAlone": true,
+    "resumeVisibleInKeeperLog": true,
+    "keeperStateSurvivesRestart": true,
+    "restartInterruptionResumed": true,
+    "keeperCanBeDisabled": true,
+    "manualResumeWorks": true,
+    "keeperExposedInStatus": true,
+    "keeperApiAuthenticated": true,
+    "sessionKeyLeak": false
+  },
+  "resumeCalls": 3
+}

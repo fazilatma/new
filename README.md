@@ -131,6 +131,170 @@ The `wcp` command is globally installed across Linux, Codespaces, and Termux:
 
 ---
 
+## 🐍 Latest Python + Rootless AI Agent Helper (No `sudo`, `apt`, or Docker)
+
+`install-python-agent.sh` is the supported path for restricted hosting accounts. It installs or upgrades `uv`, the latest stable CPython, and Open WebUI Computer (`cptr`) entirely under the account home. It also makes the new user-level `python` and `python3` launchers the defaults in future login and Bash sessions, without modifying `/usr/bin`.
+
+Download and run the helper:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-python-agent.sh -o "$HOME/install-python-agent.sh"
+```
+
+```bash
+bash "$HOME/install-python-agent.sh" install --home "$HOME"
+```
+
+If WebConsole provides an invalid `HOME`, use the real account path explicitly:
+
+```bash
+bash install-python-agent.sh install --home /home/USERNAME
+```
+
+After the first installation, all runtime operations use the installed helper command:
+
+```bash
+python-agent status
+python-agent update
+python-agent restart
+python-agent logs --follow
+python-agent doctor
+python-agent python-version
+```
+
+By default the helper installs the most reliable base `cptr` package. Optional feature sets are available during installation or update:
+
+```bash
+python-agent update --extras recommended
+```
+
+The accepted feature sets are `base`, `mcp`, `agents`, `recommended`, and `all`. The helper stores the virtual environment, data, PID, logs, and generated configuration in private account-owned paths under `~/.local` and `~/.config`.
+
+The included `open-webui-computer-rootless-project.json` imports the same helper into WebConsole, installs the newest stable Python automatically, and uses `python-agent run` for foreground process supervision.
+
+## 🤖 OpenHands Agent Canvas on Restricted Hosting (No Docker)
+
+`host-helpers/install-openhands-host.sh` installs the official `@openhands/agent-canvas` package and all required runtimes below the account home. It uses a checksummed user-local Node.js 24 release (including a verified glibc 2.17 compatibility fallback on older x86-64 hosts), user-local `uv`, and npm. It never uses `sudo`, `apt`, Docker, or systemd.
+
+Download first, then run it as a separate short command so fragile web terminals do not have to paste one long pipeline:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/01a0f230-new/host-helpers/install-openhands-host.sh -o "$HOME/install-openhands-host.sh"
+```
+
+```bash
+bash "$HOME/install-openhands-host.sh" install --home "$HOME" --port 8810 --access-host YOUR_HOST
+```
+
+After installation, use only the permanent helper command:
+
+```bash
+openhands-host status
+openhands-host update
+openhands-host restart
+openhands-host logs --follow
+openhands-host pair
+openhands-host models
+openhands-host test-models
+openhands-host access-info
+openhands-host web-check
+openhands-host doctor
+```
+
+The helper always launches Agent Canvas with `--public` and a locally generated 256-bit API key. The preferred login flow is `openhands-host pair`: it prints a short, five-minute pairing code. Open the fixed HTTPS `/open/pair` page, enter that code, and the browser configures the correct local backend and API key before immediately invalidating the code. Only a SHA-256 digest is stored on disk, each code allows at most eight attempts, and the API key is returned only after a same-origin POST validates it; neither secret is embedded in ordinary public HTML or placed in a URL. `openhands-host access-info` remains available as a manual fallback. The browser gateway also creates or repairs the local backend profile with the correct same-origin `/open` URL. The default browser base path is `/open` (override it with `--base-path`), matching WebConsole's HTTPS publisher. A generated Node gateway listens on public port `8810`, while the official Canvas ingress uses internal port `18812`. The gateway supports both WebConsole's prefix-stripping proxy and direct `/open/` requests, rewrites the prebuilt HTML/router and JavaScript manifest asset URLs, and preserves API and WebSocket routing below the prefix. `openhands-host web-check` verifies the prefixed HTML, initial JavaScript, router configuration, protected settings access, and backend readiness.
+
+Every supervised startup also idempotently seeds 12 credential-free OpenRouter LLM Profiles with the official `openrouter/<model-id>` naming: Seed 2.1 Turbo, Qwen3.8 2.4T A95B, Seed-2.0-Code, DeepSeek V4 Pro 0813, Grok 4.6, LFM2.5-2.6B free, both Nemotron 3.5 Lightning variants, Sakana Namazu, Solar Pro 4, Muse Glimmer 30B, and Muse Spark 1.2. A profile whose name already exists is never overwritten, so user edits survive restarts and future updates. The templates intentionally contain no API key and ignore third-party diagnostics such as `available`, `rateLimited`, `testDetails`, `raw`, and Worker errors. Revoke any key ever pasted into chat, create a fresh OpenRouter key, and save it only through Agent Canvas **Settings > LLM > Provider Connections**; then associate the desired profiles with that connection.
+
+Version 3 adds an authenticated model manager at `/open/models`, available after the normal browser pairing flow. Helper 3.0.1 also injects a clearly visible **⚙ مدیریت مدل‌ها** button into the lower-left corner of the main Canvas page so the feature is discoverable without typing its URL. Helper 3.0.2 fixes a generated browser-script escaping defect that prevented the import button handlers from running, and accepts provider `models` object maps in addition to arrays, `modelList`/`availableModels`, OpenAI-style `data` envelopes, flat per-model arrays, and root model-ID maps. It reports detected, newly created, already-present, linked, updated, and rejected counts separately and displays every persisted LLM Profile directly on the manager page. Only supported fields are mapped into official Provider Connections and LLM Profiles. As of Helper 3.5, every API key present in an authenticated import is automatically moved to OpenHands' encrypted Provider Connection store. An existing same-provider/same-name connection is rotated through the official `PATCH` API, and all existing Profiles belonging to that provider are linked without requiring destructive overwrite; new imported Profiles use the same connection. No key is placed inline in a Profile. The sanitized source snapshot strips credential fields, exports always set `secretsIncluded` to `false`, and imported keys are never written to HTML, logs, URLs, Git, or the one-time project JSON. Existing model settings remain unchanged unless overwrite is explicitly selected. The page and matching helper actions also export compatible provider JSON, run a two-token concurrency-limited test across all persisted profiles, and redact credentials from every test error.
+
+Helper 3.1 removes the upstream local Agent Server's hard-coded 50-profile ceiling. On every install and startup it idempotently extends Agent Canvas's already-imported compatibility module so the official profile store receives `max_profiles=None`, its own supported unlimited mode; no profile files or secrets are bypassed, and overwrites still use the official authenticated API. Bulk testing and proxy-route application now operate on the complete profile list rather than truncating it to 50.
+
+Helper 3.2 enforces OpenHands' 16,384-token minimum for managed GGUF and OpenAI-compatible local endpoints. New local profiles default to 16,384, smaller submitted values are safely raised, and startup repairs existing helper-managed or `local-*` loopback profiles that still store 8,192 without touching protected inline-key profiles. It also adds Hugging Face GGUF search by text, family/architecture, parameter-size hint, quantization, license, language, author, sort order, result count, and maximum file size; selecting a repository filters its actual files and carries the selected filename and available SHA-256 directly into the resumable installer.
+
+Helper 3.3 integrates **مدیریت مدل‌ها** directly into Agent Canvas's native desktop, collapsed, and mobile sidebars instead of showing a floating overlay. The authenticated manager now follows the Canvas visual hierarchy with a responsive tabbed workspace, compact status overview, structured forms, overflow-safe tables, keyboard-accessible navigation, per-action busy states, and dedicated views for provider JSON, proxy routing, GGUF, OpenAI-compatible endpoints, and bulk tests.
+
+Helper 3.4 makes provider imports context-safe without enabling the discouraged `ALLOW_SHORT_CONTEXT_WINDOWS` bypass. Every newly imported profile receives at least 16,384 input tokens, explicit 8,192-token values are raised automatically, and safe existing Provider-Connection profiles are repaired even when overwrite is off. Before Agent Server starts, Helper 3.4.1 atomically raises explicit short context values in stored profile documents while retaining encrypted or inline credential values and every unrelated field; the authenticated manager performs a second API-level reconciliation after startup. The import summary reports how many context windows were adjusted. Helper 3.4.2 makes llama.cpp installation retry-safe: a verified existing release archive is reused, extraction happens in a fresh path-checked staging directory, stale partial extraction directories are removed, the executable is validated before activation, and the UI displays the actual redacted job error instead of only the last progress message. Helper 3.4.3 previously selected the SHA-256-pinned official b7716 CPU runtime on x64 hosts without `libssl.so.3`; that removed the OpenSSL dependency but still required GLIBC symbols as new as 2.34 and therefore was not compatible with the target legacy host.
+
+Helper 3.5 replaces that fallback on every x64 host with the repository-shipped, SHA-256-pinned b11320 `llama-server` built as a fully static x86_64-musl ELF. It has no dynamic loader, GLIBC symbol, OpenSSL, CURL, libstdc++, libgcc, or OpenMP dependency. The permanent rootless laboratory under `host-helpers/lab/` verifies immutable source and tool hashes, builds without `apt`, `sudo`, or Docker, rejects dynamic dependencies, executes `llama-server --version`, and records evidence before the runtime is accepted. The same lab runs the real manager against a mock official API and verifies credential rotation, provider-wide Profile linking, redacted snapshots/exports/logs, and absence of inline secrets. No system package manager or root access is used.
+
+Helper 3.5.1 makes endpoint assignment model-specific during provider import. Every imported Profile receives its model-level endpoint (falling back to the provider endpoint), every bare model ID is normalized to the LiteLLM `provider/model` form, and custom endpoint providers default safely to `openai/` while native providers such as Mistral retain their own prefix. Existing same-name Profiles such as `codestral-2508` are repaired to `mistral/codestral-2508` and receive their endpoint without destructive overwrite. On startup, the manager reapplies the last redacted import snapshot so this repair reaches already-imported Profiles through Auto-Update without importing the WebConsole project JSON again.
+
+Helper 3.6 replaces the blocking bulk-test view with a live asynchronous test workspace. The authenticated UI opens an accessible modal with real-time queued/running/pass/fail rows, aggregate counters, animated progress, Profile/model/Provider columns, response and queue latency, redacted error type/detail, search, status filters, configurable concurrency, rerun, and safe cancellation. The semantic table becomes compact result cards on mobile while retaining the same live information. Results arrive incrementally from the tester as NDJSON, survive modal closing, reconnect after a page refresh, remain available to safe provider exports, and are still accessible through the blocking helper CLI for automation.
+
+Helper 3.6.1 adds an auto-focused search field to Agent Canvas's chat model/Profile dropdown and ACP model dropdown. Search matches both the Profile label and model identifier, supports unordered multi-term queries, normalizes Persian and Arabic Yeh/Kaf variants, reports an empty state, and supports Escape reset plus keyboard selection. Managed GGUF inference remains private on `127.0.0.1:18820`; installation creates a `local-<name>` Profile whose encrypted Provider Connection points to `http://127.0.0.1:18820/v1`. After the model is started and marked ready in **مدیریت مدل‌ها → GGUF محلی**, select that `local-<name>` Profile from the searchable model picker in a new Canvas conversation. No public IP or manual endpoint entry is required.
+
+Helper 3.6.2 removes the LiteLLM `LLM Provider NOT provided` failure class. A bare model identifier such as `gemini-2.5-flash-preview-tts` cannot be routed by LiteLLM, so every Profile model is canonicalized to `provider/model`. The provider is derived from the linked Provider Connection, an explicit provider field, the endpoint host, or a well-known model-family pattern, and Google `models/...` resource names are canonicalized as well. The repair runs at manager startup, during provider import, and immediately before every bulk test run, and it covers Profiles created before this release. Profiles that hold an unlinked inline credential are never rewritten, because a blind rewrite could destroy that key; they are reported as warnings instead. The tester additionally fails fast with an explicit, actionable message if a Profile still lacks its provider prefix.
+
+Helper 3.6.3 makes the local-model listening address visible and editable. The installed-model table shows each managed GGUF model's bind IP, port, and full OpenAI-compatible endpoint, and the **تنظیم** form can change both values. A changed address is applied to `llama-server`, to the managed `local-<name>` Profile, and to its encrypted Provider Connection, without ever resending the stored credential. Only `127.0.0.1`, `0.0.0.0`, `::1`, `::`, or an address that actually exists on a local interface is accepted; ports are limited to 1024-65535 and the OpenHands runtime's own ports are refused. A non-loopback bind returns an explicit exposure warning, and clients keep using loopback because the shared host publishes no extra ports.
+
+Helper 3.6.4 improves the Canvas chat view itself. Mixed Persian/Latin message text and the chat input now use automatic per-paragraph direction instead of forced left-to-right, so Persian sentences, lists, and quotes read correctly. Long code blocks, inline code, and tables scroll inside the message instead of overflowing the layout, chat scrolling no longer chains to the page, and focus outlines are visible for keyboard users. Each code block receives its own copy button, a jump-to-latest control appears whenever the user has scrolled away from the newest message, and a character counter appears for very long drafts. Ctrl/Cmd+Enter sends, Escape stops a running generation or releases the input, and Ctrl/Cmd+/ focuses the chat box; plain Enter, Shift+Enter, and a disabled send button keep Canvas's own behaviour untouched. All of it is re-applied safely after every React rerender without duplicating controls, and mobile and reduced-motion users get adapted rules.
+
+Helper 3.9.0 makes the work survive the browser. The agent loop already runs inside the Agent Server, so closing a tab, locking a phone, or losing the network never stops it; what used to stop it was a service restart or a lost run task that left the conversation persisted as paused or error. A server-side conversation keeper inside the manager now sweeps every conversation every 20 seconds, resumes exactly those that were running and got interrupted (`POST /api/conversations/{id}/run`, 409 treated as success, at most five resumes per conversation per hour, never starting new work), and keeps its watch list on disk so a manager restart resumes them too. The new «تداوم اجرا» tab shows the keeper state, the watched conversations, a manual resume button, and the keeper log, and the chat shows an offline banner that says the agent keeps working on the server instead of pretending it stopped. `host-helpers/lab/test-conversation-keeper.mjs` proves all of it against a mock Agent Server.
+
+Versioning and the changelog are a standing contract, not a habit: `AGENTS.md` records the rule, `host-helpers/lab/check-version-bump.sh` fails any helper change that ships without a `SCRIPT_VERSION` bump and a `CHANGELOG.md` entry, and `run-all.sh` runs that check plus the version guard before any gate, so the badge in the manager header, the in-app «تغییرات» tab, `/status`, and `CHANGELOG.md` can never drift apart.
+
+Helper 3.8.0 connects the test results to the chat model picker, makes the bulk test trustworthy, and rebuilds the manager page for phones. The Canvas Profile/model dropdown now asks the authenticated manager API for the last test run and shows every model that passed in green at the top, then a divider, then the models that failed; the session key is read from local storage exactly like the manager page, never embedded in HTML. The tester no longer reports healthy routes as broken: transient failures (429, quota, timeout, 5xx, dropped connections) are retried with exponential backoff and jitter, a model that rejects the two-token probe is retried once with a roomier request and no system turn, every failure is classified (auth, rate-limit, timeout, model-missing, parameters), permanent failures are never retried, concurrency goes up to 8, the per-request timeout is selectable up to 300s, and the job timeout now scales with the number of Profiles so a 470-model run cannot be cut off. The manager page gets a mobile-first rebuild: a sticky compact app bar, a bottom navigation bar for every section, 46px controls, safe-area padding, and reduced-motion support.
+
+Helper 3.7.0 makes every update visible and improves the two screens you use most. The running helper version is shown as a badge on the model-manager header, in a new "تغییرات" tab that renders the full changelog from `/status`, and on the Canvas page itself through the `data-openhands-helper` attribute, so an Auto-Update can always be confirmed; `CHANGELOG.md` is the single source for that list and the laboratory refuses to run when the helper version, the in-app changelog, and `CHANGELOG.md` disagree. Chat messages now carry their own actions: copy, edit, and resend for your own message, copy and retry for the agent answer. The bulk model-test modal gained a failed-only re-run, expandable per-row diagnostics (model, provider, endpoint host without any secret, latency, queue time, error), a copy-diagnostics button per row and for the whole filtered list, JSON and CSV export, and a roomier layout on phones.
+
+Helper 3.6.5 reworks the authenticated model-manager page. Status now refreshes automatically every few seconds and pauses while the tab is hidden, while a field is being edited, or while the test modal is open; a manual refresh button, a Ctrl+Alt+R shortcut, a last-updated indicator, and a dismissable error bar with a retry action replace the previous silent failures. The Profile list is searchable and reports how many entries match, the installed-model table collapses into readable cards on small screens, the running model is marked and its start button is disabled while it is already running, editing a model scrolls to its form, and a download that is still running is adopted again after a page reload instead of being lost. Two real escaping bugs were fixed as well: generated action attributes are now quoted, so model names and row indexes can no longer break the generated markup, and the CPU-thread suggestion no longer overwrites a value the user typed.
+
+The manager provides three outbound modes: `direct`, `direct-fallback`, and `proxy-only`. Its default URL-wrapper is `https://proxy.fazilat-ma.workers.dev/?url={url}`. A loopback-only adapter reconstructs each complete provider URL before wrapping it, so OpenAI-compatible paths such as `/chat/completions` remain inside the encoded `url` parameter; the public gateway never publishes these internal routes. Unmodified seeded OpenRouter profiles are migrated to this route automatically; other existing OpenRouter profiles can be attached from the manager page without losing their remaining fields. Provider Connections are updated through the official API rather than exposing their keys. Any URL-wrapper proxy necessarily receives the provider authorization header and prompt/response content, so enable proxy routing only when that intermediary is trusted.
+
+Local models support both requested paths. The advanced GGUF manager searches Hugging Face by requested model characteristics, discovers a current CPU-only `llama.cpp` release, records its version, verifies GitHub's asset digest when provided, accepts either a direct Hugging Face/GitHub URL or repository + filename + revision, discovers public GGUF files, sizes, and available SHA-256 hashes from a Hugging Face repository, normalizes `blob` links, and enforces HTTPS/host, 20-GiB size, free-space reserve, GGUF v2/v3 header, and optional SHA-256 checks. Large downloads use HTTP Range resume, keep safe partial files after network failure or explicit cancellation, and reject reuse when the source URL changes. The authenticated page reports CPU, RAM, disk, PID, readiness, logs, GGUF metadata, and partial progress; it can tune context size, CPU threads, logical/physical batch sizes, parallel slots, mmap, and mlock, and can start, stop, reconfigure, replace, or safely delete each managed model and its matching profile. One selected GGUF model is served only on loopback port `18820` and receives an automatic `local-<name>` profile.
+
+The same page can discover `/models`, validate, and register an existing Ollama, LM Studio, vLLM, llama.cpp, or other OpenAI-compatible endpoint. Plain HTTP is accepted only for loopback; remote endpoints require HTTPS. Context size and native tool calling are configurable, API keys go directly into encrypted Provider Connections, and are never returned by the probe. CPU inference on shared hosting can still be slow and is limited by the account's RAM, disk, and process quotas.
+
+Helper automation examples:
+
+```bash
+openhands-host models
+openhands-host providers-export --file "$HOME/openhands-providers.json"
+openhands-host providers-import --file "$HOME/openhands-providers.json"
+openhands-host test-models
+openhands-host proxy-config --proxy-mode direct-fallback
+openhands-host local-model-search --search coder --family Qwen --parameter-size 7B --quantization Q4_K_M --license apache-2.0 --language fa --max-file-size-gb 8
+openhands-host local-model-discover --hf-repo OWNER/REPO --quantization Q4_K_M --max-file-size-gb 8
+openhands-host local-model-install --name qwen-small --hf-repo OWNER/REPO --model-filename model-Q4_K_M.gguf --context-length 16384 --threads 4 --batch-size 512 --ubatch-size 256
+openhands-host local-model-list
+openhands-host local-model-config --name qwen-small --context-length 16384 --threads 4 --parallel 2
+openhands-host local-model-start --name qwen-small
+openhands-host local-model-stop
+openhands-host local-model-delete --name qwen-small --yes
+openhands-host local-endpoint-test --base-url http://127.0.0.1:11434/v1
+openhands-host local-endpoint-add --name ollama --base-url http://127.0.0.1:11434/v1 --model qwen2.5-coder --context-length 32768
+```
+
+Provider import automatically stores any key found in the selected JSON inside an encrypted Provider Connection; keep credential files protected by mode `600` and remove them after import. `--import-secrets` remains only as a backward-compatible no-op flag. Use `--api-key-file` rather than placing an endpoint key in shell history.
+
+The included `openhands-agent-canvas-project.json` is ready to import once in WebConsole's **Create Project** dialog. It enables branch auto-update every 60 seconds and executes the helper directly from the deployed branch checkout. Future pushes to `arena/01a0f230-new` are therefore fetched, installed, and restarted automatically without importing another JSON. The profile uses port `8810`, foreground helper supervision, and the real account home path rather than Docker. On each launch, `run` takes an atomic account-local startup lock, removes all recognizable account-owned OpenHands launchers and runtimes from the preceding deployment even if they have not bound a port yet, confirms that any remaining port owner is unknown and leaves it untouched, and then starts one supervised Canvas/gateway pair. A continuous readiness watchdog probes the Python Agent Server's own internal `/server_info` and protected `/api/settings` endpoints instead of trusting the Canvas ingress `/health` route (which can stay green after its backend dies). The protected request also verifies that the running backend accepts the API key currently stored by the helper. Startup is not published until both probes succeed, and three consecutive runtime or key-synchronization failures terminate the whole pair so WebConsole's daemon supervision restarts a clean stack instead of leaving a frontend that returns `502 Bad Gateway` or `Invalid API key`. Key rotation writes the replacement secret before stopping the old process, preventing an immediate WebConsole relaunch from racing ahead with the retired key.
+
+> **Security warning:** direct Agent Canvas execution is not sandboxed. An authenticated agent receives the same filesystem, shell, and network permissions as the hosting account. Do not send the API key over an untrusted plain-HTTP network, and do not expose an account that contains unrelated production credentials.
+
+## 🐳 Rootless Docker Helper (Provider Features Required)
+
+Restricted Linux hosts can run the prerequisite check and install Docker under the hosting account with the helper below. The host must already provide `newuidmap`, `newgidmap`, subordinate UID/GID ranges, unprivileged user namespaces, and container networking support.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash
+```
+
+Install Docker and then deploy Agent Zero on port `50080`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash -s -- --install-agent-zero
+```
+
+For a WebConsole session whose `HOME` is unset or invalid, provide the real account home explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/main/install-rootless-docker.sh | bash -s -- --home /home/USERNAME --install-agent-zero
+```
+
+The helper fails safely when the hosting provider has disabled a required kernel/account feature; a `curl` installer cannot bypass those restrictions.
+
+---
+
 ## 📄 License
 
 Open-source under the MIT License. Developed for automated web operations, cloud scraping, and edge computing.

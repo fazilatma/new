@@ -1,0 +1,29 @@
+{
+  "status": "passed",
+  "assertions": {
+    "generatedScriptParsed": true,
+    "quotedAttributesEnforced": true,
+    "manualRefreshControl": true,
+    "globalErrorBarWithRetry": true,
+    "searchableProfileList": true,
+    "lastUpdatedIndicator": true,
+    "responsiveCardTables": true,
+    "pausedAutoRefresh": true,
+    "threadSuggestionNotClobbered": true,
+    "installJobRecoverable": true,
+    "statusContractComplete": true,
+    "versionVisibleInUi": true,
+    "changelogPanelRendered": true,
+    "failedOnlyRerun": true,
+    "perRowDiagnostics": true,
+    "resultsExportable": true,
+    "roomierTestModalOnMobile": true,
+    "mobileBottomNavigation": true,
+    "safeAreaAndReducedMotion": true,
+    "retryBudgetExposed": true,
+    "modelHealthEndpointAuthenticated": true,
+    "continuityPanelPresent": true,
+    "apiStaysAuthenticated": true,
+    "sessionKeyLeak": false
+  }
+}

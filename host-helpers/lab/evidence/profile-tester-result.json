@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "assertions": {
+    "streamStartedEvent": true,
+    "perProfileRunningEvents": true,
+    "resultsArrivedAsCompleted": true,
+    "latencyAndQueueMetrics": true,
+    "providerMetadata": true,
+    "credentialRedaction": true,
+    "bareProviderDiagnostic": true,
+    "blockingCompatibility": true,
+    "rateLimitRetried": true,
+    "parameterFallbackRetried": true,
+    "permanentFailureNotRetried": true,
+    "errorClassification": true
+  },
+  "streamEventCount": 8
+}

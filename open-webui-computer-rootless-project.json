@@ -1,0 +1,23 @@
+{
+  "name": "Open WebUI Computer (Helper Managed, No Docker)",
+  "type": "other",
+  "repo_url": "https://github.com/open-webui/computer.git",
+  "branch": "main",
+  "subfolder": "",
+  "deploy_path": "",
+  "port": "8800",
+  "install_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; [ -d \"$ACCOUNT_HOME\" ] && [ -w \"$ACCOUNT_HOME\" ] || { echo \"ERROR: account home is missing or not writable: $ACCOUNT_HOME\" >&2; exit 1; }; mkdir -p \"$ACCOUNT_HOME/.cache/webconsole-agent\"; HELPER=\"$ACCOUNT_HOME/.cache/webconsole-agent/install-python-agent.sh\"; HELPER_URL=\"${HELPER_URL:-https://raw.githubusercontent.com/fazilatma/new/ede51e663bc57665f55e95f6c980ec9ae13aed2b/install-python-agent.sh}\"; curl -fsSL \"$HELPER_URL\" -o \"$HELPER\"; chmod 700 \"$HELPER\"; bash \"$HELPER\" install --home \"$ACCOUNT_HOME\" --port \"${PORT:-8800}\" --python \"${PYTHON_VERSION:-latest}\" --extras \"${CPTR_EXTRAS:-base}\" --workspace \"$PWD\" --no-start",
+  "build_cmd": "",
+  "start_cmd": "ACCOUNT_HOME=\"${ACCOUNT_HOME:-/home/sabashop}\"; exec \"$ACCOUNT_HOME/.local/bin/python-agent\" run --port \"${PORT:-8800}\" --workspace \"$PWD\"",
+  "env": {
+    "ACCOUNT_HOME": "/home/sabashop",
+    "HELPER_URL": "https://raw.githubusercontent.com/fazilatma/new/ede51e663bc57665f55e95f6c980ec9ae13aed2b/install-python-agent.sh",
+    "PYTHON_VERSION": "latest",
+    "CPTR_EXTRAS": "base",
+    "PYTHONUNBUFFERED": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1"
+  },
+  "auto_start": true,
+  "is_daemon": true,
+  "preserve_configs": true
+}
