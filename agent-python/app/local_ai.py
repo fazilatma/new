@@ -204,9 +204,34 @@ def host_url() -> str:
     return DEFAULT_HOST
 
 
+def _usable_home_dir() -> str:
+    """Return a HOME directory guaranteed to exist and be writable.
+
+    Several hosting-panel/process-manager launchers start this server with
+    no $HOME at all (or one that doesn't exist / isn't writable under the
+    service account actually running it). The ollama/llama.cpp binaries are
+    Go/C++ programs that call os.UserHomeDir() during startup (e.g. to create
+    ~/.ollama's local identity key) and hard-fail with exactly
+    "Error: $HOME is not defined" when it's missing — regardless of whatever
+    OLLAMA_MODELS/working directory this app has already configured. Always
+    fall back to a real, writable directory under our own data dir so local
+    AI model installs never depend on the parent process's environment.
+    """
+    home_dir = os.environ.get("HOME")
+    if home_dir and os.path.isdir(home_dir) and os.access(home_dir, os.W_OK):
+        return home_dir
+    fallback_home = root_dir() / "home"
+    try:
+        fallback_home.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return str(fallback_home)
+
+
 def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     defaults = {
+        "HOME": _usable_home_dir(),
         "OLLAMA_MODELS": str(models_dir()),
         "OLLAMA_HOST": host_url().replace("http://", "").replace("https://", ""),
         "OLLAMA_KEEP_ALIVE": os.environ.get("OLLAMA_KEEP_ALIVE", "10m"),

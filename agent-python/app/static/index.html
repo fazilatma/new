@@ -2267,9 +2267,10 @@
           max-height:260px;overflow:auto;font-size:11.5px;direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all}
 #view-localai .path-box {direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
              font-size:12px;background:rgba(0,0,0,.25);padding:6px 10px;border-radius:8px;margin:4px 0;word-break:break-all}
-#view-localai .toast {position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:20px;z-index:999;
+#view-localai .toast {position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:999;
          background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;display:none;
-         box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13.5px;max-width:90%;text-align:center}
+         box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13.5px;max-width:min(90vw,460px);text-align:center;
+         word-break:break-word}
 #view-localai .split {display:grid;grid-template-columns:1fr;gap:16px}
 #view-localai .rt-btn-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
 #view-localai .check-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0 8px}
@@ -2328,7 +2329,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.2)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.3)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2411,7 +2412,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.3.2
+          🚀 v3.3.3
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -3312,6 +3313,23 @@
 <div class="toast" id="toast"></div>
     </section>
   </main>
+</div>
+
+<!-- MODAL: ERROR / WARNING / SUCCESS MESSAGE (with copy-to-clipboard) -->
+<div class="modal-backdrop" id="messageModal">
+  <div class="modal-dialog" style="max-width:520px;">
+    <div class="modal-header">
+      <h3 id="messageModalTitle">⛔ خطا</h3>
+      <button class="modal-close" onclick="closeModal('messageModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre id="messageModalText" style="white-space:pre-wrap;word-break:break-word;direction:auto;text-align:start;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.6;margin:0;max-height:50vh;overflow:auto;background:rgba(0,0,0,.2);border-radius:8px;padding:12px;"></pre>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="messageModalCopyBtn" onclick="copyMessageModalText()">📋 کپی متن</button>
+      <button class="btn pri" onclick="closeModal('messageModal')">بستن</button>
+    </div>
+  </div>
 </div>
 
 <!-- MODAL: ADD / EDIT PROVIDER (Phase 11) -->
@@ -4501,6 +4519,59 @@ function toggleTheme() {
 
 function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
+
+// -------------------------------------------------------------
+// Error / warning message modal — used instead of a floating toast for
+// error & warning notifications (toasts positioned via `left/right: 50%` +
+// `transform: translateX(-50%)` tricks render partially or fully off-screen
+// on narrow/mobile viewports in this app's RTL layout, and long error text
+// gets truncated with no way to read or copy the full message). This modal
+// reuses the app's existing modal-backdrop/modal-dialog styling so it's
+// properly centered and scrollable on any screen size, and includes a
+// "copy text" button so the user can paste the exact error elsewhere.
+// -------------------------------------------------------------
+function showMessageModal(message, kind) {
+  const icons = { err: '⛔', warn: '⚠️', ok: '✅' };
+  const titles = { err: 'خطا', warn: 'هشدار', ok: 'موفقیت' };
+  const icon = icons[kind] || 'ℹ️';
+  const title = titles[kind] || 'پیام';
+  const titleEl = $('#messageModalTitle');
+  const textEl = $('#messageModalText');
+  const colors = { err: '#f87171', warn: '#fbbf24', ok: '#34d399' };
+  if (titleEl) {
+    titleEl.textContent = `${icon} ${title}`;
+    titleEl.style.color = colors[kind] || '';
+  }
+  if (textEl) textEl.textContent = String(message ?? '');
+  openModal('messageModal');
+}
+
+async function copyMessageModalText() {
+  const textEl = $('#messageModalText');
+  const text = textEl ? textEl.textContent : '';
+  const btn = $('#messageModalCopyBtn');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    if (btn) {
+      const original = btn.textContent;
+      btn.textContent = '✅ کپی شد';
+      setTimeout(() => { btn.textContent = original; }, 1800);
+    }
+  } catch (e) {
+    if (btn) btn.textContent = '❌ کپی ناموفق بود';
+  }
+}
 
 // -------------------------------------------------------------
 // INITIALIZATION
@@ -9639,6 +9710,16 @@ const fa = (n, d = 1) => Number(n || 0).toLocaleString('fa-IR', { maximumFractio
 
 let toastTimer = null;
 function toast(msg, kind) {
+  // Errors and warnings get the full message modal (with a copy-text
+  // button) instead of the floating toast bar: on narrow/mobile viewports
+  // the toast's centering (inset-inline-start:50% + transform:translateX)
+  // could render partially or fully off-screen in this app's RTL layout,
+  // and long error text (stack traces, multi-line logs) was silently
+  // truncated by the toast's fixed size with no way to read or copy it.
+  if ((kind === 'err' || kind === 'warn') && typeof window.showMessageModal === 'function') {
+    window.showMessageModal(msg, kind);
+    return;
+  }
   const t = $('#toast');
   t.textContent = msg;
   t.style.display = 'block';

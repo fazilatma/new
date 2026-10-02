@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.3 - "$HOME is not defined" Blocked Every Model Install; Errors Now Show in a Copyable Modal
+
+### Fixed
+- **Every local model install/download failed with "Local AI server did not become ready within 20s. Log: Error: $HOME is not defined" (repeated several times)**, which also made the model-recommendation flow look completely broken (recommendations rendered fine, but clicking "نصب" / Install on any of them hit this same failure). Root cause: on some hosting-panel/process-manager deployments, the Python server itself is launched with no `$HOME` environment variable at all (or one pointing at a path that doesn't exist/isn't writable under the service account actually running it). `server_env()` — used to build the environment for the `ollama serve` / `llama-server` / `ollama create` subprocesses — blindly copied `os.environ` as-is, so the spawned binary inherited that same missing `$HOME`. Both ollama and llama.cpp are Go/C++ programs that call `os.UserHomeDir()` during startup (e.g. to create `~/.ollama`'s local identity key) and hard-fail with exactly that `$HOME is not defined` message when it's unset — independent of `OLLAMA_MODELS` or any other directory this app had already configured correctly. `server_env()` now always injects a real, writable `HOME` (falling back to a directory under the app's own local-AI data folder whenever the parent process's own `$HOME` is missing, nonexistent, or unwritable), so installs no longer depend on how the hosting environment happened to launch this server.
+
+### Changed
+- **Error and warning messages in the Local AI panel are now shown in a modal dialog with a "copy text" button, instead of the floating toast bar.** The toast was centered using `inset-inline-start: 50%` combined with a physical `transform: translateX(-50%)` — a combination that only centers correctly in LTR layouts; in this app's RTL (`dir="rtl"`) layout it resolved to `right: 50%` plus an *additional* leftward shift, pushing the toast well past center and, on narrow/mobile viewports, off the visible edge of the screen entirely. Longer error text (multi-line logs, stack traces) was also silently cut off by the toast's small fixed footprint with no way to read the rest or copy it. Errors/warnings now open a properly centered, scrollable modal (reusing the app's existing modal styling, so it behaves correctly at any viewport size) showing the complete message with a one-click "📋 کپی متن" button; success/info messages still use the lightweight toast, whose own centering was also fixed to use a direction-independent `left: 50%`.
+
 ## 3.3.2 - Every Local AI Button Was Broken by an Un-serialized Request Body
 
 ### Fixed

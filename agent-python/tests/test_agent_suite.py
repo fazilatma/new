@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.2"
+    assert APP_VERSION == "3.3.3"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -2259,12 +2259,37 @@ def test_localai_host_endpoint_returns_flat_shape_for_frontend():
     assert "modelsDir" in data["runtime"]
 
 
+def test_localai_server_env_always_has_a_usable_home(monkeypatch):
+    """Regression test: several hosting-panel/process-manager launchers start
+    this server with no $HOME at all (or one that doesn't exist / isn't
+    writable under the service account actually running it). The ollama/
+    llama.cpp binaries are Go/C++ programs that call os.UserHomeDir() during
+    startup (e.g. to create ~/.ollama's local identity key) and hard-fail
+    with exactly "Error: $HOME is not defined" when it's missing — this was
+    reported as every single model install failing with
+    "Local AI server did not become ready within 20s. Log: Error: $HOME is
+    not defined" repeated several times. server_env() must always inject a
+    real, writable HOME regardless of what the parent process's own
+    environment looks like.
+    """
+    from app import local_ai
 
+    # Simulate a launcher that provides no HOME at all.
+    monkeypatch.delenv("HOME", raising=False)
+    env = local_ai.server_env()
+    assert env.get("HOME"), "server_env() must always set a non-empty HOME"
+    assert os.path.isdir(env["HOME"]), "the injected HOME must actually exist"
+    assert os.access(env["HOME"], os.W_OK), "the injected HOME must be writable"
 
+    # Simulate a launcher that provides a HOME pointing at a non-existent/
+    # unwritable path (e.g. a stale value from an unrelated container image).
+    monkeypatch.setenv("HOME", "/this/path/does/not/exist/at/all")
+    env2 = local_ai.server_env()
+    assert os.path.isdir(env2["HOME"])
+    assert os.access(env2["HOME"], os.W_OK)
 
-
-
-
-
-
-
+    # A real, writable HOME supplied by the parent process must be preserved
+    # as-is (no unnecessary override).
+    monkeypatch.setenv("HOME", tempfile.gettempdir())
+    env3 = local_ai.server_env()
+    assert env3["HOME"] == tempfile.gettempdir()
