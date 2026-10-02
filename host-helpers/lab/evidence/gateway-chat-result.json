@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "assertions": {
+    "chatStylingInjected": true,
+    "automaticTextDirection": true,
+    "responsiveAndReducedMotionRules": true,
+    "injectedScriptsParsed": true,
+    "jumpToLatestWorks": true,
+    "rerenderDoesNotDuplicateControls": true,
+    "perCodeBlockCopyWorks": true,
+    "longMessageCounterWorks": true,
+    "acceleratorSendWorks": true,
+    "disabledSendNeverForced": true,
+    "plainEnterUntouched": true,
+    "escapeStopsGeneration": true,
+    "escapeReleasesInput": true,
+    "focusShortcutWorks": true
+  }
+}
