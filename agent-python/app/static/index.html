@@ -2195,6 +2195,125 @@
         padding: 3px 8px;
       }
     }
+
+    /* ===== Local AI Installer view (merged from former static/localai.html) ===== */
+#view-localai {
+    --bg:#0b1020; --panel:#121a33; --panel2:#0f1730; --panel3:#182245; --line:#24304f; --txt:#e6ecff;
+    --mut:#93a2c9; --acc:#5b8cff; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; --rad:14px;
+  }
+#view-localai * {box-sizing:border-box}
+#view-localai a {color:var(--acc);text-decoration:none}
+#view-localai .wrap {max-width:1200px;margin:0 auto;padding:18px 16px 80px;box-sizing:border-box}
+#view-localai header.top {display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+#view-localai header.top h1 {font-size:20px;margin:0;line-height:1.3;display:flex;align-items:center;gap:8px}
+#view-localai .sp {flex:1}
+#view-localai .top-row-1 {display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#view-localai .top-actions {display:flex;align-items:center;gap:8px}
+#view-localai .card {background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);padding:16px;margin-bottom:16px;box-sizing:border-box;overflow:hidden}
+#view-localai .card h2 {font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:6px}
+#view-localai .grid {display:grid;gap:12px}
+#view-localai .g2 {grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+#view-localai .g4 {grid-template-columns:repeat(4,1fr)}
+#view-localai .stat {background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;box-sizing:border-box}
+#view-localai .stat b {display:block;font-size:18px;font-weight:700;line-height:1.2}
+#view-localai .stat span {color:var(--mut);font-size:12px;display:block;margin-top:3px;word-break:break-word}
+#view-localai label.lb {display:block;font-size:13px;color:var(--mut);margin:0 0 5px;font-weight:500}
+#view-localai .inp,
+  #view-localai select,
+  #view-localai textarea {width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+       border-radius:10px;padding:9px 11px;font:inherit;font-size:14px;box-sizing:border-box;transition:border-color .15s}
+#view-localai .inp:focus,
+  #view-localai select:focus,
+  #view-localai textarea:focus {outline:none;border-color:var(--acc)}
+#view-localai .btn {background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:10px;
+       padding:9px 14px;cursor:pointer;font:inherit;font-size:14px;transition:.15s;display:inline-flex;align-items:center;justify-content:center;gap:6px;text-align:center;box-sizing:border-box}
+#view-localai .btn:hover {border-color:var(--acc)}
+#view-localai .btn.pri {background:linear-gradient(135deg,#3b6ef0,#5b8cff);border-color:transparent;color:#fff;font-weight:700}
+#view-localai .btn.ok {background:linear-gradient(135deg,#059669,#10b981);border-color:transparent;color:#fff;font-weight:700}
+#view-localai .btn.danger {border-color:#7f1d1d;color:#fca5a5;background:rgba(239,68,68,.08)}
+#view-localai .btn:disabled {opacity:.5;cursor:not-allowed}
+#view-localai .btn.sm {padding:6px 11px;font-size:12.5px}
+#view-localai .btn.xs {padding:3px 8px;font-size:11.5px;border-radius:6px}
+#view-localai .chips {display:flex;flex-wrap:wrap;gap:7px}
+#view-localai .chip {border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:6px 12px;
+        cursor:pointer;font-size:12.5px;user-select:none;transition:.15s;display:inline-flex;align-items:center;gap:4px}
+#view-localai .chip:hover {border-color:var(--mut)}
+#view-localai .chip.on {background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
+#view-localai .row {display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#view-localai .tag {display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:11.5px;color:var(--mut);line-height:1.4}
+#view-localai .tag.ok {color:#6ee7b7;border-color:#065f46;background:rgba(16,185,129,.08)}
+#view-localai .tag.warn {color:#fcd34d;border-color:#78350f;background:rgba(245,158,11,.08)}
+#view-localai .tag.err {color:#fca5a5;border-color:#7f1d1d;background:rgba(239,68,68,.08)}
+#view-localai .tag.info {color:#93c5fd;border-color:#1e3a8a;background:rgba(59,130,246,.08)}
+#view-localai .ltr {direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#view-localai .hint {color:var(--mut);font-size:12.5px;line-height:1.5}
+#view-localai .bar {height:8px;background:#1b2440;border-radius:99px;overflow:hidden}
+#view-localai .bar>i {display:block;height:100%;background:linear-gradient(90deg,#3b6ef0,#10b981);transition:width .3s}
+#view-localai .tbl-wrap {width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:6px 0}
+#view-localai table {width:100%;border-collapse:collapse;font-size:13px;min-width:320px}
+#view-localai th,
+  #view-localai td {padding:9px 8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle}
+#view-localai th {color:var(--mut);font-weight:600;font-size:12px;background:rgba(0,0,0,.15)}
+#view-localai .rec {border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:var(--panel2);box-sizing:border-box}
+#view-localai .rec.best {border-color:var(--ok);box-shadow:0 0 0 1px rgba(16,185,129,.25)}
+#view-localai .rec-header {display:flex;flex-direction:column;gap:8px}
+#view-localai .rec-title-bar {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+#view-localai .rec-title-bar h3 {margin:0;font-size:15.5px}
+#view-localai .rec-actions {display:flex;align-items:center;gap:8px}
+#view-localai .rec-tags {display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+#view-localai .rec-metrics {display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;padding:8px 0;border-top:1px dashed var(--line);border-bottom:1px dashed var(--line)}
+#view-localai .rec ul {margin:8px 0 0;padding-inline-start:18px;color:var(--mut);font-size:12.5px;line-height:1.6}
+#view-localai pre.log {background:#070b16;border:1px solid var(--line);border-radius:10px;padding:10px;
+          max-height:260px;overflow:auto;font-size:11.5px;direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-all}
+#view-localai .path-box {direction:ltr;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+             font-size:12px;background:rgba(0,0,0,.25);padding:6px 10px;border-radius:8px;margin:4px 0;word-break:break-all}
+#view-localai .toast {position:fixed;inset-inline-start:50%;transform:translateX(-50%);bottom:20px;z-index:999;
+         background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;display:none;
+         box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13.5px;max-width:90%;text-align:center}
+#view-localai .split {display:grid;grid-template-columns:1fr;gap:16px}
+#view-localai .rt-btn-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+#view-localai .check-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:12px 0 8px}
+#view-localai .check-item {display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;background:var(--panel2);padding:6px 10px;border-radius:8px;border:1px solid var(--line);user-select:none}
+#view-localai .model-card {background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;transition:border-color .15s}
+#view-localai .model-card:hover {border-color:var(--acc)}
+#view-localai .model-card-top {display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}
+#view-localai .model-card-title {font-weight:700;font-size:14px;color:var(--txt)}
+#view-localai .model-card-tags {display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+#view-localai .model-card-desc {font-size:12px;color:var(--mut);line-height:1.5;margin:4px 0}
+#view-localai .model-card-bottom {display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.05);flex-wrap:wrap}
+#view-localai .filter-tabs {display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+#view-localai .tab-btn {border:1px solid var(--line);background:var(--panel2);color:var(--mut);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;transition:.15s}
+#view-localai .tab-btn:hover {color:var(--txt);border-color:var(--mut)}
+#view-localai .tab-btn.active {background:rgba(91,140,255,.18);border-color:var(--acc);color:#cfe0ff;font-weight:700}
+#view-localai .custom-pull-box {background:rgba(0,0,0,.2);border:1px dashed var(--line);border-radius:10px;padding:10px;margin-top:12px}
+@media(min-width:980px){
+#view-localai .split {grid-template-columns:1.15fr .85fr}
+}
+
+  @media(max-width:768px){
+#view-localai .wrap {padding:12px 10px 70px}
+#view-localai header.top {flex-direction:column;align-items:stretch;gap:10px}
+#view-localai .top-row-1 {display:flex;align-items:center;justify-content:space-between;width:100%}
+#view-localai .top-actions {display:grid;grid-template-columns:1fr 1fr;width:100%;gap:8px}
+#view-localai .top-actions .btn {width:100%;padding:8px 6px;font-size:12px}
+#view-localai .g4 {grid-template-columns:repeat(2,1fr);gap:8px}
+#view-localai .card {padding:14px 12px;border-radius:12px;margin-bottom:12px}
+#view-localai .card h2 {font-size:15px}
+#view-localai .stat {padding:10px}
+#view-localai .stat b {font-size:16px}
+#view-localai .stat span {font-size:11.5px}
+#view-localai #btn-rec {width:100%;padding:11px;font-size:14.5px}
+#view-localai .rt-btn-grid {grid-template-columns:1fr 1fr 1fr;gap:6px}
+#view-localai .rt-btn-grid .btn {padding:8px 4px;font-size:12px}
+}
+
+  @media(max-width:480px){
+#view-localai .stat b {font-size:15px}
+#view-localai .check-grid {grid-template-columns:1fr}
+#view-localai .model-card-top {flex-direction:column;align-items:stretch}
+#view-localai .model-card-bottom {flex-direction:column;align-items:stretch;gap:6px}
+}
+
   </style>
 </head>
 <body>
@@ -2209,7 +2328,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.0)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.1)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2235,8 +2354,8 @@
       <button class="nav-btn" data-view="providers" onclick="navigate('providers')">
         <span class="icon">🤖</span><span class="nav-text">Providers & Models</span>
       </button>
-      <button type="button" class="nav-btn" data-view="localai" onclick="openLocalAi()" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور - در تب جدید باز می‌شود (Local AI installer - opens in a new tab)">
-        <span class="icon">🧠</span><span class="nav-text">Local AI Installer ↗</span>
+      <button type="button" class="nav-btn" data-view="localai" onclick="navigate('localai')" title="نصب و اجرای مدل هوش مصنوعی روی همین سرور (Local AI installer)">
+        <span class="icon">🧠</span><span class="nav-text">Local AI Installer</span>
       </button>
       <button class="nav-btn" data-view="changesets" onclick="navigate('changesets')">
         <span class="icon">🔍</span><span class="nav-text">Approvals & Diff</span>
@@ -2292,7 +2411,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.3.0
+          🚀 v3.3.1
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -2978,6 +3097,219 @@
           <button class="btn btn-ghost btn-sm" style="margin-top:12px;" onclick="openCreateUserModal()">+ افزودن کاربر جدید</button>
         </div>
       </div>
+    </section>
+
+    <!-- VIEW: LOCAL AI INSTALLER (merged from former static/localai.html so
+         it is a single unified project file and a real SPA view instead of
+         a separate page/tab) -->
+    <section class="view-panel" id="view-localai">
+<div class="wrap">
+
+  <header class="top">
+    <div class="top-row-1">
+      <h1>🧠 هوش مصنوعی محلی</h1>
+      <span class="tag" id="rt-badge">در حال بررسی…</span>
+    </div>
+    <span class="sp"></span>
+    <div class="top-actions">
+      <button type="button" class="btn sm" onclick="navigate('chat')">🏠 بازگشت به دستیار</button>
+      <button class="btn sm" id="btn-rescan">🔄 اسکن مجدد سخت‌افزار</button>
+    </div>
+  </header>
+
+  <!-- ─────────────────────────── 1. host -->
+  <section class="card">
+    <h2>۱) مشخصات سخت‌افزار سرور</h2>
+    <div class="grid g4" id="host-stats"><div class="hint">در حال خواندن مشخصات سرور…</div></div>
+    <div class="row" style="margin-top:10px">
+      <span class="hint" id="host-extra"></span>
+    </div>
+  </section>
+
+  <div class="split">
+    <div>
+      <!-- ─────────────────────── 2. wizard -->
+      <section class="card">
+        <h2>۲) انتخاب هدف و کاربرد مدل</h2>
+
+        <label class="lb">کاربرد مورد نظر (یک یا چند مورد را انتخاب کنید)</label>
+        <div class="chips" id="tasks"></div>
+
+        <div class="grid g2" style="margin-top:14px">
+          <div>
+            <label class="lb">بودجهٔ رم (گیگابایت) — هر مقداری قابل تنظیم است</label>
+            <div class="row" style="gap:8px;flex-wrap:nowrap;align-items:center">
+              <input type="range" id="ram" min="0.5" max="128" step="0.5" class="inp" style="padding:0;flex:2">
+              <input type="number" id="ram-num" class="inp ltr" min="0.5" step="0.5" style="flex:1;min-width:90px">
+            </div>
+            <div class="hint" id="ram-hint"></div>
+          </div>
+          <div>
+            <label class="lb">حافظهٔ کارت گرافیک (VRAM) — گیگابایت</label>
+            <input type="number" id="vram" class="inp ltr" min="0" step="0.5" value="0">
+            <div class="hint">۰ یعنی پردازش روی پردازنده اصلی (CPU).</div>
+          </div>
+          <div>
+            <label class="lb">فضای دیسک قابل‌استفاده — گیگابایت</label>
+            <input type="number" id="disk" class="inp ltr" min="1" step="1" value="20">
+          </div>
+          <div>
+            <label class="lb">طول پنجرهٔ متن (Context)</label>
+            <select id="ctx">
+              <option value="4096">۴هزار توکن — کم‌مصرف و سریع</option>
+              <option value="8192" selected>۸هزار توکن — متعادل و پیشنهادی</option>
+              <option value="16384">۱۶هزار توکن</option>
+              <option value="32768">۳۲هزار توکن — فایل‌های طولانی</option>
+              <option value="131072">۱۲۸هزار توکن — مخزن کامل کد</option>
+            </select>
+          </div>
+          <div>
+            <label class="lb">اولویت پاسخ</label>
+            <select id="priority">
+              <option value="speed">بیشترین سرعت پاسخ‌دهی</option>
+              <option value="balanced" selected>متعادل (کیفیت و سرعت)</option>
+              <option value="quality">بالاترین دقت و توان استدلال</option>
+            </select>
+          </div>
+          <div>
+            <label class="lb">درخواست‌های هم‌زمان (Concurrency)</label>
+            <input type="number" id="conc" class="inp ltr" min="1" max="16" value="1">
+          </div>
+          <div>
+            <label class="lb">حداقل سرعت مطلوب (توکن/ثانیه)</label>
+            <input type="number" id="mintps" class="inp ltr" min="0" step="1" value="0">
+          </div>
+          <div>
+            <label class="lb">زبان‌های مورد نیاز</label>
+            <div class="chips" id="langs"></div>
+          </div>
+        </div>
+
+        <div class="check-grid">
+          <label class="check-item"><input type="checkbox" id="tool" checked> ابزارفراخوانی (Tools)</label>
+          <label class="check-item"><input type="checkbox" id="vision"> درک تصویر (Vision)</label>
+          <label class="check-item"><input type="checkbox" id="commercial"> لایسنس تجاری</label>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn pri" id="btn-rec" style="flex:1">🔎 جست‌وجو و پیشنهاد بهترین مدل</button>
+          <button class="btn sm" id="btn-save-prof" title="ذخیره این تنظیمات سخت‌افزاری">💾 ذخیره پروفایل</button>
+        </div>
+      </section>
+
+      <!-- ─────────────────────── 3. results -->
+      <section class="card" id="rec-card" style="display:none">
+        <h2>۳) مدل‌های پیشنهادی متناسب با سرور شما</h2>
+        <div id="rec-list"></div>
+        <details style="margin-top:8px">
+          <summary class="hint" style="cursor:pointer">مدل‌هایی که رد شدند و دلیل عدم تطابق</summary>
+          <div id="rec-rejected" style="margin-top:8px"></div>
+        </details>
+      </section>
+
+      <!-- ─────────────────────── 4. install -->
+      <section class="card" id="job-card" style="display:none">
+        <h2>۴) وضعیت نصب مدل</h2>
+        <div id="job-plan"></div>
+        <div class="bar" style="margin:10px 0"><i id="job-bar" style="width:0%"></i></div>
+        <div class="row"><b id="job-status">—</b><span class="sp"></span><span class="hint ltr" id="job-id"></span></div>
+        <pre class="log" id="job-log"></pre>
+      </section>
+    </div>
+
+    <div>
+      <!-- ─────────────────────── runtime -->
+      <section class="card">
+        <h2>⚙️ موتور هوش مصنوعی محلی</h2>
+
+        <label class="lb">انتخاب موتور برای نصب / اجرا</label>
+        <div class="row" style="gap:8px;flex-wrap:nowrap;margin-bottom:10px">
+          <select id="engine-select" style="flex:1">
+            <option value="ollama">Ollama — ساده و پیشنهادی</option>
+            <option value="llamacpp">llama.cpp (llama-server) — سبک و قابل تنظیم</option>
+          </select>
+        </div>
+
+        <div id="rt-info" class="hint">در حال بررسی…</div>
+        <div class="rt-btn-grid">
+          <button class="btn sm ok" id="btn-rt-install">⬇️ نصب موتور</button>
+          <button class="btn sm" id="btn-rt-start">▶️ اجرا</button>
+          <button class="btn sm danger" id="btn-rt-stop">⏹ توقف</button>
+        </div>
+        <p class="hint" style="margin-top:8px">موتور انتخاب‌شده دانلود، استخراج و به‌صورت محلی (بدون نیاز به دسترسی root) در فضای اختصاصی این سرور نصب می‌شود.</p>
+
+        <details style="margin-top:12px">
+          <summary class="hint" style="cursor:pointer">⚙️ تنظیمات سفارشی آدرس و باینری موتور</summary>
+          <div style="margin-top:8px" class="grid g2">
+            <div>
+              <label class="lb">آدرس سرور</label>
+              <input class="inp ltr" id="cfg-host" placeholder="http://127.0.0.1:11434">
+            </div>
+            <div>
+              <label class="lb">مسیر باینری موتور</label>
+              <input class="inp ltr" id="cfg-bin" placeholder="/usr/local/bin/ollama">
+            </div>
+          </div>
+          <p class="hint" style="margin:6px 0 0">نصب بدون نیاز به دسترسی root انجام شده و مدل‌ها در فضای ذخیره‌سازی اختصاصی نگهداری می‌شوند.</p>
+        </details>
+      </section>
+
+      <!-- ─────────────────────── installed -->
+      <section class="card">
+        <h2>📦 مدل‌های نصب‌شده روی سرور</h2>
+        <div id="models"><span class="hint">—</span></div>
+      </section>
+
+      <!-- ─────────────────────── search -->
+      <section class="card">
+        <h2>🔍 جست‌وجو و نصب دستی مدل</h2>
+
+        <!-- Category filter tabs -->
+        <div class="filter-tabs" id="search-tabs">
+          <button class="tab-btn active" data-tab="all">✨ همه</button>
+          <button class="tab-btn" data-tab="code">💻 کدنویسی</button>
+          <button class="tab-btn" data-tab="chat">💬 عمومی</button>
+          <button class="tab-btn" data-tab="reasoning">🧩 استدلال</button>
+          <button class="tab-btn" data-tab="vision">🖼 تصویر</button>
+          <button class="tab-btn" data-tab="hf">📦 Hugging Face (GGUF)</button>
+        </div>
+
+        <div class="row" style="flex-wrap:nowrap;gap:6px">
+          <input class="inp ltr" id="q" placeholder="جست‌وجوی مدل (qwen, deepseek, llama, codellama …)" style="flex:1">
+          <button class="btn sm" id="btn-search">جست‌وجو</button>
+        </div>
+
+        <div id="search-out" style="margin-top:12px"></div>
+
+        <!-- Custom pull input -->
+        <div class="custom-pull-box">
+          <label class="lb">🚀 نصب مستقیم مدل با نام دلخواه از Ollama / Hugging Face:</label>
+          <div class="row" style="flex-wrap:nowrap;gap:6px;margin-top:4px">
+            <input class="inp ltr sm" id="custom-pull-ref" placeholder="مثال: qwen2.5-coder:7b یا hf.co/bartowski/..." style="flex:1">
+            <button class="btn sm ok" id="btn-custom-pull">نصب مستقیم</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─────────────────────── drive scan -->
+      <section class="card">
+        <h2>🗂 اسکن دیسک برای مدل‌های موجود</h2>
+        <p class="hint" style="margin-top:0">
+          اگر فایل‌های مدل (gguf, ggml, safetensors …) از قبل روی سرور دانلود شده باشند — مثلاً از نصب‌های قبلی یا آپلود دستی —
+          می‌توانید بدون دانلود مجدد آن‌ها را پیدا و مستقیماً به فهرست مدل‌های محلی اضافه کنید.
+        </p>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <input class="inp ltr sm" id="scan-root" placeholder="مسیر دلخواه (اختیاری — مثال: /home/user یا /data/models)" style="flex:1;min-width:220px">
+          <button class="btn sm" id="btn-scan-quick">🔎 اسکن سریع (پوشه‌های رایج)</button>
+          <button class="btn sm" id="btn-scan-full">🔎 اسکن کامل دیسک (کندتر)</button>
+        </div>
+        <div id="scan-out" style="margin-top:12px"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
     </section>
   </main>
 </div>
@@ -4135,6 +4467,7 @@ function navigate(viewName) {
   if (viewName === 'observability') loadObservabilityData();
   if (viewName === 'settings') loadSettings();
   if (viewName === 'github') loadGitHubRepos();
+  if (viewName === 'localai' && window.initLocalAiView) window.initLocalAiView();
 }
 
 function toggleTheme() {
@@ -4147,24 +4480,6 @@ function toggleTheme() {
 
 function openModal(id) { $(`#${id}`).classList.add('open'); }
 function closeModal(id) { $(`#${id}`).classList.remove('open'); }
-
-function openLocalAi() {
-  // Local AI Installer is a full standalone page (not an SPA view), so this
-  // must be a real top-level navigation. When this app itself is rendered
-  // inside an embedding iframe (e.g. a live-preview/sandbox viewer), an
-  // in-place `location.href` navigation to a different path is exactly the
-  // kind of top-level navigation such embeds block/bounce — which looked
-  // like the button "doing nothing" and landing back on the first page.
-  // Opening it in a new tab sidesteps that restriction entirely and, as a
-  // bonus, no longer throws away whatever chat/project the user was on.
-  const url = window.apiUrl ? window.apiUrl('/localai') : '/localai';
-  const win = window.open(url, '_blank', 'noopener');
-  if (!win) {
-    // Popup blocked by the browser: fall back to the old same-tab behavior
-    // rather than silently doing nothing.
-    window.location.href = url;
-  }
-}
 
 // -------------------------------------------------------------
 // INITIALIZATION
@@ -4239,6 +4554,13 @@ async function initApp() {
 
   await checkPendingApprovals();
   setupComposerDragAndDrop();
+
+  // Backward-compat deep link: Local AI used to be served at its own /localai
+  // URL (a separate static page); that path now serves this same unified app,
+  // so old bookmarks/links still land on the right view instead of just chat.
+  if (/\/localai\/?$/.test(window.location.pathname)) {
+    navigate('localai');
+  }
 }
 
 // -------------------------------------------------------------
@@ -9289,6 +9611,641 @@ async function loadGitHubRepos() {
     container.innerHTML = `<span style="color:var(--accent-red);font-size:12px;">GitHub: ${esc(err.message)}</span>`;
   }
 }
+
+// ===== Local AI Installer view logic (merged from former static/localai.html) =====
+(function () {
+const fa = (n, d = 1) => Number(n || 0).toLocaleString('fa-IR', { maximumFractionDigits: d });
+
+let toastTimer = null;
+function toast(msg, kind) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  t.style.borderColor = kind === 'err' ? '#7f1d1d' : kind === 'ok' ? '#065f46' : kind === 'warn' ? '#78350f' : 'var(--line)';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, 4200);
+}
+
+
+
+/* ───────────────────────────────────────── task & language chips */
+const TASKS = [
+  ['code', '💻 کدنویسی'], ['agent', '🛠 عامل ابزارمحور'], ['chat', '💬 چت عمومی'],
+  ['reasoning', '🧩 استدلال و ریاضی'], ['summarize', '📝 خلاصه‌سازی'], ['translate', '🌐 ترجمه'],
+  ['vision', '🖼 درک تصویر'], ['embedding', '🔎 امبدینگ / RAG'], ['autocomplete', '⌨️ تکمیل خودکار'],
+];
+const LANGS = [['fa', 'فارسی'], ['en', 'انگلیسی'], ['ar', 'عربی'], ['multi', 'چندزبانه']];
+const picked = { tasks: new Set(['code', 'agent']), langs: new Set(['fa', 'en']) };
+
+function renderChips(el, items, set) {
+  el.innerHTML = items.map(([v, t]) =>
+    `<span class="chip${set.has(v) ? ' on' : ''}" data-v="${v}">${t}</span>`).join('');
+  el.querySelectorAll('.chip').forEach((c) => {
+    c.onclick = () => {
+      const v = c.dataset.v;
+      set.has(v) ? set.delete(v) : set.add(v);
+      c.classList.toggle('on');
+      if (el.id === 'tasks') {
+        $('#tool').checked = set.has('agent');
+        $('#vision').checked = set.has('vision');
+      }
+    };
+  });
+}
+renderChips($('#tasks'), TASKS, picked.tasks);
+renderChips($('#langs'), LANGS, picked.langs);
+
+/* ───────────────────────────────────────── host scan */
+let HOST = null;
+async function loadHost(refresh) {
+  try {
+    HOST = await api('/api/localai/host' + (refresh ? '?refresh=1' : ''));
+  } catch (e) { toast(e.message, 'err'); return; }
+
+  const m = HOST.memory || {}, c = HOST.cpu || {}, g = (HOST.gpu && HOST.gpu[0]) || HOST.gpu || {}, d = HOST.disk || {};
+  const totalGb = m.totalGb || 4.0;
+  const availGb = m.availableGb || 2.0;
+  const freeDisk = d.freeGb || 10.0;
+  const vramGb = g.vramGb || g.vramTotalGb || 0.0;
+  const isGpu = !!(g.present || vramGb > 0);
+
+  $('#host-stats').innerHTML = `
+    <div class="stat"><b>${fa(totalGb)} GB</b><span>رم کل (${fa(availGb)} GB آزاد)</span></div>
+    <div class="stat"><b>${fa(c.cores || 1, 0)} هسته</b><span>${esc(c.arch || 'x86_64')}${c.avx2 ? ' · AVX2' : ''}</span></div>
+    <div class="stat"><b>${isGpu ? fa(vramGb) + ' GB' : '—'}</b><span>${isGpu ? esc(g.name || 'GPU') : 'بدون GPU اختصاصی (CPU)'}</span></div>
+    <div class="stat"><b>${fa(freeDisk)} GB</b><span>فضای دیسک آزاد</span></div>`;
+
+  const suggestedRam = HOST.suggestedRamBudgetGb || Math.max(1, Math.min(availGb, totalGb - 1.5));
+  $('#host-extra').textContent =
+    `پیشنهاد بودجهٔ رم: ${fa(suggestedRam)} گیگابایت · سیستم‌عامل: ${esc(HOST.os || HOST.host?.os || 'Linux')}`;
+
+  const ram = $('#ram');
+  const ramNum = $('#ram-num');
+  // Slider max follows host RAM (for a usable drag range), but the number
+  // field next to it has no upper bound — any custom budget can be typed in,
+  // e.g. for remote/clustered setups or future RAM upgrades.
+  ram.max = Math.max(32, Math.ceil(totalGb * 2));
+  ram.value = suggestedRam;
+  ramNum.value = suggestedRam;
+  $('#ram-hint').textContent = `پیشنهاد سیستم: ${fa(suggestedRam)} گیگابایت (رم آزاد فعلی: ${fa(availGb)} GB) — می‌توانید عدد دلخواه را در کادر کناری وارد کنید.`;
+  $('#vram').value = vramGb;
+  $('#disk').value = Math.max(1, Math.floor(freeDisk - 1));
+  renderRuntime(HOST.runtime);
+}
+$('#ram').oninput = (e) => { $('#ram-num').value = e.target.value; };
+$('#ram-num').oninput = (e) => {
+  const v = parseFloat(e.target.value || '0');
+  if (v > parseFloat($('#ram').max)) { $('#ram').max = Math.ceil(v); }
+  $('#ram').value = v;
+};
+$('#btn-rescan').onclick = () => loadHost(true);
+
+/* ───────────────────────────────────────── runtime panel */
+const ENGINE_NAMES = { ollama: 'Ollama', llamacpp: 'llama.cpp (llama-server)', custom: 'سفارشی' };
+let CURRENT_RT = null;
+
+function renderRuntime(rt) {
+  if (!rt) return;
+  CURRENT_RT = rt;
+  const badge = $('#rt-badge');
+  badge.className = 'tag ' + (rt.running ? 'ok' : rt.installed ? 'warn' : 'err');
+  const engineName = ENGINE_NAMES[rt.engine] || rt.engine || 'Ollama';
+  badge.textContent = rt.running ? `${engineName} در حال اجرا` : rt.installed ? `${engineName} نصب است، خاموش` : `${engineName} نصب نشده`;
+  const permHtml = rt.modelsDirWritable
+    ? '<span class="tag ok">قابل نوشتن</span>'
+    : '<span class="tag err">غیرقابل نوشتن</span> <button class="btn xs" id="btn-fix-perm" style="margin-right:6px">اصلاح خودکار دسترسی</button>';
+
+  // Per-engine installed/not-installed summary chips
+  const engines = rt.engines || {};
+  const engineChips = Object.keys(engines).map((key) => {
+    const e = engines[key];
+    const isActive = key === rt.engine;
+    return `<span class="tag ${e.installed ? 'ok' : ''}" ${isActive ? 'style="font-weight:700"' : ''}>${esc(e.name || key)}: ${e.installed ? 'نصب شده' : 'نصب‌نشده'}${isActive ? ' (فعال)' : ''}</span>`;
+  }).join(' ');
+
+  $('#rt-info').innerHTML = `
+    <div style="margin-bottom:6px">موتور فعال: <b>${esc(engineName)} ${esc(rt.version || '')}</b> ${rt.managed ? '<span class="tag ok">نصب محلی</span>' : ''}</div>
+    <div class="row" style="margin-bottom:6px">${engineChips}</div>
+    <div class="path-box">${esc(rt.binary || 'یافت نشد')}</div>
+    <div class="path-box">${esc(rt.host || 'http://127.0.0.1:11434')}</div>
+    <div class="path-box" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">پوشه مدل‌ها: <span>${esc(rt.modelsDir || '')}</span> ${permHtml}</div>
+    ${rt.error ? `<div class="tag err" style="margin-top:6px;width:100%">${esc(rt.error)}</div>` : ''}`;
+
+  if (rt.host) $('#cfg-host').value = rt.host;
+  if (rt.binary) $('#cfg-bin').value = rt.binary;
+  if (rt.engine) $('#engine-select').value = rt.engine;
+
+  const fixBtn = $('#btn-fix-perm');
+  if (fixBtn) {
+    fixBtn.onclick = async () => {
+      fixBtn.disabled = true;
+      fixBtn.textContent = '…';
+      try {
+        const res = await api('/api/localai/runtime/fix-permissions', { method: 'POST', body: {} });
+        if (res.ok) {
+          toast('دسترسی پوشه مدل‌ها اصلاح شد', 'ok');
+        } else {
+          toast('دسترسی تغییر نکرد؛ لطفاً دسترسی chmod 775 را بررسی کنید', 'warn');
+        }
+      } catch (e) {
+        toast('خطا: ' + e.message, 'err');
+      }
+      refreshRuntime();
+    };
+  }
+  $('#btn-rt-install').disabled = !!rt.installed;
+  $('#btn-rt-start').disabled = !rt.installed || !!rt.running;
+  $('#btn-rt-stop').disabled = !rt.running;
+}
+
+async function refreshRuntime() {
+  try { renderRuntime(await api('/api/localai/runtime')); } catch (e) { /* ignore */ }
+}
+
+$('#engine-select').onchange = async (e) => {
+  const engine = e.target.value;
+  try {
+    await api('/api/localai/runtime/engine', { method: 'POST', body: { engine } });
+    toast('موتور فعال به ' + (ENGINE_NAMES[engine] || engine) + ' تغییر کرد', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  refreshRuntime();
+};
+
+$('#btn-rt-install').onclick = async () => {
+  const engine = $('#engine-select').value || 'ollama';
+  toast('در حال دانلود و راه‌اندازی ' + (ENGINE_NAMES[engine] || engine) + '…');
+  try {
+    await api('/api/localai/runtime/install', { method: 'POST', body: { engine } });
+    toast((ENGINE_NAMES[engine] || engine) + ' با موفقیت نصب شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+  refreshRuntime();
+};
+
+$('#btn-rt-start').onclick = async () => {
+  try {
+    await api('/api/localai/runtime/start', { method: 'POST', body: {} });
+    toast('سرویس Ollama اجرا شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+  refreshRuntime(); loadModels();
+};
+
+$('#btn-rt-stop').onclick = async () => {
+  try {
+    await api('/api/localai/runtime/stop', { method: 'POST', body: {} });
+    toast('سرویس متوقف شد', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+  refreshRuntime();
+};
+
+/* ───────────────────────────────────────── recommendation */
+function profile() {
+  return {
+    tasks: [...picked.tasks],
+    languages: [...picked.langs],
+    ramBudgetGb: parseFloat($('#ram').value || '4'),
+    vramGb: parseFloat($('#vram').value || '0'),
+    diskBudgetGb: parseFloat($('#disk').value || '10'),
+    contextTokens: parseInt($('#ctx').value, 10),
+    priority: $('#priority').value,
+    concurrency: parseInt($('#conc').value || '1', 10),
+    minTokensPerSec: parseFloat($('#mintps').value || '0'),
+    requireToolCalling: $('#tool').checked,
+    requireVision: $('#vision').checked,
+    requireEmbedding: picked.tasks.has('embedding'),
+    allowNonCommercial: !$('#commercial').checked,
+  };
+}
+
+let LAST = null;
+$('#btn-rec').onclick = async () => {
+  const btn = $('#btn-rec');
+  btn.disabled = true; btn.textContent = 'در حال تحلیل مشخصات سخت‌افزار…';
+  try {
+    LAST = await api('/api/localai/recommend', { method: 'POST', body: profile() });
+    renderRecs(LAST);
+  } catch (e) { toast(e.message, 'err'); }
+  btn.disabled = false; btn.textContent = '🔎 جست‌وجو و پیشنهاد بهترین مدل';
+};
+
+$('#btn-save-prof').onclick = async () => {
+  const name = prompt('نام این پروفایل سخت‌افزاری را وارد کنید:', 'default');
+  if (!name) return;
+  try {
+    await api('/api/localai/profiles', { method: 'POST', body: { name: name, profile: profile() } });
+    toast('پروفایل با موفقیت ذخیره شد', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+function renderRecs(d) {
+  $('#rec-card').style.display = '';
+  const list = d.recommendations || [];
+  if (!list.length) {
+    $('#rec-list').innerHTML = '<p class="hint">هیچ مدلی با این محدودیت‌ها هم‌خوانی نداشت؛ بودجهٔ رم را افزایش دهید یا طول پنجره متن را کمتر کنید.</p>';
+  } else {
+    $('#rec-list').innerHTML = list.map((m, i) => `
+      <div class="rec${i === 0 ? ' best' : ''}">
+        <div class="rec-header">
+          <div class="rec-title-bar">
+            <h3>${i === 0 ? '🏆 ' : ''}${esc(m.name)}</h3>
+            <div class="rec-actions">
+              <span class="tag ${m.scorePct > 70 ? 'ok' : ''}">امتیاز ${fa(m.scorePct, 0)}</span>
+              <button class="btn ok sm" data-install="${esc(m.ref)}">🚀 نصب</button>
+            </div>
+          </div>
+          <div class="rec-tags">
+            <span class="tag ltr">${esc(m.ref)}</span>
+            <span class="tag">${esc(m.quant)}</span>
+            ${m.toolCalling ? '<span class="tag ok">ابزارمحور (Tools)</span>' : ''}
+            ${m.vision ? '<span class="tag info">تصویر (Vision)</span>' : ''}
+            ${m.reasoning ? '<span class="tag warn">استدلال</span>' : ''}
+          </div>
+        </div>
+        <div class="bar" style="margin:8px 0"><i style="width:${Math.min(100, m.scorePct)}%"></i></div>
+        <div class="hint">${esc(m.summary)}</div>
+        <div class="rec-metrics">
+          <span class="tag">رم ≈ ${fa(m.estimate.ramGb)} GB</span>
+          <span class="tag">دیسک ${fa(m.estimate.diskGb)} GB</span>
+          <span class="tag">≈ ${fa(m.estimate.tokensPerSec)} توکن/ثانیه</span>
+          <span class="tag">KV ${fa(m.estimate.kvCacheGb)} GB</span>
+          <span class="tag">${esc(m.license)}</span>
+          <span class="tag">${esc(m.publisher)}</span>
+        </div>
+        <ul>${(m.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+      </div>`).join('');
+    $('#rec-list').querySelectorAll('[data-install]').forEach((b) => {
+      b.onclick = () => install(b.dataset.install);
+    });
+  }
+  $('#rec-rejected').innerHTML = (d.rejected || []).map((r) =>
+    `<div class="hint" style="margin-bottom:4px">• <span class="ltr">${esc(r.ref)}</span> — ${esc((r.reasons || []).join('؛ '))}</div>`).join('')
+    || '<span class="hint">—</span>';
+  $('#rec-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ───────────────────────────────────────── install + progress */
+let pollTimer = null;
+async function install(ref, extra) {
+  if (!ref) return;
+  if (!confirm(`آیا مدل ${ref} دانلود و نصب شود؟`)) return;
+  const card = $('#job-card');
+  card.style.display = '';
+  $('#job-status').textContent = 'در حال ارسال درخواست…';
+  $('#job-bar').style.width = '3%';
+  $('#job-log').textContent = '';
+  $('#job-plan').innerHTML = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const res = await api('/api/localai/install', { method: 'POST', body: Object.assign({ model: ref }, extra || {}) });
+    if (res.job && res.job.id) {
+      $('#job-id').textContent = res.job.id;
+      if (res.plan && res.plan.length) {
+        $('#job-plan').innerHTML = `<div class="hint" style="margin-bottom:8px">مراحل نصب:</div>`
+          + res.plan.map((s, i) => `<div class="hint" style="margin-bottom:3px"><b>${i+1}. ${esc(s.title)}</b>: ${esc(s.detail)}</div>`).join('');
+      }
+      pollJob(res.job.id);
+    } else {
+      toast('درخواست نصب ارسال شد', 'ok');
+    }
+  } catch (e) {
+    toast('خطای شروع نصب: ' + e.message, 'err');
+    $('#job-status').textContent = '❌ خطا: ' + e.message;
+  }
+}
+
+function pollJob(id) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    let j;
+    try { j = await api('/api/jobs/' + encodeURIComponent(id)); }
+    catch (e) { return; }
+    $('#job-bar').style.width = Math.max(2, Number(j.progress || 0)) + '%';
+    $('#job-status').textContent =
+      ({ queued: 'در صف', running: 'در حال اجرا', done: '✅ پایان موفق', failed: '❌ ناموفق', cancelled: 'لغو شد' }[j.status] || j.status)
+      + (j.summary ? ' — ' + j.summary : '') + (j.error ? ' — ' + j.error : '');
+    $('#job-log').textContent = (j.logs || []).map((l) => `[${l.level}] ${l.message}`).join('\n');
+    $('#job-log').scrollTop = $('#job-log').scrollHeight;
+    if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') {
+      clearInterval(pollTimer);
+      loadModels(); refreshRuntime();
+      if (j.status === 'done') toast('مدل نصب شد و در ارائه‌دهنده‌ها قرار گرفت', 'ok');
+    }
+  }, 2000);
+}
+
+/* ───────────────────────────────────────── installed models */
+async function loadModels() {
+  let d;
+  try { d = await api('/api/localai/models'); } catch (e) { $('#models').innerHTML = `<span class="tag err">${esc(e.message)}</span>`; return; }
+  if (!d.running) { $('#models').innerHTML = `<span class="hint">سرویس محلی خاموش است${d.error ? ' — ' + esc(d.error) : ''}</span>`; return; }
+  if (!d.models || !d.models.length) { $('#models').innerHTML = '<span class="hint">هنوز مدلی نصب نشده است.</span>'; return; }
+  const loaded = new Set((d.loaded || []).map((m) => m.name));
+  $('#models').innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>مدل</th><th>حجم</th><th>کوانت</th><th>عملیات</th></tr></thead><tbody>${
+    d.models.map((m) => `<tr>
+      <td class="ltr" style="word-break:break-all">${esc(m.name)}
+        ${loaded.has(m.name) ? '<span class="tag ok" style="display:inline-block;margin-top:2px">لود شده</span>' : ''}
+        ${m.missing ? '<span class="tag err" style="display:inline-block;margin-top:2px">فایل روی دیسک یافت نشد</span>' : ''}
+      </td>
+      <td style="white-space:nowrap">${fa(m.sizeGb)} GB</td>
+      <td class="ltr">${esc(m.quantization || '—')}</td>
+      <td style="white-space:nowrap">
+        ${m.path && !loaded.has(m.name) && !m.missing ? `<button class="btn xs ok" data-activate="${esc(m.path)}">▶️ فعال‌سازی</button>` : ''}
+        <button class="btn xs" data-test="${esc(m.name)}">تست</button>
+        <button class="btn xs danger" data-del="${esc(m.name)}">حذف</button>
+      </td></tr>`).join('')}</tbody></table></div>`;
+  $('#models').querySelectorAll('[data-test]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      try {
+        const r = await api('/api/localai/test', { method: 'POST', body: { model: b.dataset.test } });
+        toast(r.ok ? `سرعت واقعی: ${fa(r.tokensPerSec)} توکن/ثانیه` : ('خطا: ' + r.error), r.ok ? 'ok' : 'err');
+      } catch (e) { toast(e.message, 'err'); }
+      b.disabled = false; b.textContent = 'تست';
+    };
+  });
+  $('#models').querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('مدل ' + b.dataset.del + ' حذف شود؟')) return;
+      try { await api('/api/localai/models/' + b.dataset.del, { method: 'DELETE' }); toast('حذف شد', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+      loadModels();
+    };
+  });
+  $('#models').querySelectorAll('[data-activate]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      try {
+        await api('/api/localai/llamacpp/activate', { method: 'POST', body: { path: b.dataset.activate } });
+        toast('مدل فعال و بارگذاری شد', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      loadModels();
+    };
+  });
+}
+
+/* ───────────────────────────────────────── manual search & categories */
+let activeCategory = 'all';
+let hfQuantMap = {};
+let searchDebounceTimer = null;
+
+$('#search-tabs').querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.onclick = () => {
+    $('#search-tabs').querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeCategory = btn.dataset.tab;
+    executeSearch();
+  };
+});
+
+async function executeSearch() {
+  const q = ($('#q').value || '').trim();
+  const out = $('#search-out');
+  out.innerHTML = '<span class="hint">در حال جست‌وجو در کاتالوگ و Hugging Face…</span>';
+  hfQuantMap = {};
+  try {
+    const d = await api('/api/localai/search', { method: 'POST', body: { query: q, limit: 16 } });
+    let catModels = d.catalog || [];
+    let hfModels = d.huggingface || [];
+
+    // Filter by category
+    if (activeCategory === 'code') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('code'));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('code'));
+    } else if (activeCategory === 'chat') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('chat'));
+    } else if (activeCategory === 'reasoning') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('reasoning') || (m.name || '').toLowerCase().includes('deepseek-r1') || (m.name || '').toLowerCase().includes('qwq'));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('r1') || (m.id || '').toLowerCase().includes('reasoning'));
+    } else if (activeCategory === 'vision') {
+      catModels = catModels.filter((m) => (m.tasks || []).includes('vision') || (m.variants || []).some((v) => v.vision));
+      hfModels = hfModels.filter((m) => (m.id || '').toLowerCase().includes('vision') || (m.id || '').toLowerCase().includes('vl'));
+    } else if (activeCategory === 'hf') {
+      catModels = [];
+    }
+
+    let html = '';
+
+    if (catModels.length) {
+      html += `<div class="hint" style="margin-bottom:8px;font-weight:700">مدل‌های کاتالوگ بهینه‌شده (${fa(catModels.length, 0)}):</div>`;
+      catModels.forEach((m) => {
+        const variants = m.variants || [];
+        html += `
+          <div class="model-card">
+            <div class="model-card-top">
+              <span class="model-card-title">${esc(m.name)}</span>
+              <span class="tag info">${esc(m.publisher || 'Catalog')}</span>
+            </div>
+            <div class="model-card-desc">${esc(m.description || m.summary || '')}</div>
+            <div class="model-card-tags">
+              ${(m.tasks || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
+              <span class="tag">${esc(m.license || '')}</span>
+              ${m.contextMax ? `<span class="tag">📏 ${fa(m.contextMax, 0)} توکن کانتکست</span>` : ''}
+              ${m.toolCalling ? '<span class="tag ok">🛠 ابزارفراخوانی</span>' : ''}
+              ${m.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+              ${m.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+            </div>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+              ${variants.map((v) => `
+                <div style="background:rgba(0,0,0,.15);padding:8px;border-radius:6px">
+                  <div class="ltr" style="font-size:12px;font-weight:600;margin-bottom:6px">${esc(v.ref)}</div>
+                  <div class="row" style="gap:6px;margin-bottom:6px">
+                    <span class="tag">کوانت: ${esc(v.quant)}</span>
+                    <span class="tag">📦 حجم فایل: ${fa(v.diskGb)} GB</span>
+                    <span class="tag">🧠 حداقل رم: ${fa(v.ramGb || (v.diskGb * 1.25 + 1))} GB</span>
+                    ${v.paramsB ? `<span class="tag">${fa(v.paramsB)}B پارامتر</span>` : ''}
+                    ${v.quality ? `<span class="tag">کیفیت: ${fa(v.quality, 0)}/100</span>` : ''}
+                  </div>
+                  <div class="row" style="gap:6px;justify-content:space-between">
+                    <div class="row" style="gap:4px">
+                      ${v.toolCalling ? '<span class="tag ok">🛠 ابزار</span>' : ''}
+                      ${v.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+                      ${v.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+                    </div>
+                    <button class="btn xs ok" data-pull="${esc(v.ref)}">🚀 نصب</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    if (hfModels.length && activeCategory !== 'code' && activeCategory !== 'chat') {
+      html += `<div class="hint" style="margin:14px 0 8px;font-weight:700">مخازن Hugging Face GGUF (${fa(hfModels.length, 0)}) — فقط کوانت‌هایی که واقعاً در مخزن موجودند پیشنهاد می‌شوند:</div>`;
+      hfModels.forEach((m, mi) => {
+        const quants = m.quantOptions && m.quantOptions.length ? m.quantOptions : [{ quant: m.quant, ref: m.pullRef, filename: '', diskGb: m.diskGb, ramGb: m.ramGb, split: false }];
+        const cardId = `hf-${mi}`;
+        html += `
+          <div class="model-card" data-hf-card="${cardId}">
+            <div class="model-card-top">
+              <span class="model-card-title ltr">${esc(m.id || m.pullRef)}</span>
+              <span class="tag ok">Hugging Face</span>
+            </div>
+            <div class="model-card-desc">${esc(m.summary || '')}</div>
+            <div class="model-card-tags">
+              ${m.toolCalling ? '<span class="tag ok">🛠 احتمال ابزارفراخوانی</span>' : ''}
+              ${m.vision ? '<span class="tag info">🖼 تصویر</span>' : ''}
+              ${m.reasoning ? '<span class="tag warn">🧩 استدلال</span>' : ''}
+            </div>
+            <div style="margin-top:8px">
+              <label class="lb">کوانت برای نصب (${fa(quants.length, 0)} گزینهٔ تأییدشده)</label>
+              <select class="inp ltr sm" data-quant-select="${cardId}">
+                ${quants.map((q, qi) => `<option value="${qi}" ${q.quant === m.quant ? 'selected' : ''}>${esc(q.quant)} — ${fa(q.diskGb)} GB${q.split ? ' (چندبخشی)' : ''}</option>`).join('')}
+              </select>
+            </div>
+            <div class="model-card-bottom">
+              <div class="row" style="gap:6px">
+                <span class="tag">⬇️ ${fa(m.downloads || 0, 0)} دانلود</span>
+                ${m.likes ? `<span class="tag">❤️ ${fa(m.likes, 0)}</span>` : ''}
+                <span class="tag" data-quant-ram="${cardId}">🧠 رم ≈ ${fa(quants[0].ramGb)} GB</span>
+              </div>
+              <button class="btn xs ok" data-pull-hf="${cardId}">🚀 نصب GGUF</button>
+            </div>
+          </div>
+        `;
+        hfQuantMap[cardId] = quants;
+      });
+    }
+
+    if (!html) {
+      html = '<span class="hint">مدلی با این مشخصات یافت نشد. می‌توانید نام مدل را در کادر زیر وارد کنید.</span>';
+    }
+
+    out.innerHTML = html;
+    out.querySelectorAll('[data-pull]').forEach((b) => {
+      b.onclick = () => install(b.dataset.pull);
+    });
+    out.querySelectorAll('[data-quant-select]').forEach((sel) => {
+      sel.onchange = () => {
+        const id = sel.dataset.quantSelect;
+        const q = hfQuantMap[id][parseInt(sel.value, 10)];
+        const ramTag = out.querySelector(`[data-quant-ram="${id}"]`);
+        if (ramTag) ramTag.textContent = `🧠 رم ≈ ${fa(q.ramGb)} GB`;
+      };
+    });
+    out.querySelectorAll('[data-pull-hf]').forEach((b) => {
+      b.onclick = () => {
+        const id = b.dataset.pullHf;
+        const sel = out.querySelector(`[data-quant-select="${id}"]`);
+        const q = hfQuantMap[id][parseInt(sel ? sel.value : '0', 10)];
+        install(q.ref, { file: q.filename || undefined, estimateRamGb: q.ramGb, estimateDiskGb: q.diskGb });
+      };
+    });
+  } catch (e) {
+    out.innerHTML = `<span class="tag err">${esc(e.message)}</span>`;
+  }
+}
+
+$('#btn-search').onclick = executeSearch;
+$('#q').oninput = () => {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(executeSearch, 350);
+};
+$('#q').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    clearTimeout(searchDebounceTimer);
+    executeSearch();
+  }
+};
+
+$('#btn-custom-pull').onclick = () => {
+  const ref = ($('#custom-pull-ref').value || '').trim();
+  if (!ref) {
+    toast('لطفاً نام یا آدرس مدل را وارد کنید', 'warn');
+    return;
+  }
+  install(ref);
+};
+$('#custom-pull-ref').onkeydown = (e) => {
+  if (e.key === 'Enter') $('#btn-custom-pull').click();
+};
+
+/* ───────────────────────────────────────── drive scan */
+async function runScan(full) {
+  const out = $('#scan-out');
+  const root = ($('#scan-root').value || '').trim();
+  out.innerHTML = `<span class="hint">${full ? 'در حال اسکن کامل دیسک — ممکن است کمی طول بکشد…' : 'در حال اسکن پوشه‌های رایج…'}</span>`;
+  $('#btn-scan-quick').disabled = true;
+  $('#btn-scan-full').disabled = true;
+  try {
+    const body = { full: !!full };
+    if (root) body.roots = [root];
+    const d = await api('/api/localai/scan', { method: 'POST', body });
+    if (!d.results || !d.results.length) {
+      out.innerHTML = `<span class="hint">هیچ فایل مدلی پیدا نشد${root ? ' در «' + esc(root) + '»' : ''}. (${fa(d.tookSec)} ثانیه)</span>`;
+      return;
+    }
+    out.innerHTML = `<div class="hint" style="margin-bottom:8px">${fa(d.results.length, 0)} فایل پیدا شد (${fa(d.tookSec)} ثانیه)${d.truncated ? ' — فهرست به بزرگ‌ترین‌ها محدود شد' : ''}:</div>`
+      + `<div class="tbl-wrap"><table><thead><tr><th>مسیر</th><th>حجم</th><th>کوانت</th><th>عملیات</th></tr></thead><tbody>${
+        d.results.map((r) => `<tr>
+          <td class="ltr" style="word-break:break-all;font-size:12px">${esc(r.path)}</td>
+          <td style="white-space:nowrap">${fa(r.sizeGb, 2)} GB</td>
+          <td class="ltr">${esc(r.quant || '—')}</td>
+          <td style="white-space:nowrap"><button class="btn xs ok" data-import="${esc(r.path)}">➕ درون‌ریزی</button></td>
+        </tr>`).join('')
+      }</tbody></table></div>`;
+    out.querySelectorAll('[data-import]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('فایل زیر به فهرست مدل‌های محلی اضافه شود؟\n' + b.dataset.import)) return;
+        b.disabled = true;
+        b.textContent = '…';
+        try {
+          const res = await api('/api/localai/import', { method: 'POST', body: { path: b.dataset.import } });
+          toast('درون‌ریزی آغاز شد', 'ok');
+          if (res.job && res.job.id) {
+            $('#job-card').style.display = '';
+            $('#job-id').textContent = res.job.id;
+            $('#job-status').textContent = 'در حال درون‌ریزی…';
+            $('#job-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            pollJob(res.job.id);
+          }
+        } catch (e) {
+          toast(e.message, 'err');
+          b.disabled = false;
+          b.textContent = '➕ درون‌ریزی';
+        }
+      };
+    });
+  } catch (e) {
+    out.innerHTML = `<span class="tag err">${esc(e.message)}</span>`;
+  }
+  $('#btn-scan-quick').disabled = false;
+  $('#btn-scan-full').disabled = false;
+}
+$('#btn-scan-quick').onclick = () => runScan(false);
+$('#btn-scan-full').onclick = () => {
+  if (!confirm('اسکن کامل تمام دیسک ممکن است چند دقیقه طول بکشد. ادامه می‌دهید؟')) return;
+  runScan(true);
+};
+
+/* ───────────────────────────────────────── boot */
+// This view lives inside the main SPA's hidden-until-activated view-panel
+// system now (no longer a standalone page loaded fresh every time), so
+// initialization is lazy: it only runs the first time the user actually
+// opens the Local AI panel, triggered by navigate('localai') in the main
+// script below. Revisiting the panel afterwards just refreshes runtime
+// status instead of re-running host scan / search / re-registering the
+// 15s polling interval a second time.
+let localAiViewInitialized = false;
+window.initLocalAiView = function () {
+  if (localAiViewInitialized) { refreshRuntime(); return; }
+  localAiViewInitialized = true;
+  loadHost(false).then(() => {
+    loadModels();
+    executeSearch();
+  });
+  setInterval(refreshRuntime, 15000);
+};
+})();
 
 // Run on page load
 initApp();

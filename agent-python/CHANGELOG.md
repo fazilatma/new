@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.1 - Local AI Installer Merged Into a Single Unified App File
+
+### Changed
+- **Local AI Installer is no longer a separate page/file**: `static/localai.html` (a standalone HTML document previously opened via a full navigation or a new tab) has been merged directly into `static/index.html` as a first-class SPA view (`navigate('localai')`, same as Providers/Settings/Jobs/etc.). Clicking "Local AI Installer" in the sidebar now just switches views in place — no new tab, no page navigation, and your current chat/project is never lost. Its CSS was scoped under `#view-localai` and its JS wrapped in an isolated closure so nothing it defines can collide with the rest of the app; all of its actual functionality (hardware scan, model recommendations, runtime install/start/stop, manual search, disk scan) is unchanged. The old `/localai` URL still works for bookmarks — it now serves the unified app and auto-opens this view.
+- **Removed `static/chat.html`**: a fully orphaned, unreferenced legacy prototype page (no route served it) left over from a much earlier version, removed as part of consolidating the project into fewer, actively-used files.
+
 ## 3.3.0 - Resumable Job-Backed Chat, Provider Catalog Import Fixes, Round-Robin Model Testing
 
 ### Added

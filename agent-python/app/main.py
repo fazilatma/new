@@ -117,7 +117,6 @@ def _serve_spa(request: Request, filename: str = "index.html") -> Response:
         # Fallback to embedded constants if running in single-file standalone mode
         embedded_map = {
             "index.html": globals().get("EMBEDDED_INDEX_HTML", ""),
-            "localai.html": globals().get("EMBEDDED_LOCALAI_HTML", ""),
             "diag.html": globals().get("EMBEDDED_DIAG_HTML", ""),
         }
         html = embedded_map.get(filename, "")
@@ -152,7 +151,12 @@ def ui(request: Request):
 
 @app.get("/localai")
 def localai_page(request: Request):
-    return _serve_spa(request, "localai.html")
+    # Local AI used to be a separate standalone static page (static/localai.html)
+    # opened in its own tab/window. It is now merged into the single-page app
+    # as the "localai" view (index.html handles #/localai via its own router
+    # bootstrap), so old bookmarks/links to this path still work by serving
+    # the unified app, which auto-navigates to that view on load.
+    return _serve_spa(request, "index.html")
 
 @app.get("/diag")
 def diag_page(request: Request):
