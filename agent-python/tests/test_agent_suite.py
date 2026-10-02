@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.7"
+    assert APP_VERSION == "3.3.8"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -2580,3 +2580,186 @@ def test_benchmark_test_surfaces_real_ollama_error_not_generic_500(monkeypatch):
     assert result["ok"] is False
     assert "model requires more system memory" in result["error"]
     assert result["error"] != "HTTP Error 500: Internal Server Error"
+
+
+def test_binary_is_healthy_detects_missing_shared_libraries(monkeypatch, tmp_path):
+    """Regression test for the real-world failure:
+      llama-server: error while loading shared libraries: libllama.so:
+      cannot open shared object file: No such file or directory
+    A binary can sit on disk with the executable bit set and still be
+    completely broken if the shared libraries it links against are missing.
+    _binary_is_healthy() must catch that via `ldd` instead of trusting
+    os.path.isfile()/os.access() alone (which is all the pre-existing
+    `binary()` lookup checked, so a broken install silently stayed "found"
+    forever)."""
+    from app import local_ai
+
+    fake_bin = tmp_path / "llama-server"
+    fake_bin.write_text("not a real elf, just a placeholder")
+    fake_bin.chmod(0o755)
+
+    class _Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.stderr = ""
+
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: "/usr/bin/ldd" if name == "ldd" else None)
+
+    # ldd reports libllama.so cannot be resolved -> unhealthy.
+    monkeypatch.setattr(
+        local_ai.subprocess, "run",
+        lambda cmd, capture_output=None, text=None, timeout=None: _Result(
+            "\tlibllama.so => not found\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0)\n"
+        ),
+    )
+    assert local_ai._binary_is_healthy(str(fake_bin)) is False
+
+    # ldd resolves everything -> healthy.
+    monkeypatch.setattr(
+        local_ai.subprocess, "run",
+        lambda cmd, capture_output=None, text=None, timeout=None: _Result(
+            "\tlibllama.so => /some/path/libllama.so (0x00007f1)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f0)\n"
+        ),
+    )
+    assert local_ai._binary_is_healthy(str(fake_bin)) is True
+
+    # ldd not available at all on this system -> assume healthy rather than
+    # false-positive loop-reinstalling forever.
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: None)
+    assert local_ai._binary_is_healthy(str(fake_bin)) is True
+
+
+def test_install_runtime_llamacpp_copies_shared_libraries_not_just_binary(monkeypatch, tmp_path):
+    """Regression test for the actual bug report: importing a llama.cpp model
+    failed with
+      llama-server: error while loading shared libraries: libllama.so:
+      cannot open shared object file: No such file or directory
+    llama.cpp's Ubuntu release archive ships llama-server next to
+    libllama.so/libggml*.so in the same folder (resolved via the binary's
+    $ORIGIN rpath). install_runtime() used to shutil.move() only the
+    llama-server executable itself into bin_dir(), stranding the shared
+    libraries it depends on in the discarded extracted archive -- so the
+    binary could never actually start. It must copy every sibling file
+    alongside it instead."""
+    import io
+    import zipfile
+    from app import local_ai
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    # Force every shutil.which() lookup to miss (no curl/wget/unzip/ldd on
+    # this box) so install_runtime() exercises its pure-Python fallbacks:
+    # urllib for the download, zipfile for extraction.
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: None)
+
+    padding = b"x" * 400  # keep each archive member comfortably over the >1000-byte download sanity check
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("build/bin/llama-server", b"#!/bin/sh\necho fake-llama-server\n" + padding)
+        zf.writestr("build/bin/libllama.so", b"\x7fELF-fake-libllama" + padding)
+        zf.writestr("build/bin/libggml-base.so", b"\x7fELF-fake-libggml-base" + padding)
+    zip_bytes = buf.getvalue()
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self._pos = 0
+
+        def read(self, n=-1):
+            if n is None or n < 0:
+                chunk = self._data[self._pos:]
+                self._pos = len(self._data)
+                return chunk
+            chunk = self._data[self._pos:self._pos + n]
+            self._pos += len(chunk)
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "api.github.com" in url:
+            raise Exception("no network access in test")
+        return _FakeResp(zip_bytes)
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    result = local_ai.install_runtime("llamacpp")
+    assert result["ok"] is True
+
+    bd = local_ai.bin_dir()
+    assert (bd / "llama-server").is_file(), "the executable itself must still be installed"
+    assert (bd / "libllama.so").is_file(), "libllama.so must be copied alongside llama-server, not left behind"
+    assert (bd / "libggml-base.so").is_file(), "libggml-base.so must be copied alongside llama-server, not left behind"
+
+
+def test_start_server_repairs_broken_llamacpp_binary_instead_of_failing_forever(monkeypatch, tmp_path):
+    """Regression test: once llama-server was ever installed without its
+    shared libraries, EVERY future model activation/import hit the exact
+    same 'error while loading shared libraries: libllama.so: cannot open
+    shared object file' failure forever, because binary() kept finding the
+    (still +x, still present) broken file on disk and start_server() never
+    re-validated it before launching. start_server() must detect a broken
+    binary and repair (reinstall) it automatically instead of handing the
+    user the same dead end every single time."""
+    from app import local_ai
+
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"fake-gguf-contents")
+
+    broken_bin = str(tmp_path / "bin" / "llama-server")
+    healthy_bin = str(tmp_path / "bin2" / "llama-server")
+    os.makedirs(os.path.dirname(broken_bin), exist_ok=True)
+    os.makedirs(os.path.dirname(healthy_bin), exist_ok=True)
+    Path(broken_bin).write_text("broken-binary-missing-libs")
+    Path(healthy_bin).write_text("healthy-binary")
+
+    state = {"installed": False}
+
+    def fake_binary(engine=None):
+        return healthy_bin if state["installed"] else broken_bin
+
+    def fake_is_healthy(path):
+        return path == healthy_bin
+
+    def fake_install_runtime(engine, log_fn=None):
+        state["installed"] = True
+        return {"ok": True, "binary": healthy_bin, "engine": engine}
+
+    started = {}
+
+    class _FakeProc:
+        pid = 4242
+
+    def fake_popen(cmd, stdout=None, stderr=None, env=None, start_new_session=None):
+        started["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        local_ai, "get_state",
+        lambda key, *a, **kw: "llamacpp" if key == "localai:engine" else None,
+    )
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": False})
+    monkeypatch.setattr(local_ai, "binary", fake_binary)
+    monkeypatch.setattr(local_ai, "_binary_is_healthy", fake_is_healthy)
+    monkeypatch.setattr(local_ai, "install_runtime", fake_install_runtime)
+    monkeypatch.setattr(local_ai.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+    monkeypatch.setattr(local_ai, "models_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai.time, "sleep", lambda s: None)  # skip the real ~20s readiness wait
+
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        local_ai.start_server(model_path=str(model_path))
+
+    assert started.get("cmd"), "start_server() must still attempt to launch the server"
+    assert started["cmd"][0] == healthy_bin, (
+        "start_server() must repair the broken binary and relaunch with the "
+        "newly-installed healthy one, not keep using the broken path"
+    )

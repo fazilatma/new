@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.3.8 - Importing/Activating a llama.cpp Model Failed Forever: "error while loading shared libraries: libllama.so: cannot open shared object file"
+
+### Fixed
+- **Importing a model found by the disk scanner (or activating/switching any llama.cpp model) failed with a raw, scary-looking error from the OS's dynamic linker**, not from this app or even from llama.cpp itself:
+  ```
+  llama-server: error while loading shared libraries: libllama.so: cannot open shared object file: No such file or directory
+  ```
+  Root cause: llama.cpp's official release archive ships `llama-server` next to the shared libraries it's dynamically linked against (`libllama.so`, `libggml*.so`, etc.) in the same folder, and the executable finds them via its own `$ORIGIN`-relative rpath (i.e. "look in my own directory"). `install_runtime()` only ever copied the single `llama-server` file itself out of that archive into this app's own `bin/` folder, leaving every `.so` file it depends on behind in the (then-discarded) extracted archive -- so the installed binary could never actually start, on any model, on any machine that hit this code path. Once a broken copy like that existed on disk, it was never automatically detected or repaired either: the binary file was still present and still executable, so every subsequent lookup kept reporting it as "already installed" and handing the user the exact same dead-end failure forever.
+- `install_runtime()` now copies every file sitting next to `llama-server` in the extracted archive (not just the one executable) into the installed `bin/` folder, so its shared libraries always travel with it.
+- Added `_binary_is_healthy()`, which uses `ldd` to actually verify a llama.cpp binary's shared libraries can be resolved before trusting it. Both `install_runtime()` and `start_server()` now use it to detect an already-broken existing install and automatically repair it (remove the broken file, re-extract/re-copy a working one) instead of silently reusing it and failing the same way every time.
+- `server_env()` now also sets `LD_LIBRARY_PATH` to include the installed `bin/` folder as defense-in-depth, in case a future build doesn't ship with an `$ORIGIN` rpath.
+- Verified with 3 new regression tests: a unit test of the `ldd`-based health check, an end-to-end test that builds a fake llama.cpp release archive (executable + shared libraries) and confirms `install_runtime()` copies all of it (not just the binary) into place, and a test confirming `start_server()` detects and repairs a broken existing install automatically rather than relaunching the broken binary again. 66 backend tests passing.
+
 ## 3.3.7 - A Fallback/Execution/Preview-Decorated Message in History Permanently Broke a Conversation With Mistral (HTTP 422 "extra_forbidden")
 
 ### Fixed

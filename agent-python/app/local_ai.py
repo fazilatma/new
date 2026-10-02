@@ -143,6 +143,31 @@ def bin_dir() -> Path:
     return p
 
 
+def _binary_is_healthy(path: str) -> bool:
+    """A binary can sit on disk with the executable bit set and still be
+    completely unusable -- e.g. llama.cpp's release builds are dynamically
+    linked against libllama.so/libggml*.so shipped alongside llama-server in
+    the same archive folder (found via the executable's $ORIGIN rpath). If
+    only the llama-server file itself ever got copied out of that archive
+    (as a previous version of install_runtime() did), every launch fails
+    immediately with "error while loading shared libraries: libllama.so:
+    cannot open shared object file" -- and because the file is still present
+    and +x, callers that only check os.path.isfile()/os.access() keep
+    treating it as "already installed" forever, so the breakage never heals
+    itself. Use `ldd` (cheap, a few ms) to actually verify every shared
+    library the binary depends on can be resolved before trusting it.
+    """
+    ldd = shutil.which("ldd")
+    if not ldd:
+        return True  # can't verify on this system; assume OK rather than loop-reinstalling
+    try:
+        res = subprocess.run([ldd, path], capture_output=True, text=True, timeout=5)
+        combined = f"{res.stdout}\n{res.stderr}"
+        return "not found" not in combined
+    except Exception:
+        return True
+
+
 def binary(engine: Optional[str] = None) -> Optional[str]:
     active_engine = engine or get_state("localai:engine") or "ollama"
     if active_engine == "llamacpp":
@@ -240,6 +265,12 @@ def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         "OLLAMA_FLASH_ATTENTION": os.environ.get("OLLAMA_FLASH_ATTENTION", "1"),
         "OLLAMA_KV_CACHE_TYPE": os.environ.get("OLLAMA_KV_CACHE_TYPE", "q8_0"),
         "PATH": f"{bin_dir()}:{env.get('PATH', '')}",
+        # Defense-in-depth for llama-server, which is dynamically linked
+        # against libllama.so/libggml*.so normally resolved via its own
+        # $ORIGIN rpath (same folder as the binary). If that ever doesn't
+        # hold -- a different build, a binary moved after extraction, etc. --
+        # the dynamic linker still finds the libraries we keep in bin_dir().
+        "LD_LIBRARY_PATH": f"{bin_dir()}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":"),
     }
     env.update(defaults)
     if overrides:
@@ -448,8 +479,16 @@ def runtime_status() -> Dict[str, Any]:
 def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     engine = engine.strip().lower() if engine else "ollama"
     b = binary(engine)
-    if b:
+    if b and _binary_is_healthy(b):
         return {"ok": True, "alreadyInstalled": True, "binary": b, "engine": engine}
+    if b and not _binary_is_healthy(b):
+        # Broken leftover install (e.g. missing shared libraries) -- remove
+        # it so the extraction step below is guaranteed to replace it with a
+        # working copy instead of silently keeping the broken one in place.
+        try:
+            Path(b).unlink()
+        except Exception:
+            pass
 
     def _log(msg: str):
         if log_fn:
@@ -648,7 +687,43 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
             for candidate in rd.rglob(target_name):
                 if candidate.is_file() and not candidate.is_symlink() and candidate != target_bin:
                     target_bin.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(candidate), str(target_bin))
+                    if engine == "llamacpp":
+                        # llama.cpp's Ubuntu release builds are dynamically
+                        # linked against libllama.so / libggml*.so / libmtmd.so
+                        # shipped in the SAME folder as the executables
+                        # (resolved via the binary's $ORIGIN rpath). Moving
+                        # only llama-server itself left those shared
+                        # libraries behind in the extracted archive and made
+                        # every launch fail with "error while loading shared
+                        # libraries: libllama.so: cannot open shared object
+                        # file". Copy every sibling file next to it instead
+                        # of just the one binary.
+                        src_dir = candidate.parent
+                        copied_any = False
+                        for sibling in src_dir.iterdir():
+                            if sibling.is_file() and not sibling.is_symlink():
+                                try:
+                                    shutil.copy2(str(sibling), str(bd / sibling.name))
+                                    copied_any = True
+                                except Exception as copy_err:
+                                    _log(f"Could not copy {sibling.name}: {copy_err}")
+                        if copied_any:
+                            try:
+                                (bd / target_name).chmod(0o755)
+                            except Exception:
+                                pass
+                            # Clean up the now-redundant extracted copy tree
+                            # (keep disk usage sane; everything needed now
+                            # lives under bin_dir()).
+                            try:
+                                top_level = candidate.relative_to(rd).parts[0]
+                                leftover = rd / top_level
+                                if leftover.resolve() != bd.resolve():
+                                    shutil.rmtree(str(leftover), ignore_errors=True)
+                            except Exception:
+                                pass
+                    else:
+                        shutil.move(str(candidate), str(target_bin))
                     break
 
         if not target_bin.is_file() and engine == "llamacpp":
@@ -707,6 +782,13 @@ def start_server(
         stop_server()
 
     b = binary(active_engine) or binary()
+    if b and not _binary_is_healthy(b):
+        # Broken install from before this was fixed (e.g. llama-server
+        # copied without its libllama.so/libggml*.so) -- repair it instead
+        # of handing the user the same cryptic
+        # "error while loading shared libraries" failure every single time.
+        _log(f"{active_engine} binary is present but broken (missing shared libraries); repairing...")
+        b = None
     if not b:
         install_runtime(active_engine, log_fn)
         b = binary(active_engine) or binary()
