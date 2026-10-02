@@ -2184,7 +2184,16 @@ def benchmark_test(model: str) -> Dict[str, Any]:
             "stream": False,
         }).encode("utf-8")
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/3.0"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        # A completely cold model (nothing currently loaded into Ollama's
+        # own llama-server runner) can legitimately take well over 60s to
+        # load + run its one-time warm-up pass on a loaded/busy CPU-only
+        # host -- observed live: two consecutive attempts both timed out
+        # at 60s while the runner's own log showed it still mid-warm-up,
+        # not stalled/broken. The real chat path already defaults to a more
+        # generous ~120s provider timeout; match that here too so this
+        # diagnostic doesn't report a false failure for a model that is
+        # actually fine and just slow to load the very first time.
+        with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             elapsed = max(0.01, time.time() - t0)
             eval_count = int(data.get("eval_count") or 30)

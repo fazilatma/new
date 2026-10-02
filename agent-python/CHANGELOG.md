@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.23 - Diagnostic benchmark test timeout raised to match the real chat path (fixes false-negative after the 3.3.22 fix)
+
+### Fixed
+- Verified live on the production host after 3.3.22: with the truncated-download bug fixed, Ollama now downloads the full, correctly-sized archive, `llama-server` is present, and it genuinely loads the GGUF model tensors (confirmed in the runner's own log: `load_tensors: loading model tensors...`, `llama_context: constructing llama_context`, etc. -- this is real llama.cpp model-loading output, not a stub). However, the built-in `/api/localai/auto-repair` diagnostic "test" step (`benchmark_test()`) still reported `{"ok": false, "error": "timed out"}`, because its HTTP client used a hardcoded 60s timeout while a completely cold model (nothing yet loaded in Ollama's runner) can legitimately take longer than that to load plus run its one-time warm-up pass, especially under host load. This was a false negative in the diagnostic only -- the real `/api/chat` and `/api/generate` paths used by actual chat messages already default to a more generous ~120s provider-level timeout and were never affected by this specific limit.
+- `benchmark_test()`'s request timeout raised from 60s to 180s to match (and exceed) that real-path timeout, so the built-in diagnostic no longer falsely reports a healthy, correctly-installed model as broken just because the very first load took a bit longer than an arbitrary 60s guess.
+- 97 backend tests passing.
+
 ## 3.3.22 - Real root cause found and fixed: truncated ~1.4GB Ollama download silently installed as "healthy"
 
 ### Fixed
