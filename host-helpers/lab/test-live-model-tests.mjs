@@ -218,6 +218,10 @@ sys.exit(0 if all(name != "bad-profile" for name in names) else 1)
     body: JSON.stringify({ concurrency: 2 }),
   });
   assert.equal(started.status, 202);
+  const repairDeadline = Date.now() + 10000;
+  while (Date.now() < repairDeadline && profiles.get("slow-profile").config.model !== "gemini/gemini-2.5-flash-preview-tts") {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   assert.equal(
     profiles.get("slow-profile").config.model,
     "gemini/gemini-2.5-flash-preview-tts",

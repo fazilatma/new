@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "assertions": {
+    "generatedScriptParsed": true,
+    "quotedAttributesEnforced": true,
+    "manualRefreshControl": true,
+    "globalErrorBarWithRetry": true,
+    "searchableProfileList": true,
+    "lastUpdatedIndicator": true,
+    "responsiveCardTables": true,
+    "pausedAutoRefresh": true,
+    "threadSuggestionNotClobbered": true,
+    "installJobRecoverable": true,
+    "statusContractComplete": true,
+    "apiStaysAuthenticated": true,
+    "sessionKeyLeak": false
+  }
+}
