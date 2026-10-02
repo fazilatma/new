@@ -1179,6 +1179,7 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
     max_steps = int(payload.get("maxSteps") or 30)
     conversation_id = str(payload.get("conversationId") or payload.get("conversation_id") or "")
     references = payload.get("references")
+    debug_mode = bool(payload.get("debug"))
 
     # The agent loop is created as a server-side job and scheduled as a
     # detached asyncio task *before* this request returns anything -- it is
@@ -1195,6 +1196,7 @@ async def chat_stream_endpoint(payload: Dict[str, Any], request: Request, user: 
             "maxSteps": max_steps,
             "conversationId": conversation_id,
             "references": references,
+            "debug": debug_mode,
         },
         user_id=user.get("username", "user"),
         max_steps=max_steps,

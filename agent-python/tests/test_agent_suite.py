@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.10"
+    assert APP_VERSION == "3.3.11"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -523,11 +523,11 @@ def test_provider_test_all_interleaves_round_robin_not_provider_by_provider(monk
     assert call_order[5:6] == [("alpha", "a3")]
 
 def test_chat_streaming_and_error_diagnostics(monkeypatch):
-    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "Hello from mock stream!"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "Hello from mock stream!"}}
 
-    async def mock_call_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_call_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         return {
             "choices": [{
                 "message": {"role": "assistant", "content": "Hello from mock non-stream!"}
@@ -1012,7 +1012,7 @@ def test_quick_project_creation_with_minimal_fields():
 
 def test_chat_stream_sse_realtime_events(monkeypatch):
     """Test /api/chat/stream returns valid text/event-stream headers and events."""
-    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_caller(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "SSE Event stream response"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "SSE Event stream response"}}
 
@@ -1122,7 +1122,7 @@ def test_autonomous_self_healing_chat_loop(monkeypatch):
     """Test that complete_chat automatically detects errors in generated code and self-heals."""
     call_count = 0
 
-    async def mock_call_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_call_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -1172,7 +1172,7 @@ async def test_stream_complete_chat_execution_events(monkeypatch):
 
     call_count = 0
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -1375,7 +1375,7 @@ async def test_checkpoint_resumption_in_stream_chat(monkeypatch):
         status="in_progress"
     )
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "Resumed Step 2 Completed"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "Resumed Step 2 Completed"}}
 
@@ -1418,7 +1418,7 @@ async def test_chat_job_runs_to_completion_with_no_http_connection_alive(monkeyp
 
     conv_id = f"test-detached-{int(time.time()*1000)}"
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "Detached job response"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "Detached job response"}}
 
@@ -1582,7 +1582,7 @@ async def test_chat_job_resumes_from_checkpoint_after_simulated_server_restart(m
     recover_orphaned_jobs()
     assert get_job_details(job["id"])["status"] == "queued"
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "Resumed Step 2 Completed"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "Resumed Step 2 Completed"}}
 
@@ -1614,7 +1614,7 @@ async def test_smart_fallback_on_rate_limit_429_in_stream_chat(monkeypatch):
     store.data = {"prov_rate_limited": p1, "prov_backup": p2}
     store.record_metric("prov_backup", "model-backup", 120, is_error=False)
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         if p.id == "prov_rate_limited":
             raise Exception("HTTP 429: Rate limit exceeded or quota exhausted")
         else:
@@ -1654,7 +1654,7 @@ async def test_exponential_backoff_retry_loop_in_stream_chat(monkeypatch):
 
     call_attempt = 0
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         nonlocal call_attempt
         call_attempt += 1
         if call_attempt == 1:
@@ -1704,7 +1704,7 @@ async def test_network_retry_fails_fast_not_for_minutes(monkeypatch):
 
     attempt_count = 0
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         nonlocal attempt_count
         attempt_count += 1
         raise ConnectionError("Connection refused")
@@ -2852,7 +2852,7 @@ async def test_stream_complete_chat_starts_dead_local_llamacpp_server_before_fir
     monkeypatch.setattr(local_ai, "server_up", fake_server_up)
     monkeypatch.setattr(local_ai, "start_server", fake_start_server)
 
-    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None):
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
         yield {"type": "token", "text": "Hello from llama.cpp"}
         yield {"type": "full_message", "message": {"role": "assistant", "content": "Hello from llama.cpp"}}
 
@@ -3082,3 +3082,163 @@ def test_start_server_surfaces_abi_incompatibility_immediately_without_repair_at
 
     assert install_runtime_calls["count"] == 0, "must not attempt to reinstall an ABI-incompatible binary"
     assert popen_calls["count"] == 0, "must not attempt to launch a binary already known to be unable to run"
+
+
+# ---------------------------------------------------------------------------
+# "حالت تشخیص عیب" (diagnostic/debug mode): every real HTTP request/response
+# exchanged with a provider during a chat turn must be captured and surfaced
+# as `debug_request` SSE events (a DevTools-Network-tab-style inspector),
+# with secrets masked, when the caller opts in via `debug_log`/`debug=True`.
+# These are regression tests for that capture plumbing in app/chat.py.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_stream_call_provider_api_emits_debug_request_with_masked_auth(monkeypatch):
+    """When a `debug_log` list is passed, stream_call_provider_api() must
+    yield a `debug_request` event carrying the real method/url/status/raw
+    response text, while masking the Authorization header so a full API key
+    is never captured verbatim."""
+    import httpx
+    from app.chat import stream_call_provider_api
+    from app.providers import Provider, ModelSpec
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.dumps({"choices": [{"delta": {"content": "hi there"}}]}).encode()
+        return httpx.Response(200, content=b"data: " + body + b"\n\ndata: [DONE]\n\n", headers={"Content-Type": "text/event-stream"})
+
+    mock_transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = mock_transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.chat.httpx.AsyncClient", patched_async_client)
+
+    provider = Provider(id="openrouter", name="OpenRouter", protocol="openai-compatible", url="https://openrouter.ai/api/v1", apiKey="sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789", enabled=True)
+    model = ModelSpec(id="some-model", name="Some Model")
+
+    debug_log = []
+    chunks = []
+    async for chunk in stream_call_provider_api(provider, model, [{"role": "user", "content": "hi"}], "sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789", debug_log=debug_log):
+        chunks.append(chunk)
+
+    debug_events = [c for c in chunks if c.get("type") == "debug_request"]
+    assert len(debug_events) == 1, "exactly one real HTTP call was made, so exactly one debug_request event is expected"
+    evt = debug_events[0]
+    assert evt["method"] == "POST"
+    assert "openrouter.ai" in evt["url"]
+    assert evt["statusCode"] == 200
+    assert "hi there" in (evt["responseBody"] or "")
+    assert evt["durationMs"] is not None
+
+    # The real API key must never appear verbatim in the captured headers.
+    auth_header = evt["requestHeaders"].get("authorization") or evt["requestHeaders"].get("Authorization")
+    assert auth_header is not None
+    assert "sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789" not in auth_header
+    assert "Bearer" in auth_header
+
+    # The same events must also have landed in the external debug_log list
+    # (this is what stream_complete_chat relies on for its own bookkeeping).
+    assert len(debug_log) == 1
+
+
+@pytest.mark.anyio
+async def test_call_provider_api_emits_debug_entry_for_non_streaming_call(monkeypatch):
+    """Non-streaming call_provider_api() must append a debug entry with the
+    real status code/response body to `debug_log` when provided, and must
+    not do so (zero overhead) when debug_log is None."""
+    import httpx
+    from app.chat import call_provider_api
+    from app.providers import Provider, ModelSpec
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "non-stream ok"}}]}).encode()
+        return httpx.Response(200, content=body, headers={"Content-Type": "application/json"})
+
+    mock_transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args, **kwargs):
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = mock_transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.chat.httpx.AsyncClient", patched_async_client)
+
+    provider = Provider(id="openrouter", name="OpenRouter", protocol="openai-compatible", url="https://openrouter.ai/api/v1", apiKey="sk-test-key-0123456789", enabled=True)
+    model = ModelSpec(id="some-model", name="Some Model")
+
+    # debug_log is None (default): must behave exactly as before, no errors.
+    resp = await call_provider_api(provider, model, [{"role": "user", "content": "hi"}], "sk-test-key-0123456789")
+    assert resp["choices"][0]["message"]["content"] == "non-stream ok"
+
+    # debug_log provided: must capture exactly one entry with real details.
+    debug_log = []
+    resp2 = await call_provider_api(provider, model, [{"role": "user", "content": "hi"}], "sk-test-key-0123456789", debug_log=debug_log)
+    assert resp2["choices"][0]["message"]["content"] == "non-stream ok"
+    assert len(debug_log) == 1
+    entry = debug_log[0]
+    assert entry["statusCode"] == 200
+    assert "non-stream ok" in entry["responseBody"]
+    auth_header = entry["requestHeaders"].get("Authorization") or entry["requestHeaders"].get("authorization")
+    assert "sk-test-key-0123456789" not in auth_header
+
+
+@pytest.mark.anyio
+async def test_stream_complete_chat_forwards_debug_request_events_when_enabled(monkeypatch):
+    """stream_complete_chat(debug=True) must forward every debug_request
+    event emitted by stream_call_provider_api verbatim to its own SSE
+    output (this is what worker.py's publish_job_event loop then relays to
+    the frontend with zero additional plumbing). With debug=False (the
+    default), no debug_request events must appear and the underlying call
+    must not even be asked to capture them."""
+    from app.chat import stream_complete_chat
+    from app.providers import ProviderStore
+
+    received_debug_log_arg = {"value": "unset"}
+
+    async def mock_stream_provider(p, target_model, chat_msgs, api_key, custom_timeout_sec=None, custom_connect_sec=None, debug_log=None):
+        received_debug_log_arg["value"] = debug_log
+        if debug_log is not None:
+            entry = {
+                "provider": p.name, "model": target_model.id, "method": "POST",
+                "url": "https://example.test/v1/chat/completions",
+                "requestHeaders": {"Authorization": "Bearer xyz***masked"},
+                "requestBody": {"model": target_model.id}, "statusCode": 200,
+                "responseHeaders": {}, "responseBody": "ok", "durationMs": 12.3,
+                "error": None, "timestamp": 0,
+            }
+            debug_log.append(entry)
+            yield {"type": "debug_request", **entry}
+        yield {"type": "token", "text": "Hello!"}
+        yield {"type": "full_message", "message": {"role": "assistant", "content": "Hello!"}}
+
+    monkeypatch.setattr("app.chat.stream_call_provider_api", mock_stream_provider)
+    store = ProviderStore()
+    monkeypatch.setattr(store, "get_api_key", lambda p: "sk-mock-key")
+
+    # debug=True: the debug_request event must be forwarded.
+    events = []
+    async for evt in stream_complete_chat(
+        store=store, provider_id="openrouter", model_id="google/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}], max_steps=3, debug=True,
+    ):
+        events.append(evt)
+    assert received_debug_log_arg["value"] is not None
+    debug_events = [e for e in events if e.get("type") == "debug_request"]
+    assert len(debug_events) == 1
+    assert debug_events[0]["url"] == "https://example.test/v1/chat/completions"
+    assert debug_events[0]["statusCode"] == 200
+
+    # debug=False (default): the provider call must not even be asked to
+    # capture a debug log, and no debug_request events must be emitted.
+    events2 = []
+    async for evt in stream_complete_chat(
+        store=store, provider_id="openrouter", model_id="google/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}], max_steps=3,
+    ):
+        events2.append(evt)
+    assert received_debug_log_arg["value"] is None
+    assert not [e for e in events2 if e.get("type") == "debug_request"]

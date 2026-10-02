@@ -2329,7 +2329,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.10)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.11)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2412,7 +2412,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.3.10
+          🚀 v3.3.11
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -2443,10 +2443,15 @@
           <div class="chat-top-controls">
             <select id="chatProvider" class="input-control" style="width:160px" onchange="onChatProviderChange()"></select>
             <select id="chatModel" class="input-control" style="width:200px" onchange="onChatModelChange()"></select>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-left:auto;">
-              <input type="checkbox" id="requireApprovalCheck" onchange="onApprovalToggle()" checked>
-              <span>Require Approval on File Writes</span>
-            </label>
+            <div style="display:flex;align-items:center;gap:12px;margin-left:auto;">
+              <button type="button" id="debugNetworkNavBtn" class="btn btn-ghost btn-sm" style="display:none;" onclick="openDebugNetworkModal()" title="مشاهده درخواست‌ها و پاسخ‌های واقعی رد و بدل‌شده با مدل (حالت تشخیص عیب)">
+                🛰️ Network <span id="debugNetworkNavCount" style="background:var(--bg-highlight);border-radius:10px;padding:0 6px;font-size:10px;margin-right:4px;">0</span>
+              </button>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+                <input type="checkbox" id="requireApprovalCheck" onchange="onApprovalToggle()" checked>
+                <span>Require Approval on File Writes</span>
+              </label>
+            </div>
           </div>
 
           <div class="chat-messages" id="chatMessages">
@@ -3084,6 +3089,29 @@
           <div id="chatRefPills" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:36px;">
             <span style="font-size:11.5px;color:var(--text-dim);font-style:italic;">هیچ ارجاعی به این گفتگو پیوند داده نشده است (می‌توانید با دکمه «+ افزودن ارجاع» بالا یا نوشتن @ در متن چت ارجاع دهید).</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Diagnostic / Network Debug Mode Card -->
+      <div class="stat-card" style="margin-bottom:16px;border:1px solid var(--border-color);background:var(--bg-elevated);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:20px;">🛰️</span>
+            <div>
+              <div style="font-weight:600;font-size:14px;">حالت تشخیص عیب (Diagnostic / Network Debug Mode)</div>
+              <div style="font-size:11px;color:var(--text-dim);">در صورت فعال‌سازی، تمام درخواست‌ها و پاسخ‌های واقعی رد و بدل‌شده با ارائه‌دهنده مدل پس از ارسال هر پیام، به‌صورت دقیق و شبیه به تب Network در DevTools مرورگر نمایش داده می‌شود (متد، آدرس، هدرها، بدنه، کد وضعیت و زمان پاسخ).</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;user-select:none;">
+              <input type="checkbox" id="settingDebugMode" onchange="onDebugModeToggle()">
+              <span>فعال‌سازی حالت تشخیص عیب</span>
+            </label>
+            <span class="tool-status-tag success" id="debugModeStatusTag" style="display:none;">فعال</span>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);background:var(--bg-base);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);">
+          ⚠️ کلیدهای API همیشه در این نما پوشانده (Masked) نمایش داده می‌شوند. این حالت فقط برای عیب‌یابی اتصال به مدل‌ها پیشنهاد می‌شود، چون نمایش جزئیات کامل هر درخواست ممکن است سرعت دریافت پاسخ را کمی کاهش دهد.
         </div>
       </div>
 
@@ -4266,6 +4294,33 @@ gemini-1.5-pro'></textarea>
   </div>
 </div>
 
+<!-- MODAL: DIAGNOSTIC / NETWORK DEBUG (حالت تشخیص عیب) -->
+<div class="modal-backdrop" id="debugNetworkModal">
+  <div class="modal-dialog" style="max-width:980px;width:96%;max-height:90vh;display:flex;flex-direction:column;">
+    <div class="modal-header" style="border-bottom:1px solid var(--border-subtle);">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">🛰️</span>
+        <div>
+          <strong style="font-size:15px;">حالت تشخیص عیب — درخواست‌ها و پاسخ‌های واقعی</strong>
+          <div style="font-size:11px;color:var(--text-dim);">مشابه تب Network در DevTools مرورگر؛ هر ردیف یک تماس واقعی HTTP با ارائه‌دهنده مدل است (کلیدهای API همیشه پوشانده شده‌اند).</div>
+        </div>
+      </div>
+      <button class="btn-ghost" onclick="closeModal('debugNetworkModal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:0;display:flex;flex:1;min-height:420px;overflow:hidden;">
+      <div id="debugReqListPane" style="width:340px;min-width:260px;border-left:1px solid var(--border-subtle);overflow-y:auto;background:var(--bg-base);"></div>
+      <div id="debugReqDetailPane" style="flex:1;overflow-y:auto;padding:14px;"></div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:11px;color:var(--text-dim);" id="debugReqFooterInfo"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="copyDebugRequestDetail()">📋 Copy Selected</button>
+        <button class="btn btn-ghost" onclick="closeModal('debugNetworkModal')">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: REFERENCE PICKER (Cross-Chat & Cross-Project, v0.10.0) -->
 <div class="modal-backdrop" id="refPickerModal">
   <div class="modal-dialog" style="max-width:540px;">
@@ -4601,6 +4656,9 @@ async function initApp() {
   if (savedApproval !== null) {
     $('#requireApprovalCheck').checked = (savedApproval === 'true');
   }
+
+  // Restore diagnostic/debug mode toggle state
+  syncDebugModeUI();
 
   // Restore Workspace Sidebar collapsed state
   const isTreeCollapsed = localStorage.getItem('ws_tree_collapsed') === '1';
@@ -6645,6 +6703,7 @@ function renderChatMessages() {
             ${fallbackBadge}
             <button type="button" class="copy-msg-btn" onclick="copyMessageText(this)" title="Copy message text">📋 Copy</button>
             <button type="button" class="copy-msg-btn" onclick="retryAgentMessage(${idx})" title="Regenerate this response">🔄 Retry</button>
+            ${m.debugRequests && m.debugRequests.length > 0 ? `<button type="button" class="copy-msg-btn" onclick='openDebugNetworkModal(${JSON.stringify(m.debugRequests).replace(/'/g, "&#39;")})' title="مشاهده درخواست‌ها و پاسخ‌های واقعی این پیام">🛰️ Network (${m.debugRequests.length})</button>` : ''}
           </div>
         </div>
       `;
@@ -6708,6 +6767,171 @@ function onApprovalToggle() {
   flashAutoSave();
 }
 
+// --- "حالت تشخیص عیب" (diagnostic/debug mode) ------------------------------
+// A lightweight, client-side-only toggle (same persistence pattern as
+// `arena_require_approval`/`arena_theme`): when on, every chat send asks the
+// backend to capture every real HTTP request/response exchanged with the
+// provider for that turn (see app/chat.py's `debug_log` plumbing) and
+// streams them back as `debug_request` SSE events, rendered in a
+// DevTools-Network-tab-style modal (see openDebugNetworkModal below).
+function isDebugModeEnabled() {
+  return localStorage.getItem('arena_debug_mode') === 'true';
+}
+
+function syncDebugModeUI() {
+  const enabled = isDebugModeEnabled();
+  const check = $('#settingDebugMode');
+  if (check) check.checked = enabled;
+  const tag = $('#debugModeStatusTag');
+  if (tag) tag.style.display = enabled ? 'inline-block' : 'none';
+  const navBtn = $('#debugNetworkNavBtn');
+  if (navBtn) navBtn.style.display = enabled ? 'inline-flex' : 'none';
+}
+
+function onDebugModeToggle() {
+  const enabled = !!$('#settingDebugMode')?.checked;
+  localStorage.setItem('arena_debug_mode', enabled ? 'true' : 'false');
+  syncDebugModeUI();
+  flashAutoSave();
+}
+
+// --- DevTools-Network-tab-style inspector for debug mode -------------------
+let activeDebugRequests = [];
+let selectedDebugRequestIdx = -1;
+// Points at the `debugRequests` array of whichever chat turn is currently
+// streaming, so the floating "Network" button works mid-stream (before the
+// turn finishes and the list gets attached to a persisted chat message).
+let liveDebugRequestsRef = null;
+
+function onDebugRequestCaptured(list) {
+  liveDebugRequestsRef = list;
+  const countEl = $('#debugNetworkNavCount');
+  if (countEl) countEl.textContent = String(list.length);
+  const navBtn = $('#debugNetworkNavBtn');
+  if (navBtn && isDebugModeEnabled()) navBtn.style.display = 'inline-flex';
+  // Live-refresh the modal if it's already open and currently pointed at
+  // this exact (still-growing) list, so new requests appear in real time.
+  if ($('#debugNetworkModal')?.classList.contains('open') && activeDebugRequests === list) {
+    const wasAtLatest = selectedDebugRequestIdx === list.length - 2 || selectedDebugRequestIdx === -1;
+    if (wasAtLatest) selectedDebugRequestIdx = list.length - 1;
+    renderDebugRequestList();
+  }
+}
+
+function openDebugNetworkModal(requests) {
+  activeDebugRequests = requests || liveDebugRequestsRef || [];
+  selectedDebugRequestIdx = activeDebugRequests.length > 0 ? activeDebugRequests.length - 1 : -1;
+  renderDebugRequestList();
+  openModal('debugNetworkModal');
+}
+
+function _debugStatusBadge(entry) {
+  if (entry.error && entry.statusCode == null) return '<span style="color:#f87171;">(failed)</span>';
+  const code = entry.statusCode;
+  if (code === null || code === undefined) return '<span style="color:var(--text-dim);">…</span>';
+  const color = (code >= 200 && code < 300) ? '#4ade80' : (code >= 400 ? '#f87171' : '#facc15');
+  return `<span style="color:${color};font-weight:600;">${code}</span>`;
+}
+
+function renderDebugRequestList() {
+  const pane = $('#debugReqListPane');
+  if (!pane) return;
+  if (activeDebugRequests.length === 0) {
+    pane.innerHTML = `<div style="padding:16px;font-size:12px;color:var(--text-dim);line-height:1.6;">هنوز هیچ درخواستی ثبت نشده است.<br>اگر «حالت تشخیص عیب» را همین الان از تنظیمات فعال کردید، لطفاً یک پیام جدید در چت ارسال کنید تا درخواست‌های واقعی اینجا نمایش داده شوند.</div>`;
+  } else {
+    pane.innerHTML = activeDebugRequests.map((e, i) => {
+      let path = e.url || '';
+      try { const u = new URL(e.url); path = u.pathname + u.search; } catch (_) {}
+      return `
+        <div onclick="selectDebugRequest(${i})" style="padding:10px 12px;border-bottom:1px solid var(--border-subtle);cursor:pointer;${i === selectedDebugRequestIdx ? 'background:var(--bg-highlight);' : ''}">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;align-items:center;">
+            <strong>${esc(e.method || 'POST')}</strong>
+            ${_debugStatusBadge(e)}
+          </div>
+          <div style="font-size:11px;color:var(--text-main);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;" title="${esc(e.url || '')}">${esc(path)}</div>
+          <div style="font-size:10.5px;color:var(--text-dim);margin-top:2px;display:flex;justify-content:space-between;gap:6px;">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.provider || '')} / ${esc(e.model || '')}</span>
+            <span style="white-space:nowrap;">${e.durationMs != null ? Math.round(e.durationMs) + 'ms' : '…'}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+  renderDebugRequestDetail();
+  const footer = $('#debugReqFooterInfo');
+  if (footer) footer.textContent = `${activeDebugRequests.length} درخواست ثبت‌شده`;
+}
+
+function selectDebugRequest(i) {
+  selectedDebugRequestIdx = i;
+  renderDebugRequestList();
+}
+
+function _debugJsonBlock(label, value) {
+  let text;
+  if (value === null || value === undefined) {
+    text = '(خالی)';
+  } else if (typeof value === 'string') {
+    text = value;
+  } else {
+    try { text = JSON.stringify(value, null, 2); } catch (_) { text = String(value); }
+  }
+  return `
+    <div style="margin-bottom:14px;">
+      <label style="font-size:11px;color:var(--text-dim);font-weight:600;display:block;margin-bottom:4px;">${label}</label>
+      <pre style="max-height:220px;overflow:auto;background:var(--code-bg);border:1px solid var(--border-subtle);padding:10px;border-radius:6px;font-family:monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-word;margin:0;">${esc(text)}</pre>
+    </div>
+  `;
+}
+
+function renderDebugRequestDetail() {
+  const pane = $('#debugReqDetailPane');
+  if (!pane) return;
+  const e = activeDebugRequests[selectedDebugRequestIdx];
+  if (!e) {
+    pane.innerHTML = `<div style="font-size:12px;color:var(--text-dim);">یک درخواست را از لیست سمت راست انتخاب کنید تا جزئیات کامل آن (مشابه تب Network در DevTools) نمایش داده شود.</div>`;
+    return;
+  }
+  pane.innerHTML = `
+    <div class="grid-2" style="margin-bottom:14px;">
+      <div style="background:var(--bg-elevated);padding:10px;border-radius:6px;border:1px solid var(--border-subtle);">
+        <div style="font-size:11px;color:var(--text-dim);">وضعیت (Status)</div>
+        <div style="font-weight:600;font-size:13px;">${_debugStatusBadge(e)}</div>
+      </div>
+      <div style="background:var(--bg-elevated);padding:10px;border-radius:6px;border:1px solid var(--border-subtle);">
+        <div style="font-size:11px;color:var(--text-dim);">زمان پاسخ (Duration)</div>
+        <div style="font-weight:600;font-size:13px;">${e.durationMs != null ? Math.round(e.durationMs) + ' ms' : '—'}</div>
+      </div>
+    </div>
+    <div style="margin-bottom:14px;">
+      <label style="font-size:11px;color:var(--text-dim);font-weight:600;display:block;margin-bottom:4px;">آدرس (URL)</label>
+      <div style="font-size:12px;font-family:monospace;background:var(--bg-elevated);padding:8px 10px;border-radius:6px;border:1px solid var(--border-subtle);word-break:break-all;">${esc(e.method || 'POST')} ${esc(e.url || '')}</div>
+    </div>
+    ${e.error ? `<div style="margin-bottom:14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;padding:10px;border-radius:6px;font-size:12px;">⚠️ ${esc(e.error)}</div>` : ''}
+    ${_debugJsonBlock('هدرهای درخواست (Request Headers) — کلیدهای API پوشانده شده‌اند', e.requestHeaders)}
+    ${_debugJsonBlock('بدنه درخواست (Request Body)', e.requestBody)}
+    ${_debugJsonBlock('هدرهای پاسخ (Response Headers)', e.responseHeaders)}
+    ${_debugJsonBlock('بدنه پاسخ (Response Body)', e.responseBody)}
+  `;
+}
+
+function copyDebugRequestDetail() {
+  const e = activeDebugRequests[selectedDebugRequestIdx];
+  if (!e) return;
+  const text = JSON.stringify(e, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    alert('جزئیات درخواست در کلیپ‌بورد کپی شد.');
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert('جزئیات درخواست در کلیپ‌بورد کپی شد.');
+  });
+}
+
 let chatHistory = [];
 let abortController = null;
 let activeRetryTimer = null;
@@ -6752,7 +6976,8 @@ function makeStreamCtx(bubble, assistantMsgEl = null) {
     errorData: null,
     fallbackDetails: null,
     execResults: [],
-    renderPreviews: []
+    renderPreviews: [],
+    debugRequests: []
   };
 }
 
@@ -6807,6 +7032,10 @@ function applyChatStreamEvent(ctx, data, defaults = {}) {
   }
   if (data.type === 'render_preview_ready') {
     ctx.renderPreviews.push(data);
+  }
+  if (data.type === 'debug_request') {
+    ctx.debugRequests.push(data);
+    onDebugRequestCaptured(ctx.debugRequests);
   }
   if (data.fallbackDetails || data.type === 'fallback_activated') {
     ctx.fallbackDetails = data.fallbackDetails;
@@ -7223,6 +7452,7 @@ async function streamAgentResponse(retryAttempt = 0) {
   abortController = new AbortController();
   currentChatJobId = null;
   const ctx = makeStreamCtx(bubble, assistantMsgEl);
+  liveDebugRequestsRef = ctx.debugRequests;
 
   try {
     const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
@@ -7236,15 +7466,16 @@ async function streamAgentResponse(retryAttempt = 0) {
     const res = await fetch(streamUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        provider: pid,
-        model: mid,
-        messages: chatHistory,
-        maxSteps: 30,
-        requireApproval: reqApproval,
-        conversationId: STATE.activeConversationId,
-        references: STATE.activeReferences
-      }),
+        body: JSON.stringify({
+          provider: pid,
+          model: mid,
+          messages: chatHistory,
+          maxSteps: 30,
+          requireApproval: reqApproval,
+          conversationId: STATE.activeConversationId,
+          references: STATE.activeReferences,
+          debug: isDebugModeEnabled()
+        }),
       signal: abortController.signal
     });
 
@@ -7263,7 +7494,7 @@ async function streamAgentResponse(retryAttempt = 0) {
 
     await pumpSseIntoCtx(reader, ctx, { pid, mid });
 
-    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
+    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews, debugRequests } = ctx;
     // `finalContent` must be mutable: when the stream produced no text at
     // all (e.g. the provider was unreachable and failed before emitting a
     // single token) we fill in a fallback error message below. This used
@@ -7299,7 +7530,8 @@ async function streamAgentResponse(retryAttempt = 0) {
       isFallback: Boolean(fallbackDetails),
       fallbackDetails: fallbackDetails,
       execResults: execResults,
-      renderPreviews: renderPreviews
+      renderPreviews: renderPreviews,
+      debugRequests: debugRequests
     });
     localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
 
@@ -7428,6 +7660,7 @@ async function reattachActiveJobIfAny(convId) {
   const assistantMsgEl = appendMessage('assistant', '🔄 در حال اتصال مجدد به اجرای در حال انجام روی سرور...');
   const bubble = assistantMsgEl.querySelector('.msg-bubble');
   const ctx = makeStreamCtx(bubble, assistantMsgEl);
+  liveDebugRequestsRef = ctx.debugRequests;
 
   try {
     const token = localStorage.getItem('arena_token') || sessionStorage.getItem('arena_token');
@@ -7445,7 +7678,7 @@ async function reattachActiveJobIfAny(convId) {
     const reader = res.body.getReader();
     await pumpSseIntoCtx(reader, ctx, { pid: job.provider_id, mid: job.model_id });
 
-    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews } = ctx;
+    const { accumulated, accumulatedReasoning, isError, errorData, fallbackDetails, execResults, renderPreviews, debugRequests } = ctx;
     // Mutable on purpose -- see the matching comment in streamAgentResponse().
     // Previously this was `const`, and the no-token-error branch below set
     // the bubble's HTML directly without updating it, so the error text was
@@ -7478,7 +7711,8 @@ async function reattachActiveJobIfAny(convId) {
         isFallback: Boolean(fallbackDetails),
         fallbackDetails: fallbackDetails,
         execResults: execResults,
-        renderPreviews: renderPreviews
+        renderPreviews: renderPreviews,
+        debugRequests: debugRequests
       });
       localStorage.setItem('arena_draft_chat_history', JSON.stringify(chatHistory));
       if (STATE.activeConversationId) {
@@ -9500,6 +9734,7 @@ let envAutoSaveTimer = null;
 let proxyAutoSaveTimer = null;
 
 async function loadSettings() {
+  syncDebugModeUI();
   try {
     const env = await api('/api/config/environment');
 

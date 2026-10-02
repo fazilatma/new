@@ -8,7 +8,7 @@ import httpx
 from typing import Dict, Any, List, Optional, Tuple, AsyncGenerator
 
 from .models import Provider, ModelSpec
-from .config import get_proxy_url, get_proxy_config, get_raw_config
+from .config import get_proxy_url, get_proxy_config, get_raw_config, mask_secret
 from .providers import ProviderStore, PROVIDER_STORE, CIRCUIT_BREAKER, resolve_provider_endpoint_url
 from .agent_tools import AGENT_TOOL_DEFINITIONS, execute_agent_tool
 from .workspaces import (
@@ -349,6 +349,66 @@ def _sanitize_messages_for_request(messages: List[Dict[str, Any]]) -> List[Dict[
         clean.append(entry)
     return clean
 
+
+# --- "حالت تشخیص عیب" (diagnostic/debug mode) request capture -------------
+# When a chat turn runs with debug mode on, every *real* outbound HTTP call
+# made to a provider (including retries, proxy->direct fallbacks, and the
+# non-streaming last-resort fallback) is captured into a `debug_log` list and
+# surfaced to the frontend as a `debug_request` SSE event, so the UI can
+# render a DevTools-Network-tab-style inspector. This capture is fully
+# opt-in and a no-op when `debug_log` is None (the default), so normal chat
+# turns pay zero overhead.
+_SENSITIVE_DEBUG_HEADER_NAMES = {"authorization", "x-api-key", "api-key", "cookie", "set-cookie"}
+_DEBUG_BODY_TRUNCATE_LIMIT = 20000
+
+
+def _mask_debug_headers(headers: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact API keys/tokens from captured request headers before they are
+    ever stored or sent to the frontend, so the diagnostic view can never
+    leak a full secret."""
+    masked: Dict[str, Any] = {}
+    for k, v in (headers or {}).items():
+        if isinstance(k, str) and k.lower() in _SENSITIVE_DEBUG_HEADER_NAMES and isinstance(v, str) and v:
+            prefix, raw = "", v
+            if v.lower().startswith("bearer "):
+                prefix, raw = "Bearer ", v[7:]
+            masked[k] = f"{prefix}{mask_secret(raw)}"
+        else:
+            masked[k] = v
+    return masked
+
+
+def _truncate_debug_text(text: Optional[str], limit: int = _DEBUG_BODY_TRUNCATE_LIMIT) -> Optional[str]:
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n...[truncated, {len(text) - limit} more characters]"
+
+
+def _new_debug_entry(
+    provider: Provider,
+    model: ModelSpec,
+    url: str,
+    headers: Dict[str, Any],
+    body: Any,
+) -> Dict[str, Any]:
+    return {
+        "provider": provider.name,
+        "providerId": provider.id,
+        "model": model.id,
+        "method": "POST",
+        "url": url,
+        "requestHeaders": _mask_debug_headers(headers),
+        "requestBody": body,
+        "statusCode": None,
+        "responseHeaders": None,
+        "responseBody": None,
+        "durationMs": None,
+        "error": None,
+        "timestamp": time.time(),
+    }
+
 async def call_provider_api(
     provider: Provider,
     model: ModelSpec,
@@ -356,7 +416,8 @@ async def call_provider_api(
     api_key: str,
     stream: bool = False,
     custom_timeout_sec: Optional[float] = None,
-    custom_connect_sec: Optional[float] = None
+    custom_connect_sec: Optional[float] = None,
+    debug_log: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     base_url = provider.url.rstrip("/")
     messages = _sanitize_messages_for_request(messages)
@@ -424,9 +485,17 @@ async def call_provider_api(
     timeout = httpx.Timeout(tot_timeout, connect=conn_timeout)
 
     # 1. Primary Attempt: with proxy routing if enabled
+    _dbg_entry_1 = None
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False, proxy=proxy_client) as client:
             r = await client.post(target_url, headers=headers, json=body)
+            if debug_log is not None:
+                _dbg_entry_1 = _new_debug_entry(provider, model, target_url, headers, body)
+                _dbg_entry_1["statusCode"] = r.status_code
+                _dbg_entry_1["responseHeaders"] = dict(r.headers)
+                _dbg_entry_1["responseBody"] = _truncate_debug_text(r.text)
+                _dbg_entry_1["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+                debug_log.append(_dbg_entry_1)
             try:
                 r.raise_for_status()
             except httpx.HTTPStatusError as status_err:
@@ -463,11 +532,27 @@ async def call_provider_api(
                 return _normalize_cloudflare_response(data)
             return data
     except Exception as proxy_or_direct_err:
+        if debug_log is not None and _dbg_entry_1 is None:
+            # The primary attempt never got a response at all (e.g. a
+            # connection-level failure before `r` was obtained) -- still
+            # record it so the diagnostic view shows every real attempt.
+            _dbg_entry_1 = _new_debug_entry(provider, model, target_url, headers, body)
+            _dbg_entry_1["error"] = f"{type(proxy_or_direct_err).__name__}: {proxy_or_direct_err}"
+            _dbg_entry_1["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+            debug_log.append(_dbg_entry_1)
         # 2. Adaptive Direct Fallback: If proxy was used and failed, retry directly without proxy
         if (target_url != direct_url or proxy_client is not None) and provider.protocol != "ollama":
+            _dbg_entry_2 = None
             try:
                 async with httpx.AsyncClient(timeout=timeout, verify=False) as direct_client:
                     r = await direct_client.post(direct_url, headers=headers, json=body)
+                    if debug_log is not None:
+                        _dbg_entry_2 = _new_debug_entry(provider, model, direct_url, headers, body)
+                        _dbg_entry_2["statusCode"] = r.status_code
+                        _dbg_entry_2["responseHeaders"] = dict(r.headers)
+                        _dbg_entry_2["responseBody"] = _truncate_debug_text(r.text)
+                        _dbg_entry_2["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+                        debug_log.append(_dbg_entry_2)
                     try:
                         r.raise_for_status()
                     except httpx.HTTPStatusError as status_err:
@@ -486,7 +571,12 @@ async def call_provider_api(
                     elif provider.protocol == "cloudflare":
                         return _normalize_cloudflare_response(data)
                     return data
-            except Exception:
+            except Exception as direct_fallback_err:
+                if debug_log is not None and _dbg_entry_2 is None:
+                    _dbg_entry_2 = _new_debug_entry(provider, model, direct_url, headers, body)
+                    _dbg_entry_2["error"] = f"{type(direct_fallback_err).__name__}: {direct_fallback_err}"
+                    _dbg_entry_2["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+                    debug_log.append(_dbg_entry_2)
                 pass
 
         latency = (time.perf_counter() - started) * 1000
@@ -643,7 +733,8 @@ async def stream_call_provider_api(
     messages: List[Dict[str, Any]],
     api_key: str,
     custom_timeout_sec: Optional[float] = None,
-    custom_connect_sec: Optional[float] = None
+    custom_connect_sec: Optional[float] = None,
+    debug_log: Optional[List[Dict[str, Any]]] = None
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     True SSE streaming caller for OpenAI-compatible, Anthropic, and Ollama providers.
@@ -719,9 +810,17 @@ async def stream_call_provider_api(
         full_content = []
         full_reasoning = []
         tool_calls_dict: Dict[int, Dict[str, Any]] = {}
+        _dbg_entry = None
+        _dbg_started = time.perf_counter()
+        _dbg_raw_lines: List[str] = []
 
         async with httpx.AsyncClient(timeout=timeout, verify=False, proxy=client_proxy) as client:
             async with client.stream("POST", request_url, headers=headers, json=body) as resp:
+                if debug_log is not None:
+                    _dbg_entry = _new_debug_entry(provider, model, request_url, headers, body)
+                    _dbg_entry["statusCode"] = resp.status_code
+                    _dbg_entry["responseHeaders"] = dict(resp.headers)
+                    debug_log.append(_dbg_entry)
                 if resp.status_code >= 400:
                     # A streaming response's body isn't read yet at this point
                     # (client.stream() is lazy), so resp.raise_for_status()'s
@@ -729,8 +828,15 @@ async def stream_call_provider_api(
                     # so the real provider error (e.g. a local llama-server's
                     # "process has terminated: signal: killed", almost always
                     # an OOM kill) is shown instead of a generic reason phrase.
-                    raise RuntimeError(await _httpx_stream_status_error_detail(resp))
+                    detail = await _httpx_stream_status_error_detail(resp)
+                    if _dbg_entry is not None:
+                        _dbg_entry["error"] = detail
+                        _dbg_entry["durationMs"] = round((time.perf_counter() - _dbg_started) * 1000, 1)
+                        yield {"type": "debug_request", **_dbg_entry}
+                    raise RuntimeError(detail)
                 async for line in resp.aiter_lines():
+                    if _dbg_entry is not None:
+                        _dbg_raw_lines.append(line)
                     line = line.strip()
                     if not line or line.startswith(":"):
                         continue
@@ -811,6 +917,11 @@ async def stream_call_provider_api(
                         except Exception:
                             pass
 
+                if _dbg_entry is not None:
+                    _dbg_entry["responseBody"] = _truncate_debug_text("\n".join(_dbg_raw_lines))
+                    _dbg_entry["durationMs"] = round((time.perf_counter() - _dbg_started) * 1000, 1)
+                    yield {"type": "debug_request", **_dbg_entry}
+
         tool_calls_final = [v for k, v in sorted(tool_calls_dict.items())] if tool_calls_dict else []
         final_msg = {
             "role": "assistant",
@@ -824,23 +935,48 @@ async def stream_call_provider_api(
         yield {"type": "full_message", "message": final_msg}
 
     try:
+        _dbg_emitted_primary = False
         async for item in _stream_request(target_url, proxy_client):
+            if item.get("type") == "debug_request":
+                _dbg_emitted_primary = True
             yield item
         CIRCUIT_BREAKER.record_success(provider.id)
         PROVIDER_STORE.record_metric(provider.id, model.id, (time.perf_counter() - started) * 1000, is_error=False)
     except Exception as proxy_err:
+        if debug_log is not None and not _dbg_emitted_primary:
+            # The primary streaming attempt never got as far as a response
+            # at all (e.g. a connection-level failure) -- still record it.
+            _entry = _new_debug_entry(provider, model, target_url, headers, body)
+            _entry["error"] = f"{type(proxy_err).__name__}: {proxy_err}"
+            _entry["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+            debug_log.append(_entry)
+            yield {"type": "debug_request", **_entry}
+
         if (target_url != direct_url or proxy_client is not None) and provider.protocol != "ollama":
             try:
+                _dbg_emitted_direct = False
                 async for item in _stream_request(direct_url, None):
+                    if item.get("type") == "debug_request":
+                        _dbg_emitted_direct = True
                     yield item
                 CIRCUIT_BREAKER.record_success(provider.id)
                 PROVIDER_STORE.record_metric(provider.id, model.id, (time.perf_counter() - started) * 1000, is_error=False)
                 return
-            except Exception:
-                pass
+            except Exception as direct_stream_err:
+                if debug_log is not None and not _dbg_emitted_direct:
+                    _entry = _new_debug_entry(provider, model, direct_url, headers, body)
+                    _entry["error"] = f"{type(direct_stream_err).__name__}: {direct_stream_err}"
+                    _entry["durationMs"] = round((time.perf_counter() - started) * 1000, 1)
+                    debug_log.append(_entry)
+                    yield {"type": "debug_request", **_entry}
 
         try:
-            resp = await call_provider_api(provider, model, messages, api_key)
+            _fallback_debug_log: Optional[List[Dict[str, Any]]] = [] if debug_log is not None else None
+            resp = await call_provider_api(provider, model, messages, api_key, debug_log=_fallback_debug_log)
+            if _fallback_debug_log:
+                debug_log.extend(_fallback_debug_log)
+                for _e in _fallback_debug_log:
+                    yield {"type": "debug_request", **_e}
             choice = resp["choices"][0]
             msg = choice["message"]
             content = msg.get("content", "")
@@ -857,6 +993,11 @@ async def stream_call_provider_api(
             yield {"type": "full_message", "message": msg}
             return
         except Exception as non_stream_err:
+            if debug_log is not None and "_fallback_debug_log" in locals() and _fallback_debug_log:
+                for _e in _fallback_debug_log:
+                    if _e not in debug_log:
+                        debug_log.append(_e)
+                    yield {"type": "debug_request", **_e}
             CIRCUIT_BREAKER.record_failure(provider.id)
             PROVIDER_STORE.record_metric(provider.id, model.id, (time.perf_counter() - started) * 1000, is_error=True)
             raise non_stream_err
@@ -870,8 +1011,14 @@ async def stream_complete_chat(
     max_steps: int = 30,
     user_id: str = "user",
     conversation_id: Optional[str] = None,
-    references: Optional[List[Dict[str, Any]]] = None
+    references: Optional[List[Dict[str, Any]]] = None,
+    debug: bool = False
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    # "حالت تشخیص عیب" (diagnostic/debug mode): when on, every real HTTP
+    # request/response exchanged with the provider for this chat turn is
+    # captured here and surfaced as `debug_request` SSE events so the
+    # frontend can render a DevTools-Network-tab-style inspector.
+    debug_log: Optional[List[Dict[str, Any]]] = [] if debug else None
     if conversation_id:
         from .workspaces import get_or_create_session_workspace, set_active_workspace
         try:
@@ -996,13 +1143,15 @@ async def stream_complete_chat(
                 # like "the model never responds".
                 for attempt in range(1, MAX_NETWORK_RETRY_ATTEMPTS + 1):
                     try:
-                        async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
+                        async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key, debug_log=debug_log):
                             if chunk["type"] == "token":
                                 yield {"type": "token", "text": chunk["text"]}
                             elif chunk["type"] == "reasoning":
                                 yield {"type": "reasoning", "reasoning": chunk["reasoning"]}
                             elif chunk["type"] == "full_message":
                                 last_msg = chunk["message"]
+                            elif chunk["type"] == "debug_request":
+                                yield chunk
                         break # Stream completed cleanly
                     except Exception as stream_err:
                         err_str = str(stream_err).lower()
@@ -1106,13 +1255,15 @@ async def stream_complete_chat(
                                     yield {"type": "token", "text": f"\n\n⚙️ *در حال رفع خودکار خطای اجرای `{sf['path']}` (تلاش {heal_attempt})...*\n\n"}
 
                                     heal_msg = None
-                                    async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key):
+                                    async for chunk in stream_call_provider_api(p, target_model, chat_msgs, api_key, debug_log=debug_log):
                                         if chunk["type"] == "token":
                                             yield {"type": "token", "text": chunk["text"]}
                                         elif chunk["type"] == "reasoning":
                                             yield {"type": "reasoning", "reasoning": chunk["reasoning"]}
                                         elif chunk["type"] == "full_message":
                                             heal_msg = chunk["message"]
+                                        elif chunk["type"] == "debug_request":
+                                            yield chunk
 
                                     if not heal_msg:
                                         break

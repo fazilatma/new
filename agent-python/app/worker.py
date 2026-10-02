@@ -329,6 +329,7 @@ async def _run_chat_job(job_id: str, job: Dict[str, Any]):
     timeout_sec = job.get("max_timeout_sec") or 1800
     conversation_id = job.get("conversation_id") or payload.get("conversationId") or payload.get("conversation_id") or ""
     references = payload.get("references")
+    debug_mode = bool(payload.get("debug"))
 
     accumulated_text: List[str] = []
     final_event: Optional[Dict[str, Any]] = None
@@ -342,6 +343,7 @@ async def _run_chat_job(job_id: str, job: Dict[str, Any]):
         user_id=job.get("user_id", "user"),
         conversation_id=conversation_id or None,
         references=references,
+        debug=debug_mode,
     )
     try:
         async with asyncio.timeout(timeout_sec):
