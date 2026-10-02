@@ -1850,17 +1850,26 @@ def post_localai_runtime_engine(payload: Dict[str, Any], user: Dict[str, Any] = 
 def post_localai_runtime_start(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
     env_overrides = (payload or {}).get("env")
-    return local_ai.start_server(env_overrides=env_overrides)
+    try:
+        return local_ai.start_server(env_overrides=env_overrides)
+    except Exception as e:
+        raise HTTPException(500, f"Could not start local runtime: {str(e)}")
 
 @app.post("/api/localai/runtime/stop")
 def post_localai_runtime_stop(user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
-    return local_ai.stop_server()
+    try:
+        return local_ai.stop_server()
+    except Exception as e:
+        raise HTTPException(500, f"Could not stop local runtime: {str(e)}")
 
 @app.post("/api/localai/runtime/fix-permissions")
 def post_localai_runtime_fix_permissions(user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai
-    return local_ai.fix_permissions()
+    try:
+        return local_ai.fix_permissions()
+    except Exception as e:
+        raise HTTPException(500, f"Could not fix permissions: {str(e)}")
 
 @app.get("/api/localai/catalog")
 def get_localai_catalog(user: Dict[str, Any] = Depends(require_viewer)):
@@ -1873,12 +1882,18 @@ def post_localai_search(payload: Optional[Dict[str, Any]] = None, user: Dict[str
     query = str((payload or {}).get("query") or (payload or {}).get("q") or "").strip()
     limit = int((payload or {}).get("limit") or 25)
     remote = bool((payload or {}).get("remote", True))
-    return local_ai.search(query=query, limit=limit, remote=remote)
+    try:
+        return local_ai.search(query=query, limit=limit, remote=remote)
+    except Exception as e:
+        raise HTTPException(500, f"Search failed: {str(e)}")
 
 @app.get("/api/localai/search")
 def get_localai_search(q: str = "", limit: int = 25, remote: bool = True, user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
-    return local_ai.search(query=q, limit=limit, remote=remote)
+    try:
+        return local_ai.search(query=q, limit=limit, remote=remote)
+    except Exception as e:
+        raise HTTPException(500, f"Search failed: {str(e)}")
 
 @app.get("/api/localai/tags/{name:path}")
 def get_localai_tags(name: str, user: Dict[str, Any] = Depends(require_viewer)):
@@ -1891,7 +1906,10 @@ def post_localai_test(payload: Dict[str, Any], user: Dict[str, Any] = Depends(re
     model = str(payload.get("model") or payload.get("ref") or "").strip()
     if not model:
         raise HTTPException(400, "Model name is required")
-    return local_ai.benchmark_test(model)
+    try:
+        return local_ai.benchmark_test(model)
+    except Exception as e:
+        raise HTTPException(500, f"Model test failed: {str(e)}")
 
 @app.post("/api/localai/install")
 def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
@@ -2017,7 +2035,10 @@ def post_localai_install(payload: Dict[str, Any], user: Dict[str, Any] = Depends
 @app.post("/api/localai/scan")
 def post_localai_scan(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
-    return local_ai.scan_drive(payload or {})
+    try:
+        return local_ai.scan_drive(payload or {})
+    except Exception as e:
+        raise HTTPException(500, f"Scan failed: {str(e)}")
 
 @app.post("/api/localai/import")
 def post_localai_import(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
@@ -2092,7 +2113,10 @@ def get_localai_models(user: Dict[str, Any] = Depends(require_viewer)):
 @app.post("/api/localai/recommend")
 def post_localai_recommend(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_viewer)):
     from . import local_ai
-    return local_ai.recommend(payload)
+    try:
+        return local_ai.recommend(payload)
+    except Exception as e:
+        raise HTTPException(500, f"Recommendation failed: {str(e)}")
 
 @app.post("/api/localai/pull")
 def post_localai_pull(payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_admin)):
@@ -2120,7 +2144,10 @@ def post_localai_register(payload: Dict[str, Any], user: Dict[str, Any] = Depend
     if not model_ref:
         raise HTTPException(400, "Model reference is required")
     meta = payload.get("meta") or {}
-    return local_ai.register_provider(model_ref, meta=meta)
+    try:
+        return local_ai.register_provider(model_ref, meta=meta)
+    except Exception as e:
+        raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.get("/api/localai/profiles")
 def get_localai_profiles(user: Dict[str, Any] = Depends(require_viewer)):
@@ -2134,7 +2161,10 @@ def post_localai_profiles(payload: Dict[str, Any], user: Dict[str, Any] = Depend
     profile_data = payload.get("profile") or {}
     if not name:
         raise HTTPException(400, "Profile name is required")
-    return local_ai.save_profile(name, profile_data)
+    try:
+        return local_ai.save_profile(name, profile_data)
+    except Exception as e:
+        raise HTTPException(500, f"Saving profile failed: {str(e)}")
 
 @app.delete("/api/localai/profiles/{name:path}")
 def delete_localai_profile(name: str, user: Dict[str, Any] = Depends(require_developer)):

@@ -2328,7 +2328,7 @@
         <div class="brand-icon">✦</div>
         <div class="brand-text">
           Arena Agent
-          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.1)</span>
+          <span id="sidebarVersionText">Arena Python Agent 3 (v3.3.2)</span>
         </div>
       </a>
       <button class="hamburger-btn" onclick="toggleSidebar()" title="Toggle Sidebar Menu">☰</button>
@@ -2411,7 +2411,7 @@
           <span id="systemHealthText">Agent Ready</span>
         </div>
         <div class="version-pill" id="headerVersionBadge" title="Current Application Version">
-          🚀 v3.3.1
+          🚀 v3.3.2
         </div>
         <div class="provider-pill" id="activeProviderBadge">
           <span>⚡ OpenRouter</span>
@@ -4334,6 +4334,27 @@ async function api(path, opts = {}) {
   const fetchOpts = { ...opts, headers };
   if (!fetchOpts.credentials) {
     fetchOpts.credentials = 'same-origin';
+  }
+  // Defensive auto-stringify: some call sites pass a plain JS object as `body`
+  // (expecting fetch to serialize it, as the old standalone Local AI page's
+  // bespoke api() helper used to do). The native fetch() does NOT do this —
+  // it silently coerces a plain object to the literal string "[object Object]",
+  // which the server then fails to parse, surfacing as a confusing
+  // "[object Object]" error in the UI. Auto-stringify anything that isn't
+  // already a string or one of the fetch-native body types.
+  if (
+    fetchOpts.body !== undefined && fetchOpts.body !== null &&
+    typeof fetchOpts.body !== 'string' &&
+    !(typeof Blob !== 'undefined' && fetchOpts.body instanceof Blob) &&
+    !(typeof FormData !== 'undefined' && fetchOpts.body instanceof FormData) &&
+    !(typeof URLSearchParams !== 'undefined' && fetchOpts.body instanceof URLSearchParams) &&
+    !(typeof ArrayBuffer !== 'undefined' && fetchOpts.body instanceof ArrayBuffer) &&
+    !(ArrayBuffer.isView && ArrayBuffer.isView(fetchOpts.body))
+  ) {
+    fetchOpts.body = JSON.stringify(fetchOpts.body);
+    if (!headers['Content-Type'] && !headers['content-type']) {
+      headers['Content-Type'] = 'application/json';
+    }
   }
 
   try {
