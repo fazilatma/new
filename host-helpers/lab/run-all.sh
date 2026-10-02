@@ -17,6 +17,7 @@ version_guard() {
   echo "version guard ok: $helper_version"
 }
 version_guard
+"${LAB_DIR}/check-version-bump.sh" || exit 1
 node --check "${LAB_DIR}/../openhands-model-manager.mjs"
 node --check "${LAB_DIR}/test-gateway-model-search.mjs"
 node --check "${LAB_DIR}/test-local-model-address.mjs"

@@ -50,6 +50,11 @@ let profileTestPromise = null;
 
 const helperVersion = process.env.OH_HELPER_VERSION || "dev";
 const CHANGELOG = Object.freeze([
+  { version: "3.8.1", items: [
+    "نسخه‌بندی و گزارش تغییرات به یک قرارداد دائمی و خودکار تبدیل شد",
+    "اسکریپت check-version-bump.sh: هر تغییر در helper بدون bump نسخه و ورودی CHANGELOG رد می‌شود",
+    "سند AGENTS.md با قواعد همیشگی نسخه‌بندی",
+  ] },
   { version: "3.8.0", items: [
     "دراپ‌داون چت: مدل‌های موفق آخرین تست با رنگ سبز در بخش اول و مدل‌های ناموفق پس از یک خط جداکننده",
     "تست مدل‌ها بسیار دقیق‌تر شد: تلاش مجدد خودکار برای 429 و timeout، درخواست جایگزین برای مدل‌های reasoning، هم‌زمانی تا ۸ و مهلت قابل تنظیم",
