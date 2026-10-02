@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.18"
+    assert APP_VERSION == "3.3.19"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3784,6 +3784,55 @@ def test_auto_repair_persists_progress_for_later_polling(monkeypatch):
     assert last["engine"] == "ollama"
     assert [s["step"] for s in last["steps"]] == ["select-engine", "install", "start"]
     assert "at" in last
+
+
+def test_auto_repair_persists_live_install_log_mid_step(monkeypatch):
+    """Regression test: install_runtime() can run for several minutes (large
+    download, multiple candidate URLs/methods). Previously nothing was
+    persisted between the 'select-engine' and final 'install' steps, so a
+    slow-but-working install was indistinguishable from a true hang when
+    polled via GET /api/localai/auto-repair/last. Every log_fn message
+    install_runtime() emits mid-flight (e.g. 'Downloading ... from <url>')
+    must now show up in the persisted state's in-progress 'install' step
+    before install_runtime() itself returns."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+
+    persisted = {}
+
+    def fake_set_state_json(key, value):
+        persisted[key] = value
+
+    monkeypatch.setattr(local_ai, "set_state_json", fake_set_state_json)
+    monkeypatch.setattr(local_ai, "get_state_json", lambda key, default=None: persisted.get(key, default))
+
+    seen_mid_flight = {}
+
+    def fake_install_runtime(engine, log_fn=None):
+        log_fn("Downloading ollama runtime from https://example.invalid/ollama.tar.zst...")
+        # Snapshot what was persisted *during* the call, before returning.
+        seen_mid_flight.update(local_ai.last_auto_repair_result())
+        log_fn("Download candidate failed (timed out), trying next candidate...")
+        return {"ok": True, "binary": "/fake/ollama"}
+
+    monkeypatch.setattr(local_ai, "install_runtime", fake_install_runtime)
+    monkeypatch.setattr(local_ai, "start_server", lambda log_fn=None: {"ok": True, "running": True})
+
+    result = local_ai.auto_repair(target_engine="ollama")
+    assert result["ok"] is True
+
+    assert seen_mid_flight["done"] is False
+    mid_install_step = seen_mid_flight["steps"][-1]
+    assert mid_install_step["step"] == "install"
+    assert mid_install_step["ok"] is None
+    assert any("Downloading ollama runtime" in line for line in mid_install_step["log"])
+
+    final = local_ai.last_auto_repair_result()
+    final_install_step = [s for s in final["steps"] if s["step"] == "install"][0]
+    assert final_install_step["ok"] is True
+    assert any("Download candidate failed" in line for line in final_install_step["log"])
 
 
 def test_auto_repair_last_endpoint_returns_persisted_state(monkeypatch):

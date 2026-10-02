@@ -2266,11 +2266,27 @@ def auto_repair(target_engine: Optional[str] = None, test_model: Optional[str] =
     steps.append({"step": "select-engine", "ok": True, "detail": {"engine": engine}})
     _snapshot(done=False)
 
+    # install_runtime() can legitimately run for several minutes (large
+    # download over a slow connection, multiple candidate URLs/methods to
+    # try). Without this, GET /api/localai/auto-repair/last shows nothing
+    # new at all between "select-engine" and the final "install" result,
+    # indistinguishable from a true hang. Mirror every log_fn message
+    # install_runtime() already emits (which candidate URL it's trying,
+    # per-candidate failures, etc.) into the persisted state live, so
+    # polling mid-install shows real progress instead of silence.
+    install_log: List[str] = []
+
+    def _install_log(msg: str):
+        _log(msg)
+        install_log.append(msg)
+        in_progress_steps = steps + [{"step": "install", "ok": None, "log": list(install_log[-20:])}]
+        _persist_auto_repair_result({"ok": None, "done": False, "engine": engine, "steps": in_progress_steps})
+
     try:
-        install_result = install_runtime(engine, _log)
-        steps.append({"step": "install", "ok": True, "detail": install_result})
+        install_result = install_runtime(engine, _install_log)
+        steps.append({"step": "install", "ok": True, "detail": install_result, "log": install_log[-20:]})
     except Exception as e:
-        steps.append({"step": "install", "ok": False, "error": str(e)})
+        steps.append({"step": "install", "ok": False, "error": str(e), "log": install_log[-20:]})
         return _snapshot(done=True)
     _snapshot(done=False)
 

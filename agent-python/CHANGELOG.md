@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.19 - auto-repair/last now shows live install progress (which candidate URL, per-candidate failures) mid-download
+
+### Fixed
+- `install_runtime()` runs as a single blocking call inside `auto_repair()`'s "install" step, with no visibility into its internal multi-candidate-URL/multi-method (curl/wget/urllib) download loop until it fully finishes or raises. This made `GET /api/localai/auto-repair/last` show nothing new for the entire duration of a slow (but actually-progressing) install -- indistinguishable from a true hang when polled live, which is exactly what happened while live-debugging a real stuck Ollama install this session. Every `log_fn` message `install_runtime()` already emits internally (e.g. "Downloading ollama runtime from <url>...", "Download candidate failed (...), trying next candidate...") is now mirrored into the persisted state's in-progress `install` step (`ok: null`, with a rolling `log` tail of the last 20 lines) as it happens, so polling mid-install shows exactly which URL/method is being attempted right now instead of silence.
+- Added regression test `test_auto_repair_persists_live_install_log_mid_step` asserting the persisted state is updated *during* `install_runtime()`, before it returns.
+- 93 backend tests passing.
+
 ## 3.3.18 - Network probe now tests the actual release-asset CDN hostname, not objects.githubusercontent.com
 
 ### Fixed
