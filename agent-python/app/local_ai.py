@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -2325,6 +2326,61 @@ def last_auto_repair_result() -> Dict[str, Any]:
     can still be checked on afterward via a fast, separate GET instead of
     having no way to find out what actually happened."""
     return get_state_json("localai:last_auto_repair", {}) or {}
+
+
+_auto_repair_lock = threading.Lock()
+_auto_repair_running = False
+
+
+def start_auto_repair_async(
+    target_engine: Optional[str] = None,
+    test_model: Optional[str] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Kick off auto_repair() in a background daemon thread and return
+    immediately, instead of blocking the calling HTTP request for however
+    long the full diagnose->install->start->test flow takes.
+
+    This exists because of a real, live-confirmed production failure mode:
+    a multi-minute engine download (slow connection, large file) run
+    synchronously inside a request handler can outlive the host's own
+    request/worker timeout -- and on at least one real host, exceeding
+    that timeout killed the *entire worker process*, taking the in-flight
+    curl/wget child down with it. The persisted auto-repair/last state then
+    froze forever on whatever log line was last written, with literally no
+    further progress possible, indistinguishable from the app itself
+    hanging. Returning immediately and running the real work in a daemon
+    thread (which keeps running as long as the process itself is alive,
+    independent of any single request's lifetime) avoids this entirely;
+    progress and the final outcome are both visible via the existing
+    GET /api/localai/auto-repair/last polling endpoint.
+    """
+    global _auto_repair_running
+    with _auto_repair_lock:
+        if _auto_repair_running:
+            return {
+                "ok": False,
+                "started": False,
+                "error": "یک عملیات تعمیر خودکار از قبل در حال اجراست؛ نتیجه را از /api/localai/auto-repair/last پیگیری کنید.",
+            }
+        _auto_repair_running = True
+
+    def _run():
+        global _auto_repair_running
+        try:
+            auto_repair(target_engine=target_engine, test_model=test_model, log_fn=log_fn)
+        except Exception as e:
+            logger.exception(f"auto_repair background thread crashed: {e}")
+        finally:
+            with _auto_repair_lock:
+                _auto_repair_running = False
+
+    threading.Thread(target=_run, daemon=True, name="auto-repair").start()
+    return {
+        "ok": True,
+        "started": True,
+        "message": "تعمیر خودکار در پس‌زمینه شروع شد. وضعیت و نتیجه را از /api/localai/auto-repair/last پیگیری کنید.",
+    }
 
 
 def default_scan_roots() -> List[str]:

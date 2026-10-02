@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.20 - auto-repair now runs in the background instead of blocking the HTTP request (root cause of the real stuck install)
+
+### Fixed
+- Root-caused, with real production telemetry, why a live Ollama auto-repair attempt on a real host appeared to freeze forever at the exact same log line no matter how long it was polled (even well past curl's own `-m 300` + `--speed-limit`/`--speed-time` abort window from 3.3.16): `POST/GET /api/localai/auto-repair` ran the entire diagnose→install→start→test flow *synchronously inside the HTTP request handler*. A multi-minute engine download can outlive that host's own request/worker timeout -- and when it does, the timeout doesn't just drop the client's connection, it kills the *entire backend worker process*, taking the in-flight curl/wget child down with it mid-transfer. With the worker dead, nothing could ever call `_log()` again, so the persisted `auto-repair/last` state froze permanently on whatever line was last written -- indistinguishable from the app hanging, but actually an artifact of how the request was being run, not a networking or download-logic bug.
+- `/api/localai/auto-repair` now starts the real work in a background daemon thread via the new `start_auto_repair_async()` and returns immediately with `{"ok": true, "started": true}` -- a daemon thread's lifetime is tied to the whole process, not to any single HTTP request, so it keeps running (and keeps updating `auto-repair/last`) even if the triggering request's own connection/timeout is long gone. A second call while one is already running is now rejected with a clear Persian error instead of racing two installs against each other.
+- Poll `GET /api/localai/auto-repair/last` for both live progress and the final outcome, same as before -- only the *triggering* call's response shape changed (no frontend code depended on the old synchronous shape).
+- Added regression tests `test_start_auto_repair_async_runs_in_background_and_guards_against_overlap` and updated `test_auto_repair_endpoint_accepts_both_get_and_post` for the new async-start response shape.
+- 94 backend tests passing.
+
 ## 3.3.19 - auto-repair/last now shows live install progress (which candidate URL, per-candidate failures) mid-download
 
 ### Fixed

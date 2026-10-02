@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import pathlib
 from pathlib import Path
+import threading
 import time
 from fastapi.testclient import TestClient
 
@@ -64,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.19"
+    assert APP_VERSION == "3.3.20"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3738,20 +3739,66 @@ def test_auto_repair_endpoint_accepts_both_get_and_post(monkeypatch):
     """The /api/localai/auto-repair endpoint must be triggerable via a
     simple GET (a single URL fetch, for quick remote diagnosis/repair
     without needing to drive the UI through four separate buttons) as well
-    as the conventional POST."""
+    as the conventional POST. It must start the real work in the
+    background and respond immediately rather than blocking (see
+    start_auto_repair_async's docstring for why: a slow download run
+    synchronously inside a request can outlive -- and on a real host, get
+    killed by -- a request/worker-level timeout)."""
     from app import local_ai
 
-    monkeypatch.setattr(local_ai, "auto_repair", lambda target_engine=None, test_model=None: {
-        "ok": True, "engine": target_engine or "ollama", "steps": [{"step": "select-engine", "ok": True}],
-    })
+    calls = []
+    monkeypatch.setattr(
+        local_ai, "start_auto_repair_async",
+        lambda target_engine=None, test_model=None: (calls.append((target_engine, test_model)) or {"ok": True, "started": True}),
+    )
 
     res_get = client.get("/api/localai/auto-repair?engine=ollama")
     assert res_get.status_code == 200
-    assert res_get.json()["ok"] is True
+    assert res_get.json()["started"] is True
 
     res_post = client.post("/api/localai/auto-repair?engine=ollama&model=llama3.2:1b")
     assert res_post.status_code == 200
-    assert res_post.json()["engine"] == "ollama"
+    assert res_post.json()["started"] is True
+    assert calls == [("ollama", None), ("ollama", "llama3.2:1b")]
+
+
+def test_start_auto_repair_async_runs_in_background_and_guards_against_overlap(monkeypatch):
+    """start_auto_repair_async() must return immediately (not block on the
+    real auto_repair() call) and must refuse to start a second run while
+    one is already in flight, instead of racing two installs against each
+    other."""
+    from app import local_ai
+    import time as _time
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def slow_auto_repair(target_engine=None, test_model=None, log_fn=None):
+        entered.set()
+        release.wait(timeout=5)
+        return {"ok": True, "engine": target_engine, "steps": []}
+
+    monkeypatch.setattr(local_ai, "auto_repair", slow_auto_repair)
+    local_ai._auto_repair_running = False
+
+    res1 = local_ai.start_auto_repair_async(target_engine="ollama")
+    assert res1["ok"] is True
+    assert res1["started"] is True
+
+    assert entered.wait(timeout=2), "background thread never called auto_repair()"
+
+    # A second call while the first is still running must be rejected, not
+    # silently start a racing second install.
+    res2 = local_ai.start_auto_repair_async(target_engine="ollama")
+    assert res2["ok"] is False
+    assert res2["started"] is False
+
+    release.set()
+    for _ in range(50):
+        if not local_ai._auto_repair_running:
+            break
+        _time.sleep(0.05)
+    assert local_ai._auto_repair_running is False
 
 
 def test_auto_repair_persists_progress_for_later_polling(monkeypatch):

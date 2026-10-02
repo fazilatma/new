@@ -1855,10 +1855,18 @@ def post_localai_auto_repair(
     and POST: GET makes it trivially triggerable from a single URL fetch
     for quick remote diagnosis/repair without needing to drive the UI
     through four separate buttons; POST is the conventional method for the
-    equivalent UI action. Returns a step-by-step report of exactly what
-    happened at each stage."""
+    equivalent UI action.
+
+    Starts the actual work in a background thread and returns immediately
+    (`{"ok": true, "started": true}`) rather than blocking until the whole
+    flow finishes -- a real engine download can take several minutes, and
+    on at least one real host, a request running that long got its entire
+    worker process killed by a request/worker-level timeout, taking the
+    in-flight download down with it and permanently freezing progress.
+    Poll GET /api/localai/auto-repair/last for live progress and the final
+    step-by-step result."""
     from . import local_ai
-    return local_ai.auto_repair(target_engine=engine, test_model=model)
+    return local_ai.start_auto_repair_async(target_engine=engine, test_model=model)
 
 @app.get("/api/localai/auto-repair/last")
 def get_localai_auto_repair_last(user: Dict[str, Any] = Depends(require_viewer)):
