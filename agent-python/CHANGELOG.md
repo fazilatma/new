@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.13 - Added Stop + Copy-all-logs to the "حالت تشخیص عیب" (Diagnostic/Debug Mode) Network inspector
+
+### Added
+- The Network-tab-style debug/diagnostic modal (opened via the floating "🛰️ Network" button mid-stream, or "🛰️ Network (N)" on a past message) now has two more footer buttons alongside the existing "📋 Copy Selected":
+  - **"⏹ توقف"** -- stops the in-progress request straight from the inspector, using the same real client-abort + server-side `/api/jobs/{id}/cancel` path as the chat's own Stop button (`stopStreaming()`), instead of requiring the user to close the modal first. If there's no in-progress request (e.g. the modal is showing a past, already-finished turn), it tells the user there's nothing to stop instead of silently doing nothing.
+  - **"📋 کپی همه لاگ‌ها"** -- copies *every* captured request/response for that turn in one JSON blob, not just whichever row happens to be selected, so the whole exchange can be pasted into a bug report/support ticket at once.
+
 ## 3.3.12 - Local AI troubleshooting: real Stop + Copy-all-logs controls, and the Test button now surfaces the engine's actual crash log
 
 ### Added

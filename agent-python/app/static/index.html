@@ -4355,7 +4355,9 @@ gemini-1.5-pro'></textarea>
     <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
       <div style="font-size:11px;color:var(--text-dim);" id="debugReqFooterInfo"></div>
       <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" id="debugNetworkStopBtn" onclick="stopDebugNetworkStream()" title="توقف درخواست/استریم در حال اجرا">⏹ توقف</button>
         <button class="btn btn-ghost btn-sm" onclick="copyDebugRequestDetail()">📋 Copy Selected</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyAllDebugRequests()">📋 کپی همه لاگ‌ها</button>
         <button class="btn btn-ghost" onclick="closeModal('debugNetworkModal')">Close</button>
       </div>
     </div>
@@ -6971,6 +6973,41 @@ function copyDebugRequestDetail() {
     document.body.removeChild(ta);
     alert('جزئیات درخواست در کلیپ‌بورد کپی شد.');
   });
+}
+
+// Copies *every* captured request/response for this turn in one go (not
+// just whichever row happens to be selected) -- for pasting the whole
+// exchange into a bug report or support ticket at once.
+function copyAllDebugRequests() {
+  if (!activeDebugRequests || activeDebugRequests.length === 0) {
+    alert('هیچ درخواستی برای کپی ثبت نشده است.');
+    return;
+  }
+  const text = JSON.stringify(activeDebugRequests, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    alert(`همه لاگ‌ها (${activeDebugRequests.length} درخواست) در کلیپ‌بورد کپی شد.`);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert(`همه لاگ‌ها (${activeDebugRequests.length} درخواست) در کلیپ‌بورد کپی شد.`);
+  });
+}
+
+// Lets the user abort the in-progress request straight from the Network
+// inspector, instead of having to close the modal first to reach the
+// chat's own Stop button -- this is the same real client-abort +
+// server-side job-cancel path as stopStreaming(), not just a local no-op.
+function stopDebugNetworkStream() {
+  if (!abortController && !currentChatJobId) {
+    alert('در حال حاضر درخواست در حال اجرایی برای توقف وجود ندارد (این نمای یک گفتگوی قبلاً تمام‌شده است).');
+    return;
+  }
+  stopStreaming();
+  toast('درخواست متوقف شد', 'ok');
 }
 
 let chatHistory = [];
