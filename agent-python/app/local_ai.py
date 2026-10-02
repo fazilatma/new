@@ -2189,27 +2189,44 @@ def auto_repair(target_engine: Optional[str] = None, test_model: Optional[str] =
 
     engine = (target_engine or get_state("localai:engine") or "ollama").strip().lower()
     if engine not in ("ollama", "llamacpp"):
-        return {"ok": False, "error": f"Unknown engine: {engine}", "steps": []}
+        result = {"ok": False, "error": f"Unknown engine: {engine}", "steps": []}
+        _persist_auto_repair_result(result)
+        return result
 
     steps: List[Dict[str, Any]] = []
+
+    # Persisted to the DB after every single step (not just at the very
+    # end) via _persist_auto_repair_result(), so GET /api/localai/auto-repair/last
+    # can report real progress -- or the final outcome -- even if the
+    # original request that triggered this (e.g. a slow multi-hundred-MB
+    # download over a flaky connection) was itself cut off client-side
+    # before the whole flow finished.
+    def _snapshot(done: bool) -> Dict[str, Any]:
+        overall_ok = all(s["ok"] for s in steps) if steps else False
+        snap = {"ok": overall_ok if done else None, "done": done, "engine": engine, "steps": list(steps)}
+        _persist_auto_repair_result(snap)
+        return snap
 
     if target_engine:
         set_state("localai:engine", engine)
     steps.append({"step": "select-engine", "ok": True, "detail": {"engine": engine}})
+    _snapshot(done=False)
 
     try:
         install_result = install_runtime(engine, _log)
         steps.append({"step": "install", "ok": True, "detail": install_result})
     except Exception as e:
         steps.append({"step": "install", "ok": False, "error": str(e)})
-        return {"ok": False, "engine": engine, "steps": steps}
+        return _snapshot(done=True)
+    _snapshot(done=False)
 
     try:
         start_result = start_server(log_fn=_log)
         steps.append({"step": "start", "ok": True, "detail": start_result})
     except Exception as e:
         steps.append({"step": "start", "ok": False, "error": str(e), "logTail": read_engine_log_tail(engine).get("log", "")})
-        return {"ok": False, "engine": engine, "steps": steps}
+        return _snapshot(done=True)
+    _snapshot(done=False)
 
     if test_model:
         try:
@@ -2218,8 +2235,26 @@ def auto_repair(target_engine: Optional[str] = None, test_model: Optional[str] =
         except Exception as e:
             steps.append({"step": "test", "ok": False, "error": str(e)})
 
-    overall_ok = all(s["ok"] for s in steps)
-    return {"ok": overall_ok, "engine": engine, "steps": steps}
+    final = _snapshot(done=True)
+    return {"ok": final["ok"], "engine": engine, "steps": steps}
+
+
+def _persist_auto_repair_result(result: Dict[str, Any]) -> None:
+    try:
+        payload = dict(result)
+        payload["at"] = datetime.datetime.utcnow().isoformat() + "Z"
+        set_state_json("localai:last_auto_repair", payload)
+    except Exception:
+        pass
+
+
+def last_auto_repair_result() -> Dict[str, Any]:
+    """Read back the most recent auto_repair() run's progress/outcome,
+    so a slow in-flight call (or one whose original HTTP response never
+    reached the caller, e.g. a client-side timeout on a large download)
+    can still be checked on afterward via a fast, separate GET instead of
+    having no way to find out what actually happened."""
+    return get_state_json("localai:last_auto_repair", {}) or {}
 
 
 def default_scan_roots() -> List[str]:

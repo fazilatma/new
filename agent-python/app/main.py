@@ -1860,6 +1860,16 @@ def post_localai_auto_repair(
     from . import local_ai
     return local_ai.auto_repair(target_engine=engine, test_model=model)
 
+@app.get("/api/localai/auto-repair/last")
+def get_localai_auto_repair_last(user: Dict[str, Any] = Depends(require_viewer)):
+    """Read back the most recent /api/localai/auto-repair run's progress or
+    final outcome. Useful when the original call was slow (e.g. a large
+    engine download) and its HTTP response never reached the caller (a
+    client-side timeout) -- the in-progress/finished state is still visible
+    here via a fast, separate, read-only GET."""
+    from . import local_ai
+    return local_ai.last_auto_repair_result()
+
 @app.post("/api/localai/runtime/install")
 def post_localai_runtime_install(payload: Optional[Dict[str, Any]] = None, user: Dict[str, Any] = Depends(require_admin)):
     from . import local_ai

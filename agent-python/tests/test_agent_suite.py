@@ -3750,3 +3750,48 @@ def test_auto_repair_endpoint_accepts_both_get_and_post(monkeypatch):
     res_post = client.post("/api/localai/auto-repair?engine=ollama&model=llama3.2:1b")
     assert res_post.status_code == 200
     assert res_post.json()["engine"] == "ollama"
+
+
+def test_auto_repair_persists_progress_for_later_polling(monkeypatch):
+    """Regression test: a slow auto_repair() call (e.g. a large engine
+    download) might outlive the HTTP response reaching the caller (a
+    client-side timeout). Its progress/outcome must be persisted after
+    every step so GET /api/localai/auto-repair/last can still report what
+    actually happened, instead of leaving no trace at all."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "install_runtime", lambda engine, log_fn=None: {"ok": True, "binary": "/fake/ollama"})
+    monkeypatch.setattr(local_ai, "start_server", lambda log_fn=None: {"ok": True, "running": True})
+
+    persisted = {}
+
+    def fake_set_state_json(key, value):
+        persisted[key] = value
+
+    monkeypatch.setattr(local_ai, "set_state_json", fake_set_state_json)
+    monkeypatch.setattr(local_ai, "get_state_json", lambda key, default=None: persisted.get(key, default))
+
+    result = local_ai.auto_repair(target_engine="ollama")
+    assert result["ok"] is True
+
+    last = local_ai.last_auto_repair_result()
+    assert last["done"] is True
+    assert last["ok"] is True
+    assert last["engine"] == "ollama"
+    assert [s["step"] for s in last["steps"]] == ["select-engine", "install", "start"]
+    assert "at" in last
+
+
+def test_auto_repair_last_endpoint_returns_persisted_state(monkeypatch):
+    """GET /api/localai/auto-repair/last must expose whatever auto_repair()
+    last persisted, read-only, for polling after a slow/timed-out trigger."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "last_auto_repair_result", lambda: {"ok": True, "done": True, "engine": "ollama", "steps": []})
+    res = client.get("/api/localai/auto-repair/last")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["engine"] == "ollama"
