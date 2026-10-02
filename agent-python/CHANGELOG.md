@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.3.14 - Fixed "llama-server process has terminated: exit status 1" when Testing an Ollama model (wrong runner picked up via a shared PATH)
+
+### Fixed
+- **Testing an installed Ollama model (or loading any model at all) could fail with the generic**
+  ```
+  HTTP 500 Internal Server Error: llama-server process has terminated: exit status 1
+  ```
+  **on a host where the llama.cpp engine was also ever installed.** Root cause: official Ollama release tarballs ship their own, separate, matching-glibc-target `llama-server`-style runner under `lib/ollama/` next to the `ollama` executable, which Ollama discovers via a path *relative to its own binary* -- never via `PATH`. This app's `server_env()` was unconditionally putting the shared engine `bin_dir()` on `PATH`/`LD_LIBRARY_PATH` for *every* subprocess it launched, including `ollama serve`. If Ollama's own runner-discovery ever fell back (or the `lib/ollama` directory was never carried over from an older install), it would find -- and crash on -- the llama.cpp engine's *differently built, ABI-incompatible* `llama-server` sitting in that same shared `bin_dir()`, producing this exact generic, unhelpful crash message instead of any real diagnosis.
+- `server_env()` now only injects `bin_dir()` into `PATH`/`LD_LIBRARY_PATH` for the llama.cpp engine; the Ollama engine always relies on its own internal, relative-path runner discovery. **This requires restarting the Ollama engine once** (Stop then Start, or reinstall) for an already-running `ollama serve` process to pick up the corrected environment.
+- `install_runtime()`'s Ollama branch now also preserves the archive's sibling `lib/ollama/` runner directory (copying it to `root_dir()/lib/ollama`), not just the bare `ollama` executable, as a defense-in-depth against unexpected archive layouts that need its `rglob()` fallback-discovery path.
+- Added a health check (`_runtime_is_healthy()`) that treats an Ollama install as broken/needing repair if `root_dir()/lib/ollama` is missing or empty, even when the `ollama` binary itself looks fine -- so an existing, already-broken install (made before this fix) gets automatically repaired the next time it's (re)installed or (re)started, instead of silently reporting itself as healthy forever.
+- `benchmark_test()` (the "Test" button's backend) now scans the engine's own captured crash log for the glibc/libstdc++ ABI-mismatch signature (already detected proactively for llama.cpp since 3.3.10) and, when found, replaces the generic Ollama error with the same kind of clear, actionable Persian diagnosis -- correctly worded for Ollama's own bundled runner this time, since the old llama.cpp-engine wording ("switch to Ollama instead") would be actively wrong advice when Ollama's own runner is the one that's incompatible.
+- Verified with 4 new regression tests: `server_env()` never puts `bin_dir()` on `PATH`/`LD_LIBRARY_PATH` for the ollama engine (while still doing so for llamacpp); `_runtime_is_healthy()` flags a missing/empty `lib/ollama` as broken; `install_runtime()` preserves `lib/ollama` via the `rglob()` fallback path; and `benchmark_test()` surfaces the correct ABI diagnosis (mentioning Ollama, not recommending "switch to Ollama") from a captured crash log. 84 backend tests passing.
+
 ## 3.3.13 - Added Stop + Copy-all-logs to the "حالت تشخیص عیب" (Diagnostic/Debug Mode) Network inspector
 
 ### Added

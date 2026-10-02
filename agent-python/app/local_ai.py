@@ -179,15 +179,62 @@ def _binary_is_healthy(path: str) -> bool:
 _GLIBC_VERSION_RE = re.compile(r"version `(GLIBC(?:XX|_[A-Z]+)?_[0-9][0-9.]*)' not found")
 
 
-def _binary_abi_incompatibility_reason(path: str) -> Optional[str]:
+def _detect_abi_version_mismatch(combined_text):
+    """Scan arbitrary dynamic-linker/`ldd` output -- or a captured crash log,
+    e.g. the tail of ollama.log/llamacpp.log -- for the tell-tale
+
+      llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not
+      found (required by .../libggml-rpc.so)
+
+    signature and return the missing symbol version, or None if the text
+    doesn't match that pattern. Shared by both the proactive `ldd`-based
+    checks (_binary_abi_incompatibility_reason()/_ollama_runner_abi_reason())
+    and the reactive scan of a failed Test's engine log in benchmark_test(),
+    so a crash is explained the same way everywhere it's detected.
+    """
+    if not combined_text:
+        return None
+    m = _GLIBC_VERSION_RE.search(combined_text)
+    return m.group(1) if m else None
+
+
+def _abi_incompatibility_message(missing_version: str, engine: str) -> str:
+    """Build the actionable, user-facing Persian explanation for an ABI
+    incompatibility -- worded for *which* binary is actually affected.
+    Recommending "use Ollama instead" (the llama.cpp-engine wording) would
+    be actively wrong/misleading when it's Ollama's own bundled runner that
+    turned out to be incompatible, since Ollama ships that exact kind of
+    prebuilt llama-server binary too (see _ollama_runner_abi_reason()).
+    """
+    if engine == "ollama":
+        return (
+            f"سیستم‌عامل این سرور میزبان نسخه‌ی قدیمی‌تری از کتابخانه‌های پایه (glibc/libstdc++) دارد و "
+            f"باینری داخلی llama-server که خودِ Ollama برای اجرای واقعی مدل‌ها استفاده می‌کند، به نسخه‌ی جدیدتری "
+            f"({missing_version}) نیاز دارد که روی این سرور موجود نیست. این یک تنظیم اشتباه در این برنامه نیست؛ "
+            f"نصب دوباره‌ی Ollama هم این مشکل را حل نمی‌کند، چون نسخه‌ی رسمی Ollama همیشه همین نیاز نسخه را خواهد داشت. "
+            f"راه‌حل‌های پیشنهادی: "
+            f"۱) از پشتیبانی هاست خود بخواهید سیستم‌عامل/glibc سرور را به‌روزرسانی کند، "
+            f"۲) یک نسخه‌ی قدیمی‌تر Ollama را امتحان کنید (برخی نسخه‌های قدیمی‌تر ممکن است با glibc قدیمی‌تری ساخته شده باشند)، "
+            f"۳) اگر ابزارهای کامپایل (gcc/g++/cmake) روی سرور موجود است، Ollama را از سورس روی همین سرور بسازید."
+        )
+    return (
+        f"سیستم‌عامل این سرور میزبان نسخه‌ی قدیمی‌تری از کتابخانه‌های پایه (glibc/libstdc++) دارد و "
+        f"باینری رسمی llama.cpp به نسخه‌ی جدیدتری ({missing_version}) نیاز دارد که روی این سرور موجود نیست. "
+        f"نصب دوباره یا تلاش مجدد این مشکل را حل نمی‌کند، چون باینری دانلودی همیشه همین نیاز نسخه را خواهد داشت. "
+        f"راه‌حل‌های پیشنهادی: "
+        f"۱) برای این مدل از موتور Ollama استفاده کنید (سازگاری بسیار بیشتری با سیستم‌عامل‌های قدیمی دارد)، "
+        f"۲) از پشتیبانی هاست خود بخواهید سیستم‌عامل/glibc سرور را به‌روزرسانی کند، "
+        f"۳) اگر ابزارهای کامپایل (gcc/g++/cmake) روی سرور موجود است، یک نسخه‌ی llama-server سفارشی از سورس بسازید و "
+        f"مسیر آن را در تنظیمات Local AI (AGENT_LLAMACPP_BIN) وارد کنید."
+    )
+
+
+def _binary_abi_incompatibility_reason(path: str):
     """Detect the specific, unfixable-by-reinstalling failure mode where a
     prebuilt binary needs a newer glibc/libstdc++ symbol version than this
     host's own operating system ships -- very common on older hosting-panel
     environments (e.g. a CentOS/RHEL-based panel) that llama.cpp's official
-    Ubuntu release builds were never built to run on:
-
-      llama-server: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.29' not
-      found (required by .../libggml-rpc.so)
+    Ubuntu release builds were never built to run on.
 
     Unlike a plain missing shared library (fixed by re-extracting the whole
     archive, see _binary_is_healthy() above), redownloading and
@@ -198,22 +245,34 @@ def _binary_abi_incompatibility_reason(path: str) -> Optional[str]:
     Returns a short, actionable, user-facing explanation if incompatible,
     else None.
     """
-    combined = _ldd_output(path)
-    if not combined:
+    missing_version = _detect_abi_version_mismatch(_ldd_output(path))
+    if not missing_version:
         return None
-    m = _GLIBC_VERSION_RE.search(combined)
-    if not m:
+    return _abi_incompatibility_message(missing_version, "llamacpp")
+
+
+def _ollama_runner_abi_reason(ollama_lib_dir: Path):
+    """Same check as _binary_abi_incompatibility_reason(), but for Ollama's
+    OWN bundled llama-server-style runner under lib/ollama/ (see
+    install_runtime()'s ollama branch) -- Ollama ships a prebuilt binary of
+    the exact same kind, so it can be just as incompatible with an old
+    host's glibc/libstdc++ as the standalone llama.cpp engine's build,
+    independent of any PATH cross-contamination between the two engines.
+    """
+    if not ollama_lib_dir.is_dir():
         return None
-    return (
-        f"سیستم‌عامل این سرور میزبان نسخه‌ی قدیمی‌تری از کتابخانه‌های پایه (glibc/libstdc++) دارد و "
-        f"باینری رسمی llama.cpp به نسخه‌ی جدیدتری ({m.group(1)}) نیاز دارد که روی این سرور موجود نیست. "
-        f"نصب دوباره یا تلاش مجدد این مشکل را حل نمی‌کند، چون باینری دانلودی همیشه همین نیاز نسخه را خواهد داشت. "
-        f"راه‌حل‌های پیشنهادی: "
-        f"۱) برای این مدل از موتور Ollama استفاده کنید (سازگاری بسیار بیشتری با سیستم‌عامل‌های قدیمی دارد)، "
-        f"۲) از پشتیبانی هاست خود بخواهید سیستم‌عامل/glibc سرور را به‌روزرسانی کند، "
-        f"۳) اگر ابزارهای کامپایل (gcc/g++/cmake) روی سرور موجود است، یک نسخه‌ی llama-server سفارشی از سورس بسازید و "
-        f"مسیر آن را در تنظیمات Local AI (AGENT_LLAMACPP_BIN) وارد کنید."
-    )
+    try:
+        candidates = [
+            p for p in ollama_lib_dir.rglob("*")
+            if p.is_file() and not p.is_symlink() and os.access(str(p), os.X_OK) and "llama" in p.name.lower()
+        ]
+    except Exception:
+        return None
+    for candidate in candidates:
+        missing_version = _detect_abi_version_mismatch(_ldd_output(str(candidate)))
+        if missing_version:
+            return _abi_incompatibility_message(missing_version, "ollama")
+    return None
 
 
 def binary(engine: Optional[str] = None) -> Optional[str]:
@@ -302,7 +361,8 @@ def _usable_home_dir() -> str:
     return str(fallback_home)
 
 
-def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def server_env(overrides: Optional[Dict[str, str]] = None, engine: Optional[str] = None) -> Dict[str, str]:
+    engine = engine or get_state("localai:engine") or "ollama"
     env = os.environ.copy()
     defaults = {
         "HOME": _usable_home_dir(),
@@ -313,14 +373,29 @@ def server_env(overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         "OLLAMA_NUM_PARALLEL": os.environ.get("OLLAMA_NUM_PARALLEL", "1"),
         "OLLAMA_FLASH_ATTENTION": os.environ.get("OLLAMA_FLASH_ATTENTION", "1"),
         "OLLAMA_KV_CACHE_TYPE": os.environ.get("OLLAMA_KV_CACHE_TYPE", "q8_0"),
-        "PATH": f"{bin_dir()}:{env.get('PATH', '')}",
+    }
+    if engine == "llamacpp":
         # Defense-in-depth for llama-server, which is dynamically linked
         # against libllama.so/libggml*.so normally resolved via its own
         # $ORIGIN rpath (same folder as the binary). If that ever doesn't
         # hold -- a different build, a binary moved after extraction, etc. --
         # the dynamic linker still finds the libraries we keep in bin_dir().
-        "LD_LIBRARY_PATH": f"{bin_dir()}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":"),
-    }
+        defaults["PATH"] = f"{bin_dir()}:{env.get('PATH', '')}"
+        defaults["LD_LIBRARY_PATH"] = f"{bin_dir()}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+    else:
+        # Ollama bundles its *own* llama-server-style runner (a separate,
+        # matching-glibc-target build) under lib/ollama/ next to its own
+        # binary, which it resolves via its own internal, relative-path
+        # discovery -- never via PATH. Putting bin_dir() on PATH/
+        # LD_LIBRARY_PATH here too (as this used to do unconditionally) is
+        # actively harmful on a host where the llama.cpp engine was *also*
+        # installed: if Ollama's own runner can't be found for any reason
+        # it falls back to whatever "llama-server" it finds on PATH, which
+        # would then be the llama.cpp engine's own (differently built, and
+        # on older hosts often ABI-incompatible) binary instead of its own
+        # -- producing the exact same generic "llama-server process has
+        # terminated: exit status 1" crash, just for the wrong reason.
+        pass
     env.update(defaults)
     if overrides:
         env.update(overrides)
@@ -525,20 +600,49 @@ def runtime_status() -> Dict[str, Any]:
     }
 
 
+def ollama_lib_dir() -> Path:
+    return root_dir() / "lib" / "ollama"
+
+
+def _runtime_is_healthy(path: str, engine: str) -> bool:
+    """_binary_is_healthy(), extended for the ollama engine: the `ollama`
+    executable itself can be perfectly healthy (it's a near-static Go
+    binary with minimal deps of its own) while the separate lib/ollama/
+    directory holding its *own* bundled llama-server-style runner -- the
+    thing that actually loads and serves every model -- is missing (e.g.
+    an install made before this directory started being preserved, see
+    install_runtime()'s ollama branch). That leaves `ollama serve` running
+    and reporting itself as installed/up while every single model load
+    fails, so it must count as "unhealthy" too and trigger a repair.
+    """
+    if not _binary_is_healthy(path):
+        return False
+    if engine == "ollama":
+        lib_dir = ollama_lib_dir()
+        try:
+            return lib_dir.is_dir() and any(lib_dir.iterdir())
+        except Exception:
+            return False
+    return True
+
+
 def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     engine = engine.strip().lower() if engine else "ollama"
     b = binary(engine)
-    if b and _binary_is_healthy(b):
+    if b and _runtime_is_healthy(b, engine):
         return {"ok": True, "alreadyInstalled": True, "binary": b, "engine": engine}
-    if b and not _binary_is_healthy(b):
+    if b and not _runtime_is_healthy(b, engine):
         abi_reason = _binary_abi_incompatibility_reason(b)
+        if not abi_reason and engine == "ollama":
+            abi_reason = _ollama_runner_abi_reason(ollama_lib_dir())
         if abi_reason:
             # Redownloading would just fetch the identical, still-incompatible
             # official binary -- don't loop-reinstall forever on every single
             # activation attempt; surface the real, actionable explanation now.
             raise RuntimeError(abi_reason)
-        # Broken leftover install (e.g. missing shared libraries) -- remove
-        # it so the extraction step below is guaranteed to replace it with a
+        # Broken leftover install (e.g. missing shared libraries, or --
+        # for ollama -- a missing lib/ollama runner directory) -- remove it
+        # so the extraction step below is guaranteed to replace it with a
         # working copy instead of silently keeping the broken one in place.
         try:
             Path(b).unlink()
@@ -778,7 +882,46 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
                             except Exception:
                                 pass
                     else:
+                        # Official Ollama release tarballs are laid out as
+                        #   ./bin/ollama
+                        #   ./lib/ollama/...   (Ollama's OWN bundled,
+                        #     matching-glibc-target llama-server runner +
+                        #     its shared libraries, which Ollama resolves
+                        #     via a path *relative to its own binary*, not
+                        #     via PATH).
+                        # Moving only the bare `ollama` executable out of
+                        # this tree (as this used to do) orphans that
+                        # lib/ollama directory -- Ollama can then no longer
+                        # find its own matching runner, so loading *any*
+                        # model fails with a generic "llama-server process
+                        # has terminated: exit status 1" (and, worse, on a
+                        # host where the llama.cpp engine is also
+                        # installed, Ollama may fall back to whatever
+                        # "llama-server" it finds via PATH instead -- a
+                        # *different*, differently-built binary that can be
+                        # ABI-incompatible with this host even when
+                        # Ollama's own bundled one would have worked fine).
+                        extracted_lib_dir = candidate.parent.parent / "lib" / "ollama"
+                        if extracted_lib_dir.is_dir():
+                            dest_lib_dir = root_dir() / "lib" / "ollama"
+                            try:
+                                if dest_lib_dir.exists():
+                                    shutil.rmtree(str(dest_lib_dir), ignore_errors=True)
+                                shutil.copytree(str(extracted_lib_dir), str(dest_lib_dir))
+                                _log(f"Preserved Ollama's own runner libraries at {dest_lib_dir}")
+                            except Exception as copy_err:
+                                _log(f"Could not preserve Ollama's lib/ollama runner directory: {copy_err}")
                         shutil.move(str(candidate), str(target_bin))
+                        # Clean up the now-redundant extracted copy tree
+                        # (everything needed now lives under bin_dir()/
+                        # root_dir()/lib -- keep disk usage sane).
+                        try:
+                            top_level = candidate.relative_to(rd).parts[0]
+                            leftover = rd / top_level
+                            if leftover.is_dir() and leftover.resolve() != bd.resolve():
+                                shutil.rmtree(str(leftover), ignore_errors=True)
+                        except Exception:
+                            pass
                     break
 
         if not target_bin.is_file() and engine == "llamacpp":
@@ -792,7 +935,15 @@ def install_runtime(engine: str = "ollama", log_fn: Optional[Callable[[str], Non
                 target_bin.chmod(0o755)
             except Exception:
                 pass
-            abi_reason = _binary_abi_incompatibility_reason(str(target_bin)) if engine == "llamacpp" else None
+            if engine == "llamacpp":
+                abi_reason = _binary_abi_incompatibility_reason(str(target_bin))
+            else:
+                # Check Ollama's OWN bundled runner too (just preserved
+                # above), not just the `ollama` executable itself -- the
+                # top-level binary can be perfectly fine while its internal
+                # llama-server-style runner is the one that's actually
+                # ABI-incompatible with this host.
+                abi_reason = _ollama_runner_abi_reason(ollama_lib_dir())
             if abi_reason:
                 # The binary extracted fine, but this host's own glibc/
                 # libstdc++ is too old to run it -- don't report a false
@@ -844,8 +995,10 @@ def start_server(
         stop_server()
 
     b = binary(active_engine) or binary()
-    if b and not _binary_is_healthy(b):
+    if b and not _runtime_is_healthy(b, active_engine):
         abi_reason = _binary_abi_incompatibility_reason(b)
+        if not abi_reason and active_engine == "ollama":
+            abi_reason = _ollama_runner_abi_reason(ollama_lib_dir())
         if abi_reason:
             # This host's own glibc/libstdc++ is simply too old for the
             # official binary -- reinstalling would just redownload the
@@ -853,10 +1006,11 @@ def start_server(
             # actionable reason now instead of silently "repairing" forever.
             raise RuntimeError(abi_reason)
         # Broken install from before this was fixed (e.g. llama-server
-        # copied without its libllama.so/libggml*.so) -- repair it instead
+        # copied without its libllama.so/libggml*.so, or -- for ollama --
+        # the lib/ollama runner directory is missing) -- repair it instead
         # of handing the user the same cryptic
         # "error while loading shared libraries" failure every single time.
-        _log(f"{active_engine} binary is present but broken (missing shared libraries); repairing...")
+        _log(f"{active_engine} binary is present but broken (missing shared libraries/runner files); repairing...")
         b = None
     if not b:
         install_runtime(active_engine, log_fn)
@@ -869,7 +1023,7 @@ def start_server(
 
     models_dir().mkdir(parents=True, exist_ok=True)
     log_path = root_dir() / f"{active_engine}.log"
-    env = server_env(env_overrides)
+    env = server_env(env_overrides, engine=active_engine)
 
     parsed = urllib.parse.urlparse(host_url())
     bind_host = parsed.hostname or "127.0.0.1"
@@ -1851,12 +2005,17 @@ def benchmark_llamacpp(model: str, prompt: str = "Say OK.", num_predict: int = 4
         with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
+        log_tail = read_engine_log_tail("llamacpp").get("log", "")
+        error_msg = _describe_http_error(e)
+        missing_version = _detect_abi_version_mismatch(log_tail)
+        if missing_version:
+            error_msg = _abi_incompatibility_message(missing_version, "llamacpp")
         return {
             "ok": False,
             "model": model,
-            "error": _describe_http_error(e),
+            "error": error_msg,
             "latencyMs": round((time.time() - t0) * 1000, 1),
-            "logTail": read_engine_log_tail("llamacpp").get("log", ""),
+            "logTail": log_tail,
         }
 
     wall_ms = round((time.time() - t0) * 1000, 1)
@@ -1908,10 +2067,22 @@ def benchmark_test(model: str) -> Dict[str, Any]:
                 "durationSec": round(elapsed, 2),
             }
     except Exception as e:
+        log_tail = read_engine_log_tail("ollama").get("log", "")
+        error_msg = _describe_http_error(e)
+        # Ollama's own error for this ("llama runner process has
+        # terminated: exit status 1"/"exit status 2") never says *why* the
+        # runner actually died -- the real reason (if it's the glibc/
+        # libstdc++ ABI mismatch class of failure) is only visible in its
+        # own log file, which we already have right here. Surface the
+        # clear, actionable diagnosis immediately instead of making the
+        # user dig through the raw log themselves.
+        missing_version = _detect_abi_version_mismatch(log_tail)
+        if missing_version:
+            error_msg = _abi_incompatibility_message(missing_version, "ollama")
         return {
             "ok": False,
-            "error": _describe_http_error(e),
-            "logTail": read_engine_log_tail("ollama").get("log", ""),
+            "error": error_msg,
+            "logTail": log_tail,
         }
 
 
@@ -2100,7 +2271,7 @@ def run_import_job(job_id: str, engine: str, path: str, name: str, context_token
             raise RuntimeError("Ollama binary not found after install")
         log_fn(f"Importing with `ollama create {safe_name}` (this copies/converts the weights into Ollama's own store) …")
         try:
-            out = subprocess.run([b, "create", safe_name, "-f", str(modelfile)], cwd=str(root_dir()), capture_output=True, text=True, timeout=1800, env=server_env())
+            out = subprocess.run([b, "create", safe_name, "-f", str(modelfile)], cwd=str(root_dir()), capture_output=True, text=True, timeout=1800, env=server_env(engine="ollama"))
         finally:
             modelfile.unlink(missing_ok=True)
         if out.returncode != 0:

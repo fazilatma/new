@@ -64,7 +64,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.13"
+    assert APP_VERSION == "3.3.14"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -3424,3 +3424,195 @@ def test_localai_install_job_stop_button_actually_halts_the_background_thread(mo
     job = get_job_details(job_id)
     assert job["status"] == "cancelled", f"expected 'cancelled', the background thread must not overwrite it with 'failed'/'done' (got {job['status']!r})"
     assert job_id not in JOB_CONTROL_FLAGS, "JOB_CONTROL_FLAGS entry must be cleaned up once the thread exits"
+
+
+def test_server_env_never_puts_bin_dir_on_path_for_ollama(monkeypatch, tmp_path):
+    """Regression test for the real root cause behind 'llama-server process
+    has terminated: exit status 1' when Testing an installed Ollama model:
+    Ollama bundles its OWN matching-glibc-target llama-server-style runner
+    under lib/ollama/, resolved via a path RELATIVE TO ITS OWN BINARY, never
+    via PATH. server_env() used to unconditionally put bin_dir() on PATH/
+    LD_LIBRARY_PATH for every engine, including ollama. On a host where the
+    llamacpp engine was also installed (its llama-server living in that same
+    shared bin_dir()), this made Ollama's runner-discovery fall back to --
+    and crash on -- the llamacpp engine's differently-built, ABI-incompatible
+    llama-server instead of its own. bin_dir() must only ever be injected for
+    the llamacpp engine itself."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+
+    env_ollama = local_ai.server_env(engine="ollama")
+    bd = str(local_ai.bin_dir())
+    assert bd not in env_ollama.get("PATH", ""), "bin_dir() must never be injected into PATH for the ollama engine"
+    assert bd not in env_ollama.get("LD_LIBRARY_PATH", ""), "bin_dir() must never be injected into LD_LIBRARY_PATH for the ollama engine"
+
+    env_llamacpp = local_ai.server_env(engine="llamacpp")
+    assert bd in env_llamacpp.get("PATH", ""), "bin_dir() must still be injected into PATH for the llamacpp engine (its own libs rely on it)"
+    assert bd in env_llamacpp.get("LD_LIBRARY_PATH", "")
+
+
+def test_runtime_is_healthy_detects_missing_ollama_lib_dir(monkeypatch, tmp_path):
+    """Regression test: an `ollama` binary can be perfectly healthy (it's a
+    near-static Go executable) while its sibling lib/ollama/ directory --
+    which holds Ollama's OWN bundled llama-server-style runner, the thing
+    that actually loads every model -- is missing or empty (e.g. an install
+    made before this directory started being preserved). That must be
+    treated as an unhealthy/broken install needing repair, not silently
+    accepted as 'already installed', because every single model load would
+    otherwise keep failing forever."""
+    from app import local_ai
+
+    fake_bin = tmp_path / "bin" / "ollama"
+    fake_bin.parent.mkdir(parents=True, exist_ok=True)
+    fake_bin.write_text("fake-ollama-binary")
+    fake_bin.chmod(0o755)
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "_binary_is_healthy", lambda path: True)
+
+    # No lib/ollama directory at all -> unhealthy.
+    assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is False
+
+    # Empty lib/ollama directory -> still unhealthy.
+    lib_dir = tmp_path / "lib" / "ollama"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is False
+
+    # lib/ollama with actual runner files -> healthy.
+    (lib_dir / "libggml-base.so").write_bytes(b"\x7fELF-fake")
+    assert local_ai._runtime_is_healthy(str(fake_bin), "ollama") is True
+
+    # The llamacpp engine never needs/checks lib/ollama at all.
+    assert local_ai._runtime_is_healthy(str(fake_bin), "llamacpp") is True
+
+
+def test_install_runtime_preserves_ollama_lib_dir_when_binary_found_via_rglob(monkeypatch, tmp_path):
+    """Regression test: if Ollama's archive ever gets extracted such that the
+    `ollama` binary has to be located via the rglob() fallback (e.g. an
+    unexpected nested layout) rather than landing directly at bin_dir(),
+    install_runtime() must also carry over the sibling lib/ollama/ runner
+    directory to root_dir()/lib/ollama -- not just move the bare executable
+    and orphan it, which left Ollama unable to find its own bundled runner."""
+    from app import local_ai
+
+    monkeypatch.setenv("AGENT_LOCALAI_DIR", str(tmp_path / "localai"))
+    monkeypatch.setattr(local_ai, "get_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "set_state", lambda *a, **kw: None)
+    monkeypatch.setattr(local_ai, "shutil", __import__("shutil"))  # keep real shutil, just ensure 'which' misses below
+    monkeypatch.setattr(local_ai.shutil, "which", lambda name: None)
+
+    rd = local_ai.root_dir()
+    bd = local_ai.bin_dir()
+
+    # Simulate an archive that extracted into a nested subfolder instead of
+    # landing directly at rd/bin + rd/lib (forcing the rglob() fallback path).
+    nested_root = rd / "ollama-linux-amd64"
+    nested_bin = nested_root / "bin"
+    nested_lib = nested_root / "lib" / "ollama"
+    nested_bin.mkdir(parents=True, exist_ok=True)
+    nested_lib.mkdir(parents=True, exist_ok=True)
+    (nested_bin / "ollama").write_bytes(b"fake-ollama-binary")
+    (nested_lib / "libggml-base.so").write_bytes(b"\x7fELF-fake-libggml-base")
+    (nested_lib / "libllama.so").write_bytes(b"\x7fELF-fake-libllama")
+
+    padding = b"x" * 1200
+
+    # Fake out the download step entirely: install_runtime() only needs a
+    # non-empty "downloaded" marker file to proceed past the download loop
+    # and into extraction/discovery, which we've already pre-staged above.
+    orig_run = local_ai.subprocess.run
+
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] in ("curl", "wget", "unzip", "tar"):
+            class _R:
+                returncode = 1
+                stdout = ""
+                stderr = "not available in test"
+            return _R()
+        return orig_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+
+    # Make the very first unique candidate URL's download succeed by writing
+    # a placeholder file directly (standing in for a real download), so
+    # install_runtime() thinks it downloaded something and proceeds to the
+    # (already pre-staged) extraction/discovery phase.
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self._pos = 0
+
+        def read(self, n=-1):
+            if n is None or n < 0:
+                chunk = self._data[self._pos:]
+                self._pos = len(self._data)
+                return chunk
+            chunk = self._data[self._pos:self._pos + n]
+            self._pos += len(chunk)
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen2(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "api.github.com" in url:
+            raise Exception("no network access in test")
+        # Return a minimal placeholder "archive" -- extraction of it will be
+        # a no-op (it isn't a real archive), but the pre-staged nested_root
+        # tree above stands in for "what extraction already produced".
+        return _FakeResp(b"\x7fELF-placeholder-not-a-real-archive" + padding)
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen2)
+
+    result = local_ai.install_runtime("ollama")
+    assert result["ok"] is True
+    assert (bd / "ollama").is_file(), "the ollama executable itself must be discovered and moved into bin_dir()"
+    dest_lib = rd / "lib" / "ollama"
+    assert dest_lib.is_dir(), "lib/ollama must be preserved at root_dir()/lib/ollama, not orphaned in the extracted tree"
+    assert (dest_lib / "libggml-base.so").is_file()
+    assert (dest_lib / "libllama.so").is_file()
+
+
+def test_benchmark_test_detects_abi_mismatch_in_ollama_crash_log(monkeypatch):
+    """Regression test for the exact bug report: clicking 'Test' on an
+    installed Ollama model failed with the generic 'llama-server process has
+    terminated: exit status 1', while the real, actionable reason (a glibc/
+    libstdc++ ABI mismatch) was only visible buried in Ollama's own log file.
+    benchmark_test() must scan that captured log and surface the clear
+    Persian diagnosis instead of the useless generic message."""
+    import urllib.error
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+
+    crash_log = (
+        "/data/localai/bin/llama-server: /lib64/libstdc++.so.6: version "
+        "`GLIBCXX_3.4.29' not found (required by /data/localai/bin/libggml-rpc.so)\n"
+        'time=2026-10-02T13:30:44 level=INFO source=sched.go:646 msg="Load failed" '
+        'error="llama-server process has terminated: exit status 1"'
+    )
+    monkeypatch.setattr(local_ai, "read_engine_log_tail", lambda engine: {"log": crash_log})
+
+    def fake_urlopen(req, timeout=None):
+        err = urllib.error.HTTPError(url=req.full_url, code=500, msg="Internal Server Error", hdrs=None, fp=None)
+        err.read = lambda: b""
+        raise err
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    result = local_ai.benchmark_test("some-model:latest")
+    assert result["ok"] is False
+    assert "GLIBCXX_3.4.29" in result["error"]
+    assert "Ollama" in result["error"]
+    assert "llama.cpp" not in result["error"], "the ollama-specific message must not recommend switching to llama.cpp"
+    # Must NOT recommend "switch to Ollama" -- that's actively wrong when
+    # it's Ollama's own bundled runner that's incompatible.
+    assert "موتور Ollama استفاده کنید" not in result["error"]
