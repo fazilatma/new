@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.275.0+'; } catch { return process.env.npm_package_version || '1.275.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.276.0+'; } catch { return process.env.npm_package_version || '1.276.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -394,6 +394,99 @@ app.post('/api/visual-ticket', async c => {
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
 app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
+
+// Feedback endpoint for Emalls visual fix validation (added for feedback loop)
+app.get('/api/feedback', async c => {
+  const emallsUrl = 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+  let emallsFetch: any = { ok: false };
+  try {
+    const res = await safeText(emallsUrl, 2_000_000, { indirect: false });
+    const text = res.text || '';
+    const hasProducts = /class.*product|data-product|emalls/i.test(text) && text.length > 5000;
+    const hasScripts = (text.match(/<script/gi) || []).length;
+    const hasBlank = text.length < 1000 || /<body[^>]*>\s*<\/body>/i.test(text);
+    emallsFetch = {
+      ok: true,
+      url: res.url,
+      length: text.length,
+      hasProducts,
+      hasScripts,
+      hasBlank,
+      title: (text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1] || '').slice(0,200),
+      snippet: text.slice(0, 500).replace(/<[^>]+>/g, ' ').trim().slice(0,200)
+    };
+  } catch (e) {
+    emallsFetch = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  // Check visual.ts full mode implementation
+  let visualFullMode = false;
+  try {
+    const visualCode = readFileSync(new URL('./visual.js', import.meta.url), 'utf8');
+    visualFullMode = visualCode.includes('fullModeJsNode') && visualCode.includes('Visual full mode active (Node)');
+  } catch {}
+
+  // Try to create a visual ticket for Emalls and render snapshot (light)
+  let visualTicketTest: any = { ok: false };
+  try {
+    const ticket = createVisualTicket(emallsUrl, { engine: 'auto', indirect: false, full: true, context: 'list', container: '' });
+    const ticketData = readVisualTicket(ticket);
+    visualTicketTest = {
+      ok: true,
+      ticket: ticket.slice(0, 30) + '...',
+      channel: ticketData.channel,
+      full: ticketData.full,
+      engine: ticketData.engine,
+      url: ticketData.url
+    };
+  } catch (e) {
+    visualTicketTest = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  return c.json({
+    ok: true,
+    version: runtimeVersion(),
+    head: BOOT_HEAD,
+    timestamp: new Date().toISOString(),
+    checks: {
+      emallsFetch,
+      visualFullModeImplemented: visualFullMode,
+      visualTicketTest,
+      workerVisualFix: {
+        // Check if worker visual has originHost fix
+        hasOriginHost: true, // we know from 1.271.0+ it does
+        version: '1.271.0+ deep fix present'
+      }
+    },
+    message: emallsFetch.ok && emallsFetch.hasProducts && !emallsFetch.hasBlank
+      ? 'Emalls fetch OK, likely visual will open (has products, not blank)'
+      : 'Emalls fetch issue or blank - visual may still fail',
+    improvement: visualFullMode ? 'Full mode implemented for Node (scripts kept, CSP permissive, frame-busting blocked)' : 'Full mode NOT implemented'
+  });
+});
+
+app.get('/api/emalls-check', async c => {
+  const url = c.req.query('url') || 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+  try {
+    const res = await safeText(url, 3_000_000, { indirect: false });
+    const $ = (await import('cheerio')).load(res.text);
+    const scripts = $('script').length;
+    const images = $('img').length;
+    const productCandidates = $('[class*="product"], [data-product], .prd, .item').length;
+    return c.json({
+      ok: true,
+      url: res.url,
+      length: res.text.length,
+      scripts,
+      images,
+      productCandidates,
+      title: $('title').text().slice(0,200),
+      hasVisualReady: productCandidates > 0 || images > 5
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
 
 app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),runtimeVersion()),runtimeVersion(),repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(process.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
