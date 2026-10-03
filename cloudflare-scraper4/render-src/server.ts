@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.276.0+'; } catch { return process.env.npm_package_version || '1.276.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.277.0+'; } catch { return process.env.npm_package_version || '1.277.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -249,6 +249,26 @@ try {
 } catch (error) { bootstrapLastError = error instanceof Error ? error.message : String(error); console.error(`[bootstrap] restore failed: ${bootstrapLastError}`); }
 
 const app = new Hono();
+
+// Lightweight feedback endpoints that bypass DB and auth and busy checks (for feedback loop)
+app.get('/feedback', async c => {
+  return c.json({
+    ok: true,
+    version: (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return 'unknown'; } })(),
+    timestamp: new Date().toISOString(),
+    message: 'Feedback endpoint alive - if you see this, deployment updated',
+    visualFullMode: 'Check /api/feedback for detailed Emalls check after DB ready'
+  });
+});
+app.get('/api/light-feedback', async c => {
+  return c.json({
+    ok: true,
+    version: (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return 'unknown'; } })(),
+    timestamp: new Date().toISOString(),
+    message: 'Light feedback - bypasses DB'
+  });
+});
+
 const dashboardHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"],
