@@ -3349,6 +3349,8 @@ function handle_api() {
         if (!$newContent) jout(false, null, 'Download failed from all URLs, last try len '.strlen($tmp??'').' url '.$urlUsed);
         @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
         @file_put_contents(__FILE__, $newContent);
+        if (function_exists('opcache_reset')) @opcache_reset();
+        if (function_exists('opcache_invalidate')) @opcache_invalidate(__FILE__, true);
         jout(true, ['updated'=>true, 'bytes'=>strlen($newContent), 'url'=>$urlUsed]);
 
     case 'public.force_update':
@@ -3363,6 +3365,8 @@ function handle_api() {
         if (is_file($destNew) && filesize($destNew) > 10000) {
             @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
             @rename($destNew, __FILE__);
+            if (function_exists('opcache_reset')) @opcache_reset();
+            if (function_exists('opcache_invalidate')) @opcache_invalidate(__FILE__, true);
             jout(true, ['updated'=>true, 'out'=>$out, 'bytes'=>filesize(__FILE__), 'url'=>$url]);
         } else {
             jout(false, ['out'=>$out, 'url'=>$url], 'Failed');
