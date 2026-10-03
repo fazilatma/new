@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.279.0+'; } catch { return process.env.npm_package_version || '1.279.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.280.0+'; } catch { return process.env.npm_package_version || '1.280.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -268,6 +268,50 @@ app.get('/api/light-feedback', async c => {
     message: 'Light feedback - bypasses DB'
   });
 });
+// Proxy endpoint for visual full mode (Emalls/Snappshop) - bypasses DB/busy, like worker /api/rp
+app.all('/api/rp', async c => {
+  const raw = c.req.query('url') || '';
+  if (!raw) return c.json({ ok: false, error: 'Missing url' }, 400);
+  if (c.req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS', 'cache-control': 'no-store' } });
+  }
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) return c.json({ ok: false, error: 'Invalid protocol' }, 400);
+    // Block private IPs
+    const host = url.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+      return c.json({ ok: false, error: 'Private host blocked' }, 403);
+    }
+    const method = c.req.method || 'GET';
+    const headers = new Headers();
+    const accept = c.req.header('accept') || '*/*';
+    headers.set('accept', accept);
+    const lang = c.req.header('accept-language');
+    if (lang) headers.set('accept-language', lang);
+    const range = c.req.header('range');
+    if (range) headers.set('range', range);
+    headers.set('user-agent', 'Mozilla/5.0 (compatible; Scraper4 Visual)');
+    headers.set('referer', url.origin + '/');
+    const init: RequestInit = { method, headers, body: (method !== 'GET' && method !== 'HEAD') ? await c.req.arrayBuffer() : undefined } as any;
+    const response = await safeFetch(url.href, init, 25_000_000, 30_000);
+    const ct = response.headers.get('content-type') || 'application/octet-stream';
+    const data = await response.arrayBuffer();
+    return new Response(data, {
+      status: response.status,
+      headers: {
+        'content-type': ct,
+        'cache-control': 'public, max-age=3600',
+        'access-control-allow-origin': '*',
+        'access-control-allow-headers': '*',
+        'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+        'x-content-type-options': 'nosniff'
+      }
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as any)?.message || String(e) }, 502);
+  }
+});
 
 const dashboardHeaders = secureHeaders({
   contentSecurityPolicy: {
@@ -275,7 +319,7 @@ const dashboardHeaders = secureHeaders({
     connectSrc: ["'self'"], imgSrc: ["'self'", 'data:', 'https:'], objectSrc: ["'none'"], frameAncestors: ["'none'"]
   }
 });
-app.use('*', async (c, next) => c.req.path === '/visual' ? next() : dashboardHeaders(c, next));
+app.use('*', async (c, next) => (c.req.path === '/visual' || c.req.path.startsWith('/api/rp')) ? next() : dashboardHeaders(c, next));
 app.use('/api/*', cors({ origin: origin => origin, allowHeaders: ['authorization','content-type','x-scraper-activity','cf-connecting-ip','cf-ray'], allowMethods: ['GET','POST','PUT','DELETE'] }));
 // Cloudflare reverse proxy (orange cloud) buffers and caches by default; for Playwright-heavy
 // endpoints it causes 524 timeout or WAF blocks on CSS selectors containing >[]: etc.

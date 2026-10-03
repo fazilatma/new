@@ -38,10 +38,172 @@ export async function renderVisualSelector(ticket: string, fullOverride?: boolea
 }
 
 function fullModeJsNode(): string {
-  // Node/Render parity with worker fullModeJs: block frame-busting, document.write wipe, log originHost
+  // Enhanced Node full mode - parity with worker fullModeJs for Emalls/Snappshop
+  // Includes proxy via /api/rp for cross-origin/API, frame-busting block, document.write override
   return `<script>(function(){
+var proxy='/api/rp?url=';
+var proxyBase='/api/rp?url=';
 var originHost=(function(){try{return new URL(document.baseURI||location.href).hostname;}catch(e){return '';}})();
 console.log('[S4] Visual full mode active (Node), originHost='+originHost);
+function isSameHost(abs){
+  try{
+    var h=new URL(abs).hostname;
+    return h===originHost || h==='www.'+originHost || originHost==='www.'+h;
+  }catch(e){return false;}
+}
+function toProxy(u){
+  if(!u||typeof u!=='string') return u;
+  u=u.trim();
+  if(!u) return u;
+  if(u.indexOf('/api/rp')!==-1) return u;
+  if(u.startsWith('data:')||u.startsWith('blob:')||u.startsWith('#')||u.startsWith('javascript:')||u.startsWith('mailto:')||u.startsWith('about:')) return u;
+  try{
+    var base=document.baseURI||location.href;
+    var abs=new URL(u, base).href;
+    if(abs.indexOf(location.origin+'/api/rp')===0) return abs;
+    if(abs.indexOf(location.origin+'/visual')===0) return abs;
+    if(abs.indexOf(location.origin+'/api/')===0 && abs.indexOf('/api/rp')===-1) return abs;
+    if(abs.startsWith('http://')||abs.startsWith('https://')){
+      var isApi=/\\/(api|graphql|search|ajax|_next\\/data|wp-json)\\//i.test(abs) || /\\.(json)(\\?|$)/i.test(abs);
+      if(!isApi && isSameHost(abs)){
+        return abs;
+      }
+      return proxyBase+encodeURIComponent(abs);
+    }
+    return abs;
+  }catch(e){return u;}
+}
+function toProxyForce(u){
+  if(!u||typeof u!=='string') return u;
+  u=u.trim();
+  if(!u) return u;
+  if(u.indexOf('/api/rp')!==-1) return u;
+  if(u.startsWith('data:')||u.startsWith('blob:')||u.startsWith('#')||u.startsWith('javascript:')||u.startsWith('mailto:')||u.startsWith('about:')) return u;
+  try{
+    var base=document.baseURI||location.href;
+    var abs=new URL(u, base).href;
+    if(abs.indexOf(location.origin+'/api/rp')===0) return abs;
+    if(abs.indexOf(location.origin+'/visual')===0) return abs;
+    if(abs.indexOf(location.origin+'/api/')===0 && abs.indexOf('/api/rp')===-1) return abs;
+    if(abs.startsWith('http://')||abs.startsWith('https://')){
+      return proxyBase+encodeURIComponent(abs);
+    }
+    return abs;
+  }catch(e){return u;}
+}
+function toProxySrcset(v){
+  if(!v||typeof v!=='string') return v;
+  try{
+    return v.split(',').map(function(p){
+      var t=p.trim();
+      if(!t) return t;
+      var parts=t.split(/\\s+/);
+      if(!parts[0]) return t;
+      parts[0]=toProxy(parts[0]);
+      return parts.join(' ');
+    }).join(', ');
+  }catch(e){return v;}
+}
+try{
+  var _fetch=window.fetch;
+  window.fetch=function(u,o){
+    try{
+      if(typeof u==='string'){
+        u=toProxyForce(u);
+      }else if(u && typeof u.url==='string'){
+        var nu=toProxyForce(u.url);
+        if(nu!==u.url){
+          try{u=new Request(nu, u);}catch(e){u=new Request(nu);}
+        }
+      }
+    }catch(e){}
+    return _fetch.call(this,u,o);
+  };
+}catch(e){}
+try{
+  var _Request=window.Request;
+  if(_Request){
+    var _OrigRequest=_Request;
+    window.Request=function(input, init){
+      try{
+        if(typeof input==='string'){
+          input=toProxyForce(input);
+        }else if(input && typeof input.url==='string'){
+          var nurl=toProxyForce(input.url);
+          if(nurl!==input.url){
+            try{input=new _OrigRequest(nurl, input);}catch(e){input=new _OrigRequest(nurl);}
+          }
+        }
+      }catch(e){}
+      return new _OrigRequest(input, init);
+    };
+    window.Request.prototype=_OrigRequest.prototype;
+    try{Object.setOwnPropertyDescriptors(window.Request, Object.getOwnPropertyDescriptors(_OrigRequest));}catch(e){}
+  }
+}catch(e){}
+try{
+  var _open=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){
+    try{
+      if(typeof u==='string'){
+        arguments[1]=toProxyForce(u);
+      }
+    }catch(e){}
+    return _open.apply(this,arguments);
+  };
+}catch(e){}
+try{
+  var _setAttr=Element.prototype.setAttribute;
+  Element.prototype.setAttribute=function(n,v){
+    try{
+      if(typeof v==='string'){
+        var ln=n.toLowerCase();
+        if(ln==='src'||ln==='href'||ln==='action'||ln==='srcset'||ln==='data-src'||ln==='data-lazy-src'||ln==='data-original'||ln==='data-lazy'||ln==='data-thumb'||ln==='data-image'||ln==='data-zoom'||ln==='data-zoom-image'||ln==='data-large_image'||ln==='data-large-image'||ln==='data-full'||ln==='data-srcset'||ln==='data-lazy-srcset'){
+          if(ln==='srcset'||ln==='data-srcset'||ln==='data-lazy-srcset'){
+            v=toProxySrcset(v);
+          }else{
+            v=toProxy(v);
+          }
+        }
+      }
+    }catch(e){}
+    return _setAttr.call(this,n,v);
+  };
+}catch(e){}
+function patchProp(proto, prop, isSrcset){
+  try{
+    var desc=Object.getOwnPropertyDescriptor(proto, prop);
+    if(!desc || !desc.set) return;
+    var origSet=desc.set;
+    var origGet=desc.get;
+    Object.defineProperty(proto, prop, {
+      set:function(v){
+        try{
+          if(typeof v==='string'){
+            if(isSrcset) v=toProxySrcset(v);
+            else v=toProxy(v);
+          }
+        }catch(e){}
+        return origSet.call(this, v);
+      },
+      get:origGet,
+      configurable:true
+    });
+  }catch(e){}
+}
+try{
+  patchProp(HTMLImageElement.prototype,'src',false);
+  patchProp(HTMLScriptElement.prototype,'src',false);
+  patchProp(HTMLLinkElement.prototype,'href',false);
+  patchProp(HTMLIFrameElement.prototype,'src',false);
+  patchProp(HTMLAnchorElement.prototype,'href',false);
+  patchProp(HTMLFormElement.prototype,'action',false);
+  patchProp(HTMLSourceElement.prototype,'src',false);
+  patchProp(HTMLSourceElement.prototype,'srcset',true);
+  patchProp(HTMLImageElement.prototype,'srcset',true);
+  if(window.HTMLVideoElement) patchProp(HTMLVideoElement.prototype,'src',false);
+  if(window.HTMLAudioElement) patchProp(HTMLAudioElement.prototype,'src',false);
+}catch(e){}
 try{
   var _write=document.write.bind(document);
   var _writeln=document.writeln.bind(document);
@@ -55,7 +217,7 @@ try{
           var node=div.firstChild;
           if(node.tagName==='SCRIPT'){
             var s=document.createElement('script');
-            if(node.src) s.src=node.src;
+            if(node.src) s.src=toProxy(node.src);
             else s.textContent=node.textContent;
             document.head.appendChild(s);
             div.removeChild(node);
@@ -91,8 +253,8 @@ document.addEventListener('click',function(e){
 export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{visualReadiness?:any;javascriptErrors?:string[];pendingCriticalResources?:number;crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel='', full=false): string {
   const $ = cheerio.load(page.text, { scriptingEnabled: false });
   if (full) {
-    // Full mode for Emalls/Snappshop: keep scripts, only remove dangerous meta/base, keep iframe for debugging but remove object/embed/form
-    $('object,embed,form,noscript,base,meta[http-equiv="Content-Security-Policy"],meta[http-equiv="content-security-policy"],meta[http-equiv="refresh"]').remove();
+    // Full mode for Emalls/Snappshop: keep scripts, remove only dangerous object/embed/form/noscript and CSP/refresh meta, keep base for rewriting then replace
+    $('object,embed,form,noscript,meta[http-equiv="Content-Security-Policy"],meta[http-equiv="content-security-policy"],meta[http-equiv="refresh"]').remove();
   } else {
     $('script,iframe,object,embed,form,noscript,base,meta').remove();
   }
@@ -104,24 +266,44 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
       if (/^on/i.test(name) || ['srcdoc', 'nonce'].includes(name.toLowerCase())) $(el).removeAttr(name);
     }
   });
-  // Resolve resources against the final URL. Private literal addresses are removed.
-  $('[src],[href],[poster]').each((_i, el) => {
+  // Resolve resources - include data-* lazy-load attrs (Emalls uses data-src)
+  const DATA_ATTRS = ['src','href','poster','data-src','data-lazy-src','data-original','data-lazy','data-thumb','data-image','data-zoom','data-zoom-image','data-large_image','data-large-image','data-full','data-srcset','data-lazy-srcset'];
+  $('*').each((_i, el) => {
     const node = $(el);
-    for (const attr of ['src', 'href', 'poster']) {
+    for (const attr of DATA_ATTRS) {
       const raw = node.attr(attr); if (!raw || raw === '#') continue;
-      try { const absolute = new URL(raw, page.url); if (!['http:','https:','data:'].includes(absolute.protocol) || privateLiteral(absolute.hostname)) node.removeAttr(attr); else node.attr(attr, absolute.href); }
-      catch { node.removeAttr(attr); }
+      if (attr.includes('srcset')) continue;
+      try {
+        const absolute = new URL(raw, page.url);
+        if (!['http:','https:','data:'].includes(absolute.protocol) || privateLiteral(absolute.hostname)) {
+          if (['src','href','poster'].includes(attr)) node.removeAttr(attr);
+        } else {
+          if (attr.startsWith('data-') && !node.attr('src') && (el as any).tagName === 'img') {
+            node.attr('src', absolute.href);
+          }
+          node.attr(attr, absolute.href);
+        }
+      } catch { if (['src','href','poster'].includes(attr)) node.removeAttr(attr); }
     }
   });
-  $('[srcset]').each((_i, el) => {
-    const node = $(el), raw = node.attr('srcset') || '';
-    const resolved = raw.split(',').map(part => { const [value, size=''] = part.trim().split(/\s+/,2); try { const absolute = new URL(value, page.url); return privateLiteral(absolute.hostname) ? '' : `${absolute.href} ${size}`.trim(); } catch { return ''; } }).filter(Boolean).join(', ');
-    resolved ? node.attr('srcset', resolved) : node.removeAttr('srcset');
+  $('[srcset],[data-srcset],[data-lazy-srcset]').each((_i, el) => {
+    const node = $(el);
+    for (const attr of ['srcset','data-srcset','data-lazy-srcset']) {
+      const raw = node.attr(attr); if (!raw) continue;
+      const resolved = raw.split(',').map(part => { const [value, size=''] = part.trim().split(/\s+/,2); try { const absolute = new URL(value, page.url); return privateLiteral(absolute.hostname) ? '' : `${absolute.href} ${size}`.trim(); } catch { return ''; } }).filter(Boolean).join(', ');
+      if (resolved) {
+        node.attr(attr, resolved);
+        if (attr !== 'srcset' && !node.attr('srcset')) node.attr('srcset', resolved);
+      } else node.removeAttr(attr);
+    }
   });
+  if (full) {
+    $('head').prepend(`<base href="${page.url.replace(/"/g,'&quot;')}">`);
+  }
   $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1\">');
   $('head').append(`<style>${PICKER_CSS}${SNAPSHOT_LAYOUT_CSS}</style>`);
   if (full) {
-    $('head').append(fullModeJsNode());
+    $('head').prepend(fullModeJsNode());
   }
   $('body').prepend(TOOLBAR);
   $('#__s4bar').prepend($('<span>').attr('id','__s4engine').text((full?'کامل JS · ':'')+(VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine)));
