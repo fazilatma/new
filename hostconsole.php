@@ -3341,7 +3341,7 @@ function handle_api() {
         @file_put_contents(__FILE__, $newContent);
         jout(true, ['updated'=>true, 'bytes'=>strlen($newContent)]);
 
-    case 'public.auto_recover':
+        case 'public.auto_recover':
         $pw = $in['password'] ?? $_GET['password'] ?? '';
         $cfg = cfg();
         $passOk = false;
@@ -3350,48 +3350,72 @@ function handle_api() {
         if (!$passOk) jout(false, null, 'Invalid password', 403);
         $projects = proj_all();
         $target = null;
-        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') == '3000') { $target = $pp; break; } }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; } } }
         if (!$target) jout(false, null, 'Project not found');
         $dp = $target['deploy_path'] ?? '';
         $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
         $out = [];
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 20'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 20'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 20'));
-        // Use simple node script for reap
-        $reapScript = $dp.'/cloudflare-scraper4/scripts/reap.mjs';
-        @file_put_contents($reapScript, "import { reapStalledJobs, pool } from '../render-dist/db.js';\nlet n=await reapStalledJobs(5); console.log('reaped '+n); await pool.end();");
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node --input-type=module scripts/reap.mjs 2>&1'));
-        cli_stop_service($target['id']);
-        sleep(1);
+        $out[] = 'target: '.($target['name']??'').' id='.($target['id']??'').' port='.($target['port']??'').' path='.$dp.' branch='.$branch;
+        if (!is_dir($dp)) { $out[] = 'deploy_path not found: '.$dp; jout(false, ['steps'=>$out], 'deploy_path not found'); }
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && ls -la render-dist/ 2>&1 | head -n 20'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && ls -lh render-dist/ 2>&1 | head -n 20'));
         wcp_kill_port('8790');
         wcp_kill_port('3000');
+        $reapCode = "import { reapStalledJobs, pool } from './render-dist/db.js'; let n=await reapStalledJobs(5); console.log('reaped '+n); await pool.end();";
+        @file_put_contents($dp.'/cloudflare-scraper4/reap.mjs', $reapCode);
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node reap.mjs 2>&1 | tail -n 20'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && cat .env.local 2>&1 | grep -E "DATABASE" | head -n 5'));
+        cli_stop_service($target['id']);
+        sleep(2);
         $job = job_create('service', 'سرویس: '.$target['name'].' (auto_recover)', ['project_id'=>$target['id']]);
         job_start($job);
         $out[] = 'restarted job '.$job['id'];
-        sleep(2);
-        $out[] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 500'));
-        $out[] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 500'));
+        sleep(4);
+        $out[] = 'local 8790: '.trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:8790/api/version 2>&1 | head -c 1000'));
+        $out[] = 'local 3000: '.trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:3000/api/version 2>&1 | head -c 1000'));
+        $out[] = 'public: '.trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000'));
+        $out[] = 'ss 8790: '.trim(@shell_exec('ss -tlnp | grep 8790 2>&1'));
+        $out[] = 'ss 3000: '.trim(@shell_exec('ss -tlnp | grep 3000 2>&1'));
+        $out[] = 'ps: '.trim(@shell_exec('ps aux | grep node | grep -v grep 2>&1 | head -n 10'));
         jout(true, ['steps'=>$out, 'job'=>$job['id']]);
 
     case 'public.monitor':
         $projects = proj_all();
         $target = null;
-        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') != '5000') { $target = $pp; break; } }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; } } }
         $info = ['timestamp'=>date('c')];
         if ($target) {
             $dp = $target['deploy_path'] ?? '';
             $info['project'] = $target['name'] ?? '';
-            $info['git_head'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1')) : '';
-            $info['git_branch'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --abbrev-ref HEAD 2>&1')) : '';
+            $info['project_id'] = $target['id'] ?? '';
+            $info['deploy_path'] = $dp;
+            $info['port'] = $target['port'] ?? '';
+            $info['branch'] = $target['branch'] ?? '';
+            $info['git_head'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1')) : 'no dir';
+            $info['git_branch'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --abbrev-ref HEAD 2>&1')) : 'no dir';
+            $info['git_status'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git status --porcelain 2>&1 | head -n 20')) : '';
             $pkgPath = $dp.'/cloudflare-scraper4/package.json';
-            if (is_file($pkgPath)) { $pkg=json_decode(@file_get_contents($pkgPath), true); $info['version']=$pkg['version']??''; }
-            $info['local_8790'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 500'));
-            $info['local_3000'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 500'));
+            if (is_file($pkgPath)) { $pkg=json_decode(@file_get_contents($pkgPath), true); $info['version']=$pkg['version']??''; $info['pkg_exists']=true; } else { $info['pkg_exists']=false; }
+            $info['render_dist_exists'] = is_dir($dp.'/cloudflare-scraper4/render-dist') ? 'yes' : 'no';
+            $info['node_modules_exists'] = is_dir($dp.'/cloudflare-scraper4/node_modules') ? 'yes' : 'no';
+            $info['local_8790'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 1000'));
+            $info['local_3000'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 1000'));
+            $info['local_3000_port'] = trim(@shell_exec('ss -tlnp | grep 3000 2>&1 | head -n 5'));
+            $info['local_8790_port'] = trim(@shell_exec('ss -tlnp | grep 8790 2>&1 | head -n 5'));
+            $info['ps_node'] = trim(@shell_exec('ps aux | grep -E "node|8790|3000" | grep -v grep 2>&1 | head -n 20'));
+            $info['service_job'] = proj_service_job($target) ? job_status(proj_service_job($target)) : null;
         }
-        $info['public_version'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 500'));
+        $info['public_version'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000'));
+        $info['public_app'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/ 2>&1 | head -c 1000'));
         jout(true, $info);
 
     case 'public.emalls':
