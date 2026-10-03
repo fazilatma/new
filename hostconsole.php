@@ -3014,7 +3014,7 @@ function handle_universal_proxy(string $targetUrl): void {
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
-    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','custom.scraper4.monitor','custom.scraper4.feedback','custom.scraper4.update','custom.scraper4.recover'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
+    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','public.projects','public.system','custom.scraper4.monitor','custom.scraper4.feedback','custom.scraper4.update','custom.scraper4.recover','custom.projects.monitor','custom.projects.logs','custom.system.monitor','custom.scraper4-cloudflare.monitor','custom.scraper4-cloudflare.restart','custom.scraper4-cloudflare.recover','custom.scraper4-cloudflare.version','custom.scraper4-cloudflare.logs'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
     switch($api){
     case 'public.monitor':
     case 'public.feedback':
@@ -3543,6 +3543,204 @@ NODEJS
         $job = job_create('service', 'سرویس: ' . $target['name'] . ' (recover)', ['project_id' => $target['id']]);
         job_start($job);
         jout(true, ['output' => $out, 'job' => $job['id']]);
+
+    case 'custom.projects.monitor':
+        // Monitor all projects
+        $projects = proj_all();
+        $result = [];
+        foreach ($projects as $pp) {
+            $svc = proj_service_job($pp);
+            $status = $svc ? job_status($svc) : null;
+            $deployPath = $pp['deploy_path'] ?? '';
+            $gitHead = is_dir($deployPath) ? trim(@shell_exec('cd '.escapeshellarg($deployPath).' && git rev-parse --short HEAD 2>&1')) : '';
+            $gitBranch = is_dir($deployPath) ? trim(@shell_exec('cd '.escapeshellarg($deployPath).' && git rev-parse --abbrev-ref HEAD 2>&1')) : '';
+            $port = $pp['port'] ?? '';
+            $portListening = $port ? trim(@shell_exec('ss -tlnp | grep :'.escapeshellarg($port).' 2>&1 | head -n 5')) : '';
+            $result[] = [
+                'id' => $pp['id'] ?? '',
+                'name' => $pp['name'] ?? '',
+                'branch' => $pp['branch'] ?? '',
+                'deploy_path' => $deployPath,
+                'deploy_exists' => is_dir($deployPath),
+                'git_head' => $gitHead,
+                'git_branch' => $gitBranch,
+                'port' => $port,
+                'port_listening' => $portListening ? 'yes' : 'no',
+                'port_detail' => $portListening,
+                'service' => $svc ? ['job_id' => $svc['id'], 'status' => $status['status'] ?? 'unknown', 'pid' => $svc['pid'] ?? 0] : null,
+                'auto_update' => !empty($pp['auto_update']),
+            ];
+        }
+        jout(true, ['projects' => $result, 'count' => count($result), 'timestamp' => date('c')]);
+
+    case 'custom.projects.logs':
+        $projects = proj_all();
+        $logs = [];
+        foreach ($projects as $pp) {
+            $svc = proj_service_job($pp);
+            if ($svc && is_file($svc['log'])) {
+                $content = @file_get_contents($svc['log']);
+                $logs[$pp['name'] ?? $pp['id']] = $content ? substr($content, -4000) : 'empty';
+            }
+        }
+        jout(true, ['logs' => $logs]);
+
+    case 'custom.system.monitor':
+        $sys = [
+            'timestamp' => date('c'),
+            'uptime' => trim(@shell_exec('uptime 2>&1')),
+            'memory' => trim(@shell_exec('free -h 2>&1')),
+            'disk' => trim(@shell_exec('df -h 2>&1 | head -n 20')),
+            'ports' => trim(@shell_exec('ss -tlnp 2>&1 | head -n 30')),
+            'processes' => trim(@shell_exec('ps aux --sort=-%cpu | head -n 30 2>&1')),
+            'node_processes' => trim(@shell_exec('ps aux | grep -E "node.*(render|deployer|scraper|8790|3000)" | grep -v grep 2>&1')),
+            'pm2' => trim(@shell_exec('pm2 list 2>&1 | head -n 50')),
+            'systemd_scraper' => trim(@shell_exec('systemctl status scraper4* 2>&1 | head -n 100')),
+        ];
+        jout(true, $sys);
+
+    case 'custom.scraper4-cloudflare.monitor':
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare' || stripos($pp['name'] ?? '', 'scraper4-cloudflare') !== false) {
+                $target = $pp;
+                break;
+            }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) {
+                if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; }
+            }
+        }
+        if (!$target) jout(false, null, 'Project scraper4-cloudflare not found');
+        $dp = $target['deploy_path'] ?? '';
+        $svc = proj_service_job($target);
+        $info = [
+            'project' => public_project($target),
+            'service' => $svc ? ['job_id' => $svc['id'], 'status' => job_status($svc), 'pid' => $svc['pid'] ?? 0] : null,
+            'deploy_path' => $dp,
+            'git_head' => is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1')) : '',
+            'git_branch' => is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --abbrev-ref HEAD 2>&1')) : '',
+            'git_status' => is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git status --porcelain 2>&1 | head -n 30')) : '',
+            'git_log' => is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git log --oneline -10 2>&1')) : '',
+            'package_version' => 'unknown',
+            'local_8790' => trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 1000')),
+            'local_3000' => trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 1000')),
+            'public_version' => trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000')),
+            'public_rp' => trim(@shell_exec('curl -s --max-time 5 "https://sabashopping.ir/app/api/rp?url=https://example.com" 2>&1 | head -c 500')),
+            'processes' => trim(@shell_exec('ps aux | grep -E "scraper4-cloudflare|render|deployer" | grep -v grep 2>&1')),
+            'ports' => trim(@shell_exec('ss -tlnp | grep -E "8790|3000" 2>&1')),
+            'memory' => trim(@shell_exec('ps -o pid,rss,cmd -p '.escapeshellarg($svc['pid'] ?? '0').' 2>&1')),
+            'disk' => trim(@shell_exec('du -sh '.escapeshellarg($dp).' 2>&1')),
+            'env' => $target['env'] ?? [],
+        ];
+        $pkgPath = $dp . '/cloudflare-scraper4/package.json';
+        if (is_file($pkgPath)) {
+            $pkg = json_decode(@file_get_contents($pkgPath), true);
+            $info['package_version'] = $pkg['version'] ?? 'unknown';
+        }
+        $visualPath = $dp . '/cloudflare-scraper4/render-src/visual.ts';
+        if (is_file($visualPath)) {
+            $code = @file_get_contents($visualPath);
+            $info['visual_full'] = strpos($code, 'fullModeJsNode') !== false ? 'yes' : 'no';
+            $info['visual_proxy'] = strpos($code, 'toProxy') !== false ? 'yes' : 'no';
+            $info['visual_rp'] = strpos($code, '/api/rp') !== false ? 'yes' : 'no';
+        }
+        if ($svc && is_file($svc['log'])) {
+            $info['log_tail'] = substr(@file_get_contents($svc['log']), -8000);
+        }
+        jout(true, $info);
+
+    case 'custom.scraper4-cloudflare.logs':
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        if (!$target) jout(false, null, 'Not found');
+        $svc = proj_service_job($target);
+        if (!$svc || !is_file($svc['log'])) jout(false, null, 'No log');
+        $off = max(0, (int)($in['offset'] ?? 0));
+        $f = $svc['log'];
+        clearstatcache(true,$f); $size=filesize($f); if($off>$size)$off=0; $data=''; if($size>$off){$fp=fopen($f,'rb'); fseek($fp,$off); $data=(string)fread($fp,min($size-$off, 2*1024*1024)); fclose($fp);}
+        jout(true, ['b64'=>base64_encode($data), 'offset'=>$off+strlen($data), 'size'=>$size, 'status'=>job_status($svc)]);
+
+    case 'custom.scraper4-cloudflare.restart':
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        if (!$target) jout(false, null, 'Not found');
+        cli_stop_service($target['id']);
+        sleep(1);
+        wcp_kill_port('8790');
+        wcp_kill_port('3000');
+        wcp_kill_port($target['port'] ?? '8790');
+        $job = job_create('service', 'سرویس: '.$target['name'].' (restart)', ['project_id'=>$target['id']]);
+        job_start($job);
+        jout(true, ['job'=>$job['id']]);
+
+    case 'custom.scraper4-cloudflare.recover':
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        if (!$target) jout(false, null, 'Not found');
+        $dp = $target['deploy_path'] ?? '';
+        $out = '';
+        $out .= @shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node --input-type=module <<\'NODEJS\'
+try {
+  const { reapStalledJobs, pool } = await import("./render-dist/db.js");
+  const n1 = await reapStalledJobs(5);
+  console.log("Reaped "+n1);
+  await pool.end();
+} catch(e) {
+  console.error(e.message);
+  try {
+    const { readFileSync, existsSync } = await import("node:fs");
+    const envLocal = existsSync(".env.local") ? readFileSync(".env.local","utf8") : "";
+    const m = envLocal.match(/DATABASE_URL\s*=\s*(.+)/);
+    const dbUrl = m ? m[1].trim() : process.env.DATABASE_URL;
+    if (dbUrl && dbUrl.includes("postgres")) {
+      const { Pool } = await import("pg");
+      const pool = new Pool({ connectionString: dbUrl });
+      const r1 = await pool.query(`UPDATE jobs SET status=\'failed\',phase=\'watchdog\',error=\'Cleared by hostconsole recover\',finished_at=now(),updated_at=now() WHERE status=\'running\' AND updated_at < now() - interval \'5 minutes\'`);
+      console.log("Postgres reaped "+r1.rowCount);
+      const r3 = await pool.query(`UPDATE jobs SET status=\'failed\',phase=\'watchdog\',error=\'Cleared\',finished_at=now(),updated_at=now() WHERE status=\'queued\'`);
+      console.log("Cleared queued "+r3.rowCount);
+      await pool.end();
+    }
+  } catch(e2) { console.error(e2); }
+}
+NODEJS
+ 2>&1');
+        cli_stop_service($target['id']);
+        sleep(1);
+        wcp_kill_port('3000');
+        wcp_kill_port('8790');
+        $job = job_create('service', 'سرویس: '.$target['name'].' (recover)', ['project_id'=>$target['id']]);
+        job_start($job);
+        jout(true, ['output'=>$out, 'job'=>$job['id']]);
+
+    case 'custom.scraper4-cloudflare.version':
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } }
+        if (!$target) jout(false, null, 'Not found');
+        $dp = $target['deploy_path'] ?? '';
+        $pkg = is_file($dp.'/cloudflare-scraper4/package.json') ? json_decode(@file_get_contents($dp.'/cloudflare-scraper4/package.json'), true) : null;
+        $local = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1'));
+        $public = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1'));
+        jout(true, ['package_version'=>$pkg['version'] ?? 'unknown', 'git_head'=>trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1')), 'local'=>$local, 'public'=>$public]);
+
+    case 'public.projects':
+        $projects = proj_all();
+        $result = [];
+        foreach ($projects as $pp) {
+            $svc = proj_service_job($pp);
+            $result[] = ['name'=>$pp['name']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'service_status'=>$svc ? job_status($svc)['status'] : 'stopped'];
+        }
+        jout(true, ['projects'=>$result]);
+
+    case 'public.system':
+        jout(true, ['uptime'=>trim(@shell_exec('uptime 2>&1')), 'memory'=>trim(@shell_exec('free -h 2>&1 | head -n 5')), 'disk'=>trim(@shell_exec('df -h 2>&1 | head -n 10')), 'timestamp'=>date('c')]);
 
     case 'jobs.status':
         $job=job_get((string)$in['id']);if(!$job)jout(false,null,'Job not found');jout(true,['id'=>$job['id'],'name'=>$job['name'],'type'=>$job['type'],'status'=>job_status($job),'result'=>$job['result'],'created'=>$job['created']]);
