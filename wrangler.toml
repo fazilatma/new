@@ -1,0 +1,23 @@
+name = "webconsole-worker"
+main = "webconsole.worker.js"
+compatibility_date = "2024-09-25"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker Environment Variables (Optional):
+[vars]
+ADMIN_TOKEN = ""
+
+# Cloudflare D1 Database Binding (Optional):
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "webconsole-db"
+# database_id = "xxxx-xxxx-xxxx"
+
+# Cloudflare KV Storage Binding (Optional):
+# [[kv_namespaces]]
+# binding = "KV"
+# id = "xxxx-xxxx-xxxx"
+
+# Cloudflare Workers AI Binding (Optional):
+# [ai]
+# binding = "AI"
