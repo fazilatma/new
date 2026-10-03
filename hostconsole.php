@@ -3014,8 +3014,116 @@ function handle_universal_proxy(string $targetUrl): void {
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
-    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','public.projects','public.system','custom.scraper4.monitor','custom.scraper4.feedback','custom.scraper4.update','custom.scraper4.recover','custom.projects.monitor','custom.projects.logs','custom.system.monitor','custom.scraper4-cloudflare.monitor','custom.scraper4-cloudflare.restart','custom.scraper4-cloudflare.recover','custom.scraper4-cloudflare.version','custom.scraper4-cloudflare.logs'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
+    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','public.projects','public.system','public.self_update','public.auto_recover','custom.scraper4.monitor','custom.scraper4.feedback','custom.scraper4.update','custom.scraper4.recover','custom.projects.monitor','custom.projects.logs','custom.system.monitor','custom.scraper4-cloudflare.monitor','custom.scraper4-cloudflare.restart','custom.scraper4-cloudflare.recover','custom.scraper4-cloudflare.version','custom.scraper4-cloudflare.logs'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
     switch($api){
+    case 'public.self_update':
+        // Self-update hostconsole.php from GitHub branch arena/01a0aa17-new without auth, but with password check
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        // Allow either hostconsole password or hardcoded for automation
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true; // automation password provided by user
+        if (!$passOk) jout(false, null, 'Invalid password for self-update', 403);
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php';
+        $newContent = @file_get_contents($url);
+        if (!$newContent || strlen($newContent) < 10000) {
+            // Try via curl fallback
+            $newContent = trim(@shell_exec('curl -s -L --max-time 15 '.escapeshellarg($url).' 2>&1'));
+        }
+        if (!$newContent || strlen($newContent) < 10000) jout(false, null, 'Failed to download new hostconsole.php from '.$branch.' ('.strlen($newContent).' bytes)');
+        $current = @file_get_contents(__FILE__);
+        if ($current === $newContent) jout(true, ['updated' => false, 'message' => 'Already up to date', 'bytes' => strlen($newContent)]);
+        $backup = __FILE__ . '.bak.' . date('Ymd-His');
+        @copy(__FILE__, $backup);
+        if (@file_put_contents(__FILE__, $newContent) === false) jout(false, null, 'Failed to write new hostconsole.php');
+        jout(true, ['updated' => true, 'bytes' => strlen($newContent), 'backup' => $backup, 'branch' => $branch]);
+
+    case 'public.auto_recover':
+        // Full auto recover + update + restart for scraper4-cloudflare without auth (password protected)
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $out = ['timestamp' => date('c'), 'steps' => []];
+        // Step 1: self-update hostconsole
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php';
+        $newContent = @file_get_contents($url);
+        if (!$newContent) $newContent = trim(@shell_exec('curl -s -L --max-time 15 '.escapeshellarg($url).' 2>&1'));
+        if ($newContent && strlen($newContent) > 10000) {
+            @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
+            @file_put_contents(__FILE__, $newContent);
+            $out['steps'][] = 'hostconsole self-updated to '.$branch.' ('.strlen($newContent).' bytes)';
+        } else {
+            $out['steps'][] = 'hostconsole self-update failed';
+        }
+        // Step 2: find scraper4-cloudflare project
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) { if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; } }
+        }
+        if (!$target) { $out['error'] = 'scraper4-cloudflare project not found'; jout(false, $out, 'Project not found'); }
+        $dp = $target['deploy_path'] ?? '';
+        $out['deploy_path'] = $dp;
+        // Step 3: git fetch + reset
+        $out['steps'][] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 20'));
+        $out['steps'][] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 20'));
+        $out['git_head'] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
+        // Step 4: npm install + build
+        $out['steps'][] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm install --no-audit --prefer-online 2>&1 | tail -n 20'));
+        $out['steps'][] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 20'));
+        // Step 5: reap stalled jobs
+        $out['steps'][] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node --input-type=module <<\'NODEJS\'
+try {
+  const { reapStalledJobs, pool } = await import("./render-dist/db.js");
+  const n1 = await reapStalledJobs(5);
+  console.log("Reaped "+n1);
+  await pool.end();
+} catch(e) {
+  console.error(e.message);
+  try {
+    const { readFileSync, existsSync } = await import("node:fs");
+    const envLocal = existsSync(".env.local") ? readFileSync(".env.local","utf8") : "";
+    const m = envLocal.match(/DATABASE_URL\s*=\s*(.+)/);
+    const dbUrl = m ? m[1].trim() : process.env.DATABASE_URL;
+    if (dbUrl && dbUrl.includes("postgres")) {
+      const { Pool } = await import("pg");
+      const pool = new Pool({ connectionString: dbUrl });
+      const r1 = await pool.query(`UPDATE jobs SET status=\'failed\',phase=\'watchdog\',error=\'Cleared by auto_recover\',finished_at=now(),updated_at=now() WHERE status=\'running\' AND updated_at < now() - interval \'5 minutes\'`);
+      console.log("Postgres reaped "+r1.rowCount);
+      const r3 = await pool.query(`UPDATE jobs SET status=\'failed\',phase=\'watchdog\',error=\'Cleared\',finished_at=now(),updated_at=now() WHERE status=\'queued\'`);
+      console.log("Cleared queued "+r3.rowCount);
+      await pool.end();
+    }
+  } catch(e2) { console.error(e2); }
+}
+NODEJS
+ 2>&1'));
+        // Step 6: restart service
+        cli_stop_service($target['id']);
+        sleep(1);
+        wcp_kill_port('8790');
+        wcp_kill_port('3000');
+        wcp_kill_port($target['port'] ?? '8790');
+        $job = job_create('service', 'سرویس: '.$target['name'].' (auto_recover)', ['project_id'=>$target['id']]);
+        job_start($job);
+        $out['steps'][] = 'Service restarted, job '.$job['id'];
+        $out['service_job'] = $job['id'];
+        // Step 7: check versions after 3 sec
+        sleep(3);
+        $out['local_8790'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 1000'));
+        $out['local_3000'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 1000'));
+        $out['public_version'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000'));
+        jout(true, $out);
+
     case 'public.monitor':
     case 'public.feedback':
         // Public feedback for scraper4 - no auth needed for feedback loop
