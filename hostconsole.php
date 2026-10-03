@@ -3014,7 +3014,7 @@ function handle_universal_proxy(string $targetUrl): void {
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
-    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','public.projects','public.system','public.self_update','public.auto_recover','public.emalls','public.fonts'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
+    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','public.projects','public.system','public.self_update','public.auto_recover','public.emalls','public.fonts','public.force_update'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
     switch($api){
     case 'auth.setup':
         if(cfg()['pass_hash']!=='')jout(false,null,'قبلاً رمز تنظیم شده است');$pw=(string)($in['password']??'');if(strlen($pw)<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');
@@ -3333,13 +3333,40 @@ function handle_api() {
         if ($pw === 'KhTn2268') $passOk = true;
         if (!$passOk) jout(false, null, 'Invalid password', 403);
         $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?t='.time();
-        $newContent = @file_get_contents($url);
-        if (!$newContent) $newContent = trim(@shell_exec('curl -s -L --max-time 15 '.escapeshellarg($url).' 2>&1'));
-        if (!$newContent || strlen($newContent) < 10000) jout(false, null, 'Download failed');
+        $cb = time().'-'.rand(1000,9999);
+        $urls = [
+            'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.$cb,
+            'https://cdn.jsdelivr.net/gh/fazilatma/new@'.rawurlencode($branch).'/hostconsole.php?cb='.$cb,
+        ];
+        $newContent = '';
+        $urlUsed = '';
+        foreach ($urls as $u) {
+            $tmp = @file_get_contents($u);
+            if ($tmp && strlen($tmp) > 10000 && strpos($tmp,'<?php')===0) { $urlUsed=$u; $newContent=$tmp; break; }
+            $tmp = trim(@shell_exec('curl -s -L --max-time 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" '.escapeshellarg($u).' 2>&1'));
+            if ($tmp && strlen($tmp) > 10000 && strpos($tmp,'<?php')===0) { $urlUsed=$u; $newContent=$tmp; break; }
+        }
+        if (!$newContent) jout(false, null, 'Download failed from all URLs, last try len '.strlen($tmp??'').' url '.$urlUsed);
         @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
         @file_put_contents(__FILE__, $newContent);
-        jout(true, ['updated'=>true, 'bytes'=>strlen($newContent)]);
+        jout(true, ['updated'=>true, 'bytes'=>strlen($newContent), 'url'=>$urlUsed]);
+
+    case 'public.force_update':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        if ($pw !== 'KhTn2268') jout(false, null, 'Invalid', 403);
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $cb = time().'-'.rand(1000,9999);
+        $destNew = __FILE__.'.new';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.$cb;
+        $cmd = 'curl -s -L --max-time 20 -H "Cache-Control: no-cache" -o '.escapeshellarg($destNew).' '.escapeshellarg($url).' 2>&1; echo "---"; ls -lh '.escapeshellarg($destNew).' 2>&1; head -c 20 '.escapeshellarg($destNew).' 2>&1';
+        $out = trim(@shell_exec($cmd));
+        if (is_file($destNew) && filesize($destNew) > 10000) {
+            @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
+            @rename($destNew, __FILE__);
+            jout(true, ['updated'=>true, 'out'=>$out, 'bytes'=>filesize(__FILE__), 'url'=>$url]);
+        } else {
+            jout(false, ['out'=>$out, 'url'=>$url], 'Failed');
+        }
 
         case 'public.auto_recover':
         $pw = $in['password'] ?? $_GET['password'] ?? '';
