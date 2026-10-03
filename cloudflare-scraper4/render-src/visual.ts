@@ -9,11 +9,11 @@ import { renderBrowserSnapshot, VISUAL_BROWSER_ENGINES } from './visual-browser.
 const ephemeralSecret = randomBytes(32).toString('hex');
 const secret = () => config.adminToken || ephemeralSecret;
 
-type Ticket = VisualReadinessOptions & { url: string; expires: number; engine?: string; indirect?: boolean; channel?: string };
-export type VisualOptions = VisualReadinessOptions & { engine?: string; indirect?: boolean };
+type Ticket = VisualReadinessOptions & { url: string; expires: number; engine?: string; indirect?: boolean; channel?: string; full?: boolean };
+export type VisualOptions = VisualReadinessOptions & { engine?: string; indirect?: boolean; full?: boolean };
 
 export function createVisualTicket(url: string, options: VisualOptions = {}): string {
-  const payload: Ticket = { context:options.context==='detail'?'detail':'list',container:String(options.container||'').slice(0,2000),url, expires: Date.now() + 5 * 60_000, engine: String(options.engine||'auto'), indirect: Boolean(options.indirect), channel: randomBytes(24).toString('hex') };
+  const payload: Ticket = { context:options.context==='detail'?'detail':'list',container:String(options.container||'').slice(0,2000),url, expires: Date.now() + 5 * 60_000, engine: String(options.engine||'auto'), indirect: Boolean(options.indirect), full: Boolean(options.full), channel: randomBytes(24).toString('hex') };
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = createHmac('sha256', secret()).update(encoded).digest('base64url');
   return `${encoded}.${signature}`;
@@ -30,15 +30,72 @@ export function readVisualTicket(ticket: string): Ticket {
   return payload;
 }
 
-export async function renderVisualSelector(ticket: string): Promise<string> {
-  const { url, engine='auto', indirect=false, channel='',context='list',container='' } = readVisualTicket(ticket);
+export async function renderVisualSelector(ticket: string, fullOverride?: boolean): Promise<string> {
+  const { url, engine='auto', indirect=false, channel='',context='list',container='', full=false } = readVisualTicket(ticket);
+  const useFull = fullOverride !== undefined ? fullOverride : Boolean(full);
   const page = VISUAL_BROWSER_ENGINES.has(engine) ? await renderBrowserSnapshot(url,engine,indirect,undefined,{context,container}) : await safeText(url, 6_000_000, {indirect});
-  return sanitizeVisualSnapshot(page,engine,channel);
+  return sanitizeVisualSnapshot(page,engine,channel, useFull);
 }
 
-export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{visualReadiness?:any;javascriptErrors?:string[];pendingCriticalResources?:number;crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel=''): string {
+function fullModeJsNode(): string {
+  // Node/Render parity with worker fullModeJs: block frame-busting, document.write wipe, log originHost
+  return `<script>(function(){
+var originHost=(function(){try{return new URL(document.baseURI||location.href).hostname;}catch(e){return '';}})();
+console.log('[S4] Visual full mode active (Node), originHost='+originHost);
+try{
+  var _write=document.write.bind(document);
+  var _writeln=document.writeln.bind(document);
+  document.write=function(){
+    try{
+      var html=Array.prototype.join.call(arguments,'');
+      if(html && html.indexOf('__s4bar')===-1){
+        var div=document.createElement('div');
+        div.innerHTML=html;
+        while(div.firstChild){
+          var node=div.firstChild;
+          if(node.tagName==='SCRIPT'){
+            var s=document.createElement('script');
+            if(node.src) s.src=node.src;
+            else s.textContent=node.textContent;
+            document.head.appendChild(s);
+            div.removeChild(node);
+          }else{
+            document.body.appendChild(node);
+          }
+        }
+      }
+    }catch(e){try{_write.apply(document,arguments);}catch(e2){}}
+  };
+  document.writeln=function(){try{document.write.apply(document,arguments);}catch(e){}};
+}catch(e){}
+try{
+  Object.defineProperty(window,'top',{get:function(){return window;},configurable:false});
+  Object.defineProperty(window,'parent',{get:function(){return window;},configurable:false});
+}catch(e){}
+try{
+  window.addEventListener('beforeunload',function(e){e.stopPropagation();e.preventDefault();},true);
+}catch(e){}
+try{
+  window.open=function(){return null;};
+}catch(e){}
+document.addEventListener('click',function(e){
+  var a=e.target.closest('a');
+  if(a&&!a.closest('#__s4bar')&&!a.closest('.__s4pop')){
+    e.preventDefault();
+    e.stopPropagation();
+  }
+},true);
+})();</script>`;
+}
+
+export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:{visualReadiness?:any;javascriptErrors?:string[];pendingCriticalResources?:number;crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]}},engine='auto',channel='', full=false): string {
   const $ = cheerio.load(page.text, { scriptingEnabled: false });
-  $('script,iframe,object,embed,form,noscript,base,meta').remove();
+  if (full) {
+    // Full mode for Emalls/Snappshop: keep scripts, only remove dangerous meta/base, keep iframe for debugging but remove object/embed/form
+    $('object,embed,form,noscript,base,meta[http-equiv="Content-Security-Policy"],meta[http-equiv="content-security-policy"],meta[http-equiv="refresh"]').remove();
+  } else {
+    $('script,iframe,object,embed,form,noscript,base,meta').remove();
+  }
   $('[id]').each((_i,el)=>{if(String($(el).attr('id')).startsWith('__s4'))$(el).removeAttr('id')});
   $('meta[http-equiv="Content-Security-Policy"],meta[http-equiv="content-security-policy"],meta[http-equiv="refresh"],base').remove();
   $('a').each((_i,el)=>{const node=$(el);try{node.attr('data-s4-href',new URL(node.attr('href')||'',page.url).href)}catch{}node.attr('href','#').removeAttr('target')});
@@ -61,11 +118,15 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
     const resolved = raw.split(',').map(part => { const [value, size=''] = part.trim().split(/\s+/,2); try { const absolute = new URL(value, page.url); return privateLiteral(absolute.hostname) ? '' : `${absolute.href} ${size}`.trim(); } catch { return ''; } }).filter(Boolean).join(', ');
     resolved ? node.attr('srcset', resolved) : node.removeAttr('srcset');
   });
-  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">');
+  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1\">');
   $('head').append(`<style>${PICKER_CSS}${SNAPSHOT_LAYOUT_CSS}</style>`);
+  if (full) {
+    $('head').append(fullModeJsNode());
+  }
   $('body').prepend(TOOLBAR);
-  $('#__s4bar').prepend($('<span>').attr('id','__s4engine').text(VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine));
+  $('#__s4bar').prepend($('<span>').attr('id','__s4engine').text((full?'کامل JS · ':'')+(VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine)));
   const warnings=$('<details>').attr('id','__s4warnings');
+  if(full) warnings.append($('<span>').text('حالت کامل JS فعال — برای سایت‌های مثل ایمالز/اسنپ‌شاپ که با JS لود می‌شوند. اسکریپت‌ها حفظ شدند.'));
   if(page.browserDiagnostics?.crashRecovered)warnings.append($('<span>').text('بازیابی پس از crash · بارگذاری سبک؛ تصویر، ویدیو و فونت در مرحلهٔ رندر دریافت نشدند.'));
   if(page.browserDiagnostics?.criticalResourceFailed)warnings.append($('<span>').text('هشدار: بعضی منابع JavaScript یا API ناموفق بودند؛ این تصویر ممکن است ناقص باشد. '+(page.browserDiagnostics.failedResources||[]).slice(0,3).map(f=>f.type+' '+f.reason).join(' · ')));
   if(page.browserDiagnostics?.visualReadiness?.context==='list')warnings.append($('<span>').text('کاندیدای محصول در DOM: '+String(page.browserDiagnostics.visualReadiness.candidates||0)+'؛ این عدد تضمین کامل‌بودن فهرست نیست.'));
@@ -92,4 +153,13 @@ let current=null,hover=null,containerSel='';const bar=document.getElementById('_
 document.addEventListener('click',e=>{if(bar.contains(e.target))return;if(!picking){s4SnapshotClick(e);return;}e.preventDefault();e.stopPropagation();choose(e.target)},true);document.getElementById('__s4up').onclick=()=>{if(current?.parentElement&&!bar.contains(current.parentElement))choose(current.parentElement)};document.getElementById('__s4down').onclick=()=>{if(current?.firstElementChild)choose(current.firstElementChild)};document.getElementById('__s4save').onclick=()=>{if(!current)return;let s=selector(current);if(mode.value==='container'){s=generalize(current,s);containerSel=s}else s=relative(current,s);const preview=(current.innerText||current.getAttribute('src')||current.getAttribute('data-s4-href')||current.getAttribute('href')||'').trim().replace(/\\s+/g,' ').slice(0,250);let n=0;try{n=(mode.value!=='container'&&containerSel)?document.querySelectorAll(containerSel).length:document.querySelectorAll(s).length}catch{}parent.postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode:mode.value,selector:s,preview,count:n},'*');const fields=Array.from(mode.options).map(option=>option.value),index=fields.indexOf(mode.value);if(index>=0&&index<fields.length-1)mode.value=fields[index+1];if(current)current.classList.remove('__s4picked');current=null;label.textContent=index<fields.length-1?'فیلد بعدی را انتخاب کنید':'آخرین فیلد ثبت شد';count.textContent='۰ مورد'};mode.addEventListener('change',()=>{if(current)current.classList.remove('__s4picked');current=null;label.textContent='عنصر این فیلد را انتخاب کنید';count.textContent='۰ مورد'});window.addEventListener('message',e=>{if(e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;if(e.data?.type==='scraper4-mode'&&e.data.mode)mode.value=e.data.mode;if(e.data?.type==='scraper4-container'&&typeof e.data.selector==='string')containerSel=e.data.selector})})();`;
 
 function pickerSource(channel:string){if(!/^[a-f0-9]{48}$/.test(channel)&&channel!=='')throw Error('Invalid visual channel');return PICKER_JS.replaceAll('__S4_CHANNEL__',channel)}
-export function visualSelectorCsp(ticket:string){const {channel=''}=readVisualTicket(ticket);const hash=createHash('sha256').update(pickerSource(channel)).digest('base64');return `sandbox allow-scripts; default-src 'none'; img-src https: data:; style-src 'unsafe-inline' https:; font-src https: data:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'`;}
+export function visualSelectorCsp(ticket:string, fullOverride?: boolean){
+  const {channel='', full=false} = readVisualTicket(ticket);
+  const useFull = fullOverride !== undefined ? fullOverride : Boolean(full);
+  const hash=createHash('sha256').update(pickerSource(channel)).digest('base64');
+  if (useFull) {
+    // Full mode: permissive CSP for Emalls/Snappshop like worker version (PHP had no CSP)
+    return `sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
+  }
+  return `sandbox allow-scripts; default-src 'none'; img-src https: data:; style-src 'unsafe-inline' https:; font-src https: data:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'`;
+}
