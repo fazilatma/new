@@ -3014,8 +3014,48 @@ function handle_universal_proxy(string $targetUrl): void {
 
 function handle_api() {
     $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
-    if(!in_array($api,['auth.login','auth.setup'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
+    if(!in_array($api,['auth.login','auth.setup','public.monitor','public.feedback','custom.scraper4.monitor','custom.scraper4.feedback','custom.scraper4.update','custom.scraper4.recover'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
     switch($api){
+    case 'public.monitor':
+    case 'public.feedback':
+        // Public feedback for scraper4 - no auth needed for feedback loop
+        $feedback = ['timestamp' => date('c'), 'public' => true];
+        $dataDir = DATA_DIR;
+        $projectsFile = $dataDir . '/projects.json';
+        if (is_file($projectsFile)) {
+            $projects = json_decode(@file_get_contents($projectsFile), true) ?: [];
+            $target = null;
+            foreach ($projects as $pp) {
+                if (stripos($pp['name'] ?? '', 'scraper') !== false || stripos($pp['deploy_path'] ?? '', 'scraper') !== false) {
+                    $target = $pp;
+                    break;
+                }
+            }
+            if ($target) {
+                $dp = $target['deploy_path'] ?? '';
+                $feedback['scraper_version'] = 'unknown';
+                $pkgPath = $dp . '/cloudflare-scraper4/package.json';
+                if (is_file($pkgPath)) {
+                    $pkg = json_decode(@file_get_contents($pkgPath), true);
+                    $feedback['scraper_version'] = $pkg['version'] ?? 'unknown';
+                }
+                $feedback['git_head'] = trim(@shell_exec('cd ' . escapeshellarg($dp) . ' && git rev-parse --short HEAD 2>&1'));
+                $feedback['git_branch'] = trim(@shell_exec('cd ' . escapeshellarg($dp) . ' && git rev-parse --abbrev-ref HEAD 2>&1'));
+                $visualPath = $dp . '/cloudflare-scraper4/render-src/visual.ts';
+                if (is_file($visualPath)) {
+                    $code = @file_get_contents($visualPath);
+                    $feedback['visual_full'] = strpos($code, 'fullModeJsNode') !== false ? 'yes' : 'no';
+                    $feedback['visual_proxy'] = strpos($code, 'toProxy') !== false ? 'yes' : 'no';
+                }
+                $feedback['local_8790'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 500'));
+                $feedback['local_3000'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 500'));
+            }
+        }
+        $feedback['public_version'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000'));
+        $feedback['public_rp'] = trim(@shell_exec('curl -s --max-time 5 "https://sabashopping.ir/app/api/rp?url=https://example.com" 2>&1 | head -c 500'));
+        $feedback['emalls_bytes'] = trim(@shell_exec('curl -s -L --max-time 10 -A "Mozilla/5.0" https://emalls.ir/ 2>&1 | wc -c'));
+        jout(true, $feedback);
+
     case 'auth.setup':
         if(cfg()['pass_hash']!=='')jout(false,null,'قبلاً رمز تنظیم شده است');$pw=(string)($in['password']??'');if(strlen($pw)<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');
         try{cfg_save(['pass_hash'=>password_hash($pw,PASSWORD_DEFAULT)]);}catch(Throwable $e){jout(false,null,'خطا در ذخیره پیکربندی در ترموکس/حافظه: '.$e->getMessage());}
