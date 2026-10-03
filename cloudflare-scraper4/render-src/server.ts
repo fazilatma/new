@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.278.0+'; } catch { return process.env.npm_package_version || '1.278.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.279.0+'; } catch { return process.env.npm_package_version || '1.279.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -413,28 +413,14 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok:true,ticket,channel:readVisualTicket(ticket).channel,engine,full,expiresIn:300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', async c => {
-  let visualFull = false;
-  try {
-    const code = readFileSync(new URL('./visual.js', import.meta.url), 'utf8');
-    visualFull = code.includes('fullModeJsNode') && code.includes('Visual full mode active (Node)');
-  } catch {}
-  return c.json({
-    ok: true,
-    version: runtimeVersion(),
-    head: BOOT_HEAD,
-    runtime: `local-node-${runtimeEnvironment.id}`,
-    environment: runtimeEnvironment.label,
-    ui: 'cloudflare-compatible',
-    feedback: {
-      timestamp: new Date().toISOString(),
-      visualFullModeImplemented: visualFull,
-      visualFullModeMessage: visualFull ? 'Full mode implemented: scripts kept, CSP permissive, frame-busting blocked, document.write append, logs [S4] Visual full mode active (Node)' : 'Full mode NOT implemented - Emalls will be blank',
-      emallsVisualFix: visualFull ? 'Emalls should now open in visual selector like PHP version (full JS mode)' : 'Emalls will be blank, needs full mode',
-      improvement: visualFull ? 'Improvement achieved for Emalls on sabashopping.ir/app' : 'No improvement yet'
-    }
-  });
-});
+app.get('/api/version', c => c.json({
+  ok: true,
+  version: runtimeVersion(),
+  head: BOOT_HEAD,
+  runtime: `local-node-${runtimeEnvironment.id}`,
+  environment: runtimeEnvironment.label,
+  ui: 'cloudflare-compatible'
+}));
 
 // Feedback endpoint for Emalls visual fix validation (added for feedback loop)
 app.get('/api/feedback', async c => {
@@ -1099,6 +1085,15 @@ function triggerLocalJobDrain(): void { jobDispatcher.wake(); }
 function startBackground(): void {
   if (!config.runWorkerInWeb || !databaseReady || backgroundStarted) return;
   backgroundStarted = true;
+  // Immediate cleanup of stalled jobs from previous crash (5+ days stalled at 0 product/min)
+  void (async () => {
+    try {
+      const recovered = await recoverFailedAndStalledJobs(5);
+      if (recovered) console.log(`[boot] Recovered ${recovered} stalled/failed job(s) on startup`);
+    } catch (e) {
+      console.warn('[boot] Failed to recover stalled jobs:', e);
+    }
+  })();
   jobDispatcher.start();
   const schedule = async () => { try { const settings=await getState<any>('settings',{}),stallMin=Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60));if(settings.watchdog?.enabled!==false){const recovered=settings.watchdog?.autoContinue!==false?await recoverFailedAndStalledJobs(stallMin):await reapStalledJobs(stallMin);if(recovered)console.log(`Recovered ${recovered} stalled/failed job(s)`)}await drainWooReprice(wooRepriceIO());await refreshDestinationLedger(false);const count=await enqueueDueProfiles();if(count)console.log(`Scheduled ${count} profile(s)`);await scheduledBranchPushTick({settings,envToken:process.env.GH_BACKUP_TOKEN,loadLast:()=>getState<any>('branch_push_last',null),saveLast:rec=>setState('branch_push_last',rec),buildBundle:()=>createPhpSettingsBundle(),connect:token=>({getter:githubApiFetch(token),putter:githubApiPut(token)}),snapshotDatabase:nodeSnapshotDatabase,log:m=>console.log('[scheduled-push]',m)});await recoverCategoryRun();await categoryFixTick({settings,loadLast:()=>getState<any>(CATEGORY_FIX_LAST_KEY,null),saveLast:rec=>setState(CATEGORY_FIX_LAST_KEY,rec),start:input=>startCategoryRun(input),log:m=>console.log('[category-fix]',m)});if(!aiEnrichRunning){aiEnrichRunning=true;try{await aiEnrichTick({enabled:async()=>(await getState<any>('ai_description_settings',{enabled:true}))?.enabled!==false,modelReady:async()=>Boolean(await preferredAiChatModel()),listProfileIds:async()=>(await listProfiles()).map(p=>p.id),profileEnabled:async id=>(await getProfile(id))?.aiDescriptions!==false,loadCursor:()=>getState<any>(AI_ENRICH_LAST_KEY,null),saveCursor:rec=>setState(AI_ENRICH_LAST_KEY,rec),listStalest:(profileId,limit)=>listStalestProducts(profileId,limit),categories:async()=>{try{return(await destinationCategories()).items}catch{return[]}},enrich:(product,cats)=>generateProductDescription(product,{categories:cats}),saveProduct:(profileId,product)=>upsertProduct(profileId,product as any),log:m=>console.log('[ai-enrich]',m)});}finally{aiEnrichRunning=false;}}const automation=await automationTick();if(Object.keys(automation).length)console.log('Automation',JSON.stringify(automation)); } catch (error) { console.error('Scheduler error', error); } };
   void schedule(); scheduler = setInterval(schedule, 60_000); scheduler.unref();
