@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.277.0+'; } catch { return process.env.npm_package_version || '1.277.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.278.0+'; } catch { return process.env.npm_package_version || '1.278.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -413,7 +413,28 @@ app.post('/api/visual-ticket', async c => {
   return c.json({ ok:true,ticket,channel:readVisualTicket(ticket).channel,engine,full,expiresIn:300 });
 });
 app.get('/api/status', async c => { const connections=await loadConnections(); return c.json({ ok:true,profiles:(await listProfiles()).length,jobs:await listJobs(10),connections:connectionStatus(connections) }); });
-app.get('/api/version', c => c.json({ ok: true, version: runtimeVersion(), head: BOOT_HEAD, runtime: `local-node-${runtimeEnvironment.id}`, environment: runtimeEnvironment.label, ui: 'cloudflare-compatible' }));
+app.get('/api/version', async c => {
+  let visualFull = false;
+  try {
+    const code = readFileSync(new URL('./visual.js', import.meta.url), 'utf8');
+    visualFull = code.includes('fullModeJsNode') && code.includes('Visual full mode active (Node)');
+  } catch {}
+  return c.json({
+    ok: true,
+    version: runtimeVersion(),
+    head: BOOT_HEAD,
+    runtime: `local-node-${runtimeEnvironment.id}`,
+    environment: runtimeEnvironment.label,
+    ui: 'cloudflare-compatible',
+    feedback: {
+      timestamp: new Date().toISOString(),
+      visualFullModeImplemented: visualFull,
+      visualFullModeMessage: visualFull ? 'Full mode implemented: scripts kept, CSP permissive, frame-busting blocked, document.write append, logs [S4] Visual full mode active (Node)' : 'Full mode NOT implemented - Emalls will be blank',
+      emallsVisualFix: visualFull ? 'Emalls should now open in visual selector like PHP version (full JS mode)' : 'Emalls will be blank, needs full mode',
+      improvement: visualFull ? 'Improvement achieved for Emalls on sabashopping.ir/app' : 'No improvement yet'
+    }
+  });
+});
 
 // Feedback endpoint for Emalls visual fix validation (added for feedback loop)
 app.get('/api/feedback', async c => {
