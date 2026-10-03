@@ -65,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.25"
+    assert APP_VERSION == "3.3.26"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -4219,3 +4219,187 @@ def test_start_model_test_async_persists_failure_for_polling(monkeypatch):
     assert final["ok"] is False
     assert "llama runner" in final["error"]
     assert final["model"] == "broken-model:latest"
+
+
+def _build_fake_gguf_bytes(kv_pairs):
+    """Build a minimal, structurally valid GGUF v3 header (magic + version +
+    tensor_count=0 + the given metadata key/value pairs, all strings) --
+    enough for gguf_has_chat_template() to parse, without needing a real
+    multi-hundred-MB model file."""
+    import struct as _struct
+
+    def _str(s: str) -> bytes:
+        b = s.encode("utf-8")
+        return _struct.pack("<Q", len(b)) + b
+
+    out = b"GGUF"
+    out += _struct.pack("<I", 3)  # version
+    out += _struct.pack("<Q", 0)  # tensor_count
+    out += _struct.pack("<Q", len(kv_pairs))  # kv_count
+    for key, value in kv_pairs:
+        out += _str(key)
+        out += _struct.pack("<I", 8)  # type 8 = STRING
+        out += _str(value)
+    return out
+
+
+def test_gguf_has_chat_template_detects_presence_and_absence(tmp_path):
+    """gguf_has_chat_template() must correctly report True when the GGUF's
+    metadata section has the tokenizer.chat_template key, False when it
+    genuinely doesn't, and None for a file that isn't a valid GGUF at all --
+    this is the detector the import flow uses to decide whether to add a
+    ChatML TEMPLATE fallback."""
+    from app import local_ai
+
+    with_template = tmp_path / "with_template.gguf"
+    with_template.write_bytes(_build_fake_gguf_bytes([
+        ("general.architecture", "qwen2"),
+        ("tokenizer.chat_template", "{{ messages }}"),
+        ("general.name", "fake-model"),
+    ]))
+    assert local_ai.gguf_has_chat_template(str(with_template)) is True
+
+    without_template = tmp_path / "without_template.gguf"
+    without_template.write_bytes(_build_fake_gguf_bytes([
+        ("general.architecture", "gpt2"),
+        ("general.name", "fake-model-2"),
+    ]))
+    assert local_ai.gguf_has_chat_template(str(without_template)) is False
+
+    not_gguf = tmp_path / "not_a_model.gguf"
+    not_gguf.write_bytes(b"this is not a gguf file at all")
+    assert local_ai.gguf_has_chat_template(str(not_gguf)) is None
+
+    missing = tmp_path / "does_not_exist.gguf"
+    assert local_ai.gguf_has_chat_template(str(missing)) is None
+
+
+def test_run_import_job_adds_chatml_fallback_only_when_gguf_lacks_chat_template(monkeypatch, tmp_path):
+    """Regression test for the real bug report: a locally-imported GGUF file
+    with no embedded chat template produced no usable response in real chat
+    (/api/chat) even though the model installed/loaded fine. run_import_job()
+    must add a ChatML TEMPLATE to the generated Modelfile when (and only
+    when) gguf_has_chat_template() positively determined the file has none,
+    so a model that already carries its own correct template is never
+    second-guessed."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(local_ai, "install_runtime", lambda engine, log_fn=None: {"ok": True})
+    monkeypatch.setattr(local_ai, "start_server", lambda log_fn=None: {"ok": True})
+    monkeypatch.setattr(local_ai, "binary", lambda name: "/fake/bin/ollama")
+
+    captured_modelfiles = []
+
+    def fake_run(cmd, cwd=None, capture_output=None, text=None, timeout=None, env=None):
+        # cmd = [ollama, create, safe_name, -f, str(modelfile_path)]
+        modelfile_path = cmd[4]
+        captured_modelfiles.append(Path(modelfile_path).read_text(encoding="utf-8"))
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _Result()
+
+    monkeypatch.setattr(local_ai.subprocess, "run", fake_run)
+
+    # Case 1: GGUF has no chat template -> ChatML TEMPLATE must be added.
+    no_template_path = tmp_path / "no_template.gguf"
+    no_template_path.write_bytes(_build_fake_gguf_bytes([("general.architecture", "gpt2")]))
+    local_ai.run_import_job(
+        "job-1", "ollama", str(no_template_path), "no-template-model", 8192,
+        register=False, benchmark=False, set_default=False,
+        log_fn=lambda m: None, progress_fn=lambda p, s: None,
+    )
+    assert len(captured_modelfiles) == 1
+    assert "TEMPLATE" in captured_modelfiles[0]
+    assert "<|im_start|>" in captured_modelfiles[0]
+
+    # Case 2: GGUF already has its own chat template -> no TEMPLATE override.
+    with_template_path = tmp_path / "with_template.gguf"
+    with_template_path.write_bytes(_build_fake_gguf_bytes([
+        ("general.architecture", "qwen2"),
+        ("tokenizer.chat_template", "{{ messages }}"),
+    ]))
+    local_ai.run_import_job(
+        "job-2", "ollama", str(with_template_path), "has-template-model", 8192,
+        register=False, benchmark=False, set_default=False,
+        log_fn=lambda m: None, progress_fn=lambda p, s: None,
+    )
+    assert len(captured_modelfiles) == 2
+    assert "TEMPLATE" not in captured_modelfiles[1]
+
+
+def test_benchmark_test_exercises_real_chat_endpoint_not_generate(monkeypatch):
+    """Regression test for the real bug report: the 'Test' button used to
+    call /api/generate (a raw-prompt endpoint that never needs a chat
+    template), so it could report a model as healthy even though real
+    conversations -- which always go through /api/chat -- never produced a
+    response for that same model. benchmark_test() must call /api/chat with
+    a `messages` array, matching exactly what real chat use (call_provider_
+    api() in chat.py) sends."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+
+    captured = {}
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({
+                "message": {"role": "assistant", "content": "def fib(n): ..."},
+                "eval_count": 20,
+                "eval_duration": 1_000_000_000,
+            }).encode("utf-8")
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp()
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", fake_urlopen)
+
+    result = local_ai.benchmark_test("some-model:latest")
+    assert result["ok"] is True
+    assert captured["url"].endswith("/api/chat")
+    assert "messages" in captured["body"]
+    assert "prompt" not in captured["body"]
+    assert captured["body"]["messages"][0]["role"] == "user"
+
+
+def test_benchmark_test_treats_empty_chat_response_as_failure_with_diagnosis(monkeypatch):
+    """Regression test for the actual silent-failure symptom: Ollama's
+    /api/chat can return HTTP 200 with an empty message.content when a
+    model has no usable chat template -- no exception is raised, so the old
+    code would have reported this as a successful test even though real
+    chat produces nothing. benchmark_test() must detect the empty content
+    and report it as a failure, surfacing the missing-chat-template
+    diagnosis when the engine log confirms that's the reason."""
+    from app import local_ai
+
+    monkeypatch.setattr(local_ai, "get_state", lambda key, *a, **kw: "ollama" if key == "localai:engine" else None)
+    monkeypatch.setattr(local_ai, "server_up", lambda engine=None: {"up": True})
+    monkeypatch.setattr(local_ai, "host_url", lambda: "http://127.0.0.1:11434")
+    monkeypatch.setattr(local_ai, "read_engine_log_tail", lambda engine: {
+        "log": "msg=\"model is missing tokenizer.chat_template and Go TEMPLATE support is unavailable\""
+    })
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"message": {"role": "assistant", "content": ""}, "eval_count": 0}).encode("utf-8")
+
+    monkeypatch.setattr(local_ai.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp())
+
+    result = local_ai.benchmark_test("broken-template-model:latest")
+    assert result["ok"] is False
+    assert "chat template" in result["error"] or "قالب گفتگو" in result["error"]

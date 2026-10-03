@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.26 - Real root cause found and fixed: imported models with no chat template never produce a real chat response
+
+### Fixed
+- **This is the actual explanation for "مدل‌های درون‌ریزی‌شده با جیسون/چت پاسخ نمی‌دهند" (imported models don't respond in chat).** Every real conversation in this app calls Ollama's `/api/chat` endpoint (`messages` array), never `/api/generate` (raw prompt string). `/api/chat` needs a chat template to know how to render the conversation into a prompt the model understands. A GGUF file imported straight from disk very often has no `tokenizer.chat_template` metadata embedded (extremely common for third-party/community conversions and quantizations -- exactly the kind of file users import locally rather than `ollama pull`). Without one, confirmed live via Ollama's own log: `"model is missing tokenizer.chat_template and Go TEMPLATE support is unavailable; chat responses may be poorly formatted"`. The model would still install, load, and even pass a `/api/generate`-based test just fine (no templating involved there) -- but real chat silently produced nothing.
+- `server_env()` now sets `OLLAMA_GO_TEMPLATE=1` -- the exact env var Ollama's own log names as the fix for this, enabling Modelfile `TEMPLATE` directives to actually be used.
+- New `gguf_has_chat_template()` reads just a GGUF file's metadata header (never the tensor data, so this stays fast regardless of file size) to check for `tokenizer.chat_template`.
+- `run_import_job()`'s Ollama import path now adds a ChatML-format `TEMPLATE` fallback to the generated Modelfile, but **only** when `gguf_has_chat_template()` positively confirmed the file has none of its own -- a model that already carries a correct, different-format template is never second-guessed or overridden.
+- `benchmark_test()` (the "تست"/Test button) now calls `/api/chat` with a `messages` array -- exactly what real chat use (`call_provider_api()` in chat.py) sends -- instead of `/api/generate` with a raw prompt, so a passing test actually proves real chat will work, not just that the runner can produce tokens from an unformatted prompt.
+- `benchmark_test()` also now treats an HTTP-200-but-empty `message.content` response as a failure (this is exactly what a missing/broken chat template looks like from the outside -- Ollama has nothing to raise an error about, it just renders nothing coherent), surfacing a clear Persian diagnosis pointing at the missing chat template when the engine log confirms that's the reason, instead of a false "ok".
+- 103 backend tests passing (4 new regression tests: GGUF chat-template detection presence/absence/invalid-file, the import flow's conditional ChatML fallback, `/api/chat`-not-`/api/generate` usage, and empty-response-is-a-failure).
+
 ## 3.3.25 - /api/localai/test now also accepts GET, for the same remote-diagnosis convenience as auto-repair
 
 ### Changed

@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import tarfile
 import threading
@@ -374,6 +375,22 @@ def server_env(overrides: Optional[Dict[str, str]] = None, engine: Optional[str]
         "OLLAMA_NUM_PARALLEL": os.environ.get("OLLAMA_NUM_PARALLEL", "1"),
         "OLLAMA_FLASH_ATTENTION": os.environ.get("OLLAMA_FLASH_ATTENTION", "1"),
         "OLLAMA_KV_CACHE_TYPE": os.environ.get("OLLAMA_KV_CACHE_TYPE", "q8_0"),
+        # Ollama's own log is explicit about this one: a model whose GGUF
+        # lacks embedded `tokenizer.chat_template` metadata -- very common
+        # for locally-imported/"درون‌ریزی‌شده" files and some third-party
+        # HF GGUF conversions -- logs "model is missing tokenizer.chat_
+        # template and Go TEMPLATE support is unavailable; chat responses
+        # may be poorly formatted" together with exactly this env var name,
+        # i.e. Ollama is telling us how to fix it. Without this, /api/chat
+        # (the endpoint every real conversation in this app actually uses)
+        # has no way to render the `messages` array into a prompt for such
+        # a model and chat requests effectively never produce a usable
+        # response, even though a raw /api/generate call can still work.
+        # This only takes effect for a model whose Modelfile actually has a
+        # TEMPLATE directive (see run_import_job()'s ChatML fallback below)
+        # -- for models with a working embedded/native template already,
+        # this is a no-op.
+        "OLLAMA_GO_TEMPLATE": os.environ.get("OLLAMA_GO_TEMPLATE", "1"),
     }
     if engine == "llamacpp":
         # Defense-in-depth for llama-server, which is dynamically linked
@@ -1871,6 +1888,87 @@ def is_split_gguf_filename(filename: str) -> bool:
     return bool(_GGUF_SPLIT_FILENAME_RE.search(filename or ""))
 
 
+# GGUF metadata value-type sizes (from the format spec) for types whose
+# on-disk size is fixed, keyed by the type enum used in the header.
+_GGUF_FIXED_SIZE_TYPES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+_GGUF_TYPE_STRING = 8
+_GGUF_TYPE_ARRAY = 9
+
+
+def _gguf_read_string(f) -> str:
+    (length,) = struct.unpack("<Q", f.read(8))
+    return f.read(length).decode("utf-8", errors="replace")
+
+
+def _gguf_skip_value(f, vtype: int) -> None:
+    if vtype == _GGUF_TYPE_STRING:
+        _gguf_read_string(f)
+    elif vtype == _GGUF_TYPE_ARRAY:
+        (elem_type,) = struct.unpack("<I", f.read(4))
+        (count,) = struct.unpack("<Q", f.read(8))
+        for _ in range(count):
+            _gguf_skip_value(f, elem_type)
+    elif vtype in _GGUF_FIXED_SIZE_TYPES:
+        f.read(_GGUF_FIXED_SIZE_TYPES[vtype])
+    else:
+        raise ValueError(f"unknown GGUF metadata value type {vtype}")
+
+
+def gguf_has_chat_template(path: str) -> Optional[bool]:
+    """Check whether a .gguf file embeds `tokenizer.chat_template` metadata,
+    by reading just the GGUF header's key-value metadata section (never the
+    tensor data itself, so this is fast regardless of total file size).
+
+    Returns True/False when the file could be parsed, or None if it
+    couldn't (not a valid/recognized GGUF, truncated, I/O error, etc.) --
+    callers should treat None as "unknown, don't second-guess it" rather
+    than as a hard failure, since this is only ever used to decide whether
+    to add a best-effort TEMPLATE fallback, never to block an import.
+
+    This exists because of a real, live-confirmed failure mode: a model
+    whose GGUF lacks this key has no way for Ollama to render the `messages`
+    array sent to /api/chat (the endpoint every real conversation in this
+    app actually uses) into a prompt the model understands -- confirmed via
+    Ollama's own log ("model is missing tokenizer.chat_template and Go
+    TEMPLATE support is unavailable"). A raw /api/generate call still works
+    fine in this case (no templating involved), which is exactly why a
+    model can appear to "work" under a simple benchmark/test yet never
+    produce a real response in actual chat use.
+    """
+    try:
+        with open(path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return None
+            (_version,) = struct.unpack("<I", f.read(4))
+            (_tensor_count,) = struct.unpack("<Q", f.read(8))
+            (kv_count,) = struct.unpack("<Q", f.read(8))
+            for _ in range(kv_count):
+                key = _gguf_read_string(f)
+                (vtype,) = struct.unpack("<I", f.read(4))
+                if key == "tokenizer.chat_template":
+                    return True
+                _gguf_skip_value(f, vtype)
+            return False
+    except Exception:
+        return None
+
+
+# A ChatML-format fallback for models imported from a raw GGUF file that
+# doesn't embed its own chat template. ChatML (<|im_start|>/<|im_end|>) is
+# the format the large majority of modern small/community instruct-tuned
+# models use, including the most common sources users import locally --
+# far better odds of working than sending completely unformatted
+# concatenated text, and strictly a fallback: it is only ever added when
+# gguf_has_chat_template() positively determined the file has no template
+# of its own, so it never overrides a model's real, correct template.
+_CHATML_FALLBACK_TEMPLATE = (
+    '"""{{ if .System }}<|im_start|>system\n{{ .System }}<|im_end|>\n{{ end }}'
+    "{{ range .Messages }}<|im_start|>{{ .Role }}\n{{ .Content }}<|im_end|>\n{{ end }}"
+    '<|im_start|>assistant\n"""'
+)
+
+
 def safe_repo_dir_name(repo: str) -> str:
     """Safe, filesystem-friendly directory name for a Hugging Face owner/repo id."""
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (repo or "").strip("/"))
@@ -2177,10 +2275,22 @@ def benchmark_test(model: str) -> Dict[str, Any]:
         return {"ok": False, "error": "سرویس Ollama در حال اجرا نیست", "logTail": read_engine_log_tail("ollama").get("log", "")}
     try:
         t0 = time.time()
-        url = f"{host_url()}/api/generate"
+        # Deliberately test /api/chat here, not /api/generate. /api/chat is
+        # the endpoint every real conversation in this app actually calls
+        # (see call_provider_api() in chat.py); /api/generate takes a raw
+        # prompt string and never needs a chat template at all. A model can
+        # pass a /api/generate-based test perfectly fine (this function used
+        # to only test that) and still never produce a usable response in
+        # real chat, if its GGUF has no embedded chat template -- confirmed
+        # live via Ollama's own log ("model is missing tokenizer.chat_
+        # template and Go TEMPLATE support is unavailable"). Testing the
+        # same endpoint real usage depends on is the only way this "Test"
+        # button actually proves chat will work, not just that the runner
+        # can produce tokens from a raw prompt.
+        url = f"{host_url()}/api/chat"
         payload = json.dumps({
             "model": model,
-            "prompt": "Write a 30-word python function to calculate fibonacci sequence.",
+            "messages": [{"role": "user", "content": "Write a 30-word python function to calculate fibonacci sequence."}],
             "stream": False,
         }).encode("utf-8")
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ArenaAgent/3.0"})
@@ -2200,9 +2310,31 @@ def benchmark_test(model: str) -> Dict[str, Any]:
             eval_duration_ns = int(data.get("eval_duration") or int(elapsed * 1e9))
             eval_sec = max(0.01, eval_duration_ns / 1e9)
             tps = round(eval_count / eval_sec, 2)
+            content = str((data.get("message") or {}).get("content") or "").strip()
+            if not content:
+                # The request succeeded (HTTP 200, done:true) but produced
+                # no actual text -- exactly what a missing/broken chat
+                # template looks like from the outside (Ollama has nothing
+                # to raise an error about; it just has nothing coherent to
+                # render). Treat this as a failure, not a false "ok".
+                log_tail = read_engine_log_tail("ollama").get("log", "")
+                missing_template = "tokenizer.chat_template" in log_tail or "Go TEMPLATE support is unavailable" in log_tail
+                return {
+                    "ok": False,
+                    "model": model,
+                    "error": (
+                        "مدل پاسخ خالی برگرداند -- این مدل احتمالاً قالب گفتگوی (chat template) ندارد "
+                        "و Ollama نمی‌داند پیام‌ها را چطور به مدل بدهد. اگر این مدل را خودتان درون‌ریزی "
+                        "کرده‌اید، دوباره آن را درون‌ریزی کنید تا قالب پیش‌فرض ChatML روی آن اعمال شود."
+                        if missing_template else
+                        "مدل پاسخ خالی برگرداند."
+                    ),
+                    "logTail": log_tail,
+                }
             return {
                 "ok": True,
                 "model": model,
+                "response": content[:400],
                 "tokensPerSec": tps,
                 "evalCount": eval_count,
                 "durationSec": round(elapsed, 2),
@@ -2760,7 +2892,26 @@ def run_import_job(job_id: str, engine: str, path: str, name: str, context_token
 
         safe_name = re.sub(r"[^a-z0-9._-]+", "-", name.strip("-").lower()).strip("-") or "imported-model"
         modelfile = root_dir() / f"Modelfile-{safe_name}-{os.urandom(4).hex()}"
-        modelfile.write_text(f"FROM {path}\n", encoding="utf-8")
+        modelfile_lines = [f"FROM {path}"]
+        # Real-world, live-confirmed failure mode: a raw GGUF file imported
+        # straight from disk very often has no `tokenizer.chat_template`
+        # metadata embedded (common for files hand-converted or quantized
+        # by third parties, which is exactly the kind of file a user
+        # imports locally rather than `ollama pull`s from the registry).
+        # Without one, Ollama's /api/chat -- the endpoint every real
+        # conversation in this app actually uses -- has no way to render
+        # the messages array into a prompt the model understands, so real
+        # chat silently never produces a usable response even though the
+        # model installs/loads/health-checks fine and a raw /api/generate
+        # call can still work. Only add the ChatML fallback when we could
+        # positively confirm the GGUF has no template of its own, so a
+        # model that already carries a correct, different-format template
+        # is never second-guessed.
+        has_template = gguf_has_chat_template(path)
+        if has_template is False:
+            modelfile_lines.append(f"TEMPLATE {_CHATML_FALLBACK_TEMPLATE}")
+            log_fn("⚠️ این فایل GGUF قالب گفتگوی داخلی (chat_template) ندارد؛ برای این‌که پاسخ واقعی در چت کار کند، قالب پیش‌فرض ChatML اعمال شد (اگر معماری مدل غیر از ChatML باشد ممکن است نیاز به تنظیم دستی TEMPLATE داشته باشد).")
+        modelfile.write_text("\n".join(modelfile_lines) + "\n", encoding="utf-8")
 
         b = binary("ollama")
         if not b:
