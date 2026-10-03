@@ -3333,7 +3333,7 @@ function handle_api() {
         if ($pw === 'KhTn2268') $passOk = true;
         if (!$passOk) jout(false, null, 'Invalid password', 403);
         $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?t='.time();
         $newContent = @file_get_contents($url);
         if (!$newContent) $newContent = trim(@shell_exec('curl -s -L --max-time 15 '.escapeshellarg($url).' 2>&1'));
         if (!$newContent || strlen($newContent) < 10000) jout(false, null, 'Download failed');
