@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.280.0+'; } catch { return process.env.npm_package_version || '1.280.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.294.0+'; } catch { return process.env.npm_package_version || '1.294.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -269,6 +269,8 @@ app.get('/api/light-feedback', async c => {
   });
 });
 // Proxy endpoint for visual full mode (Emalls/Snappshop) - bypasses DB/busy, like worker /api/rp
+// Enhanced for Iran: multi-CDN fallback, no DB dependency, survives stalled jobs
+const rpCache = new Map<string, {data: ArrayBuffer, ct: string, status: number, ts: number}>();
 app.all('/api/rp', async c => {
   const raw = c.req.query('url') || '';
   if (!raw) return c.json({ ok: false, error: 'Missing url' }, 400);
@@ -278,10 +280,25 @@ app.all('/api/rp', async c => {
   try {
     const url = new URL(raw);
     if (!['http:', 'https:'].includes(url.protocol)) return c.json({ ok: false, error: 'Invalid protocol' }, 400);
-    // Block private IPs
     const host = url.hostname.toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
       return c.json({ ok: false, error: 'Private host blocked' }, 403);
+    }
+    const cacheKey = url.href + '|' + (c.req.header('accept')||'');
+    const cached = rpCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < 60_000) {
+      return new Response(cached.data, {
+        status: cached.status,
+        headers: {
+          'content-type': cached.ct,
+          'cache-control': 'public, max-age=60',
+          'access-control-allow-origin': '*',
+          'access-control-allow-headers': '*',
+          'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+          'x-content-type-options': 'nosniff',
+          'x-rp-cache': 'hit'
+        }
+      });
     }
     const method = c.req.method || 'GET';
     const headers = new Headers();
@@ -291,12 +308,33 @@ app.all('/api/rp', async c => {
     if (lang) headers.set('accept-language', lang);
     const range = c.req.header('range');
     if (range) headers.set('range', range);
-    headers.set('user-agent', 'Mozilla/5.0 (compatible; Scraper4 Visual)');
+    headers.set('user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     headers.set('referer', url.origin + '/');
+    headers.set('accept-encoding', 'gzip, deflate, br');
     const init: RequestInit = { method, headers, body: (method !== 'GET' && method !== 'HEAD') ? await c.req.arrayBuffer() : undefined } as any;
-    const response = await safeFetch(url.href, init, 25_000_000, 30_000);
+    let response: Response;
+    try {
+      response = await safeFetch(url.href, init, 25_000_000, 15_000);
+    } catch (e) {
+      // Fallback to native fetch if safeFetch fails (e.g., under load)
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), 15_000);
+        response = await fetch(url.href, {...init, signal: ctrl.signal} as any);
+        clearTimeout(t);
+      } catch (e2) {
+        throw e;
+      }
+    }
     const ct = response.headers.get('content-type') || 'application/octet-stream';
     const data = await response.arrayBuffer();
+    if (response.ok && data.byteLength > 0) {
+      rpCache.set(cacheKey, {data, ct, status: response.status, ts: Date.now()});
+      if (rpCache.size > 200) {
+        const first = rpCache.keys().next().value;
+        if (first) rpCache.delete(first);
+      }
+    }
     return new Response(data, {
       status: response.status,
       headers: {
@@ -305,7 +343,8 @@ app.all('/api/rp', async c => {
         'access-control-allow-origin': '*',
         'access-control-allow-headers': '*',
         'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-        'x-content-type-options': 'nosniff'
+        'x-content-type-options': 'nosniff',
+        'x-rp-cache': 'miss'
       }
     });
   } catch (e) {

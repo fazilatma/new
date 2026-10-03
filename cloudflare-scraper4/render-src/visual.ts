@@ -300,7 +300,7 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
   if (full) {
     $('head').prepend(`<base href="${page.url.replace(/"/g,'&quot;')}">`);
   }
-  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"><link rel="stylesheet" href="/assets/fonts/vazirmatn.css">');
+  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://cdn.fontcdn.ir" crossorigin><style>@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Regular.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2) format(woff2),local(Vazirmatn),local(Vazir);font-weight:400;font-display:swap}@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Bold.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Bold.woff2) format(woff2),local(Vazirmatn);font-weight:700;font-display:swap}</style><link rel="stylesheet" href="/assets/fonts/vazirmatn.css">');
   $('head').append(`<style>@font-face{font-family:Vazirmatn;src:local(Vazirmatn);font-display:swap}body{font-family:Vazirmatn,Vazir,Tahoma,sans-serif!important}${PICKER_CSS}${SNAPSHOT_LAYOUT_CSS}</style>`);
   if (full) {
     $('head').prepend(fullModeJsNode());
