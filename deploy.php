@@ -19,10 +19,9 @@ $branch = preg_replace('/[^a-zA-Z0-9\/\-_\.]/', '', $branch);
 if ($branch === '') $branch = 'arena/hostconsole-v20';
 
 // Files to deploy - from repo root to project folder
+// Only files that exist in this branch - webconsole.php and scraper4.php are optional legacy
 $files = [
     'hostconsole.php' => 'hostconsole.php',
-    'webconsole.php' => 'webconsole.php',
-    'scraper4.php' => 'scraper4.php',
     'a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php' => 'a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php',
     'deploy.php' => 'deploy.php',
     'recover.php' => 'recover.php',
