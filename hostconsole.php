@@ -3255,10 +3255,12 @@ function handle_api() {
         $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git rev-parse --short HEAD 2>&1'));
-        // If gitRepo is cache, copy cloudflare-scraper4 to scraperRoot
+        // If gitRepo is cache, copy cloudflare-scraper4 to scraperRoot + deploy files to project
         if (is_file($gitRepo.'/cloudflare-scraper4/package.json')) {
             $out[] = trim(@shell_exec('cp -r '.escapeshellarg($gitRepo.'/cloudflare-scraper4').'/* '.escapeshellarg($scraperRoot).'/ 2>&1 | head -n 20'));
             $out[] = 'Copied from '.$gitRepo.'/cloudflare-scraper4 to '.$scraperRoot;
+            // Also copy deploy.php and emergency recovery files to project folder
+            $out[] = trim(@shell_exec('cp -f '.escapeshellarg($gitRepo.'/deploy.php').' '.escapeshellarg('/home/sabashop/public_html/project/deploy.php').' 2>&1; cp -f '.escapeshellarg($gitRepo.'/hostconsole.php').' '.escapeshellarg('/home/sabashop/public_html/project/hostconsole.php').' 2>&1; cp -f '.escapeshellarg($gitRepo.'/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' '.escapeshellarg('/home/sabashop/public_html/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' 2>&1; cp -f '.escapeshellarg($gitRepo.'/recover.php').' '.escapeshellarg('/home/sabashop/public_html/project/recover.php').' 2>&1; ls -lh /home/sabashop/public_html/project/*.php 2>&1 | tail -n 20'));
         } else if (is_file($gitRepo.'/package.json') && $gitRepo !== $scraperRoot) {
             $out[] = trim(@shell_exec('cp -r '.escapeshellarg($gitRepo).'/* '.escapeshellarg($scraperRoot).'/ 2>&1 | head -n 20'));
             $out[] = 'Copied from '.$gitRepo.' to '.$scraperRoot;
