@@ -30,8 +30,8 @@ export function escapeHtml(value: unknown): string {
 const STYLE = String.raw`
 :root{
   --bg:#070b17;--bg2:#0b1222;--card:#121b33;--line:#22304f;--line2:#2d3c60;
-  --text:#eef3ff;--muted:#9eb0d6;--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
-  --radius:18px;--tap:44px;--shadow:0 14px 34px rgba(3,7,18,.45);
+  --text:#f2f6ff;--muted:#9fb1d7;--soft:rgba(255,255,255,.045);--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
+  --radius:18px;--tap:44px;--ring:0 0 0 1px rgba(255,255,255,.04) inset;--shadow:0 14px 34px rgba(3,7,18,.45);
   --font:Vazirmatn,Vazir,Tahoma,system-ui,-apple-system,sans-serif;--fsize:14px
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -70,14 +70,31 @@ button,input,select,textarea{font-family:inherit;font-size:var(--fsize);color:in
   border:1px solid var(--line);border-radius:22px;padding:22px;margin-bottom:18px;box-shadow:var(--shadow)}
 .hero::after{content:"";position:absolute;inset-inline-end:-40px;top:-60px;width:180px;height:180px;border-radius:50%;
   background:radial-gradient(circle,rgba(52,211,153,.22),transparent 70%);pointer-events:none}
-.hero h1{margin:0 0 6px;font-size:19px}
+.hero h1{margin:0 0 6px;font-size:22px;letter-spacing:-.2px;background:linear-gradient(120deg,#fff,#b9f3dd 60%,#bcd7ff);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
 .hero p{margin:0;color:var(--muted);font-size:13px}
 .hero .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
 .hero .stats b{color:var(--text)}
-.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.hero .stats span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:rgba(7,11,23,.45);
+  border-radius:999px;padding:4px 12px}
+.trust{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 18px}
+.trust div{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:14px;padding:10px 12px;
+  background:linear-gradient(180deg,var(--soft),transparent),var(--card);box-shadow:var(--ring);font-size:12px;color:var(--muted);min-height:52px}
+.trust b{display:block;color:var(--text);font-size:12.5px}
+.trust i{font-style:normal;font-size:19px;filter:saturate(1.2)}
+.sechead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:24px 0 12px}
+.sechead h2{margin:0;font-size:16px;display:flex;align-items:center;gap:8px}
+.sechead h2::before{content:"";width:4px;height:18px;border-radius:999px;background:linear-gradient(180deg,var(--brand),var(--accent))}
+.sechead a,.sechead span{font-size:12px;color:var(--muted)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+  mask-image:linear-gradient(to left,transparent,#000 18px,#000 calc(100% - 18px),transparent)}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:0 0 auto;border:1px solid var(--line);background:var(--bg2);border-radius:999px;padding:0 14px;height:38px;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
-.chip.on{background:var(--brand);color:var(--brand-ink);border-color:transparent;font-weight:700}
+.chip{transition:border-color .15s ease,color .15s ease,background .15s ease}
+.chip:hover{color:var(--text);border-color:var(--line2)}
+.chip.on{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:700;
+  box-shadow:0 8px 18px rgba(52,211,153,.22)}
+.chip b{font-weight:700;opacity:.75;font-size:11px}
 .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px}
 .toolbar .count{color:var(--muted);font-size:12px}
 .sortbox{display:flex;align-items:center;gap:6px}
@@ -94,22 +111,22 @@ button,input,select,textarea{font-family:inherit;font-size:var(--fsize);color:in
 .pcard .thumb img{width:100%;height:100%;object-fit:cover}
 .pcard .thumb .ph{width:100%;height:100%;display:grid;place-items:center;color:var(--line2);font-size:34px}
 .pcard .off{position:absolute;inset-inline-start:8px;top:8px;background:var(--warn);color:#271a00;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:800}
-.pcard .body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;flex:1}
+.pcard .body{padding:11px 13px 13px;display:flex;flex-direction:column;gap:8px;flex:1}
 .pcard h3{margin:0;font-size:13px;font-weight:600;line-height:1.75;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap}
-.tag{font-size:10px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tag.profile{border-color:#2a3f73;color:var(--accent)}
-.tag.adj{border-color:#473518;color:var(--warn)}
-.prices{margin-top:auto;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.tag{font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--soft);color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prices{margin-top:auto;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding-top:9px;border-top:1px dashed var(--line)}
 .base{color:var(--muted);font-size:11px;text-decoration:line-through}
-.final{color:var(--brand);font-weight:800;font-size:16px;letter-spacing:.2px}
+.final{color:var(--brand);font-weight:800;font-size:17px;letter-spacing:.2px;font-variant-numeric:tabular-nums}
 .unit{font-size:11px;color:var(--muted)}
 .add{width:100%;min-height:var(--tap);border-radius:12px;border:1px solid transparent;background:linear-gradient(135deg,var(--brand),#22c7a9);
   color:var(--brand-ink);font-weight:800;cursor:pointer;box-shadow:0 8px 20px rgba(52,211,153,.2)}
-.add[data-state="in"]{background:var(--bg2);color:var(--brand);border-color:var(--brand)}
+.add[data-state="in"]{background:var(--bg2);color:var(--brand);border-color:var(--brand);box-shadow:none}
+.add:active{transform:scale(.985)}
 
 /* ---------- panels, tables, forms ---------- */
-.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.panel{background:linear-gradient(180deg,var(--soft),transparent 40%),var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:16px;margin-bottom:14px;box-shadow:var(--ring)}
 .panel h2{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px}
 .cols{display:grid;grid-template-columns:1.4fr .9fr;gap:14px;align-items:start}
 .sticky{position:sticky;top:76px}
@@ -137,13 +154,15 @@ table.sum tfoot td{border-bottom:none}
 .note{color:var(--muted);font-size:12px;line-height:2}
 .ok{color:var(--brand)}.bad{color:var(--bad)}
 .empty{color:var(--muted);text-align:center;padding:42px 12px;font-size:13px}
+.empty::before{content:"🧺";display:block;font-size:34px;margin-bottom:8px;opacity:.7}
 .statusline{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}
 .pill{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:11px}
 .pill.paid{border-color:var(--brand);color:var(--brand)}
 .pill.failed{border-color:var(--bad);color:var(--bad)}
 .pager{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:20px 0 0}
 .pager a{min-width:var(--tap);min-height:var(--tap);display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:12px;background:var(--bg2);padding:0 10px}
-.pager a.on{background:var(--brand);color:var(--brand-ink);border-color:transparent;font-weight:800}
+.pager a:hover{border-color:var(--line2);color:var(--text)}
+.pager a.on{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:800}
 .crumbs{font-size:12px;color:var(--muted);margin-bottom:10px}
 .gallery{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
 .gallery img{width:74px;height:74px;object-fit:cover;border-radius:12px;border:1px solid var(--line);flex:0 0 auto}
@@ -180,6 +199,7 @@ table.sum tfoot td{border-bottom:none}
   min-height:58px;font-size:10px;color:var(--muted);position:relative}
 .tabbar a .ico{font-size:19px;line-height:1}
 .tabbar a[aria-current="page"]{color:var(--brand)}
+.tabbar a[aria-current="page"] .ico{background:rgba(52,211,153,.14);border-radius:999px;padding:3px 12px}
 .tabbar a[aria-current="page"]::before{content:"";position:absolute;top:0;inset-inline:22%;height:2px;background:var(--brand);border-radius:0 0 4px 4px}
 .tabbar .tabcount{position:absolute;top:6px;inset-inline-end:calc(50% - 22px);background:var(--brand);color:var(--brand-ink);
   border-radius:999px;font-size:10px;font-weight:800;padding:0 5px;min-width:17px;text-align:center}
@@ -188,6 +208,8 @@ table.sum tfoot td{border-bottom:none}
 
 /* ---------- categories ---------- */
 .catgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.catcard{position:relative;display:block;transition:transform .18s ease,border-color .18s ease}
+.catcard:hover{transform:translateY(-2px);border-color:var(--line2)}
 .catcard{position:relative;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);min-height:104px}
 .catcard img{width:100%;height:104px;object-fit:cover;opacity:.45}
 .catcard .ph{height:104px;display:grid;place-items:center;color:var(--line2);font-size:28px}
@@ -195,13 +217,14 @@ table.sum tfoot td{border-bottom:none}
   background:linear-gradient(180deg,transparent,rgba(7,11,23,.86))}
 .catcard b{font-size:13px}.catcard small{color:var(--muted);font-size:11px}
 
-@media(max-width:900px){.cols{grid-template-columns:1fr}.sticky{position:static}.foot-in{grid-template-columns:1fr 1fr}}
+@media(max-width:900px){.trust{grid-template-columns:repeat(2,1fr)}.cols{grid-template-columns:1fr}.sticky{position:static}.foot-in{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){
   .head-in{flex-wrap:wrap;padding:8px 12px;gap:8px}
   .head form.search{order:3;flex:1 0 100%}
   .nav .label{display:none}
   .wrap{padding:12px 12px 20px}
-  .hero{padding:14px}.hero h1{font-size:17px}
+  .hero{padding:16px}.hero h1{font-size:19px}
+  .trust div{padding:9px 10px;font-size:11px}
   .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .pcard h3{font-size:12px}
   .final{font-size:14px}
@@ -303,6 +326,18 @@ ${tabbar(options.tab)}
 <script src="shop.js" defer></script></body></html>`;
 }
 
+/** Reassurance strip under the hero — the shopper facing promise of the shop, no sourcing detail. */
+function trustStrip(settings: ShopSettings): string {
+  const items: Array<[string, string, string]> = [
+    ['🚚', 'ارسال سریع', settings.freeShippingFrom ? `رایگان از ${money(settings.freeShippingFrom)} ${settings.currency}` : 'به سراسر کشور'],
+    ['🔒', 'پرداخت امن', 'درگاه‌های بانکی معتبر'],
+    ['↩️', 'ضمانت بازگشت', 'تعویض کالای مغایر'],
+    ['🎧', 'پشتیبانی', settings.contactPhone ? fa(settings.contactPhone) : 'پاسخ‌گویی در ساعات کاری']
+  ];
+  return `<div class="trust">${items.map(([icon, title, note]) =>
+    `<div><i aria-hidden="true">${icon}</i><span><b>${escapeHtml(title)}</b>${escapeHtml(note)}</span></div>`).join('')}</div>`;
+}
+
 function priceBlock(item: ShowcaseItem, currency: string): string {
   const changed = item.price !== item.basePrice && item.basePrice > 0;
   return `<div class="prices">${changed ? `<span class="base">${money(item.basePrice)}</span>` : ''}` +
@@ -358,6 +393,9 @@ export function catalogueHtml(input: {
   const body = `<section class="hero"><h1>${escapeHtml(settings.name)}</h1><p>${escapeHtml(settings.tagline)}</p>
   <div class="stats"><span><b>${fa(total)}</b> محصول</span><span><b>${fa(categories.length)}</b> دسته‌بندی</span>
   ${query.category ? `<span>دستهٔ فعلی: <b>${escapeHtml(query.category)}</b></span>` : '<span>بر اساس دسته و نوع محصول مرتب شده است</span>'}</div></section>
+  ${trustStrip(settings)}
+  <div class="sechead"><h2>${query.category ? escapeHtml(query.category) : 'دسته‌بندی‌ها'}</h2>
+    <a href="${escapeHtml(shopUrl({ view: 'categories' }))}">همهٔ دسته‌بندی‌ها ›</a></div>
   <nav class="chips" aria-label="فیلتر دسته‌بندی">${chips}</nav>
   <div class="toolbar"><span class="count">${query.q ? `نتایج «${escapeHtml(query.q)}»: ` : ''}${fa(total)} محصول</span>
     <form class="sortbox" method="get" action="${escapeHtml(HOME_URL)}">
@@ -387,6 +425,8 @@ export function categoriesHtml(input: { settings: ShopSettings; categories: Arra
     ${entry.image ? `<img loading="lazy" decoding="async" src="${escapeHtml(entry.image)}" alt="">` : '<div class="ph" aria-hidden="true">🗂</div>'}
     <span class="meta"><b>${escapeHtml(entry.name)}</b><small>${fa(entry.count)} محصول</small></span></a>`).join('');
   const body = `<section class="hero"><h1>دسته‌بندی محصولات</h1><p>محصولات بر اساس دسته و نوع کالا گروه‌بندی شده‌اند.</p></section>
+  ${trustStrip(settings)}
+  <div class="sechead"><h2>همهٔ دسته‌ها</h2><span>${fa(categories.length)} دسته</span></div>
   ${categories.length ? `<div class="catgrid">${cards}</div>` : '<div class="panel"><div class="empty">هنوز دسته‌بندی‌ای وجود ندارد.</div></div>'}`;
   return layout(settings, 'دسته‌بندی‌ها', body, { showSearch: false, tab: 'categories' });
 }
@@ -416,7 +456,7 @@ export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem;
         ${rows.map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}
       </tbody></table></div>
     </div></section>
-  ${related ? `<h2 style="font-size:15px;margin:22px 0 10px">محصولات مشابه</h2><div class="grid">${related}</div>` : ''}`;
+  ${related ? `<div class="sechead"><h2>محصولات مشابه</h2></div><div class="grid">${related}</div>` : ''}`;
   return layout(settings, item.title, body, { tab: 'home' });
 }
 

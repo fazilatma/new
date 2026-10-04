@@ -251,6 +251,21 @@ test('products are grouped by category and type, never by profile', async () => 
   assert.doesNotMatch(page, /فروشگاه الف|فروشگاه ب|فروشگاه ج/, 'profile names never reach the storefront');
 });
 
+test('the catalogue and category pages carry the reassurance strip and section headings', async () => {
+  const d = deps({ settings: { freeShippingFrom: 500000, contactPhone: '02112345678' } });
+  const home = await routes.cataloguePage(d, {});
+  assert.match(home, /class="trust"/, 'the hero is followed by a reassurance strip');
+  assert.match(home, /ارسال سریع/);
+  assert.match(home, /پرداخت امن/);
+  assert.match(home, /ضمانت بازگشت/);
+  assert.match(home, /class="sechead"/, 'the chips rail gets a titled section header');
+  assert.match(home, /href="\.\/\?view=categories"/, 'the "all categories" shortcut stays root relative');
+  assert.doesNotMatch(home, /class="trust"[\s\S]*class="trust"/, 'the strip is rendered once');
+  const cats = await routes.categoriesPage(d);
+  assert.match(cats, /class="trust"/);
+  assert.match(cats, /همهٔ دسته‌ها/);
+});
+
 test('the storefront never mentions scraper profiles, coefficients or source prices', async () => {
   const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
   const placed = await routes.placeOrder(d, {
