@@ -67,7 +67,12 @@ createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const query = Object.fromEntries(url.searchParams);
   try {
-    if (url.pathname === '/') return send(res, 200, await routes.cataloguePage(deps, query));
+    if (url.pathname === '/') {
+      const result = await routes.rootPage(deps, query);
+      if (result.location) { res.writeHead(302, { location: result.location }); return res.end(); }
+      return send(res, result.status, result.html);
+    }
+    if (url.pathname.startsWith('/assets/fonts/')) return send(res, 200, '/* offline preview: fonts are served by the worker */', 'text/css; charset=utf-8');
     if (url.pathname === '/shop.js') return send(res, 200, SHOP_JS, 'application/javascript; charset=utf-8');
     if (url.pathname === '/categories') return send(res, 200, await routes.categoriesPage(deps));
     if (url.pathname === '/checkout') return send(res, 200, await routes.checkoutPage(deps));

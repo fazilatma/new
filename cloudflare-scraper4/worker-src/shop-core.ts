@@ -47,6 +47,8 @@ export type ShopSettings = {
   tagline: string;
   /** Folder the scraper dashboard is mounted under; the shop always owns "/". */
   scraperPath: string;
+  /** Root address the storefront is mounted on ("/" by default). Every link is built from it. */
+  basePath: string;
   /**
    * 'wordpress' = checkout is handed to the connected WooCommerce site, so the gateway PLUGINS
    * installed in WordPress (زرین‌پال، ترب‌پی، دیجی‌پی، کارت به کارت، …) do the payment.
@@ -68,6 +70,7 @@ export const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   name: 'ویترین فروشگاه',
   tagline: 'محصولات به‌روز، با قیمت‌گذاری خودکار هر پروفایل',
   scraperPath: 'scraper',
+  basePath: '/',
   gatewaySource: 'wordpress',
   currency: 'تومان',
   shippingCost: 0,
@@ -87,6 +90,7 @@ export function normalizeShopSettings(raw: unknown): ShopSettings {
     name: String(input.name ?? DEFAULT_SHOP_SETTINGS.name).slice(0, 120) || DEFAULT_SHOP_SETTINGS.name,
     tagline: String(input.tagline ?? DEFAULT_SHOP_SETTINGS.tagline).slice(0, 200),
     scraperPath: normalizeScraperPath(input.scraperPath),
+    basePath: normalizeBasePath(input.basePath),
     gatewaySource: input.gatewaySource === 'builtin' ? 'builtin' : 'wordpress',
     currency: input.currency === 'ریال' ? 'ریال' : 'تومان',
     shippingCost: positive(input.shippingCost),
@@ -96,6 +100,15 @@ export function normalizeShopSettings(raw: unknown): ShopSettings {
     contactPhone: String(input.contactPhone ?? '').slice(0, 40),
     card: { number, holder: String(card.holder ?? '').slice(0, 80), bank: String(card.bank ?? '').slice(0, 60) }
   };
+}
+
+/**
+ * The storefront root. Links are always built from it and never go one level deeper than
+ * the root: pages are selected with query parameters (`?view=`, `?product=`, `?order=`).
+ */
+export function normalizeBasePath(raw: unknown): string {
+  const cleaned = String(raw ?? '').trim().replace(/[?#].*$/, '').replace(/^\/+|\/+$/g, '').replace(/[^a-z0-9/_-]/gi, '').slice(0, 60);
+  return cleaned ? `/${cleaned}/` : '/';
 }
 
 /** The scraper lives in a FOLDER, the shop owns the root. Never let it collapse back to "/". */

@@ -190,8 +190,12 @@ test('every page carries the footer menu, the header cart and no horizontal over
   const d = deps();
   const pages = [await routes.cataloguePage(d, {}), await routes.checkoutPage(d), (await routes.infoPage(d, 'about')).html];
   for (const html of pages) {
-    for (const href of ['/checkout', '/track', '/page/payment', '/page/shipping', '/page/returns', '/page/about', '/page/contact', '/page/terms'])
-      assert.ok(html.includes(`href="${href}"`), 'footer menu entry missing: ' + href);
+    for (const url of ['./', './?view=categories', './?view=checkout', './?view=track'])
+      assert.ok(html.includes(`data-go="${url}"`), 'footer menu entry missing: ' + url);
+    for (const title of ['روش‌های پرداخت', 'ارسال و تحویل', 'بازگشت کالا', 'دربارهٔ ما', 'تماس با ما', 'قوانین و حریم خصوصی'])
+      assert.ok(html.includes(`<summary>${title}</summary>`), 'footer info must be folded into the page, not linked: ' + title);
+    assert.doesNotMatch(html, /href="\.\/[^"]*\//, 'no storefront link may go one level deeper than the app root');
+    assert.doesNotMatch(html, /<a[^>]+class="footnav"/, 'footer entries are buttons, not links');
     assert.match(html, /<footer class="foot"/, 'the footer is part of the shell');
     assert.match(html, /id="cartCount"/, 'the header always shows the cart');
     assert.match(html, /overflow-x:hidden/, 'the page must never scroll sideways on mobile');
@@ -221,12 +225,12 @@ test('every page has the bottom tabs with the active one marked and a live cart 
   };
   for (const [tab, html] of Object.entries(pages)) {
     assert.match(html, /<nav class="tabbar" aria-label="منوی پایین">/, tab + ': the bottom tab bar is missing');
-    for (const href of ['/', '/categories', '/?focus=1', '/checkout', '/track'])
+    for (const href of ['./', './?view=categories', './?focus=1', './?view=checkout', './?view=track'])
       assert.ok(html.includes('href="' + href + '"'), tab + ': tab link missing ' + href);
     assert.match(html, /id="tabCartCount"/, tab + ': the cart tab must carry the item badge');
     assert.equal((html.match(/aria-current="page"/g) || []).length >= 1, true, tab + ': the active tab must be marked');
   }
-  assert.match(pages.categories, /href="\/categories"[^>]*aria-current="page"/, 'the categories page marks its own tab');
+  assert.match(pages.categories, /href="\.\/\?view=categories"[^>]*aria-current="page"/, 'the categories page marks its own tab');
 });
 
 test('products are grouped by category and type, never by profile', async () => {
@@ -256,6 +260,33 @@ test('no customer facing page leaks a profile name', async () => {
   for (const html of pages) assert.doesNotMatch(html, /فروشگاه الف|فروشگاه ب|فروشگاه ج/, 'the sourcing profile is internal');
   const order = await routes.getOrder(d, placed.orderId);
   assert.equal(order.lines[0].profileName, 'فروشگاه الف', 'the profile is still recorded on the order for the shop owner');
+});
+
+test('all pages hang off the app root and honour a mounted base path', async () => {
+  const d = deps();
+  for (const [query, needle] of [[{}, 'class="grid"'], [{ view: 'categories' }, 'دسته‌بندی محصولات'],
+    [{ view: 'checkout' }, 'تسویه حساب'], [{ view: 'track' }, 'پیگیری سفارش'], [{ product: 'p-percent::a1' }, 'محصولات مشابه']]) {
+    const result = await routes.rootPage(d, query);
+    assert.equal(result.status, 200, JSON.stringify(query));
+    assert.ok(result.html.includes(needle), JSON.stringify(query) + ': wrong page');
+    assert.match(result.html, /<base href="\/">/, 'links resolve against the app root');
+    assert.ok(result.html.includes('<script src="shop.js" defer>'), 'the script is loaded from the root too');
+  }
+  const unknown = await routes.rootPage(d, { product: 'ghost::none' });
+  assert.equal(unknown.status, 200, 'an unknown product falls back to the catalogue instead of a dead end');
+  const mounted = deps({ state: [['shop.settings', { basePath: '/shop' }]] });
+  const html = await routes.cataloguePage(mounted, {});
+  assert.match(html, /<base href="\/shop\/">/, 'a mounted app keeps every link under its own root');
+  assert.equal(core.normalizeBasePath('shop/'), '/shop/');
+  assert.equal(core.normalizeBasePath(''), '/');
+});
+
+test('the storefront uses the same self hosted Persian fonts as the scraper panel', async () => {
+  const html = await routes.cataloguePage(deps(), {});
+  assert.ok(html.includes('<link rel="stylesheet" href="assets/fonts/vazir.css">'), 'Vazir comes from the scraper font route');
+  assert.ok(html.includes('<link rel="stylesheet" href="assets/fonts/vazirmatn.css">'), 'Vazirmatn comes from the scraper font route');
+  assert.match(html, /--font:Vazirmatn,Vazir,Tahoma/, 'same font stack as the dashboard');
+  assert.match(html, /font-family:var\(--font\)/);
 });
 
 test('a product without an image renders a placeholder instead of a broken image', async () => {
@@ -304,7 +335,7 @@ test('order tracking never 500s and never leaks another order', async () => {
   }, 'https://shop.test');
   const found = await routes.trackPage(d, { order: placed.orderId });
   assert.equal(found.status, 302);
-  assert.equal(found.location, '/order/' + placed.orderId);
+  assert.equal(found.location, '/?order=' + placed.orderId, 'tracking stays on the app root');
 });
 
 test('Persian digits typed by the customer are accepted (phone and receipt code)', async () => {

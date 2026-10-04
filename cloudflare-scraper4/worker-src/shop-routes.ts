@@ -108,6 +108,30 @@ export async function cataloguePage(deps: ShopDeps, query: { q?: string; categor
   return catalogueHtml({ settings, items: slice, categories, query: { q, category, page, sort }, total: filtered.length, perPage: PER_PAGE });
 }
 
+/**
+ * The single public entry point. Every storefront page hangs off the app ROOT and is picked with
+ * query parameters (`?view=categories|checkout|track`, `?product=`, `?order=`), so no shop link
+ * ever goes one level deeper than the root the app is mounted on.
+ */
+export async function rootPage(deps: ShopDeps, query: Record<string, string | undefined>): Promise<{ status: number; html?: string; location?: string }> {
+  const view = String(query.view ?? '').trim().toLowerCase();
+  const product = String(query.product ?? '').trim();
+  const order = String(query.order ?? '').trim();
+  if (product) {
+    const result = await productPage(deps, product);
+    if (result.html) return result;
+  }
+  if (order && view !== 'track') {
+    const result = await orderPage(deps, order);
+    if (result.html) return result;
+    return trackPage(deps, { order });
+  }
+  if (view === 'categories') return { status: 200, html: await categoriesPage(deps) };
+  if (view === 'checkout') return { status: 200, html: await checkoutPage(deps) };
+  if (view === 'track') return trackPage(deps, { order });
+  return { status: 200, html: await cataloguePage(deps, query) };
+}
+
 /** Browse-by-category page behind the bottom tab bar. */
 export async function categoriesPage(deps: ShopDeps): Promise<string> {
   const { settings } = await loadShopConfig(deps);
@@ -134,7 +158,7 @@ export async function trackPage(deps: ShopDeps, query: { order?: string }): Prom
   if (!id) return { status: 200, html: trackHtml({ settings }) };
   const order = await getOrder(deps, id);
   if (!order) return { status: 404, html: trackHtml({ settings, notFound: 'سفارشی با این شماره پیدا نشد. شمارهٔ سفارش را دوباره بررسی کنید.' }) };
-  return { status: 302, location: `/order/${encodeURIComponent(order.id)}` };
+  return { status: 302, location: `${settings.basePath}?order=${encodeURIComponent(order.id)}` };
 }
 
 export async function infoPage(deps: ShopDeps, slug: string): Promise<{ status: number; html?: string }> {

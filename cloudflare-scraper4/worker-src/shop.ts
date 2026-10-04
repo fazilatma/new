@@ -11,6 +11,18 @@ import { fa, money, type Order, type OrderTotals, type ShopSettings, type Showca
 
 export const SHOP_SCRIPT_PATH = '/shop.js';
 
+/**
+ * Every storefront link is RELATIVE to the app root (a <base> element carries settings.basePath),
+ * and no link goes one level deeper than that root: pages are selected with query parameters.
+ */
+export const HOME_URL = './';
+export function shopUrl(params: Record<string, string | number | undefined> = {}): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== '') search.set(key, String(value));
+  const text = search.toString();
+  return text ? `./?${text}` : HOME_URL;
+}
+
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
@@ -19,12 +31,16 @@ const STYLE = String.raw`
 :root{
   --bg:#070b17;--bg2:#0b1222;--card:#121b33;--line:#22304f;--line2:#2d3c60;
   --text:#eef3ff;--muted:#9eb0d6;--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
-  --radius:16px;--tap:44px;--shadow:0 10px 30px rgba(0,0,0,.35)
+  --radius:18px;--tap:44px;--shadow:0 14px 34px rgba(3,7,18,.45);
+  --font:Vazirmatn,Vazir,Tahoma,system-ui,-apple-system,sans-serif
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{max-width:100%;overflow-x:hidden}
-body{margin:0;background:linear-gradient(180deg,#070b17,#0a1020 40%,#070b17);color:var(--text);
-  font-family:Vazirmatn,Tahoma,system-ui,-apple-system,sans-serif;direction:rtl;line-height:1.9;
+body{margin:0;background:
+  radial-gradient(90% 60% at 100% -10%,rgba(52,211,153,.13),transparent 62%),
+  radial-gradient(80% 55% at 0% 0%,rgba(96,165,250,.12),transparent 60%),
+  linear-gradient(180deg,#070b17,#0a1020 40%,#070b17) fixed;color:var(--text);
+  font-family:var(--font);direction:rtl;line-height:1.9;
   font-size:14px;padding-bottom:env(safe-area-inset-bottom)}
 img{max-width:100%;display:block}
 a{color:inherit;text-decoration:none}
@@ -33,7 +49,7 @@ button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
 .skip{position:absolute;right:-9999px;top:0}.skip:focus{right:8px;top:8px;background:var(--brand);color:var(--brand-ink);padding:8px 12px;border-radius:10px;z-index:99}
 
 /* ---------- header ---------- */
-.head{position:sticky;top:0;z-index:20;background:rgba(7,11,23,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.head{position:sticky;top:0;z-index:20;background:rgba(7,11,23,.86);backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid var(--line);box-shadow:0 10px 30px rgba(3,7,18,.35)}
 .head-in{max-width:1200px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:10px}
 .brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px;white-space:nowrap}
 .brand .dot{width:26px;height:26px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--accent));display:grid;place-items:center;color:var(--brand-ink);font-size:14px}
@@ -48,8 +64,12 @@ button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
 
 /* ---------- layout ---------- */
 .wrap{max-width:1200px;margin:0 auto;padding:16px 14px 28px}
-.hero{background:radial-gradient(120% 140% at 100% 0,rgba(52,211,153,.18),transparent 60%),var(--card);
-  border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.hero{position:relative;overflow:hidden;background:
+  radial-gradient(120% 140% at 100% 0,rgba(52,211,153,.2),transparent 60%),
+  radial-gradient(90% 120% at 0% 100%,rgba(96,165,250,.16),transparent 60%),var(--card);
+  border:1px solid var(--line);border-radius:22px;padding:22px;margin-bottom:18px;box-shadow:var(--shadow)}
+.hero::after{content:"";position:absolute;inset-inline-end:-40px;top:-60px;width:180px;height:180px;border-radius:50%;
+  background:radial-gradient(circle,rgba(52,211,153,.22),transparent 70%);pointer-events:none}
 .hero h1{margin:0 0 6px;font-size:19px}
 .hero p{margin:0;color:var(--muted);font-size:13px}
 .hero .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
@@ -65,7 +85,11 @@ button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
 
 /* ---------- product grid ---------- */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
-.pcard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.pcard{background:linear-gradient(180deg,rgba(255,255,255,.04),transparent 45%),var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.pcard:hover,.pcard:focus-within{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 18px 40px rgba(3,7,18,.55)}
+.pcard .thumb img{transition:transform .35s ease}
+.pcard:hover .thumb img{transform:scale(1.04)}
 .pcard .thumb{position:relative;display:block;aspect-ratio:1/1;background:var(--bg2)}
 .pcard .thumb img{width:100%;height:100%;object-fit:cover}
 .pcard .thumb .ph{width:100%;height:100%;display:grid;place-items:center;color:var(--line2);font-size:34px}
@@ -80,7 +104,8 @@ button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
 .base{color:var(--muted);font-size:11px;text-decoration:line-through}
 .final{color:var(--brand);font-weight:800;font-size:16px;letter-spacing:.2px}
 .unit{font-size:11px;color:var(--muted)}
-.add{width:100%;min-height:var(--tap);border-radius:12px;border:1px solid transparent;background:var(--brand);color:var(--brand-ink);font-weight:800;cursor:pointer}
+.add{width:100%;min-height:var(--tap);border-radius:12px;border:1px solid transparent;background:linear-gradient(135deg,var(--brand),#22c7a9);
+  color:var(--brand-ink);font-weight:800;cursor:pointer;box-shadow:0 8px 20px rgba(52,211,153,.2)}
 .add[data-state="in"]{background:var(--bg2);color:var(--brand);border-color:var(--brand)}
 
 /* ---------- panels, tables, forms ---------- */
@@ -105,7 +130,8 @@ table.sum tfoot td{border-bottom:none}
 .pay b{font-size:13px}.pay small{display:block;color:var(--muted);font-size:11px;line-height:1.8}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--tap);padding:0 16px;border-radius:12px;
   border:1px solid var(--line);background:var(--bg2);cursor:pointer}
-.btn.primary{background:var(--brand);color:var(--brand-ink);border-color:transparent;font-weight:800}
+.btn.primary{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:800;box-shadow:0 10px 24px rgba(52,211,153,.22)}
+.btn:hover{border-color:var(--line2)}
 .btn.block{width:100%}
 .btn[disabled]{opacity:.6;cursor:progress}
 .note{color:var(--muted);font-size:12px;line-height:2}
@@ -126,13 +152,22 @@ table.sum tfoot td{border-bottom:none}
 .product-top .shot img{width:100%;height:100%;object-fit:contain}
 
 /* ---------- footer ---------- */
-.foot{border-top:1px solid var(--line);background:var(--bg2);margin-top:26px;padding:22px 14px calc(26px + env(safe-area-inset-bottom))}
+.foot{border-top:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.02),transparent),var(--bg2);margin-top:26px;padding:22px 14px calc(26px + env(safe-area-inset-bottom))}
 .foot-in{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:18px}
 .foot h4{margin:0 0 10px;font-size:13px}
 .foot ul{list-style:none;margin:0;padding:0;display:grid;gap:4px}
-.foot a,.foot li{color:var(--muted);font-size:12px}
-.foot a{display:inline-flex;align-items:center;min-height:36px}
-.foot a:hover,.foot a:focus{color:var(--text)}
+.foot li{color:var(--muted);font-size:12px}
+.footnav{display:flex;align-items:center;gap:8px;width:100%;min-height:38px;padding:0 10px;border:1px solid transparent;border-radius:12px;
+  background:transparent;color:var(--muted);font-size:12px;cursor:pointer;text-align:start}
+.footnav:hover,.footnav:focus-visible{color:var(--text);border-color:var(--line);background:rgba(255,255,255,.03)}
+.footnav[aria-current="page"]{color:var(--brand);border-color:var(--line)}
+.footinfo{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02);margin-bottom:6px}
+.footinfo>summary{list-style:none;cursor:pointer;min-height:38px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;color:var(--muted)}
+.footinfo>summary::-webkit-details-marker{display:none}
+.footinfo>summary::after{content:"＋";margin-inline-start:auto;color:var(--line2)}
+.footinfo[open]>summary{color:var(--text)}
+.footinfo[open]>summary::after{content:"−"}
+.footinfo p{margin:0;padding:0 10px 10px;font-size:11.5px;color:var(--muted);line-height:2}
 .foot .about{color:var(--muted);font-size:12px}
 .copy{max-width:1200px;margin:16px auto 0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;
   display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap}
@@ -177,32 +212,40 @@ table.sum tfoot td{border-bottom:none}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
-type NavLink = { href: string; label: string };
+const PAGES: Record<string, { title: string; body: string }> = {
+  payment: { title: 'روش‌های پرداخت', body: 'پرداخت از طریق درگاه‌های فعال فروشگاه انجام می‌شود. پس از انتخاب روش پرداخت در صفحهٔ تسویه حساب، به صفحهٔ امن درگاه منتقل می‌شوید و نتیجهٔ پرداخت روی صفحهٔ سفارش نمایش داده می‌شود. در روش کارت به کارت، پس از واریز باید کد پیگیری را در صفحهٔ سفارش ثبت کنید.' },
+  shipping: { title: 'ارسال و تحویل', body: 'سفارش‌ها پس از تأیید پرداخت آمادهٔ ارسال می‌شوند. هزینه و شرایط ارسال در صفحهٔ تسویه حساب و در فاکتور سفارش نمایش داده می‌شود.' },
+  returns: { title: 'بازگشت کالا', body: 'در صورت مغایرت کالا با مشخصات اعلام‌شده، با شمارهٔ تماس فروشگاه هماهنگ کنید تا روند بازگشت یا تعویض انجام شود.' },
+  about: { title: 'دربارهٔ ما', body: 'این ویترین محصولات را از منابع تنظیم‌شده در پنل مدیریت گردآوری می‌کند و قیمت هر محصول را با ضرایب تعدیل همان پروفایل نمایش می‌دهد.' },
+  contact: { title: 'تماس با ما', body: 'برای پرسش دربارهٔ سفارش‌ها، شمارهٔ سفارش خود را آماده کنید و از راه شمارهٔ تماس درج‌شده در پانوشت با ما در ارتباط باشید.' },
+  terms: { title: 'قوانین و حریم خصوصی', body: 'اطلاعات تماس و نشانی شما فقط برای پردازش و ارسال سفارش استفاده می‌شود و در اختیار اشخاص ثالث قرار نمی‌گیرد. ثبت سفارش به معنی پذیرش قوانین فروشگاه است.' }
+};
 
-function footer(settings: ShopSettings): string {
-  const links = (items: NavLink[]) => items.map(item => `<li><a href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a></li>`).join('');
+
+function footer(settings: ShopSettings, active?: TabKey): string {
+  const navButtons = (items: Array<{ tab: TabKey; url: string; label: string }>) => items.map(item =>
+    `<li><button type="button" class="footnav" data-go="${escapeHtml(item.url)}"${item.tab === active ? ' aria-current="page"' : ''}>
+      <span aria-hidden="true">›</span><span>${escapeHtml(item.label)}</span></button></li>`).join('');
+  // Shopping guide / info are NOT links: the text is folded into the page itself, so the
+  // footer never navigates one level deeper than the storefront root.
+  const infoFold = (slugs: string[]) => slugs.map(slug => {
+    const page = PAGES[slug];
+    return page ? `<details class="footinfo" id="info-${escapeHtml(slug)}"><summary>${escapeHtml(page.title)}</summary><p>${escapeHtml(page.body)}</p></details>` : '';
+  }).join('');
   return `<footer class="foot"><div class="foot-in">
   <div><h4>${escapeHtml(settings.name)}</h4><p class="about">${escapeHtml(settings.tagline)}</p>
-    ${settings.contactPhone ? `<p class="about">☎ <a href="tel:${escapeHtml(settings.contactPhone)}">${fa(settings.contactPhone)}</a></p>` : ''}</div>
-  <div><h4>فروشگاه</h4><ul>${links([
-    { href: '/', label: 'ویترین محصولات' },
-    { href: '/categories', label: 'دسته‌بندی محصولات' },
-    { href: '/checkout', label: 'سبد خرید و تسویه' },
-    { href: '/track', label: 'پیگیری سفارش' }
+    ${settings.contactPhone ? `<p class="about">☎ <a href="tel:${escapeHtml(settings.contactPhone)}" dir="ltr">${fa(settings.contactPhone)}</a></p>` : ''}</div>
+  <div><h4>فروشگاه</h4><ul>${navButtons([
+    { tab: 'home', url: HOME_URL, label: 'ویترین محصولات' },
+    { tab: 'categories', url: shopUrl({ view: 'categories' }), label: 'دسته‌بندی محصولات' },
+    { tab: 'cart', url: shopUrl({ view: 'checkout' }), label: 'سبد خرید و تسویه' },
+    { tab: 'track', url: shopUrl({ view: 'track' }), label: 'پیگیری سفارش' }
   ])}</ul></div>
-  <div><h4>راهنمای خرید</h4><ul>${links([
-    { href: '/page/payment', label: 'روش‌های پرداخت' },
-    { href: '/page/shipping', label: 'ارسال و تحویل' },
-    { href: '/page/returns', label: 'بازگشت کالا' }
-  ])}</ul></div>
-  <div><h4>اطلاعات</h4><ul>${links([
-    { href: '/page/about', label: 'دربارهٔ ما' },
-    { href: '/page/contact', label: 'تماس با ما' },
-    { href: '/page/terms', label: 'قوانین و حریم خصوصی' }
-  ])}</ul></div>
+  <div><h4>راهنمای خرید</h4>${infoFold(['payment', 'shipping', 'returns'])}</div>
+  <div><h4>اطلاعات</h4>${infoFold(['about', 'contact', 'terms'])}</div>
 </div>
 <div class="copy"><span>© ${fa(new Date().getFullYear())} ${escapeHtml(settings.name)} — همهٔ حقوق محفوظ است.</span>
-<span>قیمت‌ها با ضرایب تعدیل هر پروفایل محاسبه می‌شوند.</span></div></footer>`;
+<span>قیمت‌ها با ضرایب تعدیل محاسبه می‌شوند.</span></div></footer>`;
 }
 
 type TabKey = 'home' | 'categories' | 'search' | 'cart' | 'track';
@@ -210,19 +253,19 @@ type TabKey = 'home' | 'categories' | 'search' | 'cart' | 'track';
 /** Bottom tab bar: the primary navigation on phones, mirrored by the footer menu on desktop. */
 function tabbar(active?: TabKey): string {
   const tabs: Array<{ key: TabKey; href: string; icon: string; label: string; badge?: boolean }> = [
-    { key: 'home', href: '/', icon: '🏠', label: 'خانه' },
-    { key: 'categories', href: '/categories', icon: '🗂', label: 'دسته‌بندی' },
-    { key: 'search', href: '/?focus=1', icon: '🔍', label: 'جست‌وجو' },
-    { key: 'cart', href: '/checkout', icon: '🧺', label: 'سبد خرید', badge: true },
-    { key: 'track', href: '/track', icon: '📦', label: 'پیگیری' }
+    { key: 'home', href: HOME_URL, icon: '🏠', label: 'خانه' },
+    { key: 'categories', href: shopUrl({ view: 'categories' }), icon: '🗂', label: 'دسته‌بندی' },
+    { key: 'search', href: shopUrl({ focus: '1' }), icon: '🔍', label: 'جست‌وجو' },
+    { key: 'cart', href: shopUrl({ view: 'checkout' }), icon: '🧺', label: 'سبد خرید', badge: true },
+    { key: 'track', href: shopUrl({ view: 'track' }), icon: '📦', label: 'پیگیری' }
   ];
-  return `<nav class="tabbar" aria-label="منوی پایین"><ul>${tabs.map(tab => `<li><a href="${tab.href}"${tab.key === active ? ' aria-current="page"' : ''}>
+  return `<nav class="tabbar" aria-label="منوی پایین"><ul>${tabs.map(tab => `<li><a href="${escapeHtml(tab.href)}"${tab.key === active ? ' aria-current="page"' : ''}>
     <span class="ico" aria-hidden="true">${tab.icon}</span><span>${tab.label}</span>
     ${tab.badge ? '<span class="tabcount" id="tabCartCount" data-empty="1">۰</span>' : ''}</a></li>`).join('')}</ul></nav>`;
 }
 
 function layout(settings: ShopSettings, title: string, body: string, options: { search?: string; showSearch?: boolean; tab?: TabKey } = {}): string {
-  const search = options.showSearch === false ? '' : `<form class="search" method="get" action="/" role="search">
+  const search = options.showSearch === false ? '' : `<form class="search" method="get" action="${escapeHtml(HOME_URL)}" role="search">
     <input name="q" value="${escapeHtml(options.search || '')}" placeholder="جست‌وجوی محصول…" aria-label="جست‌وجوی محصول" enterkeyhint="search">
     <button class="iconbtn" type="submit" aria-label="جست‌وجو">🔍</button></form>`;
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
@@ -231,22 +274,24 @@ function layout(settings: ShopSettings, title: string, body: string, options: { 
 <meta name="theme-color" content="#070b17">
 <meta name="description" content="${escapeHtml(settings.tagline)}">
 <title>${escapeHtml(title)} — ${escapeHtml(settings.name)}</title>
-<link rel="stylesheet" href="/assets/fonts/vazirmatn.css">
+<base href="${escapeHtml(settings.basePath || '/')}">
+<link rel="stylesheet" href="assets/fonts/vazir.css">
+<link rel="stylesheet" href="assets/fonts/vazirmatn.css">
 <style>${STYLE}</style></head><body>
 <a class="skip" href="#main">رفتن به محتوا</a>
 <header class="head"><div class="head-in">
-  <a class="brand" href="/"><span class="dot">🛍</span><span>${escapeHtml(settings.name)}</span></a>
+  <a class="brand" href="${escapeHtml(HOME_URL)}"><span class="dot">🛍</span><span>${escapeHtml(settings.name)}</span></a>
   ${search}
   <nav class="nav" aria-label="منوی اصلی">
-    <a class="iconbtn" href="/track"><span aria-hidden="true">📦</span><span class="label">پیگیری سفارش</span></a>
-    <a class="iconbtn primary" href="/checkout" id="cartLink"><span aria-hidden="true">🧺</span><span class="label">سبد</span>
+    <a class="iconbtn" href="${escapeHtml(shopUrl({ view: 'track' }))}"><span aria-hidden="true">📦</span><span class="label">پیگیری سفارش</span></a>
+    <a class="iconbtn primary" href="${escapeHtml(shopUrl({ view: 'checkout' }))}" id="cartLink"><span aria-hidden="true">🧺</span><span class="label">سبد</span>
       <span class="badge-count" id="cartCount" data-empty="1">۰</span></a>
   </nav>
 </div></header>
 <main class="wrap" id="main">${body}</main>
-${footer(settings)}
+${footer(settings, options.tab)}
 ${tabbar(options.tab)}
-<script src="${SHOP_SCRIPT_PATH}" defer></script></body></html>`;
+<script src="shop.js" defer></script></body></html>`;
 }
 
 function priceBlock(item: ShowcaseItem, currency: string): string {
@@ -281,17 +326,17 @@ export function catalogueHtml(input: {
     const merged = { q: query.q, category: query.category, sort: query.sort || '', page: '', ...patch };
     for (const [key, value] of Object.entries(merged)) if (value) params.set(key, value);
     const text = params.toString();
-    return text ? `/?${text}` : '/';
+    return text ? `./?${text}` : HOME_URL;
   };
   const chips = [`<a class="chip${query.category ? '' : ' on'}" href="${escapeHtml(link({ category: '' }))}">همهٔ دسته‌ها</a>`]
     .concat(categories.slice(0, 20).map(entry => `<a class="chip${entry.name === query.category ? ' on' : ''}" href="${escapeHtml(link({ category: entry.name }))}">${escapeHtml(entry.name)} <b>${fa(entry.count)}</b></a>`))
     .join('');
   const cards = items.map(item => `<article class="pcard">
-  <a class="thumb" href="/p/${encodeURIComponent(item.id)}" aria-label="${escapeHtml(item.title)}">${thumb(item)}${item.price > item.basePrice && item.basePrice > 0 ? '' : ''}</a>
+  <a class="thumb" href="${escapeHtml(shopUrl({ product: item.id }))}" aria-label="${escapeHtml(item.title)}">${thumb(item)}${item.price > item.basePrice && item.basePrice > 0 ? '' : ''}</a>
   <div class="body">
     <div class="tagrow">${item.category ? `<a class="tag" href="${escapeHtml(link({ category: item.category }))}">${escapeHtml(item.category)}</a>` : ''}
       ${item.brand ? `<span class="tag">${escapeHtml(item.brand)}</span>` : ''}</div>
-    <h3><a href="/p/${encodeURIComponent(item.id)}">${escapeHtml(item.title)}</a></h3>
+    <h3><a href="${escapeHtml(shopUrl({ product: item.id }))}">${escapeHtml(item.title)}</a></h3>
     ${priceBlock(item, settings.currency)}
     ${addButton(item)}
   </div></article>`).join('');
@@ -306,7 +351,7 @@ export function catalogueHtml(input: {
   ${query.category ? `<span>دستهٔ فعلی: <b>${escapeHtml(query.category)}</b></span>` : '<span>بر اساس دسته و نوع محصول مرتب شده است</span>'}</div></section>
   <nav class="chips" aria-label="فیلتر دسته‌بندی">${chips}</nav>
   <div class="toolbar"><span class="count">${query.q ? `نتایج «${escapeHtml(query.q)}»: ` : ''}${fa(total)} محصول</span>
-    <form class="sortbox" method="get" action="/">
+    <form class="sortbox" method="get" action="${escapeHtml(HOME_URL)}">
       ${query.q ? `<input type="hidden" name="q" value="${escapeHtml(query.q)}">` : ''}
       ${query.category ? `<input type="hidden" name="category" value="${escapeHtml(query.category)}">` : ''}
       <label for="sort" class="note">مرتب‌سازی</label>
@@ -316,7 +361,7 @@ export function catalogueHtml(input: {
     </form></div>
   ${items.length ? `<div class="grid">${cards}</div>${pager}` : `<div class="panel"><div class="empty">
     ${query.q || query.category ? 'محصولی با این فیلتر پیدا نشد. فیلترها را بردارید یا عبارت دیگری جست‌وجو کنید.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا از پنل اسکریپر محصولات را استخراج کنید.'}
-    </div>${query.q || query.category ? '<a class="btn block" href="/">نمایش همهٔ محصولات</a>' : ''}</div>`}`;
+    </div>${query.q || query.category ? '<a class="btn block" href="${escapeHtml(HOME_URL)}">نمایش همهٔ محصولات</a>' : ''}</div>`}`;
   return layout(settings, query.category || 'ویترین', body, { search: query.q, tab: query.q ? 'search' : 'home' });
 }
 
@@ -329,7 +374,7 @@ function pageWindow(current: number, pages: number): number[] {
 
 export function categoriesHtml(input: { settings: ShopSettings; categories: Array<{ name: string; count: number; image: string }> }): string {
   const { settings, categories } = input;
-  const cards = categories.map(entry => `<a class="catcard" href="/?category=${encodeURIComponent(entry.name)}">
+  const cards = categories.map(entry => `<a class="catcard" href="${escapeHtml(shopUrl({ category: entry.name }))}">
     ${entry.image ? `<img loading="lazy" decoding="async" src="${escapeHtml(entry.image)}" alt="">` : '<div class="ph" aria-hidden="true">🗂</div>'}
     <span class="meta"><b>${escapeHtml(entry.name)}</b><small>${fa(entry.count)} محصول</small></span></a>`).join('');
   const body = `<section class="hero"><h1>دسته‌بندی محصولات</h1><p>محصولات بر اساس دسته و نوع کالا گروه‌بندی شده‌اند.</p></section>
@@ -348,15 +393,15 @@ export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem;
   if (item.category) rows.push(['دسته', item.category]);
   if (typeof item.stock === 'number') rows.push(['موجودی', fa(item.stock)]);
   const related = input.related.slice(0, 4).map(other => `<article class="pcard">
-    <a class="thumb" href="/p/${encodeURIComponent(other.id)}">${thumb(other)}</a>
-    <div class="body"><h3><a href="/p/${encodeURIComponent(other.id)}">${escapeHtml(other.title)}</a></h3>
+    <a class="thumb" href="${escapeHtml(shopUrl({ product: other.id }))}">${thumb(other)}</a>
+    <div class="body"><h3><a href="${escapeHtml(shopUrl({ product: other.id }))}">${escapeHtml(other.title)}</a></h3>
     ${priceBlock(other, settings.currency)}${addButton(other)}</div></article>`).join('');
-  const body = `<p class="crumbs"><a href="/">ویترین</a> › <a href="/?category=${encodeURIComponent(item.category || '')}">${escapeHtml(item.category || 'همهٔ محصولات')}</a> › ${escapeHtml(item.title)}</p>
+  const body = `<p class="crumbs"><a href="${escapeHtml(HOME_URL)}">ویترین</a> › <a href="${escapeHtml(shopUrl({ category: item.category || '' }))}">${escapeHtml(item.category || 'همهٔ محصولات')}</a> › ${escapeHtml(item.title)}</p>
   <section class="product-top">
     <div class="shot">${thumb(item)}</div>
     <div class="panel" style="margin:0">
       <h2>${escapeHtml(item.title)}</h2>
-      <div class="tagrow">${item.category ? `<a class="tag" href="/?category=${encodeURIComponent(item.category)}">${escapeHtml(item.category)}</a>` : ''}${item.brand ? `<span class="tag">${escapeHtml(item.brand)}</span>` : ''}</div>
+      <div class="tagrow">${item.category ? `<a class="tag" href="${escapeHtml(shopUrl({ category: item.category }))}">${escapeHtml(item.category)}</a>` : ''}${item.brand ? `<span class="tag">${escapeHtml(item.brand)}</span>` : ''}</div>
       ${priceBlock(item, settings.currency)}
       ${item.shortDesc ? `<p class="note">${escapeHtml(item.shortDesc)}</p>` : ''}
       ${addButton(item)}
@@ -382,7 +427,7 @@ export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ 
   const sourceNote = input.source === 'wordpress'
     ? '<p class="note">پرداخت توسط <b>افزونه‌های درگاه وردپرس/ووکامرس</b> انجام می‌شود؛ سفارش در ووکامرس ثبت و وضعیت پرداخت از همان‌جا خوانده می‌شود.</p>'
     : '<p class="note">اتصال ووکامرس تنظیم نشده است؛ درگاه‌های داخلی برنامه استفاده می‌شوند.</p>';
-  const body = `<p class="crumbs"><a href="/">ویترین</a> › تسویه حساب</p>
+  const body = `<p class="crumbs"><a href="${escapeHtml(HOME_URL)}">ویترین</a> › تسویه حساب</p>
 <div class="cols">
   <div>
     <div class="panel"><h2>🧺 سبد خرید</h2><div id="cartBox"><div class="empty">در حال بارگذاری…</div></div></div>
@@ -425,7 +470,7 @@ export function orderHtml(input: { settings: ShopSettings; order: Order; instruc
     <div id="receiptResult" class="note" role="status" aria-live="polite"></div></div>` : '';
   const retry = order.status === 'pending' && order.payment.payUrl
     ? `<a class="btn primary block" href="${escapeHtml(order.payment.payUrl)}">ادامهٔ پرداخت</a>` : '';
-  const body = `<p class="crumbs"><a href="/">ویترین</a> › <a href="/track">پیگیری سفارش</a> › ${escapeHtml(order.id)}</p>
+  const body = `<p class="crumbs"><a href="${escapeHtml(HOME_URL)}">ویترین</a> › <a href="${escapeHtml(shopUrl({ view: 'track' }))}">پیگیری سفارش</a> › ${escapeHtml(order.id)}</p>
 <div class="panel"><h2>سفارش ${escapeHtml(order.id)}</h2>
   <div class="statusline"><span class="pill${pillClass}">${escapeHtml(statusText[order.status] || order.status)}</span>
     <span class="pill">روش پرداخت: ${escapeHtml(order.payment.gatewayTitle || order.gateway)}</span>
@@ -446,25 +491,17 @@ export function trackHtml(input: { settings: ShopSettings; notFound?: string }):
   const body = `<div class="panel"><h2>📦 پیگیری سفارش</h2>
   <p class="note">شمارهٔ سفارشی که بعد از ثبت خرید دریافت کرده‌اید را وارد کنید.</p>
   ${input.notFound ? `<p class="bad">${escapeHtml(input.notFound)}</p>` : ''}
-  <form method="get" action="/track">
+  <form method="get" action="${escapeHtml(HOME_URL)}"><input type="hidden" name="view" value="track">
     <div class="field"><label for="order">شمارهٔ سفارش</label><input id="order" name="order" dir="ltr" required></div>
     <button class="btn primary block" type="submit">پیگیری</button></form></div>`;
   return layout(input.settings, 'پیگیری سفارش', body, { showSearch: false, tab: 'track' });
 }
 
-const PAGES: Record<string, { title: string; body: string }> = {
-  payment: { title: 'روش‌های پرداخت', body: 'پرداخت از طریق درگاه‌های فعال فروشگاه انجام می‌شود. پس از انتخاب روش پرداخت در صفحهٔ تسویه حساب، به صفحهٔ امن درگاه منتقل می‌شوید و نتیجهٔ پرداخت روی صفحهٔ سفارش نمایش داده می‌شود. در روش کارت به کارت، پس از واریز باید کد پیگیری را در صفحهٔ سفارش ثبت کنید.' },
-  shipping: { title: 'ارسال و تحویل', body: 'سفارش‌ها پس از تأیید پرداخت آمادهٔ ارسال می‌شوند. هزینه و شرایط ارسال در صفحهٔ تسویه حساب و در فاکتور سفارش نمایش داده می‌شود.' },
-  returns: { title: 'بازگشت کالا', body: 'در صورت مغایرت کالا با مشخصات اعلام‌شده، با شمارهٔ تماس فروشگاه هماهنگ کنید تا روند بازگشت یا تعویض انجام شود.' },
-  about: { title: 'دربارهٔ ما', body: 'این ویترین محصولات را از منابع تنظیم‌شده در پنل مدیریت گردآوری می‌کند و قیمت هر محصول را با ضرایب تعدیل همان پروفایل نمایش می‌دهد.' },
-  contact: { title: 'تماس با ما', body: 'برای پرسش دربارهٔ سفارش‌ها، شمارهٔ سفارش خود را آماده کنید و از راه شمارهٔ تماس درج‌شده در پانوشت با ما در ارتباط باشید.' },
-  terms: { title: 'قوانین و حریم خصوصی', body: 'اطلاعات تماس و نشانی شما فقط برای پردازش و ارسال سفارش استفاده می‌شود و در اختیار اشخاص ثالث قرار نمی‌گیرد. ثبت سفارش به معنی پذیرش قوانین فروشگاه است.' }
-};
 
 export function infoPageHtml(settings: ShopSettings, slug: string): string | null {
   const page = PAGES[slug];
   if (!page) return null;
-  const body = `<p class="crumbs"><a href="/">ویترین</a> › ${escapeHtml(page.title)}</p>
+  const body = `<p class="crumbs"><a href="${escapeHtml(HOME_URL)}">ویترین</a> › ${escapeHtml(page.title)}</p>
   <div class="panel"><h2>${escapeHtml(page.title)}</h2><p class="note">${escapeHtml(page.body)}</p>
   ${settings.contactPhone ? `<p class="note">تماس: <a href="tel:${escapeHtml(settings.contactPhone)}" dir="ltr">${fa(settings.contactPhone)}</a></p>` : ''}</div>`;
   return layout(settings, page.title, body, { showSearch: false });
@@ -485,6 +522,8 @@ export function shopAdminHtml(input: { settings: ShopSettings; payments: Payment
   <label class="pay"><input type="checkbox" data-shop="enabled"${settings.enabled ? ' checked' : ''}><span>ویترین روی ریشهٔ دامنه فعال باشد</span></label>
   <div class="field"><label>نام فروشگاه</label><input data-shop="name" value="${escapeHtml(settings.name)}"></div>
   <div class="field"><label>شعار</label><input data-shop="tagline" value="${escapeHtml(settings.tagline)}"></div>
+  <div class="field"><label>ریشهٔ آدرس فروشگاه (همهٔ لینک‌ها از این ریشه ساخته می‌شوند)</label><input data-shop="basePath" value="${escapeHtml(settings.basePath)}" dir="ltr" placeholder="/">
+  <span class="note">اگر برنامه زیر یک زیرپوشه نصب شده است، همان را وارد کنید؛ مثل <code dir="ltr">/shop/</code>. لینک‌ها هیچ‌وقت از این ریشه عمیق‌تر نمی‌شوند.</span></div>
   <div class="field"><label>پوشهٔ پنل اسکریپر (ریشه همیشه متعلق به فروشگاه است)</label><input data-shop="scraperPath" value="${escapeHtml(settings.scraperPath)}"></div>
   <div class="field"><label>منبع درگاه‌های پرداخت</label><select data-shop="gatewaySource">
     <option value="wordpress"${settings.gatewaySource === 'wordpress' ? ' selected' : ''}>افزونه‌های وردپرس/ووکامرس (پیشنهادی)</option>
@@ -502,7 +541,7 @@ export function shopAdminHtml(input: { settings: ShopSettings; payments: Payment
   ${gateways}
   <button class="btn primary block" id="saveShop">💾 ذخیرهٔ تنظیمات فروشگاه</button>
   <div id="shopSaveResult" class="note" role="status" aria-live="polite"></div>
-  <p class="note">پنل اسکریپر: <a href="/${escapeHtml(input.scraperPath)}">/${escapeHtml(input.scraperPath)}</a> · ویترین: <a href="/">/</a></p>`;
+  <p class="note">پنل اسکریپر: <a href="${escapeHtml(input.scraperPath)}">/${escapeHtml(input.scraperPath)}</a> · ویترین: <a href="${escapeHtml(HOME_URL)}">ریشهٔ فروشگاه</a></p>`;
   return layout(settings, 'مدیریت فروشگاه', body, { showSearch: false });
 }
 
@@ -538,7 +577,7 @@ function paint(){
 function renderCart(){
   var box=document.getElementById('cartBox');if(!box)return;
   var items=read();
-  if(!items.length){box.innerHTML='<div class="empty">سبد خرید خالی است.</div><a class="btn block" href="/">رفتن به ویترین</a>';paint();return}
+  if(!items.length){box.innerHTML='<div class="empty">سبد خرید خالی است.</div><a class="btn block" href="./">رفتن به ویترین</a>';paint();return}
   box.innerHTML='<div class="scroll-x"><table class="sum"><thead><tr><th>محصول</th><th>تعداد</th><th>قیمت</th><th>جمع</th><th></th></tr></thead><tbody>'+
     items.map(function(l){return '<tr><td>'+esc(l.title)+'</td>'+
       '<td><span style="display:inline-flex;gap:6px;align-items:center">'+
@@ -564,6 +603,8 @@ document.addEventListener('click',function(e){
   }
   var del=closest(e.target,'[data-remove]');
   if(del){e.preventDefault();write(read().filter(function(l){return l.id!==del.dataset.remove}));renderCart();return}
+  var go=closest(e.target,'[data-go]');
+  if(go){e.preventDefault();location.href=go.getAttribute('data-go');return}
   var step=closest(e.target,'[data-step]');
   if(step){
     e.preventDefault();
@@ -607,14 +648,14 @@ if(place)place.addEventListener('click',function(){
   if(!customer){out.innerHTML='<span class="bad">لطفاً خطاهای فرم را برطرف کنید.</span>';
     var firstBad=document.querySelector('.field.bad input,.field.bad textarea');if(firstBad)firstBad.focus();return}
   place.disabled=true;out.textContent='در حال ثبت سفارش…';
-  fetch('/api/shop/order',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+  fetch('api/shop/order',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
     gateway:picked.value,items:items.map(function(l){return {id:l.id,qty:l.qty}}),customer:customer})})
    .then(function(r){return r.json()})
    .then(function(body){
      if(!body||!body.ok){out.innerHTML='<span class="bad">'+esc(body&&body.error||'ثبت سفارش ناموفق بود.')+'</span>';place.disabled=false;return}
      try{localStorage.removeItem(KEY)}catch(e){}
      if(body.redirect){out.innerHTML='<span class="ok">در حال انتقال به درگاه پرداخت…</span>';location.href=body.redirect;return}
-     location.href='/order/'+encodeURIComponent(body.orderId);
+     location.href='./?order='+encodeURIComponent(body.orderId);
    })
    .catch(function(error){out.innerHTML='<span class="bad">'+esc(error)+'</span>';place.disabled=false});
 });
@@ -625,7 +666,7 @@ if(receipt)receipt.addEventListener('click',function(){
   var reference=en((document.getElementById('receiptRef')||{}).value||'').trim();
   if(reference.length<4){out.innerHTML='<span class="bad">کد پیگیری واریز را وارد کنید.</span>';return}
   receipt.disabled=true;out.textContent='در حال ثبت…';
-  fetch('/api/shop/receipt',{method:'POST',headers:{'content-type':'application/json'},
+  fetch('api/shop/receipt',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({orderId:receipt.dataset.order,reference:reference})})
    .then(function(r){return r.json()}).then(function(body){
      out.innerHTML=body&&body.ok?'<span class="ok">رسید ثبت شد؛ پس از تأیید فروشنده سفارش پردازش می‌شود.</span>':'<span class="bad">'+esc(body&&body.error||'ثبت نشد')+'</span>';
@@ -645,7 +686,7 @@ if(save)save.addEventListener('click',function(){
     pays[id][el.dataset.key]=el.type==='checkbox'?el.checked:el.value;
   });
   save.disabled=true;out.textContent='در حال ذخیره…';
-  fetch('/api/shop/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({shop:shop,payments:pays})})
+  fetch('api/shop/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({shop:shop,payments:pays})})
    .then(function(r){return r.json()}).then(function(body){
      out.innerHTML=body&&body.ok?'<span class="ok">ذخیره شد.</span>':'<span class="bad">'+esc(body&&body.error||'ذخیره نشد')+'</span>';save.disabled=false;
    }).catch(function(error){out.innerHTML='<span class="bad">'+esc(error)+'</span>';save.disabled=false});
