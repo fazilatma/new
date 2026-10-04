@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.304.0+'; } catch { return process.env.npm_package_version || '1.304.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.305.0+'; } catch { return process.env.npm_package_version || '1.305.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -529,11 +529,17 @@ app.get('/api/feedback', async c => {
     emallsFetch = { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 
-  // Check visual.ts full mode implementation
+  // Check visual.ts full mode implementation - visual.js is bundled into server.js
   let visualFullMode = false;
   try {
-    const visualCode = readFileSync(new URL('./visual.js', import.meta.url), 'utf8');
-    visualFullMode = visualCode.includes('fullModeJsNode') && visualCode.includes('Visual full mode active (Node)');
+    const serverCode = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+    visualFullMode = serverCode.includes('fullModeJsNode') || serverCode.includes('Visual full mode active (Node)') || serverCode.includes('Visual full mode active');
+  } catch {}
+  try {
+    if (!visualFullMode) {
+      const visualCode = readFileSync(new URL('./visual.js', import.meta.url), 'utf8');
+      visualFullMode = visualCode.includes('fullModeJsNode') && visualCode.includes('Visual full mode active (Node)');
+    }
   } catch {}
 
   // Try to create a visual ticket for Emalls and render snapshot (light)
