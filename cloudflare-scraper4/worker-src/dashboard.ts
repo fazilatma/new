@@ -2183,6 +2183,7 @@ function visualMessage(event){
   }
   if(message.type==='scraper4-selector'){if(!applyVisualSelection(message.mode,message))return;const detail=['shortDesc','longDesc','sku','category','tags','weight','stock','brand','detailImage','gallery','galleryBox','galleryOne','variations'].includes(message.mode);subTab(detail?'details':'selectors');notice('سلکتور «'+(detailFields.find(([id])=>id===message.mode)?.[1]||message.mode)+'» ثبت شد؛ می‌توانید فیلد بعدی را انتخاب کنید.');return}
   if(message.type==='scraper4-picker-hint'){if(message.msg)notice(message.msg,'info');return}
+  if(message.type==='scraper4-picker-error'){clearTimeout(state.visualLoadTimer);clearInterval(state._vpTimer);$('visualLoading').hidden=false;$('visualLoading').textContent='❌ خطای داخلی پنجرهٔ انتخاب بصری: '+String(message.msg||'خطای JavaScript').slice(0,240);$('visualFrame').hidden=false;return}
   if(message.type==='scraper4-picker-state'){/* optional live preview */return}
   if(message.type==='scraper4-detail-selectors'){let applied=0;for(const [mode,item] of Object.entries(message.selections||{}))if(applyVisualSelection(mode,item))applied++;subTab('details');closeVisual();notice(fa(applied)+' انتخاب صفحهٔ جزئیات اعمال شد؛ در پایان پروفایل را ذخیره کنید.',applied?'ok':'info')}
 }
