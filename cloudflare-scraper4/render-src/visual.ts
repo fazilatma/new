@@ -74,6 +74,8 @@ function toProxy(u){
   }catch(e){return u;}
 }
 function toProxyForce(u){
+  // Force proxy even for same-host (for API calls) - parity with worker version
+  // This fixes Emalls blank: same-host API must be proxied to avoid CORS
   if(!u||typeof u!=='string') return u;
   u=u.trim();
   if(!u) return u;
@@ -86,13 +88,7 @@ function toProxyForce(u){
     if(abs.indexOf(location.origin+'/visual')===0) return abs;
     if(abs.indexOf(location.origin+'/api/')===0 && abs.indexOf('/api/rp')===-1) return abs;
     if(abs.startsWith('http://')||abs.startsWith('https://')){
-      // Same host (emalls.ir) should NOT be proxied - direct fetch works and avoids 503 when rp is down
-      if(isSameHost(abs)) return abs;
-      // Only proxy API/json or cross-origin, not same-host static assets
-      var isApi=/\/(api|graphql|search|ajax|_next\/data|wp-json)\//i.test(abs) || /\.(json)(\?|$)/i.test(abs);
-      if(isApi) return proxyBase+encodeURIComponent(abs);
-      // For Emalls/Snappshop: allow direct for images, css, js on same host
-      return abs;
+      return proxyBase+encodeURIComponent(abs);
     }
     return abs;
   }catch(e){return u;}

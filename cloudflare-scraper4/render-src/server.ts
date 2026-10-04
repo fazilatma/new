@@ -59,7 +59,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.305.0+'; } catch { return process.env.npm_package_version || '1.305.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.306.0+'; } catch { return process.env.npm_package_version || '1.306.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -354,8 +354,9 @@ app.all('/api/rp', async c => {
 
 const dashboardHeaders = secureHeaders({
   contentSecurityPolicy: {
-    defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"],
-    connectSrc: ["'self'"], imgSrc: ["'self'", 'data:', 'https:'], objectSrc: ["'none'"], frameAncestors: ["'none'"]
+    defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'", 'https:', 'https://cdn.jsdelivr.net', 'https://cdn.fontcdn.ir', 'https://unpkg.com', 'https://cdnjs.cloudflare.com'],
+    connectSrc: ["'self'", 'https:', 'https://cdn.jsdelivr.net', 'https://cdn.fontcdn.ir', 'https://unpkg.com', 'https://cdnjs.cloudflare.com'],
+    imgSrc: ["'self'", 'data:', 'https:', 'blob:'], fontSrc: ["'self'", 'data:', 'https:', 'https://cdn.jsdelivr.net', 'https://cdn.fontcdn.ir', 'https://unpkg.com', 'https://cdnjs.cloudflare.com'], objectSrc: ["'none'"], frameAncestors: ["'none'"]
   }
 });
 app.use('*', async (c, next) => (c.req.path === '/visual' || c.req.path.startsWith('/api/rp')) ? next() : dashboardHeaders(c, next));
