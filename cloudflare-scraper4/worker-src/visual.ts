@@ -406,9 +406,9 @@ function __s4bind(id,fn){
   }catch(err){console.error('[S4] bind error',id,err);}
 }
 if(pauseBtn)__s4bind('__s4pause',()=>setPicking(!picking));
-document.addEventListener('mouseover',e=>{if(!picking)return;const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=t;if(t!==selected)t.classList.add('__s4hover');},true);
-document.addEventListener('mouseout',e=>{if(!picking)return;const t=e.target;if(t instanceof Element&&t!==selected)t.classList.remove('__s4hover');},true);
-document.addEventListener('click',e=>{const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(!picking){try{s4SnapshotClick(e);}catch{}return;}e.preventDefault();e.stopPropagation();paint(t);},true);
+window.addEventListener('mouseover',e=>{if(!picking)return;const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=t;if(t!==selected)t.classList.add('__s4hover');},true);
+window.addEventListener('mouseout',e=>{if(!picking)return;const t=e.target;if(t instanceof Element&&t!==selected)t.classList.remove('__s4hover');},true);
+window.addEventListener('click',e=>{const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(!picking){try{s4SnapshotClick(e);}catch{}return;}e.preventDefault();e.stopPropagation();paint(t);},true);
 modeSelect.addEventListener('change',restoreMode);
 __s4bind('__s4up',()=>move('up'));__s4bind('__s4down',()=>move('down'));__s4bind('__s4prev',()=>move('prev'));__s4bind('__s4next',()=>move('next'));
 __s4bind('__s4pup',()=>move('up'));__s4bind('__s4pdn',()=>move('down'));__s4bind('__s4pprv',()=>move('prev'));__s4bind('__s4pnxt',()=>move('next'));
