@@ -438,10 +438,29 @@ function __s4bind(id,fn){
     });
   }catch(err){console.error('[S4] bind error',id,err);}
 }
+// Bind pause through capture + direct handler. Event delegation makes the control resilient
+// even if the source page replaces/reparents toolbar nodes after bootstrap.
+function togglePickingFromUi(e){
+  try{
+    const t=e?.target;
+    const btn=t instanceof Element?t.closest('#__s4pause'):null;
+    if(!btn)return false;
+    e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+    setPicking(!picking);
+    return true;
+  }catch(err){console.error('[S4] pause toggle error',err);return false;}
+}
+window.addEventListener('click',togglePickingFromUi,true);
 if(pauseBtn)__s4bind('__s4pause',()=>setPicking(!picking));
 window.addEventListener('mouseover',e=>{if(!picking)return;const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=t;if(t!==selected)t.classList.add('__s4hover');},true);
 window.addEventListener('mouseout',e=>{if(!picking)return;const t=e.target;if(t instanceof Element&&t!==selected)t.classList.remove('__s4hover');},true);
-window.addEventListener('click',e=>{const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(!picking){try{s4SnapshotClick(e);}catch{}return;}e.preventDefault();e.stopPropagation();paint(t);},true);
+window.addEventListener('click',e=>{
+  if(togglePickingFromUi(e))return;
+  const t=e.target;
+  if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;
+  if(!picking){try{s4SnapshotClick(e);}catch{}return;}
+  e.preventDefault();e.stopPropagation();paint(t);
+},true);
 modeSelect.addEventListener('change',restoreMode);
 __s4bind('__s4up',()=>move('up'));__s4bind('__s4down',()=>move('down'));__s4bind('__s4prev',()=>move('prev'));__s4bind('__s4next',()=>move('next'));
 __s4bind('__s4pup',()=>move('up'));__s4bind('__s4pdn',()=>move('down'));__s4bind('__s4pprv',()=>move('prev'));__s4bind('__s4pnxt',()=>move('next'));
