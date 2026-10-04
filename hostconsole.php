@@ -3551,9 +3551,11 @@ function handle_api() {
         $result = [];
         foreach ($projects as $pp) {
             $svc = proj_service_job($pp);
-            $result[] = ['name'=>$pp['name']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'status'=>$svc ? job_status($svc)['status'] : 'stopped'];
+            $result[] = ['name'=>$pp['name']??'', 'id'=>$pp['id']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'deploy_path'=>$pp['deploy_path']??'', 'deploy_exists'=>is_dir($pp['deploy_path']??''), 'status'=>$svc ? job_status($svc)['status'] : 'stopped'];
         }
-        jout(true, ['projects'=>$result]);
+        // Also find all cloudflare-scraper4 dirs via find
+        $found = trim(@shell_exec('find /home /var/lib /root /opt -type f -name "package.json" -path "*cloudflare-scraper4/package.json" 2>/dev/null | head -n 10'));
+        jout(true, ['projects'=>$result, 'found'=>$found]);
 
     case 'jobs.status':
         $job=job_get((string)$in['id']);if(!$job)jout(false,null,'Job not found');jout(true,['id'=>$job['id'],'name'=>$job['name'],'type'=>$job['type'],'status'=>job_status($job),'result'=>$job['result'],'created'=>$job['created']]);
