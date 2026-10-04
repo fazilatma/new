@@ -273,14 +273,42 @@ function stableClass(v){return v&&v.length>1&&v.length<48&&!/^(__|active$|open$|
 function matches(v){if(!v)return 0;try{return document.querySelectorAll(v).length}catch{return 0}}
 function classCandidates(el){const tag=el.tagName.toLowerCase(),cls=Array.from(el.classList).filter(stableClass).slice(0,5),out=[];for(let s=Math.min(3,cls.length);s>=1;s--)out.push(tag+cls.slice(0,s).map(c=>'.'+cssEscape(c)).join(''));for(const c of cls)out.push(tag+'.'+cssEscape(c));return Array.from(new Set(out))}
 function selector(el){
-  if(!el||['BODY','HTML'].includes(el.tagName))return'';const tag=el.tagName.toLowerCase(),cands=classCandidates(el),repeat=context==='list'||modeSelect.value==='container';
-  if(repeat){const rep=cands.find(v=>matches(v)>1);if(rep)return rep}
-  if(context==='detail'&&validId(el.id))return tag+'#'+cssEscape(el.id);
-  if(cands.length)return cands[0];
-  for(const attr of ['itemprop','data-testid','data-test','role']){const val=el.getAttribute(attr);if(val&&val.length<80){const cand=tag+'['+attr+'="'+String(val).replace(/["\\]/g,'\\$&')+'"]';if(!repeat||matches(cand)>1)return cand}}
+  if(!el||['BODY','HTML'].includes(el.tagName))return'';
+  const tag=el.tagName.toLowerCase(),cands=classCandidates(el),repeat=context==='list'||modeSelect.value==='container';
+  // Prefer selectors that are actually reusable for list/container fields. A unique class is
+  // deliberately rejected there because it usually points at one arbitrary card rather than the field across cards.
+  if(repeat){
+    const rep=cands.find(v=>matches(v)>1);if(rep)return rep;
+  }else{
+    if(validId(el.id))return tag+'#'+cssEscape(el.id);
+    const stable=cands[0];if(stable)return stable;
+  }
+  for(const attr of ['itemprop','data-testid','data-test','role']){
+    const val=el.getAttribute(attr);
+    if(val&&val.length<80){
+      const cand=tag+'['+attr+'="'+String(val).replace(/["\\]/g,'\\$&')+'"]';
+      if(!repeat||matches(cand)>1)return cand;
+    }
+  }
   if(validId(el.id))return tag+'#'+cssEscape(el.id);
-  let p=el.parentElement,d=0;while(p&&d++<4){const pc=classCandidates(p),base=pc.find(v=>!repeat||matches(v+' '+tag)>1)||pc[0];if(base)return base+' '+tag;if(validId(p.id))return p.tagName.toLowerCase()+'#'+cssEscape(p.id)+' '+tag;p=p.parentElement}
-  return tag;
+  let p=el.parentElement,d=0;
+  while(p&&d++<6){
+    const pc=classCandidates(p);
+    for(const base of pc){
+      const cand=base+' '+tag;
+      if(matches(cand)>1)return cand;
+      if(!repeat&&matches(cand)===1)return cand;
+    }
+    if(validId(p.id))return p.tagName.toLowerCase()+'#'+cssEscape(p.id)+' '+tag;
+    p=p.parentElement;
+  }
+  // Last resort: nth-of-type path makes a single element selectable instead of returning an unstable bare tag.
+  const parts=[];let n=el;
+  while(n&&n.nodeType===1&&n!==document.body&&parts.length<6){
+    let idx=1;for(let x=n;x.previousElementSibling;x=x.previousElementSibling)if(x.tagName===n.tagName)idx++;
+    parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+idx+')');n=n.parentElement;
+  }
+  return parts.join(' > ')||tag;
 }
 function getImageUrl(el){
   if(!el)return'';const attrs=['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src'];
