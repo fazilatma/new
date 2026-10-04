@@ -422,7 +422,20 @@ function move(dir){
 }
 function fieldStep(dir){const next=fieldNext(dir);modeSelect.value=next;restoreMode();const stored=selections[next];if(stored?.selector){try{const el=document.querySelector(stored.selector.split('\\n')[0]);if(el){if(selected)selected.classList.remove('__s4picked');selected=el;el.classList.add('__s4picked');placePop(el,stored.selector,matches(stored.selector),next);}}catch{}}}
 const pauseBtn=document.getElementById('__s4pause');
-function setPicking(v){picking=!!v;try{s4InteractionMode(picking);}catch(e){}if(pauseBtn){pauseBtn.textContent=picking?'⏸ توقف انتخاب':'▶ ادامه انتخاب';pauseBtn.setAttribute('aria-pressed',String(!picking));pauseBtn.classList.toggle('__s4on',!picking);}document.body.classList.toggle('__s4paused',!picking);if(!picking)document.querySelectorAll('.__s4hover').forEach(n=>n.classList.remove('__s4hover'));pop?.classList.remove('__s4on');}
+function setPicking(v){
+  picking=!!v;
+  try{s4InteractionMode(picking);}catch(e){}
+  if(pauseBtn){
+    pauseBtn.textContent=picking?'⏸ توقف انتخاب':'▶ ادامه انتخاب';
+    pauseBtn.setAttribute('aria-pressed',String(!picking));
+    pauseBtn.classList.toggle('__s4on',!picking);
+    pauseBtn.dataset.picking=picking?'1':'0';
+  }
+  document.body.classList.toggle('__s4paused',!picking);
+  if(!picking)document.querySelectorAll('.__s4hover').forEach(n=>n.classList.remove('__s4hover'));
+  pop?.classList.remove('__s4on');
+  __s4post({type:'scraper4-picker-state',channel:'__S4_CHANNEL__',picking,paused:!picking,pauseButtonPressed:!picking,pauseButtonText:picking?'⏸ توقف انتخاب':'▶ ادامه انتخاب'},'*');
+}
 // The picker always starts in selection mode. Keep the control label/state synchronized
 // after the shared interaction/layout bootstrap so source-page scripts cannot leave the UI
 // looking paused while the picker is expected to accept element clicks.
@@ -440,18 +453,27 @@ function __s4bind(id,fn){
 }
 // Bind pause through capture + direct handler. Event delegation makes the control resilient
 // even if the source page replaces/reparents toolbar nodes after bootstrap.
+let __s4pausePointerConsumed=false;
 function togglePickingFromUi(e){
   try{
     const t=e?.target;
     const btn=t instanceof Element?t.closest('#__s4pause'):null;
     if(!btn)return false;
     e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+    if(e.type==='click'&&__s4pausePointerConsumed){__s4pausePointerConsumed=false;return true;}
     setPicking(!picking);
+    if(e.type==='pointerdown'||e.type==='mousedown'||e.type==='touchstart')__s4pausePointerConsumed=true;
     return true;
   }catch(err){console.error('[S4] pause toggle error',err);return false;}
 }
-window.addEventListener('click',togglePickingFromUi,true);
-if(pauseBtn)__s4bind('__s4pause',()=>setPicking(!picking));
+['pointerdown','mousedown','touchstart','click'].forEach(function(type){window.addEventListener(type,togglePickingFromUi,true);});
+if(pauseBtn){
+  pauseBtn.type='button';
+  pauseBtn.style.setProperty('pointer-events','auto','important');
+  pauseBtn.style.setProperty('touch-action','manipulation','important');
+  pauseBtn.style.setProperty('user-select','none','important');
+  pauseBtn.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '||e.key==='Spacebar'){e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();setPicking(!picking);}},true);
+}
 window.addEventListener('mouseover',e=>{if(!picking)return;const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=t;if(t!==selected)t.classList.add('__s4hover');},true);
 window.addEventListener('mouseout',e=>{if(!picking)return;const t=e.target;if(t instanceof Element&&t!==selected)t.classList.remove('__s4hover');},true);
 window.addEventListener('click',e=>{
@@ -514,7 +536,8 @@ document.addEventListener('keydown',e=>{
 let _rp=null;function repos(){if(!selected)return;clearTimeout(_rp);_rp=setTimeout(()=>{try{placePop(selected,selector(selected),matches(selector(selected)),modeSelect.value);}catch{}},40);}
 window.addEventListener('scroll',repos,true);window.addEventListener('resize',repos);
 window.addEventListener('message',e=>{if((e.source!==(window.__s4_realParent||parent))&&e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
-restoreMode();\nsetPicking(true);\nwindow.addEventListener('error',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.message||'خطای JavaScript'),source:String(e?.filename||'').slice(-180),line:Number(e?.lineno)||0});}catch{}});\nwindow.addEventListener('unhandledrejection',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.reason?.message||e?.reason||'Promise rejection')});}catch{}});\n__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
+restoreMode();
+setPicking(true);\nwindow.addEventListener('error',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.message||'خطای JavaScript'),source:String(e?.filename||'').slice(-180),line:Number(e?.lineno)||0});}catch{}});\nwindow.addEventListener('unhandledrejection',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.reason?.message||e?.reason||'Promise rejection')});}catch{}});\n__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
 })();</script>`;
 
 function pickerScript(context:VisualContext,channel:string){return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel.replace(/[^a-z0-9-]/gi,''))}
