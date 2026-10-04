@@ -1,6 +1,6 @@
 import { app, scheduledTasks } from './app.js';
 import { configureEnv, type Env } from './env.js';
-import { ensureSchema, flushD1Usage, listQueuedJobs, meterInvocation } from './db.js';
+import { ensureSchema, flushD1Usage, getJob, listQueuedJobs, meterInvocation } from './db.js';
 import { processJob } from './processor.js';
 import { listQueuedBackgroundRuns, processBackgroundMessage } from './background.js';
 import { isWriteQuotaError } from './utils.js';
@@ -56,7 +56,9 @@ export default {
           if(result==='continue'){
             if(env.JOBS)await env.JOBS.send({task:'job',jobId:target},{delaySeconds:1});
             else item.retry({delaySeconds:30});
-          }else if(env.JOBS&&target!==jobId&&jobId){
+          }
+          if(result==='ignored'&&target===jobId){const waiting=await getJob(jobId);if(waiting?.status==='queued'&&env.JOBS)await env.JOBS.send({task:'job',jobId},{delaySeconds:10})}
+          if(env.JOBS&&target!==jobId&&jobId){
             await env.JOBS.send({task:'job',jobId},{delaySeconds:2});
           }
         }

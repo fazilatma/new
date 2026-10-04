@@ -604,3 +604,122 @@ though they were never used.
 For a JavaScript-only shop, run `npm run browsers:install` once (or `pkg install chromium` on
 Termux). Cloudflare Workers and shared cPanel cannot run a browser at all — use the HTML engines
 there.
+
+## Live environment resources (1.208.0+)
+
+Open **Overview → Live environment resources** in the local deployer. No extra
+package, root access, external chart library or monitoring service is needed.
+
+- Host CPU is the interval utilization across all cores, not load average.
+- Host RAM uses Linux `MemAvailable` when readable; otherwise the label explains
+  that OS free-memory accounting includes cache in used memory.
+- Deployer RSS and CPU are separate numeric readings. They exclude child
+  processes such as the scraper and Chromium; process CPU uses 100% per core.
+- A readable cgroup v2 memory limit/current usage is shown separately from host
+  RAM. Host CPU is not a container CPU-quota metric.
+- Android/Termux can deny host counters. Such samples are unavailable/gaps, not
+  zero; deployer process readings remain useful.
+- The authenticated `GET /api/resources` uses the existing deployer token and
+  `no-store` responses. A single sampler retains at most 180 two-second samples
+  in RAM (about six minutes); history resets when the deployer restarts.
+- Pause/resume affects chart updates; hidden browser tabs stop polling. The
+  lightweight server sampler continues collecting the bounded history.
+
+Update and restart the **deployer process** to load this feature, not only the
+scraper. The measurements belong to the machine running the deployer, which
+can differ from the phone/PC viewing it or a separately hosted scraper.
+
+### Scraper process charts (1.209.0+)
+
+The resource panel now separately charts **Scraper Node CPU** and **Scraper
+Node RAM (RSS)**. These readings come from the scraper's own Node process,
+via a bounded request to its local `/health` endpoint on the configured
+scraper port. They work even if Termux prevents reading host `/proc` counters,
+and also work for a scraper started separately from the current deployer.
+
+CPU is sampled between counter readings (100% = one core, potentially over
+100% on multiple cores). Each scraper boot has a new identity, so restarts
+and reconnects reset the baseline instead of producing misleading spikes.
+RAM is RSS, including heap and native allocations. Chart axes scale to the
+observed range; unavailable samples are gaps. Chromium, separate workers,
+cron processes and other subprocesses are **not** included in these totals.
+
+Update and restart **both the scraper and deployer**. An old, stopped or
+unreachable scraper is labelled unavailable rather than zero usage. The
+health response exposes numeric process counters, not credentials or command
+lines. The deployer's chart API remains protected by its existing token.
+
+## Automatic scraper recovery (1.210.0+)
+
+The deployer now retries unexpected scraper exits and watches prolonged failures
+to respond. Intentional Stop cancels recovery. See [KEEPALIVE.md](KEEPALIVE.md)
+for limits, controls, and persistent VPS/systemd or Termux/runit setup. A normal
+browser tab does not need to stay open, but the deployer must remain running.
+
+## In-scraper browser repair (1.213.0+)
+
+In the scraper hamburger menu, open **Code version → Browser installation and repair**.
+As of 1.214.1+, browser installation follows the same optional authentication policy
+as the other Node APIs. It no longer requires ADMIN_TOKEN to be configured. If a token
+is configured and authentication remains enabled, existing bearer checks still apply.
+The Cloudflare Worker cannot install local browser binaries.
+
+The button covers Playwright, Puppeteer and Crawlee. Missing libraries are restored
+at their root package-lock versions using npm with `--ignore-scripts --no-save
+--package-lock=false --engine-strict`. Existing libraries are not deliberately
+upgraded; npm may reconcile transitive dependencies during a missing-package repair.
+Do not run project updates or another package installer concurrently with repair.
+Node remains unchanged; incompatible packages (for example Puppeteer requiring
+Node 22.12+ on a Node 20 runtime) are reported, not silently downgraded.
+
+It checks the actual browser executable selection used by extraction, then uses
+the project's installed CLIs to download Playwright Chromium and Puppeteer Chrome
+into their respective runtime caches. Existing HOME, XDG and explicit browser-cache
+settings are inherited; no project ID or root-cache path is hardcoded. Crawlee uses
+these browsers rather than a separate browser download. Four separate launch/page
+tests cover Playwright, Puppeteer and the Crawlee launchers for each. A working
+browser is not downloaded again. One failed component does not suppress tests of
+the remaining engines; overall success requires all four tests to pass.
+
+Official npm/browser sources are tried first. Optional npmmirror fallback for npm,
+Playwright, and Chrome-for-Testing requires explicit third-party executable trust
+consent. Existing HTTP/HTTPS proxy settings are inherited; the UI neither asks for
+proxy credentials nor accepts arbitrary URLs/commands. Reachability and mirror
+revision availability are not guaranteed. TLS verification is not disabled. No
+Firefox, WebKit or Selenium downloads are added: current extraction engines use
+Chromium/Chrome. Installing libraries cannot fix a target site's HTTP 403.
+
+Root-running installations require a separate acknowledgement. There is no sudo,
+permission/ownership rewrite, apt installation, version downgrade, service restart,
+or automatic extraction/delivery. Termux uses system Chromium; absent/broken system
+browsers or explicit executable overrides require administrator repair. Offline
+transfer still needs a compatible donor machine and administrator action.
+
+Progress is bounded and polled. Duplicate starts share one in-process job. A refresh
+can reconnect with the status button; a server restart loses job status. Downloads
+have a three-minute limit per browser source, package installation five minutes per
+registry, and launch tests a 45-second limit. Only a
+successful browser launch/page test reports success. After success rerun extraction
+diagnostics to investigate site access or selector problems separately.
+
+
+## Owner-controlled token-free Node access (1.214.1+)
+
+To disable authentication explicitly, set `ADMIN_AUTH_DISABLED=true` in the WebConsole
+project environment, save it, then restart the project. Leave the existing `ADMIN_TOKEN`
+value unchanged: it also encrypts the saved credential vault. The new switch disables
+API token checks without rotating or deleting that encryption key. No vault code,
+files, credentials or saved connections are migrated or modified by this change.
+
+If ADMIN_TOKEN was never set, no switch is necessary: APIs and browser installation
+already work without a token. Removing a previously used ADMIN_TOKEN is different:
+it changes the vault password selection and may prevent decryption. Preserve
+`data/vault.key` as well as your existing secret configuration.
+
+This is an explicit loss of authentication for **all Node scraper APIs**, not just
+installation. Anyone able to reach the scraper can use its controls, including
+package installation with the runtime account's privileges. The root and mirror
+acknowledgements are confirmations, not access controls. No firewall or proxy rules
+are changed. Deployer/WebConsole authentication is separate and remains unchanged.
+Unset ADMIN_AUTH_DISABLED (or set it to false) to restore existing token checks.
+Cloudflare Worker authentication is not changed by this Node-specific setting.

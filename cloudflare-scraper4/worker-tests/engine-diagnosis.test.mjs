@@ -311,3 +311,25 @@ test('both twins extract embedded-state catalogs and stay silent on the shell', 
   assert.equal((await scraper.extractHeuristicProducts(html, BASE)).length, 0);
   assert.equal(rscraper.heuristicProducts(html, BASE).length, 0);
 });
+
+for(const [name,twin,parse] of [['Worker',scraper,'parseCards'],['Node',rscraper,'scrapeListCheerioFromHtml']]){
+ test(name+': all 500 Emalls-like products are extracted without a 100-item cutoff',async()=>{
+  const html=await fixture('emalls-500-cards.html'),selectors={container:'div.item.product-block',title:'h2',price:'.price',link:'a[href]',image:'img'};
+  const products=await twin[parse](html,BASE,selectors);
+  assert.equal(products.length,500);assert.equal(new Set(products.map(p=>p.url)).size,500);
+  for(let i=1;i<=500;i++){
+   const p=products.find(p=>p.url===new URL('/product/'+i,BASE).href);
+   assert.ok(p,'missing product '+i);assert.equal(p.title,'کفش زنانه مدل '+i);assert.equal(p.price,907000+i);
+   assert.equal(p.image,new URL('/images/'+i+'.jpg',BASE).href);
+  }
+ });
+}
+
+for(const [runtime,twin] of [['worker',scraper],['render',rscraper]])test(runtime+': automatic detail selectors and full product use the exact supplied detail document without fetching again',async()=>{
+ const html=await fixture('patris-detail.html'),page={text:html,url:'https://shop.example/product/coat'};
+ const suggestions=await twin.suggestSelectors(page.url,'detail','cheerio',page);
+ assert.equal(suggestions.selectors.longDesc,'.product-description');assert.equal(suggestions.selectors.sku,'.sku');
+ const product={sourceKey:'coat',title:'Patris sample coat',price:1,priceText:'1',url:page.url,image:''};
+ const result=runtime==='worker'?await twin.scrapeDetails({...product},suggestions.selectors,false,4_000_000,page):await twin.scrapeDetails({...product},suggestions.selectors,false,page);
+ assert.match(result.longDesc,/Wash gently/);assert.equal(result.sku,'PAT-42');assert.equal(result.brand,'Patris');assert.equal(result.price,1250000);assert.ok(result.images.includes('https://shop.example/back.jpg'));assert.equal(product.price,1);
+});

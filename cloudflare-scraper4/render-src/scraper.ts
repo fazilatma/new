@@ -1,9 +1,18 @@
+import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
+import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
+import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
+import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
+import {compareProductParsers,unavailableProductParsers,embeddedProductData,parseDownloadedProducts,selectedProductParser,type ProductParser} from '../worker-src/product-parser.js';
+import {renderPythonPlaywright} from './playwright-python.js';
+import { collectScrollProducts } from '../worker-src/scroll-collector.js';
+import { applyResultAdjustments } from '../worker-src/result-adjustments.js';
+import { diagnosticProgress, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import * as cheerio from 'cheerio';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { safeText, sourceRoute } from './network.js';
+import { assertPublicUrl, safeText, sourceRoute } from './network.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile, type Selectors } from './types.js';
 
 // Playwright resolves its browser-registry directory at IMPORT time and only
@@ -319,7 +328,7 @@ function productLink($: cheerio.CheerioAPI, $root: cheerio.Cheerio<any>, selecto
 export function pageUrl(profile: Profile, page: number): string {
   const url = new URL(profile.url);
   // next_selector follows a link found in the page, so the URL never changes here.
-  if (page <= 1 || profile.pagination === 'none' || profile.pagination === 'next_selector') return url.href;
+  if (page <= 1 || profile.pagination === 'scroll' || profile.pagination === 'none' || profile.pagination === 'next_selector') return url.href;
   const pageNumber = (base: number) => Math.max(1, base) + (page - 1);
   if (profile.pagination === 'full_pattern') return String(profile.paginationValue || '').split('{page}').join(String(pageNumber(1)));
   if (profile.pagination === 'path_page' || profile.pagination === 'path_pattern') {
@@ -348,7 +357,7 @@ export function pageUrl(profile: Profile, page: number): string {
 export function benchmarkProbeUrl(profile: Profile): string {
   try {
     const pagination = String((profile as any)?.pagination || 'query');
-    if (pagination === 'none' || pagination === 'next_selector' || pagination === 'full_pattern') return profile.url;
+    if (pagination === 'scroll' || pagination === 'none' || pagination === 'next_selector' || pagination === 'full_pattern') return profile.url;
     const url = new URL(profile.url);
     url.hash = '';
     if (pagination === 'path_page' || pagination === 'path_pattern') {
@@ -411,6 +420,8 @@ async function scrapeListCheerio(url: string, selectors: Selectors): Promise<Pro
 export type ScrapeListResult={products:Product[];usedEngine:ExtractionEngine;elapsedMs:number;
   /** Absolute URL of the 'next page' link, when a next-selector is configured. */
   nextUrl?:string;
+  browserDiagnostics?:any;
+  productParser?:ProductParser;
   /**
    * Selectors the selector engines actually ran with (1.128.0). Equals the
    * input selectors unless auto-discovery repaired them first.
@@ -469,10 +480,31 @@ function engineOrder(requested:ExtractionEngine,master?:ExtractionEngine,autoFir
   return out;
 }
 
-export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false): Promise<ScrapeListResult> {
+export async function scrapeListWithMeta(url: string, selectors: Selectors, engine: ExtractionEngine = 'auto', master?: ExtractionEngine, autoFirst = true, nextSelector = '', autoDiscover = true, indirect = false, scrollToEnd = false, stopped?:()=>Promise<boolean>, initialDocument?:{text:string;url:string},productParser?:ProductParser,onParserDocument?:(html:string,url:string)=>Promise<void>): Promise<ScrapeListResult> {
   const started=Date.now();
   lastBrowserLayer='';
   lastNetworkApiStats=null;lastRenderedSnapshot=null;
+  if(productParser&&engine==='network_api')throw Error('network_api reads API responses, not HTML; disable the second-stage parser or choose a browser HTML loader.');
+  if(scrollToEnd){
+    if(!browserEngineAvailable())throw Error('اسکرول تا انتها به Chromium نیاز دارد؛ npm run browsers:install را اجرا کنید.');
+    const driver=engine==='puppeteer'?'puppeteer':'playwright';
+    const {renderBrowserSnapshot}=await import('./visual-browser.js');
+    let tracker:ReturnType<typeof trackScrollRequests>;
+    const snapshot=await renderBrowserSnapshot(url,driver,indirect,{initial:initialDocument,prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,stopped,tracker,undefined,productParser)});
+    await onParserDocument?.(snapshot.text,snapshot.url);
+    const products=snapshot.collected as Product[];
+    return {products,usedEngine:driver,elapsedMs:Date.now()-started,nextUrl:'',selectorsUsed:selectors,browserLayer:'scroll-union',browserDiagnostics:snapshot.browserDiagnostics,...(productParser?{productParser}:{})};
+  }
+  if(productParser){
+    let document:{text:string;url:string}|undefined;
+    const reader=async(html:string,base:string)=>{document={text:html,url:base};await onParserDocument?.(html,base);return parseProductDocument(html,base,selectors,productParser)};
+    let products:Product[];
+    if(engine==='playwright'||engine==='puppeteer')products=await withBrowserSlot(async()=>scrapeRenderedHtml(url,selectors,engine,stopped,reader,indirect));
+    else if(engine==='crawlee_playwright')products=await withBrowserSlot(async()=>scrapeListWithCrawleePlaywright(url,selectors,reader,indirect));
+    else {document=initialDocument||await safeText(url,8_000_000,{indirect});products=await reader(document.text,document.url);}
+    let nextUrl='';if(nextSelector&&document){const $=cheerio.load(document.text);for(const part of nextSelector.split(',').map(x=>x.trim()).filter(Boolean)){const href=$(xpathToCss(part)??part).first().attr('href');if(href){nextUrl=new URL(href,document.url).href;break;}}}
+    return {products:dedupe(products),usedEngine:engine,elapsedMs:Date.now()-started,nextUrl,selectorsUsed:selectors,productParser};
+  }
   let sourcePromise:Promise<{text:string;url:string}>|null=null;
   const source=()=>sourcePromise ||= safeText(url,8_000_000,{indirect});
   // 1.128.0 — PROACTIVE AUTO-DISCOVERY. Profiles created through the API always
@@ -524,9 +556,9 @@ export async function scrapeListWithMeta(url: string, selectors: Selectors, engi
       if (engine !== 'auto' && name === engine) throw new Error('مرورگری روی این دستگاه پیدا نشد؛ موتورهای مرورگر بدون آن اجرا نمی‌شوند. روی Termux دستور pkg install chromium را اجرا کنید یا BROWSER_EXECUTABLE_PATH را تنظیم کنید.');
       return [] as Product[];
     }
-    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors));
-    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors));
-    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors));
+    if (name === 'playwright') return withBrowserSlot(() => scrapeListWithPlaywright(url, activeSelectors, stopped, indirect));
+    if (name === 'puppeteer') return withBrowserSlot(() => scrapeListWithPuppeteer(url, activeSelectors, indirect));
+    if (name === 'crawlee_playwright') return withBrowserSlot(() => scrapeListWithCrawleePlaywright(url, activeSelectors, undefined, indirect));
     if (name === 'network_api') return withBrowserSlot(() => scrapeListWithNetworkApi(url));
     const { text, url: finalUrl } = await source();
     if (name === 'cheerio' || name === 'htmlrewriter') return scrapeListCheerioFromHtml(text, finalUrl, activeSelectors);
@@ -588,7 +620,7 @@ function systemBrowser(): string | undefined {
   }
   return cachedSystemBrowser || undefined;
 }
-function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
+export function browserExecutable(driver: 'playwright'|'puppeteer'): string | undefined {
   const env = process.env;
   return env.BROWSER_EXECUTABLE_PATH
     || (driver === 'playwright' ? env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH : env.PUPPETEER_EXECUTABLE_PATH)
@@ -642,7 +674,7 @@ export async function withBrowserSlot<T>(task: () => Promise<T>): Promise<T> {
   await previous;
   try { return await task(); } finally { release(); }
 }
-function browserLaunchArgs(): string[] { return ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']; }
+export function browserLaunchArgs(): string[] { return browserLaunchArguments(); }
 /** A goto interrupted by the page's own redirect/reload rejects with net::ERR_ABORTED even though the follow-up page loads fine — survivable. */
 function isAbortedNavigation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -831,7 +863,7 @@ function isJsonish(contentType: string, text: string): boolean {
 }
 async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
+  const browser = await chromium.launch({ ...playwrightSandboxOptions(), headless: true, executablePath: browserExecutable('playwright'), args: browserLaunchArgs() });
   try {
     const page = await browser.newPage({ locale: 'fa-IR' });
     const bodies: string[] = [];
@@ -921,108 +953,75 @@ async function scrapeListWithNetworkApi(url: string): Promise<Product[]> {
   } finally { await browser.close(); }
 }
 
-async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer'): Promise<Product[]> {
-  const executablePath = browserExecutable(driver);
-  if (driver === 'playwright') {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true, executablePath, args: browserLaunchArgs() });
-    try {
-      const page = await browser.newPage({ locale: 'fa-IR' });
-      // goto waits only for parsed DOM: shops routinely redirect/reload
-      // mid-load (cookie checks, bot screens, framework routers), which
-      // aborts a networkidle goto with net::ERR_ABORTED even though the
-      // follow-up page loads fine. On abort, settle and read whatever
-      // actually landed instead of failing the whole run.
-      let navStatus = 0;
-      try {
-        const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-        navStatus = navResponse?.status() ?? 0;
-      } catch (navigationError: unknown) {
-        if (!isAbortedNavigation(navigationError)) throw navigationError;
-        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-      }
-      if (isBlankPageUrl(page.url())) {
-        try {
-          const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-          navStatus = retryResponse?.status() ?? navStatus;
-        } catch (retryError: unknown) {
-          if (!isAbortedNavigation(retryError)) throw retryError;
-          await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => undefined);
-        }
-      }
-      if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-      // Best-effort idle window for JavaScript rendering; pages with
-      // ever-open connections (ads, analytics) may never idle.
-      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-      const finalUrl = page.url();
-      const html = await page.content();
-      dumpRenderedHtml(html, page.url(), 'playwright');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
-      const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-      lastBrowserLayer = rescued.layer;
-      console.log(`[scraper4] playwright extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-      return rescued.products;
-    } finally { await browser.close(); }
-  }
-  const puppeteer = await import('puppeteer');
-  const browser = await puppeteer.default.launch({ headless: true, executablePath, args: browserLaunchArgs() });
-  try {
-    const page = await browser.newPage();
-    // Same resilience as the Playwright branch above: domcontentloaded goto,
-    // survive ERR_ABORTED, best-effort idle window for rendering.
-    let navStatus = 0;
-    try {
-      const navResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-      navStatus = navResponse?.status() ?? 0;
-    } catch (navigationError: unknown) {
-      if (!isAbortedNavigation(navigationError)) throw navigationError;
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-    }
-    if (isBlankPageUrl(page.url())) {
-      try {
-        const retryResponse = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        navStatus = retryResponse?.status() ?? navStatus;
-      } catch (retryError: unknown) {
-        if (!isAbortedNavigation(retryError)) throw retryError;
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-      }
-    }
-    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-    await page.waitForNetworkIdle({ timeout: 15_000 }).catch(() => undefined);
-    const finalUrl = page.url();
-    const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'puppeteer');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:navStatus});
-    const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] puppeteer extraction layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
-    return rescued.products;
-  } finally { await browser.close(); }
+function trackScrollRequests(page:any){
+ const pending=new Set<any>();let failed=false;
+ const started=(r:any)=>{if(['xhr','fetch'].includes(r.resourceType()))pending.add(r)};
+ const finished=(r:any)=>pending.delete(r);
+ const failure=(r:any)=>{if(pending.has(r))failed=true;pending.delete(r)};
+ const response=(r:any)=>{if(pending.has(r.request())&&r.status()>=400)failed=true};
+ page.on('request',started);page.on('requestfinished',finished);page.on('requestfailed',failure);page.on('response',response);
+ return {pending,failed:()=>failed,close(){page.off('request',started);page.off('requestfinished',finished);page.off('requestfailed',failure);page.off('response',response)}};
 }
-async function scrapeListWithPlaywright(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright'); }
-async function scrapeListWithPuppeteer(url: string, selectors: Selectors): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer'); }
-async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors): Promise<Product[]> {
-  const { PlaywrightCrawler } = await import('crawlee');
-  // The crawl covers exactly one page, so the products ride home in a closure
-  // variable — the old per-run Dataset left a scraper4-<timestamp> storage
-  // directory behind on every benchmark/diagnostic page, forever.
-  let found: Product[] = [];
-  // Same browser resolution as the Playwright/Puppeteer engines: drive the
-  // detected system Chromium (Termux/VPS/desktop) with sandbox-free flags.
-  // Crawlee's default launch looks for Playwright's bundled browsers, which
-  // .npmrc deliberately skips — and which could never execute on Android
-  // (desktop-Linux glibc binaries vs Android's Bionic libc) anyway.
-  const executablePath = browserExecutable('playwright');
-  const crawler = new PlaywrightCrawler({ maxRequestsPerCrawl: 1, launchContext: { launchOptions: { headless: true, executablePath, args: browserLaunchArgs() } }, requestHandler: async ({ page }) => {
-    if (isBlankPageUrl(page.url())) throw new Error(`مرورگر به صفحه نرسید؛ پس از رفتن به آدرس، صفحه خالی ماند (${String(url).slice(0, 120)}).`);
-    await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => undefined);
-    const html = await page.content();
-    dumpRenderedHtml(html, page.url(), 'crawlee');lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:0});
-    const rescued = rescueRenderedProducts(html, page.url(), parseProductsFromHtml(html, page.url(), selectors));
-    lastBrowserLayer = rescued.layer;
-    console.log(`[scraper4] crawlee extraction layer: ${rescued.layer} (${rescued.products.length} products, ${page.url()})`);
-    found = rescued.products;
-  }});
-  await crawler.run([url]);
-  return dedupe(found);
+export async function benchmarkScroll(url:string,selectors:Selectors,engine:ExtractionEngine,indirect=false,productParser?:ProductParser){
+ if(engine!=='playwright'&&engine!=='puppeteer')throw Error('آزمون اسکرول فقط با موتور واقعی Playwright یا Puppeteer انجام می‌شود.');
+ const {renderBrowserSnapshot}=await import('./visual-browser.js'),benchmark={batches:[] as any[]};let tracker:ReturnType<typeof trackScrollRequests>;
+ const snapshot=await renderBrowserSnapshot(url,engine,indirect,{prepare:page=>{tracker=trackScrollRequests(page)},collect:page=>collectRenderedScroll(page,selectors,undefined,tracker,benchmark,productParser)});
+ return {products:snapshot.collected||[],batches:benchmark.batches};
+}
+async function collectRenderedScroll(page:any,selectors:Selectors,stopped?:()=>Promise<boolean>,tracker=trackScrollRequests(page),benchmark?:{batches:any[]},productParser?:ProductParser):Promise<Product[]>{
+ try{return await collectScrollProducts<Product>({
+  snapshot:async()=>{if(tracker.failed())throw Error('درخواست شبکه هنگام اسکرول ناموفق بود؛ کامل بودن فهرست تأیید نشد.');const html=await page.content(),url=page.url();return productParser?parseProductDocument(html,url,selectors,productParser):rescueRenderedProducts(html,url,parseProductsFromHtml(html,url,selectors)).products},
+  observe:benchmark?(products,added)=>{if(added)benchmark.batches.push({page:benchmark.batches.length+1,url:page.url(),products:products.length,newProducts:added,status:'verified'})}:undefined,
+  key:p=>p.sourceKey||p.url||p.sku||p.title,
+  step:async()=>{const result=await page.evaluate((selector:string)=>{
+   let root=document.scrollingElement||document.documentElement;
+   // Virtualized shops often scroll an inner list, not the document itself.
+   try{let el=document.querySelector(selector)?.parentElement;while(el){const style=getComputedStyle(el);if(/auto|scroll/.test(style.overflowY)&&el.scrollHeight>el.clientHeight+5){root=el;break}el=el.parentElement}}catch{}
+   const bottom=root.scrollTop+root.clientHeight>=root.scrollHeight-3;
+   if(bottom){const more=Array.from(document.querySelectorAll('button')).find(b=>!b.disabled&&b.getClientRects().length>0&&/^(?:نمایش بیشتر|بارگذاری بیشتر|محصولات بیشتر|load more|show more)$/i.test((b.textContent||'').trim()));more?.click()}
+   root.scrollTop=Math.min(root.scrollHeight,root.scrollTop+Math.max(240,root.clientHeight*.8));
+   return {height:root.scrollHeight,top:root.scrollTop,atEnd:root.scrollTop+root.clientHeight>=root.scrollHeight-3};
+  },xpathToCss(selectors.container)||selectors.container||'body');return {...result,pending:tracker.pending.size>0}},
+  wait:ms=>new Promise(resolve=>setTimeout(resolve,ms)),now:()=>Date.now(),stopped
+ },benchmark?{maxBatches:3,timeoutMs:30000,quietMs:4000,maxRounds:60}:{})}finally{tracker.close()}
+}
+
+export async function parseProductDocument(html:string,base:string,selectors:Selectors,parser:ProductParser):Promise<Product[]>{
+ const embedded=(mode:'next_data'|'script_json')=>{const out:Product[]=[];for(const value of embeddedProductData(html,mode))walkObjects(value,base,out);return out;};
+ const cards=()=>{let active=selectors;if(listSelectorsStatus(selectors)!=='custom'){const found=discoverListSelectorsFromHtml(html,base);if(found.selectors.container)active={...selectors,...found.selectors};}return parseProductsFromHtml(html,base,active);};
+ return dedupe(await parseDownloadedProducts(parser,{lxml:cards,selectolax:cards,jsonld:()=>jsonLdProducts(html,base),next_data:()=>embedded('next_data'),script_json:()=>[...jsonLdProducts(html,base),...embedded('script_json'),...scriptJsonProducts(html,base)],metadata:()=>metadataProduct(html,base),heuristic:()=>heuristicProducts(html,base)}));
+}
+async function scrapeRenderedHtml(url: string, selectors: Selectors, driver: 'playwright'|'puppeteer', stopped?:()=>Promise<boolean>,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
+  // Always route browser extraction through guarded visual-browser snapshot:
+  // it uses safeFetch which respects global source-network Worker/proxy
+  // (e.g. https://proxy.fazilat-ma.workers.dev/?url={url}) and per-profile
+  // indirect. Direct Playwright navigation would bypass that internal proxy
+  // and fail on VPS behind filtering, which is exactly the reported bug:
+  // visual works (guarded) but selector test / extraction did not.
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, driver, indirect);
+  const html = snapshot.text, finalUrl = snapshot.url;
+  dumpRenderedHtml(html, finalUrl, driver);
+  lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+  if (reader) return reader(html, finalUrl);
+  const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+  lastBrowserLayer = rescued.layer;
+  console.log(`[scraper4] ${driver} extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+  return rescued.products;
+}
+async function scrapeListWithPlaywright(url: string, selectors: Selectors, stopped?:()=>Promise<boolean>, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'playwright', stopped, undefined, indirect); }
+async function scrapeListWithPuppeteer(url: string, selectors: Selectors, indirect=false): Promise<Product[]> { return scrapeRenderedHtml(url, selectors, 'puppeteer', undefined, undefined, indirect); }
+async function scrapeListWithCrawleePlaywright(url: string, selectors: Selectors,reader?:(html:string,url:string)=>Promise<Product[]>, indirect=false): Promise<Product[]> {
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, 'playwright', indirect);
+  const html = snapshot.text, finalUrl = snapshot.url;
+  dumpRenderedHtml(html, finalUrl, 'crawlee');
+  lastRenderedSnapshot = renderedSnapshotFromHtml(html, { finalUrl, httpStatus: 0 });
+  if (reader) return reader(html, finalUrl);
+  const rescued = rescueRenderedProducts(html, finalUrl, parseProductsFromHtml(html, finalUrl, selectors));
+  lastBrowserLayer = rescued.layer;
+  console.log(`[scraper4] crawlee extraction via guarded proxy layer: ${rescued.layer} (${rescued.products.length} products, ${finalUrl})`);
+  return rescued.products;
 }
 function parseProductsFromHtml(html: string, baseUrl: string, selectors: Selectors): Product[] {
   const $ = cheerio.load(html); const products: Product[] = [];
@@ -1249,7 +1248,7 @@ function structuralProductFromCard($: any, card: any, base: string): StructuralR
   let image = '';
   const im = card.find('img').first();
   if (im.length) {
-    for (const attr of ['data-zoom-image', 'data-large_image', 'data-src', 'data-lazy-src', 'src']) {
+    for (const attr of ['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src']) {
       const v = im.attr(attr);
       if (v) { image = structuralAbsolute(v, base); break; }
     }
@@ -1529,11 +1528,13 @@ export function heuristicProducts(html: string, baseUrl: string): Product[] {
   // link otherwise extract twice; /shop/ and snp- match the old scraper4.py.
   for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,2500}?)<\/a>/gi)) { const productUrl = absolute(decodeHtml(m[1]), baseUrl); if (!productUrl || seenUrls.has(productUrl) || !/(product|products|\/p\/|\/pd\/|\/shop\/|snp-|kala|sku)/i.test(productUrl) || NON_PRODUCT_URL_RE.test(productUrl)) continue; const chunk = productContextChunk(html, m.index || 0, m[0]); if (!chunk) continue; const title = stripHtml(chunk.match(/<h[1-4]\b[^>]*>([\s\S]{0,500}?)<\/h[1-4]>/i)?.[1] || '') || normalize(decodeHtml(chunk.match(/<img\b[^>]*(?:alt|title)=["']([^"']+)["']/i)?.[1] || '')) || stripHtml(m[2]) || chunkTitle(chunk); const image = heuristicImage(chunk, baseUrl); const priceText = heuristicPriceText(stripPriceFormatChars(stripHtml(chunk.replace(/<(del|s|strike)\b[\s\S]*?<\/\1>/gi, ' ')))); if (!title || title.length < 3 || !image || !priceText || numberFromText(priceText) <= 0) continue; seenUrls.add(productUrl); out.push({ sourceKey: sourceKey(productUrl, title), title, price: numberFromText(priceText), priceText, url: productUrl, image, images: image ? [image] : [], sourcePage: baseUrl, scrapedAt: new Date().toISOString() }); } return dedupe(out); }
 
-export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false): Promise<Product> {
+export async function scrapeDetails(product: Product, selectors: Selectors, indirect = false, document?:{text:string;url:string}): Promise<Product> {
   if (!product.url) return product;
-  const { text, url } = await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
+  const { text, url } = document || await safeText(product.url, 8_000_000, { indirect }); const $ = cheerio.load(text); const body = $.root();
   const css = (selector?: string) => selector ? (xpathToCss(selector) ?? selector) : '';
   const textField = (selector?: string) => selector ? normalize(body.find(css(selector)).first().text()) : '';
+  const priceText = textField(selectors.price), detailPrice = numberFromText(priceText);
+  if (detailPrice > 0) { product.price = detailPrice; product.priceText = priceText; }
   product.shortDesc = textField(selectors.shortDesc) || product.shortDesc;
   product.longDesc = selectors.longDesc ? sanitizeHtml(body.find(css(selectors.longDesc)).first().html() || '', url) : product.longDesc;
   // Specification table: shops render it as <tr><td>name</td><td>value</td></tr>,
@@ -1564,9 +1565,20 @@ export async function scrapeDetails(product: Product, selectors: Selectors, indi
   const weight = textField(selectors.weight); if (weight) product.weight = numberFromText(weight);
   if (selectors.gallery) {
     const images = new Set(product.images);
+    const addRaw = (raw:string)=>{const image=absolute(raw,url); if(image) images.add(image);};
+    const extractFromNode = (node:any)=>{
+      const attrs=['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src','content','href'];
+      for(const attr of attrs){const v=node.attr(attr); if(v) addRaw(v);}
+      const srcset=node.attr('data-srcset')||node.attr('srcset'); if(srcset){for(const part of srcset.split(',')){const u=part.trim().split(/\s+/)[0]; if(u) addRaw(u);}}
+      const style=node.attr('style'); if(style){const m=style.match(/url\(\s*['"]?([^'"\)]+)['"]?\s*\)/i); if(m&&m[1]) addRaw(m[1]);}
+    };
     body.find(css(selectors.gallery)).each((_i, el) => {
-      const node = $(el); const raw = node.attr('data-src') || node.attr('data-large_image') || node.attr('href') || node.attr('src') || '';
-      const image = absolute(raw, url); if (image) images.add(image);
+      const node = $(el);
+      extractFromNode(node);
+      node.find('img,source,a,[data-src],[data-lazy],[data-lazy-src],[data-original],[data-large_image],[data-large-image],[data-zoom-image],[data-full],[data-thumb],[data-image],[data-zoom],[style]').each((__i:number, inner:any)=>{
+        const n=$(inner);
+        extractFromNode(n);
+      });
     });
     product.images = [...images].slice(0, 30); product.image ||= product.images[0] || '';
   }
@@ -1586,12 +1598,7 @@ function sanitizeHtml(html: string, base: string): string {
 }
 
 export function transformProduct(product: Product, profile: Profile): Product {
-  product.title = normalize(product.title + profile.titleSuffix); const value = profile.priceValue;
-  if (profile.priceMode === 'add') product.price += value;
-  if (profile.priceMode === 'percent') product.price *= 1 + value / 100;
-  if (profile.priceMode === 'multiply') product.price *= value;
-  if (profile.roundPrice > 0) product.price = Math.ceil(product.price / profile.roundPrice) * profile.roundPrice;
-  product.price = Math.round(product.price); return product;
+  return applyResultAdjustments(product, profile);
 }
 
 export async function mapLimit<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
@@ -1625,8 +1632,23 @@ const SUGGESTION_CANDIDATES:Record<string,{type?:'text'|'link'|'image';selectors
   gallery:{type:'image',selectors:['.woocommerce-product-gallery img','.product-gallery img','[data-gallery] img','.gallery img','.product-images img','[class*="gallery"] img']},
   variations:{selectors:['.variations','.variations_form','[data-product_variations]','.product-options']}
 };
-export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all'){
-  const page=await safeText(url,4_000_000),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
+/** Selector tools read the selected browser's DOM, never a product-parser result.
+ * Capture through the existing drivers so navigation/context match extraction.
+ * network_api uses Playwright for DOM selectors; API JSON has no CSS nodes.
+ */
+export async function selectorToolDocument(url:string,engine?:string, indirect=false):Promise<{text:string;url:string}>{
+  if(!isBrowserSelectorEngine(engine))return safeText(url,4_000_000,{indirect});
+  await assertPublicUrl(url);
+  // Always use guarded visual-browser snapshot for browser engines: it routes via
+  // safeFetch which respects both per-profile indirect and global source-network
+  // Worker/proxy (e.g. https://proxy.fazilat-ma.workers.dev/?url={url}) set in
+  // connections. Direct Playwright navigation would bypass that internal proxy.
+  const { renderBrowserSnapshot } = await import('./visual-browser.js');
+  const snapshot = await renderBrowserSnapshot(url, engine||'playwright', indirect);
+  return { text: snapshot.text, url: snapshot.url };
+}
+export async function suggestSelectors(url:string,mode:'list'|'detail'|'all'='all',engine?:string,document?:{text:string;url:string}, indirect=false){
+  const page=document||await selectorToolDocument(url,engine, indirect),selectors:Record<string,string>={},evidence:Record<string,unknown>={};
   // List fields go through the same discovery the engines use (1.128.0), so the
   // dashboard button proposes structural selectors for unknown shops too.
   if(mode==='list'||mode==='all'){
@@ -1659,6 +1681,7 @@ export type SelectorConfigStatus = 'empty' | 'partial' | 'default' | 'custom';
 export function listSelectorsStatus(selectors: Selectors | undefined | null): SelectorConfigStatus {
   const values = LIST_SELECTOR_KEYS.map(key => String((selectors as any)?.[key] || '').trim());
   if (values.every(value => !value)) return 'empty';
+  if(LIST_SELECTOR_KEYS.some(key=>String((selectors as any)?.[key]||'').trim()&&String((selectors as any)?.[key]).trim()!==String((DEFAULT_SELECTORS as any)[key])))return 'custom';
   if (values.some(value => !value)) return 'partial';
   const isDefault = LIST_SELECTOR_KEYS.every(key => String((selectors as any)?.[key]).trim() === String((DEFAULT_SELECTORS as any)[key]));
   return isDefault ? 'default' : 'custom';
@@ -1974,9 +1997,15 @@ function deriveStructuralFieldSelectors($: cheerio.CheerioAPI, sampleNodes: any[
   const priceWinner = [...priceVotes.entries()].sort((a, b) => b[1].count - a[1].count || a[1].length - b[1].length)[0];
   return { title: titleWinner[0], price: priceWinner ? priceWinner[0] : '', cardIsLink: cardIsLink * 2 >= sampleNodes.length };
 }
-export async function testSelector(url: string, selector: string, type = 'text'): Promise<{ count: number; values: string[] }> {
-  const { text, url: final } = await safeText(url, 4_000_000); const $ = cheerio.load(text); const values: string[] = [];
+export async function testSelector(url: string, selector: string, type = 'text',engine?:string,gallery?:{max?:number;skipFirst?:boolean;indirect?:boolean}): Promise<{ count: number; values: string[] }> {
+  const indirect = Boolean((gallery as any)?.indirect);
+  const { text, url: final } = await selectorToolDocument(url,engine, indirect); const $ = cheerio.load(text); const values: string[] = [];
   let nodes: cheerio.Cheerio<any>; try { nodes = $(xpathToCss(selector) ?? selector); } catch (error) { throw invalidSelectorError(selector, error); }
+  if(type==='gallery'&&isBrowserSelectorEngine(engine)){
+    const images:string[]=[];
+    nodes.each((_i,el)=>{const node=$(el);const candidates=node.is('img,source,a[href]')?node.add(node.find('img,source')):node.find('img,source');candidates.each((_j,img)=>{const image=$(img),value=absolute(image.attr('data-src')||image.attr('src')||image.attr('href')||'',final);if(value&&!images.includes(value))images.push(value)});});
+    const values=images.slice(gallery?.skipFirst?1:0).slice(0,Math.max(1,Math.min(30,Number(gallery?.max)||30)));return {count:values.length,values};
+  }
   nodes.slice(0, 20).each((_i, el) => { const node = $(el); let value = type === 'link' ? absolute(node.attr('href') || '', final) : type === 'image' ? absolute(node.attr('src') || node.attr('data-src') || '', final) : normalize(node.text()); if (value) values.push(value.slice(0, 1000)); });
   return { count: nodes.length, values };
 }
@@ -2226,16 +2255,20 @@ export async function diagnoseBenchmarkEngine(
   return { engine, candidates, extracted: list.length, complete, sample, dropReasons, hint, signals };
 };
 
-export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
+export async function diagnoseExtraction(profile: Profile, urlOverride = '', onProgress?: DiagnosticObserver, withDetails=false) {
   const started = Date.now(), url = String(urlOverride || profile.url || '').trim();
   const stages: any[] = [], recommendations: string[] = [];
-  const add = (name: string, ok: boolean, summary: string, details: any = {}) => stages.push({ name, ok, summary, ...details });
+  if(profile.pagination==='none'&&profile.networkIndirect&&['auto','playwright','puppeteer','crawlee_playwright','network_api'].includes(profile.extractionEngine||'auto'))recommendations.push('حالت بدون صفحه‌بندی از مسیر قدیمی موتور استفاده می‌کند؛ در موتورهای مرورگر، عبور ترافیک مرورگر از Worker تضمین نشده است. گزینهٔ اسکرول تا انتها همچنان مسیر محافظت‌شدهٔ جداگانه دارد.');
+  let parserResults:any[]|undefined;
+  const progress = diagnosticProgress(onProgress);
+  const add = (name: string, ok: boolean, summary: string, details: any = {}) => { const stage = { name, ok, summary, ...details }; stages.push(stage); progress.finish(stage); };
   if (!url) {
     add('configuration', false, 'آدرس مبدأ خالی است.');
-    return { ok: false, profileId: profile.id, url, stages, selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
+    return { ok: false, profileId: profile.id, url, stages, ...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}), selectorsToSave: {}, recommendations: ['آدرس صفحهٔ فهرست محصولات را در پروفایل وارد کنید.'] };
   }
   let page: { text: string; url: string };
   try {
+    progress.begin('network', 'در حال اتصال به مبدأ و دریافت HTML…', {url, indirect: Boolean(profile.networkIndirect)});
     page = await safeText(url, 4_000_000, { indirect: Boolean(profile.networkIndirect) });
     const bytes = Buffer.byteLength(page.text, 'utf8');
     const title = normalize(page.text.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ') || '');
@@ -2246,7 +2279,7 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
     recommendations.push(/ضدربات|چالش|challenge|403/i.test(text)
       ? 'سایت صفحهٔ ضدربات برگردانده است؛ دسترسی این دستگاه را در مبدأ مجاز کنید یا از روش اتصال غیرمستقیم استفاده کنید.'
       : 'آدرس، دسترسی اینترنت دستگاه و تنظیمات روش اتصال مبدأ را بررسی کنید.');
-    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, selectorsToSave: {}, recommendations };
+    return { ok: false, profileId: profile.id, url, durationMs: Date.now() - started, stages, ...(selectedProductParser(profile)?{parserResults:unavailableProductParsers('Page HTML unavailable.')} :{}), selectorsToSave: {}, recommendations };
   }
   let products: Product[] = [], usedEngine: ExtractionEngine | '' = '';
   // 1.135.0 — verified discoveries the route persists when the profile's
@@ -2256,7 +2289,8 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   const selectorsToSave: Record<string, string> = {};
   const overriddenTestUrl = String(urlOverride || '').trim().length > 0 && url !== String(profile.url || '').trim();
   try {
-    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect));
+    progress.begin('list-extraction', 'در حال اجرای موتور استخراج فهرست و بررسی سلکتورها…', {engine: profile.extractionEngine || 'auto'});
+    const result = await scrapeListWithMeta(page.url, profile.selectors, profile.extractionEngine || 'auto', profile.extractionEngineMaster, true, '', true, Boolean(profile.networkIndirect),profile.pagination==='scroll',undefined,page,selectedProductParser(profile),selectedProductParser(profile)?async(html,base)=>{parserResults=await compareProductParsers(parser=>parseProductDocument(html,base,profile.selectors,parser),BROWSER_ENGINES.has(profile.extractionEngine)?'rendered-html':'downloaded-html');}:undefined);
     products = result.products; usedEngine = result.usedEngine;
     // 1.146.0 — a browser run that finds nothing must say WHY: no browser
     // on the device, or rendered-but-empty (the layer names the outcome).
@@ -2276,30 +2310,34 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.responsesSeen === 0 && result.networkApiStats.failedResponses > 0 ? `صفحه ${result.networkApiStats.failedResponses.toLocaleString('fa-IR')} درخواست API زد ولی همه ناموفق بودند؛ کدهای وضعیت در لاگ است.`
         : profile.extractionEngine === 'network_api' && result.networkApiStats && result.networkApiStats.parsed === 0 ? `مرورگر ${result.networkApiStats.jsonBodies.toLocaleString('fa-IR')} پاسخ API گرفت ولی محصولی از آن‌ها خوانده نشد.`
         : 'هیچ محصولی از موتورهای خودکار یا سلکتورهای دستی استخراج نشد.',
-      { count: products.length, usedEngine, ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
+      { count: products.length, usedEngine, ...(selectedProductParser(profile)?{productParser:selectedProductParser(profile)}:{}), ...(result.browserDiagnostics?{browser:result.browserDiagnostics}:{}), ...(result.browserLayer ? { browserLayer: result.browserLayer } : {}), ...(browserProfile ? { browserAvailable } : {}), ...(result.engineError ? { engineError: result.engineError } : {}), ...(result.networkApiStats ? { networkApi: result.networkApiStats } : {}), ...(result.renderedSnapshot ? { snapshot: result.renderedSnapshot } : {}), complete, selectors: profile.selectors, samples: products.slice(0, 5).map(x => ({ title: x.title, price: x.price, priceText: x.priceText, url: x.url, image: x.image, sku: x.sku })) });
   } catch (error) {
-    add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors });
+    add('list-extraction', false, error instanceof Error ? error.message : String(error), { selectors: profile.selectors, ...((error as any)?.browserDiagnostics?{browser:(error as any).browserDiagnostics}:{}), ...((error as any)?.scrollRequests?{scrollRequests:(error as any).scrollRequests}:{}) });
   }
+  if(selectedProductParser(profile)){parserResults??=unavailableProductParsers('Selected loader did not provide usable HTML.');add('parser-comparison',true,'مقایسهٔ هشت پارسر بدون تغییر انتخاب ذخیره‌شده انجام شد.',{comparisonOnly:true,results:parserResults});}
   // 1.128.0 — when nothing extracted, show what proactive auto-discovery sees
   // on the same page. Verified discoveries above are handed to the route for
   // auto-save (1.135.0); this block still shows raw, unverified findings for
   // the manual suggest button when auto-save had nothing to persist.
   if (!products.length) {
     try {
+      progress.begin('selector-discovery', 'در حال جست‌وجوی ساختار کارت‌های محصول…');
       const discovery = discoverListSelectorsFromHtml(page.text, page.url);
       const proposed = Object.entries(discovery.selectors).filter(([, value]) => String(value || '').trim());
       if (discovery.method !== 'none' && proposed.length >= 2 && discovery.selectors.container && discovery.selectors.title) {
         add('selector-discovery', true,
-          `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این سلکتورها راستی‌آزمایی شدند و با ذخیرهٔ آن‌ها استخراج شروع می‌شود.`,
+          `موتور استخراج ${discovery.containerCount.toLocaleString('fa-IR')} کارت محصول را بدون نیاز به سلکتور دستی پیدا کرد (روش: ${discovery.method === 'structural' ? 'تحلیل ساختاری صفحه' : discovery.method === 'mixed' ? 'ترکیبی' : 'الگوهای آماده'})؛ این یافته مربوط به HTML اولیه است و موفقیت مرورگر یا اسکرول را ثابت نمی‌کند.`,
           { method: discovery.method, selectors: discovery.selectors, evidence: discovery.evidence, containerCount: discovery.containerCount });
-        if (!Object.keys(selectorsToSave).length) recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
+        if (!Object.keys(selectorsToSave).length && !(await verifyListSelectors(page.text,page.url,profile.selectors)).ok) recommendations.push('دکمهٔ «پیشنهاد خودکار سلکتورها» را بزنید تا همین سلکتورهای پیداشده ذخیره شوند، سپس استخراج را دوباره اجرا کنید.');
       } else {
         add('selector-discovery', false, 'کشف خودکار هم الگوی کارت محصولی در این صفحه پیدا نکرد؛ احتمالاً صفحه جاوااسکریپتی است (پس از بارگذاری کامل رندر می‌شود)، نیازمند ورود است، یا محصولی در آن نیست.', { method: discovery.method });
       }
-    } catch { /* informational only */ }
+    } catch(error) { progress.finish({name:'selector-discovery',ok:false,summary:String(error)}); }
   }
+  progress.begin('selector-evidence', 'در حال بررسی تک‌تک سلکتورها روی HTML واقعی…');
   const evidence: Record<string, unknown> = {};
   for (const field of ['container', 'title', 'price', 'link', 'image'] as const) {
+    progress.begin('selector-evidence', 'در حال بررسی سلکتور '+field, {field});
     const selector = String((profile.selectors as any)?.[field] || '').trim();
     if (!selector) { evidence[field] = { ok: false, count: 0, error: 'سلکتور خالی است' }; continue; }
     try {
@@ -2308,37 +2346,23 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
       evidence[field] = { ok: values.length > 0, count: values.length, sample: values.slice(0, 3) };
     } catch (error) { evidence[field] = { ok: false, count: 0, error: error instanceof Error ? error.message : String(error) }; }
   }
-  const evidenceOk = ['container', 'title'].every(key => (evidence[key] as any)?.ok);
-  // The raw selector may be pinned with :nth-of-type(N) and match a single card
-  // while extraction widens it to every card. Report the number extraction
-  // really uses, otherwise the advice contradicts the result.
-  let containerCount = Number((evidence.container as any)?.count || 0);
-  let widenedContainers = 0;
-  try {
-    const $page = cheerio.load(page.text);
-    widenedContainers = containerNodes($page, String((profile.selectors as any)?.container || '').trim()).length;
-    if (widenedContainers > containerCount) {
-      (evidence.container as any).effectiveCount = widenedContainers;
-      (evidence.container as any).note = 'سلکتور ظرف با :nth-of-type محدود شده بود؛ استخراج آن را به ' + widenedContainers + ' کارت گسترش داد.';
-      containerCount = widenedContainers;
-    }
-  } catch {}
-  // Document-wide evidence can be green while container-scoped extraction finds
-  // nothing. That contradiction is itself the diagnosis, so surface it.
-  const contradiction = evidenceOk && products.length === 0;
-  add('selector-evidence', evidenceOk && !contradiction,
-    contradiction
-      ? 'سلکتورها روی کل صفحه نتیجه دارند اما داخل هر ظرف محصول چیزی پیدا نشد؛ یعنی سلکتور ظرف به کارت محصول اشاره نمی‌کند (احتمالاً کل فهرست را گرفته) یا عنوان/قیمت داخل ظرف نیست.'
-      : evidenceOk ? 'سلکتورهای پایه روی پاسخ واقعی نشانه دارند.' : 'یک یا چند سلکتور پایه روی پاسخ واقعی نتیجه نداد.',
-    { evidence, containerCount, scope: 'این بررسی روی کل صفحه انجام می‌شود، ولی استخراج واقعی فقط داخل هر ظرف را می‌بیند.' });
-  if (contradiction) recommendations.push(containerCount <= 1
-    ? 'سلکتور ظرف فقط ' + containerCount + ' مورد در کل صفحه پیدا کرد؛ یعنی به‌جای هر کارت محصول، کل فهرست را گرفته است. سلکتوری بنویسید که به تعداد محصولات صفحه تکرار شود.'
-    : 'سلکتور ظرف ' + containerCount + ' مورد پیدا کرد ولی عنوان داخل آن‌ها نبود؛ سلکتور عنوان باید نسبت به ظرف داخلی باشد یا خودِ ظرف را هدف بگیرد.');
+  const scoped=await verifyListSelectors(page.text,page.url,{...profile.selectors,...selectorsToSave});
+  const containerCount=scoped.containerCount;
+  const evidenceOk=containerCount>0&&Number(scoped.title.count||0)>0;
+  const scopedEvidence={container:{ok:containerCount>0,count:containerCount},...Object.fromEntries(['title','price','link','image'].map(key=>[key,{...(scoped as any)[key],ok:(scoped as any)[key].count>0}]))};
+  const evidenceApplicable=initialSelectorEvidenceApplies(profile.extractionEngine);
+  recommendations.push(...selectorDiagnosticAdvice(profile.selectors,products));
+  if(products.length&&products.every(p=>!p.price&&!p.url&&!p.image))add('product-completeness',false,'فقط عنوان استخراج شد؛ هیچ قیمت، لینک یا تصویری برای محصول‌ها به دست نیامد.');
+  add('selector-evidence',evidenceOk||!evidenceApplicable,
+    !evidenceApplicable?'این شاهد فقط HTML اولیه است؛ اعتبار سلکتورهای DOM مرورگر از آن تعیین نمی‌شود. برای اعتبارسنجی از آزمایش سلکتور با همان موتور استفاده کنید.':evidenceOk?'سلکتورها داخل کارت‌های واقعی HTML اولیه معتبرند؛ نتیجهٔ مرورگر و اسکرول جداگانه بررسی می‌شود.':'سلکتور ظرف یا عنوان داخل کارت‌های HTML اولیه نتیجه نداد.',
+    {skipped:!evidenceApplicable,evidenceSource:'initial-html',evidenceValid:evidenceOk,evidenceApplicable,evidence:scopedEvidence,containerCount,cardsSampled:scoped.cardsSampled,documentEvidence:evidence,scope:'عنوان، قیمت، لینک و تصویر فقط داخل کارت‌ها بررسی شدند؛ شاهد کل صفحه نمونهٔ محدود است.'});
   let detail: any = null;
+  progress.begin('detail-extraction', 'در حال بررسی نمونهٔ محصول و استخراج جزئیات…');
   const candidate = products.find(product => product.url);
   const detailKeys = ['shortDesc', 'longDesc', 'sku', 'category', 'tags', 'weight', 'stock', 'brand', 'detailImage', 'gallery', 'variations'];
   const wantsDetail = detailKeys.some(key => String((profile.selectors as any)?.[key] || '').trim().length > 0);
-  if (candidate && wantsDetail) {
+  if(withDetails){detail=await diagnosticDetails(candidate,profile,profile.extractionEngine||'auto',extractDiagnosticSample);add('detail-extraction',detail.ok,detail.ok?'جزئیات خودکار نمونه استخراج شد.':detail.error,{sample:detail.product,detail});}
+  else if (candidate && wantsDetail) {
     try {
       const extracted = await scrapeDetails(candidate, profile.selectors, Boolean(profile.networkIndirect));
       detail = { url: candidate.url, title: extracted.title, shortDesc: extracted.shortDesc, descriptionCharacters: String(extracted.longDesc || '').length, sku: extracted.sku, brand: extracted.brand, stock: extracted.stock, weight: extracted.weight, category: extracted.category, tags: extracted.tags, image: extracted.image, galleryCount: extracted.images?.length || 0, variations: extracted.variations?.slice(0, 20) };
@@ -2348,26 +2372,41 @@ export async function diagnoseExtraction(profile: Profile, urlOverride = '') {
   // Detail selectors are suggested from a real product page only when some
   // are missing; already-configured keys are never overwritten.
   const detailSample = candidate && candidate.url ? candidate.url : '';
-  if (!overriddenTestUrl && detailSample) {
+  if (!withDetails && !overriddenTestUrl && detailSample) {
     const missingDetail = detailKeys.filter(key => !String((profile.selectors as any)?.[key] || '').trim().length);
     if (missingDetail.length) {
       try {
+        progress.begin('detail-discovery', 'در حال دریافت صفحهٔ محصول برای پیشنهاد سلکتورهای جزئیات…');
         const suggested = await suggestSelectors(detailSample, 'detail');
         for (const [key, value] of Object.entries(suggested.selectors || {})) {
           if (String(value || '').trim() && (missingDetail as string[]).includes(key)) selectorsToSave[key] = String(value);
         }
-      } catch { /* discovery is best-effort; the report below still stands */ }
+        progress.finish({name:'detail-discovery',ok:true,summary:'پیشنهاد سلکتورهای جزئیات بررسی شد.'});
+      } catch(error) { progress.finish({name:'detail-discovery',ok:false,summary:String(error)}); }
     }
   }
   if (Object.keys(selectorsToSave).length) recommendations.push('سلکتورهای پیداشده به‌صورت خودکار در تب سلکتورها ذخیره شدند؛ استخراج را دوباره اجرا کنید.');
   const deepPage = Number((url.match(/[?&](page|pg|pageNumber|page_number)=(\d+)/i) || [])[2] || 0);
   if (!products.length && deepPage > 1) recommendations.push(`آدرس صفحهٔ ${deepPage.toLocaleString('fa-IR')} است؛ اول همین عیب‌یاب را روی صفحهٔ اول (بدون پارامتر صفحه) اجرا کنید — صفحه‌های عمیق اغلب خالی‌اند یا ساختار دیگری دارند.`);
-  if (!products.length) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
-  else {
+  if (!products.length && !evidenceOk) recommendations.push('سلکتور ظرف محصول را با HTML واقعی اصلاح کنید؛ پیشنهاد خودکار را اجرا و سپس دوباره همین عیب‌یاب را بزنید.');
+  else if(products.length) {
     if (!products.some(x => x.price > 0)) recommendations.push('محصول پیدا شده ولی قیمت صفر است؛ سلکتور قیمت و واحد/متن قیمت را بررسی کنید.');
     if (!products.some(x => x.url)) recommendations.push('لینک محصول پیدا نشده است؛ سلکتور لینک باید به عنصر a یا ویژگی href/data-url برسد.');
     if (!products.some(x => x.image)) recommendations.push('تصویر پیدا نشده است؛ data-src، srcset یا سلکتور تصویر را بررسی کنید.');
   }
+  if(!products.length&&evidenceOk)recommendations.push('سلکتورهای فعلی در کارت‌های HTML اولیه معتبرند؛ خطای مرحلهٔ استخراج، مرورگر و ارتباط غیرمستقیم را بررسی کنید. صفر محصول پس از خطای مرورگر دلیل خرابی سلکتور نیست و کامل‌شدن اسکرول را تأیید نمی‌کند.');
   const failed = stages.filter(stage => !stage.ok);
-  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, recommendations, detail, selectorsToSave };
+  return { ok: products.length > 0 && failed.length === 0, profileId: profile.id, url, finalUrl: page.url, durationMs: Date.now() - started, productCount: products.length, usedEngine, stages, ...(parserResults?{parserResults}:{}), recommendations, detail, sample:detail?.product||products[0]||null, selectorsToSave };
+}
+
+/** Automatic sample detail extraction uses the selected loader's document once.
+ * Discovered selectors are ephemeral; never persist or mutate the list profile. */
+export async function extractDiagnosticSample(product:Product,profile:Profile,engine:string){
+ if(isBrowserSelectorEngine(engine)&&profile.networkIndirect)throw Error('استخراج جزئیات مرورگری با مسیر غیرمستقیم تضمین نشده است؛ برای جلوگیری از اتصال مستقیم پنهان اجرا نشد.');
+ const page=isBrowserSelectorEngine(engine)?await selectorToolDocument(product.url,engine):await safeText(product.url,4_000_000,{indirect:Boolean(profile.networkIndirect)});
+ const suggested=await suggestSelectors(page.url,'detail',engine,page);
+ const selectors={...profile.selectors,...suggested.selectors} as Selectors;
+ const extracted=await scrapeDetails(product,selectors,Boolean(profile.networkIndirect),page);
+ const fields=['shortDesc','longDesc','sku','brand','stock','weight','category','tags','images','specs','variations'].filter(key=>{const v=(extracted as any)[key];return Array.isArray(v)?v.length>0:v!==undefined&&v!==null&&String(v)!==''});
+ return {product:extracted,fields,selectors:suggested.selectors,finalUrl:page.url,warning:fields.length?'':'صفحه خوانده شد، ولی فیلد جزئیات قابل استخراج پیدا نشد.'};
 }

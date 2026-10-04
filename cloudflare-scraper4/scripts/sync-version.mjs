@@ -14,16 +14,25 @@ const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const checkOnly = process.argv.includes('--check');
 const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
 const version = String(pkg.version || '').trim();
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  console.error(`sync-version: package.json version must be x.y.z, got "${version}"`);
+// Releases published by the agent carry a trailing + (1.178.0+): the marker is how a
+// "+build" release is told apart from the hand-published ones while reading a log, a
+// dashboard header or /health output. It sits outside the numeric core, so semver
+// comparison helpers (numericCore in worker-src/deployer-branches.ts) and npm itself
+// ignore it - npm ci / npm install keep working, and the deployer's
+// serving-vs-checkout string comparison stays exact because both sides read this file.
+const VERSION_RE = /^\d+\.\d+\.\d+(?:\+[0-9A-Za-z.\u06F0-\u06F9-]*)?$/;
+if (!VERSION_RE.test(version)) {
+  console.error(`sync-version: package.json version must be x.y.z or x.y.z+marker, got "${version}"`);
   process.exit(1);
 }
 const faDigits = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = value => String(value).replace(/\d/g, d => faDigits[Number(d)]);
 const V = version;
 const FA = toFa(version);
-const N = String.raw`\d+\.\d+\.\d+`;
-const F = String.raw`[۰-۹]+\.[۰-۹]+\.[۰-۹]+`;
+// Optional trailing + in the SEARCH patterns too, so a marker release can be re-synced
+// from either state (1.178.0 -> 1.178.0+ and back) without losing an anchor.
+const N = String.raw`\d+\.\d+\.\d+\+?`;
+const F = String.raw`[۰-۹]+\.[۰-۹]+\.[۰-۹]+\+?`;
 
 // Each rule is anchored on a label so historical changelog entries are never touched.
 const rules = [
@@ -43,7 +52,6 @@ const rules = [
   { file: 'scripts/local-deployer-ui.mjs', label: 'deployer guide expected health version', find: new RegExp(String.raw`([Ee]xpected version: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs expected version', find: new RegExp(String.raw`(# Expected: )${N}`, 'g'), to: `$1${V}` },
   { file: 'scraper4.ts', label: 'header docs health version', find: new RegExp(String.raw`(verify version is )${N}`, 'g'), to: `$1${V}` },
-  { file: 'worker-tests/runtime.test.mjs', label: 'runtime test wrangler assertion', find: new RegExp(String.raw`(WORKER_VERSION\\s\*=\\s\*")${N}(")`, 'g'), to: `$1${V}$2` },
   // The lockfile carries the version twice. If it drifts, every `npm install`
   // rewrites it, the worktree is permanently dirty, and the deployer's
   // auto-update refuses to run (it must never reset --hard over local work).

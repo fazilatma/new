@@ -9,11 +9,33 @@ type FontName=keyof typeof FONT_FILES;
 function font(name:string){return FONT_FILES[name.toLowerCase() as FontName]}
 export function fontStylesheet(name:string):Response{
   const item=font(name);if(!item)return new Response('Font not found',{status:404});
-  const css=Object.keys(item.weights).map(weight=>`@font-face{font-family:"${item.family}";src:url("/assets/fonts/${name.toLowerCase()}-${weight}.woff2") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`).join('\n');
-  return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','x-content-type-options':'nosniff'}});
+  const lower=name.toLowerCase();
+  const css=Object.keys(item.weights).map(weight=>{
+    const hash=(item.weights as Record<string,string>)[weight];
+    const direct=`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`;
+    const local=`/assets/fonts/${lower}-${weight}.woff2`;
+    return `@font-face{font-family:"${item.family}";src:url("${direct}") format("woff2"),url("${local}") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`;
+  }).join('\n');
+  return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
 }
 export async function fontFile(name:string,weight:string):Promise<Response>{
   const item=font(name),hash=item&&(item.weights as Record<string,string>)[weight];if(!item||!hash)return new Response('Font file not found',{status:404});
-  const upstream=await fetch(`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,{headers:{accept:'font/woff2'}});if(!upstream.ok)return new Response('Font upstream unavailable',{status:502});
-  return new Response(upstream.body,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+  const urls=[
+    `https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,
+    ...(name.toLowerCase()==='vazir'?[
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/Vazir-${weight==='400'?'Regular':weight==='700'?'Bold':weight}.woff2`,
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/woff2/Vazirmatn-${weight}.woff2`
+    ]:[]),
+  ];
+  let last:Response|null=null;
+  for(const url of urls){
+    try{
+      const upstream=await fetch(url,{headers:{accept:'font/woff2'}});
+      if(!upstream.ok){ last=new Response(`Font upstream ${upstream.status}`,{status:502}); continue; }
+      return new Response(upstream.body,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
+    } catch (e){
+      last=new Response('Font fetch failed',{status:502});
+    }
+  }
+  return last||new Response('Font upstream unavailable',{status:502});
 }

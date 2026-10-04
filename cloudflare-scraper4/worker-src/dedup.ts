@@ -39,7 +39,7 @@ export function parseSuffixFormats(input: unknown): string[] {
 const CODE_CHAR = '[\\p{L}\\p{N}]';
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Compiles each format into an end-of-title matcher; `x` accepts a 1–10 digit number. */
+/** Compiles each format into an end-of-title matcher; `x` accepts a 1–20 character letter/number code. */
 export function suffixPatterns(formats: string[]): RegExp[] {
   return parseSuffixFormats(formats).map(format => {
     const body = escapeRegex(format).replace(/[xX]+/g, CODE_CHAR + '{1,20}').replace(/\s+/g, '\\s*');
@@ -52,7 +52,7 @@ export function suffixPatterns(formats: string[]): RegExp[] {
  * «(کد A12)», «(کد ب۳)» and «(کد 7)» interchangeably. \p{L}\p{N} keeps Persian,
  * Arabic and Latin characters all valid.
  */
-export const GENERIC_CODE_SUFFIX = /(?:\s|[-–—_·.])*[\[(]\s*(?:کد|كد|code|sku)\s*[:：#-]?\s*[\p{L}\p{N}][\p{L}\p{N}\s._/-]{0,40}?\s*[\])]\s*$/iu;
+export const GENERIC_CODE_SUFFIX = /(?:[\s\u200c\u200d]|[-–—_·.])*[\[(][\s\u200c\u200d]*(?:کد|كد|code|sku)[\s\u200c\u200d]*[:：#-]?[\s\u200c\u200d]*[\p{L}\p{N}][\p{L}\p{N}\s\u200c\u200d._/-]{0,40}?[\s\u200c\u200d]*[\])][\s\u200c\u200d]*$/iu;
 
 /**
  * True when a title ends with a product-code suffix: either one of the

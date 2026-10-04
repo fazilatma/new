@@ -1,0 +1,44 @@
+# Deploy scraper4 to sc.fazhook.workers.dev (worker name = sc)
+# This is root wrangler.toml for Cloudflare Workers Builds with Root "/"
+# It points to cloudflare-scraper4 source so that https://sc.fazhook.workers.dev shows scraper program, not webconsole proxy
+name = "sc"
+main = "cloudflare-scraper4/worker-src/main.ts"
+compatibility_date = "2026-08-19"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "scraper4-cloudflare-db"
+migrations_dir = "cloudflare-scraper4/migrations"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "scraper4-cloudflare-jobs"
+
+[[queues.producers]]
+binding = "JOBS_DLQ"
+queue = "scraper4-cloudflare-jobs-dlq"
+
+[[queues.consumers]]
+queue = "scraper4-cloudflare-jobs"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "scraper4-cloudflare-jobs-dlq"
+max_concurrency = 8
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+WORKER_VERSION = "1.298.0+"
+REQUEST_TIMEOUT_MS = "25000"
+MAX_RESPONSE_BYTES = "8000000"
+DETAIL_CONCURRENCY = "2"
+AI_DESCRIPTION_CONCURRENCY = "2"
+JOB_CHUNK_SIZE = "2"
+
+[observability.logs]
+enabled = true
+invocation_logs = true

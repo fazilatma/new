@@ -76,7 +76,8 @@ test('rendered snapshot: every browser driver reports what it saw', async () => 
   const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
   assert.ok(scraper.includes('export function renderedSnapshotFromHtml'), 'the builder must be exported');
   assert.ok(scraper.includes('lastRenderedSnapshot=null;'), 'each run must reset the snapshot');
-  assert.equal(scraper.split('lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:').length - 1, 3, 'all three DOM drivers must snapshot with their landing');
+  assert.equal(scraper.split('lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl:page.url(),httpStatus:').length - 1, 2, 'Puppeteer and Crawlee must snapshot with their landing');
+  assert.ok(scraper.includes('lastRenderedSnapshot=renderedSnapshotFromHtml(html,{finalUrl,httpStatus})'), 'Playwright helper landing and real status must be retained');
   assert.ok(scraper.includes('renderedSnapshotFromHtml(await page.content(), { finalUrl: page.url(), httpStatus: navStatus })'), 'network_api must snapshot the rendered page with its landing too');
   assert.ok(scraper.includes('renderedSnapshot:lastRenderedSnapshot'), 'the empty result must carry the snapshot');
   assert.ok(scraper.includes('{ snapshot: result.renderedSnapshot }'), 'the diagnostic must surface the snapshot');
@@ -84,8 +85,11 @@ test('rendered snapshot: every browser driver reports what it saw', async () => 
 
 test('blank landings: drivers retry once, then fail loud with a landing-aware summary', async () => {
   const scraper = await readFile(join(ROOT, 'render-src', 'scraper.ts'), 'utf8');
-  assert.equal(scraper.split('isBlankPageUrl(page.url())').length - 1, 7, 'all four drivers must detect blank landings');
-  assert.equal(scraper.split('retryResponse').length - 1, 6, 'the three goto drivers must retry once');
+  assert.equal(scraper.split('isBlankPageUrl(page.url())').length - 1, 5, 'the unchanged browser drivers must detect blank landings');
+  assert.equal(scraper.split('retryResponse').length - 1, 4, 'the unchanged goto drivers must retry once');
+  const profile = await readFile(join(ROOT, 'render-src', 'playwright-python.ts'), 'utf8');
+  assert.ok(profile.includes("['','about:blank','chrome://newtab/'].includes(page.url()))continue"), 'Playwright must retry blank landings');
+  assert.ok(profile.includes('Playwright navigation did not reach'), 'Playwright must fail after all blank attempts');
   assert.ok(scraper.includes('به صفحه نرسید'), 'a blank landing after retry must fail loud, in Persian');
   assert.ok(scraper.includes('navStatus'), 'the navigation HTTP status must be captured for forensics');
   assert.ok(scraper.includes('صفحهٔ خالی تحویل گرفت'), 'a rendered-but-empty page must get its own summary');

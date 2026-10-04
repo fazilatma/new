@@ -107,7 +107,7 @@ export function applyPrice(op: string, value: string, current: number): number |
 }
 
 export function basalamStatuses(status: string) {
-  const map: Record<string, string[]> = { all: ['2976', '3790', '3567', '3568', '4184', '2977', '2978', '3248', '4221'], active: ['2976'], inactive: ['3790'], not_approved: ['3567'], pending: ['3568'], archived: ['4184'] };
+  const map: Record<string, string[]> = { all: ['2976', '3790', '3567', '3568', '4184', '2977', '2978', '3248', '4221'], active: ['2976'], inactive: ['3790'], not_approved: ['3567'], pending: ['3568'], archived: ['4184'], ledger: ['2976', '3567'], visible: ['2976', '3567'] };
   return map[status] || ([2976, 3790, 3567, 3568, 4184].includes(Number(status)) ? [String(status)] : map.all);
 }
 
@@ -180,16 +180,44 @@ export function categoryRows(title: string, categories: AiCategoryOption[]) {
   return rows.map((row, index) => { const name = String(row.path || row.name), normalized = normalizeCategoryText(name), score = words.reduce((sum, word) => sum + (normalized.includes(word) ? word.length + 2 : 0), 0); return { row, index, name, score }; }).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 500);
 }
 
-export function categoryPrompt(title: string, categories: AiCategoryOption[]) {
+export type CategoryManualGuidance = {
+  profileName?: string;
+  profileId?: string;
+  suffix?: string;
+  manualIds: number[];
+  manualRows?: AiCategoryOption[];
+};
+export function categoryPrompt(title: string, categories: AiCategoryOption[], manual?: CategoryManualGuidance) {
   const ranked = categoryRows(title, categories), allowed: AiCategoryOption[] = [], lines: string[] = [];
   let length = 0;
+  const manualSet = new Set((manual?.manualIds || []).map(Number).filter(n => n > 0));
+  const manualRows = (manual?.manualRows || []).filter(r => manualSet.has(Number(r.id)));
+  const manualIdsInCategories = categories.filter(c => manualSet.has(Number(c.id)));
+  const prioritizedManual = manualRows.length ? manualRows : manualIdsInCategories;
+  for (const row of prioritizedManual) {
+    if (allowed.some(a => Number(a.id) === Number(row.id))) continue;
+    const name = String((row as any).path || row.name);
+    const line = `${row.id} | ${name}`;
+    if (length + line.length + 1 > 18_000) break;
+    lines.push(line); allowed.push(row); length += line.length + 1;
+  }
   for (const item of ranked) {
+    if (allowed.some(a => Number(a.id) === Number(item.row.id))) continue;
     const line = `${item.row.id} | ${item.name}`;
     if (length + line.length + 1 > 18_000) break;
     lines.push(line); allowed.push(item.row); length += line.length + 1;
   }
   if (!lines.length) throw new Error('فهرست معتبر دسته‌بندی باسلام در دسترس نیست.');
-  return { allowed, prompt: `برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}` };
+  let guidanceBlock = '';
+  if (manual && manualSet.size) {
+    const manualLines = prioritizedManual.map(r => `${r.id} | ${String((r as any).path || r.name)}`).join('، ');
+    const fallbackManual = manual.manualIds.map(id => String(id)).join('، ');
+    const listText = manualLines || fallbackManual;
+    const profileText = manual.profileName ? `پروفایل «${manual.profileName}»` : manual.profileId ? `پروفایل ${manual.profileId}` : 'پروفایل مرتبط';
+    const suffixText = manual.suffix ? ` (پسوند «${manual.suffix.slice(0, 80)}»)` : '';
+    guidanceBlock = `\n\n🔍 راهنمای دسته‌بندی دستی (برای دقت بیشتر، نه به عنوان جایگزین):\nاین محصول از ${profileText}${suffixText} آمده و صاحب فروشگاه برای این پروفایل دسته‌های دستی زیر را به عنوان الگوی صحیح پیشنهاد داده: ${listText}.\nاین دسته‌ها را به عنوان راهنمای قوی در نظر بگیر: اگر عنوان محصول با یکی از این دسته‌های دستی سازگار است، همان یا نزدیک‌ترین زیرشاخهٔ آن را از فهرست مجاز انتخاب کن. اگر هیچ‌کدام مناسب نیست، بهترین دستهٔ مرتبط را از فهرست مجاز انتخاب کن. در هر حال پاسخ باید از فهرست مجاز باشد و فقط یک شناسه برگردان.`;
+  }
+  return { allowed, prompt: `برای محصول زیر فقط مناسب‌ترین شناسه دسته‌بندی باسلام را از فهرست مجاز انتخاب کن. شناسه باید دقیقاً یکی از اعداد فهرست باشد. اگر مدل استدلالی هستی، فکرکردن را داخلی انجام بده و در پاسخ نهایی هیچ عدد دیگری ننویس. پاسخ نهایی فقط JSON کوتاه {"category_id":123,"reason":"..."} باشد.${guidanceBlock}\nمحصول: ${title}\nفهرست مجاز:\n${lines.join('\n')}` };
 }
 
 export function parseCategoryId(text: string, categories: AiCategoryOption[]) {
@@ -242,7 +270,7 @@ export function selectCategoryModels(input: { mode?: any; master?: any; candidat
   return [...new Set([...wanted.filter(key => usable.includes(key)), ...usable])].slice(0, 5);
 }
 /** Default gap between automatic bulk Basalam category fixes (hours). */
-export const CATEGORY_FIX_DEFAULT_EVERY_HOURS = 6;
+export const CATEGORY_FIX_DEFAULT_EVERY_HOURS = 1;
 /** Longest gap a user may schedule between automatic bulk fixes (one week). */
 export const CATEGORY_FIX_MAX_EVERY_HOURS = 168;
 /** Cap on manually picked consensus models (shared with the green-model cap). */
@@ -264,10 +292,11 @@ export function normalizeCategoryFixPinned(raw: any): string[] {
 /** Read the stored consensus-model list from settings (empty means automatic). */
 export function categoryFixPinnedModels(settings: any): string[] { return normalizeCategoryFixPinned(settings?.categoryFix?.consensusModels); }
 export interface CategoryFixSchedule { enabled: boolean; everyHours: number; mode: CategoryVoteMode }
-/** Normalize the periodic-fix schedule; defaults to disabled / 6h / consensus. */
+/** Normalize the periodic-fix schedule; defaults to disabled / 1h / consensus. Also respects general.categoryFixEveryHours as fallback. */
 export function normalizeCategoryFixSchedule(settings: any): CategoryFixSchedule {
-  const raw = settings?.categoryFix?.periodic ?? {}, hours = Number(raw?.everyHours);
-  return { enabled: raw?.enabled === true, everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw?.mode) };
+  const raw = settings?.categoryFix?.periodic ?? {}, hoursRaw = raw?.everyHours ?? settings?.general?.categoryFixEveryHours;
+  const hours = Number(hoursRaw);
+  return { enabled: raw?.enabled === true || (settings?.general?.categoryFixEveryHours!=null && raw?.enabled!==false && Boolean(settings?.general?.categoryFixEveryHours)), everyHours: Number.isFinite(hours) ? Math.min(CATEGORY_FIX_MAX_EVERY_HOURS, Math.max(1, Math.trunc(hours))) : CATEGORY_FIX_DEFAULT_EVERY_HOURS, mode: normalizeCategoryMode(raw?.mode) };
 }
 /** True when the periodic fix may start (never started, or the gap has passed). */
 export function categoryFixDue(schedule: CategoryFixSchedule, last: { at?: unknown } | null | undefined, now: number = Date.now()): boolean {

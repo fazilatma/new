@@ -4,6 +4,7 @@
 // db.ts's json() helper silently swallows - every seeded profile then loaded with
 // no selectors at all and extracted nothing.
 export const SCHEMA = String.raw`
+
 CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY,
   data TEXT NOT NULL,
@@ -194,5 +195,5 @@ VALUES (
   strftime('%Y-%m-%dT%H:%M:%fZ','now'),
   strftime('%Y-%m-%dT%H:%M:%fZ','now')
 );
-
+CREATE TABLE IF NOT EXISTS destination_ledger (scope TEXT NOT NULL,generation TEXT NOT NULL,remote_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scope,generation,remote_id));
 `;

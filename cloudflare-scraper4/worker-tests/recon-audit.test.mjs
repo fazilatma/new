@@ -69,7 +69,7 @@ test('stored destination_map ids win over the legacy columns', () => {
 test('worker unified comparison reads Rial prices on both targets', async () => {
   const src = await read('../worker-src/maintenance.ts');
   assert.ok(src.includes('price:x.priceRaw,status:x.status,shopId:'), 'basalam leg must use priceRaw (Rial)');
-  assert.ok(src.includes('price:x.priceRaw,status:x.status}'), 'woo leg must use priceRaw');
+  assert.ok(src.includes('destinationCatalog(account.target,'), 'both destinations share the complete ledger scan and use priceRaw');
   assert.doesNotMatch(src, /remoteForAccount[\s\S]{0,400}price:x\.price,/);
 });
 
@@ -114,4 +114,22 @@ test('matrix cells, legend and counts cover the unreachable bucket', async () =>
     'unreachable cells need their own label, not "no source price"');
   assert.ok(dash.includes("['unreachable','مقصد پاسخ نداد']"), 'legend must list the bucket');
   assert.ok(dash.includes("['unreachable','پاسخ نداد',d.unreachable]"), 'counts must list the bucket');
+});
+
+for(const keep of ['expensive','cheapest'])test('Basalam duplicate planning is stall-local even with mixed ledger rows: '+keep,()=>{
+ const accounts=['100','200'].map(accountKey=>({target:'basalam',accountKey,name:'Stall '+accountKey}));
+ const rows=[{id:1,shopId:'100',name:'کیف (کد 11)',price:100},{id:2,shopId:'200',name:'کیف (کد 22)',price:500}];
+ for(const account of accounts)assert.deepEqual(core.planDuplicateDeletions(rows,account,'',keep),[]);
+ rows.push({id:3,shopId:'100',name:'کیف (کد 33)',price:200});
+ const actions=core.planDuplicateDeletions(rows,accounts[0],'',keep);
+ assert.equal(actions.length,1);assert.equal(actions[0].accountKey,'100');
+ assert.equal(actions[0].remoteId,keep==='expensive'?1:3);assert.equal(actions[0].keepId,keep==='expensive'?3:1);
+ assert.deepEqual(core.planDuplicateDeletions(rows,accounts[1],'',keep),[]);
+});
+
+test('ledger duplicate planning ignores code suffixes, not real title attributes or stall identity',()=>{
+ const account={target:'basalam',accountKey:'100',name:'Stall 100'};
+ const rows=[{id:1,shopId:'100',name:'کیف (کد: ایکس)',price:100},{id:2,shopId:'100',name:'کیف (کد\u200c: A12)',price:200},{id:3,shopId:'200',name:'کیف (کد:۳)',price:500},{id:4,shopId:'100',name:'کیف (قرمز) (کد:۴)',price:300}];
+ const actions=core.planDuplicateDeletions(rows,account);
+ assert.equal(actions.length,1);assert.equal(actions[0].remoteId,1);assert.equal(actions[0].keepId,2);assert.equal(actions[0].accountKey,'100');
 });

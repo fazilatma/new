@@ -71,7 +71,7 @@ test('version tab: the deployer install guide is a first-class group', async () 
   const group = groups.find(g => g.key === 'deployer');
   assert.ok(group, 'a deployer install group must exist');
   assert.ok(group.body.includes('npm run deployer:ui'), 'the group must run the local deployer');
-  const claimed = group.body.match(/# Expected: (\d+\.\d+\.\d+)/);
+  const claimed = group.body.match(/# Expected: (\d+\.\d+\.\d+\+?)/);
   assert.ok(claimed, 'the group must state its expected version');
   assert.equal(claimed[1], version, 'the deployer guide must track the current version');
 });

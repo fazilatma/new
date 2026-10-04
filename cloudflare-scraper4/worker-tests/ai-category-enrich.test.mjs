@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises';
 /**
  * The AI enricher also fixes the product category in Basalam format, in both
  * runtimes: learning first (free), then one AI suggestion against the live
- * taxonomy, remembered for the next product. Enrichment stays gated by the
- * global switch AND the per-profile switch, both defaulting to ON.
+ * taxonomy, remembered for the next product. Description generation stays gated
+ * by both switches; post-extraction categories run independently before it.
  *
  * The generators import live database/network modules, so behavior is pinned
  * through the real compiled pure helper (repo precedent: productNeedsEnrichment
@@ -68,10 +68,10 @@ for (const [runtime, aiFile, procFile] of [
       'the taxonomy must reach the generator');
   });
 
-  test(`${runtime}: automatic enrichment honors both switches, defaulting ON`, async () => {
+  test(`${runtime}: automatic descriptions honor both switches, defaulting ON`, async () => {
     const proc = await read(procFile);
     assert.match(proc, /aiSettings\?\.enabled\s*!==\s*false\s*&&\s*profile\?\.aiDescriptions\s*!==\s*false/,
-      'global AND per-profile switches must gate job-time enrichment');
+      'global AND per-profile switches must gate job-time descriptions');
   });
 }
 

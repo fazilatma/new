@@ -34,11 +34,11 @@
  *   git config --global --unset-all credential.helper || true
  *   gh auth login --web -h github.com -p https
  *   gh auth setup-git
- *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a09468-new --depth 1
+ *   gh repo clone fazilatma/new "$HOME/new" -- --branch arena/01a0aa17-new --depth 1
  *   cd "$HOME/new"
  *   git config --local --unset-all credential.helper || true
  *   git config --local --replace-all credential.helper "!gh auth git-credential"
- *   git pull --ff-only origin arena/01a09468-new
+ *   git pull --ff-only origin arena/01a0aa17-new
  *   cd "$HOME/new/cloudflare-scraper4"
  *   npm install
  *   npm run browsers:install || true

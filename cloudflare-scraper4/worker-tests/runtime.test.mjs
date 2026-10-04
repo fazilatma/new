@@ -82,7 +82,9 @@ test('Cloudflare resources are automatically provisioned during deploy',async()=
   assert.match(config,/queue\s*=\s*"scraper4-cloudflare-jobs"/);
   assert.match(config,/dead_letter_queue\s*=\s*"scraper4-cloudflare-jobs-dlq"/);
   assert.match(config,/crons\s*=\s*\[\s*"\* \* \* \* \*"\s*\]/);
-  assert.match(config,/WORKER_VERSION\s*=\s*"1.183.0"/);
+  // Derived, not hardcoded: the literal could never be trusted after a version bump, and a
+  // trailing + marker in a regex source would be read as a quantifier instead of a character.
+  assert.ok(config.includes('WORKER_VERSION = "' + packageJson.version + '"'), 'wrangler WORKER_VERSION must equal the package.json version, got ' + packageJson.version);
   assert.equal(packageJson.scripts['worker:deploy'],'node scripts/deploy-cloudflare.mjs');
   assert.match(deployScript,/R2-free mode[\s\S]*deploy[\s\S]*experimental-provision[\s\S]*d1[\s\S]*migrations[\s\S]*apply[\s\S]*DB[\s\S]*remote/);
   assert.doesNotMatch(deployScript,/10042|enable R2/i);

@@ -30,8 +30,9 @@ const readRenderBundle = () => (renderBundlePromise ??= (async () => {
 const version = pkg.version;
 const faVersion = String(version).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
 
-test('package.json exposes a concrete semver as the single source of truth', () => {
-  assert.match(version, /^\d+\.\d+\.\d+$/);
+test('package.json exposes a concrete version as the single source of truth', () => {
+  // x.y.z with the optional + release marker; the marker is display-only, the numeric core sorts.
+  assert.match(version, /^\d+\.\d+\.\d+\+?$/);
 });
 
 test('sync-version --check passes, so no version reference has drifted', () => {
@@ -56,7 +57,7 @@ test('changelog documents the current version and its footer matches it', async 
   assert.ok(firstEntry, 'the change list must start with a dated entry');
   assert.ok(firstEntry[1].includes(faVersion), `newest changelog entry should mention ${faVersion}, got ${firstEntry[1]}`);
   for (const label of ['نسخهٔ فعلی Worker: ', 'نسخهٔ فعلی: ']) {
-    const footer = dashboard.match(new RegExp(label + '([۰-۹.]+)'));
+    const footer = dashboard.match(new RegExp(label + '([۰-۹.+]+)'));
     assert.ok(footer, `footer "${label}" must exist`);
     assert.equal(footer[1], faVersion);
   }
@@ -64,13 +65,13 @@ test('changelog documents the current version and its footer matches it', async 
 
 test('version fallbacks used before /health responds are current', async () => {
   const dashboard = await readProjectFile('worker-src/dashboard.ts');
-  for (const match of dashboard.matchAll(/faVersion\((?:value|health\.version)\s*\|\|\s*'(\d+\.\d+\.\d+)'/g)) {
+  for (const match of dashboard.matchAll(/faVersion\((?:value|health\.version)\s*\|\|\s*'(\d+\.\d+\.\d+\+?)'/g)) {
     assert.equal(match[1], version);
   }
   const server = await readProjectFile('render-src/server.ts');
-  for (const match of server.matchAll(/\|\|\s*'(\d+\.\d+\.\d+)'/g)) assert.equal(match[1], version);
+  for (const match of server.matchAll(/\|\|\s*'(\d+\.\d+\.\d+\+?)'/g)) assert.equal(match[1], version);
   const app = await readProjectFile('worker-src/app.ts');
-  for (const match of app.matchAll(/WORKER_VERSION\|\|'(\d+\.\d+\.\d+)'/g)) assert.equal(match[1], version);
+  for (const match of app.matchAll(/WORKER_VERSION\|\|'(\d+\.\d+\.\d+\+?)'/g)) assert.equal(match[1], version);
 });
 
 test('every environment install guide carries a version verification step', async () => {
@@ -85,7 +86,7 @@ test('every environment install guide carries a version verification step', asyn
   }
   // The guides must not advertise a version other than the current one.
   for (const group of groups) {
-    for (const match of group.body.matchAll(/(?:# Expected: |REM Expected: |Expected version: )(\d+\.\d+\.\d+)/g)) {
+    for (const match of group.body.matchAll(/(?:# Expected: |REM Expected: |Expected version: )(\d+\.\d+\.\d+\+?)/g)) {
       assert.equal(match[1], version, `guide "${group.key}" mentions a stale version`);
     }
   }
@@ -95,7 +96,7 @@ test('deployer guides stay aligned with the dashboard guides', async () => {
   const deployer = await readProjectFile('scripts/local-deployer-ui.mjs');
   const commands = JSON.parse(deployer.match(/const commands = (\{[\s\S]*?\});\n/)[1]);
   for (const [name, body] of Object.entries(commands)) {
-    for (const match of body.matchAll(/(?:# Expected: |REM Expected: |expected version: )(\d+\.\d+\.\d+)/g)) {
+    for (const match of body.matchAll(/(?:# Expected: |REM Expected: |expected version: )(\d+\.\d+\.\d+\+?)/g)) {
       assert.equal(match[1], version, `deployer guide "${name}" mentions a stale version`);
     }
   }
@@ -153,7 +154,7 @@ test('intrusive confirmation popups are gone from safe/local actions', async () 
   // toast, not a modal the user has to dismiss before seeing the job list.
   assert.ok(!dashboard.includes("openResultModal(source==='backend'"),
     'starting an extraction must not open a blocking result modal');
-  assert.match(dashboard, /notice\(source==='backend'/,
+  assert.match(dashboard, /notice\(listOnly/,
     'starting an extraction reports through the non-blocking notice toast');
   // Failures are still worth interrupting for.
   assert.ok(dashboard.includes('شروع استخراج ناموفق بود'),
@@ -243,7 +244,7 @@ test('opening the scraper waits for it to build instead of returning ECONNREFUSE
   // forward. `running` is true the instant spawn() returns, long before the port
   // is listening, so gating on it reintroduces the ECONNREFUSED.
   const proxy = deployer.slice(deployer.indexOf('async function proxyScraper('), deployer.indexOf('function requireAuth('));
-  assert.match(proxy, /if \(!\(await scraperIsListening\(\)\)\) \{\s*\n\s*startScraper\(\);/,
+  assert.match(proxy, /if \(!\(await scraperIsListening\(\)\)\) \{\s*if\(scraperKeepalive.status\(\).lastReason==='Stopped intentionally'\)[^\n]+\n\s*startScraper\(\);/,
     'the proxy must probe the port, not trust scraper.running, before forwarding');
   assert.match(proxy, /await waitForScraperPort\(Date\.now\(\) \+ budget\)/, 'the proxy must actually await the port');
   assert.doesNotMatch(proxy, /const budget = 0;/, 'the wait budget must not be disabled');
@@ -422,8 +423,8 @@ test('the engine benchmark never saves a near-empty engine as the profile defaul
   const start = server.indexOf('const usable=results.filter');
   const end = server.indexOf('(profile as any).extractionEngineBenchmarks', start);
   const body = server.slice(start, end).replace(/const MIN_BENCHMARK_PRODUCTS[^\n]*\n/, '');
-  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS',
-    `${body}; return { fastest, bestCount };`)(results, 2);
+  const pick = (results) => new Function('results', 'MIN_BENCHMARK_PRODUCTS', 'emit',
+    `${body}; return { fastest, bestCount };`)(results, 2, ()=>{});
 
   // The user's real Termux numbers.
   const termux = [
@@ -602,7 +603,7 @@ test('dashboard URLs are relative so the deployer proxy at /scraper/ works', asy
   assert.equal(at('/scraper/')('https://x.test/a'), 'https://x.test/a', 'external URLs stay absolute');
 
   // api() funnels 100+ call sites, so it is the one that must be wrapped.
-  assert.match(dash, /async function api\(path,options=\{\}\)\{const response=await fetch\(U\(path\)/, 'api() must route through U()');
+  assert.match(dash, /async function apiRequest\(path,options=\{\}\)\{const response=await activityFetch\(U\(path\)/, 'api() must route through U()');
   // The bootstrap script tag must be relative too, or nothing loads at all.
   assert.ok(!/<script src="\/dashboard\.js"/.test(dash), 'the script tag must not be root-absolute');
   assert.match(dash, /<script src="dashboard\.js" defer><\/script>/);
@@ -913,7 +914,7 @@ test('both extraction-diagnostic twins auto-save discoveries for unconfigured pr
     const end = source.indexOf('\napp.', at + 1);
     const handler = source.slice(at, end > 0 ? end : at + 2000);
     assert.match(handler, /selectorsToSave/, `${runtime}: the route must read what diagnose decided to save`);
-    assert.match(handler, /saveProfile/, `${runtime}: the route must persist discoveries to the profile`);
+    assert.match(handler, /saveLearnedProfile/, `${runtime}: discoveries must use edit-safe persistence`);
     assert.match(handler, /selectors-auto-saved/, `${runtime}: the report must show the auto-save stage`);
   }
 });
@@ -1025,16 +1026,14 @@ test('an empty href or src never resolves to the listing page URL', async () => 
   assert.equal(absolute('/p/1', 'https://barfbox.ir/search/?page=1'), 'https://barfbox.ir/p/1', 'real links must still resolve');
 });
 
-test('the diagnostic reports the evidence-vs-extraction contradiction', async () => {
-  // The user saw every selector green while 0 products were extracted, and the
-  // report still blamed the container selector generically. Evidence is
-  // document-wide; extraction is container-scoped. That gap IS the diagnosis.
-  const src = await readProjectFile('render-src/scraper.ts');
-  const at = src.indexOf('export async function diagnoseExtraction');
-  const body = src.slice(at);
-  assert.match(body, /const contradiction = evidenceOk && products\.length === 0/, 'the contradiction must be detected explicitly');
-  assert.match(body, /add\('selector-evidence', evidenceOk && !contradiction/, 'the evidence stage must FAIL when it contradicts extraction, not show green');
-  assert.match(body, /containerCount/, 'the report must say how many containers matched, which distinguishes the two causes');
+test('both diagnostics verify card-scoped selectors independently of browser failures', async () => {
+  for(const file of ['render-src/scraper.ts','worker-src/scraper.ts']){
+    const src=await readProjectFile(file),body=src.slice(src.indexOf('export async function diagnoseExtraction'));
+    assert.match(body,/const scoped=await verifyListSelectors/);
+    assert.match(body,/containerCount>0&&Number\(scoped.title.count/);
+    assert.doesNotMatch(body,/const contradiction = evidenceOk && products.length === 0/);
+    assert.match(body,/documentEvidence:evidence/);
+  }
 });
 
 test('the deployer restores the lockfile using its real repo-relative path', async () => {
@@ -1310,7 +1309,7 @@ test('manual sync runs list, details and delivery in one click', async () => {
   // the run always stopped after extraction -- details/sync never happened.
   const dash = await readProjectFile('worker-src/dashboard.ts');
   assert.ok(dash.includes('🔄 همگام‌سازی دستی'), 'the button must be relabelled manual sync');
-  assert.match(dash, /body=\{target\}/, 'a scrape job must forward its destination');
+  assert.match(dash, /body=\{target,\.\.\.options\}/, 'a scrape job must forward its destination');
   assert.doesNotMatch(dash, /body=kind==='sync'\?\{target\}:\{\}/, 'the scrape branch must not drop the target again');
 
   // The target must follow the profile's own destination switches.
@@ -1327,7 +1326,7 @@ test('manual sync runs list, details and delivery in one click', async () => {
   const proc = await readProjectFile('render-src/processor.ts');
   const details = proc.indexOf("job.phase = 'details'");
   const save = proc.indexOf("job.phase = 'save'");
-  const sync = proc.indexOf('await runSync(job, profile, products)');
+  const sync = proc.indexOf('await runSync(job, profile, await allProducts(profile.id))');
   assert.ok(details > 0 && save > details && sync > save, 'details must run before save, and delivery last');
   assert.match(proc, /if \(job\.target !== 'none'\) await runSync/, 'delivery must run whenever a destination is set');
 });
@@ -1394,7 +1393,8 @@ test('the AI description endpoints exist in BOTH runtimes, so the tab is never d
     assert.ok(proc.includes("'ai_description_settings'"), `${runtime} processor must read the on/off switch`);
     assert.ok(/enabled\s*\)?\s*!==\s*false/.test(proc), `${runtime} processor must default the generator ON`);
     assert.ok(proc.indexOf('generateProductDescription') > proc.indexOf('scrapeDetails('), `${runtime} must enrich AFTER detail extraction`);
-    assert.ok(proc.indexOf('generateProductDescription') < proc.indexOf('upsertProduct('), `${runtime} must enrich BEFORE the product is saved`);
+    const full=proc.slice(Math.max(proc.indexOf("job.phase='details-save-sync'"),proc.indexOf("job.phase = 'details'")));
+    assert.ok(full.indexOf('generateProductDescription')>=0&&full.indexOf('generateProductDescription') < full.indexOf('upsertProduct('), `${runtime} must enrich BEFORE the product is saved`);
   }
 });
 
@@ -1738,7 +1738,7 @@ test('browser engines run on Termux via the system Chromium, never desktop downl
   const scraper = await readProjectFile('render-src/scraper.ts');
   // Detection + flags (shared by all three engines).
   assert.match(scraper, /\/data\/data\/com\.termux\/files\/usr\/bin\/chromium/, 'the Termux Chromium path must be auto-detected');
-  assert.match(scraper, /'--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'/, 'rootless/Android-safe launch flags must be shared');
+  assert.match(scraper, /return browserLaunchArguments\(\)/, 'browser flags must follow the central platform/sandbox policy');
   // Playwright + Puppeteer already launch the detected executable...
   assert.ok(scraper.includes('async function scrapeRenderedHtml('), 'guard: the shared launcher was located');
   const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
@@ -1747,7 +1747,7 @@ test('browser engines run on Termux via the system Chromium, never desktop downl
   // ignore the detected browser and look for bundled downloads only).
   assert.ok(scraper.includes('async function scrapeListWithCrawleePlaywright('), 'guard: the crawlee body was located');
   const crawlee = scraper.slice(scraper.indexOf('async function scrapeListWithCrawleePlaywright('), scraper.indexOf('function parseProductsFromHtml('));
-  assert.match(crawlee, /launchContext: \{ launchOptions: \{ headless: true, executablePath, args: browserLaunchArgs\(\) \} \}/, 'crawlee must launch the detected executable with the shared flags');
+  assert.match(crawlee, /launchContext: \{ launchOptions: \{ \.\.\.playwrightSandboxOptions\(\), headless: true, executablePath, args: browserLaunchArgs\(\) \} \}/, 'crawlee must launch the detected executable with the shared flags');
   // The installer must not download desktop browsers on Termux.
   const installer = await import('../scripts/browsers-install.mjs');
   assert.equal(installer.isTermux({ PREFIX: '/data/data/com.termux/files/usr' }), true, 'Termux must be detected from $PREFIX');
@@ -1789,7 +1789,10 @@ test('browser navigation survives aborted navigations and never-idle pages', asy
   const rendered = scraper.slice(scraper.indexOf('async function scrapeRenderedHtml('), scraper.indexOf('async function scrapeListWithPlaywright('));
   assert.match(rendered, /waitUntil: 'domcontentloaded'/, 'goto must resolve on parsed DOM, not network idle');
   assert.ok(!rendered.includes("waitUntil: 'networkidle'") && !rendered.includes("waitUntil: 'networkidle2'"), 'goto must not wait for idle (redirects abort it)');
-  assert.equal((rendered.match(/if \(!isAbortedNavigation\(navigationError\)\) throw navigationError;/g) || []).length, 2, 'both drivers must survive ERR_ABORTED and read what landed');
-  assert.match(rendered, /waitForLoadState\('networkidle', \{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'playwright must still get a best-effort idle window');
+  assert.equal((rendered.match(/if \(!isAbortedNavigation\(navigationError\)\) throw navigationError;/g) || []).length, 1, 'Puppeteer keeps its ERR_ABORTED recovery');
+  const profile = await readProjectFile('render-src/playwright-python.ts');
+  assert.ok(profile.includes('/ERR_ABORTED/i.test(message)'), 'adapted Playwright must retain redirect recovery');
+  assert.ok(profile.includes("['load','domcontentloaded','commit']"), 'Playwright uses bounded Python wait sequence');
+  assert.ok(profile.includes('page.waitForTimeout(plan.initialWait)'), 'Playwright now uses reference settling and scroll waits rather than network idle');
   assert.match(rendered, /waitForNetworkIdle\(\{ timeout: 15_000 \}\)\.catch\(\(\) => undefined\)/, 'puppeteer must still get a best-effort idle window');
 });

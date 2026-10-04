@@ -125,6 +125,51 @@ export function mappedRemoteId(row: ReconLocal, account: ReconAccount): number {
 }
 
 /**
+ * Profile suffix handling for reconciliation.
+ * Each profile may have a titleSuffix like " - فروشگاه الف" that is appended to every product.
+ * We use it to determine which profile a destination product belongs to, and to protect
+ * zero-count profiles from deletion.
+ */
+export type ProfileSuffixInfo = {
+  id: string;
+  name?: string;
+  titleSuffix: string;
+};
+
+/**
+ * Find which profile a destination product belongs to based on its title suffix.
+ * - Strips code suffix "(کد: ایکس)" first, because title is "base + profileSuffix + codeSuffix"
+ * - Then checks if remaining title ends with any profile suffix (longest first)
+ * - Returns matching profile or null if none matches (or all suffixes empty)
+ */
+export function findProfileBySuffix(
+  title: string,
+  profiles: ProfileSuffixInfo[],
+  suffixFormats: unknown = ''
+): ProfileSuffixInfo | null {
+  if (!profiles?.length) return null;
+  const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
+  // Strip code suffix first: "Product - Shop (کد: 123)" -> "Product - Shop"
+  let stripped = String(title || '').trim();
+  // stripCodeSuffix removes all configured code suffixes repeatedly
+  stripped = stripCodeSuffix(stripped, patterns).trim();
+  // Also remove trailing code-like "(کد...)" even if not in configured formats (fallback)
+  stripped = stripped.replace(/\s*[\[(]\s*(?:کد|كد|code|sku)\s*[:：#-]?[^\])]+[\])]\s*$/iu, '').trim();
+
+  // Sort profiles by suffix length desc for longest-match
+  const sorted = [...profiles]
+    .filter(p => String(p.titleSuffix || '').trim().length > 0)
+    .sort((a, b) => String(b.titleSuffix || '').trim().length - String(a.titleSuffix || '').trim().length);
+
+  for (const p of sorted) {
+    const suf = String(p.titleSuffix || '').trim();
+    if (!suf) continue;
+    if (stripped.endsWith(suf)) return p;
+  }
+  return null;
+}
+
+/**
  * Compare every source product against ONE destination account.
  * Pure function: no database, no network, fully testable.
  */
@@ -156,7 +201,20 @@ export function unreachableAccountRows(local: ReconLocal[], account: ReconAccoun
     }));
 }
 
-export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], account: ReconAccount, profileNames: Record<string, string> = {}, suffixFormats: unknown = ''): UnifiedReconRow[] {
+export type ReconcileOptions = {
+  profiles?: ProfileSuffixInfo[];
+  zeroCountIds?: Set<string>;
+  profileFilter?: string; // if set, only act on this profile's products
+};
+
+export function reconcileAccount(
+  local: ReconLocal[],
+  remote: ReconRemote[],
+  account: ReconAccount,
+  profileNames: Record<string, string> = {},
+  suffixFormats: unknown = '',
+  opts: ReconcileOptions = {}
+): UnifiedReconRow[] {
   const rows: UnifiedReconRow[] = [];
   // Only products whose title carries a «(کد ایکس)» suffix take part: everything
   // else is a draft/base title that must never be reconciled or published.
@@ -194,10 +252,61 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
     sourceKey: String(row?.source_key || ''),
   });
 
+  const profiles = opts.profiles || [];
+  const zeroCountIds = opts.zeroCountIds || new Set<string>();
+  const profileFilter = String(opts.profileFilter || '').trim();
+
+  // Helper: does a remote product belong to zero-count profile?
+  const isZeroCountOwner = (title: string): boolean => {
+    const owner = findProfileBySuffix(title, profiles, suffixFormats);
+    if (owner && zeroCountIds.has(owner.id)) return true;
+    // If owner is null and there exists zero-count profile with empty suffix, protect conservatively
+    if (!owner) {
+      const hasEmptyZero = profiles.some(p => !String(p.titleSuffix || '').trim() && zeroCountIds.has(p.id));
+      if (hasEmptyZero) return true;
+    }
+    return false;
+  };
+
+  // Helper: should we ignore this remote product when filtering by profile?
+  const shouldIgnoreForFilter = (title: string): boolean => {
+    if (!profileFilter) return false;
+    const owner = findProfileBySuffix(title, profiles, suffixFormats);
+    if (owner) {
+      return owner.id !== profileFilter;
+    } else {
+      // No suffix match: if filter profile has non-empty suffix, then this remote doesn't belong to it
+      const filterProfile = profiles.find(p => p.id === profileFilter);
+      const filterSuffix = String(filterProfile?.titleSuffix || '').trim();
+      if (filterSuffix) {
+        // remote has no matching suffix, so it doesn't belong to filter profile
+        return true;
+      }
+      // filter profile has empty suffix: remote with no owner could belong to it, so don't ignore
+      return false;
+    }
+  };
+
   for (const item of remote) {
     // Destination products outside the «(کد ایکس)» convention are ignored
     // entirely rather than being reported as "only at the destination".
     if (!hasCodeSuffix(String(item.name || ''), patterns)) continue;
+
+    // Profile-based filtering: when running recon for a specific profile, ignore remote products of other profiles
+    if (shouldIgnoreForFilter(String(item.name || ''))) continue;
+
+    // Zero-count protection: if this remote belongs to a profile with zero products, don't treat as extra
+    if (isZeroCountOwner(String(item.name || ''))) {
+      // We still want to avoid counting it as extra; skip entirely for safety
+      // But we also need to ensure it doesn't get matched to a wrong profile's local
+      // So we skip extra detection by continuing to next remote without pushing extra
+      // However, we must also ensure it doesn't get consumed as matched for other profile's local
+      // Since local is already filtered to profileFilter (if set), and owner is zero-count, we skip
+      // For all-profiles mode, skipping prevents deletion of zero-count profile's products
+      // To be extra safe, we check if there's any local that would match; if not, skip
+      // We'll do the matching attempt below, but if no source found, we skip instead of pushing extra
+    }
+
     const key = reconNormTitle(item.name || '');
     // Match by title first, then sku, then the stored remote id (destination
     // titles get edited by hand, so the id is the most durable fallback).
@@ -208,6 +317,8 @@ export function reconcileAccount(local: ReconLocal[], remote: ReconRemote[], acc
     const remotePrice = asPrice(item.price);
 
     if (!source) {
+      // If this remote belongs to zero-count profile, protect it: don't report as extra
+      if (isZeroCountOwner(String(item.name || ''))) continue;
       rows.push({
         ...base(null), bucket: 'extra', title: item.name || '', remoteTitle: item.name || '', remoteId: item.id || null,
         sourcePrice: null, expectedPrice: null, remotePrice, delta: null, matchedBy: 'none',
@@ -296,8 +407,26 @@ export type ReconAction = {
   toPrice: number | null;
 };
 
-export function planActions(rows: UnifiedReconRow[], suffixFormats: unknown = ''): ReconAction[] {
+export type PlanOptions = {
+  profiles?: ProfileSuffixInfo[];
+  zeroCountIds?: Set<string>;
+};
+
+export function planActions(rows: UnifiedReconRow[], suffixFormats: unknown = '', opts: PlanOptions = {}): ReconAction[] {
   const actions: ReconAction[] = [];
+  const profiles = opts.profiles || [];
+  const zeroCountIds = opts.zeroCountIds || new Set<string>();
+
+  const isZeroCountOwner = (title: string): boolean => {
+    const owner = findProfileBySuffix(title, profiles, suffixFormats);
+    if (owner && zeroCountIds.has(owner.id)) return true;
+    if (!owner) {
+      const hasEmptyZero = profiles.some(p => !String(p.titleSuffix || '').trim() && zeroCountIds.has(p.id));
+      if (hasEmptyZero) return true;
+    }
+    return false;
+  };
+
   for (const row of rows) {
     if (row.bucket === 'priceDiff' && row.remoteId && row.expectedPrice) {
       actions.push({ kind: 'updatePrice', target: row.target, accountKey: row.accountKey, accountName: row.accountName,
@@ -309,6 +438,8 @@ export function planActions(rows: UnifiedReconRow[], suffixFormats: unknown = ''
         fromPrice: null, toPrice: row.expectedPrice });
     } else if (row.bucket === 'extra' && row.remoteId
         && hasCodeSuffix(String(row.remoteTitle || row.title || ''), suffixPatterns(parseSuffixFormats(suffixFormats)))) {
+      // Zero-count protection: don't plan removal for products belonging to zero-count profiles
+      if (isZeroCountOwner(String(row.remoteTitle || row.title || ''))) continue;
       // Only remove destination products carrying the «(کد ایکس)» suffix — those
       // are ours. Anything the shop owner added by hand has no suffix and is
       // reported as `extra` but never touched.
@@ -353,6 +484,9 @@ export function planDuplicateDeletions(
   const patterns = suffixPatterns(parseSuffixFormats(suffixFormats));
   const groups = new Map<string, ReconRemote[]>();
   for (const remote of remotes) {
+    // A title in another Basalam stall is not a duplicate in this account.
+    // Unscoped rows remain valid for legacy callers that already supply one account.
+    if (account.target === 'basalam' && remote.shopId !== undefined && String(remote.shopId) !== String(account.accountKey)) continue;
     const name = String(remote?.name || '');
     // Only «(کد ایکس)» listings participate, exactly like reconciliation: a shop
     // product without the code suffix is not one of our published variants.
