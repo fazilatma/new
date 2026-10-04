@@ -290,6 +290,23 @@ const PICKER_JS=String.raw`<script>(function(){
 ${SNAPSHOT_INTERACTION_JS}
 const __s4post=(msg)=>{try{var rp=window.__s4_realParent||parent; rp.postMessage(msg,'*'); console.log('[S4] posted',msg.type,msg.mode||'');}catch(e){console.error('[S4] postMessage failed',e,msg); try{parent.postMessage(msg,'*');}catch(e2){console.error('[S4] fallback postMessage failed',e2);}}};
 const context='__S4_CONTEXT__',bar=document.getElementById('__s4bar'),pop=document.getElementById('__s4pop'),modeSelect=document.getElementById('__s4mode'),selectorText=document.getElementById('__s4selector'),countText=document.getElementById('__s4count'),previewText=document.getElementById('__s4preview'),fieldText=document.getElementById('__s4field'),progressText=document.getElementById('__s4progress'),selections={};let selected=null,hovered=null;let GAL=[];let picking=true;
+function __s4KeepUiMounted(){
+  try{
+    const body=document.body||document.documentElement;
+    if(bar&&bar.parentNode!==body)body.prepend(bar);
+    if(pop&&pop.parentNode!==body)body.appendChild(pop);
+  }catch{}
+}
+__s4KeepUiMounted();
+try{
+  const root=document.documentElement;
+  if(window.MutationObserver&&root){
+    const mo=new MutationObserver(function(){__s4KeepUiMounted();});
+    mo.observe(root,{childList:true,subtree:true});
+    window.addEventListener('pagehide',function(){try{mo.disconnect();}catch{}},{once:true});
+  }
+}catch{}
+
 const labels={container:'کانتینر محصول',title:'عنوان',price:'قیمت',link:'لینک',image:'تصویر فهرست',shortDesc:'توضیحات کوتاه',longDesc:'توضیحات بلند',sku:'SKU',category:'دسته‌بندی',tags:'برچسب‌ها',weight:'وزن',stock:'موجودی',brand:'برند',detailImage:'عکس اصلی محصول',variations:'تنوع‌ها',galleryBox:'باکس گالری',galleryOne:'عکس‌های گالری'};
 const fields=Array.from(modeSelect.options).map(o=>o.value);
 const cssEscape=v=>window.CSS&&CSS.escape?CSS.escape(v):String(v).replace(/[^a-zA-Z0-9_-]/g,c=>'\\'+c.charCodeAt(0).toString(16)+' ');
@@ -482,7 +499,8 @@ let __s4pausePointerConsumed=false;
 function togglePickingFromUi(e){
   try{
     const t=e?.target;
-    const btn=t instanceof Element?t.closest('#__s4pause'):null;
+    const path=typeof e?.composedPath==='function'?e.composedPath():[];
+    const btn=(t instanceof Element?t.closest('#__s4pause'):null)||path.find(n=>n instanceof Element&&n.id==='__s4pause')||null;
     if(!btn)return false;
     e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();
     if(e.type==='click'&&__s4pausePointerConsumed){__s4pausePointerConsumed=false;return true;}
