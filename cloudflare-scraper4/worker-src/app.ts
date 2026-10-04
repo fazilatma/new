@@ -161,6 +161,28 @@ app.get('/api/feedback', async c => {
   });
 });
 
+
+app.get('/api/visual-diagnostics', async c => {
+  const url=String(c.req.query('url')||'').trim();
+  if(!url)return c.json({ok:false,error:'Missing url'},400);
+  const context=c.req.query('context')==='detail'?'detail':'list';
+  const full=c.req.query('full')==='1';
+  const started=Date.now();
+  let source:any={ok:false};
+  try{
+    const {sourceText}=await import('./scraper.js');
+    const fetched=await sourceText(url,false,5_000_000);
+    source={ok:true,url:fetched.url,contentType:fetched.contentType||'',bytes:fetched.text.length,title:(fetched.text.match(/<title[^>]*>(.*?)<\\/title>/is)?.[1]||'').slice(0,200)};
+  }catch(e){source={ok:false,error:e instanceof Error?e.message:String(e)}}
+  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.310.3+'},502);
+  try{
+    const ticket=await createVisualTicket(url,false);
+    const response=await renderVisualSelector(ticket,context,full);
+    const html=await response.text();
+    const pickerState={toolbar:html.includes('id="__s4bar"'),pauseButton:html.includes('id="__s4pause"'),saveButton:html.includes('id="__s4save"'),pickerScript:html.includes('scraper4-picker-ready'),errorReporter:html.includes('scraper4-picker-error'),activeInit:/setPicking\\(true\\)/.test(html),csp:response.headers.get('content-security-policy')||'',htmlBytes:html.length};
+    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.310.3+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
+  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.310.3+'},502)}
+});
 app.get('/api/emalls-check', async c => {
   const url = c.req.query('url') || 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
   try {
