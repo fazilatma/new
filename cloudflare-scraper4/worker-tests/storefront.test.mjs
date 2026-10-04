@@ -133,7 +133,7 @@ test('the card-to-card receipt moves the order to review and is shown on the ord
   assert.equal(order.payment.reference, '987654321');
   const page = await routes.orderPage(d, placed.orderId);
   assert.match(page.html, /۹۸۷۶۵۴۳۲۱|987654321/);
-  assert.match(page.html, /ضریب تعدیل پروفایل/, 'the order keeps the coefficient that produced its price');
+  assert.match(page.html, /ضریب تعدیل/, 'the order keeps the coefficient that produced its price');
 });
 
 test('shop settings and payment plugins round-trip through the admin page', async () => {
@@ -174,10 +174,125 @@ test('both runtimes mount the shop on "/" and the dashboard in the configured fo
     assert.match(source, /if\(path===base\)return/, file + ': the folder serves the dashboard');
     assert.match(source, /path===base\+'\/dashboard\.js'/, file + ': the dashboard script is reachable inside the folder');
     assert.match(source, /path===base\+'\/shop'/, file + ': the shop admin page lives beside the dashboard');
-    for (const route of ['/shop.js', '/checkout', '/order/:id', '/api/shop/order', '/api/shop/receipt', '/api/shop/settings', '/api/shop/callback/:gateway'])
+    for (const route of ['/shop.js', '/checkout', '/order/:id', '/p/:id', '/track', '/page/:slug', '/api/shop/order', '/api/shop/receipt', '/api/shop/settings', '/api/shop/callback/:gateway'])
       assert.ok(source.includes("'" + route + "'"), file + ': missing route ' + route);
     assert.match(source, /if\(!settings\.enabled\)return/, file + ': turning the shop off gives the dashboard its root back');
   }
 });
 
 test.after(() => rm(temp, { recursive: true, force: true }));
+
+// ---------------------------------------------------------------------------
+// Professional shell: footer menu, product and tracking pages, mobile rules.
+// ---------------------------------------------------------------------------
+
+test('every page carries the footer menu, the header cart and no horizontal overflow', async () => {
+  const d = deps();
+  const pages = [await routes.cataloguePage(d, {}), await routes.checkoutPage(d), (await routes.infoPage(d, 'about')).html];
+  for (const html of pages) {
+    for (const href of ['/checkout', '/track', '/page/payment', '/page/shipping', '/page/returns', '/page/about', '/page/contact', '/page/terms'])
+      assert.ok(html.includes(`href="${href}"`), 'footer menu entry missing: ' + href);
+    assert.match(html, /<footer class="foot"/, 'the footer is part of the shell');
+    assert.match(html, /id="cartCount"/, 'the header always shows the cart');
+    assert.match(html, /overflow-x:hidden/, 'the page must never scroll sideways on mobile');
+    assert.match(html, /viewport-fit=cover/, 'notched phones must use the full width');
+    assert.match(html, /--tap:44px/, 'tap targets are at least 44px');
+    assert.match(html, /class="skip"/, 'keyboard users get a skip link');
+    assert.doesNotMatch(html, /<script>[^<]/, 'no inline script: script-src is self only');
+  }
+});
+
+test('the mobile layout switches to a two column grid and a sticky cart bar', async () => {
+  const html = await routes.cataloguePage(deps(), {});
+  assert.match(html, /@media\(max-width:720px\)\{[\s\S]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'two products per row on phones');
+  assert.match(html, /@media\(max-width:360px\)\{\.grid\{grid-template-columns:1fr\}\}/, 'one per row on very small screens');
+  assert.match(html, /id="cartBar"/, 'the sticky cart bar exists');
+  assert.match(html, /env\(safe-area-inset-bottom\)/, 'the sticky bar respects the home indicator');
+  assert.match(html, /\.pcard h3\{[^}]*-webkit-line-clamp:2/, 'long titles are clamped instead of breaking the card');
+});
+
+test('a product without an image renders a placeholder instead of a broken image', async () => {
+  const html = await routes.cataloguePage(deps(), { profile: 'p-multiply' });
+  assert.match(html, /class="ph" role="img" aria-label="بدون تصویر"/);
+  assert.doesNotMatch(html, /<img[^>]*src=""/, 'never emit an empty src');
+});
+
+test('the product page shows the coefficient breakdown and related items', async () => {
+  const d = deps();
+  const page = await routes.productPage(d, 'p-percent::a1');
+  assert.equal(page.status, 200);
+  assert.match(page.html, /کتری برقی/);
+  assert.match(page.html, /قیمت مبدأ/);
+  assert.match(page.html, /ضریب تعدیل پروفایل/);
+  assert.match(page.html, /۱۴۴٬۰۰۰/);
+  assert.match(page.html, /محصولات مشابه/);
+  assert.equal((await routes.productPage(d, 'ghost::none')).status, 404, 'an unknown product is a clean 404');
+});
+
+test('sorting and paging keep the active filters in the links', async () => {
+  const d = deps();
+  const cheap = await routes.cataloguePage(d, { sort: 'cheap' });
+  const order = [...cheap.matchAll(/class="final">([^<]+)</g)].map(m => m[1]);
+  assert.deepEqual(order, ['۵۰٬۰۰۰', '۱۴۴٬۰۰۰', '۹۰۰٬۰۰۰'], 'cheapest first');
+  const expensive = await routes.cataloguePage(d, { sort: 'expensive' });
+  assert.deepEqual([...expensive.matchAll(/class="final">([^<]+)</g)].map(m => m[1]), ['۹۰۰٬۰۰۰', '۱۴۴٬۰۰۰', '۵۰٬۰۰۰']);
+  const filtered = await routes.cataloguePage(d, { q: 'لیوان', sort: 'cheap' });
+  assert.match(filtered, /<input type="hidden" name="q" value="لیوان">/, 'the sort form keeps the search term');
+  const far = await routes.cataloguePage(d, { page: '99' });
+  assert.match(far, /class="final"/, 'an out of range page clamps instead of showing an empty shop');
+});
+
+test('order tracking never 500s and never leaks another order', async () => {
+  const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
+  const empty = await routes.trackPage(d, {});
+  assert.equal(empty.status, 200);
+  assert.match(empty.html, /پیگیری سفارش/);
+  const missing = await routes.trackPage(d, { order: 'NOPE-404' });
+  assert.equal(missing.status, 404);
+  assert.match(missing.html, /پیدا نشد/);
+  assert.equal((await routes.trackPage(d, { order: '../../etc/passwd' })).status, 404);
+  const placed = await routes.placeOrder(d, {
+    gateway: 'card', items: [{ id: 'p-plain::c1', qty: 1 }],
+    customer: { name: 'زهرا محمدی', phone: '09351234567', address: 'مشهد، بلوار سجاد، پلاک ۴' }
+  }, 'https://shop.test');
+  const found = await routes.trackPage(d, { order: placed.orderId });
+  assert.equal(found.status, 302);
+  assert.equal(found.location, '/order/' + placed.orderId);
+});
+
+test('Persian digits typed by the customer are accepted (phone and receipt code)', async () => {
+  const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
+  const placed = await routes.placeOrder(d, {
+    gateway: 'card', items: [{ id: 'p-plain::c1', qty: 1 }],
+    customer: { name: 'رضا  احمدی', phone: '۰۹۱۲۳۴۵۶۷۸۹', address: 'اصفهان، خیابان چهارباغ، پلاک ۱۲' }
+  }, 'https://shop.test');
+  assert.equal(placed.ok, true, placed.error);
+  const order = await routes.getOrder(d, placed.orderId);
+  assert.equal(order.customer.phone, '09123456789', 'Persian digits are normalised, not rejected');
+  assert.equal(order.customer.name, 'رضا احمدی', 'double spaces are collapsed');
+  assert.equal((await routes.submitReceipt(d, { orderId: placed.orderId, reference: '۱۲۳۴۵۶' })).ok, true);
+  assert.equal((await routes.getOrder(d, placed.orderId)).payment.reference, '123456');
+  assert.equal(core.normalizeCustomer({ phone: '+989123456789' }).phone, '09123456789', 'the +98 prefix is accepted');
+});
+
+test('info pages exist for the whole footer menu and unknown slugs are 404', async () => {
+  const d = deps();
+  for (const slug of ['payment', 'shipping', 'returns', 'about', 'contact', 'terms']) {
+    const page = await routes.infoPage(d, slug);
+    assert.equal(page.status, 200, slug + ' must exist');
+    assert.ok(page.html.length > 500, slug + ' must have content');
+  }
+  assert.equal((await routes.infoPage(d, 'nope')).status, 404);
+});
+
+test('the client script guards every DOM lookup and sanitises what it injects', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(join(root, 'worker-src/shop.ts'), 'utf8');
+  const script = source.slice(source.indexOf('export const SHOP_JS'), source.indexOf('export function totalsSummary'));
+  assert.match(script, /function esc\(/, 'cart rows are escaped before being injected');
+  assert.match(script, /innerHTML=.*esc\(l\.title\)|esc\(l\.title\)/, 'product titles are escaped in the cart');
+  assert.match(script, /function closest\(target,selector\)\{return target&&target\.closest\?/, 'clicks on non elements must not throw');
+  assert.match(script, /window\.addEventListener\('storage'/, 'the cart stays in sync across tabs');
+  assert.match(script, /Math\.max\(1,Math\.min\(999/, 'quantities are clamped on read');
+  assert.doesNotMatch(script, /await /, 'no top level await in a classic script');
+});

@@ -22,7 +22,7 @@ import { saveBenchmarkProfile } from './db.js';
 import { applyStoredResultSettings } from './db.js';
 import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
 import { SHOP_JS } from '../worker-src/shop.js';
-import { adminPage, cataloguePage, catalogueJson, checkoutPage, handleCallback, listOrders, loadShopConfig, orderPage, placeOrder, saveShopSettings, submitReceipt, type ShopDeps } from '../worker-src/shop-routes.js';
+import { adminPage, cataloguePage, infoPage, productPage, trackPage, catalogueJson, checkoutPage, handleCallback, listOrders, loadShopConfig, orderPage, placeOrder, saveShopSettings, submitReceipt, type ShopDeps } from '../worker-src/shop-routes.js';
 import { pushConfiguration, subscribePush, unsubscribePush, deliverPush, pushDeployerNotices } from './web-push.js';
 import { diagnosticStream, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import { serve } from '@hono/node-server';
@@ -61,7 +61,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.315.0+'; } catch { return process.env.npm_package_version || '1.315.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.316.0+'; } catch { return process.env.npm_package_version || '1.316.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -426,6 +426,9 @@ app.get('/', async c => {
   return c.html(await cataloguePage(shopDeps(),c.req.query()),200,{'cache-control':'no-store'});
 });
 app.get('/shop.js',c=>c.body(SHOP_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}));
+app.get('/p/:id',async c=>{await Promise.resolve();const result=await productPage(shopDeps(),c.req.param('id'));return result.html?c.html(result.html,200,{'cache-control':'no-store'}):c.notFound()});
+app.get('/track',async c=>{await Promise.resolve();const result=await trackPage(shopDeps(),c.req.query());if(result.location)return c.redirect(result.location,302);return c.html(result.html as string,result.status as any,{'cache-control':'no-store'})});
+app.get('/page/:slug',async c=>{await Promise.resolve();const result=await infoPage(shopDeps(),c.req.param('slug'));return result.html?c.html(result.html,200,{'cache-control':'no-store'}):c.notFound()});
 app.get('/checkout',async c=>c.html(await checkoutPage(shopDeps()),200,{'cache-control':'no-store'}));
 app.get('/order/:id',async c=>{const result=await orderPage(shopDeps(),c.req.param('id'));return result.html?c.html(result.html,200,{'cache-control':'no-store'}):c.notFound()});
 app.get('/api/shop/catalogue',async c=>c.json(await catalogueJson(shopDeps())));

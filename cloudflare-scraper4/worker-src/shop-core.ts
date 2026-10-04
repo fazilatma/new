@@ -110,6 +110,12 @@ function positive(value: unknown): number {
 }
 
 const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+/** Customers type Persian/Arabic digits; every validator and gateway needs ASCII ones. */
+export function toEnglishDigits(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660));
+}
 export function fa(value: number | string): string {
   return String(value).replace(/\d/g, d => FA_DIGITS[Number(d)]);
 }
@@ -194,8 +200,8 @@ export type OrderCustomer = { name: string; phone: string; address: string; note
 export function normalizeCustomer(raw: unknown): OrderCustomer {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
   return {
-    name: String(input.name ?? '').trim().slice(0, 120),
-    phone: String(input.phone ?? '').replace(/[^\d+]/g, '').slice(0, 20),
+    name: String(input.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120),
+    phone: toEnglishDigits(input.phone).replace(/[^\d+]/g, '').replace(/^\+98/, '0').replace(/^98(?=9)/, '0').slice(0, 20),
     address: String(input.address ?? '').trim().slice(0, 500),
     note: String(input.note ?? '').trim().slice(0, 500)
   };

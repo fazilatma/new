@@ -69,6 +69,19 @@ createServer(async (req, res) => {
     if (url.pathname === '/') return send(res, 200, await routes.cataloguePage(deps, query));
     if (url.pathname === '/shop.js') return send(res, 200, SHOP_JS, 'application/javascript; charset=utf-8');
     if (url.pathname === '/checkout') return send(res, 200, await routes.checkoutPage(deps));
+    if (url.pathname.startsWith('/p/')) {
+      const page = await routes.productPage(deps, decodeURIComponent(url.pathname.slice(3)));
+      return page.html ? send(res, 200, page.html) : send(res, 404, 'not found', 'text/plain');
+    }
+    if (url.pathname === '/track') {
+      const page = await routes.trackPage(deps, query);
+      if (page.location) { res.writeHead(302, { location: page.location }); return res.end(); }
+      return send(res, page.status, page.html);
+    }
+    if (url.pathname.startsWith('/page/')) {
+      const page = await routes.infoPage(deps, url.pathname.slice(6));
+      return page.html ? send(res, 200, page.html) : send(res, 404, 'not found', 'text/plain');
+    }
     if (url.pathname === '/scraper/shop') return send(res, 200, await routes.adminPage(deps));
     if (url.pathname === '/scraper') return send(res, 200, '<h1 dir="rtl">اینجا پنل اسکریپر سرو می‌شود.</h1>');
     if (url.pathname.startsWith('/order/')) {

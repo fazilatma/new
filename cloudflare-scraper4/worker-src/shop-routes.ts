@@ -4,7 +4,7 @@
  */
 import {
   DEFAULT_SHOP_SETTINGS, SHOP_ORDER_INDEX_KEY, SHOP_SETTINGS_KEY, adjustmentOf, basePriceOf,
-  customerProblem, itemId, money, normalizeCustomer, normalizeShopSettings, orderStateKey, orderTotals,
+  customerProblem, itemId, money, normalizeCustomer, toEnglishDigits, normalizeShopSettings, orderStateKey, orderTotals,
   parseItemId, showcaseItem,
   type Order, type OrderStatus, type ShopProduct, type ShopProfile, type ShopSettings, type ShowcaseItem
 } from './shop-core.js';
@@ -12,7 +12,7 @@ import {
   PAYMENT_SETTINGS_KEY, availableGateways, isPaymentGateway, normalizePaymentSettings, startPayment, verifyPayment,
   type Fetcher, type PaymentGatewayId, type PaymentSettings
 } from './payments.js';
-import { catalogueHtml, checkoutHtml, orderHtml, shopAdminHtml } from './shop.js';
+import { catalogueHtml, checkoutHtml, infoPageHtml, orderHtml, productHtml, shopAdminHtml, trackHtml } from './shop.js';
 import { createWooOrder, listWooGateways, readWooOrder, wooConfigured, type WooClient, type WooConfig, type WooFetch } from './payments-woo.js';
 
 export type ShopDeps = {
@@ -85,18 +85,49 @@ export async function showcase(deps: ShopDeps, settings: ShopSettings): Promise<
   return { items, profiles: summary.filter(entry => entry.count > 0) };
 }
 
-export async function cataloguePage(deps: ShopDeps, query: { q?: string; profile?: string; page?: string }): Promise<string> {
+export async function cataloguePage(deps: ShopDeps, query: { q?: string; profile?: string; page?: string; sort?: string }): Promise<string> {
   const { settings } = await loadShopConfig(deps);
   const { items, profiles } = await showcase(deps, settings);
   const q = String(query.q ?? '').trim().slice(0, 80);
   const profileId = String(query.profile ?? '').trim();
+  const sort = ['cheap', 'expensive', 'name'].includes(String(query.sort)) ? String(query.sort) : '';
   const needle = q.toLowerCase();
   const filtered = items.filter(item =>
     (!profileId || item.profileId === profileId) &&
     (!needle || item.title.toLowerCase().includes(needle) || String(item.brand || '').toLowerCase().includes(needle)));
-  const page = Math.max(1, Math.min(999, Math.round(Number(query.page) || 1)));
+  if (sort === 'cheap') filtered.sort((a, b) => a.price - b.price);
+  if (sort === 'expensive') filtered.sort((a, b) => b.price - a.price);
+  if (sort === 'name') filtered.sort((a, b) => a.title.localeCompare(b.title, 'fa'));
+  const pages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const page = Math.max(1, Math.min(pages, Math.round(Number(query.page) || 1)));
   const slice = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  return catalogueHtml({ settings, items: slice, profiles, query: { q, profileId, page }, total: filtered.length, perPage: PER_PAGE });
+  return catalogueHtml({ settings, items: slice, profiles, query: { q, profileId, page, sort }, total: filtered.length, perPage: PER_PAGE });
+}
+
+/** Single product page: same price contract as the card, plus the coefficient breakdown. */
+export async function productPage(deps: ShopDeps, id: string): Promise<{ status: number; html?: string }> {
+  const { settings } = await loadShopConfig(deps);
+  const { items } = await showcase(deps, settings);
+  const item = items.find(entry => entry.id === String(id || ''));
+  if (!item) return { status: 404 };
+  const related = items.filter(entry => entry.id !== item.id && entry.profileId === item.profileId).slice(0, 4);
+  return { status: 200, html: productHtml({ settings, item, related: related.length ? related : items.filter(entry => entry.id !== item.id).slice(0, 4) }) };
+}
+
+/** Order lookup from the footer menu. A wrong number must never 500 or leak other orders. */
+export async function trackPage(deps: ShopDeps, query: { order?: string }): Promise<{ status: number; html?: string; location?: string }> {
+  const { settings } = await loadShopConfig(deps);
+  const id = String(query.order ?? '').trim().toUpperCase();
+  if (!id) return { status: 200, html: trackHtml({ settings }) };
+  const order = await getOrder(deps, id);
+  if (!order) return { status: 404, html: trackHtml({ settings, notFound: 'سفارشی با این شماره پیدا نشد. شمارهٔ سفارش را دوباره بررسی کنید.' }) };
+  return { status: 302, location: `/order/${encodeURIComponent(order.id)}` };
+}
+
+export async function infoPage(deps: ShopDeps, slug: string): Promise<{ status: number; html?: string }> {
+  const { settings } = await loadShopConfig(deps);
+  const html = infoPageHtml(settings, String(slug || '').toLowerCase());
+  return html ? { status: 200, html } : { status: 404 };
 }
 
 export async function checkoutPage(deps: ShopDeps): Promise<string> {
@@ -233,7 +264,7 @@ export async function submitReceipt(deps: ShopDeps, body: any): Promise<{ ok: bo
   const order = await getOrder(deps, String(body?.orderId || ''));
   if (!order) return { ok: false, status: 404, error: 'سفارش پیدا نشد.' };
   if (order.gateway !== 'card') return { ok: false, status: 400, error: 'این سفارش کارت به کارت نیست.' };
-  const reference = String(body?.reference || '').trim().slice(0, 60);
+  const reference = toEnglishDigits(body?.reference).trim().slice(0, 60) || String(body?.reference || '').trim().slice(0, 60);
   if (reference.length < 4) return { ok: false, status: 400, error: 'کد پیگیری واریز را وارد کنید.' };
   order.payment.reference = reference;
   order.status = 'review';
