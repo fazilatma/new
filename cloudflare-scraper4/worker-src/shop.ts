@@ -32,7 +32,7 @@ const STYLE = String.raw`
   --bg:#070b17;--bg2:#0b1222;--card:#121b33;--line:#22304f;--line2:#2d3c60;
   --text:#f2f6ff;--muted:#9fb1d7;--soft:rgba(255,255,255,.045);--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
   --radius:18px;--tap:44px;--ring:0 0 0 1px rgba(255,255,255,.04) inset;--shadow:0 14px 34px rgba(3,7,18,.45);
-  --font:Vazirmatn,Vazir,Tahoma,system-ui,-apple-system,sans-serif;--fsize:14px
+  --app-font:Vazirmatn,Vazir,Tahoma,system-ui,sans-serif;--font:var(--app-font);--fsize:14px
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{max-width:100%;overflow-x:hidden}
@@ -358,7 +358,10 @@ function appearanceOf(settings: ShopSettings) {
   return settings.appearance && settings.appearance.family ? settings.appearance : DEFAULT_APPEARANCE;
 }
 function appearanceLinks(settings: ShopSettings): string {
-  const sheets = [appearanceOf(settings).stylesheet, 'vazirmatn'].filter((name, index, all) => name && all.indexOf(name) === index);
+  // Same sheets the panel head loads (vazirmatn + vazir) plus the picked family, so the
+  // storefront renders with exactly the typography of the scraper panel.
+  const sheets = [appearanceOf(settings).stylesheet, 'vazirmatn', 'vazir']
+    .filter((name, index, all) => name && all.indexOf(name) === index);
   return sheets.map(name => `<link rel="stylesheet" href="assets/fonts/${escapeHtml(name)}.css">`).join('\n');
 }
 
@@ -375,7 +378,8 @@ function layout(settings: ShopSettings, title: string, body: string, options: { 
 <base href="${escapeHtml(settings.basePath || '/')}">
 ${appearanceLinks(settings)}
 <style>${STYLE}</style>
-<style>:root{--font:${appearanceOf(settings).family};--fsize:${appearanceOf(settings).scale}px}</style></head><body>
+<style>:root{--app-font:${appearanceOf(settings).family};--font:var(--app-font);--fsize:${appearanceOf(settings).scale}px}
+html{font-size:${appearanceOf(settings).scale}px}</style></head><body>
 <a class="skip" href="#main">رفتن به محتوا</a>
 <div id="navbar" aria-hidden="true"></div>
 <header class="head"><div class="head-in">
@@ -734,13 +738,22 @@ function internalForm(form){
   var url=abs(form.getAttribute('action')||'./');
   return Boolean(url)&&url.origin===location.origin&&url.pathname===appRoot();
 }
+// Built by hand instead of FormData: one less browser API to depend on, and a failure here
+// must never swallow a search submit.
 function submitForm(form){
-  var url=abs(form.getAttribute('action')||'./');
-  if(!url){form.submit();return}
-  var data=new FormData(form),params=new URLSearchParams();
-  data.forEach(function(value,key){if(String(value).trim()!=='')params.set(key,String(value))});
-  var text=params.toString();
-  navigate('.'+(text?'/?'+text:'/'),true);
+  try{
+    var params=new URLSearchParams();
+    var fields=form.querySelectorAll('input,select,textarea');
+    for(var i=0;i<fields.length;i++){
+      var field=fields[i],name=field.getAttribute('name');
+      if(!name||field.disabled)continue;
+      if((field.type==='checkbox'||field.type==='radio')&&!field.checked)continue;
+      var value=field.value==null?'':String(field.value);
+      if(value.trim()!=='')params.set(name,value);
+    }
+    var text=params.toString();
+    navigate('.'+(text?'/?'+text:'/'),true);
+  }catch(e){try{form.submit()}catch(err){}}
 }
 function progress(value){
   var bar=document.getElementById('navbar');if(!bar)return;
@@ -766,6 +779,7 @@ var navToken=0;
 function navigate(href,push){
   var url=abs(href);if(!url){location.href=href;return}
   if(url.origin!==location.origin||url.pathname!==appRoot()){location.href=url.href;return}
+  if(!window.fetch||!window.DOMParser){location.href=url.href;return}
   var token=++navToken,main=document.getElementById('main');
   toggleDrawer(false);progress(25);
   if(main)main.classList.add('swapping');
@@ -778,14 +792,18 @@ function navigate(href,push){
      if(!next)throw new Error('no main');
      if(push&&url.href!==location.href)history.pushState({},'',url.href);
      else if(!push)history.replaceState({},'',url.href);
-     document.title=doc.title||document.title;
-     swap('footer.foot',doc);swap('nav.tabbar',doc);swap('#drawer',doc);
-     if(main){main.innerHTML=next.innerHTML;main.classList.remove('swapping');
-       main.style.animation='none';void main.offsetWidth;main.style.animation='';}
-     var box=document.querySelector('.head form.search input'),fresh=doc.querySelector('.head form.search input');
-     if(box&&fresh)box.value=fresh.value;
-     window.scrollTo({top:0,behavior:'auto'});
-     renderCart();paint();focusSearch();progress(100);
+     if(main)main.innerHTML=next.innerHTML;
+     // Everything past this point is cosmetic: a failure here must never reload the page,
+     // the shopper already has the new view in front of them.
+     try{
+       document.title=doc.title||document.title;
+       swap('footer.foot',doc);swap('nav.tabbar',doc);swap('#drawer',doc);
+       if(main){main.classList.remove('swapping');main.style.animation='none';void main.offsetWidth;main.style.animation=''}
+       var box=document.querySelector('.head form.search input'),fresh=doc.querySelector('.head form.search input');
+       if(box&&fresh)box.value=fresh.value;
+       if(window.scrollTo)window.scrollTo({top:0,behavior:'auto'});
+       renderCart();paint();focusSearch();progress(100);
+     }catch(e){progress(100)}
    })
    .catch(function(){location.href=url.href});
 }
@@ -796,7 +814,8 @@ function swap(selector,doc){
 function focusSearch(){
   if(!/[?&]focus=1/.test(location.search))return;
   var box=document.querySelector('.head form.search input');
-  if(box){box.focus();try{box.select()}catch(e){}}
+  if(!box)return;
+  try{box.focus();box.select()}catch(e){}
 }
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function closest(target,selector){return target&&target.closest?target.closest(selector):null}
@@ -830,7 +849,8 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('change',function(e){
   var auto=closest(e.target,'[data-autosubmit]');
-  if(auto&&auto.form){e.preventDefault();submitForm(auto.form)}
+  var autoForm=auto&&(auto.form||closest(auto,'form'));
+  if(autoForm){e.preventDefault();submitForm(autoForm)}
 });
 document.addEventListener('submit',function(e){
   var form=closest(e.target,'form');

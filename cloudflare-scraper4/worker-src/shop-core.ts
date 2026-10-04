@@ -72,15 +72,16 @@ export type ShopAppearance = { font: string; family: string; stylesheet: string;
 /** The same font list the scraper dashboard offers, served from the same /assets/fonts route. */
 export const SITE_FONTS: Record<string, { family: string; stylesheet: string }> = {
   system: { family: 'Tahoma,system-ui,sans-serif', stylesheet: '' },
-  vazir: { family: 'Vazir,Vazirmatn,Tahoma,sans-serif', stylesheet: 'vazir' },
-  vazirmatn: { family: 'Vazirmatn,Vazir,Tahoma,sans-serif', stylesheet: 'vazirmatn' },
+  vazir: { family: 'Vazir,Tahoma,sans-serif', stylesheet: 'vazir' },
+  vazirmatn: { family: 'Vazirmatn,Vazir,Tahoma,system-ui,sans-serif', stylesheet: 'vazirmatn' },
   yekan: { family: 'Yekan,Tahoma,sans-serif', stylesheet: 'yekan' },
   shabnam: { family: 'Shabnam,Tahoma,sans-serif', stylesheet: 'shabnam' },
   sahel: { family: 'Sahel,Tahoma,sans-serif', stylesheet: 'sahel' },
   samim: { family: 'Samim,Tahoma,sans-serif', stylesheet: 'samim' }
 };
 
-const FONT_SCALES: Record<string, number> = { small: 13, medium: 14, large: 15, xlarge: 16 };
+/** Identical steps to the panel's applySiteFontSize map, so both surfaces read the same size. */
+const FONT_SCALES: Record<string, number> = { small: 12, medium: 14, large: 16, xlarge: 18 };
 
 export const DEFAULT_APPEARANCE: ShopAppearance = { font: 'vazir', family: SITE_FONTS.vazir.family, stylesheet: 'vazir', scale: 14 };
 

@@ -315,16 +315,30 @@ test('all pages hang off the app root and honour a mounted base path', async () 
 });
 
 test('the storefront uses the same self hosted Persian fonts as the scraper panel', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const dashboard = await readFile(join(root, 'worker-src/dashboard.ts'), 'utf8');
   const html = await routes.cataloguePage(deps(), {});
   assert.ok(html.includes('<link rel="stylesheet" href="assets/fonts/vazir.css">'), 'Vazir comes from the scraper font route');
   assert.ok(html.includes('<link rel="stylesheet" href="assets/fonts/vazirmatn.css">'), 'Vazirmatn comes from the scraper font route');
-  assert.match(html, /--font:Vazirmatn,Vazir,Tahoma/, 'same font stack as the dashboard');
+  assert.match(html, /--app-font:Vazir,Tahoma,sans-serif/, 'the default is the panel default (vazir)');
   assert.match(html, /font-family:var\(--font\)/);
-  // The font chosen in the scraper panel (settings.appearance.font) restyles the shop as well.
+  // The panel picker must actually win there as well: a hard coded !important stack used to
+  // pin the dashboard to Vazirmatn, which is why the two surfaces never looked the same.
+  assert.match(dashboard, /body\{font-family:var\(--app-font[^}]*\)!important\}/, 'the panel honours its own font picker');
+  // Every family and size step the panel offers must resolve to the identical value here.
+  for (const [key, family] of [['system', 'Tahoma,system-ui,sans-serif'], ['vazir', 'Vazir,Tahoma,sans-serif'],
+    ['yekan', 'Yekan,Tahoma,sans-serif'], ['shabnam', 'Shabnam,Tahoma,sans-serif'],
+    ['sahel', 'Sahel,Tahoma,sans-serif'], ['samim', 'Samim,Tahoma,sans-serif']]) {
+    assert.match(dashboard, new RegExp(key + ":\\{family:'" + family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'"), key + ' must match the panel stack');
+    assert.equal(core.resolveAppearance({ appearance: { font: key } }).family, family, key + ' resolves to the panel stack');
+  }
+  for (const [size, px] of [['small', 12], ['medium', 14], ['large', 16], ['xlarge', 18]])
+    assert.equal(core.resolveAppearance({ appearance: { fontSize: size } }).scale, px, size + ' matches the panel step');
   const themed = deps({ state: [['settings', { appearance: { font: 'shabnam', fontSize: 'large' } }]] });
   const page = await routes.cataloguePage(themed, {});
   assert.ok(page.includes('href="assets/fonts/shabnam.css"'), 'the panel font is loaded from the same route');
-  assert.match(page, /--font:Shabnam,Tahoma,sans-serif;--fsize:15px/, 'font family and size follow the panel');
+  assert.match(page, /--app-font:Shabnam,Tahoma,sans-serif;--font:var\(--app-font\);--fsize:16px/, 'font family and size follow the panel');
+  assert.match(page, /html\{font-size:16px\}/, 'the panel scales the root font size, so the shop does too');
   assert.equal(core.resolveAppearance({ appearance: { font: 'nope' } }).font, 'vazir', 'unknown fonts fall back');
 });
 
@@ -475,6 +489,80 @@ test('a click really swaps main in place instead of loading another document', a
   assert.deepEqual(pushed, ['http://localhost:3000/?view=categories'], 'the URL still changes for real');
   assert.equal(document.title, 'CATS', 'the title follows the swapped view');
   assert.match(document.getElementById('main').innerHTML, /CATEGORIES/, 'only main is replaced');
+});
+
+test('a shopper can browse, filter, search and fill the cart without one page reload', async () => {
+  const { parseHTML } = await import('linkedom');
+  const shop = await load('worker-src/shop.ts', 'shop-flow.mjs');
+  const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
+  // The client runs against the real route dispatcher: whatever the server would answer.
+  const serve = async href => {
+    const url = new URL(href, 'http://shop.test');
+    const query = Object.fromEntries(url.searchParams.entries());
+    const page = await routes.rootPage(d, query);
+    return page.html || (await routes.cataloguePage(d, {}));
+  };
+  const { window, document } = parseHTML(await serve('/'));
+  const store = new Map();
+  let current = 'http://shop.test/', hard = 0;
+  window.localStorage = { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) };
+  window.DOMParser = class { parseFromString(html) { return parseHTML(html).document } };
+  window.location = { get origin() { return 'http://shop.test' }, get href() { return current },
+    set href(value) { hard++; current = String(value) },
+    get pathname() { return new URL(current).pathname }, get search() { return new URL(current).search } };
+  window.history = { pushState: (a, b, url) => { current = String(url) }, replaceState: (a, b, url) => { current = String(url) } };
+  window.scrollTo = () => {};
+  window.fetch = async href => ({ ok: true, status: 200, text: () => serve(new URL(String(href), current).href) });
+  const run = new Function('window', 'document', 'location', 'localStorage', 'fetch', 'DOMParser', 'history',
+    'URL', 'URLSearchParams', 'setTimeout', 'console', shop.SHOP_JS);
+  run(window, document, window.location, window.localStorage, window.fetch, window.DOMParser, window.history,
+    URL, URLSearchParams, setTimeout, console);
+  const click = node => {
+    assert.ok(node, 'the element a shopper would click must exist');
+    const event = new window.Event('click', { bubbles: true });
+    Object.defineProperty(event, 'target', { value: node });
+    Object.defineProperty(event, 'button', { value: 0 });
+    node.dispatchEvent(event);
+  };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 120));
+  const main = () => document.getElementById('main');
+  const cards = () => (main().innerHTML.match(/class="pcard"/g) || []).length;
+  const all = cards();
+  assert.ok(all > 1, 'the catalogue starts with products');
+  click(document.querySelector('.chip:not(.on)'));
+  await settle();
+  assert.match(current, /\?category=/, 'a category chip filters in place');
+  assert.ok(cards() < all, 'and the grid really changes');
+  const sort = document.getElementById('sort');
+  Object.defineProperty(sort, 'value', { value: 'cheap', configurable: true });
+  sort.dispatchEvent(Object.defineProperty(new window.Event('change', { bubbles: true }), 'target', { value: sort }));
+  await settle();
+  assert.match(current, /sort=cheap/, 'the sort select navigates without a form post');
+  const form = document.querySelector('.head form.search'), box = form.querySelector('input');
+  Object.defineProperty(box, 'value', { value: 'کتری', configurable: true });
+  form.dispatchEvent(Object.defineProperty(new window.Event('submit', { bubbles: true }), 'target', { value: form }));
+  await settle();
+  assert.match(decodeURIComponent(current), /\?q=کتری/, 'search stays on the same document');
+  click(document.querySelector('.pcard h3 a'));
+  await settle();
+  assert.match(current, /\?product=/, 'a product opens in place');
+  click(main().querySelector('.add'));
+  await settle();
+  assert.equal(JSON.parse(store.get('shop.cart.v1')).length, 1, 'the product lands in the cart');
+  click(document.getElementById('cartLink'));
+  await settle();
+  assert.match(main().innerHTML, /data-remove=/, 'the cart renders on the checkout view');
+  assert.match(main().innerHTML, /name="gateway"/, 'payment choices are there');
+  click(document.querySelector('[data-step="1"]'));
+  await settle();
+  assert.equal(JSON.parse(store.get('shop.cart.v1'))[0].qty, 2, 'quantity controls work after the swap');
+  click(document.querySelector('[data-remove]'));
+  await settle();
+  assert.match(main().innerHTML, /سبد خرید خالی/, 'removing the last line shows the empty cart');
+  click(document.querySelector('.d-item[data-go="./?view=track"]'));
+  await settle();
+  assert.match(current, /view=track/);
+  assert.equal(hard, 0, 'not a single full page load during the whole journey');
 });
 
 test('the worker serves a stylesheet for every font the panel offers', async () => {
