@@ -23,11 +23,12 @@ const profiles = [
 ];
 const image = n => `https://picsum.photos/seed/s4-${n}/600/600`;
 const products = {
-  'digikala-kitchen': [['کتری برقی ۱.۷ لیتری', 820000], ['سرخ‌کن بدون روغن', 3450000], ['آبمیوه‌گیری صنعتی', 1990000], ['توستر دو نفره', 740000]],
-  'snapp-tools': [['دریل شارژی ۲۰ ولت', 2150000], ['فرز انگشتی', 1180000], ['اره عمودبر', 1640000], ['پیچ‌گوشتی برقی', 390000]],
-  'local-gifts': [['بشقاب میناکاری', 480000], ['جعبهٔ خاتم', 950000], ['فرش دستباف کوچک', 2750000], ['سفال لالجین', 160000]]
+  'digikala-kitchen': [['کتری برقی ۱.۷ لیتری', 820000, 'خانه > آشپزخانه > چای‌ساز'], ['سرخ‌کن بدون روغن', 3450000, 'خانه > آشپزخانه > سرخ‌کن'], ['آبمیوه‌گیری صنعتی', 1990000, 'خانه > آشپزخانه > آبمیوه‌گیری'], ['توستر دو نفره', 740000, 'خانه > آشپزخانه > چای‌ساز']],
+  'snapp-tools': [['دریل شارژی ۲۰ ولت', 2150000, 'ابزار > ابزار برقی'], ['فرز انگشتی', 1180000, 'ابزار > ابزار برقی'], ['اره عمودبر', 1640000, 'ابزار > ابزار برقی'], ['پیچ‌گوشتی برقی', 390000, 'ابزار > ابزار شارژی']],
+  'local-gifts': [['بشقاب میناکاری', 480000, 'صنایع دستی > میناکاری'], ['جعبهٔ خاتم', 950000, 'صنایع دستی > خاتم'], ['فرش دستباف کوچک', 2750000, 'صنایع دستی > فرش'], ['سفال لالجین', 160000, 'صنایع دستی > سفال']]
 };
-const byProfile = Object.fromEntries(Object.entries(products).map(([id, list]) => [id, list.map(([title, price], index) => ({
+const byProfile = Object.fromEntries(Object.entries(products).map(([id, list]) => [id, list.map(([title, price, category], index) => ({
+  category,
   sourceKey: `${id}-${index}`, title, price, priceText: price.toLocaleString('fa-IR') + ' تومان',
   image: image(`${id}-${index}`), url: 'https://example.test/p', shortDesc: 'نمونهٔ پیش‌نمایش آفلاین.'
 }))]));
@@ -68,6 +69,7 @@ createServer(async (req, res) => {
   try {
     if (url.pathname === '/') return send(res, 200, await routes.cataloguePage(deps, query));
     if (url.pathname === '/shop.js') return send(res, 200, SHOP_JS, 'application/javascript; charset=utf-8');
+    if (url.pathname === '/categories') return send(res, 200, await routes.categoriesPage(deps));
     if (url.pathname === '/checkout') return send(res, 200, await routes.checkoutPage(deps));
     if (url.pathname.startsWith('/p/')) {
       const page = await routes.productPage(deps, decodeURIComponent(url.pathname.slice(3)));

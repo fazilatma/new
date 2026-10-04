@@ -16,7 +16,7 @@ export type ShopProfile = {
 export type ShopProduct = {
   sourceKey: string; title: string; price: number; priceText?: string;
   url?: string; image?: string; images?: string[];
-  shortDesc?: string; longDesc?: string; sku?: string; brand?: string; stock?: number; category?: string;
+  shortDesc?: string; longDesc?: string; sku?: string; brand?: string; stock?: number; category?: string; tags?: string;
   resultBase?: { title: string; price: number; priceText: string };
 };
 
@@ -164,11 +164,34 @@ export function showcaseItem(product: ShopProduct, profile: ShopProfile): Showca
     title: String(clone.title || product.title || '').trim(),
     basePrice: base, price, priceText: money(price),
     image: String(product.image || images[0] || ''),
-    brand: product.brand, category: product.category, stock: product.stock,
+    brand: product.brand, category: categoryOf(product), stock: product.stock,
     shortDesc: String(product.shortDesc || '').slice(0, 300),
     sourceUrl: product.url,
     adjustment
   };
+}
+
+export const UNCATEGORISED = 'دسته‌بندی‌نشده';
+
+/**
+ * Customer facing grouping is by PRODUCT CATEGORY, never by the internal profile name.
+ * Scraped categories arrive as "خانه > آشپزخانه > کتری" or "Kitchen/Kettles": keep the most
+ * specific segment, which is what a shopper actually browses by.
+ */
+export function categoryOf(product: { category?: string; tags?: string; brand?: string }): string {
+  const raw = String(product.category || '').replace(/\s+/g, ' ').trim();
+  if (raw) {
+    const parts = raw.split(/\s*(?:>|،|\||\/|»|<)\s*/).map(part => part.trim()).filter(Boolean);
+    const picked = parts.length ? parts[parts.length - 1] : raw;
+    if (picked.length > 1) return picked.slice(0, 60);
+  }
+  const tag = String(product.tags || '').split(/[,،|\n]/).map(part => part.trim()).find(part => part.length > 1);
+  if (tag) return tag.slice(0, 60);
+  return UNCATEGORISED;
+}
+
+export function categorySlug(name: string): string {
+  return String(name || '').trim().slice(0, 60);
 }
 
 export function itemId(profileId: string, sourceKey: string): string {

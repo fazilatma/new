@@ -24,8 +24,8 @@ const profiles = [
   { id: 'p-plain', name: 'فروشگاه ج', titleSuffix: '', priceMode: 'none', priceValue: 0, roundPrice: 0, minPrice: 0 }
 ];
 const products = {
-  'p-percent': [{ sourceKey: 'a1', title: 'کتری برقی', price: 120000, priceText: '۱۲۰٬۰۰۰ تومان', image: 'https://x/i.jpg' }],
-  'p-multiply': [{ sourceKey: 'b1', title: 'جاروبرقی', price: 500000, priceText: '۵۰۰٬۰۰۰ تومان' }],
+  'p-percent': [{ sourceKey: 'a1', title: 'کتری برقی', price: 120000, priceText: '۱۲۰٬۰۰۰ تومان', image: 'https://x/i.jpg', category: 'خانه > آشپزخانه > کتری و سماور', brand: 'پارس' }],
+  'p-multiply': [{ sourceKey: 'b1', title: 'جاروبرقی', price: 500000, priceText: '۵۰۰٬۰۰۰ تومان', category: 'لوازم خانگی/نظافت' }],
   'p-plain': [{ sourceKey: 'c1', title: 'لیوان', price: 50000, priceText: '۵۰٬۰۰۰ تومان' }, { sourceKey: 'c2', title: 'بدون قیمت', price: 0, priceText: '' }]
 };
 
@@ -73,8 +73,8 @@ test('the catalogue page shows base price, coefficient and final price and keeps
   const html = await routes.cataloguePage(d, {});
   assert.match(html, /۱۴۴٬۰۰۰/, 'the adjusted price is rendered');
   assert.match(html, /۱۲۰٬۰۰۰/, 'the untouched source price is rendered next to it');
-  assert.match(html, /فروشگاه الف/, 'each card is attributed to its profile');
-  assert.match(html, /ضرایب تعدیل/, 'the page explains that profile coefficients are applied');
+  assert.doesNotMatch(html, /فروشگاه الف/, 'internal profile names are never shown to shoppers');
+  assert.match(html, /کتری و سماور/, 'cards are tagged with the product category');
   assert.doesNotMatch(html, /<script>(?!<\/script>)/, 'no inline script: script-src is self only');
   const { settings } = await routes.loadShopConfig(d);
   assert.equal(settings.scraperPath, 'scraper');
@@ -82,9 +82,9 @@ test('the catalogue page shows base price, coefficient and final price and keeps
   assert.equal(core.normalizeScraperPath('/panel/'), 'panel');
 });
 
-test('the catalogue filters by profile and by search term', async () => {
+test('the catalogue filters by category and by search term', async () => {
   const d = deps();
-  const onlyB = await routes.cataloguePage(d, { profile: 'p-multiply' });
+  const onlyB = await routes.cataloguePage(d, { category: 'نظافت' });
   assert.match(onlyB, /جاروبرقی/);
   assert.doesNotMatch(onlyB, /کتری برقی/);
   const search = await routes.cataloguePage(d, { q: 'لیوان' });
@@ -174,7 +174,7 @@ test('both runtimes mount the shop on "/" and the dashboard in the configured fo
     assert.match(source, /if\(path===base\)return/, file + ': the folder serves the dashboard');
     assert.match(source, /path===base\+'\/dashboard\.js'/, file + ': the dashboard script is reachable inside the folder');
     assert.match(source, /path===base\+'\/shop'/, file + ': the shop admin page lives beside the dashboard');
-    for (const route of ['/shop.js', '/checkout', '/order/:id', '/p/:id', '/track', '/page/:slug', '/api/shop/order', '/api/shop/receipt', '/api/shop/settings', '/api/shop/callback/:gateway'])
+    for (const route of ['/shop.js', '/checkout', '/order/:id', '/p/:id', '/track', '/page/:slug', '/categories', '/api/shop/order', '/api/shop/receipt', '/api/shop/settings', '/api/shop/callback/:gateway'])
       assert.ok(source.includes("'" + route + "'"), file + ': missing route ' + route);
     assert.match(source, /if\(!settings\.enabled\)return/, file + ': turning the shop off gives the dashboard its root back');
   }
@@ -202,17 +202,64 @@ test('every page carries the footer menu, the header cart and no horizontal over
   }
 });
 
-test('the mobile layout switches to a two column grid and a sticky cart bar', async () => {
+test('the mobile layout switches to a two column grid and a bottom tab bar', async () => {
   const html = await routes.cataloguePage(deps(), {});
   assert.match(html, /@media\(max-width:720px\)\{[\s\S]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'two products per row on phones');
   assert.match(html, /@media\(max-width:360px\)\{\.grid\{grid-template-columns:1fr\}\}/, 'one per row on very small screens');
-  assert.match(html, /id="cartBar"/, 'the sticky cart bar exists');
-  assert.match(html, /env\(safe-area-inset-bottom\)/, 'the sticky bar respects the home indicator');
+  assert.match(html, /env\(safe-area-inset-bottom\)/, 'the bottom bar respects the home indicator');
   assert.match(html, /\.pcard h3\{[^}]*-webkit-line-clamp:2/, 'long titles are clamped instead of breaking the card');
+  assert.match(html, /@media\(max-width:900px\)\{\.tabbar\{display:block\}body\{padding-bottom:calc\(66px/, 'the tab bar only takes over on small screens and never covers the footer');
+});
+
+test('every page has the bottom tabs with the active one marked and a live cart badge', async () => {
+  const d = deps();
+  const pages = {
+    home: await routes.cataloguePage(d, {}),
+    categories: await routes.categoriesPage(d),
+    cart: await routes.checkoutPage(d),
+    track: (await routes.trackPage(d, {})).html
+  };
+  for (const [tab, html] of Object.entries(pages)) {
+    assert.match(html, /<nav class="tabbar" aria-label="منوی پایین">/, tab + ': the bottom tab bar is missing');
+    for (const href of ['/', '/categories', '/?focus=1', '/checkout', '/track'])
+      assert.ok(html.includes('href="' + href + '"'), tab + ': tab link missing ' + href);
+    assert.match(html, /id="tabCartCount"/, tab + ': the cart tab must carry the item badge');
+    assert.equal((html.match(/aria-current="page"/g) || []).length >= 1, true, tab + ': the active tab must be marked');
+  }
+  assert.match(pages.categories, /href="\/categories"[^>]*aria-current="page"/, 'the categories page marks its own tab');
+});
+
+test('products are grouped by category and type, never by profile', async () => {
+  const d = deps();
+  const { categories } = await routes.showcase(d, (await routes.loadShopConfig(d)).settings);
+  assert.deepEqual(categories.map(entry => entry.name), ['کتری و سماور', 'نظافت', 'دسته‌بندی‌نشده'],
+    'the most specific segment of the scraped category wins and uncategorised sinks to the end');
+  assert.equal(core.categoryOf({ category: 'خانه > آشپزخانه > کتری و سماور' }), 'کتری و سماور');
+  assert.equal(core.categoryOf({ category: 'Kitchen/Kettles' }), 'Kettles');
+  assert.equal(core.categoryOf({ tags: 'هدیه، چوبی' }), 'هدیه', 'tags are the fallback grouping');
+  assert.equal(core.categoryOf({}), 'دسته‌بندی‌نشده');
+  const page = await routes.categoriesPage(d);
+  assert.match(page, /دسته‌بندی محصولات/);
+  assert.match(page, /کتری و سماور/);
+  assert.match(page, /۱ محصول/);
+  assert.doesNotMatch(page, /فروشگاه الف|فروشگاه ب|فروشگاه ج/, 'profile names never reach the storefront');
+});
+
+test('no customer facing page leaks a profile name', async () => {
+  const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
+  const placed = await routes.placeOrder(d, {
+    gateway: 'card', items: [{ id: 'p-percent::a1', qty: 1 }],
+    customer: { name: 'زهرا محمدی', phone: '09351234567', address: 'مشهد، بلوار سجاد، پلاک ۴' }
+  }, 'https://shop.test');
+  const pages = [await routes.cataloguePage(d, {}), await routes.categoriesPage(d),
+    (await routes.productPage(d, 'p-percent::a1')).html, (await routes.orderPage(d, placed.orderId)).html];
+  for (const html of pages) assert.doesNotMatch(html, /فروشگاه الف|فروشگاه ب|فروشگاه ج/, 'the sourcing profile is internal');
+  const order = await routes.getOrder(d, placed.orderId);
+  assert.equal(order.lines[0].profileName, 'فروشگاه الف', 'the profile is still recorded on the order for the shop owner');
 });
 
 test('a product without an image renders a placeholder instead of a broken image', async () => {
-  const html = await routes.cataloguePage(deps(), { profile: 'p-multiply' });
+  const html = await routes.cataloguePage(deps(), { category: 'نظافت' });
   assert.match(html, /class="ph" role="img" aria-label="بدون تصویر"/);
   assert.doesNotMatch(html, /<img[^>]*src=""/, 'never emit an empty src');
 });

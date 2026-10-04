@@ -4,7 +4,7 @@
  */
 import {
   DEFAULT_SHOP_SETTINGS, SHOP_ORDER_INDEX_KEY, SHOP_SETTINGS_KEY, adjustmentOf, basePriceOf,
-  customerProblem, itemId, money, normalizeCustomer, toEnglishDigits, normalizeShopSettings, orderStateKey, orderTotals,
+  UNCATEGORISED, customerProblem, itemId, money, normalizeCustomer, toEnglishDigits, normalizeShopSettings, orderStateKey, orderTotals,
   parseItemId, showcaseItem,
   type Order, type OrderStatus, type ShopProduct, type ShopProfile, type ShopSettings, type ShowcaseItem
 } from './shop-core.js';
@@ -12,7 +12,7 @@ import {
   PAYMENT_SETTINGS_KEY, availableGateways, isPaymentGateway, normalizePaymentSettings, startPayment, verifyPayment,
   type Fetcher, type PaymentGatewayId, type PaymentSettings
 } from './payments.js';
-import { catalogueHtml, checkoutHtml, infoPageHtml, orderHtml, productHtml, shopAdminHtml, trackHtml } from './shop.js';
+import { catalogueHtml, categoriesHtml, checkoutHtml, infoPageHtml, orderHtml, productHtml, shopAdminHtml, trackHtml } from './shop.js';
 import { createWooOrder, listWooGateways, readWooOrder, wooConfigured, type WooClient, type WooConfig, type WooFetch } from './payments-woo.js';
 
 export type ShopDeps = {
@@ -72,36 +72,49 @@ export async function loadShopConfig(deps: ShopDeps): Promise<{ settings: ShopSe
 }
 
 /** Every showcased product, priced with its own profile's coefficients. */
-export async function showcase(deps: ShopDeps, settings: ShopSettings): Promise<{ items: ShowcaseItem[]; profiles: Array<{ id: string; name: string; count: number }> }> {
+export async function showcase(deps: ShopDeps, settings: ShopSettings): Promise<{ items: ShowcaseItem[]; categories: Array<{ name: string; count: number }> }> {
   const profiles = (await deps.listProfiles()).filter(profile => !settings.profileIds.length || settings.profileIds.includes(profile.id));
   const items: ShowcaseItem[] = [];
-  const summary: Array<{ id: string; name: string; count: number }> = [];
   for (const profile of profiles) {
     const products = await deps.allProducts(profile.id);
-    const priced = products.filter(product => basePriceOf(product) > 0).map(product => showcaseItem(product, profile));
-    items.push(...priced);
-    summary.push({ id: profile.id, name: profile.name, count: priced.length });
+    items.push(...products.filter(product => basePriceOf(product) > 0).map(product => showcaseItem(product, profile)));
   }
-  return { items, profiles: summary.filter(entry => entry.count > 0) };
+  // Shoppers browse by product category/type. The profile is an internal sourcing detail and is
+  // never shown in the storefront, only used to price the item.
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.category || UNCATEGORISED, (counts.get(item.category || UNCATEGORISED) || 0) + 1);
+  const categories = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => (a.name === UNCATEGORISED ? 1 : b.name === UNCATEGORISED ? -1 : b.count - a.count || a.name.localeCompare(b.name, 'fa')));
+  return { items, categories };
 }
 
-export async function cataloguePage(deps: ShopDeps, query: { q?: string; profile?: string; page?: string; sort?: string }): Promise<string> {
+export async function cataloguePage(deps: ShopDeps, query: { q?: string; category?: string; page?: string; sort?: string }): Promise<string> {
   const { settings } = await loadShopConfig(deps);
-  const { items, profiles } = await showcase(deps, settings);
+  const { items, categories } = await showcase(deps, settings);
   const q = String(query.q ?? '').trim().slice(0, 80);
-  const profileId = String(query.profile ?? '').trim();
+  const category = String(query.category ?? '').trim().slice(0, 60);
   const sort = ['cheap', 'expensive', 'name'].includes(String(query.sort)) ? String(query.sort) : '';
   const needle = q.toLowerCase();
   const filtered = items.filter(item =>
-    (!profileId || item.profileId === profileId) &&
-    (!needle || item.title.toLowerCase().includes(needle) || String(item.brand || '').toLowerCase().includes(needle)));
+    (!category || item.category === category) &&
+    (!needle || item.title.toLowerCase().includes(needle) || String(item.brand || '').toLowerCase().includes(needle) || String(item.category || '').toLowerCase().includes(needle)));
   if (sort === 'cheap') filtered.sort((a, b) => a.price - b.price);
   if (sort === 'expensive') filtered.sort((a, b) => b.price - a.price);
   if (sort === 'name') filtered.sort((a, b) => a.title.localeCompare(b.title, 'fa'));
   const pages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
   const page = Math.max(1, Math.min(pages, Math.round(Number(query.page) || 1)));
   const slice = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  return catalogueHtml({ settings, items: slice, profiles, query: { q, profileId, page, sort }, total: filtered.length, perPage: PER_PAGE });
+  return catalogueHtml({ settings, items: slice, categories, query: { q, category, page, sort }, total: filtered.length, perPage: PER_PAGE });
+}
+
+/** Browse-by-category page behind the bottom tab bar. */
+export async function categoriesPage(deps: ShopDeps): Promise<string> {
+  const { settings } = await loadShopConfig(deps);
+  const { items, categories } = await showcase(deps, settings);
+  const covers = new Map<string, string>();
+  for (const item of items) { const name = item.category || UNCATEGORISED; if (item.image && !covers.has(name)) covers.set(name, item.image); }
+  return categoriesHtml({ settings, categories: categories.map(entry => ({ ...entry, image: covers.get(entry.name) || '' })) });
 }
 
 /** Single product page: same price contract as the card, plus the coefficient breakdown. */
@@ -110,7 +123,7 @@ export async function productPage(deps: ShopDeps, id: string): Promise<{ status:
   const { items } = await showcase(deps, settings);
   const item = items.find(entry => entry.id === String(id || ''));
   if (!item) return { status: 404 };
-  const related = items.filter(entry => entry.id !== item.id && entry.profileId === item.profileId).slice(0, 4);
+  const related = items.filter(entry => entry.id !== item.id && entry.category === item.category).slice(0, 4);
   return { status: 200, html: productHtml({ settings, item, related: related.length ? related : items.filter(entry => entry.id !== item.id).slice(0, 4) }) };
 }
 

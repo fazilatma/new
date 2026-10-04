@@ -137,13 +137,28 @@ table.sum tfoot td{border-bottom:none}
 .copy{max-width:1200px;margin:16px auto 0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;
   display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap}
 
-/* ---------- sticky mobile cart bar ---------- */
-.cartbar{position:fixed;inset-inline:0;bottom:0;z-index:30;display:none;gap:10px;align-items:center;
-  padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(11,18,34,.96);border-top:1px solid var(--line);backdrop-filter:blur(8px)}
-.cartbar[data-show="1"]{display:flex}
-.cartbar .sum{flex:1;font-size:12px;color:var(--muted)}
-.cartbar .sum b{color:var(--text);font-size:14px}
-body[data-cartbar="1"]{padding-bottom:84px}
+/* ---------- bottom tab bar (mobile app style) ---------- */
+.tabbar{position:fixed;inset-inline:0;bottom:0;z-index:40;display:none;background:rgba(9,14,27,.97);
+  border-top:1px solid var(--line);backdrop-filter:blur(10px);padding-bottom:env(safe-area-inset-bottom)}
+.tabbar ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,1fr)}
+.tabbar a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  min-height:58px;font-size:10px;color:var(--muted);position:relative}
+.tabbar a .ico{font-size:19px;line-height:1}
+.tabbar a[aria-current="page"]{color:var(--brand)}
+.tabbar a[aria-current="page"]::before{content:"";position:absolute;top:0;inset-inline:22%;height:2px;background:var(--brand);border-radius:0 0 4px 4px}
+.tabbar .tabcount{position:absolute;top:6px;inset-inline-end:calc(50% - 22px);background:var(--brand);color:var(--brand-ink);
+  border-radius:999px;font-size:10px;font-weight:800;padding:0 5px;min-width:17px;text-align:center}
+.tabbar .tabcount[data-empty="1"]{display:none}
+@media(max-width:900px){.tabbar{display:block}body{padding-bottom:calc(66px + env(safe-area-inset-bottom))}}
+
+/* ---------- categories ---------- */
+.catgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.catcard{position:relative;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);min-height:104px}
+.catcard img{width:100%;height:104px;object-fit:cover;opacity:.45}
+.catcard .ph{height:104px;display:grid;place-items:center;color:var(--line2);font-size:28px}
+.catcard .meta{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;padding:10px;
+  background:linear-gradient(180deg,transparent,rgba(7,11,23,.86))}
+.catcard b{font-size:13px}.catcard small{color:var(--muted);font-size:11px}
 
 @media(max-width:900px){.cols{grid-template-columns:1fr}.sticky{position:static}.foot-in{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){
@@ -171,6 +186,7 @@ function footer(settings: ShopSettings): string {
     ${settings.contactPhone ? `<p class="about">☎ <a href="tel:${escapeHtml(settings.contactPhone)}">${fa(settings.contactPhone)}</a></p>` : ''}</div>
   <div><h4>فروشگاه</h4><ul>${links([
     { href: '/', label: 'ویترین محصولات' },
+    { href: '/categories', label: 'دسته‌بندی محصولات' },
     { href: '/checkout', label: 'سبد خرید و تسویه' },
     { href: '/track', label: 'پیگیری سفارش' }
   ])}</ul></div>
@@ -189,7 +205,23 @@ function footer(settings: ShopSettings): string {
 <span>قیمت‌ها با ضرایب تعدیل هر پروفایل محاسبه می‌شوند.</span></div></footer>`;
 }
 
-function layout(settings: ShopSettings, title: string, body: string, options: { search?: string; showSearch?: boolean } = {}): string {
+type TabKey = 'home' | 'categories' | 'search' | 'cart' | 'track';
+
+/** Bottom tab bar: the primary navigation on phones, mirrored by the footer menu on desktop. */
+function tabbar(active?: TabKey): string {
+  const tabs: Array<{ key: TabKey; href: string; icon: string; label: string; badge?: boolean }> = [
+    { key: 'home', href: '/', icon: '🏠', label: 'خانه' },
+    { key: 'categories', href: '/categories', icon: '🗂', label: 'دسته‌بندی' },
+    { key: 'search', href: '/?focus=1', icon: '🔍', label: 'جست‌وجو' },
+    { key: 'cart', href: '/checkout', icon: '🧺', label: 'سبد خرید', badge: true },
+    { key: 'track', href: '/track', icon: '📦', label: 'پیگیری' }
+  ];
+  return `<nav class="tabbar" aria-label="منوی پایین"><ul>${tabs.map(tab => `<li><a href="${tab.href}"${tab.key === active ? ' aria-current="page"' : ''}>
+    <span class="ico" aria-hidden="true">${tab.icon}</span><span>${tab.label}</span>
+    ${tab.badge ? '<span class="tabcount" id="tabCartCount" data-empty="1">۰</span>' : ''}</a></li>`).join('')}</ul></nav>`;
+}
+
+function layout(settings: ShopSettings, title: string, body: string, options: { search?: string; showSearch?: boolean; tab?: TabKey } = {}): string {
   const search = options.showSearch === false ? '' : `<form class="search" method="get" action="/" role="search">
     <input name="q" value="${escapeHtml(options.search || '')}" placeholder="جست‌وجوی محصول…" aria-label="جست‌وجوی محصول" enterkeyhint="search">
     <button class="iconbtn" type="submit" aria-label="جست‌وجو">🔍</button></form>`;
@@ -213,7 +245,7 @@ function layout(settings: ShopSettings, title: string, body: string, options: { 
 </div></header>
 <main class="wrap" id="main">${body}</main>
 ${footer(settings)}
-<div class="cartbar" id="cartBar"><div class="sum" id="cartBarSum"></div><a class="btn primary" href="/checkout">مشاهدهٔ سبد</a></div>
+${tabbar(options.tab)}
 <script src="${SHOP_SCRIPT_PATH}" defer></script></body></html>`;
 }
 
@@ -237,28 +269,28 @@ function thumb(item: ShowcaseItem): string {
 export function catalogueHtml(input: {
   settings: ShopSettings;
   items: ShowcaseItem[];
-  profiles: Array<{ id: string; name: string; count: number }>;
-  query: { q: string; profileId: string; page: number; sort?: string };
+  categories: Array<{ name: string; count: number }>;
+  query: { q: string; category: string; page: number; sort?: string };
   total: number;
   perPage: number;
 }): string {
-  const { settings, items, profiles, query, total, perPage } = input;
+  const { settings, items, categories, query, total, perPage } = input;
   const pages = Math.max(1, Math.ceil(total / perPage));
   const link = (patch: Record<string, string>) => {
     const params = new URLSearchParams();
-    const merged = { q: query.q, profile: query.profileId, sort: query.sort || '', page: '', ...patch };
+    const merged = { q: query.q, category: query.category, sort: query.sort || '', page: '', ...patch };
     for (const [key, value] of Object.entries(merged)) if (value) params.set(key, value);
     const text = params.toString();
     return text ? `/?${text}` : '/';
   };
-  const chips = [`<a class="chip${query.profileId ? '' : ' on'}" href="${escapeHtml(link({ profile: '' }))}">همهٔ فروشگاه‌ها</a>`]
-    .concat(profiles.map(profile => `<a class="chip${profile.id === query.profileId ? ' on' : ''}" href="${escapeHtml(link({ profile: profile.id }))}">${escapeHtml(profile.name)} <b>${fa(profile.count)}</b></a>`))
+  const chips = [`<a class="chip${query.category ? '' : ' on'}" href="${escapeHtml(link({ category: '' }))}">همهٔ دسته‌ها</a>`]
+    .concat(categories.slice(0, 20).map(entry => `<a class="chip${entry.name === query.category ? ' on' : ''}" href="${escapeHtml(link({ category: entry.name }))}">${escapeHtml(entry.name)} <b>${fa(entry.count)}</b></a>`))
     .join('');
   const cards = items.map(item => `<article class="pcard">
   <a class="thumb" href="/p/${encodeURIComponent(item.id)}" aria-label="${escapeHtml(item.title)}">${thumb(item)}${item.price > item.basePrice && item.basePrice > 0 ? '' : ''}</a>
   <div class="body">
-    <div class="tagrow"><span class="tag profile">${escapeHtml(item.profileName)}</span>
-      <span class="tag adj" title="ضریب تعدیل قیمت این پروفایل">⚖ ${escapeHtml(item.adjustment.label)}</span></div>
+    <div class="tagrow">${item.category ? `<a class="tag" href="${escapeHtml(link({ category: item.category }))}">${escapeHtml(item.category)}</a>` : ''}
+      ${item.brand ? `<span class="tag">${escapeHtml(item.brand)}</span>` : ''}</div>
     <h3><a href="/p/${encodeURIComponent(item.id)}">${escapeHtml(item.title)}</a></h3>
     ${priceBlock(item, settings.currency)}
     ${addButton(item)}
@@ -270,22 +302,22 @@ export function catalogueHtml(input: {
     ${query.page < pages ? `<a href="${escapeHtml(link({ page: String(query.page + 1) }))}" rel="next">بعدی</a>` : ''}</nav>` : '';
   const sorts: Array<[string, string]> = [['', 'جدیدترین'], ['cheap', 'ارزان‌ترین'], ['expensive', 'گران‌ترین'], ['name', 'نام محصول']];
   const body = `<section class="hero"><h1>${escapeHtml(settings.name)}</h1><p>${escapeHtml(settings.tagline)}</p>
-  <div class="stats"><span><b>${fa(total)}</b> محصول</span><span><b>${fa(profiles.length)}</b> فروشگاه/پروفایل</span>
-  <span>قیمت‌ها با <b>ضرایب تعدیل هر پروفایل</b> محاسبه شده‌اند</span></div></section>
-  <nav class="chips" aria-label="فیلتر پروفایل">${chips}</nav>
+  <div class="stats"><span><b>${fa(total)}</b> محصول</span><span><b>${fa(categories.length)}</b> دسته‌بندی</span>
+  ${query.category ? `<span>دستهٔ فعلی: <b>${escapeHtml(query.category)}</b></span>` : '<span>بر اساس دسته و نوع محصول مرتب شده است</span>'}</div></section>
+  <nav class="chips" aria-label="فیلتر دسته‌بندی">${chips}</nav>
   <div class="toolbar"><span class="count">${query.q ? `نتایج «${escapeHtml(query.q)}»: ` : ''}${fa(total)} محصول</span>
     <form class="sortbox" method="get" action="/">
       ${query.q ? `<input type="hidden" name="q" value="${escapeHtml(query.q)}">` : ''}
-      ${query.profileId ? `<input type="hidden" name="profile" value="${escapeHtml(query.profileId)}">` : ''}
+      ${query.category ? `<input type="hidden" name="category" value="${escapeHtml(query.category)}">` : ''}
       <label for="sort" class="note">مرتب‌سازی</label>
       <select id="sort" name="sort" data-autosubmit>${sorts.map(([value, label]) =>
         `<option value="${value}"${(query.sort || '') === value ? ' selected' : ''}>${label}</option>`).join('')}</select>
       <noscript><button class="btn" type="submit">اعمال</button></noscript>
     </form></div>
   ${items.length ? `<div class="grid">${cards}</div>${pager}` : `<div class="panel"><div class="empty">
-    ${query.q || query.profileId ? 'محصولی با این فیلتر پیدا نشد. فیلترها را بردارید یا عبارت دیگری جست‌وجو کنید.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا از پنل اسکریپر محصولات را استخراج کنید.'}
-    </div>${query.q || query.profileId ? '<a class="btn block" href="/">نمایش همهٔ محصولات</a>' : ''}</div>`}`;
-  return layout(settings, 'ویترین', body, { search: query.q });
+    ${query.q || query.category ? 'محصولی با این فیلتر پیدا نشد. فیلترها را بردارید یا عبارت دیگری جست‌وجو کنید.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا از پنل اسکریپر محصولات را استخراج کنید.'}
+    </div>${query.q || query.category ? '<a class="btn block" href="/">نمایش همهٔ محصولات</a>' : ''}</div>`}`;
+  return layout(settings, query.category || 'ویترین', body, { search: query.q, tab: query.q ? 'search' : 'home' });
 }
 
 function pageWindow(current: number, pages: number): number[] {
@@ -293,6 +325,16 @@ function pageWindow(current: number, pages: number): number[] {
   const out: number[] = [];
   for (let page = start; page <= Math.min(pages, start + 4); page++) out.push(page);
   return out;
+}
+
+export function categoriesHtml(input: { settings: ShopSettings; categories: Array<{ name: string; count: number; image: string }> }): string {
+  const { settings, categories } = input;
+  const cards = categories.map(entry => `<a class="catcard" href="/?category=${encodeURIComponent(entry.name)}">
+    ${entry.image ? `<img loading="lazy" decoding="async" src="${escapeHtml(entry.image)}" alt="">` : '<div class="ph" aria-hidden="true">🗂</div>'}
+    <span class="meta"><b>${escapeHtml(entry.name)}</b><small>${fa(entry.count)} محصول</small></span></a>`).join('');
+  const body = `<section class="hero"><h1>دسته‌بندی محصولات</h1><p>محصولات بر اساس دسته و نوع کالا گروه‌بندی شده‌اند.</p></section>
+  ${categories.length ? `<div class="catgrid">${cards}</div>` : '<div class="panel"><div class="empty">هنوز دسته‌بندی‌ای وجود ندارد.</div></div>'}`;
+  return layout(settings, 'دسته‌بندی‌ها', body, { showSearch: false, tab: 'categories' });
 }
 
 export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem; related: ShowcaseItem[] }): string {
@@ -309,12 +351,12 @@ export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem;
     <a class="thumb" href="/p/${encodeURIComponent(other.id)}">${thumb(other)}</a>
     <div class="body"><h3><a href="/p/${encodeURIComponent(other.id)}">${escapeHtml(other.title)}</a></h3>
     ${priceBlock(other, settings.currency)}${addButton(other)}</div></article>`).join('');
-  const body = `<p class="crumbs"><a href="/">ویترین</a> › <a href="/?profile=${encodeURIComponent(item.profileId)}">${escapeHtml(item.profileName)}</a> › ${escapeHtml(item.title)}</p>
+  const body = `<p class="crumbs"><a href="/">ویترین</a> › <a href="/?category=${encodeURIComponent(item.category || '')}">${escapeHtml(item.category || 'همهٔ محصولات')}</a> › ${escapeHtml(item.title)}</p>
   <section class="product-top">
     <div class="shot">${thumb(item)}</div>
     <div class="panel" style="margin:0">
       <h2>${escapeHtml(item.title)}</h2>
-      <div class="tagrow"><span class="tag profile">${escapeHtml(item.profileName)}</span><span class="tag adj">⚖ ${escapeHtml(item.adjustment.label)}</span></div>
+      <div class="tagrow">${item.category ? `<a class="tag" href="/?category=${encodeURIComponent(item.category)}">${escapeHtml(item.category)}</a>` : ''}${item.brand ? `<span class="tag">${escapeHtml(item.brand)}</span>` : ''}</div>
       ${priceBlock(item, settings.currency)}
       ${item.shortDesc ? `<p class="note">${escapeHtml(item.shortDesc)}</p>` : ''}
       ${addButton(item)}
@@ -323,7 +365,7 @@ export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem;
       </tbody></table></div>
     </div></section>
   ${related ? `<h2 style="font-size:15px;margin:22px 0 10px">محصولات مشابه</h2><div class="grid">${related}</div>` : ''}`;
-  return layout(settings, item.title, body);
+  return layout(settings, item.title, body, { tab: 'home' });
 }
 
 export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ id: string; title: string; description: string }>; source?: 'wordpress' | 'builtin'; error?: string }): string {
@@ -363,12 +405,12 @@ export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ 
       <button class="btn primary block" id="placeOrder"${gateways.length ? '' : ' disabled'}>ثبت سفارش و پرداخت</button>
       <div id="payResult" class="note" role="status" aria-live="polite"></div></div>
   </div></div>`;
-  return layout(settings, 'تسویه حساب', body, { showSearch: false });
+  return layout(settings, 'تسویه حساب', body, { showSearch: false, tab: 'cart' });
 }
 
 export function orderHtml(input: { settings: ShopSettings; order: Order; instructions?: string }): string {
   const { settings, order } = input;
-  const rows = order.lines.map(line => `<tr><td>${escapeHtml(line.title)}<br><small class="note">${escapeHtml(line.profileName)}</small></td>
+  const rows = order.lines.map(line => `<tr><td>${escapeHtml(line.title)}</td>
     <td>${fa(line.qty)}</td><td>${money(line.basePrice)}</td><td>${escapeHtml(line.adjustment.label)}</td>
     <td>${money(line.price)}</td><td>${money(line.price * line.qty)}</td></tr>`).join('');
   const statusText: Record<string, string> = {
@@ -397,7 +439,7 @@ export function orderHtml(input: { settings: ShopSettings; order: Order; instruc
   <tr><td colspan="5">مالیات</td><td>${money(order.tax)}</td></tr>
   <tr><td colspan="5"><b>مبلغ قابل پرداخت</b></td><td><b>${money(order.total)} ${escapeHtml(order.currency)}</b></td></tr></tfoot></table></div>
   ${retry}</div>${receipt}`;
-  return layout(settings, 'سفارش ' + order.id, body, { showSearch: false });
+  return layout(settings, 'سفارش ' + order.id, body, { showSearch: false, tab: 'track' });
 }
 
 export function trackHtml(input: { settings: ShopSettings; notFound?: string }): string {
@@ -407,7 +449,7 @@ export function trackHtml(input: { settings: ShopSettings; notFound?: string }):
   <form method="get" action="/track">
     <div class="field"><label for="order">شمارهٔ سفارش</label><input id="order" name="order" dir="ltr" required></div>
     <button class="btn primary block" type="submit">پیگیری</button></form></div>`;
-  return layout(input.settings, 'پیگیری سفارش', body, { showSearch: false });
+  return layout(input.settings, 'پیگیری سفارش', body, { showSearch: false, tab: 'track' });
 }
 
 const PAGES: Record<string, { title: string; body: string }> = {
@@ -483,15 +525,8 @@ function subtotal(){return read().reduce(function(n,l){return n+l.price*l.qty},0
 function paint(){
   var items=read(),n=count(),badge=document.getElementById('cartCount');
   if(badge){badge.textContent=fa(n);badge.setAttribute('data-empty',n?'0':'1')}
-  var bar=document.getElementById('cartBar');
-  if(bar){
-    var onCheckout=location.pathname==='/checkout';
-    var show=n>0&&!onCheckout;
-    bar.setAttribute('data-show',show?'1':'0');
-    document.body.setAttribute('data-cartbar',show?'1':'0');
-    var sum=document.getElementById('cartBarSum');
-    if(sum)sum.innerHTML=fa(n)+' کالا · <b>'+money(subtotal())+'</b>';
-  }
+  var tabBadge=document.getElementById('tabCartCount');
+  if(tabBadge){tabBadge.textContent=fa(n);tabBadge.setAttribute('data-empty',n?'0':'1')}
   var sumItems=document.getElementById('sumItems');
   if(sumItems)sumItems.textContent=items.length?money(subtotal()):'—';
   document.querySelectorAll('.add').forEach(function(btn){
@@ -616,6 +651,8 @@ if(save)save.addEventListener('click',function(){
    }).catch(function(error){out.innerHTML='<span class="bad">'+esc(error)+'</span>';save.disabled=false});
 });
 
+// "جست‌وجو" tab: land on the catalogue with the search box focused.
+if(/[?&]focus=1/.test(location.search)){var box=document.querySelector('.head form.search input');if(box){box.focus();try{box.select()}catch(e){}}}
 renderCart();paint();
 })();`;
 
