@@ -13,10 +13,23 @@ export function fontStylesheet(name:string):Response{
   const lower=name.toLowerCase();
   const css=Object.keys(item.weights).map(weight=>{
     const hash=(item.weights as Record<string,string>)[weight];
-    const direct=`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`;
+    let cdnUrls: string[] = [];
+    if (lower === 'vazirmatn') {
+      // Vazirmatn: Iranian CDN + jsDelivr + unpkg + cdnjs + local
+      const weightName = hash; // thin, light, regular, etc.
+      const weightCap = weightName.charAt(0).toUpperCase()+weightName.slice(1);
+      cdnUrls = [
+        `https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-${weightCap}.woff2`,
+        `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
+        `https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
+        `https://cdn.jsdelivr.net/npm/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
+      ];
+    } else {
+      cdnUrls = [`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`];
+    }
     const local=`/assets/fonts/${lower}-${weight}.woff2`;
-    // Direct CDN first (browser fetches without server proxy), then local proxy fallback for hosts that block CDN
-    return `@font-face{font-family:"${item.family}";src:url("${direct}") format("woff2"),url("${local}") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`;
+    const srcList = [...cdnUrls.map(u=>`url("${u}") format("woff2")`), `url("${local}") format("woff2")`, `local("${item.family}")`, `local(Tahoma)`].join(',');
+    return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');
   return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
 }
@@ -40,11 +53,20 @@ export async function fontFile(name:string,weight:string):Promise<Response>{
     if(buf?.length) return new Response(buf,{status:200,headers:{'content-type':'font/woff2','cache-control':'public, max-age=31536000, immutable','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
   } catch {}
   const urls=[
-    `https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,
+    ...(lower==='vazirmatn'?[
+      `https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-${(hash as string).charAt(0).toUpperCase()+(hash as string).slice(1)}.woff2`,
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-${(hash as string).charAt(0).toUpperCase()+(hash as string).slice(1)}.woff2`,
+      `https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${(hash as string).charAt(0).toUpperCase()+(hash as string).slice(1)}.woff2`,
+      `https://cdn.jsdelivr.net/npm/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${(hash as string).charAt(0).toUpperCase()+(hash as string).slice(1)}.woff2`,
+      `https://cdnjs.cloudflare.com/ajax/libs/vazirmatn/33.003/fonts/webfonts/Vazirmatn-${(hash as string).charAt(0).toUpperCase()+(hash as string).slice(1)}.woff2`,
+    ]:[
+      `https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,
+    ]),
     // jsDelivr mirrors for Vazir as fallback when fontcdn.ir is unreachable from host
     ...(lower==='vazir'?[
       `https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/Vazir-${weight==='400'?'Regular':weight==='700'?'Bold':weight}.woff2`,
-      `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/woff2/Vazirmatn-${weight}.woff2`
+      `https://unpkg.com/vazir-font@30.1.0/dist/Vazir-${weight==='400'?'Regular':weight==='700'?'Bold':weight}.woff2`,
+      `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2`,
     ]:[]),
   ];
   let lastError:Response|null=null;

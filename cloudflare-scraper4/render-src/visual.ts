@@ -86,7 +86,13 @@ function toProxyForce(u){
     if(abs.indexOf(location.origin+'/visual')===0) return abs;
     if(abs.indexOf(location.origin+'/api/')===0 && abs.indexOf('/api/rp')===-1) return abs;
     if(abs.startsWith('http://')||abs.startsWith('https://')){
-      return proxyBase+encodeURIComponent(abs);
+      // Same host (emalls.ir) should NOT be proxied - direct fetch works and avoids 503 when rp is down
+      if(isSameHost(abs)) return abs;
+      // Only proxy API/json or cross-origin, not same-host static assets
+      var isApi=/\/(api|graphql|search|ajax|_next\/data|wp-json)\//i.test(abs) || /\.(json)(\?|$)/i.test(abs);
+      if(isApi) return proxyBase+encodeURIComponent(abs);
+      // For Emalls/Snappshop: allow direct for images, css, js on same host
+      return abs;
     }
     return abs;
   }catch(e){return u;}
@@ -300,7 +306,7 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
   if (full) {
     $('head').prepend(`<base href="${page.url.replace(/"/g,'&quot;')}">`);
   }
-  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://cdn.fontcdn.ir" crossorigin><style>@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Regular.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2) format(woff2),local(Vazirmatn),local(Vazir);font-weight:400;font-display:swap}@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Bold.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Bold.woff2) format(woff2),local(Vazirmatn);font-weight:700;font-display:swap}</style><link rel="stylesheet" href="/assets/fonts/vazirmatn.css">');
+  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preconnect" href="https://cdn.fontcdn.ir" crossorigin><link rel="preconnect" href="https://unpkg.com" crossorigin><style>@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Regular.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2) format(woff2),url(https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-Regular.woff2) format(woff2),local(Vazirmatn),local(Vazir);font-weight:400;font-display:swap}@font-face{font-family:Vazirmatn;src:url(https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-Bold.woff2) format(woff2),url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Bold.woff2) format(woff2),url(https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-Bold.woff2) format(woff2),local(Vazirmatn);font-weight:700;font-display:swap}</style><link rel="stylesheet" href="/assets/fonts/vazirmatn.css">');
   $('head').append(`<style>@font-face{font-family:Vazirmatn;src:local(Vazirmatn);font-display:swap}body{font-family:Vazirmatn,Vazir,Tahoma,sans-serif!important}${PICKER_CSS}${SNAPSHOT_LAYOUT_CSS}</style>`);
   if (full) {
     $('head').prepend(fullModeJsNode());
