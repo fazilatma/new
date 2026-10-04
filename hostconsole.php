@@ -3447,7 +3447,28 @@ function handle_api() {
     case 'public.monitor':
         $projects = proj_all();
         $target = null;
-        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') != '5000') { $target = $pp; break; } }
+        // Prefer project with existing deploy_path and package.json
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare') {
+                $dp = $pp['deploy_path'] ?? '';
+                if (is_dir($dp) && is_file($dp.'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
+            }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) {
+                if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; }
+            }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) {
+                if (($pp['name'] ?? '') === 'scraper4-cloudflare') {
+                    $svc = proj_service_job($pp);
+                    $st = $svc ? job_status($svc)['status'] : '';
+                    if ($st === 'running') { $target = $pp; break; }
+                }
+            }
+        }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') == '3000') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; } } }
         $info = ['timestamp'=>date('c')];
