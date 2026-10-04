@@ -4039,7 +4039,7 @@ function proj_poll_auto_updates(): array {
         }
         $hasUpdate = ($local === '' || substr($remote, 0, 7) !== substr($local, 0, 7));
         if ($hasUpdate) {
-            $job = job_create('deploy', 'به‌روزرسانی خودکار: ' . $p['name'] . ' (' . $remote . ')', ['project_id' => $p['id']]);
+            $job = job_create('deploy', 'به‌روزرسانی خودکار: ' . $p['name'] . ' (' . $remote . ')', ['project_id' => $p['id'], 'restart_after_update' => true]);
             job_start($job);
             $triggered[] = [
                 'project_id' => $p['id'],
@@ -4064,6 +4064,7 @@ function cli_deploy(array $job): int {
     }
     $commit = 'unknown';
     $wasRunning = false;
+    $restartAfterUpdate = !empty($job['params']['restart_after_update']);
     $svc = proj_service_job($p);
     if ($svc && job_status($svc)['status'] === 'running') { $wasRunning = true; }
     try {
@@ -4072,7 +4073,7 @@ function cli_deploy(array $job): int {
         
         $p = proj_perform_deploy($p, $commit);
         
-        if (($wasRunning || !empty($p['auto_start'])) && !empty($p['start_cmd'])) {
+        if (($restartAfterUpdate || $wasRunning || !empty($p['auto_start'])) && !empty($p['start_cmd'])) {
             cli_log('Restarting service with new commit ' . $commit . '...');
             cli_start_service($p);
         }
