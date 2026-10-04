@@ -3081,7 +3081,18 @@ function handle_api() {
             $svc = proj_service_job($target);
             $info['service_job'] = $svc ? job_status($svc) : null;
             if ($svc && is_file($svc['log'] ?? '')) {
-                $info['service_log'] = trim(@shell_exec('tail -n 100 '.escapeshellarg($svc['log']).' 2>&1'));
+                $info['service_log'] = trim(@shell_exec('tail -n 200 '.escapeshellarg($svc['log']).' 2>&1'));
+                // Also include runner script
+                $runnerFiles = glob(CACHE_DIR.'/svc-run-*.sh') ?: [];
+                $latestRunner = '';
+                $latestTime = 0;
+                foreach ($runnerFiles as $rf) {
+                    $mt = @filemtime($rf);
+                    if ($mt > $latestTime) { $latestTime = $mt; $latestRunner = $rf; }
+                }
+                if ($latestRunner && is_file($latestRunner)) {
+                    $info['runner_script'] = trim(@shell_exec('cat '.escapeshellarg($latestRunner).' 2>&1 | head -n 100'));
+                }
             } else {
                 $info['service_log'] = 'no log file';
             }
