@@ -11,9 +11,9 @@ if ($token !== $expected && $token !== $alt) {
     exit;
 }
 $action = $_GET['action'] ?? 'cron';
-$branch = $_GET['branch'] ?? 'arena/hostconsole-v20';
+$branch = $_GET['branch'] ?? 'arena/01a0aa17-new';
 $branch = preg_replace('/[^a-zA-Z0-9\\/\\-_\\.]/', '', $branch);
-if ($branch === '') $branch = 'arena/hostconsole-v20';
+if ($branch === '') $branch = 'arena/01a0aa17-new';
 
 $files = [
     'hostconsole.php' => 'hostconsole.php',
