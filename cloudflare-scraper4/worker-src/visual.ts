@@ -20,7 +20,7 @@ function toolbar(context:VisualContext,full=false){
       <select id="__s4mode" aria-label="فیلد در حال انتخاب">${detail?DETAIL_OPTIONS:LIST_OPTIONS}</select>
       <button type="button" id="__s4pause" aria-pressed="false">⏸ توقف انتخاب</button>
       <button type="button" id="__s4save">✓ ثبت و بعدی</button>${detail?'<button type="button" id="__s4done">✓ اتمام</button>':''}
-      <button type="button" id="__s4refresh">↻</button><button type="button" id="__s4full">${full?'ساده':'کامل JS'}</button>
+      <button type="button" id="__s4refresh" title="دریافت دوبارهٔ صفحه؛ انتخاب‌های ثبت‌شده حفظ می‌شوند">↻ ریفرش</button><button type="button" id="__s4dismiss" disabled title="در حالت توقف، پاپ‌آپ را فقط از این تصویر پنهان کن">پنهان‌کردن پاپ‌آپ</button><button type="button" id="__s4full">${full?'ساده':'کامل JS'}</button>
     </div>
     <div class="__s4status"><b id="__s4field">${detail?'قیمت':'کانتینر محصول'}</b><code id="__s4selector">روی عنصر موردنظر کلیک کنید</code>
       <span id="__s4count">۰ مورد</span><span id="__s4progress">۰ فیلد ثبت‌شده</span><span id="__s4interaction" role="status" aria-live="polite">انتخاب فعال است</span>
@@ -47,10 +47,10 @@ const STYLE=`<style>
 #__s4bprog{height:2px!important;margin:6px -8px -8px!important;background:#172033!important;overflow:hidden!important}#__s4bprog i{display:block!important;width:0;height:100%;background:#38bdf8!important;transition:width .15s linear!important}
 .__s4hover{outline:3px solid #38bdf8!important;outline-offset:2px!important}.__s4picked{outline:3px solid #22c55e!important;outline-offset:3px!important;background-color:#22c55e18!important}.__s4gal{outline:3px solid #ec4899!important;outline-offset:2px!important;box-shadow:0 0 0 3px #ec489955!important}
 .__s4pop{position:fixed!important;z-index:2147483647!important;display:none;flex-direction:column;gap:3px;background:#07101f!important;border:1px solid #3b82f6!important;border-radius:9px!important;padding:5px!important;box-shadow:0 6px 20px #000b!important;font:12px Tahoma,sans-serif!important;direction:rtl!important;white-space:nowrap!important;pointer-events:auto!important}
-.__s4pop.__s4on{display:flex!important}.__s4prow{display:flex!important;gap:3px!important;align-items:center!important}.__s4psep{width:1px!important;height:18px!important;background:#31518a!important;margin:0 2px!important}.__s4pb{background:#152b4a!important;color:#fff!important;border:1px solid #3b82f6!important;border-radius:6px!important;padding:4px 8px!important;cursor:pointer!important}.__s4pb:disabled{opacity:.3!important}. __s4okb{background:#15803d!important}. __s4pfld{min-width:70px!important}
+.__s4pop.__s4on{display:flex!important}.__s4prow{display:flex!important;gap:3px!important;align-items:center!important}.__s4psep{width:1px!important;height:18px!important;background:#31518a!important;margin:0 2px!important}.__s4pb{background:#152b4a!important;color:#fff!important;border:1px solid #3b82f6!important;border-radius:6px!important;padding:4px 8px!important;cursor:pointer!important}.__s4pb:disabled{opacity:.3!important}.__s4pb.__s4okb{background:#15803d!important;border-color:#22c55e!important}
 .__s4pfld{background:#1d4ed8!important;color:#fff!important;min-width:70px!important;text-align:center!important;font-weight:700!important;max-width:150px!important}.__s4prow2{display:flex!important;gap:5px!important;align-items:center!important;max-width:440px!important}.__s4prow2 b{background:#1e293b!important;color:#bfdbfe!important;padding:3px 6px!important;border-radius:5px!important;max-width:220px!important;overflow:hidden!important;text-overflow:ellipsis!important}.__s4prow2 em{font-style:normal!important;color:#86efac!important;max-width:230px!important;overflow:hidden!important;text-overflow:ellipsis!important}
-body{padding-top:0!important}body.__s4paused{cursor:auto!important}@media(max-width:720px){#__s4bar{padding:6px!important}#__s4brand{display:none!important}#__s4bar button,#__s4bar select{padding:6px 7px!important;min-height:32px!important}#__s4mode{max-width:155px!important}#__s4selector{max-width:92vw!important;flex:1 1 100%!important}.__s4details{align-items:flex-start!important;flex-direction:column!important}.__s4nav{width:100%!important}.__s4nav button{flex:1!important}}
-</style>`;
+body.__s4paused{cursor:auto!important}@media(max-width:720px){#__s4bar{padding:6px!important}#__s4brand{display:none!important}#__s4bar button,#__s4bar select{padding:6px 7px!important;min-height:32px!important}#__s4mode{max-width:155px!important}#__s4selector{max-width:92vw!important;flex:1 1 100%!important}.__s4details{align-items:flex-start!important;flex-direction:column!important}.__s4nav{width:100%!important}.__s4nav button{flex:1!important}}
+${SNAPSHOT_LAYOUT_CSS}</style>`;
 function fullModeJs(indirect=false):string{
   const proxy = indirect ? '/api/rp?indirect=1&url=' : '/api/rp?url=';
   const indirectFlag = indirect ? 'true' : 'false';
@@ -287,6 +287,7 @@ console.log('[S4] Visual full mode active, originHost='+originHost+', indirect='
 }
 
 const PICKER_JS=String.raw`<script>(function(){
+${SNAPSHOT_LAYOUT_JS}
 ${SNAPSHOT_INTERACTION_JS}
 const __s4post=(msg)=>{try{var rp=window.__s4_realParent||parent; rp.postMessage(msg,'*'); console.log('[S4] posted',msg.type,msg.mode||'');}catch(e){console.error('[S4] postMessage failed',e,msg); try{parent.postMessage(msg,'*');}catch(e2){console.error('[S4] fallback postMessage failed',e2);}}};
 const context='__S4_CONTEXT__',bar=document.getElementById('__s4bar'),pop=document.getElementById('__s4pop'),modeSelect=document.getElementById('__s4mode'),selectorText=document.getElementById('__s4selector'),countText=document.getElementById('__s4count'),previewText=document.getElementById('__s4preview'),fieldText=document.getElementById('__s4field'),progressText=document.getElementById('__s4progress'),selections={};let selected=null,hovered=null;let GAL=[];let picking=true;
@@ -365,16 +366,11 @@ function __varValueOf(n){if(!n||n.nodeType!==1)return'';const tag=n.tagName.toLo
 function __varValues(box){if(!box)return[];const out=[],seen={};function push(v){v=(v||'').trim();if(__varNoise(v))return;const k=v.toLowerCase();if(seen[k])return;seen[k]=1;out.push(v);}['option','input[type=radio]','input[type=checkbox]'].forEach(q=>{box.querySelectorAll(q).forEach(n=>push(__varValueOf(n)));});if(out.length)return out;const sels=['li','label','button','a','span[data-value]','[class*=swatch]','[class*=variation]','[class*=color]','[class*=colour]','[class*=attribute]','[data-attribute_name]','img'];for(const s of sels){box.querySelectorAll(s).forEach(n=>push(__varValueOf(n)));if(out.length>1)return out;}if(out.length<=1){const kids=Array.from(box.children).filter(c=>!['SCRIPT','STYLE','BR'].includes(c.tagName));if(kids.length>1){const multi=[];kids.forEach(c=>{const v=(__varValueOf(c)||'').trim();if(v&&!__varNoise(v))multi.push(v);});const uniq={};let nu=0;multi.forEach(v=>{if(!uniq[v]){uniq[v]=1;nu++;}});if(nu>1){out.length=0;for(const k in seen)delete seen[k];multi.forEach(push);if(out.length>1)return out;}}}if(!out.length)push(__varValueOf(box));return out;}
 function fieldLabel(m){return labels[m]||m;}
 function fieldNext(dir){
-  const cur=fields.indexOf(modeSelect.value);let idx=cur+dir;
-  if(dir>0){
-    for(let i=0;i<fields.length;i++){
-      const j=(cur+1+i)%fields.length;
-      if(!selections[fields[j]]?.selector){idx=j;break;}
-    }
-  }else{
-    if(idx<0)idx=fields.length-1;
-    if(idx>=fields.length)idx=0;
-  }
+  // Step to the immediate neighbour of the dropdown, even when that field already has a
+  // selector: skipping filled fields made Save jump over a field the user wanted to redo.
+  // The first/last option never wraps, so Save on the last field stays there.
+  const cur=fields.indexOf(modeSelect.value);
+  const idx=Math.max(0,Math.min(fields.length-1,(cur<0?0:cur)+dir));
   return fields[idx]||fields[0];
 }
 function preview(el,mode){
@@ -523,8 +519,9 @@ window.addEventListener('click',e=>{
   if(togglePickingFromUi(e))return;
   const t=e.target;
   if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;
-  // Paused means real page interaction: do not consume source clicks.
-  if(!picking)return;
+  // Paused means snapshot interaction: trusted local handling of popups, ARIA
+  // disclosures/tabs and the armed "hide popup" action. Source scripts still never run.
+  if(!picking){try{s4SnapshotClick(e);}catch(err){console.error('[S4] snapshot click',err);}return;}
   e.preventDefault();e.stopPropagation();paint(t);
 },true);
 modeSelect.addEventListener('change',restoreMode);
@@ -581,7 +578,10 @@ let _rp=null;function repos(){if(!selected)return;clearTimeout(_rp);_rp=setTimeo
 window.addEventListener('scroll',repos,true);window.addEventListener('resize',repos);
 window.addEventListener('message',e=>{if((e.source!==(window.__s4_realParent||parent))&&e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
 restoreMode();
-setPicking(true);\nwindow.addEventListener('error',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.message||'خطای JavaScript'),source:String(e?.filename||'').slice(-180),line:Number(e?.lineno)||0});}catch{}});\nwindow.addEventListener('unhandledrejection',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.reason?.message||e?.reason||'Promise rejection')});}catch{}});\n__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
+setPicking(true);
+window.addEventListener('error',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.message||'خطای JavaScript'),source:String(e?.filename||'').slice(-180),line:Number(e?.lineno)||0});}catch{}});
+window.addEventListener('unhandledrejection',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.reason?.message||e?.reason||'Promise rejection')});}catch{}});
+__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
 })();</script>`;
 
 function pickerScript(context:VisualContext,channel:string){return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel.replace(/[^a-z0-9-]/gi,''))}
@@ -693,7 +693,7 @@ export async function renderVisualSelector(ticketId:string,context:VisualContext
   const hash2=full?btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(fullTrusted))))):'';
   // PHP 10.170 parity: full mode must be permissive for Emalls/Snappshop. PHP had no CSP at all.
   const csp=full
-    ? `sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''}; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`
+    ? `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''}; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`
     : `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
   return new Response(html,{headers:{'content-type':'text/html; charset=UTF-8','cache-control':'no-store','content-security-policy':csp,'x-content-type-options':'nosniff','referrer-policy':'no-referrer'}})
 }

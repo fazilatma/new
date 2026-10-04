@@ -319,7 +319,7 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
     onProgress?.({type:'progress',stage:'account-start',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length});
     try{
       const remote=await remoteForAccount(account,false,(e)=>{
-        onProgress?.({type:'progress',stage:'ledger-fetch',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length,...e});
+        onProgress?.({...e,type:'progress',stage:'ledger-fetch',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length});
       });
       totalFetched+=remote.length;
       onProgress?.({type:'progress',stage:'account-fetched',account:account.name,remoteCount:remote.length,totalFetched});
@@ -364,7 +364,7 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
       for(let i=0;i<matchedAccounts.length;i++){
         const acc=matchedAccounts[i];
         onProgress?.({type:'progress',stage:'account-start',account:acc.name,target,index:i,total:matchedAccounts.length});
-        const part=await remoteForAccount(acc,false,(e)=>onProgress?.({type:'progress',stage:'ledger-fetch',account:acc.name,target,...e}));
+        const part=await remoteForAccount(acc,false,(e)=>onProgress?.({...e,type:'progress',stage:'ledger-fetch',account:acc.name,target}));
         remote.push(...part);
         onProgress?.({type:'progress',stage:'account-done',account:acc.name,target,fetched:remote.length});
       }

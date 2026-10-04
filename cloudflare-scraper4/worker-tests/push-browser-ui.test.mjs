@@ -21,7 +21,10 @@ test('enable is idempotent, test uses this device, and disable revokes backend p
   await b.ctx.pushAction('disable');assert.equal(b.calls.at(-1).path,'/api/web-push/unsubscribe');assert.match(b.box.textContent,/غیرفعال/);
 });
 test('sandbox selector messages require both window identity and ticket channel',()=>{
-  const start=source.indexOf('function visualMessage(event)'),line=source.slice(start,source.indexOf('\n',start)),frameWindow={},accepted=[];
+  const start=source.indexOf('function visualMessage(event)'),frameWindow={},accepted=[];
+ // visualMessage is no longer a one-liner: take the whole balanced function body.
+ let depth=0,end=start;for(let i=source.indexOf('{',start);i<source.length;i++){const c=source[i];if(c==='{')depth++;else if(c==='}'){depth--;if(!depth){end=i+1;break}}}
+ const line=source.slice(start,end);
   const ctx=vm.createContext({$:()=>({contentWindow:frameWindow}),state:{visualChannel:'ticket-channel'},location:{origin:'https://app.test'},applyVisualSelection:(mode,item)=>{accepted.push(item);return true},subTab:()=>{},notice:()=>{},detailFields:[]});vm.runInContext(line,ctx);
   const data={type:'scraper4-selector',mode:'title',selector:'.title',channel:'ticket-channel'};
   ctx.visualMessage({source:{},origin:'https://app.test',data});ctx.visualMessage({source:frameWindow,origin:'null',data:{...data,channel:'wrong'}});assert.equal(accepted.length,0);

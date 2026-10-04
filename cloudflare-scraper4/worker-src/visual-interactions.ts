@@ -41,8 +41,10 @@ function s4InteractionMode(picking){
  s4DismissArmed=false;
  const button=document.getElementById('__s4dismiss');if(button)button.disabled=picking;
  // Only clear hover, keep picked when pausing to avoid losing selection visual? But clear hover always
+ // Pausing and resuming both drop the picked/hover outlines: a paused snapshot must not
+ // keep a stale green element that Save could still assign to a different field.
  document.querySelectorAll('.__s4hover').forEach(el=>el.classList.remove('__s4hover'));
- if(picking){document.querySelectorAll('.__s4picked').forEach(el=>el.classList.remove('__s4picked'));}
+ document.querySelectorAll('.__s4picked').forEach(el=>el.classList.remove('__s4picked'));
  s4Note(picking?'انتخاب فعال است؛ ثبت، سپس فیلد بعدی.':'انتخاب متوقف است: بستن پاپ‌آپ و کنترل‌های HTML فعال‌اند؛ اسکریپت‌های سایت اجرا نمی‌شوند.');
  }catch(e){console.error('[S4] interactionMode',e);}
 }
@@ -56,68 +58,59 @@ try{
 }catch{}
 `;
 
-/** Visual Picker V2: stable UI shell.
- * The toolbar is deliberately kept in normal document flow. No DOM re-parenting,
- * details/summary widgets, or source-page dependent layout mutations are used.
- */
+/** Shared layout overrides: essential actions stay visible; secondary tools fold away. */
 export const SNAPSHOT_LAYOUT_CSS=String.raw`
-#__s4bar{
-  position:fixed!important;top:0!important;left:0!important;right:0!important;
-  z-index:2147483647!important;display:block!important;box-sizing:border-box!important;
-  width:100%!important;margin:0!important;padding:8px!important;
-  background:#111827!important;color:#fff!important;direction:rtl!important;
-  font:12px Tahoma,sans-serif!important;isolation:isolate!important;
-  pointer-events:auto!important;contain:layout paint style!important;
-}
-#__s4bar,#__s4bar *{box-sizing:border-box!important}
-#__s4bar .__s4row{display:flex!important;gap:6px!important;align-items:center!important;flex-wrap:wrap!important}
-#__s4bar .__s4meta{display:flex!important;gap:8px!important;align-items:center!important;margin-top:6px!important;padding-top:6px!important;border-top:1px solid #334155!important}
-#__s4bar button,#__s4bar select{pointer-events:auto!important;touch-action:manipulation!important;user-select:none!important;font:inherit!important;border:1px solid #475569!important;border-radius:7px!important;padding:7px!important;background:#1f2937!important;color:#fff!important}
-#__s4bar button{cursor:pointer!important}
-#__s4bar button:disabled{opacity:.45!important;cursor:default!important}
-#__s4bar button:hover{background:#334155!important}
-#__s4bar #__s4pause{position:relative!important;z-index:2!important;min-width:92px!important}
-#__s4bar #__s4save{background:#166534!important;border-color:#22c55e!important}
-#__s4bar #__s4done{background:#075985!important;border-color:#38bdf8!important}
-#__s4bar button.__s4on{background:#f59e0b!important;color:#111827!important;font-weight:bold!important}
-#__s4selector{direction:ltr!important;background:#020617!important;color:#67e8f9!important;padding:7px!important;border-radius:6px!important;min-width:160px!important;max-width:34vw!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;flex:1!important}
-#__s4count{background:#422006!important;color:#fde68a!important;border-radius:999px!important;padding:5px 9px!important;white-space:nowrap!important}
-#__s4interaction{overflow-wrap:anywhere!important}
-#__s4bprog{height:3px!important;overflow:hidden!important}
-#__s4bprogBar{display:block!important;height:100%!important;width:0!important}
-body.__s4paused #__s4bar{opacity:.96!important}
-body{padding-top:104px!important}
-@media(max-width:720px){
-  #__s4bar{padding:6px!important;font-size:11px!important}
-  #__s4bar .__s4row{gap:4px!important}
-  #__s4bar button,#__s4bar select{padding:6px 7px!important}
-  #__s4selector{order:8!important;min-width:55%!important;max-width:none!important}
-  #__s4bar .__s4meta{align-items:flex-start!important;flex-wrap:wrap!important}
-  #__s4preview{flex-basis:70%!important}
-}
+#__s4bar{display:block!important;box-sizing:border-box!important;min-height:0!important;max-height:var(--s4-height,30vh)!important;overflow:auto!important;overscroll-behavior:contain!important;width:100%!important;margin:0!important}
+#__s4bar.__s4flow{position:relative!important;top:auto!important;left:auto!important;right:auto!important}
+#__s4bar .__s4primary,#__s4bar .__s4extras{display:flex!important;flex-wrap:wrap!important;align-items:center!important;gap:6px!important}
+#__s4bar .__s4primary{padding-bottom:4px!important}
+#__s4bar details{display:block!important;margin:0!important;padding:0!important;color:#e2e8f0!important;background:#111827!important;border:0!important}
+#__s4bar details>summary{display:list-item!important;cursor:pointer!important;padding:5px 8px!important;font:inherit!important;color:#fde68a!important}
+#__s4bar details:not([open])>:not(summary){display:none!important}
+#__s4bar .__s4extras{padding:6px!important}
+#__s4bar #__s4warnings span{display:block!important;padding:5px 8px!important;overflow-wrap:anywhere!important}
+#__s4bar label{display:inline-flex!important;align-items:center!important;gap:4px!important;color:#fff!important;font:inherit!important;margin:0!important}
+#__s4bar input[type=checkbox]{appearance:auto!important;position:static!important;opacity:1!important;width:16px!important;height:16px!important;margin:0!important}
+#__s4bar input[type=range]{appearance:auto!important;position:static!important;opacity:1!important;width:110px!important;height:24px!important}
+#__s4bar #__s4interaction{flex-basis:100%!important;overflow-wrap:anywhere!important}
+@supports(height:1dvh){#__s4bar{max-height:var(--s4-height-dynamic,30dvh)!important}}
 `;
 
 export const SNAPSHOT_LAYOUT_JS=String.raw`
-(function(){
-  const bar=document.getElementById('__s4bar');
-  if(!bar)return;
-  bar.dataset.s4UiVersion='2';
-  function syncOffset(){
-    try{document.body.style.setProperty('padding-top',Math.ceil(bar.getBoundingClientRect().height)+'px','important');}catch{}
-  }
-  syncOffset();
-  window.addEventListener('resize',syncOffset,{passive:true});
-  if(window.ResizeObserver)new ResizeObserver(syncOffset).observe(bar);
-  // Keep the UI alive if a source-page framework replaces body children.
-  const ensure=()=>{
-    try{
-      if(document.body&&!document.body.contains(bar))document.body.prepend(bar);
-      bar.style.setProperty('z-index','2147483647','important');
-      bar.style.setProperty('pointer-events','auto','important');
-    }catch{}
-  };
-  new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});
-  window.__s4EnsureUi=ensure;
-  console.log('[S4] Visual Picker V2 shell ready');
-})();
+const s4Bar=document.getElementById('__s4bar');
+const s4Tools=document.createElement('details');s4Tools.id='__s4tools';
+s4Tools.innerHTML='<summary>ابزارها و تنظیم ارتفاع</summary><div class="__s4extras"></div>';
+const s4Extras=s4Tools.lastElementChild;
+const s4Warnings=document.getElementById('__s4warnings');
+s4Bar.appendChild(s4Tools);
+Array.from(s4Bar.childNodes).forEach(node=>{if(node!==s4Warnings&&node!==s4Tools)s4Extras.appendChild(node);});
+const s4Primary=document.createElement('div');s4Primary.className='__s4primary';
+['__s4mode','__s4save','__s4pause'].forEach(id=>{const el=document.getElementById(id);if(el)s4Primary.appendChild(el);});
+const s4PinLabel=document.createElement('label');s4PinLabel.innerHTML='<input id="__s4pin" type="checkbox" checked> چسبان';s4Primary.appendChild(s4PinLabel);
+const s4HeightLabel=document.createElement('label');s4HeightLabel.innerHTML='حداکثر ارتفاع <input id="__s4height" type="range" min="15" max="50" value="30" step="5" aria-label="حداکثر ارتفاع نوار، درصد پنجره"><output id="__s4heightValue">30%</output>';s4Extras.appendChild(s4HeightLabel);
+s4Bar.prepend(s4Primary);s4Bar.appendChild(s4Tools);if(s4Warnings)s4Bar.appendChild(s4Warnings);
+// The Worker originally appends its toolbar. Flow mode must start above the page.
+document.body.prepend(s4Bar);
+const s4Pin=document.getElementById('__s4pin'),s4Height=document.getElementById('__s4height');
+s4Pin.checked=true;
+function s4Offset(){const height=s4Pin.checked?Math.ceil(s4Bar.getBoundingClientRect().height):0;document.body.style.setProperty('padding-top',height+'px','important');}
+s4Pin.onchange=()=>{s4Bar.classList.toggle('__s4flow',!s4Pin.checked);s4Offset();};
+s4Height.oninput=()=>{const height=Math.max(15,Math.min(50,Number(s4Height.value)||30));s4Bar.style.setProperty('--s4-height',height+'vh');s4Bar.style.setProperty('--s4-height-dynamic',height+'dvh');document.getElementById('__s4heightValue').textContent=height+'%';s4Offset();};
+s4Tools.addEventListener('toggle',s4Offset);s4Warnings?.addEventListener('toggle',s4Offset);window.addEventListener('resize',s4Offset);
+if(window.ResizeObserver)new window.ResizeObserver(s4Offset).observe(s4Bar);
+s4Offset();
+// Full-JS snapshots let the source framework rewrite body children. Re-attach the toolbar
+// (and the floating mini toolbar) instead of letting the controls disappear mid-session.
+function s4EnsureUi(){
+ try{
+  const body=document.body;if(!body)return;
+  if(!body.contains(s4Bar))body.prepend(s4Bar);
+  const s4Pop=document.getElementById('__s4pop');
+  if(s4Pop&&!body.contains(s4Pop))body.appendChild(s4Pop);
+  s4Bar.style.setProperty('z-index','2147483647','important');
+  s4Bar.style.setProperty('pointer-events','auto','important');
+ }catch{}
+}
+window.__s4EnsureUi=s4EnsureUi;
+try{if(window.MutationObserver){const s4Mo=new window.MutationObserver(s4EnsureUi);s4Mo.observe(document.documentElement,{childList:true,subtree:true});window.addEventListener('pagehide',()=>{try{s4Mo.disconnect();}catch{}},{once:true});}}catch{}
 `;

@@ -1,6 +1,7 @@
 import {SNAPSHOT_INTERACTION_JS,SNAPSHOT_LAYOUT_JS,SNAPSHOT_LAYOUT_CSS} from '../worker-src/visual-interactions.js';
 import type {VisualReadinessOptions} from './visual-readiness.js';
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import * as cheerio from 'cheerio';
 import { config } from './config.js';
 import { safeText } from './network.js';
 import { renderBrowserSnapshot, VISUAL_BROWSER_ENGINES } from './visual-browser.js';
@@ -278,7 +279,7 @@ const DETAIL_OPTIONS=`<option value="price">💰 قیمت</option><option value=
 
 function toolbar(context:'list'|'detail',full=false){
   const detail=context==='detail';
-  return `<div id="__s4bar" data-context="${context}" data-full="${full?'1':'0'}"><div id="__s4bprog" class="__s4bprog"><i id="__s4bprogBar"></i></div><div class="__s4row"><select id="__s4mode" aria-label="فیلد در حال انتخاب">${detail?DETAIL_OPTIONS:LIST_OPTIONS}</select><button id="__s4up" title="والد (↑)">⬆ والد</button><button id="__s4down" title="فرزند (↓)">⬇ فرزند</button><button id="__s4prev" title="هم‌سطح قبلی (→)">→ قبلی</button><button id="__s4next" title="هم‌سطح بعدی (←)">← بعدی</button><code id="__s4selector">روی عنصر مورد نظر کلیک کنید</code><span id="__s4count">۰ مورد</span><button id="__s4pause" title="موقتاً انتخاب را خاموش کن تا بتوانی تب‌ها و کشویی‌های صفحه را باز کنی">⏸ توقف</button><button id="__s4refresh" title="دریافت دوبارهٔ صفحه؛ انتخاب‌های ثبت‌شده حفظ می‌شوند">↻</button><button id="__s4full" title="حالت کامل JS برای سایت‌های مثل ایمالز/اسنپ‌شاپ">${full?'🧹 ساده':'🌐 کامل'}</button><span id="__s4interaction" role="status">تصویر ${full?'کامل JS':'ثابت'}؛ ثبت و رفتن به بعدی</span><button id="__s4save">✓ ثبت و بعدی</button>${detail?'<button id="__s4done">✅ اتمام و اعمال همه</button>':''}</div><div class="__s4meta"><b id="__s4field">${detail?'قیمت':'کانتینر محصول'}</b><span id="__s4preview">هنوز عنصری انتخاب نشده است.</span><span id="__s4progress">۰ فیلد ثبت‌شده</span></div></div><div class="__s4pop" id="__s4pop"><div class="__s4prow"><button class="__s4pb" id="__s4pup" title="والد (↑)">⬆</button><button class="__s4pb" id="__s4pdn" title="فرزند (↓)">⬇</button><button class="__s4pb" id="__s4pprv" title="قبلی (→)">⬅</button><button class="__s4pb" id="__s4pnxt" title="بعدی (←)">➡</button><span class="__s4psep"></span><button class="__s4pb" id="__s4pfprev" title="فیلد قبلی (Shift+Tab)">‹</button><button class="__s4pb __s4pfld" id="__s4pfld">—</button><button class="__s4pb" id="__s4pfnext" title="فیلد بعدی (Tab)">›</button><span class="__s4psep"></span><i id="__s4pcnt"></i><button class="__s4pb __s4okb" id="__s4pok" title="ثبت (Enter)">✓</button></div><div class="__s4prow2"><b id="__s4psel">—</b><em id="__s4ppv"></em></div></div>`;
+  return `<div id="__s4bar" data-context="${context}" data-full="${full?'1':'0'}"><div id="__s4bprog" class="__s4bprog"><i id="__s4bprogBar"></i></div><div class="__s4row"><select id="__s4mode" aria-label="فیلد در حال انتخاب">${detail?DETAIL_OPTIONS:LIST_OPTIONS}</select><button id="__s4up" title="والد (↑)">⬆ والد</button><button id="__s4down" title="فرزند (↓)">⬇ فرزند</button><button id="__s4prev" title="هم‌سطح قبلی (→)">→ قبلی</button><button id="__s4next" title="هم‌سطح بعدی (←)">← بعدی</button><code id="__s4selector">روی عنصر مورد نظر کلیک کنید</code><span id="__s4count">۰ مورد</span><button id="__s4pause" title="موقتاً انتخاب را خاموش کن تا بتوانی تب‌ها و کشویی‌های صفحه را باز کنی">⏸ توقف</button><button id="__s4refresh" title="دریافت دوبارهٔ صفحه؛ انتخاب‌های ثبت‌شده حفظ می‌شوند">↻ ریفرش</button><button id="__s4dismiss" disabled title="در حالت توقف، پاپ‌آپ را فقط از این تصویر پنهان کن">پنهان‌کردن پاپ‌آپ</button><button id="__s4full" title="حالت کامل JS برای سایت‌های مثل ایمالز/اسنپ‌شاپ">${full?'🧹 ساده':'🌐 کامل'}</button><span id="__s4interaction" role="status">تصویر ${full?'کامل JS':'ثابت'}؛ ثبت و رفتن به بعدی</span><button id="__s4save">✓ ثبت و بعدی</button>${detail?'<button id="__s4done">✅ اتمام و اعمال همه</button>':''}</div><div class="__s4meta"><b id="__s4field">${detail?'قیمت':'کانتینر محصول'}</b><span id="__s4preview">هنوز عنصری انتخاب نشده است.</span><span id="__s4progress">۰ فیلد ثبت‌شده</span></div></div><div class="__s4pop" id="__s4pop"><div class="__s4prow"><button class="__s4pb" id="__s4pup" title="والد (↑)">⬆</button><button class="__s4pb" id="__s4pdn" title="فرزند (↓)">⬇</button><button class="__s4pb" id="__s4pprv" title="قبلی (→)">⬅</button><button class="__s4pb" id="__s4pnxt" title="بعدی (←)">➡</button><span class="__s4psep"></span><button class="__s4pb" id="__s4pfprev" title="فیلد قبلی (Shift+Tab)">‹</button><button class="__s4pb __s4pfld" id="__s4pfld">—</button><button class="__s4pb" id="__s4pfnext" title="فیلد بعدی (Tab)">›</button><span class="__s4psep"></span><i id="__s4pcnt"></i><button class="__s4pb __s4okb" id="__s4pok" title="ثبت (Enter)">✓</button></div><div class="__s4prow2"><b id="__s4psel">—</b><em id="__s4ppv"></em></div></div>`;
 }
 
 const STYLE=`<style>
@@ -301,14 +302,42 @@ function stableClass(v){return v&&v.length>1&&v.length<48&&!/^(__|active$|open$|
 function matches(v){if(!v)return 0;try{return document.querySelectorAll(v).length}catch{return 0}}
 function classCandidates(el){const tag=el.tagName.toLowerCase(),cls=Array.from(el.classList).filter(stableClass).slice(0,5),out=[];for(let s=Math.min(3,cls.length);s>=1;s--)out.push(tag+cls.slice(0,s).map(c=>'.'+cssEscape(c)).join(''));for(const c of cls)out.push(tag+'.'+cssEscape(c));return Array.from(new Set(out))}
 function selector(el){
-  if(!el||['BODY','HTML'].includes(el.tagName))return'';const tag=el.tagName.toLowerCase(),cands=classCandidates(el),repeat=context==='list'||modeSelect.value==='container';
-  if(repeat){const rep=cands.find(v=>matches(v)>1);if(rep)return rep}
-  if(context==='detail'&&validId(el.id))return tag+'#'+cssEscape(el.id);
-  if(cands.length)return cands[0];
-  for(const attr of ['itemprop','data-testid','data-test','role']){const val=el.getAttribute(attr);if(val&&val.length<80){const cand=tag+'['+attr+'="'+String(val).replace(/["\\]/g,'\\$&')+'"]';if(!repeat||matches(cand)>1)return cand}}
+  if(!el||['BODY','HTML'].includes(el.tagName))return'';
+  const tag=el.tagName.toLowerCase(),cands=classCandidates(el),repeat=context==='list'||modeSelect.value==='container';
+  // Prefer selectors that are actually reusable for list/container fields. A unique class is
+  // deliberately rejected there because it usually points at one arbitrary card rather than the field across cards.
+  if(repeat){
+    const rep=cands.find(v=>matches(v)>1);if(rep)return rep;
+  }else{
+    if(validId(el.id))return tag+'#'+cssEscape(el.id);
+    const stable=cands[0];if(stable)return stable;
+  }
+  for(const attr of ['itemprop','data-testid','data-test','role']){
+    const val=el.getAttribute(attr);
+    if(val&&val.length<80){
+      const cand=tag+'['+attr+'="'+String(val).replace(/["\\]/g,'\\$&')+'"]';
+      if(!repeat||matches(cand)>1)return cand;
+    }
+  }
   if(validId(el.id))return tag+'#'+cssEscape(el.id);
-  let p=el.parentElement,d=0;while(p&&d++<4){const pc=classCandidates(p),base=pc.find(v=>!repeat||matches(v+' '+tag)>1)||pc[0];if(base)return base+' '+tag;if(validId(p.id))return p.tagName.toLowerCase()+'#'+cssEscape(p.id)+' '+tag;p=p.parentElement}
-  return tag;
+  let p=el.parentElement,d=0;
+  while(p&&d++<6){
+    const pc=classCandidates(p);
+    for(const base of pc){
+      const cand=base+' '+tag;
+      if(matches(cand)>1)return cand;
+      if(!repeat&&matches(cand)===1)return cand;
+    }
+    if(validId(p.id))return p.tagName.toLowerCase()+'#'+cssEscape(p.id)+' '+tag;
+    p=p.parentElement;
+  }
+  // Last resort: nth-of-type path makes a single element selectable instead of returning an unstable bare tag.
+  const parts=[];let n=el;
+  while(n&&n.nodeType===1&&n!==document.body&&parts.length<6){
+    let idx=1;for(let x=n;x.previousElementSibling;x=x.previousElementSibling)if(x.tagName===n.tagName)idx++;
+    parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+idx+')');n=n.parentElement;
+  }
+  return parts.join(' > ')||tag;
 }
 function getImageUrl(el){
   if(!el)return'';const attrs=['data-zoom-image','data-large_image','data-large-image','data-full','data-original','data-lazy-src','data-lazy','data-src','data-thumb','data-image','data-zoom','src'];
@@ -323,16 +352,11 @@ function __varValueOf(n){if(!n||n.nodeType!==1)return'';const tag=n.tagName.toLo
 function __varValues(box){if(!box)return[];const out=[],seen={};function push(v){v=(v||'').trim();if(__varNoise(v))return;const k=v.toLowerCase();if(seen[k])return;seen[k]=1;out.push(v);}['option','input[type=radio]','input[type=checkbox]'].forEach(q=>{box.querySelectorAll(q).forEach(n=>push(__varValueOf(n)));});if(out.length)return out;const sels=['li','label','button','a','span[data-value]','[class*=swatch]','[class*=variation]','[class*=color]','[class*=colour]','[class*=attribute]','[data-attribute_name]','img'];for(const s of sels){box.querySelectorAll(s).forEach(n=>push(__varValueOf(n)));if(out.length>1)return out;}if(out.length<=1){const kids=Array.from(box.children).filter(c=>!['SCRIPT','STYLE','BR'].includes(c.tagName));if(kids.length>1){const multi=[];kids.forEach(c=>{const v=(__varValueOf(c)||'').trim();if(v&&!__varNoise(v))multi.push(v);});const uniq={};let nu=0;multi.forEach(v=>{if(!uniq[v]){uniq[v]=1;nu++;}});if(nu>1){out.length=0;for(const k in seen)delete seen[k];multi.forEach(push);if(out.length>1)return out;}}}if(!out.length)push(__varValueOf(box));return out;}
 function fieldLabel(m){return labels[m]||m;}
 function fieldNext(dir){
-  const cur=fields.indexOf(modeSelect.value);let idx=cur+dir;
-  if(dir>0){
-    for(let i=0;i<fields.length;i++){
-      const j=(cur+1+i)%fields.length;
-      if(!selections[fields[j]]?.selector){idx=j;break;}
-    }
-  }else{
-    if(idx<0)idx=fields.length-1;
-    if(idx>=fields.length)idx=0;
-  }
+  // Step to the immediate neighbour of the dropdown, even when that field already has a
+  // selector: skipping filled fields made Save jump over a field the user wanted to redo.
+  // The first/last option never wraps, so Save on the last field stays there.
+  const cur=fields.indexOf(modeSelect.value);
+  const idx=Math.max(0,Math.min(fields.length-1,(cur<0?0:cur)+dir));
   return fields[idx]||fields[0];
 }
 function preview(el,mode){
@@ -501,6 +525,11 @@ function pickerScript(context:'list'|'detail',channel:string){
   return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel);
 }
 
+/** Bare script body (no <script> wrapper) — the exact text the CSP hash is taken over. */
+function pickerSource(context:'list'|'detail',channel:string){
+  return pickerScript(context,channel).replace(/^<script>/,'').replace(/<\/script>$/,'');
+}
+
 function escapeAttr(value:string):string{return value.replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!))}
 function absolutize(value:string,base:string):string{try{return new URL(value,base).href}catch{return value}}
 function absolutizeUrl(value:string,base:string):string{
@@ -572,30 +601,102 @@ function rewriteHtml(html:string,baseUrl:string,full=false,indirect=false):strin
   return html;
 }
 
-export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:any},engine='auto',channel='', full=false, context:'list'|'detail'='list', indirect=false): string {
-  let html = page.text;
-  const finalUrl = page.url;
-  html = rewriteHtml(html, finalUrl, full, indirect);
-  const fmJs = full ? fullModeJsNode(indirect) : '';
-  const head = `<base href="${escapeAttr(finalUrl)}">${STYLE}${fmJs}`;
-  const body = `${toolbar(context,full)}${pickerScript(context,channel)}`;
-  html = /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, match => match + head) : `<head>${head}</head>${html}`;
-  html = /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, body + '</body>') : html + body;
-  return html;
+type VisualDiagnostics={visualReadiness?:any;javascriptErrors?:string[];pendingCriticalResources?:number;crashRecovered?:boolean;urlWarning?:string;criticalResourceFailed?:boolean;failedResources?:any[]};
+
+/** Render-warning texts, newest concern first. Empty array means no disclosure at all. */
+function visualWarnings(d?:VisualDiagnostics):string[]{
+  if(!d)return [];
+  const out:string[]=[];
+  if(d.crashRecovered)out.push('بازیابی پس از crash · بارگذاری سبک؛ تصویر، ویدیو و فونت در مرحلهٔ رندر دریافت نشدند.');
+  if(d.criticalResourceFailed)out.push('هشدار: بعضی منابع JavaScript یا API ناموفق بودند؛ این تصویر ممکن است ناقص باشد. '+(d.failedResources||[]).slice(0,3).map((f:any)=>f.type+' '+f.reason).join(' · '));
+  if(d.visualReadiness?.context==='list')out.push('کاندیدای محصول در DOM: '+String(d.visualReadiness.candidates||0)+'؛ این عدد تضمین کامل‌بودن فهرست نیست.');
+  if(d.visualReadiness?.selectorError)out.push(String(d.visualReadiness.selectorError));
+  if(d.pendingCriticalResources)out.push('هشدار: درخواست‌های JavaScript/API هنوز کامل نشده‌اند؛ تصویر ممکن است ناقص باشد.');
+  if(d.visualReadiness?.selectorMismatch)out.push('سلکتور ظرف فعلی پیدا نشد؛ محتوای محصول با نشانه‌های عمومی دیده شد. سلکتور ذخیره‌شده تغییر نکرد.');
+  if(d.javascriptErrors?.length)out.push('هشدار خطای JavaScript: '+d.javascriptErrors.join(' · '));
+  if(d.urlWarning)out.push(String(d.urlWarning));
+  return out;
+}
+
+/** Closed disclosure so long diagnostics never become a wall of toolbar text. */
+function warningsHtml(d?:VisualDiagnostics):string{
+  const list=visualWarnings(d);
+  if(!list.length)return '';
+  return `<details id="__s4warnings"><summary>${escapeAttr('هشدارها و وضعیت رندر ('+list.length+')')}</summary>${list.map(text=>`<span>${escapeAttr(text)}</span>`).join('')}</details>`;
+}
+
+function engineHtml(engine:string):string{
+  const text=VISUAL_BROWSER_ENGINES.has(engine)?'DOM رندرشده · '+engine+' · تصویر ثابت صفحه، نه مرورگر تعاملی':'HTML مستقیم · '+engine;
+  return `<span id="__s4engine">${escapeAttr(text)}</span>`;
+}
+
+function privateLiteral(host:string):boolean{
+  const h=host.toLowerCase().replace(/^\[|\]$/g,'');
+  return h==='localhost'||h==='::1'||h==='::'||(h.startsWith('fc')&&h.includes(':'))||(h.startsWith('fd')&&h.includes(':'))||h.startsWith('fe80:')||h.endsWith('.internal')||h.endsWith('.local')||/^127\./.test(h)||/^10\./.test(h)||/^192\.168\./.test(h)||/^169\.254\./.test(h)||/^172\.(1[6-9]|2\d|3[01])\./.test(h);
+}
+
+/**
+ * Default path: a sanitized static snapshot. No source script, frame, form or private-host
+ * resource survives, and only the trusted picker script remains so the CSP hash stays exact.
+ * `full` keeps the permissive JS snapshot used for script-driven shops.
+ */
+export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagnostics?:VisualDiagnostics},engine='auto',channel='', full=false, context:'list'|'detail'='list', indirect=false): string {
+  const finalUrl=page.url;
+  const warnings=warningsHtml(page.browserDiagnostics);
+  if(full){
+    let html=rewriteHtml(page.text,finalUrl,true,indirect);
+    const head=`<base href="${escapeAttr(finalUrl)}">${STYLE}${fullModeJsNode(indirect)}`;
+    const bar=toolbar(context,true).replace('</div><div class="__s4pop"',`${engineHtml(engine)}${warnings}</div><div class="__s4pop"`);
+    const body=`${bar}${pickerScript(context,channel)}`;
+    html=/<head\b[^>]*>/i.test(html)?html.replace(/<head\b[^>]*>/i,match=>match+head):`<head>${head}</head>${html}`;
+    html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,body+'</body>'):html+body;
+    return html;
+  }
+  const $=cheerio.load(page.text,{scriptingEnabled:false});
+  $('script,iframe,object,embed,form,noscript,base,meta').remove();
+  $('[id]').each((_i,el)=>{if(String($(el).attr('id')).startsWith('__s4'))$(el).removeAttr('id')});
+  $('a').each((_i,el)=>{const node=$(el);try{node.attr('data-s4-href',new URL(node.attr('href')||'',finalUrl).href)}catch{}node.attr('href','#').removeAttr('target')});
+  $('*').each((_i,el)=>{
+    for(const name of Object.keys(('attribs' in el?el.attribs:{})||{})){
+      if(/^on/i.test(name)||['srcdoc','nonce'].includes(name.toLowerCase()))$(el).removeAttr(name);
+    }
+  });
+  $('[src],[href],[poster]').each((_i,el)=>{
+    const node=$(el);
+    for(const attr of ['src','href','poster']){
+      const raw=node.attr(attr);if(!raw||raw==='#')continue;
+      try{const absolute=new URL(raw,finalUrl);if(!['http:','https:','data:'].includes(absolute.protocol)||privateLiteral(absolute.hostname))node.removeAttr(attr);else node.attr(attr,absolute.href)}
+      catch{node.removeAttr(attr)}
+    }
+  });
+  $('[srcset]').each((_i,el)=>{
+    const node=$(el),raw=node.attr('srcset')||'';
+    const resolved=raw.split(',').map(part=>{const [value,size='']=part.trim().split(/\s+/,2);try{const absolute=new URL(value,finalUrl);return privateLiteral(absolute.hostname)?'':`${absolute.href} ${size}`.trim()}catch{return ''}}).filter(Boolean).join(', ');
+    resolved?node.attr('srcset',resolved):node.removeAttr('srcset');
+  });
+  if(!$('head').length)$.root().prepend('<head></head>');
+  $('head').prepend('<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">');
+  $('head').append(STYLE);
+  $('body').prepend(toolbar(context,false));
+  $('#__s4bar').append(engineHtml(engine));
+  if(warnings)$('#__s4bar').append(warnings);
+  $('body').append(`<script>${pickerSource(context,channel)}</script>`);
+  return $.html();
 }
 
 export function visualSelectorCsp(ticket:string, fullOverride?: boolean, indirectOverride?: boolean){
   const {channel='', full=false, context='list', indirect=false} = readVisualTicket(ticket) as any;
   const useFull = fullOverride !== undefined ? fullOverride : Boolean(full);
   const useIndirect = indirectOverride !== undefined ? indirectOverride : Boolean(indirect);
-  const pickerSrc = pickerScript(context as any, channel).replace(/^<script>/,'').replace(/<\/script>$/,'');
+  const pickerSrc = pickerSource(context as any, channel);
   const fullSrc = useFull ? fullModeJsNode(useIndirect).replace(/^<script>/,'').replace(/<\/script>$/,'') : '';
   const combined = pickerSrc + fullSrc;
   const hash = createHash('sha256').update(combined).digest('base64');
   const hash2 = useFull ? createHash('sha256').update(fullSrc).digest('base64') : '';
   const hashPicker = createHash('sha256').update(pickerSrc).digest('base64');
   if (useFull) {
-    return `sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''} 'sha256-${hashPicker}'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
+    return `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''} 'sha256-${hashPicker}'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
   }
-  return `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hash}' 'sha256-${hashPicker}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
+  // The sanitized snapshot carries exactly one script, so a single exact hash is enough.
+  return `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hashPicker}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
 }

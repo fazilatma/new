@@ -21,33 +21,37 @@ async function picker(runtime,context='list'){
  const script=document.querySelector('script').textContent;
  new Function('window','document','parent','Element','HTMLInputElement','HTMLTextAreaElement','HTMLSelectElement',script)(window,document,parent,window.Element,window.HTMLInputElement,window.HTMLTextAreaElement,window.HTMLSelectElement);
  const $=id=>document.getElementById(id),click=el=>el.dispatchEvent(new window.Event('click',{bubbles:true,cancelable:true}));
- return {window,document,$,select,messages,click,ticket,script};
+ // `messages` keeps every postMessage, including the live telemetry the dashboard needs
+ // (ready/state/error). Control assertions use `posts`: explicit user actions only.
+ const acted=()=>messages.filter(m=>['scraper4-selector','scraper4-refresh'].includes(m?.type));
+ const posts={get length(){return acted().length},at(i){return acted()[i]}};
+ return {window,document,$,select,messages,posts,click,ticket,script};
 }
 for(const runtime of ['render','worker']){
  test(runtime+': save advances immediately, including already picked fields; empty selection does not advance',async()=>{
-  const p=await picker(runtime);p.click(p.$('__s4save'));assert.equal(p.select.value,'container');assert.equal(p.messages.length,0);
-  p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.messages[0].mode,'container');assert.equal(p.select.value,'title');
-  p.click(p.$('__s4save'));assert.equal(p.messages.length,1);assert.equal(p.select.value,'title');
-  p.click(p.document.querySelector('h2'));p.click(p.$('__s4save'));assert.equal(p.messages[1].mode,'title');assert.equal(p.select.value,'price');
+  const p=await picker(runtime);p.click(p.$('__s4save'));assert.equal(p.select.value,'container');assert.equal(p.posts.length,0);
+  p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.posts.at(0).mode,'container');assert.equal(p.select.value,'title');
+  p.click(p.$('__s4save'));assert.equal(p.posts.length,1);assert.equal(p.select.value,'title');
+  p.click(p.document.querySelector('h2'));p.click(p.$('__s4save'));assert.equal(p.posts.at(1).mode,'title');assert.equal(p.select.value,'price');
   p.select.value='container';p.select.dispatchEvent(new p.window.Event('change'));p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.select.value,'title','must not skip an existing title');
   const last=Array.from(p.select.options).at(-1).value;p.select.value=last;p.select.dispatchEvent(new p.window.Event('change'));p.click(p.document.querySelector('h2'));p.click(p.$('__s4save'));assert.equal(p.select.value,last,'last field must not wrap to container');
  });
  test(runtime+': pause disables picking/hover/keyboard; local popup and ARIA controls work',async()=>{
   const p=await picker(runtime);p.click(p.document.querySelector('h2'));p.click(p.$('__s4pause'));assert.equal(p.document.querySelectorAll('.__s4picked,.__s4hover').length,0);
   p.document.querySelector('b').dispatchEvent(new p.window.Event('mouseover',{bubbles:true}));assert.equal(p.document.querySelectorAll('.__s4hover').length,0);
-  const key=new p.window.Event('keydown',{bubbles:true,cancelable:true});key.key='Enter';p.document.dispatchEvent(key);assert.equal(key.defaultPrevented,false);assert.equal(p.messages.length,0);
-  p.click(p.$('close-icon'));assert.equal(p.$('advert').hidden,true);assert.equal(p.messages.length,0);
+  const key=new p.window.Event('keydown',{bubbles:true,cancelable:true});key.key='Enter';p.document.dispatchEvent(key);assert.equal(key.defaultPrevented,false);assert.equal(p.posts.length,0);
+  p.click(p.$('close-icon'));assert.equal(p.$('advert').hidden,true);assert.equal(p.posts.length,0);
   p.click(p.$('tab-two'));assert.equal(p.$('panel-one').hidden,true);assert.equal(p.$('panel-two').hidden,false);
   const event=new p.window.Event('click',{bubbles:true,cancelable:true});p.$('disclosure').dispatchEvent(event);assert.equal(event.defaultPrevented,false,'native disclosures pass through');
   p.$('advert').hidden=false;p.click(p.$('__s4dismiss'));p.click(p.$('ad-content'));assert.equal(p.$('advert').hidden,true);
   p.click(p.$('__s4pause'));p.click(p.document.querySelector('h2'));assert.equal(p.document.querySelectorAll('.__s4picked').length,1);
  });
  test(runtime+': refresh sends channel-bound request rather than reloading consumed ticket',async()=>{
-  const p=await picker(runtime);p.click(p.$('__s4refresh'));assert.equal(p.messages[0].type,'scraper4-refresh');assert.ok(p.messages[0].channel);assert.doesNotMatch(p.script,/location\.reload/);
+  const p=await picker(runtime);p.click(p.$('__s4refresh'));assert.equal(p.posts.at(0).type,'scraper4-refresh');assert.ok(p.posts.at(0).channel);assert.doesNotMatch(p.script,/location\.reload/);
   if(runtime==='worker')await assert.rejects(modules.worker.renderVisualSelector(p.ticket),/منقضی|نامعتبر/);
  });
 }
-test('Worker detail save uses next dropdown field',async()=>{const p=await picker('worker','detail');p.click(p.document.querySelector('h2'));p.click(p.$('__s4save'));assert.equal(p.messages[0].mode,'shortDesc');assert.equal(p.select.value,'longDesc');});
+test('Worker detail save uses next dropdown field',async()=>{const p=await picker('worker','detail');const [first,second]=Array.from(p.select.options).slice(0,2).map(option=>option.value);p.click(p.document.querySelector('h2'));p.click(p.$('__s4save'));assert.equal(p.posts.at(0).mode,first);assert.equal(p.select.value,second);});
 test.after(()=>rm(temp,{recursive:true,force:true}));
 test('dashboard refresh validates sender/channel/origin, coalesces requests and preserves detail context and saved selectors',async()=>{
  const source=await readFile(join(root,'worker-src/dashboard.ts'),'utf8'),script=source.slice(source.indexOf('async function openVisual('),source.indexOf('async function suggestSelectorFields('));
@@ -76,5 +80,5 @@ for(const runtime of ['render','worker'])test(runtime+': compact toolbar, flow t
  height.value='90';height.dispatchEvent(new p.window.Event('input'));assert.equal(bar.style.getPropertyValue('--s4-height'),'50vh','height is bounded');
  const styles=[...p.document.querySelectorAll('style')].map(el=>el.textContent).join('');assert.match(styles,/max-height:var\(--s4-height,30vh\)!important/);assert.match(styles,/overflow:auto!important/);assert.match(styles,/\.__s4flow\{position:relative!important/);
  const key=new p.window.Event('keydown',{bubbles:true,cancelable:true});key.key='Enter';tools.firstElementChild.dispatchEvent(key);assert.equal(key.defaultPrevented,false,'keyboard can open the tools disclosure');
- p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.messages[0].mode,'container');assert.equal(p.select.value,'title');
+ p.click(p.document.querySelector('article'));p.click(p.$('__s4save'));assert.equal(p.posts.at(0).mode,'container');assert.equal(p.select.value,'title');
 });

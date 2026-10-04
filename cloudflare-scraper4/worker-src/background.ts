@@ -307,7 +307,7 @@ async function listCategoryProducts(run:CategoryRun):Promise<BackgroundOutcome>{
           if(id<=0)continue;
           const title=String(remote.name||raw.name||raw.title||'').trim();
           if(!title)continue;
-          ledgerProducts.push({id,shopId:String(acc.accountKey||acc.shopId||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined,profileId:String(e.profileId||'' )||undefined,sourceKey:String(e.sourceKey||'')||undefined});
+          ledgerProducts.push({id,shopId:String(acc.accountKey||(acc as any).shopId||''),title,categoryId:Number(raw.category_id||raw.categoryId||0)||undefined,profileId:String(e.profileId||'' )||undefined,sourceKey:String(e.sourceKey||'')||undefined});
         }
       }
       if(ledgerUsable&&anyComplete){

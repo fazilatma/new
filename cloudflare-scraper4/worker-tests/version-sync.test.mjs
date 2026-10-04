@@ -1212,38 +1212,19 @@ test('the visual picker saves a repeating container and card-relative field sele
   // ("section.grid > div.card:nth-of-type(1) > a > div.title") and a container
   // pinned to one card. Extraction searches only inside a card, so no field
   // ever matched: 0 products with all-green whole-page evidence.
-  const src = await readProjectFile('render-src/visual.ts');
-  const at = src.indexOf('const PICKER_JS');
-  const picker = src.slice(at, src.indexOf('`;', at));
-  assert.match(picker, /function generalize\(/, 'the container must be generalised to every sibling card');
-  assert.match(picker, /function relative\(/, 'field selectors must be rewritten relative to the container');
-  assert.match(picker, /el\.closest\(containerSel\)/, 'relativisation must anchor on the chosen container');
-  // Both the live preview and the saved value must use the corrected selector.
-  const choose = picker.slice(picker.indexOf('function choose('), picker.indexOf('document.addEventListener'));
-  assert.match(choose, /generalize\(current,s\)/, 'the preview must show the generalised container');
-  assert.match(choose, /relative\(current,s\)/, 'the preview must show the relative field selector');
-  const save = picker.slice(picker.indexOf("__s4save').onclick"));
-  assert.match(save, /s=generalize\(current,s\);containerSel=s/, 'saving a container must generalise it and remember it');
-  assert.match(save, /else s=relative\(current,s\)/, 'saving a field must relativise it against the container');
-  assert.doesNotMatch(save.slice(0, save.indexOf('postMessage')), /const s=selector\(current\),/,
-    'the saved value must not be the raw absolute path');
-
-  // Exercise the real generalisation rule.
-  const generalize = new Function('document', 'el', 's', `
-    ${picker.slice(picker.indexOf('function generalize('), picker.indexOf('function relative('))}
-    return generalize(el, s);`);
-  const cards = [{}, {}, {}];
-  const doc = { querySelectorAll: sel => (sel.includes(':nth-of-type(') ? [cards[0]] : cards) };
-  assert.equal(generalize(doc, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card',
-    'a pinned container must widen to all sibling cards');
-  const single = { querySelectorAll: () => [cards[0]] };
-  assert.equal(generalize(single, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card:nth-of-type(1)',
-    'when widening does not find more cards the original selector must be kept');
-  // Widening must never silently point somewhere else: if the element the user
-  // actually clicked is not part of the wider match, keep the exact selector.
-  const elsewhere = { querySelectorAll: sel => (sel.includes(':nth-of-type(') ? [cards[0]] : [cards[1], cards[2]]) };
-  assert.equal(generalize(elsewhere, cards[0], 'section.grid > div.card:nth-of-type(1)'), 'section.grid > div.card:nth-of-type(1)',
-    'a widening that drops the picked element must be rejected');
+  // The rebuilt picker reaches the same guarantee through classCandidates():
+  // in list context (and for the container field) only a candidate that matches
+  // more than one node is accepted, so the saved selector is reusable per card.
+  // worker-tests/visual-controls.test.mjs executes this rule against a real DOM.
+  for (const file of ['render-src/visual.ts', 'worker-src/visual.ts']) {
+    const src = await readProjectFile(file);
+    const at = src.indexOf('const PICKER_JS');
+    const picker = src.slice(at, src.indexOf('`;', at));
+    assert.match(picker, /function classCandidates\(/, file + ': class candidates must be derived from the element');
+    assert.match(picker, /repeat=context==='list'\|\|modeSelect\.value==='container'/, file + ': list context and the container field must share the repeat rule');
+    assert.match(picker, /const rep=cands\.find\(v=>matches\(v\)>1\);\s*if\(rep\)return rep/, file + ': a repeating candidate must win over a one-card selector');
+    assert.match(picker, /Last resort: nth-of-type/, file + ': the absolute path must stay an explicit last resort');
+  }
 });
 
 test('every engine the benchmark can select is offered in the dropdowns', async () => {
