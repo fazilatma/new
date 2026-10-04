@@ -5965,7 +5965,37 @@ async function handleCreateProjectSubmit(e) {
   });
   closeModal('newProjectModal');
   await switchProject(created.id);
+  // Conversations aren't scoped to a project server-side (the same global
+  // thread list is shared across every project) and switchProject() never
+  // touches the currently-open conversation -- so without this, creating a
+  // brand new project left the chat page showing whatever conversation was
+  // already open, making the new project feel like it was never actually
+  // "applied" the moment the user went back to chat. Starting a fresh
+  // conversation (using the new project's own default provider/model) as
+  // part of creation gives the new project a real, visible effect on chat.
+  await startFreshConversationForActiveProject();
   navigate('projects');
+}
+
+async function startFreshConversationForActiveProject() {
+  try {
+    const title = `Chat ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const created = await api('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        provider: STATE.activeProject?.default_provider || $('#chatProvider')?.value || '',
+        model: STATE.activeProject?.default_model || $('#chatModel')?.value || ''
+      })
+    });
+    await loadConversationsList();
+    await selectConversation(created.id);
+  } catch (_) {
+    // Non-fatal: the project itself was already created/activated
+    // successfully above; worst case the chat page keeps showing the
+    // previous conversation instead of a fresh one.
+  }
 }
 
 async function deleteProject(projId) {
@@ -6775,6 +6805,7 @@ function onChatProviderChange(save = true) {
   const pid = $('#chatProvider')?.value;
   if (save && pid) {
     localStorage.setItem('arena_selected_provider', pid);
+    persistConversationModelChoice();
     flashAutoSave();
   }
 
@@ -6797,6 +6828,7 @@ function onChatModelChange(save = true) {
   const mid = $('#chatModel')?.value;
   if (save && mid) {
     localStorage.setItem('arena_selected_model', mid);
+    persistConversationModelChoice();
     flashAutoSave();
   }
   const pid = $('#chatProvider')?.value;
@@ -6804,6 +6836,34 @@ function onChatModelChange(save = true) {
   const badge = $('#activeProviderBadge');
   if (badge) badge.textContent = `⚡ ${p?.name || 'Agent'} / ${mid || 'Model'}`;
 }
+
+// A conversation remembers the provider/model it was *created* with, and
+// selectConversation() re-applies that saved value every time the
+// conversation is (re)opened -- including on a page refresh. Without
+// persisting a later in-conversation change back to the conversation
+// itself, that restore silently overwrites whatever the user picked
+// afterward with the original, stale value: exactly the real bug report
+// "تنظیمات انجام‌شده بعد از ریفرش به حالت اول برمی‌گردند، بخصوص مدل
+// انتخاب‌شده" (settings revert to their original state after refresh,
+// especially the selected model). Fire-and-forget: this is a convenience
+// sync, not something that should ever block or fail the dropdown change.
+function persistConversationModelChoice() {
+  if (!STATE.activeConversationId) return;
+  const provider = $('#chatProvider')?.value;
+  const model = $('#chatModel')?.value;
+  if (!provider && !model) return;
+  const convObj = (STATE.conversations || []).find(c => c.id === STATE.activeConversationId);
+  if (convObj) {
+    convObj.provider_id = provider || convObj.provider_id;
+    convObj.model_id = model || convObj.model_id;
+  }
+  api(`/api/conversations/${STATE.activeConversationId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model })
+  }).catch(() => {});
+}
+
 
 function onApprovalToggle() {
   localStorage.setItem('arena_require_approval', $('#requireApprovalCheck').checked);

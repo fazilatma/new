@@ -1325,9 +1325,27 @@ def sync_conversation_messages(conv_id: str, payload: Dict[str, Any], user: Dict
 @app.put("/api/conversations/{conv_id}")
 def update_conversation(conv_id: str, payload: Dict[str, Any], user: Dict[str, Any] = Depends(require_developer)):
     title = payload.get("title")
+    provider_id = payload.get("provider") or payload.get("providerId") or payload.get("provider_id")
+    model_id = payload.get("model") or payload.get("modelId") or payload.get("model_id")
     with get_db() as conn:
         if title:
             conn.execute("UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ?", (str(title), conv_id))
+        # A conversation remembers the provider/model it was *created* with
+        # so re-opening it (including across a page refresh) restores the
+        # same context -- but without persisting a later in-conversation
+        # change here too, selectConversation() on the client always
+        # re-applies that original, now-stale value and silently undoes
+        # whatever the user picked afterward from the model dropdown. This
+        # is exactly the real bug report: "تنظیمات انجام‌شده بعد از ریفرش
+        # به حالت اول برمی‌گردند، بخصوص مدل انتخاب‌شده" (settings revert
+        # to their original state after refresh, especially the selected
+        # model). Persisting the live choice here means a refresh restores
+        # what the user actually last picked, not what the conversation
+        # happened to start with.
+        if provider_id is not None:
+            conn.execute("UPDATE conversations SET provider_id = ?, updated_at = datetime('now') WHERE id = ?", (str(provider_id), conv_id))
+        if model_id is not None:
+            conn.execute("UPDATE conversations SET model_id = ?, updated_at = datetime('now') WHERE id = ?", (str(model_id), conv_id))
     return {"ok": True, "id": conv_id}
 
 @app.delete("/api/conversations/{conv_id}")

@@ -65,7 +65,7 @@ def test_version_and_health():
     r = client.get("/api/version")
     assert r.status_code == 200
     assert r.json()["version"] == APP_VERSION
-    assert APP_VERSION == "3.3.26"
+    assert APP_VERSION == "3.3.27"
 
     hr = client.get("/health")
     assert hr.status_code == 200
@@ -4403,3 +4403,56 @@ def test_benchmark_test_treats_empty_chat_response_as_failure_with_diagnosis(mon
     result = local_ai.benchmark_test("broken-template-model:latest")
     assert result["ok"] is False
     assert "chat template" in result["error"] or "قالب گفتگو" in result["error"]
+
+
+def test_update_conversation_persists_provider_and_model_choice():
+    """Regression test for the real bug report: 'تنظیمات انجام‌شده بعد از
+    ریفرش به حالت اول برمی‌گردند، بخصوص مدل انتخاب‌شده' (settings revert to
+    their original state after refresh, especially the selected model).
+    Root cause: a conversation only remembered the provider/model it was
+    *created* with; selectConversation() on the client re-applies that
+    saved value every time the conversation is (re)opened, including on a
+    page refresh -- so a later in-conversation model change, which only
+    ever reached localStorage, got silently overwritten by the original
+    value. PUT /api/conversations/{id} must now also accept and persist a
+    provider/model change so a refresh restores what was actually last
+    picked."""
+    create_conv = client.post("/api/conversations", json={
+        "title": "Model Persistence Test", "provider": "openrouter", "model": "original-model"
+    })
+    assert create_conv.status_code == 200
+    conv_id = create_conv.json()["id"]
+
+    get_before = client.get("/api/conversations")
+    before = next(c for c in get_before.json()["conversations"] if c["id"] == conv_id)
+    assert before["provider_id"] == "openrouter"
+    assert before["model_id"] == "original-model"
+
+    # Simulate the user picking a different model mid-conversation.
+    update_res = client.put(f"/api/conversations/{conv_id}", json={"provider": "ollama", "model": "llama3.2:1b"})
+    assert update_res.status_code == 200
+    assert update_res.json()["ok"] is True
+
+    get_after = client.get("/api/conversations")
+    after = next(c for c in get_after.json()["conversations"] if c["id"] == conv_id)
+    assert after["provider_id"] == "ollama"
+    assert after["model_id"] == "llama3.2:1b"
+
+
+def test_update_conversation_title_only_does_not_clear_provider_model():
+    """A title-only PUT (the pre-existing use case) must not accidentally
+    wipe out the conversation's provider/model -- provider/model fields
+    should only be touched when explicitly present in the payload."""
+    create_conv = client.post("/api/conversations", json={
+        "title": "Title Only Test", "provider": "anthropic", "model": "claude-x"
+    })
+    conv_id = create_conv.json()["id"]
+
+    update_res = client.put(f"/api/conversations/{conv_id}", json={"title": "Renamed"})
+    assert update_res.status_code == 200
+
+    get_after = client.get("/api/conversations")
+    after = next(c for c in get_after.json()["conversations"] if c["id"] == conv_id)
+    assert after["title"] == "Renamed"
+    assert after["provider_id"] == "anthropic"
+    assert after["model_id"] == "claude-x"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.27 - Fixed: selected model reverting after refresh, and new projects not actually reflected in chat
+
+### Fixed
+- **"تنظیمات انجام‌شده بعد از ریفرش به حالت اول برمی‌گردند، بخصوص مدل انتخاب‌شده"**: a conversation only ever remembered the provider/model it was *created* with. `selectConversation()` re-applies that saved value to the provider/model dropdowns every time the conversation is (re)opened -- including automatically on a page refresh (restoring the last-active conversation). Changing the model mid-conversation only ever reached `localStorage`, never the conversation itself, so a refresh silently discarded that later choice and brought back whatever the conversation started with. `PUT /api/conversations/{id}` now also accepts and persists `provider`/`model`, and the dropdown's change handlers call it immediately, so a refresh restores what was actually last picked.
+- **"پروژه جدید ایجاد شده بعد از ایجاد روی صفحه چت اعمال نمی‌شود"**: conversations are a single global list, not scoped to any project, and creating/switching a project never touched the currently-open conversation -- so after creating a brand new project, the chat page kept showing whatever conversation (and provider/model) was already open, making the new project feel like it had no effect at all. Creating a project now also starts a fresh conversation using that new project's own default provider/model, so going to the chat page actually shows the new project taking effect instead of silently continuing the old context.
+- 105 backend tests passing (2 new regression tests for the `PUT /api/conversations/{id}` provider/model persistence, including a check that a title-only update doesn't accidentally wipe out an existing provider/model).
+
 ## 3.3.26 - Real root cause found and fixed: imported models with no chat template never produce a real chat response
 
 ### Fixed
