@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.188';
+const APP_VERSION = '10.189';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1130,6 +1130,47 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
     @exec($cmd, $out, $rc);
     $txt = trim(implode("\n", $out));
     return ['ok' => $rc === 0, 'exit_code' => $rc, 'tail' => mb_substr($txt, -2000)];
+}
+
+function s4CliPhpBinary(): string {
+    $env = trim((string)getenv('SCRAPER_PHP'));
+    if ($env !== '') return $env;
+    if (defined('PHP_BINARY') && PHP_BINARY && stripos((string)PHP_BINARY, 'php-fpm') === false) return (string)PHP_BINARY;
+    if (defined('PHP_BINDIR') && PHP_BINDIR && is_file(PHP_BINDIR . '/php')) return PHP_BINDIR . '/php';
+    return 'php';
+}
+
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
+    if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
+    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'all';
+    if ($profileKey === '') return ['ok' => false, 'error' => 'profile_key_empty'];
+    if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
+    $php = s4CliPhpBinary();
+    $probeOut = []; $probeRc = 0;
+    @exec(escapeshellarg($php) . ' -v 2>&1', $probeOut, $probeRc);
+    if ($probeRc !== 0) return ['ok' => false, 'error' => 'php_cli_unavailable', 'php' => $php, 'tail' => mb_substr(trim(implode("\n", $probeOut)), -500)];
+    $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
+    $log = __DIR__ . '/logs/backend-extract.log';
+    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+        . ' ' . escapeshellarg(__FILE__) . ' backend_extract ' . escapeshellarg($profileKey)
+        . ' --phase=' . escapeshellarg($phase)
+        . ($forceAll ? ' --force-all' : '')
+        . ($resume ? ' --resume' : '')
+        . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
+    $out = []; $rc = 0;
+    @exec($cmd, $out, $rc);
+    $pid = 0;
+    foreach ($out as $line) { $line = trim((string)$line); if (ctype_digit($line)) { $pid = (int)$line; break; } }
+    if ($rc !== 0 || $pid <= 0) return ['ok' => false, 'error' => 'spawn_failed', 'exit_code' => $rc, 'log' => $log];
+    writeProgress(EXTRACT_PROGRESS_FILE, [
+        'running' => true, 'done' => false, 'worker_child' => true, 'child_pid' => $pid,
+        'profile_key' => $profileKey, 'phase' => 'starting', 'total' => 0, 'current' => 0,
+        'started_at' => time(), 'last_progress_ts' => time(), 'extracted' => 0,
+        'recent_log' => ['🧵 استخراج در پردازهٔ CLI جدا شروع شد — مستقل از request مرورگر ادامه می‌دهد'],
+        'total_log_count' => 1,
+    ]);
+    return ['ok' => true, 'pid' => $pid, 'log' => $log];
 }
 
 function s4WorkerRunCronChild(): array {
@@ -16857,6 +16898,20 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
     exit;
 }
 
+/* v10.189: اگر worker دائمی بالا نیست، درخواست وب دیگر عملیات طولانی را داخل
+   همان request اجرا نمی‌کند؛ یک CLI child جدا بالا می‌آید تا timeout وب‌سرور
+   بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
+if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
+    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested);
+    if (!empty($spawn['ok'])) {
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['ok'=>true,'started'=>true,'worker_child'=>true,'profile_key'=>$profileKey,
+            'phase'=>$phaseIn,'pid'=>(int)($spawn['pid']??0),'log'=>(string)($spawn['log']??''),
+            'note'=>'operation detached to CLI child'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
 $resumeLockQueueId = '';
 /* v10.136: resumeِ فرزند باید خودش، در همان process که worker را می‌سازد،
    lock بگیرد؛ parent فقط دیگر probe و mutation جداگانه انجام نمی‌دهد. */
@@ -16871,7 +16926,7 @@ if ($resumeRequested) {
     $phaseIn = (string)$resumePrep['phase'];
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
-$res=runBackendExtract($profileKey,'manual',true,$phaseIn,$forceAllIn,$resumeLockQueueId);
+$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId);
 // v8.30: همان اعلان‌های تغییر مبدأ که کران‌جاب می‌فرستد
 if(!empty($res['ok'])){
 $cnNow=loadConnections();
@@ -19068,6 +19123,17 @@ if (isCliRun()) {
         $_GET['force'] = '1';
         $_GET['direct'] = '1';                      // childِ worker دوباره enqueue نکند
         if (in_array('resume', $_cliArgs, true) || in_array('--resume', $_cliArgs, true)) $_GET['resume'] = '1';
+    } elseif ($_cliCmd === 'backend_extract' || $_cliCmd === 'extract') {
+        $_GET['backend_extract_cli'] = '1';         // php scraper4.php backend_extract <profile_key>
+        $_GET['profile_key'] = (string)($_cliArgs[1] ?? '');
+        $_GET['phase'] = 'all';
+        foreach ($_cliArgs as $_a) {
+            $_a = (string)$_a;
+            if (preg_match('~^--phase=(all|list|detail)$~', $_a, $_m)) $_GET['phase'] = $_m[1];
+            elseif ($_a === '--force-all' || $_a === 'force_all') $_GET['force_all'] = '1';
+            elseif ($_a === '--resume' || $_a === 'resume') $_GET['resume'] = '1';
+        }
+        $_GET['direct'] = '1';
     } elseif ($_cliCmd === 'whoami') {
         $_GET['whoami'] = '1';
     } elseif ($_cliCmd === 'backup') {
@@ -19093,6 +19159,26 @@ if (isset($_GET['worker_run'])) {
     }
     s4WorkerLoopFromCli();
     exit;
+}
+if (isset($_GET['backend_extract_cli'])) {
+    $pk = trim((string)($_GET['profile_key'] ?? ''));
+    $phaseCli = (string)($_GET['phase'] ?? 'all');
+    if (!in_array($phaseCli, ['all','list','detail'], true)) $phaseCli = 'all';
+    $forceCli = !empty($_GET['force_all']);
+    $resumeCli = !empty($_GET['resume']);
+    $reservedCli = '';
+    if ($resumeCli) {
+        $prepCli = extractResumePrepare($pk, loadConnections());
+        if (empty($prepCli['ok'])) {
+            echo json_encode(['ok'=>false,'error'=>'checkpoint استخراج قابل رزرو نیست: '.(string)($prepCli['reason']??'')], JSON_UNESCAPED_UNICODE) . PHP_EOL;
+            exit(2);
+        }
+        $phaseCli = (string)($prepCli['phase'] ?? $phaseCli);
+        $reservedCli = (string)($prepCli['queue_id'] ?? '');
+    }
+    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli);
+    echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
+    exit(!empty($resCli['ok']) ? 0 : 1);
 }
 
 /* =====================================================================
@@ -35841,6 +35927,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.188', 'ورودیِ 10.188 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "188'") !== false
       && version_compare(APP_VERSION, '10.' . '188', '>='));
+
+    /* ---------- v10.189: child مستقل برای استخراج وب بدون worker ---------- */
+    $add('10.189', 'backend_extract از وب در نبود worker به CLI child جدا detach می‌شود',
+         function_exists('s4SpawnBackendExtract' . 'Child')
+      && strpos($selfSrc, "backend_extract_" . "cli") !== false
+      && strpos($selfSrc, "worker_" . "child") !== false);
+    $add('10.189', 'فرمان CLI backend_extract مستقیم runBackendExtract را اجرا می‌کند',
+         strpos($selfSrc, "\$_cliCmd === 'backend_" . "extract'") !== false
+      && strpos($selfSrc, "runBackendExtract(\$pk, 'worker_" . "child'") !== false);
+    $add('10.189', 'ورودیِ 10.189 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "189'") !== false
+      && version_compare(APP_VERSION, '10.' . '189', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66008,6 +66106,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.189', t:'🚀 اجرای جداگانهٔ CLI برای استخراج‌های طولانی وب', items:[
+    'اگر worker دائمی فعال نباشد، دکمهٔ استخراج بک‌اند دیگر کار طولانی را داخل همان request وب اجرا نمی‌کند؛ یک پردازهٔ CLI جدا با max_execution_time=0 اجرا می‌شود',
+    'فرمان php scraper4.php backend_extract <profile_key> اضافه شد تا child مستقل همان موتور runBackendExtract را بدون پاسخ زودهنگام وب اجرا کند',
+    'این مسیر fallback جلوی قطع شدن استخراج‌های طولانی توسط timeout وب‌سرور/FastCGI را می‌گیرد؛ direct=1 همچنان برای دیباگ مسیر قدیمی را نگه می‌دارد',
+  ]},
   {v:'10.188', t:'🧵 ادامهٔ واقعی استخراج طولانی بدون توقف UI', items:[
     'poll_extract حالا اگر worker دائمی همان استخراج را از checkpoint ادامه می‌دهد، پاسخ را running نگه می‌دارد و فرانت‌اند polling را قطع نمی‌کند',
     'جزئیات درجای محصولات داخل هر صفحه، قبل/بعد از باز کردن صفحهٔ محصول lock را تازه می‌کند و هر چند محصول progress زنده می‌نویسد؛ بنابراین یک صفحهٔ بزرگ با جزئیات زیاد دیگر چند دقیقه بی‌حرکت دیده نمی‌شود',
