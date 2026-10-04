@@ -1,0 +1,21 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+*.log
+coverage/
+render-dist/
+worker-dist/
+dist/
+.deploy/
+data/
+
+# Crawlee scratch data (request queues, session state) created at runtime
+storage/
+
+# Built worker bundle: committed only on Release commits, rebuilt by worker:build.
+scraper4.worker.js
+
+# Bootstrap bundles hold secrets (API keys/tokens): never commit them.
+bootstrap/*.json

@@ -1055,7 +1055,7 @@ binding = "AI"</div>
       const box = document.getElementById('gh-output-box');
       box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت شاخه‌های مخزن ' + repo + '...</div>';
       try {
-        const r = await fetch(`/api/github/branches?repo=${encodeURIComponent(repo)}&token=${encodeURIComponent(token)}`);
+        const r = await fetch('/api/github/branches?repo='+(encodeURIComponent(repo))+'&token='+(encodeURIComponent(token)));
         const d = await r.json();
         if (d.ok && Array.isArray(d.branches)) {
           const sel = document.getElementById('gh-branch-sel');
@@ -1087,7 +1087,7 @@ binding = "AI"</div>
       const box = document.getElementById('gh-output-box');
       box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت تاریخچه کامیت‌های شاخه ' + branch + '...</div>';
       try {
-        const r = await fetch(`/api/github/commits?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&token=${encodeURIComponent(token)}`);
+        const r = await fetch('/api/github/commits?repo='+(encodeURIComponent(repo))+'&branch='+(encodeURIComponent(branch))+'&token='+(encodeURIComponent(token)));
         const d = await r.json();
         if (d.ok && Array.isArray(d.commits)) {
           let html = '<table><thead><tr><th>پیام کامیت (Message)</th><th>نویسنده</th><th>تاریخ</th><th>SHA</th></tr></thead><tbody>';
@@ -1111,7 +1111,7 @@ binding = "AI"</div>
       const box = document.getElementById('gh-output-box');
       box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت ساختار درختی فایل‌ها از شاخه ' + branch + '...</div>';
       try {
-        const r = await fetch(`/api/git-tree?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&token=${encodeURIComponent(token)}`);
+        const r = await fetch('/api/git-tree?repo='+(encodeURIComponent(repo))+'&branch='+(encodeURIComponent(branch))+'&token='+(encodeURIComponent(token)));
         const d = await r.json();
         if (d.ok && Array.isArray(d.tree)) {
           let html = '<table><thead><tr><th>مسیر فایل (Path)</th><th>نوع</th><th>عملیات</th></tr></thead><tbody>';
@@ -1135,7 +1135,7 @@ binding = "AI"</div>
       const box = document.getElementById('gh-output-box');
       box.innerHTML = '<div style="padding:14px;color:var(--muted)">در حال دریافت فایل ' + fPath + '...</div>';
       try {
-        const r = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(branch)}&path=${encodeURIComponent(fPath)}&token=${encodeURIComponent(token)}`);
+        const r = await fetch('/api/github/file?repo='+(encodeURIComponent(repo))+'&branch='+(encodeURIComponent(branch))+'&path='+(encodeURIComponent(fPath))+'&token='+(encodeURIComponent(token)));
         const d = await r.json();
         if (d.ok) {
           box.innerHTML = '<div style="margin-bottom:8px;font-weight:bold;color:var(--primary)">📄 ' + fPath + ' (' + branch + ')</div><div class="code-box">' + escapeHtml(d.content) + '</div>';
@@ -1334,20 +1334,7 @@ binding = "AI"</div>
         outBox.innerHTML = '';
         return;
       } else if (app === 'help') {
-        resElem.textContent = `WebConsole Edge Network & POSIX Commands:
-  • ssh <host> [-p port]     - Probe SSH server & retrieve SSH protocol version/banner
-  • ftp <host> [port]        - Connect to FTP server (port 21) & inspect banner
-  • telnet / nc <host> <port>- Raw TCP socket probe & latency test from Cloudflare Edge
-  • ping <host>              - TCP Ping & latency measurement to host from Edge
-  • dig <domain> [type]      - Perform DNS query (A, AAAA, MX, TXT, CNAME, NS) via 1.1.1.1
-  • git clone <owner/repo>   - Clone GitHub repository tree & files into local virtual FS
-  • curl / wget <url>        - Live HTTP request across Cloudflare Proxy & download
-  • ls [-la] / pwd / cd      - Directory navigation
-  • cat <file>               - Display file content
-  • echo "text" [> file]     - Output text or save to virtual file
-  • mkdir / rm               - Create or remove files/folders
-  • uname -a / date / whoami - System details & metrics
-  • clear / help             - Console utilities`;
+        resElem.textContent = 'WebConsole Edge Network & POSIX Commands:\n  • ssh <host> [-p port]     - Probe SSH server & retrieve SSH protocol version/banner\n  • ftp <host> [port]        - Connect to FTP server (port 21) & inspect banner\n  • telnet / nc <host> <port>- Raw TCP socket probe & latency test from Cloudflare Edge\n  • ping <host>              - TCP Ping & latency measurement to host from Edge\n  • dig <domain> [type]      - Perform DNS query (A, AAAA, MX, TXT, CNAME, NS) via 1.1.1.1\n  • git clone <owner/repo>   - Clone GitHub repository tree & files into local virtual FS\n  • curl / wget <url>        - Live HTTP request across Cloudflare Proxy & download\n  • ls [-la] / pwd / cd      - Directory navigation\n  • cat <file>               - Display file content\n  • echo "text" [> file]     - Output text or save to virtual file\n  • mkdir / rm               - Create or remove files/folders\n  • uname -a / date / whoami - System details & metrics\n  • clear / help             - Console utilities';
       } else if (app === 'ssh') {
         let host = args[0];
         let port = 22;
@@ -1358,7 +1345,7 @@ binding = "AI"</div>
           if (host.includes('@')) host = host.split('@')[1];
           const pIdx = args.indexOf('-p');
           if (pIdx !== -1 && args[pIdx + 1]) port = Number(args[pIdx + 1]);
-          resElem.textContent = `Connecting to ${host}:${port} over Cloudflare Raw TCP Sockets...`;
+          resElem.textContent = 'Connecting to '+(host)+':'+(port)+' over Cloudflare Raw TCP Sockets...';
           outBox.appendChild(resElem);
           outBox.scrollTop = outBox.scrollHeight;
           try {
@@ -1369,10 +1356,10 @@ binding = "AI"</div>
             });
             const d = await r.json();
             if (d.ok) {
-              resElem.innerHTML = `<span style="color:var(--green)">✓ SSH Connection Established (${d.latencyMs}ms)</span>\n<span style="color:#fff">Remote SSH Banner:</span> ${escapeHtml(d.banner)}\n<span style="color:var(--muted)">Protocol: SSH-2.0 · Key exchange and socket handshake verified.</span>`;
+              resElem.innerHTML = '<span style="color:var(--green)">✓ SSH Connection Established ('+(d.latencyMs)+'ms)</span>\\n<span style="color:#fff">Remote SSH Banner:</span> '+(escapeHtml(d.banner))+'\\n<span style="color:var(--muted)">Protocol: SSH-2.0 · Key exchange and socket handshake verified.</span>';
             } else {
               resElem.style.color = 'var(--red)';
-              resElem.textContent = `ssh: connect to host ${host} port ${port}: ${d.error || 'Connection failed'}`;
+              resElem.textContent = 'ssh: connect to host '+(host)+' port '+(port)+': '+(d.error || 'Connection failed');
             }
           } catch (e) {
             resElem.style.color = 'var(--red)';
@@ -1385,10 +1372,10 @@ binding = "AI"</div>
         let port = app === 'ftp' ? (args[1] ? Number(args[1]) : 21) : 22;
         if (!host) {
           resElem.style.color = 'var(--red)';
-          resElem.textContent = `Usage: ${app} <host> [port]`;
+          resElem.textContent = 'Usage: '+(app)+' <host> [port]';
         } else {
           if (host.includes('@')) host = host.split('@')[1];
-          resElem.textContent = `Connecting to FTP server ${host}:${port} via Edge TCP Sockets...`;
+          resElem.textContent = 'Connecting to FTP server '+(host)+':'+(port)+' via Edge TCP Sockets...';
           outBox.appendChild(resElem);
           outBox.scrollTop = outBox.scrollHeight;
           try {
@@ -1399,10 +1386,10 @@ binding = "AI"</div>
             });
             const d = await r.json();
             if (d.ok) {
-              resElem.innerHTML = `<span style="color:var(--green)">✓ Connected to ${host}:${port} (${d.latencyMs}ms)</span>\n<span style="color:#fff">Server Response:</span> ${escapeHtml(d.banner)}\n<span style="color:var(--muted)">FTP command channel open. Status 220 Ready.</span>`;
+              resElem.innerHTML = '<span style="color:var(--green)">✓ Connected to '+(host)+':'+(port)+' ('+(d.latencyMs)+'ms)</span>\\n<span style="color:#fff">Server Response:</span> '+(escapeHtml(d.banner))+'\\n<span style="color:var(--muted)">FTP command channel open. Status 220 Ready.</span>';
             } else {
               resElem.style.color = 'var(--red)';
-              resElem.textContent = `ftp: connect to ${host}:${port}: ${d.error || 'Connection refused'}`;
+              resElem.textContent = 'ftp: connect to '+(host)+':'+(port)+': '+(d.error || 'Connection refused');
             }
           } catch (e) {
             resElem.style.color = 'var(--red)';
@@ -1415,9 +1402,9 @@ binding = "AI"</div>
         const port = Number(args[1] || 80);
         if (!host) {
           resElem.style.color = 'var(--red)';
-          resElem.textContent = `Usage: ${app} <host> <port>`;
+          resElem.textContent = 'Usage: '+(app)+' <host> <port>';
         } else {
-          resElem.textContent = `Probing raw TCP socket ${host}:${port}...`;
+          resElem.textContent = 'Probing raw TCP socket '+(host)+':'+(port)+'...';
           outBox.appendChild(resElem);
           outBox.scrollTop = outBox.scrollHeight;
           try {
@@ -1428,10 +1415,10 @@ binding = "AI"</div>
             });
             const d = await r.json();
             if (d.ok) {
-              resElem.innerHTML = `<span style="color:var(--green)">✓ Connected to ${host}:${port} [TCP/IP] (${d.latencyMs}ms)</span>\n${escapeHtml(d.banner)}`;
+              resElem.innerHTML = '<span style="color:var(--green)">✓ Connected to '+(host)+':'+(port)+' [TCP/IP] ('+(d.latencyMs)+'ms)</span>\\n'+(escapeHtml(d.banner));
             } else {
               resElem.style.color = 'var(--red)';
-              resElem.textContent = `Failed to connect to ${host}:${port}: ${d.error}`;
+              resElem.textContent = 'Failed to connect to '+(host)+':'+(port)+': '+(d.error);
             }
           } catch (e) {
             resElem.style.color = 'var(--red)';
@@ -1445,7 +1432,7 @@ binding = "AI"</div>
           resElem.style.color = 'var(--red)';
           resElem.textContent = 'Usage: ping <host>';
         } else {
-          resElem.textContent = `PING ${host} from Cloudflare Edge...`;
+          resElem.textContent = 'PING '+(host)+' from Cloudflare Edge...';
           outBox.appendChild(resElem);
           outBox.scrollTop = outBox.scrollHeight;
           try {
@@ -1455,7 +1442,7 @@ binding = "AI"</div>
               body: JSON.stringify({ host, port: 443, timeoutMs: 2500 })
             });
             const d = await r.json();
-            resElem.innerHTML = `<span style="color:var(--green)">64 bytes from ${host}: time=${d.latencyMs} ms (Edge Colo Roundtrip)</span>\n--- ${host} ping statistics ---\n1 packets transmitted, 1 received, 0% packet loss, time ${d.latencyMs}ms`;
+            resElem.innerHTML = '<span style="color:var(--green)">64 bytes from '+(host)+': time='+(d.latencyMs)+' ms (Edge Colo Roundtrip)</span>\\n--- '+(host)+' ping statistics ---\\n1 packets transmitted, 1 received, 0% packet loss, time '+(d.latencyMs)+'ms';
           } catch (e) {
             resElem.style.color = 'var(--red)';
             resElem.textContent = 'ping: error: ' + e.message;
@@ -1469,15 +1456,15 @@ binding = "AI"</div>
           resElem.style.color = 'var(--red)';
           resElem.textContent = 'Usage: dig <domain> [A | AAAA | MX | TXT | CNAME | NS]';
         } else {
-          resElem.textContent = `; <<>> DiG 9.18.1-Edge <<>> ${domain} ${type}\n;; Querying 1.1.1.1 (Cloudflare DNS over HTTPS)...`;
+          resElem.textContent = '; <<>> DiG 9.18.1-Edge <<>> '+(domain)+' '+(type)+'\\n;; Querying 1.1.1.1 (Cloudflare DNS over HTTPS)...';
           outBox.appendChild(resElem);
           outBox.scrollTop = outBox.scrollHeight;
           try {
-            const r = await fetch(`/api/dns-query?name=${encodeURIComponent(domain)}&type=${encodeURIComponent(type)}`);
+            const r = await fetch('/api/dns-query?name='+(encodeURIComponent(domain))+'&type='+(encodeURIComponent(type)));
             const d = await r.json();
             if (d.ok && d.dns) {
-              const answers = (d.dns.Answer || []).map(a => `${a.name}.\t${a.TTL}\tIN\t${type}\t${a.data}`).join('\n');
-              resElem.textContent = `;; ANSWER SECTION:\n${answers || '(No records found)'}\n\n;; Query time: ${Math.floor(Math.random()*15+5)} msec\n;; SERVER: 1.1.1.1#53(1.1.1.1)\n;; MSG SIZE rcvd: ${JSON.stringify(d.dns).length}`;
+              const answers = (d.dns.Answer || []).map(a => (a.name)+'.\\t'+(a.TTL)+'\\tIN\\t'+(type)+'\\t'+(a.data)).join('\n');
+              resElem.textContent = ';; ANSWER SECTION:\\n'+(answers || '(No records found)')+'\\n\\n;; Query time: '+(Math.floor(Math.random()*15+5))+' msec\\n;; SERVER: 1.1.1.1#53(1.1.1.1)\\n;; MSG SIZE rcvd: '+(JSON.stringify(d.dns).length);
             } else {
               resElem.style.color = 'var(--red)';
               resElem.textContent = 'DNS query failed: ' + (d.error || 'NXDOMAIN');
@@ -1495,11 +1482,11 @@ binding = "AI"</div>
             resElem.style.color = 'var(--red)';
             resElem.textContent = 'Usage: git clone <owner/repo>';
           } else {
-            resElem.textContent = `Cloning into '${repo.split('/')[1] || repo}' from GitHub...`;
+            resElem.textContent = 'Cloning into \(repo.split('/')[1] || repo)+'\' from GitHub...';
             outBox.appendChild(resElem);
             outBox.scrollTop = outBox.scrollHeight;
             try {
-              const r = await fetch(`/api/git-tree?repo=${encodeURIComponent(repo)}`);
+              const r = await fetch('/api/git-tree?repo='+(encodeURIComponent(repo)));
               const d = await r.json();
               if (d.ok && d.tree) {
                 const folder = repo.split('/')[1] || repo;
@@ -1509,11 +1496,11 @@ binding = "AI"</div>
                   if (item.type === 'blob') {
                     const fname = item.path.split('/').pop();
                     wasmFs[wasmCwd + '/' + folder].push(fname);
-                    wasmFs[wasmCwd + '/' + folder + '/' + fname] = `# Git placeholder for ${item.path}\n# SHA: ${item.sha}`;
+                    wasmFs[wasmCwd + '/' + folder + '/' + fname] = '# Git placeholder for '+(item.path)+'\\n# SHA: '+(item.sha);
                   }
                 }
                 saveWasmFs();
-                resElem.innerHTML = `<span style="color:var(--green)">✓ Successfully cloned repository ${repo} (${d.tree.length} objects).</span>\nDirectory created: ${wasmCwd}/${folder}`;
+                resElem.innerHTML = '<span style="color:var(--green)">✓ Successfully cloned repository '+(repo)+' ('+(d.tree.length)+' objects).</span>\\nDirectory created: '+(wasmCwd)+'/'+(folder);
               } else {
                 resElem.style.color = 'var(--red)';
                 resElem.textContent = 'git clone error: ' + (d.message || d.error);
@@ -1593,9 +1580,9 @@ binding = "AI"</div>
         const target = args.find(a => !a.startsWith('-'));
         if (!target) {
           resElem.style.color = 'var(--red)';
-          resElem.textContent = `${app}: no URL specified!`;
+          resElem.textContent = (app)+': no URL specified!';
         } else {
-          resElem.textContent = `Connecting to ${target} via Cloudflare Forward Proxy...`;
+          resElem.textContent = 'Connecting to '+(target)+' via Cloudflare Forward Proxy...';
           try {
             const fetchUrl = '/?url=' + encodeURIComponent(target.startsWith('http') ? target : 'https://' + target);
             const r = await fetch(fetchUrl);
@@ -1603,7 +1590,7 @@ binding = "AI"</div>
             resElem.textContent = txt;
           } catch (e) {
             resElem.style.color = 'var(--red)';
-            resElem.textContent = `${app}: error fetching: ` + e.message;
+            resElem.textContent = (app)+': error fetching: ' + e.message;
           }
         }
       } else {
