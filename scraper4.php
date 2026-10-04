@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.186';
+const APP_VERSION = '10.187';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -340,7 +340,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/09';
+const APP_VERSION_DATE = '1405/07/12';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -940,6 +940,12 @@ function s4WorkerStateWrite(array $patch): void {
     @file_put_contents(WORKER_STATE_FILE, json_encode($cur, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 
+function s4WorkerPidAlive(int $pid): bool {
+    if ($pid <= 0) return false;
+    if (function_exists('posix_kill')) return @posix_kill($pid, 0);
+    return false;
+}
+
 function s4WorkerHeartbeatFromProgress(string $file = '', array $data = []): void {
     static $last = 0;
     $now = time();
@@ -955,8 +961,27 @@ function s4WorkerHeartbeatFromProgress(string $file = '', array $data = []): voi
         $v = $data[$k];
         $patch[$k === 'phase' ? 'task_phase' : ('task_' . $k)] = is_scalar($v) ? $v : '';
     }
+    $qid = (string)($data['queue_id'] ?? ($GLOBALS['_extractLockQueueId'] ?? ''));
+    if ($qid !== '' && function_exists('extractLockTouch')) extractLockTouch($qid);
     s4WorkerStateWrite($patch);
     $last = $now;
+}
+
+function s4WorkerExtractBeatForRow(string $rowId, string $profileKey = ''): array {
+    $st = s4WorkerStateLoad();
+    if (empty($st['running'])) return ['beat' => 0, 'why' => 'worker_not_running'];
+    $phase = (string)($st['phase'] ?? '');
+    if (!in_array($phase, ['job', 'extract'], true)) return ['beat' => 0, 'why' => 'worker_' . ($phase ?: 'idle')];
+    if ((string)($st['job_type'] ?? '') !== 'backend_extract') return ['beat' => 0, 'why' => 'not_extract_job'];
+    $pid = (int)($st['pid'] ?? 0);
+    if (!s4WorkerPidAlive($pid)) return ['beat' => 0, 'why' => 'worker_pid_dead'];
+    $taskQ = (string)($st['task_queue_id'] ?? '');
+    $taskProfile = (string)($st['task_profile_key'] ?? ($st['job_profile'] ?? ''));
+    $match = $taskQ !== ''
+        ? ($rowId !== '' && $taskQ === $rowId)
+        : ($profileKey !== '' && $taskProfile !== '' && $taskProfile === $profileKey);
+    if (!$match) return ['beat' => 0, 'why' => 'worker_other_job'];
+    return ['beat' => time(), 'why' => 'worker_pid_alive', 'pid' => $pid];
 }
 
 function s4WorkerIsActive(int $staleSec = 45): bool {
@@ -967,7 +992,7 @@ function s4WorkerIsActive(int $staleSec = 45): bool {
     /* هنگام اجرای job طولانی، خودِ worker ممکن است در runBackendExtract یا child
        منتظر بماند و heartbeat ننویسد؛ زنده‌بودن PID هنوز نشانهٔ معتبر است. */
     $pid = (int)($st['pid'] ?? 0);
-    if ($pid > 0 && function_exists('posix_kill') && @posix_kill($pid, 0)) return true;
+    if (s4WorkerPidAlive($pid)) return true;
     $fp = @fopen(WORKER_LOCK_FILE, 'c');
     if ($fp) {
         $free = @flock($fp, LOCK_EX | LOCK_NB);
@@ -1136,7 +1161,7 @@ function s4WorkerRunJob(array $job): array {
         $segments = 0;
         $transientResumes = 0;
         $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 200)));
-        $maxTransientResumes = max(0, min(10, (int)(loadConnections()['worker_extract_retry_segments'] ?? 3)));
+        $maxTransientResumes = max(0, min(100, (int)(loadConnections()['worker_extract_retry_segments'] ?? 20)));
         $res = ['ok' => false, 'error' => 'worker did not start'];
         while (true) {
             $segments++;
@@ -1183,7 +1208,7 @@ function s4WorkerRunJob(array $job): array {
                     'total_log_count' => max((int)($pg['total_log_count'] ?? 0) + 1, count($lg)),
                 ]));
             } catch (Throwable $_wCont) {}
-            sleep($budgetResume ? 2 : 10);
+            sleep($budgetResume ? 2 : min(60, 10 + ($transientResumes * 5)));
             $resumeNext = true;
             $phase = 'all';
         }
@@ -1571,6 +1596,10 @@ function queueRowIdle(string $kind, array $row, array $prog, int $now, array $ex
 
     /* ۲) شواهدِ بیرونی (قفلِ استخراج و مانندِ آن) */
     foreach ($extraBeats as $name => $b) if ((int)$b > 0) $beats[(string)$name] = (int)$b;
+    if ($kind === 'extract' && function_exists('s4WorkerExtractBeatForRow')) {
+        $_wb = s4WorkerExtractBeatForRow($rowId, (string)($row['profile_key'] ?? ''));
+        if ((int)($_wb['beat'] ?? 0) > 0) $beats['worker_pid_alive'] = (int)$_wb['beat'];
+    }
 
     /* ۳) شاهدِ حرکت — عددها عوض شده‌اند یا نه */
     $mv = queueBeatSee($kind, $rowId, queueRowSig($row, $prog));
@@ -16318,9 +16347,10 @@ foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantFields[]=$_f; }
 $cn0=loadConnections();
 $_budget=(int)($cn0['detail_budget_sec']??0);
 if($_budget<=0){
-    // اگر تنظیم نشده، از max_execution_time حدس بزن و حاشیهٔ امن بگذار
+    // اگر تنظیم نشده، از max_execution_time حدس بزن و حاشیهٔ امن بگذار.
+    // در worker/CLI محدودیت وب‌سرور نداریم؛ ۹۰ ثانیه باعث pauseهای چندمحصولی می‌شد.
     $_ini=(int)@ini_get('max_execution_time');
-    $_budget=$_ini>0?max(30,(int)($_ini*0.7)):90;
+    $_budget=$_ini>0?max(30,(int)($_ini*0.7)):((isCliRun()||(string)$trigger==='worker')?900:90);
 }
 $_budget=max(20,min(3600,$_budget));
 /* v8.98: مهلت از «شروع فاز جزئیات» حساب می‌شود، نه از شروع کل اجرا.
@@ -35751,6 +35781,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.186', 'ورودیِ 10.186 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "186'") !== false
       && version_compare(APP_VERSION, '10.' . '186', '>='));
+
+    /* ---------- v10.187: تشخیص زنده‌بودن worker در صف استخراج ---------- */
+    $add('10.187', 'صف استخراج PID زندهٔ worker را شاهد فعالیت می‌داند',
+         function_exists('s4WorkerExtractBeat' . 'ForRow')
+      && strpos($selfSrc, "worker_pid_" . "alive") !== false
+      && strpos($selfSrc, "s4WorkerExtractBeatFor" . "Row(\$rowId") !== false);
+    $add('10.187', 'ضربان progress، قفل استخراج را هم touch می‌کند',
+         strpos($selfSrc, "extractLock" . "Touch(\$qid)") !== false
+      && strpos($selfSrc, "\$GLOBALS['_extractLock" . "QueueId']") !== false);
+    $add('10.187', 'بودجهٔ پیش‌فرض جزئیات در worker/CLI کوتاه نیست',
+         strpos($selfSrc, "(isCliRun()||(string)\$trigger==='wor" . "ker')?900:90") !== false);
+    $add('10.187', 'retryهای توقف موقت worker پیش‌فرض بلندتر و با backoff است',
+         strpos($selfSrc, "worker_extract_retry_" . "segments'] ?? 20") !== false
+      && strpos($selfSrc, "min(60, 10 + (\$transient" . "Resumes * 5))") !== false);
+    $add('10.187', 'ورودیِ 10.187 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "187'") !== false
+      && version_compare(APP_VERSION, '10.' . '187', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65918,6 +65965,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.187', t:'🛡 جلوگیری از stuck کاذب در استخراج‌های خیلی طولانی', items:[
+    'صف استخراج حالا اگر worker دائمی با PID زنده همان ردیف/پروفایل را اجرا می‌کند، آن را گیرکرده حساب نمی‌کند؛ حتی اگر progress در یک render/fetch طولانی چند دقیقه نوشته نشده باشد',
+    'heartbeatهای progress علاوه بر worker_state، metadata قفل استخراج را هم touch می‌کنند تا نگهبان و UI روی قفل کهنه تصمیم اشتباه نگیرند',
+    'بودجهٔ پیش‌فرض فاز جزئیات در worker/CLI از ۹۰ ثانیه به ۹۰۰ ثانیه رسید؛ pauseهای چندمحصولی در استخراج‌های بلند کمتر می‌شود',
+    'retry ادامهٔ خودکار worker برای خطاهای موقت صفحه/رندر پیش‌فرضاً طولانی‌تر و با backoff انجام می‌شود، نه اینکه بعد از چند تلاش کوتاه عملیات را paused بگذارد',
+  ]},
   {v:'10.186', t:'🫀 ضربان زندهٔ worker در extraction/render طولانی', items:[
     'هر بار فایل progress نوشته می‌شود، اگر پردازه همان worker دائمی باشد، worker_state.json هم heartbeat و خلاصهٔ پیشرفت را تازه می‌کند',
     'قبل از هر render اجباری Playwright/Selenium هم heartbeat ثبت می‌شود تا timeout/صف رندر باعث نشود وضعیت worker کهنه و مرده به نظر برسد',
