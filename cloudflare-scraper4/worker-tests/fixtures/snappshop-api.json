@@ -1,0 +1,47 @@
+{
+  "meta": { "page": 1, "perPage": 24, "total": 480, "totalPages": 20, "sort": "newest" },
+  "data": {
+    "products": [
+      {
+        "id": 1001,
+        "title": "قابلمه گرانیتی",
+        "price": 1900000,
+        "url": "/product/snp-1001",
+        "image": "https://snappshop.test/img/pot.jpg",
+        "sku": "snp-1001",
+        "brand": "KitchenLand"
+      },
+      {
+        "id": 1002,
+        "name": "کتری استیل",
+        "offers": { "price": "850000", "availability": "InStock" },
+        "link": "https://snappshop.test/product/snp-1002",
+        "thumbnail": "https://snappshop.test/img/kettle.jpg",
+        "productId": "snp-1002"
+      },
+      {
+        "id": 1003,
+        "productName": "سرویس قاشق و چنگال",
+        "finalPrice": 1250000,
+        "slug": "/product/snp-1003",
+        "images": ["https://snappshop.test/img/cutlery.jpg"],
+        "code": "snp-1003"
+      },
+      {
+        "id": 1004,
+        "title": "قوری چینی",
+        "salePrice": 640000,
+        "href": "/product/snp-1004",
+        "cover": { "url": "https://snappshop.test/img/teapot.jpg" }
+      },
+      {
+        "id": 1005,
+        "title": "بدون تصویر",
+        "price": 100000,
+        "url": "/product/snp-1005"
+      }
+    ]
+  },
+  "filters": { "brands": ["KitchenLand"], "priceRange": [100000, 5000000] },
+  "banners": [{ "title": "فروش ویژه", "image": "https://snappshop.test/img/banner.jpg" }]
+}

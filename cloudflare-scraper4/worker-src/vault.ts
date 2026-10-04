@@ -1,0 +1,67 @@
+import { getEnv, MIN_SECRET_LENGTH, validSecret } from './env.js';
+import { upgradeAiProviderCatalog } from './ai-catalog.js';
+import { base64ToBytes, bytesToBase64, textDecoder, textEncoder } from './utils.js';
+
+export type ConnectionVault={
+  woo:{url:string;key:string;secret:string;categoryId:number;pricePercent:number;network:{mode:'auto'|'direct'|'worker';workerUrl:string}};
+  basalam:{token:string;vendorId:string;api:string;pricePercent:number;preparationDays:number;weight:number;packageWeight:number;stock:number;categoryId:number;fallbackCategoryIds:number[];autoCategory:boolean;netIndirect:boolean;shops:Array<{name:string;token:string;vendorId:string;pricePercent:number}>};
+  ai:{catalogVersion:number;baseUrl:string;apiKey:string;model:string;providers:Array<{id:string;name:string;baseUrl:string;apiKey:string;apiKeys:Array<string|{accountId:string;token:string}>;accountId?:string;cfToken?:string;models:string[];reasoningModels:string[];nonChatModels?:string[];vendor?:string;enabled:boolean}>;candidates:string[];master:string;network:{mode:string;proxyUrl:string;workerUrl:string;dohUrl:string;resolveIp:string}};
+  notifications:{url:string;token:string;chatId:string;baleToken:string;baleChatId:string;rubikaToken:string;rubikaChatId:string};
+};
+type Envelope={version:2;salt:string;iv:string;ciphertext:string;iterations?:number};
+/** Cloudflare Workers currently rejects PBKDF2 counts above 100,000. */
+export const VAULT_KDF_ITERATIONS=100_000;
+
+export const emptyConnections=():ConnectionVault=>({
+  woo:{url:'',key:'',secret:'',categoryId:0,pricePercent:0,network:{mode:'auto',workerUrl:''}},
+  basalam:{token:'',vendorId:'',api:'https://openapi.basalam.com/v1',pricePercent:0,preparationDays:3,weight:500,packageWeight:600,stock:10,categoryId:0,fallbackCategoryIds:[],autoCategory:false,netIndirect:false,shops:[]},
+  ai:{catalogVersion:0,baseUrl:'',apiKey:'',model:'',providers:[],candidates:[],master:'',network:{mode:'direct',proxyUrl:'',workerUrl:'',dohUrl:'https://cloudflare-dns.com/dns-query',resolveIp:''}},
+  notifications:{url:'',token:'',chatId:'',baleToken:'',baleChatId:'',rubikaToken:'',rubikaChatId:''}
+});
+function password():string{const env=getEnv(),secret=validSecret(env.VAULT_SECRET)?env.VAULT_SECRET:env.VAULT_TOKEN;if(!validSecret(secret))throw new Error(`برای ذخیره امن اطلاعات اتصال، در Cloudflare Dashboard ← Settings ← Variables and Secrets یک Secret دقیقاً با نام VAULT_SECRET و حداقل ${MIN_SECRET_LENGTH} کاراکتر تعریف و Worker را Redeploy کنید. اگر قبلاً VAULT_TOKEN ساخته‌اید، این نسخه آن را هم به‌عنوان alias می‌پذیرد؛ اما نام پیشنهادی VAULT_SECRET است.`);return secret;}
+const source=(value:Uint8Array):ArrayBuffer=>Uint8Array.from(value).buffer;
+async function key(salt:Uint8Array,usage:KeyUsage[],iterations=VAULT_KDF_ITERATIONS):Promise<CryptoKey>{if(!Number.isInteger(iterations)||iterations<1||iterations>VAULT_KDF_ITERATIONS)throw new Error(`تعداد تکرار PBKDF2 نامعتبر است؛ حداکثر Cloudflare برابر ${VAULT_KDF_ITERATIONS} است.`);const material=await crypto.subtle.importKey('raw',textEncoder.encode(password()),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',hash:'SHA-256',salt:source(salt),iterations},material,{name:'AES-GCM',length:256},false,usage);}
+export async function encryptVault(value:ConnectionVault):Promise<Envelope>{const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),ciphertext=await crypto.subtle.encrypt({name:'AES-GCM',iv},await key(salt,['encrypt']),textEncoder.encode(JSON.stringify(value)));return{version:2,salt:bytesToBase64(salt),iv:bytesToBase64(iv),ciphertext:bytesToBase64(new Uint8Array(ciphertext)),iterations:VAULT_KDF_ITERATIONS};}
+export async function decryptVault(raw:unknown):Promise<ConnectionVault>{if(!raw)return environmentFallback();const envelope=raw as Envelope;if(envelope.version!==2)throw new Error('نسخه خزانه با Worker سازگار نیست؛ اتصال‌ها را دوباره وارد کنید.');try{const iterations=envelope.iterations??VAULT_KDF_ITERATIONS,salt=base64ToBytes(envelope.salt),iv=base64ToBytes(envelope.iv),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:source(iv)},await key(salt,['decrypt'],iterations),source(base64ToBytes(envelope.ciphertext)));const result=mergeConnections(emptyConnections(),JSON.parse(textDecoder.decode(plain)));upgradeAiProviderCatalog(result.ai);return result}catch(error){if(error instanceof Error&&error.message.includes('PBKDF2'))throw error;throw new Error('بازکردن اطلاعات اتصال ممکن نشد؛ آیا VAULT_SECRET تغییر کرده است؟')}}
+export function environmentFallback():ConnectionVault{const env=getEnv(),result=emptyConnections();result.woo={...result.woo,url:env.WOO_URL||'',key:env.WOO_KEY||'',secret:env.WOO_SECRET||''};result.basalam={...result.basalam,token:sanitizeToken(env.BASALAM_TOKEN||''),vendorId:env.BASALAM_VENDOR_ID||'',api:env.BASALAM_API||result.basalam.api};upgradeAiProviderCatalog(result.ai);const openrouter=result.ai.providers.find(provider=>provider.id==='openrouter');if(openrouter){openrouter.apiKey=env.OPENROUTER_API_KEY||env.AI_OPENROUTER_API_KEY||'';openrouter.apiKeys=openrouter.apiKey?[openrouter.apiKey]:[];openrouter.enabled=Boolean(openrouter.apiKey)}const ollama=result.ai.providers.find(provider=>provider.id==='ollama');if(ollama&&env.OLLAMA_URL)ollama.baseUrl=env.OLLAMA_URL.replace(/\/$/,'');return result;}
+/**
+ * Cleans a pasted API token so it can go into an Authorization header.
+ *
+ * Two real-world paste mistakes produced Basalam's
+ * `401 {"message":"invalid authorization header"}`:
+ *  - copying the whole header value, i.e. "Bearer eyJ..." — we then sent
+ *    "Authorization: Bearer Bearer eyJ..." with two schemes;
+ *  - invisible characters (ZWNJ/RTL marks from a Persian keyboard, non-breaking
+ *    spaces, smart quotes) which are not valid ByteString header characters and
+ *    make fetch throw or the server reject the header outright.
+ * Anything left outside printable ASCII is dropped rather than silently failing.
+ */
+export function sanitizeToken(value:unknown):string{
+  let token=typeof value==='string'?value:'';
+  if(!token)return '';
+  // Strip zero-width/bidi marks and normalise exotic spaces and quotes.
+  token=token.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g,'')
+             .replace(/[\u00a0\u2000-\u200a\u3000]/g,' ')
+             .replace(/[\u2018\u2019\u201c\u201d]/g,'')
+             .trim();
+  // Drop a pasted scheme prefix ("Bearer x", "Token x", "Authorization: Bearer x").
+  token=token.replace(/^authorization\s*:\s*/i,'').trim();
+  token=token.replace(/^(?:bearer|token)\s+/i,'').trim();
+  // Remove wrapping quotes people copy from JSON/env files.
+  if(token.length>1&&((token.startsWith('"')&&token.endsWith('"'))||(token.startsWith("'")&&token.endsWith("'"))))
+    token=token.slice(1,-1).trim();
+  // Whatever remains must be header-safe; strip control and non-ASCII bytes.
+  return token.replace(/[^\x21-\x7e]/g,'');
+}
+export function mergeConnections(base:ConnectionVault,input:any):ConnectionVault{
+  const text=(value:unknown,fallback='')=>typeof value==='string'?value.trim():fallback,num=(value:unknown,fallback=0)=>value!==undefined&&Number.isFinite(Number(value))?Number(value):fallback,bool=(value:unknown,fallback=false)=>typeof value==='boolean'?value:fallback;
+  const shops=Array.isArray(input?.basalam?.shops)?input.basalam.shops.map((shop:any)=>({name:text(shop?.name),token:sanitizeToken(text(shop?.token)),vendorId:text(shop?.vendorId),pricePercent:num(shop?.pricePercent)})):base.basalam.shops;
+  const providerInput=Array.isArray(input?.ai?.providers)?input.ai.providers:(input?.ai&&typeof input.ai==='object'?Object.values(input.ai).filter((value:any)=>value&&typeof value==='object'&&(value.id||value.vendor||value.url||value.baseUrl||Array.isArray(value.models))):null);
+  const providers=Array.isArray(providerInput)?providerInput.map((p:any,i:number)=>{const models=Array.isArray(p?.models)?p.models.map((model:any)=>typeof model==='string'?model:String(model?.id||model?.name||'')).filter(Boolean):[],modelSet=new Set(models);const rawKeys=Array.isArray(p?.apiKeys)?p.apiKeys:(p?.apiKey?[p.apiKey]:p?.api_key?[p.api_key]:[]);const keys=rawKeys.filter((k:any)=>k&&(typeof k==='string'?String(k).trim():String(k?.token||'').trim()));const apiKey=typeof keys[0]==='string'?keys[0]:keys[0]?.token||text(p?.apiKey||p?.api_key);const baseUrl=text(p?.baseUrl||p?.base_url||p?.url).replace(/\/$/,'');const cf={...(p?.accountId||p?.cfToken?{accountId:text(p?.accountId),cfToken:text(p?.cfToken)}:{})};return{id:text(p?.id)||`provider-${i+1}`,name:text(p?.name)||text(p?.id)||`Provider ${i+1}`,baseUrl,apiKey,apiKeys:keys.length?keys:(apiKey?[apiKey]:[]),...cf,models,reasoningModels:Array.isArray(p?.reasoningModels)?p.reasoningModels.map(String).filter((model:string)=>modelSet.has(model)):[],nonChatModels:Array.isArray(p?.nonChatModels)?p.nonChatModels.map(String).filter((model:string)=>modelSet.has(model)):[],...(p?.vendor?{vendor:text(p.vendor)}:{}),enabled:p?.enabled!==false}}):base.ai.providers;
+  const network={...base.ai.network,...(input?.ai?.network||{})};return{
+    woo:{url:text(input?.woo?.url,base.woo.url).replace(/\/$/,''),key:text(input?.woo?.key,base.woo.key),secret:text(input?.woo?.secret,base.woo.secret),categoryId:num(input?.woo?.categoryId,base.woo.categoryId),pricePercent:num(input?.woo?.pricePercent,base.woo.pricePercent),network:{mode:['auto','direct','worker'].includes(text(input?.woo?.network?.mode,base.woo.network.mode))?text(input?.woo?.network?.mode,base.woo.network.mode) as 'auto'|'direct'|'worker':'auto',workerUrl:text(input?.woo?.network?.workerUrl,base.woo.network.workerUrl).replace(/\/$/,'')}},
+    basalam:{token:sanitizeToken(text(input?.basalam?.token,base.basalam.token)),vendorId:text(input?.basalam?.vendorId,base.basalam.vendorId),api:text(input?.basalam?.api,base.basalam.api).replace(/\/$/,'')||'https://openapi.basalam.com/v1',pricePercent:num(input?.basalam?.pricePercent,base.basalam.pricePercent),preparationDays:num(input?.basalam?.preparationDays,base.basalam.preparationDays),weight:num(input?.basalam?.weight,base.basalam.weight),packageWeight:num(input?.basalam?.packageWeight,base.basalam.packageWeight),stock:num(input?.basalam?.stock,base.basalam.stock),categoryId:num(input?.basalam?.categoryId,base.basalam.categoryId),fallbackCategoryIds:Array.isArray(input?.basalam?.fallbackCategoryIds)?input.basalam.fallbackCategoryIds.map(Number).filter((id:number)=>id>0):base.basalam.fallbackCategoryIds,autoCategory:bool(input?.basalam?.autoCategory,base.basalam.autoCategory),netIndirect:bool(input?.basalam?.netIndirect,base.basalam.netIndirect),shops},
+    ai:{catalogVersion:num(input?.ai?.catalogVersion,base.ai.catalogVersion),baseUrl:text(input?.ai?.baseUrl,base.ai.baseUrl).replace(/\/$/,''),apiKey:text(input?.ai?.apiKey,base.ai.apiKey),model:text(input?.ai?.model,base.ai.model),providers,candidates:Array.isArray(input?.ai?.candidates)?input.ai.candidates.map(String):base.ai.candidates,master:text(input?.ai?.master,base.ai.master),network:{mode:text(network.mode,'direct'),proxyUrl:text(network.proxyUrl),workerUrl:text(network.workerUrl),dohUrl:text(network.dohUrl,'https://cloudflare-dns.com/dns-query'),resolveIp:text(network.resolveIp)}},
+    notifications:{url:text(input?.notifications?.url,base.notifications.url),token:text(input?.notifications?.token,base.notifications.token),chatId:text(input?.notifications?.chatId,base.notifications.chatId),baleToken:text(input?.notifications?.baleToken,base.notifications.baleToken),baleChatId:text(input?.notifications?.baleChatId,base.notifications.baleChatId),rubikaToken:text(input?.notifications?.rubikaToken,base.notifications.rubikaToken),rubikaChatId:text(input?.notifications?.rubikaChatId,base.notifications.rubikaChatId)}
+  };
+}
