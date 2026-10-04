@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.187';
+const APP_VERSION = '10.188';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -13967,10 +13967,13 @@ function fetch_html_for_engine(string $url, int $timeout, string $engine, array 
     $lastAttempt = 0;
     for ($i = 1; $i <= $attempts; $i++) {
         $lastAttempt = $i;
+        $_qid = (string)($GLOBALS['_extractLockQueueId'] ?? '');
+        if ($_qid !== '' && function_exists('extractLockTouch')) extractLockTouch($_qid);
         if (function_exists('s4WorkerHeartbeatFromProgress')) {
             s4WorkerHeartbeatFromProgress('', ['phase' => 'render', 'render_engine' => $engine]);
         }
         $r = fetch_html_render($url, $rc, $opts);
+        if ($_qid !== '' && function_exists('extractLockTouch')) extractLockTouch($_qid);
         if (!empty($r['ok'])) {
             $r['forced_render_engine'] = $engine;
             $r['render_attempts'] = $i;
@@ -15313,6 +15316,12 @@ if(!empty($p['running'])&&empty($p['done'])){
         $_pLkAt=(int)($_pLk['at']??0);
         if($_pLkAt>$_pTs)$_pTs=$_pLkAt;
     }
+    if(function_exists('s4WorkerExtractBeatForRow')){
+        $_pW=s4WorkerExtractBeatForRow((string)($p['queue_id']??''),(string)($p['profile_key']??''));
+        $_pWAt=(int)($_pW['beat']??0);
+        if($_pWAt>$_pTs)$_pTs=$_pWAt;
+        if($_pWAt>0)$p['worker_alive']=true;
+    }
     $_pIdle=$_pTs>0?(time()-$_pTs):PHP_INT_MAX;
     $_pMax=max(120,(int)(loadConnections()['stall_after']??300));
     if($_pIdle>$_pMax){
@@ -15356,6 +15365,15 @@ if(!empty($p['running'])&&empty($p['done'])){
         }
         unset($_qe);
         if($_qd)extractWriteQueue($_q);
+    }
+}
+if((!empty($p['done']) || !empty($p['ran_out']) || !empty($p['resume_needed']))
+    && !empty($p['resume_needed']) && function_exists('s4WorkerExtractBeatForRow')){
+    $_pW=s4WorkerExtractBeatForRow((string)($p['queue_id']??''),(string)($p['profile_key']??''));
+    if((int)($_pW['beat']??0)>0){
+        $p['running']=true;$p['done']=false;$p['worker_continuing']=true;$p['worker_alive']=true;
+        $p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
+            ['🧵 worker زنده است و همین استخراج را از checkpoint ادامه می‌دهد…']),-40);
     }
 }
 echo json_encode($p,JSON_UNESCAPED_UNICODE);exit;
@@ -16062,8 +16080,18 @@ foreach ($_wantKeys as $_wk) {
 }
 if (!($_galDoneNow && !$_fieldMissingNow)) {
     $_inlineDetailDone++;
-    msAlive('جزئیات: ' . mb_substr((string)($p['title'] ?? $key), 0, 45));   /* v10.61 (۷۵) */
+    $_inlineTitle = mb_substr((string)($p['title'] ?? $key), 0, 45);
+    msAlive('جزئیات: ' . $_inlineTitle);   /* v10.61 (۷۵) */
+    extractLockTouch($queueId);
+    if ($_inlineDetailDone === 1 || $_inlineDetailDone % 3 === 0) {
+        $_inlineLogs = array_slice(array_merge($logs, ['🔍 جزئیات درجای صفحه '.$page.' — محصول '.$_inlineDetailDone.': '.$_inlineTitle]), -12);
+        writeProgress(EXTRACT_PROGRESS_FILE, array_merge(['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$page,
+            'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_inlineLogs,
+            'total_log_count'=>$page+$_inlineDetailDone,'extracted'=>count($allProducts),'phase'=>'list_detail',
+            'page'=>$page,'inline_detail_current'=>$_inlineDetailDone], extractLiveCompare($allProducts,$livePrevMap)));
+    }
     extractProductDetailInline($allProducts, $key, $detailSelectors, $galleryCfg, false);
+    extractLockTouch($queueId);
     extractCheckpoint($pkFinal, $allProducts,
         ['_extract_stage' => 'detail', '_extract_stage_at' => time(),
          '_extract_detail_done' => $_inlineDetailDone, '_extract_detail_total' => 0]);
@@ -35798,6 +35826,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.187', 'ورودیِ 10.187 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "187'") !== false
       && version_compare(APP_VERSION, '10.' . '187', '>='));
+
+    /* ---------- v10.188: جلوگیری از توقف UI/poll هنگام ادامهٔ خودکار ---------- */
+    $add('10.188', 'poll_extract وقتی worker همان استخراج را ادامه می‌دهد done کاذب نمی‌دهد',
+         strpos($selfSrc, 'worker_' . 'continuing') !== false
+      && strpos($selfSrc, "s4WorkerExtractBeatFor" . "Row((string)(\$p['queue_" . "id']") !== false);
+    $add('10.188', 'جزئیات درجای فهرست حین هر چند محصول progress و lock را تازه می‌کند',
+         strpos($selfSrc, 'inline_detail_' . 'current') !== false
+      && strpos($selfSrc, 'جزئیات درجای صفحه') !== false);
+    $add('10.188', 'render اجباری قبل و بعد از فراخوانی سرویس lock را touch می‌کند',
+         substr_count($selfSrc, "extractLock" . "Touch(\$_qid)") >= 2);
+    $add('10.188', 'فرانت‌اند روی worker_continuing polling را قطع نمی‌کند',
+         strpos($selfSrc, 'const done=!!d.done && !d.worker_' . 'continuing;') !== false);
+    $add('10.188', 'ورودیِ 10.188 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "188'") !== false
+      && version_compare(APP_VERSION, '10.' . '188', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65455,7 +65498,7 @@ function pollExtractProgress(){
         if(!d)return;
         renderLiveCounters(d);   // v8.22
         const running=d.running||false;
-        const done=d.done||false;
+        const done=!!d.done && !d.worker_continuing;
         const cancelled=d.cancelled||false;
         const extracted=d.extracted||0;
         const logs=d.recent_log||[];
@@ -65965,6 +66008,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.188', t:'🧵 ادامهٔ واقعی استخراج طولانی بدون توقف UI', items:[
+    'poll_extract حالا اگر worker دائمی همان استخراج را از checkpoint ادامه می‌دهد، پاسخ را running نگه می‌دارد و فرانت‌اند polling را قطع نمی‌کند',
+    'جزئیات درجای محصولات داخل هر صفحه، قبل/بعد از باز کردن صفحهٔ محصول lock را تازه می‌کند و هر چند محصول progress زنده می‌نویسد؛ بنابراین یک صفحهٔ بزرگ با جزئیات زیاد دیگر چند دقیقه بی‌حرکت دیده نمی‌شود',
+    'در رندر اجباری Playwright/Selenium، قبل و بعد از فراخوانی سرویس رندر lock استخراج touch می‌شود تا timeout/fallback مرورگر باعث stuck کاذب نشود',
+  ]},
   {v:'10.187', t:'🛡 جلوگیری از stuck کاذب در استخراج‌های خیلی طولانی', items:[
     'صف استخراج حالا اگر worker دائمی با PID زنده همان ردیف/پروفایل را اجرا می‌کند، آن را گیرکرده حساب نمی‌کند؛ حتی اگر progress در یک render/fetch طولانی چند دقیقه نوشته نشده باشد',
     'heartbeatهای progress علاوه بر worker_state، metadata قفل استخراج را هم touch می‌کنند تا نگهبان و UI روی قفل کهنه تصمیم اشتباه نگیرند',
