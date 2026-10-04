@@ -3,7 +3,7 @@
  * dashboard security headers allow script-src 'self' only — inline shop scripts would be blocked
  * exactly like the visual picker was.
  */
-import { PAYMENT_PLUGINS, type PaymentPlugin, type PaymentSettings } from './payments.js';
+import { PAYMENT_PLUGINS, type PaymentSettings } from './payments.js';
 import { fa, money, type Order, type OrderTotals, type ShopSettings, type ShowcaseItem } from './shop-core.js';
 
 export const SHOP_SCRIPT_PATH = '/shop.js';
@@ -117,19 +117,27 @@ export function catalogueHtml(input: {
   return layout(settings, 'ویترین', body);
 }
 
-export function checkoutHtml(input: { settings: ShopSettings; gateways: PaymentPlugin[] }): string {
+export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ id: string; title: string; description: string }>; source?: 'wordpress' | 'builtin'; error?: string }): string {
   const { settings, gateways } = input;
+  const emptyText = input.error
+    ? escapeHtml(input.error)
+    : input.source === 'wordpress'
+      ? 'در ووکامرس هیچ درگاه پرداختی فعال نیست. افزونهٔ درگاه (زرین‌پال، ترب‌پی، دیجی‌پی، کارت به کارت …) را در وردپرس نصب و فعال کنید.'
+      : 'هیچ روش پرداختی فعال نیست. از پنل مدیریت فروشگاه یکی از افزونه‌ها را فعال کنید.';
   const pays = gateways.length ? gateways.map(plugin => `<label class="pay">
-  <input type="radio" name="gateway" value="${plugin.id}"${plugin.id === gateways[0].id ? ' checked' : ''}>
+  <input type="radio" name="gateway" value="${escapeHtml(plugin.id)}"${plugin.id === gateways[0].id ? ' checked' : ''}>
   <span><b>${escapeHtml(plugin.title)}</b><small>${escapeHtml(plugin.description)}</small></span></label>`).join('')
-    : '<div class="empty">هیچ روش پرداختی فعال نیست. از پنل مدیریت فروشگاه یکی از افزونه‌ها را فعال کنید.</div>';
+    : `<div class="empty">${emptyText}</div>`;
+  const sourceNote = input.source === 'wordpress'
+    ? '<p class="note">پرداخت توسط <b>افزونه‌های درگاه وردپرس/ووکامرس</b> انجام می‌شود؛ سفارش در ووکامرس ساخته می‌شود و پس از پرداخت، وضعیت همان سفارش ملاک است.</p>'
+    : '<p class="note">اتصال ووکامرس تنظیم نشده است؛ درگاه‌های داخلی برنامه استفاده می‌شوند.</p>';
   const body = `<div class="panel"><h2>🧺 سبد خرید</h2><div id="cartBox"><div class="empty">در حال بارگذاری…</div></div></div>
 <div class="panel"><h2>🚚 اطلاعات گیرنده</h2>
   <div class="field"><label>نام و نام خانوادگی</label><input id="cname" autocomplete="name"></div>
   <div class="field"><label>شمارهٔ موبایل</label><input id="cphone" inputmode="numeric" placeholder="۰۹…" autocomplete="tel"></div>
   <div class="field"><label>نشانی کامل تحویل</label><textarea id="caddress" rows="3"></textarea></div>
   <div class="field"><label>توضیح سفارش (اختیاری)</label><input id="cnote"></div></div>
-<div class="panel"><h2>💳 روش پرداخت</h2><div class="pay-list">${pays}</div>
+<div class="panel"><h2>💳 روش پرداخت</h2>${sourceNote}<div class="pay-list">${pays}</div>
   <p class="note">${settings.shippingCost ? 'هزینهٔ ارسال: ' + money(settings.shippingCost) + ' ' + escapeHtml(settings.currency) + (settings.freeShippingFrom ? ' — رایگان از ' + money(settings.freeShippingFrom) + ' به بالا' : '') : 'ارسال رایگان'}${settings.taxPercent ? ' · مالیات ' + fa(settings.taxPercent) + '٪' : ''}</p>
   <button class="btn primary" id="placeOrder" style="width:100%">ثبت سفارش و پرداخت</button>
   <div id="payResult" class="note"></div></div>`;
@@ -175,6 +183,10 @@ export function shopAdminHtml(input: { settings: ShopSettings; payments: Payment
   <div class="field"><label>نام فروشگاه</label><input data-shop="name" value="${escapeHtml(settings.name)}"></div>
   <div class="field"><label>شعار</label><input data-shop="tagline" value="${escapeHtml(settings.tagline)}"></div>
   <div class="field"><label>پوشهٔ پنل اسکریپر (ریشه همیشه متعلق به فروشگاه است)</label><input data-shop="scraperPath" value="${escapeHtml(settings.scraperPath)}"></div>
+  <div class="field"><label>منبع درگاه‌های پرداخت</label><select data-shop="gatewaySource">
+    <option value="wordpress"${settings.gatewaySource === 'wordpress' ? ' selected' : ''}>افزونه‌های وردپرس/ووکامرس (پیشنهادی)</option>
+    <option value="builtin"${settings.gatewaySource === 'builtin' ? ' selected' : ''}>درگاه‌های داخلی این برنامه</option></select>
+  <span class="note">با گزینهٔ وردپرس، هر درگاهی که در ووکامرس فعال باشد (زرین‌پال، ترب‌پی، دیجی‌پی، کارت به کارت و …) خودکار در تسویه حساب نمایش داده می‌شود و کلیدهای درگاه در وردپرس می‌مانند.</span></div>
   <div class="field"><label>واحد پول</label><select data-shop="currency"><option${settings.currency === 'تومان' ? ' selected' : ''}>تومان</option><option${settings.currency === 'ریال' ? ' selected' : ''}>ریال</option></select></div>
   <div class="field"><label>هزینهٔ ارسال</label><input data-shop="shippingCost" type="number" value="${settings.shippingCost}"></div>
   <div class="field"><label>ارسال رایگان از مبلغ</label><input data-shop="freeShippingFrom" type="number" value="${settings.freeShippingFrom}"></div>
@@ -182,6 +194,7 @@ export function shopAdminHtml(input: { settings: ShopSettings; payments: Payment
   <div class="field"><label>شمارهٔ کارت (کارت به کارت)</label><input data-shop="card.number" value="${escapeHtml(settings.card.number)}" inputmode="numeric"></div>
   <div class="field"><label>نام صاحب کارت</label><input data-shop="card.holder" value="${escapeHtml(settings.card.holder)}"></div>
   <div class="field"><label>بانک</label><input data-shop="card.bank" value="${escapeHtml(settings.card.bank)}"></div></div>
+  <div class="panel"><h2>🔌 درگاه‌های داخلی (فقط وقتی منبع «داخلی» است)</h2><p class="note">اگر سایت ووکامرس متصل است این بخش را خالی بگذارید؛ پرداخت با افزونه‌های وردپرس انجام می‌شود.</p></div>
   ${gateways}
   <button class="btn primary" id="saveShop" style="width:100%">💾 ذخیرهٔ تنظیمات فروشگاه</button>
   <div id="shopSaveResult" class="note"></div>

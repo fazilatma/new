@@ -13,6 +13,7 @@ import {
   type Fetcher, type PaymentGatewayId, type PaymentSettings
 } from './payments.js';
 import { catalogueHtml, checkoutHtml, orderHtml, shopAdminHtml } from './shop.js';
+import { createWooOrder, listWooGateways, readWooOrder, wooConfigured, type WooClient, type WooConfig, type WooFetch } from './payments-woo.js';
 
 export type ShopDeps = {
   listProfiles: () => Promise<ShopProfile[]>;
@@ -20,7 +21,45 @@ export type ShopDeps = {
   getState: <T>(key: string, fallback: T) => Promise<T>;
   setState: (key: string, value: unknown) => Promise<void>;
   fetchImpl?: Fetcher;
+  /** WooCommerce connection from the dashboard vault; enables the WordPress gateway plugins. */
+  wooConfig?: () => Promise<WooConfig | null>;
+  wooFetch?: WooFetch;
+  /** Woo product id of an already synced product, so orders use real catalogue lines. */
+  destinationId?: (profileId: string, sourceKey: string) => Promise<number | string | null>;
 };
+
+export type GatewayOption = { id: string; title: string; description: string };
+export type GatewayChoices = { source: 'wordpress' | 'builtin'; gateways: GatewayOption[]; error?: string };
+
+async function wooClient(deps: ShopDeps): Promise<WooClient | null> {
+  const config = deps.wooConfig ? await deps.wooConfig() : null;
+  if (!wooConfigured(config)) return null;
+  return { config, fetch: (deps.wooFetch ?? deps.fetchImpl ?? (globalThis.fetch as unknown as WooFetch)) };
+}
+
+/**
+ * Checkout methods. Preferred source is the WordPress site: whatever gateway plugin the owner
+ * activated in WooCommerce is offered here, with its own Persian title and description.
+ * The built-in adapters are only a fallback for installs with no Woo connection.
+ */
+export async function gatewayChoices(deps: ShopDeps, settings: ShopSettings, payments: PaymentSettings): Promise<GatewayChoices> {
+  if (settings.gatewaySource === 'wordpress') {
+    const client = await wooClient(deps);
+    if (client) {
+      try {
+        const gateways = await listWooGateways(client);
+        if (gateways.length) return { source: 'wordpress', gateways };
+        return { source: 'wordpress', gateways: [], error: 'در ووکامرس هیچ درگاه پرداختی فعال نیست. افزونهٔ درگاه را در وردپرس فعال کنید.' };
+      } catch (error) {
+        return { source: 'wordpress', gateways: [], error: `دریافت درگاه‌های وردپرس ناموفق بود: ${(error as Error)?.message || error}` };
+      }
+    }
+  }
+  return {
+    source: 'builtin',
+    gateways: availableGateways(payments, settings.card.number).map(plugin => ({ id: plugin.id, title: plugin.title, description: plugin.description }))
+  };
+}
 
 export const PER_PAGE = 24;
 
@@ -62,7 +101,8 @@ export async function cataloguePage(deps: ShopDeps, query: { q?: string; profile
 
 export async function checkoutPage(deps: ShopDeps): Promise<string> {
   const { settings, payments } = await loadShopConfig(deps);
-  return checkoutHtml({ settings, gateways: availableGateways(payments, settings.card.number) });
+  const choices = await gatewayChoices(deps, settings, payments);
+  return checkoutHtml({ settings, gateways: choices.gateways, source: choices.source, error: choices.error });
 }
 
 export async function adminPage(deps: ShopDeps): Promise<string> {
@@ -102,10 +142,11 @@ export type PlaceResult = { ok: boolean; status: number; orderId?: string; redir
 export async function placeOrder(deps: ShopDeps, body: any, origin: string): Promise<PlaceResult> {
   const { settings, payments } = await loadShopConfig(deps);
   if (!settings.enabled) return { ok: false, status: 503, error: 'فروشگاه غیرفعال است.' };
-  const gateway = String(body?.gateway || '');
-  if (!isPaymentGateway(gateway)) return { ok: false, status: 400, error: 'روش پرداخت نامعتبر است.' };
-  if (!availableGateways(payments, settings.card.number).some(plugin => plugin.id === gateway))
-    return { ok: false, status: 400, error: 'این روش پرداخت فعال یا کامل تنظیم نشده است.' };
+  const gateway = String(body?.gateway || '').slice(0, 60);
+  const choices = await gatewayChoices(deps, settings, payments);
+  const chosen = choices.gateways.find(option => option.id === gateway);
+  if (!chosen) return { ok: false, status: 400, error: choices.error || 'این روش پرداخت فعال یا کامل تنظیم نشده است.' };
+  if (choices.source === 'builtin' && !isPaymentGateway(gateway)) return { ok: false, status: 400, error: 'روش پرداخت نامعتبر است.' };
   const customer = normalizeCustomer(body?.customer);
   const problem = customerProblem(customer);
   if (problem) return { ok: false, status: 400, error: problem };
@@ -136,8 +177,32 @@ export async function placeOrder(deps: ShopDeps, body: any, origin: string): Pro
     currency: settings.currency, payment: {}
   };
 
+  order.payment.source = choices.source;
+  order.payment.gatewayTitle = chosen.title;
+
+  if (choices.source === 'wordpress') {
+    // The WordPress plugin does the payment: create the Woo order and hand the customer over.
+    const client = await wooClient(deps);
+    if (!client) return { ok: false, status: 503, error: 'اتصال ووکامرس تنظیم نشده است.' };
+    const created = await createWooOrder(client, order, {
+      gatewayTitle: chosen.title,
+      productIdFor: line => (deps.destinationId ? deps.destinationId(line.profileId, line.sourceKey) : Promise.resolve(null))
+    });
+    if (!created.ok) {
+      order.status = 'failed';
+      order.payment.error = created.error;
+      await saveOrder(deps, order);
+      return { ok: false, status: 502, orderId: order.id, error: created.error };
+    }
+    order.payment.wooOrderId = created.wooOrderId;
+    order.payment.payUrl = created.payUrl;
+    order.status = 'pending';
+    await saveOrder(deps, order);
+    return { ok: true, status: 200, orderId: order.id, redirect: created.payUrl };
+  }
+
   const callbackUrl = `${origin.replace(/\/+$/, '')}/api/shop/callback/${gateway}?order=${order.id}`;
-  const started = await startPayment(gateway, { order, settings: payments, callbackUrl, card: settings.card, fetchImpl: deps.fetchImpl });
+  const started = await startPayment(gateway as PaymentGatewayId, { order, settings: payments, callbackUrl, card: settings.card, fetchImpl: deps.fetchImpl });
   if (!started.ok) {
     order.status = 'failed';
     order.payment.error = started.error;
@@ -176,10 +241,28 @@ export async function submitReceipt(deps: ShopDeps, body: any): Promise<{ ok: bo
   return { ok: true, status: 200 };
 }
 
+/** WooCommerce owns "paid": re-read the Woo order whenever the customer looks at the page. */
+export async function refreshWooOrder(deps: ShopDeps, order: Order): Promise<Order> {
+  if (order.payment.source !== 'wordpress' || !order.payment.wooOrderId) return order;
+  const client = await wooClient(deps);
+  if (!client) return order;
+  const status = await readWooOrder(client, order.payment.wooOrderId);
+  if (!status.ok) return order;
+  const next: OrderStatus = status.paid ? 'paid' : status.status === 'cancelled' ? 'canceled' : status.status === 'failed' ? 'failed' : 'pending';
+  const changed = order.status !== next || order.payment.wooStatus !== status.status;
+  order.payment.wooStatus = status.status;
+  if (status.reference) order.payment.reference = status.reference;
+  if (status.paid && !order.payment.paidAt) order.payment.paidAt = new Date().toISOString();
+  order.status = next;
+  if (changed) await saveOrder(deps, order);
+  return order;
+}
+
 export async function orderPage(deps: ShopDeps, id: string): Promise<{ status: number; html?: string }> {
   const { settings } = await loadShopConfig(deps);
-  const order = await getOrder(deps, id);
+  let order = await getOrder(deps, id);
   if (!order) return { status: 404 };
+  order = await refreshWooOrder(deps, order);
   const card = settings.card;
   const instructions = order.gateway === 'card' && card.number
     ? `مبلغ ${money(order.total)} ${settings.currency} را به کارت ${card.number.replace(/(\d{4})(?=\d)/g, '$1-')}${card.holder ? ` به نام ${card.holder}` : ''} واریز کنید.`

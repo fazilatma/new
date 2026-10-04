@@ -41,7 +41,22 @@ const deps = {
   allProducts: async id => JSON.parse(JSON.stringify(byProfile[id] || [])),
   getState: async (key, fallback) => (state.has(key) ? state.get(key) : fallback),
   setState: async (key, value) => void state.set(key, value),
-  fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ data: { authority: 'DEMO-AUTHORITY' } }), text: async () => '' })
+  // Pretend a WordPress site with the usual Iranian gateway plugins is connected.
+  wooConfig: async () => ({ url: 'https://wp.example', key: 'ck_demo', secret: 'cs_demo' }),
+  destinationId: async () => null,
+  wooFetch: async (url, init) => {
+    const body = url.includes('payment_gateways')
+      ? [{ id: 'zarinpal', title: 'درگاه پرداخت زرین‌پال', description: 'پرداخت امن با همهٔ کارت‌های شتاب', enabled: true, order: 0 },
+         { id: 'torobpay', title: 'ترب‌پی — خرید اعتباری', description: 'پرداخت در چند قسط', enabled: true, order: 1 },
+         { id: 'digipay', title: 'دیجی‌پی', description: 'کیف پول و اعتبار دیجی‌پی', enabled: true, order: 2 },
+         { id: 'wc_card_to_card', title: 'کارت به کارت', description: 'واریز به کارت فروشگاه و ثبت کد پیگیری', enabled: true, order: 3 },
+         { id: 'cheque', title: 'چک', description: '', enabled: false, order: 4 }]
+      : /orders\/\d+$/.test(url.split('?')[0])
+        ? { id: 9001, status: 'processing', transaction_id: 'DEMO-TRX' }
+        : { id: 9001, payment_url: 'https://wp.example/checkout/order-pay/9001/?pay_for_order=true' };
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  },
+  fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' })
 };
 
 const send = (res, status, body, type = 'text/html; charset=utf-8') => { res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' }); res.end(body); };

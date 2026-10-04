@@ -47,6 +47,12 @@ export type ShopSettings = {
   tagline: string;
   /** Folder the scraper dashboard is mounted under; the shop always owns "/". */
   scraperPath: string;
+  /**
+   * 'wordpress' = checkout is handed to the connected WooCommerce site, so the gateway PLUGINS
+   * installed in WordPress (زرین‌پال، ترب‌پی، دیجی‌پی، کارت به کارت، …) do the payment.
+   * 'builtin' = the direct gateway adapters in payments.ts (used when no Woo site is connected).
+   */
+  gatewaySource: 'wordpress' | 'builtin';
   currency: 'تومان' | 'ریال';
   shippingCost: number;
   freeShippingFrom: number;
@@ -62,6 +68,7 @@ export const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   name: 'ویترین فروشگاه',
   tagline: 'محصولات به‌روز، با قیمت‌گذاری خودکار هر پروفایل',
   scraperPath: 'scraper',
+  gatewaySource: 'wordpress',
   currency: 'تومان',
   shippingCost: 0,
   freeShippingFrom: 0,
@@ -80,6 +87,7 @@ export function normalizeShopSettings(raw: unknown): ShopSettings {
     name: String(input.name ?? DEFAULT_SHOP_SETTINGS.name).slice(0, 120) || DEFAULT_SHOP_SETTINGS.name,
     tagline: String(input.tagline ?? DEFAULT_SHOP_SETTINGS.tagline).slice(0, 200),
     scraperPath: normalizeScraperPath(input.scraperPath),
+    gatewaySource: input.gatewaySource === 'builtin' ? 'builtin' : 'wordpress',
     currency: input.currency === 'ریال' ? 'ریال' : 'تومان',
     shippingCost: positive(input.shippingCost),
     freeShippingFrom: positive(input.freeShippingFrom),
@@ -207,7 +215,11 @@ export type Order = {
   customer: OrderCustomer;
   lines: Array<{ id: string; profileId: string; profileName: string; sourceKey: string; title: string; qty: number; basePrice: number; price: number; adjustment: Adjustment }>;
   subtotal: number; shipping: number; tax: number; total: number; currency: string;
-  payment: { authority?: string; reference?: string; ticket?: string; trackingCode?: string; paidAt?: string; error?: string };
+  payment: {
+    authority?: string; reference?: string; ticket?: string; trackingCode?: string; paidAt?: string; error?: string;
+    /** WordPress/WooCommerce delegation: the Woo order is the source of truth for "paid". */
+    source?: 'wordpress' | 'builtin'; wooOrderId?: number; payUrl?: string; wooStatus?: string; gatewayTitle?: string;
+  };
 };
 
 export function orderNumber(id: string): string {

@@ -23,7 +23,7 @@ import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, 
 import { automationTick as rawautomationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { DASHBOARD, DASHBOARD_JS } from './dashboard.js';
-import { flushD1Usage, getD1Usage, allProducts, listStalestProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
+import { getDestinationId, flushD1Usage, getD1Usage, allProducts, listStalestProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { configureEnv, type Env } from './env.js';
 import { bulkEdit, destinationBulkEdit, destinationCatalog, destinationCategories, destinationChangeStatus, destinationDelete, destinationOverview, destinationProduct, destinationUpdate, findDestinationDuplicates, photoFix, rebuildMap, recon, reconAccounts, reconTable, reconTableLive, retire, unifiedRecon, unifiedReconLive, unifiedReconApply, destinationDuplicates } from './maintenance.js';
 import { safeFetch, safeText, safeWooFetch } from './network.js';
@@ -53,13 +53,19 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.314.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.315.0+',time:new Date().toISOString()}));
 
 // --- Storefront layer -------------------------------------------------------
 // The shop owns "/" and the scraper dashboard moves into a folder (default "/scraper",
 // configurable in the shop settings). Every /api/* route keeps its address so the
 // dashboard, the deployer and the PHP host console contract stay untouched.
-const shopDeps=():ShopDeps=>({listProfiles:listProfiles as any,allProducts:allProducts as any,getState,setState});
+const shopDeps=():ShopDeps=>({
+  listProfiles:listProfiles as any,allProducts:allProducts as any,getState,setState,
+  // WordPress/WooCommerce gateways: the payment itself is done by the plugins installed there.
+  wooConfig:async()=>{const {woo}=await loadConnections();return woo?.url&&woo?.key&&woo?.secret?{url:woo.url,key:woo.key,secret:woo.secret}:null},
+  wooFetch:(url,init)=>safeWooFetch(url,init,3_000_000) as any,
+  destinationId:(profileId,sourceKey)=>getDestinationId(profileId,sourceKey,'woo')
+});
 const dashboardResponse=async(c:any)=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})};
 app.use('*',async(c,next)=>{
   if(c.req.method!=='GET'||!c.env.DB)return next();
@@ -212,14 +218,14 @@ app.get('/api/visual-diagnostics', async c => {
     const fetched=await sourceText(url,false,5_000_000);
     source={ok:true,url:fetched.url,contentType:fetched.contentType||'',bytes:fetched.text.length,title:(fetched.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').slice(0,200)};
   }catch(e){source={ok:false,error:e instanceof Error?e.message:String(e)}}
-  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.314.0+'},502);
+  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.315.0+'},502);
   try{
     const ticket=await createVisualTicket(url,false);
     const response=await renderVisualSelector(ticket,context,full);
     const html=await response.text();
     const pickerState={toolbar:html.includes('id="__s4bar"'),pauseButton:html.includes('id="__s4pause"'),saveButton:html.includes('id="__s4save"'),pickerScript:html.includes('scraper4-picker-ready'),errorReporter:html.includes('scraper4-picker-error'),activeInit:/setPicking\\(true\\)/.test(html),csp:response.headers.get('content-security-policy')||'',htmlBytes:html.length};
-    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.314.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
-  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.314.0+'},502)}
+    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.315.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
+  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.315.0+'},502)}
 });
 app.get('/api/emalls-check', async c => {
   const url = c.req.query('url') || 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
@@ -248,7 +254,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.314.0+'),listActiveJobs(),listLiveActivities()
+    Promise.resolve(c.env.WORKER_VERSION||'1.315.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=allActive.sort((a,b)=>{
@@ -283,11 +289,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.314.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.315.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.314.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.315.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});

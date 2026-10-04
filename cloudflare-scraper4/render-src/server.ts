@@ -17,7 +17,7 @@ import { maintenanceResponse } from '../worker-src/maintenance-response.js';
 import { saveConnectionsAndReprice, drainWooReprice } from '../worker-src/woo-reprice.js';
 import { mergeConnections } from './vault.js';
 import { activityMiddleware, monitored } from '../worker-src/activity-monitor.js';
-import { listActiveJobs, listLiveActivities, deleteState } from './db.js';
+import { listActiveJobs, listLiveActivities, deleteState, getDestinationId } from './db.js';
 import { saveBenchmarkProfile } from './db.js';
 import { applyStoredResultSettings } from './db.js';
 import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
@@ -61,7 +61,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.314.0+'; } catch { return process.env.npm_package_version || '1.314.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.315.0+'; } catch { return process.env.npm_package_version || '1.315.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -402,7 +402,13 @@ app.get('/health', c => c.json({
 }));
 // --- Storefront layer (twin of worker-src/app.ts) ---------------------------
 // Shop on "/", scraper dashboard in a folder (default "/scraper"), /api/* unchanged.
-const shopDeps=():ShopDeps=>({listProfiles:listProfiles as any,allProducts:allProducts as any,getState,setState,fetchImpl:fetch as any});
+const shopDeps=():ShopDeps=>({
+  listProfiles:listProfiles as any,allProducts:allProducts as any,getState,setState,fetchImpl:fetch as any,
+  // Twin of worker-src/app.ts: checkout is delegated to the WordPress gateway plugins.
+  wooConfig:async()=>{const {woo}=await loadConnections();return woo?.url&&woo?.key&&woo?.secret?{url:woo.url,key:woo.key,secret:woo.secret}:null},
+  wooFetch:(url,init)=>safeFetch(url,init,3_000_000) as any,
+  destinationId:(profileId,sourceKey)=>getDestinationId(profileId,sourceKey,'woo')
+});
 app.use('*',async(c,next)=>{
   if(c.req.method!=='GET')return next();
   const path=c.req.path.replace(/\/+$/,'')||'/';
