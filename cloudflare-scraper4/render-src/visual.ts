@@ -248,8 +248,21 @@ document.addEventListener('click',function(e){
 },true);
 window.open=function(){return null;};
 try{
-  Object.defineProperty(window,'top',{get:function(){return window;},configurable:false});
-  Object.defineProperty(window,'parent',{get:function(){return window;},configurable:false});
+  var __s4_realParent = window.parent;
+  var __s4_realTop = window.top;
+  window.__s4_realParent = __s4_realParent;
+  window.__s4_realTop = __s4_realTop;
+  // Preserve postMessage ability for picker: keep real parent reference before override
+  try{
+    Object.defineProperty(window,'top',{get:function(){return window;},configurable:false});
+  }catch(e){}
+  try{
+    Object.defineProperty(window,'parent',{get:function(){return window;},configurable:false});
+  }catch(e){}
+  // Ensure our picker can still post to real parent via __s4_realParent
+  if(window.__s4_realParent && window.__s4_realParent!==window){
+    console.log('[S4] Real parent preserved for picker messaging');
+  }
 }catch(e){}
 try{
   window.addEventListener('beforeunload',function(e){e.stopPropagation();e.preventDefault();},true);
@@ -363,7 +376,7 @@ function paint(el){
     selectorText.textContent=val;countText.textContent=cnt.toLocaleString('fa-IR')+' مورد';previewText.textContent=prev||'پیش‌نمایشی پیدا نشد.';fieldText.textContent=fieldLabel(mode)||mode;
   }
   paintGallery(mode);placePop(target,val,cnt,mode);updateProgress();
-  parent.postMessage({type:'scraper4-picker-state',channel:'__S4_CHANNEL__',mode,val,cnt,prev,all:selections,gal:GAL},'*');
+  (window.__s4_realParent||parent).postMessage({type:'scraper4-picker-state',channel:'__S4_CHANNEL__',mode,val,cnt,prev,all:selections,gal:GAL},'*');
 }
 function restoreMode(){
   const mode=modeSelect.value;const stored=selections[mode];fieldText.textContent=fieldLabel(mode)+(mode==='galleryOne'&&GAL.length?' — '+GAL.length+' انتخاب':'');
@@ -387,11 +400,11 @@ function sendOne(){
   const mode=modeSelect.value;if(mode==='galleryOne'){
     if(!GAL.length){previewText.textContent='ابتدا حداقل یک عکس تکی را انتخاب کنید.';return;}
     const sel=GAL.join('\\n');const cnt=countGalImgs(GAL);
-    parent.postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode:'galleryOne',selector:sel,count:cnt,preview:GAL.length+' سلکتور — '+cnt+' عکس یکتا'},'*');
+    (window.__s4_realParent||parent).postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode:'galleryOne',selector:sel,count:cnt,preview:GAL.length+' سلکتور — '+cnt+' عکس یکتا'},'*');
     return;
   }
   const item=selections[mode];if(!item?.selector){previewText.textContent='ابتدا یک عنصر را انتخاب کنید.';return;}
-  parent.postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode,...item},'*');
+  (window.__s4_realParent||parent).postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode,...item},'*');
   const next=fieldNext(1);modeSelect.value=next;restoreMode();
 }
 function move(dir){
@@ -428,9 +441,9 @@ __s4bind('__s4up',()=>move('up'));__s4bind('__s4down',()=>move('down'));__s4bind
 __s4bind('__s4pup',()=>move('up'));__s4bind('__s4pdn',()=>move('down'));__s4bind('__s4pprv',()=>move('prev'));__s4bind('__s4pnxt',()=>move('next'));
 __s4bind('__s4pfprev',()=>fieldStep(-1));__s4bind('__s4pfnext',()=>fieldStep(1));__s4bind('__s4pfld',()=>fieldStep(1));
 __s4bind('__s4save',sendOne);__s4bind('__s4pok',sendOne);
-const done=document.getElementById('__s4done');if(done)__s4bind('__s4done',()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};parent.postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');});
-__s4bind('__s4refresh',()=>parent.postMessage({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*'));
-__s4bind('__s4full',()=>parent.postMessage({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*'));
+const done=document.getElementById('__s4done');if(done)__s4bind('__s4done',()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};(window.__s4_realParent||parent).postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');});
+__s4bind('__s4refresh',()=>(window.__s4_realParent||parent).postMessage({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*'));
+__s4bind('__s4full',()=>(window.__s4_realParent||parent).postMessage({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*'));
 (function(){
   try{
     var prog=document.getElementById('__s4bprog');
@@ -471,12 +484,12 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='ArrowLeft'){e.preventDefault();move('next');}
   else if(e.key===' '||e.key==='Spacebar'){e.preventDefault();fieldStep(1);}
   else if(e.key==='Enter'){e.preventDefault();done?done.click():sendOne();}
-  else if(e.key==='Escape'){e.preventDefault();if(modeSelect.value==='galleryOne'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));}else delete selections[modeSelect.value];if(selected)selected.classList.remove('__s4picked');selected=null;pop?.classList.remove('__s4on');restoreMode();parent.postMessage({type:'scraper4-picker-hint',channel:'__S4_CHANNEL__',msg:'انتخاب پاک شد.'},'*');}
+  else if(e.key==='Escape'){e.preventDefault();if(modeSelect.value==='galleryOne'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));}else delete selections[modeSelect.value];if(selected)selected.classList.remove('__s4picked');selected=null;pop?.classList.remove('__s4on');restoreMode();(window.__s4_realParent||parent).postMessage({type:'scraper4-picker-hint',channel:'__S4_CHANNEL__',msg:'انتخاب پاک شد.'},'*');}
 },true);
 let _rp=null;function repos(){if(!selected)return;clearTimeout(_rp);_rp=setTimeout(()=>{try{placePop(selected,selector(selected),matches(selector(selected)),modeSelect.value);}catch{}},40);}
 window.addEventListener('scroll',repos,true);window.addEventListener('resize',repos);
-window.addEventListener('message',e=>{if(e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
-restoreMode();parent.postMessage({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
+window.addEventListener('message',e=>{if((e.source!==(window.__s4_realParent||parent))&&e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
+restoreMode();(window.__s4_realParent||parent).postMessage({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
 })();</script>`;
 
 function pickerScript(context:'list'|'detail',channel:string){
