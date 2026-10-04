@@ -3080,6 +3080,11 @@ function handle_api() {
             $info['proc_cwd2'] = $procCwd2;
             $svc = proj_service_job($target);
             $info['service_job'] = $svc ? job_status($svc) : null;
+            if ($svc && is_file($svc['log'] ?? '')) {
+                $info['service_log'] = trim(@shell_exec('tail -n 100 '.escapeshellarg($svc['log']).' 2>&1'));
+            } else {
+                $info['service_log'] = 'no log file';
+            }
             $info['public_version'] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/version 2>&1 | head -n 5'));
             $info['feedback'] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/feedback 2>&1 | head -n 20'));
         } else {
