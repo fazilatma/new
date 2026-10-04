@@ -505,7 +505,8 @@ window.addEventListener('click',e=>{
   if(togglePickingFromUi(e))return;
   const t=e.target;
   if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;
-  if(!picking){try{s4SnapshotClick(e);}catch{}return;}
+  // Paused means real page interaction: do not consume source clicks.
+  if(!picking)return;
   e.preventDefault();e.stopPropagation();paint(t);
 },true);
 modeSelect.addEventListener('change',restoreMode);
