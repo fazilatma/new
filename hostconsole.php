@@ -3381,7 +3381,19 @@ function handle_api() {
         if (!$passOk) jout(false, null, 'Invalid password', 403);
         $projects = proj_all();
         $target = null;
-        foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') == '3000') { $target = $pp; break; } }
+        // Find project with existing deploy_path
+        foreach ($projects as $pp) {
+            if (($pp['name'] ?? '') === 'scraper4-cloudflare') {
+                $dp = $pp['deploy_path'] ?? '';
+                if (is_dir($dp) && is_file($dp.'/cloudflare-scraper4/package.json')) { $target = $pp; break; }
+            }
+        }
+        if (!$target) {
+            foreach ($projects as $pp) {
+                if (($pp['name'] ?? '') === 'scraper4-cloudflare' && is_dir($pp['deploy_path'] ?? '')) { $target = $pp; break; }
+            }
+        }
+        if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare' && ($pp['port'] ?? '') == '3000') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
         if (!$target) { foreach ($projects as $pp) { if (stripos($pp['name'] ?? '', 'scraper') !== false) { $target = $pp; break; } } }
         if (!$target) jout(false, null, 'Project not found');
@@ -3389,7 +3401,22 @@ function handle_api() {
         $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
         $out = [];
         $out[] = 'target: '.($target['name']??'').' id='.($target['id']??'').' port='.($target['port']??'').' path='.$dp.' branch='.$branch;
-        if (!is_dir($dp)) { $out[] = 'deploy_path not found: '.$dp; jout(false, ['steps'=>$out], 'deploy_path not found'); }
+        if (!is_dir($dp)) {
+            // Try to find actual path via find
+            $found = trim(@shell_exec('find /home /var/lib -type d -name "cloudflare-scraper4" 2>/dev/null | head -n 5'));
+            $out[] = 'deploy_path not found: '.$dp.' found: '.$found;
+            // Try to use found path's parent
+            $lines = explode("\n", $found);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line && is_dir($line) && is_file($line.'/package.json')) {
+                    $dp = dirname($line);
+                    $out[] = 'Using found path: '.$dp;
+                    break;
+                }
+            }
+            if (!is_dir($dp)) jout(false, ['steps'=>$out], 'deploy_path not found');
+        }
         $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
