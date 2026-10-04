@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Static Universal Deployer</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1120;--panel:#111827;--muted:#94a3b8;--text:#e5e7eb;--accent:#38bdf8;--line:#334155}
+    body{margin:0;background:linear-gradient(160deg,#020617,#111827);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;line-height:1.45}
+    main{max-width:1100px;margin:auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+    section,.card{background:rgba(17,24,39,.88);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 12px 30px #0005}
+    h1,h2{margin:.2rem 0 1rem}label{display:block;margin:.6rem 0 .2rem;color:#cbd5e1}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:#020617;color:var(--text);padding:10px;font:inherit}
+    textarea{min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}button{border:0;border-radius:10px;background:var(--accent);color:#00111a;padding:10px 14px;font-weight:700;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#334155;color:#e2e8f0}.muted{color:var(--muted);font-size:14px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;margin:3px;color:#bae6fd}.warn{border-left:4px solid #f59e0b;padding-left:12px}.ok{border-left:4px solid #22c55e;padding-left:12px}code{background:#020617;border:1px solid var(--line);border-radius:6px;padding:1px 5px}.lib-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px}.lib-card{border:1px solid var(--line);border-radius:14px;background:#07111f;padding:12px}.lib-card h3{margin:0 0 6px;color:#bae6fd}.lib-card small{color:var(--muted);display:block;margin-bottom:7px}.lib-card code{display:inline-block;margin:2px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Static Universal Deployer</h1>
+  <p class="muted">This offline HTML helper generates install commands, shell scripts, and deployment notes for Node.js, Next.js, and Cloudflare Worker projects. It runs entirely in the browser and does not need a server.</p>
+  <section class="warn">
+    <strong>Browser limitation:</strong> a plain HTML page cannot install packages or modify your local project automatically because browsers are sandboxed. It can safely generate downloadable scripts and commands that you run in Termux, VS Code terminal, Cloudflare, Vercel, Render, or a VPS.
+  </section>
+
+  <div class="grid" style="margin-top:16px">
+    <section>
+      <h2>Project</h2>
+      <label>Project name</label><input id="name" value="scraper4-cloudflare">
+      <label>Environment</label><select id="env">
+        <option value="termux-offline">Termux mobile, offline</option>
+        <option value="vscode">VS Code mobile/desktop</option>
+        <option value="cloudflare-worker">Cloudflare Worker</option>
+        <option value="vercel">Vercel</option>
+        <option value="render">Render</option>
+        <option value="vps">VPS server</option>
+      </select>
+      <label>Package manager</label><select id="pm"><option>npm</option><option>pnpm</option><option>yarn</option><option>bun</option></select>
+      <label>Build command</label><input id="build" value="npm run worker:build">
+      <label>Start command</label><input id="start" value="npm start">
+      <label>Port</label><input id="port" value="3000">
+    </section>
+    <section>
+      <h2>Scraping libraries</h2>
+      <label>Library profile</label><select id="profile">
+        <option value="minimal">minimal: edge parsers only</option>
+        <option value="edge">edge: Cloudflare-friendly extraction</option>
+        <option value="node" selected>node: general Node scraping</option>
+        <option value="browser">browser: Playwright/Puppeteer rendering</option>
+        <option value="full">full: all curated scraping libraries</option>
+      </select>
+      <p class="muted">Profiles are curated. Cloudflare Workers cannot run browser engines such as Playwright/Puppeteer. Proxy packages are included only for authorized networks, not for bypassing access controls.</p>
+      <div id="groups"></div>
+    </section>
+  </div>
+
+  <section style="margin-top:16px">
+    <h2>Installed libraries by type</h2>
+    <p class="muted">These are the libraries already included in the Scraper4 project, grouped by their role. Optional profiles above can generate extra install commands.</p>
+    <div id="installedLibraries" class="lib-grid"></div>
+  </section>
+
+  <section style="margin-top:16px">
+    <h2>Generated output</h2>
+    <button onclick="generate()">Generate</button>
+    <button class="secondary" onclick="copyOut()">Copy</button>
+    <button class="secondary" onclick="download('install-generated.sh',out.value)">Download shell script</button>
+    <button class="secondary" onclick="download('deployment-notes.md',notes())">Download notes</button>
+    <textarea id="out" spellcheck="false"></textarea>
+  </section>
+
+  <section class="ok" style="margin-top:16px">
+    <h2>Recommended safe SnappShop-like scraping flow</h2>
+    <p>Use an authorized normal network, respect robots.txt and terms, and prefer official or permitted APIs. For JavaScript-heavy shops, use a Node/browser discovery step to inspect allowed JSON responses, then map products with JSONPath or fall back to rendered DOM extraction.</p>
+  </section>
+</main>
+<script>
+const installedLibrariesByEnv={
+ 'cloudflare-worker':[
+  ['Runtime / API',['Cloudflare Workers runtime','hono']],
+  ['Extraction / edge parsing',['HTMLRewriter','JSON-LD parser','__NEXT_DATA__ parser','metadata parser','inline-script JSON parser','heuristic product-card parser','linkedom-compatible selectors']],
+  ['Storage / queue',['Cloudflare D1','Cloudflare Queues','Cron Triggers','Web Crypto vault']],
+  ['Build bundle only',['wrangler','esbuild','typescript']]
+ ],
+ vscode:[
+  ['Runtime / API',['hono','@hono/node-server']],
+  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
+  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
+  ['Data import / backup',['read-excel-file','fflate']],
+  ['Storage',['pg','node:sqlite','Basalam SDK optional adapter']],
+  ['Build / deploy / types',['wrangler','esbuild','typescript','@types/node','@types/pg']]
+ ],
+ render:[
+  ['Runtime / API',['hono','@hono/node-server']],
+  ['Extraction / HTML parsing',['cheerio','linkedom','undici']],
+  ['Browser rendering / crawling',['playwright','puppeteer','crawlee']],
+  ['Data import / backup',['read-excel-file','fflate']],
+  ['Storage',['pg','node:sqlite fallback']],
+  ['Build / deploy / types',['esbuild','typescript']]
+ ],
+ vps:[
+  ['System packages',['git','curl','nginx','build-essential','postgresql','nodejs']],
+  ['Node scraper libraries',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
+  ['Storage',['PostgreSQL','node:sqlite fallback']]
+ ],
+ 'termux-offline':[
+  ['Termux system packages',['git','gh','openssh','nodejs-lts','python','make','clang','chromium']],
+  ['Node scraping runtime',['hono','@hono/node-server','cheerio','linkedom','undici','playwright','puppeteer','crawlee','read-excel-file','fflate','pg']],
+  ['Storage',['node:sqlite','PostgreSQL optional']]
+ ],
+ vercel:[
+  ['Serverless-compatible',['Node runtime','hono','cheerio','linkedom','undici']],
+  ['Not installed for Vercel runtime',['Playwright runtime','Puppeteer runtime','long crawler workers']]
+ ]
+};
+const groups={
+ edge:['htmlparser2','parse5','node-html-parser','linkedom','css-select','domutils','entities','he','jsonpath-plus','secure-json-parse'],
+ node:['undici','got','axios','cheerio','jsdom','happy-dom','xpath','fontoxpath','html-metadata-parser','metascraper','metascraper-title','metascraper-image','metascraper-description','fast-xml-parser','xml2js','rss-parser','sitemap','csv-parse','papaparse','fast-csv','read-excel-file','exceljs','xlsx','sanitize-html','html-to-text','turndown','normalize-url'],
+ browser:['playwright','puppeteer-core'],
+ crawler:['crawlee','p-queue','bottleneck','robots-parser'],
+ data:['jsonpath-plus','jmespath','object-scan','schema-dts','@mozilla/readability','unfluff'],
+ media:['probe-image-size','image-size','file-type','pdf-parse','pdfjs-dist','mammoth'],
+ locale:['persian-tools','jalaali-js','dayjs','slugify','xregexp'],
+ proxy:['proxy-agent','https-proxy-agent','socks-proxy-agent','proxy-chain','user-agents']
+};
+const profiles={minimal:['edge'],edge:['edge','data','locale'],node:['edge','node','crawler','data','locale'],browser:['node','browser','crawler','data','locale'],full:['edge','node','browser','crawler','data','media','locale','proxy']};
+function uniq(a){return [...new Set(a)]}
+function pkgs(){return uniq(profiles[profile.value].flatMap(g=>groups[g]))}
+function addCmd(list){const s=list.join(' '),m=pm.value;return m==='pnpm'?`pnpm add ${s}`:m==='yarn'?`yarn add ${s}`:m==='bun'?`bun add ${s}`:`npm install ${s}`}
+function deployBlock(){const e=env.value,n=name.value,p=port.value,b=build.value,st=start.value;if(e==='termux-offline')return `pkg install -y nodejs-lts tar\n# Copy the project archive here first.\n${addCmd(pkgs())}\n${b}\n${st}`;if(e==='vscode')return `${addCmd(pkgs())}\n${b}\n${st}`;if(e==='cloudflare-worker')return `npm ci\n${addCmd(pkgs())}\nnpm run worker:test\nnpm run worker:deploy`;if(e==='vercel')return `npm ci\n${addCmd(pkgs())}\n${b}\nnpx vercel deploy --prod`;if(e==='render')return `# Render build command:\nnpm ci && ${addCmd(pkgs())} && ${b}\n# Render start command:\n${st}`;return `sudo apt-get update\nsudo apt-get install -y nodejs npm nginx\nnpm ci\n${addCmd(pkgs())}\n${b}\nPORT=${p} ${st}`}
+function generate(){out.value=`#!/usr/bin/env bash\nset -euo pipefail\n\n# Generated by Static Universal Deployer\n# Environment: ${env.value}\n# Scraping profile: ${profile.value}\n\n${deployBlock()}\n`}
+function notes(){return `# Deployment notes\n\nProject: ${name.value}\nEnvironment: ${env.value}\nScraping profile: ${profile.value}\n\nPackages:\n\n${pkgs().map(x=>`- ${x}`).join('\n')}\n\nInstall command:\n\n\`\`\`bash\n${addCmd(pkgs())}\n\`\`\`\n\nSecurity note: do not use proxies, browser engines, or scraping APIs to bypass access controls. Use authorized sources and respect robots.txt and terms.\n`}
+async function copyOut(){await navigator.clipboard.writeText(out.value)}
+function download(filename,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function renderInstalledLibraries(){const list=installedLibrariesByEnv[env.value]||installedLibrariesByEnv.vscode;document.getElementById('installedLibraries').innerHTML=list.map(([type,items])=>`<div class="lib-card"><h3>${type}</h3><small>${items.length} items for ${env.value}</small>${items.map(x=>`<code>${x}</code>`).join(' ')}</div>`).join('')}
+function renderGroups(){document.getElementById('groups').innerHTML=Object.entries(groups).map(([k,v])=>`<div><span class="pill">${k}</span><span class="muted">${v.length} packages</span></div>`).join('')}
+profile.onchange=generate;env.onchange=()=>{renderInstalledLibraries();generate()};pm.onchange=generate;renderGroups();renderInstalledLibraries();generate();
+</script>
+</body>
+</html>

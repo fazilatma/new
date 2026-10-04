@@ -1,0 +1,893 @@
+<?php
+/** WebConsole Pro — standalone VPS console, based on the supplied source.
+ * PHP 7.4+. Use HTTPS and a non-root PHP account. Protect .wconsole_data
+ * in the web-server configuration (Nginx does not read .htaccess).
+ * Jobs are detached, but reboot startup still requires an OS supervisor.
+ */
+error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
+ini_set('display_errors', '0');
+@set_time_limit(300);
+define('WCP_VERSION', '1.2.3');
+function wcp_init_data_dir(): string {
+    // A child must use the SAME directory selected by its web parent.
+    if (PHP_SAPI === 'cli') {
+        foreach (($_SERVER['argv'] ?? []) as $argument) {
+            if (strpos($argument, '--wcp-data-dir=') !== 0) continue;
+            $directory = base64_decode(substr($argument, 15), true);
+            if ($directory === false || $directory === '' || $directory[0] !== '/' || !is_dir($directory) || !is_writable($directory)) {
+                throw new RuntimeException('The inherited WebConsole data directory is invalid or not writable.');
+            }
+            return $directory;
+        }
+    }
+    $primary = __DIR__ . '/.wconsole_data';
+    if (!is_dir($primary)) @mkdir($primary, 0700, true);
+    $cfgFile = $primary . '/config.json';
+    if (is_dir($primary) && is_writable($primary) && (!is_file($cfgFile) || is_writable($cfgFile))) return $primary;
+    $fallback = sys_get_temp_dir() . '/.wconsole_data_' . substr(md5(__DIR__), 0, 8);
+    if (!is_dir($fallback)) @mkdir($fallback, 0700, true);
+    if (!is_dir($fallback) || !is_writable($fallback)) throw new RuntimeException('WebConsole data directory is not writable. Fix ownership; do not use chmod 777.');
+    return $fallback;
+}
+umask(0077);
+define('DATA_DIR', wcp_init_data_dir());
+define('JOBS_DIR', DATA_DIR . '/jobs');
+define('CACHE_DIR', DATA_DIR . '/cache');
+define('TERM_DIR', DATA_DIR . '/term');
+define('MAX_EDIT', 3 * 1024 * 1024);
+define('SPLIT_BYTES', 80 * 1024 * 1024);
+foreach ([JOBS_DIR, CACHE_DIR, TERM_DIR] as $d) if (!is_dir($d)) @mkdir($d, 0700, true);
+@file_put_contents(DATA_DIR . '/.htaccess', "Require all denied\nDeny from all\n");
+@file_put_contents(DATA_DIR . '/index.html', '');
+$GLOBALS['__NOEXEC'] = !function_exists('exec');
+if (!function_exists('mb_strtolower')) { function mb_strtolower($s) { return strtolower((string)$s); } }
+if (!function_exists('mb_substr')) { function mb_substr($s, $start, $len = null) { return $len === null ? substr((string)$s, $start) : substr((string)$s, $start, $len); } }
+if (!function_exists('mb_check_encoding')) { function mb_check_encoding($s, $enc = 'UTF-8') { return $enc !== 'UTF-8' ? true : preg_match('//u', (string)$s) === 1; } }
+function jout($ok, $data = null, $err = null, $code = 200) {
+    http_response_code($code); header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok'=>$ok,'data'=>$data,'error'=>$err], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE); exit;
+}
+function body(): array {
+    static $b = null; if ($b !== null) return $b;
+    $ct = $_SERVER['CONTENT_TYPE'] ?? '';
+    if (stripos($ct, 'application/json') !== false) { $j=json_decode((string)file_get_contents('php://input'),true); $b=is_array($j)?$j:[]; } else $b=$_POST;
+    if (isset($_GET['api'])) $b['api']=$_GET['api']; if (isset($_POST['api'])) $b['api']=$_POST['api']; return $b;
+}
+function esc($s) { return escapeshellarg((string)$s); }
+function sh($cmd, &$code = null) {
+    if ($GLOBALS['__NOEXEC']) { $code=127; return 'PHP exec() is disabled'; }
+    $o=[]; exec($cmd.' 2>&1',$o,$code); return implode("\n",$o);
+}
+function sh_ok($cmd, &$code = null) {
+    if ($GLOBALS['__NOEXEC']) { $code=127; return ''; }
+    $o=[]; exec($cmd.' 2>/dev/null',$o,$code); return implode("\n",$o);
+}
+function which($bin) { return trim(sh_ok('command -v '.esc($bin))) !== ''; }
+function mask_url($u) { return preg_replace('~//([^:@/]+):([^@/]+)@~','//$1:***@',(string)$u); }
+function act_log($m) { $who=PHP_SAPI==='cli'?'cli':($_SESSION['wcp_user']??'anon'); @file_put_contents(DATA_DIR.'/activity.log','['.date('c')."] $who | $m\n",FILE_APPEND|LOCK_EX); }
+function wcp_random($n=8) { return bin2hex(random_bytes($n)); }
+function cfg(): array {
+    if (!empty($GLOBALS['__CFG'])) return $GLOBALS['__CFG'];
+    $d=['pass_hash'=>'','created'=>date('c'),'theme'=>'dark','layout'=>'classic','density'=>'comfortable','project_root'=>'/var/lib/webconsole-projects','fs_start'=>is_dir('/var/www')?'/var/www':'/','fs_roots'=>['/'],'session_minutes'=>180,'allowed_ips'=>'','gh_token'=>'','gh_repo'=>'','gh_branch'=>'backups','git_name'=>'webconsole','git_email'=>'webconsole@localhost','split_mb'=>80,'tmux_width'=>120,'tmux_height'=>34];
+    $j=json_decode((string)@file_get_contents(DATA_DIR.'/config.json'),true); if(is_array($j))$d=array_merge($d,$j); return $GLOBALS['__CFG']=$d;
+}
+function cfg_save(array $new) {
+    $c=array_merge(cfg(),$new); $f=DATA_DIR.'/config.json';
+    if(file_put_contents($f,json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX)===false)throw new RuntimeException('Cannot save configuration to '.DATA_DIR);
+    @chmod($f,0600); $GLOBALS['__CFG']=$c;
+}
+if (PHP_SAPI !== 'cli') {
+    session_name('WCPSESS');
+    session_set_cookie_params(['lifetime'=>0,'path'=>'/','httponly'=>true,'samesite'=>'Lax','secure'=>(($_SERVER['HTTPS']??'')==='on'||($_SERVER['HTTP_X_FORWARDED_PROTO']??'')==='https')]);
+    session_start();
+}
+function client_ip(): string { return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'; }
+function ip_allowed(): bool {
+    $list=trim((string)cfg()['allowed_ips']); if($list==='')return true; $ip=client_ip();
+    foreach(preg_split('/[\s,;]+/',$list)as$r){if($r===$ip)return true;if(strpos($r,'/')!==false){[$net,$bits]=explode('/',$r,2);$n=inet_pton($net);$i=inet_pton($ip);if($n===false||$i===false||strlen($n)!==strlen($i)||!ctype_digit($bits))continue;$b=(int)$bits;if($b>strlen($n)*8)continue;$bytes=intdiv($b,8);$rest=$b%8;if(substr($n,0,$bytes)===substr($i,0,$bytes)&&(!$rest||((ord($n[$bytes])^ord($i[$bytes]))&(255<<(8-$rest)))===0))return true;}}
+    return false;
+}
+function wcp_logged(): bool {
+    if(empty($_SESSION['wcp_ok']))return false;
+    if(time()-(int)($_SESSION['wcp_last']??0)>(int)cfg()['session_minutes']*60){session_destroy();return false;}
+    $_SESSION['wcp_last']=time();return ip_allowed();
+}
+function require_auth(){if(!wcp_logged())jout(false,null,'نشست منقضی شده — دوباره وارد شوید',401);}
+function csrf_ok(): bool {$in=body();$t=$_SERVER['HTTP_X_CSRF']??($in['csrf']??'');return !empty($_SESSION['wcp_csrf'])&&is_string($t)&&hash_equals($_SESSION['wcp_csrf'],$t);}
+function login_locked(): int {$j=json_decode((string)@file_get_contents(DATA_DIR.'/loginfails.json'),true)?:[];return max(0,(int)($j['until']??0)-time());}
+function login_fail(){ $f=DATA_DIR.'/loginfails.json';$j=json_decode((string)@file_get_contents($f),true)?:['n'=>0,'until'=>0];$j['n']++;if($j['n']>=6){$j['until']=time()+600;$j['n']=0;}file_put_contents($f,json_encode($j),LOCK_EX); }
+function login_reset(){@unlink(DATA_DIR.'/loginfails.json');}
+function do_login(string $pw): bool {
+    if(cfg()['pass_hash']&&password_verify($pw,cfg()['pass_hash'])){session_regenerate_id(true);$_SESSION['wcp_ok']=true;$_SESSION['wcp_last']=time();$_SESSION['wcp_user']='admin';$_SESSION['wcp_csrf']=wcp_random(16);login_reset();act_log('Login from '.client_ip());return true;}
+    login_fail();return false;
+}
+function norm_path(string $p): string {
+    $p=str_replace('\\','/',$p);if($p==='')$p='/';if($p[0]!=='/')$p=rtrim(getcwd()?:'/','/').'/'.$p;$parts=[];
+    foreach(explode('/',$p)as$s){if($s===''||$s==='.')continue;if($s==='..')array_pop($parts);else$parts[]=$s;}return '/'.implode('/',$parts);
+}
+function safe_path(string $p): string {
+    $p=norm_path($p);$resolved=realpath($p);if($resolved!==false)$p=$resolved;
+    foreach(cfg()['fs_roots']?:['/']as$r){$r=norm_path($r);$real=realpath($r);if($real!==false)$r=$real;if($r==='/')return $p;$r=rtrim($r,'/');if($p===$r||strpos($p,$r.'/')===0)return $p;}
+    throw new RuntimeException('Path is outside the configured roots: '.$p);
+}
+function safe_new_path(string $p): string {
+    $p=norm_path($p);$parent=realpath(dirname($p));if($parent===false)throw new RuntimeException('Parent directory does not exist');$base=basename($p);if($base===''||$base==='.'||$base==='..')throw new RuntimeException('Invalid name');return safe_path($parent.'/'.$base);
+}
+function job_file(string $id): string { return JOBS_DIR.'/'.preg_replace('/[^a-f0-9]/','',$id).'.json'; }
+function job_get(string $id): ?array {$j=json_decode((string)@file_get_contents(job_file($id)),true);return is_array($j)?$j:null;}
+function job_save(array $job){if(file_put_contents(job_file($job['id']),json_encode($job,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX)===false)throw new RuntimeException('Cannot save job metadata');}
+function job_create(string $type,string $name,array $params): array {
+    $id=date('ymd').'-'.wcp_random(4);$job=['id'=>$id,'type'=>$type,'name'=>$name,'params'=>$params,'pid'=>0,'created'=>date('c'),'log'=>JOBS_DIR."/$id.log",'result'=>null];@unlink(JOBS_DIR."/$id.exit");job_save($job);return $job;
+}
+function wcp_php_cli(): string {
+    if (!function_exists('exec')) throw new RuntimeException('PHP exec() is disabled; background jobs cannot launch.');
+    $override = defined('WCP_PHP_CLI') ? trim((string)WCP_PHP_CLI) : trim((string)getenv('WCP_PHP_CLI'));
+    $candidates = $override !== '' ? [$override] : array_merge(
+        [PHP_SAPI === 'cli' ? PHP_BINARY : '', '/usr/bin/php', '/usr/local/bin/php', PHP_BINDIR . '/php', trim(sh_ok('command -v php'))],
+        glob('/usr/bin/php[0-9]*') ?: []
+    );
+    foreach (array_unique($candidates) as $candidate) {
+        if ($candidate === '' || $candidate[0] !== '/' || !is_file($candidate) || !is_executable($candidate)) continue;
+        // Do not accidentally start php-fpm or apache as a server.
+        if ($override === '' && !preg_match('/^php(?:[0-9.]+|-cli)?$/', basename($candidate))) continue;
+        $probe = 'if (PHP_SAPI === "cli" && function_exists("exec") && function_exists("proc_open")) { echo "WCP_CLI_OK"; } else { exit(78); }';
+        $result = sh(esc($candidate) . ' -r ' . esc($probe), $rc);
+        if ($rc === 0 && trim($result) === 'WCP_CLI_OK') return $candidate;
+    }
+    throw new RuntimeException('No usable PHP CLI with exec/proc_open was found. Install php-cli, or configure an absolute WCP_PHP_CLI path. PHP-FPM/CGI is not PHP CLI.');
+}
+function wcp_job_alive(array $job): bool {
+    $pid = (int)($job['pid'] ?? 0);
+    if (!job_pid_alive($pid)) return false;
+    $args = explode("\0", (string)@file_get_contents('/proc/' . $pid . '/cmdline'));
+    return in_array('--bgjob=' . $job['id'], $args, true)
+        && in_array($job['script'] ?? __FILE__, $args, true);
+}
+function job_start(array &$job) {
+    $id = $job['id'];
+    $receipt = JOBS_DIR . '/' . $id . '.started.json';
+    $exitFile = JOBS_DIR . '/' . $id . '.exit';
+    try {
+        if (!is_writable(JOBS_DIR) || !is_readable(__FILE__)) throw new RuntimeException('Job directory is not writable or the PHP source is not readable.');
+        $php = wcp_php_cli();
+        $setsid = trim(sh_ok('command -v setsid'));
+        if ($setsid === '' || $setsid[0] !== '/' || !is_executable($setsid)) throw new RuntimeException('setsid is missing. Install util-linux.');
+        if (@file_put_contents($job['log'], "[launcher] PHP CLI: " . $php . "\n", FILE_APPEND | LOCK_EX) === false) throw new RuntimeException('Cannot write the job log.');
+        @unlink($receipt);
+        @unlink($exitFile);
+        @unlink(JOBS_DIR . '/' . $id . '.pid');
+        $job['pid'] = 0;
+        $job['script'] = __FILE__;
+        $job['launch_token'] = wcp_random(16);
+        $job['launch_deadline'] = time() + 10;
+        job_save($job);
+        $cmd = 'cd ' . esc(DATA_DIR) . ' && ( ' . esc($setsid) . ' ' . esc($php)
+            . ' -d register_argc_argv=1 ' . esc(__FILE__)
+            . ' ' . esc('--bgjob=' . $id)
+            . ' ' . esc('--wcp-data-dir=' . base64_encode(DATA_DIR))
+            . ' >> ' . esc($job['log']) . ' 2>&1 < /dev/null & )';
+        $output = sh($cmd, $rc);
+        if ($rc !== 0) throw new RuntimeException('Background launcher failed: ' . mask_url($output));
+        $deadline = microtime(true) + 5;
+        do {
+            clearstatcache(true, $receipt);
+            $ack = json_decode((string)@file_get_contents($receipt), true);
+            if (is_array($ack) && hash_equals($job['launch_token'], (string)($ack['token'] ?? '')) && (int)($ack['pid'] ?? 0) > 1) {
+                $job['pid'] = (int)$ack['pid'];
+                job_save($job);
+                act_log('Started ' . $job['type'] . ': ' . $job['name'] . ' (job ' . $id . ', PID ' . $job['pid'] . ')');
+                return;
+            }
+            usleep(100000);
+        } while (microtime(true) < $deadline);
+        throw new RuntimeException('PHP CLI did not acknowledge startup within 5 seconds. Read the job log for permissions, PHP configuration or bootstrap errors.');
+    } catch (Throwable $e) {
+        $message = $e->getMessage();
+        $job['result'] = ['error' => $message];
+        @file_put_contents($job['log'], "[launcher ERROR] " . $message . "\n", FILE_APPEND | LOCK_EX);
+        @file_put_contents($exitFile, "127\n", LOCK_EX);
+        job_save($job);
+        throw new RuntimeException('Job ' . $id . ': ' . $message, 0, $e);
+    }
+}
+function job_pid_alive(int $pid): bool {
+    if ($pid <= 1) return false;
+    $stat = (string)@file_get_contents('/proc/' . $pid . '/stat');
+    $end = strrpos($stat, ')');
+    if ($end === false) return false;
+    $state = substr($stat, $end + 2, 1);
+    return $state !== 'Z' && $state !== 'X';
+}
+function job_status(array $job): array {
+    $f=JOBS_DIR.'/'.$job['id'].'.exit';clearstatcache(true,$f);
+    if(is_file($f)){$text=trim((string)file_get_contents($f));if(preg_match('/^-?\d+$/',$text))return ['status'=>(int)$text===0?'done':'failed','exit'=>(int)$text];}
+    if (wcp_job_alive($job)) return ['status' => 'running', 'exit' => null];
+    return ['status'=>'dead','exit'=>-1];
+}
+function job_stop(array $job) {
+    $pid = (int)$job['pid'];
+    if (wcp_job_alive($job)) {
+        @file_put_contents(JOBS_DIR.'/'.$job['id'].'.stop',"1\n");
+        $k=is_executable('/bin/kill')?'/bin/kill':'kill';
+        sh($k.' -TERM -- -'.$pid.' 2>/dev/null; '.$k.' -TERM '.$pid.' 2>/dev/null');
+        for($i=0;$i<20;$i++){if(!job_pid_alive($pid))break;usleep(250000);}
+        if(wcp_job_alive($job))sh($k.' -KILL -- -'.$pid.' 2>/dev/null; '.$k.' -KILL '.$pid.' 2>/dev/null');
+    }
+    file_put_contents(JOBS_DIR.'/'.$job['id'].'.exit',"130\n",LOCK_EX);act_log('Stopped job '.$job['id']);
+}
+function term_mode(): string {
+    if(!empty($GLOBALS['__TMODE']))return $GLOBALS['__TMODE'];
+    return $GLOBALS['__TMODE']=$GLOBALS['__NOEXEC']?'none':(which('tmux')?'tmux':(which('screen')?'screen':'simple'));
+}
+function term_tmux_conf(): string {
+    $f=TERM_DIR.'/tmux.conf';if(!is_file($f)){$bash=trim(sh_ok('command -v bash'))?:'/bin/sh';file_put_contents($f,"set-option -g default-shell $bash\nset-option -g default-command $bash\nset-option -g escape-time 0\nset-option -g default-terminal xterm-256color\nset-option -g history-limit 10000\n");}return $f;
+}
+function term_dir(string $id): string {if(!preg_match('/^[a-f0-9]{12}$/',$id))throw new RuntimeException('Invalid terminal ID');$d=TERM_DIR.'/'.$id;if(!is_dir($d))mkdir($d,0700,true);return $d;}
+function term_name(string $id): string {return 'wc_'.preg_replace('/[^a-f0-9]/','',$id);}
+function term_list(): array {
+    $mode=term_mode();$alive=[];
+    if($mode==='tmux'){foreach(explode("\n",sh_ok('tmux -f '.esc(term_tmux_conf()).' ls -F "#S"'))as$l)if(strpos($l,'wc_')===0)$alive[substr($l,3)]=true;}
+    elseif($mode==='screen'){preg_match_all('/\bwc_([a-f0-9]+)\b/',sh_ok('screen -ls'),$m);foreach($m[1]as$id)$alive[$id]=true;}
+    $res=[];foreach(glob(TERM_DIR.'/*',GLOB_ONLYDIR)?:[]as$d){$id=basename($d);if(!preg_match('/^[a-f0-9]{12}$/',$id))continue;$meta=json_decode((string)@file_get_contents($d.'/meta.json'),true)?:[];$isAlive=isset($alive[$id])||$mode==='simple';
+        if(!$isAlive && time()-(strtotime($meta['created']??'')?:time())>3600){
+                term_kill($id);
+            continue;
+        }
+        $res[]=['id'=>$id,'title'=>$meta['title']??('شل '.substr($id,0,4)),'created'=>$meta['created']??'','alive'=>$isAlive];
+    }usort($res,fn($a,$b)=>strcmp($a['created'],$b['created']));return $res;
+}
+function term_create(int $cols,int $rows): array {
+    $id=wcp_random(6);$d=term_dir($id);$s=term_name($id);$log=$d.'/out.log';touch($log);$cols=max(40,min(500,$cols?:120));$rows=max(10,min(200,$rows?:34));$mode=term_mode();$bash=trim(sh_ok('command -v bash'))?:'/bin/sh';$home=is_dir('/var/www')?'/var/www':(getenv('HOME')?:'/');
+    if($mode==='tmux'){
+        $tm='tmux -f '.esc(term_tmux_conf());$out=sh($tm.' new-session -d -s '.esc($s).' -x '.$cols.' -y '.$rows.' -c '.esc($home).' '.esc($bash),$rc);if($rc!==0)throw new RuntimeException($out);
+        sh($tm.' pipe-pane -t '.esc($s).' '.esc('cat >> '.esc($log).' 2>&1'));
+        sh($tm.' send-keys -t '.esc($s).' Enter');
+    }elseif($mode==='screen'){$out=sh('screen -dmS '.esc($s).' -L -Logfile '.esc($log).' '.esc($bash),$rc);if($rc!==0)throw new RuntimeException($out);}
+    elseif($mode==='simple'){file_put_contents($d.'/cwd',$home);file_put_contents($log,"Simple shell: install tmux for an interactive terminal.\n");}
+    else throw new RuntimeException('PHP exec() is disabled');
+    file_put_contents($d.'/meta.json',json_encode(['title'=>'شل '.substr($id,0,4),'created'=>date('c'),'mode'=>$mode],JSON_UNESCAPED_UNICODE));return ['id'=>$id,'mode'=>$mode,'log'=>$log];
+}
+function term_read(string $id,int $offset): array {
+    $log=term_dir($id).'/out.log';if(!is_file($log))return ['b64'=>'','offset'=>0,'alive'=>false];clearstatcache(true,$log);$size=filesize($log);$offset=max(0,$offset);if($offset>$size)$offset=0;$data='';if($size>$offset){$f=fopen($log,'rb');fseek($f,$offset);$data=(string)fread($f,min(1048576,$size-$offset));fclose($f);}
+    $alive=true;$info='';if(term_mode()==='tmux'){$info=sh_ok('tmux -f '.esc(term_tmux_conf()).' display-message -p -t '.esc(term_name($id)).' "#{pane_current_command}|#{pane_current_path}"');$alive=trim($info)!=='';}elseif(term_mode()==='screen')$alive=strpos(sh_ok('screen -ls'),term_name($id))!==false;
+    return ['b64'=>base64_encode($data),'offset'=>$offset+strlen($data),'alive'=>$alive,'info'=>$info];
+}
+function term_write(string $id,string $b64){
+    $raw=base64_decode($b64,true);if($raw===false||$raw==='')return;$d=term_dir($id);$s=term_name($id);
+    if(term_mode()==='tmux')sh('tmux -f '.esc(term_tmux_conf()).' send-keys -t '.esc($s).' -l -- '.esc($raw));
+    elseif(term_mode()==='screen')sh('screen -S '.esc($s).' -p 0 -X stuff '.esc($raw));
+    else{file_put_contents($d.'/in.buf',$raw,FILE_APPEND|LOCK_EX);$buf=(string)file_get_contents($d.'/in.buf');if(strpbrk($buf,"\r\n")!==false){$lines=preg_split('/\r\n|\n|\r/',$buf);file_put_contents($d.'/in.buf',array_pop($lines),LOCK_EX);foreach($lines as$l)if(trim($l)!=='')term_simple_exec($id,$l);}}
+}
+function term_simple_exec(string $id,string $line){
+    $d=term_dir($id);$cwd=trim((string)@file_get_contents($d.'/cwd'))?:'/';file_put_contents($d.'/out.log',$cwd.' $ '.$line."\n",FILE_APPEND|LOCK_EX);
+    $script='cd '.esc($cwd)." || exit\n{ ".$line."\n}\n__rc=\$?\necho \"[wcp-exit:\$__rc]\"\npwd > ".esc($d.'/cwd2')."\n";
+    file_put_contents($d.'/run.sh',$script);sh('bash '.esc($d.'/run.sh').' >> '.esc($d.'/out.log').' 2>&1');$new=trim((string)@file_get_contents($d.'/cwd2'));if(is_dir($new))file_put_contents($d.'/cwd',$new);
+}
+function term_resize(string $id,int $cols,int $rows){$cols=max(40,min(500,$cols));$rows=max(10,min(200,$rows));$s=term_name($id);if(term_mode()==='tmux')sh('tmux -f '.esc(term_tmux_conf()).' resize-window -t '.esc($s).' -x '.$cols.' -y '.$rows);elseif(term_mode()==='screen')sh('screen -S '.esc($s).' -p 0 -X width -w '.$cols);}
+function term_kill(string $id){$d=term_dir($id);$s=term_name($id);if(term_mode()==='tmux')sh('tmux -f '.esc(term_tmux_conf()).' kill-session -t '.esc($s));elseif(term_mode()==='screen')sh('screen -S '.esc($s).' -p 0 -X quit');sh('rm -rf -- '.esc($d));}
+function fs_scan_dir(string $path,string $sort='name',bool $asc=true): array {
+    $path=safe_path($path);$dh=opendir($path);if(!$dh)throw new RuntimeException('Cannot open directory');$items=[];
+    while(($f=readdir($dh))!==false){if($f==='.'||$f==='..')continue;$full=rtrim($path,'/').'/'.$f;$st=lstat($full);if(!$st)continue;$items[]=['name'=>$f,'dir'=>is_dir($full)&&!is_link($full),'link'=>is_link($full),'size'=>$st['size'],'mtime'=>$st['mtime'],'perms'=>substr(sprintf('%o',$st['mode']),-4),'owner'=>function_exists('posix_getpwuid')?(posix_getpwuid($st['uid'])['name']??$st['uid']):$st['uid'],'group'=>function_exists('posix_getgrgid')?(posix_getgrgid($st['gid'])['name']??$st['gid']):$st['gid']];}
+    closedir($dh);usort($items,function($a,$b)use($sort,$asc){if($a['dir']!==$b['dir'])return $a['dir']?-1:1;$r=$sort==='size'?($a['size']<=>$b['size']):($sort==='date'?($a['mtime']<=>$b['mtime']):strcasecmp($a['name'],$b['name']));return $asc?$r:-$r;});return ['path'=>$path,'items'=>$items];
+}
+function fs_zip_to(string $zipFile,array $paths,string $baseDir): bool {
+    if(which('zip')){$cmd='cd '.esc($baseDir).' && zip -rq '.esc($zipFile).' --';foreach($paths as$p)$cmd.=' '.esc(ltrim($p,'/'));sh($cmd,$rc);return $rc===0&&is_file($zipFile);}
+    if(!class_exists('ZipArchive'))return false;$z=new ZipArchive();if($z->open($zipFile,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true)return false;
+    foreach($paths as$p){$full=rtrim($baseDir,'/').'/'.ltrim($p,'/');if(is_dir($full)){foreach(new RecursiveIteratorIterator(new RecursiveDirectoryIterator($full,FilesystemIterator::SKIP_DOTS))as$f)if($f->isFile())$z->addFile($f->getPathname(),ltrim(substr($f->getPathname(),strlen(rtrim($baseDir,'/'))),'/'));}elseif(is_file($full))$z->addFile($full,basename($full));}return $z->close();
+}
+function fs_stream_download(string $file,string $name){@set_time_limit(0);session_write_close();header('Content-Type: application/octet-stream');header('Content-Disposition: attachment; filename="'.rawurlencode($name).'"');header('Content-Length: '.filesize($file));header('X-Content-Type-Options: nosniff');readfile($file);exit;}
+function fs_search(string $base,string $q,bool $content=false): array {
+    $base=safe_path($base);$res=[];$start=microtime(true);$it=new RecursiveIteratorIterator(new RecursiveCallbackFilterIterator(new RecursiveDirectoryIterator($base,FilesystemIterator::SKIP_DOTS),function($f){return !in_array($f->getFilename(),['.git','node_modules','.wconsole_data'],true)&&!$f->isLink();}),RecursiveIteratorIterator::SELF_FIRST,RecursiveIteratorIterator::CATCH_GET_CHILD);$it->setMaxDepth(12);
+    foreach($it as$f){if(microtime(true)-$start>8||count($res)>=600)break;$hit=strpos(mb_strtolower($f->getFilename()),mb_strtolower($q))!==false;if(!$hit&&$content&&$f->isFile()&&$f->getSize()<1048576)$hit=stripos((string)@file_get_contents($f->getPathname()),$q)!==false;if($hit)$res[]=['path'=>$f->getPathname(),'dir'=>$f->isDir(),'size'=>$f->getSize()];}return $res;
+}
+function bk_profiles(): array {
+    $f=DATA_DIR.'/backup_profiles.json';$j=json_decode((string)@file_get_contents($f),true);if(is_array($j))return $j;
+    $j=[['id'=>'web','name'=>'وب‌سایت‌ها','icon'=>'🌐','extra'=>'','enabled'=>true,'includes'=>['/var/www','/usr/share/nginx/html','/srv'],'excludes'=>['*/node_modules','*/.git','*/cache/*','*/tmp/*']],['id'=>'home','name'=>'فایل‌های شخصی','icon'=>'🏠','extra'=>'','enabled'=>true,'includes'=>['/root','/home'],'excludes'=>['*/.bash_history','*/.cache/*','*/.npm/*']],['id'=>'etc','name'=>'کانفیگ‌ها','icon'=>'⚙️','extra'=>'','enabled'=>true,'includes'=>['/etc'],'excludes'=>[]],['id'=>'ssl','name'=>'گواهی‌ها','icon'=>'🔒','extra'=>'','enabled'=>false,'includes'=>['/etc/letsencrypt'],'excludes'=>[]],['id'=>'db','name'=>'دیتابیس‌ها','icon'=>'🗄️','extra'=>'db','enabled'=>true,'includes'=>[],'excludes'=>[]],['id'=>'cron','name'=>'کران‌جاب‌ها','icon'=>'⏰','extra'=>'cron','enabled'=>true,'includes'=>[],'excludes'=>[]],['id'=>'pkg','name'=>'لیست پکیج‌ها','icon'=>'📦','extra'=>'packages','enabled'=>true,'includes'=>[],'excludes'=>[]],['id'=>'logs','name'=>'لاگ‌ها','icon'=>'📜','extra'=>'','enabled'=>false,'includes'=>['/var/log'],'excludes'=>['*.gz','*.xz','*/journal/*']]];bk_profiles_save($j);return $j;
+}
+function bk_profiles_save(array $list){file_put_contents(DATA_DIR.'/backup_profiles.json',json_encode(array_values($list),JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function gh_url(): string {
+    $c=cfg();$repo=trim((string)$c['gh_repo']);if($repo==='')return '';if($repo[0]==='/')return $repo;
+    if(preg_match('~^git@([^:]+):(.+)$~',$repo,$m))$repo=$m[1].'/'.$m[2];$repo=preg_replace('~^https?://~i','',$repo);$repo=preg_replace('~^[^@/]+@~','',$repo);if(strpos($repo,'github.com/')!==0)$repo='github.com/'.ltrim($repo,'/');return 'https://'.($c['gh_token']!==''?'wcp:'.rawurlencode($c['gh_token']).'@':'').$repo;
+}
+function gh_slug(string $name): string {return trim(preg_replace('/[^a-z0-9_\-]+/i','-',$name),'-')?:'p';}
+function gh_request(string $url,string $token=''): ?string {
+    if(!function_exists('curl_init'))throw new RuntimeException('PHP cURL extension is required');$token=$token!==''?$token:(string)cfg()['gh_token'];$ch=curl_init($url);$headers=['User-Agent: WebConsole-Pro/1.2.3','Accept: application/vnd.github+json'];if($token!=='')$headers[]='Authorization: Bearer '.$token;
+    curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_HTTPHEADER=>$headers,CURLOPT_TIMEOUT=>20,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);$res=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);return $code>=200&&$code<300&&is_string($res)?$res:null;
+}
+function gh_http_get(string $url,string $token=''): ?array {$j=json_decode((string)gh_request($url,$token),true);return is_array($j)?$j:null;}
+function gh_raw_get(string $owner,string $repo,string $branch,string $path,string $token=''): ?string {return gh_request('https://raw.githubusercontent.com/'.rawurlencode($owner).'/'.rawurlencode($repo).'/'.rawurlencode($branch).'/'.implode('/',array_map('rawurlencode',explode('/',ltrim($path,'/')))),$token);}
+function gh_user_repos(string $owner,string $token=''): array {
+    $owner=trim($owner)?:'fazilatma';$data=gh_http_get('https://api.github.com/users/'.rawurlencode($owner).'/repos?per_page=100&sort=updated',$token);if(!is_array($data))$data=gh_http_get('https://api.github.com/orgs/'.rawurlencode($owner).'/repos?per_page=100&sort=updated',$token)?:[];$list=[];foreach($data as$r)if(isset($r['name']))$list[]=['name'=>$r['name'],'full_name'=>$r['full_name']??($owner.'/'.$r['name']),'description'=>$r['description']??'','default_branch'=>$r['default_branch']??'main','language'=>$r['language']??'Other','stars'=>(int)($r['stargazers_count']??0),'updated_at'=>$r['updated_at']??'','private'=>!empty($r['private']),'clone_url'=>$r['clone_url']??''];return $list;
+}
+function gh_repo_branches(string $owner,string $repo,string $token='',?callable $fetch=null): array {
+    $fetch=$fetch??'gh_http_get';$base='https://api.github.com/repos/'.rawurlencode($owner).'/'.rawurlencode($repo);$meta=$fetch($base,$token);$default=$meta['default_branch']??'';$list=[];
+    for($page=1;;$page++){$data=$fetch($base.'/branches?per_page=100&page='.$page,$token);if(!is_array($data)||isset($data['message']))throw new RuntimeException('Cannot list all branches (page '.$page.'). Check GitHub access, token, rate limit and network.');foreach($data as $b)if(isset($b['name']))$list[]=['name'=>$b['name'],'default'=>$b['name']===$default];if(count($data)<100)break;}return $list;
+}
+function proj_scraper4_runtime(): array {
+    return json_decode('{"type":"node","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","port":"8790","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"},"runtime_profile":"scraper4-local-deployer"}',true);
+}
+function gh_apply_runtime_profile(array $app,array $pkg,bool $hasLauncher): array {
+    if($hasLauncher&&($pkg['name']??'')==='scraper4-cloudflare'&&trim((string)($pkg['scripts']['deployer:ui']??''))==='node scripts/local-deployer-ui.mjs'){
+        $app=array_merge($app,proj_scraper4_runtime());$app['framework']='Scraper4 Node + Local Deployer (8790 / 3000)';
+    }
+    return $app;
+}
+function proj_quick_settings(array $p): array {
+    if(($p['runtime_profile']??'')==='scraper4-local-deployer'){
+        $env=$p['env']??[];$p=array_merge($p,proj_scraper4_runtime());$p['env']=array_merge($p['env'],$env);
+    }else{$p['env']=array_merge(['NODE_ENV'=>'production','PYTHONUNBUFFERED'=>'1'],$p['env']??[]);}
+    $p['id']='';$p['auto_start']=true;$p['is_daemon']=true;if(($p['port']??'')!=='')$p['env']['PORT']=$p['port'];return $p;
+}
+
+function gh_inspect_branch(string $owner,string $repo,string $branch,string $token=''): array {
+    $data=gh_http_get('https://api.github.com/repos/'.rawurlencode($owner).'/'.rawurlencode($repo).'/git/trees/'.rawurlencode($branch).'?recursive=1',$token);$byDir=[];if(!is_array($data)||!isset($data['tree']))throw new RuntimeException('Cannot inspect branch. Check GitHub access, rate limit and network.');if(!empty($data['truncated']))throw new RuntimeException('GitHub tree is truncated; project versions cannot be compared reliably.');
+    foreach($data['tree']??[]as$item){if(($item['type']??'')!=='blob')continue;$p=$item['path'];$d=dirname($p);$byDir[$d==='.'?'':$d][]=basename($p);}$apps=[];
+    foreach($byDir as$sub=>$files){$set=array_flip($files);$name=$sub===''?$repo:basename($sub);$app=['name'=>$name,'subfolder'=>$sub,'type'=>'other','lang_label'=>'Other','framework'=>'','version'=>'','description'=>'','install_cmd'=>'','build_cmd'=>'','start_cmd'=>'','port'=>'','is_daemon'=>true];
+        if(isset($set['package.json'])){$pkg=json_decode((string)gh_raw_get($owner,$repo,$branch,($sub!==''?$sub.'/':'').'package.json',$token),true);if(!is_array($pkg))throw new RuntimeException('Cannot read valid package.json at '.($sub?:'/').'; version inspection incomplete.');$scripts=$pkg['scripts']??[];$deps=array_keys(array_merge($pkg['dependencies']??[],$pkg['devDependencies']??[]));$frameworks=[];foreach(['express'=>'Express','fastify'=>'Fastify','hono'=>'Hono','next'=>'Next.js','nuxt'=>'Nuxt','telegraf'=>'Telegram Bot','grammy'=>'Telegram Bot','crawlee'=>'Scraper','playwright'=>'Scraper','puppeteer'=>'Scraper','wrangler'=>'Cloudflare','socket.io'=>'Socket.io']as$key=>$label)if(in_array($key,$deps))$frameworks[]=$label;$app=array_merge($app,['name'=>$pkg['name']??$name,'type'=>'node','lang_label'=>'Node.js','framework'=>implode(' • ',array_unique($frameworks))?:'Node.js / JS','version'=>$pkg['version']??'','description'=>$pkg['description']??'','install_cmd'=>isset($set['pnpm-lock.yaml'])?'pnpm install':(isset($set['yarn.lock'])?'yarn install':'npm install --include=dev --no-audit --no-fund'),'build_cmd'=>isset($scripts['build'])?'npm run build':'','start_cmd'=>isset($scripts['start'])?'npm start':(isset($set['server.js'])?'node server.js':(isset($set['index.js'])?'node index.js':'node app.js')),'port'=>'3000']);$app=gh_apply_runtime_profile($app,$pkg,in_array('local-deployer-ui.mjs',$byDir[($sub!==''?$sub.'/':'').'scripts']??[],true));
+        }elseif(isset($set['requirements.txt'])||isset($set['pyproject.toml'])||isset($set['Pipfile'])||isset($set['app.py'])||isset($set['main.py'])||isset($set['bot.py'])){$req=strtolower((string)gh_raw_get($owner,$repo,$branch,($sub!==''?$sub.'/':'').'requirements.txt',$token));$f=[];foreach(['fastapi','flask','django','telethon','pyrogram','aiogram','streamlit','scrapy','beautifulsoup4']as$key)if(strpos($req,$key)!==false)$f[]=$key;$app=array_merge($app,['type'=>'python','lang_label'=>'Python 3','framework'=>implode(' • ',$f)?:'Python','install_cmd'=>isset($set['requirements.txt'])?'pip3 install -r requirements.txt':'pip3 install .','start_cmd'=>isset($set['app.py'])?(in_array('fastapi',$f)?'uvicorn app:app --host 0.0.0.0 --port 8000':'python3 app.py'):(isset($set['bot.py'])?'python3 bot.py':(isset($set['manage.py'])?'python3 manage.py runserver 0.0.0.0:8000':'python3 main.py')),'port'=>'8000']);
+        }elseif(isset($set['composer.json'])||isset($set['index.php'])){$app=array_merge($app,['type'=>'php','lang_label'=>'PHP','framework'=>isset($set['artisan'])?'Laravel':'PHP','install_cmd'=>isset($set['composer.json'])?'composer install --no-dev -o':'','is_daemon'=>false]);
+        }elseif(isset($set['go.mod'])){$app=array_merge($app,['lang_label'=>'Go','framework'=>'Go','install_cmd'=>'go mod download','build_cmd'=>'go build -o app','start_cmd'=>'./app','port'=>'8080']);
+        }elseif(isset($set['Cargo.toml'])){$app=array_merge($app,['lang_label'=>'Rust','framework'=>'Rust','install_cmd'=>'cargo fetch','build_cmd'=>'cargo build --release','start_cmd'=>'./target/release/'.$name,'port'=>'8080']);
+        }elseif(isset($set['index.html'])&&$sub===''){$app=array_merge($app,['type'=>'static','lang_label'=>'HTML/Static','is_daemon'=>false]);}else continue;$apps[]=$app;
+    }return $apps;
+}
+// A dedicated, persistent storage root is separate from the file-browser start path.
+function proj_storage_root(?string $value=null): string {
+    $value=$value??(string)cfg()['project_root'];
+    if($value===''||$value[0]!=='/'||preg_match('/[\x00-\x1f]/',$value))throw new RuntimeException('Project storage must be an absolute directory path.');
+    $root=norm_path($value);
+    if(in_array($root,['/','/var','/var/lib','/var/www','/home','/opt','/usr','/etc','/tmp','/var/tmp'],true))throw new RuntimeException('Choose a dedicated persistent project directory, not a system root.');
+    foreach(['/tmp','/var/tmp','/dev','/proc','/sys',__DIR__,DATA_DIR,(string)($_SERVER['DOCUMENT_ROOT']??'')]as$blocked){if($blocked==='')continue;$blocked=rtrim(norm_path($blocked),'/');if($root===$blocked||strpos($root,$blocked.'/')===0)throw new RuntimeException('Project storage must be persistent and outside the WebConsole/document/temp directories.');}
+    for($part=$root;$part!=='/';$part=dirname($part))if(is_link($part))throw new RuntimeException('Symlink components are not allowed in the managed storage root: '.$part);
+    return safe_path($root);
+}
+function proj_execution_identity(): array {
+    $uid=function_exists('posix_geteuid')?(string)posix_geteuid():trim(sh_ok('id -u'));
+    $gid=function_exists('posix_getegid')?(string)posix_getegid():trim(sh_ok('id -g'));
+    return ['uid'=>ctype_digit($uid)?(int)$uid:null,'gid'=>ctype_digit($gid)?(int)$gid:null];
+}
+function proj_storage_setup_script(string $root,array $identity): string {
+    // This script is displayed for explicit SSH execution; PHP never runs it.
+    $uid=$identity['uid'];$gid=$identity['gid'];
+    if($uid===null||$gid===null||$uid===0||$gid===0)return '# No safe setup command: configure PHP with a dedicated non-root UID/GID first.';
+    $script= <<<'SH'
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+[ "$(id -u)" -eq 0 ] || { echo "Run this setup in a root SSH session, not WebConsole." >&2; exit 1; }
+SH;
+    $script.="\nroot=".esc($root)."\nuid=".(int)$uid."\ngid=".(int)$gid."\n";
+    $script.= <<<'SH'
+# Refuse symlinks and untrusted writable ancestors. Never chown recursively.
+parent=$(dirname "$root")
+while :; do
+  [ ! -L "$parent" ] || { echo "Symlink ancestor refused: $parent" >&2; exit 1; }
+  [ -d "$parent" ] || { echo "Create the trusted parent first: $parent" >&2; exit 1; }
+  [ "$(stat -c %u -- "$parent")" = 0 ] || { echo "Parent is not root-owned: $parent" >&2; exit 1; }
+  mode=$(stat -c %a -- "$parent")
+  [ $((0$mode & 022)) -eq 0 ] || { echo "Writable ancestor refused: $parent" >&2; exit 1; }
+  [ "$parent" != / ] || break
+  parent=$(dirname "$parent")
+done
+[ ! -L "$root" ] || { echo "Symlink target refused." >&2; exit 1; }
+if [ -e "$root" ]; then
+  [ -d "$root" ] || { echo "Target is not a directory." >&2; exit 1; }
+  owner=$(stat -c %u -- "$root")
+  if [ "$owner" != "$uid" ]; then
+    [ "$owner" = 0 ] && [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -printf x -quit)" ] || { echo "Existing directory belongs to another account or contains data; refusing takeover." >&2; exit 1; }
+  fi
+else
+  mkdir -m 0700 -- "$root"
+fi
+chown --no-dereference "$uid:$gid" -- "$root"
+chmod 0700 -- "$root"
+echo "Managed project storage prepared: $root (UID $uid / GID $gid). Return to WebConsole and run the write test."
+SH;
+    return $script."\n";
+}
+function proj_storage_status(bool $probe=false): array {
+    $root=proj_storage_root();$identity=proj_execution_identity();clearstatcache(true,$root);
+    $ready=is_dir($root)&&is_writable($root)&&is_executable($root);
+    $error=$ready?'':'Storage is missing or not writable by the PHP execution account. Run the one-time SSH setup.';
+    if($probe&&$ready){$dir=$root.'/.wcp-probe-'.wcp_random(8);$made=@mkdir($dir,0700);$ready=$made&&@file_put_contents($dir.'/write-test','ok')===2;if($made){@unlink($dir.'/write-test');if(!@rmdir($dir))$ready=false;}if(!$ready)$error='Actual directory/file write test failed; check mount permissions, ACLs, quota, SELinux/AppArmor and available disk space.';}
+    return ['root'=>$root,'ready'=>$ready,'uid'=>$identity['uid'],'gid'=>$identity['gid'],'probed'=>$probe,'error'=>$error,'setup_script'=>proj_storage_setup_script($root,$identity)];
+}
+function proj_managed_path(string $name,string $id): string {
+    $root=proj_storage_root();$slug=substr(gh_slug($name),0,64);$id=gh_slug($id);
+    return $root.'/'.$slug.'-'.$id;
+}
+function proj_resolve_deploy_path(array $p,?array $existing=null): string {
+    $path=trim((string)($p['deploy_path']??''));
+    // A blank field on an existing profile preserves its data location.
+    if($path==='')$path=!empty($existing['deploy_path'])?$existing['deploy_path']:proj_managed_path($p['name'],$p['id']);
+    return safe_path($path);
+}
+function proj_runtime_env(array $p): array {
+    $base=DATA_DIR.'/runtime/'.gh_slug((string)$p['id']);
+    foreach([$base,$base.'/home',$base.'/cache',$base.'/tmp']as$dir){if(is_link($dir)||(!is_dir($dir)&&!@mkdir($dir,0700,true))||!is_writable($dir))throw new RuntimeException('Private project runtime directory is not writable: '.$dir);}
+    $defaults=['XDG_CACHE_HOME'=>$base.'/cache','npm_config_cache'=>$base.'/cache/npm','PIP_CACHE_DIR'=>$base.'/cache/pip','TMPDIR'=>$base.'/tmp'];
+    if(strpos((string)($p['deploy_path']??''),rtrim(norm_path((string)cfg()['project_root']),'/').'/')===0)$defaults['HOME']=$base.'/home';
+    if(isset($p['env']['NPM_CONFIG_CACHE']))unset($defaults['npm_config_cache']);
+    return array_merge($defaults,$p['env']??[]);
+}
+function proj_empty_location(string $path): bool {
+    if($path==='')return true;
+    for($part=norm_path($path);$part!=='/';$part=dirname($part))if(is_link($part))return false;
+    if(!file_exists($path)){for($parent=dirname($path);!file_exists($parent)&&$parent!=='/';$parent=dirname($parent)){}return is_dir($parent)&&is_readable($parent)&&is_executable($parent);}
+    if(!is_dir($path)||!is_readable($path))return false;
+    $files=@scandir($path);return is_array($files)&&count(array_diff($files,['.','..']))===0;
+}
+
+function proj_all(): array {$j=json_decode((string)@file_get_contents(DATA_DIR.'/projects.json'),true);return is_array($j)?$j:[];}
+function proj_save_all(array $list){if(file_put_contents(DATA_DIR.'/projects.json',json_encode(array_values($list),JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)===false)throw new RuntimeException('Cannot save projects');}
+function proj_find(array $list,string $id): ?array {foreach($list as$p)if(($p['id']??'')===$id)return $p;return null;}
+function proj_repo_url(array $p): string {
+    $raw=trim($p['repo_url']??'');if($raw===''||$raw[0]==='/')return $raw;if(!empty($p['auth_token'])&&preg_match('~^https://github\.com/~',$raw))return 'https://wcp:'.rawurlencode($p['auth_token']).'@'.substr($raw,8);return $raw;
+}
+function proj_service_job(array $p): ?array {
+    $jobs=[];foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)@file_get_contents($f),true);if(($j['type']??'')==='service'&&($j['params']['project_id']??'')===$p['id'])$jobs[]=$j;}usort($jobs,fn($a,$b)=>strcmp($b['created'],$a['created']));foreach($jobs as$j)if(job_status($j)['status']==='running')return $j;return $jobs[0]??null;
+}
+function public_project(array $p): array {$p['has_token_hint']=!empty($p['auth_token']);unset($p['auth_token']);return $p;}
+function sysinfo(): array {
+    $mem=['total'=>0,'avail'=>0];foreach(@file('/proc/meminfo')?:[]as$l){if(preg_match('/^MemTotal:\s+(\d+)/',$l,$m))$mem['total']=(int)$m[1]*1024;if(preg_match('/^MemAvailable:\s+(\d+)/',$l,$m))$mem['avail']=(int)$m[1]*1024;}
+    $parse=function($s){if(!preg_match('/^cpu\s+(.+)$/m',(string)$s,$m))return null;$a=array_map('intval',preg_split('/\s+/',trim($m[1])));return [array_sum(array_slice($a,0,8)),($a[3]??0)+($a[4]??0)];};$a=$parse(@file_get_contents('/proc/stat'));usleep(120000);$b=$parse(@file_get_contents('/proc/stat'));$cpu=$a&&$b&&$b[0]>$a[0]?round(100*(1-($b[1]-$a[1])/($b[0]-$a[0])),1):null;$load=sys_getloadavg()?:[0,0,0];$tools=[];foreach(['git','tmux','screen','zip','rsync','composer','npm','node','python3','pip3','tar','setsid']as$t)$tools[$t]=which($t);$tools['mysqldump']=which('mysqldump')||which('mariadb-dump');
+    return ['host'=>gethostname(),'kernel'=>php_uname('s').' '.php_uname('r').' '.php_uname('m'),'php'=>PHP_VERSION,'user'=>sh_ok('id -un')?:get_current_user(),'cores'=>(int)sh_ok("grep -c '^processor' /proc/cpuinfo"),'load'=>array_map(fn($v)=>round($v,2),$load),'cpu_pct'=>$cpu,'mem'=>['total'=>$mem['total'],'used'=>$mem['total']-$mem['avail']],'disk'=>['total'=>disk_total_space('/')?:0,'free'=>disk_free_space('/')?:0],'uptime'=>(int)(float)@file_get_contents('/proc/uptime'),'web'=>$_SERVER['SERVER_SOFTWARE']??'cli','term_mode'=>term_mode(),'ip'=>client_ip(),'tools'=>$tools];
+}
+function handle_api() {
+    $in=body();$api=$in['api']??'';if(!ip_allowed())jout(false,null,'IP is not allowed',403);
+    if(!in_array($api,['auth.login','auth.setup'],true)){require_auth();if($api!=='fs.download'&&!csrf_ok())jout(false,null,'توکن CSRF نامعتبر',403);}
+    switch($api){
+    case 'auth.setup':
+        if(cfg()['pass_hash']!=='')jout(false,null,'قبلاً رمز تنظیم شده است');$pw=(string)($in['password']??'');if(strlen($pw)<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');cfg_save(['pass_hash'=>password_hash($pw,PASSWORD_DEFAULT)]);do_login($pw);jout(true,['csrf'=>$_SESSION['wcp_csrf']]);
+    case 'auth.login':
+        if(cfg()['pass_hash']==='')jout(true,['setup'=>true]);if(login_locked()>0)jout(false,null,'ورود موقتاً قفل شده است',429);if(do_login((string)($in['password']??'')))jout(true,['csrf'=>$_SESSION['wcp_csrf']]);jout(false,null,'رمز عبور اشتباه است',401);
+    case 'auth.logout': session_destroy();jout(true);
+    case 'auth.change':
+        if(!password_verify((string)($in['old']??''),cfg()['pass_hash']))jout(false,null,'رمز فعلی اشتباه است');if(strlen((string)($in['new']??''))<8)jout(false,null,'رمز حداقل ۸ کاراکتر باشد');cfg_save(['pass_hash'=>password_hash($in['new'],PASSWORD_DEFAULT)]);jout(true);
+    case 'ping': jout(true,['v'=>WCP_VERSION,'user'=>$_SESSION['wcp_user']??'']);
+    case 'sysinfo': jout(true,sysinfo());
+    case 'proc.list':
+        $procs=[];$cpu=0;$mem=0;foreach(explode("\n",trim(sh_ok('ps -eo pid,user,%cpu,%mem,vsz,rss,stat,start,time,comm,args --no-headers')))as$l){$p=preg_split('/\s+/',trim($l),11);if(count($p)<10)continue;$cpu+=(float)$p[2];$mem+=(float)$p[3];$procs[]=['pid'=>(int)$p[0],'user'=>$p[1],'cpu'=>(float)$p[2],'mem'=>(float)$p[3],'vsz'=>(int)$p[4],'rss'=>(int)$p[5],'stat'=>$p[6],'start'=>$p[7],'time'=>$p[8],'comm'=>$p[9],'args'=>$p[10]??$p[9]];}jout(true,['list'=>$procs,'count'=>count($procs),'total_cpu'=>round($cpu,1),'total_mem'=>round($mem,1),'my_pid'=>getmypid()]);
+    case 'proc.kill':
+        $pid=(int)($in['pid']??0);$sig=(int)($in['sig']??15);if($pid<=1||$pid===getmypid())jout(false,null,'Invalid/protected PID');if(!in_array($sig,[1,2,9,15]))$sig=15;$out=sh('kill -'.$sig.' '.$pid,$rc);if($rc!==0&&is_dir('/proc/'.$pid))jout(false,null,$out?:'Permission denied');act_log("Signal $sig to PID $pid");jout(true,['pid'=>$pid,'sig'=>$sig]);
+    case 'proc.info':
+        $pid=(int)($in['pid']??0);if($pid<1||!is_dir('/proc/'.$pid))jout(false,null,'Process does not exist');$d='/proc/'.$pid;jout(true,['pid'=>$pid,'cmdline'=>str_replace("\0",' ',(string)@file_get_contents($d.'/cmdline')),'cwd'=>@readlink($d.'/cwd')?:'','exe'=>@readlink($d.'/exe')?:'','status'=>(string)@file_get_contents($d.'/status'),'raw_stat'=>sh_ok('ps -p '.$pid.' -o pid,user,%cpu,%mem,vsz,rss,stat,start,time,comm,args --no-headers')]);
+    case 'fs.list':
+        $r=fs_scan_dir((string)($in['path']??'/'),(string)($in['sort']??'name'),(bool)($in['asc']??true));$r['items']=array_values(array_filter($r['items'],fn($i)=>!empty($in['hidden'])||$i['name'][0]!=='.'));jout(true,$r);
+    case 'fs.read':
+        $p=safe_path((string)$in['path']);if(!is_file($p)||filesize($p)>MAX_EDIT)jout(false,null,'File missing or larger than 3 MiB');$c=file_get_contents($p);if($c===false||!mb_check_encoding($c,'UTF-8'))jout(false,null,'Unreadable or binary file');jout(true,['path'=>$p,'content'=>$c,'size'=>filesize($p),'mtime'=>filemtime($p)]);
+    case 'fs.save':
+        $p=safe_new_path((string)$in['path']);$c=(string)$in['content'];if(file_put_contents($p,$c,LOCK_EX)===false)jout(false,null,'Cannot write file');jout(true,['path'=>$p,'size'=>strlen($c)]);
+    case 'fs.create':
+        $p=safe_new_path((string)$in['path']);if(file_exists($p))jout(false,null,'Already exists');$ok=($in['type']??'file')==='dir'?mkdir($p,0755,true):file_put_contents($p,(string)($in['content']??''))!==false;jout($ok,['path'=>$p],$ok?null:'Cannot create item');
+    case 'fs.delete':
+        $n=0;foreach((array)($in['paths']??[])as$p){$p=safe_path((string)$p);if(in_array($p,['/','/etc','/usr','/var','/home','/root',DATA_DIR],true))throw new RuntimeException('Protected directory');$out=sh('rm -rf -- '.esc($p),$rc);if($rc!==0)throw new RuntimeException($out);$n++;}act_log('Deleted '.$n.' items');jout(true,['deleted'=>$n]);
+    case 'fs.rename':
+        $p=safe_path((string)$in['path']);$np=safe_new_path(dirname($p).'/'.basename((string)$in['name']));if(file_exists($np))jout(false,null,'Destination already exists');jout(rename($p,$np),['path'=>$np]);
+    case 'fs.transfer':
+        $dest=safe_path((string)$in['dest']);if(!is_dir($dest))jout(false,null,'Destination missing');$errs=[];foreach((array)($in['paths']??[])as$p){$p=safe_path((string)$p);$t=safe_new_path(rtrim($dest,'/').'/'.basename($p));if($t===$p)continue;if(is_dir($p)&&strpos($t.'/',rtrim($p,'/').'/')===0){$errs[]=$p;continue;}sh((($in['op']??'move')==='copy'?'cp -a -- ':'mv -- ').esc($p).' '.esc($t),$rc);if($rc!==0)$errs[]=$p;}jout(!$errs,['errors'=>$errs],$errs?implode(', ',$errs):null);
+    case 'fs.chmod':
+        $mode=(string)($in['mode']??'644');if(!preg_match('/^[0-7]{3,4}$/',$mode))jout(false,null,'Invalid mode');foreach((array)$in['paths']as$p){$p=safe_path($p);sh('chmod '.(!empty($in['recursive'])&&is_dir($p)?'-R ':'').$mode.' -- '.esc($p),$rc);if($rc!==0)throw new RuntimeException('chmod failed');}jout(true);
+    case 'fs.chown':
+        $ug=trim((string)($in['owner']??''));if(!preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9_\-.]*(:[a-zA-Z0-9_\-.]+)?$/',$ug))jout(false,null,'Invalid owner/group');foreach((array)$in['paths']as$p){$p=safe_path($p);sh('chown '.(!empty($in['recursive'])&&is_dir($p)?'-R ':'').esc($ug).' -- '.esc($p),$rc);if($rc!==0)throw new RuntimeException('chown failed');}jout(true);
+    case 'fs.zip':
+        $dest=safe_new_path((string)$in['dest']);if(!fs_zip_to($dest,array_map('basename',(array)$in['paths']),safe_path((string)$in['base'])))jout(false,null,'ZIP failed');jout(true,['path'=>$dest,'size'=>filesize($dest)]);
+    case 'fs.unzip':
+        $z=safe_path((string)$in['zip']);$dest=safe_new_path((string)$in['dest']);if(!class_exists('ZipArchive'))jout(false,null,'Install the PHP zip extension for checked ZIP extraction');$zip=new ZipArchive();if($zip->open($z)!==true)jout(false,null,'Cannot open ZIP');
+        for($i=0;$i<$zip->numFiles;$i++){$name=str_replace('\\','/',$zip->getNameIndex($i));$ops=0;$attr=0;$zip->getExternalAttributesIndex($i,$ops,$attr);if($name===''||$name[0]==='/'||preg_match('~(^|/)\.\.(/|$)|^[a-zA-Z]:~',$name)||(($attr>>16)&0170000)===0120000)throw new RuntimeException('Unsafe ZIP entry');$target=norm_path($dest.'/'.$name);$parent=$target;while(!file_exists($parent)&&dirname($parent)!==$parent)$parent=dirname($parent);if(is_link($parent)||is_link($target))throw new RuntimeException('ZIP target contains a symlink');}
+        if(!is_dir($dest))mkdir($dest,0755,true);$ok=$zip->extractTo($dest);$zip->close();jout($ok,['dest'=>$dest],$ok?null:'Extraction failed');
+    case 'fs.search': jout(true,['results'=>fs_search((string)$in['path'],(string)$in['q'],!empty($in['content']))]);
+    case 'fs.du':
+        $p=safe_path((string)$in['path']);preg_match('/^(\d+)/',trim(sh_ok('du -sb -- '.esc($p))),$m);jout(true,['bytes'=>(int)($m[1]??0),'path'=>$p]);
+    case 'fs.info':
+        $p=safe_path((string)$in['path']);$st=lstat($p);if(!$st)jout(false,null,'Missing');jout(true,['path'=>$p,'size'=>$st['size'],'mtime'=>$st['mtime'],'ctime'=>$st['ctime'],'perms'=>substr(sprintf('%o',$st['mode']),-4),'link'=>is_link($p)?readlink($p):null,'owner'=>function_exists('posix_getpwuid')?(posix_getpwuid($st['uid'])['name']??$st['uid']):$st['uid'],'mime'=>function_exists('mime_content_type')?mime_content_type($p):'']);
+    case 'fs.download':
+        $p=safe_path((string)($_GET['path']??''));if(is_dir($p)){$tmp=CACHE_DIR.'/dl-'.wcp_random(4).'.zip';if(!fs_zip_to($tmp,[basename($p)],dirname($p)))jout(false,null,'Cannot create ZIP');register_shutdown_function(function()use($tmp){@unlink($tmp);});fs_stream_download($tmp,basename($p).'.zip');}if(!is_file($p))jout(false,null,'Missing file');fs_stream_download($p,basename($p));
+    case 'fs.upload':
+        $dest=safe_path((string)($in['dest']??'/'));$n=0;$errors=[];foreach((array)($_FILES['files']['name']??[])as$i=>$nm){$nm=basename(str_replace('\\','/',$nm));if(($_FILES['files']['error'][$i]??1)!==UPLOAD_ERR_OK||!move_uploaded_file($_FILES['files']['tmp_name'][$i],safe_new_path(rtrim($dest,'/').'/'.$nm)))$errors[]=$nm;else$n++;}jout(!$errors,['uploaded'=>$n,'errors'=>$errors],$errors?'Upload failed':null);
+    case 'fs.upload_chunk':
+        $t=safe_new_path(rtrim(safe_path((string)$in['dest']),'/').'/'.basename(str_replace('\\','/',(string)$in['name'])));$off=max(0,(int)($in['offset']??0));$data=base64_decode((string)$in['b64'],true);if($data===false)jout(false,null,'Invalid data');$fp=fopen($t,'c+b');if(!$fp)jout(false,null,'Cannot open destination');flock($fp,LOCK_EX);if($off===0)ftruncate($fp,0);$size=fstat($fp)['size'];if($size!==$off){flock($fp,LOCK_UN);fclose($fp);jout(false,null,'Chunk offset mismatch');}fseek($fp,$off);$r=fwrite($fp,$data);flock($fp,LOCK_UN);fclose($fp);jout($r===strlen($data),['path'=>$t,'received'=>$r]);
+    case 'term.list': jout(true,['sessions'=>term_list(),'mode'=>term_mode()]);
+    case 'term.create': jout(true,term_create((int)($in['cols']??120),(int)($in['rows']??34)));
+    case 'term.read': jout(true,term_read((string)$in['id'],(int)($in['offset']??0)));
+    case 'term.write': term_write((string)$in['id'],(string)$in['b64']);jout(true);
+    case 'term.resize': term_resize((string)$in['id'],(int)$in['cols'],(int)$in['rows']);jout(true);
+    case 'term.kill': term_kill((string)$in['id']);jout(true);
+    case 'gh.save':
+        $c=cfg();$new=[];foreach(['gh_repo','gh_branch','git_name','git_email']as$k)$new[$k]=trim((string)($in[$k]??$c[$k]));$new['gh_branch']=$new['gh_branch']?:'backups';if(!empty($in['gh_token'])&&$in['gh_token']!=='__KEEP__')$new['gh_token']=$in['gh_token'];cfg_save($new);$c=cfg();jout(true,['gh_repo'=>$c['gh_repo'],'gh_branch'=>$c['gh_branch'],'git_name'=>$c['git_name'],'git_email'=>$c['git_email'],'has_token'=>$c['gh_token']!=='','token_hint'=>$c['gh_token']?'••••'.substr($c['gh_token'],-4):'']);
+    case 'gh.get':
+        $c=cfg();jout(true,['gh_repo'=>$c['gh_repo'],'gh_branch'=>$c['gh_branch'],'git_name'=>$c['git_name'],'git_email'=>$c['git_email'],'has_token'=>$c['gh_token']!=='','token_hint'=>$c['gh_token']?'••••'.substr($c['gh_token'],-4):'']);
+    case 'gh.test':
+        if(gh_url()==='')jout(false,null,'Save repository settings first');$out=sh('git ls-remote '.esc(gh_url()),$rc);if($rc!==0)jout(false,null,mb_substr(mask_url($out),0,400));jout(true,['empty'=>trim($out)==='','refs'=>array_slice(explode("\n",trim($out)),0,10)]);
+    case 'gh.profiles':
+        $list=bk_profiles();$op=$in['op']??'list';if($op==='save'){$p=$in['profile'];$p['id']=$p['id']?:wcp_random(4);$found=false;foreach($list as&$x)if($x['id']===$p['id']){$x=array_merge($x,$p);$found=true;}unset($x);if(!$found)$list[]=$p;bk_profiles_save($list);}elseif($op==='delete'){bk_profiles_save(array_values(array_filter($list,fn($x)=>$x['id']!==$in['id'])));}jout(true,['profiles'=>bk_profiles()]);
+    case 'gh.backup':
+        if(empty($in['profiles'])||gh_url()==='')jout(false,null,'Select profiles and configure repository');$job=job_create('backup','بکاپ گیت‌هاب',['profiles'=>(array)$in['profiles'],'msg'=>(string)($in['msg']??''),'tag'=>(string)($in['tag']??'')]);job_start($job);jout(true,['job'=>$job['id']]);
+    case 'gh.snapshots':
+        if(gh_url()==='')jout(false,null,'Configure repository');$out=sh('git ls-remote '.esc(gh_url()),$rc);if($rc!==0)jout(false,null,mask_url($out));$tags=[];$has=false;$branch=cfg()['gh_branch'];foreach(explode("\n",trim($out))as$l){$a=explode("\t",$l,2);if(count($a)<2)continue;$ref=$a[1];if(strpos($ref,'refs/tags/')===0&&strpos($ref,'^{}')===false)$tags[]=substr($ref,10);if($ref==='refs/heads/'.$branch)$has=true;}rsort($tags);jout(true,['tags'=>$tags,'has_branch'=>$has,'branch'=>$branch]);
+    case 'gh.manifest':
+        $ref=(string)($in['ref']??'');if($ref===''||$ref[0]==='-')jout(false,null,'Invalid ref');$cache=CACHE_DIR.'/gh-'.hash('sha256',gh_url().'|'.$ref);if(!is_file($cache.'/manifest.json')){sh('rm -rf -- '.esc($cache));$out=sh('git clone --depth 1 --branch '.esc($ref).' -- '.esc(gh_url()).' '.esc($cache),$rc);if($rc!==0)jout(false,null,mask_url($out));}$mf=json_decode((string)@file_get_contents($cache.'/manifest.json'),true);if(!$mf)jout(false,null,'manifest.json is missing');jout(true,['ref'=>$ref,'manifest'=>$mf,'cache'=>$cache]);
+    case 'gh.restore':
+        if(empty($in['categories']))jout(false,null,'Select categories');$job=job_create('restore','بازیابی از گیت‌هاب',['ref'=>(string)$in['ref'],'categories'=>(array)$in['categories'],'overwrite'=>!empty($in['overwrite']),'safety'=>!empty($in['safety']),'target_base'=>trim((string)($in['target_base']??''))]);job_start($job);jout(true,['job'=>$job['id']]);
+    case 'gh.user_repos': $owner=trim((string)($in['owner']??'fazilatma'));jout(true,['owner'=>$owner,'repos'=>gh_user_repos($owner,(string)($in['token']??''))]);
+    case 'gh.repo_branches': jout(true,['branches'=>gh_repo_branches((string)$in['owner'],(string)$in['repo'],(string)($in['token']??''))]);
+    case 'gh.inspect_branch': jout(true,['apps'=>gh_inspect_branch((string)$in['owner'],(string)$in['repo'],(string)$in['branch'],(string)($in['token']??''))]);
+    case 'proj.list':
+        $list=proj_all();foreach($list as&$p){$svc=proj_service_job($p);$p['service']=$svc?['job'=>$svc['id'],'status'=>job_status($svc)['status']]:null;$p['deploy_path_exists']=is_dir($p['deploy_path']??'');$p=public_project($p);}unset($p);jout(true,['projects'=>$list]);
+    case 'proj.save': case 'proj.quick_deploy':
+        $list=proj_all();$p=$in['project']??[];foreach(['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','port','id']as$k)$p[$k]=trim((string)($p[$k]??''));if($p['name']==='')jout(false,null,'Name is required');if($p['repo_url']!==''&&!preg_match('~^(https?://|git@|ssh://|file://|/)~',$p['repo_url']))jout(false,null,'Invalid repository URL');if($p['branch']==='')$p['branch']='main';if($p['branch'][0]==='-'||preg_match('~(^|/)\.\.(/|$)~',$p['subfolder']))jout(false,null,'Invalid branch/subfolder');
+        $env=[];foreach(preg_split('/\r\n|\r|\n/',(string)($p['env_text']??''))as$l){$l=trim($l);if($l===''||$l[0]==='#'||strpos($l,'=')===false)continue;[$k,$v]=explode('=',$l,2);$k=trim($k);if(!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/',$k))jout(false,null,'Invalid environment key');$env[$k]=trim($v);}unset($p['env_text']);$p['env']=$env;
+        if($api==='proj.quick_deploy')$p=proj_quick_settings($p);
+        if(($p['auth_token']??'')==='__KEEP__'||($p['auth_token']??'')==='')unset($p['auth_token']);$p['keep_git']=!empty($p['keep_git']);$p['auto_start']=!empty($p['auto_start']);$p['is_daemon']=!empty($p['is_daemon']);$existing=$p['id']!==''?proj_find($list,$p['id']):null;if(!$existing)$p['id']=wcp_random(5);$p['deploy_path']=proj_resolve_deploy_path($p,$existing);if($p['deploy_path']==='/')jout(false,null,'Invalid deployment root');
+        $found=false;if($p['id']!==''){foreach($list as&$x)if($x['id']===$p['id']){$p=array_merge($x,$p);$x=$p;$found=true;}unset($x);}if(!$found){$p['created']=date('c');$list[]=$p;}proj_save_all($list);
+        if($api==='proj.quick_deploy'){$job=job_create('deploy','دیپلوی: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['project'=>public_project($p),'job'=>$job['id']]);}jout(true,['projects'=>array_map('public_project',proj_all())]);
+    case 'proj.delete': cli_stop_service((string)$in['id']);proj_save_all(array_values(array_filter(proj_all(),fn($x)=>$x['id']!==$in['id'])));jout(true);
+    case 'proj.storage':
+        if(!empty($in['prepare'])){$root=proj_storage_root();if(!file_exists($root)&&is_dir(dirname($root))&&is_writable(dirname($root)))@mkdir($root,0700);}
+        jout(true,proj_storage_status(!empty($in['probe'])||!empty($in['prepare'])));
+    case 'proj.managed_path':
+        $id=(string)($in['id']??'');$old=$id!==''?proj_find(proj_all(),$id):null;if($id!==''&&!$old)jout(false,null,'Project not found');
+        if($old){foreach(glob(JOBS_DIR.'/*.json')?:[]as$file){$active=json_decode((string)@file_get_contents($file),true);if(($active['params']['project_id']??null)===$id&&in_array($active['type']??'',['deploy','service'],true)&&job_status($active)['status']==='running')jout(false,null,'Stop or finish the active deployment/service before changing its storage location.');}$svc=proj_service_job($old);if($svc&&job_status($svc)['status']==='running')jout(false,null,'Stop the existing service before changing its storage location.');if(!proj_empty_location((string)($old['deploy_path']??'')))jout(false,null,'Existing installation contains data or cannot be inspected. No files were moved. Keep its path, or ask an administrator to migrate the full installation, database, .env.local and vault key first.');}
+        $storage=proj_storage_status(true);if(!$storage['ready'])jout(false,null,$storage['error']);
+        $path=proj_managed_path((string)($in['name']??($old['name']??'project')),$id?:wcp_random(5));if(file_exists($path)||is_link($path))jout(false,null,'Managed destination already exists; refusing to reuse it.');jout(true,['path'=>$path]);
+    case 'proj.preflight':
+        $p=proj_find(proj_all(),(string)($in['id']??''));if(!$p)jout(false,null,'Project not found');jout(true,proj_preflight($p));
+    case 'proj.deploy':
+        $p=proj_find(proj_all(),(string)$in['id']);if(!$p)jout(false,null,'Project not found');$job=job_create('deploy','دیپلوی: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['job'=>$job['id']]);
+    case 'proj.service':
+        $p=proj_find(proj_all(),(string)$in['id']);if(!$p)jout(false,null,'Project not found');$act=$in['action']??'start';if(in_array($act,['stop','restart'],true))cli_stop_service($p['id']);if($act==='stop')jout(true);if(empty($p['start_cmd']))jout(false,null,'Start command is empty');$svc=proj_service_job($p);if($svc&&job_status($svc)['status']==='running')jout(true,['job'=>$svc['id']]);$job=job_create('service','سرویس: '.$p['name'],['project_id'=>$p['id']]);job_start($job);jout(true,['job'=>$job['id']]);
+    case 'jobs.status':
+        $job=job_get((string)$in['id']);if(!$job)jout(false,null,'Job not found');jout(true,['id'=>$job['id'],'name'=>$job['name'],'type'=>$job['type'],'status'=>job_status($job),'result'=>$job['result'],'created'=>$job['created']]);
+    case 'jobs.log':
+        $job=job_get((string)$in['id']);if(!$job)jout(false,null,'Job not found');$off=max(0,(int)($in['offset']??0));$f=$job['log'];if(!is_file($f))jout(true,['b64'=>'','offset'=>0,'status'=>job_status($job)]);clearstatcache(true,$f);$size=filesize($f);if($off>$size)$off=0;$data='';if($size>$off){$fp=fopen($f,'rb');fseek($fp,$off);$data=(string)fread($fp,min($size-$off,1048576));fclose($fp);}
+        jout(true,['b64'=>base64_encode($data),'offset' => $off + strlen($data), 'has_more' => ($off + strlen($data) < $size), 'status' => job_status($job)]);
+    case 'jobs.stop': $j=job_get((string)$in['id']);if($j)job_stop($j);jout(true);
+    case 'jobs.list':
+        $res=[];foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)file_get_contents($f),true);if(!$j||empty($j['id']))continue;$res[]=['id'=>$j['id'],'name'=>$j['name'],'type'=>$j['type'],'created'=>$j['created'],'status'=>job_status($j)];}usort($res,fn($a,$b)=>strcmp($b['created'],$a['created']));jout(true,['jobs'=>array_slice($res,0,50)]);
+    case 'settings.get':
+        $c=cfg();jout(true,['theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'project_root'=>$c['project_root'],'fs_start'=>$c['fs_start'],'session_minutes'=>$c['session_minutes'],'allowed_ips'=>$c['allowed_ips'],'created'=>$c['created'],'noexec'=>$GLOBALS['__NOEXEC']]);
+    case 'settings.save':
+        $new=[];foreach(['theme'=>['dark','light','forest','ocean','amber'],'layout'=>['classic','studio','focus'],'density'=>['comfortable','compact']] as $key=>$allowed){if(isset($in[$key])){if(!in_array($in[$key],$allowed,true))jout(false,null,'Invalid appearance option: '.$key);$new[$key]=$in[$key];}}if(isset($in['project_root']))$new['project_root']=proj_storage_root((string)$in['project_root']);if(isset($in['fs_start']))$new['fs_start']=safe_path((string)$in['fs_start']);if(isset($in['session_minutes']))$new['session_minutes']=max(10,min(1440,(int)$in['session_minutes']));if(isset($in['allowed_ips']))$new['allowed_ips']=trim((string)$in['allowed_ips']);cfg_save($new);jout(true);
+    case 'activity': $lines=@file(DATA_DIR.'/activity.log',FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)?:[];jout(true,['lines'=>array_slice(array_reverse($lines),0,200)]);
+    default:jout(false,null,'Unknown action',400);
+    }
+}
+function cli_log(string $m){echo '['.date('H:i:s').'] '.$m."\n";}
+function cli_run(string $cmd,&$code=null): string {cli_log('$ '.mask_url($cmd));$out=sh($cmd,$code);if(trim($out)!=='')echo mask_url($out)."\n";return $out;}
+function cli_checked(string $cmd): string {$out=cli_run($cmd,$rc);if($rc!==0)throw new RuntimeException('Command failed ('.$rc.'): '.mask_url($out));return $out;}
+function cli_backup(array $job): int {
+    $c=cfg();$params=$job['params'];$url=gh_url();if($url==='')throw new RuntimeException('Configure backup repository');$stage=CACHE_DIR.'/backup-'.$job['id'];mkdir($stage,0700,true);$selected=array_filter(bk_profiles(),fn($p)=>in_array($p['id'],$params['profiles'],true));$mf=['app'=>'wconsole','version'=>WCP_VERSION,'created'=>date('c'),'host'=>gethostname(),'branch'=>$c['gh_branch'],'profiles'=>[],'splits'=>[]];
+    foreach($selected as$p){$slug=gh_slug($p['id'].'-'.$p['name']);$dest=$stage.'/profiles/'.$slug;mkdir($dest,0700,true);$info=['id'=>$p['id'],'name'=>$p['name'],'extra'=>$p['extra'],'includes'=>[],'bytes'=>0,'files'=>0];cli_log('Profile: '.$p['name']);
+        if($p['extra']==='db'){
+            mkdir($dest.'/dumps',0700,true);$found=false;
+            if(which('mysqldump')||which('mariadb-dump')){$bin=which('mysqldump')?'mysqldump':'mariadb-dump';cli_checked('bash -o pipefail -c '.esc($bin.' --all-databases --single-transaction --quick | gzip > '.esc($dest.'/dumps/mysql-all.sql.gz')));$found=true;}
+            if(which('pg_dumpall')){cli_checked('bash -o pipefail -c '.esc('pg_dumpall | gzip > '.esc($dest.'/dumps/postgres-all.sql.gz')));$found=true;}
+            if(!$found)throw new RuntimeException('No database dump utility is available');$info['includes'][]=['src'=>'@db','staged'=>'profiles/'.$slug.'/dumps','restore_mode'=>'cache'];
+        }elseif($p['extra']==='cron'){
+            mkdir($dest.'/cron',0700,true);file_put_contents($dest.'/cron/current-user.cron.txt',sh_ok('crontab -l'));if(is_readable('/var/spool/cron/crontabs'))cli_checked('cp -a /var/spool/cron/crontabs '.esc($dest.'/cron/spool'));$info['includes'][]=['src'=>'/var/spool/cron','staged'=>'profiles/'.$slug.'/cron','restore_mode'=>'direct'];
+        }elseif($p['extra']==='packages'){
+            mkdir($dest.'/packages',0700,true);foreach(['dpkg'=>"dpkg-query -W -f='\${Package}\t\${Version}\n'",'pip'=>'pip3 freeze','npm'=>'npm ls -g --depth=0','snap'=>'snap list']as$k=>$cmd)file_put_contents($dest.'/packages/'.$k.'.txt',sh_ok($cmd));$info['includes'][]=['src'=>'@packages','staged'=>'profiles/'.$slug.'/packages','restore_mode'=>'cache'];
+        }else foreach((array)($p['includes']??[])as$src){$src=rtrim(trim((string)$src),'/');if($src===''||!is_dir($src)){cli_log('Skipping missing path: '.$src);continue;}$ex=' --exclude='.esc(ltrim(DATA_DIR,'/'));foreach((array)($p['excludes']??[])as$e)if(trim($e)!=='')$ex.=' --exclude='.esc(ltrim($e,'/'));cli_checked('bash -o pipefail -c '.esc('tar -C / -cf - '.$ex.' -- '.esc(ltrim($src,'/')).' | tar -C '.esc($dest).' -xf -'));$info['includes'][]=['src'=>$src,'staged'=>'profiles/'.$slug.'/'.ltrim($src,'/'),'restore_mode'=>'direct'];preg_match('/^(\d+)/',sh_ok('du -sb -- '.esc($dest.'/'.ltrim($src,'/'))),$m);$info['bytes']+=(int)($m[1]??0);$info['files']+=(int)sh_ok('find '.esc($dest.'/'.ltrim($src,'/')).' -type f | wc -l');}
+        $mf['profiles'][]=$info;
+    }
+    $split=max(10,(int)$c['split_mb']?:80);foreach(explode("\n",trim(sh_ok('find '.esc($stage).' -type f -size +'.$split.'M')))as$big){if($big==='')continue;$rel=ltrim(substr($big,strlen($stage)),'/');cli_checked('split -b '.($split*1048576).' -d -- '.esc($big).' '.esc($big.'.part.'));$parts=[];foreach(glob($big.'.part.*')?:[]as$pp)$parts[]=ltrim(substr($pp,strlen($stage)),'/');if(!$parts)throw new RuntimeException('File splitting produced no parts');unlink($big);$mf['splits'][]=['final'=>$rel,'parts'=>$parts];}
+    file_put_contents($stage.'/manifest.json',json_encode($mf,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));$branch=$c['gh_branch']?:'backups';$tag=trim($params['tag']??'')?:'bk-'.date('Ymd-His');$g='git -C '.esc($stage).' ';cli_checked($g.'check-ref-format --branch '.esc($branch));cli_checked($g.'check-ref-format '.esc('refs/tags/'.$tag));cli_checked($g.'init -b '.esc($branch));cli_checked($g.'config user.email '.esc($c['git_email']));cli_checked($g.'config user.name '.esc($c['git_name']));cli_checked($g.'remote add origin '.esc($url));cli_checked($g.'add -A -f');cli_checked($g.'commit --allow-empty -m '.esc(trim($params['msg']??'')?:'WebConsole backup '.date('c')));cli_checked($g.'push --force origin '.esc($branch.':'.$branch));cli_checked($g.'tag '.esc($tag));cli_checked($g.'push origin '.esc('refs/tags/'.$tag));sh('rm -rf -- '.esc($stage));cli_log('Backup complete: '.$tag);return 0;
+}
+function manifest_path(string $root,string $relative): string {
+    if($relative===''||$relative[0]==='/'||strpos($relative,"\0")!==false||preg_match('~(^|/)\.\.(/|$)~',str_replace('\\','/',$relative)))throw new RuntimeException('Unsafe manifest path');$path=norm_path($root.'/'.$relative);$probe=$path;while(!file_exists($probe)&&dirname($probe)!==$probe)$probe=dirname($probe);$real=realpath($probe);$base=realpath($root);if($real===false||$base===false||($real!==$base&&strpos($real,$base.'/')!==0))throw new RuntimeException('Manifest path escapes backup');return $path;
+}
+function cli_restore(array $job): int {
+    $p=$job['params'];$ref=$p['ref'];if($ref===''||$ref[0]==='-')throw new RuntimeException('Invalid ref');$work=CACHE_DIR.'/restore-'.$job['id'];mkdir($work,0700,true);$repo=$work.'/repo';cli_checked('git clone --depth 1 --branch '.esc($ref).' -- '.esc(gh_url()).' '.esc($repo));$mf=json_decode((string)@file_get_contents($repo.'/manifest.json'),true);if(!$mf)throw new RuntimeException('Invalid manifest');
+    if(!empty($p['safety'])){$tag='pre-restore-'.date('Ymd-His');$g='git -C '.esc($repo).' ';cli_checked($g.'fetch --depth 1 origin '.esc(cfg()['gh_branch']));cli_checked($g.'tag '.esc($tag).' FETCH_HEAD');cli_checked($g.'push origin '.esc('refs/tags/'.$tag));cli_log('Safety tag preserves the remote backup branch, not a new snapshot of local VPS files.');}
+    $selected=array_filter($mf['profiles']??[],fn($pr)=>in_array($pr['id'],$p['categories'],true));
+    foreach($mf['splits']??[]as$sp){$need=false;foreach($selected as$pr)foreach($pr['includes']as$inc)if($sp['final']===$inc['staged']||strpos($sp['final'],rtrim($inc['staged'],'/').'/')===0)$need=true;if(!$need)continue;$final=manifest_path($repo,$sp['final']);$parts=array_map(fn($pt)=>manifest_path($repo,$pt),$sp['parts']);foreach($parts as$part)if(!is_file($part))throw new RuntimeException('Missing backup part');cli_checked('cat -- '.implode(' ',array_map('esc',$parts)).' > '.esc($final));}
+    foreach($selected as$pr){cli_log('Restoring '.$pr['name']);foreach($pr['includes']??[]as$inc){$src=manifest_path($repo,$inc['staged']);if(!is_dir($src))throw new RuntimeException('Missing staged directory');$base=trim((string)($p['target_base']??''));$target=($inc['restore_mode']??'direct')==='cache'?DATA_DIR.'/restored/'.date('Ymd-His').'/'.basename($inc['staged']):($base!==''?rtrim($base,'/').'/'.ltrim($inc['src'],'/'):$inc['src']);$target=safe_path($target);if($target==='/')throw new RuntimeException('Cannot restore to filesystem root');if(!is_dir($target))mkdir($target,0755,true);$cmd=which('rsync')?'rsync -a '.(!empty($p['overwrite'])?'':'--ignore-existing ').esc(rtrim($src,'/').'/.').' '.esc(rtrim($target,'/').'/'):'cp -'.(!empty($p['overwrite'])?'a':'an').' -- '.esc(rtrim($src,'/').'/.').' '.esc(rtrim($target,'/').'/');cli_checked($cmd);}}
+    sh('rm -rf -- '.esc($work));cli_log('Restore complete. Database dumps require a separate manual import.');return 0;
+}
+function default_install_cmd(string $type): string {
+    switch($type){case 'php':return 'composer install --no-interaction --no-dev -o';case 'node':return 'npm install --include=dev --no-audit --no-fund';case 'python':return 'if [ -f requirements.txt ]; then pip3 install -r requirements.txt; else pip3 install .; fi';default:return '';}
+}
+function proj_preflight(array $p): array {
+    $checks=[];$add=function($name,$ok,$detail)use(&$checks){$checks[]=['name'=>$name,'ok'=>(bool)$ok,'detail'=>$detail];};
+    $path=(string)($p['deploy_path']??'');$target='';$parent='';
+    try{$target=safe_path($path);if($path===''||$target==='/')throw new RuntimeException('Choose a non-root absolute deployment directory');$parent=$target;while(!file_exists($parent)&&$parent!=='/')$parent=dirname($parent);$ok=is_dir($parent)&&is_writable($parent)&&is_executable($parent);$add('Deployment directory',$ok,$ok?'Writable directory/ancestor: '.$parent:'Permission denied or not a directory: '.$parent.'. For new projects, open Project storage and use the managed root after its one-time setup. Existing custom installations need an administrator to repair ownership or migrate their data; do not use chmod 777 or run PHP as root.');}
+    catch(Throwable $e){$add('Deployment directory',false,$e->getMessage());}
+    $uid=function_exists('posix_geteuid')?posix_geteuid():null;$pw=$uid!==null&&function_exists('posix_getpwuid')?posix_getpwuid($uid):false;
+    $user=is_array($pw)?$pw['name']:trim(sh_ok('id -un'));if($user==='')$user='unknown';
+    $add('Shell execution',empty($GLOBALS['__NOEXEC']),'PHP execution account: '.$user.($uid!==null?' (UID '.$uid.')':''));
+    foreach(['git','bash']as$tool)$add($tool,which($tool),'Required in the execution account PATH');
+    $copy=which('rsync')||which('tar');$add('File copy tool',$copy,'rsync or tar required');
+    $commands=implode(' ',[$p['install_cmd']??'', $p['build_cmd']??'', $p['start_cmd']??'']);
+    if(($p['type']??'')==='node')$add('node',which('node'),'Required for Node projects');
+    if(preg_match('/\bnpm\b/',$commands)||(($p['type']??'')==='node'&&empty($p['install_cmd'])))$add('npm',which('npm'),'Required by install/build commands');
+    $add('WebConsole cache',is_writable(CACHE_DIR),'Cache directory must be writable');
+    return ['ok'=>!in_array(false,array_column($checks,'ok'),true),'user'=>$user,'target'=>$target,'checks'=>$checks,'notes'=>['Read-only preflight: no directories or permissions changed.','This does not verify repository credentials, dependencies, free ports, or lasting service health.','Do not run a second supervisor on the same project.']];
+}
+
+function cli_deploy(array $job): int {
+    $p=proj_find(proj_all(),$job['params']['project_id']??'');if(!$p)throw new RuntimeException('Project not found');$repo=CACHE_DIR.'/proj-'.$p['id'];$branch=$p['branch']?:'main';$sub=trim($p['subfolder']??'','/');$dest=safe_path($p['deploy_path']);$preflight=proj_preflight($p);foreach($preflight['checks'] as $check){cli_log('[preflight] '.($check['ok']?'OK ':'FAIL ').$check['name'].': '.$check['detail']);}if(!$preflight['ok'])throw new RuntimeException('Deployment preflight failed. Resolve the failed checks before retrying. Execution account: '.$preflight['user']);if(!is_dir($dest)&&!@mkdir($dest,0750,true)&&!is_dir($dest))throw new RuntimeException('Cannot create deployment directory: '.$dest.'; ask an SSH administrator to check ownership and permissions.');cli_log('Deploying '.$p['name'].' -> '.$dest);
+    if(is_dir($repo.'/.git')){$g='git -C '.esc($repo).' ';cli_checked($g.'remote set-url origin '.esc(proj_repo_url($p)));cli_run($g.'fetch origin '.esc($branch).' && '.$g.'checkout --detach --force FETCH_HEAD && '.$g.'clean -fd',$rc);if($rc!==0)sh('rm -rf -- '.esc($repo));}
+    if(!is_dir($repo.'/.git'))cli_checked('git clone --depth 1 --branch '.esc($branch).' -- '.esc(proj_repo_url($p)).' '.esc($repo));$commit=trim(sh_ok('git -C '.esc($repo).' rev-parse --short HEAD'));$src=$sub!==''?manifest_path($repo,$sub):$repo;if(!is_dir($src))throw new RuntimeException('Repository subfolder does not exist');
+    $lock=fopen(CACHE_DIR.'/deploy-'.$p['id'].'.lock','c');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))throw new RuntimeException('Another deployment for this project is in progress');
+    try{
+        cli_stop_service($p['id']);
+        if(which('rsync'))cli_checked('rsync -a --exclude=.git --exclude=node_modules --exclude=.env.local --exclude=data/ '.esc(rtrim($src,'/').'/').' '.esc(rtrim($dest,'/').'/'));
+        else cli_checked('bash -o pipefail -c '.esc('tar -C '.esc($src).' --exclude=.git --exclude=node_modules --exclude=.env.local --exclude=data -cf - . | tar -C '.esc($dest).' -xf -'));
+        $envTxt="# written by WebConsole\n";foreach($p['env']??[]as$k=>$v)$envTxt.=$k.'='.$v."\n";file_put_contents($dest.'/.env.wcp',$envTxt);chmod($dest.'/.env.wcp',0600);
+        foreach(['install'=>($p['install_cmd']?:default_install_cmd($p['type'])),'build'=>$p['build_cmd']]as$label=>$cmd){if(trim($cmd)==='')continue;$script="set -e\nset -o pipefail\ncd ".esc($dest)."\n";foreach(proj_runtime_env($p)as$k=>$v)$script.='export '.esc($k.'='.$v)."\n";$script.=$cmd."\n";$f=CACHE_DIR.'/deploy-step-'.$job['id'].'.sh';file_put_contents($f,$script);try{cli_checked('bash '.esc($f));}finally{@unlink($f);}cli_log($label.' completed');}
+        $list=proj_all();foreach($list as&$x)if($x['id']===$p['id'])$x['last_deploy']=['time'=>date('c'),'commit'=>$commit,'status'=>'ok'];unset($x);proj_save_all($list);file_put_contents($dest.'/.deploy.json',json_encode(['project'=>$p['name'],'commit'=>$commit,'branch'=>$branch,'time'=>date('c'),'by'=>'webconsole'],JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+        if(!empty($p['auto_start'])&&!empty($p['start_cmd']))cli_start_service($p);cli_log('Deployment complete');return 0;
+    }catch(Throwable $e){$list=proj_all();foreach($list as&$x)if($x['id']===$p['id'])$x['last_deploy']=['time'=>date('c'),'commit'=>$commit,'status'=>'warn'];unset($x);proj_save_all($list);throw $e;}finally{flock($lock,LOCK_UN);fclose($lock);}
+}
+function cli_start_service(array $p){$job=job_create('service','سرویس: '.$p['name'],['project_id'=>$p['id']]);job_start($job);cli_log('Service job '.$job['id'].' started');return $job;}
+function cli_stop_service(string $projectId){foreach(glob(JOBS_DIR.'/*.json')?:[]as$f){$j=json_decode((string)file_get_contents($f),true);if(($j['type']??'')==='service'&&($j['params']['project_id']??'')===$projectId&&job_status($j)['status']==='running')job_stop($j);}}
+function cli_service(array $job): int {
+    $p=proj_find(proj_all(),$job['params']['project_id']??'');if(!$p||empty($p['start_cmd']))throw new RuntimeException('Missing project/start command');if(!function_exists('proc_open'))throw new RuntimeException('PHP CLI proc_open() is disabled');$stop=JOBS_DIR.'/'.$job['id'].'.stop';@unlink($stop);$runner=CACHE_DIR.'/svc-run-'.$job['id'].'.sh';$script="#!/bin/bash\nset -e\ncd ".esc($p['deploy_path'])."\nexport NODE_ENV=production\nexport PYTHONUNBUFFERED=1\n";foreach(proj_runtime_env($p)as$k=>$v)$script.='export '.esc($k.'='.$v)."\n";if(!empty($p['port']))$script.='export PORT='.esc($p['port'])."\n";$script.=$p['start_cmd']."\n";file_put_contents($runner,$script);chmod($runner,0700);$ph=null;$stopRequested=false;
+    if(function_exists('pcntl_async_signals')){pcntl_async_signals(true);pcntl_signal(SIGTERM,function()use(&$stopRequested){$stopRequested=true;});pcntl_signal(SIGINT,function()use(&$stopRequested){$stopRequested=true;});}
+    $attempt=0;try{while(!$stopRequested&&!is_file($stop)){$started=microtime(true);cli_log('Starting service attempt '.(++$attempt));$ph=proc_open(['bash',$runner],[0=>['file','/dev/null','r'],1=>['file',$job['log'],'a'],2=>['file',$job['log'],'a']],$pipes);if(!is_resource($ph))throw new RuntimeException('Cannot start service');$st=proc_get_status($ph);file_put_contents(JOBS_DIR.'/'.$job['id'].'.child_pid',$st['pid']."\n");
+        do{if($stopRequested||is_file($stop)){proc_terminate($ph);break;}usleep(250000);$st=proc_get_status($ph);}while($st['running']);
+        $exit=$st['exitcode'];$closed=proc_close($ph);$ph=null;if($exit<0)$exit=$closed;@unlink(JOBS_DIR.'/'.$job['id'].'.child_pid');if($stopRequested||is_file($stop))break;cli_log('Service exited: '.$exit);if(empty($p['is_daemon']))return $exit >= 0 ? $exit : 1;if(microtime(true)-$started>60)$attempt=0;$delay=min(60,2**min(6,$attempt));for($i=0;$i<$delay*4&&!$stopRequested&&!is_file($stop);$i++)usleep(250000);
+    }return 0;}finally{if(is_resource($ph)){proc_terminate($ph);proc_close($ph);}@unlink($runner);@unlink(JOBS_DIR.'/'.$job['id'].'.child_pid');}
+}
+function wcp_cli(array $argv) {
+    if(isset($argv[1])&&strpos($argv[1],'--bgjob=')===0){
+        $id=substr($argv[1],8);$job=job_get($id);
+        if (!$job) { fwrite(STDERR, "Background job metadata not found in " . JOBS_DIR . "\n"); exit(1); }
+        if (!empty($job['launch_token'])) {
+            if (is_file(JOBS_DIR . '/' . $id . '.exit') || time() > (int)$job['launch_deadline']) {
+                fwrite(STDERR, "Background launch was cancelled or expired.\n"); exit(127);
+            }
+            $ack = ['token' => $job['launch_token'], 'pid' => getmypid()];
+            if (file_put_contents(JOBS_DIR . '/' . $id . '.started.json', json_encode($ack), LOCK_EX) === false) {
+                fwrite(STDERR, "Cannot write background startup acknowledgement.\n"); exit(127);
+            }
+            file_put_contents(JOBS_DIR . '/' . $id . '.pid', getmypid() . "\n", LOCK_EX);
+        }
+        @set_time_limit(0);ini_set('memory_limit','512M');$code=1;cli_log('WebConsole job '.$id.' ('.$job['type'].')');
+        try{switch($job['type']){case 'backup':$code=cli_backup($job);break;case 'restore':$code=cli_restore($job);break;case 'deploy':$code=cli_deploy($job);break;case 'service':$code=cli_service($job);break;default:throw new RuntimeException('Unknown job type');}}
+        catch(Throwable $e){cli_log('ERROR: '.mask_url($e->getMessage()));$code=1;}
+        $exit=JOBS_DIR.'/'.$id.'.exit';if(!is_file($exit))file_put_contents($exit,$code."\n",LOCK_EX);exit($code);
+    }
+    exit(0);
+}
+if (PHP_SAPI === 'cli') {
+    if (defined('WCP_LIBRARY_ONLY') && WCP_LIBRARY_ONLY === true) return;
+    wcp_cli($argv ?? []);
+}
+function page_head(){
+    $c=cfg();$boot=['csrf'=>$_SESSION['wcp_csrf']??'','v'=>WCP_VERSION,'theme'=>$c['theme'],'layout'=>$c['layout'],'density'=>$c['density'],'fs_start'=>$c['fs_start'],'host'=>gethostname(),'term_mode'=>term_mode(),'setup'=>$c['pass_hash']===''];
+    echo '<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>وب‌کنسول Pro</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/material-darker.css"><script>const __BOOT='.json_encode($boot,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE).';</script>';
+}
+function render_css(){ob_start();?>
+<style>
+:root{--bg:#0a0f1c;--panel:#101828;--panel2:#0c1322;--line:#1e2a44;--line2:#27365c;--txt:#e6eefc;--mut:#8ea3c6;--acc:#6366f1;--acc2:#22d3ee;--ok:#34d399;--warn:#f59e0b;--err:#f87171;--r:14px}
+[data-theme=light]{--bg:#eef2f9;--panel:#fff;--panel2:#f6f8fd;--line:#dde5f0;--line2:#c9d6ea;--txt:#101a2e;--mut:#5b6b87}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.7 Vazirmatn,Tahoma,sans-serif}button,input,textarea,select{font:inherit;color:inherit}button{cursor:pointer;touch-action:manipulation}a{color:var(--acc2)}.hide{display:none!important}.ltr{direction:ltr;text-align:left}.hint,small{color:var(--mut);font-size:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.grid2,.grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:14px}h1{font-size:20px}h3{font-size:15px;margin:0 0 12px}.btn{display:inline-flex;gap:5px;align-items:center;justify-content:center;border:1px solid var(--line2);border-radius:9px;padding:8px 13px;background:var(--panel2)}.btn.pri{background:var(--acc);color:#fff;border-color:var(--acc)}.btn.danger{color:var(--err);border-color:var(--err)}.btn.ok{color:var(--ok)}.btn.sm{padding:5px 9px;font-size:12px}.btn:disabled{opacity:.5;cursor:not-allowed}.inp,.mini{background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:10px;width:100%;outline:none}.inp:focus{border-color:var(--acc)}textarea.inp{min-height:90px;resize:vertical}.mini{width:auto;padding:6px}.lb{display:block;color:var(--mut);font-size:12px;margin:9px 0 4px}.tag{display:inline-block;padding:2px 8px;border:1px solid var(--line2);border-radius:30px;font-size:11px;color:var(--mut)}.tag.ok{color:var(--ok)}.tag.err{color:var(--err)}.tag.acc{color:var(--acc2)}.tag.warn{color:var(--warn)}.li{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:10px;margin:7px 0;background:var(--panel2)}.li .t{flex:1;min-width:0;overflow-wrap:anywhere}.li small{display:block}.acts{display:flex;gap:6px;flex-wrap:wrap}.empty{text-align:center;color:var(--mut);padding:24px}.chk{width:18px;height:18px;accent-color:var(--acc)}.logbox{direction:ltr;text-align:left;background:#05080f;color:#c8d6ee;padding:12px;border:1px solid var(--line);border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;max-height:55vh;font:12px/1.6 ui-monospace,monospace}.stat{padding:12px;background:var(--panel2);border-radius:10px}.stat .v{font-size:20px;font-weight:bold}.bar{height:7px;background:var(--line);border-radius:10px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--acc2)}.tblwrap{overflow:auto;border:1px solid var(--line);border-radius:10px}.tbl{border-collapse:collapse;width:100%;font-size:12px}.tbl th,.tbl td{padding:10px;text-align:right;border-bottom:1px solid var(--line)}.tbl th{background:var(--panel2);white-space:nowrap}.cmdcol{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;text-align:left!important}.numcol{direction:ltr}.spin{display:inline-block;width:15px;height:15px;border:2px solid var(--mut);border-top-color:var(--acc2);border-radius:100%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#app{height:100dvh;display:flex;flex-direction:column}#topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}.spacer{flex:1}#main{display:flex;flex:1;min-height:0}#sidebar{display:none;width:180px;padding:10px;background:var(--panel)}#sidebar button,#navbottom button{border:0;background:transparent;color:var(--mut);padding:10px;border-radius:9px}#sidebar button{display:block;width:100%;text-align:right}#sidebar button.on,#navbottom button.on{background:var(--panel2);color:var(--acc2)}#content{flex:1;position:relative;min-width:0}.view{display:none;position:absolute;inset:0;padding:14px;overflow:auto}.view.on{display:block}#navbottom{display:flex;justify-content:space-around;background:var(--panel);border-top:1px solid var(--line);overflow:auto}#navbottom button{font-size:11px;white-space:nowrap}#modals{display:none;position:fixed;inset:0;z-index:60}#modals.on{display:block}.mback{position:absolute;inset:0;background:#020610bb;backdrop-filter:blur(3px)}.msheet{position:absolute;bottom:0;left:0;right:0;max-height:94dvh;overflow:auto;background:var(--panel);padding:18px;border:1px solid var(--line2);border-radius:18px 18px 0 0}.mhead{display:flex;align-items:center;gap:10px;font-weight:bold;margin-bottom:15px}.mhead .x{margin-inline-start:auto}#toasts{position:fixed;top:10px;left:50%;transform:translateX(-50%);width:min(92vw,460px);z-index:90}.toast{background:var(--panel);padding:13px;margin:8px 0;border:1px solid var(--line2);border-radius:12px;box-shadow:0 5px 20px #0007}.toast.err{border-color:var(--err)}.toast.ok{border-color:var(--ok)}#termwrap{height:100%;display:flex;flex-direction:column;gap:10px}#termbox{flex:1;min-height:100px;background:#05080f;direction:ltr;padding:8px;border-radius:10px;overflow:hidden}#termbox .xterm{height:100%}#keybar,.quick{display:flex;gap:6px;overflow:auto;flex-shrink:0;padding:3px}#keybar button{min-width:42px;flex-shrink:0}.termstatus{font-size:11px;color:var(--mut)}#crumb{direction:ltr;overflow-wrap:anywhere;padding:8px;border:1px solid var(--line);border-radius:9px;margin:10px 0}.frow{display:flex;align-items:center;gap:8px;padding:10px;border-bottom:1px solid var(--line)}.frow.sel{background:#6366f122}.frow .nm{flex:1;min-width:0;overflow-wrap:anywhere;cursor:pointer}.frow .sz{font-size:11px;color:var(--mut)}#selbar{display:none;position:sticky;bottom:0;background:var(--panel);border:1px solid var(--line2);padding:10px;gap:7px;flex-wrap:wrap}#selbar.on{display:flex}#login{min-height:100dvh;display:grid;place-items:center;padding:20px}#login .card{width:min(420px,100%)}#edcm{height:65vh;direction:ltr;text-align:left}#edcm .CodeMirror{height:100%;font:13px ui-monospace,monospace}.segtabs{display:flex;gap:8px;margin-bottom:15px}.segtabs button{flex:1}.kbd{font:11px ui-monospace,monospace;direction:ltr}.pulse-badge{color:var(--ok);font-size:12px}
+@media(min-width:900px){#sidebar{display:block}#navbottom{display:none}.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}.msheet{top:50%;bottom:auto;left:50%;right:auto;transform:translate(-50%,-50%);width:min(860px,94vw);border-radius:18px}}@media(max-width:500px){.grid2{grid-template-columns:1fr}.acts{max-width:45%}}
+/* 1.2: independent visual palettes and workspaces, shared by every section. */
+[data-theme=forest]{--bg:#071a16;--panel:#102b24;--panel2:#0a221c;--line:#23473c;--line2:#356252;--txt:#e5fff4;--mut:#a2c4b5;--acc:#287b60;--acc2:#75e5ba}
+[data-theme=ocean]{--bg:#071525;--panel:#0e253d;--panel2:#102e49;--line:#214867;--line2:#326182;--txt:#e2f3ff;--mut:#9dbed7;--acc:#196ca3;--acc2:#70dbff}
+[data-theme=amber]{--bg:#201811;--panel:#302419;--panel2:#271e15;--line:#503d29;--line2:#73583a;--txt:#fff2db;--mut:#d1b898;--acc:#946015;--acc2:#ffd17a}
+[data-theme=light]{--acc:#5146c7;--acc2:#075f88;--ok:#087750;--err:#b42c35;--warn:#855510}
+:focus-visible{outline:2px solid var(--acc2);outline-offset:3px}button,input,select,textarea{scroll-margin:1rem}button{min-height:2.25rem}a:hover{text-decoration:underline}#topbar{min-height:4.3rem;padding-inline:1.5rem}#topbar b{letter-spacing:-.03em}.brand-mark{display:inline-grid;place-items:center;width:2rem;height:2rem;background:var(--acc);color:white;border-radius:.6rem;margin-inline-end:.5rem}#hosttag{border-inline-start:1px solid var(--line2);padding-inline-start:.8rem}.chrome-btn{white-space:nowrap}.view{padding:1.4rem}.card{box-shadow:0 4px 22px #00000009}.view>.card:first-child{border-top:3px solid var(--acc)}.stat .v{font-size:1.8rem;letter-spacing:-.04em}.stat{border:1px solid var(--line)}#sidebar{width:14rem;border-inline-end:1px solid var(--line);padding:1rem .7rem}#sidebar button{margin-bottom:.35rem;padding:.85rem 1rem;display:flex;gap:.7rem;align-items:center}#sidebar button.on{border-inline-start:3px solid var(--acc2)}.nav-icon{font-size:1.2rem;display:inline-flex;flex-shrink:0}.nav-caption{font-size:.88rem}#workspacebar{display:flex;align-items:center;gap:.7rem;padding:.5rem 1.5rem;background:var(--panel2);border-bottom:1px solid var(--line);font-size:.8rem}#workspacebar .tag{margin-inline-start:auto}.skin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.7rem}.skin-choice{display:flex;flex-direction:column;align-items:stretch;text-align:right;padding:.9rem;border-radius:.8rem;background:var(--panel2);border:1px solid var(--line2);gap:.4rem}.skin-choice[aria-pressed=true]{outline:2px solid var(--acc2);outline-offset:2px}.skin-swatch{height:2rem;border-radius:.4rem;border:1px solid #ffffff33;background:linear-gradient(110deg,var(--sw1) 65%,var(--sw2) 65%)}.section-label{font-size:.72rem;letter-spacing:.12em;color:var(--acc2);margin:.8rem 0}.palette-item{width:100%;text-align:right;justify-content:flex-start;padding:.85rem;margin:.2rem 0}.view-tools{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem}.view-tools .inp{flex:1;min-width:8rem}.check-row{display:flex;align-items:flex-start;gap:.7rem;padding:.8rem 0;border-bottom:1px solid var(--line)}.check-row p{margin:0;overflow-wrap:anywhere}.check-row b{display:block}.appearance-note{padding:.8rem;border-inline-start:3px solid var(--acc2);background:var(--panel2)}.project-card{position:relative}.project-card h3{font-size:1.1rem}.project-card .tag{margin-inline-start:.5rem}.msheet{box-shadow:0 20px 100px #0008}#log-tools .inp{width:auto;flex:1;min-width:8rem}#jlog{min-height:15rem}#modals .msheet:focus{outline:none}
+[data-density=compact] .card{padding:.7rem;margin-bottom:.65rem}[data-density=compact] .li,[data-density=compact] .frow,[data-density=compact] .tbl td{padding:.4rem .6rem}[data-density=compact] .view{padding:.7rem}[data-density=compact] #sidebar button{padding:.5rem .7rem}
+@media(min-width:900px){
+ [data-layout=studio] #main{flex-direction:column}[data-layout=studio] #sidebar{width:100%;display:flex;border-inline-end:0;border-bottom:1px solid var(--line);padding:.45rem 1rem;gap:.4rem;overflow:auto;flex-shrink:0}[data-layout=studio] #sidebar button{width:auto;white-space:nowrap;margin:0;padding:.5rem .9rem}[data-layout=studio] #sidebar button.on{border-inline-start:0;box-shadow:inset 0 -2px var(--acc2)}[data-layout=studio] .view{padding:1.5rem max(1.5rem,calc((100vw - 1200px)/2))}
+ [data-layout=focus] #sidebar{width:4.7rem}[data-layout=focus] #sidebar .nav-caption{display:none}[data-layout=focus] #sidebar button{justify-content:center;padding:.8rem .3rem}[data-layout=focus] .view{padding:1rem}[data-layout=focus] #workspacebar{padding-block:.25rem}
+ [data-layout=classic] #sidebar:after{content:'WEBCONSOLE / PRO';display:block;margin-top:2rem;text-align:center;font:10px monospace;letter-spacing:.13em;color:var(--mut)}
+}
+@media(max-width:899px){#topbar{padding:.6rem;gap:.4rem;flex-wrap:wrap}#hosttag{display:none}#topbar b{font-size:.85rem}.chrome-btn{padding:.45rem;font-size:.75rem}.view{padding:.7rem}#workspacebar{padding:.35rem .7rem}#navbottom{padding-bottom:env(safe-area-inset-bottom)}#navbottom button{display:flex;flex-direction:column;align-items:center;gap:.1rem;min-width:4rem;padding:.4rem}#navbottom .nav-caption{font-size:.65rem}.segtabs{flex-wrap:wrap}.msheet{padding:.9rem}.view-tools{gap:.35rem}}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;scroll-behavior:auto!important}}
+
+</style>
+<?php return ob_get_clean();}
+function render_login(bool $setup){ob_start();?>
+<div id="login"><div class="card"><h1>وب‌کنسول Pro</h1><p class="hint"><?= $setup?'برای شروع رمز عبور قوی تعیین کنید':'برای ورود رمز عبور کنسول را وارد کنید' ?></p><form id="lgform"><label class="lb">رمز عبور</label><input class="inp ltr" id="lgpass" type="password" required minlength="8" autocomplete="<?= $setup?'new-password':'current-password' ?>"><?php if($setup){?><label class="lb">تکرار رمز</label><input class="inp ltr" id="lgpass2" type="password" required minlength="8" autocomplete="new-password"><?php }?><button class="btn pri" id="lgbtn" style="width:100%;margin-top:15px">ورود / راه‌اندازی</button></form><p class="hint">این کنسول دسترسی اجرای فرمان دارد. فقط با HTTPS، دسترسی محدود و حساب غیر root استفاده شود.</p></div></div>
+<script>
+document.getElementById('lgform').onsubmit=async e=>{e.preventDefault();const p=document.getElementById('lgpass').value,p2=document.getElementById('lgpass2');if(p2&&p!==p2.value){alert('رمزها یکسان نیستند');return}const b=document.getElementById('lgbtn');b.disabled=true;try{const r=await fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api:__BOOT.setup?'auth.setup':'auth.login',password:p})});const j=await r.json();if(!j.ok)throw Error(j.error||'خطا');location.reload()}catch(e){alert(e.message);b.disabled=false}};
+</script>
+<?php return ob_get_clean();}
+function render_body(){ob_start();?>
+<div id="app"><header id="topbar"><b><span class="brand-mark">W</span> وب‌کنسول Pro</b><small id="hosttag"></small><span class="spacer"></span><button class="btn sm chrome-btn" id="palettebtn" title="Ctrl / ⌘ + K">⌕ جستجو</button><button class="btn sm chrome-btn" id="appearancebtn">◈ پوسته‌ها</button><button class="btn sm" id="themebtn" aria-label="تغییر روشنایی">☀</button><button class="btn sm" id="logoutbtn">خروج</button></header><div id="workspacebar"><span id="viewtitle">داشبورد</span><span class="hint">/ فضای مدیریت سرور</span><span class="tag" id="workspace-version"></span></div><div id="main"><aside id="sidebar"></aside><main id="content"><section class="view" id="v-dash"></section><section class="view" id="v-term"><div id="termwrap"><div class="row"><button class="btn pri sm" id="newterm">+ شل جدید</button><select class="mini" id="termsel"></select><span id="termstat" class="termstatus"></span><button class="btn sm" id="copyterm">کپی</button><button class="btn sm" id="pasteterm">چسباندن</button><button class="btn sm" id="kbterm">⌨</button><button class="btn danger sm" id="killterm">توقف شل</button></div><div id="keybar"></div><div id="termbox"></div></div></section><section class="view" id="v-files"><div class="row"><button class="btn sm" id="upbtn">⬆ بالا</button><button class="btn sm" id="refbtn">🔄</button><button class="btn sm pri" id="newfbtn">+ جدید</button><button class="btn sm" id="uploadbtn">بارگذاری</button><button class="btn sm" id="searchbtn">جستجو</button><button class="btn sm" id="hiddenbtn">فایل مخفی</button><select id="sortsel" class="mini"><option value="name-1">نام ↑</option><option value="name-0">نام ↓</option><option value="size-0">حجم ↓</option><option value="date-0">تاریخ ↓</option><option value="date-1">تاریخ ↑</option></select></div><div id="crumb"></div><div class="quick" id="quick"></div><div class="view-tools"><input class="inp" id="file-filter" aria-label="فیلتر فایل‌های این پوشه" placeholder="فیلتر سریع فایل‌های نمایش‌داده‌شده…"></div><div id="fmlist" class="card"></div><div id="selbar"><span id="selcnt"></span><button class="btn sm" data-op="copy">کپی</button><button class="btn sm" data-op="move">انتقال</button><button class="btn sm" data-op="zip">ZIP</button><button class="btn sm" data-op="download">دانلود</button><button class="btn sm danger" data-op="delete">حذف</button><button class="btn sm" id="selclear">لغو</button></div><input id="fileinput" type="file" multiple class="hide"></section><section class="view" id="v-proc"></section><section class="view" id="v-backup"></section><section class="view" id="v-proj"></section><section class="view" id="v-jobs"></section><section class="view" id="v-set"></section></main></div><nav id="navbottom"></nav></div><div id="modals"><div class="mback"></div><div class="msheet" role="dialog" aria-modal="true" aria-label="پنجره کنسول" tabindex="-1"></div></div><div id="toasts"></div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script><script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/xml/xml.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/css/css.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/htmlmixed/htmlmixed.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/clike/clike.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/php/php.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/yaml/yaml.js"></script><script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.js"></script>
+<script>
+'use strict';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],CSRF=__BOOT.csrf;
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function fmtSize(n){if(!n)return '0 B';const u=['B','KB','MB','GB','TB'],i=Math.min(4,Math.max(0,Math.floor(Math.log(Math.abs(n))/Math.log(1024))));return (n/1024**i).toFixed(i?1:0)+' '+u[i]}
+function fmtDate(v){if(!v)return '—';return new Date(typeof v==='number'?v*1000:v).toLocaleString('fa-IR')}
+function fmtDur(s){return Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m '+Math.floor(s%60)+'s'}
+async function api(action,data={}){const r=await fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF':CSRF},body:JSON.stringify({api:action,...data})});if(r.status===401){location.reload();throw Error('نشست منقضی شده')}const j=await r.json().catch(()=>({ok:false,error:'پاسخ نامعتبر سرور'}));if(!j.ok)throw Error(j.error||'خطای نامشخص');return j.data}
+function toast(msg,type=''){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;$('#toasts').append(t);setTimeout(()=>t.remove(),6000)}
+let __sheet=null;
+function openSheet(html,{onclose=null}={}){__closeSheet();$('#modals').classList.add('on');const sh=$('#modals .msheet');sh.innerHTML=html;const returnFocus=document.activeElement;__sheet={onclose,returnFocus};sh.focus();sh.onkeydown=e=>{if(e.key!=='Tab')return;const list=[...sh.querySelectorAll('button,input,textarea,select,a[href],[tabindex]')].filter(el=>!el.disabled&&el.getAttribute('tabindex')!=='-1'&&el.getClientRects().length);if(!list.length){e.preventDefault();return}const first=list[0],last=list[list.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===sh)){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}};$('#modals .mback').onclick=__closeSheet;return sh}
+function __closeSheet(){if(!__sheet)return;const cb=__sheet.onclose,returnFocus=__sheet.returnFocus;__sheet=null;$('#modals').classList.remove('on');$('#modals .msheet').replaceChildren();if(cb)cb();if(returnFocus?.isConnected)returnFocus.focus()}
+function sheetHead(t){return `<div class="mhead">${t}<button class="btn sm x" onclick="__closeSheet()">✕</button></div>`}
+async function confirmDlg(msg){return window.confirm(msg)}
+async function promptDlg(title,val=''){return window.prompt(title,val)}
+function actions(root,attr,fn){root.querySelectorAll('['+attr+']').forEach(b=>b.onclick=()=>Promise.resolve(fn(b.getAttribute(attr),b)).catch(e=>toast(e.message,'err')))}
+function decode(b64){return new TextDecoder().decode(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)))}
+async function openJob(id,title){
+ let offset=0,alive=true,timer=null,buffer='',follow=true,paused=false,busy=false;
+ const sh=openSheet(sheetHead('📜 '+esc(title)+` <span class="tag acc" id="jstat">…</span>`)+`<div class="row" id="log-tools"><input class="inp" id="jfilter" aria-label="فیلتر خطوط لاگ" placeholder="فیلتر خطوط…"><label class="hint"><input type="checkbox" id="jfollow" checked> دنبال‌کردن</label><button class="btn sm" id="jpause">مکث دریافت</button><button class="btn sm" id="jdownload">دانلود متن موجود</button></div><div class="logbox" id="jlog"></div><p class="hint">نمایش حداکثر ۲ میلیون نویسه آخر دریافت‌شده؛ فیلتر فقط نمایشی است. متن لاگ ممکن است حاوی اطلاعات حساس باشد.</p><div class="row"><button class="btn danger sm" id="jstop">توقف کار</button><button class="btn sm" id="jclr">پاک کردن صفحه</button></div>`,{onclose:()=>{alive=false;clearInterval(timer)}});
+ const log=sh.querySelector('#jlog'),st=sh.querySelector('#jstat');
+ const paint=()=>{const q=sh.querySelector('#jfilter').value.toLowerCase();log.textContent=q?buffer.split('\n').filter(line=>line.toLowerCase().includes(q)).join('\n'):buffer;if(follow)log.scrollTop=log.scrollHeight};
+ sh.querySelector('#jfilter').oninput=paint;sh.querySelector('#jfollow').onchange=e=>{follow=e.target.checked;if(follow)paint()};
+ sh.querySelector('#jpause').onclick=e=>{paused=!paused;e.target.textContent=paused?'ادامه دریافت':'مکث دریافت'};
+ sh.querySelector('#jdownload').onclick=()=>downloadText('job-'+id+'.log',buffer);
+ sh.querySelector('#jclr').onclick=()=>{buffer='';paint()};sh.querySelector('#jstop').onclick=async()=>{if(!await confirmDlg('کار متوقف شود؟'))return;try{await api('jobs.stop',{id})}catch(e){toast(e.message,'err')}};
+ const poll=async()=>{if(busy||!alive||paused)return;busy=true;try{const d=await api('jobs.log',{id,offset});if(!alive)return;if(d.offset<offset)buffer='';offset=d.offset;if(d.b64)buffer=(buffer+decode(d.b64)).slice(-2000000);paint();const s=d.status||{},map={running:'در حال اجرا',done:'کامل شد',failed:'ناموفق',dead:'قطع شده'};st.textContent=(map[s.status]||s.status)+(s.exit!=null?' · '+s.exit:'');st.className='tag '+(s.status==='done'?'ok':s.status==='running'?'acc':'err');if(s.status==='running'||d.has_more){sh.querySelector('#jstop').classList.toggle('hide',s.status!=='running')}else{alive=false;sh.querySelector('#jstop').classList.add('hide');clearInterval(timer);sh.querySelector('#jpause').disabled=true;}}catch(e){st.textContent=e.message;st.className='tag err'}finally{busy=false}};
+ await poll();if(alive)timer=setInterval(poll,1000);
+}
+const TABS=[['dash','داشبورد','🏠'],['term','ترمینال','⌨'],['files','فایل‌ها','📁'],['proc','پردازش‌ها','⚙'],['backup','بکاپ','☁'],['proj','پروژه‌ها','📦'],['jobs','کارها','📜'],['set','تنظیمات','🔧']];let curTab='';const INITS={};
+function navIcon(id){const paths={dash:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',term:'M4 5l6 6-6 6 M13 18h7',files:'M3 7V5h6l2 3h10v12H3z',proc:'M2 12h5l3-8 4 16 3-8h5',backup:'M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5 5 0 0 1 0 11 M12 20V10 M8 14l4-4 4 4',proj:'M3 7l9-4 9 4v11l-9 4-9-4z M3 7l9 4 9-4 M12 11v11',jobs:'M8 3h8v4H8z M8 5H5v16h14V5h-3 M8 12h8 M8 16h5',set:'M3 6h18 M3 12h18 M3 18h18 M8 3v6 M16 9v6 M10 15v6'};return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+paths[id]+'"/></svg>'}
+function buildNav(){for(const sel of ['#sidebar','#navbottom']){$(sel).innerHTML=TABS.map(([id,t,i])=>`<button data-tab="${id}" title="${t}" aria-label="${t}"><span class="nav-icon">${navIcon(id)}</span><span class="nav-caption">${t}</span></button>`).join('');actions($(sel),'data-tab',switchTab)}}
+function switchTab(id){if(!TABS.some(t=>t[0]===id))return;curTab=id;$('#viewtitle').textContent=TABS.find(t=>t[0]===id)[1];$$('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+id));$$('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===id));if(INITS[id]&&!INITS[id].done){INITS[id].done=true;INITS[id].fn()}if(id==='term')setTimeout(fitTerm,80)}
+async function renderDash(){try{const s=await api('sysinfo'),m=s.mem.total?Math.round(s.mem.used/s.mem.total*100):0,d=s.disk.total?Math.round((s.disk.total-s.disk.free)/s.disk.total*100):0;$('#v-dash').innerHTML=`<div class="card"><h3>سرور: ${esc(s.host)}</h3><p class="hint ltr">${esc(s.kernel)} · PHP ${esc(s.php)} · ${esc(s.user)} · ${esc(s.ip)}</p><div class="grid4"><div class="stat">CPU<div class="v">${s.cpu_pct??'—'}%</div><small>${s.cores} cores · ${s.load.join(' / ')}</small></div><div class="stat">RAM<div class="v">${m}%</div><small>${fmtSize(s.mem.used)} / ${fmtSize(s.mem.total)}</small></div><div class="stat">Disk<div class="v">${d}%</div><small>${fmtSize(s.disk.free)} free</small></div><div class="stat">Uptime<div class="v ltr">${fmtDur(s.uptime)}</div><small>Terminal: ${esc(s.term_mode)}</small></div></div></div><div class="card"><h3>ابزارهای موجود</h3><div class="row">${Object.entries(s.tools).map(([k,v])=>`<span class="tag ${v?'ok':'err'}">${v?'✓':'✗'} ${esc(k)}</span>`).join('')}</div></div><div class="card hint">نسخه ${esc(__BOOT.v)} · پردازش پس‌زمینه با PHP CLI اجرا می‌شود. اجرای پس از راه‌اندازی مجدد VPS نیازمند systemd است.</div>`}catch(e){toast(e.message,'err')}}
+INITS.dash={fn(){renderDash();setInterval(()=>{if(curTab==='dash'&&!document.hidden)renderDash()},6000)}};
+let term=null,fitAddon=null,termId=null,termOffset=0,termTimer=null,keyQueue=[],keyTimer=null,ctrlLatch=false,termMounted=false;
+INITS.term={fn(){initTermUI()}};
+function initTermUI(){const keys=[['Esc','\x1b'],['Tab','\t'],['Ctrl','__CTRL__'],['↑','\x1b[A'],['↓','\x1b[B'],['←','\x1b[D'],['→','\x1b[C'],['Home','\x1b[H'],['End','\x1b[F'],['^C','\x03'],['^D','\x04'],['^U','\x15'],['^L','\x0c'],['^R','\x12'],['^W','\x17'],['PgUp','\x1b[5~'],['PgDn','\x1b[6~'],['|','|'],['/','/'],['~','~']];keys.forEach(([l,s])=>{const b=document.createElement('button');b.className='btn sm';b.textContent=l;b.onclick=()=>{if(s==='__CTRL__'){ctrlLatch=!ctrlLatch;b.classList.toggle('pri',ctrlLatch)}else sendKeys(s)};$('#keybar').append(b)});$('#newterm').onclick=createTerm;$('#killterm').onclick=async()=>{if(termId&&await confirmDlg('این شل بسته شود؟')){await api('term.kill',{id:termId});termId=null;await loadSessions()}};$('#termsel').onchange=e=>attachTerm(e.target.value);$('#copyterm').onclick=copyTerm;$('#pasteterm').onclick=pasteTerm;$('#kbterm').onclick=()=>term?term.focus():$('#fallbackcmd')?.focus();window.addEventListener('resize',fitTerm);mountXterm();loadSessions()}
+function mountXterm(){if(termMounted)return;termMounted=true;if(typeof Terminal!=='undefined'){term=new Terminal({cursorBlink:true,scrollback:6000,fontSize:13,theme:{background:'#05080f',foreground:'#d7e3f8'}});if(typeof FitAddon!=='undefined'){fitAddon=new FitAddon.FitAddon();term.loadAddon(fitAddon)}term.open($('#termbox'));term.onData(d=>{if(ctrlLatch&&/^[a-z]$/.test(d)){d=String.fromCharCode(d.charCodeAt(0)-96);ctrlLatch=false}sendKeys(d)});term.onResize(({cols,rows})=>{if(termId)api('term.resize',{id:termId,cols,rows}).catch(()=>{})});fitTerm()}else{$('#termbox').innerHTML='<pre class="logbox" id="fallbacklog" style="height:65%;max-height:none"></pre><textarea class="inp ltr" id="fallbackcmd" placeholder="دستور کامل؛ Enter برای اجرا"></textarea>';$('#fallbackcmd').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendKeys(e.target.value+'\r');e.target.value=''}}}startPoll()}
+async function loadSessions(){try{const d=await api('term.list');$('#termsel').innerHTML=d.sessions.map(s=>`<option value="${esc(s.id)}">${esc(s.title)}${s.alive?'':' (پایان)'}</option>`).join('');const alive=d.sessions.filter(s=>s.alive);if(!alive.length){await createTerm();return}if(!alive.some(s=>s.id===termId))attachTerm(alive[alive.length-1].id);else $('#termsel').value=termId}catch(e){toast(e.message,'err')}}
+async function createTerm(){try{const d=await api('term.create',{cols:term?.cols||120,rows:term?.rows||34});attachTerm(d.id);await loadSessions()}catch(e){toast(e.message,'err')}}
+function attachTerm(id){termId=id;termOffset=0;if(term)term.reset();else if($('#fallbacklog'))$('#fallbacklog').textContent='';$('#termsel').value=id;fitTerm()}
+function startPoll(){clearInterval(termTimer);let busy=false;termTimer=setInterval(async()=>{if(busy||!termId||curTab!=='term'||document.hidden)return;busy=true;const id=termId;try{const d=await api('term.read',{id,offset:termOffset});if(id!==termId)return;termOffset=d.offset;if(d.b64){if(term)term.write(Uint8Array.from(atob(d.b64),c=>c.charCodeAt(0)));else{$('#fallbacklog').textContent+=decode(d.b64);$('#fallbacklog').scrollTop=$('#fallbacklog').scrollHeight}}$('#termstat').textContent=d.alive?(d.info||'متصل'):'پایان‌یافته'}catch(e){$('#termstat').textContent=e.message}finally{busy=false}},250)}
+function sendKeys(s){if(!termId)return;keyQueue.push(s);clearTimeout(keyTimer);keyTimer=setTimeout(flushKeys,40)}
+async function flushKeys(){if(!keyQueue.length||!termId)return;const raw=keyQueue.join('');keyQueue=[];try{await api('term.write',{id:termId,b64:btoa(unescape(encodeURIComponent(raw)))})}catch(e){toast(e.message,'err')}}
+function fitTerm(){try{fitAddon?.fit()}catch(e){}}
+async function copyTerm(){let text=term?.getSelection()||'';if(!text&&term){const a=term.buffer.active;for(let i=0;i<a.length;i++)text+=(a.getLine(i)?.translateToString(true)||'')+'\n'}if(!term)text=$('#fallbacklog')?.textContent||'';try{await navigator.clipboard.writeText(text);toast('کپی شد','ok')}catch(e){window.prompt('کپی کنید:',text)}}
+async function pasteTerm(){let s;try{s=await navigator.clipboard.readText()}catch(e){s=window.prompt('متن برای چسباندن:','')}if(s)sendKeys(s)}
+const F={path:__BOOT.fs_start||'/',items:[],sort:'name-1',hidden:false,sel:new Set(),quick:['/','/var/www','/root','/home','/etc','/tmp','/opt','/srv']};
+function joinPath(a,b){return (a.replace(/\/+$/,'')+'/'+b).replace(/\/+/g,'/')}
+function parentDir(p){p=p.replace(/\/+$/,'');return p.slice(0,p.lastIndexOf('/'))||'/'}
+function navFm(p){F.path=p||'/';F.sel.clear();renderFm()}
+INITS.files={fn(){for(const[id,fn]of Object.entries({upbtn:()=>navFm(parentDir(F.path)),refbtn:renderFm,newfbtn:newItemDlg,uploadbtn:()=>$('#fileinput').click(),searchbtn:searchDlg,hiddenbtn:()=>{F.hidden=!F.hidden;renderFm()},selclear:()=>{F.sel.clear();renderFm()}}))$('#'+id).onclick=fn;$('#sortsel').onchange=e=>{F.sort=e.target.value;renderFm()};$('#fileinput').onchange=e=>{uploadFiles([...e.target.files]);e.target.value=''};actions($('#selbar'),'data-op',selOp);const v=$('#v-files');v.ondragover=e=>e.preventDefault();v.ondrop=e=>{e.preventDefault();uploadFiles([...e.dataTransfer.files])};renderFm()}};
+async function renderFm(){try{const[sort,asc]=F.sort.split('-');const d=await api('fs.list',{path:F.path,sort,asc:asc==='1',hidden:F.hidden});F.path=d.path;F.items=d.items;$('#hiddenbtn').classList.toggle('pri',F.hidden);let acc='';$('#crumb').innerHTML='<a href="#" data-p="/">/</a> '+F.path.split('/').filter(Boolean).map(x=>{acc+='/'+x;return `<a href="#" data-p="${esc(acc)}">${esc(x)}</a>`}).join(' / ');actions($('#crumb'),'data-p',navFm);$('#quick').innerHTML=F.quick.map(p=>`<button class="btn sm" data-p="${esc(p)}">${esc(p)}</button>`).join('');actions($('#quick'),'data-p',navFm);$('#fmlist').innerHTML=d.items.length?d.items.map((it,i)=>`<div class="frow ${F.sel.has(it.name)?'sel':''}"><input class="chk" data-select="${i}" type="checkbox" ${F.sel.has(it.name)?'checked':''}><span class="nm" data-open="${i}">${it.dir?'📁':'📄'} ${esc(it.name)}<small class="ltr">${it.perms} · ${esc(it.owner)}:${esc(it.group)} · ${fmtDate(it.mtime)}</small></span><span class="sz">${it.dir?'—':fmtSize(it.size)}</span><button class="btn sm" data-more="${i}">⋯</button></div>`).join(''):'<div class="empty">پوشه خالی است</div>';actions($('#fmlist'),'data-open',i=>{const it=F.items[i];it.dir?navFm(joinPath(F.path,it.name)):openEditor(joinPath(F.path,it.name))});actions($('#fmlist'),'data-more',i=>itemMenu(F.items[i]));$('#fmlist').querySelectorAll('[data-select]').forEach(c=>c.onchange=()=>{const n=F.items[c.dataset.select].name;c.checked?F.sel.add(n):F.sel.delete(n);c.closest('.frow').classList.toggle('sel',c.checked);paintSel()});paintSel();const filter=()=>$('#fmlist').querySelectorAll('.frow').forEach(row=>row.classList.toggle('hide',!row.querySelector('.nm').textContent.toLowerCase().includes($('#file-filter').value.trim().toLowerCase())));$('#file-filter').oninput=filter;filter()}catch(e){toast(e.message,'err')}}
+function paintSel(){$('#selbar').classList.toggle('on',F.sel.size>0);$('#selcnt').textContent=F.sel.size+' انتخاب'}
+function selPaths(){return [...F.sel].map(n=>joinPath(F.path,n))}
+function itemMenu(it){const p=joinPath(F.path,it.name),ops=[['باز کردن',()=>it.dir?navFm(p):openEditor(p)],['دانلود',()=>dlPath(p)],['کپی مسیر',async()=>{try{await navigator.clipboard.writeText(p)}catch(e){window.prompt('مسیر',p)}}],['تغییرنام',async()=>{const n=await promptDlg('نام جدید',it.name);if(n&&n!==it.name){await api('fs.rename',{path:p,name:n});renderFm()}}],['مجوزها',()=>chmodDlg([p],it)],['مالکیت',()=>chownDlg([p])],['ZIP',()=>zipDlg([p])],['مشخصات',async()=>{const d=await api('fs.info',{path:p});openSheet(sheetHead(esc(it.name))+'<pre class="logbox">'+esc(JSON.stringify(d,null,2))+'</pre>')}],['حذف',async()=>{if(await confirmDlg('حذف '+it.name+'؟')){await api('fs.delete',{paths:[p]});renderFm()}}]];if(/\.zip$/i.test(it.name))ops.push(['استخراج ZIP',()=>unzipDlg(p)]);const sh=openSheet(sheetHead(esc(it.name))+ops.map(([label],i)=>`<button class="btn" style="margin:4px" data-act="${i}">${label}</button>`).join(''));actions(sh,'data-act',async i=>{__closeSheet();await ops[i][1]()})}
+function dlPath(p){const a=document.createElement('a');a.href=location.pathname+'?api=fs.download&path='+encodeURIComponent(p);a.download='';a.click()}
+async function selOp(op){const ps=selPaths();if(!ps.length)return;if(op==='delete'){if(await confirmDlg('حذف '+ps.length+' مورد؟')){await api('fs.delete',{paths:ps});F.sel.clear();renderFm()}}else if(op==='download'){if(ps.length===1)dlPath(ps[0]);else{const d=await api('fs.zip',{paths:ps.map(p=>p.split('/').pop()),base:F.path,dest:joinPath(F.path,'selection-'+Date.now()+'.zip')});dlPath(d.path);renderFm()}}else if(op==='zip')await zipDlg(ps);else{const dest=await promptDlg('پوشه مقصد',F.path);if(dest){await api('fs.transfer',{paths:ps,dest,op});F.sel.clear();renderFm()}}}
+async function zipDlg(ps){const name=await promptDlg('نام ZIP','archive-'+Date.now()+'.zip');if(name){await api('fs.zip',{paths:ps.map(p=>p.split('/').pop()),base:F.path,dest:joinPath(F.path,name)});renderFm()}}
+async function unzipDlg(p){const dest=await promptDlg('پوشه مقصد',p.replace(/\.zip$/i,'')+'-extracted');if(dest){await api('fs.unzip',{zip:p,dest});renderFm()}}
+async function chmodDlg(paths,it){const mode=await promptDlg('مجوز (مثلاً 644 یا 755)',it?.perms||'644');if(mode){await api('fs.chmod',{paths,mode,recursive:!!it?.dir&&await confirmDlg('بازگشتی روی زیرپوشه‌ها؟')});renderFm()}}
+async function chownDlg(paths){const owner=await promptDlg('کاربر:گروه','');if(owner){await api('fs.chown',{paths,owner,recursive:await confirmDlg('بازگشتی؟')});renderFm()}}
+async function newItemDlg(){const sh=openSheet(sheetHead('مورد جدید')+'<input class="inp ltr" id="nname" placeholder="نام"><select class="inp" id="ntype"><option value="file">فایل</option><option value="dir">پوشه</option></select><button class="btn pri" id="nok">ساخت</button>');sh.querySelector('#nok').onclick=async()=>{const name=sh.querySelector('#nname').value.trim(),type=sh.querySelector('#ntype').value;if(!name)return;try{await api('fs.create',{path:joinPath(F.path,name),type});__closeSheet();renderFm();if(type==='file')openEditor(joinPath(F.path,name),true)}catch(e){toast(e.message,'err')}}}
+function searchDlg(){const sh=openSheet(sheetHead('جستجو')+'<input class="inp" id="sq" placeholder="عبارت"><label class="lb"><input id="scontent" type="checkbox"> جستجو در محتوا</label><button class="btn pri" id="sok">جستجو</button><div id="sres"></div>');sh.querySelector('#sok').onclick=async()=>{try{const d=await api('fs.search',{path:F.path,q:sh.querySelector('#sq').value,content:sh.querySelector('#scontent').checked});const box=sh.querySelector('#sres');box.innerHTML=d.results.map((r,i)=>`<div class="li"><span class="t ltr">${esc(r.path)}</span><button class="btn sm" data-r="${i}">باز کردن</button></div>`).join('')||'نتیجه‌ای نیست';actions(box,'data-r',i=>{const r=d.results[i];__closeSheet();r.dir?navFm(r.path):openEditor(r.path)})}catch(e){toast(e.message,'err')}}}
+async function uploadFiles(files){if(!files.length)return;const sh=openSheet(sheetHead('بارگذاری')+'<div id="upl"></div>'),box=sh.querySelector('#upl');for(const f of files){const row=document.createElement('div');row.className='li ltr';row.textContent=f.name+' …';box.append(row);try{const chunk=1024*1024;let off=0;do{const blob=f.slice(off,off+chunk),b64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result.split(',')[1]);r.onerror=reject;r.readAsDataURL(blob)});await api('fs.upload_chunk',{dest:F.path,name:f.name,offset:off,b64});off+=blob.size;row.textContent=f.name+' '+Math.round(f.size?off/f.size*100:100)+'%'}while(off<f.size)}catch(e){row.textContent=f.name+': '+e.message;row.style.color='var(--err)'}}renderFm()}
+function cmMode(n){n=n.toLowerCase();if(/\.php$/.test(n))return 'application/x-httpd-php';if(/\.(html?|vue)$/.test(n))return 'htmlmixed';if(/\.(js|ts|json|jsx|tsx)$/.test(n))return 'javascript';if(/\.css$/.test(n))return 'css';if(/\.py$/.test(n))return 'python';if(/\.ya?ml$/.test(n))return 'yaml';if(/\.md$/.test(n))return 'markdown';if(/\.sql$/.test(n))return 'sql';if(/\.(sh|bash|env)$/.test(n))return 'shell';return null}
+async function openEditor(path,isNew=false){try{const content=isNew?'':(await api('fs.read',{path})).content;const sh=openSheet(sheetHead('<span class="ltr">'+esc(path)+'</span>')+'<div id="edcm"></div><textarea id="edta" class="inp ltr hide" style="height:65vh" spellcheck="false"></textarea><div class="row"><button class="btn pri" id="edsave">ذخیره Ctrl+S</button><span class="hint" id="edstat"></span></div>');let cm=null;if(typeof CodeMirror!=='undefined'){cm=CodeMirror(sh.querySelector('#edcm'),{value:content,mode:cmMode(path),theme:'material-darker',lineNumbers:true,lineWrapping:false});setTimeout(()=>cm.refresh(),100)}else{sh.querySelector('#edcm').classList.add('hide');sh.querySelector('#edta').classList.remove('hide');sh.querySelector('#edta').value=content}const save=async()=>{try{await api('fs.save',{path,content:cm?cm.getValue():sh.querySelector('#edta').value});sh.querySelector('#edstat').textContent='ذخیره شد';toast('ذخیره شد','ok');renderFm()}catch(e){toast(e.message,'err')}};sh.querySelector('#edsave').onclick=save;sh.onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();save()}}}catch(e){toast(e.message,'err')}}
+let procList=[],procFilter='',procUser='',procSort='cpu',procTimer=null,procHideKernel=true;
+INITS.proc={fn(){const v=$('#v-proc');v.innerHTML='<div class="card"><h3>مدیریت پردازش‌ها</h3><div id="proc-summary" class="hint"></div><div class="row"><input class="inp" id="proc-search" placeholder="نام، PID، فرمان"><select class="mini" id="proc-user"></select><select class="mini" id="proc-sort"><option value="cpu">CPU</option><option value="mem">RAM</option><option value="pid">PID</option><option value="name">نام</option></select><select class="mini" id="proc-rate"><option value="0">خودکار خاموش</option><option value="2000">۲ ثانیه</option><option value="5000" selected>۵ ثانیه</option><option value="10000">۱۰ ثانیه</option></select><button class="btn sm" id="proc-refresh">به‌روزرسانی</button><label class="hint"><input id="proc-kernel" type="checkbox" checked> مخفی‌کردن Kernel Threads</label></div></div><div id="proc-table"></div>';$('#proc-search').oninput=e=>{procFilter=e.target.value.toLowerCase();renderProcList()};$('#proc-user').onchange=e=>{procUser=e.target.value;renderProcList()};$('#proc-sort').onchange=e=>{procSort=e.target.value;renderProcList()};$('#proc-kernel').onchange=e=>{procHideKernel=e.target.checked;renderProcList()};$('#proc-refresh').onclick=loadProcs;const timer=()=>{clearInterval(procTimer);const ms=+$('#proc-rate').value;if(ms)procTimer=setInterval(()=>{if(curTab==='proc'&&!document.hidden&&!__sheet)loadProcs()},ms)};$('#proc-rate').onchange=timer;timer();loadProcs()}};
+async function loadProcs(){try{const d=await api('proc.list');procList=d.list;$('#proc-summary').textContent=d.count+' processes · CPU '+d.total_cpu+'% · RAM '+d.total_mem+'% · PHP PID '+d.my_pid;$('#proc-user').innerHTML='<option value="">همه کاربران</option>'+[...new Set(procList.map(p=>p.user))].sort().map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');$('#proc-user').value=procUser;renderProcList()}catch(e){toast(e.message,'err')}}
+function renderProcList(){let a=procList.filter(p=>(!procHideKernel||!/^\[.*\]$/.test(p.args))&&(!procUser||p.user===procUser)&&(!procFilter||[p.pid,p.user,p.comm,p.args].join(' ').toLowerCase().includes(procFilter)));a.sort((a,b)=>procSort==='name'?a.comm.localeCompare(b.comm):procSort==='pid'?a.pid-b.pid:b[procSort]-a[procSort]);const box=$('#proc-table');box.innerHTML='<div class="tblwrap"><table class="tbl"><thead><tr><th>PID</th><th>User</th><th>CPU</th><th>RAM</th><th>State</th><th>Command</th><th>عملیات</th></tr></thead><tbody>'+a.map(p=>`<tr><td>${p.pid}</td><td>${esc(p.user)}</td><td>${p.cpu}%</td><td>${p.mem}% (${(p.rss/1024).toFixed(1)}M)</td><td>${esc(p.stat)}</td><td class="cmdcol" title="${esc(p.args)}">${esc(p.args)}</td><td><button class="btn sm" data-info="${p.pid}">جزئیات</button><button class="btn sm" data-term="${p.pid}">TERM</button><button class="btn danger sm" data-kill="${p.pid}">KILL</button></td></tr>`).join('')+'</tbody></table></div>';actions(box,'data-info',openProcInfo);actions(box,'data-term',id=>killProc(+id,15));actions(box,'data-kill',id=>killProc(+id,9))}
+async function killProc(pid,sig){if(await confirmDlg('ارسال سیگنال '+sig+' به PID '+pid+'؟')){await api('proc.kill',{pid,sig});toast('سیگنال ارسال شد','ok');loadProcs()}}
+async function openProcInfo(pid){const d=await api('proc.info',{pid:+pid}),sh=openSheet(sheetHead('PID '+pid)+'<pre class="logbox">'+esc(JSON.stringify(d,null,2))+'</pre><div class="row">'+[1,15,9].map(sig=>`<button class="btn sm" data-sig="${sig}">${sig===1?'SIGHUP':sig===15?'SIGTERM':'SIGKILL'}</button>`).join('')+'</div>');actions(sh,'data-sig',async sig=>{__closeSheet();await killProc(+pid,+sig)})}
+const B={gh:null,profiles:[]};INITS.backup={fn:renderBackup};
+async function renderBackup(){try{const[g,p]=await Promise.all([api('gh.get'),api('gh.profiles')]);B.gh=g;B.profiles=p.profiles;const v=$('#v-backup');v.innerHTML=`<div class="card"><h3>اتصال به گیت‌هاب</h3><div class="grid2"><div><label class="lb">ریپازیتوری بکاپ (خصوصی)</label><input class="inp ltr" id="ghrepo" value="${esc(g.gh_repo)}" placeholder="owner/private-backups"></div><div><label class="lb">شاخه بکاپ</label><input class="inp ltr" id="ghbranch" value="${esc(g.gh_branch)}"></div><div><label class="lb">توکن؛ خالی یعنی بدون تغییر</label><input class="inp ltr" id="ghtoken" type="password" placeholder="${esc(g.token_hint)}"></div><div><label class="lb">نام و ایمیل کامیت</label><input class="inp ltr" id="ghname" value="${esc(g.git_name)}"><input class="inp ltr" id="ghmail" value="${esc(g.git_email)}"></div></div><div class="row"><button class="btn pri" id="ghsave">ذخیره</button><button class="btn" id="ghtest">تست اتصال</button></div><p class="hint">بکاپ‌ها ممکن است حاوی اسرار باشند. از ریپوی خصوصی و توکن با حداقل دسترسی استفاده کنید. این شاخه با force push بازنویسی می‌شود؛ شاخه کد پروژه را وارد نکنید.</p></div><div class="card"><h3>پروفایل‌های بکاپ</h3><div id="proflist"></div><button class="btn sm" id="profadd">+ پروفایل</button></div><div class="card"><h3>اجرای بکاپ</h3><input class="inp" id="bkmsg" placeholder="پیام کامیت"><button class="btn pri" id="bkgo">شروع بکاپ</button></div><div class="card"><h3>نسخه‌های بکاپ</h3><button class="btn sm" id="snapref">به‌روزرسانی</button><div id="snaplist"></div></div>`;
+ const save=async()=>{const repo=$('#ghrepo').value.trim();if(!repo)throw Error('ریپو الزامی است');B.gh=await api('gh.save',{gh_repo:repo,gh_branch:$('#ghbranch').value.trim()||'backups',gh_token:$('#ghtoken').value.trim()||'__KEEP__',git_name:$('#ghname').value.trim(),git_email:$('#ghmail').value.trim()});$('#ghtoken').value=''};
+ $('#ghsave').onclick=async()=>{try{await save();toast('ذخیره شد','ok');loadSnaps()}catch(e){toast(e.message,'err')}};$('#ghtest').onclick=async()=>{try{await save();await api('gh.test');toast('اتصال موفق','ok');loadSnaps()}catch(e){toast(e.message,'err')}};$('#profadd').onclick=()=>profileDlg(null);$('#snapref').onclick=loadSnaps;$('#bkgo').onclick=async()=>{try{const profiles=$$('#proflist [data-id]:checked').map(c=>c.dataset.id),msg=$('#bkmsg').value;if(!profiles.length)throw Error('حداقل یک پروفایل انتخاب کنید');await save();if(!await confirmDlg('بکاپ به '+B.gh.gh_repo+' ارسال شود؟'))return;const d=await api('gh.backup',{profiles,msg});openJob(d.job,'بکاپ گیت‌هاب')}catch(e){toast(e.message,'err')}};paintProfiles();loadSnaps();}catch(e){toast(e.message,'err')}}
+function paintProfiles(){const box=$('#proflist');box.innerHTML=B.profiles.map(p=>`<div class="li"><input class="chk" type="checkbox" data-id="${esc(p.id)}" ${p.enabled?'checked':''}><span class="t"><b>${esc(p.icon||'📁')} ${esc(p.name)}</b><small class="ltr">${esc((p.includes||[]).join(', ')||p.extra||'')}</small></span><div class="acts"><button class="btn sm" data-edit="${esc(p.id)}">ویرایش</button><button class="btn danger sm" data-del="${esc(p.id)}">حذف</button></div></div>`).join('');box.querySelectorAll('[data-id]').forEach(c=>c.onchange=async()=>{try{const p=B.profiles.find(x=>x.id===c.dataset.id);p.enabled=c.checked;await api('gh.profiles',{op:'save',profile:p})}catch(e){toast(e.message,'err')}});actions(box,'data-edit',id=>profileDlg(B.profiles.find(p=>p.id===id)));actions(box,'data-del',async id=>{if(await confirmDlg('پروفایل حذف شود؟')){B.profiles=(await api('gh.profiles',{op:'delete',id})).profiles;paintProfiles()}})}
+function profileDlg(p){p=p||{id:'',name:'',icon:'📁',extra:'',enabled:true,includes:[],excludes:[]};const sh=openSheet(sheetHead('پروفایل بکاپ')+`<label class="lb">نام</label><input class="inp" id="pname" value="${esc(p.name)}"><label class="lb">آیکون</label><input class="inp" id="picon" value="${esc(p.icon)}"><label class="lb">مسیرها؛ هر خط یک مسیر</label><textarea class="inp ltr" id="pinc">${esc((p.includes||[]).join('\n'))}</textarea><label class="lb">الگوهای مستثنی</label><textarea class="inp ltr" id="pexc">${esc((p.excludes||[]).join('\n'))}</textarea><label class="lb">نوع ویژه</label><select class="inp" id="pextra">${[['','پوشه‌ها'],['db','دیتابیس'],['cron','کران‌جاب'],['packages','لیست پکیج‌ها']].map(([v,l])=>`<option value="${v}" ${p.extra===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn pri" id="pok">ذخیره</button>`);sh.querySelector('#pok').onclick=async()=>{try{const q={...p,name:sh.querySelector('#pname').value.trim(),icon:sh.querySelector('#picon').value.trim(),extra:sh.querySelector('#pextra').value,includes:sh.querySelector('#pinc').value.split('\n').map(x=>x.trim()).filter(Boolean),excludes:sh.querySelector('#pexc').value.split('\n').map(x=>x.trim()).filter(Boolean)};if(!q.name)throw Error('نام الزامی است');B.profiles=(await api('gh.profiles',{op:'save',profile:q})).profiles;__closeSheet();paintProfiles()}catch(e){toast(e.message,'err')}}}
+async function loadSnaps(){if(!B.gh?.gh_repo){$('#snaplist').textContent='ابتدا ریپو را ذخیره کنید';return}try{const d=await api('gh.snapshots'),refs=[...(d.has_branch?[d.branch]:[]),...d.tags],box=$('#snaplist');box.innerHTML=refs.map((r,i)=>`<div class="li"><span class="t ltr">${esc(r)}</span><div class="acts"><button class="btn sm" data-tree="${i}">محتوا</button><button class="btn pri sm" data-restore="${i}">بازیابی</button></div></div>`).join('')||'بکاپی موجود نیست';actions(box,'data-tree',i=>snapshotTreeDlg(refs[i]));actions(box,'data-restore',i=>restoreDlg(refs[i]))}catch(e){$('#snaplist').textContent=e.message}}
+async function restoreDlg(ref){const d=await api('gh.manifest',{ref}),mf=d.manifest;const sh=openSheet(sheetHead('بازیابی '+esc(ref))+`<p class="hint">${fmtDate(mf.created)} · ${esc(mf.host)}</p><div>${(mf.profiles||[]).map(p=>`<label class="li"><input class="chk rc" type="checkbox" value="${esc(p.id)}" checked><span>${esc(p.name)}</span></label>`).join('')}</div><label class="lb"><input id="rover" type="checkbox" checked> بازنویسی فایل‌ها</label><label class="lb"><input id="rsafe" type="checkbox" checked> تگ ایمنی از شاخه بکاپ (نه بکاپ جدید VPS)</label><label class="lb">مسیر جایگزین؛ خالی یعنی مسیر اصلی</label><input class="inp ltr" id="rbase" placeholder="/restore-test"><button class="btn pri" id="rok">شروع بازیابی</button>`);sh.querySelector('#rok').onclick=async()=>{try{const params={ref,categories:[...sh.querySelectorAll('.rc:checked')].map(c=>c.value),overwrite:sh.querySelector('#rover').checked,safety:sh.querySelector('#rsafe').checked,target_base:sh.querySelector('#rbase').value.trim()};if(!params.categories.length)throw Error('دسته‌ای انتخاب نشده');if(params.target_base&&!params.target_base.startsWith('/'))throw Error('مسیر باید مطلق باشد');if(!await confirmDlg('بازیابی انجام شود؟ فایل‌های موجود ممکن است بازنویسی شوند.'))return;const result=await api('gh.restore',params);openJob(result.job,'بازیابی '+ref)}catch(e){toast(e.message,'err')}}}
+async function snapshotTreeDlg(ref){const d=await api('gh.manifest',{ref}),entries=[];(d.manifest.profiles||[]).forEach(p=>(p.includes||[]).forEach(i=>entries.push({name:p.name+' → '+i.src,path:d.cache+'/'+i.staged})));const sh=openSheet(sheetHead('محتوای '+esc(ref))+entries.map((e,i)=>`<div class="li"><span class="t">${esc(e.name)}</span><button class="btn sm" data-p="${i}">باز</button></div>`).join(''));actions(sh,'data-p',i=>repoBrowse(entries[i].path))}
+async function repoBrowse(path){const d=await api('fs.list',{path,hidden:true}),sh=openSheet(sheetHead(esc(path))+d.items.map((it,i)=>`<div class="li"><span class="t">${it.dir?'📁':'📄'} ${esc(it.name)}</span><button class="btn sm" data-i="${i}">${it.dir?'باز':'دانلود'}</button></div>`).join(''));actions(sh,'data-i',i=>{const it=d.items[i],p=joinPath(path,it.name);it.dir?repoBrowse(p):dlPath(p)})}
+INITS.proj={fn:renderProj};let projectList=[];
+async function renderProj(){try{projectList=(await api('proj.list')).projects;const v=$('#v-proj');v.innerHTML='<div class="card"><h3>مدیریت پروژه‌ها</h3><button class="btn pri" id="padd">+ پروژه جدید</button><button class="btn" id="pref">به‌روزرسانی</button><button class="btn" id="project-storage">فضای نصب پروژه‌ها</button><p class="appearance-note hint">نصب‌های جدید از ریشه اختصاصی پروژه‌ها استفاده می‌کنند، نه /var/www. ابتدا «فضای نصب پروژه‌ها» را یک‌بار آماده و آزمایش کنید. مسیرهای قبلی بدون تأیید شما تغییر نمی‌کنند.</p><p class="hint">نگهبان PHP تا زمانی که پردازش آن زنده باشد، سرویس را بازیابی می‌کند. راه‌اندازی پس از بوت نیازمند systemd است. هم‌زمان دو نگهبان برای یک پروژه اجرا نکنید.</p></div>'+'<div class="view-tools"><input class="inp" id="project-filter" aria-label="فیلتر پروژه" placeholder="جستجوی نام، ریپو یا وضعیت پروژه…"><select class="mini" id="project-preset"><option value="scraper4">Scraper4 + Deployer</option><option value="node">Node.js</option><option value="static">Static</option></select><button class="btn" id="preset-new">ساخت از الگو</button></div>'+projectList.map(p=>`<div class="card project-card"><h3>${esc(p.name)} <span class="tag ${p.service?.status==='running'?'ok':''}">${esc(p.service?.status||'stopped')}</span></h3><p class="hint ltr">${esc(p.repo_url)} · ${esc(p.branch)}${p.subfolder?' / '+esc(p.subfolder):''}<br>${esc(p.deploy_path)} · Port ${esc(p.port)}<br>${p.last_deploy?esc(p.last_deploy.commit)+' · '+fmtDate(p.last_deploy.time)+' · '+esc(p.last_deploy.status):''}</p><div class="row"><button class="btn pri sm" data-deploy="${p.id}">نصب / به‌روزرسانی</button>${p.start_cmd?`<button class="btn sm" data-start="${p.id}">اجرا</button><button class="btn danger sm" data-stop="${p.id}">توقف</button><button class="btn sm" data-restart="${p.id}">راه‌اندازی مجدد</button>`:''}${p.service?`<button class="btn sm" data-log="${esc(p.service.job)}">لاگ</button>`:''}<button class="btn sm" data-check="${p.id}">بررسی نصب</button><button class="btn sm" data-export="${p.id}">خروجی JSON</button><button class="btn sm" data-edit="${p.id}">تنظیمات</button><button class="btn sm" data-files="${p.id}">فایل‌ها</button><button class="btn danger sm" data-del="${p.id}">حذف پروفایل</button></div></div>`).join('');$('#project-storage').onclick=projectStorageDlg;$('#padd').onclick=()=>projectDlg(null);$('#preset-new').onclick=()=>projectDlg(presetProject($('#project-preset').value));$('#project-filter').oninput=e=>v.querySelectorAll('.project-card').forEach(c=>c.classList.toggle('hide',!c.textContent.toLowerCase().includes(e.target.value.trim().toLowerCase())));actions(v,'data-check',projectPreflight);actions(v,'data-export',id=>projectExport(projectList.find(p=>p.id===id)));$('#pref').onclick=renderProj;actions(v,'data-deploy',async id=>{if(!await confirmDlg('فایل‌های پروژه به‌روزرسانی شوند؟ از داده‌ها بکاپ داشته باشید.'))return;const d=await api('proj.deploy',{id});openJob(d.job,'دیپلوی پروژه')});for(const action of ['start','stop','restart'])actions(v,'data-'+action,async id=>{const d=await api('proj.service',{id,action});renderProj();if(d?.job)openJob(d.job,'سرویس')});actions(v,'data-log',id=>openJob(id,'لاگ سرویس'));actions(v,'data-edit',id=>projectDlg(projectList.find(p=>p.id===id)));actions(v,'data-files',id=>{switchTab('files');navFm(projectList.find(p=>p.id===id).deploy_path)});actions(v,'data-del',async id=>{if(await confirmDlg('پروفایل حذف و سرویس آن متوقف شود؟ فایل‌ها باقی می‌مانند.')){await api('proj.delete',{id});renderProj()}})}catch(e){toast(e.message,'err')}}
+// Import is data-only: it never saves, deploys, evaluates, or starts commands.
+const PROJECT_JSON_MAX_BYTES=256*1024;
+function parseProjectJson(text){
+ if(new TextEncoder().encode(text).byteLength>PROJECT_JSON_MAX_BYTES)throw Error('JSON بزرگ‌تر از ۲۵۶ کیلوبایت است');
+ let d;try{d=JSON.parse(text.replace(/^\uFEFF/,''))}catch(e){throw Error('JSON معتبر نیست؛ کوتیشن، ویرگول و براکت‌ها را بررسی کنید')}
+ const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+ if(!record(d))throw Error('تنظیمات باید یک شیء JSON باشد، نه آرایه');
+ if(Object.prototype.hasOwnProperty.call(d,'project')){if(Object.keys(d).length!==1||!record(d.project))throw Error('قالب project نامعتبر است');d=d.project}
+ const strings=['name','type','repo_url','branch','subfolder','deploy_path','install_cmd','build_cmd','start_cmd','auth_token'];
+ const allowed=new Set([...strings,'id','port','env','auto_start','is_daemon']);
+ for(const k of Object.keys(d))if(!allowed.has(k))throw Error('فیلد ناشناخته: '+k);
+ if(typeof d.name!=='string'||!d.name.trim()||typeof d.repo_url!=='string'||!d.repo_url.trim())throw Error('نام و repo_url الزامی هستند');
+ const out=Object.create(null);
+ for(const k of strings)if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='string'||/[\r\n\0]/.test(d[k]))throw Error('مقدار تک‌خطی متنی لازم است: '+k);out[k]=d[k]}
+ if(out.type!==undefined&&!['node','python','php','static','other'].includes(out.type))throw Error('نوع پروژه نامعتبر است');
+ if(!/^(https?:\/\/|git@|ssh:\/\/|file:\/\/|\/)/.test(out.repo_url))throw Error('آدرس ریپو نامعتبر است');
+ if(out.deploy_path!==undefined&&out.deploy_path!==''&&(!out.deploy_path.startsWith('/')||out.deploy_path==='/'))throw Error('مسیر نصب باید مطلق و غیر از / باشد');
+ if(out.branch?.startsWith('-')||/(^|\/)\.\.(\/|$)/.test(out.subfolder||''))throw Error('شاخه یا زیرپوشه نامعتبر است');
+ if(Object.prototype.hasOwnProperty.call(d,'port')){if(!['string','number'].includes(typeof d.port))throw Error('پورت نامعتبر است');const v=String(d.port);if(v!==''&&(!/^\d+$/.test(v)||+v<1||+v>65535))throw Error('پورت باید بین ۱ و ۶۵۵۳۵ باشد');out.port=v}
+ for(const k of ['auto_start','is_daemon'])if(Object.prototype.hasOwnProperty.call(d,k)){if(typeof d[k]!=='boolean')throw Error('مقدار '+k+' باید true یا false باشد');out[k]=d[k]}
+ if(Object.prototype.hasOwnProperty.call(d,'env')){if(!record(d.env))throw Error('env باید یک شیء کلید/مقدار باشد');out.env=Object.create(null);for(const[k,v]of Object.entries(d.env)){if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||!['string','number','boolean'].includes(typeof v)||(typeof v==='number'&&!Number.isFinite(v))||/[\r\n\0]/.test(String(v)))throw Error('متغیر محیطی نامعتبر: '+k);out.env[k]=String(v)}}
+ // A portable profile cannot change the identity of the dialog being edited.
+ return out;
+}
+function applyProjectJson(sh,d){
+ for(const k of ['name','repo_url','branch','subfolder','deploy_path','port','install_cmd','build_cmd','start_cmd'])if(d[k]!==undefined)sh.querySelector('#jq-'+k).value=d[k];
+ if(d.type!==undefined)sh.querySelector('#jq-type').value=d.type;
+ if(d.auth_token!==undefined)sh.querySelector('#jq-token').value=d.auth_token;
+ if(d.auto_start!==undefined)sh.querySelector('#jq-auto').checked=d.auto_start;
+ if(d.is_daemon!==undefined)sh.querySelector('#jq-daemon').checked=d.is_daemon;
+ if(d.env!==undefined){const box=sh.querySelector('#jq-env');const lines=box.value.split(/\r?\n/).filter(line=>{const i=line.indexOf('=');return i<0||!Object.prototype.hasOwnProperty.call(d.env,line.slice(0,i).trim())});box.value=[...lines.filter(line=>line.trim()!==''),...Object.entries(d.env).map(([k,v])=>k+'='+v)].join('\n')}
+}
+
+function parsedProjectVersion(value){const m=String(value||'').trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]*)?$/);return m?{core:[m[1],m[2],m[3]||'0'].map(x=>BigInt(x)),pre:m[4]?.split('.')||[]}:null}
+function compareProjectVersions(a,b){const x=parsedProjectVersion(a),y=parsedProjectVersion(b);if(!x||!y)return x?-1:y?1:0;for(let i=0;i<3;i++)if(x.core[i]!==y.core[i])return x.core[i]>y.core[i]?-1:1;if(!x.pre.length||!y.pre.length)return x.pre.length?1:y.pre.length?-1:0;for(let i=0;i<Math.max(x.pre.length,y.pre.length);i++){if(x.pre[i]===undefined)return 1;if(y.pre[i]===undefined)return -1;const a=x.pre[i],b=y.pre[i];if(a===b)continue;const an=/^\d+$/.test(a),bn=/^\d+$/.test(b);if(an&&bn){if(BigInt(a)===BigInt(b))continue;return BigInt(a)>BigInt(b)?-1:1}if(an!==bn)return an?1:-1;return a>b?-1:1}return 0}
+function branchVersion(row,path='*'){const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return apps.map(a=>a.version).filter(v=>parsedProjectVersion(v)).sort(compareProjectVersions)[0]||''}
+function sortedBranchRows(rows,path='*'){return [...rows].sort((a,b)=>compareProjectVersions(branchVersion(a,path),branchVersion(b,path))||a.name.localeCompare(b.name))}
+
+function projectDlg(p){const fresh=!p;p=p||{id:'',name:'',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},auto_start:false,is_daemon:true};const fields=[['name','نام پروژه'],['repo_url','آدرس ریپو'],['branch','شاخه'],['subfolder','زیرپوشه داخل ریپو'],['deploy_path','مسیر نصب روی سرور'],['port','پورت'],['install_cmd','دستور نصب'],['build_cmd','دستور بیلد'],['start_cmd','دستور اجرا']];const sh=openSheet(sheetHead('پروفایل پروژه')+`<div class="segtabs"><button class="btn" id="tab-gh">کاوشگر گیت‌هاب</button><button class="btn pri" id="tab-man">تنظیمات دستی</button><button class="btn" id="tab-json">ورود JSON</button></div><div id="json-exp" class="hide"><label class="lb">انتخاب فایل JSON تنظیمات (حداکثر ۲۵۶ کیلوبایت)</label><input class="inp" id="jq-json-file" type="file" accept=".json,application/json"><label class="lb">یا JSON را اینجا پیست کنید</label><textarea class="inp ltr" id="jq-json-text" rows="12" spellcheck="false" placeholder='{"name":"My project","repo_url":"https://github.com/owner/repo"}'></textarea><p class="hint">فقط فایل مورداعتماد وارد کنید؛ دستورات این پروفایل هنگام نصب قابل اجرا هستند. ورود JSON فقط فرم را پر می‌کند و چیزی را ذخیره یا اجرا نمی‌کند. متغیرهای محیطی موجود حفظ می‌شوند مگر همان کلید در JSON آمده باشد. شناسه id واردشده نادیده گرفته می‌شود.</p><button class="btn pri" id="jq-json-apply">اعمال در فرم برای بازبینی</button><p class="hint" id="jq-json-status" role="status" aria-live="polite"></p></div><div id="gh-exp" class="hide"><div class="row"><input class="inp ltr" id="gh-owner" value="fazilatma"><button class="btn pri" id="gh-load">دریافت مخازن</button></div><label class="lb">مخزن</label><select class="inp" id="gh-repo-sel"></select><label class="lb">مرتب‌سازی شاخه‌ها بر اساس نسخه پروژه</label><select class="inp" id="gh-version-path"><option value="*">بالاترین نسخه بین پروژه‌ها</option></select><p class="hint">جدیدترین نسخه ابتدا؛ نسخه‌های نامشخص در انتها. برای مقایسه یک پروژه مشخص، زیرپوشه آن را انتخاب کنید. بررسی نسخه‌های Node از package.json انجام می‌شود.</p><div class="row"><span class="hint" id="gh-branch-progress" role="status" aria-live="polite"></span><button class="btn sm" id="gh-branches-refresh">بررسی دوباره شاخه‌ها</button></div><div class="tblwrap" id="gh-branch-table"></div><label class="lb">شاخه انتخاب‌شده</label><select class="inp" id="gh-branch-sel"></select><div id="gh-apps-list"></div></div><div id="man-exp"><div class="grid2">${fields.map(([k,l])=>`<div><label class="lb">${l}</label><input class="inp ${k==='name'?'':'ltr'}" id="jq-${k}" value="${esc(p[k]||'')}"></div>`).join('')}<div><label class="lb">نوع</label><select class="inp" id="jq-type">${['node','python','php','static','other'].map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}</select></div><div><label class="lb">توکن ریپوی خصوصی؛ خالی بدون تغییر</label><input class="inp ltr" id="jq-token" type="password" placeholder="${p.has_token_hint?'ذخیره شده':''}"></div></div><div class="row"><button class="btn sm" id="jq-managed-path">استفاده از مسیر قابل‌نوشتن مدیریت‌شده</button></div><p class="hint">پروژه جدید: مسیر خالی یعنی پوشه اختصاصی زیر ریشه نصب مدیریت‌شده. پروژه موجود: خالی‌کردن مسیر، محل قبلی را حفظ می‌کند. جابه‌جایی نصب‌های دارای داده خودکار نیست.</p><p class="hint">فیلد پورت فقط PORT را تنظیم می‌کند؛ برنامه باید آن را پشتیبانی کند. در Scraper4، دیپلویر از DEPLOYER_UI_PORT (پیش‌فرض 8790) و اسکریپر از SCRAPER_PORT (پیش‌فرض 3000) استفاده می‌کند. npm start این مخزن، Wrangler است نه دیپلویر.</p><label class="lb">متغیرهای محیطی؛ هر خط KEY=VALUE</label><textarea class="inp ltr" id="jq-env">${esc(Object.entries(p.env||{}).map(([k,v])=>k+'='+v).join('\n'))}</textarea><label class="lb"><input class="chk" id="jq-auto" type="checkbox" ${p.auto_start?'checked':''}> اجرای خودکار پس از دیپلوی</label><label class="lb"><input class="chk" id="jq-daemon" type="checkbox" ${p.is_daemon?'checked':''}> بازیابی خودکار سرویس هنگام خروج</label><button class="btn pri" id="jq-save">ذخیره پروفایل</button><p class="hint">ذخیره به‌تنهایی نصب را شروع نمی‌کند. پس از ذخیره دکمه نصب را بزنید.</p></div>`);
+ const showTab=id=>{for(const tab of ['gh','man','json']){sh.querySelector('#'+tab+'-exp').classList.toggle('hide',tab!==id);sh.querySelector('#tab-'+tab).classList.toggle('pri',tab===id)}};
+ const man=()=>showTab('man'),gh=()=>showTab('gh');sh.querySelector('#tab-man').onclick=man;sh.querySelector('#tab-gh').onclick=gh;sh.querySelector('#tab-json').onclick=()=>showTab('json');
+ const jsonText=sh.querySelector('#jq-json-text'),jsonStatus=sh.querySelector('#jq-json-status');let jsonEpoch=0;
+ jsonText.oninput=()=>{jsonEpoch++;jsonStatus.textContent=''};
+ sh.querySelector('#jq-json-file').onchange=async e=>{const epoch=++jsonEpoch,file=e.target.files[0];if(!file)return;try{if(file.size>PROJECT_JSON_MAX_BYTES)throw Error('فایل بزرگ‌تر از ۲۵۶ کیلوبایت است');const text=await file.text();if(epoch!==jsonEpoch||sh.querySelector('#jq-json-text')!==jsonText)return;jsonText.value=text;jsonStatus.textContent='فایل خوانده شد؛ برای اعتبارسنجی و بازبینی دکمه اعمال را بزنید'}catch(error){if(epoch===jsonEpoch&&sh.querySelector('#jq-json-text')===jsonText)jsonStatus.textContent=error.message}};
+ sh.querySelector('#jq-json-apply').onclick=()=>{try{const imported=parseProjectJson(jsonText.value);jsonEpoch++;applyProjectJson(sh,imported);man();toast('JSON در فرم اعمال شد؛ دستورات و مسیر را بررسی و سپس ذخیره کنید','ok')}catch(error){jsonStatus.textContent=error.message}};
+ const fill=app=>{applyProjectJson(sh,app);sh.querySelector('#jq-type').value=app.type||'node';man()};
+ const owner=()=>sh.querySelector('#gh-owner').value.trim()||'fazilatma',repo=()=>sh.querySelector('#gh-repo-sel').value,branch=()=>sh.querySelector('#gh-branch-sel').value;
+ const table=sh.querySelector('#gh-branch-table'),progress=sh.querySelector('#gh-branch-progress'),pathSelect=sh.querySelector('#gh-version-path');
+ let epoch=0,selection=0,rows=[],snapshot=null;
+ const current=e=>e===epoch&&sh.querySelector('#gh-branch-table')===table&&table.isConnected;
+ const renderApps=(apps,ctx)=>{const box=sh.querySelector('#gh-apps-list');box.innerHTML='<h3 class="ltr">'+esc(ctx.branch)+'</h3>'+apps.map((a,i)=>`<div class="li"><span class="t"><b>${esc(a.name)}</b><small class="ltr">${esc(a.subfolder||'/')} · ${esc(a.lang_label)} · ${esc(a.version||'نسخه نامشخص')}<br>${esc(a.framework)}<br>${esc(a.install_cmd)}<br>${esc(a.start_cmd)}</small></span><div class="acts"><button class="btn sm" data-custom="${i}">سفارشی‌سازی</button><button class="btn pri sm" data-quick="${i}">نصب سریع</button></div></div>`).join('');if(!apps.length)box.innerHTML+='<p class="hint">پروژه استانداردی یافت نشد؛ از تنظیمات دستی استفاده کنید.</p>';const project=i=>({...apps[i],repo_url:'https://github.com/'+ctx.owner+'/'+ctx.repo,branch:ctx.branch});actions(box,'data-custom',i=>fill(project(i)));actions(box,'data-quick',async i=>{if(!await confirmDlg('نصب سریع با دستورات تشخیص‌داده‌شده؟ برای اسکرپر بهتر است سفارشی‌سازی کنید.'))return;const r=await api('proj.quick_deploy',{project:project(i)});renderProj();openJob(r.job,'نصب پروژه')})};
+ const paintBranches=()=>{const path=pathSelect.value,ordered=sortedBranchRows(rows,path);table.innerHTML=rows.length?'<table class="tbl"><thead><tr><th>شاخه</th><th>نسخه ↓</th><th>پروژه / زیرپوشه</th><th>وضعیت</th><th>انتخاب</th></tr></thead><tbody>'+ordered.map(row=>{const apps=(row.apps||[]).filter(a=>path==='*'||a.subfolder===path);return `<tr><td class="ltr">${esc(row.name)}${row.default?' <span class="tag">پیش‌فرض</span>':''}</td><td class="ltr">${esc(branchVersion(row,path)||'—')}</td><td>${apps.map(a=>'<div class="ltr">'+esc(a.subfolder||'/')+' · '+esc(a.version||'نامشخص')+'</div>').join('')||'—'}</td><td>${esc(row.error||({pending:'در صف بررسی',loading:'در حال بررسی…',done:apps.length?'بررسی شد':'بدون پروژه مطابق'}[row.state]))}</td><td><button class="btn sm" data-branch-row="${rows.indexOf(row)}">انتخاب</button></td></tr>`}).join('')+'</tbody></table>':'<p class="empty">شاخه‌ای یافت نشد</p>';actions(table,'data-branch-row',i=>{sh.querySelector('#gh-branch-sel').value=rows[i].name;inspect()});};
+ const updatePaths=()=>{const old=pathSelect.value,paths=[...new Set(rows.flatMap(r=>(r.apps||[]).map(a=>a.subfolder)))].sort();pathSelect.innerHTML='<option value="*">بالاترین نسخه بین پروژه‌ها</option>'+paths.map(path=>`<option value="${esc(path)}" ${old===path?'selected':''}>${esc(path||'/ (ریشه)')}</option>`).join('');if(old==='*')pathSelect.value='*'};
+ const inspect=async()=>{if(!snapshot)return;const e=epoch,s=++selection,ctx={...snapshot,branch:branch()},row=rows.find(r=>r.name===ctx.branch);sh.querySelector('#gh-apps-list').textContent='در حال بررسی…';try{const apps=row?.state==='done'?row.apps:(await api('gh.inspect_branch',ctx)).apps;if(current(e)&&s===selection)renderApps(apps,ctx)}catch(error){if(current(e)&&s===selection)sh.querySelector('#gh-apps-list').textContent=error.message}};
+ const branches=async()=>{const e=++epoch;selection++;snapshot={owner:owner(),repo:repo()};const ctx={...snapshot};rows=[];table.replaceChildren();progress.textContent='دریافت همه شاخه‌ها…';sh.querySelector('#gh-apps-list').replaceChildren();sh.querySelector('#gh-branch-sel').replaceChildren();pathSelect.innerHTML='<option value="*">بالاترین نسخه بین پروژه‌ها</option>';pathSelect.value='*';try{const d=await api('gh.repo_branches',ctx);if(!current(e))return;rows=d.branches.map(b=>({...b,state:'pending',apps:[]}));sh.querySelector('#gh-branch-sel').innerHTML=rows.map(b=>`<option value="${esc(b.name)}" ${b.default?'selected':''}>${esc(b.name)}</option>`).join('');paintBranches();let done=0;for(const row of rows){if(!current(e))return;row.state='loading';progress.textContent=`بررسی نسخه‌ها: ${done} / ${rows.length}`;paintBranches();try{row.apps=(await api('gh.inspect_branch',{...ctx,branch:row.name})).apps;row.state='done'}catch(error){row.state='error';row.error=error.message}if(!current(e))return;done++;updatePaths();paintBranches();progress.textContent=`بررسی نسخه‌ها: ${done} / ${rows.length} · خطا: ${rows.filter(r=>r.state==='error').length}`;}}catch(error){if(current(e))progress.textContent=error.message}};
+ pathSelect.onchange=paintBranches;sh.querySelector('#gh-branches-refresh').onclick=branches;
+ let repoLoad=0;
+ sh.querySelector('#gh-load').onclick=async()=>{const request=++repoLoad,requestedOwner=owner();++epoch;++selection;rows=[];snapshot=null;table.replaceChildren();sh.querySelector('#gh-apps-list').replaceChildren();sh.querySelector('#gh-repo-sel').replaceChildren();sh.querySelector('#gh-branch-sel').replaceChildren();progress.textContent='دریافت مخازن…';try{const d=await api('gh.user_repos',{owner:requestedOwner});if(request!==repoLoad||owner()!==requestedOwner||!table.isConnected||sh.querySelector('#gh-branch-table')!==table)return;sh.querySelector('#gh-repo-sel').innerHTML=d.repos.map(r=>`<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.language)})</option>`).join('');sh.querySelector('#gh-repo-sel').value=d.repos[0]?.name||'';if(d.repos.length)await branches();else progress.textContent='مخزنی یافت نشد'}catch(error){if(request===repoLoad&&table.isConnected)progress.textContent=error.message}};
+ sh.querySelector('#gh-owner').oninput=()=>{++epoch;++selection;++repoLoad;snapshot=null;rows=[];table.replaceChildren();sh.querySelector('#gh-apps-list').replaceChildren();sh.querySelector('#gh-repo-sel').replaceChildren();sh.querySelector('#gh-branch-sel').replaceChildren();progress.textContent='برای این مالک، دریافت مخازن را بزنید'};
+ sh.querySelector('#gh-repo-sel').onchange=branches;sh.querySelector('#gh-branch-sel').onchange=inspect;
+ sh.querySelector('#jq-managed-path').onclick=async()=>{try{const d=await api('proj.managed_path',{id:p.id||'',name:sh.querySelector('#jq-name').value});sh.querySelector('#jq-deploy_path').value=d.path;toast('مسیر پیشنهادی در فرم قرار گرفت؛ پس از بازبینی ذخیره کنید','ok')}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#jq-save').onclick=async()=>{try{const q={id:p.id||'',type:sh.querySelector('#jq-type').value,auth_token:sh.querySelector('#jq-token').value.trim()||'__KEEP__',env_text:sh.querySelector('#jq-env').value,auto_start:sh.querySelector('#jq-auto').checked,is_daemon:sh.querySelector('#jq-daemon').checked};for(const[k]of fields)q[k]=sh.querySelector('#jq-'+k).value.trim();if(!q.name||!q.repo_url)throw Error('نام و ریپو الزامی است');await api('proj.save',{project:q});__closeSheet();renderProj();toast('ذخیره شد؛ اکنون نصب را بزنید','ok')}catch(e){toast(e.message,'err')}};
+ if(fresh){gh();sh.querySelector('#gh-load').click()}
+}
+INITS.jobs={fn(){renderJobs();setInterval(()=>{if(curTab==='jobs'&&!document.hidden&&!__sheet)renderJobs()},5000)}};
+let jobText="",jobState="";
+async function renderJobs(){try{const d=await api('jobs.list'),v=$('#v-jobs');v.innerHTML='<div class="card"><h3>کارهای پس‌زمینه و خطاهای راه‌اندازی</h3><button class="btn sm" id="jobs-ref">به‌روزرسانی</button></div>'+'<div class="view-tools"><input class="inp" id="job-filter" aria-label="جستجوی کارها" placeholder="فیلتر کارها…" value="'+esc(jobText)+'"><select class="mini" id="job-state">'+[['','همه وضعیت‌ها'],['running','در حال اجرا'],['failed','ناموفق'],['done','کامل'],['dead','قطع شده']].map(([k,t])=>'<option value="'+k+'" '+(jobState===k?'selected':'')+'>'+t+'</option>').join('')+'</select></div>'+d.jobs.map(j=>`<div class="li job-row" data-state="${esc(j.status.status)}"><span class="t"><b>${esc(j.name)}</b><small>${fmtDate(j.created)} · ${esc(j.type)} · ${esc(j.status.status)} ${j.status.exit??''}</small></span><button class="btn sm" data-log="${esc(j.id)}">لاگ</button>${j.status.status==='running'?`<button class="btn danger sm" data-stop="${esc(j.id)}">توقف</button>`:''}</div>`).join('');const filter=()=>v.querySelectorAll('.job-row').forEach(row=>row.classList.toggle('hide',!(row.textContent.toLowerCase().includes(jobText.toLowerCase())&&(!jobState||row.dataset.state===jobState))));$('#job-filter').oninput=e=>{jobText=e.target.value;filter()};$('#job-state').onchange=e=>{jobState=e.target.value;filter()};filter();$('#jobs-ref').onclick=renderJobs;actions(v,'data-log',id=>openJob(id,d.jobs.find(j=>j.id===id).name));actions(v,'data-stop',async id=>{if(await confirmDlg('متوقف شود؟')){await api('jobs.stop',{id});renderJobs()}})}catch(e){toast(e.message,'err')}}
+INITS.set={fn:renderSet};
+async function renderSet(){try{const s=await api('settings.get'),v=$('#v-set');v.innerHTML=`<div class="card"><h3>استودیوی ظاهر</h3><p class="hint">۵ پالت رنگ × ۳ چیدمان · حالت فشرده · پیش‌نمایش و ذخیره</p><button class="btn pri" onclick="appearanceDlg()">پوسته و چیدمان</button></div><div class="card"><h3>تغییر رمز</h3><label class="lb">رمز فعلی</label><input class="inp" type="password" id="pwold"><label class="lb">رمز جدید</label><input class="inp" type="password" id="pwnew"><button class="btn pri" id="pwok">تغییر رمز</button></div><div class="card"><h3>تنظیمات عمومی</h3><button class="btn" onclick="projectStorageDlg()">فضای نصب پروژه‌ها</button><label class="lb">پوشه شروع</label><input class="inp ltr" id="stfs" value="${esc(s.fs_start)}"><label class="lb">مدت نشست (دقیقه)</label><input class="inp" type="number" id="stses" value="${s.session_minutes}"><label class="lb">IP/CIDR مجاز؛ هر خط یک مورد، خالی یعنی همه</label><textarea class="inp ltr" id="stip">${esc(s.allowed_ips)}</textarea><p class="hint">محدودیت IP از REMOTE_ADDR استفاده می‌کند. در پشت پراکسی، آدرس واقعی را در تنظیمات مورداعتماد وب‌سرور تنظیم کنید.</p><button class="btn pri" id="stok">ذخیره</button>${s.noexec?'<p class="hint">PHP exec غیرفعال است</p>':''}</div><div class="card"><h3>گزارش فعالیت</h3><button class="btn" id="actbtn">مشاهده</button></div><div class="card hint">وب‌کنسول Pro ${esc(__BOOT.v)} · ترمینال، فایل منیجر، بکاپ، مدیریت پردازش و پروژه.<br>داده‌ها در .wconsole_data نگه‌داری می‌شوند. دسترسی HTTP به این پوشه را در وب‌سرور ببندید. این ابزار را به‌عنوان root اجرا نکنید.</div>`;$('#pwok').onclick=async()=>{try{await api('auth.change',{old:$('#pwold').value,new:$('#pwnew').value});$('#pwold').value=$('#pwnew').value='';toast('رمز تغییر کرد','ok')}catch(e){toast(e.message,'err')}};$('#stok').onclick=async()=>{try{await api('settings.save',{fs_start:$('#stfs').value.trim(),session_minutes:+$('#stses').value,allowed_ips:$('#stip').value.trim()});toast('ذخیره شد','ok')}catch(e){toast(e.message,'err')}};$('#actbtn').onclick=async()=>{try{const d=await api('activity');openSheet(sheetHead('گزارش فعالیت')+'<pre class="logbox">'+esc(d.lines.join('\n'))+'</pre>')}catch(e){toast(e.message,'err')}}}catch(e){toast(e.message,'err')}}
+const SCRAPER4_PRESET={"name":"Scraper4 + Deployer","type":"node","repo_url":"https://github.com/fazilatma/new.git","branch":"arena/01a0aa17-new","subfolder":"cloudflare-scraper4","deploy_path":"","port":"8790","install_cmd":"npm ci --include=dev --no-audit --no-fund","build_cmd":"node scripts/esbuild-check.mjs && npm run version:check && npm run render:build","start_cmd":"node scripts/local-deployer-ui.mjs","auto_start":false,"is_daemon":true,"env":{"NODE_ENV":"production","DEPLOYER_UI_PORT":"8790","DEPLOYER_UI_HOST":"127.0.0.1","SCRAPER_PORT":"3000","SCRAPER_BIND_HOST":"127.0.0.1","RUN_WORKER_IN_WEB":"true","DEPLOYER_SUPERVISED":"true","LOCAL_SCRAPER_AUTOSTART":"true","LOCAL_SCRAPER_KEEPALIVE":"true","LOCAL_SCRAPER_STOP_WITH_UI":"true","LOCAL_DEPLOYER_AUTO_UPDATE":"false","LOCAL_DEPLOYER_AUTO_INSTALL_LATEST":"false","LOCAL_SCRAPER_AUTO_UPDATE":"false"}};
+const SKINS=[['dark','نیمه‌شب','#101828','#6366f1'],['light','کاغذ روشن','#eef2f9','#5146c7'],['ocean','اقیانوس','#0e253d','#70dbff'],['forest','جنگل','#102b24','#75e5ba'],['amber','کهربا','#302419','#ffd17a']];
+const LAYOUTS=[['classic','کلاسیک','منوی کناری و فضای آشنای کنسول'],['studio','استودیو','نوار ناوبری بالا و محتوای متمرکز'],['focus','تمرکز','نوار آیکون باریک و فضای کاری بزرگ']];
+function readAppearance(){const root=document.documentElement;return {theme:root.getAttribute('data-theme')||'dark',layout:root.getAttribute('data-layout')||'classic',density:root.getAttribute('data-density')||'comfortable'}}
+function applyAppearance(p){applyTheme(p.theme);document.documentElement.setAttribute('data-layout',LAYOUTS.some(x=>x[0]===p.layout)?p.layout:'classic');document.documentElement.setAttribute('data-density',p.density==='compact'?'compact':'comfortable');setTimeout(()=>{if(curTab==='term')fitTerm()},80)}
+function appearanceDlg(){const original=readAppearance();let saved=false;const sh=openSheet(sheetHead('◈ استودیوی ظاهر')+`<p class="hint">پیش‌نمایش فوری در همه بخش‌ها. ذخیره برای این کنسول و نشست‌های بعدی اعمال می‌شود؛ بستن بدون ذخیره، ظاهر قبلی را بازمی‌گرداند.</p><div class="section-label">COLOR / رنگ</div><div class="skin-grid">${SKINS.map(([id,name,a,b])=>`<button class="skin-choice" data-skin="${id}"><span class="skin-swatch" style="--sw1:${a};--sw2:${b}"></span><b>${name}</b></button>`).join('')}</div><div class="section-label">WORKSPACE / چیدمان</div><div class="skin-grid">${LAYOUTS.map(([id,name,desc])=>`<button class="skin-choice" data-layout-choice="${id}"><b>${name}</b><small>${desc}</small></button>`).join('')}</div><label class="lb"><input class="chk" id="density-compact" type="checkbox"> نمایش فشرده فهرست‌ها و کارت‌ها</label><p class="appearance-note hint">در موبایل، هر سه چیدمان از نوار ناوبری پایین استفاده می‌کنند. فونت، کنتراست و رنگ‌ها در تمام بخش‌ها مشترک هستند.</p><button class="btn pri" id="appearance-save">ذخیره ظاهر</button>`,{onclose:()=>{if(!saved)applyAppearance(original)}});
+ const paint=()=>{const a=readAppearance();sh.querySelectorAll('[data-skin]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.skin===a.theme)));sh.querySelectorAll('[data-layout-choice]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.layoutChoice===a.layout)));sh.querySelector('#density-compact').checked=a.density==='compact'};
+ actions(sh,'data-skin',theme=>{applyAppearance({...readAppearance(),theme});paint()});actions(sh,'data-layout-choice',layout=>{applyAppearance({...readAppearance(),layout});paint()});sh.querySelector('#density-compact').onchange=e=>applyAppearance({...readAppearance(),density:e.target.checked?'compact':'comfortable'});paint();
+ sh.querySelector('#appearance-save').onclick=async()=>{const button=sh.querySelector('#appearance-save');button.disabled=true;try{await api('settings.save',readAppearance());saved=true;if(sh.querySelector('#appearance-save')===button)__closeSheet();toast('ظاهر ذخیره شد','ok')}catch(e){toast(e.message,'err')}finally{button.disabled=false}};
+}
+function commandPalette(){const entries=[...TABS.map(([id,label,icon])=>({label:icon+' '+label,keywords:id+' '+({dash:'dashboard server',term:'terminal shell',files:'file manager',proc:'processes',backup:'backups github',proj:'projects deployment',jobs:'queue logs',set:'settings security'}[id]||''),run:()=>switchTab(id)})),{label:'◈ انتخاب پوسته و چیدمان',keywords:'theme layout appearance',run:appearanceDlg},{label:'＋ پروژه جدید / ورود JSON',keywords:'project import json',run:()=>projectDlg(null)}];const sh=openSheet(sheetHead('جستجو و رفتن به بخش‌ها')+'<input class="inp" id="command-query" aria-label="جستجوی بخش" placeholder="نام بخش، theme، project، files…" autocomplete="off"><div id="command-results"></div><p class="hint">Ctrl / ⌘ + K · جستجو فقط در بخش‌ها و فرمان‌های ناوبری؛ هیچ دستور سیستمی اجرا نمی‌شود.</p>');const input=sh.querySelector('#command-query'),box=sh.querySelector('#command-results');const paint=()=>{const q=input.value.trim().toLowerCase();const results=entries.filter(x=>(x.label+' '+x.keywords).toLowerCase().includes(q));box.innerHTML=results.length?results.map((x,i)=>`<button class="btn palette-item" data-command="${i}">${esc(x.label)}</button>`).join(''):'<p class="empty">نتیجه‌ای یافت نشد</p>';actions(box,'data-command',i=>{__closeSheet();results[i].run()});input.onkeydown=e=>{if(e.key==='Enter'&&results.length){e.preventDefault();__closeSheet();results[0].run()}}};input.oninput=paint;paint();input.focus();}
+function downloadText(name,text,type='text/plain'){const blob=new Blob([text],{type:type+';charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+function projectExport(p){const q={};for(const k of ['name','type','branch','subfolder','deploy_path','port','install_cmd','build_cmd','start_cmd'])q[k]=p[k]||'';q.repo_url=p.repo_url||'';try{const u=new URL(q.repo_url);u.username='';u.password='';u.search='';u.hash='';q.repo_url=u.toString()}catch(e){q.repo_url=q.repo_url.replace(/^(https?:\/\/)[^/]*@/i,'$1').split(/[?#]/)[0]}
+ q.type=['node','python','php','static','other'].includes(p.type)?p.type:'other';q.auto_start=false;q.is_daemon=!!p.is_daemon;
+ // Command text may itself contain credentials; let the operator review before download.
+ const sh=openSheet(sheetHead('خروجی امن‌تر JSON')+'<p class="appearance-note hint">توکن خصوصی، تمام متغیرهای محیطی و شناسه حذف شده‌اند؛ اجرای خودکار خاموش است. دستورات و آدرس‌ها ممکن است هنوز اطلاعات حساس داشته باشند؛ قبل از دانلود یا اشتراک‌گذاری بازبینی کنید. در مقصد جدید، متغیرهای محیطی لازم را دستی اضافه کنید.</p><textarea class="inp ltr" id="project-export" rows="14" spellcheck="false"></textarea><button class="btn pri" id="project-export-save">دانلود JSON بازبینی‌شده</button>');sh.querySelector('#project-export').value=JSON.stringify(q,null,2);sh.querySelector('#project-export-save').onclick=()=>{try{const text=sh.querySelector('#project-export').value;parseProjectJson(text);downloadText('project.json',text,'application/json')}catch(e){toast(e.message,'err')}};return q;
+}
+async function projectPreflight(id){try{const d=await api('proj.preflight',{id});openSheet(sheetHead('بررسی پیش از نصب')+`<p class="appearance-note">${d.ok?'✓ بررسی‌های اولیه موفق بود':'✗ ابتدا موارد ناموفق را برطرف کنید'}</p><p class="hint">حساب اجرا: <b>${esc(d.user)}</b> · بررسی فقط خواندنی است و مجوزها را تغییر نمی‌دهد.</p><p class="hint ltr">${esc(d.target)}</p>`+d.checks.map(c=>`<div class="check-row"><span class="tag ${c.ok?'ok':'err'}">${c.ok?'✓':'✗'}</span><p><b>${esc(c.name)}</b><small>${esc(c.detail)}</small></p></div>`).join('')+d.notes.map(n=>'<p class="hint">'+esc(n)+'</p>').join(''));}catch(e){toast(e.message,'err')}}
+async function projectStorageDlg(){
+ try{const data=await api('proj.storage');const sh=openSheet(sheetHead('فضای نصب پروژه‌ها')+`<p class="appearance-note">برای پروژه‌های جدید یک ریشه اختصاصی بسازید؛ پس از راه‌اندازی یک‌باره، پوشه هر پروژه بدون نیاز به دسترسی root ایجاد می‌شود.</p><label class="lb">ریشه دائمی پروژه‌ها (خارج از ریشه وب)</label><input class="inp ltr" id="storage-root" value="${esc(data.root)}"><p class="hint">UID: ${esc(data.uid??'unknown')} / GID: ${esc(data.gid??'unknown')} · این شناسه‌ها متعلق به پردازش PHP هستند، نه مالک فایل PHP.</p><div class="row"><button class="btn" id="storage-save">ذخیره ریشه</button><button class="btn" id="storage-prepare">ایجاد با مجوز فعلی PHP</button><button class="btn pri" id="storage-test">آزمایش نوشتن</button></div><p id="storage-status" role="status" class="hint"></p><label class="lb">اگر مسیر آماده نیست: این اسکریپت را یک‌بار در SSH با دسترسی root اجرا کنید؛ نه ترمینال وب‌کنسول</label><textarea class="inp ltr" rows="13" readonly id="storage-script"></textarea><p class="hint">اسکریپت فقط پوشه ریشه اختصاصی را آماده می‌کند؛ chown بازگشتی، chmod 777 و اجرای PHP با root ندارد. نصب‌های قبلی جابه‌جا نمی‌شوند. آزمایش نوشتن یک پوشه و فایل موقت ساخته و حذف می‌کند. برای نصب‌های قبلی بدون فایل، در تنظیمات پروژه دکمه مسیر مدیریت‌شده را بزنید و ذخیره کنید. نصب‌های دارای داده باید با بکاپ و مهاجرت بررسی‌شده منتقل شوند.</p>`);
+ let storedRoot=data.root;const paint=d=>{storedRoot=d.root;sh.querySelector('#storage-test').disabled=false;sh.querySelector('#storage-prepare').disabled=false;sh.querySelector('#storage-status').textContent=d.ready?(d.probed?'✓ آزمایش واقعی نوشتن موفق بود':'مسیر آماده به نظر می‌رسد؛ آزمایش نوشتن را اجرا کنید'):d.error;sh.querySelector('#storage-script').value=d.setup_script;sh.querySelector('#storage-root').value=d.root};paint(data);sh.querySelector('#storage-root').oninput=e=>{sh.querySelector('#storage-test').disabled=e.target.value.trim()!==storedRoot;sh.querySelector('#storage-prepare').disabled=e.target.value.trim()!==storedRoot};
+ sh.querySelector('#storage-save').onclick=async()=>{try{await api('settings.save',{project_root:sh.querySelector('#storage-root').value.trim()});paint(await api('proj.storage'));toast('ریشه ذخیره شد؛ محل نصب پروژه‌های قبلی تغییر نکرد','ok')}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#storage-prepare').onclick=async()=>{try{paint(await api('proj.storage',{prepare:true}))}catch(e){toast(e.message,'err')}};
+ sh.querySelector('#storage-test').onclick=async()=>{try{paint(await api('proj.storage',{probe:true}))}catch(e){toast(e.message,'err')}};
+ }catch(e){toast(e.message,'err')}
+}
+
+function presetProject(kind){const base={name:'My project',type:'node',repo_url:'',branch:'main',subfolder:'',deploy_path:'',install_cmd:'npm ci --include=dev',build_cmd:'npm run build',start_cmd:'npm start',port:'3000',env:{NODE_ENV:'production'},auto_start:false,is_daemon:true};if(kind==='static')return {...base,name:'Static site',type:'static',install_cmd:'',build_cmd:'',start_cmd:'',port:'',env:{},is_daemon:false};if(kind==='scraper4')return {...SCRAPER4_PRESET,env:{...SCRAPER4_PRESET.env}};return base;}
+
+function applyTheme(t){if(!['dark','light','forest','ocean','amber'].includes(t))t='dark';document.documentElement.setAttribute('data-theme',t);$('#themebtn').textContent=t==='light'?'☾':'☀'}
+$('#hosttag').textContent='@'+__BOOT.host;$('#workspace-version').textContent='v'+__BOOT.v;applyAppearance(__BOOT);$('#appearancebtn').onclick=appearanceDlg;$('#palettebtn').onclick=commandPalette;document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!e.target.closest?.('.xterm')){e.preventDefault();if(!__sheet)commandPalette()}if(e.key==='Escape'&&__sheet)__closeSheet()});buildNav();switchTab('dash');$('#themebtn').onclick=async()=>{const theme=document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';applyTheme(theme);try{await api('settings.save',{theme})}catch(e){toast(e.message,'err')}};$('#logoutbtn').onclick=async()=>{if(await confirmDlg('خارج می‌شوید؟')){await api('auth.logout');location.reload()}};
+</script></body></html>
+<?php return ob_get_clean();}
+/* CLI library mode is reserved for local validation; it is not an HTTP option. */
+$in = body();
+if (!empty($in['api'])) {
+    try { handle_api(); }
+    catch (Throwable $e) { jout(false, null, mask_url($e->getMessage()), 500); }
+    exit;
+}
+header('X-Frame-Options: SAMEORIGIN');header('X-Content-Type-Options: nosniff');header('Referrer-Policy: same-origin');header('Cache-Control: no-store');
+if(!ip_allowed()){http_response_code(403);echo 'IP is not allowed';exit;}
+page_head();echo render_css();echo '</head><body>';
+if(!wcp_logged()){echo render_login(cfg()['pass_hash']==='');echo '</body></html>';exit;}
+echo render_body();
