@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.20.0');
+define('WCP_VERSION', '2.21.0');
 // نسخهٔ این فایل مستقل از webconsole.php است؛ EDITION مشخص می‌کند سلف‌آپدیت کدام فایل را از گیت‌هاب بگیرد.
 define('WCP_EDITION', 'hostconsole');
 define('WCP_NVM_RELEASE', 'v0.40.7');   // نسخهٔ اسکریپت نصب nvm-sh
@@ -1103,6 +1103,49 @@ function wcp_node_version_of(string $want = ''): string {
     if ($bin !== '') { foreach (wcp_nvm_versions() as $v) if ($v['bin'] === $bin) return $v['version']; }
     return ltrim(trim((string)sh_ok('node -v 2>/dev/null')), 'vV');
 }
+/** Check whether a declared Node package is actually present. */
+function wcp_node_package_installed(string $dir, string $pkg): bool {
+    $pkg = trim($pkg);
+    if ($pkg === '' || $pkg[0] === '.' || $pkg[0] === '/') return false;
+    return @is_file(rtrim($dir, '/') . '/node_modules/' . $pkg . '/package.json');
+}
+
+/** Repair incomplete/stale node_modules before a Node service starts, without sudo. */
+function wcp_node_ensure_deps(string $dir, array $p = []): bool {
+    if ($dir === '' || !@is_file(rtrim($dir, '/') . '/package.json')) return true;
+    $pkg = @json_decode((string)@file_get_contents(rtrim($dir, '/') . '/package.json'), true);
+    if (!is_array($pkg)) return true;
+    $declared = array_keys(array_merge((array)($pkg['dependencies'] ?? []), (array)($pkg['optionalDependencies'] ?? []), (array)($pkg['peerDependencies'] ?? [])));
+    $missing = [];
+    foreach ($declared as $name) if (!wcp_node_package_installed($dir, (string)$name)) $missing[] = (string)$name;
+    if (!$missing) return true;
+    $nodeBin = wcp_nvm_node_bin((string)($p['node_version'] ?? ''));
+    $npm = $nodeBin !== '' ? $nodeBin . '/npm' : trim((string)sh_ok('command -v npm'));
+    if ($npm === '' || !@is_file($npm) || !@is_executable($npm)) {
+        if (function_exists('cli_log')) cli_log('[node] Missing dependencies: ' . implode(', ', $missing) . '; npm is unavailable.');
+        return false;
+    }
+    if (function_exists('cli_log')) cli_log('[node] Repairing incomplete node_modules; missing: ' . implode(', ', $missing));
+    $lock = rtrim($dir, '/') . '/package-lock.json';
+    $path = ($nodeBin !== '' ? $nodeBin . ':' : '') . '/usr/local/bin:/usr/bin:/bin:$PATH';
+    $cmd = 'cd ' . escapeshellarg($dir) . ' && PATH=' . escapeshellarg($path) . ' ' . escapeshellarg($npm)
+         . (@is_file($lock) ? ' ci' : ' install')
+         . ' --include=dev --ignore-scripts --no-audit --no-fund 2>&1';
+    $rc = null;
+    $out = function_exists('cli_run') ? cli_run($cmd, $rc) : sh($cmd, $rc);
+    if ($rc !== 0) {
+        if (function_exists('cli_log')) cli_log('[node] Dependency repair failed (exit ' . $rc . ').');
+        if (function_exists('cli_log') && trim($out) !== '') cli_log('[node] ' . trim(substr($out, -3000)));
+        return false;
+    }
+    foreach ($declared as $name) if (!wcp_node_package_installed($dir, (string)$name)) {
+        if (function_exists('cli_log')) cli_log('[node] Repair finished but still missing: ' . $name);
+        return false;
+    }
+    if (function_exists('cli_log')) cli_log('[node] Dependency repair completed successfully.');
+    return true;
+}
+
 
 /* ============================================================
  *  Python runtime resolution (shared hosting, no root)
@@ -2246,7 +2289,7 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
 
     // Ensure destination directory exists and has permissive write rights
     if (!is_dir($dest)) @mkdir($dest, 0777, true);
-    @sh('chmod -R 777 ' . esc($dest) . ' 2>/dev/null || sudo -n chmod -R 777 ' . esc($dest) . ' 2>/dev/null || true');
+    @sh('chmod -R 777 ' . esc($dest) . ' 2>/dev/null || true');
 
     if (which('rsync')) {
         // Use -rlD --no-perms --no-owner --no-group --omit-dir-times to prevent Operation not permitted (1) on containers/Codespaces
@@ -4280,6 +4323,10 @@ function cli_service(array $job): int {
                 }
             }
 
+            if (($currentP['type'] ?? '') === 'node' || @is_file($deployDir . '/package.json')) {
+                wcp_node_ensure_deps($deployDir, $currentP);
+            }
+
             // Auto-synchronize .env file in project directory with chosen port
             $chosenPort = !empty($currentP['port']) ? $currentP['port'] : (!empty($portsToFree) ? reset($portsToFree) : '');
             if (is_dir($deployDir) && !empty($chosenPort)) {
@@ -4465,11 +4512,19 @@ function cli_service(array $job): int {
                 }
 
                 // Pattern 3: Node.js missing module
-                if (!$depsAutoInstalled && preg_match('/Cannot find module [\x22\x27]([a-zA-Z0-9_\-\.\@\/]+)[\x22\x27]/i', $logTail, $npmM)) {
-                    $nodePkg = trim($npmM[1]);
+                if (!$depsAutoInstalled) {
+                    $nodePkg = '';
+                    if (preg_match('/Cannot find module [\x22\x27]([a-zA-Z0-9_\-\.\@\/]+)[\x22\x27]/i', $logTail, $npmM)) {
+                        $nodePkg = trim($npmM[1]);
+                    } elseif (preg_match('~Cannot find package [\x22\x27].*/node_modules/((?:@[^/]+/)?[^/\x22\x27]+)/[^\r\n\x22\x27]*[\x22\x27]~i', $logTail, $npmM)) {
+                        $nodePkg = trim($npmM[1]);
+                    }
                     if ($nodePkg !== '' && $nodePkg[0] !== '.' && $nodePkg[0] !== '/') {
                         cli_log("[auto-installer] Detected missing Node.js module: " . $nodePkg . ". Auto-installing via npm...");
-                        cli_run('cd ' . esc($deployDir) . ' && npm install ' . esc($nodePkg) . ' --no-audit --no-fund 2>&1', $npmRc);
+                        $nodeBin = wcp_nvm_node_bin((string)($currentP['node_version'] ?? ''));
+                        $npm = $nodeBin !== '' ? $nodeBin . '/npm' : trim((string)sh_ok('command -v npm'));
+                        $npmCmd = $npm !== '' ? escapeshellarg($npm) : 'npm';
+                        cli_run('cd ' . esc($deployDir) . ' && ' . $npmCmd . ' install ' . esc($nodePkg) . ' --no-audit --no-fund 2>&1', $npmRc);
                         if ($npmRc === 0) {
                             cli_log("[auto-installer] Installed Node.js module: " . $nodePkg);
                             $depsAutoInstalled = true;
