@@ -462,7 +462,7 @@ document.addEventListener('keydown',e=>{
 let _rp=null;function repos(){if(!selected)return;clearTimeout(_rp);_rp=setTimeout(()=>{try{placePop(selected,selector(selected),matches(selector(selected)),modeSelect.value);}catch{}},40);}
 window.addEventListener('scroll',repos,true);window.addEventListener('resize',repos);
 window.addEventListener('message',e=>{if((e.source!==(window.__s4_realParent||parent))&&e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
-restoreMode();__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
+restoreMode();\nwindow.addEventListener('error',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.message||'خطای JavaScript'),source:String(e?.filename||'').slice(-180),line:Number(e?.lineno)||0});}catch{}});\nwindow.addEventListener('unhandledrejection',e=>{try{__s4post({type:'scraper4-picker-error',channel:'__S4_CHANNEL__',msg:String(e?.reason?.message||e?.reason||'Promise rejection')});}catch{}});\n__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
 })();</script>`;
 
 function pickerScript(context:VisualContext,channel:string){return PICKER_JS.replace('__S4_CONTEXT__',context).replaceAll('__S4_CHANNEL__',channel.replace(/[^a-z0-9-]/gi,''))}
