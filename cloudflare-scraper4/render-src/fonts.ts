@@ -12,23 +12,10 @@ export function fontStylesheet(name:string):Response{
   const item=font(name);if(!item)return new Response('Font not found',{status:404});
   const lower=name.toLowerCase();
   const css=Object.keys(item.weights).map(weight=>{
-    const hash=(item.weights as Record<string,string>)[weight];
-    let cdnUrls: string[] = [];
-    if (lower === 'vazirmatn') {
-      // Vazirmatn: Iranian CDN + jsDelivr + unpkg + cdnjs + local
-      const weightName = hash; // thin, light, regular, etc.
-      const weightCap = weightName.charAt(0).toUpperCase()+weightName.slice(1);
-      cdnUrls = [
-        `https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-${weightCap}.woff2`,
-        `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
-        `https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
-        `https://cdn.jsdelivr.net/npm/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${weightCap}.woff2`,
-      ];
-    } else {
-      cdnUrls = [`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`];
-    }
+    // Twin parity with worker-src/fonts.ts: the stylesheet stays same origin and the
+    // /assets/fonts/*.woff2 route does the upstream fetching (and disk caching).
     const local=`/assets/fonts/${lower}-${weight}.woff2`;
-    const srcList = [...cdnUrls.map(u=>`url("${u}") format("woff2")`), `url("${local}") format("woff2")`, `local("${item.family}")`, `local(Tahoma)`].join(',');
+    const srcList=[`url("${local}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
     return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');
   return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});

@@ -401,6 +401,94 @@ test('info pages exist for the whole footer menu and unknown slugs are 404', asy
   assert.equal((await routes.infoPage(d, 'nope')).status, 404);
 });
 
+test('the shell carries a hamburger drawer wired to the same root relative destinations', async () => {
+  const d = deps();
+  const home = await routes.cataloguePage(d, {});
+  assert.match(home, /id="menuBtn"[^>]*aria-controls="drawer"/, 'a hamburger button controls the drawer');
+  assert.match(home, /<aside class="drawer" id="drawer"/, 'the drawer is part of every page');
+  assert.match(home, /class="d-item" data-go="\.\/\?view=checkout"/, 'drawer entries are buttons, not links');
+  assert.match(home, /id="drawerCartCount"/, 'the drawer shows the cart badge');
+  assert.match(home, /data-fold="info-payment"/, 'guide entries open the in page fold instead of navigating');
+  const aside = home.slice(home.indexOf('<aside class="drawer"'), home.indexOf('</aside>'));
+  assert.doesNotMatch(aside, /<a /, 'the drawer never descends to another document');
+  const checkout = await routes.checkoutPage(d);
+  assert.match(checkout, /id="drawer"/, 'the drawer is on every page of the single page shell');
+  assert.match(checkout, /class="d-item" data-go="\.\/\?view=checkout" aria-current="page"/, 'the active entry is marked');
+});
+
+test('the storefront behaves as one document: clicks swap main in place', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(join(root, 'worker-src/shop.ts'), 'utf8');
+  const script = source.slice(source.indexOf('export const SHOP_JS'), source.indexOf('export function totalsSummary'));
+  assert.match(script, /function navigate\(href,push\)/, 'there is a client side router');
+  assert.match(script, /history\.pushState/, 'navigation keeps real URLs');
+  assert.match(script, /window\.addEventListener\('popstate'/, 'back and forward work');
+  assert.match(script, /main\.innerHTML=next\.innerHTML/, 'only the main region is replaced');
+  assert.match(script, /url\.pathname!==appRoot\(\)/, 'anything outside the app root is left to the browser');
+  assert.match(script, /\.catch\(function\(\)\{location\.href=url\.href\}\)/, 'a failed swap falls back to a real navigation');
+  assert.match(script, /onClick\('#placeOrder'/, 'page actions are delegated so they survive a swap');
+  assert.match(script, /onClick\('#sendReceipt'/);
+  assert.match(script, /function toggleDrawer\(open\)/, 'the drawer is scripted');
+  assert.doesNotMatch(script, /document\.getElementById\('placeOrder'\)/, 'no bindings that break after a swap');
+});
+
+test('a click really swaps main in place instead of loading another document', async () => {
+  const { parseHTML } = await import('linkedom');
+  const shop = await load('worker-src/shop.ts', 'shop-spa.mjs');
+  const shell = `<!doctype html><html><head><base href="/"><title>A</title></head><body>
+<div id="navbar"></div><header class="head"><button id="menuBtn" aria-expanded="false"></button>
+<form class="search" action="./"><input name="q" value=""></form></header>
+<aside class="drawer" id="drawer"><button class="d-item" data-go="./?view=categories"></button>
+<button class="d-item" data-fold="info-payment"></button></aside>
+<main class="wrap" id="main"><p>HOME</p></main>
+<footer class="foot"><details class="footinfo" id="info-payment"><summary>s</summary></details></footer>
+<nav class="tabbar"></nav></body></html>`;
+  const next = `<!doctype html><html><head><title>CATS</title></head><body><main id="main"><p>CATEGORIES</p></main>
+<footer class="foot"></footer><nav class="tabbar"></nav><aside id="drawer"></aside></body></html>`;
+  const { window, document } = parseHTML(shell);
+  const fetched = [], pushed = [];
+  window.fetch = async url => { fetched.push(String(url)); return { ok: true, status: 200, text: async () => next }; };
+  window.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  window.DOMParser = class { parseFromString(html) { return parseHTML(html).document } };
+  window.history = { pushState: (a, b, url) => pushed.push(url), replaceState: () => {} };
+  window.scrollTo = () => {};
+  window.location = { origin: 'http://localhost:3000', href: 'http://localhost:3000/', pathname: '/', search: '' };
+  const run = new Function('window', 'document', 'location', 'localStorage', 'fetch', 'DOMParser', 'history',
+    'URL', 'URLSearchParams', 'FormData', 'setTimeout', 'console', shop.SHOP_JS);
+  run(window, document, window.location, window.localStorage, window.fetch, window.DOMParser, window.history,
+    URL, URLSearchParams, window.FormData, setTimeout, console);
+  const fire = node => {
+    const event = new window.Event('click', { bubbles: true });
+    Object.defineProperty(event, 'target', { value: node });
+    Object.defineProperty(event, 'button', { value: 0 });
+    node.dispatchEvent(event);
+  };
+  fire(document.querySelector('#menuBtn'));
+  assert.ok(document.body.classList.contains('drawer-open'), 'the hamburger opens the drawer');
+  assert.equal(document.querySelector('#menuBtn').getAttribute('aria-expanded'), 'true');
+  fire(document.querySelector('[data-fold="info-payment"]'));
+  assert.ok(document.getElementById('info-payment').hasAttribute('open'), 'guide entries unfold on the same page');
+  assert.ok(!document.body.classList.contains('drawer-open'), 'and close the drawer');
+  fire(document.querySelector('.d-item[data-go="./?view=categories"]'));
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.deepEqual(fetched, ['http://localhost:3000/?view=categories'], 'the destination is fetched, not navigated to');
+  assert.deepEqual(pushed, ['http://localhost:3000/?view=categories'], 'the URL still changes for real');
+  assert.equal(document.title, 'CATS', 'the title follows the swapped view');
+  assert.match(document.getElementById('main').innerHTML, /CATEGORIES/, 'only main is replaced');
+});
+
+test('the worker serves a stylesheet for every font the panel offers', async () => {
+  const fonts = await load('worker-src/fonts.ts', 'fonts.mjs');
+  for (const name of ['vazirmatn', 'vazir', 'yekan', 'shabnam', 'sahel', 'samim']) {
+    const response = fonts.fontStylesheet(name);
+    assert.equal(response.status, 200, name + '.css must exist on the worker too');
+    const css = await response.text();
+    assert.match(css, /@font-face/, name + ' must define faces');
+    assert.match(css, new RegExp('/assets/fonts/' + name + '-\\d+\\.woff2'), name + ' must fall back to the self hosted file');
+  }
+  assert.equal(fonts.fontStylesheet('nope').status, 404);
+});
+
 test('the client script guards every DOM lookup and sanitises what it injects', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(join(root, 'worker-src/shop.ts'), 'utf8');
@@ -411,4 +499,6 @@ test('the client script guards every DOM lookup and sanitises what it injects', 
   assert.match(script, /window\.addEventListener\('storage'/, 'the cart stays in sync across tabs');
   assert.match(script, /Math\.max\(1,Math\.min\(999/, 'quantities are clamped on read');
   assert.doesNotMatch(script, /await /, 'no top level await in a classic script');
+  const shop = await load('worker-src/shop.ts', 'shop.mjs');
+  assert.doesNotThrow(() => new Function(shop.SHOP_JS), 'the shipped script must parse');
 });

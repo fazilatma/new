@@ -1,4 +1,7 @@
 const FONT_FILES={
+  // Twin parity with render-src/fonts.ts: Vazirmatn is the default UI family of the panel and
+  // of the storefront, so the worker must serve its stylesheet too (it used to 404 here).
+  vazirmatn:{family:'Vazirmatn',folder:'Vazirmatn',weights:{100:'thin',300:'light',400:'regular',500:'medium',700:'bold',900:'black'}},
   vazir:{family:'Vazir',folder:'Vazir',weights:{100:'ad3cd4cbda94aee8578c1b622b9002f9dfe345c05870eb375a02da853d08f072',300:'046a76746039189feb148c360dfb82d07a1e3464d31a2078363587af6f5a1cfb',400:'d783603a0dd07db6896ecd8a3460e2256a48dca62373a0478706a05490c1a2d8',500:'fc6648da06acebfe96ad5a8f077f569c5c4dd75b77122951723ddfbfeb191728',700:'3b2277e82a583c9f91de41aa9e198a14d7ef7f4ccd04828abdd623acd116a88b',900:'71671477a4b62305fbd3ed4976a31c3c08520cf914656ece6b79543524a49132'}},
   yekan:{family:'Yekan',folder:'Yekan',weights:{400:'1cdce741b89d94b75c1b52dfbfc7bc3b1eb1a8d2ecb9da71753e17219a1b8057',700:'8b3d4ccc94807967874f481b0ea82d0f26cda739c2fad3b923f28d8915af064f'}},
   shabnam:{family:'Shabnam',folder:'Shabnam',weights:{100:'a074a415cfe0e4f57e2ede996a73d0e509c0ea194c9678c7b87c65fb977907e7',300:'87cf5dde711a284c1e25dd414d51a571b7c9aedd91b2b96f9d679869f5d65162',400:'540d3f4e172bd6b5c70dd06bce57e055ce59270e95ea642b414fe0709faaa085',500:'fd5931f57e84baad81cc7243cfc1c83e5ac7f5dd17818d917765063544a54441',700:'1ff187f5320ec4527ebb6a71831b88289a6cb18ca33ac34476b96960f0af7282'}},
@@ -7,22 +10,34 @@ const FONT_FILES={
 } as const;
 type FontName=keyof typeof FONT_FILES;
 function font(name:string){return FONT_FILES[name.toLowerCase() as FontName]}
+/** Vazirmatn ships weight names (not fontcdn hashes); mirror the render twin's CDN order. */
+function vazirmatnUrls(weightName:string):string[]{
+  const cap=weightName.charAt(0).toUpperCase()+weightName.slice(1);
+  return [
+    `https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-${cap}.woff2`,
+    `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-${cap}.woff2`,
+    `https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${cap}.woff2`,
+    `https://cdn.jsdelivr.net/npm/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${cap}.woff2`
+  ];
+}
 export function fontStylesheet(name:string):Response{
   const item=font(name);if(!item)return new Response('Font not found',{status:404});
   const lower=name.toLowerCase();
   const css=Object.keys(item.weights).map(weight=>{
-    const hash=(item.weights as Record<string,string>)[weight];
-    const direct=`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`;
+    // Same origin only: /assets/fonts/*.woff2 proxies the upstream CDN server side, so no
+    // third party host ever appears in the page (and font-src can stay 'self').
     const local=`/assets/fonts/${lower}-${weight}.woff2`;
-    return `@font-face{font-family:"${item.family}";src:url("${direct}") format("woff2"),url("${local}") format("woff2");font-weight:${weight};font-style:normal;font-display:swap}`;
+    const srcList=[`url("${local}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
+    return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');
   return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
 }
 export async function fontFile(name:string,weight:string):Promise<Response>{
   const item=font(name),hash=item&&(item.weights as Record<string,string>)[weight];if(!item||!hash)return new Response('Font file not found',{status:404});
+  const lower=name.toLowerCase();
   const urls=[
-    `https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`,
-    ...(name.toLowerCase()==='vazir'?[
+    ...(lower==='vazirmatn'?vazirmatnUrls(hash):[`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`]),
+    ...(lower==='vazir'?[
       `https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/Vazir-${weight==='400'?'Regular':weight==='700'?'Bold':weight}.woff2`,
       `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/woff2/Vazirmatn-${weight}.woff2`
     ]:[]),

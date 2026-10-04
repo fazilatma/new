@@ -46,6 +46,39 @@ img{max-width:100%;display:block}
 a{color:inherit;text-decoration:none}
 button,input,select,textarea{font-family:inherit;font-size:var(--fsize);color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#navbar{position:fixed;top:0;inset-inline:0;height:3px;z-index:60;pointer-events:none}
+#navbar::after{content:"";display:block;height:100%;width:var(--p,0%);background:linear-gradient(90deg,var(--brand),var(--accent));
+  transition:width .25s ease,opacity .3s ease;opacity:var(--o,0)}
+.menubtn{display:inline-flex;flex-direction:column;justify-content:center;gap:4px;width:var(--tap);min-width:var(--tap);height:var(--tap);
+  border-radius:12px;border:1px solid var(--line);background:var(--bg2);cursor:pointer;padding:0 11px}
+.menubtn span{display:block;height:2px;border-radius:2px;background:var(--text);transition:transform .22s ease,opacity .22s ease}
+body.drawer-open .menubtn span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+body.drawer-open .menubtn span:nth-child(2){opacity:0}
+body.drawer-open .menubtn span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+.scrim{position:fixed;inset:0;background:rgba(3,7,18,.6);backdrop-filter:blur(3px);opacity:0;visibility:hidden;transition:opacity .22s ease,visibility .22s;z-index:40}
+body.drawer-open .scrim{opacity:1;visibility:visible}
+.drawer{position:fixed;inset-block:0;inset-inline-start:0;width:min(86vw,320px);z-index:50;background:linear-gradient(180deg,#0d1529,#0a1020);
+  border-inline-end:1px solid var(--line);box-shadow:24px 0 60px rgba(3,7,18,.6);transform:translateX(-102%);
+  transition:transform .26s cubic-bezier(.22,.61,.36,1);display:flex;flex-direction:column;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
+html[dir="rtl"] .drawer{inset-inline-start:auto;inset-inline-end:0;transform:translateX(102%);border-inline-end:none;border-inline-start:1px solid var(--line)}
+body.drawer-open .drawer{transform:translateX(0)}
+.drawer .d-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+.drawer .d-head b{font-size:15px}
+.drawer .d-close{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--bg2);cursor:pointer;font-size:16px}
+.drawer nav{padding:10px}
+.drawer .d-item{width:100%;display:flex;align-items:center;gap:10px;min-height:46px;padding:0 12px;border-radius:12px;border:1px solid transparent;
+  background:transparent;color:var(--text);font-size:13.5px;cursor:pointer;text-align:start}
+.drawer .d-item:hover{background:var(--bg2);border-color:var(--line)}
+.drawer .d-item[aria-current="page"]{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.35);color:var(--brand);font-weight:700}
+.drawer .d-item .ico{font-size:17px}
+.drawer .d-item .pill{margin-inline-start:auto;font-size:11px;background:var(--brand);color:var(--brand-ink);border-radius:999px;padding:1px 8px;font-weight:800}
+.drawer .d-item .pill[data-empty="1"]{background:var(--line2);color:var(--muted)}
+.drawer h5{margin:14px 12px 6px;font-size:11px;letter-spacing:.4px;color:var(--muted);text-transform:uppercase}
+.drawer .d-foot{margin-top:auto;padding:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+main.swapping{opacity:.35;transition:opacity .12s ease}
+main{animation:fadein .28s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){main,.drawer,#navbar::after{animation:none!important;transition:none!important}}
 .skip{position:absolute;right:-9999px;top:0}.skip:focus{right:8px;top:8px;background:var(--brand);color:var(--brand-ink);padding:8px 12px;border-radius:10px;z-index:99}
 
 /* ---------- header ---------- */
@@ -77,6 +110,14 @@ button,input,select,textarea{font-family:inherit;font-size:var(--fsize);color:in
 .hero .stats b{color:var(--text)}
 .hero .stats span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:rgba(7,11,23,.45);
   border-radius:999px;padding:4px 12px}
+.hero .cta{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+.hero .cta button{min-height:40px;padding:0 16px;border-radius:12px;cursor:pointer;font-weight:700;font-size:12.5px;border:1px solid var(--line);background:var(--bg2);color:var(--text)}
+.hero .cta button.go{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;box-shadow:0 10px 24px rgba(52,211,153,.22)}
+.crumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:0 0 12px}
+.crumb button{background:none;border:none;color:var(--muted);cursor:pointer;padding:0;font-size:12px}
+.crumb button:hover{color:var(--text);text-decoration:underline}
+.crumb span[aria-current]{color:var(--text)}
+.head.scrolled{box-shadow:0 14px 34px rgba(3,7,18,.55)}
 .trust{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 18px}
 .trust div{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:14px;padding:10px 12px;
   background:linear-gradient(180deg,var(--soft),transparent),var(--card);box-shadow:var(--ring);font-size:12px;color:var(--muted);min-height:52px}
@@ -219,7 +260,9 @@ table.sum tfoot td{border-bottom:none}
 
 @media(max-width:900px){.trust{grid-template-columns:repeat(2,1fr)}.cols{grid-template-columns:1fr}.sticky{position:static}.foot-in{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){
-  .head-in{flex-wrap:wrap;padding:8px 12px;gap:8px}
+  .head-in{flex-wrap:wrap;padding:8px 12px;gap:7px}
+  .menubtn{padding:0 9px}
+  .hero .cta button{flex:1 1 auto}
   .head form.search{order:3;flex:1 0 100%}
   .nav .label{display:none}
   .wrap{padding:12px 12px 20px}
@@ -287,6 +330,29 @@ function tabbar(active?: TabKey): string {
     ${tab.badge ? '<span class="tabcount" id="tabCartCount" data-empty="1">۰</span>' : ''}</a></li>`).join('')}</ul></nav>`;
 }
 
+/** Hamburger drawer: the same root relative destinations as the tab bar, opened in place. */
+function drawer(settings: ShopSettings, active?: TabKey): string {
+  const items: Array<{ tab: TabKey; url: string; icon: string; label: string; badge?: boolean }> = [
+    { tab: 'home', url: HOME_URL, icon: '🏠', label: 'ویترین محصولات' },
+    { tab: 'categories', url: shopUrl({ view: 'categories' }), icon: '🗂', label: 'دسته‌بندی محصولات' },
+    { tab: 'search', url: shopUrl({ focus: '1' }), icon: '🔍', label: 'جست‌وجو' },
+    { tab: 'cart', url: shopUrl({ view: 'checkout' }), icon: '🧺', label: 'سبد خرید و تسویه', badge: true },
+    { tab: 'track', url: shopUrl({ view: 'track' }), icon: '📦', label: 'پیگیری سفارش' }
+  ];
+  const links = items.map(item => `<button type="button" class="d-item" data-go="${escapeHtml(item.url)}"${item.tab === active ? ' aria-current="page"' : ''}>
+      <span class="ico" aria-hidden="true">${item.icon}</span><span>${escapeHtml(item.label)}</span>
+      ${item.badge ? '<span class="pill" id="drawerCartCount" data-empty="1">۰</span>' : ''}</button>`).join('');
+  const guide = ['payment', 'shipping', 'returns', 'about', 'contact', 'terms']
+    .map(slug => PAGES[slug] ? `<button type="button" class="d-item" data-fold="info-${slug}"><span class="ico" aria-hidden="true">›</span><span>${escapeHtml(PAGES[slug]!.title)}</span></button>` : '').join('');
+  return `<div class="scrim" id="scrim" hidden-role="presentation"></div>
+<aside class="drawer" id="drawer" aria-label="منوی فروشگاه" aria-hidden="true">
+  <div class="d-head"><b>${escapeHtml(settings.name)}</b>
+    <button type="button" class="d-close" id="drawerClose" aria-label="بستن منو">✕</button></div>
+  <nav>${links}<h5>راهنما و اطلاعات</h5>${guide}</nav>
+  <div class="d-foot">${escapeHtml(settings.tagline)}${settings.contactPhone ? `<br>☎ <span dir="ltr">${fa(settings.contactPhone)}</span>` : ''}</div>
+</aside>`;
+}
+
 /** The storefront inherits the scraper panel's font choice (same self hosted /assets/fonts route). */
 function appearanceOf(settings: ShopSettings) {
   return settings.appearance && settings.appearance.family ? settings.appearance : DEFAULT_APPEARANCE;
@@ -311,7 +377,10 @@ ${appearanceLinks(settings)}
 <style>${STYLE}</style>
 <style>:root{--font:${appearanceOf(settings).family};--fsize:${appearanceOf(settings).scale}px}</style></head><body>
 <a class="skip" href="#main">رفتن به محتوا</a>
+<div id="navbar" aria-hidden="true"></div>
 <header class="head"><div class="head-in">
+  <button type="button" class="menubtn" id="menuBtn" aria-label="منوی فروشگاه" aria-controls="drawer" aria-expanded="false">
+    <span></span><span></span><span></span></button>
   <a class="brand" href="${escapeHtml(HOME_URL)}"><span class="dot">🛍</span><span>${escapeHtml(settings.name)}</span></a>
   ${search}
   <nav class="nav" aria-label="منوی اصلی">
@@ -320,6 +389,7 @@ ${appearanceLinks(settings)}
       <span class="badge-count" id="cartCount" data-empty="1">۰</span></a>
   </nav>
 </div></header>
+${drawer(settings, options.tab)}
 <main class="wrap" id="main">${body}</main>
 ${footer(settings, options.tab)}
 ${tabbar(options.tab)}
@@ -392,7 +462,9 @@ export function catalogueHtml(input: {
   const sorts: Array<[string, string]> = [['', 'جدیدترین'], ['cheap', 'ارزان‌ترین'], ['expensive', 'گران‌ترین'], ['name', 'نام محصول']];
   const body = `<section class="hero"><h1>${escapeHtml(settings.name)}</h1><p>${escapeHtml(settings.tagline)}</p>
   <div class="stats"><span><b>${fa(total)}</b> محصول</span><span><b>${fa(categories.length)}</b> دسته‌بندی</span>
-  ${query.category ? `<span>دستهٔ فعلی: <b>${escapeHtml(query.category)}</b></span>` : '<span>بر اساس دسته و نوع محصول مرتب شده است</span>'}</div></section>
+  ${query.category ? `<span>دستهٔ فعلی: <b>${escapeHtml(query.category)}</b></span>` : '<span>بر اساس دسته و نوع محصول مرتب شده است</span>'}</div>
+  <div class="cta"><button type="button" class="go" data-go="${escapeHtml(shopUrl({ view: 'categories' }))}">مرور دسته‌بندی‌ها</button>
+    <button type="button" data-go="${escapeHtml(shopUrl({ view: 'track' }))}">پیگیری سفارش</button></div></section>
   ${trustStrip(settings)}
   <div class="sechead"><h2>${query.category ? escapeHtml(query.category) : 'دسته‌بندی‌ها'}</h2>
     <a href="${escapeHtml(shopUrl({ view: 'categories' }))}">همهٔ دسته‌بندی‌ها ›</a></div>
@@ -443,7 +515,11 @@ export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem;
     <a class="thumb" href="${escapeHtml(shopUrl({ product: other.id }))}">${thumb(other)}</a>
     <div class="body"><h3><a href="${escapeHtml(shopUrl({ product: other.id }))}">${escapeHtml(other.title)}</a></h3>
     ${priceBlock(other, settings.currency)}${addButton(other)}</div></article>`).join('');
-  const body = `<p class="crumbs"><a href="${escapeHtml(HOME_URL)}">ویترین</a> › <a href="${escapeHtml(shopUrl({ category: item.category || '' }))}">${escapeHtml(item.category || 'همهٔ محصولات')}</a> › ${escapeHtml(item.title)}</p>
+  // Breadcrumbs are buttons too: they move inside the same document instead of linking away.
+  const body = `<nav class="crumb" aria-label="مسیر">
+    <button type="button" data-go="${escapeHtml(HOME_URL)}">ویترین</button><span aria-hidden="true">›</span>
+    <button type="button" data-go="${escapeHtml(shopUrl({ category: item.category || '' }))}">${escapeHtml(item.category || 'همهٔ محصولات')}</button><span aria-hidden="true">›</span>
+    <span aria-current="page">${escapeHtml(item.title)}</span></nav>
   <section class="product-top">
     <div class="shot">${thumb(item)}</div>
     <div class="panel" style="margin:0">
@@ -612,6 +688,8 @@ function paint(){
   if(badge){badge.textContent=fa(n);badge.setAttribute('data-empty',n?'0':'1')}
   var tabBadge=document.getElementById('tabCartCount');
   if(tabBadge){tabBadge.textContent=fa(n);tabBadge.setAttribute('data-empty',n?'0':'1')}
+  var drawerBadge=document.getElementById('drawerCartCount');
+  if(drawerBadge){drawerBadge.textContent=fa(n);drawerBadge.setAttribute('data-empty',n?'0':'1')}
   var sumItems=document.getElementById('sumItems');
   if(sumItems)sumItems.textContent=items.length?money(subtotal()):'—';
   document.querySelectorAll('.add').forEach(function(btn){
@@ -635,6 +713,91 @@ function renderCart(){
     '</tbody></table></div>';
   paint();
 }
+
+// ---- single page router -----------------------------------------------------
+// The whole storefront is one document: every internal destination hangs off the app
+// root as a query string, so a click only swaps <main> instead of loading a new page.
+function baseHref(){
+  var base=document.querySelector('base'),raw=base&&base.getAttribute('href');
+  try{return new URL(raw||'./',location.href).href}catch(e){return location.href}
+}
+function appRoot(){try{return new URL(baseHref()).pathname}catch(e){return location.pathname}}
+function abs(href){try{return new URL(href,baseHref())}catch(e){return null}}
+function internal(a){
+  if(a.hasAttribute('download')||a.getAttribute('target'))return false;
+  var raw=a.getAttribute('href')||'';
+  if(/^(mailto:|tel:|#|javascript:)/i.test(raw))return false;
+  var url=abs(raw);
+  return Boolean(url)&&url.origin===location.origin&&url.pathname===appRoot();
+}
+function internalForm(form){
+  var url=abs(form.getAttribute('action')||'./');
+  return Boolean(url)&&url.origin===location.origin&&url.pathname===appRoot();
+}
+function submitForm(form){
+  var url=abs(form.getAttribute('action')||'./');
+  if(!url){form.submit();return}
+  var data=new FormData(form),params=new URLSearchParams();
+  data.forEach(function(value,key){if(String(value).trim()!=='')params.set(key,String(value))});
+  var text=params.toString();
+  navigate('.'+(text?'/?'+text:'/'),true);
+}
+function progress(value){
+  var bar=document.getElementById('navbar');if(!bar)return;
+  bar.style.setProperty('--p',value+'%');bar.style.setProperty('--o',value>0&&value<100?'1':'0');
+  if(value>=100)setTimeout(function(){bar.style.setProperty('--p','0%')},320);
+}
+function toggleDrawer(open){
+  document.body.classList.toggle('drawer-open',Boolean(open));
+  var box=document.getElementById('drawer'),button=document.getElementById('menuBtn');
+  if(box)box.setAttribute('aria-hidden',open?'false':'true');
+  if(button)button.setAttribute('aria-expanded',open?'true':'false');
+  if(open&&box){var first=box.querySelector('.d-item');if(first&&first.focus)first.focus()}
+  else if(button&&button.focus)button.focus();
+}
+function openFold(id){
+  toggleDrawer(false);
+  var fold=document.getElementById(id);if(!fold)return;
+  fold.open=true;fold.setAttribute('open','');
+  try{if(fold.scrollIntoView)fold.scrollIntoView({behavior:'smooth',block:'center'})}catch(e){}
+  var summary=fold.querySelector('summary');if(summary&&summary.focus)summary.focus();
+}
+var navToken=0;
+function navigate(href,push){
+  var url=abs(href);if(!url){location.href=href;return}
+  if(url.origin!==location.origin||url.pathname!==appRoot()){location.href=url.href;return}
+  var token=++navToken,main=document.getElementById('main');
+  toggleDrawer(false);progress(25);
+  if(main)main.classList.add('swapping');
+  fetch(url.href,{credentials:'same-origin',headers:{'x-shop-partial':'1'}})
+   .then(function(r){if(!r.ok&&r.status>=500)throw new Error('http '+r.status);progress(70);return r.text()})
+   .then(function(html){
+     if(token!==navToken)return;
+     var doc=new DOMParser().parseFromString(html,'text/html');
+     var next=doc.getElementById('main');
+     if(!next)throw new Error('no main');
+     if(push&&url.href!==location.href)history.pushState({},'',url.href);
+     else if(!push)history.replaceState({},'',url.href);
+     document.title=doc.title||document.title;
+     swap('footer.foot',doc);swap('nav.tabbar',doc);swap('#drawer',doc);
+     if(main){main.innerHTML=next.innerHTML;main.classList.remove('swapping');
+       main.style.animation='none';void main.offsetWidth;main.style.animation='';}
+     var box=document.querySelector('.head form.search input'),fresh=doc.querySelector('.head form.search input');
+     if(box&&fresh)box.value=fresh.value;
+     window.scrollTo({top:0,behavior:'auto'});
+     renderCart();paint();focusSearch();progress(100);
+   })
+   .catch(function(){location.href=url.href});
+}
+function swap(selector,doc){
+  var current=document.querySelector(selector),next=doc.querySelector(selector);
+  if(current&&next)current.replaceWith(next);
+}
+function focusSearch(){
+  if(!/[?&]focus=1/.test(location.search))return;
+  var box=document.querySelector('.head form.search input');
+  if(box){box.focus();try{box.select()}catch(e){}}
+}
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function closest(target,selector){return target&&target.closest?target.closest(selector):null}
 
@@ -649,8 +812,15 @@ document.addEventListener('click',function(e){
   }
   var del=closest(e.target,'[data-remove]');
   if(del){e.preventDefault();write(read().filter(function(l){return l.id!==del.dataset.remove}));renderCart();return}
+  var fold=closest(e.target,'[data-fold]');
+  if(fold){e.preventDefault();openFold(fold.getAttribute('data-fold'));return}
   var go=closest(e.target,'[data-go]');
-  if(go){e.preventDefault();location.href=go.getAttribute('data-go');return}
+  if(go){e.preventDefault();navigate(go.getAttribute('data-go'),true);return}
+  var link=closest(e.target,'a[href]');
+  if(link&&!e.defaultPrevented&&!e.metaKey&&!e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.button===0&&internal(link)){
+    e.preventDefault();navigate(link.getAttribute('href'),true);return}
+  if(closest(e.target,'#menuBtn')){e.preventDefault();toggleDrawer(!document.body.classList.contains('drawer-open'));return}
+  if(closest(e.target,'#drawerClose')||closest(e.target,'#scrim')){e.preventDefault();toggleDrawer(false);return}
   var step=closest(e.target,'[data-step]');
   if(step){
     e.preventDefault();
@@ -660,8 +830,16 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('change',function(e){
   var auto=closest(e.target,'[data-autosubmit]');
-  if(auto&&auto.form)auto.form.submit();
+  if(auto&&auto.form){e.preventDefault();submitForm(auto.form)}
 });
+document.addEventListener('submit',function(e){
+  var form=closest(e.target,'form');
+  if(form&&(!form.method||form.method.toLowerCase()==='get')&&internalForm(form)){e.preventDefault();submitForm(form)}
+});
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&document.body.classList.contains('drawer-open'))toggleDrawer(false);
+});
+window.addEventListener('popstate',function(){navigate(location.href,false)});
 // Keep every open tab in sync with the cart.
 window.addEventListener('storage',function(e){if(e.key===KEY){paint();renderCart()}});
 
@@ -683,8 +861,14 @@ function validate(){
   return bad?null:{name:name,phone:phone,address:address,note:(document.getElementById('cnote')||{}).value||''};
 }
 
-var place=document.getElementById('placeOrder');
-if(place)place.addEventListener('click',function(){
+// Page actions are delegated so they keep working after <main> is swapped in place.
+function onClick(selector,handler){
+  document.addEventListener('click',function(e){
+    var node=closest(e.target,selector);
+    if(node){e.preventDefault();handler(node)}
+  });
+}
+onClick('#placeOrder',function(place){
   var out=document.getElementById('payResult');
   var picked=document.querySelector('input[name=gateway]:checked');
   if(!picked){out.innerHTML='<span class="bad">یک روش پرداخت انتخاب کنید.</span>';return}
@@ -701,13 +885,12 @@ if(place)place.addEventListener('click',function(){
      if(!body||!body.ok){out.innerHTML='<span class="bad">'+esc(body&&body.error||'ثبت سفارش ناموفق بود.')+'</span>';place.disabled=false;return}
      try{localStorage.removeItem(KEY)}catch(e){}
      if(body.redirect){out.innerHTML='<span class="ok">در حال انتقال به درگاه پرداخت…</span>';location.href=body.redirect;return}
-     location.href='./?order='+encodeURIComponent(body.orderId);
+     navigate('./?order='+encodeURIComponent(body.orderId),true);
    })
    .catch(function(error){out.innerHTML='<span class="bad">'+esc(error)+'</span>';place.disabled=false});
 });
 
-var receipt=document.getElementById('sendReceipt');
-if(receipt)receipt.addEventListener('click',function(){
+onClick('#sendReceipt',function(receipt){
   var out=document.getElementById('receiptResult');
   var reference=en((document.getElementById('receiptRef')||{}).value||'').trim();
   if(reference.length<4){out.innerHTML='<span class="bad">کد پیگیری واریز را وارد کنید.</span>';return}
@@ -716,12 +899,11 @@ if(receipt)receipt.addEventListener('click',function(){
     body:JSON.stringify({orderId:receipt.dataset.order,reference:reference})})
    .then(function(r){return r.json()}).then(function(body){
      out.innerHTML=body&&body.ok?'<span class="ok">رسید ثبت شد؛ پس از تأیید فروشنده سفارش پردازش می‌شود.</span>':'<span class="bad">'+esc(body&&body.error||'ثبت نشد')+'</span>';
-     if(body&&body.ok)setTimeout(function(){location.reload()},1200);else receipt.disabled=false;
+     if(body&&body.ok)setTimeout(function(){navigate(location.href,false)},1200);else receipt.disabled=false;
    }).catch(function(error){out.innerHTML='<span class="bad">'+esc(error)+'</span>';receipt.disabled=false});
 });
 
-var save=document.getElementById('saveShop');
-if(save)save.addEventListener('click',function(){
+onClick('#saveShop',function(save){
   var out=document.getElementById('shopSaveResult'),shop={card:{}},pays={};
   document.querySelectorAll('[data-shop]').forEach(function(el){
     var key=el.dataset.shop,value=el.type==='checkbox'?el.checked:el.value;
@@ -739,8 +921,9 @@ if(save)save.addEventListener('click',function(){
 });
 
 // "جست‌وجو" tab: land on the catalogue with the search box focused.
-if(/[?&]focus=1/.test(location.search)){var box=document.querySelector('.head form.search input');if(box){box.focus();try{box.select()}catch(e){}}}
-renderCart();paint();
+function headShadow(){var head=document.querySelector('.head');if(head)head.classList.toggle('scrolled',window.scrollY>6)}
+window.addEventListener('scroll',headShadow,{passive:true});headShadow();
+focusSearch();renderCart();paint();
 })();`;
 
 export function totalsSummary(totals: OrderTotals, settings: ShopSettings): string {
