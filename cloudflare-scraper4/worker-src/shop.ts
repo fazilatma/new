@@ -7,7 +7,7 @@
  * cart bar, no horizontal overflow and no hover-only affordances.
  */
 import { PAYMENT_PLUGINS, type PaymentSettings } from './payments.js';
-import { fa, money, type Order, type OrderTotals, type ShopSettings, type ShowcaseItem } from './shop-core.js';
+import { DEFAULT_APPEARANCE, fa, money, type Order, type OrderTotals, type ShopSettings, type ShowcaseItem } from './shop-core.js';
 
 export const SHOP_SCRIPT_PATH = '/shop.js';
 
@@ -32,7 +32,7 @@ const STYLE = String.raw`
   --bg:#070b17;--bg2:#0b1222;--card:#121b33;--line:#22304f;--line2:#2d3c60;
   --text:#eef3ff;--muted:#9eb0d6;--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
   --radius:18px;--tap:44px;--shadow:0 14px 34px rgba(3,7,18,.45);
-  --font:Vazirmatn,Vazir,Tahoma,system-ui,-apple-system,sans-serif
+  --font:Vazirmatn,Vazir,Tahoma,system-ui,-apple-system,sans-serif;--fsize:14px
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{max-width:100%;overflow-x:hidden}
@@ -41,10 +41,10 @@ body{margin:0;background:
   radial-gradient(80% 55% at 0% 0%,rgba(96,165,250,.12),transparent 60%),
   linear-gradient(180deg,#070b17,#0a1020 40%,#070b17) fixed;color:var(--text);
   font-family:var(--font);direction:rtl;line-height:1.9;
-  font-size:14px;padding-bottom:env(safe-area-inset-bottom)}
+  font-size:var(--fsize);padding-bottom:env(safe-area-inset-bottom)}
 img{max-width:100%;display:block}
 a{color:inherit;text-decoration:none}
-button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
+button,input,select,textarea{font-family:inherit;font-size:var(--fsize);color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .skip{position:absolute;right:-9999px;top:0}.skip:focus{right:8px;top:8px;background:var(--brand);color:var(--brand-ink);padding:8px 12px;border-radius:10px;z-index:99}
 
@@ -264,6 +264,15 @@ function tabbar(active?: TabKey): string {
     ${tab.badge ? '<span class="tabcount" id="tabCartCount" data-empty="1">۰</span>' : ''}</a></li>`).join('')}</ul></nav>`;
 }
 
+/** The storefront inherits the scraper panel's font choice (same self hosted /assets/fonts route). */
+function appearanceOf(settings: ShopSettings) {
+  return settings.appearance && settings.appearance.family ? settings.appearance : DEFAULT_APPEARANCE;
+}
+function appearanceLinks(settings: ShopSettings): string {
+  const sheets = [appearanceOf(settings).stylesheet, 'vazirmatn'].filter((name, index, all) => name && all.indexOf(name) === index);
+  return sheets.map(name => `<link rel="stylesheet" href="assets/fonts/${escapeHtml(name)}.css">`).join('\n');
+}
+
 function layout(settings: ShopSettings, title: string, body: string, options: { search?: string; showSearch?: boolean; tab?: TabKey } = {}): string {
   const search = options.showSearch === false ? '' : `<form class="search" method="get" action="${escapeHtml(HOME_URL)}" role="search">
     <input name="q" value="${escapeHtml(options.search || '')}" placeholder="جست‌وجوی محصول…" aria-label="جست‌وجوی محصول" enterkeyhint="search">
@@ -275,9 +284,9 @@ function layout(settings: ShopSettings, title: string, body: string, options: { 
 <meta name="description" content="${escapeHtml(settings.tagline)}">
 <title>${escapeHtml(title)} — ${escapeHtml(settings.name)}</title>
 <base href="${escapeHtml(settings.basePath || '/')}">
-<link rel="stylesheet" href="assets/fonts/vazir.css">
-<link rel="stylesheet" href="assets/fonts/vazirmatn.css">
-<style>${STYLE}</style></head><body>
+${appearanceLinks(settings)}
+<style>${STYLE}</style>
+<style>:root{--font:${appearanceOf(settings).family};--fsize:${appearanceOf(settings).scale}px}</style></head><body>
 <a class="skip" href="#main">رفتن به محتوا</a>
 <header class="head"><div class="head-in">
   <a class="brand" href="${escapeHtml(HOME_URL)}"><span class="dot">🛍</span><span>${escapeHtml(settings.name)}</span></a>

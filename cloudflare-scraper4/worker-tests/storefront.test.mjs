@@ -287,6 +287,12 @@ test('the storefront uses the same self hosted Persian fonts as the scraper pane
   assert.ok(html.includes('<link rel="stylesheet" href="assets/fonts/vazirmatn.css">'), 'Vazirmatn comes from the scraper font route');
   assert.match(html, /--font:Vazirmatn,Vazir,Tahoma/, 'same font stack as the dashboard');
   assert.match(html, /font-family:var\(--font\)/);
+  // The font chosen in the scraper panel (settings.appearance.font) restyles the shop as well.
+  const themed = deps({ state: [['settings', { appearance: { font: 'shabnam', fontSize: 'large' } }]] });
+  const page = await routes.cataloguePage(themed, {});
+  assert.ok(page.includes('href="assets/fonts/shabnam.css"'), 'the panel font is loaded from the same route');
+  assert.match(page, /--font:Shabnam,Tahoma,sans-serif;--fsize:15px/, 'font family and size follow the panel');
+  assert.equal(core.resolveAppearance({ appearance: { font: 'nope' } }).font, 'vazir', 'unknown fonts fall back');
 });
 
 test('a product without an image renders a placeholder instead of a broken image', async () => {

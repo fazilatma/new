@@ -47,6 +47,8 @@ export type ShopSettings = {
   tagline: string;
   /** Folder the scraper dashboard is mounted under; the shop always owns "/". */
   scraperPath: string;
+  /** Typography taken from the scraper panel's appearance settings (same self hosted fonts). */
+  appearance: ShopAppearance;
   /** Root address the storefront is mounted on ("/" by default). Every link is built from it. */
   basePath: string;
   /**
@@ -65,12 +67,40 @@ export type ShopSettings = {
   card: { number: string; holder: string; bank: string };
 };
 
+export type ShopAppearance = { font: string; family: string; stylesheet: string; scale: number };
+
+/** The same font list the scraper dashboard offers, served from the same /assets/fonts route. */
+export const SITE_FONTS: Record<string, { family: string; stylesheet: string }> = {
+  system: { family: 'Tahoma,system-ui,sans-serif', stylesheet: '' },
+  vazir: { family: 'Vazir,Vazirmatn,Tahoma,sans-serif', stylesheet: 'vazir' },
+  vazirmatn: { family: 'Vazirmatn,Vazir,Tahoma,sans-serif', stylesheet: 'vazirmatn' },
+  yekan: { family: 'Yekan,Tahoma,sans-serif', stylesheet: 'yekan' },
+  shabnam: { family: 'Shabnam,Tahoma,sans-serif', stylesheet: 'shabnam' },
+  sahel: { family: 'Sahel,Tahoma,sans-serif', stylesheet: 'sahel' },
+  samim: { family: 'Samim,Tahoma,sans-serif', stylesheet: 'samim' }
+};
+
+const FONT_SCALES: Record<string, number> = { small: 13, medium: 14, large: 15, xlarge: 16 };
+
+export const DEFAULT_APPEARANCE: ShopAppearance = { font: 'vazir', family: SITE_FONTS.vazir.family, stylesheet: 'vazir', scale: 14 };
+
+/** Reads the dashboard's `appearance.*` settings so the shop uses the panel's own typography. */
+export function resolveAppearance(raw: unknown): ShopAppearance {
+  const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const block = (input.appearance && typeof input.appearance === 'object' ? input.appearance : input) as Record<string, any>;
+  const key = String(block.font ?? '').toLowerCase();
+  const font = SITE_FONTS[key] ? key : DEFAULT_APPEARANCE.font;
+  const scale = FONT_SCALES[String(block.fontSize ?? '').toLowerCase()] || DEFAULT_APPEARANCE.scale;
+  return { font, family: SITE_FONTS[font].family, stylesheet: SITE_FONTS[font].stylesheet, scale };
+}
+
 export const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   enabled: true,
   name: 'ویترین فروشگاه',
   tagline: 'محصولات به‌روز، با قیمت‌گذاری خودکار هر پروفایل',
   scraperPath: 'scraper',
   basePath: '/',
+  appearance: DEFAULT_APPEARANCE,
   gatewaySource: 'wordpress',
   currency: 'تومان',
   shippingCost: 0,
@@ -91,6 +121,7 @@ export function normalizeShopSettings(raw: unknown): ShopSettings {
     tagline: String(input.tagline ?? DEFAULT_SHOP_SETTINGS.tagline).slice(0, 200),
     scraperPath: normalizeScraperPath(input.scraperPath),
     basePath: normalizeBasePath(input.basePath),
+    appearance: resolveAppearance(input.appearance ? { appearance: input.appearance } : {}),
     gatewaySource: input.gatewaySource === 'builtin' ? 'builtin' : 'wordpress',
     currency: input.currency === 'ریال' ? 'ریال' : 'تومان',
     shippingCost: positive(input.shippingCost),

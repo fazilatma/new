@@ -5,7 +5,7 @@
 import {
   DEFAULT_SHOP_SETTINGS, SHOP_ORDER_INDEX_KEY, SHOP_SETTINGS_KEY, adjustmentOf, basePriceOf,
   UNCATEGORISED, customerProblem, itemId, money, normalizeCustomer, toEnglishDigits, normalizeShopSettings, orderStateKey, orderTotals,
-  parseItemId, showcaseItem,
+  parseItemId, resolveAppearance, showcaseItem,
   type Order, type OrderStatus, type ShopProduct, type ShopProfile, type ShopSettings, type ShowcaseItem
 } from './shop-core.js';
 import {
@@ -64,11 +64,14 @@ export async function gatewayChoices(deps: ShopDeps, settings: ShopSettings, pay
 export const PER_PAGE = 24;
 
 export async function loadShopConfig(deps: ShopDeps): Promise<{ settings: ShopSettings; payments: PaymentSettings }> {
-  const [rawSettings, rawPayments] = await Promise.all([
+  const [rawSettings, rawPayments, panel] = await Promise.all([
     deps.getState<unknown>(SHOP_SETTINGS_KEY, DEFAULT_SHOP_SETTINGS),
-    deps.getState<unknown>(PAYMENT_SETTINGS_KEY, {})
+    deps.getState<unknown>(PAYMENT_SETTINGS_KEY, {}),
+    deps.getState<unknown>('settings', {})
   ]);
-  return { settings: normalizeShopSettings(rawSettings), payments: normalizePaymentSettings(rawPayments) };
+  // Typography follows the scraper panel: picking a font there restyles the storefront too.
+  const settings = { ...normalizeShopSettings(rawSettings), appearance: resolveAppearance(panel) };
+  return { settings, payments: normalizePaymentSettings(rawPayments) };
 }
 
 /** Every showcased product, priced with its own profile's coefficients. */
