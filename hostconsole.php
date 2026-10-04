@@ -3047,24 +3047,45 @@ function handle_api() {
         }
         if (!$target) { foreach ($projects as $pp) { if (($pp['name'] ?? '') === 'scraper4-cloudflare') { $target = $pp; break; } } }
         $info = ['timestamp'=>date('c')];
+        // Find actual running cwd via /proc
+        $procCwd = trim(@shell_exec('ls -l /proc/*/cwd 2>/dev/null | grep cloudflare-scraper4 | head -n 20'));
+        $procCwd2 = trim(@shell_exec('for d in /proc/[0-9]*; do if [ -e $d/cwd ]; then r=$(readlink $d/cwd 2>/dev/null); case $r in *cloudflare-scraper4*) echo $d:$r;; esac; fi; done | head -n 20'));
         if ($target) {
             $dp = $target['deploy_path'] ?? '';
+            // If deploy_path does not contain package.json, try to find real path via proc
+            if (!is_file($dp.'/cloudflare-scraper4/package.json')) {
+                $real = trim(@shell_exec('for d in /proc/[0-9]*; do r=$(readlink $d/cwd 2>/dev/null); case $r in *cloudflare-scraper4*) echo $r;; esac; done | head -n 5'));
+                $lines = explode("\n", $real);
+                foreach ($lines as $line) {
+                    $line = trim($line);
+                    if (!$line) continue;
+                    if (is_file($line.'/package.json')) { $dp = dirname($line); break; }
+                    if (is_file($line.'/cloudflare-scraper4/package.json')) { $dp = $line; break; }
+                    if (is_file($line.'/../package.json')) { $dp = dirname($line); break; }
+                    if (is_file(dirname($line).'/package.json')) { $dp = dirname($line); break; }
+                }
+            }
             $info['project'] = $target['name'] ?? '';
             $info['project_id'] = $target['id'] ?? '';
             $info['deploy_path'] = $dp;
             $info['port'] = $target['port'] ?? '';
             $info['branch'] = $target['branch'] ?? '';
             $info['git_head'] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
-            $info['pkg_exists'] = is_file($dp.'/cloudflare-scraper4/package.json');
-            $info['render_dist_exists'] = is_dir($dp.'/cloudflare-scraper4/render-dist') ? 'yes' : 'no';
+            $info['pkg_exists'] = is_file($dp.'/cloudflare-scraper4/package.json') || is_file($dp.'/package.json');
+            $info['render_dist_exists'] = is_dir($dp.'/cloudflare-scraper4/render-dist') || is_dir($dp.'/render-dist') ? 'yes' : 'no';
             $info['local_8790'] = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:8790/api/version 2>&1'));
             $info['local_3000'] = trim(@shell_exec('curl -s --max-time 5 http://127.0.0.1:3000/api/version 2>&1'));
             $info['ps_node'] = trim(@shell_exec('ps aux | grep node | head -n 20 2>&1'));
+            $info['proc_cwd'] = $procCwd;
+            $info['proc_cwd2'] = $procCwd2;
             $svc = proj_service_job($target);
             $info['service_job'] = $svc ? job_status($svc) : null;
             $info['public_version'] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/version 2>&1 | head -n 5'));
+            $info['feedback'] = trim(@shell_exec('curl -s --max-time 10 https://sabashopping.ir/app/api/feedback 2>&1 | head -n 20'));
         } else {
             $info['error'] = 'Project not found';
+            $info['proc_cwd'] = $procCwd;
+            $info['proc_cwd2'] = $procCwd2;
         }
         if (function_exists('opcache_reset')) @opcache_reset();
         jout(true, $info);
@@ -3161,6 +3182,19 @@ function handle_api() {
         $branch = $in['branch'] ?? $_GET['branch'] ?? 'arena/01a0aa17-new';
         $out = [];
         $out[] = 'target: '.($target['name']??'').' id='.($target['id']??'').' port='.($target['port']??'').' path='.$dp.' branch='.$branch;
+        // Try to find real path via /proc if deploy_path missing package.json
+        if (!is_dir($dp) || (!is_file($dp.'/cloudflare-scraper4/package.json') && !is_file($dp.'/package.json'))) {
+            $procPaths = trim(@shell_exec('for d in /proc/[0-9]*; do r=$(readlink $d/cwd 2>/dev/null); case $r in *cloudflare-scraper4*) echo $r;; esac; done | head -n 10'));
+            $out[] = 'proc paths: '.$procPaths;
+            $lines = explode("\n", $procPaths);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (!$line) continue;
+                if (is_file($line.'/package.json')) { $dp = dirname($line); $out[] = 'Using proc path (parent): '.$dp.' from '.$line; break; }
+                if (is_file($line.'/cloudflare-scraper4/package.json')) { $dp = $line; $out[] = 'Using proc path: '.$dp; break; }
+                if (is_file($line.'/../package.json')) { $dp = dirname($line); $out[] = 'Using proc path up: '.$dp; break; }
+            }
+        }
         if (!is_dir($dp)) {
             $found = trim(@shell_exec('find /home -type d -name cloudflare-scraper4 2>/dev/null | head -n 10'));
             $out[] = 'deploy_path not found: '.$dp.' found: '.$found;
@@ -3175,18 +3209,31 @@ function handle_api() {
             }
             if (!is_dir($dp)) jout(false, ['steps'=>$out], 'deploy_path not found');
         }
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).' && git rev-parse --short HEAD 2>&1'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && npm run render:build 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && ls -lh render-dist/ 2>&1 | head -n 20'));
+        // Ensure dp points to parent containing cloudflare-scraper4 folder
+        if (is_file($dp.'/package.json') && is_dir($dp.'/render-dist')) {
+            // dp is already cloudflare-scraper4 folder
+            $scraperRoot = $dp;
+            $dpParent = dirname($dp);
+        } else if (is_file($dp.'/cloudflare-scraper4/package.json')) {
+            $scraperRoot = $dp.'/cloudflare-scraper4';
+            $dpParent = $dp;
+        } else {
+            $scraperRoot = $dp.'/cloudflare-scraper4';
+            $dpParent = $dp;
+        }
+        $out[] = 'scraperRoot: '.$scraperRoot.' dpParent: '.$dpParent;
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && git rev-parse --short HEAD 2>&1'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && npm run render:build 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && ls -lh render-dist/ 2>&1 | head -n 20'));
         @shell_exec('pkill -f '.escapeshellarg('cloudflare-scraper4/render-dist/server.js').' 2>&1');
         wcp_kill_port('8790');
         wcp_kill_port('3000');
         $reapCode = "import { reapStalledJobs, pool } from './render-dist/db.js'; let n=await reapStalledJobs(5); console.log('reaped '+n); await pool.end();";
-        @file_put_contents($dp.'/cloudflare-scraper4/reap.mjs', $reapCode);
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dp).'/cloudflare-scraper4 && node reap.mjs 2>&1 | tail -n 20'));
+        @file_put_contents($scraperRoot.'/reap.mjs', $reapCode);
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && node reap.mjs 2>&1 | tail -n 20'));
         $job = job_create('service', 'Restart scraper4-cloudflare service', ['project_id'=>$target['id']]);
         job_start($job);
         $out[] = 'service job started: '.$job['id'];
