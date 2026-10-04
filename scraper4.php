@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.185';
+const APP_VERSION = '10.186';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -938,6 +938,25 @@ function s4WorkerStateWrite(array $patch): void {
     $cur = s4WorkerStateLoad();
     $cur = array_merge($cur, $patch, ['version' => APP_VERSION, 'heartbeat' => time()]);
     @file_put_contents(WORKER_STATE_FILE, json_encode($cur, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+function s4WorkerHeartbeatFromProgress(string $file = '', array $data = []): void {
+    static $last = 0;
+    $now = time();
+    if ($now <= $last) return;
+    $pid = (int)@getmypid();
+    if ($pid <= 0) return;
+    $st = s4WorkerStateLoad();
+    if (empty($st['running']) || (int)($st['pid'] ?? 0) !== $pid) return;
+    $patch = ['running' => true];
+    if ($file !== '') $patch['progress_file'] = basename($file);
+    foreach (['queue_id','profile_key','phase','current','total','page','extracted','detail_current','detail_total','render_engine'] as $k) {
+        if (!array_key_exists($k, $data)) continue;
+        $v = $data[$k];
+        $patch[$k === 'phase' ? 'task_phase' : ('task_' . $k)] = is_scalar($v) ? $v : '';
+    }
+    s4WorkerStateWrite($patch);
+    $last = $now;
 }
 
 function s4WorkerIsActive(int $staleSec = 45): bool {
@@ -2370,6 +2389,7 @@ function writeJsonFile(string $path, $data): array {
 
 function writeProgress(string $file, array $data): void {
 writeJsonFile($file, $data);
+if (function_exists('s4WorkerHeartbeatFromProgress')) s4WorkerHeartbeatFromProgress($file, $data);
 }
 function localTaskDbForget(string $path): void {
     $key = localTaskKeyForFile($path);
@@ -13918,6 +13938,9 @@ function fetch_html_for_engine(string $url, int $timeout, string $engine, array 
     $lastAttempt = 0;
     for ($i = 1; $i <= $attempts; $i++) {
         $lastAttempt = $i;
+        if (function_exists('s4WorkerHeartbeatFromProgress')) {
+            s4WorkerHeartbeatFromProgress('', ['phase' => 'render', 'render_engine' => $engine]);
+        }
         $r = fetch_html_render($url, $rc, $opts);
         if (!empty($r['ok'])) {
             $r['forced_render_engine'] = $engine;
@@ -35717,6 +35740,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "185'") !== false
       && version_compare(APP_VERSION, '10.' . '185', '>='));
     unset($__renderPhp185, $__renderNode185);
+
+    /* ---------- v10.186: heartbeat زندهٔ worker هنگام progress/render ---------- */
+    $add('10.186', 'writeProgress ضربان worker دائمی را هم تازه می‌کند',
+         function_exists('s4WorkerHeartbeatFrom' . 'Progress')
+      && strpos($selfSrc, "s4WorkerHeartbeatFrom" . "Progress(\$file, \$data)") !== false
+      && strpos($selfSrc, "'task_' . \$k") !== false);
+    $add('10.186', 'قبل از render اجباری هم heartbeat ثبت می‌شود',
+         strpos($selfSrc, "['phase' => 'ren" . "der', 'render_engine' => \$engine]") !== false);
+    $add('10.186', 'ورودیِ 10.186 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "186'") !== false
+      && version_compare(APP_VERSION, '10.' . '186', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65884,6 +65918,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.186', t:'🫀 ضربان زندهٔ worker در extraction/render طولانی', items:[
+    'هر بار فایل progress نوشته می‌شود، اگر پردازه همان worker دائمی باشد، worker_state.json هم heartbeat و خلاصهٔ پیشرفت را تازه می‌کند',
+    'قبل از هر render اجباری Playwright/Selenium هم heartbeat ثبت می‌شود تا timeout/صف رندر باعث نشود وضعیت worker کهنه و مرده به نظر برسد',
+    'این تغییر مکمل v10.185 است و کمک می‌کند عملیات‌های چندصفحه‌ای طولانی در UI/نگهبان صف به‌اشتباه گیرکرده تشخیص داده نشوند',
+  ]},
   {v:'10.185', t:'🎭 موتورهای Playwright/Selenium + ادامهٔ خودکار استخراج‌های طولانی', items:[
     'Playwright و Selenium به فهرست موتورهای استخراج اضافه شدند؛ انتخاب آن‌ها واقعاً فهرست را از مسیر رندر مرورگر می‌خواند و بعد Auto parser را روی HTML رندرشده اجرا می‌کند',
     'scraper4.php همچنان وابستگی Node/Python اضافه ندارد: Playwright از مسیر CDP/Chromium سرویس PHP و Selenium از W3C WebDriver HTTP استفاده می‌کند؛ در حالت Auto ترجیح Playwright/CDP و fallback به Selenium حفظ شده است',
