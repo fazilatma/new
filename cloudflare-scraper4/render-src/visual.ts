@@ -291,6 +291,7 @@ const STYLE=`<style>
 const PICKER_JS=String.raw`<script>(function(){
 ${SNAPSHOT_LAYOUT_JS}
 ${SNAPSHOT_INTERACTION_JS}
+const __s4post=(msg)=>{try{var rp=window.__s4_realParent||parent; rp.postMessage(msg,'*'); console.log('[S4] posted',msg.type,msg.mode||'');}catch(e){console.error('[S4] postMessage failed',e,msg); try{parent.postMessage(msg,'*');}catch(e2){console.error('[S4] fallback postMessage failed',e2);}}};
 const context='__S4_CONTEXT__',bar=document.getElementById('__s4bar'),pop=document.getElementById('__s4pop'),modeSelect=document.getElementById('__s4mode'),selectorText=document.getElementById('__s4selector'),countText=document.getElementById('__s4count'),previewText=document.getElementById('__s4preview'),fieldText=document.getElementById('__s4field'),progressText=document.getElementById('__s4progress'),selections={};let selected=null,hovered=null;let GAL=[];let picking=true;
 const labels={container:'کانتینر محصول',title:'عنوان',price:'قیمت',link:'لینک',image:'تصویر فهرست',shortDesc:'توضیحات کوتاه',longDesc:'توضیحات بلند',sku:'SKU',category:'دسته‌بندی',tags:'برچسب‌ها',weight:'وزن',stock:'موجودی',brand:'برند',detailImage:'عکس اصلی محصول',variations:'تنوع‌ها',galleryBox:'باکس گالری',galleryOne:'عکس‌های گالری'};
 const fields=Array.from(modeSelect.options).map(o=>o.value);
@@ -363,7 +364,7 @@ function placePop(el,sel,count,mode){
   const pcnt=document.getElementById('__s4pcnt');if(pcnt)pcnt.textContent=count>1?count+' تطبیق':'';const pfld=document.getElementById('__s4pfld');if(pfld)pfld.textContent=fieldLabel(mode);
 }
 function paint(el){
-  if(!el||el===bar||el.closest('#__s4bar')||el.closest('.__s4pop'))return;
+  console.log('[S4] paint try',el?.tagName, el?.className?.toString?.().slice(0,100)); if(!el||el===bar||el.closest('#__s4bar')||el.closest('.__s4pop')){console.log('[S4] paint blocked by bar/pop');return;}
   const mode=modeSelect.value;const target=(()=>{if(mode==='link')return el.closest('a[href]')||el.querySelector('a[href]')||el;if(['image','detailImage','galleryOne'].includes(mode))return(el.tagName==='IMG'?el:el.querySelector('img'))||el;return el;})();
   if(selected)selected.classList.remove('__s4picked');selected=target;selected.classList.add('__s4picked');
   const val=selector(target),cnt=matches(val),prev=preview(target,mode);
@@ -376,7 +377,7 @@ function paint(el){
     selectorText.textContent=val;countText.textContent=cnt.toLocaleString('fa-IR')+' مورد';previewText.textContent=prev||'پیش‌نمایشی پیدا نشد.';fieldText.textContent=fieldLabel(mode)||mode;
   }
   paintGallery(mode);placePop(target,val,cnt,mode);updateProgress();
-  (window.__s4_realParent||parent).postMessage({type:'scraper4-picker-state',channel:'__S4_CHANNEL__',mode,val,cnt,prev,all:selections,gal:GAL},'*');
+  __s4post({type:'scraper4-picker-state',channel:'__S4_CHANNEL__',mode,val,cnt,prev,all:selections,gal:GAL},'*');
 }
 function restoreMode(){
   const mode=modeSelect.value;const stored=selections[mode];fieldText.textContent=fieldLabel(mode)+(mode==='galleryOne'&&GAL.length?' — '+GAL.length+' انتخاب':'');
@@ -400,15 +401,15 @@ function sendOne(){
   const mode=modeSelect.value;if(mode==='galleryOne'){
     if(!GAL.length){previewText.textContent='ابتدا حداقل یک عکس تکی را انتخاب کنید.';return;}
     const sel=GAL.join('\\n');const cnt=countGalImgs(GAL);
-    (window.__s4_realParent||parent).postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode:'galleryOne',selector:sel,count:cnt,preview:GAL.length+' سلکتور — '+cnt+' عکس یکتا'},'*');
+    __s4post({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode:'galleryOne',selector:sel,count:cnt,preview:GAL.length+' سلکتور — '+cnt+' عکس یکتا'},'*');
     return;
   }
   const item=selections[mode];if(!item?.selector){previewText.textContent='ابتدا یک عنصر را انتخاب کنید.';return;}
-  (window.__s4_realParent||parent).postMessage({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode,...item},'*');
+  __s4post({type:'scraper4-selector',channel:'__S4_CHANNEL__',mode,...item},'*');
   const next=fieldNext(1);modeSelect.value=next;restoreMode();
 }
 function move(dir){
-  if(!selected)return;let next=null;
+  console.log('[S4] move',dir,'selected',selected?.tagName); if(!selected)return;let next=null;
   if(dir==='up')next=selected.parentElement;
   else if(dir==='down')next=selected.firstElementChild;
   else if(dir==='prev')next=selected.previousElementSibling;
@@ -419,7 +420,6 @@ function move(dir){
   try{const r=next.getBoundingClientRect(),vh=window.innerHeight||600;if(r.top<60||r.bottom>vh-20)next.scrollIntoView({block:'center',behavior:'smooth'});setTimeout(()=>placePop(next,selector(next),matches(selector(next)),modeSelect.value),300);}catch{}
 }
 function fieldStep(dir){const next=fieldNext(dir);modeSelect.value=next;restoreMode();const stored=selections[next];if(stored?.selector){try{const el=document.querySelector(stored.selector.split('\\n')[0]);if(el){if(selected)selected.classList.remove('__s4picked');selected=el;el.classList.add('__s4picked');placePop(el,stored.selector,matches(stored.selector),next);}}catch{}}}
-let picking=true;
 const pauseBtn=document.getElementById('__s4pause');
 function setPicking(v){picking=v;try{s4InteractionMode(picking);}catch(e){}if(pauseBtn){pauseBtn.textContent=v?'⏸ توقف':'▶ ادامه';pauseBtn.classList.toggle('__s4on',!v);}document.body.classList.toggle('__s4paused',!v);if(!v)document.querySelectorAll('.__s4hover').forEach(n=>n.classList.remove('__s4hover'));pop?.classList.remove('__s4on');}
 function __s4bind(id,fn){
@@ -441,9 +441,9 @@ __s4bind('__s4up',()=>move('up'));__s4bind('__s4down',()=>move('down'));__s4bind
 __s4bind('__s4pup',()=>move('up'));__s4bind('__s4pdn',()=>move('down'));__s4bind('__s4pprv',()=>move('prev'));__s4bind('__s4pnxt',()=>move('next'));
 __s4bind('__s4pfprev',()=>fieldStep(-1));__s4bind('__s4pfnext',()=>fieldStep(1));__s4bind('__s4pfld',()=>fieldStep(1));
 __s4bind('__s4save',sendOne);__s4bind('__s4pok',sendOne);
-const done=document.getElementById('__s4done');if(done)__s4bind('__s4done',()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};(window.__s4_realParent||parent).postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');});
-__s4bind('__s4refresh',()=>(window.__s4_realParent||parent).postMessage({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*'));
-__s4bind('__s4full',()=>(window.__s4_realParent||parent).postMessage({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*'));
+const done=document.getElementById('__s4done');if(done)__s4bind('__s4done',()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};__s4post({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');});
+__s4bind('__s4refresh',()=>__s4post({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*'));
+__s4bind('__s4full',()=>__s4post({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*'));
 (function(){
   try{
     var prog=document.getElementById('__s4bprog');
@@ -484,12 +484,12 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='ArrowLeft'){e.preventDefault();move('next');}
   else if(e.key===' '||e.key==='Spacebar'){e.preventDefault();fieldStep(1);}
   else if(e.key==='Enter'){e.preventDefault();done?done.click():sendOne();}
-  else if(e.key==='Escape'){e.preventDefault();if(modeSelect.value==='galleryOne'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));}else delete selections[modeSelect.value];if(selected)selected.classList.remove('__s4picked');selected=null;pop?.classList.remove('__s4on');restoreMode();(window.__s4_realParent||parent).postMessage({type:'scraper4-picker-hint',channel:'__S4_CHANNEL__',msg:'انتخاب پاک شد.'},'*');}
+  else if(e.key==='Escape'){e.preventDefault();if(modeSelect.value==='galleryOne'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));}else delete selections[modeSelect.value];if(selected)selected.classList.remove('__s4picked');selected=null;pop?.classList.remove('__s4on');restoreMode();__s4post({type:'scraper4-picker-hint',channel:'__S4_CHANNEL__',msg:'انتخاب پاک شد.'},'*');}
 },true);
 let _rp=null;function repos(){if(!selected)return;clearTimeout(_rp);_rp=setTimeout(()=>{try{placePop(selected,selector(selected),matches(selector(selected)),modeSelect.value);}catch{}},40);}
 window.addEventListener('scroll',repos,true);window.addEventListener('resize',repos);
 window.addEventListener('message',e=>{if((e.source!==(window.__s4_realParent||parent))&&e.source!==parent||e.data?.channel!=='__S4_CHANNEL__')return;const d=e.data;if(d.type==='scraper4-mode'&&fields.includes(d.mode)){modeSelect.value=d.mode;restoreMode();}else if(d.type==='picker_clear_gal'){GAL=[];delete selections['galleryOne'];document.querySelectorAll('.__s4gal').forEach(x=>x.classList.remove('__s4gal'));restoreMode();}else if(d.type==='scraper4-container'){try{const el=document.querySelector(d.selector);if(el)paint(el);}catch{}}});
-restoreMode();(window.__s4_realParent||parent).postMessage({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
+restoreMode();__s4post({type:'scraper4-picker-ready',channel:'__S4_CHANNEL__'},'*');
 })();</script>`;
 
 function pickerScript(context:'list'|'detail',channel:string){

@@ -76,18 +76,17 @@ export const SNAPSHOT_LAYOUT_CSS=String.raw`
 
 export const SNAPSHOT_LAYOUT_JS=String.raw`
 const s4Bar=document.getElementById('__s4bar');
-const s4Tools=document.createElement('details');s4Tools.id='__s4tools';
+const s4Tools=document.createElement('details');s4Tools.id='__s4tools';s4Tools.open=true;
 s4Tools.innerHTML='<summary>ابزارها و تنظیم ارتفاع</summary><div class="__s4extras"></div>';
 const s4Extras=s4Tools.lastElementChild;
 const s4Warnings=document.getElementById('__s4warnings');
 s4Bar.appendChild(s4Tools);
 Array.from(s4Bar.childNodes).forEach(node=>{if(node!==s4Warnings&&node!==s4Tools)s4Extras.appendChild(node);});
 const s4Primary=document.createElement('div');s4Primary.className='__s4primary';
-['__s4mode','__s4save','__s4pause'].forEach(id=>{const el=document.getElementById(id);if(el)s4Primary.appendChild(el);});
+['__s4mode','__s4up','__s4down','__s4prev','__s4next','__s4save','__s4pause','__s4refresh','__s4full'].forEach(id=>{const el=document.getElementById(id);if(el)s4Primary.appendChild(el);});
 const s4PinLabel=document.createElement('label');s4PinLabel.innerHTML='<input id="__s4pin" type="checkbox" checked> چسبان';s4Primary.appendChild(s4PinLabel);
 const s4HeightLabel=document.createElement('label');s4HeightLabel.innerHTML='حداکثر ارتفاع <input id="__s4height" type="range" min="15" max="50" value="30" step="5" aria-label="حداکثر ارتفاع نوار، درصد پنجره"><output id="__s4heightValue">30%</output>';s4Extras.appendChild(s4HeightLabel);
 s4Bar.prepend(s4Primary);s4Bar.appendChild(s4Tools);if(s4Warnings)s4Bar.appendChild(s4Warnings);
-// The Worker originally appends its toolbar. Flow mode must start above the page.
 document.body.prepend(s4Bar);
 const s4Pin=document.getElementById('__s4pin'),s4Height=document.getElementById('__s4height');
 s4Pin.checked=true;
@@ -97,4 +96,5 @@ s4Height.oninput=()=>{const height=Math.max(15,Math.min(50,Number(s4Height.value
 s4Tools.addEventListener('toggle',s4Offset);s4Warnings?.addEventListener('toggle',s4Offset);window.addEventListener('resize',s4Offset);
 if(window.ResizeObserver)new window.ResizeObserver(s4Offset).observe(s4Bar);
 s4Offset();
+console.log('[S4] layout applied, primary has',s4Primary.children.length,'items, bar in body');
 `;
