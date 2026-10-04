@@ -3102,9 +3102,11 @@ function handle_api() {
             $svc = proj_service_job($pp);
             $result[] = ['name'=>$pp['name']??'', 'id'=>$pp['id']??'', 'branch'=>$pp['branch']??'', 'port'=>$pp['port']??'', 'deploy_path'=>$pp['deploy_path']??'', 'deploy_exists'=>is_dir($pp['deploy_path']??''), 'status'=>$svc ? job_status($svc)['status'] : 'stopped'];
         }
-        $found = trim(@shell_exec('find /home -type d -name cloudflare-scraper4 2>/dev/null | head -n 10'));
+        $found = trim(@shell_exec('find /home -type d -name cloudflare-scraper4 2>/dev/null | head -n 20'));
+        $foundGit = trim(@shell_exec('find /home/sabashop -type d -name .git 2>/dev/null | head -n 20'));
+        $foundPkg = trim(@shell_exec('find /home/sabashop -type f -name package.json 2>/dev/null | xargs grep -l scraper4-cloudflare 2>/dev/null | head -n 20'));
         if (function_exists('opcache_reset')) @opcache_reset();
-        jout(true, ['projects'=>$result, 'found'=>$found]);
+        jout(true, ['projects'=>$result, 'found'=>$found, 'foundGit'=>$foundGit, 'foundPkg'=>$foundPkg]);
     case 'public.force_update':
         $pw = $in['password'] ?? $_GET['password'] ?? '';
         $cfg = cfg();
