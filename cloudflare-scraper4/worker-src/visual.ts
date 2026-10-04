@@ -690,15 +690,23 @@ export async function renderVisualSelector(ticketId:string,context:VisualContext
   const fmJs = full ? fullModeJs(Boolean(ticket.indirect)) : '';
   const head=`${baseTag}${STYLE}${fmJs}`,body=`${toolbar(context,full)}${pickerScript(context,ticketId)}`;
   html=/<head\b[^>]*>/i.test(html)?html.replace(/<head\b[^>]*>/i,match=>match+head):`<head>${head}</head>${html}`;
-  html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,body+'</body>'):html+body;
+  html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,match=>body+match):html+body;
+  // The injected picker contains $& / $1 sequences (e.g. String.replace(/["\\]/g,'\\$&')).
+  // Passing it as a STRING replacement let the regex engine expand them, which corrupted the
+  // script AND broke its CSP sha256 hash, so the browser refused to run the picker at all:
+  // the toolbar rendered but no button (pause included) did anything. Always use a replacer fn.
   const trusted=pickerScript(context,ticketId).replace(/^<script>/,'').replace(/<\/script>$/,'');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const fullTrusted=full?fmJs.replace(/^<script>/,'').replace(/<\/script>$/,''):'';
-  const combined=trusted+fullTrusted;
-  const hash=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(combined)))));
-  const hash2=full?btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(fullTrusted))))):'';
+  // One hash PER inline script. Hashing the concatenation matches nothing, and in full mode
+  // a stale hash is worse than none: as soon as a hash is present the browser IGNORES
+  // 'unsafe-inline', so every inline script (ours and the page's) gets blocked.
+  const sha=async(text:string)=>btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))));
+  const hash=await sha(trusted);
+  const hash2=full&&fullTrusted?await sha(fullTrusted):'';
   // PHP 10.170 parity: full mode must be permissive for Emalls/Snappshop. PHP had no CSP at all.
   const csp=full
-    ? `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''}; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`
+    ? `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`
     : `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
   return new Response(html,{headers:{'content-type':'text/html; charset=UTF-8','cache-control':'no-store','content-security-policy':csp,'x-content-type-options':'nosniff','referrer-policy':'no-referrer'}})
 }

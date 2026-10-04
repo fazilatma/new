@@ -649,7 +649,7 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
     const bar=toolbar(context,true).replace('</div><div class="__s4pop"',`${engineHtml(engine)}${warnings}</div><div class="__s4pop"`);
     const body=`${bar}${pickerScript(context,channel)}`;
     html=/<head\b[^>]*>/i.test(html)?html.replace(/<head\b[^>]*>/i,match=>match+head):`<head>${head}</head>${html}`;
-    html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,body+'</body>'):html+body;
+    html=/<\/body\s*>/i.test(html)?html.replace(/<\/body\s*>/i,match=>body+match):html+body;
     return html;
   }
   const $=cheerio.load(page.text,{scriptingEnabled:false});
@@ -690,12 +690,12 @@ export function visualSelectorCsp(ticket:string, fullOverride?: boolean, indirec
   const useIndirect = indirectOverride !== undefined ? indirectOverride : Boolean(indirect);
   const pickerSrc = pickerSource(context as any, channel);
   const fullSrc = useFull ? fullModeJsNode(useIndirect).replace(/^<script>/,'').replace(/<\/script>$/,'') : '';
-  const combined = pickerSrc + fullSrc;
-  const hash = createHash('sha256').update(combined).digest('base64');
-  const hash2 = useFull ? createHash('sha256').update(fullSrc).digest('base64') : '';
   const hashPicker = createHash('sha256').update(pickerSrc).digest('base64');
   if (useFull) {
-    return `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''} 'sha256-${hashPicker}'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
+    // No hashes in full mode: the page's own inline scripts must run, and a single hash
+    // makes the browser ignore 'unsafe-inline' and block EVERY inline script, picker included.
+    void fullSrc;
+    return `sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
   }
   // The sanitized snapshot carries exactly one script, so a single exact hash is enough.
   return `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hashPicker}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
