@@ -1,7 +1,6 @@
 <?php
-// Emergency recovery - recovers all 4 critical files
+// Emergency recovery - recovers all 4 critical files, jsDelivr first
 // Access via https://sabashopping.ir/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php
-// Or with token: ?token=a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9&branch=arena/hostconsole-v20
 $token = $_GET['token'] ?? $_GET['password'] ?? $_GET['api_token'] ?? '';
 $expected = 'a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9';
 $alt = 'KhTn2268';
@@ -14,20 +13,20 @@ $branch = preg_replace('/[^a-zA-Z0-9\\/\\-_\\.]/', '', $branch);
 if ($branch === '') $branch = 'arena/hostconsole-v20';
 
 function fetch_file($branch, $file, $minSize = 1000) {
-    $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/'.rawurlencode($file).'?cb='.time().'-'.rand(1000,9999);
-    $content = @file_get_contents($url);
-    if (!$content || strlen($content) < $minSize) {
-        $content = @shell_exec('curl -sL --max-time 30 '.escapeshellarg($url).' 2>&1');
-    }
-    if (!$content || strpos($content, '<?php') !== 0 || strlen($content) < $minSize) {
-        $url2 = 'https://cdn.jsdelivr.net/gh/fazilatma/new@'.rawurlencode($branch).'/'.rawurlencode($file).'?cb='.time().'-'.rand(1000,9999);
-        $c2 = @file_get_contents($url2);
-        if ($c2 && strpos($c2, '<?php') === 0 && strlen($c2) >= $minSize) {
-            $content = $c2;
-            $url = $url2;
+    $urls = [
+        'https://cdn.jsdelivr.net/gh/fazilatma/new@'.rawurlencode($branch).'/'.rawurlencode($file).'?cb='.time().'-'.rand(1000,9999),
+        'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/'.rawurlencode($file).'?cb='.time().'-'.rand(1000,9999),
+    ];
+    foreach ($urls as $url) {
+        $content = @file_get_contents($url);
+        if (!$content || strlen($content) < $minSize || strpos($content, '<?php') !== 0) {
+            $content = @shell_exec('curl -sL --max-time 30 '.escapeshellarg($url).' 2>&1');
+        }
+        if ($content && strpos($content, '<?php') === 0 && strlen($content) >= $minSize) {
+            return [$content, $url];
         }
     }
-    return [$content, $url];
+    return [null, $urls[0]];
 }
 
 $files = [
