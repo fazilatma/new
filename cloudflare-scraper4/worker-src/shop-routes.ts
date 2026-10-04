@@ -63,14 +63,34 @@ export async function gatewayChoices(deps: ShopDeps, settings: ShopSettings, pay
 
 export const PER_PAGE = 24;
 
-export async function loadShopConfig(deps: ShopDeps): Promise<{ settings: ShopSettings; payments: PaymentSettings }> {
+/**
+ * Where the app is actually mounted. Reverse proxies (cPanel/Plesk/nginx in front of Node)
+ * often serve the app from a sub folder, and then an absolute `<base href="/">` points every
+ * relative asset at the domain root — the page arrives unstyled with a dead script. When the
+ * shop settings do not pin a base path we derive it from the request instead.
+ */
+export function mountBase(requestUrl: string, forwardedPrefix?: string | null): string {
+  let path = '/';
+  try { path = new URL(requestUrl).pathname || '/'; } catch { path = '/'; }
+  const prefix = String(forwardedPrefix ?? '').trim();
+  const joined = prefix ? '/' + prefix.replace(/^\/+|\/+$/g, '') + (path === '/' ? '/' : path) : path;
+  const folder = joined.replace(/[^/]*$/, '');
+  return folder.startsWith('/') ? (folder.endsWith('/') ? folder : folder + '/') : '/' + folder;
+}
+
+export async function loadShopConfig(deps: ShopDeps, mount?: string): Promise<{ settings: ShopSettings; payments: PaymentSettings }> {
   const [rawSettings, rawPayments, panel] = await Promise.all([
     deps.getState<unknown>(SHOP_SETTINGS_KEY, DEFAULT_SHOP_SETTINGS),
     deps.getState<unknown>(PAYMENT_SETTINGS_KEY, {}),
     deps.getState<unknown>('settings', {})
   ]);
-  // Typography follows the scraper panel: picking a font there restyles the storefront too.
-  const settings = { ...normalizeShopSettings(rawSettings), appearance: resolveAppearance(panel) };
+  // Typography and palette follow the scraper panel: the storefront is the same site.
+  const base = normalizeShopSettings(rawSettings);
+  const settings: ShopSettings = {
+    ...base,
+    appearance: resolveAppearance(panel),
+    basePath: base.basePath && base.basePath !== '/' ? base.basePath : (mount || base.basePath || '/')
+  };
   return { settings, payments: normalizePaymentSettings(rawPayments) };
 }
 
@@ -92,8 +112,8 @@ export async function showcase(deps: ShopDeps, settings: ShopSettings): Promise<
   return { items, categories };
 }
 
-export async function cataloguePage(deps: ShopDeps, query: { q?: string; category?: string; page?: string; sort?: string }): Promise<string> {
-  const { settings } = await loadShopConfig(deps);
+export async function cataloguePage(deps: ShopDeps, query: { q?: string; category?: string; page?: string; sort?: string }, mount?: string): Promise<string> {
+  const { settings } = await loadShopConfig(deps, mount);
   const { items, categories } = await showcase(deps, settings);
   const q = String(query.q ?? '').trim().slice(0, 80);
   const category = String(query.category ?? '').trim().slice(0, 60);
@@ -116,28 +136,28 @@ export async function cataloguePage(deps: ShopDeps, query: { q?: string; categor
  * query parameters (`?view=categories|checkout|track`, `?product=`, `?order=`), so no shop link
  * ever goes one level deeper than the root the app is mounted on.
  */
-export async function rootPage(deps: ShopDeps, query: Record<string, string | undefined>): Promise<{ status: number; html?: string; location?: string }> {
+export async function rootPage(deps: ShopDeps, query: Record<string, string | undefined>, mount?: string): Promise<{ status: number; html?: string; location?: string }> {
   const view = String(query.view ?? '').trim().toLowerCase();
   const product = String(query.product ?? '').trim();
   const order = String(query.order ?? '').trim();
   if (product) {
-    const result = await productPage(deps, product);
+    const result = await productPage(deps, product, mount);
     if (result.html) return result;
   }
   if (order && view !== 'track') {
-    const result = await orderPage(deps, order);
+    const result = await orderPage(deps, order, mount);
     if (result.html) return result;
-    return trackPage(deps, { order });
+    return trackPage(deps, { order }, mount);
   }
-  if (view === 'categories') return { status: 200, html: await categoriesPage(deps) };
-  if (view === 'checkout') return { status: 200, html: await checkoutPage(deps) };
-  if (view === 'track') return trackPage(deps, { order });
-  return { status: 200, html: await cataloguePage(deps, query) };
+  if (view === 'categories') return { status: 200, html: await categoriesPage(deps, mount) };
+  if (view === 'checkout') return { status: 200, html: await checkoutPage(deps, mount) };
+  if (view === 'track') return trackPage(deps, { order }, mount);
+  return { status: 200, html: await cataloguePage(deps, query, mount) };
 }
 
 /** Browse-by-category page behind the bottom tab bar. */
-export async function categoriesPage(deps: ShopDeps): Promise<string> {
-  const { settings } = await loadShopConfig(deps);
+export async function categoriesPage(deps: ShopDeps, mount?: string): Promise<string> {
+  const { settings } = await loadShopConfig(deps, mount);
   const { items, categories } = await showcase(deps, settings);
   const covers = new Map<string, string>();
   for (const item of items) { const name = item.category || UNCATEGORISED; if (item.image && !covers.has(name)) covers.set(name, item.image); }
@@ -145,8 +165,8 @@ export async function categoriesPage(deps: ShopDeps): Promise<string> {
 }
 
 /** Single product page: same price contract as the card, plus the coefficient breakdown. */
-export async function productPage(deps: ShopDeps, id: string): Promise<{ status: number; html?: string }> {
-  const { settings } = await loadShopConfig(deps);
+export async function productPage(deps: ShopDeps, id: string, mount?: string): Promise<{ status: number; html?: string }> {
+  const { settings } = await loadShopConfig(deps, mount);
   const { items } = await showcase(deps, settings);
   const item = items.find(entry => entry.id === String(id || ''));
   if (!item) return { status: 404 };
@@ -155,8 +175,8 @@ export async function productPage(deps: ShopDeps, id: string): Promise<{ status:
 }
 
 /** Order lookup from the footer menu. A wrong number must never 500 or leak other orders. */
-export async function trackPage(deps: ShopDeps, query: { order?: string }): Promise<{ status: number; html?: string; location?: string }> {
-  const { settings } = await loadShopConfig(deps);
+export async function trackPage(deps: ShopDeps, query: { order?: string }, mount?: string): Promise<{ status: number; html?: string; location?: string }> {
+  const { settings } = await loadShopConfig(deps, mount);
   const id = String(query.order ?? '').trim().toUpperCase();
   if (!id) return { status: 200, html: trackHtml({ settings }) };
   const order = await getOrder(deps, id);
@@ -164,14 +184,14 @@ export async function trackPage(deps: ShopDeps, query: { order?: string }): Prom
   return { status: 302, location: `${settings.basePath}?order=${encodeURIComponent(order.id)}` };
 }
 
-export async function infoPage(deps: ShopDeps, slug: string): Promise<{ status: number; html?: string }> {
-  const { settings } = await loadShopConfig(deps);
+export async function infoPage(deps: ShopDeps, slug: string, mount?: string): Promise<{ status: number; html?: string }> {
+  const { settings } = await loadShopConfig(deps, mount);
   const html = infoPageHtml(settings, String(slug || '').toLowerCase());
   return html ? { status: 200, html } : { status: 404 };
 }
 
-export async function checkoutPage(deps: ShopDeps): Promise<string> {
-  const { settings, payments } = await loadShopConfig(deps);
+export async function checkoutPage(deps: ShopDeps, mount?: string): Promise<string> {
+  const { settings, payments } = await loadShopConfig(deps, mount);
   const choices = await gatewayChoices(deps, settings, payments);
   return checkoutHtml({ settings, gateways: choices.gateways, source: choices.source, error: choices.error });
 }
@@ -329,8 +349,8 @@ export async function refreshWooOrder(deps: ShopDeps, order: Order): Promise<Ord
   return order;
 }
 
-export async function orderPage(deps: ShopDeps, id: string): Promise<{ status: number; html?: string }> {
-  const { settings } = await loadShopConfig(deps);
+export async function orderPage(deps: ShopDeps, id: string, mount?: string): Promise<{ status: number; html?: string }> {
+  const { settings } = await loadShopConfig(deps, mount);
   let order = await getOrder(deps, id);
   if (!order) return { status: 404 };
   order = await refreshWooOrder(deps, order);

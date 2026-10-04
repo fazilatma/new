@@ -30,6 +30,7 @@ export function escapeHtml(value: unknown): string {
 const STYLE = String.raw`
 :root{
   --bg:#070b17;--bg2:#0b1222;--card:#121b33;--line:#22304f;--line2:#2d3c60;
+  --glow:#17345e55;--glow2:#312e8144;
   --text:#f2f6ff;--muted:#9fb1d7;--soft:rgba(255,255,255,.045);--brand:#34d399;--brand-ink:#04281a;--accent:#60a5fa;--warn:#fbbf24;--bad:#f87171;
   --radius:18px;--tap:44px;--ring:0 0 0 1px rgba(255,255,255,.04) inset;--shadow:0 14px 34px rgba(3,7,18,.45);
   --app-font:Vazirmatn,Vazir,Tahoma,system-ui,sans-serif;--font:var(--app-font);--fsize:14px
@@ -37,9 +38,9 @@ const STYLE = String.raw`
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{max-width:100%;overflow-x:hidden}
 body{margin:0;background:
-  radial-gradient(90% 60% at 100% -10%,rgba(52,211,153,.13),transparent 62%),
-  radial-gradient(80% 55% at 0% 0%,rgba(96,165,250,.12),transparent 60%),
-  linear-gradient(180deg,#070b17,#0a1020 40%,#070b17) fixed;color:var(--text);
+  radial-gradient(90% 60% at 100% -10%,var(--glow),transparent 62%),
+  radial-gradient(80% 55% at 0% 0%,var(--glow2),transparent 60%),
+  linear-gradient(180deg,var(--bg),var(--bg2) 40%,var(--bg)) fixed;color:var(--text);
   font-family:var(--font);direction:rtl;line-height:1.9;
   font-size:var(--fsize);padding-bottom:env(safe-area-inset-bottom)}
 img{max-width:100%;display:block}
@@ -57,7 +58,7 @@ body.drawer-open .menubtn span:nth-child(2){opacity:0}
 body.drawer-open .menubtn span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
 .scrim{position:fixed;inset:0;background:rgba(3,7,18,.6);backdrop-filter:blur(3px);opacity:0;visibility:hidden;transition:opacity .22s ease,visibility .22s;z-index:40}
 body.drawer-open .scrim{opacity:1;visibility:visible}
-.drawer{position:fixed;inset-block:0;inset-inline-start:0;width:min(86vw,320px);z-index:50;background:linear-gradient(180deg,#0d1529,#0a1020);
+.drawer{position:fixed;inset-block:0;inset-inline-start:0;width:min(86vw,320px);z-index:50;background:linear-gradient(180deg,var(--card),var(--bg));
   border-inline-end:1px solid var(--line);box-shadow:24px 0 60px rgba(3,7,18,.6);transform:translateX(-102%);
   transition:transform .26s cubic-bezier(.22,.61,.36,1);display:flex;flex-direction:column;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
 html[dir="rtl"] .drawer{inset-inline-start:auto;inset-inline-end:0;transform:translateX(102%);border-inline-end:none;border-inline-start:1px solid var(--line)}
@@ -69,7 +70,7 @@ body.drawer-open .drawer{transform:translateX(0)}
 .drawer .d-item{width:100%;display:flex;align-items:center;gap:10px;min-height:46px;padding:0 12px;border-radius:12px;border:1px solid transparent;
   background:transparent;color:var(--text);font-size:13.5px;cursor:pointer;text-align:start}
 .drawer .d-item:hover{background:var(--bg2);border-color:var(--line)}
-.drawer .d-item[aria-current="page"]{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.35);color:var(--brand);font-weight:700}
+.drawer .d-item[aria-current="page"]{background:var(--glow);border-color:var(--line2);color:var(--brand);font-weight:700}
 .drawer .d-item .ico{font-size:17px}
 .drawer .d-item .pill{margin-inline-start:auto;font-size:11px;background:var(--brand);color:var(--brand-ink);border-radius:999px;padding:1px 8px;font-weight:800}
 .drawer .d-item .pill[data-empty="1"]{background:var(--line2);color:var(--muted)}
@@ -82,7 +83,7 @@ main{animation:fadein .28s ease}
 .skip{position:absolute;right:-9999px;top:0}.skip:focus{right:8px;top:8px;background:var(--brand);color:var(--brand-ink);padding:8px 12px;border-radius:10px;z-index:99}
 
 /* ---------- header ---------- */
-.head{position:sticky;top:0;z-index:20;background:rgba(7,11,23,.86);backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid var(--line);box-shadow:0 10px 30px rgba(3,7,18,.35)}
+.head{position:sticky;top:0;z-index:20;background:var(--bg);backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid var(--line);box-shadow:0 10px 30px rgba(3,7,18,.35)}
 .head-in{max-width:1200px;margin:0 auto;padding:10px 14px;display:flex;align-items:center;gap:10px}
 .brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px;white-space:nowrap}
 .brand .dot{width:26px;height:26px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--accent));display:grid;place-items:center;color:var(--brand-ink);font-size:14px}
@@ -98,21 +99,24 @@ main{animation:fadein .28s ease}
 /* ---------- layout ---------- */
 .wrap{max-width:1200px;margin:0 auto;padding:16px 14px 28px}
 .hero{position:relative;overflow:hidden;background:
-  radial-gradient(120% 140% at 100% 0,rgba(52,211,153,.2),transparent 60%),
-  radial-gradient(90% 120% at 0% 100%,rgba(96,165,250,.16),transparent 60%),var(--card);
+  radial-gradient(120% 140% at 100% 0,var(--glow),transparent 60%),
+  radial-gradient(90% 120% at 0% 100%,var(--glow2),transparent 60%),var(--card);
   border:1px solid var(--line);border-radius:22px;padding:22px;margin-bottom:18px;box-shadow:var(--shadow)}
 .hero::after{content:"";position:absolute;inset-inline-end:-40px;top:-60px;width:180px;height:180px;border-radius:50%;
-  background:radial-gradient(circle,rgba(52,211,153,.22),transparent 70%);pointer-events:none}
-.hero h1{margin:0 0 6px;font-size:22px;letter-spacing:-.2px;background:linear-gradient(120deg,#fff,#b9f3dd 60%,#bcd7ff);
-  -webkit-background-clip:text;background-clip:text;color:transparent}
+  background:radial-gradient(circle,var(--glow),transparent 70%);pointer-events:none}
+.hero h1{margin:0 0 6px;font-size:22px;letter-spacing:-.2px;color:var(--text)}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+  .hero h1{background:linear-gradient(120deg,var(--text),var(--brand) 70%,var(--accent));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+}
 .hero p{margin:0;color:var(--muted);font-size:13px}
 .hero .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
 .hero .stats b{color:var(--text)}
-.hero .stats span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:rgba(7,11,23,.45);
+.hero .stats span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--bg);
   border-radius:999px;padding:4px 12px}
 .hero .cta{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
 .hero .cta button{min-height:40px;padding:0 16px;border-radius:12px;cursor:pointer;font-weight:700;font-size:12.5px;border:1px solid var(--line);background:var(--bg2);color:var(--text)}
-.hero .cta button.go{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;box-shadow:0 10px 24px rgba(52,211,153,.22)}
+.hero .cta button.go{background:linear-gradient(135deg,var(--brand),var(--accent));color:var(--brand-ink);border-color:transparent;box-shadow:0 10px 24px var(--glow)}
 .crumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:0 0 12px}
 .crumb button{background:none;border:none;color:var(--muted);cursor:pointer;padding:0;font-size:12px}
 .crumb button:hover{color:var(--text);text-decoration:underline}
@@ -128,13 +132,14 @@ main{animation:fadein .28s ease}
 .sechead h2::before{content:"";width:4px;height:18px;border-radius:999px;background:linear-gradient(180deg,var(--brand),var(--accent))}
 .sechead a,.sechead span{font-size:12px;color:var(--muted)}
 .chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+  -webkit-mask-image:linear-gradient(to left,transparent,#000 18px,#000 calc(100% - 18px),transparent);
   mask-image:linear-gradient(to left,transparent,#000 18px,#000 calc(100% - 18px),transparent)}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:0 0 auto;border:1px solid var(--line);background:var(--bg2);border-radius:999px;padding:0 14px;height:38px;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .chip{transition:border-color .15s ease,color .15s ease,background .15s ease}
 .chip:hover{color:var(--text);border-color:var(--line2)}
-.chip.on{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:700;
-  box-shadow:0 8px 18px rgba(52,211,153,.22)}
+.chip.on{background:linear-gradient(135deg,var(--brand),var(--accent));color:var(--brand-ink);border-color:transparent;font-weight:700;
+  box-shadow:0 8px 18px var(--glow)}
 .chip b{font-weight:700;opacity:.75;font-size:11px}
 .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px}
 .toolbar .count{color:var(--muted);font-size:12px}
@@ -160,8 +165,8 @@ main{animation:fadein .28s ease}
 .base{color:var(--muted);font-size:11px;text-decoration:line-through}
 .final{color:var(--brand);font-weight:800;font-size:17px;letter-spacing:.2px;font-variant-numeric:tabular-nums}
 .unit{font-size:11px;color:var(--muted)}
-.add{width:100%;min-height:var(--tap);border-radius:12px;border:1px solid transparent;background:linear-gradient(135deg,var(--brand),#22c7a9);
-  color:var(--brand-ink);font-weight:800;cursor:pointer;box-shadow:0 8px 20px rgba(52,211,153,.2)}
+.add{width:100%;min-height:var(--tap);border-radius:12px;border:1px solid transparent;background:linear-gradient(135deg,var(--brand),var(--accent));
+  color:var(--brand-ink);font-weight:800;cursor:pointer;box-shadow:0 8px 20px var(--glow)}
 .add[data-state="in"]{background:var(--bg2);color:var(--brand);border-color:var(--brand);box-shadow:none}
 .add:active{transform:scale(.985)}
 
@@ -188,7 +193,7 @@ table.sum tfoot td{border-bottom:none}
 .pay b{font-size:13px}.pay small{display:block;color:var(--muted);font-size:11px;line-height:1.8}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--tap);padding:0 16px;border-radius:12px;
   border:1px solid var(--line);background:var(--bg2);cursor:pointer}
-.btn.primary{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:800;box-shadow:0 10px 24px rgba(52,211,153,.22)}
+.btn.primary{background:linear-gradient(135deg,var(--brand),var(--accent));color:var(--brand-ink);border-color:transparent;font-weight:800;box-shadow:0 10px 24px var(--glow)}
 .btn:hover{border-color:var(--line2)}
 .btn.block{width:100%}
 .btn[disabled]{opacity:.6;cursor:progress}
@@ -203,7 +208,7 @@ table.sum tfoot td{border-bottom:none}
 .pager{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:20px 0 0}
 .pager a{min-width:var(--tap);min-height:var(--tap);display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:12px;background:var(--bg2);padding:0 10px}
 .pager a:hover{border-color:var(--line2);color:var(--text)}
-.pager a.on{background:linear-gradient(135deg,var(--brand),#22c7a9);color:var(--brand-ink);border-color:transparent;font-weight:800}
+.pager a.on{background:linear-gradient(135deg,var(--brand),var(--accent));color:var(--brand-ink);border-color:transparent;font-weight:800}
 .crumbs{font-size:12px;color:var(--muted);margin-bottom:10px}
 .gallery{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
 .gallery img{width:74px;height:74px;object-fit:cover;border-radius:12px;border:1px solid var(--line);flex:0 0 auto}
@@ -240,7 +245,7 @@ table.sum tfoot td{border-bottom:none}
   min-height:58px;font-size:10px;color:var(--muted);position:relative}
 .tabbar a .ico{font-size:19px;line-height:1}
 .tabbar a[aria-current="page"]{color:var(--brand)}
-.tabbar a[aria-current="page"] .ico{background:rgba(52,211,153,.14);border-radius:999px;padding:3px 12px}
+.tabbar a[aria-current="page"] .ico{background:var(--glow);border-radius:999px;padding:3px 12px}
 .tabbar a[aria-current="page"]::before{content:"";position:absolute;top:0;inset-inline:22%;height:2px;background:var(--brand);border-radius:0 0 4px 4px}
 .tabbar .tabcount{position:absolute;top:6px;inset-inline-end:calc(50% - 22px);background:var(--brand);color:var(--brand-ink);
   border-radius:999px;font-size:10px;font-weight:800;padding:0 5px;min-width:17px;text-align:center}
@@ -344,7 +349,7 @@ function drawer(settings: ShopSettings, active?: TabKey): string {
       ${item.badge ? '<span class="pill" id="drawerCartCount" data-empty="1">۰</span>' : ''}</button>`).join('');
   const guide = ['payment', 'shipping', 'returns', 'about', 'contact', 'terms']
     .map(slug => PAGES[slug] ? `<button type="button" class="d-item" data-fold="info-${slug}"><span class="ico" aria-hidden="true">›</span><span>${escapeHtml(PAGES[slug]!.title)}</span></button>` : '').join('');
-  return `<div class="scrim" id="scrim" hidden-role="presentation"></div>
+  return `<div class="scrim" id="scrim" role="presentation"></div>
 <aside class="drawer" id="drawer" aria-label="منوی فروشگاه" aria-hidden="true">
   <div class="d-head"><b>${escapeHtml(settings.name)}</b>
     <button type="button" class="d-close" id="drawerClose" aria-label="بستن منو">✕</button></div>
@@ -355,7 +360,17 @@ function drawer(settings: ShopSettings, active?: TabKey): string {
 
 /** The storefront inherits the scraper panel's font choice (same self hosted /assets/fonts route). */
 function appearanceOf(settings: ShopSettings) {
-  return settings.appearance && settings.appearance.family ? settings.appearance : DEFAULT_APPEARANCE;
+  const look = settings.appearance;
+  return look && look.family && look.palette ? look : DEFAULT_APPEARANCE;
+}
+/** Font + palette of the scraper panel, emitted as the storefront's own custom properties. */
+function appearanceVars(settings: ShopSettings): string {
+  const look = appearanceOf(settings), p = look.palette;
+  return `:root{--app-font:${look.family};--font:var(--app-font);--fsize:${look.scale}px;
+  --bg:${p.bg};--bg2:${p.bg2};--card:${p.card};--line:${p.line};--line2:${p.line2};
+  --text:${p.text};--muted:${p.muted};--brand:${p.brand};--brand-ink:${p.brandInk};--accent:${p.accent};
+  --glow:${p.glow};--glow2:${p.glow2}}
+html{font-size:${look.scale}px}`;
 }
 function appearanceLinks(settings: ShopSettings): string {
   // Same sheets the panel head loads (vazirmatn + vazir) plus the picked family, so the
@@ -372,14 +387,13 @@ function layout(settings: ShopSettings, title: string, body: string, options: { 
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#070b17">
+<meta name="theme-color" content="${escapeHtml(appearanceOf(settings).palette.bg)}">
 <meta name="description" content="${escapeHtml(settings.tagline)}">
 <title>${escapeHtml(title)} — ${escapeHtml(settings.name)}</title>
 <base href="${escapeHtml(settings.basePath || '/')}">
 ${appearanceLinks(settings)}
 <style>${STYLE}</style>
-<style>:root{--app-font:${appearanceOf(settings).family};--font:var(--app-font);--fsize:${appearanceOf(settings).scale}px}
-html{font-size:${appearanceOf(settings).scale}px}</style></head><body>
+<style>${appearanceVars(settings)}</style></head><body>
 <a class="skip" href="#main">رفتن به محتوا</a>
 <div id="navbar" aria-hidden="true"></div>
 <header class="head"><div class="head-in">

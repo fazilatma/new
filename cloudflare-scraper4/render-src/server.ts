@@ -22,7 +22,7 @@ import { saveBenchmarkProfile } from './db.js';
 import { applyStoredResultSettings } from './db.js';
 import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
 import { SHOP_JS } from '../worker-src/shop.js';
-import { adminPage, cataloguePage, rootPage, categoriesPage, infoPage, productPage, trackPage, catalogueJson, checkoutPage, handleCallback, listOrders, loadShopConfig, orderPage, placeOrder, saveShopSettings, submitReceipt, type ShopDeps } from '../worker-src/shop-routes.js';
+import { adminPage, cataloguePage, mountBase, rootPage, categoriesPage, infoPage, productPage, trackPage, catalogueJson, checkoutPage, handleCallback, listOrders, loadShopConfig, orderPage, placeOrder, saveShopSettings, submitReceipt, type ShopDeps } from '../worker-src/shop-routes.js';
 import { pushConfiguration, subscribePush, unsubscribePush, deliverPush, pushDeployerNotices } from './web-push.js';
 import { diagnosticStream, type DiagnosticObserver } from '../worker-src/diagnostic-progress.js';
 import { serve } from '@hono/node-server';
@@ -61,7 +61,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.323.0+'; } catch { return process.env.npm_package_version || '1.323.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.324.0+'; } catch { return process.env.npm_package_version || '1.324.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -423,7 +423,7 @@ app.use('*',async(c,next)=>{
 app.get('/', async c => {
   const {settings}=await loadShopConfig(shopDeps());
   if(!settings.enabled)return c.html(DASHBOARD,200,{'cache-control':'no-store'});
-  const result=await rootPage(shopDeps(),c.req.query());
+  const result=await rootPage(shopDeps(),c.req.query(),mountBase(c.req.url,c.req.header('x-forwarded-prefix')));
   if(result.location)return c.redirect(result.location,302);
   return c.html(result.html as string,result.status as any,{'cache-control':'no-store'});
 });

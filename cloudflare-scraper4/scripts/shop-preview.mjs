@@ -68,7 +68,7 @@ createServer(async (req, res) => {
   const query = Object.fromEntries(url.searchParams);
   try {
     if (url.pathname === '/') {
-      const result = await routes.rootPage(deps, query);
+      const result = await routes.rootPage(deps, query, routes.mountBase(url.href, req.headers['x-forwarded-prefix']));
       if (result.location) { res.writeHead(302, { location: result.location }); return res.end(); }
       return send(res, result.status, result.html);
     }

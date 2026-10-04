@@ -565,6 +565,28 @@ test('a shopper can browse, filter, search and fill the cart without one page re
   assert.equal(hard, 0, 'not a single full page load during the whole journey');
 });
 
+test('the storefront inherits the panel colour theme and survives a sub folder mount', async () => {
+  const themed = deps({ state: [['settings', { appearance: { theme: 'sunset', font: 'sahel' } }]] });
+  const html = await routes.cataloguePage(themed, {});
+  const palette = core.paletteOf('sunset');
+  assert.match(html, new RegExp('--brand:' + palette.brand), 'the accent of the panel theme becomes the shop brand colour');
+  assert.match(html, new RegExp('--bg:' + palette.bg), 'page background follows the panel');
+  assert.match(html, new RegExp('<meta name="theme-color" content="' + palette.bg + '">'), 'even the browser chrome colour follows');
+  assert.match(html, /--glow:#f973164d/, 'the ambient glows come from the same palette');
+  assert.doesNotMatch(html, /rgba\(52,211,153/, 'no hard coded green is left behind');
+  assert.equal(core.paletteOf('nope').brand, core.paletteOf('midnight').brand, 'unknown themes fall back to the panel default');
+  assert.equal(core.paletteOf('graphite').brandInk, '#07131f', 'light accents get dark ink');
+  assert.equal(core.paletteOf('cobalt').brandInk, '#ffffff', 'dark accents get white ink');
+  // A reverse proxy serving the app from /shop must still find its own CSS, script and API.
+  assert.equal(routes.mountBase('https://host.ir/shop/?view=track'), '/shop/');
+  assert.equal(routes.mountBase('https://host.ir/'), '/');
+  assert.equal(routes.mountBase('https://host.ir/', 'store'), '/store/');
+  const mounted = await routes.cataloguePage(deps(), {}, '/shop/');
+  assert.match(mounted, /<base href="\/shop\/">/, 'the derived mount point drives every relative URL');
+  const pinned = deps({ state: [['shop.settings', { basePath: '/pinned' }]] });
+  assert.match(await routes.cataloguePage(pinned, {}, '/shop/'), /<base href="\/pinned\/">/, 'an explicit setting still wins');
+});
+
 test('the worker serves a stylesheet for every font the panel offers', async () => {
   const fonts = await load('worker-src/fonts.ts', 'fonts.mjs');
   for (const name of ['vazirmatn', 'vazir', 'yekan', 'shabnam', 'sahel', 'samim']) {

@@ -67,7 +67,14 @@ export type ShopSettings = {
   card: { number: string; holder: string; bank: string };
 };
 
-export type ShopAppearance = { font: string; family: string; stylesheet: string; scale: number };
+export type ShopAppearance = { font: string; family: string; stylesheet: string; scale: number; theme: string; palette: ShopPalette };
+
+/** The storefront half of a panel palette: the CSS custom properties the shop styles read. */
+export type ShopPalette = {
+  bg: string; bg2: string; card: string; line: string; line2: string;
+  text: string; muted: string; brand: string; brandInk: string; accent: string;
+  glow: string; glow2: string;
+};
 
 /** The same font list the scraper dashboard offers, served from the same /assets/fonts route. */
 export const SITE_FONTS: Record<string, { family: string; stylesheet: string }> = {
@@ -83,7 +90,50 @@ export const SITE_FONTS: Record<string, { family: string; stylesheet: string }> 
 /** Identical steps to the panel's applySiteFontSize map, so both surfaces read the same size. */
 const FONT_SCALES: Record<string, number> = { small: 12, medium: 14, large: 16, xlarge: 18 };
 
-export const DEFAULT_APPEARANCE: ShopAppearance = { font: 'vazir', family: SITE_FONTS.vazir.family, stylesheet: 'vazir', scale: 14 };
+/**
+ * The twelve palettes of the panel ("رنگ‌بندی کل سایت"), in the panel's own order:
+ * page, surface, card, input, line, accent, accent2, text, muted, glow, glow2.
+ */
+export const SITE_THEMES: Record<string, string[]> = {
+  midnight: ['#03070d','#0c1628','#142136','#0b1424','#536078','#2f8df5','#16bdd3','#edf2f9','#a6afc0','#17345e55','#312e8144'],
+  ocean: ['#03111d','#08233a','#0d3150','#061a2c','#295d7a','#0284c7','#22d3ee','#e6f7ff','#91b8ca','#0284c755','#06b6d433'],
+  aurora: ['#03110f','#082720','#103a30','#061c18','#2b6b58','#10b981','#5eead4','#e8fff8','#91c7b8','#10b98144','#84cc1633'],
+  royal: ['#0b0618','#21123b','#322052','#150d29','#655087','#8b5cf6','#d946ef','#f5efff','#b8a6d1','#8b5cf655','#d946ef33'],
+  sunset: ['#170904','#35160e','#512417','#251008','#81513b','#f97316','#fbbf24','#fff4e8','#d4ae97','#f973164d','#ef444433'],
+  rose: ['#16070f','#351326','#501d38','#260d1b','#80455f','#ec4899','#fb7185','#fff0f6','#d0a4b8','#ec48994d','#a855f733'],
+  cobalt: ['#03091c','#0a1a43','#102762','#071333','#385b9a','#2563eb','#38bdf8','#edf5ff','#9db4dc','#2563eb55','#06b6d433'],
+  forest: ['#04100a','#0b2518','#133a26','#071c12','#37654b','#16a34a','#a3e635','#f0fff4','#9fc4aa','#16a34a44','#84cc1633'],
+  graphite: ['#090b0f','#191d24','#252b34','#11151b','#596273','#94a3b8','#e2e8f0','#f8fafc','#aab1bd','#64748b44','#cbd5e122'],
+  coffee: ['#130b06','#2b1a10','#43291a','#20130c','#74543d','#d97706','#facc15','#fff7ed','#cbb09a','#d9770644','#92400e44'],
+  persian: ['#050b19','#0c1f3b','#12345c','#08172c','#315f8c','#0ea5e9','#2dd4bf','#effaff','#9fbcd1','#0ea5e94d','#14b8a633'],
+  cyber: ['#02040b','#0b1022','#151b35','#070b18','#414b75','#22d3ee','#e879f9','#f3fbff','#a3acd0','#22d3ee44','#e879f933']
+};
+
+/** Readable ink on a coloured button: dark text on light accents, white on dark ones. */
+function inkFor(hex: string): string {
+  const value = hex.replace('#', '');
+  const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value.slice(0, 6);
+  const [r, g, b] = [0, 2, 4].map(index => parseInt(full.slice(index, index + 2), 16) / 255 || 0);
+  const channel = (c: number) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  // 0.3 keeps mid tone accents (cyan, lime, silver, amber) readable with dark ink.
+  return luminance > 0.3 ? '#07131f' : '#ffffff';
+}
+
+export function paletteOf(theme: string): ShopPalette {
+  const key = SITE_THEMES[theme] ? theme : 'midnight';
+  const t = SITE_THEMES[key]!;
+  return {
+    bg: t[0]!, bg2: t[3]!, card: t[2]!, line: t[4]!, line2: t[9]!,
+    text: t[7]!, muted: t[8]!, brand: t[5]!, brandInk: inkFor(t[5]!), accent: t[6]!,
+    glow: t[9]!, glow2: t[10]!
+  };
+}
+
+export const DEFAULT_APPEARANCE: ShopAppearance = {
+  font: 'vazir', family: SITE_FONTS.vazir.family, stylesheet: 'vazir', scale: 14,
+  theme: 'midnight', palette: paletteOf('midnight')
+};
 
 /** Reads the dashboard's `appearance.*` settings so the shop uses the panel's own typography. */
 export function resolveAppearance(raw: unknown): ShopAppearance {
@@ -92,7 +142,9 @@ export function resolveAppearance(raw: unknown): ShopAppearance {
   const key = String(block.font ?? '').toLowerCase();
   const font = SITE_FONTS[key] ? key : DEFAULT_APPEARANCE.font;
   const scale = FONT_SCALES[String(block.fontSize ?? '').toLowerCase()] || DEFAULT_APPEARANCE.scale;
-  return { font, family: SITE_FONTS[font].family, stylesheet: SITE_FONTS[font].stylesheet, scale };
+  const themeKey = String(block.theme ?? '').toLowerCase();
+  const theme = SITE_THEMES[themeKey] ? themeKey : DEFAULT_APPEARANCE.theme;
+  return { font, family: SITE_FONTS[font].family, stylesheet: SITE_FONTS[font].stylesheet, scale, theme, palette: paletteOf(theme) };
 }
 
 export const DEFAULT_SHOP_SETTINGS: ShopSettings = {
