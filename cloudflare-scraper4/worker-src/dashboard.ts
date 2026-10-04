@@ -605,7 +605,7 @@ function escCssAttr(s){return String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"'
 
 const APP_BASE=(location.pathname.replace(/[^/]*$/,'')||'/');
 const U=p=>{const v=String(p==null?'':p);return v.charAt(0)==='/'?APP_BASE+v.slice(1):v};
-const $=id=>document.getElementById(id), state={profiles:[],jobs:[],selected:'',connected:false,settings:{},connections:{}};
+const $=id=>document.getElementById(id), state={profiles:[],jobs:[],selected:'',connected:false,settings:{},connections:{},visualLoadTimer:0};
 const LAST_PROFILE_KEY='scraper4:last-profile-id';
 function rememberedProfileId(){try{return String(localStorage.getItem(LAST_PROFILE_KEY)||'')}catch{return''}}
 function rememberProfile(id){const value=String(id||'');state.selected=value;try{if(value)localStorage.setItem(LAST_PROFILE_KEY,value);else localStorage.removeItem(LAST_PROFILE_KEY)}catch{}return value}
@@ -2144,7 +2144,8 @@ async function openVisual(context='list'){
     }
     const data=await api('/api/visual-ticket',{method:'POST',body:JSON.stringify({url,profileId:state.selected,engine,indirect:Boolean($('networkIndirect')?.checked),context:detail?'detail':'list',container:detail?'':String($('sel-container')?.value||'')})});
     if(request!==state.visualRequest)return;
-    state.visualChannel=data.channel||data.ticket;
+    const ticket=String(data.ticket||'').trim();if(!ticket)throw Error('سرور برای پنجرهٔ انتخاب بصری یک ticket معتبر برنگرداند.');
+    state.visualChannel=String(data.channel||ticket);
     $('visualUrl').textContent=(detail?'صفحهٔ جزئیات: ':'صفحهٔ فهرست: ')+url;
     $('visualModal').classList.add('open');
     // progress bar start
@@ -2154,10 +2155,11 @@ async function openVisual(context='list'){
     }catch{}
     $('visualLoading').textContent=['playwright','puppeteer','crawlee_playwright','network_api'].includes(engine)?'در حال رندر امن DOM با '+engine+'؛ این پنجره تصویر ثابت HTML رندرشده را نشان می‌دهد…':(state.visualFull?'در حال بارگذاری کامل با JS (برای ایمالز/اسنپ‌شاپ)…':'در حال دریافت HTML ساده…');
     $('visualLoading').hidden=false;$('visualFrame').hidden=true;
-    $('visualFrame').src=U('/visual?context=')+(detail?'detail':'list')+'&ticket='+encodeURIComponent(data.ticket)+(state.visualFull?'&full=1':'');
+    clearTimeout(state.visualLoadTimer);state.visualLoadTimer=setTimeout(()=>{if(request===state.visualRequest){$('visualLoading').hidden=false;$('visualLoading').textContent='⏳ بارگذاری پنجرهٔ انتخاب بصری طول کشید؛ «ریفرش» یا «کامل» را امتحان کنید.';}},45000);
+    $('visualFrame').src=U('/visual?context=')+(detail?'detail':'list')+'&ticket='+encodeURIComponent(ticket)+(state.visualFull?'&full=1':'');
   }catch(error){notice(error.message,'error')}finally{busy(button,false)}}
 async function refreshVisualSelector(){if(state.visualRefreshing)return;const request=state.visualRequest;state.visualRefreshing=true;try{await flushProfileEdits($('profileId').value);if(request!==state.visualRequest)return;await openVisual(state.visualContext||'list')}catch(error){notice(error.message,'error')}finally{state.visualRefreshing=false}}
-function closeVisual(){state.visualRequest=(state.visualRequest||0)+1;state.visualChannel='';try{clearInterval(state._vpTimer);const wrap=$('visualProgressWrap'),bar=$('visualProgressBar');if(wrap)wrap.classList.remove('show');if(bar){bar.classList.remove('indeterminate');bar.style.width='0%';}}catch{};$('visualModal').classList.remove('open');$('visualFrame').src='about:blank'}
+function closeVisual(){state.visualRequest=(state.visualRequest||0)+1;state.visualChannel='';try{clearInterval(state._vpTimer);clearTimeout(state.visualLoadTimer);const wrap=$('visualProgressWrap'),bar=$('visualProgressBar');if(wrap)wrap.classList.remove('show');if(bar){bar.classList.remove('indeterminate');bar.style.width='0%';}}catch{};$('visualModal').classList.remove('open');$('visualFrame').src='about:blank'}
 function applyVisualSelection(mode,item={}){const selector=String(item.selector||'').trim();if(!selector)return false;if(mode==='gallery'||mode==='galleryOne'){const prevCount=item.count||0;$('galMode').value='manual';$('galSelectors').value=selector;galModeChanged();updateDetailSummary();scheduleAutoSave('profile',true,'galMode');try{const box=$('galPreview'),cnt=$('galPreviewCount'),empty=$('galPreviewEmpty'),grid=$('galPreviewGrid');if(box){box.hidden=false;if(cnt)cnt.textContent=fa(prevCount||0)+' عکس انتخاب شد';if(empty){empty.hidden=false;empty.textContent=prevCount?('در انتخاب بصری '+fa(prevCount)+' عکس داخل باکس دیده شد؛ برای دریافت آدرس‌های واقعی «پیش‌نمایش فوری» را بزنید.'):'انتخاب ثبت شد؛ پیش‌نمایش فوری را بزنید.'}if(grid&&!prevCount)grid.innerHTML='';}if($('detailSampleUrl')?.value.trim()){setTimeout(()=>{try{testGallery()}catch{}},600);}}catch{}return true}if(mode==='galleryBox'){const prevCount=item.count||0;$('galMode').value='auto';$('galBox').value=selector;galModeChanged();updateDetailSummary();scheduleAutoSave('profile',true,'galMode');try{const box=$('galPreview'),cnt=$('galPreviewCount'),empty=$('galPreviewEmpty'),grid=$('galPreviewGrid');if(box){box.hidden=false;if(cnt)cnt.textContent=fa(prevCount||0)+' عکس در باکس';if(empty){empty.hidden=false;empty.textContent=prevCount?('در انتخاب بصری '+fa(prevCount)+' عکس داخل باکس دیده شد؛ برای دریافت آدرس‌های واقعی «پیش‌نمایش فوری» را بزنید.'):'باکس گالری ثبت شد؛ پیش‌نمایش فوری را بزنید.'}if(grid&&!prevCount)grid.innerHTML='';}if($('detailSampleUrl')?.value.trim()){setTimeout(()=>{try{testGallery()}catch{}},600);}}catch{}return true}const input=$('sel-'+mode);if(!input)return false;input.value=selector;scheduleAutoSave('profile',true,'sel-'+mode);$('result-'+mode).textContent=fa(item.count||0)+' مورد · '+(item.preview||'ثبت شد');$('wrap-'+mode).classList.add('has');if(detailFields.some(([id])=>id===mode))updateDetailSummary();return true}
 function visualMessage(event){
   const frame=$('visualFrame');
@@ -2814,6 +2816,7 @@ $('visualFrame')?.addEventListener('load',()=>{
     target?.postMessage({type:'scraper4-mode',channel:state.visualChannel,mode:state.visualContext==='detail'?'shortDesc':'container'},'*');
   }catch{}
 });
+$('visualFrame')?.addEventListener('error',()=>{clearTimeout(state.visualLoadTimer);clearInterval(state._vpTimer);$('visualLoading').hidden=false;$('visualLoading').textContent='❌ پنجرهٔ انتخاب بصری بارگذاری نشد؛ ریفرش کنید یا حالت «کامل» را تغییر دهید.';$('visualFrame').hidden=true});
 $('visualModal')?.addEventListener('click',event=>{if(event.target===$('visualModal'))closeVisual()});window.addEventListener('message',visualMessage);
 $('suggestSelectors')?.addEventListener('click',suggestSelectorFields);$('injectorCopyBtn')?.addEventListener('click',()=>copyInjectorScript());$('suggestDetails')?.addEventListener('click',suggestDetailFields);
 $('testSelectors')?.addEventListener('click',testSelectors);$('testDetails')?.addEventListener('click',testDetailSelectors);$('clearDetails')?.addEventListener('click',clearDetailSelectors);
