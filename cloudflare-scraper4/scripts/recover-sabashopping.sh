@@ -1,141 +1,133 @@
 #!/bin/bash
-# Recovery for sabashopping.ir/app when 3 jobs stalled 6881 min cause 503
-# Run on VPS where repo is cloned: /opt/scraper4 or ~/new or /home/*/new
-# Usage: curl -sL https://raw.githubusercontent.com/fazilatma/new/arena/01a0aa17-new/cloudflare-scraper4/scripts/recover-sabashopping.sh | bash
-# Or: bash cloudflare-scraper4/scripts/recover-sabashopping.sh
-
+# Auto recover sabashopping.ir scraper when 503
+# Usage: bash recover-sabashopping.sh [branch]
+# Default branch arena/01a0aa17-new
 set -e
-echo "=== SabaShopping Recovery ==="
+BRANCH=${1:-arena/01a0aa17-new}
+HOSTCONSOLE_BRANCH=${2:-arena/hostconsole-v7}
+echo "[$(date)] Starting recover for branch $BRANCH, hostconsole $HOSTCONSOLE_BRANCH"
 
-# Find repo root
-for d in /opt/scraper4 /home/*/new ~/new ./new /home/user/new /root/new; do
-  if [ -d "$d/.git" ] && [ -f "$d/cloudflare-scraper4/package.json" ]; then
-    REPO="$d"
-    break
-  fi
-done
-if [ -z "$REPO" ]; then
-  REPO="$(pwd)"
-  while [ "$REPO" != "/" ] && [ ! -d "$REPO/.git" ]; do REPO="$(dirname "$REPO")"; done
+# Find hostconsole.php
+HC=$(find / -type f -name "hostconsole.php" 2>/dev/null | head -n 1 || echo "")
+if [ -z "$HC" ]; then
+  for d in /home/*/public_html/project /home/*/www/project /var/www/html/project /home/*/domains/*/public_html/project; do
+    if [ -f "$d/hostconsole.php" ]; then HC="$d/hostconsole.php"; break; fi
+  done
 fi
-echo "Repo: $REPO"
-cd "$REPO"
+if [ -z "$HC" ]; then HC="/home/$(whoami)/public_html/project/hostconsole.php"; fi
+echo "Hostconsole: $HC"
+HCDIR=$(dirname "$HC")
+cd "$HCDIR"
+pwd
+ls -lh hostconsole.php | head -n 5
 
-# Ensure we are on correct branch
-git fetch origin arena/01a0aa17-new || true
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD || echo "unknown")
-echo "Current branch: $CURRENT_BRANCH"
-if [ "$CURRENT_BRANCH" != "arena/01a0aa17-new" ]; then
-  git checkout arena/01a0aa17-new || git checkout -b arena/01a0aa17-new origin/arena/01a0aa17-new || true
+echo "=== Updating hostconsole.php from $HOSTCONSOLE_BRANCH ==="
+curl -s -L --max-time 30 -o hostconsole.php.new "https://raw.githubusercontent.com/fazilatma/new/${HOSTCONSOLE_BRANCH}/hostconsole.php?cb=$(date +%s)" || true
+if [ ! -f hostconsole.php.new ]; then
+  curl -s -L --max-time 30 -o hostconsole.php.new "https://cdn.jsdelivr.net/gh/fazilatma/new@${HOSTCONSOLE_BRANCH}/hostconsole.php?cb=$(date +%s)" || true
 fi
-
-# Clear dirty check that pauses auto-update
-echo "Git status before:"
-git status --porcelain | head -n 20 || true
-
-# Stash or reset dirty files (except data/)
-# data/ is ignored, but check for untracked that are not ignored
-git reset --hard origin/arena/01a0aa17-new
-echo "After reset, head: $(git rev-parse --short HEAD)"
-
-# Pull latest
-git pull --ff-only origin arena/01a0aa17-new || git reset --hard origin/arena/01a0aa17-new
-
-# Clear stalled jobs via Node directly (bypasses HTTP 503)
-cd "$REPO/cloudflare-scraper4"
-echo "Installing deps if needed..."
-npm install --no-audit --prefer-online 2>&1 | tail -n 5 || true
-
-echo "Building..."
-npm run render:build 2>&1 | tail -n 10 || true
-
-echo "Clearing stalled jobs via direct DB..."
-node --input-type=module <<'NODEJS'
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-try {
-  // Try to load db and reap
-  const dbPath = './render-dist/db.js';
-  const { reapStalledJobs, recoverFailedAndStalledJobs, pool } = await import(dbPath);
-  console.log('Calling reapStalledJobs(5)...');
-  const n1 = await reapStalledJobs(5);
-  console.log(`Reaped ${n1} jobs`);
-  console.log('Calling recoverFailedAndStalledJobs(5)...');
-  const n2 = await recoverFailedAndStalledJobs(5);
-  console.log(`Recovered ${n2} jobs`);
-  await pool.end();
-} catch (e) {
-  console.error('Direct DB clear failed, trying SQL:', e);
-  // Fallback: try via psql or sqlite
-  try {
-    const { readFileSync, existsSync } = await import('node:fs');
-    const envLocal = existsSync('.env.local') ? readFileSync('.env.local','utf8') : '';
-    const env = existsSync('.env') ? readFileSync('.env','utf8') : '';
-    const allEnv = envLocal + '\n' + env + '\n' + Object.entries(process.env).map(([k,v])=>`${k}=${v}`).join('\n');
-    const m = allEnv.match(/DATABASE_URL\s*=\s*(.+)/);
-    const dbUrl = m ? m[1].trim().replace(/^["']|["']$/g,'') : process.env.DATABASE_URL;
-    console.log('DATABASE_URL:', dbUrl ? dbUrl.slice(0,30)+'...' : 'not set, trying sqlite');
-    if (dbUrl && dbUrl.startsWith('postgres')) {
-      const { Pool } = await import('pg');
-      const pool = new Pool({ connectionString: dbUrl });
-      const r1 = await pool.query(`UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog - manual recovery',finished_at=now(),updated_at=now() WHERE status='running' AND updated_at < now() - interval '5 minutes'`);
-      console.log(`Postgres reaped ${r1.rowCount}`);
-      const r2 = await pool.query(`UPDATE jobs SET status='queued',phase='waiting',stop_requested=false,error=NULL,finished_at=NULL,updated_at=now() WHERE status='failed' OR (status='running' AND updated_at < now() - interval '5 minutes')`);
-      console.log(`Postgres recovered ${r2.rowCount} (set to queued) - then marking failed jobs as failed again to clear queue`);
-      // Actually we want to fail them, not queue them again, to stop loop
-      const r3 = await pool.query(`UPDATE jobs SET status='failed',phase='watchdog',error='Cleared by manual recovery script',finished_at=now(),updated_at=now() WHERE status='queued'`);
-      console.log(`Cleared queued ${r3.rowCount}`);
-      await pool.end();
-    } else {
-      // sqlite
-      const sqlitePath = 'data/scraper4.sqlite';
-      if (existsSync(sqlitePath)) {
-        const sqlite = await import('node:sqlite');
-        const db = new sqlite.DatabaseSync(sqlitePath);
-        const cutoff = new Date(Date.now() - 5*60*1000).toISOString();
-        console.log('SQLite cutoff:', cutoff);
-        // For sqlite we need to use SQL directly
-        const { execSync } = await import('node:child_process');
-        execSync(`sqlite3 ${sqlitePath} "UPDATE jobs SET status='failed',phase='watchdog',error='Job was inactive and closed by watchdog - manual recovery',finished_at=datetime('now'),updated_at=datetime('now') WHERE status='running' AND updated_at < datetime('now','-5 minutes'); SELECT changes();"`, { stdio: 'inherit' });
-        execSync(`sqlite3 ${sqlitePath} "UPDATE jobs SET status='failed',phase='watchdog',error='Cleared by manual recovery',finished_at=datetime('now'),updated_at=datetime('now') WHERE status='queued'; SELECT changes();"`, { stdio: 'inherit' });
-      } else {
-        console.log('No sqlite db found at', sqlitePath);
-      }
-    }
-  } catch (e2) {
-    console.error('Fallback also failed:', e2);
-  }
-}
-NODEJS
-
-echo "=== Restarting scraper ==="
-# Try systemd
-if systemctl is-active --quiet scraper4 2>/dev/null; then
-  echo "Restarting systemd scraper4..."
-  sudo systemctl restart scraper4 || systemctl restart scraper4 || true
-elif systemctl is-active --quiet scraper4-node 2>/dev/null; then
-  sudo systemctl restart scraper4-node || true
+ls -lh hostconsole.php.new || true
+if [ -f hostconsole.php.new ] && [ $(wc -c < hostconsole.php.new) -gt 50000 ] && head -c 5 hostconsole.php.new | grep -q "<?php"; then
+  cp hostconsole.php hostconsole.php.bak.$(date +%Y%m%d-%H%M%S)
+  mv hostconsole.php.new hostconsole.php
+  echo "Hostconsole updated to $(wc -c < hostconsole.php) bytes"
 else
-  echo "No systemd service found, trying pm2..."
-  pm2 restart scraper4 || pm2 restart all || true
-  # Try deployer
-  if [ -f "$REPO/cloudflare-scraper4/.deploy/vps/run.sh" ]; then
-    echo "Found deployer run.sh, restarting..."
-    bash "$REPO/cloudflare-scraper4/.deploy/vps/run.sh" restart || true
-  fi
-  # Kill node and restart via npm
-  echo "Killing old node processes and starting new..."
-  pkill -f "render.*server" || true
-  sleep 2
-  cd "$REPO/cloudflare-scraper4"
-  nohup npm run render:start > /tmp/scraper4.log 2>&1 &
-  echo "Started via npm run render:start, log /tmp/scraper4.log"
+  echo "Hostconsole download failed or invalid"
+  cat hostconsole.php.new | head -c 500 || true
 fi
 
-echo "Waiting 5s then checking /api/version..."
-sleep 5
-curl -s http://127.0.0.1:3000/api/version || curl -s http://127.0.0.1:8790/api/version || curl -s https://sabashopping.ir/app/api/version || echo "curl failed"
+echo "=== Finding scraper4-cloudflare project ==="
+# Find via hostconsole data dir or via find
+SC=""
+for d in /home/*/public_html /home/*/www /var/www/html /opt/scraper* /root/scraper*; do
+  if [ -f "$d/cloudflare-scraper4/package.json" ]; then SC="$d"; break; fi
+done
+if [ -z "$SC" ]; then
+  SC=$(find / -type f -path "*cloudflare-scraper4/package.json" 2>/dev/null | head -n 1 | xargs dirname | xargs dirname || echo "")
+fi
+if [ -z "$SC" ]; then
+  # Try via hostconsole projects
+  if [ -d "$HCDIR/../.wconsole_data" ]; then
+    echo "Checking hostconsole data"
+    ls "$HCDIR/../.wconsole_data" | head
+  fi
+fi
+echo "Scraper path guess: $SC"
 
-echo "=== Recovery done ==="
-echo "Check https://sabashopping.ir/app/api/version - should be 1.279.0+"
-echo "If still 503, run: sudo journalctl -u scraper4 -n 100 --no-pager"
+# Try to get deploy_path from hostconsole via php
+if [ -f "$HC" ]; then
+  DEPLOY=$(php -r '
+  $cfgFile = dirname($argv[1])."/../.wconsole_data/config.json";
+  if (!is_file($cfgFile)) $cfgFile = dirname($argv[1])."/.wconsole_data/config.json";
+  $files = glob(dirname($argv[1])."/../.wconsole_data/projects/*.json");
+  if (!$files) $files = glob("/home/*/.wconsole_data/projects/*.json");
+  foreach ($files as $f) {
+    $p = json_decode(file_get_contents($f), true);
+    if (($p["name"]??"") === "scraper4-cloudflare") { echo $p["deploy_path"]??""; exit; }
+  }
+  ' "$HC" 2>&1 || echo "")
+  echo "Deploy from hostconsole: $DEPLOY"
+  if [ -n "$DEPLOY" ] && [ -d "$DEPLOY" ]; then SC="$DEPLOY"; fi
+fi
+
+if [ -z "$SC" ] || [ ! -d "$SC" ]; then
+  # Fallback: find any dir with cloudflare-scraper4
+  SC=$(find /home -type d -name "cloudflare-scraper4" 2>/dev/null | head -n 1 | xargs dirname || echo "")
+fi
+
+echo "Final scraper path: $SC"
+if [ -z "$SC" ] || [ ! -d "$SC/cloudflare-scraper4" ]; then
+  echo "Scraper path not found, trying /home/*/scraper4-cloudflare"
+  SC=$(ls -d /home/*/scraper4-cloudflare 2>/dev/null | head -n 1 || echo "")
+fi
+
+if [ -n "$SC" ] && [ -d "$SC/cloudflare-scraper4" ]; then
+  cd "$SC"
+  echo "=== Git fetch reset $BRANCH ==="
+  git fetch origin $BRANCH 2>&1 | tail -n 20 || true
+  git reset --hard origin/$BRANCH 2>&1 | tail -n 20 || true
+  echo "Head: $(git rev-parse --short HEAD 2>&1)"
+  cd cloudflare-scraper4
+  echo "=== npm install ==="
+  npm install --no-audit --prefer-online 2>&1 | tail -n 20 || true
+  echo "=== render:build ==="
+  npm run render:build 2>&1 | tail -n 30 || true
+  ls -lh render-dist/ | head -n 20 || true
+  echo "=== Killing ports 8790 3000 ==="
+  fuser -k 8790/tcp 2>&1 || ss -K dport 8790 2>&1 || true
+  fuser -k 3000/tcp 2>&1 || ss -K dport 3000 2>&1 || true
+  pkill -f "node.*8790" 2>&1 || true
+  pkill -f "node.*3000" 2>&1 || true
+  echo "=== Reap stalled jobs ==="
+  cat > /tmp/reap.mjs <<'REAP'
+import { reapStalledJobs, pool } from './render-dist/db.js';
+let n = await reapStalledJobs(5);
+console.log('reaped '+n);
+await pool.end();
+REAP
+  node /tmp/reap.mjs 2>&1 | tail -n 20 || node reap.mjs 2>&1 | tail -n 20 || true
+  echo "=== Restart via hostconsole job ==="
+  # Try to restart via hostconsole CLI if available
+  cd "$HCDIR"
+  php -r '
+  $files = glob(__DIR__."/../.wconsole_data/projects/*.json");
+  if (!$files) $files = glob("/home/*/.wconsole_data/projects/*.json");
+  foreach ($files as $f) {
+    $p = json_decode(file_get_contents($f), true);
+    if (($p["name"]??"") === "scraper4-cloudflare" && ($p["port"]??"") == "3000") {
+      echo $p["id"]." ".$p["deploy_path"]."\n";
+    }
+  }
+  ' 2>&1 || true
+else
+  echo "Scraper path not found, cannot git update"
+fi
+
+echo "=== Check local versions ==="
+curl -s --max-time 5 http://127.0.0.1:8790/api/version 2>&1 | head -c 500 || echo "8790 down"
+curl -s --max-time 5 http://127.0.0.1:3000/api/version 2>&1 | head -c 500 || echo "3000 down"
+
+echo "=== Public version ==="
+curl -s --max-time 10 https://sabashopping.ir/app/api/version 2>&1 | head -c 1000 || echo "public down"
+
+echo "[$(date)] Recover done"
