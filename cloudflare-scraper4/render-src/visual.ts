@@ -265,13 +265,14 @@ const DETAIL_OPTIONS=`<option value="price">💰 قیمت</option><option value=
 
 function toolbar(context:'list'|'detail',full=false){
   const detail=context==='detail';
-  return `<div id="__s4bar" data-context="${context}" data-full="${full?'1':'0'}"><div class="__s4row"><select id="__s4mode" aria-label="فیلد در حال انتخاب">${detail?DETAIL_OPTIONS:LIST_OPTIONS}</select><button id="__s4up" title="والد (↑)">⬆ والد</button><button id="__s4down" title="فرزند (↓)">⬇ فرزند</button><button id="__s4prev" title="هم‌سطح قبلی (→)">→ قبلی</button><button id="__s4next" title="هم‌سطح بعدی (←)">← بعدی</button><code id="__s4selector">روی عنصر مورد نظر کلیک کنید</code><span id="__s4count">۰ مورد</span><button id="__s4pause" title="موقتاً انتخاب را خاموش کن تا بتوانی تب‌ها و کشویی‌های صفحه را باز کنی">⏸ توقف</button><button id="__s4refresh" title="دریافت دوبارهٔ صفحه؛ انتخاب‌های ثبت‌شده حفظ می‌شوند">↻</button><button id="__s4full" title="حالت کامل JS برای سایت‌های مثل ایمالز/اسنپ‌شاپ">${full?'🧹 ساده':'🌐 کامل'}</button><span id="__s4interaction" role="status">تصویر ${full?'کامل JS':'ثابت'}؛ ثبت و رفتن به بعدی</span><button id="__s4save">✓ ثبت و بعدی</button>${detail?'<button id="__s4done">✅ اتمام و اعمال همه</button>':''}</div><div class="__s4meta"><b id="__s4field">${detail?'قیمت':'کانتینر محصول'}</b><span id="__s4preview">هنوز عنصری انتخاب نشده است.</span><span id="__s4progress">۰ فیلد ثبت‌شده</span></div></div><div class="__s4pop" id="__s4pop"><div class="__s4prow"><button class="__s4pb" id="__s4pup" title="والد (↑)">⬆</button><button class="__s4pb" id="__s4pdn" title="فرزند (↓)">⬇</button><button class="__s4pb" id="__s4pprv" title="قبلی (→)">⬅</button><button class="__s4pb" id="__s4pnxt" title="بعدی (←)">➡</button><span class="__s4psep"></span><button class="__s4pb" id="__s4pfprev" title="فیلد قبلی (Shift+Tab)">‹</button><button class="__s4pb __s4pfld" id="__s4pfld">—</button><button class="__s4pb" id="__s4pfnext" title="فیلد بعدی (Tab)">›</button><span class="__s4psep"></span><i id="__s4pcnt"></i><button class="__s4pb __s4okb" id="__s4pok" title="ثبت (Enter)">✓</button></div><div class="__s4prow2"><b id="__s4psel">—</b><em id="__s4ppv"></em></div></div>`;
+  return `<div id="__s4bar" data-context="${context}" data-full="${full?'1':'0'}"><div id="__s4bprog" class="__s4bprog"><i id="__s4bprogBar"></i></div><div class="__s4row"><select id="__s4mode" aria-label="فیلد در حال انتخاب">${detail?DETAIL_OPTIONS:LIST_OPTIONS}</select><button id="__s4up" title="والد (↑)">⬆ والد</button><button id="__s4down" title="فرزند (↓)">⬇ فرزند</button><button id="__s4prev" title="هم‌سطح قبلی (→)">→ قبلی</button><button id="__s4next" title="هم‌سطح بعدی (←)">← بعدی</button><code id="__s4selector">روی عنصر مورد نظر کلیک کنید</code><span id="__s4count">۰ مورد</span><button id="__s4pause" title="موقتاً انتخاب را خاموش کن تا بتوانی تب‌ها و کشویی‌های صفحه را باز کنی">⏸ توقف</button><button id="__s4refresh" title="دریافت دوبارهٔ صفحه؛ انتخاب‌های ثبت‌شده حفظ می‌شوند">↻</button><button id="__s4full" title="حالت کامل JS برای سایت‌های مثل ایمالز/اسنپ‌شاپ">${full?'🧹 ساده':'🌐 کامل'}</button><span id="__s4interaction" role="status">تصویر ${full?'کامل JS':'ثابت'}؛ ثبت و رفتن به بعدی</span><button id="__s4save">✓ ثبت و بعدی</button>${detail?'<button id="__s4done">✅ اتمام و اعمال همه</button>':''}</div><div class="__s4meta"><b id="__s4field">${detail?'قیمت':'کانتینر محصول'}</b><span id="__s4preview">هنوز عنصری انتخاب نشده است.</span><span id="__s4progress">۰ فیلد ثبت‌شده</span></div></div><div class="__s4pop" id="__s4pop"><div class="__s4prow"><button class="__s4pb" id="__s4pup" title="والد (↑)">⬆</button><button class="__s4pb" id="__s4pdn" title="فرزند (↓)">⬇</button><button class="__s4pb" id="__s4pprv" title="قبلی (→)">⬅</button><button class="__s4pb" id="__s4pnxt" title="بعدی (←)">➡</button><span class="__s4psep"></span><button class="__s4pb" id="__s4pfprev" title="فیلد قبلی (Shift+Tab)">‹</button><button class="__s4pb __s4pfld" id="__s4pfld">—</button><button class="__s4pb" id="__s4pfnext" title="فیلد بعدی (Tab)">›</button><span class="__s4psep"></span><i id="__s4pcnt"></i><button class="__s4pb __s4okb" id="__s4pok" title="ثبت (Enter)">✓</button></div><div class="__s4prow2"><b id="__s4psel">—</b><em id="__s4ppv"></em></div></div>`;
 }
 
 const STYLE=`<style>
-#__s4bar{position:fixed;z-index:2147483647;top:0;left:0;right:0;background:#111827;color:#fff;padding:8px;font:12px Vazirmatn,Tahoma,sans-serif;box-shadow:0 3px 14px #0008;direction:rtl}#__s4bar .__s4row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}#__s4bar .__s4meta{display:flex;gap:8px;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #334155}#__s4bar select,#__s4bar button{font:inherit;border:1px solid #475569;border-radius:7px;padding:7px;background:#1f2937;color:white}#__s4bar button{cursor:pointer}#__s4bar button:disabled{opacity:.45;cursor:default}#__s4bar button:hover{background:#334155}#__s4bar #__s4save{background:#166534;border-color:#22c55e}#__s4bar #__s4done{background:#075985;border-color:#38bdf8}#__s4selector{direction:ltr;background:#020617;color:#67e8f9;padding:7px;border-radius:6px;min-width:160px;max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}#__s4count{background:#422006;color:#fde68a;border-radius:999px;padding:5px 9px;white-space:nowrap}#__s4field{color:#bfdbfe}#__s4preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;color:#bbf7d0}#__s4progress{color:#cbd5e1;white-space:nowrap}.__s4hover{outline:3px solid #38bdf8!important;outline-offset:2px!important}.__s4picked{outline:3px solid #22c55e!important;outline-offset:3px!important;background-color:#22c55e18!important}.__s4gal{outline:3px solid #ec4899!important;outline-offset:2px!important;box-shadow:0 0 0 3px #ec489955!important}
+#__s4bar{position:fixed;z-index:2147483647;top:0;left:0;right:0;background:#111827;color:#fff;padding:8px;font:12px Vazirmatn,Tahoma,sans-serif;box-shadow:0 3px 14px #0008;direction:rtl}#__s4bar .__s4bprog{position:absolute;top:0;left:0;right:0;height:3px;background:transparent;overflow:hidden;z-index:10}#__s4bprog{display:none}#__s4bar .__s4bprog i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#06b6d4,#22c55e,#3b82f6);transition:width .25s ease,opacity .3s;box-shadow:0 0 6px #22d3ee}#__s4bar .__s4bprog.__s4loading i{width:70%;animation:__s4progIndef 1.2s infinite}#__s4bar .__s4bprog.__s4done i{width:100%;opacity:0}#__s4bar .__s4row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}#__s4bar .__s4meta{display:flex;gap:8px;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #334155}#__s4bar select,#__s4bar button{font:inherit;border:1px solid #475569;border-radius:7px;padding:7px;background:#1f2937;color:white}#__s4bar button{cursor:pointer}#__s4bar button:disabled{opacity:.45;cursor:default}#__s4bar button:hover{background:#334155}#__s4bar #__s4save{background:#166534;border-color:#22c55e}#__s4bar #__s4done{background:#075985;border-color:#38bdf8}#__s4selector{direction:ltr;background:#020617;color:#67e8f9;padding:7px;border-radius:6px;min-width:160px;max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}#__s4count{background:#422006;color:#fde68a;border-radius:999px;padding:5px 9px;white-space:nowrap}#__s4field{color:#bfdbfe}#__s4preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;color:#bbf7d0}#__s4progress{color:#cbd5e1;white-space:nowrap}.__s4hover{outline:3px solid #38bdf8!important;outline-offset:2px!important}.__s4picked{outline:3px solid #22c55e!important;outline-offset:3px!important;background-color:#22c55e18!important}.__s4gal{outline:3px solid #ec4899!important;outline-offset:2px!important;box-shadow:0 0 0 3px #ec489955!important}
 #__s4bar button.__s4on{background:#f59e0b;color:#111827;font-weight:bold}body.__s4paused #__s4bar{opacity:.92}body.__s4paused{cursor:auto}
 .__s4pop{position:absolute;z-index:2147483647;display:none;flex-direction:column;gap:2px;background:#0b1220;border:1px solid #3b82f6;border-radius:7px;padding:3px 4px;box-shadow:0 4px 14px rgba(0,0,0,.55);font:12px Tahoma,sans-serif;direction:rtl;white-space:nowrap;cursor:default}.__s4pop.__s4on{display:flex}.__s4pop.__s4off{display:none!important}.__s4prow{display:flex;gap:3px;align-items:center}.__s4prow2{display:flex;gap:4px;align-items:center;max-width:430px}.__s4psep{width:1px;height:15px;background:#1e40af;margin:0 2px;flex:0 0 auto}.__s4pb{background:#1e3a5f;color:#fff;border:1px solid #3b82f6;border-radius:5px;padding:3px 7px;font:12px Tahoma,sans-serif;cursor:pointer;line-height:1.4}.__s4pb:hover{background:#3b82f6}.__s4pb:disabled{opacity:.3;cursor:not-allowed}.__s4pb.__s4okb{background:#22c55e;border-color:#22c55e;color:#04210f;font-weight:700}.__s4pfld{background:#1d4ed8!important;color:#fff!important;min-width:70px;text-align:center;font-weight:700!important;max-width:150px}.__s4pfld.__s4fdone{background:#166534!important;color:#bbf7d0!important}.__s4pop b{background:#1e293b;color:#bfdbfe;padding:2px 6px;border-radius:4px;font:11px ui-monospace,monospace;font-weight:400;max-width:190px;overflow:hidden;text-overflow:ellipsis}.__s4pop i{font-style:normal;color:#93c5fd;font-size:11px;padding:0 3px}.__s4pop em{font-style:normal;color:#86efac;font-size:10.5px;max-width:235px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#052e16;border:1px solid #14532d;border-radius:4px;padding:1px 5px}.__s4pop em.__s4warn{color:#fbbf24;background:#3f2d05;border-color:#78350f}
+@keyframes __s4progIndef{0%{transform:translateX(-100%)}50%{transform:translateX(30%)}100%{transform:translateX(100%)}}
 @media(max-width:720px){#__s4bar{padding:6px;font-size:11px}#__s4bar .__s4row{gap:4px}#__s4bar button,#__s4bar select{padding:6px 7px}#__s4selector{order:8;min-width:55%;max-width:none}#__s4bar .__s4meta{align-items:flex-start;flex-wrap:wrap}#__s4preview{flex-basis:70%}body{padding-top:120px!important} .__s4pop{max-width:92vw}}body{padding-top:104px!important}${SNAPSHOT_LAYOUT_CSS}</style>`;
 
 const PICKER_JS=String.raw`<script>(function(){
@@ -407,19 +408,58 @@ function move(dir){
 function fieldStep(dir){const next=fieldNext(dir);modeSelect.value=next;restoreMode();const stored=selections[next];if(stored?.selector){try{const el=document.querySelector(stored.selector.split('\\n')[0]);if(el){if(selected)selected.classList.remove('__s4picked');selected=el;el.classList.add('__s4picked');placePop(el,stored.selector,matches(stored.selector),next);}}catch{}}}
 let picking=true;
 const pauseBtn=document.getElementById('__s4pause');
-function setPicking(v){picking=v;s4InteractionMode(picking);if(pauseBtn){pauseBtn.textContent=v?'⏸ توقف':'▶ ادامه';pauseBtn.classList.toggle('__s4on',!v);}document.body.classList.toggle('__s4paused',!v);if(!v)document.querySelectorAll('.__s4hover').forEach(n=>n.classList.remove('__s4hover'));pop?.classList.remove('__s4on');}
-if(pauseBtn)pauseBtn.onclick=()=>setPicking(!picking);
+function setPicking(v){picking=v;try{s4InteractionMode(picking);}catch(e){}if(pauseBtn){pauseBtn.textContent=v?'⏸ توقف':'▶ ادامه';pauseBtn.classList.toggle('__s4on',!v);}document.body.classList.toggle('__s4paused',!v);if(!v)document.querySelectorAll('.__s4hover').forEach(n=>n.classList.remove('__s4hover'));pop?.classList.remove('__s4on');}
+function __s4bind(id,fn){
+  try{
+    var el=document.getElementById(id);
+    if(!el){console.warn('[S4] bind missing',id);return;}
+    el.addEventListener('click',function(e){
+      try{e.preventDefault();e.stopPropagation();}catch{}
+      try{fn(e);}catch(err){console.error('[S4] handler error',id,err);}
+    });
+  }catch(err){console.error('[S4] bind error',id,err);}
+}
+if(pauseBtn)__s4bind('__s4pause',()=>setPicking(!picking));
 document.addEventListener('mouseover',e=>{if(!picking)return;const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(hovered&&hovered!==selected)hovered.classList.remove('__s4hover');hovered=t;if(t!==selected)t.classList.add('__s4hover');},true);
 document.addEventListener('mouseout',e=>{if(!picking)return;const t=e.target;if(t instanceof Element&&t!==selected)t.classList.remove('__s4hover');},true);
-document.addEventListener('click',e=>{const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(!picking){s4SnapshotClick(e);return;}e.preventDefault();e.stopPropagation();paint(t);},true);
+document.addEventListener('click',e=>{const t=e.target;if(!(t instanceof Element)||t.closest('#__s4bar')||t.closest('.__s4pop'))return;if(!picking){try{s4SnapshotClick(e);}catch{}return;}e.preventDefault();e.stopPropagation();paint(t);},true);
 modeSelect.addEventListener('change',restoreMode);
-document.getElementById('__s4up').onclick=()=>move('up');document.getElementById('__s4down').onclick=()=>move('down');document.getElementById('__s4prev').onclick=()=>move('prev');document.getElementById('__s4next').onclick=()=>move('next');
-document.getElementById('__s4pup').onclick=()=>move('up');document.getElementById('__s4pdn').onclick=()=>move('down');document.getElementById('__s4pprv').onclick=()=>move('prev');document.getElementById('__s4pnxt').onclick=()=>move('next');
-document.getElementById('__s4pfprev').onclick=()=>fieldStep(-1);document.getElementById('__s4pfnext').onclick=()=>fieldStep(1);document.getElementById('__s4pfld').onclick=()=>fieldStep(1);
-document.getElementById('__s4save').onclick=sendOne;document.getElementById('__s4pok').onclick=sendOne;
-const done=document.getElementById('__s4done');if(done)done.onclick=()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};parent.postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');};
-document.getElementById('__s4refresh').onclick=()=>parent.postMessage({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*');
-document.getElementById('__s4full').onclick=()=>parent.postMessage({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*');
+__s4bind('__s4up',()=>move('up'));__s4bind('__s4down',()=>move('down'));__s4bind('__s4prev',()=>move('prev'));__s4bind('__s4next',()=>move('next'));
+__s4bind('__s4pup',()=>move('up'));__s4bind('__s4pdn',()=>move('down'));__s4bind('__s4pprv',()=>move('prev'));__s4bind('__s4pnxt',()=>move('next'));
+__s4bind('__s4pfprev',()=>fieldStep(-1));__s4bind('__s4pfnext',()=>fieldStep(1));__s4bind('__s4pfld',()=>fieldStep(1));
+__s4bind('__s4save',sendOne);__s4bind('__s4pok',sendOne);
+const done=document.getElementById('__s4done');if(done)__s4bind('__s4done',()=>{if(GAL.length)selections['galleryOne']={selector:GAL.join('\\n'),count:countGalImgs(GAL),preview:GAL.length+' سلکتور تکی'};parent.postMessage({type:'scraper4-detail-selectors',channel:'__S4_CHANNEL__',selections},'*');});
+__s4bind('__s4refresh',()=>parent.postMessage({type:'scraper4-refresh',channel:'__S4_CHANNEL__'},'*'));
+__s4bind('__s4full',()=>parent.postMessage({type:'scraper4-toggle-full',channel:'__S4_CHANNEL__'},'*'));
+(function(){
+  try{
+    var prog=document.getElementById('__s4bprog');
+    var bar=document.getElementById('__s4bprogBar');
+    if(!prog||!bar)return;
+    var progress=0;
+    function show(){prog.style.display='block';prog.classList.add('__s4loading');prog.classList.remove('__s4done');bar.style.width='0%';progress=0;}
+    function setP(p){progress=Math.max(progress,p);bar.style.width=progress+'%';}
+    function doneP(){prog.classList.remove('__s4loading');prog.classList.add('__s4done');bar.style.width='100%';setTimeout(function(){prog.style.display='none';},600);}
+    show();
+    var iv=setInterval(function(){if(progress<85){setP(progress+Math.random()*12);}else{clearInterval(iv);}},300);
+    window.addEventListener('load',function(){clearInterval(iv);setP(100);doneP();});
+    try{
+      var imgs=document.querySelectorAll('img');
+      var imgCount=imgs.length;
+      var loaded=0;
+      if(imgCount===0){setP(60);}
+      imgs.forEach(function(img){
+        if(img.complete){loaded++;}else{
+          img.addEventListener('load',function(){loaded++;setP(30+ (loaded/Math.max(1,imgCount))*60);});
+          img.addEventListener('error',function(){loaded++;setP(30+ (loaded/Math.max(1,imgCount))*60);});
+        }
+      });
+    }catch{}
+    setTimeout(function(){clearInterval(iv);setP(100);doneP();},7000);
+    window.__s4setProgress=setP;
+    window.__s4doneProgress=doneP;
+  }catch(e){console.error('[S4] progress error',e);}
+})();
 document.addEventListener('keydown',e=>{
   if(e.target?.closest?.('#__s4bar'))return;
   if(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement)return;
@@ -531,16 +571,18 @@ export function sanitizeVisualSnapshot(page:{text:string;url:string;browserDiagn
   return html;
 }
 
-export function visualSelectorCsp(ticket:string, fullOverride?: boolean){
-  const {channel='', full=false, context='list'} = readVisualTicket(ticket);
+export function visualSelectorCsp(ticket:string, fullOverride?: boolean, indirectOverride?: boolean){
+  const {channel='', full=false, context='list', indirect=false} = readVisualTicket(ticket) as any;
   const useFull = fullOverride !== undefined ? fullOverride : Boolean(full);
+  const useIndirect = indirectOverride !== undefined ? indirectOverride : Boolean(indirect);
   const pickerSrc = pickerScript(context as any, channel).replace(/^<script>/,'').replace(/<\/script>$/,'');
-  const fullSrc = useFull ? fullModeJsNode().replace(/^<script>/,'').replace(/<\/script>$/,'') : '';
+  const fullSrc = useFull ? fullModeJsNode(useIndirect).replace(/^<script>/,'').replace(/<\/script>$/,'') : '';
   const combined = pickerSrc + fullSrc;
   const hash = createHash('sha256').update(combined).digest('base64');
   const hash2 = useFull ? createHash('sha256').update(fullSrc).digest('base64') : '';
+  const hashPicker = createHash('sha256').update(pickerSrc).digest('base64');
   if (useFull) {
-    return `sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''}; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
+    return `sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads; default-src * data: blob: https: http:; script-src * data: blob: https: http: 'unsafe-inline' 'unsafe-eval' 'sha256-${hash}' ${hash2?`'sha256-${hash2}'`:''} 'sha256-${hashPicker}'; style-src * data: blob: https: http: 'unsafe-inline'; img-src * data: blob: https: http:; font-src * data: blob: https: http:; connect-src * data: blob: https: http: ws: wss:; frame-src * data: blob: https: http:; object-src * data: blob: https: http:; base-uri * data: blob: https: http:; form-action * data: blob: https: http:;`;
   }
-  return `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hash}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
+  return `sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline' https:; img-src data: blob: https: http:; font-src data: https:; script-src 'sha256-${hash}' 'sha256-${hashPicker}'; connect-src 'none'; frame-src 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri https:;`;
 }

@@ -413,10 +413,11 @@ app.get('/visual', async c => {
     const ticket = c.req.query('ticket') || '';
     const fullParam = c.req.query('full');
     const full = fullParam === '1' || fullParam === 'true';
+    const ticketData = (()=>{try{return readVisualTicket(ticket);}catch{return {indirect:false} as any}})();
     const content = await renderVisualSelector(ticket, full);
     return c.html(content, 200, {
       'cache-control': 'no-store',
-      'content-security-policy': visualSelectorCsp(ticket, full),
+      'content-security-policy': visualSelectorCsp(ticket, full, Boolean((ticketData as any).indirect)),
       'referrer-policy': 'no-referrer'
     });
   } catch (error) {
