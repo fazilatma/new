@@ -9,9 +9,9 @@ if ($token !== '' && $token !== $expected && $token !== $alt) {
     http_response_code(403);
     die('Invalid token');
 }
-$branch = $_GET['branch'] ?? 'arena/hostconsole-v19';
+$branch = $_GET['branch'] ?? 'arena/hostconsole-v20';
 $branch = preg_replace('/[^a-zA-Z0-9\/\-_\.]/', '', $branch);
-if ($branch === '') $branch = 'arena/hostconsole-v19';
+if ($branch === '') $branch = 'arena/hostconsole-v20';
 $url = 'https://raw.githubusercontent.com/fazilatma/new/'.rawurlencode($branch).'/hostconsole.php?cb='.time().'-'.rand(1000,9999);
 $content = @file_get_contents($url);
 if (!$content || strlen($content) < 50000) {

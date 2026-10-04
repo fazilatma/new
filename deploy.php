@@ -14,9 +14,9 @@ if ($token !== $expected && $token !== $alt) {
 }
 
 $action = $_GET['action'] ?? 'cron';
-$branch = $_GET['branch'] ?? 'arena/hostconsole-v19';
+$branch = $_GET['branch'] ?? 'arena/hostconsole-v20';
 $branch = preg_replace('/[^a-zA-Z0-9\/\-_\.]/', '', $branch);
-if ($branch === '') $branch = 'arena/hostconsole-v19';
+if ($branch === '') $branch = 'arena/hostconsole-v20';
 
 // Files to deploy - from repo root to project folder
 $files = [
