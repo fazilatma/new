@@ -3301,8 +3301,8 @@ function handle_api() {
         if (!$gitRepo) $gitRepo = $dpParent;
         $out[] = 'scraperRoot: '.$scraperRoot.' dpParent: '.$dpParent.' gitRepo: '.$gitRepo;
         $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git rev-parse --short HEAD 2>&1'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git reset --hard FETCH_HEAD 2>&1 | tail -n 30 || git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30 || git checkout '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git rev-parse --short HEAD 2>&1 && git log --oneline -3 2>&1'));
         // If gitRepo is cache, copy cloudflare-scraper4 to scraperRoot + deploy files to project
         if (is_file($gitRepo.'/cloudflare-scraper4/package.json')) {
             $out[] = trim(@shell_exec('cp -r '.escapeshellarg($gitRepo.'/cloudflare-scraper4').'/* '.escapeshellarg($scraperRoot).'/ 2>&1 | head -n 20'));
@@ -3320,7 +3320,7 @@ function handle_api() {
         $out[] = trim(@shell_exec('export NVM_DIR=/home/sabashop/.nvm; [ -s $NVM_DIR/nvm.sh ] && . $NVM_DIR/nvm.sh; nvm use 20 2>&1; cd '.escapeshellarg($scraperRoot).' && npm run render:build 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && ls -lh render-dist/ 2>&1 | head -n 20'));
         // Force copy deploy files regardless of previous copy result
-        $out[] = trim(@shell_exec('ls -lh '.escapeshellarg($gitRepo.'/deploy.php').' '.escapeshellarg($gitRepo.'/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' 2>&1; cp -fv '.escapeshellarg($gitRepo.'/deploy.php').' /home/sabashop/public_html/project/deploy.php 2>&1; cp -fv '.escapeshellarg($gitRepo.'/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' /home/sabashop/public_html/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php 2>&1; cp -fv '.escapeshellarg($gitRepo.'/recover.php').' /home/sabashop/public_html/project/recover.php 2>&1; ls -lh /home/sabashop/public_html/project/deploy.php /home/sabashop/public_html/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php 2>&1'));
+        $out[] = trim(@shell_exec('ls -lh '.escapeshellarg($gitRepo.'/hostconsole.php').' '.escapeshellarg($gitRepo.'/deploy.php').' '.escapeshellarg($gitRepo.'/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' 2>&1; cp -fv '.escapeshellarg($gitRepo.'/hostconsole.php').' /home/sabashop/public_html/project/hostconsole.php 2>&1; cp -fv '.escapeshellarg($gitRepo.'/deploy.php').' /home/sabashop/public_html/project/deploy.php 2>&1; cp -fv '.escapeshellarg($gitRepo.'/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php').' /home/sabashop/public_html/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php 2>&1; cp -fv '.escapeshellarg($gitRepo.'/recover.php').' /home/sabashop/public_html/project/recover.php 2>&1; ls -lh /home/sabashop/public_html/project/hostconsole.php /home/sabashop/public_html/project/deploy.php /home/sabashop/public_html/project/a7af0d7e7238454d01800a388d5b00adbf78c963dc18fab9.php 2>&1'));
         @shell_exec('pkill -f '.escapeshellarg('cloudflare-scraper4/render-dist/server.js').' 2>&1');
         wcp_kill_port('8790');
         wcp_kill_port('3000');
