@@ -4321,12 +4321,17 @@ function cli_service(array $job): int {
                 $script .= "export UVICORN_PORT=" . esc($chosenPort) . "\n";
                 $script .= 'if [ -n "$PORT" ]; then (fuser -k -9 "$PORT/tcp" 2>/dev/null || true); (lsof -ti :"$PORT" 2>/dev/null | xargs -r kill -9 2>/dev/null || true); fi' . "\n";
             }
+            $script .= "echo \"[debug] PATH=$PATH\" >&2\n";
+            $script .= "echo \"[debug] which node=$(which node 2>&1) node -v=$(node -v 2>&1) npm -v=$(npm -v 2>&1)\" >&2\n";
+            $script .= "echo \"[debug] NVM_DIR=$NVM_DIR NVM_BIN=$NVM_BIN\" >&2\n";
+            $script .= "echo \"[debug] pwd=$(pwd) ls=$(ls -lh 2>&1 | head -n 20)\" >&2\n";
             $script .= str_replace(["\r\n", "\r"], "\n", $startCmd) . "\n";
             $script = str_replace(["\r\n", "\r"], "\n", $script);
             wcp_put_contents($runner, $script, false);
             @chmod($runner, 0755);
             $started = microtime(true);
             cli_log('Starting service attempt ' . (++$attempt));
+            cli_log('Runner script: '.$runner.' content: '.substr($script,0,2000));
             $cmdArr = which('nice') ? ['nice', '-n', '10', 'bash', $runner] : ['bash', $runner];
             $ph = proc_open($cmdArr, [0 => ['file', '/dev/null', 'r'], 1 => ['file', $job['log'], 'a'], 2 => ['file', $job['log'], 'a']], $pipes);
             if (!is_resource($ph)) throw new RuntimeException('Cannot start service');
