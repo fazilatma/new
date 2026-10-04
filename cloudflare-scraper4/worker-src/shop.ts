@@ -216,7 +216,7 @@ const PAGES: Record<string, { title: string; body: string }> = {
   payment: { title: 'روش‌های پرداخت', body: 'پرداخت از طریق درگاه‌های فعال فروشگاه انجام می‌شود. پس از انتخاب روش پرداخت در صفحهٔ تسویه حساب، به صفحهٔ امن درگاه منتقل می‌شوید و نتیجهٔ پرداخت روی صفحهٔ سفارش نمایش داده می‌شود. در روش کارت به کارت، پس از واریز باید کد پیگیری را در صفحهٔ سفارش ثبت کنید.' },
   shipping: { title: 'ارسال و تحویل', body: 'سفارش‌ها پس از تأیید پرداخت آمادهٔ ارسال می‌شوند. هزینه و شرایط ارسال در صفحهٔ تسویه حساب و در فاکتور سفارش نمایش داده می‌شود.' },
   returns: { title: 'بازگشت کالا', body: 'در صورت مغایرت کالا با مشخصات اعلام‌شده، با شمارهٔ تماس فروشگاه هماهنگ کنید تا روند بازگشت یا تعویض انجام شود.' },
-  about: { title: 'دربارهٔ ما', body: 'این ویترین محصولات را از منابع تنظیم‌شده در پنل مدیریت گردآوری می‌کند و قیمت هر محصول را با ضرایب تعدیل همان پروفایل نمایش می‌دهد.' },
+  about: { title: 'دربارهٔ ما', body: 'این فروشگاه محصولات را از منابع معتبر گردآوری می‌کند و قیمت هر کالا را به‌روز و نهایی نمایش می‌دهد.' },
   contact: { title: 'تماس با ما', body: 'برای پرسش دربارهٔ سفارش‌ها، شمارهٔ سفارش خود را آماده کنید و از راه شمارهٔ تماس درج‌شده در پانوشت با ما در ارتباط باشید.' },
   terms: { title: 'قوانین و حریم خصوصی', body: 'اطلاعات تماس و نشانی شما فقط برای پردازش و ارسال سفارش استفاده می‌شود و در اختیار اشخاص ثالث قرار نمی‌گیرد. ثبت سفارش به معنی پذیرش قوانین فروشگاه است.' }
 };
@@ -245,7 +245,7 @@ function footer(settings: ShopSettings, active?: TabKey): string {
   <div><h4>اطلاعات</h4>${infoFold(['about', 'contact', 'terms'])}</div>
 </div>
 <div class="copy"><span>© ${fa(new Date().getFullYear())} ${escapeHtml(settings.name)} — همهٔ حقوق محفوظ است.</span>
-<span>قیمت‌ها با ضرایب تعدیل محاسبه می‌شوند.</span></div></footer>`;
+<span>قیمت‌ها به‌صورت روزانه به‌روزرسانی می‌شوند.</span></div></footer>`;
 }
 
 type TabKey = 'home' | 'categories' | 'search' | 'cart' | 'track';
@@ -369,7 +369,7 @@ export function catalogueHtml(input: {
       <noscript><button class="btn" type="submit">اعمال</button></noscript>
     </form></div>
   ${items.length ? `<div class="grid">${cards}</div>${pager}` : `<div class="panel"><div class="empty">
-    ${query.q || query.category ? 'محصولی با این فیلتر پیدا نشد. فیلترها را بردارید یا عبارت دیگری جست‌وجو کنید.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا از پنل اسکریپر محصولات را استخراج کنید.'}
+    ${query.q || query.category ? 'محصولی با این فیلتر پیدا نشد. فیلترها را بردارید یا عبارت دیگری جست‌وجو کنید.' : 'هنوز محصولی برای نمایش وجود ندارد؛ به‌زودی کالاهای تازه اضافه می‌شوند.'}
     </div>${query.q || query.category ? '<a class="btn block" href="${escapeHtml(HOME_URL)}">نمایش همهٔ محصولات</a>' : ''}</div>`}`;
   return layout(settings, query.category || 'ویترین', body, { search: query.q, tab: query.q ? 'search' : 'home' });
 }
@@ -393,11 +393,9 @@ export function categoriesHtml(input: { settings: ShopSettings; categories: Arra
 
 export function productHtml(input: { settings: ShopSettings; item: ShowcaseItem; related: ShowcaseItem[] }): string {
   const { settings, item } = input;
-  const rows: Array<[string, string]> = [
-    ['قیمت مبدأ', `${money(item.basePrice)} ${settings.currency}`],
-    ['ضریب تعدیل پروفایل', item.adjustment.label],
-    ['قیمت فروشگاه', `${money(item.price)} ${settings.currency}`]
-  ];
+  // Customer facing: only shop facts. Source price, sourcing profile and the pricing
+  // coefficient are internal and never rendered.
+  const rows: Array<[string, string]> = [['قیمت فروشگاه', `${money(item.price)} ${settings.currency}`]];
   if (item.brand) rows.push(['برند', item.brand]);
   if (item.category) rows.push(['دسته', item.category]);
   if (typeof item.stock === 'number') rows.push(['موجودی', fa(item.stock)]);
@@ -455,7 +453,7 @@ export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ 
         <tr><td>مالیات</td><td>${settings.taxPercent ? fa(settings.taxPercent) + '٪' : '—'}</td></tr>
       </tbody></table>
       <p class="note">${settings.freeShippingFrom ? 'ارسال رایگان برای سفارش‌های بالای ' + money(settings.freeShippingFrom) + ' ' + escapeHtml(settings.currency) + '.' : ''}
-      مبلغ نهایی روی سرور و بر اساس قیمت روز هر پروفایل محاسبه می‌شود.</p>
+      مبلغ نهایی روی سرور و بر اساس قیمت روز محاسبه می‌شود.</p>
       <button class="btn primary block" id="placeOrder"${gateways.length ? '' : ' disabled'}>ثبت سفارش و پرداخت</button>
       <div id="payResult" class="note" role="status" aria-live="polite"></div></div>
   </div></div>`;
@@ -465,8 +463,7 @@ export function checkoutHtml(input: { settings: ShopSettings; gateways: Array<{ 
 export function orderHtml(input: { settings: ShopSettings; order: Order; instructions?: string }): string {
   const { settings, order } = input;
   const rows = order.lines.map(line => `<tr><td>${escapeHtml(line.title)}</td>
-    <td>${fa(line.qty)}</td><td>${money(line.basePrice)}</td><td>${escapeHtml(line.adjustment.label)}</td>
-    <td>${money(line.price)}</td><td>${money(line.price * line.qty)}</td></tr>`).join('');
+    <td>${fa(line.qty)}</td><td>${money(line.price)}</td><td>${money(line.price * line.qty)}</td></tr>`).join('');
   const statusText: Record<string, string> = {
     pending: '⏳ در انتظار پرداخت', 'awaiting-receipt': '🧾 در انتظار ثبت رسید کارت به کارت',
     review: '🔎 در انتظار تأیید فروشنده', paid: '✅ پرداخت‌شده', failed: '❌ ناموفق', canceled: '🚫 لغو شده'
@@ -486,12 +483,12 @@ export function orderHtml(input: { settings: ShopSettings; order: Order; instruc
     ${order.payment.reference ? `<span class="pill">کد پیگیری: ${escapeHtml(order.payment.reference)}</span>` : ''}
     ${order.payment.error ? `<span class="pill failed">${escapeHtml(order.payment.error)}</span>` : ''}</div>
   <div class="scroll-x" style="margin-top:12px"><table class="sum">
-  <thead><tr><th>محصول</th><th>تعداد</th><th>قیمت مبدأ</th><th>ضریب تعدیل</th><th>قیمت فروشگاه</th><th>جمع</th></tr></thead>
+  <thead><tr><th>محصول</th><th>تعداد</th><th>قیمت واحد</th><th>جمع</th></tr></thead>
   <tbody>${rows}</tbody>
-  <tfoot><tr><td colspan="5">جمع کالاها</td><td>${money(order.subtotal)}</td></tr>
-  <tr><td colspan="5">ارسال</td><td>${money(order.shipping)}</td></tr>
-  <tr><td colspan="5">مالیات</td><td>${money(order.tax)}</td></tr>
-  <tr><td colspan="5"><b>مبلغ قابل پرداخت</b></td><td><b>${money(order.total)} ${escapeHtml(order.currency)}</b></td></tr></tfoot></table></div>
+  <tfoot><tr><td colspan="3">جمع کالاها</td><td>${money(order.subtotal)}</td></tr>
+  <tr><td colspan="3">ارسال</td><td>${money(order.shipping)}</td></tr>
+  <tr><td colspan="3">مالیات</td><td>${money(order.tax)}</td></tr>
+  <tr><td colspan="3"><b>مبلغ قابل پرداخت</b></td><td><b>${money(order.total)} ${escapeHtml(order.currency)}</b></td></tr></tfoot></table></div>
   ${retry}</div>${receipt}`;
   return layout(settings, 'سفارش ' + order.id, body, { showSearch: false, tab: 'track' });
 }

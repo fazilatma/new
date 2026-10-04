@@ -133,7 +133,9 @@ test('the card-to-card receipt moves the order to review and is shown on the ord
   assert.equal(order.payment.reference, '987654321');
   const page = await routes.orderPage(d, placed.orderId);
   assert.match(page.html, /۹۸۷۶۵۴۳۲۱|987654321/);
-  assert.match(page.html, /ضریب تعدیل/, 'the order keeps the coefficient that produced its price');
+  assert.doesNotMatch(page.html, /ضریب تعدیل/, 'the invoice shows shop prices only, never the internal coefficient');
+  const stored = await routes.getOrder(d, placed.orderId);
+  assert.ok(stored.lines[0].adjustment.label, 'the coefficient is still recorded on the order for the shop owner');
 });
 
 test('shop settings and payment plugins round-trip through the admin page', async () => {
@@ -249,6 +251,22 @@ test('products are grouped by category and type, never by profile', async () => 
   assert.doesNotMatch(page, /فروشگاه الف|فروشگاه ب|فروشگاه ج/, 'profile names never reach the storefront');
 });
 
+test('the storefront never mentions scraper profiles, coefficients or source prices', async () => {
+  const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
+  const placed = await routes.placeOrder(d, {
+    gateway: 'card', items: [{ id: 'p-percent::a1', qty: 1 }],
+    customer: { name: 'زهرا محمدی', phone: '09351234567', address: 'مشهد، بلوار سجاد، پلاک ۴' }
+  }, 'https://shop.test');
+  const pages = [await routes.cataloguePage(d, {}), await routes.categoriesPage(d), await routes.checkoutPage(d),
+    (await routes.productPage(d, 'p-percent::a1')).html, (await routes.orderPage(d, placed.orderId)).html,
+    (await routes.trackPage(d, {})).html, (await routes.infoPage(d, 'about')).html];
+  for (const html of pages) {
+    assert.doesNotMatch(html, /پروفایل/, 'the word "profile" must never reach a shopper');
+    assert.doesNotMatch(html, /اسکریپر|اسکرپر/, 'the scraper is invisible to shoppers');
+    assert.doesNotMatch(html, /ضریب|ضرایب|قیمت مبدأ/, 'pricing coefficients and source prices stay internal');
+  }
+});
+
 test('no customer facing page leaks a profile name', async () => {
   const d = deps({ state: [['shop.payments', { card: { enabled: true } }], ['shop.settings', { card: { number: '6037991234567890' } }]] });
   const placed = await routes.placeOrder(d, {
@@ -306,8 +324,7 @@ test('the product page shows the coefficient breakdown and related items', async
   const page = await routes.productPage(d, 'p-percent::a1');
   assert.equal(page.status, 200);
   assert.match(page.html, /کتری برقی/);
-  assert.match(page.html, /قیمت مبدأ/);
-  assert.match(page.html, /ضریب تعدیل پروفایل/);
+  assert.doesNotMatch(page.html, /قیمت مبدأ|ضریب|پروفایل/, 'sourcing price and coefficient are internal');
   assert.match(page.html, /۱۴۴٬۰۰۰/);
   assert.match(page.html, /محصولات مشابه/);
   assert.equal((await routes.productPage(d, 'ghost::none')).status, 404, 'an unknown product is a clean 404');

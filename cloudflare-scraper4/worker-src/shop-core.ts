@@ -97,7 +97,7 @@ export function resolveAppearance(raw: unknown): ShopAppearance {
 export const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   enabled: true,
   name: 'ویترین فروشگاه',
-  tagline: 'محصولات به‌روز، با قیمت‌گذاری خودکار هر پروفایل',
+  tagline: 'محصولات به‌روز با قیمت‌گذاری خودکار',
   scraperPath: 'scraper',
   basePath: '/',
   appearance: DEFAULT_APPEARANCE,
