@@ -3213,7 +3213,6 @@ function handle_api() {
         }
         // Ensure dp points to parent containing cloudflare-scraper4 folder
         if (is_file($dp.'/package.json') && is_dir($dp.'/render-dist')) {
-            // dp is already cloudflare-scraper4 folder
             $scraperRoot = $dp;
             $dpParent = dirname($dp);
         } else if (is_file($dp.'/cloudflare-scraper4/package.json')) {
@@ -3223,12 +3222,52 @@ function handle_api() {
             $scraperRoot = $dp.'/cloudflare-scraper4';
             $dpParent = $dp;
         }
-        $out[] = 'scraperRoot: '.$scraperRoot.' dpParent: '.$dpParent;
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($dpParent).' && git rev-parse --short HEAD 2>&1'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
-        $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && npm run render:build 2>&1 | tail -n 30'));
+        // Find actual git repo: check dpParent/.git, cache/proj-<id>/.git, etc.
+        $gitRepo = '';
+        $possibleGit = [
+            $dpParent.'/.git',
+            $dp.'/.git',
+            $scraperRoot.'/.git',
+            '/home/sabashop/public_html/project/.wconsole_data/cache/proj-'.$target['id'].'/.git',
+            '/home/sabashop/public_html/project/.wconsole_data/cache/proj-'.$target['id'].'/cloudflare-scraper4/.git',
+        ];
+        foreach ($possibleGit as $g) {
+            if (is_dir($g)) { $gitRepo = dirname($g); $out[] = 'Found git repo at: '.$gitRepo; break; }
+        }
+        if (!$gitRepo) {
+            $foundGit = trim(@shell_exec('find /home/sabashop/public_html/project/.wconsole_data -type d -name .git 2>/dev/null | head -n 20'));
+            $out[] = 'Searching git repos: '.$foundGit;
+            $lines = explode("\n", $foundGit);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (!$line) continue;
+                $repo = dirname($line);
+                // Check if this repo contains scraper4-cloudflare
+                if (is_file($repo.'/cloudflare-scraper4/package.json') || is_file($repo.'/package.json')) {
+                    $gitRepo = $repo;
+                    $out[] = 'Using git repo: '.$gitRepo;
+                    break;
+                }
+            }
+        }
+        if (!$gitRepo) $gitRepo = $dpParent;
+        $out[] = 'scraperRoot: '.$scraperRoot.' dpParent: '.$dpParent.' gitRepo: '.$gitRepo;
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && pwd && git fetch origin '.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git reset --hard origin/'.escapeshellarg($branch).' 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('cd '.escapeshellarg($gitRepo).' && git rev-parse --short HEAD 2>&1'));
+        // If gitRepo is cache, copy cloudflare-scraper4 to scraperRoot
+        if (is_file($gitRepo.'/cloudflare-scraper4/package.json')) {
+            $out[] = trim(@shell_exec('cp -r '.escapeshellarg($gitRepo.'/cloudflare-scraper4').'/* '.escapeshellarg($scraperRoot).'/ 2>&1 | head -n 20'));
+            $out[] = 'Copied from '.$gitRepo.'/cloudflare-scraper4 to '.$scraperRoot;
+        } else if (is_file($gitRepo.'/package.json') && $gitRepo !== $scraperRoot) {
+            $out[] = trim(@shell_exec('cp -r '.escapeshellarg($gitRepo).'/* '.escapeshellarg($scraperRoot).'/ 2>&1 | head -n 20'));
+            $out[] = 'Copied from '.$gitRepo.' to '.$scraperRoot;
+        }
+        // Try to find node and npm via nvm
+        $out[] = trim(@shell_exec('which node; which npm; ls /home/sabashop/.nvm/versions/node/*/bin/node 2>/dev/null | head -n 5'));
+        $out[] = trim(@shell_exec('export NVM_DIR=/home/sabashop/.nvm; [ -s $NVM_DIR/nvm.sh ] && . $NVM_DIR/nvm.sh; nvm use 20 2>&1; which node; node -v; which npm; npm -v 2>&1 | head -n 20'));
+        $out[] = trim(@shell_exec('export NVM_DIR=/home/sabashop/.nvm; [ -s $NVM_DIR/nvm.sh ] && . $NVM_DIR/nvm.sh; nvm use 20 2>&1; cd '.escapeshellarg($scraperRoot).' && npm install --no-audit --prefer-online 2>&1 | tail -n 30'));
+        $out[] = trim(@shell_exec('export NVM_DIR=/home/sabashop/.nvm; [ -s $NVM_DIR/nvm.sh ] && . $NVM_DIR/nvm.sh; nvm use 20 2>&1; cd '.escapeshellarg($scraperRoot).' && npm run render:build 2>&1 | tail -n 30'));
         $out[] = trim(@shell_exec('cd '.escapeshellarg($scraperRoot).' && ls -lh render-dist/ 2>&1 | head -n 20'));
         @shell_exec('pkill -f '.escapeshellarg('cloudflare-scraper4/render-dist/server.js').' 2>&1');
         wcp_kill_port('8790');
