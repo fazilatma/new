@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.211';
+const APP_VERSION = '10.212';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -37010,6 +37010,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "211'") !== false
       && version_compare(APP_VERSION, '10.' . '211', '>='));
 
+    /* ---------- v10.212: بسته‌های Ubuntu bionic برای runtime رندر ---------- */
+    $_boot212 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.212', 'bootstrap mirrorهای Ubuntu را قبل از Debian امتحان می‌کند',
+         strpos($_boot212, 'mirrors.aliyun.com/ubuntu') !== false
+      && strpos($_boot212, 'archive.ubuntu.com/ubuntu') !== false);
+    $add('10.212', 'بسته‌های runtime روی Ubuntu bionic/glibc قدیمی‌تر تنظیم شده‌اند',
+         strpos($_boot212, 'libatk-bridge2.0-0_2.26.2-1_amd64.deb') !== false
+      && strpos($_boot212, 'libgbm1_20.0.8-0ubuntu1~18.04.1_amd64.deb') !== false
+      && strpos($_boot212, 'libasound2_1.1.3-5ubuntu0.6_amd64.deb') !== false);
+    $add('10.212', 'دانلود bootstrap سقف زمانی دارد',
+         strpos($_boot212, '--connect-timeout 8 --max-time 45') !== false
+      && strpos($_boot212, '--timeout=15 --tries=1') !== false);
+    $add('10.212', 'ورودیِ 10.212 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "212'") !== false
+      && version_compare(APP_VERSION, '10.' . '212', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67199,6 +67215,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.212', t:'🚀 بسته‌های Ubuntu bionic برای runtime رندر', items:[
+    'دانلود runtime libraryهای محلی از mirrorهای Ubuntu bionic شروع می‌شود تا هم با glibc قدیمی سازگار باشد و هم از archive کند Debian معطل نشود',
+    'دانلودهای bootstrap سقف زمانی دارند تا render_probe زیر بار mirror کند/قطع، سرویس را برای مدت طولانی گیر نیندازد',
+  ]},
   {v:'10.211', t:'🧱 کتابخانه‌های Chrome سازگار با glibc قدیمی', items:[
     'بسته‌های runtime محلی Chrome از Debian 12 به Debian 10 archive تغییر کرد تا روی هاست‌های دارای glibc قدیمی‌تر خطای GLIBC_2.33/2.34 ندهند',
     'libwayland-server0 هم به فهرست نصب محلی اضافه شد چون بعد از باز شدن libgbm، وابستگی بعدی Chrome بود',

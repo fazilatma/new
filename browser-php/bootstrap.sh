@@ -33,8 +33,8 @@ fail() { echo "✗ $*"; exit 1; }
 
 download_once() {  # url → file
   local url="$1" out="$2"
-  if have curl; then curl -fL --progress-bar -o "$out" "$url" && return 0; fi
-  if have wget; then wget -q -O "$out" "$url" && return 0; fi
+  if have curl; then curl -fL --connect-timeout 8 --max-time 45 --progress-bar -o "$out" "$url" && return 0; fi
+  if have wget; then wget -q --timeout=15 --tries=1 -O "$out" "$url" && return 0; fi
   if have python3; then
     python3 - "$url" "$out" <<'PY' && return 0
 import sys, urllib.request
@@ -64,7 +64,7 @@ download() {  # url → file  (v10.200: try mirror before Google storage on rest
 
 deb_download() {  # debian pool path → file
   local rel="$1" out="$2" base
-  for base in     "https://archive.debian.org/debian"     "http://archive.debian.org/debian"     "https://mirrors.aliyun.com/debian"     "https://mirrors.tuna.tsinghua.edu.cn/debian"     "https://ftp.debian.org/debian"     "https://deb.debian.org/debian"     "http://deb.debian.org/debian"; do
+  for base in     "https://mirrors.aliyun.com/ubuntu"     "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"     "https://archive.ubuntu.com/ubuntu"     "http://archive.ubuntu.com/ubuntu"     "https://mirrors.aliyun.com/debian"     "https://mirrors.tuna.tsinghua.edu.cn/debian"     "https://deb.debian.org/debian"     "http://deb.debian.org/debian"     "https://archive.debian.org/debian"     "http://archive.debian.org/debian"; do
     echo "… دریافت کتابخانه از ${base}/${rel}"
     download_once "${base}/${rel}" "$out" && return 0
   done
@@ -117,7 +117,7 @@ PY
 install_chrome_deb_libs() {
   mkdir -p "$LIB"
   local rel out ok=0
-  for rel in     "pool/main/a/at-spi2-atk/libatk-bridge2.0-0_2.30.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.30.0-7_amd64.deb"     "pool/main/m/mesa/libgbm1_18.3.6-2+deb10u1_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.1.8-1_amd64.deb"     "pool/main/w/wayland/libwayland-server0_1.16.0-1_amd64.deb"; do
+  for rel in     "pool/main/a/at-spi2-atk/libatk-bridge2.0-0_2.26.2-1_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.28.0-1_amd64.deb"     "pool/main/m/mesa/libgbm1_20.0.8-0ubuntu1~18.04.1_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.1.3-5ubuntu0.6_amd64.deb"     "pool/main/w/wayland/libwayland-server0_1.16.0-1ubuntu1.1~18.04.4_amd64.deb"; do
     out="$LIB/$(basename "$rel")"
     if [ ! -f "$out" ]; then deb_download "$rel" "$out" || { ok=1; continue; }; fi
     extract_deb_to_lib "$out" || ok=1
