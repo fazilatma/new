@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.205';
+const APP_VERSION = '10.206';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1940,6 +1940,18 @@ function extractSourcePrice(array $p): string {
         if (isset($p[$k]) && trim((string)$p[$k]) !== '') return (string)$p[$k];
     }
     return '';
+}
+
+function extractAvgPpmValue(array $p, ?int $now = null): int {
+    $count = max(0, (int)($p['extracted'] ?? 0));
+    if ($count <= 0) return max(0, (int)($p['avg_ppm'] ?? 0));
+    $started = (int)($p['started_at'] ?? 0);
+    if ($started > 0) {
+        $end = (int)($p['finished_at'] ?? 0);
+        if ($end <= 0) $end = $now ?? time();
+        return max(0, (int)round($count * 60 / max(1, $end - $started)));
+    }
+    return max(0, (int)($p['avg_ppm'] ?? 0));
 }
 
 /**
@@ -16027,6 +16039,7 @@ if((!empty($p['done']) || !empty($p['ran_out']) || !empty($p['resume_needed']))
             ['🧵 worker زنده است و همین استخراج را از checkpoint ادامه می‌دهد…']),-40);
     }
 }
+$p['avg_ppm'] = extractAvgPpmValue($p);
 echo json_encode($p,JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -17440,7 +17453,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailTotal,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailTotal+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailTotal,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailTotal+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -36827,6 +36840,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.205', 'ورودیِ 10.205 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "205'") !== false
       && version_compare(APP_VERSION, '10.' . '205', '>='));
+
+    /* ---------- v10.206: سرعت میانگین سمت سرور در poll استخراج ---------- */
+    $add('10.206', 'poll_extract مقدار avg_ppm را سمت سرور از progress محاسبه می‌کند',
+         strpos($selfSrc, 'function extractAvgPpmValue') !== false
+      && strpos($selfSrc, "\$p['avg_ppm'] = extractAvgPpmValue(\$p)") !== false);
+    $add('10.206', 'progress نهایی finished_at و avg_ppm را هم ذخیره می‌کند',
+         strpos($selfSrc, "'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count(\$allProducts)*60") !== false);
+    $add('10.206', 'ورودیِ 10.206 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "206'") !== false
+      && version_compare(APP_VERSION, '10.' . '206', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -67017,6 +67040,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.206', t:'⚡ سرعت میانگین در poll زنده استخراج', items:[
+    'poll_extract اکنون avg_ppm را سمت سرور از تعداد محصول استخراج‌شده و زمان شروع همان اجرا محاسبه می‌کند تا شمارندهٔ ششم در همهٔ حالت‌های زنده مقدار پایدار داشته باشد',
+    'فایل progress نهایی هم finished_at و avg_ppm را نگه می‌دارد تا مقدار سرعت بعد از پایان اجرا همان عدد واقعی اجرای انجام‌شده بماند',
+  ]},
   {v:'10.205', t:'🛍️ fallback عملیاتی SnappShop برای استخراج', items:[
     'برای URLهای snappshop.ir وقتی واکشی مستقیم یا رندر Playwright/Selenium شکست بخورد، مسیر Reader کمکی خوانده و به کارت‌های HTML قابل parse تبدیل می‌شود',
     'parser اختصاصی SnappShop لینک‌های /product/snp-*، عنوان و آخرین قیمت کارت را از خروجی Markdown می‌خواند تا سلکتورهای قدیمی/تک‌کارت مانع استخراج نشوند',
