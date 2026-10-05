@@ -144,6 +144,24 @@ find_sys_chrome() {
   return 1
 }
 
+# v10.213: latest Chrome-for-Testing may SIGTRAP on older shared hosts; keep a
+# known older headless-shell fallback that still supports the modern CDP paths.
+download_cft_version() {  # version → 0/1
+  local ver="$1" base="https://storage.googleapis.com/chrome-for-testing-public/$1/linux64"
+  rm -rf "$BIN/chrome-headless-shell-linux64" "$BIN/chrome-linux64" "$BIN/chromedriver-linux64"
+  echo "… دانلود chrome-headless-shell سازگارتر: $ver"
+  download "$base/chrome-headless-shell-linux64.zip" "$BIN/headless-$ver.zip" || return 1
+  unzip_file "$BIN/headless-$ver.zip" "$BIN/" || return 1
+  rm -f "$BIN/headless-$ver.zip"
+  echo "… دانلود chromedriver سازگارتر: $ver"
+  if download "$base/chromedriver-linux64.zip" "$BIN/driver-$ver.zip"; then
+    unzip_file "$BIN/driver-$ver.zip" "$BIN/" || true
+    rm -f "$BIN/driver-$ver.zip"
+  fi
+  chmod_render_bins
+  return 0
+}
+
 echo "── scraper4 render bootstrap (pure binaries, no apt) ──"
 
 if compgen -G "$BIN/*/chrome" >/dev/null 2>&1 || compgen -G "$BIN/*/chrome-headless-shell" >/dev/null 2>&1; then
@@ -203,15 +221,24 @@ if [ -n "$CHROME_PATH" ]; then
       echo "✓ کروم پس از افزودن کتابخانه‌های محلی اجرا شد"
       "$CHROME_PATH" --version || true
     else
-      echo "⚠ کروم هنوز اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
-      echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
-      echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
-      echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
-      echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
-      if have ldd; then
-        ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+      echo "⚠ کروم هنوز اجرا نمی‌شود — تلاش با Chrome-for-Testing قدیمی‌تر"
+      if download_cft_version "120.0.6099.109"; then
+        CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
+      fi
+      if [ -n "$CHROME_PATH" ] && "$CHROME_PATH" --version >/dev/null 2>&1; then
+        echo "✓ کروم سازگارتر اجرا شد"
+        "$CHROME_PATH" --version || true
       else
-        echo "      ldd در این محیط موجود نیست"
+        echo "⚠ کروم هنوز اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
+        echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
+        echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
+        echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
+        echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
+        if have ldd && [ -n "$CHROME_PATH" ]; then
+          ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+        else
+          echo "      ldd در این محیط موجود نیست"
+        fi
       fi
     fi
   fi

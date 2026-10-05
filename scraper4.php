@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.212';
+const APP_VERSION = '10.213';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -37026,6 +37026,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "212'") !== false
       && version_compare(APP_VERSION, '10.' . '212', '>='));
 
+    /* ---------- v10.213: fallback مرورگر برای SIGTRAP هاست ---------- */
+    $_boot213 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.213', 'bootstrap نسخهٔ سازگارتر Chrome-for-Testing را می‌تواند جایگزین کند',
+         strpos($_boot213, 'download_cft_version') !== false
+      && strpos($_boot213, '120.0.6099.109') !== false);
+    $add('10.213', 'fallback هم headless-shell و هم chromedriver را هماهنگ جایگزین می‌کند',
+         strpos($_boot213, 'chrome-headless-shell-linux64.zip') !== false
+      && strpos($_boot213, 'chromedriver-linux64.zip') !== false
+      && strpos($_boot213, 'rm -rf "$BIN/chrome-headless-shell-linux64"') !== false);
+    $add('10.213', 'ورودیِ 10.213 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "213'") !== false
+      && version_compare(APP_VERSION, '10.' . '213', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67215,6 +67228,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.213', t:'🧯 fallback مرورگر برای SIGTRAP هاست', items:[
+    'اگر Chrome-for-Testing جدید بعد از نصب libraryها باز هم با Trace/breakpoint trap اجرا نشود، bootstrap یک headless-shell/chromedriver سازگارتر نسخهٔ 120.0.6099.109 را جایگزین می‌کند',
+    'مسیر جایگزین همچنان از همان دانلودهای Chrome-for-Testing و بدون Node/Python runtime در scraper4 استفاده می‌کند',
+  ]},
   {v:'10.212', t:'🚀 بسته‌های Ubuntu bionic برای runtime رندر', items:[
     'دانلود runtime libraryهای محلی از mirrorهای Ubuntu bionic شروع می‌شود تا هم با glibc قدیمی سازگار باشد و هم از archive کند Debian معطل نشود',
     'دانلودهای bootstrap سقف زمانی دارند تا render_probe زیر بار mirror کند/قطع، سرویس را برای مدت طولانی گیر نیندازد',
