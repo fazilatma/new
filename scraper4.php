@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.196';
+const APP_VERSION = '10.197';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9709,7 +9709,7 @@ function s4RenderLocalEndpoint(array $rcfg): array {
     if ($port < 1 || $port > 65535) return ['ok'=>false, 'error'=>'invalid render port'];
     return ['ok'=>true, 'host'=>$host === 'localhost' ? '127.0.0.1' : $host, 'port'=>$port];
 }
-function s4LaunchRenderService(array $rcfg): array {
+function s4LaunchRenderService(array $rcfg, bool $force = false): array {
     if (!function_exists('shell_exec')) return ['ok'=>false, 'error'=>'shell_exec disabled'];
     $ep = s4RenderLocalEndpoint($rcfg);
     if (empty($ep['ok'])) return $ep;
@@ -9723,12 +9723,14 @@ function s4LaunchRenderService(array $rcfg): array {
     $pidfile = $dir . '/run/render-service.pid';
     $oldPid = (int)trim((string)@file_get_contents($pidfile));
     if ($oldPid > 0 && trim((string)@shell_exec('kill -0 ' . (int)$oldPid . ' 2>/dev/null && echo alive')) === 'alive') {
-        return ['ok'=>true, 'running'=>true, 'pid'=>$oldPid, 'log'=>basename(dirname($log)) . '/' . basename($log)];
+        if (!$force) return ['ok'=>true, 'running'=>true, 'pid'=>$oldPid, 'log'=>basename(dirname($log)) . '/' . basename($log)];
+        @shell_exec('pkill -TERM -P ' . (int)$oldPid . ' 2>/dev/null; kill ' . (int)$oldPid . ' 2>/dev/null');
+        usleep(300000);
     }
     $host = (string)$ep['host'];
     $port = (int)$ep['port'];
     $maxc = max(1, min(4, (int)($rcfg['max_concurrency'] ?? 2)));
-    $bootCmd = is_file($boot) ? 'if [ ! -x browser-php/bin/chrome-headless-shell ] && [ ! -x browser-php/bin/chromedriver ]; then bash browser-php/bootstrap.sh; fi; ' : '';
+    $bootCmd = is_file($boot) ? ($force ? 'bash browser-php/bootstrap.sh; ' : 'if [ ! -x browser-php/bin/chrome-headless-shell ] && [ ! -x browser-php/bin/chromedriver ]; then bash browser-php/bootstrap.sh; fi; ') : '';
     $cmd = 'cd ' . escapeshellarg($dir)
          . ' && ( export RENDER_HOST=' . escapeshellarg($host)
          . ' RENDER_PORT=' . escapeshellarg((string)$port)
@@ -28070,8 +28072,12 @@ if (isset($_GET['render_probe'])) {
     }
     $t0 = microtime(true);
     $hc = function_exists('fetch_html_render_health') ? fetch_html_render_health($rc) : ['ok' => false, 'error' => 'fn missing'];
-    if (empty($hc['ok']) && (isset($_GET['launch']) || isset($_GET['start']))) {
-        $out['launch'] = s4LaunchRenderService($rc);
+    $wantsLaunch = isset($_GET['launch']) || isset($_GET['start']);
+    $forceLaunch = isset($_GET['force']) || isset($_GET['repair']) || isset($_GET['bootstrap']);
+    $drvUnavailable = !empty($hc['ok']) && ((string)($hc['driver'] ?? '') === 'unavailable'
+        || (is_array($hc['available'] ?? null) && empty($hc['available']['cdp']) && empty($hc['available']['selenium'])));
+    if ($wantsLaunch && (empty($hc['ok']) || ($forceLaunch && $drvUnavailable))) {
+        $out['launch'] = s4LaunchRenderService($rc, $forceLaunch);
         usleep(700000);
         $hc = function_exists('fetch_html_render_health') ? fetch_html_render_health($rc) : $hc;
     }
@@ -36541,6 +36547,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.196', 'ورودیِ 10.196 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "196'") !== false
       && version_compare(APP_VERSION, '10.' . '196', '>='));
+
+    /* ---------- v10.197: ترمیم باینری‌های رندر مرورگری ---------- */
+    $_renderPhp197 = is_file(__DIR__ . '/browser-php/render.php') ? (string)@file_get_contents(__DIR__ . '/browser-php/render.php') : '';
+    $_boot197 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.197', 'render.php برای فایل‌های مرورگر chmod ترمیمی انجام می‌دهد',
+         strpos($_renderPhp197, 'function render_bin_ready') !== false
+      && strpos($_renderPhp197, '@chmod($path, 0755)') !== false
+      && strpos($_renderPhp197, 'render_bin_ready($p)') !== false);
+    $add('10.197', 'bootstrap.sh بعد از دانلود یا هنگام وجود فایل‌ها مجوز اجرا را درست می‌کند',
+         strpos($_boot197, 'chmod_render_bins()') !== false
+      && strpos($_boot197, 'chmod +x "$f"') !== false);
+    $add('10.197', 'render_probe با force/repair می‌تواند سرویس رندر را برای bootstrap دوباره راه‌اندازی کند',
+         strpos($selfSrc, '$forceLaunch = isset($_GET[' . "'force'") !== false
+      && strpos($selfSrc, 's4LaunchRenderService($rc, $forceLaunch)') !== false
+      && strpos($selfSrc, 'pkill -TERM -P') !== false);
+    $add('10.197', 'ورودیِ 10.197 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "197'") !== false
+      && version_compare(APP_VERSION, '10.' . '197', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66731,6 +66755,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.197', t:'🧰 ترمیم باینری‌های رندر مرورگری', items:[
+    'bootstrap مرورگر، فایل‌های chrome/chromedriver استخراج‌شده را executable می‌کند تا دانلود موفق به دلیل مجوز فایل در health ناموجود دیده نشود',
+    'سرویس رندر هنگام جست‌وجوی باینری، در صورت امکان مجوز اجرا را ترمیم می‌کند و render_probe با launch=1&force=1 می‌تواند سرویس را برای ترمیم مرورگر بازراه‌اندازی کند',
+  ]},
   {v:'10.196', t:'▶️ راه‌اندازی رندر مرورگری از عیب‌یاب', items:[
     'render_probe با پارامتر launch=1 می‌تواند سرویس محدود و ثابت browser-php/start.sh را روی localhost بالا بیاورد و دوباره health را بسنجد',
     'این راه‌اندازی هیچ فرمان یا مسیر دلخواهی از ورودی کاربر نمی‌گیرد و فقط برای فعال‌کردن سریع موتورهای Playwright/Selenium روی سرور legacy است',

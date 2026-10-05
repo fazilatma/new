@@ -16,6 +16,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HERE/bin"
 mkdir -p "$BIN"
 
+chmod_render_bins() {
+  local f
+  for f in "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome "$BIN"/*/chromedriver; do
+    [ -e "$f" ] && chmod +x "$f" 2>/dev/null || true
+  done
+}
+chmod_render_bins
+
 have() { command -v "$1" >/dev/null 2>&1; }
 
 fail() { echo "✗ $*"; exit 1; }
@@ -54,6 +62,7 @@ find_sys_chrome() {
 echo "── scraper4 render bootstrap (pure binaries, no apt) ──"
 
 if compgen -G "$BIN/*/chrome" >/dev/null 2>&1 || compgen -G "$BIN/*/chrome-headless-shell" >/dev/null 2>&1; then
+  chmod_render_bins
   echo "✓ باینریِ مرورگر از قبل هست — دانلود رد شد"
 elif SYS="$(find_sys_chrome)"; then
   echo "✓ مرورگرِ سیستمی پیدا شد: $SYS  (دانلود لازم نیست)"
@@ -96,6 +105,7 @@ else
 fi
 
 # گزارشِ نهایی + آزمون اجرایی
+chmod_render_bins
 CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
 if [ -n "$CHROME_PATH" ]; then
   echo "✓ chrome: $CHROME_PATH"

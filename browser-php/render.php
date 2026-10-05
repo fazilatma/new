@@ -162,9 +162,16 @@ function http_get(string $url, int $timeoutSec = 3) {
 }
 
 /* --------------------------------------------------- یافتن فایل‌ها */
+function render_bin_ready(string $path): bool {
+    if ($path === '' || !is_file($path)) return false;
+    if (is_executable($path)) return true;
+    @chmod($path, 0755);
+    return is_executable($path);
+}
+
 function find_chrome_bin(): string {
     $env = rcfg()['chrome_bin'];
-    if ($env !== '' && is_file($env)) return $env;
+    if ($env !== '' && render_bin_ready($env)) return $env;
     $cands = [];
     foreach (glob(__DIR__ . '/bin/*/chrome') ?: [] as $p) $cands[] = $p;
     foreach (glob(__DIR__ . '/bin/*/chrome-headless-shell') ?: [] as $p) $cands[] = $p;
@@ -173,19 +180,19 @@ function find_chrome_bin(): string {
         if ($p !== '' && is_file($p)) $cands[] = $p;
     }
     foreach ($cands as $c) {
-        if (is_file($c) && is_executable($c)) return $c;
+        if (render_bin_ready($c)) return $c;
     }
     return '';
 }
 
 function find_chromedriver_bin(): string {
     $env = rcfg()['driver_bin'];
-    if ($env !== '' && is_file($env)) return $env;
+    if ($env !== '' && render_bin_ready($env)) return $env;
     foreach (glob(__DIR__ . '/bin/*/chromedriver') ?: [] as $p) {
-        if (is_file($p) && is_executable($p)) return $p;
+        if (render_bin_ready($p)) return $p;
     }
     $p = trim((string)@shell_exec('command -v chromedriver 2>/dev/null'));
-    if ($p !== '' && is_file($p)) return $p;
+    if ($p !== '' && render_bin_ready($p)) return $p;
     return '';
 }
 
