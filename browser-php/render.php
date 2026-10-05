@@ -231,7 +231,10 @@ function render_with_cdp(string $url, array $opts, int $timeoutMs): array {
             }
             usleep(100000);
         }
-        if ($port <= 0) throw new Exception('CDP port file never appeared (chromium failed to start — missing system libraries?)');
+        if ($port <= 0) {
+            $tail = is_file($log) ? substr((string)@file_get_contents($log), -1200) : '';
+            throw new Exception('CDP port file never appeared (chromium failed to start — missing system libraries?)' . ($tail !== '' ? ' chrome-log: ' . $tail : ''));
+        }
 
         $ver = http_get('http://127.0.0.1:' . $port . '/json/version', 5);
         if ($ver === null) throw new Exception('CDP endpoint not reachable on 127.0.0.1:' . $port);
@@ -391,6 +394,9 @@ function render_with_selenium(string $url, array $opts, int $timeoutMs): array {
         } finally {
             try { wd_http('DELETE', "$base/session/$sid"); } catch (Exception $e) {}
         }
+    } catch (Exception $e) {
+        $tail = (isset($log) && is_file($log)) ? substr((string)@file_get_contents($log), -1200) : '';
+        throw new Exception($e->getMessage() . ($tail !== '' ? ' chromedriver-log: ' . $tail : ''));
     } finally {
         if ($pid > 0 || $proc) proc_kill($pid, $proc);
         @unlink($log ?? '');
@@ -453,6 +459,7 @@ if ($path === '/render' && $method === 'POST') {
         else $drivers = rcfg()['driver'] === 'auto' ? ['cdp', 'selenium'] : ['cdp'];
 
         $lastErr = '';
+        $errors = [];
         $result = null;
         foreach ($drivers as $d) {
             try {
@@ -461,10 +468,11 @@ if ($path === '/render' && $method === 'POST') {
                 break;
             } catch (Exception $e) {
                 $lastErr = $d . ': ' . $e->getMessage();
+                $errors[] = $lastErr;
             }
         }
         if ($result === null) {
-            jout(['ok' => false, 'error' => 'render-error: ' . $lastErr], 502);
+            jout(['ok' => false, 'error' => 'render-error: ' . implode(' | ', $errors ?: [$lastErr])], 502);
         }
         jout([
             'ok' => true,

@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.201';
+const APP_VERSION = '10.202';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36667,6 +36667,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "201'") !== false
       && version_compare(APP_VERSION, '10.' . '201', '>='));
 
+    /* ---------- v10.202: خطای کامل‌تر رندر مرورگری ---------- */
+    $_render202 = is_file(__DIR__ . '/browser-php/render.php') ? (string)@file_get_contents(__DIR__ . '/browser-php/render.php') : '';
+    $add('10.202', 'render.php خطاهای CDP و Selenium را با هم گزارش می‌دهد',
+         strpos($_render202, '$errors = []') !== false
+      && strpos($_render202, "implode(' | ', \$errors") !== false
+      && strpos($_render202, 'chromedriver-log:') !== false
+      && strpos($_render202, 'chrome-log:') !== false);
+    $add('10.202', 'ورودیِ 10.202 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "202'") !== false
+      && version_compare(APP_VERSION, '10.' . '202', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -66856,6 +66867,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.202', t:'🧩 خطای کامل‌تر برای رندر Playwright/Selenium', items:[
+    'render.php خطای هر دو مسیر CDP و Selenium را با هم برمی‌گرداند و tail لاگ chrome/chromedriver را برای عیب‌یابی کتابخانه یا ضدربات نشان می‌دهد',
+  ]},
   {v:'10.201', t:'🔎 پروب تک‌صفحه‌ای رندر مرورگری', items:[
     'اندپوینت render_page_probe اضافه شد تا یک URL با driver مشخص Playwright/Selenium و timeout کوتاه رندر و همان‌جا با auto/heuristic/jsonld شمارش شود',
   ]},
