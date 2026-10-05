@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.208';
+const APP_VERSION = '10.209';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36971,6 +36971,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "208'") !== false
       && version_compare(APP_VERSION, '10.' . '208', '>='));
 
+    /* ---------- v10.209: کتابخانه‌های محلی Chrome بدون apt ---------- */
+    $_boot209 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $_start209 = is_file(__DIR__ . '/browser-php/start.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/start.sh') : '';
+    $add('10.209', 'bootstrap کتابخانه‌های runtime گمشدهٔ Chrome را از .deb استخراج می‌کند',
+         strpos($_boot209, 'install_chrome_deb_libs') !== false
+      && strpos($_boot209, 'libatk-bridge2.0-0_2.46.0-5_amd64.deb') !== false
+      && strpos($_boot209, 'libgbm1_22.3.6-1+deb12u1_amd64.deb') !== false
+      && strpos($_boot209, 'libasound2_1.2.8-1+b1_amd64.deb') !== false);
+    $add('10.209', 'start.sh مسیر lib محلی را به LD_LIBRARY_PATH اضافه می‌کند',
+         strpos($_start209, 'LD_LIBRARY_PATH=') !== false
+      && strpos($_start209, 'lib/x86_64-linux-gnu') !== false);
+    $add('10.209', 'ورودیِ 10.209 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "209'") !== false
+      && version_compare(APP_VERSION, '10.' . '209', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67160,6 +67175,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.209', t:'📦 کتابخانه‌های محلی Chrome بدون apt', items:[
+    'bootstrap سرویس رندر در نبود apt، چهار کتابخانهٔ runtime گمشدهٔ Chrome را از mirrorهای Debian به browser-php/lib استخراج می‌کند',
+    'start.sh مسیر browser-php/lib را در LD_LIBRARY_PATH می‌گذارد تا Playwright/CDP و Selenium بتوانند از همان کتابخانه‌های محلی استفاده کنند',
+  ]},
   {v:'10.208', t:'🧰 تشخیص درست‌تر باینری‌های رندر', items:[
     'render.php آزمون --version مرورگر/درایور را در صورت وجود با دستور timeout اجرا می‌کند تا chromedriverهای سالم به‌اشتباه unavailable نشوند',
     'bootstrap هنگام خراب بودن Chrome، خروجی ldd کتابخانه‌های missing را در لاگ render_probe نشان می‌دهد تا حلقهٔ فیدبک دقیق‌تر شود',

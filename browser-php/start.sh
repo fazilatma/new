@@ -10,6 +10,8 @@
 set -eu
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
+LIB="$HERE/lib"
+export LD_LIBRARY_PATH="$LIB/usr/lib/x86_64-linux-gnu:$LIB/lib/x86_64-linux-gnu:$LIB:${LD_LIBRARY_PATH:-}"
 
 RENDER_HOST="${RENDER_HOST:-127.0.0.1}"
 RENDER_PORT="${RENDER_PORT:-3100}"

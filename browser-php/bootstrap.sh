@@ -14,7 +14,10 @@
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HERE/bin"
-mkdir -p "$BIN"
+LIB="$HERE/lib"
+mkdir -p "$BIN" "$LIB"
+render_lib_path() { printf '%s:%s:%s' "$LIB/usr/lib/x86_64-linux-gnu" "$LIB/lib/x86_64-linux-gnu" "$LIB"; }
+export LD_LIBRARY_PATH="$(render_lib_path):${LD_LIBRARY_PATH:-}"
 
 chmod_render_bins() {
   local f
@@ -57,6 +60,60 @@ download() {  # url → file  (v10.200: try mirror before Google storage on rest
   esac
   download_once "$url" "$out" && return 0
   return 1
+}
+
+deb_download() {  # debian pool path → file
+  local rel="$1" out="$2" base
+  for base in     "https://mirrors.aliyun.com/debian"     "https://mirrors.tuna.tsinghua.edu.cn/debian"     "https://ftp.debian.org/debian"     "https://deb.debian.org/debian"     "http://deb.debian.org/debian"; do
+    echo "… دریافت کتابخانه از ${base}/${rel}"
+    download_once "${base}/${rel}" "$out" && return 0
+  done
+  return 1
+}
+
+extract_deb_to_lib() {  # deb → $LIB
+  local deb="$1" tmp="$LIB/.debtmp.$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  if have ar; then
+    (cd "$tmp" && ar x "$deb") || { rm -rf "$tmp"; return 1; }
+  elif have python3; then
+    python3 - "$deb" "$tmp" <<'PY' || { rm -rf "$tmp"; return 1; }
+import sys, os
+p=sys.argv[1]; out=sys.argv[2]
+with open(p,'rb') as f:
+    if f.read(8) != b'!<arch>\n': raise SystemExit(1)
+    while True:
+        hdr=f.read(60)
+        if not hdr: break
+        name=hdr[:16].decode('utf-8','ignore').strip().rstrip('/')
+        size=int(hdr[48:58].decode('ascii','ignore').strip() or '0')
+        data=f.read(size)
+        if size % 2: f.read(1)
+        if name.startswith('data.tar'):
+            q=os.path.join(out,name.replace('/','_'))
+            open(q,'wb').write(data)
+PY
+  else
+    rm -rf "$tmp"; return 1
+  fi
+  local data
+  data="$(ls -1 "$tmp"/data.tar.* 2>/dev/null | head -n1 || true)"
+  [ -n "$data" ] || { rm -rf "$tmp"; return 1; }
+  tar -xf "$data" -C "$LIB" || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+  return 0
+}
+
+install_chrome_deb_libs() {
+  mkdir -p "$LIB"
+  local rel out ok=0
+  for rel in     "pool/main/a/at-spi2-core/libatk-bridge2.0-0_2.46.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.46.0-5_amd64.deb"     "pool/main/m/mesa/libgbm1_22.3.6-1+deb12u1_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.2.8-1+b1_amd64.deb"; do
+    out="$LIB/$(basename "$rel")"
+    if [ ! -f "$out" ]; then deb_download "$rel" "$out" || { ok=1; continue; }; fi
+    extract_deb_to_lib "$out" || ok=1
+  done
+  export LD_LIBRARY_PATH="$(render_lib_path):${LD_LIBRARY_PATH:-}"
+  return $ok
 }
 
 unzip_file() {  # zip → dir
@@ -130,15 +187,22 @@ if [ -n "$CHROME_PATH" ]; then
   if "$CHROME_PATH" --version >/dev/null 2>&1; then
     "$CHROME_PATH" --version || true
   else
-    echo "⚠ کروم اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
-    echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
-    echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
-    echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
-    echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
-    if have ldd; then
-      ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+    echo "⚠ کروم اجرا نمی‌شود — تلاش برای نصب کتابخانه‌های runtime بدون apt"
+    install_chrome_deb_libs || true
+    if "$CHROME_PATH" --version >/dev/null 2>&1; then
+      echo "✓ کروم پس از افزودن کتابخانه‌های محلی اجرا شد"
+      "$CHROME_PATH" --version || true
     else
-      echo "      ldd در این محیط موجود نیست"
+      echo "⚠ کروم هنوز اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
+      echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
+      echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
+      echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
+      echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
+      if have ldd; then
+        ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+      else
+        echo "      ldd در این محیط موجود نیست"
+      fi
     fi
   fi
 else
