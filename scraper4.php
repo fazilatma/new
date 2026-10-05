@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.209';
+const APP_VERSION = '10.210';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36986,6 +36986,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "209'") !== false
       && version_compare(APP_VERSION, '10.' . '209', '>='));
 
+    /* ---------- v10.210: استخراج .deb بدون xz سیستم ---------- */
+    $_boot210 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.210', 'bootstrap برای data.tar.xz fallback پایتون دارد',
+         strpos($_boot210, "tarfile.open") !== false
+      && strpos($_boot210, "t.extractall") !== false);
+    $add('10.210', 'نسخهٔ libgbm1 روی deb12u2 موجود در bookworm است',
+         strpos($_boot210, 'libgbm1_22.3.6-1+deb12u2_amd64.deb') !== false);
+    $add('10.210', 'ورودیِ 10.210 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "210'") !== false
+      && version_compare(APP_VERSION, '10.' . '210', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67175,6 +67186,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.210', t:'🗜️ استخراج .deb بدون xz سیستم', items:[
+    'bootstrap اگر tar سیستم به‌خاطر نبود xz نتواند data.tar.xz را باز کند، با tarfile پایتون همان .deb را استخراج می‌کند',
+    'نسخهٔ بستهٔ libgbm1 به build موجود bookworm یعنی 22.3.6-1+deb12u2 به‌روز شد',
+  ]},
   {v:'10.209', t:'📦 کتابخانه‌های محلی Chrome بدون apt', items:[
     'bootstrap سرویس رندر در نبود apt، چهار کتابخانهٔ runtime گمشدهٔ Chrome را از mirrorهای Debian به browser-php/lib استخراج می‌کند',
     'start.sh مسیر browser-php/lib را در LD_LIBRARY_PATH می‌گذارد تا Playwright/CDP و Selenium بتوانند از همان کتابخانه‌های محلی استفاده کنند',

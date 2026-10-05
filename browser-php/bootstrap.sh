@@ -99,7 +99,17 @@ PY
   local data
   data="$(ls -1 "$tmp"/data.tar.* 2>/dev/null | head -n1 || true)"
   [ -n "$data" ] || { rm -rf "$tmp"; return 1; }
-  tar -xf "$data" -C "$LIB" || { rm -rf "$tmp"; return 1; }
+  if ! tar -xf "$data" -C "$LIB" 2>/dev/null; then
+    if have python3; then
+      python3 - "$data" "$LIB" <<'PY' || { rm -rf "$tmp"; return 1; }
+import sys, tarfile
+with tarfile.open(sys.argv[1], 'r:*') as t:
+    t.extractall(sys.argv[2])
+PY
+    else
+      rm -rf "$tmp"; return 1
+    fi
+  fi
   rm -rf "$tmp"
   return 0
 }
@@ -107,7 +117,7 @@ PY
 install_chrome_deb_libs() {
   mkdir -p "$LIB"
   local rel out ok=0
-  for rel in     "pool/main/a/at-spi2-core/libatk-bridge2.0-0_2.46.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.46.0-5_amd64.deb"     "pool/main/m/mesa/libgbm1_22.3.6-1+deb12u1_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.2.8-1+b1_amd64.deb"; do
+  for rel in     "pool/main/a/at-spi2-core/libatk-bridge2.0-0_2.46.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.46.0-5_amd64.deb"     "pool/main/m/mesa/libgbm1_22.3.6-1+deb12u2_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.2.8-1+b1_amd64.deb"; do
     out="$LIB/$(basename "$rel")"
     if [ ! -f "$out" ]; then deb_download "$rel" "$out" || { ok=1; continue; }; fi
     extract_deb_to_lib "$out" || ok=1
