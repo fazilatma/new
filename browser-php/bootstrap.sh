@@ -28,7 +28,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 fail() { echo "✗ $*"; exit 1; }
 
-download() {  # url → file
+download_once() {  # url → file
   local url="$1" out="$2"
   if have curl; then curl -fL --progress-bar -o "$out" "$url" && return 0; fi
   if have wget; then wget -q -O "$out" "$url" && return 0; fi
@@ -38,6 +38,19 @@ import sys, urllib.request
 urllib.request.urlretrieve(sys.argv[1], sys.argv[2])
 PY
   fi
+  return 1
+}
+
+download() {  # url → file  (v10.199: mirror fallback when Google storage blocks the host)
+  local url="$1" out="$2" alt=""
+  download_once "$url" "$out" && return 0
+  case "$url" in
+    https://storage.googleapis.com/chrome-for-testing-public/*)
+      alt="https://registry.npmmirror.com/-/binary/chrome-for-testing/${url#https://storage.googleapis.com/chrome-for-testing-public/}"
+      echo "… تلاش با mirror برای Chrome-for-Testing"
+      download_once "$alt" "$out" && return 0
+      ;;
+  esac
   return 1
 }
 
