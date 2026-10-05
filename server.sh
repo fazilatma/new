@@ -47,6 +47,14 @@ SCRAPER_HEALTH_URL="${SCRAPER_HEALTH_URL:-}"  # خالی = http://127.0.0.1:$POR
 SCRAPER_LOG="${SCRAPER_LOG:-$HERE/logs/server.log}"
 SCRAPER_TICK_LOG="${SCRAPER_TICK_LOG:-$HERE/logs/cron-tick.log}"
 SCRAPER_WORKER_LOG="${SCRAPER_WORKER_LOG:-$HERE/logs/worker.log}"
+# v10.195: سرویس رندر مرورگریِ pure-PHP برای موتورهای Playwright/Selenium.
+# روی loopback بالا می‌آید و فقط خودِ scraper4 به آن وصل می‌شود؛ وابستگی Node/Python ندارد.
+SCRAPER_RENDER_SERVICE="${SCRAPER_RENDER_SERVICE:-1}"
+SCRAPER_RENDER_HOST="${SCRAPER_RENDER_HOST:-127.0.0.1}"
+SCRAPER_RENDER_PORT="${SCRAPER_RENDER_PORT:-3100}"
+SCRAPER_RENDER_BOOTSTRAP="${SCRAPER_RENDER_BOOTSTRAP:-1}"
+SCRAPER_RENDER_MAX_CONCURRENCY="${SCRAPER_RENDER_MAX_CONCURRENCY:-2}"
+SCRAPER_RENDER_LOG="${SCRAPER_RENDER_LOG:-$HERE/logs/render.log}"
 # ریشهٔ سند اختیاری برای چیدمان‌های چندپوشه‌ای (مثلاً حالت لاراول:
 #   SCRAPER_DOCROOT=laravel/public SCRAPER_ROUTER=laravel/public/index.php)
 SCRAPER_DOCROOT="${SCRAPER_DOCROOT:-}"
@@ -57,6 +65,7 @@ SUP_PIDFILE="$RUN_DIR/supervisor.pid"
 SRV_PIDFILE="$RUN_DIR/php-server.pid"
 TICK_PIDFILE="$RUN_DIR/cron-tick.pid"
 WORKER_PIDFILE="$RUN_DIR/queue-worker.pid"
+RENDER_PIDFILE="$RUN_DIR/render-service.pid"
 HEALTH_PIDFILE="$RUN_DIR/health-probe.pid"
 
 # ویندوز (Git Bash/MSYS): چندکارگر پشتیبانی نمی‌شود
@@ -66,7 +75,7 @@ esac
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
-ensure_dirs() { mkdir -p "$RUN_DIR" "$(dirname "$SCRAPER_LOG")" "$(dirname "$SCRAPER_TICK_LOG")" "$(dirname "$SCRAPER_WORKER_LOG")"; }
+ensure_dirs() { mkdir -p "$RUN_DIR" "$(dirname "$SCRAPER_LOG")" "$(dirname "$SCRAPER_TICK_LOG")" "$(dirname "$SCRAPER_WORKER_LOG")" "$(dirname "$SCRAPER_RENDER_LOG")"; }
 
 need_php() {
   if ! command -v "$SCRAPER_PHP" >/dev/null 2>&1; then
@@ -139,6 +148,42 @@ worker_loop() {
   done
 }
 
+# --- سرویس رندر مرورگری: browser-php/start.sh روی loopback --------------------
+render_loop() {
+  [ "$SCRAPER_RENDER_SERVICE" -gt 0 ] 2>/dev/null || exit 0
+  [ -f "$HERE/browser-php/start.sh" ] || { log "سرویس رندر پیدا نشد: $HERE/browser-php/start.sh"; exit 0; }
+  local delay=2 started up rc boot_once=0
+  while [ ! -f "$STOP_FLAG" ]; do
+    started="$(date +%s)"
+    if [ "$SCRAPER_RENDER_BOOTSTRAP" -gt 0 ] 2>/dev/null && [ "$boot_once" -eq 0 ] && [ -f "$HERE/browser-php/bootstrap.sh" ]; then
+      log "آماده‌سازی مرورگرِ سرویس رندر (در صورت نیاز) — لاگ: $SCRAPER_RENDER_LOG"
+      bash "$HERE/browser-php/bootstrap.sh" >>"$SCRAPER_RENDER_LOG" 2>&1 || log "هشدار: bootstrap سرویس رندر کامل نشد؛ سرویس برای health بالا می‌آید ولی ممکن است مرورگر پیدا نکند"
+      boot_once=1
+    fi
+    log "راه‌اندازی سرویس رندر مرورگری: http://$SCRAPER_RENDER_HOST:$SCRAPER_RENDER_PORT — لاگ: $SCRAPER_RENDER_LOG"
+    RENDER_HOST="$SCRAPER_RENDER_HOST" RENDER_PORT="$SCRAPER_RENDER_PORT" \
+      RENDER_MAX_CONCURRENCY="$SCRAPER_RENDER_MAX_CONCURRENCY" PHP="$SCRAPER_PHP" \
+      bash "$HERE/browser-php/start.sh" >>"$SCRAPER_RENDER_LOG" 2>&1
+    rc=$?
+    [ -f "$STOP_FLAG" ] && break
+    up=$(( $(date +%s) - started ))
+    [ "$up" -ge 60 ] && delay=2
+    log "سرویس رندر با کد $rc از کار افتاد (پس از ${up} ثانیه) — بازراه‌اندازی تا ${delay} ثانیهٔ دیگر…"
+    sleep "$delay"
+    [ "$up" -lt 60 ] && delay=$((delay*2))
+    [ "$delay" -gt "$SCRAPER_RESTART_DELAY_MAX" ] && delay="$SCRAPER_RESTART_DELAY_MAX"
+  done
+}
+
+stop_render() {
+  if [ -n "${RENDER_PID:-}" ]; then
+    pkill -TERM -P "$RENDER_PID" 2>/dev/null || true
+    kill "$RENDER_PID" 2>/dev/null || true
+    wait "$RENDER_PID" 2>/dev/null || true
+    RENDER_PID=""
+  fi
+}
+
 stop_worker() {
   if [ -n "${WORKER_PID:-}" ]; then
     pkill -TERM -P "$WORKER_PID" 2>/dev/null || true
@@ -203,6 +248,7 @@ supervise() {
     touch "$STOP_FLAG"
     stop_ticker
     stop_worker
+    stop_render
     stop_health
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
     exit 0
@@ -226,6 +272,12 @@ supervise() {
       echo "$TICKER_PID" > "$TICK_PIDFILE"
     fi
 
+    if [ "$SCRAPER_RENDER_SERVICE" -gt 0 ] 2>/dev/null; then
+      render_loop &
+      RENDER_PID=$!
+      echo "$RENDER_PID" > "$RENDER_PIDFILE"
+    fi
+
     if [ "$SCRAPER_HEALTH_SEC" -gt 0 ] 2>/dev/null; then
       health_loop &
       HEALTH_PID=$!
@@ -235,6 +287,7 @@ supervise() {
     wait "$SERVER_PID"; rc=$?
     stop_ticker
     stop_worker
+    stop_render
     stop_health
 
     if [ -f "$STOP_FLAG" ]; then

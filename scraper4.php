@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.194';
+const APP_VERSION = '10.195';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9689,6 +9689,7 @@ function fetch_html_render_health(array $rcfg): array {
     $j = json_decode($body, true);
     if (!is_array($j)) return ['ok'=>false,'error'=>'invalid health response'];
     return ['ok'=>true,'driver'=>(string)($j['driver'] ?? ''),
+            'available'=>is_array($j['available'] ?? null) ? $j['available'] : [],
             'max_concurrency'=>(int)($j['max_concurrency'] ?? 0),
             'active'=>(int)($j['active'] ?? 0)];
 }
@@ -15603,7 +15604,8 @@ if(($p['queue_id']??'')===$qid){
 $rep=['new_items'=>$p['new_items']??[],'changed_items'=>$p['changed_items']??[],
 'removed_items'=>$p['removed_items']??[],'unchanged'=>$p['unchanged']??0,
 'price_up'=>$p['price_up']??0,'price_down'=>$p['price_down']??0,
-'extracted'=>$p['extracted']??0,'live'=>true];
+'extracted'=>$p['extracted']??0,'started_at'=>$p['started_at']??0,
+'finished_at'=>time(),'avg_ppm'=>max(0,(int)round((int)($p['extracted']??0)*60/max(1,time()-(int)($p['started_at']??time())))),'live'=>true];
 }
 }
 if($rep===null){echo json_encode(['ok'=>false,'error'=>'گزارشی برای این اجرا ذخیره نشده']);exit;}
@@ -17276,7 +17278,9 @@ extractSaveReport($queueId, [
     'price_down'    => $priceDown,
     'extracted'     => count($allProducts),
     'profile_name'  => $profile['name'] ?? ($profileKey ?? ''),
+    'started_at'    => $startedAt,
     'finished_at'   => time(),
+    'avg_ppm'       => max(0, (int)round(count($allProducts) * 60 / max(1, time() - $startedAt))),
 ]);
 
 foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']='done';$qe['products_count']=count($allProducts);$qe['total']=count($allProducts);$qe['current']=count($allProducts);$qe['done_at']=time();$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
@@ -28010,10 +28014,7 @@ if (isset($_GET['render_probe'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $rc = renderCfg();
     $out = ['ok' => false, 'enabled' => !empty($rc['enabled']), 'url' => (string)($rc['url'] ?? '')];
-    if (empty($rc['enabled'])) {
-        $out['diagnosis'] = 'رندر در تنظیمات فعال نیست — اول تیک «فعال» را بزنید و ذخیره کنید، بعد دوباره امتحان کنید.';
-        echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
-    }
+    $renderDisabledNote = empty($rc['enabled']) ? 'رندر خودکار در تنظیمات خاموش است؛ اما موتورهای Playwright/Selenium هنگام انتخاب شدن همین سرویس را اجباری صدا می‌زنند. ' : '';
     if ((string)$rc['url'] === '' || !preg_match('~^https?://~i', (string)$rc['url'])) {
         $out['diagnosis'] = 'آدرس سرویس رندر تنظیم نشده است (پیش‌فرض: http://127.0.0.1:3100).';
         echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
@@ -28023,10 +28024,12 @@ if (isset($_GET['render_probe'])) {
     $out['ms'] = (int)round((microtime(true) - $t0) * 1000);
     $out = array_merge($out, $hc);
     if (empty($out['ok'])) {
-        $out['diagnosis'] = 'به سرویس رندر وصل نشد — آیا با «cd browser && ./browser.sh start» یا «docker compose up -d render» بالاست؟'
+        $out['diagnosis'] = $renderDisabledNote . 'به سرویس رندر وصل نشد — سرویس browser-php/start.sh باید روی 127.0.0.1:3100 بالا باشد.'
                           . ' خطا: ' . mb_substr((string)($out['error'] ?? ''), 0, 120);
     } else {
-        $out['diagnosis'] = 'سرویس رندر سالم است؛ در حالتِ خودکار فقط صفحه‌های «پوستهٔ JS» رندر می‌شوند.';
+        $avail = is_array($out['available'] ?? null) ? $out['available'] : [];
+        $drvNote = (!empty($avail) && empty($avail['cdp']) && empty($avail['selenium'])) ? ' ولی هیچ مرورگر/درایوری پیدا نشده؛ bootstrap مرورگر لازم است.' : '';
+        $out['diagnosis'] = $renderDisabledNote . 'سرویس رندر سالم است' . $drvNote . '؛ در حالتِ خودکار فقط صفحه‌های «پوستهٔ JS» رندر می‌شوند.';
     }
     echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
 }
@@ -36449,6 +36452,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.194', 'ورودیِ 10.194 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "194'") !== false
       && version_compare(APP_VERSION, '10.' . '194', '>='));
+
+    /* ---------- v10.195: سرعت استخراج و render_probe مرورگری ---------- */
+    $add('10.195', 'شمارندهٔ ششم سرعت میانگین استخراج در liveCounters اضافه شده است',
+         strpos($selfSrc, 'function extractAvgPpm(d)') !== false
+      && strpos($selfSrc, "cell('⚡','سرعت میانگین'") !== false
+      && strpos($selfSrc, '.live-cnt{display:grid;grid-template-columns:repeat(6,1fr);') !== false);
+    $add('10.195', 'گزارش نهایی استخراج avg_ppm و started_at را ذخیره می‌کند',
+         strpos($selfSrc, "'avg_ppm'       => max(0, (int)round(count(\$allProducts) * 60") !== false
+      && strpos($selfSrc, "'started_at'    => \$startedAt") !== false);
+    $add('10.195', 'render_probe حتی با خاموش بودن رندر خودکار سلامت سرویس مرورگری را تست می‌کند',
+         strpos($selfSrc, '$renderDisabledNote = empty($rc[' . "'enabled'") !== false
+      && strpos($selfSrc, 'سرویس browser-php/start.sh باید روی 127.0.0.1:3100 بالا باشد') !== false
+      && version_compare(APP_VERSION, '10.' . '195', '>='));
+    $_srv195 = is_file(__DIR__ . '/server.sh') ? (string)@file_get_contents(__DIR__ . '/server.sh') : '';
+    $add('10.195', 'server.sh سرویس browser-php render را کنار worker بالا می‌آورد',
+         strpos($_srv195, 'SCRAPER_RENDER_SERVICE') !== false
+      && strpos($_srv195, 'render_loop()') !== false
+      && strpos($_srv195, 'browser-php/start.sh') !== false);
+    $add('10.195', 'ورودیِ 10.195 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "195'") !== false
+      && version_compare(APP_VERSION, '10.' . '195', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -57571,7 +57595,7 @@ body.modal-open .hamburger-btn,body.modal-open .fullwidth-btn{z-index:10}
    (۲) overflow:visible باعث می‌شود سربخش‌های تودرتو هم واقعاً بچسبند
    (سربخشِ داخلِ جعبهٔ overflow:hidden به‌جای پنل، به همان جعبه می‌چسبد). */
 .smenu-body.open.smenu-done{max-height:none;overflow:visible}/* v9.78: آکاردئون‌های تب سلکتورها بزرگ‌ترند (شامل پیش‌نمایش iframe) */
-.smenu-body.open.sel-open{max-height:12000px}.smenu-body .crow{margin-bottom:8px}.smenu-body .cact{margin-top:10px}.live-cnt{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:8px 0}.live-cnt .lc{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:7px 4px;text-align:center;cursor:pointer;transition:.15s;display:flex;flex-direction:column;gap:1px}
+.smenu-body.open.sel-open{max-height:12000px}.smenu-body .crow{margin-bottom:8px}.smenu-body .cact{margin-top:10px}.live-cnt{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:8px 0}.live-cnt .lc{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:7px 4px;text-align:center;cursor:pointer;transition:.15s;display:flex;flex-direction:column;gap:1px}
 /* v9.78: توضیحاتِ داخلِ بخش‌های تب سلکتورها هم کشویی شدند */
 .hint-collapse summary{cursor:pointer;font-size:12px;font-weight:700;list-style:none;display:flex;align-items:center;gap:6px;padding:4px 0}
 .hint-collapse summary::-webkit-details-marker{display:none}
@@ -65493,7 +65517,7 @@ function openExtractPanel(title){
             +'<button type="button" class="exl-btn" onclick="extractLogClear()" title="فقط نمایشِ این جعبه پاک می‌شود؛ اجرا ادامه دارد">🧹 پاک‌کردن نمایش</button>'
             +'</div>'
             +'<div id="extractLog" style="max-height:400px;overflow-y:auto;font-size:11px;color:#e2e8f0;background:#0f172a80;border:1px solid #33415555;border-radius:8px;padding:6px 8px"></div>'
-            +'<div id="extractStats" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-top:10px"></div>'
+            +'<div id="extractStats" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px"></div>'
             +'<div style="text-align:center;margin-top:8px"><button class="btn btn-red" onclick="stopBackendExtract()">⏹ توقف</button></div>';
     }
     if($('extractStatusText'))$('extractStatusText').textContent='⚡ در حال استخراج...';
@@ -66009,6 +66033,7 @@ function loadExtractModalCounters(queueId){
         const nUnc=rp.unchanged||0;
         const up=rp.price_up||0, down=rp.price_down||0;
         const gone=rp.gone_from_site||0, noPrice=rp.no_price||0;
+        const ppm=extractAvgPpm(rp);
 
         const cell=(icon,label,val,color,type,extra)=>
             '<div class="lc" style="border-color:'+color+'33" onclick="showExtractReport(\''+type+'\')" title="کلیک برای دیدن فهرست">'
@@ -66020,7 +66045,8 @@ function loadExtractModalCounters(queueId){
             +cell('🆕','جدید',nNew,'#4ade80','new')
             +cell('💰','تغییر قیمت',nChg,'#facc15','changed',nChg?('▲'+toFa(up)+' ▼'+toFa(down)):'')
             +cell('❌','حذف/ناموجود',nRem,'#f87171','removed',noPrice?('🚫'+toFa(noPrice)+' بی‌قیمت'):'')
-            +cell('⏭','بدون تغییر',nUnc,'#94a3b8','unchanged');
+            +cell('⏭','بدون تغییر',nUnc,'#94a3b8','unchanged')
+            +cell('⚡','سرعت میانگین',ppm,'#a78bfa','none','محصول/دقیقه');
     }).catch(()=>{
         if(box)box.innerHTML='<div style="grid-column:1/-1;color:#f87171;font-size:11px;padding:6px">خطا در دریافت گزارش</div>';
     });
@@ -66066,6 +66092,20 @@ function pollExtractLogModal(){
         }).catch(()=>{});
     },2000);
 }
+// v10.195: میانگین سرعت استخراج برای شمارندهٔ ششمِ زنده و گزارش نهایی.
+function extractAvgPpm(d){
+    const count=Number((d&&d.extracted)||0);
+    if(!count)return 0;
+    let started=Number((d&&d.started_at)||0);
+    let finished=Number((d&&d.finished_at)||0);
+    if(started>0){
+        const endMs=finished>0?finished*1000:Date.now();
+        const mins=Math.max((endMs-started*1000)/60000,1/60);
+        return Math.max(0,Math.round(count/mins));
+    }
+    return Number((d&&d.avg_ppm)||0)||0;
+}
+
 // v8.22: clickable live counters shown while the extraction runs
 function renderLiveCounters(d){
     const box=$('liveCounters');
@@ -66091,13 +66131,15 @@ function renderLiveCounters(d){
     let extra='';
     if(nChg>0)extra='▲'+toFa(up)+' ▼'+toFa(down);
     const noPrice=d.no_price||0;   // v8.26: چند تا از حذف‌شده‌ها بی‌قیمت‌اند
+    const ppm=extractAvgPpm(d);
 
     box.innerHTML=
         cell('📦','کل','','#67e8f9','none').replace('<b style="color:#67e8f9"></b>','<b style="color:#67e8f9">'+toFa(d.extracted||0)+'</b>')
         +cell('🆕','جدید',nNew,'#4ade80','new')
         +cell('💰','تغییر قیمت',nChg,'#facc15','changed',extra)
         +cell('❌','حذف/ناموجود',nRem,'#f87171','removed',noPrice?('🚫'+toFa(noPrice)+' بی‌قیمت'):'')
-        +cell('⏭','بدون تغییر',nUnc,'#94a3b8','unchanged');
+        +cell('⏭','بدون تغییر',nUnc,'#94a3b8','unchanged')
+        +cell('⚡','سرعت میانگین',ppm,'#a78bfa','none','محصول/دقیقه');
 }
 
 function pollExtractProgress(){
@@ -66176,7 +66218,8 @@ function pollExtractProgress(){
                 // v8.19: Show clickable stats in extractStats
                 const statsDiv=$('extractStats');
                 if(statsDiv){
-                    statsDiv.innerHTML='<div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'new\')"><b style="color:#4ade80;font-size:16px">'+toFa(newCount)+'</b><br><span style="color:#94a3b8;font-size:10px">🆕 جدید</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'changed\')"><b style="color:#facc15;font-size:16px">'+toFa(priceChanged)+'</b><br><span style="color:#94a3b8;font-size:10px">💰 تغییر قیمت</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'removed\')"><b style="color:#f87171;font-size:16px">'+toFa(removed)+'</b><br><span style="color:#94a3b8;font-size:10px">❌ حذف شده</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'unchanged\')"><b style="color:#94a3b8;font-size:16px">'+toFa(unchanged)+'</b><br><span style="color:#94a3b8;font-size:10px">⏭ بدون تغییر</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center"><b style="color:#60a5fa;font-size:16px">'+toFa(extracted)+'</b><br><span style="color:#94a3b8;font-size:10px">📊 کل</span></div>';
+                    const ppm=extractAvgPpm(d);
+                    statsDiv.innerHTML='<div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'new\')"><b style="color:#4ade80;font-size:16px">'+toFa(newCount)+'</b><br><span style="color:#94a3b8;font-size:10px">🆕 جدید</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'changed\')"><b style="color:#facc15;font-size:16px">'+toFa(priceChanged)+'</b><br><span style="color:#94a3b8;font-size:10px">💰 تغییر قیمت</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'removed\')"><b style="color:#f87171;font-size:16px">'+toFa(removed)+'</b><br><span style="color:#94a3b8;font-size:10px">❌ حذف شده</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'unchanged\')"><b style="color:#94a3b8;font-size:16px">'+toFa(unchanged)+'</b><br><span style="color:#94a3b8;font-size:10px">⏭ بدون تغییر</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center"><b style="color:#60a5fa;font-size:16px">'+toFa(extracted)+'</b><br><span style="color:#94a3b8;font-size:10px">📊 کل</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center"><b style="color:#a78bfa;font-size:16px">'+toFa(ppm)+'</b><br><span style="color:#94a3b8;font-size:10px">⚡ محصول/دقیقه</span></div>';
                 }
                 showToast('✅ '+extracted+' محصول استخراج شد — 🆕'+newCount+' 💰'+priceChanged+' ❌'+removed);
             }
@@ -66620,6 +66663,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.195', t:'⚡ شمارندهٔ سرعت استخراج و آماده‌سازی سرویس رندر مرورگری', items:[
+    'در پنل زندهٔ استخراج، شمارندهٔ ششم اضافه شد و میانگین سرعت را بر حسب محصول/دقیقه از شروع همان اجرا نشان می‌دهد',
+    'گزارش پایان استخراج هم started_at و avg_ppm را ذخیره می‌کند تا مودال کارهای تمام‌شده سرعت میانگین را نشان دهد',
+    'آزمون render_probe حتی وقتی رندر خودکار خاموش است سلامت سرویس محلی Playwright/Selenium را بررسی می‌کند تا عیب‌یابی موتورهای مرورگری روشن‌تر باشد',
+    'server.sh سرویس pure-PHP browser-php را کنار وب‌سرور و worker بالا می‌آورد تا موتورهای Playwright/Selenium به 127.0.0.1:3100 وصل شوند',
+  ]},
   {v:'10.194', t:'🔤 پذیرش URL فارسی ایمالز در UI و استخراج', items:[
     'آدرس‌هایی که با مسیر فارسی خام از مرورگر کپی می‌شوند قبل از اعتبارسنجی سرور به شکل percent-encoded امن تبدیل می‌شوند؛ بنابراین visual_proxy، تست صفحه‌بندی، تست موتور و استخراج بک‌اند دیگر روی URL فارسی خطای Invalid URL نمی‌دهند',
     'فرمول کلید پروفایل در PHP و مرورگر برای URLهای فارسی هم‌راستا شد و backend_extract به‌جای کلید حدسی مرورگر، کلید واقعیِ برگردانده‌شده از load_profile را می‌فرستد',
