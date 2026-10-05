@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.189';
+const APP_VERSION = '10.190';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1074,7 +1074,7 @@ function s4WorkerFinishJob(string $jobId, string $status, array $result = [], st
 }
 
 function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
-    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'all';
+    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
     $enq = s4WorkerEnqueue('backend_extract', [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
@@ -1143,7 +1143,7 @@ function s4CliPhpBinary(): string {
 function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
-    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'all';
+    $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     if ($profileKey === '') return ['ok' => false, 'error' => 'profile_key_empty'];
     if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
     $php = s4CliPhpBinary();
@@ -16878,10 +16878,10 @@ if($profileKey===''){
 $u=trim($_GET['url']??'');
 if($u!==''&&filter_var($u,FILTER_VALIDATE_URL))$profileKey=profileKey($u);
 }
-/* v9.01: همان اندپوینت می‌تواند فقط فهرست یا فقط جزئیات را اجرا کند.
-   ?phase=list | detail | all — پیش‌فرض all، پس رفتار دکمهٔ دستی عوض نمی‌شود. */
-$phaseIn = (string)($_GET['phase'] ?? $_POST['phase'] ?? 'all');
-if (!in_array($phaseIn, ['all','list','detail'], true)) $phaseIn = 'all';
+/* v9.01/v10.190: همان اندپوینت می‌تواند فقط فهرست یا فقط جزئیات را اجرا کند.
+   ?phase=list | detail | all — پیش‌فرض list است تا استخراج بک‌اند مثل تست سه‌صفحه‌ای سریع بماند؛ phase=all مسیر کامل قدیمی است. */
+$phaseIn = (string)($_GET['phase'] ?? $_POST['phase'] ?? 'list');
+if (!in_array($phaseIn, ['all','list','detail'], true)) $phaseIn = 'list';
 /* v9.11: دامنهٔ «همهٔ محصولات» از دکمهٔ اجرای فوریِ استخراج دوره‌ای */
 $forceAllIn = !empty($_GET['force_all']) || !empty($_POST['force_all']);
 $resumeRequested = !empty($_GET['resume']) || !empty($_POST['resume']);
@@ -19126,7 +19126,7 @@ if (isCliRun()) {
     } elseif ($_cliCmd === 'backend_extract' || $_cliCmd === 'extract') {
         $_GET['backend_extract_cli'] = '1';         // php scraper4.php backend_extract <profile_key>
         $_GET['profile_key'] = (string)($_cliArgs[1] ?? '');
-        $_GET['phase'] = 'all';
+        $_GET['phase'] = 'list';
         foreach ($_cliArgs as $_a) {
             $_a = (string)$_a;
             if (preg_match('~^--phase=(all|list|detail)$~', $_a, $_m)) $_GET['phase'] = $_m[1];
@@ -19162,8 +19162,8 @@ if (isset($_GET['worker_run'])) {
 }
 if (isset($_GET['backend_extract_cli'])) {
     $pk = trim((string)($_GET['profile_key'] ?? ''));
-    $phaseCli = (string)($_GET['phase'] ?? 'all');
-    if (!in_array($phaseCli, ['all','list','detail'], true)) $phaseCli = 'all';
+    $phaseCli = (string)($_GET['phase'] ?? 'list');
+    if (!in_array($phaseCli, ['all','list','detail'], true)) $phaseCli = 'list';
     $forceCli = !empty($_GET['force_all']);
     $resumeCli = !empty($_GET['resume']);
     $reservedCli = '';
@@ -35602,9 +35602,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     /* v9.11: فراخوانی یک آرگومان force_all هم گرفت (دکمهٔ اجرای فوریِ
        استخراج دوره‌ای)، پس دیگر به $phaseIn); ختم نمی‌شود. */
     $add('10.137', 'اندپوینت resume را قبل از اجرای backend به reservation متصل می‌کند',
-         strpos($selfSrc, "\$phaseIn = (string)(\$_GET['phase'] ?? \$_POST['phase'] ?? 'all');") !== false
+         strpos($selfSrc, "\$phaseIn = (string)(\$_GET['phase'] ?? \$_POST['phase'] ?? 'list');") !== false
          && strpos($selfSrc, "if (!empty(\$_GET['resume']) || !empty(\$_POST['resume']))") !== false
-         && strpos($selfSrc, 'runBackendExtract($profileKey,' . "'manual',true,\$phaseIn,\$forceAllIn,\$resumeLockQueueId);") !== false);
+         && strpos($selfSrc, 'runBackendExtract($profileKey,' . "isCliRun()?'worker_child':'manual'") !== false
+         && strpos($selfSrc, "\$resumeLockQueueId);") !== false);
 
     $add('10.147', 'توقفِ ساخت جدول فقط بعد از lock مصرف می‌شود و صفِ paused خودکار resume نمی‌شود',
          strpos($selfSrc, "function queueStallCheck(string \$which, int \$staleAfter = 300, bool \$includePaused = false): array {") !== false
@@ -35939,6 +35940,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.189', 'ورودیِ 10.189 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "189'") !== false
       && version_compare(APP_VERSION, '10.' . '189', '>='));
+
+    /* ---------- v10.190: استخراج بک‌اند مثل تست سه‌صفحه‌ای، اول فهرست سریع ---------- */
+    $add('10.190', 'پیش‌فرض backend_extract از وب فاز list است نه all',
+         strpos($selfSrc, "\$phaseIn = (string)(\$_GET['phase'] ?? \$_POST['phase'] ?? 'list');") !== false
+      && strpos($selfSrc, "if (!in_array(\$phaseIn, ['all','list','detail'], true)) \$phaseIn = 'list';") !== false);
+    $add('10.190', 'فرانت‌اند استخراج بک‌اند پیش‌فرض list می‌فرستد',
+         strpos($selfSrc, "const ph=phase||'list';") !== false
+      && strpos($selfSrc, 'همان مسیر تست سه‌صفحه‌ای') !== false);
+    $add('10.190', 'فرمان CLI backend_extract هم پیش‌فرض list دارد',
+         strpos($selfSrc, "\$_GET['phase'] = 'list';") !== false
+      && strpos($selfSrc, "\$phaseCli = (string)(\$_GET['phase'] ?? 'list');") !== false);
+    $add('10.190', 'ورودیِ 10.190 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "190'") !== false
+      && version_compare(APP_VERSION, '10.' . '190', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -64621,19 +64636,21 @@ function backendExtractFor(url,panelTitle,phase){
         /* v9.07: فاز جزئیات روی محصولاتی کار می‌کند که «روی دیسک» هستند.
            اگر پروفایل ذخیره‌شده هنوز محصولی ندارد، گام جزئیات چیزی برای
            باز کردن پیدا نمی‌کند و کاربر یک اجرای بی‌صدا می‌بیند. */
-        const ph=phase||'all';
+        const ph=phase||'list';
         if(ph==='detail'&&!(prof.products&&prof.products.length)){
             showToast('⚠️ هنوز محصولی روی سرور ذخیره نشده — اول «استخراج بک‌اند» را بزنید',1);
             return;
         }
-        openExtractPanel(panelTitle||'⚡ استخراج بک‌اند — پیشرفت زنده');
+        openExtractPanel(panelTitle||'⚡ استخراج سریع فهرست — پیشرفت زنده');
         const galOn=((prof.gallery||{}).mode||'off')!=='off';
         const nDet=Object.keys(prof.detailSelectors||{}).length;
         if(ph==='detail'){
             showToast('🔍 استخراج تفصیلی روی سرور شروع شد — گالری '+(galOn?'روشن':'خاموش')
                 +(nDet?(' · '+toFa(nDet)+' فیلد'):''));
+        }else if(ph==='list'){
+            showToast('⚡ استخراج سریع فهرست — همان مسیر تست سه‌صفحه‌ای، بدون باز کردن صفحهٔ تک‌محصول');
         }else{
-            showToast('⚡ شروع — گالری '+(galOn?'روشن':'خاموش')+(nDet?(' · '+toFa(nDet)+' فیلد جزئیات'):''));
+            showToast('⚡ استخراج کامل — شامل جزئیات/گالری و کندتر از تست سه‌صفحه‌ای');
         }
         // Trigger backend extract endpoint (fire-and-forget)
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
@@ -66106,6 +66123,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.190', t:'⚡ استخراج بک‌اند مثل تست سه‌صفحه‌ای: فهرست سریع اول', items:[
+    'علت کندی روشن شد: تست سه‌صفحه‌ای فقط صفحه‌های فهرست را fetch/parse می‌کند، اما استخراج کامل قبلاً هم‌زمان صفحهٔ تک‌تک محصولات را برای جزئیات/گالری باز می‌کرد و همین آن را کند و ناپایدار می‌کرد',
+    'دکمهٔ استخراج بک‌اند حالا پیش‌فرضاً فاز list را اجرا می‌کند؛ یعنی همان موتور و مسیر سریعِ تست سه‌صفحه‌ای برای گرفتن فهرست محصولات، بدون باز کردن صفحهٔ محصول‌ها',
+    'جزئیات/گالری همچنان از دکمهٔ جداگانهٔ «استخراج تفصیلی (سرور)» اجرا می‌شود؛ اگر کسی مسیر قدیمیِ کامل را بخواهد هنوز می‌تواند phase=all را صریح صدا بزند',
+  ]},
   {v:'10.189', t:'🚀 اجرای جداگانهٔ CLI برای استخراج‌های طولانی وب', items:[
     'اگر worker دائمی فعال نباشد، دکمهٔ استخراج بک‌اند دیگر کار طولانی را داخل همان request وب اجرا نمی‌کند؛ یک پردازهٔ CLI جدا با max_execution_time=0 اجرا می‌شود',
     'فرمان php scraper4.php backend_extract <profile_key> اضافه شد تا child مستقل همان موتور runBackendExtract را بدون پاسخ زودهنگام وب اجرا کند',
