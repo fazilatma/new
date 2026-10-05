@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.214';
+const APP_VERSION = '10.215';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -37054,6 +37054,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "214'") !== false
       && version_compare(APP_VERSION, '10.' . '214', '>='));
 
+    /* ---------- v10.215: fallback به Chrome کامل قدیمی‌تر ---------- */
+    $_boot215 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.215', 'bootstrap می‌تواند Chrome کامل قدیمی‌تر را هم امتحان کند',
+         strpos($_boot215, 'download_cft_full_chrome_version') !== false
+      && strpos($_boot215, 'chrome-linux64.zip') !== false
+      && strpos($_boot215, '115.0.5790.170') !== false);
+    $add('10.215', 'marker نسخهٔ CFT مانع دانلود تکراری باینری خراب می‌شود',
+         strpos($_boot215, '.cft-version') !== false
+      && strpos($_boot215, 'headless:120.0.6099.109') !== false
+      && strpos($_boot215, 'chrome:115.0.5790.170') !== false);
+    $add('10.215', 'ورودیِ 10.215 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "215'") !== false
+      && version_compare(APP_VERSION, '10.' . '215', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67243,6 +67257,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.215', t:'🧪 fallback به Chrome کامل قدیمی‌تر', items:[
+    'اگر headless-shell نسخهٔ 120 هم روی هاست SIGTRAP بدهد، bootstrap یک Chrome کامل سازگارتر از Chrome-for-Testing 115.0.5790.170 را امتحان می‌کند',
+    'bootstrap marker نسخهٔ دانلودشده را نگه می‌دارد تا روی هر render_probe همان binary خراب بی‌دلیل دوباره دانلود نشود',
+  ]},
   {v:'10.214', t:'🔒 دانلود مرورگر رندر بدون همزمانی', items:[
     'bootstrap سرویس رندر اکنون قفل داخلی دارد تا چند render_probe یا supervisor همزمان، فایل‌های Chrome را نیمه‌کاره روی هم ننویسند',
     'در نصب تازه، نسخهٔ سازگار Chrome-for-Testing 120 پیش‌فرض است و فقط اگر آن دانلود نشود به آخرین نسخهٔ رسمی fallback می‌کند',

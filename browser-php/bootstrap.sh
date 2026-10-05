@@ -175,7 +175,7 @@ find_sys_chrome() {
 
 # v10.213: latest Chrome-for-Testing may SIGTRAP on older shared hosts; keep a
 # known older headless-shell fallback that still supports the modern CDP paths.
-download_cft_version() {  # version → 0/1
+download_cft_version() {  # version → 0/1 (headless-shell)
   local ver="$1" base="https://storage.googleapis.com/chrome-for-testing-public/$1/linux64"
   rm -rf "$BIN/chrome-headless-shell-linux64" "$BIN/chrome-linux64" "$BIN/chromedriver-linux64"
   echo "… دانلود chrome-headless-shell سازگارتر: $ver"
@@ -187,6 +187,24 @@ download_cft_version() {  # version → 0/1
     unzip_file "$BIN/driver-$ver.zip" "$BIN/" || true
     rm -f "$BIN/driver-$ver.zip"
   fi
+  echo "headless:$ver" > "$BIN/.cft-version" 2>/dev/null || true
+  chmod_render_bins
+  return 0
+}
+
+download_cft_full_chrome_version() {  # version → 0/1 (full chrome, older milestone)
+  local ver="$1" base="https://storage.googleapis.com/chrome-for-testing-public/$1/linux64"
+  rm -rf "$BIN/chrome-headless-shell-linux64" "$BIN/chrome-linux64" "$BIN/chromedriver-linux64"
+  echo "… دانلود chrome کامل سازگارتر: $ver"
+  download "$base/chrome-linux64.zip" "$BIN/chrome-$ver.zip" || return 1
+  unzip_file "$BIN/chrome-$ver.zip" "$BIN/" || return 1
+  rm -f "$BIN/chrome-$ver.zip"
+  echo "… دانلود chromedriver همان نسخه: $ver"
+  if download "$base/chromedriver-linux64.zip" "$BIN/driver-$ver.zip"; then
+    unzip_file "$BIN/driver-$ver.zip" "$BIN/" || true
+    rm -f "$BIN/driver-$ver.zip"
+  fi
+  echo "chrome:$ver" > "$BIN/.cft-version" 2>/dev/null || true
   chmod_render_bins
   return 0
 }
@@ -258,22 +276,37 @@ if [ -n "$CHROME_PATH" ]; then
       "$CHROME_PATH" --version || true
     else
       echo "⚠ کروم هنوز اجرا نمی‌شود — تلاش با Chrome-for-Testing قدیمی‌تر"
-      if download_cft_version "120.0.6099.109"; then
-        CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
+      CFT_MARKER="$(cat "$BIN/.cft-version" 2>/dev/null || true)"
+      if [ "$CFT_MARKER" != "headless:120.0.6099.109" ]; then
+        if download_cft_version "120.0.6099.109"; then
+          CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
+        fi
       fi
       if [ -n "$CHROME_PATH" ] && "$CHROME_PATH" --version >/dev/null 2>&1; then
         echo "✓ کروم سازگارتر اجرا شد"
         "$CHROME_PATH" --version || true
       else
-        echo "⚠ کروم هنوز اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص است."
-        echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
-        echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
-        echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
-        echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
-        if have ldd && [ -n "$CHROME_PATH" ]; then
-          ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+        CFT_MARKER="$(cat "$BIN/.cft-version" 2>/dev/null || true)"
+        echo "⚠ headless-shell هم اجرا نشد — تلاش با chrome کامل قدیمی‌تر"
+        if [ "$CFT_MARKER" != "chrome:115.0.5790.170" ]; then
+          if download_cft_full_chrome_version "115.0.5790.170"; then
+            CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
+          fi
+        fi
+        if [ -n "$CHROME_PATH" ] && "$CHROME_PATH" --version >/dev/null 2>&1; then
+          echo "✓ chrome کامل سازگارتر اجرا شد"
+          "$CHROME_PATH" --version || true
         else
-          echo "      ldd در این محیط موجود نیست"
+          echo "⚠ کروم هنوز اجرا نمی‌شود — معمولاً یک کتابخانهٔ سیستمی ناقص یا محدودیت اجرای باینری هاست است."
+          echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
+          echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
+          echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
+          echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
+          if have ldd && [ -n "$CHROME_PATH" ]; then
+            ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+          else
+            echo "      ldd در این محیط موجود نیست"
+          fi
         fi
       fi
     fi
