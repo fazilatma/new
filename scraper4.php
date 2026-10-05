@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.195';
+const APP_VERSION = '10.196';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9692,6 +9692,55 @@ function fetch_html_render_health(array $rcfg): array {
             'available'=>is_array($j['available'] ?? null) ? $j['available'] : [],
             'max_concurrency'=>(int)($j['max_concurrency'] ?? 0),
             'active'=>(int)($j['active'] ?? 0)];
+}
+
+/* v10.196: راه‌اندازی امن و محدودِ سرویس رندر محلی از همان صفحهٔ عیب‌یابی.
+   فقط اسکریپت ثابت browser-php/start.sh را روی localhost اجرا می‌کند؛ هیچ فرمان
+   یا مسیر دلخواهی از ورودی کاربر گرفته نمی‌شود. */
+function s4RenderLocalEndpoint(array $rcfg): array {
+    $base = (string)($rcfg['url'] ?? 'http://127.0.0.1:3100');
+    $parts = parse_url($base);
+    $host = strtolower((string)($parts['host'] ?? '127.0.0.1'));
+    if ($host === '[::1]') $host = '::1';
+    if (!in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+        return ['ok'=>false, 'error'=>'render URL must be localhost for managed launch'];
+    }
+    $port = (int)($parts['port'] ?? 3100);
+    if ($port < 1 || $port > 65535) return ['ok'=>false, 'error'=>'invalid render port'];
+    return ['ok'=>true, 'host'=>$host === 'localhost' ? '127.0.0.1' : $host, 'port'=>$port];
+}
+function s4LaunchRenderService(array $rcfg): array {
+    if (!function_exists('shell_exec')) return ['ok'=>false, 'error'=>'shell_exec disabled'];
+    $ep = s4RenderLocalEndpoint($rcfg);
+    if (empty($ep['ok'])) return $ep;
+    $dir = __DIR__;
+    $start = $dir . '/browser-php/start.sh';
+    $boot  = $dir . '/browser-php/bootstrap.sh';
+    if (!is_file($start)) return ['ok'=>false, 'error'=>'browser-php/start.sh missing'];
+    @mkdir($dir . '/logs', 0777, true);
+    @mkdir($dir . '/run', 0777, true);
+    $log = $dir . '/logs/render.log';
+    $pidfile = $dir . '/run/render-service.pid';
+    $oldPid = (int)trim((string)@file_get_contents($pidfile));
+    if ($oldPid > 0 && trim((string)@shell_exec('kill -0 ' . (int)$oldPid . ' 2>/dev/null && echo alive')) === 'alive') {
+        return ['ok'=>true, 'running'=>true, 'pid'=>$oldPid, 'log'=>basename(dirname($log)) . '/' . basename($log)];
+    }
+    $host = (string)$ep['host'];
+    $port = (int)$ep['port'];
+    $maxc = max(1, min(4, (int)($rcfg['max_concurrency'] ?? 2)));
+    $bootCmd = is_file($boot) ? 'if [ ! -x browser-php/bin/chrome-headless-shell ] && [ ! -x browser-php/bin/chromedriver ]; then bash browser-php/bootstrap.sh; fi; ' : '';
+    $cmd = 'cd ' . escapeshellarg($dir)
+         . ' && ( export RENDER_HOST=' . escapeshellarg($host)
+         . ' RENDER_PORT=' . escapeshellarg((string)$port)
+         . ' RENDER_MAX_CONCURRENCY=' . escapeshellarg((string)$maxc)
+         . ' PHP=${PHP:-php}; '
+         . $bootCmd
+         . 'exec bash browser-php/start.sh ) >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
+    $pid = (int)trim((string)@shell_exec($cmd));
+    if ($pid > 0) @file_put_contents($pidfile, (string)$pid);
+    return ['ok'=>$pid > 0, 'started'=>$pid > 0, 'pid'=>$pid, 'port'=>$port,
+            'log'=>basename(dirname($log)) . '/' . basename($log),
+            'error'=>$pid > 0 ? '' : 'failed to spawn render service'];
 }
 
 /* لایهٔ تصمیم: واکشِ ایستا یا رندر. فقط برای صفحه‌های فهرست استفاده می‌شود
@@ -28021,10 +28070,16 @@ if (isset($_GET['render_probe'])) {
     }
     $t0 = microtime(true);
     $hc = function_exists('fetch_html_render_health') ? fetch_html_render_health($rc) : ['ok' => false, 'error' => 'fn missing'];
+    if (empty($hc['ok']) && (isset($_GET['launch']) || isset($_GET['start']))) {
+        $out['launch'] = s4LaunchRenderService($rc);
+        usleep(700000);
+        $hc = function_exists('fetch_html_render_health') ? fetch_html_render_health($rc) : $hc;
+    }
     $out['ms'] = (int)round((microtime(true) - $t0) * 1000);
     $out = array_merge($out, $hc);
     if (empty($out['ok'])) {
-        $out['diagnosis'] = $renderDisabledNote . 'به سرویس رندر وصل نشد — سرویس browser-php/start.sh باید روی 127.0.0.1:3100 بالا باشد.'
+        $launchHint = (isset($_GET['launch']) || isset($_GET['start'])) ? '' : ' برای راه‌اندازی محدود از همین عیب‌یاب، launch=1 را هم بفرستید.';
+        $out['diagnosis'] = $renderDisabledNote . 'به سرویس رندر وصل نشد — سرویس browser-php/start.sh باید روی 127.0.0.1:3100 بالا باشد.' . $launchHint
                           . ' خطا: ' . mb_substr((string)($out['error'] ?? ''), 0, 120);
     } else {
         $avail = is_array($out['available'] ?? null) ? $out['available'] : [];
@@ -36473,6 +36528,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.195', 'ورودیِ 10.195 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "195'") !== false
       && version_compare(APP_VERSION, '10.' . '195', '>='));
+
+    /* ---------- v10.196: راه‌اندازی سرویس رندر از عیب‌یاب ---------- */
+    $add('10.196', 'render_probe پارامتر launch=1 برای بالا آوردن browser-php دارد',
+         function_exists('s4LaunchRender' . 'Service')
+      && strpos($selfSrc, "isset(\$_GET['launch'])") !== false
+      && strpos($selfSrc, 'render URL must be localhost for managed launch') !== false);
+    $add('10.196', 'راه‌انداز رندر فقط اسکریپت ثابت browser-php/start.sh را اجرا می‌کند',
+         strpos($selfSrc, 'browser-php/start.sh missing') !== false
+      && strpos($selfSrc, 'exec bash browser-php/start.sh') !== false
+      && strpos($selfSrc, 'shell_exec($cmd)') !== false);
+    $add('10.196', 'ورودیِ 10.196 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "196'") !== false
+      && version_compare(APP_VERSION, '10.' . '196', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66663,6 +66731,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.196', t:'▶️ راه‌اندازی رندر مرورگری از عیب‌یاب', items:[
+    'render_probe با پارامتر launch=1 می‌تواند سرویس محدود و ثابت browser-php/start.sh را روی localhost بالا بیاورد و دوباره health را بسنجد',
+    'این راه‌اندازی هیچ فرمان یا مسیر دلخواهی از ورودی کاربر نمی‌گیرد و فقط برای فعال‌کردن سریع موتورهای Playwright/Selenium روی سرور legacy است',
+  ]},
   {v:'10.195', t:'⚡ شمارندهٔ سرعت استخراج و آماده‌سازی سرویس رندر مرورگری', items:[
     'در پنل زندهٔ استخراج، شمارندهٔ ششم اضافه شد و میانگین سرعت را بر حسب محصول/دقیقه از شروع همان اجرا نشان می‌دهد',
     'گزارش پایان استخراج هم started_at و avg_ppm را ذخیره می‌کند تا مودال کارهای تمام‌شده سرعت میانگین را نشان دهد',
