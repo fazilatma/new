@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.215';
+const APP_VERSION = '10.216';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -37068,6 +37068,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "215'") !== false
       && version_compare(APP_VERSION, '10.' . '215', '>='));
 
+    /* ---------- v10.216: جلوگیری از دانلود تکراری Chrome کامل ---------- */
+    $_boot216 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.216', 'marker جداگانه برای تلاش Chrome کامل ثبت می‌شود',
+         strpos($_boot216, '.cft-full-attempted') !== false
+      && strpos($_boot216, 'FULL_ATTEMPTED') !== false);
+    $add('10.216', 'دانلود ناموفق Chrome کامل دوباره خودکار تکرار نمی‌شود',
+         strpos($_boot216, 'تکرار خودکار نمی‌شود') !== false
+      && strpos($_boot216, 'قبلاً انجام شده') !== false);
+    $add('10.216', 'ورودیِ 10.216 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "216'") !== false
+      && version_compare(APP_VERSION, '10.' . '216', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67257,6 +67269,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.216', t:'🛑 جلوگیری از دانلود تکراری Chrome کامل', items:[
+    'اگر تلاش fallback به Chrome کامل 115 ناموفق یا کند باشد، marker جداگانه جلوی تکرار خودکار همان دانلود بزرگ را می‌گیرد',
+    'لاگ bootstrap اکنون روشن می‌گوید تلاش Chrome کامل قبلاً انجام شده و برای جلوگیری از فشار روی هاست رد شده است',
+  ]},
   {v:'10.215', t:'🧪 fallback به Chrome کامل قدیمی‌تر', items:[
     'اگر headless-shell نسخهٔ 120 هم روی هاست SIGTRAP بدهد، bootstrap یک Chrome کامل سازگارتر از Chrome-for-Testing 115.0.5790.170 را امتحان می‌کند',
     'bootstrap marker نسخهٔ دانلودشده را نگه می‌دارد تا روی هر render_probe همان binary خراب بی‌دلیل دوباره دانلود نشود',

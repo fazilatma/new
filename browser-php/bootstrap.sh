@@ -194,9 +194,10 @@ download_cft_version() {  # version → 0/1 (headless-shell)
 
 download_cft_full_chrome_version() {  # version → 0/1 (full chrome, older milestone)
   local ver="$1" base="https://storage.googleapis.com/chrome-for-testing-public/$1/linux64"
+  echo "$ver" > "$BIN/.cft-full-attempted" 2>/dev/null || true
   rm -rf "$BIN/chrome-headless-shell-linux64" "$BIN/chrome-linux64" "$BIN/chromedriver-linux64"
   echo "… دانلود chrome کامل سازگارتر: $ver"
-  download "$base/chrome-linux64.zip" "$BIN/chrome-$ver.zip" || return 1
+  download "$base/chrome-linux64.zip" "$BIN/chrome-$ver.zip" || { echo "⚠ دانلود chrome کامل ناموفق بود؛ تکرار خودکار نمی‌شود"; return 1; }
   unzip_file "$BIN/chrome-$ver.zip" "$BIN/" || return 1
   rm -f "$BIN/chrome-$ver.zip"
   echo "… دانلود chromedriver همان نسخه: $ver"
@@ -288,10 +289,13 @@ if [ -n "$CHROME_PATH" ]; then
       else
         CFT_MARKER="$(cat "$BIN/.cft-version" 2>/dev/null || true)"
         echo "⚠ headless-shell هم اجرا نشد — تلاش با chrome کامل قدیمی‌تر"
-        if [ "$CFT_MARKER" != "chrome:115.0.5790.170" ]; then
+        FULL_ATTEMPTED="$(cat "$BIN/.cft-full-attempted" 2>/dev/null || true)"
+        if [ "$CFT_MARKER" != "chrome:115.0.5790.170" ] && [ "$FULL_ATTEMPTED" != "115.0.5790.170" ]; then
           if download_cft_full_chrome_version "115.0.5790.170"; then
             CHROME_PATH="$(ls -1 "$BIN"/*/chrome-headless-shell "$BIN"/*/chrome 2>/dev/null | head -n1 || true)"
           fi
+        else
+          echo "ℹ تلاش با chrome کامل 115 قبلاً انجام شده؛ برای جلوگیری از دانلود تکراری رد شد"
         fi
         if [ -n "$CHROME_PATH" ] && "$CHROME_PATH" --version >/dev/null 2>&1; then
           echo "✓ chrome کامل سازگارتر اجرا شد"
