@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.190';
+const APP_VERSION = '10.191';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9360,6 +9360,7 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
     $body = curl_exec($ch); $err = curl_error($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
+    if ($mode === 'worker') $finalUrl = $url; // v10.191: لینک‌های نسبی باید نسبت به سایت مبدأ حل شوند، نه آدرس Worker.
     curl_close($ch);
     return ['ok' => $body !== false && $code >= 200 && $code < 400,
             'error' => $err ?: 'Empty', 'code' => $code, 'url' => $finalUrl,
@@ -9371,6 +9372,7 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
    بخورد (تایم‌اوت، اتصال، بلاک ۴۰۳/۴۲۹)، به ترتیبِ روش‌هایِ فعالِ دیگر هم
    امتحان می‌شود تا اولین موفق برگردد. */
 function fetch_html(string $url, int $timeout = 25): array {
+    $__profileForcedDirect = array_key_exists('_srcNetProfileIndirect', $GLOBALS) && empty($GLOBALS['_srcNetProfileIndirect']);
     $__srcNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','gap_ms'=>0,'hosts'=>'','fallback'=>false];
     $parsed = parse_url($url); $__srcHost = strtolower((string)($parsed['host'] ?? ''));
     srcPace($__srcHost, (int)($__srcNet['gap_ms'] ?? 0));
@@ -9398,6 +9400,38 @@ function fetch_html(string $url, int $timeout = 25): array {
         if (!empty($last['ok'])) return $last;
         // اگر خطای قطعیِ منطقی (مثل ۴۰۴/۴۰۰) بود، امتحانِ روشِ دیگر بی‌فایده است
         if ($last['code'] > 0 && !in_array($last['code'], [403, 429], true)) break;
+    }
+
+    /* v10.191: بعضی پروفایل‌های قدیمیِ ایمالز با «اتصال غیرمستقیم» خاموش
+       ذخیره شده‌اند. آن حالت عمداً تنظیم سراسری src_net را به direct تبدیل
+       می‌کند؛ اما ایمالز ممکن است direct را با خطای TLS/بلاک IP ببندد و خروجی
+       بصری/استخراج صفر شود. فقط برای ایمالز و فقط بعد از شکست direct، یک بار
+       تنظیم سراسریِ proxy/worker/DoH را بدون اجبارِ پروفایل امتحان می‌کنیم. */
+    if ($__profileForcedDirect && function_exists('isEmallsUrl') && isEmallsUrl($url)) {
+        $__oldProfileIndirect = $GLOBALS['_srcNetProfileIndirect'] ?? null;
+        unset($GLOBALS['_srcNetProfileIndirect']);
+        $__srcNet2 = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','gap_ms'=>0,'hosts'=>'','fallback'=>false];
+        $__modes2 = [];
+        if (srcNetApplies($__srcNet2, $__srcHost)) $__modes2[] = (string)$__srcNet2['mode'];
+        if (!empty($__srcNet2['fallback'])) {
+            foreach (['doh','dns','proxy','worker'] as $__m) {
+                if (in_array($__m, $__modes2, true)) continue;
+                if ($__m === 'dns'    && trim((string)($__srcNet2['resolve_ip'] ?? '')) === '') continue;
+                if ($__m === 'doh'    && trim((string)($__srcNet2['doh_url'] ?? '')) === '') continue;
+                if ($__m === 'proxy'  && trim((string)($__srcNet2['proxy'] ?? '')) === '') continue;
+                if ($__m === 'worker' && trim((string)($__srcNet2['worker_url'] ?? '')) === '') continue;
+                $__modes2[] = $__m;
+            }
+        }
+        foreach ($__modes2 as $__m) {
+            if ($__m === 'direct') continue;
+            $__try = srcNetFetchAttempt($url, $timeout, $__srcNet2, $__m);
+            $__try['profile_direct_emalls_fallback'] = true;
+            if (!empty($__try['ok'])) { $GLOBALS['_srcNetProfileIndirect'] = $__oldProfileIndirect; return $__try; }
+            $last = $__try;
+            if ($__try['code'] > 0 && !in_array($__try['code'], [403, 429], true)) break;
+        }
+        $GLOBALS['_srcNetProfileIndirect'] = $__oldProfileIndirect;
     }
     return $last ?? ['ok' => false, 'error' => 'Empty', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
 }
@@ -9533,6 +9567,14 @@ function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): 
         return $s;
     }
     $s = fetch_html($url, $timeout);
+    if (empty($s['ok']) && function_exists('isEmallsUrl') && isEmallsUrl($url)) {
+        $r = fetch_html_render($url, $rc);
+        if (!empty($r['ok'])) {
+            $r['emalls_static_error'] = (string)($s['error'] ?? '');
+            return $r;
+        }
+        $s['render_error'] = (string)($r['error'] ?? '');
+    }
     if (!empty($s['ok']) && looks_like_js_shell((string)$s['html'])) {
         $was = strlen((string)$s['html']);
         $r = fetch_html_render($url, $rc);
@@ -10500,6 +10542,11 @@ exit;
 }
 
 $res = fetch_html($url, 15);
+if ((!$res['ok'] || (isEmallsUrl($url) && stripos((string)($res['html'] ?? ''), '~id~') === false))
+    && function_exists('fetch_html_smart')) {
+    $_sgSmart = fetch_html_smart($url, 25);
+    if (!empty($_sgSmart['ok'])) $res = $_sgSmart;
+}
 if (!$res['ok']) {
 echo json_encode(['ok' => false, 'error' => $res['error']]);
 exit;
@@ -10579,6 +10626,7 @@ $pricePatterns = [
 $suggestions['price'] = array_map(fn($p) => ['selector' => $p['selector']], $pricePatterns);
 
 $suggestions['link'] = [
+['selector' => 'a[href*="~id~"]'],
 ['selector' => 'a.woocommerce-LoopProduct-link'],
 ['selector' => 'a.product-link'],
 ['selector' => 'a[href*="product"]'],
@@ -11674,6 +11722,11 @@ if (!$res['ok']) {
         $res = fetch_html($url, min(180, $vpTimeout * 2));
     }
 }
+if ((!$res['ok'] || (isEmallsUrl($url) && stripos((string)($res['html'] ?? ''), '~id~') === false))
+    && function_exists('fetch_html_smart')) {
+    $_smart = fetch_html_smart($url, min(180, $vpTimeout));
+    if (!empty($_smart['ok']) && (stripos((string)($_smart['html'] ?? ''), '~id~') !== false || strlen((string)($_smart['html'] ?? '')) > strlen((string)($res['html'] ?? '')))) $res = $_smart;
+}
 if (!$res['ok']) {
 http_response_code(500);
 $err = $res['error'] ?? 'Unknown';
@@ -11694,6 +11747,8 @@ $html = $res['html'];
 $baseUrl = $res['url'];
 $fullMode = !empty($_GET['full']);
 $html = preg_replace("~<meta[^>]*name=[\"']viewport[\"'][^>]*>~i", "", $html);
+$html = preg_replace("~<meta[^>]*http-equiv=[\"']Content-Security-Policy[\"'][^>]*>~i", "", $html);
+$html = preg_replace("~<meta[^>]*http-equiv=[\"']X-Frame-Options[\"'][^>]*>~i", "", $html);
 if ($fullMode) {
 $html = preg_replace("~<script[^>]*(?:google|analytics|gtag|facebook|snapchat|doubleclick|adsense|adwords|hotjar|clarity)[^>]*>.*?</script>~is", "", $html);
 } else {
@@ -13984,6 +14039,10 @@ function extractionEngineRenderDriver(string $engine): string {
     $engine = normalizeExtractionEngine($engine);
     return $engine === 'selenium' ? 'selenium' : ($engine === 'playwright' ? 'playwright' : '');
 }
+function isEmallsUrl(string $url): bool {
+    $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
+    return $host === 'emalls.ir' || substr($host, -10) === '.emalls.ir' || stripos($url, '~Category~') !== false;
+}
 function extractionEngineLabel(string $engine): string {
     $engine = normalizeExtractionEngine($engine);
     $map = [
@@ -14076,6 +14135,55 @@ function parse_jsonld_products(string $html, string $baseUrl): array {
     }
     return $products;
 }
+function parse_emalls_products(string $html, string $baseUrl): array {
+    if ($html === '' || (!isEmallsUrl($baseUrl) && stripos($html, '~id~') === false)) return [];
+    $products = [];
+    $attrOf = function (string $tag, string $name): string {
+        if (preg_match('~\b' . preg_quote($name, '~') . '\s*=\s*(["\'])(.*?)\1~isu', $tag, $m)) {
+            return html_entity_decode((string)$m[2], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+        return '';
+    };
+    if (!preg_match_all('~<a\b(?=[^>]*~id~)[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a>~isu', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
+    foreach ($matches as $m) {
+        $tagHtml = (string)$m[0][0];
+        $off = (int)$m[0][1];
+        $href = html_entity_decode((string)$m[2][0], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($href === '' || stripos($href, '~id~') === false) continue;
+        $title = normalize_text(strip_tags((string)$m[3][0]));
+        if ($title === '' || mb_stripos($title, 'مشاهده فروشندگان') !== false) {
+            $title = normalize_text($attrOf($tagHtml, 'title'));
+        }
+        if ($title === '' || mb_stripos($title, 'مشاهده فروشندگان') !== false) {
+            $path = rawurldecode((string)(parse_url($href, PHP_URL_PATH) ?: $href));
+            if (preg_match('~مشخصات[_-]([^~]+)~u', $path, $tm)) $title = str_replace(['-', '_'], ' ', $tm[1]);
+            $title = normalize_text($title);
+        }
+        if ($title === '' || mb_strlen($title) < 3) continue;
+        $pre = substr($html, max(0, $off - 4000), min(4000, $off));
+        $post = substr($html, $off, 1800);
+        $ctxText = normalize_text(strip_tags($post));
+        $price = extractPrice($ctxText);
+        $image = '';
+        if (preg_match_all('~<img\b[^>]*>~isu', $pre, $ims) && !empty($ims[0])) {
+            $imgTag = end($ims[0]);
+            foreach (['data-src', 'data-lazy-src', 'data-original', 'src'] as $a) {
+                $v = $attrOf((string)$imgTag, $a);
+                if ($v !== '' && url_is_image($v)) { $image = make_absolute_url($v, $baseUrl); break; }
+            }
+        }
+        $p = [
+            'title' => mb_substr($title, 0, 200),
+            'price' => $price,
+            'link'  => make_absolute_url($href, $baseUrl),
+            'image' => $image,
+            'sku'   => '',
+        ];
+        $key = productKey($p);
+        if (!isset($products[$key])) $products[$key] = $p;
+    }
+    return $products;
+}
 function parse_list_by_engine(string $html, string $baseUrl, array $sel, string $engine, ?string &$usedEngine = null): array {
     $engine = normalizeExtractionEngine($engine);
     $usedEngine = $engine;
@@ -14088,7 +14196,13 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     }
     if ($engine === 'selectors') {
         $usedEngine = 'selectors';
-        return $hasSelectors ? parse_with_selectors($html, $baseUrl, $sel) : [];
+        $rows = $hasSelectors ? parse_with_selectors($html, $baseUrl, $sel) : [];
+        if (empty($rows) && isEmallsUrl($baseUrl)) {
+            $rows = parse_products($html, $baseUrl);
+            if (empty($rows)) $rows = parse_emalls_products($html, $baseUrl);
+            if (!empty($rows)) $usedEngine = 'selectors → heuristic(emalls)';
+        }
+        return $rows;
     }
     if ($engine === 'jsonld') {
         $usedEngine = 'jsonld';
@@ -14096,7 +14210,12 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     }
     if ($engine === 'heuristic') {
         $usedEngine = 'heuristic';
-        return parse_products($html, $baseUrl);
+        $rows = parse_products($html, $baseUrl);
+        if (empty($rows) && isEmallsUrl($baseUrl)) {
+            $rows = parse_emalls_products($html, $baseUrl);
+            if (!empty($rows)) $usedEngine = 'heuristic → emalls-regex';
+        }
+        return $rows;
     }
     // Auto mirrors the Node app's idea without depending on Node packages:
     // structured data first, structural/heuristic cards next, saved selectors last.
@@ -14104,6 +14223,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     if (!empty($rows)) { $usedEngine = 'jsonld'; return $rows; }
     $rows = parse_products($html, $baseUrl);
     if (!empty($rows)) { $usedEngine = 'heuristic'; return $rows; }
+    if (isEmallsUrl($baseUrl)) {
+        $rows = parse_emalls_products($html, $baseUrl);
+        if (!empty($rows)) { $usedEngine = 'heuristic → emalls-regex'; return $rows; }
+    }
     if ($hasSelectors) {
         $rows = parse_with_selectors($html, $baseUrl, $sel);
         if (!empty($rows)) { $usedEngine = 'selectors'; return $rows; }
@@ -35954,6 +36077,29 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.190', 'ورودیِ 10.190 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "190'") !== false
       && version_compare(APP_VERSION, '10.' . '190', '>='));
+
+    /* ---------- v10.191: ایمالز — visual/proxy و fallback موتور ---------- */
+    $add('10.191', 'موتور CSS selectors برای ایمالز اگر صفر شد به heuristic برمی‌گردد',
+         function_exists('isEmalls' . 'Url')
+      && function_exists('parse_emalls' . '_products')
+      && strpos($selfSrc, "selectors → heuristic(em" . "alls)") !== false);
+    $_t191h = '<img src="/i.jpg"><h2><a href="/مشخصات_بوت-زنانه~id~123">بوت زنانه</a></h2><span>۸۴۸,۶۰۰</span>';
+    $_t191p = function_exists('parse_emalls' . '_products') ? parse_emalls_products($_t191h, 'https://emalls.ir/list~Category~13145') : [];
+    $add('10.191', 'fallback اختصاصی ایمالز از لینک ~id~ محصول می‌سازد',
+         count($_t191p) === 1
+      && strpos((string)(array_values($_t191p)[0]['link'] ?? ''), '~id~123') !== false);
+    $add('10.191', 'visual_proxy برای CSP و HTML ناقص ایمالز fallback دارد',
+         strpos($selfSrc, 'Content-Security-Policy') !== false
+      && strpos($selfSrc, "fetch_html_" . "smart(\$url, min(180, \$vpTimeout))") !== false);
+    $add('10.191', 'ایمالز بعد از شکست direct از src_net/render fallback کمک می‌گیرد',
+         strpos($selfSrc, 'profile_direct_emalls_fallback') !== false
+      && strpos($selfSrc, 'emalls_static_error') !== false
+      && strpos($selfSrc, "if (\$mode === 'worker') \$finalUrl = \$url") !== false);
+    $add('10.191', 'پیشنهاد سلکتور لینک‌های ~id~ ایمالز را می‌شناسد',
+         strpos($selfSrc, 'a[href*="~id~"]') !== false);
+    $add('10.191', 'ورودیِ 10.191 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "191'") !== false
+      && version_compare(APP_VERSION, '10.' . '191', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66123,6 +66269,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.191', t:'🛒 اصلاح ایمالز: باز شدن انتخابگر بصری و fallback استخراج', items:[
+    'برای ایمالز اگر پروفایل هنوز روی CSS selectors باشد و سلکتورهای قدیمی صفر محصول بدهند، موتور به heuristic مخصوص لینک‌های ~id~ و fallback اختصاصی ایمالز برمی‌گردد تا محصول‌ها مثل تست سه‌صفحه‌ای استخراج شوند',
+    'visual_proxy متاهای CSP/X-Frame-Options را از HTML مقصد حذف می‌کند و اگر HTML ایمالز ناقص/بدون لینک محصول بود یک بار از fetch_html_smart هم کمک می‌گیرد',
+    'اگر پروفایل قدیمی ایمالز روی direct مانده باشد اما سرور به direct خطای TLS/بلاک بدهد، بعد از شکست از تنظیم سراسری src_net یا رندر کمک گرفته می‌شود؛ در حالت Worker هم base URL اصلی حفظ می‌شود تا لینک‌ها درست ساخته شوند',
+    'پیشنهادگر سلکتور هم لینک‌های محصول ایمالز با الگوی ~id~ را به‌عنوان نامزد می‌شناسد',
+  ]},
   {v:'10.190', t:'⚡ استخراج بک‌اند مثل تست سه‌صفحه‌ای: فهرست سریع اول', items:[
     'علت کندی روشن شد: تست سه‌صفحه‌ای فقط صفحه‌های فهرست را fetch/parse می‌کند، اما استخراج کامل قبلاً هم‌زمان صفحهٔ تک‌تک محصولات را برای جزئیات/گالری باز می‌کرد و همین آن را کند و ناپایدار می‌کرد',
     'دکمهٔ استخراج بک‌اند حالا پیش‌فرضاً فاز list را اجرا می‌کند؛ یعنی همان موتور و مسیر سریعِ تست سه‌صفحه‌ای برای گرفتن فهرست محصولات، بدون باز کردن صفحهٔ محصول‌ها',
