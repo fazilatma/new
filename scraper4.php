@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.193';
+const APP_VERSION = '10.194';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -2100,6 +2100,7 @@ return $root . $dir . $url;
 }
 
 function profileKey(string $url): string {
+$url = function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($url) : trim($url);
 $parts = parse_url($url);
 if (!$parts || empty($parts['host'])) return md5($url);
 $host = strtolower($parts['host']);
@@ -2117,16 +2118,19 @@ return $host . ($path ? '_' . preg_replace('~[^a-z0-9]+~i', '_', $path) : '');
 function profileResolveKey(string $given, array $profiles): ?string {
     $g = trim($given);
     if ($g === '') return null;
+    $gn = function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($g) : $g;
     if (isset($profiles[$g])) return $g;
+    if ($gn !== $g && isset($profiles[$gn])) return $gn;
     $cands = [];
     foreach ($profiles as $k => $p) {
         $u = (string)($p['url'] ?? '');
-        if ($u !== '' && $u === $g) $cands[] = (string)$k;
-        elseif ($u !== '' && profileKey($u) === $g) $cands[] = (string)$k;
+        $un = function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($u) : $u;
+        if ($u !== '' && ($u === $g || $u === $gn || $un === $g || $un === $gn)) $cands[] = (string)$k;
+        elseif ($u !== '' && (profileKey($u) === $g || profileKey($u) === $gn)) $cands[] = (string)$k;
     }
     if (count($cands) === 1) return $cands[0];
-    if (strpos($g, '://') !== false && filter_var($g, FILTER_VALIDATE_URL)) {
-        $pk = profileKey($g);
+    if (strpos($gn, '://') !== false && filter_var($gn, FILTER_VALIDATE_URL)) {
+        $pk = profileKey($gn);
         if (isset($profiles[$pk])) return $pk;
     }
     return null;
@@ -9774,6 +9778,30 @@ if(strpos($url,'/')===0)return $base.$url;
 return rtrim($pageUrl,'/').'/'.ltrim($url,'/');
 }
 
+/* v10.194: URLهایی که کاربر از مرورگر فارسی کپی می‌کند گاهی IRI هستند
+   (مسیرِ فارسی خام دارند) و FILTER_VALIDATE_URL در PHP آن‌ها را رد می‌کند.
+   قبل از اعتبارسنجی، فقط کاراکترهای غیر ASCII/فاصله را percent-encode می‌کنیم؛
+   نشانی‌های از قبل encode شده دست‌نخورده می‌مانند و کلید پروفایل هم پایدار می‌شود. */
+function s4NormalizeInputUrl(string $url): string {
+$url = trim(html_entity_decode($url, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+if ($url === '') return '';
+if (filter_var($url, FILTER_VALIDATE_URL)) return $url;
+$enc = @preg_replace_callback('~[^\x21-\x7E]~u', function ($m) { return rawurlencode($m[0]); }, $url);
+if (!is_string($enc) || $enc === '') {
+    $enc = @preg_replace_callback('~[^\x21-\x7E]~', function ($m) {
+        $out = '';
+        foreach (str_split($m[0]) as $ch) $out .= '%' . strtoupper(bin2hex($ch));
+        return $out;
+    }, $url);
+}
+return is_string($enc) && $enc !== '' ? $enc : $url;
+}
+
+function s4ValidInputUrl(string $url): bool {
+$url = s4NormalizeInputUrl($url);
+return $url !== '' && filter_var($url, FILTER_VALIDATE_URL) !== false;
+}
+
 /* =====================================================================
  *  بررسی نسخه — فقط خواندنی
  *  ---------------------------------------------------------------
@@ -10179,7 +10207,7 @@ if (isset($_GET['vc_deploy_info'])) {
 }
 
 if (!empty($_GET['rp'])) {
-$rpUrl = trim($_GET['rp']);
+$rpUrl = s4NormalizeInputUrl((string)($_GET['rp'] ?? ''));
 if (!filter_var($rpUrl, FILTER_VALIDATE_URL)) { http_response_code(400); echo 'Invalid'; exit; }
 $ch = curl_init($rpUrl);
 curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_MAXREDIRS=>5,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_TIMEOUT=>30,CURLOPT_ENCODING=>'',CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',CURLOPT_REFERER=>$rpUrl,CURLOPT_HTTPHEADER=>['Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8','Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7','Sec-Ch-Ua: "Not/A)Brand";v="8", "Chromium";v="126"','Sec-Ch-Ua-Mobile: ?0','Sec-Ch-Ua-Platform: "Windows"','Sec-Fetch-Dest: document','Sec-Fetch-Mode: navigate','Sec-Fetch-Site: same-origin','Sec-Fetch-User: ?1']]);
@@ -10210,7 +10238,7 @@ exit;
 }
 
 if (!empty($_GET['image_proxy'])) {
-$url = trim($_GET['image_proxy']);
+$url = s4NormalizeInputUrl((string)($_GET['image_proxy'] ?? ''));
 if (!filter_var($url, FILTER_VALIDATE_URL)) { http_response_code(400); exit; }
 $pUrl=parse_url($url);$origin=($pUrl['scheme']??'https').'://'.($pUrl['host']??'');
 
@@ -10369,11 +10397,11 @@ if (isset($_GET['push_route_save'])) {
 
 if (!empty($_GET['load_profile'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$url = trim($_GET['load_profile']);
-$key = profileKey($url);
+$url = s4NormalizeInputUrl((string)($_GET['load_profile'] ?? ''));
 $profiles = loadProfiles();
+$key = profileResolveKey($url, $profiles) ?: profileKey($url);
 if (isset($profiles[$key])) {
-echo json_encode(['ok' => true, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok' => true, 'key' => $key, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE);
 } else {
 echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UNESCAPED_UNICODE);
 }
@@ -10382,7 +10410,7 @@ exit;
 
 if (($_POST['action'] ?? '') === 'save_profile') {
 header('Content-Type: application/json; charset=UTF-8');
-$url = trim($_POST['url'] ?? '');
+$url = s4NormalizeInputUrl((string)($_POST['url'] ?? ''));
 if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
 echo json_encode(['ok' => false, 'error' => 'Invalid URL']);
 exit;
@@ -10556,7 +10584,7 @@ exit;
 
 if (($_POST['action'] ?? '') === 'delete_profile') {
 header('Content-Type: application/json; charset=UTF-8');
-$url = trim($_POST['url'] ?? '');
+$url = s4NormalizeInputUrl((string)($_POST['url'] ?? ''));
 if (!$url) {
 echo json_encode(['ok' => false, 'error' => 'No URL']);
 exit;
@@ -10676,7 +10704,7 @@ if (isset($_GET['s4_feedback'])) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(180);
 $kind = trim((string)$_GET['s4_feedback']);
-$url = trim((string)($_GET['url'] ?? ''));
+$url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
 if ($url === '') $url = 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
 if (!filter_var($url, FILTER_VALIDATE_URL)) { echo json_encode(['ok'=>false,'error'=>'Invalid URL'], JSON_UNESCAPED_UNICODE); exit; }
 if (!isEmallsUrl($url)) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls URLs'], JSON_UNESCAPED_UNICODE); exit; }
@@ -10816,7 +10844,7 @@ exit;
 
 if (!empty($_GET['suggest_selectors'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$url = trim($_GET['suggest_selectors']);
+$url = s4NormalizeInputUrl((string)($_GET['suggest_selectors'] ?? ''));
 if (!filter_var($url, FILTER_VALIDATE_URL)) {
 echo json_encode(['ok' => false, 'error' => 'Invalid URL']);
 exit;
@@ -11006,7 +11034,7 @@ if (!empty($_GET['gallery_suggest'])) {
 
 if (!empty($_GET['suggest_detail_selectors'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$url = trim($_GET['suggest_detail_selectors']);
+$url = s4NormalizeInputUrl((string)($_GET['suggest_detail_selectors'] ?? ''));
 if (!filter_var($url, FILTER_VALIDATE_URL)) {
 echo json_encode(['ok' => false, 'error' => 'Invalid URL']);
 exit;
@@ -11111,7 +11139,7 @@ exit;
 }
 
 if (!empty($_GET['detail_proxy'])) {
-$url = trim($_GET['detail_proxy']);
+$url = s4NormalizeInputUrl((string)($_GET['detail_proxy'] ?? ''));
 if (!filter_var($url, FILTER_VALIDATE_URL)) { http_response_code(400); echo 'Invalid URL'; exit; }
 
 /* v8.99: همان مهلت قابل تنظیم و همان تلاش دوم که در visual_proxy هست —
@@ -11968,7 +11996,7 @@ exit;
 }
 
 if (!empty($_GET['visual_proxy'])) {
-$url = trim($_GET['visual_proxy']);
+$url = s4NormalizeInputUrl((string)($_GET['visual_proxy'] ?? ''));
 if (!filter_var($url, FILTER_VALIDATE_URL)) { http_response_code(400); echo 'Invalid URL'; exit; }
 
 /* v8.99: مهلت طولانی‌تر و یک تلاش دوم.
@@ -14887,7 +14915,7 @@ header('Cache-Control: no-cache');
 header('X-Accel-Buffering: no');
 while (@ob_get_level()) @ob_end_clean();
 
-$url = trim($_GET['url'] ?? DEFAULT_URL);
+$url = s4NormalizeInputUrl((string)($_GET['url'] ?? DEFAULT_URL));
 $maxPages = max(1, min(100, (int)($_GET['pages'] ?? 20)));
 $selectors = isset($_GET['selectors']) ? json_decode($_GET['selectors'], true) : null;
 $streamEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (($selectors && !empty($selectors['container'])) ? 'selectors' : 'heuristic')));
@@ -16083,7 +16111,7 @@ $releaseResumeReservation();
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'پروفایل یافت نشد'];
 }
 
-$url=$profile['url']??'';
+$url=s4NormalizeInputUrl((string)($profile['url']??''));
 $maxPages=max(1,min(100,(int)($profile['pages']??10)));
 $selectors=$profile['selectors']??[];
 $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
@@ -17280,6 +17308,7 @@ if(isset($_GET['action']) && $_GET['action'] === 'backend_extract'){
 $profileKey=trim($_GET['profile_key']??$_POST['profile_key']??'');
 if($profileKey===''){
 $u=trim($_GET['url']??'');
+$u=s4NormalizeInputUrl($u);
 if($u!==''&&filter_var($u,FILTER_VALIDATE_URL))$profileKey=profileKey($u);
 }
 /* v9.01/v10.190: همان اندپوینت می‌تواند فقط فهرست یا فقط جزئیات را اجرا کند.
@@ -27689,7 +27718,7 @@ if (isset($_GET['recon_result'])) {
    ریدایرکت/نادیده‌گرفتنِ نشانه (همان صفحهٔ ۱ برمی‌گردد)، یا الگوی ناسازگار (4xx). */
 if (isset($_GET['pag_probe'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $u = trim((string)($_GET['url'] ?? ''));
+    $u = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
     if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
         echo json_encode(['ok' => false, 'diagnosis' => 'آدرس نامعتبر است.'], JSON_UNESCAPED_UNICODE); exit;
     }
@@ -27856,7 +27885,7 @@ if (isset($_GET['pag_probe'])) {
 if (isset($_GET['engine_benchmark'])) {
     header('Content-Type: application/json; charset=UTF-8');
     @set_time_limit(0); @ignore_user_abort(true);
-    $u = trim((string)($_POST['url'] ?? $_GET['url'] ?? ''));
+    $u = s4NormalizeInputUrl((string)($_POST['url'] ?? $_GET['url'] ?? ''));
     if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
         echo json_encode(['ok' => false, 'error' => 'آدرس پروفایل نامعتبر است.'], JSON_UNESCAPED_UNICODE); exit;
     }
@@ -28004,7 +28033,7 @@ if (isset($_GET['render_probe'])) {
 
 if (isset($_GET['src_probe'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $u = trim((string)($_GET['url'] ?? ''));
+    $u = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
     if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
         echo json_encode(['ok' => false, 'error' => 'آدرس نامعتبر'], JSON_UNESCAPED_UNICODE); exit;
     }
@@ -36409,6 +36438,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.193', 'ورودیِ 10.193 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "193'") !== false
       && version_compare(APP_VERSION, '10.' . '193', '>='));
+
+    /* ---------- v10.194: URL فارسی/IRI برای ایمالز ---------- */
+    $add('10.194', 'URL فارسی قبل از اعتبارسنجی به percent-encoded تبدیل می‌شود',
+         function_exists('s4NormalizeInput' . 'Url')
+      && s4NormalizeInputUrl('https://emalls.ir/لیست-قیمت_کفش-زنانه~Category~13145') === 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145');
+    $add('10.194', 'کلید پروفایل و backend_extract برای URL فارسی با پروفایل ذخیره‌شده هم‌راستا است',
+         profileKey('https://emalls.ir/لیست-قیمت_کفش-زنانه~Category~13145') === 'emalls.ir__D9_84_DB_8C_D8_B3_D8_AA_D9_82_DB_8C_D9_85_D8_AA_DA_A9_D9_81_D8_B4_D8_B2_D9_86_D8_A7_D9_86_D9_87_Category_13145'
+      && strpos($selfSrc, 'const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));') !== false);
+    $add('10.194', 'ورودیِ 10.194 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "194'") !== false
+      && version_compare(APP_VERSION, '10.' . '194', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -56532,6 +56572,7 @@ function selagentSeedProducts(string $listUrl, string $pk, string $model = '', i
                 'from' => 'stored', 'error' => ''];
     }
 
+    $listUrl = s4NormalizeInputUrl($listUrl);
     if ($listUrl === '' || !filter_var($listUrl, FILTER_VALIDATE_URL)) {
         $out['error'] = 'برای ساختنِ محصولِ نمونه، آدرسِ صفحهٔ فهرست لازم است';
         return $out;
@@ -65108,8 +65149,9 @@ function backendExtractFor(url,panelTitle,phase){
             showToast('⚡ استخراج کامل — شامل جزئیات/گالری و کندتر از تست سه‌صفحه‌ای');
         }
         // Trigger backend extract endpoint (fire-and-forget)
+        const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
-              +'&profile_key='+encodeURIComponent(profileKey(url)),{method:'GET'}).catch(()=>{});
+              +'&profile_key='+encodeURIComponent(serverProfileKey),{method:'GET'}).catch(()=>{});
         watchExtractProgress();
     }).catch(()=>{showToast('خطا شبکه',1);});
 }
@@ -66200,7 +66242,7 @@ function profileKey(url){
     // پروفایلی نمی‌یافت. حالا مسیر را عینِ تایپ‌شده می‌گیریم تا دقیقاً
     // هم‌زمانِ سرور بماند.
     try{
-        const src=String(url);
+        const src=String(url).replace(/[^\x21-\x7E]/g,ch=>encodeURIComponent(ch));
         const m=src.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*/);
         let host='',rawPath='';
         if(m){
@@ -66578,6 +66620,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.194', t:'🔤 پذیرش URL فارسی ایمالز در UI و استخراج', items:[
+    'آدرس‌هایی که با مسیر فارسی خام از مرورگر کپی می‌شوند قبل از اعتبارسنجی سرور به شکل percent-encoded امن تبدیل می‌شوند؛ بنابراین visual_proxy، تست صفحه‌بندی، تست موتور و استخراج بک‌اند دیگر روی URL فارسی خطای Invalid URL نمی‌دهند',
+    'فرمول کلید پروفایل در PHP و مرورگر برای URLهای فارسی هم‌راستا شد و backend_extract به‌جای کلید حدسی مرورگر، کلید واقعیِ برگردانده‌شده از load_profile را می‌فرستد',
+    'load_profile حالا کلید پروفایل پیدا‌شده را هم برمی‌گرداند تا دکمه‌های استخراج روی پروفایل ذخیره‌شدهٔ واقعی اجرا شوند',
+  ]},
   {v:'10.193', t:'🧪 اندپوینت feedback برای عیب‌یابی حلقه‌ای ایمالز', items:[
     'اندپوینت ?s4_feedback=emalls&url=... اضافه شد تا مسیرهای direct، fetch_html، fetch_html_smart، fallback عمومی و صفحه‌های پروفایل را یک‌جا تست کند',
     'خروجی JSON تعداد لینک‌های ~id~، تعداد کانتینر سلکتور، موتور استفاده‌شده، تعداد محصول استخراج‌شده و چند نمونه محصول را می‌دهد تا مشکل روی هاست واقعی قابل تکرار باشد',
