@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.203';
+const APP_VERSION = '10.204';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36688,6 +36688,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "203'") !== false
       && version_compare(APP_VERSION, '10.' . '203', '>='));
 
+    /* ---------- v10.204: timeout آزمون باینری رندر ---------- */
+    $_render204 = is_file(__DIR__ . '/browser-php/render.php') ? (string)@file_get_contents(__DIR__ . '/browser-php/render.php') : '';
+    $add('10.204', 'render.php آزمون --version را با سقف زمانی کوتاه اجرا می‌کند',
+         strpos($_render204, 'php-render-bincheck-') !== false
+      && strpos($_render204, 'microtime(true) + 3.0') !== false
+      && strpos($_render204, "proc_spawn([\$path, '--version']") !== false);
+    $add('10.204', 'ورودیِ 10.204 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "204'") !== false
+      && version_compare(APP_VERSION, '10.' . '204', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -66877,6 +66887,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.204', t:'⏱️ timeout برای آزمون باینری رندر', items:[
+    'آزمون --version مرورگر/درایور با proc_open و سقف ۳ ثانیه انجام می‌شود تا health رندر روی باینری‌های خراب یا wrapperهای کند قفل نشود',
+  ]},
   {v:'10.203', t:'✅ انتخاب فقط باینری مرورگر قابل‌اجرا', items:[
     'render.php دیگر صرفاً executable بودن chrome/chromedriver را کافی نمی‌داند و قبل از انتخاب، --version را اجرا می‌کند؛ اگر باینری دانلودی کتابخانه کم داشته باشد، به مرورگر/درایور سیستم fallback می‌کند',
   ]},

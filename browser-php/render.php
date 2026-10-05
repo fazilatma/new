@@ -170,10 +170,24 @@ function render_bin_ready(string $path): bool {
 
 function render_bin_runs(string $path): bool {
     if (!render_bin_ready($path)) return false;
-    $out = [];
-    $code = 127;
-    @exec(escapeshellarg($path) . ' --version 2>&1', $out, $code);
-    return $code === 0;
+    $log = sys_get_temp_dir() . '/php-render-bincheck-' . getmypid() . '-' . mt_rand(1000, 99999) . '.log';
+    try {
+        [$proc, $pid] = proc_spawn([$path, '--version'], $log);
+        $deadline = microtime(true) + 3.0;
+        $exit = null;
+        while (microtime(true) < $deadline) {
+            $st = proc_get_status($proc);
+            if (empty($st['running'])) { $exit = (int)($st['exitcode'] ?? 1); break; }
+            usleep(100000);
+        }
+        if ($exit === null) { proc_kill($pid, $proc); return false; }
+        @proc_close($proc);
+        return $exit === 0;
+    } catch (Exception $e) {
+        return false;
+    } finally {
+        @unlink($log);
+    }
 }
 
 function find_chrome_bin(): string {
