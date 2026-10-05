@@ -134,8 +134,12 @@ if [ -n "$CHROME_PATH" ]; then
     echo "  چون این محیط apt/sudo ندارد، این چگونگی‌ها باقی می‌ماند:"
     echo "   ۱) کنسول hostconsole را با نصبِ کامل (گزینهٔ full-stack) بالا بیاورید تا libs بیاید؛"
     echo "   ۲) اسکریپتِ releaseٔ کنسول که render را آماده می‌کند اجرا شود؛"
-    echo "   ۳) از دستور ldd روی همین باینری استفاده کنید تا نام کتابخانهٔ گمشده را ببینید:"
-    echo "      ldd \"$CHROME_PATH\" | grep 'not found'"
+    echo "   ۳) خروجی زیر نام کتابخانه‌های گمشده را نشان می‌دهد:"
+    if have ldd; then
+      ldd "$CHROME_PATH" 2>/dev/null | grep 'not found' || true
+    else
+      echo "      ldd در این محیط موجود نیست"
+    fi
   fi
 else
   echo "ℹ باینریِ دانلودشده در bin/ پیدا نشد — اگر مرورگر سیستمی هست لازم نیست."
