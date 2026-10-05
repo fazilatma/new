@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.206';
+const APP_VERSION = '10.207';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9546,6 +9546,68 @@ function snappshopProductsFromReaderText(string $text, string $baseUrl): array {
     return $products;
 }
 
+function parse_snappshop_products_html(string $html, string $baseUrl): array {
+    $products = [];
+    if (trim($html) === '' || stripos($html, 'snappshop.ir/product/') === false && stripos($html, '/product/snp-') === false) return [];
+    $attrOf = function (string $tag, string $name): string {
+        if (preg_match('~\b' . preg_quote($name, '~') . '\s*=\s*(["\'])(.*?)\1~isu', $tag, $m)) {
+            return html_entity_decode((string)$m[2], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+        return '';
+    };
+    $pickPrice = function (string $text): string {
+        $text = normalize_text($text);
+        if ($text === '') return '';
+        if (!preg_match_all('~[۰-۹٠-٩0-9]{1,3}(?:[,،٬][۰-۹٠-٩0-9]{3})+(?:\s*(?:تومان|تومن|ریال))?|[۰-۹٠-٩0-9]{5,}(?:\s*(?:تومان|تومن|ریال))?~u', $text, $pm)) return '';
+        $cands = [];
+        foreach ($pm[0] as $raw) {
+            $clean = preg_replace('~[^۰-۹٠-٩0-9]~u', '', (string)$raw);
+            if (mb_strlen($clean) >= 4) $cands[] = normalize_text((string)$raw);
+        }
+        if (!$cands) return '';
+        $price = end($cands);
+        if ($price !== '' && !preg_match('~(تومان|تومن|ریال)~u', $price)) $price .= ' تومان';
+        return $price;
+    };
+    if (!preg_match_all('#<a\b(?=[^>]*href\s*=\s*(["\'])(?:https?://(?:www\.)?snappshop\.ir)?/product/snp-[^"\']+\1)[^>]*>.*?</a>#isu', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
+    foreach ($matches as $m) {
+        $tagHtml = (string)$m[0][0];
+        $off = (int)$m[0][1];
+        $href = $attrOf($tagHtml, 'href');
+        if ($href === '' || stripos($href, '/product/snp-') === false) continue;
+        $title = normalize_text($attrOf($tagHtml, 'title'));
+        if ($title === '') $title = normalize_text($attrOf($tagHtml, 'aria-label'));
+        if ($title === '' && preg_match('~<img\b[^>]*\balt\s*=\s*(["\'])(.*?)\1~isu', $tagHtml, $im)) {
+            $title = normalize_text(html_entity_decode((string)$im[2], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+        if ($title === '' && preg_match('~<h[1-4]\b[^>]*>(.*?)</h[1-4]>~isu', $tagHtml, $hm)) {
+            $title = normalize_text(strip_tags((string)$hm[1]));
+        }
+        if ($title === '') {
+            $txt = normalize_text(strip_tags($tagHtml));
+            $txt = preg_replace('~(خرید\s*قسطی|٪|%|تخفیف|تومان|ریال|[۰-۹٠-٩0-9,،٬]{4,})~u', ' ', $txt);
+            $title = normalize_text($txt);
+        }
+        if ($title === '' || mb_strlen($title) < 3) continue;
+        $img = '';
+        if (preg_match('~<img\b[^>]*(?:data-src|data-lazy-src|data-original|src)\s*=\s*(["\'])(.*?)\1~isu', $tagHtml, $im)) {
+            $img = html_entity_decode((string)$im[2], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+        $ctx = substr($html, max(0, $off - 600), strlen($tagHtml) + 2200);
+        $price = $pickPrice(strip_tags($ctx));
+        $p = [
+            'title' => mb_substr($title, 0, 220),
+            'price' => $price,
+            'link'  => make_absolute_url($href, $baseUrl),
+            'image' => url_is_image($img) ? make_absolute_url($img, $baseUrl) : '',
+            'sku'   => '',
+        ];
+        $key = productKey($p);
+        if (!isset($products[$key])) $products[$key] = $p;
+    }
+    return $products;
+}
+
 function snappshopSyntheticHtml(array $products, string $sourceUrl, string $note = ''): string {
     $cards = '';
     foreach ($products as $p) {
@@ -9572,6 +9634,16 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
         return ['ok' => false, 'error' => 'not snappshop', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
     }
     $timeout = max(8, min(60, $timeout));
+    $last = ['ok' => false, 'error' => (string)($prev['error'] ?? 'Empty'), 'code' => (int)($prev['code'] ?? 0), 'url' => $url, 'html' => '', 'mode' => 'snappshop-public'];
+    $raw = fetch_html($url, $timeout);
+    $raw['snappshop_public_fallback'] = 'fetch-html';
+    $rawBody = (string)($raw['html'] ?? '');
+    if (!empty($raw['ok']) && !empty(parse_snappshop_products_html($rawBody, $url))) {
+        $raw['url'] = $url;
+        $raw['mode'] = 'snappshop-fetch-html';
+        return $raw;
+    }
+    $last = $raw + $last;
     $readerUrl = 'https://r.jina.ai/' . $url;
     $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
     $body = (string)($r['html'] ?? '');
@@ -9583,9 +9655,10 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
                     'snappshop_public_fallback' => 'jina-reader', 'source_error' => (string)($prev['error'] ?? '')];
         }
     }
-    return ['ok' => false, 'error' => trim((string)($r['error'] ?? '')) !== '' ? (string)$r['error'] : (string)($prev['error'] ?? 'Empty'),
-            'code' => (int)($r['code'] ?? ($prev['code'] ?? 0)), 'url' => $url, 'html' => '',
-            'mode' => 'snappshop-jina-reader', 'snappshop_public_fallback' => 'jina-reader'];
+    $last = $r + $last;
+    return ['ok' => false, 'error' => trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty'),
+            'code' => (int)($last['code'] ?? ($prev['code'] ?? 0)), 'url' => $url, 'html' => '',
+            'mode' => (string)($last['mode'] ?? 'snappshop-jina-reader'), 'snappshop_public_fallback' => (string)($last['snappshop_public_fallback'] ?? 'jina-reader')];
 }
 
 
@@ -10871,9 +10944,17 @@ header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(180);
 $kind = trim((string)$_GET['s4_feedback']);
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
-if ($url === '') $url = 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+$_fbKind = strtolower($kind);
+$_fbSnapp = in_array($_fbKind, ['snappshop','snapp','snappshop.ir'], true);
+if ($url === '') {
+    $url = $_fbSnapp
+        ? 'https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1'
+        : 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+}
 if (!filter_var($url, FILTER_VALIDATE_URL)) { echo json_encode(['ok'=>false,'error'=>'Invalid URL'], JSON_UNESCAPED_UNICODE); exit; }
-if (!isEmallsUrl($url)) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls URLs'], JSON_UNESCAPED_UNICODE); exit; }
+$_fbIsEmalls = isEmallsUrl($url);
+$_fbIsSnapp = isSnappshopUrl($url);
+if (!$_fbIsEmalls && !$_fbIsSnapp) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls or SnappShop URLs'], JSON_UNESCAPED_UNICODE); exit; }
 $timeout = max(8, min(60, (int)($_GET['timeout'] ?? 20)));
 $pages = max(1, min(3, (int)($_GET['pages'] ?? 1)));
 $profiles = loadProfiles();
@@ -10899,6 +10980,8 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
     if (preg_match_all('#<a\b[^>]*href\s*=\s*(["\'])(.*?)\1#isu', $html, $am)) $hrefCount = count($am[0]);
     $idHrefCount = 0;
     if (preg_match_all('#<a\b[^>]*href\s*=\s*(["\'])([^"\']*~id~[^"\']*)\1#isu', $html, $im)) $idHrefCount = count($im[0]);
+    $snappHrefCount = 0;
+    if (preg_match_all('#<a\b[^>]*href\s*=\s*(["\'])([^"\']*/product/snp-[^"\']*)\1#isu', $html, $sm)) $snappHrefCount = count($sm[0]);
     $selContainerCount = 0;
     if (!empty($sel['container'])) {
         [$_dom, $_xp] = load_dom($html);
@@ -10916,8 +10999,10 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
     $heu = parse_list_by_engine($html, $baseUrl, $sel, 'heuristic', $usedHeu);
     $selRows = !empty($sel['container']) ? parse_list_by_engine($html, $baseUrl, $sel, 'selectors', $usedSel) : [];
     $em = function_exists('parse_emalls_products') ? parse_emalls_products($html, $baseUrl) : [];
+    $snHtml = function_exists('parse_snappshop_products_html') ? parse_snappshop_products_html($html, $baseUrl) : [];
+    $snReader = function_exists('snappshopProductsFromReaderText') ? snappshopProductsFromReaderText($html, $baseUrl) : [];
     $first = [];
-    foreach ($profileRows ?: ($auto ?: ($heu ?: $em)) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
+    foreach ($profileRows ?: ($auto ?: ($heu ?: ($em ?: ($snHtml ?: $snReader)))) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
     return [
         'bytes' => strlen($html),
         'sha1' => substr(sha1($html), 0, 12),
@@ -10926,7 +11011,9 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
         'tilde_id_count' => substr_count($html, '~id~'),
         'href_count' => $hrefCount,
         'href_tilde_id_count' => $idHrefCount,
+        'href_snapp_product_count' => $snappHrefCount,
         'synthetic_fallback' => strpos($html, 'data-emalls-fallback') !== false,
+        'synthetic_snappshop_fallback' => strpos($html, 'data-snappshop-fallback') !== false,
         'selector_container' => (string)($sel['container'] ?? ''),
         'selector_container_count' => $selContainerCount,
         'products' => [
@@ -10935,6 +11022,8 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
             'heuristic' => ['used'=>$usedHeu, 'count'=>count($heu)],
             'selectors' => ['used'=>$usedSel, 'count'=>count($selRows)],
             'emalls_regex' => ['count'=>count($em)],
+            'snappshop_html' => ['count'=>count($snHtml)],
+            'snappshop_reader' => ['count'=>count($snReader)],
         ],
         'first_products' => $first,
     ];
@@ -10949,7 +11038,7 @@ $summarizeFetch = function(string $label, array $r, array $sel, string $eng) use
         'mode' => (string)($r['mode'] ?? ''),
         'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
         'final_url' => mb_substr($base, 0, 260),
-        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','source_error','render_error','js_shell_detected','emalls_static_error'])),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','source_error','render_error','js_shell_detected','emalls_static_error'])),
     ];
     $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
     return $out;
@@ -10962,7 +11051,8 @@ $attempts = [];
 $attempts[] = $summarizeFetch('raw_direct_srcNetFetchAttempt', srcNetFetchAttempt($url, $timeout, $directNet, 'direct'), $selectors, $engine);
 $attempts[] = $summarizeFetch('fetch_html_current', fetch_html($url, $timeout), $selectors, $engine);
 $attempts[] = $summarizeFetch('fetch_html_smart_current', fetch_html_smart($url, $timeout), $selectors, $engine);
-$attempts[] = $summarizeFetch('emalls_public_fallback_only', fetch_html_emalls_public_fallback($url, $timeout, []), $selectors, $engine);
+if ($_fbIsEmalls) $attempts[] = $summarizeFetch('emalls_public_fallback_only', fetch_html_emalls_public_fallback($url, $timeout, []), $selectors, $engine);
+if ($_fbIsSnapp) $attempts[] = $summarizeFetch('snappshop_public_fallback_only', fetch_html_snappshop_public_fallback($url, $timeout, []), $selectors, $engine);
 $pageSummaries = [];
 for ($i = 1; $i <= $pages; $i++) {
     $pageUrl = $i === 1 ? $url : build_page_url_custom($url, $url, $i, $pagType, $pagVal);
@@ -14689,6 +14779,7 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
         }
         if (empty($rows) && function_exists('isSnappshopUrl') && isSnappshopUrl($baseUrl)) {
             $rows = parse_products($html, $baseUrl);
+            if (empty($rows)) $rows = parse_snappshop_products_html($html, $baseUrl);
             if (empty($rows)) $rows = snappshopProductsFromReaderText($html, $baseUrl);
             if (!empty($rows)) $usedEngine = 'selectors → heuristic(snappshop)';
         }
@@ -14706,8 +14797,9 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
             if (!empty($rows)) $usedEngine = 'heuristic → emalls-regex';
         }
         if (empty($rows) && function_exists('isSnappshopUrl') && isSnappshopUrl($baseUrl)) {
-            $rows = snappshopProductsFromReaderText($html, $baseUrl);
-            if (!empty($rows)) $usedEngine = 'heuristic → snappshop-reader';
+            $rows = parse_snappshop_products_html($html, $baseUrl);
+            if (empty($rows)) $rows = snappshopProductsFromReaderText($html, $baseUrl);
+            if (!empty($rows)) $usedEngine = 'heuristic → snappshop';
         }
         return $rows;
     }
@@ -14722,8 +14814,9 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
         if (!empty($rows)) { $usedEngine = 'heuristic → emalls-regex'; return $rows; }
     }
     if (function_exists('isSnappshopUrl') && isSnappshopUrl($baseUrl)) {
-        $rows = snappshopProductsFromReaderText($html, $baseUrl);
-        if (!empty($rows)) { $usedEngine = 'heuristic → snappshop-reader'; return $rows; }
+        $rows = parse_snappshop_products_html($html, $baseUrl);
+        if (empty($rows)) $rows = snappshopProductsFromReaderText($html, $baseUrl);
+        if (!empty($rows)) { $usedEngine = 'heuristic → snappshop'; return $rows; }
     }
     if ($hasSelectors) {
         $rows = parse_with_selectors($html, $baseUrl, $sel);
@@ -36850,6 +36943,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.206', 'ورودیِ 10.206 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "206'") !== false
       && version_compare(APP_VERSION, '10.' . '206', '>='));
+
+    /* ---------- v10.207: feedback/fallback خام SnappShop ---------- */
+    $add('10.207', 'parser HTML اسنپ‌شاپ لینک‌های /product/snp-* را می‌خواند',
+         strpos($selfSrc, 'function parse_snappshop_products_html') !== false
+      && strpos($selfSrc, '/product/snp-') !== false
+      && strpos($selfSrc, 'snappshop-fetch-html') !== false);
+    $add('10.207', 's4_feedback برای SnappShop هم فعال است',
+         strpos($selfSrc, 'snappshop_public_fallback_only') !== false
+      && strpos($selfSrc, 'href_snapp_product_count') !== false
+      && strpos($selfSrc, 'restricted to Emalls or SnappShop URLs') !== false);
+    $add('10.207', 'ورودیِ 10.207 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "207'") !== false
+      && version_compare(APP_VERSION, '10.' . '207', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -67040,6 +67146,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.207', t:'🧪 feedback و fallback خام برای SnappShop', items:[
+    's4_feedback اکنون URLهای SnappShop را هم با مسیرهای direct، fetch_html، fetch_html_smart، fallback و صفحه‌های پروفایل خلاصه می‌کند',
+    'fallback اسنپ‌شاپ قبل از Reader، HTML خام قابل‌دسترسی از مسیر فعلی هاست را امتحان می‌کند و لینک‌های /product/snp-* را با parser اختصاصی می‌خواند',
+  ]},
   {v:'10.206', t:'⚡ سرعت میانگین در poll زنده استخراج', items:[
     'poll_extract اکنون avg_ppm را سمت سرور از تعداد محصول استخراج‌شده و زمان شروع همان اجرا محاسبه می‌کند تا شمارندهٔ ششم در همهٔ حالت‌های زنده مقدار پایدار داشته باشد',
     'فایل progress نهایی هم finished_at و avg_ppm را نگه می‌دارد تا مقدار سرعت بعد از پایان اجرا همان عدد واقعی اجرای انجام‌شده بماند',
