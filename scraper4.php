@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.216';
+const APP_VERSION = '10.217';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -340,7 +340,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/13';
+const APP_VERSION_DATE = '1405/07/14';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -10809,6 +10809,10 @@ $profiles[$key] = [
 'net_indirect' => array_key_exists('net_indirect', $_POST)
     ? !empty($_POST['net_indirect'])
     : !empty($profiles[$key]['net_indirect']),
+// v10.217: per-profile source selector. Additive metadata only; products keep the legacy shape.
+'productSource' => array_key_exists('productSource', $_POST)
+    ? (json_decode((string)$_POST['productSource'], true) ?: ['mode'=>'direct'])
+    : (array)($profiles[$key]['productSource'] ?? ['mode'=>'direct']),
 'updatedAt' => time()
 ];
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
@@ -15804,6 +15808,373 @@ break 2;
 }
 }
 return $mapping;
+}
+
+
+/* =====================================================================
+ * v10.217: GitHub-backed product source + comprehensive profile tester
+ *
+ * These helpers are intentionally additive: they reuse the same parsed product
+ * shape (key/title/price/image/link/sku/description/variations) that the legacy
+ * scraper, CSV import tab, WooCommerce sender, and BaSalam sender already use.
+ * No WordPress-facing endpoint is renamed or removed.
+ * ===================================================================== */
+function s4GithubDefaultRepo(): string {
+    $repo = 'fazilatma/new';
+    $cfg = __DIR__ . '/.git/config';
+    if (is_file($cfg)) {
+        $txt = (string)@file_get_contents($cfg);
+        if (preg_match('~url\s*=\s*(?:git@github\.com:|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?~i', $txt, $m)) {
+            $repo = $m[1];
+        }
+    }
+    return $repo;
+}
+function s4GithubDefaultBranch(): string {
+    $head = __DIR__ . '/.git/HEAD';
+    if (is_file($head)) {
+        $txt = trim((string)@file_get_contents($head));
+        if (preg_match('~^ref:\s*refs/heads/(.+)$~', $txt, $m) && trim($m[1]) !== '') return trim($m[1]);
+    }
+    return 'arena/01a0ebf7-new';
+}
+function s4GithubCleanRepo(string $repo): string {
+    $repo = trim($repo);
+    $repo = preg_replace('~^https://github\.com/~i', '', $repo);
+    $repo = preg_replace('~\.git$~i', '', $repo);
+    return preg_match('~^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$~', $repo) ? $repo : s4GithubDefaultRepo();
+}
+function s4GithubCleanBranch(string $branch): string {
+    $branch = trim($branch);
+    if ($branch === '') $branch = s4GithubDefaultBranch();
+    return preg_match('~^[A-Za-z0-9_./-]{1,160}$~', $branch) ? $branch : s4GithubDefaultBranch();
+}
+function s4GithubHttp(string $url, int $timeout = 25): array {
+    if (!function_exists('curl_init')) return ['ok'=>false,'code'=>0,'error'=>'curl unavailable','body'=>''];
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_USERAGENT => 'scraper4/' . APP_VERSION,
+        CURLOPT_HTTPHEADER => ['Accept: application/vnd.github+json', 'X-GitHub-Api-Version: 2022-11-28'],
+    ]);
+    $body = curl_exec($ch);
+    $err = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    return ['ok'=>$body !== false && $code >= 200 && $code < 300, 'code'=>$code, 'error'=>$err, 'body'=>(string)$body];
+}
+function s4GithubApiJson(string $url, int $timeout = 25): array {
+    $r = s4GithubHttp($url, $timeout);
+    if (empty($r['ok'])) return ['ok'=>false,'code'=>(int)($r['code']??0),'error'=>(string)($r['error']??('HTTP '.($r['code']??0)))];
+    $j = json_decode((string)$r['body'], true);
+    if (!is_array($j)) return ['ok'=>false,'code'=>(int)$r['code'],'error'=>'invalid JSON from GitHub'];
+    return ['ok'=>true,'code'=>(int)$r['code'],'json'=>$j];
+}
+function s4GithubBranches(string $repo): array {
+    $repo = s4GithubCleanRepo($repo);
+    $j = s4GithubApiJson('https://api.github.com/repos/' . $repo . '/branches?per_page=100', 18);
+    $branches = [];
+    if (!empty($j['ok'])) {
+        foreach ((array)$j['json'] as $b) {
+            $name = trim((string)($b['name'] ?? ''));
+            if ($name !== '') $branches[] = $name;
+        }
+    }
+    foreach ([s4GithubDefaultBranch(), 'main', 'master'] as $b) if ($b !== '' && !in_array($b, $branches, true)) $branches[] = $b;
+    return array_values(array_unique($branches));
+}
+function s4GithubLocalProductFiles(): array {
+    $out = [];
+    $root = realpath(__DIR__) ?: __DIR__;
+    $skip = ['.git'=>1,'node_modules'=>1,'vendor'=>1,'.cache'=>1,'browser-php/bin'=>1,'browser-php/lib'=>1];
+    try {
+        $it = new RecursiveIteratorIterator(new RecursiveCallbackFilterIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), function($cur, $key, $iterator) use ($root, $skip) {
+            if ($cur->isDir()) {
+                $rel = str_replace('\\','/', substr($cur->getPathname(), strlen($root) + 1));
+                return !isset($skip[$rel]) && !isset($skip[$cur->getFilename()]);
+            }
+            return true;
+        }));
+        foreach ($it as $f) {
+            if (!$f->isFile()) continue;
+            $ext = strtolower(pathinfo($f->getFilename(), PATHINFO_EXTENSION));
+            if (!in_array($ext, ['csv','xls','xlsx','xml'], true)) continue;
+            $rel = str_replace('\\','/', substr($f->getPathname(), strlen($root) + 1));
+            $out[] = ['path'=>$rel, 'name'=>basename($rel), 'size'=>(int)$f->getSize(), 'source'=>'local'];
+            if (count($out) >= 300) break;
+        }
+    } catch (Throwable $e) {}
+    usort($out, fn($a,$b)=>strcmp((string)$a['path'], (string)$b['path']));
+    return $out;
+}
+function s4GithubProductFiles(string $repo, string $branch): array {
+    $repo = s4GithubCleanRepo($repo); $branch = s4GithubCleanBranch($branch);
+    $url = 'https://api.github.com/repos/' . $repo . '/git/trees/' . rawurlencode($branch) . '?recursive=1';
+    $j = s4GithubApiJson($url, 28);
+    $files = [];
+    if (!empty($j['ok']) && isset($j['json']['tree']) && is_array($j['json']['tree'])) {
+        foreach ($j['json']['tree'] as $n) {
+            if (($n['type'] ?? '') !== 'blob') continue;
+            $path = (string)($n['path'] ?? '');
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['csv','xls','xlsx','xml'], true)) continue;
+            $files[] = ['path'=>$path, 'name'=>basename($path), 'size'=>(int)($n['size'] ?? 0), 'source'=>'github'];
+        }
+    }
+    if (!$files) $files = s4GithubLocalProductFiles();
+    usort($files, fn($a,$b)=>strcmp((string)$a['path'], (string)$b['path']));
+    return $files;
+}
+function s4GithubFetchFile(string $repo, string $branch, string $path): array {
+    $repo = s4GithubCleanRepo($repo); $branch = s4GithubCleanBranch($branch);
+    $path = ltrim(str_replace('\\','/', trim($path)), '/');
+    if ($path === '' || preg_match('~(^|/)\.\.(/|$)~', $path) || !preg_match('~\.(csv|xls|xlsx|xml)$~i', $path)) {
+        return ['ok'=>false,'error'=>'مسیر فایل نامعتبر است'];
+    }
+    // First try local checkout/cache because private session branches may already be deployed there.
+    $local = realpath(__DIR__ . '/' . $path);
+    $root = realpath(__DIR__) ?: __DIR__;
+    if ($local && strpos($local, $root) === 0 && is_file($local)) {
+        $body = @file_get_contents($local);
+        if ($body !== false) return ['ok'=>true,'body'=>$body,'source'=>'local','size'=>strlen($body)];
+    }
+    $api = 'https://api.github.com/repos/' . $repo . '/contents/' . str_replace('%2F','/', rawurlencode($path)) . '?ref=' . rawurlencode($branch);
+    $j = s4GithubApiJson($api, 35);
+    if (empty($j['ok'])) return ['ok'=>false,'error'=>'GitHub: '.($j['error'] ?? 'HTTP error'), 'code'=>(int)($j['code'] ?? 0)];
+    $node = $j['json'];
+    if (isset($node[0]) && is_array($node[0])) return ['ok'=>false,'error'=>'مسیر انتخاب‌شده پوشه است نه فایل'];
+    $enc = (string)($node['encoding'] ?? '');
+    $content = (string)($node['content'] ?? '');
+    if ($enc === 'base64' && $content !== '') {
+        $body = base64_decode(preg_replace('~\s+~', '', $content), true);
+        if ($body !== false) return ['ok'=>true,'body'=>$body,'source'=>'github','size'=>strlen($body)];
+    }
+    if (!empty($node['download_url'])) {
+        $r = s4GithubHttp((string)$node['download_url'], 35);
+        if (!empty($r['ok'])) return ['ok'=>true,'body'=>(string)$r['body'],'source'=>'github_raw','size'=>strlen((string)$r['body'])];
+    }
+    return ['ok'=>false,'error'=>'محتوای فایل از GitHub خوانده نشد'];
+}
+function s4ParsedRowsToProducts(array $parsed, ?array $mapping = null): array {
+    $headers = array_values((array)($parsed['headers'] ?? []));
+    $mapping = $mapping ?: autoDetectColumns($headers);
+    $products = [];
+    foreach ((array)($parsed['rows'] ?? []) as $row) {
+        $vals = (array)($row['values'] ?? []);
+        $get = function(string $field) use ($mapping, $vals): string {
+            if (!array_key_exists($field, $mapping)) return '';
+            $idx = (int)$mapping[$field];
+            return trim((string)($vals[$idx] ?? ''));
+        };
+        $title = $get('title'); $price = $get('price'); $image = $get('image'); $link = $get('link'); $sku = $get('sku');
+        if ($title === '' && $link === '') continue;
+        $p = [
+            'title'=>$title, 'price'=>$price, 'image'=>$image, 'link'=>$link, 'sku'=>$sku,
+            'shortDesc'=>$get('shortDesc'), 'longDesc'=>$get('longDesc'),
+            '_source'=>'github_import', '_imported_at'=>time(),
+        ];
+        if ($image !== '' && preg_match('~\s*(?:\||,|\n)\s*~', $image)) {
+            $imgs = array_values(array_filter(array_map('trim', preg_split('~\s*(?:\||,|\n)\s*~', $image))));
+            if ($imgs) { $p['images'] = $imgs; $p['image'] = $imgs[0]; }
+        }
+        $extra = [];
+        foreach ($headers as $i => $h) {
+            $h = trim((string)$h); if ($h === '') $h = 'col_' . $i;
+            $v = trim((string)($vals[$i] ?? '')); if ($v === '') continue;
+            if (in_array($i, array_map('intval', $mapping), true)) continue;
+            $extra[$h] = $v;
+            $hl = mb_strtolower($h, 'UTF-8');
+            if (strpos($hl, 'variation') !== false || strpos($hl, 'تنوع') !== false || strpos($hl, 'رنگ') !== false || strpos($hl, 'سایز') !== false) {
+                $p['variations'] = $v;
+            }
+            if (strpos($hl, 'gallery') !== false || strpos($hl, 'گالری') !== false || strpos($hl, 'images') !== false) {
+                $imgs = array_values(array_filter(array_map('trim', preg_split('~\s*(?:\||,|\n)\s*~', $v))));
+                if ($imgs) $p['images'] = array_values(array_unique(array_merge((array)($p['images'] ?? []), $imgs)));
+            }
+        }
+        if ($extra) $p['extra'] = $extra;
+        $key = productKey(['link'=>$p['link'], 'title'=>$p['title'], 'price'=>$p['price']]);
+        $p['key'] = $key;
+        $products[$key] = $p;
+    }
+    return ['products'=>$products, 'mapping'=>$mapping, 'headers'=>$headers];
+}
+function s4ProductPricingForProfile(array $profile, array $p, ?array $cn = null): array {
+    $cn = $cn ?: loadConnections();
+    $raw = extractSourcePrice($p);
+    $base = extractPriceNum($raw);
+    $profilePrice = profileFinalPrice($profile, $raw);
+    $woo = destAdjustPrice($profilePrice, destPriceCfg($cn, 'woocommerce'));
+    $bsl = destAdjustPrice($profilePrice, destPriceCfg($cn, 'basalam'));
+    $shops = [];
+    foreach (bslAllShops($cn) as $shop) {
+        $sp = bslShopPriceForProfile($profile, $raw, $shop, (int)($profile['roundPrice'] ?? 0));
+        $shops[] = [
+            'vendor_id'=>(int)($shop['vendor_id'] ?? 0), 'name'=>(string)($shop['shop_name'] ?? ''),
+            'is_default'=>!empty($shop['is_default']), 'price'=>(int)($sp['price'] ?? 0),
+            'eff_pct'=>(float)($sp['eff_pct'] ?? 0), 'profile_pct'=>(float)($sp['profile_pct'] ?? 0),
+            'shop_pct'=>(float)($sp['shop_pct'] ?? 0),
+        ];
+    }
+    return [
+        'raw_text'=>$raw, 'raw'=>(int)$base,
+        'profile_price'=>(int)$profilePrice,
+        'profile_mode'=>(string)($profile['priceMode'] ?? 'none'),
+        'profile_val'=>(float)($profile['priceVal'] ?? 0),
+        'round'=>(int)($profile['roundPrice'] ?? 0),
+        'woocommerce_price'=>(int)$woo,
+        'basalam_price'=>(int)$bsl,
+        'shops'=>$shops,
+    ];
+}
+function s4ProductSampleRows(array $profile, array $products, int $limit = 4): array {
+    $cn = loadConnections(); $out = []; $i = 0;
+    foreach ($products as $k => $p) {
+        if (!is_array($p)) continue;
+        if (empty($p['key'])) $p['key'] = is_string($k) ? $k : productKey($p);
+        $p['_pricing'] = s4ProductPricingForProfile($profile, $p, $cn);
+        $out[] = $p;
+        $i++; if ($i >= $limit) break;
+    }
+    return $out;
+}
+
+if (isset($_GET['github_product_files'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $repo = s4GithubCleanRepo((string)($_GET['repo'] ?? s4GithubDefaultRepo()));
+    $branch = s4GithubCleanBranch((string)($_GET['branch'] ?? s4GithubDefaultBranch()));
+    echo json_encode([
+        'ok'=>true,
+        'repo'=>$repo,
+        'branch'=>$branch,
+        'default_repo'=>s4GithubDefaultRepo(),
+        'default_branch'=>s4GithubDefaultBranch(),
+        'branches'=>s4GithubBranches($repo),
+        'files'=>s4GithubProductFiles($repo, $branch),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); exit;
+}
+
+if (($_POST['action'] ?? '') === 'github_import_products') {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(0);
+    $repo = s4GithubCleanRepo((string)($_POST['repo'] ?? s4GithubDefaultRepo()));
+    $branch = s4GithubCleanBranch((string)($_POST['branch'] ?? s4GithubDefaultBranch()));
+    $path = trim((string)($_POST['path'] ?? ''));
+    $f = s4GithubFetchFile($repo, $branch, $path);
+    if (empty($f['ok'])) { echo json_encode(['ok'=>false,'error'=>$f['error'] ?? 'خواندن فایل ناموفق بود'], JSON_UNESCAPED_UNICODE); exit; }
+    if ((int)($f['size'] ?? 0) > 30 * 1024 * 1024) { echo json_encode(['ok'=>false,'error'=>'فایل بزرگ‌تر از سقف ۳۰MB است'], JSON_UNESCAPED_UNICODE); exit; }
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['csv','xls','xlsx','xml'], true)) { echo json_encode(['ok'=>false,'error'=>'فرمت فایل پشتیبانی نمی‌شود'], JSON_UNESCAPED_UNICODE); exit; }
+    if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
+    $safe = preg_replace('~[^A-Za-z0-9_.-]+~', '_', basename($path));
+    $save = UPLOAD_DIR . 'github_' . date('Ymd_His') . '_' . $safe;
+    @file_put_contents($save, (string)$f['body'], LOCK_EX);
+    $parsed = parseUploadedFile($save, $ext);
+    if (!empty($parsed['error'])) { echo json_encode(['ok'=>false,'error'=>$parsed['error']], JSON_UNESCAPED_UNICODE); exit; }
+    if (empty($parsed['headers']) || empty($parsed['rows'])) { echo json_encode(['ok'=>false,'error'=>'فایل خالی است یا ستون‌ها شناسایی نشدند'], JSON_UNESCAPED_UNICODE); exit; }
+    $conv = s4ParsedRowsToProducts($parsed, null);
+    $products = $conv['products'];
+    $pairs = [];
+    foreach ($products as $k => $p) $pairs[] = [$k, $p];
+    $profileUrl = s4NormalizeInputUrl((string)($_POST['profile_url'] ?? ''));
+    $saved = false; $profileKey = '';
+    if (!empty($_POST['save_to_profile']) && $profileUrl !== '') {
+        $profiles = loadProfiles();
+        $profileKey = profileResolveKey($profileUrl, $profiles) ?: profileKey($profileUrl);
+        $profile = (array)($profiles[$profileKey] ?? ['url'=>$profileUrl, 'name'=>parse_url($profileUrl, PHP_URL_HOST)]);
+        $profile['url'] = $profileUrl;
+        $profile['products'] = $pairs;
+        $profile['productsOrder'] = array_keys($products);
+        $profile['productSource'] = ['mode'=>'github','repo'=>$repo,'branch'=>$branch,'path'=>$path,'source'=>$f['source'] ?? 'github','imported_at'=>time()];
+        $sc = (array)($profile['syncConfig'] ?? []);
+        $sc['noExtract'] = true;
+        if (!array_key_exists('noExtractRefresh', $sc)) $sc['noExtractRefresh'] = true;
+        $profile['syncConfig'] = $sc;
+        $profile['updatedAt'] = time();
+        $profiles[$profileKey] = $profile;
+        $saved = saveProfiles($profiles);
+    }
+    echo json_encode([
+        'ok'=>true, 'repo'=>$repo, 'branch'=>$branch, 'path'=>$path, 'file'=>basename($save),
+        'source'=>$f['source'] ?? 'github', 'headers'=>$conv['headers'], 'mapping'=>$conv['mapping'],
+        'count'=>count($products), 'products'=>array_values($products), 'pairs'=>$pairs,
+        'saved'=>$saved, 'profile_key'=>$profileKey,
+        'sample'=>array_slice(array_values($products), 0, 5),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); exit;
+}
+
+if (isset($_GET['s4_comprehensive_test'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(0); @ignore_user_abort(true);
+    $pagesTarget = max(1, min(10, (int)($_POST['pages'] ?? $_GET['pages'] ?? 5)));
+    $profiles = loadProfiles();
+    $outProfiles = [];
+    $startedAll = microtime(true);
+    foreach ($profiles as $pk => $profile) {
+        if (!is_array($profile)) continue;
+        $rowStart = microtime(true);
+        $products = []; $pageRows = []; $errors = []; $source = 'direct';
+        $ps = (array)($profile['productSource'] ?? []);
+        if (($ps['mode'] ?? '') === 'github' && !empty($ps['path'])) {
+            $source = 'github';
+            $f = s4GithubFetchFile((string)($ps['repo'] ?? s4GithubDefaultRepo()), (string)($ps['branch'] ?? s4GithubDefaultBranch()), (string)$ps['path']);
+            if (!empty($f['ok'])) {
+                $tmp = tempnam(sys_get_temp_dir(), 's4gh_');
+                @file_put_contents($tmp, (string)$f['body']);
+                $parsed = parseUploadedFile($tmp, strtolower(pathinfo((string)$ps['path'], PATHINFO_EXTENSION)));
+                @unlink($tmp);
+                if (!empty($parsed['rows'])) $products = s4ParsedRowsToProducts($parsed, null)['products'];
+                else $errors[] = 'GitHub file parsed but had no rows';
+            } else $errors[] = 'GitHub import failed: ' . (string)($f['error'] ?? 'unknown');
+        } else {
+            $u = s4NormalizeInputUrl((string)($profile['url'] ?? ''));
+            $sel = (array)($profile['selectors'] ?? []);
+            $engine = normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
+            $pt = (string)($profile['pagType'] ?? 'query_page');
+            $pv = (string)($profile['pagVal'] ?? '');
+            $nextUrl = null;
+            if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) $errors[] = 'Invalid profile URL';
+            for ($page = 1; $page <= $pagesTarget && !$errors; $page++) {
+                if ($page === 1) $pageUrl = $u;
+                elseif ($pt === 'next_selector' && $nextUrl) $pageUrl = $nextUrl;
+                elseif ($pt === 'next_selector' && !$nextUrl) { $errors[] = 'next_selector did not produce page ' . $page; break; }
+                else $pageUrl = build_page_url_custom($u, $u, $page, $pt, $pv);
+                $fetchStart = microtime(true);
+                $res = fetch_html_for_engine($pageUrl, 18, $engine, $sel);
+                $fetchMs = (int)round((microtime(true) - $fetchStart) * 1000);
+                $html = (string)($res['html'] ?? ''); $used = '';
+                $parsed = !empty($res['ok']) ? parse_list_by_engine($html, (string)($res['url'] ?? $pageUrl), $sel, $engine, $used) : [];
+                foreach ($parsed as $k => $p) if (!isset($products[$k])) $products[$k] = $p;
+                $pageRows[] = ['page'=>$page,'ok'=>!empty($res['ok']),'code'=>(int)($res['code'] ?? 0),'url'=>$pageUrl,'final_url'=>(string)($res['url'] ?? ''),'bytes'=>strlen($html),'products'=>count($parsed),'used_engine'=>$used,'fetch_ms'=>$fetchMs,'error'=>!empty($res['ok'])?'':(string)($res['error'] ?? '')];
+                if (empty($res['ok'])) $errors[] = 'page '.$page.': '.(string)($res['error'] ?? ('HTTP '.($res['code'] ?? 0)));
+                if ($pt === 'next_selector' && !empty($pv) && !empty($res['ok'])) {
+                    [$dom, $xp] = load_dom($html);
+                    $xpath = cssToXpath($pv);
+                    $nodes = $xpath ? @$xp->query($xpath) : null;
+                    $nextUrl = null;
+                    if ($nodes && $nodes->length && $nodes->item(0) instanceof DOMElement) {
+                        $href = $nodes->item(0)->getAttribute('href');
+                        if ($href && $href !== '#' && !preg_match('~^(javascript:|data:)~i', $href)) $nextUrl = make_absolute_url($href, (string)($res['url'] ?? $pageUrl));
+                    }
+                }
+            }
+        }
+        $elapsedMs = (int)round((microtime(true) - $rowStart) * 1000);
+        $ppm = $elapsedMs > 0 ? (int)round((count($products) * 60000) / max(1, $elapsedMs)) : 0;
+        $outProfiles[] = [
+            'key'=>(string)$pk, 'name'=>(string)($profile['name'] ?? $pk), 'url'=>(string)($profile['url'] ?? ''),
+            'source'=>$source, 'ok'=>count($products) > 0 && !$errors, 'pages_target'=>$pagesTarget,
+            'pages_scanned'=>count($pageRows), 'products_unique'=>count($products), 'elapsed_ms'=>$elapsedMs,
+            'products_per_minute'=>$ppm, 'errors'=>$errors, 'pages'=>$pageRows,
+            'samples'=>s4ProductSampleRows($profile, $products, 4),
+        ];
+    }
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'pages_target'=>$pagesTarget,'took_ms'=>(int)round((microtime(true)-$startedAll)*1000),'profiles'=>$outProfiles], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE); exit;
 }
 
 if(isset($_GET['extract_queue_status'])){
@@ -37079,6 +37450,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.216', 'ورودیِ 10.216 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "216'") !== false
       && version_compare(APP_VERSION, '10.' . '216', '>='));
+
+    /* ---------- v10.217: منبع محصول GitHub، تست جامع و مودال تمام‌صفحهٔ سلکتور ---------- */
+    $add('10.217', 'منبع محصولات هر پروفایل می‌تواند direct یا GitHub باشد',
+         strpos($selfSrc, 'profileProduct' . 'Source') !== false
+      && strpos($selfSrc, 'github_import_' . 'products') !== false
+      && strpos($selfSrc, 'product' . 'Source') !== false);
+    $add('10.217', 'دراپ‌داون repo/branch/file از GitHub یا fallback محلی پر می‌شود',
+         function_exists('s4GithubProduct' . 'Files')
+      && function_exists('s4GithubFetch' . 'File')
+      && strpos($selfSrc, 'github_product_' . 'files') !== false);
+    $add('10.217', 'تست جامع همهٔ پروفایل‌ها با کارت نمونه و مودال محصول وجود دارد',
+         strpos($selfSrc, 's4_comprehensive_' . 'test') !== false
+      && strpos($selfSrc, 'comprehensiveTest' . 'Start') !== false
+      && strpos($selfSrc, 'compOpen' . 'Product') !== false);
+    $add('10.217', 'دکمه‌های بارگذاری صفحهٔ لیست/جزئیات مودال تمام‌صفحه باز می‌کنند',
+         strpos($selfSrc, 'selectorFs' . 'Modal') !== false
+      && strpos($selfSrc, "selectorFsOpen('list'") !== false
+      && strpos($selfSrc, "selectorFsOpen('detail'") !== false);
+    $add('10.217', 'ورودیِ 10.217 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "217'") !== false
+      && version_compare(APP_VERSION, '10.' . '217', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -61020,7 +61412,47 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
         </div>
     </div>
 
-    <div class="card">
+    <!-- v10.217: per-profile product source: direct scrape or GitHub CSV/Excel import -->
+    <div class="card" id="profileProductSourceCard">
+        <div class="section-title">📦 منبع محصولات این پروفایل</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.8;margin-bottom:8px">
+            انتخاب کنید محصولات این پروفایل مستقیم از سایت استخراج شوند یا از فایل‌های CSV/Excel قبلاً استخراج‌شده در GitHub خوانده شوند. ساختار محصولات همان ساختار داخلی اسکرپر می‌ماند تا ارسال به ووکامرس/باسلام و افزونهٔ وردپرس دست‌نخورده بماند.
+        </div>
+        <div class="row" style="align-items:center">
+            <label style="min-width:120px">روش دریافت:</label>
+            <select id="profileProductSource" onchange="productSourceChanged(true)" style="flex:1">
+                <option value="direct">🔄 استخراج مستقیم از سایت</option>
+                <option value="github">📥 دریافت از GitHub (CSV/Excel)</option>
+            </select>
+        </div>
+        <div id="sourceDirectHint" style="margin-top:8px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:11px;color:#86efac;line-height:1.8">
+            حالت مستقیم فعال است؛ فیلدهای آدرس، صفحه‌بندی و موتور استخراج پایین نمایش داده می‌شوند.
+        </div>
+        <div id="sourceGithubFields" class="hidden" style="margin-top:10px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:10px">
+            <div class="row" style="align-items:center;margin-bottom:6px">
+                <label style="min-width:70px">Repo:</label>
+                <select id="ghRepoSelect" onchange="ghSourceRepoChanged()" style="flex:1;direction:ltr;text-align:left"><option value="fazilatma/new">fazilatma/new</option></select>
+                <input type="text" id="ghRepoCustom" placeholder="owner/repo" dir="ltr" style="flex:1;display:none" oninput="ghSourceRepoCustomChanged()">
+                <button class="btn btn-gray" onclick="ghSourceToggleCustomRepo()" style="flex:0;font-size:11px;padding:7px 9px">✎</button>
+            </div>
+            <div class="row" style="align-items:center;margin-bottom:6px">
+                <label style="min-width:70px">Branch:</label>
+                <select id="ghBranchSelect" onchange="ghSourceLoadFiles()" style="flex:1;direction:ltr;text-align:left"><option value="arena/01a0ebf7-new">arena/01a0ebf7-new</option></select>
+                <button class="btn btn-gray" onclick="ghSourceRefresh()" style="flex:0;font-size:11px;padding:7px 9px">🔄</button>
+            </div>
+            <div class="row" style="align-items:center;margin-bottom:6px">
+                <label style="min-width:70px">File:</label>
+                <select id="ghFileSelect" onchange="productSourceChanged(true)" style="flex:1;direction:ltr;text-align:left"><option value="">— فایل CSV/Excel —</option></select>
+            </div>
+            <div class="row">
+                <button class="btn btn-green" id="ghImportBtn" onclick="ghImportProducts()" style="flex:1">📥 دریافت و ثبت محصولات برای همین پروفایل</button>
+                <button class="btn btn-cyan" onclick="ghSourceRefresh()" style="flex:0">🔎 جستجوی فایل‌ها</button>
+            </div>
+            <div id="ghSourceStatus" style="font-size:11px;color:#94a3b8;margin-top:7px;line-height:1.8">با انتخاب GitHub، فهرست branch و فایل‌ها خودکار پر می‌شود.</div>
+        </div>
+    </div>
+
+    <div class="card" id="directExtractFieldsCard">
         <div class="section-title">🔗 آدرس و محدوده</div>
         <div class="row">
             <input type="url" id="url" value="<?=h(DEFAULT_URL)?>" placeholder="آدرس فروشگاه..." oninput="onUrlChange()">
@@ -61058,7 +61490,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
         </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="directExtractRunCard">
         <div class="mode-tabs">
             <button class="mode-tab active" onclick="setMode('auto')">🤖 خودکار</button>
             <button class="mode-tab" onclick="setMode('visual')">👆 دستی</button>
@@ -61074,10 +61506,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-purple" id="startBackendBtn" onclick="startBackendSync()" style="flex:1;font-size:13px;padding:8px 12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;border-radius:8px;cursor:pointer">⚡ استخراج بک‌اند</button>
             </div>
-            <!-- v10.182: benchmark all PHP-native extraction engines on first three pages -->
+            <!-- v10.217: one comprehensive test button instead of the old single-profile engine benchmark button -->
             <div class="row" style="margin-top:6px">
-                <button class="btn btn-orange" id="engineBenchmarkBtn" onclick="engineBenchmarkStart()" style="flex:1;font-size:12px;padding:8px 12px;font-weight:800">🏁 تست سه‌صفحه‌ای همهٔ موتورها</button>
+                <button class="btn btn-orange" id="comprehensiveTestBtn" onclick="comprehensiveTestStart()" style="flex:1;font-size:12px;padding:8px 12px;font-weight:800">🧪 تست جامع همهٔ پروفایل‌ها (۵ صفحه)</button>
             </div>
+            <div id="comprehensiveTestBox" style="display:none;margin-top:8px"></div>
             <div id="engineBenchmarkBox" style="display:none;margin-top:8px"></div>
 
             <!-- v10.35 (۴۷ه): همگام‌سازیِ دستی — یک دکمه برای کلِ زنجیره -->
@@ -61386,7 +61819,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             </select>
         </div>
         <div class="row">
-            <button class="btn btn-orange" onclick="loadVisual()" style="flex:1">🔄 بارگذاری صفحه</button>
+            <button class="btn btn-orange" onclick="selectorFsOpen('list')" style="flex:1">🔄 بارگذاری صفحه</button>
             <button class="btn btn-green" onclick="loadDirect()" style="flex:1" title="بارگذاری مستقیم بدون پراکسی — برای سایت‌های SPA مثل snappshop">🌐 بارگذاری مستقیم</button>
             <button class="btn btn-yellow" onclick="suggestSelectors()" style="flex:1" title="پیشنهادِ سریعِ الگومحور — بدون هوش مصنوعی">💡 پیشنهاد</button>
             <!-- v10.25 (۳۸ج): نسخهٔ ایجنتی؛ صفحه را واقعاً باز می‌کند و سلکتورها را می‌آزماید -->
@@ -61579,7 +62012,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             </div>
         </details>
         <div class="row">
-            <button class="btn btn-pink" onclick="openDetailProxy()" style="flex:1" id="detailProxyBtn">🎯 باز کردن نمونه</button>
+            <button class="btn btn-pink" onclick="selectorFsOpen('detail')" style="flex:1" id="detailProxyBtn">🎯 باز کردن نمونه</button>
             <button class="btn btn-purple" onclick="suggestDetailSelectors()" style="flex:1" title="پیشنهادِ سریعِ الگومحور — بدون هوش مصنوعی">💡 پیشنهاد</button>
             <!-- v10.25 (۳۸ج) -->
             <button class="btn btn-blue" onclick="selagStart('detail')" style="flex:1" id="selagBtn-detail" title="ایجنتِ AI صفحهٔ نمونه را باز می‌کند و برای هر فیلد سلکتور پیدا و آزمایش می‌کند">🤖 پیشنهاد (ایجنت)</button>
@@ -62200,6 +62633,21 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 
 <div id="toast" class="toast"></div>
 
+<!-- v10.217: fullscreen selector page-load modal for list/detail selector tabs -->
+<div id="selectorFsModal" class="bsl-modal-overlay" style="display:none;z-index:100050;padding:0" onclick="if(event.target===this)selectorFsClose()">
+  <div class="bsl-modal" style="width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none">
+    <div class="bsl-modal-head" style="gap:8px;flex-wrap:wrap">
+      <h2 id="selectorFsTitle">🔍 بارگذاری صفحه</h2>
+      <button class="btn btn-blue" onclick="selectorFsReload()" style="font-size:11px;padding:7px 10px">🔄 بارگذاری دوباره</button>
+      <button class="btn btn-teal" onclick="selectorFsUseInline()" style="font-size:11px;padding:7px 10px">↙ نمایش در پنل داخلی</button>
+      <button class="btn btn-gray" onclick="selectorFsOpenNewTab()" style="font-size:11px;padding:7px 10px">🪟 تب جدید</button>
+      <button class="btn btn-red" onclick="selectorFsClose()" style="font-size:11px;padding:7px 10px">✕ بستن</button>
+    </div>
+    <div id="selectorFsHint" style="padding:7px 12px;background:#0f172a;border-bottom:1px solid #334155;color:#94a3b8;font-size:11px;line-height:1.7"></div>
+    <iframe id="selectorFsFrame" style="width:100%;height:100%;border:0;background:#fff;flex:1"></iframe>
+  </div>
+</div>
+
 </div>
 
 <script>
@@ -62267,6 +62715,11 @@ let importMapping = {};
 // ========== Woo/Bsl Retry State ==========
 
 let profiles =<?=json_encode($initialProfiles, JSON_UNESCAPED_UNICODE)?>;
+const S4_GH_DEFAULT_REPO = <?=json_encode(s4GithubDefaultRepo(), JSON_UNESCAPED_UNICODE)?>;
+const S4_GH_DEFAULT_BRANCH = <?=json_encode(s4GithubDefaultBranch(), JSON_UNESCAPED_UNICODE)?>;
+let ghSourceState = {files:[], branches:[], loaded:false};
+let comprehensiveReport = null;
+let selectorFsState = {kind:'list', src:'', inline:false};
 let currentProfileKey = null;
 let isDirty = false;
 let saveTimer = null;
@@ -63441,6 +63894,107 @@ function pagProbe(){
     .catch(()=>{box.textContent='❌ خطا در ارتباط با رابطِ آزمایش';});
 }
 
+
+function comprehensiveTestStart(){
+    const box=$('comprehensiveTestBox'); const btn=$('comprehensiveTestBtn');
+    if(!box)return;
+    box.style.display='block';
+    box.innerHTML='<div style="padding:12px;background:#0f172a;border:1px solid #f59e0b;border-radius:10px;color:#fde68a;font-size:12px;line-height:1.9">⏳ تست جامع شروع شد؛ همهٔ پروفایل‌ها با پیش‌فرض ۵ صفحه آزمایش می‌شوند و نمونه کارت محصول ساخته می‌شود. چیزی ارسال یا ذخیره نمی‌شود.</div>';
+    if(btn){btn.disabled=true;btn.textContent='⏳ در حال تست جامع...';}
+    const fd=new FormData(); fd.append('pages','5');
+    fetch('?s4_comprehensive_test=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+        if(!d.ok)throw Error(d.error||'پاسخ نامعتبر');
+        comprehensiveReport=d;
+        renderComprehensiveTest(d);
+        showToast('✓ تست جامع کامل شد: '+toFa((d.profiles||[]).length)+' پروفایل');
+    }).catch(e=>{
+        box.innerHTML='<div class="alert alert-danger">❌ خطای تست جامع: '+esc(e.message||e)+'</div>';
+    }).finally(()=>{if(btn){btn.disabled=false;btn.textContent='🧪 تست جامع همهٔ پروفایل‌ها (۵ صفحه)';}});
+}
+function compMoney(n){n=parseInt(n)||0;return n?toFa(n.toLocaleString('en-US'))+' تومان':'—';}
+function renderComprehensiveTest(rep){
+    const box=$('comprehensiveTestBox'); if(!box)return;
+    const rows=rep.profiles||[];
+    let ok=rows.filter(r=>r.ok).length;
+    let h='<div style="background:linear-gradient(135deg,#0f172a,#42200655);border:1px solid #f59e0b;border-radius:12px;padding:12px;color:#e2e8f0">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
+    h+='<b style="color:#fde68a;font-size:14px">🧪 نتیجهٔ تست جامع همهٔ پروفایل‌ها</b>';
+    h+='<span style="font-size:10px;color:#94a3b8">نسخه '+esc(rep.version||'')+' · '+toFa(rows.length)+' پروفایل · '+toFa(ok)+' موفق · '+toFa(rep.took_ms||0)+'ms</span></div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">';
+    rows.forEach((r,pi)=>{
+        const color=r.ok?'#22c55e':'#f87171';
+        h+='<div style="background:#0f172a;border:1px solid '+(r.ok?'#14532d':'#7f1d1d')+';border-radius:12px;padding:10px;min-width:0">';
+        h+='<div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><b style="color:#e2e8f0;font-size:12px;line-height:1.6">'+esc(r.name||r.key)+'</b><span style="color:'+color+';font-size:11px;white-space:nowrap">'+(r.ok?'✓':'✗')+'</span></div>';
+        h+='<div style="font-size:10px;color:#64748b;direction:ltr;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.url||r.source||'')+'</div>';
+        h+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0;font-size:10px">';
+        h+='<span style="background:#1e293b;border:1px solid #334155;border-radius:99px;padding:2px 7px">منبع: '+(r.source==='github'?'GitHub':'مستقیم')+'</span>';
+        h+='<span style="background:#1e293b;border:1px solid #334155;border-radius:99px;padding:2px 7px">محصول: '+toFa(r.products_unique||0)+'</span>';
+        h+='<span style="background:#1e293b;border:1px solid #334155;border-radius:99px;padding:2px 7px">سرعت: '+toFa(r.products_per_minute||0)+'/دقیقه</span>';
+        h+='</div>';
+        if(r.errors&&r.errors.length)h+='<div style="font-size:10px;color:#fca5a5;line-height:1.6;max-height:44px;overflow:auto">'+esc(r.errors.join(' | '))+'</div>';
+        const samples=r.samples||[];
+        if(samples.length){
+            h+='<div style="display:grid;gap:7px;margin-top:8px">';
+            samples.forEach((p,si)=>{h+=compProductCard(p,pi,si);});
+            h+='</div>';
+        }else h+='<div style="font-size:11px;color:#64748b;padding:10px;text-align:center;border:1px dashed #334155;border-radius:8px;margin-top:8px">نمونه محصولی برنگشت</div>';
+        if(r.pages&&r.pages.length){
+            h+='<details style="margin-top:8px"><summary style="cursor:pointer;color:#93c5fd;font-size:11px">جزئیات صفحه‌ها</summary><div style="font-size:10px;color:#cbd5e1;line-height:1.8;white-space:pre-wrap">';
+            h+=esc((r.pages||[]).map(p=>'ص'+p.page+': '+(p.ok?'HTTP '+p.code:'خطا')+' · '+(p.products||0)+' کارت · '+(p.bytes||0)+' بایت · '+(p.used_engine||'')+(p.error?' · '+p.error:'')).join('\n'));
+            h+='</div></details>';
+        }
+        h+='</div>';
+    });
+    h+='</div><div style="font-size:10px;color:#94a3b8;margin-top:10px;line-height:1.8">کلیک روی هر کارت محصول، مودال کامل قیمت‌ها، تعدیل پروفایل/غرفه، قیمت نهایی ارسال، تصاویر، توضیحات، تنوع‌ها و سایر جزئیات استخراج‌شده را باز می‌کند.</div></div>';
+    box.innerHTML=h;
+}
+function compProductCard(p,pi,si){
+    const pr=p._pricing||{}; const img=(Array.isArray(p.images)&&p.images.length?p.images[0]:p.image)||'';
+    let h='<button type="button" onclick="compOpenProduct('+pi+','+si+')" style="display:flex;gap:8px;text-align:right;background:#111c31;border:1px solid #334155;border-radius:10px;padding:8px;color:#e2e8f0;cursor:pointer;width:100%">';
+    if(img)h+='<img src="?image_proxy='+encodeURIComponent(img)+'" onerror="this.style.display=\'none\'" style="width:54px;height:54px;object-fit:cover;border-radius:8px;border:1px solid #334155;flex:0 0 auto">';
+    else h+='<span style="width:54px;height:54px;border-radius:8px;background:#0f172a;border:1px solid #334155;display:flex;align-items:center;justify-content:center;flex:0 0 auto">📦</span>';
+    h+='<span style="min-width:0;flex:1"><b style="display:block;font-size:11px;color:#e2e8f0;line-height:1.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(p.title||p.link||'بدون عنوان')+'</b>';
+    h+='<span style="display:block;color:#fbbf24;font-size:10px">پایه: '+compMoney(pr.raw||extractNumber(p.price||''))+'</span>';
+    h+='<span style="display:block;color:#67e8f9;font-size:10px">ارسال: '+compMoney(pr.woocommerce_price||pr.basalam_price||pr.profile_price)+'</span></span></button>';
+    return h;
+}
+function compOpenProduct(pi,si){
+    if(!comprehensiveReport)return;
+    const prof=(comprehensiveReport.profiles||[])[pi]; if(!prof)return;
+    const p=(prof.samples||[])[si]; if(!p)return;
+    const pr=p._pricing||{};
+    let m=$('compProductModal');
+    if(!m){m=document.createElement('div');m.id='compProductModal';m.className='bsl-modal-overlay';m.onclick=function(e){if(e.target===m)compCloseProduct();};document.body.appendChild(m);}
+    const imgs=[]; if(p.image)imgs.push(p.image); if(Array.isArray(p.images))p.images.forEach(u=>{if(u&&!imgs.includes(u))imgs.push(u);});
+    let h='<div class="bsl-modal" style="width:980px;max-width:96vw"><div class="bsl-modal-head"><h2>📦 '+esc(p.title||'جزئیات محصول')+'</h2><button class="btn btn-gray" onclick="compCloseProduct()">✕</button></div>';
+    h+='<div class="bsl-modal-body" style="padding:14px;max-height:78vh;overflow:auto">';
+    h+='<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:14px">';
+    h+='<div>';
+    if(imgs.length){h+='<div style="display:flex;flex-wrap:wrap;gap:6px">';imgs.slice(0,12).forEach((u,i)=>{h+='<a href="'+esc(u)+'" target="_blank" title="'+esc(u)+'"><img src="?image_proxy='+encodeURIComponent(u)+'" style="width:'+(i?72:150)+'px;height:'+(i?72:150)+'px;object-fit:cover;border-radius:10px;border:1px solid '+(i?'#334155':'#22c55e')+'"></a>';});h+='</div>';}else h+='<div style="height:160px;border:1px dashed #334155;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#64748b">بدون تصویر</div>';
+    h+='</div><div>';
+    h+='<table class="bsl-modal-table" style="white-space:normal"><tbody>';
+    const row=(k,v,c)=>'<tr><th style="width:190px;text-align:right">'+k+'</th><td style="white-space:normal;color:'+(c||'#e2e8f0')+'">'+v+'</td></tr>';
+    h+=row('پروفایل',esc(prof.name||''));
+    h+=row('لینک',p.link?('<a href="'+esc(p.link)+'" target="_blank" style="color:#93c5fd;direction:ltr;display:block">'+esc(p.link)+'</a>'):'—');
+    h+=row('SKU',esc(p.sku||'—'));
+    h+=row('قیمت پایه سایت',compMoney(pr.raw||extractNumber(p.price||''))+' <span style="color:#64748b">('+esc(pr.raw_text||p.price||'')+')</span>','#fbbf24');
+    h+=row('تعدیل همین پروفایل',esc((pr.profile_mode||'none')+' '+(pr.profile_val||0)+' · گرد کردن '+(pr.round||0))+' → <b>'+compMoney(pr.profile_price)+'</b>','#86efac');
+    h+=row('قیمت نهایی ارسال ووکامرس',compMoney(pr.woocommerce_price),'#a78bfa');
+    h+=row('قیمت نهایی ارسال باسلام',compMoney(pr.basalam_price),'#67e8f9');
+    if(pr.shops&&pr.shops.length){
+        let sh='<table style="width:100%;border-collapse:collapse;font-size:11px"><tr><th>غرفه</th><th>تعدیل کل</th><th>تعدیل غرفه</th><th>قیمت ارسال</th></tr>';
+        pr.shops.forEach(s=>{sh+='<tr><td>'+esc(s.name||s.vendor_id||'—')+(s.is_default?' <span style="color:#22c55e">پیش‌فرض</span>':'')+'</td><td>'+toFa(s.eff_pct||0)+'٪</td><td>'+toFa(s.shop_pct||0)+'٪</td><td style="color:#fbbf24">'+compMoney(s.price)+'</td></tr>';});
+        sh+='</table>'; h+=row('غرفه‌ها / تعدیل اضافه',sh);
+    }
+    h+='</tbody></table></div></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">';
+    h+='<div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px"><b style="color:#c4b5fd">📝 توضیحات</b><div style="font-size:12px;color:#cbd5e1;line-height:1.9;margin-top:6px;white-space:pre-wrap">'+esc(p.longDesc||p.shortDesc||p.description||'—')+'</div></div>';
+    h+='<div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px"><b style="color:#f9a8d4">🎨 تنوع‌ها و سایر جزئیات</b><div style="font-size:11px;color:#cbd5e1;line-height:1.9;margin-top:6px;white-space:pre-wrap;direction:ltr;text-align:left">'+esc(JSON.stringify({variations:p.variations||null,stock:p.stock||null,brand:p.brand||null,category:p.category||null,tags:p.tags||null,extra:p.extra||null},null,2))+'</div></div>';
+    h+='</div></div></div>';
+    m.innerHTML=h;m.style.display='flex';document.body.classList.add('modal-open');
+}
+function compCloseProduct(){const m=$('compProductModal');if(m)m.style.display='none';document.body.classList.remove('modal-open');}
+
 function engineBenchmarkStart(){
     const box=$('engineBenchmarkBox');
     const btn=$('engineBenchmarkBtn');
@@ -63600,6 +64154,129 @@ function selectProfile(url) {
     loadProfileFromServer(url);
 }
 
+
+function ghRepoValue(){
+    const custom=$('ghRepoCustom');
+    if(custom&&custom.style.display!=='none'&&custom.value.trim())return custom.value.trim();
+    return (($('ghRepoSelect')||{}).value)||S4_GH_DEFAULT_REPO;
+}
+function ghBranchValue(){return (($('ghBranchSelect')||{}).value)||S4_GH_DEFAULT_BRANCH;}
+function ghFileValue(){return (($('ghFileSelect')||{}).value)||'';}
+function getProductSourceConfig(){
+    const mode=(($('profileProductSource')||{}).value)||'direct';
+    if(mode!=='github')return{mode:'direct'};
+    return{mode:'github',repo:ghRepoValue(),branch:ghBranchValue(),path:ghFileValue()};
+}
+function applyProductSourceConfig(ps, triggerLoad){
+    ps=ps||{mode:'direct'};
+    const mode=ps.mode==='github'?'github':'direct';
+    if($('profileProductSource'))$('profileProductSource').value=mode;
+    if(mode==='github'){
+        if($('ghRepoSelect')){
+            const repo=ps.repo||S4_GH_DEFAULT_REPO;
+            if(!Array.from($('ghRepoSelect').options).some(o=>o.value===repo))$('ghRepoSelect').insertAdjacentHTML('beforeend','<option value="'+esc(repo)+'">'+esc(repo)+'</option>');
+            $('ghRepoSelect').value=repo;
+        }
+        if($('ghBranchSelect')){
+            const br=ps.branch||S4_GH_DEFAULT_BRANCH;
+            if(!Array.from($('ghBranchSelect').options).some(o=>o.value===br))$('ghBranchSelect').insertAdjacentHTML('beforeend','<option value="'+esc(br)+'">'+esc(br)+'</option>');
+            $('ghBranchSelect').value=br;
+        }
+        if($('ghFileSelect')&&ps.path){
+            if(!Array.from($('ghFileSelect').options).some(o=>o.value===ps.path))$('ghFileSelect').insertAdjacentHTML('beforeend','<option value="'+esc(ps.path)+'">'+esc(ps.path)+'</option>');
+            $('ghFileSelect').value=ps.path;
+        }
+    }
+    productSourceChanged(false);
+    if(mode==='github'&&triggerLoad!==false)ghSourceRefresh();
+}
+function productSourceChanged(save){
+    const mode=(($('profileProductSource')||{}).value)||'direct';
+    const gh=$('sourceGithubFields'), hint=$('sourceDirectHint');
+    if(gh)gh.classList.toggle('hidden',mode!=='github');
+    if(hint)hint.classList.toggle('hidden',mode==='github');
+    const directHidden=(mode==='github');
+    ['directExtractFieldsCard'].forEach(id=>{const el=$(id);if(el)el.style.display=directHidden?'none':'';});
+    const status=$('ghSourceStatus');
+    if(mode==='github'){
+        if(status&&!ghSourceState.loaded)status.textContent='در حال آماده‌سازی فهرست GitHub...';
+        if(!ghSourceState.loaded)ghSourceRefresh();
+        if($('profileSyncNoExtract')){$('profileSyncNoExtract').checked=true;syncToggleNoExtractBox();updateSyncStatusText();}
+    }
+    if(save)scheduleSave();
+}
+function ghSourceToggleCustomRepo(){
+    const c=$('ghRepoCustom'), s=$('ghRepoSelect'); if(!c||!s)return;
+    const show=c.style.display==='none';
+    c.style.display=show?'':'none';
+    s.style.display=show?'none':'';
+    if(show)c.value=s.value||S4_GH_DEFAULT_REPO;
+    ghSourceRefresh();
+}
+function ghSourceRepoCustomChanged(){clearTimeout(window._ghRepoT);window._ghRepoT=setTimeout(()=>ghSourceRefresh(),600);}
+function ghSourceRepoChanged(){ghSourceRefresh();}
+function ghSetStatus(msg,isErr){const el=$('ghSourceStatus');if(el){el.textContent=msg;el.style.color=isErr?'#fca5a5':'#94a3b8';}}
+function ghSourceRefresh(){
+    const repo=ghRepoValue();
+    ghSetStatus('⏳ خواندن branch و فایل‌های CSV/Excel از '+repo+' ...');
+    const br=ghBranchValue();
+    fetch('?github_product_files=1&repo='+encodeURIComponent(repo)+'&branch='+encodeURIComponent(br))
+      .then(r=>r.json()).then(d=>{
+        if(!d.ok)throw Error(d.error||'GitHub error');
+        ghSourceState.loaded=true;ghSourceState.files=d.files||[];ghSourceState.branches=d.branches||[];
+        const bsel=$('ghBranchSelect');
+        if(bsel){
+            const want=bsel.value||d.branch||S4_GH_DEFAULT_BRANCH;
+            bsel.innerHTML='';
+            (d.branches||[want]).forEach(b=>{const o=document.createElement('option');o.value=b;o.textContent=b;bsel.appendChild(o);});
+            if(Array.from(bsel.options).some(o=>o.value===want))bsel.value=want;
+        }
+        renderGhFiles(d.files||[]);
+        ghSetStatus('✓ '+toFa((d.files||[]).length)+' فایل CSV/Excel پیدا شد'+((d.files||[]).some(f=>f.source==='local')?' (fallback محلی)':''));
+      }).catch(e=>{ghSetStatus('❌ '+(e.message||e),true);});
+}
+function ghSourceLoadFiles(){
+    const repo=ghRepoValue(), br=ghBranchValue();
+    ghSetStatus('⏳ خواندن فایل‌های '+br+' ...');
+    fetch('?github_product_files=1&repo='+encodeURIComponent(repo)+'&branch='+encodeURIComponent(br))
+      .then(r=>r.json()).then(d=>{if(!d.ok)throw Error(d.error||'GitHub error');ghSourceState.files=d.files||[];renderGhFiles(d.files||[]);ghSetStatus('✓ '+toFa((d.files||[]).length)+' فایل پیدا شد');productSourceChanged(true);})
+      .catch(e=>ghSetStatus('❌ '+(e.message||e),true));
+}
+function renderGhFiles(files){
+    const fs=$('ghFileSelect'); if(!fs)return;
+    const prev=fs.value;
+    fs.innerHTML='<option value="">— فایل CSV/Excel —</option>';
+    (files||[]).forEach(f=>{
+        const o=document.createElement('option');
+        o.value=f.path;o.textContent=f.path+(f.size?(' — '+Math.round(f.size/1024)+'KB'):'')+(f.source==='local'?' [local]':'');
+        fs.appendChild(o);
+    });
+    if(prev&&Array.from(fs.options).some(o=>o.value===prev))fs.value=prev;
+}
+function ghImportProducts(){
+    if(!ghFileValue()){showToast('ابتدا فایل CSV/Excel را انتخاب کنید',true);return;}
+    const url=($('url')&&$('url').value.trim())||(($('profileSelect')||{}).value)||'';
+    if(!url){showToast('برای ثبت در پروفایل، ابتدا پروفایل/URL را انتخاب کنید',true);return;}
+    const btn=$('ghImportBtn'); if(btn){btn.disabled=true;btn.textContent='⏳ در حال دریافت...';}
+    ghSetStatus('⏳ دریافت فایل و تبدیل به محصولات داخلی...');
+    const fd=new FormData();
+    fd.append('action','github_import_products');fd.append('repo',ghRepoValue());fd.append('branch',ghBranchValue());fd.append('path',ghFileValue());fd.append('profile_url',url);fd.append('save_to_profile','1');
+    fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+        if(!d.ok)throw Error(d.error||'import failed');
+        products.clear(); order=[];
+        (d.products||[]).forEach(p=>{const k=p.key||((p.link||'')+'|'+(p.title||''));p.key=k;products.set(k,p);order.push(k);});
+        importProducts=d.products||[];
+        if($('profileSyncNoExtract')){$('profileSyncNoExtract').checked=true;syncToggleNoExtractBox();updateSyncStatusText();}
+        refreshViews(); update();
+        markClean(d.profile_key||currentProfileKey||profileKey(url));
+        ghSetStatus('✓ '+toFa(d.count||0)+' محصول از '+d.path+' دریافت و برای همین پروفایل ثبت شد');
+        showToast('✓ محصولات GitHub مثل خروجی استخراج در پروفایل نشستند');
+        renderProfileDropdown();
+        if(typeof switchMainTab==='function')switchMainTab('results');
+    }).catch(e=>{ghSetStatus('❌ '+(e.message||e),true);showToast('خطا در دریافت GitHub: '+(e.message||e),true);})
+      .finally(()=>{if(btn){btn.disabled=false;btn.textContent='📥 دریافت و ثبت محصولات برای همین پروفایل';}});
+}
+
 function loadProfileFromServer(url, silent) {
     fetch('?load_profile=' + encodeURIComponent(url))
         .then(r => r.json())
@@ -63677,6 +64354,7 @@ function applyProfile(p, keepTab) {
     galApply(p.gallery || {});           // v8.64
 
     updatePagUI();
+    applyProductSourceConfig(p.productSource || {mode:'direct'}, false);
 
     // Restore saved products from profile
     if (p.products && Array.isArray(p.products) && p.products.length > 0) {
@@ -63816,7 +64494,8 @@ function collectProfileData() {
         // v9.76: به‌جای boolean، '1'/'0' بفرست — FormData مقدار false را به رشتهٔ
         // "false" تبدیل می‌کرد و سرور !empty("false") را true حساب می‌کرد؛ یعنی
         // خاموش‌کردن هیچ‌وقت ذخیره نمی‌شد و بعد از رفرش برمی‌گشت.
-        net_indirect: (($('profileNetIndirect') && $('profileNetIndirect').checked) ? '1' : '0')
+        net_indirect: (($('profileNetIndirect') && $('profileNetIndirect').checked) ? '1' : '0'),
+        productSource: getProductSourceConfig()
     };
 }
 
@@ -63828,7 +64507,7 @@ function saveProfileSilent() {
     fd.append('action', 'save_profile');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, data[k]);
@@ -63874,7 +64553,7 @@ function saveProfile() {
     fd.append('action', 'save_profile');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, data[k]);
@@ -64182,6 +64861,47 @@ function vpApplyState(st){
   vpRenderChips();
   const ms=$('vpMode'); if(ms&&st.mode&&ms.value!==st.mode)ms.value=st.mode;
 }
+
+function selectorFsBuildSrc(kind){
+    if(kind==='detail'){
+        const sampleUrl=detailSampleUrl(); if(!sampleUrl)return'';
+        const _pk=profileKey(($('profileSelect')&&$('profileSelect').value)||($('url')&&$('url').value.trim())||'');
+        return '?detail_proxy='+encodeURIComponent(sampleUrl)+'&pk='+encodeURIComponent(_pk);
+    }
+    const url=$('url').value.trim(); if(!url){showToast('URL وارد کنید',true);return'';}
+    const full=$('fullMode')&&$('fullMode').checked?'&full=1':'';
+    const _pk=profileKey(url);
+    return '?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk);
+}
+function selectorFsOpen(kind){
+    const src=selectorFsBuildSrc(kind||'list'); if(!src)return;
+    selectorFsState={kind:kind||'list',src:src,inline:false};
+    const m=$('selectorFsModal'), fr=$('selectorFsFrame'), title=$('selectorFsTitle'), hint=$('selectorFsHint');
+    if(title)title.textContent=(kind==='detail'?'📄 بارگذاری تمام‌صفحهٔ نمونه جزئیات':'🧾 بارگذاری تمام‌صفحهٔ لیست محصولات');
+    if(hint)hint.innerHTML=(kind==='detail')
+        ? 'صفحهٔ محصول نمونه در مودال تمام‌صفحه باز شد. کنترل‌های انتخاب جزئیات داخل صفحه و پنل‌های بیرونی همچنان از همین انتخاب‌ها استفاده می‌کنند.'
+        : 'صفحهٔ لیست در مودال تمام‌صفحه باز شد. روی المان‌ها کلیک کنید؛ سلکتورها همانند پنل داخلی در فرم اصلی ثبت می‌شوند.';
+    if(fr){fr.src='about:blank';setTimeout(()=>{fr.src=src;},30);}
+    if(m){m.style.display='flex';document.body.classList.add('modal-open');}
+    if(kind==='detail'){
+        renderSampleBar();
+        const pp=$('pickerPanel'); if(pp)pp.classList.remove('hidden');
+    }else{
+        const d=$('directLoadBanner'); if(d)d.classList.add('hidden');
+    }
+}
+function selectorFsClose(){const m=$('selectorFsModal');if(m)m.style.display='none';const fr=$('selectorFsFrame');if(fr)fr.src='about:blank';document.body.classList.remove('modal-open');}
+function selectorFsReload(){const fr=$('selectorFsFrame');if(fr&&selectorFsState.src){fr.src='about:blank';setTimeout(()=>{fr.src=selectorFsState.src;},30);}}
+function selectorFsUseInline(){
+    if(selectorFsState.kind==='detail'){
+        const fr=$('detailFrame'); if(fr){$('detailFrameWrap').classList.remove('hidden');fr.src=selectorFsState.src;}
+    }else{
+        const fr=$('vFrame'); if(fr)fr.src=selectorFsState.src;
+    }
+    showToast('صفحه در پنل داخلی هم نمایش داده شد');
+}
+function selectorFsOpenNewTab(){if(selectorFsState.src){const w=window.open(selectorFsState.src,'_blank');if(!w)showToast('پاپ‌آپ مسدود شد',true);}}
+
 function loadVisual(){
   const url=$('url').value.trim();
   if(!url){showToast('URL وارد کنید',true);return;}
@@ -67269,6 +67989,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.217', t:'📦 منبع محصول GitHub · 🧪 تست جامع پروفایل‌ها · 🔍 مودال تمام‌صفحه سلکتورها', items:[
+    'در تب شروع، برای هر پروفایل منبع محصولات اضافه شد: استخراج مستقیم یا دریافت از فایل CSV/Excel روی GitHub؛ با انتخاب GitHub فیلدهای repo/branch/file نمایش داده و فیلدهای مستقیم پنهان می‌شوند.',
+    'فهرست branch و فایل‌های CSV/Excel به‌صورت خودکار از GitHub (یا fallback محلی همان checkout) پر می‌شود و محصول واردشده با همان ساختار داخلی اسکرپر ذخیره می‌شود تا مسیر ووکامرس/باسلام/افزونهٔ وردپرس دست‌نخورده بماند.',
+    'دکمهٔ تست جامع همهٔ پروفایل‌ها اضافه شد: پیش‌فرض ۵ صفحه را می‌سنجد، برای هر پروفایل کارت نمونه محصول نشان می‌دهد و با کلیک، مودال کامل قیمت پایه، تعدیل پروفایل، تعدیل غرفه‌ها، قیمت نهایی ارسال، تصاویر، توضیحات، تنوع‌ها و جزئیات را باز می‌کند.',
+    'دکمه‌های بارگذاری صفحه در سلکتورهای لیست و جزئیات حالا صفحه را در مودال تمام‌صفحه با کنترل‌های بارگذاری دوباره، نمایش در پنل داخلی و تب جدید باز می‌کنند.',
+  ]},
   {v:'10.216', t:'🛑 جلوگیری از دانلود تکراری Chrome کامل', items:[
     'اگر تلاش fallback به Chrome کامل 115 ناموفق یا کند باشد، marker جداگانه جلوی تکرار خودکار همان دانلود بزرگ را می‌گیرد',
     'لاگ bootstrap اکنون روشن می‌گوید تلاش Chrome کامل قبلاً انجام شده و برای جلوگیری از فشار روی هاست رد شده است',
