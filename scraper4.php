@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.191';
+const APP_VERSION = '10.192';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -340,7 +340,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/12';
+const APP_VERSION_DATE = '1405/07/13';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -9367,6 +9367,128 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
             'html' => $body === false ? '' : $body, 'mode' => $mode];
 }
 
+function emallsLooksUsefulHtml(string $html): bool {
+    if (trim($html) === '') return false;
+    return stripos($html, '~id~') !== false
+        || mb_stripos($html, 'مشاهده فروشندگان') !== false
+        || mb_stripos($html, 'لیست قیمت') !== false;
+}
+function emallsNeedsProductSignal(string $url): bool {
+    $u = rawurldecode($url);
+    return stripos($url, '~Category~') !== false || mb_stripos($u, 'لیست') !== false;
+}
+function emallsProductsFromReaderText(string $text, string $baseUrl): array {
+    $products = [];
+    $lines = preg_split('~\R~u', $text) ?: [];
+    $lastImg = '';
+    $lastImgAlt = '';
+    $n = count($lines);
+    for ($i = 0; $i < $n; $i++) {
+        $line = trim((string)$lines[$i]);
+        if ($line === '') continue;
+        if (preg_match('~!\[([^\]]*)\]\((https?://[^)\s]+)\)~u', $line, $im)) {
+            $lastImgAlt = normalize_text($im[1] ?? '');
+            $lastImg = html_entity_decode((string)($im[2] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            continue;
+        }
+        if (!preg_match('#\[([^\]]{3,260})\]\((https?://(?:www\.)?emalls\.ir/[^)\s]*~id~\d+[^)\s]*)\)#iu', $line, $lm)) continue;
+        $title = normalize_text(strip_tags(html_entity_decode((string)$lm[1], ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+        $link = html_entity_decode((string)$lm[2], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($title === '' || mb_stripos($title, 'مشاهده فروشندگان') !== false) continue;
+        $priceCandidates = [];
+        for ($j = $i + 1; $j < min($n, $i + 14); $j++) {
+            $ln = trim((string)$lines[$j]);
+            if ($ln === '') continue;
+            if (strpos($ln, '~id~') !== false && preg_match('#\[[^\]]+\]\(https?://(?:www\.)?emalls\.ir/[^)]*~id~\d+#iu', $ln)) break;
+            if (strpos($ln, '![') !== false || mb_stripos($ln, 'مشاهده فروشندگان') !== false || strpos($ln, '٪') !== false || strpos($ln, '%') !== false) continue;
+            $pp = extractPrice($ln);
+            if ($pp !== '') $priceCandidates[] = $pp;
+        }
+        $price = !empty($priceCandidates) ? end($priceCandidates) : '';
+        $image = ($lastImg !== '' && url_is_image($lastImg)) ? make_absolute_url($lastImg, $baseUrl) : '';
+        $p = [
+            'title' => mb_substr($title, 0, 200),
+            'price' => $price,
+            'link'  => make_absolute_url($link, $baseUrl),
+            'image' => $image,
+            'sku'   => '',
+        ];
+        $key = productKey($p);
+        if (!isset($products[$key])) $products[$key] = $p;
+        $lastImg = '';
+        $lastImgAlt = '';
+    }
+    return $products;
+}
+function emallsSyntheticHtml(array $products, string $sourceUrl, string $note = ''): string {
+    $cards = '';
+    foreach ($products as $p) {
+        $title = h((string)($p['title'] ?? ''));
+        $link  = h((string)($p['link'] ?? ''));
+        $img   = h((string)($p['image'] ?? ''));
+        $price = h((string)($p['price'] ?? ''));
+        $cards .= '<article class="product-card emalls-product" data-emalls-fallback="1">'
+            . '<a class="product-link" href="' . $link . '">' . ($img !== '' ? '<img class="product-image" src="' . $img . '" alt="' . $title . '">' : '')
+            . '<h2 class="product-title title">' . $title . '</h2></a>'
+            . ($price !== '' ? '<div class="price product-price">' . $price . '</div>' : '')
+            . '<div class="seller-count">مشاهده فروشندگان</div>'
+            . '</article>';
+    }
+    if ($cards === '') $cards = '<p>هیچ محصولی در fallback ایمالز پیدا نشد.</p>';
+    return '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>Emalls fallback</title>'
+        . '<style>body{font-family:tahoma,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:18px}.emalls-fallback-note{background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:12px;margin-bottom:16px;line-height:1.9}.product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}.product-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(15,23,42,.06)}.product-card a{text-decoration:none;color:inherit}.product-image{width:100%;height:170px;object-fit:contain;background:#f1f5f9;border-radius:10px}.product-title{font-size:14px;line-height:1.7;margin:10px 0;color:#0f172a}.price{font-weight:800;color:#16a34a;margin-top:6px}.seller-count{font-size:12px;color:#64748b;margin-top:6px}</style>'
+        . '</head><body><div class="emalls-fallback-note"><b>Fallback ایمالز فعال شد.</b><br>واکشی مستقیم سرور از ایمالز شکست خورد، بنابراین این نمای قابل انتخاب از مسیر کمکی ساخته شده است.'
+        . ($note !== '' ? '<br>' . h($note) : '') . '<br><small style="direction:ltr;display:block">' . h($sourceUrl) . '</small></div>'
+        . '<main class="product-grid products">' . $cards . '</main></body></html>';
+}
+function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array $prev = []): array {
+    if (!(function_exists('isEmallsUrl') && isEmallsUrl($url))) {
+        return ['ok' => false, 'error' => 'not emalls', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
+    }
+    $timeout = max(8, min(60, $timeout));
+    $last = ['ok' => false, 'error' => (string)($prev['error'] ?? 'Empty'), 'code' => (int)($prev['code'] ?? 0), 'url' => $url, 'html' => '', 'mode' => 'emalls-public'];
+
+    $workers = ['https://proxy.fazilat-ma.workers.dev/?url={url}'];
+    foreach ($workers as $wu) {
+        $net = ['worker_url' => $wu, 'ipv4' => true, 'proxy' => '', 'proxy_type' => 'http', 'proxy_auth' => '', 'resolve_ip' => '', 'doh_url' => '', 'fallback' => false, 'hosts' => ''];
+        $r = srcNetFetchAttempt($url, $timeout, $net, 'worker');
+        $r['emalls_public_fallback'] = 'worker';
+        $body = (string)($r['html'] ?? '');
+        if (!empty($r['ok']) && emallsLooksUsefulHtml($body)) {
+            if (stripos($body, '<html') === false && strpos($body, '![') !== false) {
+                $ps = emallsProductsFromReaderText($body, $url);
+                if (!empty($ps)) $r['html'] = emallsSyntheticHtml($ps, $url, 'Worker markdown');
+            }
+            $r['url'] = $url;
+            $r['mode'] = 'emalls-worker';
+            return $r;
+        }
+        $last = $r;
+    }
+
+    $readerUrl = 'https://r.jina.ai/' . $url;
+    $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
+    $r['emalls_public_fallback'] = 'jina-reader';
+    $body = (string)($r['html'] ?? '');
+    if (!empty($r['ok']) && trim($body) !== '') {
+        $ps = emallsProductsFromReaderText($body, $url);
+        if (!empty($ps)) {
+            return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $url,
+                    'html' => emallsSyntheticHtml($ps, $url, 'Jina Reader'), 'mode' => 'emalls-jina-reader',
+                    'emalls_public_fallback' => 'jina-reader', 'source_error' => (string)($prev['error'] ?? '')];
+        }
+        if (emallsLooksUsefulHtml($body)) {
+            return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $url,
+                    'html' => '<!doctype html><html lang="fa" dir="rtl"><meta charset="UTF-8"><body><pre style="white-space:pre-wrap;font-family:tahoma,sans-serif;line-height:1.8">' . h($body) . '</pre></body></html>',
+                    'mode' => 'emalls-jina-reader-text', 'emalls_public_fallback' => 'jina-reader', 'source_error' => (string)($prev['error'] ?? '')];
+        }
+    }
+    $last = $r + $last;
+    $last['url'] = $url;
+    $last['error'] = trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty');
+    return $last;
+}
+
 /* v9.00: راه عبور برای سایت مبدأ — DoH / IP دستی / پروکسی / Worker.
    v9.77: اگر تیک «استفاده از روش‌های جایگزین» روشن باشد و روشِ اصلی شکست
    بخورد (تایم‌اوت، اتصال، بلاک ۴۰۳/۴۲۹)، به ترتیبِ روش‌هایِ فعالِ دیگر هم
@@ -9397,7 +9519,15 @@ function fetch_html(string $url, int $timeout = 25): array {
     $last = null;
     foreach ($modes as $m) {
         $last = srcNetFetchAttempt($url, $timeout, $__srcNet, $m);
-        if (!empty($last['ok'])) return $last;
+        if (!empty($last['ok'])) {
+            if (function_exists('isEmallsUrl') && isEmallsUrl($url)
+                && function_exists('emallsNeedsProductSignal') && emallsNeedsProductSignal($url)
+                && stripos((string)($last['html'] ?? ''), '~id~') === false) {
+                // v10.192: پاسخ ۲۰۰ ولی بدون کارت محصول برای صفحهٔ فهرست ایمالز، عملاً همان Empty است؛ برو سراغ fallback عمومی.
+            } else {
+                return $last;
+            }
+        }
         // اگر خطای قطعیِ منطقی (مثل ۴۰۴/۴۰۰) بود، امتحانِ روشِ دیگر بی‌فایده است
         if ($last['code'] > 0 && !in_array($last['code'], [403, 429], true)) break;
     }
@@ -9432,6 +9562,11 @@ function fetch_html(string $url, int $timeout = 25): array {
             if ($__try['code'] > 0 && !in_array($__try['code'], [403, 429], true)) break;
         }
         $GLOBALS['_srcNetProfileIndirect'] = $__oldProfileIndirect;
+    }
+    if (function_exists('fetch_html_emalls_public_fallback') && function_exists('isEmallsUrl') && isEmallsUrl($url)) {
+        $__pub = fetch_html_emalls_public_fallback($url, $timeout, is_array($last) ? $last : []);
+        if (!empty($__pub['ok'])) return $__pub;
+        if (is_array($__pub) && trim((string)($__pub['error'] ?? '')) !== '') $last = $__pub;
     }
     return $last ?? ['ok' => false, 'error' => 'Empty', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
 }
@@ -9567,6 +9702,10 @@ function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): 
         return $s;
     }
     $s = fetch_html($url, $timeout);
+    if (empty($s['ok']) && function_exists('isEmallsUrl') && isEmallsUrl($url) && function_exists('fetch_html_emalls_public_fallback')) {
+        $pf = fetch_html_emalls_public_fallback($url, $timeout, is_array($s) ? $s : []);
+        if (!empty($pf['ok'])) return $pf;
+    }
     if (empty($s['ok']) && function_exists('isEmallsUrl') && isEmallsUrl($url)) {
         $r = fetch_html_render($url, $rc);
         if (!empty($r['ok'])) {
@@ -14144,7 +14283,7 @@ function parse_emalls_products(string $html, string $baseUrl): array {
         }
         return '';
     };
-    if (!preg_match_all('~<a\b(?=[^>]*~id~)[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a>~isu', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
+    if (!preg_match_all('#<a\b(?=[^>]*~id~)[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a>#isu', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
     foreach ($matches as $m) {
         $tagHtml = (string)$m[0][0];
         $off = (int)$m[0][1];
@@ -36100,6 +36239,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.191', 'ورودیِ 10.191 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "191'") !== false
       && version_compare(APP_VERSION, '10.' . '191', '>='));
+
+    /* ---------- v10.192: ایمالز — fallback عمومی برای خطای Empty ---------- */
+    $_t192md = "![کفش نمونه](https://files.emalls.ir/files/Products/automatic/1/a_thumb3.jpg)\n\n## [کفش نمونه](https://emalls.ir/مشخصات_کفش-نمونه~id~123)\n\n۸۴۸,۶۰۰\nمشاهده فروشندگان (۱۷۵)";
+    $_t192p = function_exists('emallsProductsFromReader' . 'Text') ? emallsProductsFromReaderText($_t192md, 'https://emalls.ir/list~Category~13145') : [];
+    $add('10.192', 'Reader/Markdown ایمالز به کارت محصول قابل استخراج تبدیل می‌شود',
+         count($_t192p) === 1
+      && strpos((string)(array_values($_t192p)[0]['link'] ?? ''), '~id~123') !== false
+      && function_exists('emallsSynthetic' . 'Html'));
+    $add('10.192', 'fetch_html برای خطای Empty ایمالز public fallback دارد',
+         strpos($selfSrc, 'fetch_html_emalls_public_fallback') !== false
+      && strpos($selfSrc, 'proxy.fazilat-ma.workers.dev') !== false
+      && strpos($selfSrc, 'https://r.jina.ai/') !== false
+      && strpos($selfSrc, 'emallsNeedsProductSignal') !== false);
+    $add('10.192', 'ورودیِ 10.192 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "192'") !== false
+      && version_compare(APP_VERSION, '10.' . '192', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66269,6 +66424,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.192', t:'🛟 fallback عمومی برای ایمالز وقتی direct خطای Empty می‌دهد', items:[
+    'اگر cURL سرور برای emalls.ir با پاسخ Empty/TLS بسته شود یا صفحهٔ فهرست ۲۰۰ ولی بدون لینک محصول ~id~ برگردد، قبل از نمایش خطا به‌صورت خودکار Worker عمومی و سپس Jina Reader امتحان می‌شود',
+    'برای خروجی Markdown مسیر کمکی، یک صفحهٔ HTML مصنوعیِ قابل انتخاب با کارت‌های product-card ساخته می‌شود تا پنجرهٔ انتخابگر بصری خالی نماند',
+    'همان fallback در استخراج فهرست هم استفاده می‌شود، بنابراین پروفایل ایمالز حتی وقتی HTML مستقیم باز نشود محصول‌های ~id~ را دوباره برمی‌گرداند',
+  ]},
   {v:'10.191', t:'🛒 اصلاح ایمالز: باز شدن انتخابگر بصری و fallback استخراج', items:[
     'برای ایمالز اگر پروفایل هنوز روی CSS selectors باشد و سلکتورهای قدیمی صفر محصول بدهند، موتور به heuristic مخصوص لینک‌های ~id~ و fallback اختصاصی ایمالز برمی‌گردد تا محصول‌ها مثل تست سه‌صفحه‌ای استخراج شوند',
     'visual_proxy متاهای CSP/X-Frame-Options را از HTML مقصد حذف می‌کند و اگر HTML ایمالز ناقص/بدون لینک محصول بود یک بار از fetch_html_smart هم کمک می‌گیرد',
