@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.200';
+const APP_VERSION = '10.201';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28073,6 +28073,52 @@ if (isset($_GET['engine_benchmark'])) {
     ], JSON_UNESCAPED_UNICODE); exit;
 }
 
+/* v10.201: پروب تک‌صفحه‌ای مستقیمِ رندر مرورگری؛ برای حلقهٔ فیدبک سایت‌هایی
+   مثل SnappShop که benchmark چندصفحه‌ای ممکن است از سقف اتصال عبور کند. */
+if (isset($_GET['render_page_probe'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(90);
+    $u = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
+    if ($u === '' || !filter_var($u, FILTER_VALIDATE_URL)) {
+        echo json_encode(['ok'=>false,'error'=>'آدرس نامعتبر'], JSON_UNESCAPED_UNICODE); exit;
+    }
+    $driver = strtolower((string)($_GET['driver'] ?? 'playwright'));
+    if (!in_array($driver, ['playwright','selenium'], true)) $driver = 'playwright';
+    $rc = renderCfg();
+    $rc['timeout_ms'] = max(5000, min(30000, (int)($_GET['timeout_ms'] ?? 15000)));
+    $opts = ['driver'=>$driver, 'wait_until'=>(string)($_GET['wait_until'] ?? 'domcontentloaded'), 'scroll'=>!empty($_GET['scroll'])];
+    $t0 = microtime(true);
+    $r = fetch_html_render($u, $rc, $opts);
+    $html = (string)($r['html'] ?? '');
+    $title = '';
+    if ($html !== '' && preg_match('~<title[^>]*>(.*?)</title>~isu', $html, $tm)) $title = normalize_text(strip_tags($tm[1]));
+    $usedAuto=''; $usedHeu=''; $usedJson='';
+    $auto = !empty($r['ok']) ? parse_list_by_engine($html, (string)($r['url'] ?? $u), [], 'auto', $usedAuto) : [];
+    $heu  = !empty($r['ok']) ? parse_list_by_engine($html, (string)($r['url'] ?? $u), [], 'heuristic', $usedHeu) : [];
+    $json = !empty($r['ok']) ? parse_list_by_engine($html, (string)($r['url'] ?? $u), [], 'jsonld', $usedJson) : [];
+    $brief = function(array $rows): array {
+        $out = [];
+        foreach ($rows as $p) {
+            $out[] = ['title'=>mb_substr((string)($p['title'] ?? ''),0,100), 'price'=>mb_substr((string)($p['price'] ?? ''),0,50), 'link'=>mb_substr((string)($p['link'] ?? ''),0,180)];
+            if (count($out) >= 5) break;
+        }
+        return $out;
+    };
+    $blocked = false;
+    if ($html !== '' && preg_match('~(Access Denied|403 Forbidden|turn off VPN|خاموش.*vpn|آروان|captcha|cloudflare|ddos-guard|429)~iu', $html)) $blocked = true;
+    echo json_encode([
+        'ok'=>!empty($r['ok']), 'driver'=>$driver, 'render_driver'=>(string)($r['driver'] ?? ''),
+        'code'=>(int)($r['code'] ?? 0), 'final_url'=>(string)($r['url'] ?? $u),
+        'ms'=>(int)round((microtime(true)-$t0)*1000), 'render_ms'=>(int)($r['took_ms'] ?? 0),
+        'bytes'=>strlen($html), 'title'=>mb_substr($title,0,180), 'blocked_hint'=>$blocked,
+        'error'=>(string)($r['error'] ?? ''),
+        'counts'=>['auto'=>count($auto), 'heuristic'=>count($heu), 'jsonld'=>count($json)],
+        'used'=>['auto'=>$usedAuto, 'heuristic'=>$usedHeu, 'jsonld'=>$usedJson],
+        'samples'=>['auto'=>$brief($auto), 'heuristic'=>$brief($heu), 'jsonld'=>$brief($json)],
+        'text_sample'=>mb_substr(normalize_text(strip_tags(preg_replace('~<(script|style|noscript|template)[^>]*>.*?</\1>~isu',' ',$html))),0,500),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); exit;
+}
+
 /* v10.174: آزمون اتصال به سرویس رندر (browser/) — مانند src_probe ولی به
    اندپوینتِ /health خودِ سرویس نه به یک صفحهٔ وب. */
 if (isset($_GET['render_probe'])) {
@@ -36611,6 +36657,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.200', 'ورودیِ 10.200 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "200'") !== false
       && version_compare(APP_VERSION, '10.' . '200', '>='));
+
+    /* ---------- v10.201: پروب تک‌صفحه‌ای رندر مرورگری ---------- */
+    $add('10.201', 'render_page_probe یک صفحه را با driver مرورگری مشخص رندر و parse می‌کند',
+         strpos($selfSrc, "isset(\$_GET['render_page_probe'])") !== false
+      && strpos($selfSrc, "'driver'=>$driver") !== false
+      && strpos($selfSrc, "'counts'=>['auto'=>count(\$auto)") !== false);
+    $add('10.201', 'ورودیِ 10.201 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "201'") !== false
+      && version_compare(APP_VERSION, '10.' . '201', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66801,6 +66856,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.201', t:'🔎 پروب تک‌صفحه‌ای رندر مرورگری', items:[
+    'اندپوینت render_page_probe اضافه شد تا یک URL با driver مشخص Playwright/Selenium و timeout کوتاه رندر و همان‌جا با auto/heuristic/jsonld شمارش شود',
+  ]},
   {v:'10.200', t:'🚀 اولویت mirror برای دانلود Chrome رندر', items:[
     'bootstrap سرویس رندر روی هاست‌های محدود، mirrorهای npmmirror را قبل از Google امتحان می‌کند تا راه‌اندازی مرورگر پشت 403 متوقف نشود',
   ]},
