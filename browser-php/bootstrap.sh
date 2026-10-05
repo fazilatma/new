@@ -41,16 +41,21 @@ PY
   return 1
 }
 
-download() {  # url → file  (v10.199: mirror fallback when Google storage blocks the host)
-  local url="$1" out="$2" alt=""
-  download_once "$url" "$out" && return 0
+download() {  # url → file  (v10.200: try mirror before Google storage on restricted hosts)
+  local url="$1" out="$2" rel="" alt1="" alt2=""
   case "$url" in
     https://storage.googleapis.com/chrome-for-testing-public/*)
-      alt="https://registry.npmmirror.com/-/binary/chrome-for-testing/${url#https://storage.googleapis.com/chrome-for-testing-public/}"
-      echo "… تلاش با mirror برای Chrome-for-Testing"
-      download_once "$alt" "$out" && return 0
+      rel="${url#https://storage.googleapis.com/chrome-for-testing-public/}"
+      alt1="https://registry.npmmirror.com/-/binary/chrome-for-testing/$rel"
+      alt2="https://cdn.npmmirror.com/binaries/chrome-for-testing/$rel"
+      echo "… تلاش با mirror برای Chrome-for-Testing: registry.npmmirror.com"
+      download_once "$alt1" "$out" && return 0
+      echo "… mirror اول ناموفق بود؛ تلاش با cdn.npmmirror.com"
+      download_once "$alt2" "$out" && return 0
+      echo "… mirrorها ناموفق بودند؛ تلاش با مبدأ Google"
       ;;
   esac
+  download_once "$url" "$out" && return 0
   return 1
 }
 

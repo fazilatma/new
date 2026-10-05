@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.199';
+const APP_VERSION = '10.200';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36602,6 +36602,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "199'") !== false
       && version_compare(APP_VERSION, '10.' . '199', '>='));
 
+    /* ---------- v10.200: اولویت mirror دانلود Chrome ---------- */
+    $_boot200 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.200', 'bootstrap.sh mirror را قبل از Google برای Chrome-for-Testing امتحان می‌کند',
+         strpos($_boot200, 'try mirror before Google storage') !== false
+      && strpos($_boot200, 'cdn.npmmirror.com/binaries/chrome-for-testing') !== false
+      && strpos($_boot200, 'mirrorها ناموفق بودند') !== false);
+    $add('10.200', 'ورودیِ 10.200 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "200'") !== false
+      && version_compare(APP_VERSION, '10.' . '200', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -66791,6 +66801,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.200', t:'🚀 اولویت mirror برای دانلود Chrome رندر', items:[
+    'bootstrap سرویس رندر روی هاست‌های محدود، mirrorهای npmmirror را قبل از Google امتحان می‌کند تا راه‌اندازی مرورگر پشت 403 متوقف نشود',
+  ]},
   {v:'10.199', t:'🌐 mirror دانلود Chrome برای سرویس رندر', items:[
     'bootstrap سرویس browser-php اگر دانلود Chrome-for-Testing از storage.googleapis.com با 403 شکست بخورد، همان فایل را از mirror registry.npmmirror.com امتحان می‌کند',
   ]},
