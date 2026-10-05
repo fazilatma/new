@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.210';
+const APP_VERSION = '10.211';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36997,6 +36997,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "210'") !== false
       && version_compare(APP_VERSION, '10.' . '210', '>='));
 
+    /* ---------- v10.211: کتابخانه‌های Chrome سازگار با glibc قدیمی ---------- */
+    $_boot211 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.211', 'bootstrap از archive Debian برای بسته‌های قدیمی‌تر runtime استفاده می‌کند',
+         strpos($_boot211, 'archive.debian.org/debian') !== false);
+    $add('10.211', 'libgbm/libasound روی نسخه‌های buster سازگار با glibc قدیمی‌تر هستند',
+         strpos($_boot211, 'libgbm1_18.3.6-2+deb10u1_amd64.deb') !== false
+      && strpos($_boot211, 'libasound2_1.1.8-1_amd64.deb') !== false);
+    $add('10.211', 'وابستگی libwayland-server محلی برای libgbm نصب می‌شود',
+         strpos($_boot211, 'libwayland-server0_1.16.0-1_amd64.deb') !== false);
+    $add('10.211', 'ورودیِ 10.211 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "211'") !== false
+      && version_compare(APP_VERSION, '10.' . '211', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67186,6 +67199,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.211', t:'🧱 کتابخانه‌های Chrome سازگار با glibc قدیمی', items:[
+    'بسته‌های runtime محلی Chrome از Debian 12 به Debian 10 archive تغییر کرد تا روی هاست‌های دارای glibc قدیمی‌تر خطای GLIBC_2.33/2.34 ندهند',
+    'libwayland-server0 هم به فهرست نصب محلی اضافه شد چون بعد از باز شدن libgbm، وابستگی بعدی Chrome بود',
+  ]},
   {v:'10.210', t:'🗜️ استخراج .deb بدون xz سیستم', items:[
     'bootstrap اگر tar سیستم به‌خاطر نبود xz نتواند data.tar.xz را باز کند، با tarfile پایتون همان .deb را استخراج می‌کند',
     'نسخهٔ بستهٔ libgbm1 به build موجود bookworm یعنی 22.3.6-1+deb12u2 به‌روز شد',

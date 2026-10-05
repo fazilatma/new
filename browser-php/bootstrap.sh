@@ -64,7 +64,7 @@ download() {  # url → file  (v10.200: try mirror before Google storage on rest
 
 deb_download() {  # debian pool path → file
   local rel="$1" out="$2" base
-  for base in     "https://mirrors.aliyun.com/debian"     "https://mirrors.tuna.tsinghua.edu.cn/debian"     "https://ftp.debian.org/debian"     "https://deb.debian.org/debian"     "http://deb.debian.org/debian"; do
+  for base in     "https://archive.debian.org/debian"     "http://archive.debian.org/debian"     "https://mirrors.aliyun.com/debian"     "https://mirrors.tuna.tsinghua.edu.cn/debian"     "https://ftp.debian.org/debian"     "https://deb.debian.org/debian"     "http://deb.debian.org/debian"; do
     echo "… دریافت کتابخانه از ${base}/${rel}"
     download_once "${base}/${rel}" "$out" && return 0
   done
@@ -117,7 +117,7 @@ PY
 install_chrome_deb_libs() {
   mkdir -p "$LIB"
   local rel out ok=0
-  for rel in     "pool/main/a/at-spi2-core/libatk-bridge2.0-0_2.46.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.46.0-5_amd64.deb"     "pool/main/m/mesa/libgbm1_22.3.6-1+deb12u2_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.2.8-1+b1_amd64.deb"; do
+  for rel in     "pool/main/a/at-spi2-atk/libatk-bridge2.0-0_2.30.0-5_amd64.deb"     "pool/main/a/at-spi2-core/libatspi2.0-0_2.30.0-7_amd64.deb"     "pool/main/m/mesa/libgbm1_18.3.6-2+deb10u1_amd64.deb"     "pool/main/a/alsa-lib/libasound2_1.1.8-1_amd64.deb"     "pool/main/w/wayland/libwayland-server0_1.16.0-1_amd64.deb"; do
     out="$LIB/$(basename "$rel")"
     if [ ! -f "$out" ]; then deb_download "$rel" "$out" || { ok=1; continue; }; fi
     extract_deb_to_lib "$out" || ok=1
