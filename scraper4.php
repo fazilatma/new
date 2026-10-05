@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.202';
+const APP_VERSION = '10.203';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -36678,6 +36678,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "202'") !== false
       && version_compare(APP_VERSION, '10.' . '202', '>='));
 
+    /* ---------- v10.203: فقط باینری قابل‌اجرا برای رندر ---------- */
+    $_render203 = is_file(__DIR__ . '/browser-php/render.php') ? (string)@file_get_contents(__DIR__ . '/browser-php/render.php') : '';
+    $add('10.203', 'render.php پیش از انتخاب chrome/chromedriver دستور --version را اجرا می‌کند',
+         strpos($_render203, 'function render_bin_runs') !== false
+      && strpos($_render203, "--version 2>&1") !== false
+      && strpos($_render203, "if (\$env !== '' && render_bin_runs(\$env))") !== false);
+    $add('10.203', 'ورودیِ 10.203 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "203'") !== false
+      && version_compare(APP_VERSION, '10.' . '203', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -66867,6 +66877,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.203', t:'✅ انتخاب فقط باینری مرورگر قابل‌اجرا', items:[
+    'render.php دیگر صرفاً executable بودن chrome/chromedriver را کافی نمی‌داند و قبل از انتخاب، --version را اجرا می‌کند؛ اگر باینری دانلودی کتابخانه کم داشته باشد، به مرورگر/درایور سیستم fallback می‌کند',
+  ]},
   {v:'10.202', t:'🧩 خطای کامل‌تر برای رندر Playwright/Selenium', items:[
     'render.php خطای هر دو مسیر CDP و Selenium را با هم برمی‌گرداند و tail لاگ chrome/chromedriver را برای عیب‌یابی کتابخانه یا ضدربات نشان می‌دهد',
   ]},
