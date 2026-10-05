@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.213';
+const APP_VERSION = '10.214';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -37039,6 +37039,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "213'") !== false
       && version_compare(APP_VERSION, '10.' . '213', '>='));
 
+    /* ---------- v10.214: دانلود مرورگر رندر بدون همزمانی ---------- */
+    $_boot214 = is_file(__DIR__ . '/browser-php/bootstrap.sh') ? (string)@file_get_contents(__DIR__ . '/browser-php/bootstrap.sh') : '';
+    $add('10.214', 'bootstrap برای جلوگیری از دانلود همزمان قفل داخلی دارد',
+         strpos($_boot214, 'acquire_bootstrap_lock') !== false
+      && strpos($_boot214, '.bootstrap.lock') !== false);
+    $add('10.214', 'نسخهٔ سازگار Chrome-for-Testing 120 نصب تازه را پوشش می‌دهد',
+         strpos($_boot214, 'SCRAPER_CFT_VERSION:-120.0.6099.109') !== false
+      && strpos($_boot214, 'Chrome-for-Testing سازگار نصب شد') !== false);
+    $add('10.214', 'متادیتای آخرین Chrome فقط fallback است و timeout کوتاه دارد',
+         strpos($_boot214, 'تلاش با آخرین نسخهٔ رسمی') !== false
+      && strpos($_boot214, '--max-time 20') !== false);
+    $add('10.214', 'ورودیِ 10.214 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "214'") !== false
+      && version_compare(APP_VERSION, '10.' . '214', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -67228,6 +67243,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.214', t:'🔒 دانلود مرورگر رندر بدون همزمانی', items:[
+    'bootstrap سرویس رندر اکنون قفل داخلی دارد تا چند render_probe یا supervisor همزمان، فایل‌های Chrome را نیمه‌کاره روی هم ننویسند',
+    'در نصب تازه، نسخهٔ سازگار Chrome-for-Testing 120 پیش‌فرض است و فقط اگر آن دانلود نشود به آخرین نسخهٔ رسمی fallback می‌کند',
+  ]},
   {v:'10.213', t:'🧯 fallback مرورگر برای SIGTRAP هاست', items:[
     'اگر Chrome-for-Testing جدید بعد از نصب libraryها باز هم با Trace/breakpoint trap اجرا نشود، bootstrap یک headless-shell/chromedriver سازگارتر نسخهٔ 120.0.6099.109 را جایگزین می‌کند',
     'مسیر جایگزین همچنان از همان دانلودهای Chrome-for-Testing و بدون Node/Python runtime در scraper4 استفاده می‌کند',

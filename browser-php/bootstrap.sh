@@ -15,9 +15,38 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HERE/bin"
 LIB="$HERE/lib"
+LOCK="$HERE/.bootstrap.lock"
 mkdir -p "$BIN" "$LIB"
 render_lib_path() { printf '%s:%s:%s' "$LIB/usr/lib/x86_64-linux-gnu" "$LIB/lib/x86_64-linux-gnu" "$LIB"; }
 export LD_LIBRARY_PATH="$(render_lib_path):${LD_LIBRARY_PATH:-}"
+
+acquire_bootstrap_lock() {
+  local i oldpid
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo "$$" > "$LOCK/pid" 2>/dev/null || true
+    trap 'rm -rf "$LOCK"' EXIT INT TERM
+    return 0
+  fi
+  oldpid="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$oldpid" ] && ! kill -0 "$oldpid" 2>/dev/null; then
+    rm -rf "$LOCK" 2>/dev/null || true
+    if mkdir "$LOCK" 2>/dev/null; then
+      echo "$$" > "$LOCK/pid" 2>/dev/null || true
+      trap 'rm -rf "$LOCK"' EXIT INT TERM
+      return 0
+    fi
+  fi
+  echo "… bootstrap دیگری در حال اجراست؛ انتظار کوتاه برای جلوگیری از دانلود همزمان"
+  i=0
+  while [ -d "$LOCK" ] && [ "$i" -lt 45 ]; do sleep 2; i=$((i+1)); done
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo "$$" > "$LOCK/pid" 2>/dev/null || true
+    trap 'rm -rf "$LOCK"' EXIT INT TERM
+    return 0
+  fi
+  echo "⚠ bootstrap هنوز قفل است؛ ادامه نمی‌دهم تا فایل‌های مرورگر نصفه جایگزین نشوند"
+  exit 0
+}
 
 chmod_render_bins() {
   local f
@@ -163,6 +192,7 @@ download_cft_version() {  # version → 0/1
 }
 
 echo "── scraper4 render bootstrap (pure binaries, no apt) ──"
+acquire_bootstrap_lock
 
 if compgen -G "$BIN/*/chrome" >/dev/null 2>&1 || compgen -G "$BIN/*/chrome-headless-shell" >/dev/null 2>&1; then
   chmod_render_bins
@@ -170,39 +200,45 @@ if compgen -G "$BIN/*/chrome" >/dev/null 2>&1 || compgen -G "$BIN/*/chrome-headl
 elif SYS="$(find_sys_chrome)"; then
   echo "✓ مرورگرِ سیستمی پیدا شد: $SYS  (دانلود لازم نیست)"
 else
-  if have curl; then
-    META="$(curl -fsSL 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
-  elif have wget; then
-    META="$(wget -qO- 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
-  elif have python3; then
-    META="$(python3 -c "import urllib.request;print(urllib.request.urlopen('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json',timeout=15).read().decode())" 2>/dev/null || true)"
-  fi
-  [ -n "${META:-}" ] || fail "متادیتای Chrome-for-Testing خوانده نشد — به اینترنت دسترسی هست؟"
-
-  HEADLESS_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-headless-shell-linux64\.zip' | head -n1 || true)"
-  DRIVER_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chromedriver-linux64\.zip' | head -n1 || true)"
-  FULL_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-linux64\.zip' | head -n1 || true)"
-
-  if [ -n "$HEADLESS_URL" ]; then
-    echo "… دانلود chrome-headless-shell (نیازِ کتابخانه‌ایِ کم)"
-    download "$HEADLESS_URL" "$BIN/headless.zip" || fail "دانلود ناموفق بود"
-    unzip_file "$BIN/headless.zip" "$BIN/" || fail "بازکردن zip ناموفق — unzip ندارید و fallbackٔ python/php هم کار نکرد"
-    rm -f "$BIN/headless.zip"
-  elif [ -n "$FULL_URL" ]; then
-    echo "… headless-shell در متادیتا نیست؛ دانلود chrome کامل: $FULL_URL"
-    download "$FULL_URL" "$BIN/chrome.zip" || fail "دانلود ناموفق بود"
-    unzip_file "$BIN/chrome.zip" "$BIN/" || fail "بازکردن zip ناموفق"
-    rm -f "$BIN/chrome.zip"
+  PINNED_CFT_VERSION="${SCRAPER_CFT_VERSION:-120.0.6099.109}"
+  if download_cft_version "$PINNED_CFT_VERSION"; then
+    echo "✓ Chrome-for-Testing سازگار نصب شد: $PINNED_CFT_VERSION"
   else
-    fail "هیچ نشانیِ دانلودی در متادیتا پیدا نشد"
-  fi
+    echo "⚠ دانلود نسخهٔ سازگار ناموفق بود؛ تلاش با آخرین نسخهٔ رسمی"
+    if have curl; then
+      META="$(curl -fsSL --connect-timeout 8 --max-time 20 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
+    elif have wget; then
+      META="$(wget -q --timeout=15 --tries=1 -O- 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json' 2>/dev/null || true)"
+    elif have python3; then
+      META="$(python3 -c "import urllib.request;print(urllib.request.urlopen('https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json',timeout=15).read().decode())" 2>/dev/null || true)"
+    fi
+    [ -n "${META:-}" ] || fail "متادیتای Chrome-for-Testing خوانده نشد — به اینترنت دسترسی هست؟"
 
-  if [ -n "$DRIVER_URL" ]; then
-    echo "… دانلود chromedriver (موتور Selenium)"
-    if download "$DRIVER_URL" "$BIN/driver.zip" && unzip_file "$BIN/driver.zip" "$BIN/"; then
-      rm -f "$BIN/driver.zip"
+    HEADLESS_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-headless-shell-linux64\.zip' | head -n1 || true)"
+    DRIVER_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chromedriver-linux64\.zip' | head -n1 || true)"
+    FULL_URL="$(printf '%s' "$META" | grep -o 'https://[^"]*/chrome-linux64\.zip' | head -n1 || true)"
+
+    if [ -n "$HEADLESS_URL" ]; then
+      echo "… دانلود chrome-headless-shell (نیازِ کتابخانه‌ایِ کم)"
+      download "$HEADLESS_URL" "$BIN/headless.zip" || fail "دانلود ناموفق بود"
+      unzip_file "$BIN/headless.zip" "$BIN/" || fail "بازکردن zip ناموفق — unzip ندارید و fallbackٔ python/php هم کار نکرد"
+      rm -f "$BIN/headless.zip"
+    elif [ -n "$FULL_URL" ]; then
+      echo "… headless-shell در متادیتا نیست؛ دانلود chrome کامل: $FULL_URL"
+      download "$FULL_URL" "$BIN/chrome.zip" || fail "دانلود ناموفق بود"
+      unzip_file "$BIN/chrome.zip" "$BIN/" || fail "بازکردن zip ناموفق"
+      rm -f "$BIN/chrome.zip"
     else
-      echo "⚠ دانلود chromedriver ناموفق — موتور CDP کفایت می‌کند"
+      fail "هیچ نشانیِ دانلودی در متادیتا پیدا نشد"
+    fi
+
+    if [ -n "$DRIVER_URL" ]; then
+      echo "… دانلود chromedriver (موتور Selenium)"
+      if download "$DRIVER_URL" "$BIN/driver.zip" && unzip_file "$BIN/driver.zip" "$BIN/"; then
+        rm -f "$BIN/driver.zip"
+      else
+        echo "⚠ دانلود chromedriver ناموفق — موتور CDP کفایت می‌کند"
+      fi
     fi
   fi
 fi
