@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.192';
+const APP_VERSION = '10.193';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -10669,6 +10669,148 @@ $result['value'] = normalize_text($node->textContent);
 
 $result['value'] = mb_substr($result['value'], 0, 500);
 echo json_encode($result, JSON_UNESCAPED_UNICODE);
+exit;
+}
+
+if (isset($_GET['s4_feedback'])) {
+header('Content-Type: application/json; charset=UTF-8');
+@set_time_limit(180);
+$kind = trim((string)$_GET['s4_feedback']);
+$url = trim((string)($_GET['url'] ?? ''));
+if ($url === '') $url = 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+if (!filter_var($url, FILTER_VALIDATE_URL)) { echo json_encode(['ok'=>false,'error'=>'Invalid URL'], JSON_UNESCAPED_UNICODE); exit; }
+if (!isEmallsUrl($url)) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls URLs'], JSON_UNESCAPED_UNICODE); exit; }
+$timeout = max(8, min(60, (int)($_GET['timeout'] ?? 20)));
+$pages = max(1, min(3, (int)($_GET['pages'] ?? 1)));
+$profiles = loadProfiles();
+$pkIn = trim((string)($_GET['pk'] ?? ($_GET['profile_key'] ?? '')));
+$pk = profileResolveKey($pkIn !== '' ? $pkIn : $url, $profiles) ?: profileKey($url);
+$profile = $profiles[$pk] ?? [];
+$selectors = is_array($profile['selectors'] ?? null) ? (array)$profile['selectors'] : [];
+$engine = normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
+$pagType = (string)($profile['pagType'] ?? 'query_page');
+$pagVal = (string)($profile['pagVal'] ?? '');
+$briefProduct = function(array $p): array {
+    return [
+        'title' => mb_substr((string)($p['title'] ?? ''), 0, 120),
+        'price' => mb_substr((string)($p['price'] ?? ''), 0, 80),
+        'link' => mb_substr((string)($p['link'] ?? ''), 0, 220),
+        'image' => mb_substr((string)($p['image'] ?? ''), 0, 220),
+    ];
+};
+$summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng) use ($briefProduct): array {
+    $title = '';
+    if (preg_match('~<title[^>]*>(.*?)</title>~isu', $html, $tm)) $title = normalize_text(strip_tags($tm[1]));
+    $hrefCount = 0;
+    if (preg_match_all('#<a\b[^>]*href\s*=\s*(["\'])(.*?)\1#isu', $html, $am)) $hrefCount = count($am[0]);
+    $idHrefCount = 0;
+    if (preg_match_all('#<a\b[^>]*href\s*=\s*(["\'])([^"\']*~id~[^"\']*)\1#isu', $html, $im)) $idHrefCount = count($im[0]);
+    $selContainerCount = 0;
+    if (!empty($sel['container'])) {
+        [$_dom, $_xp] = load_dom($html);
+        $_q = cssToXpath((string)$sel['container'], true);
+        $_nodes = $_q ? @$_xp->query($_q) : null;
+        if (!$_nodes || $_nodes->length === 0) {
+            $_q = cssToXpath((string)$sel['container'], false);
+            $_nodes = $_q ? @$_xp->query($_q) : null;
+        }
+        $selContainerCount = $_nodes ? (int)$_nodes->length : 0;
+    }
+    $usedAuto = ''; $usedProfile = ''; $usedHeu = ''; $usedSel = '';
+    $auto = parse_list_by_engine($html, $baseUrl, $sel, 'auto', $usedAuto);
+    $profileRows = parse_list_by_engine($html, $baseUrl, $sel, $eng, $usedProfile);
+    $heu = parse_list_by_engine($html, $baseUrl, $sel, 'heuristic', $usedHeu);
+    $selRows = !empty($sel['container']) ? parse_list_by_engine($html, $baseUrl, $sel, 'selectors', $usedSel) : [];
+    $em = function_exists('parse_emalls_products') ? parse_emalls_products($html, $baseUrl) : [];
+    $first = [];
+    foreach ($profileRows ?: ($auto ?: ($heu ?: $em)) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
+    return [
+        'bytes' => strlen($html),
+        'sha1' => substr(sha1($html), 0, 12),
+        'title' => mb_substr($title, 0, 180),
+        'has_tilde_id' => stripos($html, '~id~') !== false,
+        'tilde_id_count' => substr_count($html, '~id~'),
+        'href_count' => $hrefCount,
+        'href_tilde_id_count' => $idHrefCount,
+        'synthetic_fallback' => strpos($html, 'data-emalls-fallback') !== false,
+        'selector_container' => (string)($sel['container'] ?? ''),
+        'selector_container_count' => $selContainerCount,
+        'products' => [
+            'profile_engine' => ['engine'=>$eng, 'used'=>$usedProfile, 'count'=>count($profileRows)],
+            'auto' => ['used'=>$usedAuto, 'count'=>count($auto)],
+            'heuristic' => ['used'=>$usedHeu, 'count'=>count($heu)],
+            'selectors' => ['used'=>$usedSel, 'count'=>count($selRows)],
+            'emalls_regex' => ['count'=>count($em)],
+        ],
+        'first_products' => $first,
+    ];
+};
+$summarizeFetch = function(string $label, array $r, array $sel, string $eng) use ($summarizeHtml, $url): array {
+    $html = (string)($r['html'] ?? '');
+    $base = (string)($r['url'] ?? $url);
+    $out = [
+        'label' => $label,
+        'ok' => !empty($r['ok']),
+        'code' => (int)($r['code'] ?? 0),
+        'mode' => (string)($r['mode'] ?? ''),
+        'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
+        'final_url' => mb_substr($base, 0, 260),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','source_error','render_error','js_shell_detected','emalls_static_error'])),
+    ];
+    $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
+    return $out;
+};
+$oldIndirectSet = array_key_exists('_srcNetProfileIndirect', $GLOBALS);
+$oldIndirect = $GLOBALS['_srcNetProfileIndirect'] ?? null;
+if ($pk !== '') srcNetSetProfileIndirect($pk);
+$directNet = ['ipv4'=>true, 'hosts'=>'', 'fallback'=>false, 'resolve_ip'=>'', 'doh_url'=>'', 'worker_url'=>'', 'proxy'=>'', 'proxy_type'=>'http', 'proxy_auth'=>''];
+$attempts = [];
+$attempts[] = $summarizeFetch('raw_direct_srcNetFetchAttempt', srcNetFetchAttempt($url, $timeout, $directNet, 'direct'), $selectors, $engine);
+$attempts[] = $summarizeFetch('fetch_html_current', fetch_html($url, $timeout), $selectors, $engine);
+$attempts[] = $summarizeFetch('fetch_html_smart_current', fetch_html_smart($url, $timeout), $selectors, $engine);
+$attempts[] = $summarizeFetch('emalls_public_fallback_only', fetch_html_emalls_public_fallback($url, $timeout, []), $selectors, $engine);
+$pageSummaries = [];
+for ($i = 1; $i <= $pages; $i++) {
+    $pageUrl = $i === 1 ? $url : build_page_url_custom($url, $url, $i, $pagType, $pagVal);
+    $r = fetch_html_for_engine($pageUrl, $timeout, $engine, $selectors);
+    $pageSummaries[] = ['page'=>$i, 'url'=>$pageUrl] + $summarizeFetch('profile_page_'.$i, $r, $selectors, $engine);
+}
+if ($oldIndirectSet) $GLOBALS['_srcNetProfileIndirect'] = $oldIndirect; else unset($GLOBALS['_srcNetProfileIndirect']);
+$best = null;
+foreach (array_merge($attempts, $pageSummaries) as $a) {
+    $cnt = (int)($a['html']['products']['profile_engine']['count'] ?? 0);
+    if ($cnt <= 0) $cnt = (int)($a['html']['products']['auto']['count'] ?? 0);
+    if ($cnt > 0 && ($best === null || $cnt > (int)$best['count'])) $best = ['label'=>$a['label'] ?? ('page '.($a['page'] ?? '?')), 'count'=>$cnt, 'mode'=>$a['mode'] ?? ''];
+}
+$out = [
+    'ok' => true,
+    'version' => APP_VERSION,
+    'kind' => $kind,
+    'url' => $url,
+    'profile' => [
+        'requested_key' => $pkIn,
+        'resolved_key' => $pk,
+        'found' => isset($profiles[$pk]),
+        'name' => (string)($profile['name'] ?? ''),
+        'engine' => $engine,
+        'pages' => (int)($profile['pages'] ?? 0),
+        'pagType' => $pagType,
+        'pagVal' => $pagVal,
+        'net_indirect' => netIndirectOn($profile['net_indirect'] ?? false),
+        'selectors' => [
+            'container' => (string)($selectors['container'] ?? ''),
+            'title' => (string)($selectors['title'] ?? ''),
+            'price' => (string)($selectors['price'] ?? ''),
+            'link' => (string)($selectors['link'] ?? ''),
+            'image' => (string)($selectors['image'] ?? ''),
+        ],
+    ],
+    'attempts' => $attempts,
+    'pages_tested' => $pageSummaries,
+    'best' => $best,
+    'recommendation' => $best ? ('Use path '.$best['label'].'; parsed '.$best['count'].' products') : 'No parser produced products; send this JSON back for the next fix.',
+];
+echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -36255,6 +36397,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.192', 'ورودیِ 10.192 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "192'") !== false
       && version_compare(APP_VERSION, '10.' . '192', '>='));
+
+    /* ---------- v10.193: اندپوینت feedback برای ایمالز ---------- */
+    $add('10.193', 'اندپوینت s4_feedback مسیرهای fetch/parse ایمالز را گزارش می‌کند',
+         strpos($selfSrc, "_GET['s4_" . "feedback']") !== false
+      && strpos($selfSrc, 'raw_direct_srcNetFetchAttempt') !== false
+      && strpos($selfSrc, 'pages_tested') !== false);
+    $add('10.193', 'feedback ایمالز به دامنهٔ emalls محدود و بدون توکن است',
+         strpos($selfSrc, 'This feedback endpoint is restricted to Emalls URLs') !== false
+      && strpos($selfSrc, "'selectors' => [") !== false);
+    $add('10.193', 'ورودیِ 10.193 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "193'") !== false
+      && version_compare(APP_VERSION, '10.' . '193', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66424,6 +66578,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.193', t:'🧪 اندپوینت feedback برای عیب‌یابی حلقه‌ای ایمالز', items:[
+    'اندپوینت ?s4_feedback=emalls&url=... اضافه شد تا مسیرهای direct، fetch_html، fetch_html_smart، fallback عمومی و صفحه‌های پروفایل را یک‌جا تست کند',
+    'خروجی JSON تعداد لینک‌های ~id~، تعداد کانتینر سلکتور، موتور استفاده‌شده، تعداد محصول استخراج‌شده و چند نمونه محصول را می‌دهد تا مشکل روی هاست واقعی قابل تکرار باشد',
+    'اندپوینت عمداً فقط URLهای ایمالز را می‌پذیرد و توکن/تنظیمات محرمانه را برنمی‌گرداند',
+  ]},
   {v:'10.192', t:'🛟 fallback عمومی برای ایمالز وقتی direct خطای Empty می‌دهد', items:[
     'اگر cURL سرور برای emalls.ir با پاسخ Empty/TLS بسته شود یا صفحهٔ فهرست ۲۰۰ ولی بدون لینک محصول ~id~ برگردد، قبل از نمایش خطا به‌صورت خودکار Worker عمومی و سپس Jina Reader امتحان می‌شود',
     'برای خروجی Markdown مسیر کمکی، یک صفحهٔ HTML مصنوعیِ قابل انتخاب با کارت‌های product-card ساخته می‌شود تا پنجرهٔ انتخابگر بصری خالی نماند',
