@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.217';
+const APP_VERSION = '10.218';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -3452,6 +3452,65 @@ function aiDohQuery(string $host, string $dohUrl, int $timeout = 10): array {
     return ['ok' => false, 'error' => 'رکورد A پیدا نشد'];
 }
 
+/* v10.218: حذفِ پورت پیش‌فرض از URL هدف. بعضی Workerها وقتی آدرسِ
+   مقصد به‌شکل خام داخل path برود، قطعهٔ `https:` یا `:443` را پورتِ path
+   می‌خوانند و خطای «bad/invalid port» می‌دهند. پیش از هر درخواستِ AI،
+   پورت‌های پیش‌فرض 80/443 از URL پاک می‌شود تا هم direct/DoH سالم بماند
+   و هم Worker با URL تمیزتری کار کند. */
+function aiUrlStripDefaultPort(string $url): string {
+    return (string)preg_replace_callback('~^(https?)://((?:[^/@?#]+@)?)(\[[^\]]+\]|[^:/?#]+):(80|443)([/?#]|$)~i',
+        function ($m) {
+            $scheme = strtolower((string)$m[1]);
+            $port   = (string)$m[4];
+            if (($scheme === 'https' && $port === '443') || ($scheme === 'http' && $port === '80')) {
+                return $m[1] . '://' . $m[2] . $m[3] . $m[5];
+            }
+            return $m[0];
+        }, $url);
+}
+
+/* v10.218: نرمال‌سازی آدرس Worker — فاصله، slash انتهایی و پورت پیش‌فرض
+   خودِ Worker حذف می‌شود. اگر کاربر فقط دامنهٔ workers.dev را چسبانده باشد،
+   https:// به ابتدا اضافه می‌شود. */
+function aiWorkerNormalizeUrl(string $w): string {
+    $w = trim($w);
+    if ($w === '') return '';
+    if (!preg_match('~^https?://~i', $w) && preg_match('~^[a-z0-9.-]+(?:/|$|\?)~i', $w)) $w = 'https://' . $w;
+    $w = aiUrlStripDefaultPort($w);
+    return rtrim($w, '/');
+}
+
+/* v10.218: ساختِ URL امن برای Worker. نسخهٔ قدیمی آدرسِ کامل مقصد را خام
+   به path می‌چسباند (worker/https://api...). بعضی Workerها/URL-parserها آن
+   را با خطای پورت رد می‌کنند. پیش‌فرض جدید، مقصد را هم در queryِ encoded و
+   هم در هدر X-Target-URL می‌فرستد. الگوهای سفارشی هم پشتیبانی می‌شوند:
+     {url} یا {target}        = rawurlencode(target)
+     {url.raw} یا {target.raw}= target خام (برای Workerهای legacy)
+     {url.b64} یا {target.b64}= base64url(target)
+ */
+function aiWorkerBuildRequestUrl(string $workerUrl, string $targetUrl): array {
+    $w = aiWorkerNormalizeUrl($workerUrl);
+    $targetUrl = aiUrlStripDefaultPort($targetUrl);
+    if ($w === '') return ['ok' => false, 'url' => '', 'style' => '', 'error' => 'آدرس Worker خالی است'];
+    $enc = rawurlencode($targetUrl);
+    $b64 = rtrim(strtr(base64_encode($targetUrl), '+/', '-_'), '=');
+    $repl = [
+        '{url}' => $enc, '{target}' => $enc,
+        '{url.raw}' => $targetUrl, '{target.raw}' => $targetUrl,
+        '{url.b64}' => $b64, '{target.b64}' => $b64,
+    ];
+    foreach ($repl as $ph => $rv) {
+        if (strpos($w, $ph) !== false) {
+            $built = strtr($w, $repl);
+            if (!filter_var($built, FILTER_VALIDATE_URL)) return ['ok' => false, 'url' => '', 'style' => '', 'error' => 'قالب Worker پس از جایگذاری URL نامعتبر شد'];
+            return ['ok' => true, 'url' => $built, 'style' => 'template', 'target' => $targetUrl];
+        }
+    }
+    if (!filter_var($w, FILTER_VALIDATE_URL)) return ['ok' => false, 'url' => '', 'style' => '', 'error' => 'آدرس Worker نامعتبر است'];
+    $sep = (strpos($w, '?') === false) ? '?' : '&';
+    return ['ok' => true, 'url' => $w . $sep . 'url=' . $enc, 'style' => 'query:url', 'target' => $targetUrl];
+}
+
 /* =====================================================================
  *  v9.99: aiHttp به سه بخش شکسته شد تا همان منطق هم به‌صورت تکی و هم
  *  به‌صورت موازی (curl_multi) قابل استفاده باشد:
@@ -3461,6 +3520,7 @@ function aiDohQuery(string $host, string $dohUrl, int $timeout = 10): array {
  *  هیچ رفتاری برای مسیرهای موجود عوض نمی‌شود؛ فقط قابلِ‌اشتراک شد.
  * ===================================================================== */
 function aiHttpPrepare(string $url, array $headers, ?array $payload, array $net, ?string $forceMode = null): array {
+    $url = aiUrlStripDefaultPort($url);
     $mode = $forceMode ?? ($net['mode'] ?? 'direct');
     $parts = parse_url($url);
     $host  = (string)($parts['host'] ?? '');
@@ -3468,20 +3528,28 @@ function aiHttpPrepare(string $url, array $headers, ?array $payload, array $net,
     $extraHeaders = [];
     $via = $mode;
     $pinnedIp = '';   // v9.99: IPی که با DoH/دستی به curl تحمیل شده
+    $workerStyle = '';
 
     if ($mode === 'worker') {
-        // پروکسی معکوس: آدرس مقصد را به‌عنوان مسیر/هدر می‌فرستیم.
-        $w = rtrim((string)$net['worker_url'], '/');
-        if ($w === '') return ['err' => ['ok' => false, 'code' => 0, 'error' => 'آدرس Worker خالی است', 'via' => $mode, 'mode' => $mode]];
-        // دو الگوی رایج پشتیبانی می‌شود:
-        //   https://worker.example.workers.dev/https://api.openai.com/v1/...
-        //   https://worker.example.workers.dev/v1/...   (+ هدر X-Target-Base)
-        if (strpos($w, '{url}') !== false) {
-            $reqUrl = str_replace('{url}', rawurlencode($url), $w);
-        } else {
-            $reqUrl = $w . '/' . ltrim($url, '/');
+        // v10.218: مقصد را خام داخل path نگذار؛ برای جلوگیری از خطای bad port
+        // در Worker/URL-parser، هدف encoded در query و نیز در هدرها فرستاده می‌شود.
+        $wb = aiWorkerBuildRequestUrl((string)($net['worker_url'] ?? ''), $url);
+        if (empty($wb['ok'])) {
+            return ['err' => ['ok' => false, 'code' => 0, 'error' => (string)($wb['error'] ?? 'آدرس Worker نامعتبر است'), 'via' => $mode, 'mode' => $mode]];
         }
+        $reqUrl = (string)$wb['url'];
+        $url    = (string)($wb['target'] ?? $url);
+        $workerStyle = (string)($wb['style'] ?? '');
+        $tParts = parse_url($url);
+        $base = (string)($tParts['scheme'] ?? 'https') . '://' . (string)($tParts['host'] ?? '');
+        $tPort = isset($tParts['port']) ? (int)$tParts['port'] : 0;
+        if ($tPort > 0) $base .= ':' . $tPort;
+        $tPath = (string)($tParts['path'] ?? '/');
+        if (isset($tParts['query']) && $tParts['query'] !== '') $tPath .= '?' . $tParts['query'];
         $extraHeaders[] = 'X-Target-URL: ' . $url;
+        $extraHeaders[] = 'X-Target-Base: ' . $base;
+        $extraHeaders[] = 'X-Target-Path: ' . $tPath;
+        $via = 'worker' . ($workerStyle !== '' ? '(' . $workerStyle . ')' : '');
     } elseif ($mode === 'gateway') {
         // درگاه واسط: کاربر Base URL را مستقیم در بخش هوش مصنوعی می‌گذارد،
         // پس اینجا کاری لازم نیست جز اینکه مثل direct عمل کنیم.
@@ -3549,7 +3617,7 @@ function aiHttpPrepare(string $url, array $headers, ?array $payload, array $net,
         return aiTestStopRequested() ? 1 : 0;   // غیرصفر → abort
     });
     return ['ch' => $ch, 'mode' => $mode, 'via' => $via, 'host' => $host,
-            'pinnedIp' => $pinnedIp, 'reqUrl' => $reqUrl];
+            'pinnedIp' => $pinnedIp, 'reqUrl' => $reqUrl, 'workerStyle' => $workerStyle];
 }
 
 /** خروجیِ خامِ یک هندلِ curlِ اجراشده را به نتیجهٔ استاندارد تبدیل می‌کند */
@@ -3570,7 +3638,8 @@ function aiHttpFinish(array $h, $raw, string $err, int $code, string $eurl): arr
     return ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $err,
             'body' => @json_decode((string)$raw, true), 'raw' => $raw,
             'via' => (string)($h['via'] ?? ''), 'effective_url' => $eurl,
-            'req_url' => (string)($h['reqUrl'] ?? ''), 'mode' => (string)($h['mode'] ?? '')];
+            'req_url' => (string)($h['reqUrl'] ?? ''), 'mode' => (string)($h['mode'] ?? ''),
+            'worker_style' => (string)($h['workerStyle'] ?? '')];
 }
 
 /**
@@ -4023,20 +4092,51 @@ function aiTestStopRequested(): bool {
     return is_file(AI_TEST_STOP_FILE);
 }
 /** آیا یک درخواستِ پاسخ‌نشده واقعاً «قطع/ناپذیر» بود (نه خطای منطقی API)؟ */
+/* v10.218: متنِ خطا را از همهٔ شکل‌های رایج بیرون بکش. Workerها گاهی
+   خطای port/fetch را به‌صورت متن خام یا {success:false,error:'...'} می‌دهند؛
+   اگر فقط curl_error را بخوانیم، کاربر فقط HTTP 500/400 می‌بیند. */
+function aiHttpErrorMessage(array $r): string {
+    $body = $r['body'] ?? null;
+    $msg = '';
+    if (is_array($body)) {
+        $e = $body['error'] ?? null;
+        if (is_array($e)) $msg = (string)($e['message'] ?? ($e['error'] ?? ''));
+        elseif (is_string($e)) $msg = $e;
+        if ($msg === '') $msg = (string)($body['message'] ?? ($body['detail'] ?? ''));
+        if ($msg === '' && isset($body['errors'][0]['message'])) $msg = (string)$body['errors'][0]['message'];
+    } elseif (is_string($body) && $body !== '') {
+        $msg = $body;
+    }
+    if ($msg === '') $msg = (string)($r['error'] ?? '');
+    if ($msg === '') {
+        $raw = trim((string)($r['raw'] ?? ''));
+        if ($raw !== '') {
+            $plain = trim((string)preg_replace('~<[^>]+>~', ' ', $raw));
+            $plain = trim((string)preg_replace('~\s+~u', ' ', html_entity_decode($plain, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+            if ($plain !== '') $msg = $plain;
+        }
+    }
+    if (!empty($r['cf_error'])) $msg = (string)$r['cf_error'];
+    return mb_substr($msg, 0, 500);
+}
+
 function aiTestNetworkFailure(array $r): array {
     $code = (int)($r['code'] ?? 0);
-    $err  = strtolower((string)($r['error'] ?? ''));
+    $msg  = aiHttpErrorMessage($r);
+    $err  = strtolower($msg . ' ' . (string)($r['error'] ?? '') . ' ' . (string)($r['raw'] ?? ''));
     $cat  = 'ok'; $label = ''; $reachable = true;
     if ($code === 0 && $err !== '') {
         $reachable = false;
-        if (strpos($err, 'resolve') !== false)            { $cat = 'dns';    $label = 'DNS — دامنه‌ای که قابل‌حل نیست (مسموم/بسته)'; }
+        if (strpos($err, 'bad port') !== false || strpos($err, 'invalid port') !== false || strpos($err, 'port is not allowed') !== false || strpos($err, 'disallowed port') !== false) { $cat = 'port'; $label = 'خطای پورت در مسیر Worker/URL مقصد'; }
+        elseif (strpos($err, 'resolve') !== false)            { $cat = 'dns';    $label = 'DNS — دامنه‌ای که قابل‌حل نیست (مسموم/بسته)'; }
         elseif (strpos($err, 'timed out') !== false)      { $cat = 'timeout';$label = 'تایم‌اوت — سرور پاسخ نداد'; }
         elseif (strpos($err, 'refused') !== false)        { $cat = 'refused';$label = 'اتصال رد شد (Connection refused)'; }
         elseif (strpos($err, 'connect') !== false)        { $cat = 'connect';$label = 'برقراری اتصال ناموفق'; }
         elseif (strpos($err, 'ssl') !== false)            { $cat = 'ssl';    $label = 'خطای SSL/TLS'; }
-        else                                              { $cat = 'network';$label = 'خطای شبکه: ' . mb_substr($r['error'], 0, 80); }
+        else                                              { $cat = 'network';$label = 'خطای شبکه: ' . mb_substr($msg, 0, 80); }
     } elseif ($code > 0) {
-        if ($code === 401)      { $cat = 'auth';   $label = 'کلید API نامعتبر (401)'; }
+        if (strpos($err, 'bad port') !== false || strpos($err, 'invalid port') !== false || strpos($err, 'port is not allowed') !== false || strpos($err, 'disallowed port') !== false) { $cat = 'port'; $label = 'خطای پورت در Worker — آدرس مقصد/قالب Worker اصلاح شود'; }
+        elseif ($code === 401)      { $cat = 'auth';   $label = 'کلید API نامعتبر (401)'; }
         elseif ($code === 403)  { $cat = 'forbidden'; $label = 'دسترسی رد شد (403) — IP هاست احتمالاً بلاک است'; }
         elseif ($code === 404)  { $cat = 'notfound';$label = 'مدل/اندپوینت پیدا نشد (404)'; }
         elseif ($code === 429)  { $cat = 'ratelimit';$label = 'محدودیت نرخ (429)'; }
@@ -4044,7 +4144,7 @@ function aiTestNetworkFailure(array $r): array {
         elseif ($code === 422)  { $cat = 'badreq'; $label = 'درخواست نامعتبر (422)'; }
         else                    { $cat = 'http';   $label = 'HTTP ' . $code; }
     }
-    return ['code' => $code, 'cat' => $cat, 'label' => $label, 'reachable' => $reachable, 'error' => (string)($r['error'] ?? '')];
+    return ['code' => $code, 'cat' => $cat, 'label' => $label, 'reachable' => $reachable, 'error' => $msg];
 }
 /* =====================================================================
  *  v9.99: تشخیصِ «خطا از واسطه است، نه از خودِ سرویس»
@@ -4077,7 +4177,8 @@ function aiProxyLevelFailure(array $r, string $mode = ''): bool {
     $sigs = ['access denied by security policy', 'sorry, you have been blocked',
              'you have been blocked', 'attention required! | cloudflare',
              'cf-error-details', 'error code: 1020', 'proxy.php',
-             'x-target-url', 'bad gateway', 'gateway timeout'];
+             'x-target-url', 'bad gateway', 'gateway timeout',
+             'bad port', 'invalid port', 'port is not allowed', 'disallowed port'];
     foreach ($sigs as $sig) {
         if ($sig !== '' && strpos($low, $sig) !== false) return true;
     }
@@ -15496,7 +15597,7 @@ if (isset($_POST['ai_net'])) {
         'mode'       => in_array($mode, $allowedModes, true) ? $mode : 'direct',
         'resolve_ip' => trim((string)($n['resolve_ip'] ?? '')),
         'doh_url'    => trim((string)($n['doh_url'] ?? '')) ?: 'https://cloudflare-dns.com/dns-query',
-        'worker_url' => trim((string)($n['worker_url'] ?? '')),
+        'worker_url' => aiWorkerNormalizeUrl(trim((string)($n['worker_url'] ?? ''))),
         'proxy'      => trim((string)($n['proxy'] ?? '')),
         'proxy_type' => in_array(($n['proxy_type'] ?? 'http'), ['http','socks5','socks4'], true) ? (string)$n['proxy_type'] : 'http',
         'proxy_auth' => trim((string)($n['proxy_auth'] ?? '')),
@@ -28868,19 +28969,22 @@ if (isset($_GET['ai_probe'])) {
         $r  = aiHttp($url, $headers, $payload, $net, $m);
         $ms = (int)((microtime(true) - $t0) * 1000);
         $code = (int)$r['code'];
-        // 401 یعنی شبکه رسید ولی کلید غلط است — از نظر عبور، موفق است
-        $reached = $code > 0;
-        // v9.26: «DNS حل شد ولی اتصال برقرار نشد» یعنی خودِ IP مقصد بلاک است
+        // 401 یعنی خودِ سرویس رسید ولی کلید غلط است؛ اما خطای Worker/پروکسیِ واسط «رسیدن به مقصد» نیست.
         $connNote = '';
         if ($m === 'doh' && $code === 0) {
             $connNote = ' ⚠️ DoH دامنه را حل کرد ولی اتصال به IP مقصد برقرار نشد — DNS سالم است ولی مسیر IP بسته است؛ پروکسی/Worker لازم است';
         }
-        $note = $code === 0 ? ('نرسید: ' . mb_substr((string)$r['error'], 0, 70) . $connNote)
+        $emsg = aiHttpErrorMessage($r);
+        $diag = aiTestNetworkFailure($r);
+        $reached = $code > 0 && ($diag['cat'] ?? '') !== 'port' && !aiProxyLevelFailure($r, $m);
+        $note = $code === 0 ? ('نرسید: ' . mb_substr($emsg, 0, 90) . $connNote)
               : ($code === 401 ? 'رسید ✓ (کلید نامعتبر یا خالی)'
-              : ($code >= 200 && $code < 300 ? 'کامل ✓' : 'رسید ✓ (HTTP ' . $code . ')'));
+              : ($code >= 200 && $code < 300 ? 'کامل ✓' : 'رسید ✓ (HTTP ' . $code . ($emsg !== '' ? ' — ' . mb_substr($emsg, 0, 90) : '') . ')'));
+        if (($diag['cat'] ?? '') === 'port') $note = 'خطای پورت Worker/URL: ' . mb_substr($emsg, 0, 90) . ' — قالب Worker را اصلاح کنید یا DoH را بگذارید';
         if ($reached) $working[] = $m;
         $out['modes'][] = ['mode' => $m, 'reached' => $reached, 'http' => $code,
-                           'ms' => $ms, 'note' => $note, 'via' => $r['via'] ?? $m];
+                           'ms' => $ms, 'note' => $note, 'via' => $r['via'] ?? $m,
+                           'diag' => (string)($diag['cat'] ?? ''), 'worker_style' => (string)($r['worker_style'] ?? '')];
     }
     $out['working'] = $working;
     $out['recommended'] = $working[0] ?? '';
@@ -28888,6 +28992,199 @@ if (isset($_GET['ai_probe'])) {
         ? 'هیچ روشی به مقصد نرسید — Worker یا پروکسی لازم است (DoH فقط DNS را حل می‌کند، نه مسیر IP)'
         : ('روش‌های کارآمد: ' . implode(' · ', $working));
     echo json_encode($out, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/* =====================================================================
+ *  v10.218: endpoint حلقهٔ فیدبک برای رفع خطاهای فنی AI
+ *
+ *  ?ai_feedback_fix=1[&apply=1]
+ *    ۱) روش‌های direct/doh/worker را با اندپوینت واقعیِ ارائه‌دهندهٔ فعال
+ *       می‌سنجد و خطای پورت Worker را صریح تشخیص می‌دهد.
+ *    ۲) اگر Worker خراب است ولی DoH/direct می‌رسد، در حالت apply روش امن را
+ *       ذخیره می‌کند (rate-limit و credit را «رفع» حساب نمی‌کند).
+ *    ۳) مدل‌های قرمزِ غیرِ credit/rate-limit را با تنظیم اصلاح‌شده دوباره
+ *       تست می‌کند و فقط همان‌ها را به‌روز می‌کند.
+ * ===================================================================== */
+function aiNetPublic(array $n): array {
+    if (isset($n['proxy_auth']) && $n['proxy_auth'] !== '') $n['proxy_auth'] = '***';
+    return $n;
+}
+
+function aiFeedbackSkipReason(array $m): string {
+    if (!empty($m['available'])) return 'available';
+    $d = is_array($m['testDetails'] ?? null) ? (array)$m['testDetails'] : [];
+    $code = (int)($d['status'] ?? 0);
+    $kind = (string)($d['kind'] ?? '');
+    $txt = strtolower((string)($d['error'] ?? '') . ' ' . (string)($d['note'] ?? '') . ' ' . (string)($d['raw'] ?? ''));
+    if (!empty($m['billingIssue']) || strpos($kind, 'billing') === 0) return 'billing';
+    $bill = aiBillingFailure(['code' => $code, 'raw' => $txt, 'body' => ['error' => ['message' => $txt]]]);
+    if (!empty($bill['is'])) return 'billing';
+    if (!empty($m['rateLimited']) || $code === 429 || strpos($txt, 'rate limit') !== false || strpos($txt, 'too many requests') !== false) return 'ratelimit';
+    if (empty($m['tested']) && !$d) return 'untested';
+    return '';
+}
+
+function aiFeedbackProbeModes(array $net, string $url, string $apiKey, string $model): array {
+    $modes = ['direct', 'doh'];
+    if (!empty($net['resolve_ip'])) $modes[] = 'dns';
+    if (!empty($net['worker_url'])) $modes[] = 'worker';
+    if (!empty($net['proxy'])) $modes[] = 'proxy';
+    $headers = ['Content-Type: application/json'];
+    if ($apiKey !== '') $headers[] = 'Authorization: Bearer ' . $apiKey;
+    $payload = ['model' => $model, 'max_tokens' => 4, 'messages' => [['role' => 'user', 'content' => 'ping']]];
+    $out = [];
+    foreach ($modes as $m) {
+        $t0 = microtime(true);
+        $r = aiHttp($url, $headers, $payload, $net, $m);
+        $diag = aiTestNetworkFailure($r);
+        $msg = aiHttpErrorMessage($r);
+        $code = (int)($r['code'] ?? 0);
+        $proxyFailure = aiProxyLevelFailure($r, $m);
+        $out[$m] = [
+            'mode' => $m, 'reached' => ($code > 0 && ($diag['cat'] ?? '') !== 'port' && !$proxyFailure), 'ok' => $code >= 200 && $code < 300,
+            'http' => $code, 'diag' => (string)($diag['cat'] ?? ''),
+            'label' => (string)($diag['label'] ?? ''), 'error' => mb_substr($msg, 0, 220),
+            'via' => (string)($r['via'] ?? $m), 'worker_style' => (string)($r['worker_style'] ?? ''),
+            'proxy_failure' => $proxyFailure,
+            'ms' => (int)round((microtime(true) - $t0) * 1000),
+        ];
+    }
+    return $out;
+}
+
+function aiFeedbackBestMode(array $probe, array $net): array {
+    $cur = (string)($net['mode'] ?? 'direct');
+    $pick = $cur;
+    $why = 'روش فعلی قابل استفاده است';
+    if (isset($probe[$cur]) && !empty($probe[$cur]['reached']) && ($probe[$cur]['diag'] ?? '') !== 'port' && empty($probe[$cur]['proxy_failure'])) {
+        return ['mode' => $pick, 'why' => $why, 'changed' => false];
+    }
+    foreach (['doh', 'direct', 'dns', 'proxy'] as $m) {
+        if (isset($probe[$m]) && !empty($probe[$m]['reached'])) {
+            $pick = $m;
+            $why = ($cur === 'worker' ? 'Worker خطای مسیر/پورت داد و ' : 'روش فعلی نرسید و ') . $m . ' به اندپوینت رسید';
+            return ['mode' => $pick, 'why' => $why, 'changed' => $pick !== $cur];
+        }
+    }
+    return ['mode' => $pick, 'why' => 'هیچ روش جایگزینی به اندپوینت نرسید؛ فقط گزارش شد', 'changed' => false];
+}
+
+function aiFeedbackStoreResult(array &$providers, string $pid, int $idx, string $mid, array $r, array $j, int $latency, string $testMsg): void {
+    $ok = !empty($j['ok']);
+    $code = (int)($j['code'] ?? 0);
+    $providers[$pid]['models'][$idx]['tested'] = true;
+    $providers[$pid]['models'][$idx]['available'] = $ok;
+    $providers[$pid]['models'][$idx]['rateLimited'] = false;
+    if ($ok) unset($providers[$pid]['models'][$idx]['billingIssue']);
+    $providers[$pid]['models'][$idx]['testDetails'] = [
+        'status' => $code, 'error' => mb_substr((string)($j['error'] ?? ''), 0, 300),
+        'response' => mb_substr((string)($j['response'] ?? ''), 0, 300),
+        'testMsg' => $testMsg, 'testCat' => '', 'latencyMs' => $latency,
+        'testedAt' => gmdate('c'), 'raw' => mb_substr((string)($r['raw'] ?? ''), 0, 4000),
+        'via' => (string)($r['via'] ?? ''), 'kind' => (string)($j['kind'] ?? ''),
+        'note' => (string)($j['note'] ?? ''), 'feedbackFix' => true,
+        'workerStyle' => (string)($r['worker_style'] ?? ''),
+    ];
+}
+
+if (isset($_GET['ai_feedback_fix'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(0);
+    $apply = !empty($_GET['apply']) && $_GET['apply'] !== 'false';
+    $limit = max(1, min(80, (int)($_GET['limit'] ?? 25)));
+    $testMsg = trim((string)($_GET['msg'] ?? 'سلام'));
+    if ($testMsg === '') $testMsg = 'سلام';
+
+    $cn = loadConnections();
+    $net = aiNetCfg($cn);
+    foreach (['mode','resolve_ip','doh_url','worker_url','proxy','proxy_type','proxy_auth'] as $k) {
+        if (isset($_GET['net_' . $k])) $net[$k] = trim((string)$_GET['net_' . $k]);
+    }
+    if (isset($_GET['net_fallback'])) $net['fallback'] = !empty($_GET['net_fallback']) && $_GET['net_fallback'] !== 'false';
+    if (isset($_GET['net_timeout'])) $net['timeout'] = max(5, min(120, (int)$_GET['net_timeout']));
+    $origWorker = (string)($net['worker_url'] ?? '');
+    $normWorker = aiWorkerNormalizeUrl($origWorker);
+    if ($normWorker !== $origWorker) $net['worker_url'] = $normWorker;
+
+    $providers = aiProvidersLoad();
+    $active = aiActiveConfig();
+    $probe = [];
+    $best = ['mode' => (string)($net['mode'] ?? 'direct'), 'why' => 'ارائه‌دهندهٔ فعال برای probe پیدا نشد', 'changed' => false];
+    $probeProvider = '';
+    if (!empty($active['provider']) && (string)($active['model'] ?? '') !== '') {
+        $ap = (array)$active['provider'];
+        $probeProvider = (string)($ap['name'] ?? ($ap['id'] ?? ''));
+        $pk = aiPickApiKey($ap, (string)($ap['id'] ?? ''));
+        $ep = aiProviderEndpoint($ap, (string)$active['model']);
+        if (!empty($ep['url'])) {
+            $probe = aiFeedbackProbeModes($net, (string)$ep['url'], (string)($pk['key'] ?? ''), (string)$active['model']);
+            $best = aiFeedbackBestMode($probe, $net);
+        }
+    }
+
+    $fixNet = $net;
+    $changes = [];
+    if ($normWorker !== $origWorker) $changes[] = 'Worker URL normalized';
+    if (!empty($best['changed'])) {
+        $fixNet['mode'] = (string)$best['mode'];
+        $fixNet['fallback'] = true;
+        $changes[] = 'AI network mode -> ' . $best['mode'];
+    }
+    if ($apply && ($changes || $normWorker !== $origWorker)) {
+        if (!isset($cn['ai_net']) || !is_array($cn['ai_net'])) $cn['ai_net'] = [];
+        $cn['ai_net']['worker_url'] = (string)($fixNet['worker_url'] ?? '');
+        $cn['ai_net']['mode'] = (string)($fixNet['mode'] ?? 'direct');
+        $cn['ai_net']['fallback'] = !empty($fixNet['fallback']);
+        saveConnections($cn);
+    }
+
+    $targets = [];
+    $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0];
+    foreach ($providers as $pid => $p) {
+        if (($p['enabled'] ?? true) === false) continue;
+        foreach ((array)($p['models'] ?? []) as $idx => $m) {
+            if (!is_array($m)) continue;
+            $mid = (string)($m['id'] ?? '');
+            if ($mid === '') continue;
+            $sr = aiFeedbackSkipReason($m);
+            if ($sr !== '') { if (isset($skipped[$sr])) $skipped[$sr]++; continue; }
+            $targets[] = ['pid'=>(string)$pid, 'idx'=>(int)$idx, 'mid'=>$mid];
+            if (count($targets) >= $limit) break 2;
+        }
+    }
+
+    $results = [];
+    $fixed = 0; $stillFailed = 0; $nowExcluded = 0;
+    foreach ($targets as $t) {
+        $pid = (string)$t['pid']; $idx = (int)$t['idx']; $mid = (string)$t['mid'];
+        if (!isset($providers[$pid])) continue;
+        $t0 = microtime(true);
+        $r = aiProviderCall((array)$providers[$pid], $mid,
+            ['messages'=>[['role'=>'user','content'=>$testMsg]], 'temperature'=>0.2, 'max_tokens'=>300], $fixNet);
+        $lat = (int)round((microtime(true) - $t0) * 1000);
+        $j = aiTestJudge($r, $mid, $pid);
+        $code = (int)($j['code'] ?? 0);
+        $excluded = ((string)($j['billing'] ?? '') !== '' || strpos((string)($j['kind'] ?? ''), 'billing') === 0 || $code === 429);
+        if ($excluded) {
+            $nowExcluded++;
+        } else {
+            if ($apply) aiFeedbackStoreResult($providers, $pid, $idx, $mid, $r, $j, $lat, $testMsg);
+            if (!empty($j['ok'])) $fixed++; else $stillFailed++;
+        }
+        $results[] = ['provider'=>$pid, 'model'=>$mid, 'ok'=>!empty($j['ok']), 'code'=>$code,
+            'kind'=>(string)($j['kind'] ?? ''), 'billing'=>(string)($j['billing'] ?? ''),
+            'diag'=>(string)($j['diag']['cat'] ?? ''), 'error'=>mb_substr((string)($j['error'] ?? ''), 0, 180),
+            'via'=>(string)($r['via'] ?? ''), 'latencyMs'=>$lat, 'saved'=>$apply && !$excluded];
+    }
+    if ($apply && $results) aiProvidersSave($providers);
+
+    echo json_encode(['ok'=>true, 'applied'=>$apply, 'probe_provider'=>$probeProvider,
+        'probe'=>$probe, 'recommended'=>$best, 'net_before'=>aiNetPublic($net), 'net_after'=>aiNetPublic($fixNet),
+        'changes'=>$changes, 'limit'=>$limit, 'candidates'=>count($targets),
+        'fixed'=>$fixed, 'still_failed'=>$stillFailed, 'excluded_after_retest'=>$nowExcluded,
+        'skipped'=>$skipped, 'results'=>$results,
+        'summary'=>($apply ? 'حلقهٔ فیدبک اجرا و تغییرهای مجاز ذخیره شد' : 'حلقهٔ فیدبک در حالت گزارش اجرا شد')], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -32519,8 +32816,8 @@ if (isset($_GET['selftest'])) {
     $add('10.18', '۳۱ب: خطای موقت (۵xx) نامزدِ تلاشِ دوباره است',
          aiTestRetryable(['ok' => false, 'code' => 500, 'kind' => '', 'billing' => '', 'diag' => []]) !== '');
 
-    $add('10.18', '۳۱ب: محدودیتِ نرخ (۴۲۹) نامزدِ تلاشِ دوباره است',
-         aiTestRetryable(['ok' => false, 'code' => 429, 'kind' => '', 'billing' => '', 'diag' => []]) !== '');
+    $add('10.18', '۳۱ب/۱۰.۲۱۸: محدودیتِ نرخ (۴۲۹) رفعِ کدی ندارد و دوباره تلاش نمی‌شود',
+         aiTestRetryable(['ok' => false, 'code' => 429, 'kind' => '', 'billing' => '', 'diag' => []]) === '');
 
     $add('10.18', '۳۱ب: خطای شبکه/تایم‌اوت نامزدِ تلاشِ دوباره است',
          aiTestRetryable(['ok' => false, 'code' => 0, 'kind' => '', 'billing' => '',
@@ -37471,6 +37768,29 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.217', 'ورودیِ 10.217 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "217'") !== false
       && version_compare(APP_VERSION, '10.' . '217', '>='));
+
+    /* ---------- v10.218: فیدبک رفع AI و Worker بدون خطای پورت ---------- */
+    $add('10.218', 'Worker URL هوش مصنوعی با query encoded ساخته می‌شود نه path خامِ https://',
+         function_exists('aiWorkerBuild' . 'RequestUrl')
+      && strpos($selfSrc, "'query:url'") !== false
+      && strpos($selfSrc, "aiWorkerBuild" . "RequestUrl((string)(\$net['worker_url']") !== false);
+    $add('10.218', 'اندپوینت فیدبک AI برای رفع غیر credit/rate-limit وجود دارد',
+         strpos($selfSrc, "isset(\$_GET['ai_" . "feedback_fix'])") !== false
+      && function_exists('aiFeedbackSkip' . 'Reason')
+      && function_exists('aiFeedbackProbe' . 'Modes'));
+    $add('10.218', 'دکمه و تابع UI فیدبک AI در تب تست مدل‌ها وجود دارد',
+         strpos($selfSrc, 'function aiFeedback' . 'Fix()') !== false
+      && strpos($selfSrc, 'فیدبک و رفع خطاهای غیر اعتباری') !== false
+      && strpos($selfSrc, 'aiFix' . 'TR') !== false);
+    $add('10.218', 'خطای پورت Worker از متن خام تشخیص داده می‌شود',
+         function_exists('aiHttpError' . 'Message')
+      && strpos($selfSrc, "'bad port'") !== false
+      && strpos($selfSrc, "'invalid port'") !== false);
+    $add('10.218', 'ریت‌لیمیت ۴۲۹ در حلقهٔ رفع، fixable/retryable نیست',
+         aiTestRetryable(['ok' => false, 'code' => 429, 'kind' => '', 'billing' => '', 'diag' => []]) === '');
+    $add('10.218', 'ورودیِ 10.218 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "218'") !== false
+      && version_compare(APP_VERSION, '10.' . '218', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -47323,12 +47643,10 @@ $modelUsed=$rData['model']??$modelId;
 $usage=$rData['usage']??[];
 echo json_encode(['ok'=>true,'message'=>'اتصال AI موفق!','response'=>$aiText,'model'=>$modelUsed,'usage'=>$usage,'via'=>$r['via']??'','tried'=>$r['tried']??[],'provider'=>$provider['name']??$providerId],JSON_UNESCAPED_UNICODE);
 }else{
-$errBody=$r['body']??[];
-$errMsg=$errBody['error']['message']??($errBody['message']??'HTTP '.$httpCode);
-// v9.30: پیام خطای دقیق Cloudflare را نشان بده (قبلاً فقط «HTTP 400» می‌آمد)
-if (!empty($r['cf_error'])) $errMsg = $r['cf_error'];
+$errMsg=aiHttpErrorMessage($r);
+if($errMsg==='')$errMsg='HTTP '.$httpCode;
 if($httpCode===401)$errMsg='کلید API نامعتبر (۴۰۱)';
-elseif($httpCode===0)$errMsg='خطا ارتباط با سرور AI: '.($r['error']??'').' — روش عبور را عوض کنید';
+elseif($httpCode===0)$errMsg='خطا ارتباط با سرور AI: '.($errMsg!==''?$errMsg:($r['error']??'')).' — روش عبور را عوض کنید';
 // v9.32: آدرس دقیق و مدل‌های امتحان‌شده را هم بده تا قابل‌تشخیص باشد
 $cfInfo = '';
 if (!empty($r['cf_url'])) $cfInfo = ' | آدرس: ' . $r['cf_url'];
@@ -47972,18 +48290,15 @@ $t0 = microtime(true);
 $payload = ['messages'=>[['role'=>'user','content'=>$testMsg]], 'temperature'=>0.3, 'max_tokens'=>300];
 $r = aiProviderCall($pRun, $mid, $payload, aiNetCfg());
 $latency = (int)round((microtime(true) - $t0) * 1000);
-$code = (int)$r['code'];
-$ok = $code === 200;
-$body = $r['body'] ?? [];
-$response = $ok ? aiExtractAnswer($body) : '';   // v9.54: استخراج مقاوم · v9.94: بدون بلوکِ فکر
-$err = $ok ? '' : ($body['error']['message'] ?? ($body['message'] ?? ($r['error'] ?? ('HTTP '.$code))));
-$rateLimited = in_array($code, [429], true);
-/* v10.01 (۱۵): تستِ تکی هم مثل تستِ گروهی از همان «داورِ» مشترک عبور می‌کند.
-   تا پیش از این، دستهٔ خطا (kind/note) و مهم‌تر از آن پرچمِ billingIssue فقط
-   در مسیرِ گروهی نوشته می‌شد؛ نتیجه اینکه اگر کاربر یک مدل را تکی تست می‌کرد
-   و کلید اعتبارش تمام بود، آن مدل «رد» می‌شد ولی بعد از افزودنِ کلیدِ تازه
-   آزاد نمی‌شد. حالا هر دو مسیر یکسان‌اند. */
+/* v10.218: تستِ تکی هم دقیقاً با داور مشترک قضاوت می‌شود؛ HTTP 200 با
+   پاسخِ بی‌معنی/خالی دیگر به‌اشتباه سبز نمی‌شود و متن خطای Worker خام هم
+   نمایش داده می‌شود. */
 $j = aiTestJudge($r, $mid, $pid);
+$code = (int)$j['code'];
+$ok = !empty($j['ok']);
+$response = (string)$j['response'];
+$err = $ok ? '' : (string)$j['error'];
+$rateLimited = in_array($code, [429], true);
 $details = ['status'=>$code, 'error'=>mb_substr((string)$err,0,300), 'response'=>mb_substr((string)$response,0,300),
             'catResponse'=>(string)$catResponse, 'testMsg'=>$testMsg, 'testCat'=>$testCat,
             'latencyMs'=>$latency, 'testedAt'=>gmdate('c'),
@@ -48600,9 +48915,9 @@ function aiTestJudge(array $r, string $mid, string $pid = ''): array {
     $response = $ok ? aiExtractAnswer($body) : '';
     $err = '';
     if (!$ok) {
-        $err = $body['error']['message'] ?? ($body['message'] ?? ($r['error'] ?? ('HTTP ' . $code)));
+        $err = aiHttpErrorMessage($r);
+        if ($err === '') $err = 'HTTP ' . $code;
         if (is_array($err)) $err = json_encode($err, JSON_UNESCAPED_UNICODE);
-        if (!empty($r['cf_error'])) $err = $r['cf_error'];
     }
     $diag = aiTestNetworkFailure($r);
     $kind = ''; $note = '';
@@ -48673,12 +48988,14 @@ function aiTestJudge(array $r, string $mid, string $pid = ''): array {
  *  تا سه بار با تایم‌اوتِ فزاینده دوباره تلاش شوند.»
  *
  *  چرا لازم است: بخشِ بزرگی از قرمزهای یک اجرا موقتی‌اند — تایم‌اوت،
- *  قطعِ اتصال، ۵۰۰/۵۰۲/۵۰۳ سرویس، ۴۲۹ ریت‌لیمیت، خطای DNS/پروکسی. تا
+ *  قطعِ اتصال، ۵۰۰/۵۰۲/۵۰۳ سرویس و خطای DNS/پروکسی. از v10.218،
+ *  ۴۲۹ ریت‌لیمیت مثل credit رفع‌پذیر کدی حساب نمی‌شود و فقط گزارش می‌شود.
  *  اینجا این‌ها همان‌قدر قرمز می‌ماندند که یک مدلِ واقعاً خراب، و کاربر
  *  مجبور بود کلِ تست را از نو بزند.
  *
  *  در مقابل، خطاهایی که تکرارشان بی‌فایده است رد می‌شوند:
  *    • اعتبار/اشتراک/سهمیهٔ تمام‌شده (billing) — خواستهٔ صریحِ کاربر
+ *    • محدودیت نرخ/ریت‌لیمیت (429) — با کد رفع نمی‌شود؛ فقط گزارش می‌شود
  *    • مدلِ ناموجود/غیرچت (badmodel) و ۴۰۱/۴۰۳/۴۰۴ — با تکرار درست نمی‌شود
  *    • پاسخِ بی‌معنی (bogus) — مدل جواب داد، فقط جوابش بی‌ربط بود
  *
@@ -48691,10 +49008,10 @@ function aiTestRetryable(array $j): string {
     /* اعتبار/اشتراک — طبقِ خواستهٔ کاربر هرگز دوباره تلاش نمی‌شود */
     if ((string)($j['billing'] ?? '') !== '' || strpos($kind, 'billing') === 0) return '';
     if ($kind === 'badmodel' || $kind === 'bogus') return '';
+    if ($code === 429) return ''; // v10.218: rate-limit قابلِ رفعِ کدی نیست؛ در feedback فقط گزارش می‌شود
     if (in_array($code, [400, 401, 403, 404, 405, 422], true)) return '';
     $cat = (string)($j['diag']['cat'] ?? '');
     if ($code === 0) return 'خطای شبکه/اتصال';                   // تایم‌اوت، DNS، refused
-    if ($code === 429) return 'محدودیتِ نرخ (۴۲۹)';
     if ($code >= 500) return 'خطای موقتِ سرویس (' . $code . ')';
     if ($kind === 'proxy' || $cat === 'proxy') return 'خطای مسیرِ عبور';
     if (in_array($cat, ['dns','timeout','refused','connect','ssl','network'], true)) return 'خطای شبکه';
@@ -59629,6 +59946,10 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div class="cact" style="margin-top:4px">
 <button class="btn" onclick="aiTestUnstick()" style="flex:1;background:#7c2d12;border-color:#9a3412" title="اگر تست وسطِ کار گیر کرده (پردازهٔ پس‌زمینه مرده)، قفل را آزاد می‌کند و از همان‌جا که مانده ادامه می‌دهد — مدل‌های تست‌شده دوباره تست نمی‌شوند">🔧 رفعِ گیر و ادامه</button>
 </div>
+<div class="cact" style="margin-top:4px">
+<button class="btn btn-orange" onclick="aiFeedbackFix()" style="flex:1" title="Worker/DoH/direct را با اندپوینت واقعی می‌سنجد و فقط خطاهای غیرِ credit و غیرِ rate-limit را دوباره تست/اصلاح می‌کند">🧭 فیدبک و رفع خطاهای غیر اعتباری</button>
+</div>
+<div id="aiFixTR" style="margin-top:8px"></div>
 
 <!-- ═══════════════════════════════════════════════════════════════════
      v10.36 (۴۹د): کارت‌های شمارندهٔ تفصیلی و آماری زیرِ دکمه‌های تست.
@@ -59739,7 +60060,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <details class="hint-mini" style="margin:-4px 0 6px"><summary>راهنمای Worker</summary>
 <div class="hint-body" style="font-size:10px;color:#64748b;line-height:1.8">
 💡 کد آمادهٔ Worker را با دکمهٔ «📄 کد Worker» بگیرید و در حساب رایگان Cloudflare بگذارید.<br>
-اگر آدرس شامل <code style="direction:ltr">{url}</code> باشد، آدرس مقصد جای آن می‌نشیند.
+پیش‌فرض امن از <code style="direction:ltr">?url=...</code> و هدر <code style="direction:ltr">X-Target-URL</code> استفاده می‌کند تا خطای پورت Worker رخ ندهد. اگر آدرس شامل <code style="direction:ltr">{url}</code> باشد، آدرس مقصدِ encoded جای آن می‌نشیند.
 </div></details>
 <div class="cact" style="margin-top:0"><button class="btn btn-gray" onclick="aiShowWorkerCode()" style="flex:1;font-size:11px">📄 کد Worker</button></div>
 </div>
@@ -67989,6 +68310,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.218', t:'🧭 فیدبک رفع AI · 🔌 اصلاح خطای پورت Worker · 🚦 تفکیک rate/credit', items:[
+    'مسیر Cloudflare Worker برای درخواست‌های هوش مصنوعی دیگر URL کامل مقصد را خام داخل path نمی‌گذارد؛ مقصد به‌صورت encoded در ?url= و هدرهای X-Target-* فرستاده می‌شود تا خطاهای bad/invalid port رفع شوند.',
+    'اندپوینت ?ai_feedback_fix=1 اضافه شد: direct/DoH/Worker را روی اندپوینت واقعی ارائه‌دهندهٔ فعال می‌سنجد، Worker خراب را تشخیص می‌دهد و فقط خطاهای غیرِ credit و غیرِ rate-limit را دوباره تست و در حالت apply ذخیره می‌کند.',
+    'در تب تست مدل‌ها دکمهٔ «فیدبک و رفع خطاهای غیر اعتباری» اضافه شد؛ خطاهای سهمیه/اعتبار و ۴۲۹ عمداً رفع‌پذیر حساب نمی‌شوند و فقط گزارش می‌شوند.',
+    'پیام خطای Worker/پروکسی از بدنهٔ خام یا JSON استخراج می‌شود تا به‌جای HTTP 500/400 مبهم، علت‌هایی مثل خطای پورت، مسیر عبور یا پاسخ واسط دیده شود.',
+  ]},
   {v:'10.217', t:'📦 منبع محصول GitHub · 🧪 تست جامع پروفایل‌ها · 🔍 مودال تمام‌صفحه سلکتورها', items:[
     'در تب شروع، برای هر پروفایل منبع محصولات اضافه شد: استخراج مستقیم یا دریافت از فایل CSV/Excel روی GitHub؛ با انتخاب GitHub فیلدهای repo/branch/file نمایش داده و فیلدهای مستقیم پنهان می‌شوند.',
     'فهرست branch و فایل‌های CSV/Excel به‌صورت خودکار از GitHub (یا fallback محلی همان checkout) پر می‌شود و محصول واردشده با همان ساختار داخلی اسکرپر ذخیره می‌شود تا مسیر ووکامرس/باسلام/افزونهٔ وردپرس دست‌نخورده بماند.',
@@ -77841,11 +78168,12 @@ function aiShowWorkerCode(){
 "    };",
 "    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });",
 "",
-"    // آدرس مقصد: از هدر X-Target-URL یا از مسیر بعد از /",
+"    // آدرس مقصد: اول از هدر، بعد query ?url=، بعد مسیر legacy بعد از /",
 "    let target = request.headers.get('X-Target-URL');",
+"    const u = new URL(request.url);",
+"    if (!target) target = u.searchParams.get('url') || u.searchParams.get('target') || '';",
 "    if (!target) {",
-"      const u = new URL(request.url);",
-"      target = u.pathname.slice(1) + u.search;",
+"      target = u.pathname.slice(1) + (u.search || '');",
 "      if (target.startsWith('https:/') && !target.startsWith('https://'))",
 "        target = target.replace('https:/', 'https://');",
 "      if (target.startsWith('http:/') && !target.startsWith('http://'))",
@@ -77853,9 +78181,17 @@ function aiShowWorkerCode(){
 "    }",
 "    if (!/^https?:\\/\\//.test(target))",
 "      return new Response('bad target', { status: 400, headers: cors });",
+"    let tu;",
+"    try { tu = new URL(target); } catch(e) {",
+"      return new Response('bad target url', { status: 400, headers: cors });",
+"    }",
+"    if ((tu.protocol === 'https:' && tu.port === '443') || (tu.protocol === 'http:' && tu.port === '80')) tu.port = '';",
+"    target = tu.toString();",
 "",
 "    const h = new Headers(request.headers);",
 "    h.delete('X-Target-URL');",
+"    h.delete('X-Target-Base');",
+"    h.delete('X-Target-Path');",
 "    h.delete('Host');",
 "",
 "    const resp = await fetch(target, {",
@@ -80003,6 +80339,41 @@ function aiShowTestTable(){
         }
     }).catch(()=>{ if($('aiTestCur'))$('aiTestCur').textContent='خطا در خواندن وضعیت'; });
 }
+/* v10.218: حلقهٔ فیدبک AI — خطای Worker/پورت را از endpoint واقعی می‌گیرد
+   و فقط مدل‌های شکست‌خوردهٔ غیرِ credit/rate-limit را دوباره تست و ذخیره می‌کند. */
+function aiFeedbackFix(){
+    const box=$('aiFixTR')||$('aiTR');
+    if(box)box.innerHTML='<div class="alert alert-info" style="padding:8px;font-size:11px">🧭 حلقهٔ فیدبک در حال اجراست: probe مسیرها + تست دوبارهٔ خطاهای قابل رفع...</div>';
+    const n=getAiNet();
+    const q=new URLSearchParams({ai_feedback_fix:'1',apply:'1',limit:'25',
+        msg:(($('aiTestMsg')&&$('aiTestMsg').value.trim())||'سلام'),
+        net_mode:n.mode,net_resolve_ip:n.resolve_ip,net_doh_url:n.doh_url,
+        net_worker_url:n.worker_url,net_proxy:n.proxy,net_proxy_type:n.proxy_type,
+        net_proxy_auth:n.proxy_auth,net_timeout:String(n.timeout),net_fallback:String(n.fallback)});
+    fetch('?'+q.toString()).then(r=>r.json()).then(d=>{
+        if(!d||!d.ok){ if(box)box.innerHTML='<div style="background:#7f1d1d;color:#fca5a5;padding:8px;font-size:11px">✗ '+esc((d&&d.error)||'خطا')+'</div>'; return; }
+        if(d.net_after){ const nn=Object.assign({},d.net_after); if(nn.proxy_auth==='***')nn.proxy_auth=n.proxy_auth; applyAiNet(nn); }
+        let h='<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;font-size:11px;line-height:1.9">';
+        h+='<div style="color:#fbbf24;font-weight:800;margin-bottom:6px">🧭 نتیجهٔ فیدبک و رفع AI</div>';
+        h+='<div style="color:#94a3b8">'+esc(d.summary||'')+'</div>';
+        if(d.recommended)h+='<div>روش پیشنهادی: <b style="color:#67e8f9">'+esc(d.recommended.mode||'')+'</b> — <span style="color:#94a3b8">'+esc(d.recommended.why||'')+'</span></div>';
+        if((d.changes||[]).length)h+='<div style="color:#4ade80">تغییرها: '+esc((d.changes||[]).join(' · '))+'</div>';
+        h+='<div>کاندیدا: '+toFa(d.candidates||0)+' · رفع‌شده: <b style="color:#4ade80">'+toFa(d.fixed||0)+'</b> · هنوز ناموفق: <b style="color:#fca5a5">'+toFa(d.still_failed||0)+'</b> · credit/rate رد شد: '+toFa(((d.skipped&&((d.skipped.billing||0)+(d.skipped.ratelimit||0)))||0)+(d.excluded_after_retest||0))+'</div>';
+        if(d.probe){
+            h+='<div style="margin-top:6px;color:#67e8f9;font-weight:700">Probe مسیرها</div>';
+            ['direct','doh','worker','proxy','dns'].forEach(k=>{const m=d.probe[k]; if(!m)return; h+='<div>'+(m.reached?'🟢':'🔴')+' '+esc(k)+' — HTTP '+toFa(m.http||0)+' · '+esc(m.label||m.error||'')+(m.worker_style?' · '+esc(m.worker_style):'')+'</div>';});
+        }
+        if((d.results||[]).length){
+            h+='<details style="margin-top:6px"><summary style="cursor:pointer;color:#c4b5fd">جزئیات مدل‌های دوباره‌تست‌شده</summary><div style="max-height:180px;overflow:auto;margin-top:4px">';
+            d.results.slice(0,40).forEach(x=>{h+='<div style="border-top:1px solid #1e293b;padding:3px 0">'+(x.ok?'✅':'❌')+' <span dir="ltr">'+esc(x.provider||'')+' / '+esc(x.model||'')+'</span> — HTTP '+toFa(x.code||0)+' · '+esc(x.kind||x.diag||'')+' · '+esc(x.error||'')+'</div>';});
+            h+='</div></details>';
+        }
+        h+='</div>';
+        if(box)box.innerHTML=h;
+        try{ aiStatsLoad(); }catch(e){}
+    }).catch(()=>{ if(box)box.innerHTML='<div style="background:#7f1d1d;color:#fca5a5;padding:8px;font-size:11px">✗ خطای شبکه در اجرای فیدبک</div>'; });
+}
+
 /* v9.99: «رفعِ گیر» — وقتی پردازهٔ پس‌زمینهٔ تست مرده ولی وضعیت روی «در حال
    اجرا» مانده، قفل را آزاد می‌کند و تست را از همان‌جا که مانده ادامه می‌دهد.
    چون نتیجهٔ هر دور بلافاصله ذخیره شده، مدل‌های تست‌شده دوباره تست نمی‌شوند. */
