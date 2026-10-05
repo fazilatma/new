@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.197';
+const APP_VERSION = '10.198';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9743,6 +9743,20 @@ function s4LaunchRenderService(array $rcfg, bool $force = false): array {
     return ['ok'=>$pid > 0, 'started'=>$pid > 0, 'pid'=>$pid, 'port'=>$port,
             'log'=>basename(dirname($log)) . '/' . basename($log),
             'error'=>$pid > 0 ? '' : 'failed to spawn render service'];
+}
+
+function s4RenderLogTail(int $lines = 80): string {
+    $lines = max(10, min(250, $lines));
+    $log = __DIR__ . '/logs/render.log';
+    if (!is_file($log)) return '';
+    if (function_exists('shell_exec')) {
+        $txt = (string)@shell_exec('tail -n ' . (int)$lines . ' ' . escapeshellarg($log) . ' 2>/dev/null');
+        if ($txt !== '') return mb_substr($txt, -20000);
+    }
+    $txt = (string)@file_get_contents($log);
+    $rows = preg_split("~\R~", $txt) ?: [];
+    return mb_substr(implode("
+", array_slice($rows, -$lines)), -20000);
 }
 
 /* لایهٔ تصمیم: واکشِ ایستا یا رندر. فقط برای صفحه‌های فهرست استفاده می‌شود
@@ -28083,6 +28097,9 @@ if (isset($_GET['render_probe'])) {
     }
     $out['ms'] = (int)round((microtime(true) - $t0) * 1000);
     $out = array_merge($out, $hc);
+    if (isset($_GET['log']) || isset($_GET['tail'])) {
+        $out['log_tail'] = s4RenderLogTail((int)($_GET['lines'] ?? 100));
+    }
     if (empty($out['ok'])) {
         $launchHint = (isset($_GET['launch']) || isset($_GET['start'])) ? '' : ' برای راه‌اندازی محدود از همین عیب‌یاب، launch=1 را هم بفرستید.';
         $out['diagnosis'] = $renderDisabledNote . 'به سرویس رندر وصل نشد — سرویس browser-php/start.sh باید روی 127.0.0.1:3100 بالا باشد.' . $launchHint
@@ -36565,6 +36582,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.197', 'ورودیِ 10.197 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "197'") !== false
       && version_compare(APP_VERSION, '10.' . '197', '>='));
+
+    /* ---------- v10.198: لاگ عیب‌یابی رندر ---------- */
+    $add('10.198', 'render_probe با log=1 انتهای لاگ سرویس رندر را نشان می‌دهد',
+         function_exists('s4RenderLog' . 'Tail')
+      && strpos($selfSrc, "isset(\$_GET['log'])") !== false
+      && strpos($selfSrc, "['log_tail'] =") !== false);
+    $add('10.198', 'ورودیِ 10.198 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "198'") !== false
+      && version_compare(APP_VERSION, '10.' . '198', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66755,6 +66781,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.198', t:'🧾 لاگ عیب‌یابی سرویس رندر', items:[
+    'render_probe با پارامتر log=1 انتهای logs/render.log را برمی‌گرداند تا علت نبودن Chrome یا chromedriver در همان حلقهٔ فیدبک مشخص شود',
+  ]},
   {v:'10.197', t:'🧰 ترمیم باینری‌های رندر مرورگری', items:[
     'bootstrap مرورگر، فایل‌های chrome/chromedriver استخراج‌شده را executable می‌کند تا دانلود موفق به دلیل مجوز فایل در health ناموجود دیده نشود',
     'سرویس رندر هنگام جست‌وجوی باینری، در صورت امکان مجوز اجرا را ترمیم می‌کند و render_probe با launch=1&force=1 می‌تواند سرویس را برای ترمیم مرورگر بازراه‌اندازی کند',
