@@ -19,7 +19,7 @@ async function bundle(runtime,before=false){
  b.onLoad({filter:/.*/,namespace:'rendered'},()=>({contents:`export const renderPythonPlaywright=async(url)=>({html:globalThis.__parserRendered,finalUrl:url,httpStatus:200});`}));
  if(original)b.onLoad({filter:new RegExp(runtime+'-src/scraper.ts$')},()=>({contents:original,loader:'ts',resolveDir:join(root,runtime+'-src')}));
  b.onResolve({filter:/^(\.\/network\.js|\.\/db\.js|\.\/connections\.js)$/},a=>({path:a.path,namespace:'mock'}));
- b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:a.path.includes('network')?`export const safeText=(...a)=>globalThis.__parserDownload(...a),safeTextViaWorker=safeText,sourceRoute=()=> 'direct',assertPublicUrl=async()=>{},safeFetch=async()=>{throw Error('Unexpected network')};`:a.path.includes('connections')?'export const loadConnections=async()=>({ai:{network:{}}});':'export const getState=async(_k,value)=>value;'}));
+ b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:a.path.includes('network')?`export const safeText=(...a)=>globalThis.__parserDownload(...a),safeTextViaWorker=safeText,sourceRoute=()=> 'direct',assertPublicUrl=async()=>{},safeFetch=async()=>{throw Error('Unexpected network')},probeSource=async()=>{throw Error('Unexpected network probe')},probeSourceViaWorker=probeSource;`:a.path.includes('connections')?'export const loadConnections=async()=>({ai:{network:{}}});':'export const getState=async(_k,value)=>value; export const setState=async()=>{};'}));
  }}]});return req(outfile);
 }
 

@@ -78,7 +78,26 @@ function ensureTextResponse(text:string,contentType:string,url:string):void{
 async function responseText(response:Response,url:string):Promise<{text:string;url:string;contentType:string}>{
   if(!response.ok)throw new Error(`HTTP ${response.status} from ${url}`);const contentType=response.headers.get('content-type')||'',bytes=new Uint8Array(await response.arrayBuffer()),text=decodeResponseBody(bytes,contentType),finalUrl=response.headers.get('x-scraper-final-url')||url;ensureTextResponse(text,contentType,finalUrl);return{text,url:finalUrl,contentType};
 }
-export async function safeText(raw:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{return responseText(await safeFetch(raw,{},maxBytes),raw)}
+export async function safeText(raw:string,maxBytes=8_000_000,init:ApiRequestInit={}):Promise<{text:string;url:string;contentType:string}>{return responseText(await safeFetch(raw,init,maxBytes),raw)}
+/**
+ * Raw probe for the connection feedback loop (worker-src/connection-loop.ts).
+ *
+ * Unlike safeText it NEVER throws on a refusal: the whole point of the loop is to read the
+ * refusal — status code, challenge markup, empty body — and let it choose the next request
+ * shape. Only transport failures (timeout/DNS) still reject. Twin: render-src/network.ts.
+ */
+export type SourceProbe={status:number;text:string;url:string;contentType:string;cookie:string};
+function cookieJar(response:Response):string{return (response.headers.get('set-cookie')||'').split(/,(?=[^;=]+=)/).map(part=>part.split(';')[0]!.trim()).filter(Boolean).join('; ')}
+export async function probeSource(raw:string,init:ApiRequestInit={},maxBytes=4_000_000):Promise<SourceProbe>{
+  const response=await safeFetch(raw,init,maxBytes),contentType=response.headers.get('content-type')||'',bytes=new Uint8Array(await response.arrayBuffer());
+  return {status:response.status,text:decodeResponseBody(bytes,contentType),url:response.headers.get('x-scraper-final-url')||raw,contentType,cookie:cookieJar(response)};
+}
+export async function probeSourceViaWorker(raw:string,workerUrl:string,headers:Record<string,string>={},maxBytes=4_000_000):Promise<SourceProbe>{
+  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);
+  if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');
+  const probe=await probeSource(sourceWorkerUrl(base,target),{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml',...headers},apiMode:Boolean(headers['x-proxy-ua'])},maxBytes);
+  return {...probe,url:target};
+}
 /**
  * Normalises a user-entered proxy/Worker address.
  *
@@ -96,8 +115,8 @@ export function normalizeProxyUrl(raw:string):string{
   if(value.startsWith('/'))throw new Error(`آدرس پراکسی «${value}» نسبی است؛ باید با https:// شروع شود.`);
   return 'https://'+value.replace(/^\/+/,'');
 }
-export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_000_000):Promise<{text:string;url:string;contentType:string}>{
-  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=sourceWorkerUrl(base,target);const response=await fetchSourceGateway(target,gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml'}},options=>safeFetch(gateway,{...options,apiMode:new Headers(options.headers).has('x-proxy-ua')},maxBytes));
+export async function safeTextViaWorker(raw:string,workerUrl:string,maxBytes=8_000_000,extraHeaders:Record<string,string>={}):Promise<{text:string;url:string;contentType:string}>{
+  const target=assertPublicUrl(raw).href,base=normalizeProxyUrl(workerUrl);if(!base)throw new Error('برای اتصال غیرمستقیم، Worker URL را در تنظیمات روش اتصال وارد کنید.');const gateway=sourceWorkerUrl(base,target);const response=await fetchSourceGateway(target,gateway,{headers:{'x-target-url':target,accept:'text/html,application/xhtml+xml',...extraHeaders}},options=>safeFetch(gateway,{...options,apiMode:new Headers(options.headers).has('x-proxy-ua')},maxBytes));
   if(!response.ok)throw new Error(`HTTP ${response.status} from ${target} (route: worker, attempts: ${sourceGatewayAttempts(response).join(' → ')}); پاسخ می‌تواند از پراکسی یا مبدأ باشد.`);
   const result=await responseText(response,target);return {...result,url:target};
 }

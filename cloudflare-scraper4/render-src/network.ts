@@ -139,7 +139,26 @@ export type ApiRequestInit = RequestInit & {
    * the same profile works on the Worker.
    */
   indirect?: boolean;
+  /**
+   * Skip the learned connection recipe. Set by the connection feedback loop itself: while the
+   * loop is measuring one request shape, silently merging a remembered shape on top of it
+   * would make every attempt untrustworthy.
+   */
+  noRecipe?: boolean;
 };
+
+/**
+ * Hooks installed by render-src/connection-heal.ts so every source fetch of this runtime
+ * replays the request shape the host already accepted, and one block-shaped failure heals
+ * itself instead of failing identically forever. Twin: sourceText() in worker-src/scraper.ts.
+ */
+export type ConnectionRecipeHooks = {
+  learned: (url: string) => Promise<{ headers: Record<string, string>; route: 'direct' | 'worker' } | null>;
+  heal: (url: string, message: string) => Promise<{ headers: Record<string, string>; route: 'direct' | 'worker' } | null>;
+};
+let recipeHooks: ConnectionRecipeHooks | null = null;
+export function registerConnectionRecipe(hooks: ConnectionRecipeHooks | null): void { recipeHooks = hooks; }
+export function connectionRecipeHooks(): ConnectionRecipeHooks | null { return recipeHooks; }
 
 export async function safeBasalamFetch(raw: string, init: ApiRequestInit = {}, maxBytes = 8_000_000): Promise<Response> {
   const { loadConnections } = await import('./connections.js');
@@ -174,6 +193,10 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
   const network = init.directRoute !== true && init.aiEndpoint !== true && sourceNetworkLoader ? await sourceNetworkLoader(raw) : sourceNetwork;
   if (init.directRoute !== true) configureSourceNetwork(network);
   let url = await (init.aiEndpoint === true ? assertAiEndpointUrl(raw) : assertPublicUrl(raw)), throttleRetries = 0;
+  // Replay the request shape this host already accepted (see connection-heal.ts).
+  const learned = recipeHooks && init.directRoute !== true && init.aiEndpoint !== true && init.apiMode !== true && init.noRecipe !== true
+    ? await recipeHooks.learned(url.href).catch(() => null) : null;
+  if (learned) init = { ...init, headers: { ...(learned.headers as any), ...(init.headers as any) }, indirect: init.indirect || learned.route === 'worker' };
   for (let redirects = 0; redirects < 5; redirects++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
@@ -258,6 +281,15 @@ export function ensureTextResponse(text: string, contentType: string, url: strin
 }
 
 export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiRequestInit = {}): Promise<{ text: string; url: string; route: string }> {
+  try { return await safeTextOnce(raw, maxBytes, init); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const healed = recipeHooks && init.noRecipe !== true ? await recipeHooks.heal(raw, message).catch(() => null) : null;
+    if (!healed) throw error;
+    return safeTextOnce(raw, maxBytes, { ...init, headers: { ...(healed.headers as any), ...(init.headers as any) }, indirect: init.indirect || healed.route === 'worker', noRecipe: true });
+  }
+}
+async function safeTextOnce(raw: string, maxBytes: number, init: ApiRequestInit): Promise<{ text: string; url: string; route: string }> {
   const response = await safeFetch(raw, init, maxBytes);
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${raw} (route: ${sourceResponses.get(response)?.route || 'direct'}, attempts: ${sourceGatewayAttempts(response).join(' → ')}); در مسیر worker، این وضعیت می‌تواند از پراکسی یا سایت مبدأ باشد. قرارداد مسیر /https://site یا الگوی ?url={url} و مجوز دامنه در پراکسی را بررسی کنید.`);
   const buffer = await response.arrayBuffer();
@@ -265,4 +297,27 @@ export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiReque
   const text = new TextDecoder().decode(buffer);
   ensureTextResponse(text, response.headers.get('content-type') || '', raw);
   return { text, url: sourceResponses.get(response)?.url || raw, route: sourceResponses.get(response)?.route || 'direct' };
+}
+
+/**
+ * Raw probe for the connection feedback loop (worker-src/connection-loop.ts).
+ *
+ * Twin of probeSource() in worker-src/network.ts: it NEVER throws on a refusal, because the
+ * loop has to read the refusal (status, challenge markup, empty body) to choose the next
+ * request shape. `route` picks the transport explicitly instead of following the saved mode.
+ */
+export type SourceProbe = { status: number; text: string; url: string; contentType: string; cookie: string };
+function cookieJar(response: Response): string {
+  const raw = (response.headers as any).getSetCookie?.().join(', ') || response.headers.get('set-cookie') || '';
+  return String(raw).split(/,(?=[^;=]+=)/).map(part => part.split(';')[0]!.trim()).filter(Boolean).join('; ');
+}
+export async function probeSource(raw: string, init: ApiRequestInit = {}, maxBytes = 4_000_000): Promise<SourceProbe> {
+  const response = await safeFetch(raw, init, maxBytes);
+  const contentType = response.headers.get('content-type') || '';
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > maxBytes) throw new Error(`Response exceeds ${maxBytes} bytes`);
+  return {
+    status: response.status, text: new TextDecoder().decode(buffer), contentType, cookie: cookieJar(response),
+    url: sourceResponses.get(response)?.url || raw
+  };
 }

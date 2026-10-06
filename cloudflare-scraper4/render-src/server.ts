@@ -1,4 +1,5 @@
 import {saveLearnedProfile} from './db.js';
+import { healSourceConnection, forgetSourceRecipe } from './connection-heal.js';
 import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
 import {createBrowserRuntime} from '../scripts/browser-runtime.mjs';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
@@ -61,7 +62,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.324.0+'; } catch { return process.env.npm_package_version || '1.324.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.325.0+'; } catch { return process.env.npm_package_version || '1.325.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -986,6 +987,10 @@ app.delete('/api/destination/:target/:id',async c=>{const target=c.req.param('ta
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=c.req.param('target');if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);if(target==='woo')return c.json({ok:true,result:await syncWoo(product,profile)});if(target==='basalam')return c.json({ok:true,result:await syncBasalam(product,profile)});return c.json({ok:false,error:'Invalid target'},400)});
 app.post('/api/queue-watchdog', async c => { const body=await c.req.json().catch(()=>({})) as any,settings=await getState<any>('settings',{}),stallMin=Number(body.minutes)||Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60)),autoContinue=body.autoContinue??settings.watchdog?.autoContinue!==false;return c.json({ok:true,autoContinue,recovered:autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped:autoContinue?0:await reapStalledJobs(stallMin)}); });
 app.post('/api/source-test', async c => { const body=await c.req.json() as any; const profile=body.profileId?await getProfile(String(body.profileId)):null; const result=await safeText(String(body.url||''),1_000_000,{indirect:Boolean(profile?.networkIndirect)}); return c.json({ok:true,bytes:Buffer.byteLength(result.text),url:result.url,route:result.route,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()}); });
+// 1.325.0 — connection feedback loop (twin of worker-src/app.ts). Each attempt's answer
+// chooses the next request shape; the verified winner is remembered for that host.
+app.post('/api/source/connection-loop', async c => { const body=await c.req.json() as any; const profile=body.profileId?await getProfile(String(body.profileId)):null; const url=String(body.url||profile?.url||'').trim(); if(!url)return c.json({ok:false,error:'آدرس آزمایش را وارد یا یک پروفایل انتخاب کنید.'},400); const listSelector=String(body.listSelector||(profile as any)?.selectors?.container||''); const report=await healSourceConnection(url,{listSelector,maxRounds:Number(body.maxRounds)||undefined,startWith:body.startWith?String(body.startWith):undefined}); return c.json({...report,profile:profile?.name||'',listSelector}); });
+app.post('/api/source/connection-recipe/forget', async c => { const body=await c.req.json() as any; const url=String(body.url||'').trim(); if(!url)return c.json({ok:false,error:'آدرس لازم است.'},400); await forgetSourceRecipe(url); return c.json({ok:true,url}); });
 app.post('/api/test-connection/:target', async c => {
   const target=c.req.param('target'),connections=await loadConnections(true);
   if(target==='woo') { const x=connections.woo;if(!x.url||!x.key||!x.secret)return c.json({ok:false,error:'تنظیمات ووکامرس کامل نیست'},400);const auth=`Basic ${Buffer.from(`${x.key}:${x.secret}`).toString('base64')}`,r=await safeFetch(x.url+'/wp-json/wc/v3/system_status',{headers:{authorization:auth,accept:'application/json'}},2_000_000);return c.json({ok:r.ok,code:r.status}); }

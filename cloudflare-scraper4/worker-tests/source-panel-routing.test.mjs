@@ -22,7 +22,7 @@ await build({entryPoints:[join(root,'worker-src/scraper.ts')],outfile:join(dir,'
   b.onLoad({filter:/.*/,namespace:'worker-state'},args=>({contents:args.path.includes('connections')
     ? 'export async function loadConnections(){return {ai:{network:{mode:"direct",workerUrl:"",proxyUrl:""}}}}'
     : args.path.includes('env') ? 'export function getEnv(){return {}}'
-    : 'export async function getState(){return globalThis.__sourcePanelState} export function meterSubrequest(){}'}));
+    : 'export async function getState(){return globalThis.__sourcePanelState} export async function setState(){} export function meterSubrequest(){}'}));
 }}]});
 const worker=await import(pathToFileURL(join(dir,'worker.mjs')));
 
@@ -170,7 +170,10 @@ test('AI endpoints do not inherit the source-site gateway',async()=>{
 test('both runtime entrypoints and dashboard use saved source settings and profile flags',async()=>{
   const read=p=>readFile(join(root,p),'utf8');
   const worker=await read('worker-src/scraper.ts');
-  assert.match(worker,/resolveSourceNetwork\(\(await getState<any>\('settings',\{\}\)\)\?\.source/);
+  // 1.325.0 — the settings lookup moved into connection-heal.ts, which the worker fetch path
+  // calls through sourceNetworkFor(); the saved «روش اتصال مبدأ» still decides every request.
+  assert.match(worker,/const network=await sourceNetworkFor\(url\)/);
+  assert.match(await read('worker-src/connection-heal.ts'),/resolveSourceNetwork\(\(await getState<any>\('settings', \{\}\)\)\?\.source/);
   assert.match(await read('render-src/connections.ts'),/registerSourceNetworkLoader\(async url/);
   assert.match(await read('worker-src/network.ts'),/sourceWorkerUrl\(base,target\)/);
   for(const file of ['worker-src/app.ts','render-src/server.ts']){
@@ -179,7 +182,10 @@ test('both runtime entrypoints and dashboard use saved source settings and profi
   }
   const dashboard=await read('worker-src/dashboard.ts');
   assert.ok(dashboard.includes("if(action==='source-test'){await saveSettings({silent:true});"));
-  assert.ok(dashboard.includes("try{await saveSettings({silent:true});const response=await activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1'"));
+  // The live diagnostic still saves the panel settings before it runs; the two statements were
+  // split across lines when the handler grew its own error branch, so pin them separately.
+  assert.ok(dashboard.includes("try{await saveSettings({silent:true});"));
+  assert.ok(dashboard.includes("activityFetch(U('/api/profiles/'+encodeURIComponent(id)+'/extraction-diagnostic?live=1')"));
 });
 
 test.after(async()=>{await rm(dir,{recursive:true,force:true});});

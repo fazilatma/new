@@ -13,9 +13,9 @@ for (const runtime of ['worker','render']) {
   await build({entryPoints:[join(root,runtime+'-src/scraper.ts')],outfile,bundle:true,platform:'node',format:'esm',packages:'external',logLevel:'silent',plugins:[{name:'offline',setup(b){
     b.onResolve({filter:/^\.\/(network|connections|db)\.js$/},a=>({path:a.path,namespace:'offline'}));
     b.onLoad({filter:/.*/,namespace:'offline'},a=>({contents:a.path.includes('network')
-      ? 'export const safeText=(...args)=>globalThis.__diagnosticFetch(...args); export const safeTextViaWorker=safeText; export const assertPublicUrl=async()=>{throw Error("Unexpected browser network in static fixture")}; export const safeFetch=assertPublicUrl; export const sourceRoute=()=>"direct";'
+      ? 'export const safeText=(...args)=>globalThis.__diagnosticFetch(...args); export const safeTextViaWorker=safeText; export const assertPublicUrl=async()=>{throw Error("Unexpected browser network in static fixture")}; export const safeFetch=assertPublicUrl; export const sourceRoute=()=>"direct"; export const probeSource=async()=>{throw Error("Unexpected network probe in static fixture")}; export const probeSourceViaWorker=probeSource;'
       : a.path.includes('connections') ? 'export const loadConnections=async()=>({ai:{network:{mode:"direct"}}});'
-      : 'export const getState=async()=>({});'}));
+      : 'export const getState=async()=>({}); export const setState=async()=>{};'}));
   }}]});
   twins[runtime]=await import(pathToFileURL(outfile));
 }
