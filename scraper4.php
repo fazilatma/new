@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.226';
+const APP_VERSION = '10.227';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9740,16 +9740,29 @@ function s4JinaUnwrapTargetUrl(string $url): string {
     return $url;
 }
 
-/* v10.220: آدرس‌های قابل امتحان برای Jina Reader. اول آدرس canonical، بعد
-   فرم nested که کاربر برای SnappShop فرستاد، تا اگر یکی روی هاست/سایت خاص
-   جواب نداد دیگری فرصت داشته باشد. */
-function s4JinaReaderUrls(string $url): array {
+/* v10.227: آدرس‌های قابل امتحان برای Jina Reader با برچسب diagnostic:
+   canonical، bridge و در نهایت همان فرم nested درخواست‌شدهٔ SnappShop. */
+function s4JinaReaderUrlVariants(string $url): array {
     $target = s4JinaUnwrapTargetUrl($url);
     if ($target === '') return [];
-    $base = 'https://r.jina.ai/' . $target;
-    $bridge = 'https://r.jina.ai/http://' . $target;
-    $nested = 'https://r.jina.ai/http://r.jina.ai/http://' . $target;
-    return array_values(array_unique([$base, $bridge, $nested]));
+    $defs = [
+        ['kind' => 'canonical', 'url' => 'https://r.jina.ai/' . $target],
+        ['kind' => 'bridge',    'url' => 'https://r.jina.ai/http://' . $target],
+        ['kind' => 'nested',    'url' => 'https://r.jina.ai/http://r.jina.ai/http://' . $target],
+    ];
+    $seen = []; $out = [];
+    foreach ($defs as $d) {
+        $u = (string)$d['url'];
+        if ($u === '' || isset($seen[$u])) continue;
+        $seen[$u] = true;
+        $out[] = $d;
+    }
+    return $out;
+}
+function s4JinaReaderUrls(string $url): array {
+    $urls = [];
+    foreach (s4JinaReaderUrlVariants($url) as $v) $urls[] = (string)($v['url'] ?? '');
+    return array_values(array_filter($urls, fn($u) => $u !== ''));
 }
 
 function s4JinaMarkdownLabel(string $label): string {
@@ -9885,8 +9898,9 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $readerUrl;
         curl_close($ch);
-        return ['ok' => $body !== false && $code >= 200 && $code < 400,
-                'error' => $err ?: 'Empty', 'code' => $code, 'url' => $finalUrl,
+        $ok = $body !== false && $code >= 200 && $code < 400;
+        return ['ok' => $ok,
+                'error' => $ok ? '' : ($err ?: 'Empty'), 'code' => $code, 'url' => $finalUrl,
                 'html' => $body === false ? '' : $body, 'mode' => 'direct', 'jina_reader_via' => 'direct'];
     }
     $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
@@ -9894,24 +9908,65 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
     return $r;
 }
 
+
+function s4JinaReaderTraceEntry(string $via, string $kind, string $readerUrl, array $r, string $target): array {
+    $body = (string)($r['html'] ?? '');
+    $title = '';
+    if ($body !== '' && preg_match('~(?:^|\n)\s*Title:\s*(.+)$~iu', $body, $tm)) {
+        $title = normalize_text((string)$tm[1]);
+    } elseif ($body !== '' && preg_match('~<title[^>]*>(.*?)</title>~isu', $body, $tm)) {
+        $title = normalize_text(strip_tags((string)$tm[1]));
+    }
+    $sample = '';
+    if ($body !== '') {
+        $plain = preg_replace('~<(script|style|noscript|template)[^>]*>.*?</\1>~isu', ' ', $body) ?? $body;
+        $plain = normalize_text(strip_tags($plain));
+        $sample = mb_substr($plain, 0, 320);
+    }
+    $pcount = array_key_exists('jina_product_count', $r)
+        ? (int)$r['jina_product_count']
+        : ($body !== '' ? count(s4JinaProductsFromReaderText($body, $target)) : 0);
+    return [
+        'via' => $via,
+        'kind' => $kind,
+        'reader_url' => mb_substr($readerUrl, 0, 360),
+        'ok' => !empty($r['ok']),
+        'code' => (int)($r['code'] ?? 0),
+        'mode' => (string)($r['mode'] ?? ''),
+        'bytes' => strlen($body),
+        'sha1' => $body !== '' ? substr(sha1($body), 0, 12) : '',
+        'title' => mb_substr($title, 0, 180),
+        'product_count' => $pcount,
+        'error' => mb_substr((string)($r['error'] ?? ''), 0, 220),
+        'sample' => $sample,
+    ];
+}
+
 function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []): array {
     $target = s4JinaUnwrapTargetUrl($url);
     $timeout = max(8, min(75, $timeout));
     $last = ['ok' => false, 'error' => (string)($prev['error'] ?? 'Empty'), 'code' => (int)($prev['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'jina-reader'];
     $firstText = null;
-    $readerUrls = s4JinaReaderUrls($target);
+    $trace = [];
+    $readerVariants = s4JinaReaderUrlVariants($target);
     foreach (['direct', 'worker'] as $via) {
-        foreach ($readerUrls as $readerUrl) {
+        foreach ($readerVariants as $variant) {
+            $readerUrl = (string)($variant['url'] ?? '');
+            if ($readerUrl === '') continue;
+            $kind = (string)($variant['kind'] ?? 'reader');
             $r = s4JinaFetchAttempt($readerUrl, $timeout, $via);
             $r['jina_reader'] = $readerUrl;
             $body = (string)($r['html'] ?? '');
+            $ps = trim($body) !== '' ? s4JinaProductsFromReaderText($body, $target) : [];
+            $r['jina_product_count'] = count($ps);
+            $trace[] = s4JinaReaderTraceEntry($via, $kind, $readerUrl, $r, $target);
             if (!empty($r['ok']) && trim($body) !== '') {
-                $ps = s4JinaProductsFromReaderText($body, $target);
                 if (!empty($ps)) {
                     return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $target,
                             'html' => s4JinaSyntheticHtml($ps, $target, 'Reader URL: ' . $readerUrl . ' · via ' . $via),
                             'mode' => 'jina-reader', 'jina_reader' => $readerUrl, 'jina_reader_via' => $via,
-                            'jina_product_count' => count($ps), 'source_error' => (string)($prev['error'] ?? '')];
+                            'jina_product_count' => count($ps), 'jina_reader_trace' => $trace,
+                            'source_error' => (string)($prev['error'] ?? '')];
                 }
                 if ($firstText === null) {
                     $firstText = $r + $last;
@@ -9925,10 +9980,16 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
             $last = $r + $last;
         }
     }
-    if ($firstText !== null) return $firstText;
+    if ($firstText !== null) {
+        $firstText['jina_reader_trace'] = $trace;
+        if (!isset($firstText['jina_product_count'])) $firstText['jina_product_count'] = 0;
+        return $firstText;
+    }
     $last['url'] = $target;
     $last['mode'] = (string)($last['mode'] ?? 'jina-reader');
     $last['error'] = trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty');
+    $last['jina_reader_trace'] = $trace;
+    if (!isset($last['jina_product_count'])) $last['jina_product_count'] = 0;
     return $last;
 }
 
@@ -10039,13 +10100,18 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
             return ['ok' => true, 'error' => '', 'code' => (int)($jr['code'] ?? 200), 'url' => $url,
                     'html' => snappshopSyntheticHtml($ps, $url, 'Jina Reader'), 'mode' => 'snappshop-jina-reader',
                     'snappshop_public_fallback' => 'jina-reader', 'jina_reader' => (string)($jr['jina_reader'] ?? ''),
+                    'jina_reader_via' => (string)($jr['jina_reader_via'] ?? ''), 'jina_product_count' => count($ps),
+                    'jina_reader_trace' => is_array($jr['jina_reader_trace'] ?? null) ? $jr['jina_reader_trace'] : [],
                     'source_error' => (string)($prev['error'] ?? '')];
         }
     }
     $last = $jr + $last;
     return ['ok' => false, 'error' => trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty'),
             'code' => (int)($last['code'] ?? ($prev['code'] ?? 0)), 'url' => $url, 'html' => '',
-            'mode' => (string)($last['mode'] ?? 'snappshop-jina-reader'), 'snappshop_public_fallback' => (string)($last['snappshop_public_fallback'] ?? 'jina-reader')];
+            'mode' => (string)($last['mode'] ?? 'snappshop-jina-reader'), 'snappshop_public_fallback' => (string)($last['snappshop_public_fallback'] ?? 'jina-reader'),
+            'jina_reader' => (string)($last['jina_reader'] ?? ''), 'jina_reader_via' => (string)($last['jina_reader_via'] ?? ''),
+            'jina_product_count' => (int)($last['jina_product_count'] ?? 0),
+            'jina_reader_trace' => is_array($last['jina_reader_trace'] ?? null) ? $last['jina_reader_trace'] : []];
 }
 
 
@@ -10353,6 +10419,27 @@ function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): 
         }
         $s['js_shell_detected'] = true;             // تشخیص دادیم ولی رندر نشد
         $s['render_error'] = (string)($r['error'] ?? '');
+        /* v10.227: اگر صفحه SPA است و رندر محلی روی هاست بالا نیست، برای
+           دامنه‌هایی مثل SnappShop/Digikala همان مسیر Reader را هم امتحان کن؛
+           این دقیقاً همان نقش موتور Jina در سایت‌های JS-layered است، بدون اینکه
+           رفتار سریع صفحات HTML معمولی عوض شود. */
+        $_canJinaJs = function_exists('fetch_html_jina_reader')
+            && ((function_exists('isSnappshopUrl') && isSnappshopUrl($url))
+             || (function_exists('isDigikalaUrl') && isDigikalaUrl($url)));
+        if ($_canJinaJs) {
+            $_jr = fetch_html_jina_reader($url, $timeout, is_array($s) ? $s : []);
+            if (!empty($_jr['ok']) && (int)($_jr['jina_product_count'] ?? 0) > 0) {
+                $_jr['js_shell_detected'] = true;
+                $_jr['render_error'] = (string)($s['render_error'] ?? '');
+                $_jr['jina_js_fallback'] = true;
+                return $_jr;
+            }
+            $s['jina_error'] = (string)($_jr['error'] ?? '');
+            $s['jina_reader'] = (string)($_jr['jina_reader'] ?? '');
+            $s['jina_reader_via'] = (string)($_jr['jina_reader_via'] ?? '');
+            $s['jina_product_count'] = (int)($_jr['jina_product_count'] ?? 0);
+            if (is_array($_jr['jina_reader_trace'] ?? null)) $s['jina_reader_trace'] = $_jr['jina_reader_trace'];
+        }
     }
     return $s;
 }
@@ -11435,7 +11522,7 @@ $summarizeFetch = function(string $label, array $r, array $sel, string $eng) use
         'mode' => (string)($r['mode'] ?? ''),
         'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
         'final_url' => mb_substr($base, 0, 260),
-        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','source_error','render_error','js_shell_detected','emalls_static_error'])),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error'])),
     ];
     $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
     return $out;
@@ -11444,6 +11531,7 @@ $oldIndirectSet = array_key_exists('_srcNetProfileIndirect', $GLOBALS);
 $oldIndirect = $GLOBALS['_srcNetProfileIndirect'] ?? null;
 if ($pk !== '') srcNetSetProfileIndirect($pk);
 $directNet = ['ipv4'=>true, 'hosts'=>'', 'fallback'=>false, 'resolve_ip'=>'', 'doh_url'=>'', 'worker_url'=>'', 'proxy'=>'', 'proxy_type'=>'http', 'proxy_auth'=>''];
+$jinaVariants = ($engine === 'jina' || !empty($_GET['jina'])) && function_exists('s4JinaReaderUrlVariants') ? s4JinaReaderUrlVariants($url) : [];
 $attempts = [];
 $attempts[] = $summarizeFetch('raw_direct_srcNetFetchAttempt', srcNetFetchAttempt($url, $timeout, $directNet, 'direct'), $selectors, $engine);
 $attempts[] = $summarizeFetch('fetch_html_current', fetch_html($url, $timeout), $selectors, $engine);
@@ -11487,6 +11575,7 @@ $out = [
             'image' => (string)($selectors['image'] ?? ''),
         ],
     ],
+    'jina_reader_variants' => $jinaVariants,
     'attempts' => $attempts,
     'pages_tested' => $pageSummaries,
     'best' => $best,
@@ -38275,6 +38364,28 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '@media(max-width:720px)') !== false
       && strpos($selfSrc, "{v:'10." . "226'") !== false
       && version_compare(APP_VERSION, '10.' . '226', '>='));
+
+
+    /* ---------- v10.227: trace دقیق Jina Reader و fallback برای پوستهٔ JS ---------- */
+    $_jina227vars = function_exists('s4JinaReaderUrl' . 'Variants') ? s4JinaReaderUrlVariants('https://snappshop.ir/category/kitchen-appliances?page=1') : [];
+    $_jina227Nested = false;
+    foreach ($_jina227vars as $_v227) {
+        if (($_v227['kind'] ?? '') === 'nested'
+            && ($_v227['url'] ?? '') === 'https://r.jina.ai/http://r.jina.ai/http://https://snappshop.ir/category/kitchen-appliances?page=1') {
+            $_jina227Nested = true; break;
+        }
+    }
+    $add('10.227', 'Jina Reader فرم nested دقیق درخواست‌شده را با برچسب diagnostic نگه می‌دارد',
+         $_jina227Nested
+      && strpos($selfSrc, 's4JinaReaderUrl' . 'Variants') !== false);
+    $add('10.227', 'feedback نتیجهٔ تک‌تک مسیرهای direct/worker جینا را قبل از fallback نهایی گزارش می‌کند',
+         strpos($selfSrc, 's4JinaReaderTrace' . 'Entry') !== false
+      && strpos($selfSrc, "'jina_reader_trace'") !== false
+      && strpos($selfSrc, "'jina_reader_variants'") !== false);
+    $add('10.227', 'پوسته‌های JS SnappShop/Digikala بعد از شکست رندر می‌توانند به Jina Reader برگردند',
+         strpos($selfSrc, 'jina_js_' . 'fallback') !== false
+      && strpos($selfSrc, "{v:'10." . "227'") !== false
+      && version_compare(APP_VERSION, '10.' . '227', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -68827,6 +68938,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.227', t:'🔬 trace کامل Jina Reader برای SnappShop', items:[
+    'گزارش s4_feedback اکنون فهرست URLهای Reader را با برچسب canonical/bridge/nested نشان می‌دهد و فرم nested دقیق https://r.jina.ai/http://r.jina.ai/http://https://... قابل مشاهده است.',
+    'هر تلاش Jina Reader، قبل از fallback نهایی Worker، کد HTTP، مسیر direct/worker، اندازهٔ بدنه، عنوان، نمونهٔ متن و تعداد محصول parse‌شده را در jina_reader_trace ثبت می‌کند.',
+    'اگر صفحهٔ SnappShop یا Digikala به‌صورت پوستهٔ JavaScript تشخیص داده شود و سرویس Playwright/Selenium روی هاست آماده نباشد، fetch_html_smart یک fallback محدود به Jina Reader انجام می‌دهد و نتیجه را با jina_js_fallback علامت می‌زند.',
+  ]},
   {v:'10.226', t:'⏸ توقف موقت انتخاب در پنجره‌های بارگذاری صفحه', items:[
     'در مودال‌های بارگذاری صفحهٔ تب سلکتورها دکمهٔ «توقف انتخاب» اضافه شد؛ در این حالت کلیک‌ها به خود سایت می‌رسند تا پاپ‌آپ‌ها، منوهای کشویی و تب‌های داخل صفحه باز شوند و سپس بتوان دوباره انتخاب را فعال کرد.',
     'هم انتخابگر فهرست و هم انتخابگر جزئیات پیام pause/resume را می‌پذیرند و دکمهٔ کوچک همان حالت کنار المان هم اضافه شد.',
