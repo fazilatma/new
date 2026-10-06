@@ -18,7 +18,7 @@ import { maintenanceResponse } from '../worker-src/maintenance-response.js';
 import { saveConnectionsAndReprice, drainWooReprice } from '../worker-src/woo-reprice.js';
 import { mergeConnections } from './vault.js';
 import { activityMiddleware, monitored } from '../worker-src/activity-monitor.js';
-import { listActiveJobs, listLiveActivities, deleteState, getDestinationId } from './db.js';
+import { listActiveJobs, listLiveActivities, deleteState, getDestinationId, getRemoteId } from './db.js';
 import { saveBenchmarkProfile } from './db.js';
 import { applyStoredResultSettings } from './db.js';
 import { PUSH_SERVICE_WORKER, PUSH_MANIFEST, PUSH_ICON, pushIconPng } from '../worker-src/push-assets.js';
@@ -43,6 +43,7 @@ import { AGENT_TOOL_MODELS } from '../worker-src/ai-catalog.js';
 import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from '../worker-src/destination-core.js';
 import { AI_ENRICH_LAST_KEY, aiEnrichTick as rawaiEnrichTick } from '../worker-src/ai-enrich.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
+import { destinationRows } from '../worker-src/basalam-accounts.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
@@ -62,7 +63,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.328.0+'; } catch { return process.env.npm_package_version || '1.328.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.329.0+'; } catch { return process.env.npm_package_version || '1.329.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -984,6 +985,16 @@ app.post('/api/destination/:target/dedup-runs/reset',async c=>{
 });
 app.post('/api/destination/:target/:id/status',async c=>{const target=c.req.param('target'),body=await c.req.json() as any;if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(body.confirm!=='APPLY')return c.json({ok:false,error:'confirm APPLY is required'},400);return c.json(await destinationChangeStatus(target as any,Number(c.req.param('id')),String(body.status||''),String(body.shopId||'')))});
 app.delete('/api/destination/:target/:id',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm DELETE is required'},400);return c.json(await destinationDelete(target as any,Number(c.req.param('id')),c.req.query('force')==='true',c.req.query('shop')||''))});
+// Twin of worker-src/app.ts: the panel reads the live destination list from the server, so a
+// newly registered Basalam stall shows up in the product modal at once.
+app.get('/api/products/:profileId/:sourceKey/destinations',async c=>{
+  const profileId=c.req.param('profileId'),sourceKey=decodeURIComponent(c.req.param('sourceKey'));
+  const vault=await loadConnections(),defaultVendor=String(vault.basalam?.vendorId||'');
+  const accounts=await destinationRows(vault,async(target,key)=>target==='woo'
+    ?await getRemoteId(profileId,sourceKey,'woo')
+    :(await getDestinationId(profileId,sourceKey,'basalam',key))??(key===defaultVendor?await getRemoteId(profileId,sourceKey,'basalam'):null));
+  return c.json({ok:true,profileId,sourceKey,accounts});
+});
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=c.req.param('target');if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);if(target==='woo')return c.json({ok:true,result:await syncWoo(product,profile)});if(target==='basalam')return c.json({ok:true,result:await syncBasalam(product,profile)});return c.json({ok:false,error:'Invalid target'},400)});
 app.post('/api/queue-watchdog', async c => { const body=await c.req.json().catch(()=>({})) as any,settings=await getState<any>('settings',{}),stallMin=Number(body.minutes)||Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60)),autoContinue=body.autoContinue??settings.watchdog?.autoContinue!==false;return c.json({ok:true,autoContinue,recovered:autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped:autoContinue?0:await reapStalledJobs(stallMin)}); });
 app.post('/api/source-test', async c => {

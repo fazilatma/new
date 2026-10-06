@@ -4,6 +4,7 @@ import { loadConnections } from './connections.js';
 import { toRemoteId } from '../worker-src/utils.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId, setState } from './db.js';
 import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts, type ApiWriteReport, type WriteKind } from '../worker-src/api-loop.js';
+import { basalamStalls, noStallReason, sendableStalls } from '../worker-src/basalam-accounts.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -285,12 +286,16 @@ async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,e
 
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
-  const c=(await loadConnections()).basalam;if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');
+  const c=(await loadConnections()).basalam;
+  // Twin of worker-src/sync.ts: every registered stall is considered and the ones that cannot
+  // receive the product report their reason instead of vanishing.
+  const stalls=basalamStalls(c),accounts=sendableStalls(stalls);
+  if(!accounts.length)throw Error(noStallReason(stalls));
   const learned=c.autoCategory?await findLearnedCategory(product.title):null;
   const manualCats=[(profile as any).basalamCategoryId,...((profile as any).basalamFallbackCategoryIds||[])].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
   const categories=manualCats.length?manualCats:[product.basalamCategoryId,learned?.categoryId,c.categoryId,...((c as any).fallbackCategoryIds||[])].map(Number).filter((id:number,index:number,all:number[])=>id>0&&all.indexOf(id)===index);
   const categoryAttempts=(categories.length?categories:[undefined]) as Array<number|undefined>;
-  const accounts=[...(c.token&&c.vendorId?[{name:'پیش‌فرض',token:c.token,vendorId:c.vendorId,pricePercent:Number(c.pricePercent)||0}]:[]),...c.shops.filter(s=>s.token&&s.vendorId)];const results:BasalamSyncResult[]=[];
+  const results:BasalamSyncResult[]=stalls.filter(stall=>!stall.ready).map(stall=>({shop:stall.name,action:'created' as const,id:0,transport:'api' as const,price:0,error:stall.reason}));
   for(const account of accounts){
     const accountKey=String(account.vendorId),legacy=String(account.vendorId)===String(c.vendorId)?await getRemoteId(profile.id,product.sourceKey,'basalam'):null;
     const existing=await getDestinationId(profile.id,product.sourceKey,'basalam',accountKey)||legacy;

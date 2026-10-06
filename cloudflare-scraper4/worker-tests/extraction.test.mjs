@@ -791,9 +791,15 @@ test('the default basalam shop has its own price percentage', async () => {
     readFile(new URL('../render-src/maintenance.ts', import.meta.url), 'utf8')
   ]);
   assert.match(dashboard, /BCON\('basalam\.pricePercent'\)/, 'the default shop needs its own field');
+  // 1.329.0 — the account list moved into worker-src/basalam-accounts.ts so the sender and the
+  // product modal cannot disagree; the default stall still carries its own percentage there.
+  const stalls = await readFile(new URL('../worker-src/basalam-accounts.ts', import.meta.url), 'utf8');
+  assert.match(stalls, /name: DEFAULT_STALL_NAME, vendorId: defaultVendor, ownToken: defaultToken, pricePercent: percent\(vault\.pricePercent\)/,
+    'the default stall must keep its own percentage, not a hardcoded 0%');
+  assert.match(stalls, /DEFAULT_STALL_NAME = 'پیش‌فرض'/);
   for (const [name, sync] of [['worker', workerSync], ['node', nodeSync]]) {
-    assert.match(sync, /name:'پیش‌فرض',token:c\.token,vendorId:c\.vendorId,pricePercent:Number\(c\.pricePercent\)\|\|0/,
-      `${name} sync must stop hardcoding the default shop to 0%`);
+    assert.match(sync, /basalamStalls\(c\),accounts=sendableStalls\(stalls\)/,
+      `${name} sync must build its stalls from the shared list`);
   }
   for(const source of [workerMaint,nodeMaint]){assert.match(source,/\.\.\.c\.basalam,name:'غرفهٔ پیش‌فرض'/);assert.match(source,/pricePercent:Number\(shop.pricePercent\)\|\|0/)}
 });
