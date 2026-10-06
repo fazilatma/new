@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.230';
+const APP_VERSION = '10.231';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9925,7 +9925,66 @@ function s4JinaFetchPlan(): array {
 function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'direct', ?array $netOverride = null): array {
     if ($mode !== 'direct') {
         $net = $netOverride ?: s4JinaIndirectNet();
-        $r = srcNetFetchAttempt($readerUrl, $timeout, $net, $mode);
+        // v10.231: indirect Jina must still look like a Jina Reader request.
+        // The generic source fetcher sends HTML/browser headers through Worker,
+        // which can turn r.jina.ai into a Cloudflare "Just a moment" page.
+        if (function_exists('curl_init')) {
+            $parsed = parse_url($readerUrl);
+            $host = strtolower((string)($parsed['host'] ?? ''));
+            $reqUrl = $readerUrl;
+            $ch = curl_init($readerUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5,
+                CURLOPT_CONNECTTIMEOUT => 7, CURLOPT_TIMEOUT => $timeout, CURLOPT_ENCODING => '',
+                CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Scraper4-JinaReader/' . APP_VERSION . '; +https://r.jina.ai/)',
+                CURLOPT_HTTPHEADER => [
+                    'Accept: text/plain,text/markdown,*/*;q=0.8',
+                    'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'X-Return-Format: markdown',
+                    'X-Respond-With: markdown',
+                    'X-Engine: browser',
+                    'X-Respond-Timing: network-idle',
+                    'X-Timeout: ' . (string)min(60, max(8, $timeout)),
+                    'X-Cache-Tolerance: 604800',
+                ],
+            ]);
+            if ($mode === 'dns' || $mode === 'doh') {
+                $ip = '';
+                if ($mode === 'dns') $ip = (string)($net['resolve_ip'] ?? '');
+                elseif (function_exists('aiDohResolve')) {
+                    $dr = aiDohResolve($host, (string)($net['doh_url'] ?? ''), min(10, $timeout));
+                    if (!empty($dr['ok'])) $ip = (string)$dr['ip'];
+                }
+                if ($ip !== '' && $host !== '') {
+                    $port = ((parse_url($readerUrl, PHP_URL_SCHEME) ?: 'https') === 'https') ? 443 : 80;
+                    curl_setopt($ch, CURLOPT_RESOLVE, [$host . ':' . $port . ':' . $ip]);
+                }
+            } elseif ($mode === 'proxy' && trim((string)($net['proxy'] ?? '')) !== '') {
+                curl_setopt($ch, CURLOPT_PROXY, (string)$net['proxy']);
+                $map = ['http' => CURLPROXY_HTTP,
+                        'socks5' => defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5,
+                        'socks4' => defined('CURLPROXY_SOCKS4') ? CURLPROXY_SOCKS4 : CURLPROXY_HTTP];
+                curl_setopt($ch, CURLOPT_PROXYTYPE, $map[(string)($net['proxy_type'] ?? 'http')] ?? CURLPROXY_HTTP);
+                if (trim((string)($net['proxy_auth'] ?? '')) !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, (string)$net['proxy_auth']);
+            } elseif ($mode === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
+                $w = rtrim((string)$net['worker_url'], '/');
+                $reqUrl = (strpos($w, '{url}') !== false) ? str_replace('{url}', rawurlencode($readerUrl), $w) : $w . '/' . ltrim($readerUrl, '/');
+                curl_setopt($ch, CURLOPT_URL, $reqUrl);
+            }
+            if (!empty($net['ipv4']) && defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            $body = curl_exec($ch); $err = curl_error($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $readerUrl;
+            curl_close($ch);
+            $r = ['ok' => $body !== false && $code >= 200 && $code < 400,
+                  'error' => $err ?: 'Empty', 'code' => $code,
+                  'url' => $mode === 'worker' ? $readerUrl : $finalUrl,
+                  'html' => $body === false ? '' : $body, 'mode' => $mode,
+                  'jina_reader_request_url' => $mode === 'worker' ? $reqUrl : ''];
+        } else {
+            $r = srcNetFetchAttempt($readerUrl, $timeout, $net, $mode);
+        }
         $r['jina_reader_via'] = $mode;
         if ($mode === 'worker') $r['jina_reader_worker'] = (string)($net['worker_url'] ?? '');
         return $r;
@@ -38534,6 +38593,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '__S4_SELECTOR_WAIT_MS__') !== false
       && strpos($selfSrc, "{v:'10." . "230'") !== false
       && version_compare(APP_VERSION, '10.' . '230', '>='));
+
+
+    /* ---------- v10.231: هدرهای Reader در مسیر indirect Jina ---------- */
+    $add('10.231', 'Jina Worker/Proxy همان هدرهای Markdown Reader را می‌فرستد',
+         strpos($selfSrc, 'indirect Jina must still look like a Jina Reader request') !== false
+      && strpos($selfSrc, "'X-Return-Format: markdown'") !== false
+      && strpos($selfSrc, "'X-Respond-With: markdown'") !== false
+      && strpos($selfSrc, 'jina_reader_request_url') !== false);
+    $add('10.231', 'ورودیِ 10.231 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "231'") !== false
+      && version_compare(APP_VERSION, '10.' . '231', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -69126,6 +69196,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.231', t:'🧾 هدرهای Markdown در مسیر غیرمستقیم Jina', items:[
+    'مسیرهای غیرمستقیم Jina Reader مثل Worker/Proxy/DoH/DNS اکنون همان هدرهای اختصاصی Reader را می‌فرستند؛ بنابراین Worker دیگر با هدرهای عمومی HTML، r.jina.ai را به صفحهٔ Cloudflare/Just a moment تحریک نمی‌کند.',
+    'trace هر تلاش indirect همچنان via/code/sample را نشان می‌دهد و برای Worker آدرس درخواست واسط نیز در فیلد داخلی jina_reader_request_url نگه داشته می‌شود.',
+  ]},
   {v:'10.230', t:'🌐 Jina عمومی با اتصال غیرمستقیم · ⏳ انتظار انتخابگر', items:[
     'موتور Jina Reader دیگر direct را اول امتحان نمی‌کند؛ برای r.jina.ai مسیرهای غیرمستقیم تنظیم‌شده مثل proxy/Worker و سپس DoH/DNS را قبل از direct می‌سنجد تا محدودیت هاست ایرانی دور زده شود.',
     'فیدبک Jina به SnappShop محدود نیست؛ هر URL معتبری با extractionEngine=jina یا s4_feedback=jina قابل تست است و خروجی مسیرهای Jina در jina_reader_modes دیده می‌شود.',
