@@ -6,6 +6,7 @@ import { byAccount, byProfile, findProfileBySuffix, planActions, planDuplicateDe
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow, ProfileSuffixInfo } from './recon-core.js';
 import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from './dedup.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
+import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts } from './api-loop.js';
 import { basicAuth, normalizePersianText } from './utils.js';
 import type { ConnectionVault } from './vault.js';
 import { applyPrice, basalamStatuses, bulkPayload, categoryChildren, categoryRoots, clamp, dedupeCategories, directPayload, flattenCategoryTree, imageValue, msg, normalizeCategoryAssignments, normalizeRefs, normalizeRemote, numberOrNull, rowsFrom, selectShops, statusPayload, unwrapProduct, wooListStatus } from './destination-core.js';
@@ -552,8 +553,13 @@ async function rawbasalamUpdateShop(accountKey:string,id:number|string,payload:a
   const c=(await loadConnections()).basalam;
   const shop=String(accountKey)===String(c.vendorId)?{token:c.token,vendorId:String(c.vendorId)}:(c.shops||[]).find(s=>String(s.vendorId)===String(accountKey));
   if(!shop?.token)throw Error('توکن این غرفه در دسترس نیست');
-  const r=await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`,{method:'PATCH',headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json'},body:JSON.stringify(payload)},3_000_000);
-  if(!r.ok)throw Error(`Basalam update ${id}: HTTP ${r.status}`);
+  // 1.328.0 — same destination feedback loop as the sender: the gateway edits by product id,
+  // the vendor-scoped path is only a legacy fallback, and the winner is remembered.
+  const report=await runApiWriteLoop({getState,setState,transport:async({url,method})=>{
+    const r=await safeBasalamFetch(url,{method,headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
+    return{status:r.status,body:await r.json().catch(()=>({}))};
+  }},{kind:'update',context:{base:normalizeApiBase(String(c.api||'')),vendorId:shop.vendorId,productId:id}});
+  if(!report.ok)throw Error(`Basalam update ${id}: HTTP ${report.status} — ${report.advice} [${summarizeApiAttempts(report.attempts)}]`);
 }
 
 export async function rebuildMap(target:Target,profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}

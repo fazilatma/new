@@ -1,7 +1,8 @@
 import { destinationLedger, destinationScope } from './ledger.js';
 import { desiredProduct } from './destination-ledger.js';
 import { loadConnections } from './connections.js';
-import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId } from './db.js';
+import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId, setState } from './db.js';
+import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts, type ApiWriteReport, type WriteKind } from './api-loop.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
 import { basicAuth, toRemoteId } from './utils.js';
 import type { Product, Profile, VariationGroup } from './types.js';
@@ -265,19 +266,42 @@ async function sendBasalamWithSdk(product:Product,profile:Profile,c:any,account:
 }
 
 async function sendBasalamWithApi(product:Product,profile:Profile,c:any,account:BasalamAccount,existing:number|string|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number|string;body:any;categoryId:number|undefined}> {
-  const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;
-  let response:Response|undefined,body:any={},usedCategory: number|undefined;
+  // 1.328.0 — the write goes through the destination feedback loop: Basalam's gateway edits a
+  // product by its own id (PATCH /v1/products/{id}), while the old vendor-scoped path answers
+  // 404. The loop tries the known shapes, reads each answer and remembers the one that works.
+  const base=normalizeApiBase(String(c.api||''));
+  const headers={authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'};
+  const send=(kind:WriteKind,productId:number|string|null,payload:any)=>runApiWriteLoop({
+    getState,setState,
+    transport:async({url,method})=>{
+      const response=await safeBasalamFetch(url,{method,headers,body:JSON.stringify(payload)},3_000_000);
+      const answer=await response.json().catch(()=>({}));
+      return{status:response.status,body:answer};
+    }
+  },{kind,context:{base,vendorId:account.vendorId,productId}});
+  let report:ApiWriteReport|null=null,body:any={},usedCategory:number|undefined,recreated=false;
   for(const categoryId of categories){
     usedCategory=categoryId;
-    const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);
-    response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
-    body=await response.json().catch(()=>({}));
-    if(response.ok)break;
+    report=await send(existing?'update':'create',existing,basalamPayload(product,c,account,categoryId,photoIds,!existing));
+    if(!report.ok&&report.retryAsCreate){
+      // Every known update shape answered 404, so the stored id is gone from Basalam itself:
+      // build the product again instead of failing forever against a dead id.
+      report=await send('create',null,basalamPayload(product,c,account,categoryId,photoIds,true));
+      recreated=report.ok;
+    }
+    body=report.body||{};
+    if(report.ok)break;
+    // Only a complaint about the product itself can be answered by the next category.
+    if(report.verdict!=='payload')break;
   }
-  if(!response?.ok)throw new Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${basalamPhotoHint(response?.status||0,body)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);
-  const newId=toRemoteId(body.id||body.product?.id||existing) ?? 0;
+  if(!report?.ok){
+    const status=report?.status||0;
+    throw new Error(`Basalam ${account.name} API HTTP ${status}: ${basalamAuthHint(status,account.token)}${basalamPhotoHint(status,body)}${status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)} — حلقهٔ بازخورد ارسال: ${report?.advice||''} [${summarizeApiAttempts(report?.attempts||[])}]`);
+  }
+  const newId=toRemoteId(body.id||body.product?.id||(recreated?0:existing)) ?? 0;
   return{id:newId,body,categoryId:usedCategory};
 }
+
 
 export async function syncBasalam(product:Product,profile:Profile):Promise<BasalamSyncResult[]>{
   const c=(await loadConnections()).basalam;

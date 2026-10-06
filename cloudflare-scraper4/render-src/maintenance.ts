@@ -6,6 +6,7 @@ import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow, ProfileSuf
 import { loadConnections } from './connections.js';
 import { getProduct, getProfile, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { safeBasalamFetch, safeFetch } from './network.js';
+import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts } from '../worker-src/api-loop.js';
 import { hasCodeSuffix, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from '../worker-src/dedup.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { basalamStatuses, bulkPayload, categoryRoots, clamp, dedupeCategories, directPayload, flattenCategoryTree, normalizeCategoryAssignments, normalizeRefs, normalizeRemote, rowsFrom, selectShops, unwrapProduct, wooListStatus } from '../worker-src/destination-core.js';
@@ -327,12 +328,17 @@ export async function destinationDuplicates(apply = false, limit = 200, keep: 'e
   return { source: 'ledger', ok: failed.length === 0 && failures.length === 0, dryRun: false, keep, planned: actions.length, processed: capped.length,
     deleted, archived, accounts: accounts.length, byDestination, failures, failed: failed.slice(0, 20), actions: capped.slice(0, 200) };
 }
-async function rawbasalamUpdateShop(accountKey: string, id: number | string, payload: any) {
-  const c = (await loadConnections()).basalam;
-  const shop = String(accountKey) === String(c.vendorId) ? { token: c.token, vendorId: String(c.vendorId) } : (c.shops || []).find(s => String(s.vendorId) === String(accountKey));
-  if (!shop?.token) throw Error('توکن این غرفه در دسترس نیست');
-  const r = await safeBasalamFetch(`${c.api}/vendors/${encodeURIComponent(shop.vendorId)}/products/${id}`, { method: 'PATCH', headers: { authorization: `Bearer ${shop.token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) }, 3_000_000);
-  if (!r.ok) throw Error(`Basalam update ${id}: HTTP ${r.status}`);
+async function rawbasalamUpdateShop(accountKey:string,id:number|string,payload:any){
+  const c=(await loadConnections()).basalam;
+  const shop=String(accountKey)===String(c.vendorId)?{token:c.token,vendorId:String(c.vendorId)}:(c.shops||[]).find(s=>String(s.vendorId)===String(accountKey));
+  if(!shop?.token)throw Error('توکن این غرفه در دسترس نیست');
+  // 1.328.0 — same destination feedback loop as the sender: the gateway edits by product id,
+  // the vendor-scoped path is only a legacy fallback, and the winner is remembered.
+  const report=await runApiWriteLoop({getState,setState,transport:async({url,method})=>{
+    const r=await safeBasalamFetch(url,{method,headers:{authorization:`Bearer ${shop.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);
+    return{status:r.status,body:await r.json().catch(()=>({}))};
+  }},{kind:'update',context:{base:normalizeApiBase(String(c.api||'')),vendorId:shop.vendorId,productId:id}});
+  if(!report.ok)throw Error(`Basalam update ${id}: HTTP ${report.status} — ${report.advice} [${summarizeApiAttempts(report.attempts)}]`);
 }
 
 /** Single-destination table, kept for the existing per-target buttons.

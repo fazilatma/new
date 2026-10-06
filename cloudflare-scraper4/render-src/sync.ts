@@ -2,7 +2,8 @@ import { destinationLedger, destinationScope } from './ledger.js';
 import { desiredProduct } from '../worker-src/destination-ledger.js';
 import { loadConnections } from './connections.js';
 import { toRemoteId } from '../worker-src/utils.js';
-import { findLearnedCategory, getDestinationId, getRemoteId, setDestinationId, setRemoteId } from './db.js';
+import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId, setState } from './db.js';
+import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts, type ApiWriteReport, type WriteKind } from '../worker-src/api-loop.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -249,8 +250,39 @@ async function sendBasalamWithSdk(product:Product,c:any,account:BasalamAccount,e
   }
 }
 async function sendBasalamWithNpmSdk(loaded:any,product:Product,c:any,account:BasalamAccount,existing:number|string|null,categoryId:number|undefined,photoIds:number[]=[]):Promise<{id:number|string;body:any;packageName:string}>{const mod=loaded.module,Exported=mod.BasalamClient||mod.Basalam||mod.Client||mod.default,create=mod.createClient||mod.createBasalamClient,options={accessToken:account.token,token:account.token,bearerToken:account.token,vendorId:account.vendorId,baseUrl:c.api,apiBase:c.api};const client=typeof create==='function'?await create(options):typeof Exported==='function'?new Exported(options):Exported;if(!client)throw new Error(`Basalam SDK ${loaded.name} did not expose a usable client.`);const payload=basalamPayload(product,c,account,categoryId,photoIds),productApi=client.products||client.product||client.core?.products||client.core||client,methods=existing?[['updateProduct',existing,payload],['update',existing,payload],['patch',existing,payload],['products.update',existing,payload]]:[['createProduct',payload],['create',payload],['store',payload],['products.create',payload]];let last='';for(const[method,...args]of methods)try{const target=String(method).split('.').reduce((obj:any,key:string)=>obj?.[key],productApi);const body=await callMaybe(target?.bind?.(productApi),...args);if(body!==undefined)return{id:toRemoteId(body?.id||body?.product?.id||existing) ?? 0,body,packageName:loaded.name}}catch(error){last=error instanceof Error?error.message:String(error)}throw new Error(last||`Basalam SDK ${loaded.name} has no supported product create/update method.`)}
-async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|string|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number|string;body:any}>{const base=`${c.api}/vendors/${encodeURIComponent(account.vendorId)}/products`;let response:Response|undefined,body:any={};for(const categoryId of categories){const payload=basalamPayload(product,c,account,categoryId,photoIds,!existing);response=await safeBasalamFetch(existing?`${base}/${existing}`:base,{method:existing?'PATCH':'POST',headers:{authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'},body:JSON.stringify(payload)},3_000_000);body=await response.json().catch(()=>({}));if(response.ok)break}if(!response?.ok)throw Error(`Basalam ${account.name} API HTTP ${response?.status||0}: ${basalamAuthHint(response?.status||0,account.token)}${basalamPhotoHint(response?.status||0,body)}${response?.status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)}`);const newId=toRemoteId(body.id||body.product?.id||existing) ?? 0;
-  return{id:newId,body}}
+// Twin of worker-src/sync.ts: the Basalam write goes through the destination feedback loop,
+// because the gateway edits a product by its own id (PATCH /v1/products/{id}) while the old
+// vendor-scoped path answers 404. The loop reads each answer and remembers what worked.
+async function sendBasalamWithApi(product:Product,c:any,account:BasalamAccount,existing:number|string|null,categories:Array<number|undefined>,photoIds:number[]=[]):Promise<{id:number|string;body:any}>{
+  const base=normalizeApiBase(String(c.api||''));
+  const headers={authorization:`Bearer ${account.token}`,'content-type':'application/json',accept:'application/json'};
+  const send=(kind:WriteKind,productId:number|string|null,payload:any)=>runApiWriteLoop({
+    getState,setState,
+    transport:async({url,method})=>{
+      const response=await safeBasalamFetch(url,{method,headers,body:JSON.stringify(payload)},3_000_000);
+      const answer=await response.json().catch(()=>({}));
+      return{status:response.status,body:answer};
+    }
+  },{kind,context:{base,vendorId:account.vendorId,productId}});
+  let report:ApiWriteReport|null=null,body:any={},recreated=false;
+  for(const categoryId of categories){
+    report=await send(existing?'update':'create',existing,basalamPayload(product,c,account,categoryId,photoIds,!existing));
+    if(!report.ok&&report.retryAsCreate){
+      report=await send('create',null,basalamPayload(product,c,account,categoryId,photoIds,true));
+      recreated=report.ok;
+    }
+    body=report.body||{};
+    if(report.ok)break;
+    if(report.verdict!=='payload')break;
+  }
+  if(!report?.ok){
+    const status=report?.status||0;
+    throw Error(`Basalam ${account.name} API HTTP ${status}: ${basalamAuthHint(status,account.token)}${basalamPhotoHint(status,body)}${status===401?(await basalamTokenProbe(c,account))+' ':''}${body.message||JSON.stringify(body).slice(0,300)} — حلقهٔ بازخورد ارسال: ${report?.advice||''} [${summarizeApiAttempts(report?.attempts||[])}]`);
+  }
+  const newId=toRemoteId(body.id||body.product?.id||(recreated?0:existing)) ?? 0;
+  return{id:newId,body};
+}
+
 
 export async function syncBasalam(product: Product, profile: Profile): Promise<BasalamSyncResult[]> {
   const c=(await loadConnections()).basalam;if(!(c.token&&c.vendorId)&&!c.shops.some(s=>s.token&&s.vendorId))throw Error('تنظیمات باسلام در منوی همبرگری کامل نیست');

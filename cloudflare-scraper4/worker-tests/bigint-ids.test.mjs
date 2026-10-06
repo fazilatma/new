@@ -145,8 +145,10 @@ test('sync REST path: an existing huge id updates by its exact digits', async ()
     assert.equal(results[0].transport, 'api');
     assert.equal(results[0].id, BIG, 'the result id must be exact, not the rounded double');
     assert.deepEqual(seen.map(s => s.method), ['PATCH']);
-    assert.equal(seen[0].url, `http://192.0.2.1/v1/vendors/123/products/${BIG}`);
-    assert.notEqual(seen[0].url, `http://192.0.2.1/v1/vendors/123/products/${ROUNDED}`);
+    // 1.328.0 — the destination feedback loop starts at the documented gateway shape
+    // (PATCH /v1/products/{id}); what this test pins is the id, which must stay exact.
+    assert.equal(seen[0].url, `http://192.0.2.1/v1/products/${BIG}`);
+    assert.notEqual(seen[0].url, `http://192.0.2.1/v1/products/${ROUNDED}`);
   } finally {
     globalThis.fetch = realFetch;
     delete process.env.BASALAM_PYTHON;

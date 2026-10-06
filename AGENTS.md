@@ -58,6 +58,15 @@ npm test                                            # full gate (must be green)
   `worker-tests/deployer-ui-mobile.test.mjs` pins the markup and stylesheet,
   `worker-tests/deployer-ui-live.test.mjs` runs the page's own script against a
   parsed DOM to pin behaviour. Add a capability, add a pin.
+- **Feedback loop for every connection problem (user instruction).** When a
+  request fails — reading a source page or writing to a destination API — never
+  hard-code a single new address or header and call it fixed. Build or reuse the
+  loop: try one request shape, classify the answer, let that verdict choose the
+  next shape, verify the win against real content, remember the winning shape in
+  state, and report the attempt table plus a plain-Persian diagnosis to the user.
+  The two existing loops are `worker-src/connection-loop.ts` (source side) and
+  `worker-src/api-loop.ts` (destination side); extend them rather than adding a
+  one-off retry.
 - **Brownfield discipline.** Small diffs, count-asserted patches, no renames
   of public behavior; run the gate before every commit and push.
 - **Automatic push (user instruction).** After each completed code change, run
