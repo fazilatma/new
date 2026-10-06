@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.235';
+const APP_VERSION = '10.236';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -8937,6 +8937,57 @@ function bslCatalogBuildFromMatrix(int $vid): array {
         'detail' => 'ساخته‌شده از جدول مغایرت؛ بدون برداشت جداگانه از باسلام']);
 }
 
+/** آیا کشِ کاتالوگ ردیف قابل استفاده دارد؟ */
+function bslCatalogUsable(array $c): bool {
+    return is_array($c['items'] ?? null) && (count((array)($c['items'] ?? [])) > 0 || count((array)($c['rows'] ?? [])) > 0);
+}
+
+/** منبع کش از جدول مغایرت/واکشی مغایرت است، نه برداشت مستقل کاتالوگ. */
+function bslCatalogFromReconTable(array $c): bool {
+    $src = (string)($c['source'] ?? '');
+    if (in_array($src, ['sync_matrix', 'sync_matrix_fetch', 'recon_fetch'], true)) return true;
+    return (string)($c['status_scope'] ?? '') === 'active_2976' && !empty($c['partial']);
+}
+
+function bslMatrixGeneratedAt(): int {
+    if (!function_exists('matrixResultLoad')) return 0;
+    $mx = matrixResultLoad();
+    $t = (int)($mx['generated_at'] ?? 0);
+    if ($t <= 0 && defined('SYNC_MATRIX_RESULT_FILE') && is_file(SYNC_MATRIX_RESULT_FILE)) $t = (int)@filemtime(SYNC_MATRIX_RESULT_FILE);
+    return max(0, $t);
+}
+
+/**
+ * v10.236: مسیر مخصوص ارسال — هیچ برداشت شبکه‌ایِ کاتالوگ انجام نمی‌دهد.
+ * فقط از کش ساخته‌شده از جدول مغایرت/ماتریس استفاده می‌کند؛ اگر جدول تازه‌تر
+ * از کش باشد، کش از همان فایل نتیجهٔ مغایرت بازسازی می‌شود. اگر جدولی نباشد،
+ * خروجی خالی است و ارسال با جستجوی سبک محصول‌به‌محصول ادامه می‌دهد.
+ */
+function bslCatalogGetForSend(string $tk, int $vid): array {
+    if ($vid <= 0) return [];
+    $mxAt = bslMatrixGeneratedAt();
+    $acceptRecon = static function (array $c) use ($mxAt): bool {
+        if (!bslCatalogUsable($c) || !bslCatalogFromReconTable($c)) return false;
+        $catAt = max((int)($c['at'] ?? 0), (int)($c['matrix_generated_at'] ?? 0));
+        return $mxAt <= 0 || $catAt >= $mxAt;
+    };
+    if (isset($GLOBALS['_bslCatalog'][$vid]) && is_array($GLOBALS['_bslCatalog'][$vid]) && $acceptRecon($GLOBALS['_bslCatalog'][$vid])) {
+        return $GLOBALS['_bslCatalog'][$vid];
+    }
+    $c = bslCatalogRead($vid);
+    if ($acceptRecon($c)) { $GLOBALS['_bslCatalog'][$vid] = $c; return $c; }
+    if ($mxAt > 0) {
+        $mx = bslCatalogBuildFromMatrix($vid);
+        if (!empty($mx['ok'])) {
+            $c2 = $GLOBALS['_bslCatalog'][$vid] ?? bslCatalogRead($vid);
+            if (is_array($c2) && bslCatalogUsable($c2)) return $c2;
+        }
+    }
+    /* استفاده از کش تازهٔ موجود مجاز است، اما هیچ شبکه‌ای برای ساخت آن زده نمی‌شود. */
+    if (bslCatalogFresh($vid, $c) && bslCatalogUsable($c)) { $GLOBALS['_bslCatalog'][$vid] = $c; return $c; }
+    return [];
+}
+
 /**
  * کلِ فهرستِ محصولاتِ یک غرفه را می‌گیرد و به شکلِ «عنوانِ نرمال ⇒ شناسه»
  * روی دیسک می‌نشاند.
@@ -9083,9 +9134,9 @@ function bslCatalogGet(string $tk, int $vid, bool $build = true): array {
  *   0    ⇒ کش می‌گوید نیست و *قابل اعتماد* است (کش کامل و تازه)
  *   -1   ⇒ کش نمی‌داند (نبود، کهنه بود، یا ناقص بود) ⇒ آبشار را اجرا کن
  */
-function bslCatalogLookup(string $tk, int $vid, string $title, bool $build = true): int {
+function bslCatalogLookup(string $tk, int $vid, string $title, bool $build = true, bool $sendCacheOnly = false): int {
     if ($vid <= 0 || trim($title) === '') return -1;
-    $c = bslCatalogGet($tk, $vid, $build);
+    $c = ($sendCacheOnly || !empty($GLOBALS['_bslSendCatalogMatrixOnly'])) ? bslCatalogGetForSend($tk, $vid) : bslCatalogGet($tk, $vid, $build);
     if (!$c || !is_array($c['items'] ?? null)) return -1;
     foreach ([reconNormTitle($title), reconNormTitle(stripProductCode($title))] as $n) {
         if ($n !== '' && isset($c['items'][$n])) return (int)$c['items'][$n];
@@ -9114,9 +9165,9 @@ function bslCatalogRemoteRow(array $row, string $fallbackTitle = ''): array {
  * state=miss ⇒ کش کامل است و نبودن قطعی است
  * state=unknown ⇒ کش ناقص/ناموجود است و باید مسیرهای سبک یا عمیق امتحان شود
  */
-function bslCatalogLookupRow(string $tk, int $vid, string $title, bool $build = true, int $knownId = 0): array {
+function bslCatalogLookupRow(string $tk, int $vid, string $title, bool $build = true, int $knownId = 0, bool $sendCacheOnly = false): array {
     if ($vid <= 0 || (trim($title) === '' && $knownId <= 0)) return ['state' => 'unknown'];
-    $c = bslCatalogGet($tk, $vid, $build);
+    $c = ($sendCacheOnly || !empty($GLOBALS['_bslSendCatalogMatrixOnly'])) ? bslCatalogGetForSend($tk, $vid) : bslCatalogGet($tk, $vid, $build);
     if (!$c || !is_array($c['items'] ?? null)) return ['state' => 'unknown'];
     $id = $knownId;
     if ($id <= 0) {
@@ -38908,6 +38959,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "235'") !== false
       && version_compare(APP_VERSION, '10.' . '235', '>='));
 
+    /* ---------- v10.236: ارسال باسلام بدون rebuild کاتالوگ مقصد ---------- */
+    $add('10.236', 'مسیر مخصوص ارسال کاتالوگ را فقط از جدول مغایرت می‌خواند',
+         function_exists('bslCatalogGetFor' . 'Send')
+      && function_exists('bslCatalogFrom' . 'ReconTable')
+      && strpos($selfSrc, 'bslCatalogGetForSend($tk,$vid)') !== false);
+    $add('10.236', 'شروع ارسال دیگر bslCatalogGet با build شبکه‌ای صدا نمی‌زند',
+         strpos($selfSrc, '$__bslCatalogWarm=bslCatalogGetForSend($tk,$vid);') !== false
+      && strpos($selfSrc, '$__bslCatalogWarm=bslCatalogGet($tk,$vid,true);') === false
+      && strpos($selfSrc, 'کاتالوگ کامل از باسلام ساخته نمی‌شود') !== false);
+    $add('10.236', 'lookup کاتالوگ در حالت ارسال rebuild شبکه‌ای را دور می‌زند',
+         strpos($selfSrc, "!empty(\$GLOBALS['_bslSendCatalogMatrixOnly'])") !== false
+      && strpos($selfSrc, 'bslCatalogLookupRow($tk,$vid,$__ft,false,0,true)') !== false
+      && strpos($selfSrc, "\$GLOBALS['_bslSendCatalogMatrixOnly']=true;") !== false);
+    $add('10.236', 'ورودیِ 10.236 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "236'") !== false
+      && version_compare(APP_VERSION, '10.' . '236', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -54134,17 +54202,21 @@ $bslFlatCats=bslCatsAll($tk);
 bslSetCatNameMap($bslFlatCats);
 bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',[count($bslFlatCats).' دسته']);
 
-/* v10.234: پیش‌گرم‌کردن کش مقصد؛ در اکثر اجراها از جدول/اختلاف‌گیری تازه می‌آید
-   و جلوی جستجوی شبکه‌ایِ تک‌تک محصولات را می‌گیرد. */
-$__bslCatalogWarm=bslCatalogGet($tk,$vid,true);
-if(is_array($__bslCatalogWarm)){
+/* v10.236: ارسال دیگر برای هر اجرا برداشت/ساخت شبکه‌ای کاتالوگ انجام نمی‌دهد.
+   اول جدول آمادهٔ مغایرت‌گیری/ماتریس خوانده می‌شود؛ اگر نبود، فقط جستجوی سبک
+   محصول‌به‌محصول انجام می‌شود و کاتالوگ کامل مقصد از باسلام بازسازی نمی‌گردد. */
+$GLOBALS['_bslSendCatalogMatrixOnly']=true;
+$__bslCatalogWarm=bslCatalogGetForSend($tk,$vid);
+if(is_array($__bslCatalogWarm)&&bslCatalogUsable($__bslCatalogWarm)){
 $__warmRows=count((array)($__bslCatalogWarm['rows']??[]));$__warmItems=count((array)($__bslCatalogWarm['items']??[]));
-bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['📚 کش مقصد آماده: '.$__warmRows.' ردیف / '.$__warmItems.' کلید — منبع: '.($__bslCatalogWarm['source']??'catalog').(!empty($__bslCatalogWarm['partial'])?' (ناقص/فعال‌ها)':' (کامل)')]);
+$__warmSrc=(string)($__bslCatalogWarm['source']??'catalog');
+$__warmAge=(int)($__bslCatalogWarm['at']??0)>0?max(0,time()-(int)$__bslCatalogWarm['at']):0;
+bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['📚 کش مقصد از جدول مغایرت آماده شد: '.$__warmRows.' ردیف / '.$__warmItems.' کلید — منبع: '.$__warmSrc.' — بدون برداشت شبکه‌ای کاتالوگ'.($__warmAge>0?' — سن: '.round($__warmAge/60).' دقیقه':'')]);
 }else{
-bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['📚 کش مقصد آماده نشد؛ ارسال با جستجوی سبک ادامه می‌دهد']);
+bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['📚 جدول/کش مغایرت برای مقصد پیدا نشد؛ کاتالوگ کامل از باسلام ساخته نمی‌شود و ارسال با جستجوی سبک ادامه می‌دهد']);
 }
 
-bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['🚀 شروع ارسال — دفترچه/کاتالوگ اول، جستجوی شبکه فقط هنگام نیاز...']);
+bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['🚀 شروع ارسال — دفترچه/جدول مغایرت اول، بدون rebuild کاتالوگ مقصد...']);
 $pd=$verifyProducts;$total=count($pd);$sent=0;$updated=0;$skipped=0;$fail=0;
 /* v10.56 (۷۰): ادامه — شمارنده‌ها را از فایلِ پیشرفتِ قبلی برمی‌گردانیم
    (فایلِ محصولاتِ هر ردیفِ صف ثابت است، پس شمارشِ اجرأ قبلی معتبر است).
@@ -54202,7 +54274,7 @@ if(($bslPriceCfg['mode']??'none')!=='none'&&$__pn>0)$__pn=destAdjustPrice($__pn,
 $__unit=$__fp['price_unit']??'';if($__unit!=='rial')$__pn*=10;if($__pn<=0)continue;
 $__catId=(int)($cn['basalam']['category_id']??0);if($__catId<=0&&$autoCat&&!empty($bslFlatCats)){$__ac=autoMatchBslCategory($__ft,$bslFlatCats);if($__ac>0)$__catId=$__ac;}
 if($__catId>0&&!empty($cData)&&is_array($cData))$__catId=findLeafCategory($__catId,$cData);
-$__hit=bslCatalogLookupRow($tk,$vid,$__ft,true);
+$__hit=bslCatalogLookupRow($tk,$vid,$__ft,false,0,true);
 if(($__hit['state']??'')!=='hit'||!is_array($__hit['row']??null))continue;
 $__ex=$__hit['row'];$__id=(int)($__ex['id']??0);if($__id<=0)continue;
 $__rev=(is_array($__ex['revision']??null)&&isset($__ex['revision']['data'])&&is_array($__ex['revision']['data']))?$__ex['revision']['data']:[];
@@ -69639,6 +69711,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.236', t:'📚 ارسال باسلام بدون بازسازی کاتالوگ مقصد', items:[
+    'ارسال محصولات باسلام دیگر در شروع هر اجرا کاتالوگ کامل مقصد را از باسلام نمی‌سازد؛ فقط از جدول/کش تولیدشده توسط مغایرت‌گیری یا ماتریس استفاده می‌کند.',
+    'اگر جدول مغایرت برای غرفه وجود نداشته باشد، ارسال به‌جای rebuild کاتالوگ با جستجوی سبک محصول‌به‌محصول ادامه می‌دهد تا توقف طولانی ابتدای ارسال حذف شود.',
+    'لاگ ارسال اکنون صریحاً می‌گوید کش مقصد از جدول مغایرت آمده یا کاتالوگ کامل عمداً ساخته نشده است.',
+  ]},
   {v:'10.235', t:'🟢 مغایرت‌گیری باسلام فقط روی محصولات فعال', items:[
     'واکشی باسلام در مغایرت‌گیری تک‌غرفه‌ای و چندغرفه‌ای از این نسخه فقط status=2976 را می‌گیرد؛ محصولات غیرفعال، در انتظار، ردشده یا بایگانی‌شده دیگر وارد extra/price_diff/missing نمی‌شوند.',
     'کش ادامهٔ واکشی مغایرت‌گیری برای active-only جدا شد تا checkpointهای قدیمیِ active+inactive دوباره در نتیجهٔ جدید مخلوط نشوند.',
