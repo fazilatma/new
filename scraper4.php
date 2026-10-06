@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.231';
+const APP_VERSION = '10.232';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9906,6 +9906,7 @@ function s4JinaIndirectNet(): array {
 function s4JinaFetchPlan(): array {
     $net = s4JinaIndirectNet();
     $modes = [];
+    $diag = !empty($_GET['jina_direct_diag']) || !empty($_GET['jina_network_diag']);
     $add = function(string $m) use (&$modes, $net) {
         if (in_array($m, $modes, true)) return;
         if ($m === 'proxy' && trim((string)($net['proxy'] ?? '')) === '') return;
@@ -9915,11 +9916,16 @@ function s4JinaFetchPlan(): array {
         $modes[] = $m;
     };
     $pref = (string)($net['mode'] ?? 'direct');
-    if ($pref !== 'direct') $add($pref);
-    // Real indirect paths first; direct stays last only as a diagnostic fallback.
-    foreach (['proxy','worker','doh','dns','direct'] as $m) $add($m);
-    if (empty($modes)) $modes = ['direct'];
-    return ['net'=>$net, 'modes'=>$modes];
+    // v10.232: r.jina.ai is blocked from the Iranian host, so the production
+    // Jina route must be truly indirect: proxy/worker only. DoH/DNS/direct keep
+    // the same server egress path and are now available only when explicitly
+    // requested for diagnostics with ?jina_direct_diag=1.
+    if (in_array($pref, ['proxy','worker'], true)) $add($pref);
+    foreach (['proxy','worker'] as $m) $add($m);
+    if ($diag) foreach (['doh','dns','direct'] as $m) $add($m);
+    if (empty($modes)) $add('worker');
+    if (empty($modes) && $diag) $modes = ['direct'];
+    return ['net'=>$net, 'modes'=>$modes, 'diagnostic_direct' => $diag];
 }
 
 function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'direct', ?array $netOverride = null): array {
@@ -38604,6 +38610,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.231', 'ورودیِ 10.231 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "231'") !== false
       && version_compare(APP_VERSION, '10.' . '231', '>='));
+
+
+    /* ---------- v10.232: Jina بدون direct در حالت عملیاتی ---------- */
+    $_j232Plan = function_exists('s4JinaFetchPlan') ? s4JinaFetchPlan() : ['modes'=>[]];
+    $add('10.232', 'برنامهٔ عملیاتی Jina فقط مسیرهای واقعاً غیرمستقیم را امتحان می‌کند',
+         function_exists('s4JinaFetch' . 'Plan')
+      && in_array('worker', (array)($_j232Plan['modes'] ?? []), true)
+      && !in_array('direct', (array)($_j232Plan['modes'] ?? []), true)
+      && !in_array('doh', (array)($_j232Plan['modes'] ?? []), true)
+      && strpos($selfSrc, 'jina_direct_diag') !== false);
+    $add('10.232', 'ورودیِ 10.232 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "232'") !== false
+      && version_compare(APP_VERSION, '10.' . '232', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -69196,6 +69215,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.232', t:'🛰️ Jina فقط از مسیر غیرمستقیم عملیاتی', items:[
+    'در حالت عادی، موتور Jina Reader دیگر DoH/DNS/direct را امتحان نمی‌کند؛ چون برای r.jina.ai روی هاست ایرانی همان مسیر خروجی مسدود باقی می‌ماند. مسیر عملیاتی اکنون proxy/Worker است و direct فقط با ?jina_direct_diag=1 برای عیب‌یابی فعال می‌شود.',
+    'گزارش s4_feedback=jina روی هر URL معتبر همچنان برنامهٔ مسیرها را در jina_reader_modes نشان می‌دهد تا مشخص باشد تست واقعاً از مسیر غیرمستقیم انجام شده است.',
+  ]},
   {v:'10.231', t:'🧾 هدرهای Markdown در مسیر غیرمستقیم Jina', items:[
     'مسیرهای غیرمستقیم Jina Reader مثل Worker/Proxy/DoH/DNS اکنون همان هدرهای اختصاصی Reader را می‌فرستند؛ بنابراین Worker دیگر با هدرهای عمومی HTML، r.jina.ai را به صفحهٔ Cloudflare/Just a moment تحریک نمی‌کند.',
     'trace هر تلاش indirect همچنان via/code/sample را نشان می‌دهد و برای Worker آدرس درخواست واسط نیز در فیلد داخلی jina_reader_request_url نگه داشته می‌شود.',
