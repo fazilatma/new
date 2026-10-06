@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.234';
+const APP_VERSION = '10.235';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -8633,6 +8633,10 @@ function bslStatusQuery(): string {
     $q = '';
     foreach (bslAllStatuses() as $s) $q .= '&statuses=' . $s;
     return $q;
+}
+function bslActiveStatusQuery(): string {
+    /* v10.235: scope مخصوص مغایرت‌گیری/ماتریس — فقط محصول فعال و قابل مشاهده. */
+    return '&statuses=2976';
 }
 
 /* =====================================================================
@@ -38886,6 +38890,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "234'") !== false
       && version_compare(APP_VERSION, '10.' . '234', '>='));
 
+    /* ---------- v10.235: مغایرت‌گیری باسلام فقط محصولات فعال ---------- */
+    $add('10.235', 'scope فعال باسلام برای مغایرت‌گیری یک helper جدا دارد',
+         function_exists('bslActiveStatus' . 'Query')
+      && bslActiveStatusQuery() === '&statuses=2976');
+    $add('10.235', 'recon تک‌غرفه‌ای باسلام فقط active 2976 را واکشی می‌کند',
+         strpos($selfSrc, "reconFetchResumable('bsl', [], \$tk, \$vid, \$fetchMeta, true)") !== false
+      && strpos($selfSrc, 'باسلام' . "' . (\$shopName !== '' ? ' · ' . \$shopName : '') . ' (فقط فعال 2976)'") !== false);
+    $add('10.235', 'کش ادامهٔ واکشی active-only با active+inactive مخلوط نمی‌شود',
+         strpos($selfSrc, "\$cursorTarget = (\$target === 'bsl' && \$customerVisibleOnly) ? 'bsl_active' : \$target;") !== false
+      && strpos($selfSrc, 'reconFetchCursorAppend($cursorTarget, $vid, $page, $pageRows)') !== false);
+    $add('10.235', 'گزارش‌های پسوند/مغایرت فقط وضعیت 2976 را از باسلام می‌خوانند',
+         strpos($selfSrc, '$statuses = bslActiveStatusQuery();') !== false
+      && strpos($selfSrc, "'status_scope' => 'active_2976'") !== false
+      && strpos($selfSrc, 'محصول فعال 2976') !== false);
+    $add('10.235', 'ورودیِ 10.235 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "235'") !== false
+      && version_compare(APP_VERSION, '10.' . '235', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -45236,15 +45258,17 @@ function suffixFetchBsl(string $tk, int $vid, int $maxPages = 80, ?array $cp = n
                          ?array &$meta = null, string $checkpointTarget = 'bsl', array $summaryContext = []): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false,
              'reason' => '', 'error' => '', 'page' => (int)($cp['page'] ?? 0)];
-    $rows = is_array($cp['rows'] ?? null) && (string)($cp['target'] ?? '') === 'bsl'
+    $scopeOk = ($cp === null) || (($cp['status_scope'] ?? '') === 'active_2976');
+    $rows = $scopeOk && is_array($cp['rows'] ?? null) && (string)($cp['target'] ?? '') === 'bsl'
         ? array_values(array_filter($cp['rows'], 'is_array')) : [];
-    if (($cp['phase'] ?? '') === 'match' && (!empty($cp['complete']) || $rows)) {
+    if ($scopeOk && ($cp['phase'] ?? '') === 'match' && (!empty($cp['complete']) || $rows)) {
         $meta['complete'] = true;
         return $rows;
     }
-    $startPage = max(1, (int)($cp['page'] ?? 0) + 1);
+    $startPage = $scopeOk ? max(1, (int)($cp['page'] ?? 0) + 1) : 1;
     $lastPage = max(0, $startPage - 1);
-    $statuses = '&statuses=2976&statuses=3790&statuses=3567&statuses=3568&statuses=4184';
+    /* v10.235: گزارش‌های مرتبط با مغایرت‌گیری/پسوند فقط فعال‌های باسلام را می‌خوانند. */
+    $statuses = bslActiveStatusQuery();
     $save = static function (int $page, array $rows, bool $complete = false) use
         ($checkpointTarget, $summaryContext, $vid, $cp): void {
         $base = $summaryContext;
@@ -45253,13 +45277,14 @@ function suffixFetchBsl(string $tk, int $vid, int $maxPages = 80, ?array $cp = n
         $base['page'] = $page;
         $base['rows'] = $rows;
         $base['complete'] = $complete;
+        $base['status_scope'] = 'active_2976';
         $base['current_vid'] = $vid;
         $base['started_at'] = (int)($summaryContext['started_at'] ?? ($cp['started_at'] ?? time()));
         $base['notify'] = !empty($summaryContext['notify']) || !empty($cp['notify']);
         if ($checkpointTarget !== 'summary') {
             $base = ['target' => $checkpointTarget, 'phase' => 'fetch', 'page' => $page,
-                'rows' => $rows, 'complete' => $complete, 'notify' => $base['notify'],
-                'started_at' => $base['started_at']];
+                'rows' => $rows, 'complete' => $complete, 'status_scope' => 'active_2976',
+                'notify' => $base['notify'], 'started_at' => $base['started_at']];
         }
         suffixProgress(['phase' => 'fetch', 'page' => $page, 'fetched' => count($rows),
             'checkpoint' => $base]);
@@ -45298,7 +45323,7 @@ function suffixFetchBsl(string $tk, int $vid, int $maxPages = 80, ?array $cp = n
         }
         $lastPage = $page; $meta['page'] = $page;
         suffixProgress(['log_add' => ['📄 باسلام صفحهٔ ' . $page . ': ' . count($batch)
-            . ' محصول (مجموع ' . count($rows) . ')'], 'phase' => 'fetch', 'page' => $page,
+            . ' محصول فعال 2976 (مجموع ' . count($rows) . ')'], 'phase' => 'fetch', 'page' => $page,
             'fetched' => count($rows)]);
         if (count($batch) < 100) {
             $meta['complete'] = true;
@@ -46369,12 +46394,12 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
  * واکشی محصولات باسلام برای مغایرت‌گیری/ماتریس.
  * $customerVisibleOnly=true ⇒ فقط وضعیت 2976 (فعال و قابل مشاهده برای مشتری)
  *                           — نه غیرفعال/در انتظار/بایگانی.
- * پیش‌فرض false برای سازگاری recon قدیمی (فعال+غیرفعال).
+ * از v10.235 پیش‌فرض true است: همهٔ عملیات مغایرت‌گیری فقط فعال‌ها را می‌خوانند.
  */
-function reconFetchBsl(string $tk, int $vid, int $maxPages = 0, bool $customerVisibleOnly = false): array {
+function reconFetchBsl(string $tk, int $vid, int $maxPages = 0, bool $customerVisibleOnly = true): array {
     if ($maxPages <= 0) $maxPages = (int)RECON_FETCH_MAX_PAGES;
     $rows = [];
-    $stQ = $customerVisibleOnly ? '&statuses=2976' : '&statuses=2976&statuses=3790';
+    $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
     for ($page = 1; $page <= $maxPages; $page++) {
         if (reconStopRequested()) break;
         $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page
@@ -46433,7 +46458,8 @@ function reconFetchCursorAppend(string $target, int $vid, int $page, array $rows
 function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?array &$meta = null, bool $customerVisibleOnly = false): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
     $maxPages = (int)RECON_FETCH_MAX_PAGES;
-    $cur = reconFetchCursorLoad($target, $vid);
+    $cursorTarget = ($target === 'bsl' && $customerVisibleOnly) ? 'bsl_active' : $target;
+    $cur = reconFetchCursorLoad($cursorTarget, $vid);
     $rows = array_values(array_filter((array)($cur['rows'] ?? []), 'is_array'));
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     if ($rows) reconProgress(['log_add' => ['↻ ادامهٔ واکشی از صفحهٔ ' . $startPage . ' — ' . count($rows) . ' محصولِ قبلاً خوانده‌شده']]);
@@ -46454,7 +46480,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
                     'status' => (string)($pr['status'] ?? ''), 'via' => 'api'];
             }
         } else {
-            $stQ = $customerVisibleOnly ? '&statuses=2976' : '&statuses=2976&statuses=3790';
+            $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
             $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ);
             if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page; break; }
             $batch = $r['body']['data'];
@@ -46471,10 +46497,10 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
                     'stock' => (int)($rev['stock'] ?? ($rev['inventory'] ?? ($pr['stock'] ?? ($pr['inventory'] ?? 0))))];
             }
         }
-        $rows = array_merge($rows, $pageRows); reconFetchCursorAppend($target, $vid, $page, $pageRows);
+        $rows = array_merge($rows, $pageRows); reconFetchCursorAppend($cursorTarget, $vid, $page, $pageRows);
         $meta['page'] = $page;
         $endpointNote = $target === 'bsl'
-            ? ('vendors/' . $vid . '/products · statuses=' . ($customerVisibleOnly ? '2976' : '2976,3790'))
+            ? ('vendors/' . $vid . '/products · statuses=' . ($customerVisibleOnly ? '2976 active-only' : '2976,3790'))
             : 'Woo products REST/direct';
         $progressLine = '📄 ' . ($target === 'bsl' ? 'باسلام' : 'ووکامرس') . ' صفحهٔ ' . $page
             . ': ' . count($batch) . ' ردیف؛ مجموع ' . count($rows) . ' — ' . $endpointNote;
@@ -46665,7 +46691,7 @@ function reconRunOne(array $cn, string $target, bool $apply = false,
 
     if (reconStopRequested()) return $stopRecon();
     reconProgress(['phase' => 'fetch', 'log_add' => ['📥 دریافت محصولات '
-        . ($target === 'woo' ? 'ووکامرس' : ('باسلام' . ($shopName !== '' ? ' · ' . $shopName : ''))) . '...']]);
+        . ($target === 'woo' ? 'ووکامرس' : ('باسلام' . ($shopName !== '' ? ' · ' . $shopName : '') . ' (فقط فعال 2976)')) . '...']]);
     /* v10.126: واکشی همیشه از مسیرِ قابلِ ادامه است تا کشِ صفحه‌ای ساخته شود؛
        فقط مسیرِ DB مستقیمِ ووکامرس (سریع، بدونِ نیاز به کش) وقتی به کار می‌رود
        که ادامه‌ای در کار نباشد. */
@@ -46685,7 +46711,7 @@ function reconRunOne(array $cn, string $target, bool $apply = false,
         $tk = $shopToken !== '' ? $shopToken : (string)($cn['basalam']['token'] ?? '');
         $vid = $vendorId > 0 ? $vendorId : (int)($cn['basalam']['vendor_id'] ?? 0);
         if ($tk === '' || $vid <= 0) { $out['ok'] = false; $out['error'] = 'تنظیمات باسلام ناقص'; return $out; }
-        $remote = reconFetchResumable('bsl', [], $tk, $vid, $fetchMeta);
+        $remote = reconFetchResumable('bsl', [], $tk, $vid, $fetchMeta, true);
     }
     if (!empty($fetchMeta['partial']) || reconStopRequested()) {
         if (!empty($fetchMeta['stopped']) || reconStopRequested()) return $stopRecon();
@@ -69613,6 +69639,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.235', t:'🟢 مغایرت‌گیری باسلام فقط روی محصولات فعال', items:[
+    'واکشی باسلام در مغایرت‌گیری تک‌غرفه‌ای و چندغرفه‌ای از این نسخه فقط status=2976 را می‌گیرد؛ محصولات غیرفعال، در انتظار، ردشده یا بایگانی‌شده دیگر وارد extra/price_diff/missing نمی‌شوند.',
+    'کش ادامهٔ واکشی مغایرت‌گیری برای active-only جدا شد تا checkpointهای قدیمیِ active+inactive دوباره در نتیجهٔ جدید مخلوط نشوند.',
+    'گزارش‌های مرتبط با مغایرت/پسوند هم فقط محصولات فعال باسلام را می‌خوانند و در لاگ، active-only بودن endpoint را نشان می‌دهند.',
+  ]},
   {v:'10.234', t:'⚡ ارسال سریع‌تر باسلام و گزارش‌های دقیق‌تر', items:[
     'ارسال تک‌غرفه‌ای باسلام اکنون قبل از حلقه، کاتالوگ مقصد را گرم می‌کند و آپدیت‌های امنِ محصولات موجود را با endpoint گروهی batch-updates می‌فرستد؛ محصولاتی که از کاتالوگ بی‌تغییر تشخیص داده شوند بدون درخواست شبکه رد می‌شوند.',
     'در آپدیت محصول موجود، آپلود عکس فقط وقتی انجام می‌شود که اختلاف گالری واقعاً لازم باشد؛ بنابراین تغییر قیمت/موجودی/توضیح دیگر برای هر محصول منتظر آپلود چند تصویر نمی‌ماند.',
