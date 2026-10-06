@@ -13,6 +13,8 @@
  * against fixtures with no network at all.
  */
 
+import { shapeUrl, urlEncodingNotes, URL_SHAPE_LABELS, type UrlShape } from './url-shapes.js';
+
 export type LoopVerdict =
   | 'ok'            // real page content came back
   | 'forbidden'     // 401/403 — the edge refused this request shape
@@ -31,6 +33,12 @@ export type ConnectionRecipe = {
   route: RecipeRoute;
   /** Warm up by requesting the site root first and reusing its cookies + referer. */
   warm?: boolean;
+  /**
+   * Spell the URL differently for this attempt. Encoding is part of the request fingerprint:
+   * a Persian query written with `+` instead of `%20`, or an address that was pasted already
+   * encoded, is a different request as far as a WAF or an IIS pipeline is concerned.
+   */
+  url?: UrlShape;
   headers: (target: URL) => Record<string, string>;
 };
 
@@ -70,6 +78,22 @@ export const CONNECTION_RECIPES: ConnectionRecipe[] = [
   {
     id: 'direct-warm', label: 'گرم‌کردن صفحهٔ اصلی و سپس درخواست', route: 'direct', warm: true,
     headers: target => ({ referer: target.origin + '/', ...BROWSER_NAV, ...CLIENT_HINTS })
+  },
+  {
+    id: 'url-unescape', label: 'آدرس با یک لایه رمزگذاری کمتر', route: 'direct', url: 'unescape-once',
+    headers: target => ({ referer: target.origin + '/', ...BROWSER_NAV })
+  },
+  {
+    id: 'url-plus-space', label: 'فاصلهٔ کوئری به‌صورت +', route: 'direct', url: 'plus-space',
+    headers: target => ({ referer: target.origin + '/', ...BROWSER_NAV })
+  },
+  {
+    id: 'url-space-20', label: 'فاصلهٔ کوئری به‌صورت %20', route: 'direct', url: 'space-20',
+    headers: target => ({ referer: target.origin + '/', ...BROWSER_NAV })
+  },
+  {
+    id: 'url-lower-escapes', label: 'کدهای درصدی با حروف کوچک', route: 'direct', url: 'lower-escapes',
+    headers: target => ({ referer: target.origin + '/', ...BROWSER_NAV })
   },
   { id: 'worker', label: 'از مسیر Worker واسط', route: 'worker', headers: () => ({}) },
   {
@@ -113,11 +137,12 @@ export const VERDICT_PLAN: Record<LoopVerdict, string[]> = {
   // A challenge is an IP/JS problem: header cosmetics never solve it, leave the network.
   challenge: ['worker', 'worker-ua', 'direct-warm'],
   // A plain refusal is usually about how the request looks.
-  forbidden: ['direct-referer', 'direct-hints', 'direct-warm', 'direct-mobile', 'direct-search-bot', 'worker', 'worker-ua'],
+  forbidden: ['direct-referer', 'direct-hints', 'url-unescape', 'url-plus-space', 'url-space-20', 'url-lower-escapes',
+    'direct-warm', 'direct-mobile', 'direct-search-bot', 'worker', 'worker-ua'],
   throttled: ['direct-referer', 'direct-hints', 'worker'],
   server: ['direct-referer', 'worker', 'worker-ua'],
-  empty: ['direct-hints', 'direct-warm', 'direct-mobile', 'worker'],
-  mismatch: ['direct-hints', 'direct-warm', 'direct-mobile', 'worker', 'worker-ua'],
+  empty: ['direct-hints', 'url-unescape', 'url-plus-space', 'direct-warm', 'direct-mobile', 'worker'],
+  mismatch: ['url-unescape', 'url-plus-space', 'direct-hints', 'direct-warm', 'direct-mobile', 'worker', 'worker-ua'],
   network: ['direct-referer', 'worker', 'worker-ua'],
   ok: []
 };
@@ -180,12 +205,16 @@ export function selectorVerifier(selector?: string): LoopDeps['verify'] {
 
 export type LoopAttempt = {
   round: number; recipe: string; label: string; route: RecipeRoute;
+  /** The exact address this attempt sent — the spelling matters, so it is reported. */
+  url: string; shape: UrlShape; shapeLabel: string;
   status: number; verdict: LoopVerdict; note: string; ms: number; bytes: number;
 };
 
 export type LoopReport = {
   ok: boolean; url: string; host: string;
   recipe: string | null; route: RecipeRoute | null;
+  /** The spelling that worked (or was last tried) and what is unusual about the address. */
+  shape: UrlShape | null; sentUrl: string | null; urlNotes: string[];
   attempts: LoopAttempt[];
   advice: string;
   learned: boolean;
@@ -208,7 +237,7 @@ export type LoopDeps = {
   now?: () => number;
 };
 
-export type LearnedRecipe = { recipe: string; route: RecipeRoute; at: number; verdictBefore: LoopVerdict | null };
+export type LearnedRecipe = { recipe: string; route: RecipeRoute; shape: UrlShape; at: number; verdictBefore: LoopVerdict | null };
 
 export function recipeKey(url: string): string {
   let host = '';
@@ -235,63 +264,90 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
   const now = deps.now || (() => Date.now());
   const sleep = deps.sleep || ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const target = new URL(options.url);
+  const canonical = target.href;
   const rounds = Math.max(1, Math.min(MAX_ROUNDS, Number(options.maxRounds) || MAX_ROUNDS));
   const attempts: LoopAttempt[] = [];
   const tried: string[] = [];
+  const sent = new Set<string>();
   const plan = { hasGateway: deps.hasGateway, allowDirect: deps.allowDirect !== false };
+  const urlNotes = urlEncodingNotes(options.url);
   const first = recipeById(options.startWith || '');
   // Start from the remembered shape when there is one, otherwise from the plain request —
   // unless direct access is not allowed at all, in which case start at the gateway.
   let recipe: ConnectionRecipe | null = first && usable(first, [], plan) ? first
     : plan.allowDirect ? CONNECTION_RECIPES[0]! : planNext('forbidden', [], plan);
   let throttleWaits = 0;
+  let lastVerdict: LoopVerdict = 'forbidden';
 
-  for (let round = 1; round <= rounds && recipe; round++) {
+  /** Skips a planned recipe whose URL spelling is identical to one already sent: no new information. */
+  const pick = (candidate: ConnectionRecipe | null): { recipe: ConnectionRecipe; url: string } | null => {
+    while (candidate) {
+      const url = shapeUrl(canonical, candidate.url || 'canonical');
+      const duplicate = Boolean(candidate.url) && sent.has(candidate.route + ':' + url);
+      if (!duplicate && !tried.includes(candidate.id)) return { recipe: candidate, url };
+      tried.push(candidate.id);
+      candidate = planNext(lastVerdict, tried, plan);
+    }
+    return null;
+  };
+
+  let current = pick(recipe);
+  for (let round = 1; round <= rounds && current; round++) {
     const started = now();
-    tried.push(recipe.id);
+    const { recipe: active, url: sentUrl } = current;
+    tried.push(active.id);
+    sent.add(active.route + ':' + sentUrl);
     let raw: { status: number; text: string; url?: string; error?: string };
     try {
-      raw = await deps.transport({ url: target.href, route: recipe.route, headers: recipe.headers(target), warm: Boolean(recipe.warm) });
+      raw = await deps.transport({ url: sentUrl, route: active.route, headers: active.headers(target), warm: Boolean(active.warm) });
     } catch (error) {
       raw = { status: 0, text: '', error: error instanceof Error ? error.message : String(error) };
     }
     let { verdict, note } = classifyAttempt(raw);
     if (verdict === 'ok' && deps.verify) {
-      const checked = await deps.verify({ text: raw.text, url: raw.url || target.href });
+      const checked = await deps.verify({ text: raw.text, url: raw.url || sentUrl });
       if (!checked.ok) { verdict = 'mismatch'; note = checked.note || 'محتوای مورد انتظار در صفحه پیدا نشد.'; }
       else note = checked.note || note;
     }
+    const shape: UrlShape = active.url || 'canonical';
     attempts.push({
-      round, recipe: recipe.id, label: recipe.label, route: recipe.route,
+      round, recipe: active.id, label: active.label, route: active.route,
+      url: sentUrl, shape, shapeLabel: URL_SHAPE_LABELS[shape],
       status: Number(raw.status || 0), verdict, note, ms: Math.max(0, now() - started),
       bytes: String(raw.text || '').length
     });
+    lastVerdict = verdict;
 
     if (verdict === 'ok') {
-      const learned: LearnedRecipe = { recipe: recipe.id, route: recipe.route, at: now(), verdictBefore: attempts[0]?.verdict ?? null };
-      await deps.setState(recipeKey(target.href), learned);
+      const learned: LearnedRecipe = { recipe: active.id, route: active.route, shape, at: now(), verdictBefore: attempts[0]?.verdict ?? null };
+      await deps.setState(recipeKey(canonical), learned);
+      const spelling = shape === 'canonical' ? '' : ` با نگارش آدرس «${URL_SHAPE_LABELS[shape]}»`;
       return {
-        ok: true, url: target.href, host: target.hostname, recipe: recipe.id, route: recipe.route,
-        attempts, learned: true,
-        advice: `این روش جواب داد: «${recipe.label}». از این پس همین روش برای ${target.hostname} به‌صورت خودکار استفاده می‌شود.`
+        ok: true, url: canonical, host: target.hostname, recipe: active.id, route: active.route,
+        shape, sentUrl, urlNotes, attempts, learned: true,
+        advice: `این روش جواب داد: «${active.label}»${spelling}. از این پس همین روش برای ${target.hostname} به‌صورت خودکار استفاده می‌شود.`
       };
     }
 
     // 429 is the one verdict that asks for patience rather than a different shape.
     if (verdict === 'throttled' && throttleWaits < 2) { throttleWaits++; tried.pop(); await sleep(1500 * throttleWaits); continue; }
 
-    const next: ConnectionRecipe | null = planNext(verdict, tried, plan);
-    recipe = next;
+    current = pick(planNext(verdict, tried, plan));
   }
 
   return {
-    ok: false, url: target.href, host: target.hostname, recipe: null, route: null, attempts, learned: false,
-    advice: failureAdvice(attempts, deps.hasGateway)
+    ok: false, url: canonical, host: target.hostname, recipe: null, route: null,
+    shape: null, sentUrl: attempts.length ? attempts[attempts.length - 1]!.url : null, urlNotes,
+    attempts, learned: false,
+    advice: failureAdvice(attempts, deps.hasGateway, urlNotes)
   };
 }
 
-export function failureAdvice(attempts: LoopAttempt[], hasGateway: boolean): string {
+export function failureAdvice(attempts: LoopAttempt[], hasGateway: boolean, urlNotes: string[] = []): string {
   const verdicts = attempts.map(a => a.verdict);
+  // An address that is spelled oddly is the cheapest explanation of a refusal, so it is said first.
+  if (urlNotes.length && verdicts.every(v => v === 'forbidden' || v === 'empty' || v === 'mismatch'))
+    return 'هیچ شکلی از درخواست پذیرفته نشد و نگارش خود آدرس هم مشکوک است: ' + urlNotes[0] + ' آدرس پروفایل را مستقیم از نوار آدرس مرورگر کپی کنید.';
   if (!hasGateway && (verdicts.includes('challenge') || verdicts.includes('forbidden')))
     return 'همهٔ شکل‌های درخواست مستقیم رد شدند. این یعنی مسدودسازی بر اساس IP است: در «روش اتصال مبدأ» آدرس Worker واسط را وارد کنید تا حلقه بتواند مسیر غیرمستقیم را هم امتحان کند.';
   if (verdicts.includes('challenge'))

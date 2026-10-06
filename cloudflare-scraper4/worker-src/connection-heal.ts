@@ -18,6 +18,7 @@ import {
   runConnectionLoop, learnedRecipe, recipeById, selectorVerifier, shouldAutoHeal, autoHealAllowed, forgetRecipe,
   type ConnectionRecipe, type LoopDeps, type LoopReport, type LoopTransport, type RecipeRoute
 } from './connection-loop.js';
+import { shapeUrl, type UrlShape } from './url-shapes.js';
 
 export { shouldAutoHeal };
 /** Drops the remembered recipe for a host so the next run re-learns it from scratch. */
@@ -63,7 +64,7 @@ export async function healSourceConnection(url: string, options: { listSelector?
   return runConnectionLoop(deps, { url, maxRounds: options.maxRounds, startWith: options.startWith });
 }
 
-export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string> } | null;
+export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string>; url: string; shape: UrlShape } | null;
 
 /** The remembered request shape for this host, ready to be merged into the next fetch. */
 export async function learnedSourceInit(url: string): Promise<LearnedInit> {
@@ -71,7 +72,11 @@ export async function learnedSourceInit(url: string): Promise<LearnedInit> {
   if (!saved) return null;
   const recipe = recipeById(saved.recipe);
   if (!recipe) return null;
-  try { return { recipe, route: recipe.route, headers: recipe.headers(new URL(url)) }; } catch { return null; }
+  const shape: UrlShape = saved.shape || recipe.url || 'canonical';
+  try {
+    const target = new URL(url);
+    return { recipe, route: recipe.route, headers: recipe.headers(target), url: shapeUrl(target.href, shape), shape };
+  } catch { return null; }
 }
 
 /**

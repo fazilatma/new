@@ -152,9 +152,10 @@ export type ApiRequestInit = RequestInit & {
  * replays the request shape the host already accepted, and one block-shaped failure heals
  * itself instead of failing identically forever. Twin: sourceText() in worker-src/scraper.ts.
  */
+export type LearnedRequestShape = { headers: Record<string, string>; route: 'direct' | 'worker'; url?: string };
 export type ConnectionRecipeHooks = {
-  learned: (url: string) => Promise<{ headers: Record<string, string>; route: 'direct' | 'worker' } | null>;
-  heal: (url: string, message: string) => Promise<{ headers: Record<string, string>; route: 'direct' | 'worker' } | null>;
+  learned: (url: string) => Promise<LearnedRequestShape | null>;
+  heal: (url: string, message: string) => Promise<LearnedRequestShape | null>;
 };
 let recipeHooks: ConnectionRecipeHooks | null = null;
 export function registerConnectionRecipe(hooks: ConnectionRecipeHooks | null): void { recipeHooks = hooks; }
@@ -196,7 +197,12 @@ export async function safeFetch(raw: string, init: ApiRequestInit = {}, maxBytes
   // Replay the request shape this host already accepted (see connection-heal.ts).
   const learned = recipeHooks && init.directRoute !== true && init.aiEndpoint !== true && init.apiMode !== true && init.noRecipe !== true
     ? await recipeHooks.learned(url.href).catch(() => null) : null;
-  if (learned) init = { ...init, headers: { ...(learned.headers as any), ...(init.headers as any) }, indirect: init.indirect || learned.route === 'worker' };
+  if (learned) {
+    init = { ...init, headers: { ...(learned.headers as any), ...(init.headers as any) }, indirect: init.indirect || learned.route === 'worker' };
+    // The remembered recipe may also respell the address (e.g. a Persian query with + instead
+    // of %20); keep the host/origin checks by re-validating the respelled URL.
+    if (learned.url && learned.url !== url.href) url = await assertPublicUrl(learned.url);
+  }
   for (let redirects = 0; redirects < 5; redirects++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
@@ -286,7 +292,7 @@ export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiReque
     const message = error instanceof Error ? error.message : String(error);
     const healed = recipeHooks && init.noRecipe !== true ? await recipeHooks.heal(raw, message).catch(() => null) : null;
     if (!healed) throw error;
-    return safeTextOnce(raw, maxBytes, { ...init, headers: { ...(healed.headers as any), ...(init.headers as any) }, indirect: init.indirect || healed.route === 'worker', noRecipe: true });
+    return safeTextOnce(healed.url || raw, maxBytes, { ...init, headers: { ...(healed.headers as any), ...(init.headers as any) }, indirect: init.indirect || healed.route === 'worker', noRecipe: true });
   }
 }
 async function safeTextOnce(raw: string, maxBytes: number, init: ApiRequestInit): Promise<{ text: string; url: string; route: string }> {

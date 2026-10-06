@@ -1,4 +1,5 @@
 import {browserLaunchArguments,playwrightSandboxOptions} from '../scripts/browser-defaults.mjs';
+import { setQueryParam, deleteQueryParams, readQueryParam } from '../worker-src/url-shapes.js';
 import {selectorDiagnosticAdvice,initialSelectorEvidenceApplies} from '../worker-src/selector-diagnostic-advice.js';
 import {diagnosticDetails} from '../worker-src/diagnostic-details.js';
 import {isBrowserSelectorEngine} from '../worker-src/selector-engine.js';
@@ -339,11 +340,12 @@ export function pageUrl(profile: Profile, page: number): string {
     const basePath = url.pathname.replace(/\/page\/\d+\/?$/i, '').replace(/\/$/, '');
     return url.origin + basePath + pattern.split('{page}').join(String(next));
   }
+  // 1.326.0 — the page cursor is edited as text, never through URLSearchParams: that API
+  // re-serialises the whole query (%20→+, /→%2F) and a Persian search term then reaches the
+  // source spelled differently on page 2 than on page 1. Twin: worker-src/scraper.ts.
   const param = profile.pagination === 'query_custom' ? (profile.paginationValue || 'paged') : 'page';
-  const current = Number(url.searchParams.get(param) || 1);
-  url.hash = '';
-  url.searchParams.set(param, String(pageNumber(current)));
-  return url.href;
+  const current = Number(readQueryParam(url.href, param) || 1);
+  return setQueryParam(url.href.split('#')[0]!, param, String(pageNumber(current)));
 }
 
 /**
@@ -365,8 +367,7 @@ export function benchmarkProbeUrl(profile: Profile): string {
       return url.href;
     }
     const custom = pagination === 'query_custom' ? String((profile as any)?.paginationValue || 'paged') : 'page';
-    for (const param of new Set([custom, 'page', 'paged'])) url.searchParams.delete(param);
-    return url.href;
+    return deleteQueryParams(url.href, [...new Set([custom, 'page', 'paged'])]);
   } catch { return profile.url; }
 }
 

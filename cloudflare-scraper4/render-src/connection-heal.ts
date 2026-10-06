@@ -12,6 +12,7 @@ import {
   runConnectionLoop, learnedRecipe, recipeById, selectorVerifier, shouldAutoHeal, autoHealAllowed, forgetRecipe,
   type ConnectionRecipe, type LoopDeps, type LoopReport, type LoopTransport, type RecipeRoute
 } from '../worker-src/connection-loop.js';
+import { shapeUrl, type UrlShape } from '../worker-src/url-shapes.js';
 
 export { shouldAutoHeal };
 /** Drops the remembered recipe for a host so the next run re-learns it from scratch. */
@@ -51,13 +52,17 @@ export async function healSourceConnection(url: string, options: { listSelector?
   return runConnectionLoop(await loopDeps(url, options.listSelector), { url, maxRounds: options.maxRounds, startWith: options.startWith });
 }
 
-export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string> } | null;
+export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string>; url: string; shape: UrlShape } | null;
 
 export async function learnedSourceInit(url: string): Promise<LearnedInit> {
   const saved = await learnedRecipe(getState, url);
   const recipe = saved && recipeById(saved.recipe);
   if (!recipe) return null;
-  try { return { recipe, route: recipe.route, headers: recipe.headers(new URL(url)) }; } catch { return null; }
+  const shape: UrlShape = saved!.shape || recipe.url || 'canonical';
+  try {
+    const target = new URL(url);
+    return { recipe, route: recipe.route, headers: recipe.headers(target), url: shapeUrl(target.href, shape), shape };
+  } catch { return null; }
 }
 
 export async function autoHeal(url: string, message: string, listSelector?: string): Promise<LearnedInit> {
@@ -72,10 +77,10 @@ export async function autoHeal(url: string, message: string, listSelector?: stri
 registerConnectionRecipe({
   learned: async url => {
     const learned = await learnedSourceInit(url);
-    return learned ? { headers: learned.headers, route: learned.route } : null;
+    return learned ? { headers: learned.headers, route: learned.route, url: learned.url } : null;
   },
   heal: async (url, message) => {
     const healed = await autoHeal(url, message);
-    return healed ? { headers: healed.headers, route: healed.route } : null;
+    return healed ? { headers: healed.headers, route: healed.route, url: healed.url } : null;
   }
 });

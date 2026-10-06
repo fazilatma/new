@@ -137,6 +137,11 @@ test('pagination URL construction matches every PHP mode and drops stale path qu
   assert.equal(scraper.pageUrl(profile('full_pattern','','https://shop.test/catalog'),2),'');
   assert.equal(scraper.pageUrl(profile('full_pattern','https://cdn.test/{page}/x/{page}','https://shop.test/catalog'),8),'https://cdn.test/8/x/8');
   assert.equal(scraper.pageUrl(profile('next_selector','.next'),2),'https://shop.test/catalog?sort=asc#items');
+  // 1.326.0 — a Persian query must reach page 2 spelled exactly as on page 1. URLSearchParams
+  // used to rewrite it (%20→+, /→%2F) and picky sources (emalls.ir) answered 403.
+  const persian='https://emalls.ir/Search?q='+encodeURIComponent('کفش زنانه')+'&cat=a/b&page=1';
+  assert.equal(scraper.pageUrl(profile('query_page','',persian),2),'https://emalls.ir/Search?q='+encodeURIComponent('کفش زنانه')+'&cat=a/b&page=2');
+  assert.equal(scraper.benchmarkProbeUrl(profile('query_page','',persian)),'https://emalls.ir/Search?q='+encodeURIComponent('کفش زنانه')+'&cat=a/b');
 });
 
 test('response decoding honors declared legacy encodings and BOMs',()=>{

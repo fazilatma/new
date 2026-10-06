@@ -6,6 +6,7 @@ import { applyResultAdjustments } from './result-adjustments.js';
 import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progress.js';
 import { autoHeal, learnedSourceInit, sourceNetworkFor, type LearnedInit } from './connection-heal.js';
 import { safeText, safeTextViaWorker } from './network.js';
+import { setQueryParam, deleteQueryParams, readQueryParam } from './url-shapes.js';
 import { escapeHtml, sha256 } from './utils.js';
 import type { ExtractionEngine, Product, Profile, Selectors, VariationGroup } from './types.js';
 import { DEFAULT_SELECTORS } from './types.js';
@@ -87,12 +88,15 @@ async function sourceTextOnce(url:string,indirect:boolean,maxBytes:number,learne
   // to AI calls. Previously it was used only when a profile had ticked the
   // per-profile «اتصال غیرمستقیم» box, so users who configured the gateway to
   // bypass a sanction block still hit the block on every extraction.
+  // The learned recipe also fixes the SPELLING of the address (a Persian query sent with + or
+  // a double-encoded path is a different request for the source), so it replaces the URL too.
+  const sent=recipe?.url||url;
   const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker'||recipe?.route==='worker');
-  if(useWorker){try{return {...await safeTextViaWorker(url,network.workerUrl,maxBytes,recipe?.route==='worker'?recipe.headers:{}),route:'worker'}}catch(error){throw new Error(`${error instanceof Error?error.message:String(error)} (route: worker)؛ قرارداد آدرس پراکسی و مجوز دامنهٔ مبدأ را بررسی کنید.`)}}
+  if(useWorker){try{return {...await safeTextViaWorker(sent,network.workerUrl,maxBytes,recipe?.route==='worker'?recipe.headers:{}),route:'worker'}}catch(error){throw new Error(`${error instanceof Error?error.message:String(error)} (route: worker)؛ قرارداد آدرس پراکسی و مجوز دامنهٔ مبدأ را بررسی کنید.`)}}
   if(network.mode==='worker'&&!network.workerUrl)throw new Error('Worker URL در تنظیمات اتصال مبدأ خالی است.');
   if(network.mode==='proxy')throw new Error('پروکسی CONNECT در Cloudflare پشتیبانی نمی‌شود؛ روش Worker / پروکسی معکوس را انتخاب کنید.');
   if(indirect&&network.mode!=='worker')throw new Error('اتصال غیرمستقیم مبدأ در Cloudflare فقط با روش Worker URL پشتیبانی می‌شود. (در محیط Cloudflare پروکسی HTTP در دسترس نیست؛ آدرس Worker واسط را وارد کنید.)');
-  return {...await safeText(url,maxBytes,recipe?{headers:recipe.headers}:{}),route:'direct'};
+  return {...await safeText(sent,maxBytes,recipe?{headers:recipe.headers}:{}),route:'direct'};
 }
 function toAbsoluteUrl(value:string,base:string):string{try{return new URL(value,base).href}catch{return ''}}
 
@@ -1015,7 +1019,11 @@ export function pageUrl(profile:Profile,page:number):string{
     const basePath=url.pathname.replace(/\/page\/\d+\/?$/i,'').replace(/\/$/,'');
     return url.origin+basePath+pattern.split('{page}').join(String(next));
   }
-  const param=profile.pagination==='query_custom'?(profile.paginationValue||'paged'):'page',current=Number(url.searchParams.get(param)||1);url.hash='';url.searchParams.set(param,String(pageNumber(current)));return url.href;
+  // 1.326.0 — the page cursor is edited as text. url.searchParams.set() re-serialises the
+  // WHOLE query (%20→+, /→%2F), so a Persian search term used to be spelled differently on
+  // page 1 and page 2 and picky sources answered 403 for the rewritten one.
+  const param=profile.pagination==='query_custom'?(profile.paginationValue||'paged'):'page',current=Number(readQueryParam(url.href,param)||1);
+  return setQueryParam(url.href.split('#')[0]!,param,String(pageNumber(current)));
 }
 export function benchmarkProbeUrl(profile:Profile):string{
   try{
@@ -1024,8 +1032,7 @@ export function benchmarkProbeUrl(profile:Profile):string{
     const url=new URL(profile.url);url.hash='';
     if(pagination==='path_page'||pagination==='path_pattern'){url.pathname=url.pathname.replace(/\/page\/\d+\/?$/i,'')||'/';return url.href}
     const custom=pagination==='query_custom'?String((profile as any)?.paginationValue||'paged'):'page';
-    for(const param of new Set([custom,'page','paged']))url.searchParams.delete(param);
-    return url.href;
+    return deleteQueryParams(url.href,[...new Set([custom,'page','paged'])]);
   }catch{return profile.url}
 }
 export async function mapLimit<T>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<void>):Promise<void>{

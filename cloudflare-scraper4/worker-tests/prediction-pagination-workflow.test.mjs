@@ -13,6 +13,7 @@ const {benchmarkPagination}=await import(pathToFileURL(join(dir,'benchmark-pagin
 const {collectScrollProducts}=await import(pathToFileURL(join(dir,'scroll-collector.mjs')));
 test.after(()=>rm(dir,{recursive:true,force:true}));
 async function compile(source,names,io={}){const js=(await transform(source.replace(/^import .*;\s*$/gm,'').replaceAll('export ',''),{loader:'ts'})).code;return new Function(...Object.keys(io),js+';return {'+names+'};')(...Object.values(io))}
+const urlShapes=await compile(await read('worker-src/url-shapes.ts'),'setQueryParam,deleteQueryParams,readQueryParam');
 const categories=[{id:1,name:'Root',leaf:false},{id:2,name:'Shoes',leaf:true},{id:3,name:'Other',leaf:true}];
 test('native category responses must resolve to a known leaf and ambiguity triggers fallback',()=>{
  assert.equal(validatedPrediction({result:[{cat_id:2}]},categories),2);
@@ -35,7 +36,9 @@ test('prediction HTTP errors, malformed JSON and timeout are recoverable and nev
 });
 for(const runtime of ['worker','render']){
  const source=await read(runtime+'-src/scraper.ts'),a=source.indexOf('export function pageUrl('),b=source.indexOf('export function benchmarkProbeUrl(',a);
- const {pageUrl}=await compile(source.slice(a,b),'pageUrl');
+ // 1.326.0 — pageUrl edits the page parameter as text (worker-src/url-shapes.ts) so a Persian
+ // query keeps its exact spelling on every page; the helpers are injected into the slice here.
+ const {pageUrl}=await compile(source.slice(a,b),'pageUrl',urlShapes);
  for(const [mode,value,expected] of [['query_page','page','?page=2'],['query_custom','offset','?offset=2'],['path_page','','/page/2/'],['path_pattern','/p/{page}','/p/2'],['full_pattern','https://shop.test/catalog/{page}','/catalog/2']])test(runtime+': benchmark exercises '+mode+' and verifies new products on both transitions',async()=>{
   const urls=[],report=await benchmarkPagination({url:'https://shop.test/',pagination:mode,paginationValue:value},{pageUrl,scrape:async url=>{urls.push(url);return{products:[{sourceKey:url}]}}});
   assert.equal(urls.length,3);assert.ok(urls[1].endsWith(expected));assert.equal(report.transitionsVerified,2);assert.equal(report.verified,true);

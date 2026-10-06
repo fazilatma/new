@@ -189,6 +189,48 @@ test('selector signals decide whether a 200 is really the product list', () => {
   assert.equal(loop.selectorVerifier('   '), undefined);
 });
 
+test('a refusal caused by the ADDRESS is healed by respelling it, not by headers', async () => {
+  const bag = stateBag();
+  const good = 'https://emalls.ir/' + encodeURIComponent('جستجو') + '/x';
+  const bad = 'https://emalls.ir/' + encodeURIComponent(encodeURIComponent('جستجو')) + '/x';
+  const src = source(({ round }) => ({ status: 200, text: PAGE }));
+  src.transport = async input => { src.seen.push(input); return input.url === good ? { status: 200, text: PAGE, url: input.url } : { status: 403, text: DENIED, url: input.url }; };
+  const report = await loop.runConnectionLoop({ ...bag, transport: src.transport, hasGateway: false, sleep: async () => {} }, { url: bad });
+  assert.equal(report.ok, true);
+  assert.equal(report.recipe, 'url-unescape');
+  assert.equal(report.shape, 'unescape-once');
+  assert.equal(report.sentUrl, good);
+  assert.ok(report.urlNotes.some(note => note.includes('دوبار رمزگذاری')), 'the report explains the address problem in Persian');
+  assert.equal(bag.state.get('net.recipe:emalls.ir').shape, 'unescape-once', 'the spelling is remembered with the recipe');
+  assert.ok(report.attempts.every(a => a.url && a.shapeLabel), 'every attempt reports the exact address it sent');
+});
+
+test('spelling variants are skipped when they cannot change the address', async () => {
+  const bag = stateBag();
+  const src = source(() => ({ status: 403, text: DENIED }));
+  const report = await loop.runConnectionLoop({ ...bag, transport: src.transport, hasGateway: false, sleep: async () => {} },
+    { url: 'https://emalls.ir/plain/list?page=2' });
+  assert.equal(report.ok, false);
+  const urls = new Set(report.attempts.map(a => a.url));
+  assert.equal(urls.size, 1, 'an ASCII address has only one possible spelling, so none are retried');
+  assert.ok(!report.attempts.some(a => a.recipe.startsWith('url-')), 'no pointless respelling attempts');
+  assert.deepEqual(report.urlNotes, []);
+});
+
+test('a Persian query is tried with both + and %20 spellings', async () => {
+  const bag = stateBag();
+  const term = encodeURIComponent('کفش زنانه');
+  const plus = 'https://emalls.ir/Search?q=' + term.replace(/%20/g, '+');
+  const src = source(() => ({ status: 403, text: DENIED }));
+  src.transport = async input => { src.seen.push(input); return input.url === plus ? { status: 200, text: PAGE, url: input.url } : { status: 403, text: DENIED, url: input.url }; };
+  const report = await loop.runConnectionLoop({ ...bag, transport: src.transport, hasGateway: false, sleep: async () => {} },
+    { url: 'https://emalls.ir/Search?q=' + term });
+  assert.equal(report.ok, true);
+  assert.equal(report.shape, 'plus-space');
+  assert.equal(report.sentUrl, plus);
+  assert.match(report.advice, /نگارش آدرس/);
+});
+
 test('both twins expose the loop and the panel can run it (deployer page contract pins)', async () => {
   const read = name => readFile(join(root, name), 'utf8');
   const [workerApp, renderServer, dashboard, workerScraper, renderNetwork] = await Promise.all(
@@ -203,6 +245,10 @@ test('both twins expose the loop and the panel can run it (deployer page contrac
   assert.ok(dashboard.includes('function openLoopModal'), 'the attempt table has a renderer');
   assert.ok(workerScraper.includes('autoHeal('), 'the worker fetch path heals itself');
   assert.ok(renderNetwork.includes('registerConnectionRecipe'), 'the node fetch path replays the learned recipe');
+  assert.ok(workerScraper.includes('const sent=recipe?.url||url'), 'the worker fetch path sends the learned SPELLING of the address');
+  assert.ok(renderNetwork.includes('learned.url !== url.href'), 'the node fetch path does too');
+  assert.ok(dashboard.includes('آدرس ارسالی'), 'the attempt table shows the exact address of each attempt');
+  assert.ok(dashboard.includes('بررسی نگارش آدرس'), 'the panel surfaces the URL encoding notes');
 });
 
 test.after(() => rm(temp, { recursive: true, force: true }));
