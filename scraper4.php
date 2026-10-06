@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.228';
+const APP_VERSION = '10.229';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -38404,6 +38404,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "{v:'10." . "228'") !== false
       && version_compare(APP_VERSION, '10.' . '228', '>='));
 
+
+    /* ---------- v10.229: انتخاب سریع پروفایل در نوار چسبان بالا ---------- */
+    $add('10.229', 'نوار چسبان بالا کشوی انتخاب سریع پروفایل دارد',
+         strpos($selfSrc, 'id="hdrProfileSelect"') !== false
+      && strpos($selfSrc, 'class="hdr-profile-select"') !== false
+      && strpos($selfSrc, 'selectHeaderProfile(this.value)') !== false);
+    $add('10.229', 'کشوی بالایی با کشوی اصلی پروفایل همگام می‌شود',
+         strpos($selfSrc, "['profileSelect','hdrProfileSelect']") !== false
+      && strpos($selfSrc, 'function setProfileSelectValue') !== false
+      && strpos($selfSrc, "{v:'10." . "229'") !== false
+      && version_compare(APP_VERSION, '10.' . '229', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -59426,6 +59438,13 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 /* دکمه‌ها داخلِ نوار دیگر شناور نیستند؛ کنار هم و بدون فاصله می‌نشینند */
 .hdr-tools .hamburger-btn,.hdr-tools .fullwidth-btn,.hdr-tools .tasks-btn{position:static;top:auto;left:auto;right:auto;bottom:auto;flex:0 0 auto;height:44px;margin:0;border-radius:0;box-shadow:none;border-right-width:0}
 .hdr-tools .tasks-btn{flex:1 1 auto;width:auto;min-width:0;justify-content:flex-start;gap:8px;padding:0 12px;border-right-width:1px;font-size:17px;overflow:hidden;direction:rtl}
+/* v10.229: انتخاب سریع پروفایل داخل همان نوارِ چسبانِ بالای صفحه */
+.hdr-profile-select{position:static;flex:0 1 240px;min-width:150px;height:44px;margin:0;border:1px solid #475569;border-right-width:0;border-radius:0;background:#0f172a;color:#e2e8f0;font-size:11px;font-weight:700;padding:0 10px;outline:none;box-shadow:none;direction:rtl;cursor:pointer}
+.hdr-profile-select:hover{background:#1e293b}
+.hdr-profile-select:focus{border-color:#22d3ee;box-shadow:inset 0 0 0 1px #22d3ee}
+body.modal-open .hdr-profile-select{z-index:10}
+@media(max-width:720px){.hdr-profile-select{flex:0 1 160px;min-width:105px;font-size:10px;padding:0 6px}.hdr-profile-select option{font-size:11px}}
+@media(max-width:400px){.hdr-profile-select{flex:1 1 90px;min-width:78px}.hdr-profile-select{font-size:9.5px}}
 /* برچسبِ متنی — «گویاتر» یعنی متن هم داشته باشد، نه فقط یک تصویرکِ مبهم */
 .tasks-lbl{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.2px}
 .tasks-sub{font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:400;flex:1 1 auto;min-width:0}
@@ -60056,6 +60075,8 @@ html[data-skin="gloss"] .progress-bar{
 <div class="hdr-tools" id="hdrTools">
 <button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>
 <button class="fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن">⛶</button>
+<!-- v10.229: انتخاب سریع پروفایل، همیشه در نوار چسبان بالای صفحه -->
+<select class="hdr-profile-select" id="hdrProfileSelect" onchange="selectHeaderProfile(this.value)" title="انتخاب سریع پروفایل" aria-label="انتخاب سریع پروفایل"><option value="">پروفایل...</option></select>
 <button class="tasks-btn" id="tasksBtn" onclick="tmOpen()" title="مدیر وظیفه — کارهای در حال اجرا"><span aria-hidden="true">📋</span><span class="tasks-lbl">مدیر وظیفه</span><span class="tasks-sub" id="tasksSub">کارهای پس‌زمینه</span><span class="tasks-badge" id="tasksBadge">0</span></button>
 <!-- v10.82 (96): چت باسلام — باز کردن مودالِ گفتگوها از نوارِ هدر -->
 <button class="chat-hdr-btn" id="chatHdrBtn" onclick="mrOpenModal()" title="پاسخ دستی به مشتریان — اتاقِ چتِ زنده"><span aria-hidden="true">💬</span><span class="chat-hdr-lbl">پاسخ دستی</span><span id="chatUnreadB" style="display:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#e11d48;color:#fff;font-size:10px;font-weight:700;align-items:center;justify-content:center">۰</span></button>
@@ -65035,23 +65056,38 @@ function onUrlChange() {
             s.textContent = 'جدید';
             s.className = 'profile-indicator unsaved';
             $('profileName').value = '';
-            $('profileSelect').value = '';
+            setProfileSelectValue('');
         }
     }, 500);
+}
+
+function setProfileSelectValue(url) {
+    ['profileSelect','hdrProfileSelect'].forEach(id => { const el=$(id); if(el) el.value = url || ''; });
 }
 
 function renderProfileDropdown() {
     // v9.65: اگر profiles.json خراب/غیر-آرایه باشد، کل اسکریپت هنگام راه‌اندازی
     // با «profiles.forEach is not a function» می‌ایستد و محتوای تب‌ها خالی می‌ماند.
     if(!Array.isArray(profiles)) profiles=[];
-    const sel = $('profileSelect');
-    sel.innerHTML = '<option value="">-- انتخاب سایت (' + profiles.length + ') --</option>';
-    profiles.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.url;
-        opt.textContent = p.name;
-        sel.appendChild(opt);
-    });
+    const fill = (el, label) => {
+        if(!el) return;
+        el.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = label;
+        el.appendChild(first);
+        profiles.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.url;
+            opt.textContent = p.name || p.url || p.key;
+            opt.title = p.url || p.name || p.key || '';
+            el.appendChild(opt);
+        });
+    };
+    fill($('profileSelect'), '-- انتخاب سایت (' + profiles.length + ') --');
+    fill($('hdrProfileSelect'), 'پروفایل (' + profiles.length + ')');
+    const cur = (($('url')||{}).value || '').trim();
+    if (cur && profiles.some(p => p.url === cur)) setProfileSelectValue(cur);
     // v8.62: همان فهرست برای «عکس‌دار کردن» — آنجا کلید پروفایل لازم است نه URL
     const ph = $('photoProfile');
     if (ph) {
@@ -65098,17 +65134,21 @@ function restoreLastProfile() {
     if (!url) return;
     // فقط اگر هنوز در فهرست پروفایل‌ها هست (ممکن است حذف شده باشد)
     if (!profiles.some(p => p.url === url)) { forgetProfile(); return; }
-    const sel = $('profileSelect');
-    if (sel) sel.value = url;
+    setProfileSelectValue(url);
     $('url').value = url;
     loadProfileFromServer(url, true);
 }
 
 function selectProfile(url) {
     if (!url) return;
+    setProfileSelectValue(url);
     $('url').value = url;
     rememberProfile(url);
     loadProfileFromServer(url);
+}
+function selectHeaderProfile(url) {
+    if (!url) { setProfileSelectValue(''); return; }
+    selectProfile(url);
 }
 
 
@@ -65350,7 +65390,7 @@ function applyProfile(p, keepTab) {
     }
 
     markClean(currentProfileKey);
-    $('profileSelect').value = p.url;
+    setProfileSelectValue(p.url || '');
     // v8.06: Restore per-profile BaSalam category
     if(p.bslCategoryId && p.bslCategoryId>0){
         bslSelectedCatId=p.bslCategoryId;
@@ -65484,7 +65524,7 @@ function saveProfileSilent() {
                     profiles.unshift(entry);
                 }
                 renderProfileDropdown();
-                $('profileSelect').value = data.url;
+                setProfileSelectValue(data.url);
             }
         })
         .catch(() => {});
@@ -65530,7 +65570,7 @@ function saveProfile() {
                     profiles.unshift(entry);
                 }
                 renderProfileDropdown();
-                $('profileSelect').value = data.url;
+                setProfileSelectValue(data.url);
                 // v7.66: Show selector status after save
                 if(data.selectors && data.selectors.container){
                     showToast('✓ ذخیره شد — سلکتورها: '+data.selectors.container+' ✓');
@@ -65564,7 +65604,7 @@ function deleteProfile() {
             if (d.ok) {
                 profiles = profiles.filter(p => p.url !== url);
                 renderProfileDropdown();
-                $('profileSelect').value = '';
+                setProfileSelectValue('');
                 if (lastProfileUrl() === url) forgetProfile();   // v8.68
                 currentProfileKey = null;
                 const s = $('profileStatus');
@@ -68955,6 +68995,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.229', t:'📌 انتخاب سریع پروفایل در نوار چسبان بالا', items:[
+    'یک کشوی کوچک انتخاب پروفایل به نوار چسبان بالای صفحه، کنار دکمه‌های همبرگری/تمام‌عرض/مدیر وظیفه اضافه شد تا بدون برگشت به تب شروع بتوان پروفایل را عوض کرد.',
+    'کشوی بالایی و کشوی اصلی پروفایل همگام می‌مانند: بارگذاری، ذخیره، حذف و بازیابی آخرین پروفایل هر دو را به‌روز می‌کند.',
+  ]},
   {v:'10.228', t:'🧹 ترمیم Worker URL در تست مدل‌های AI', items:[
     'نرمال‌سازی Worker هوش مصنوعی اکنون کاراکترهای اضافهٔ ابتدای آدرس مثل }https://... را حذف می‌کند تا قالب {url} دوباره معتبر شود.',
     'ai_feedback_fix این تغییر را به‌عنوان Worker URL normalized گزارش می‌کند و می‌تواند در حالت apply آن را ذخیره کند؛ خطاهای اعتبار/سیاست دسترسی همچنان به‌عنوان خطای واقعی مدل/ارائه‌دهنده گزارش می‌شوند.',
