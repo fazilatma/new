@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.229';
+const APP_VERSION = '10.230';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9871,13 +9871,63 @@ function s4JinaSyntheticHtml(array $products, string $sourceUrl, string $note = 
         . '<main class="product-grid products">' . $cards . '</main></body></html>';
 }
 
-function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'direct'): array {
-    if ($mode === 'worker') {
-        $net = ['worker_url' => 'https://proxy.fazilat-ma.workers.dev/?url={url}', 'ipv4' => true,
-                'proxy' => '', 'proxy_type' => 'http', 'proxy_auth' => '', 'resolve_ip' => '',
-                'doh_url' => '', 'fallback' => false, 'hosts' => ''];
-        $r = srcNetFetchAttempt($readerUrl, $timeout, $net, 'worker');
-        $r['jina_reader_via'] = 'worker';
+
+function s4JinaIndirectNet(): array {
+    $cn = function_exists('loadConnections') ? loadConnections() : [];
+    $oldSet = array_key_exists('_srcNetProfileIndirect', $GLOBALS);
+    $oldVal = $GLOBALS['_srcNetProfileIndirect'] ?? null;
+    // v10.230: Jina itself is a service endpoint and may be blocked from the Iranian host.
+    // Do not let a profile-level "direct" override disable the indirect route for r.jina.ai.
+    unset($GLOBALS['_srcNetProfileIndirect']);
+    $net = function_exists('srcNetCfg') ? srcNetCfg($cn) : ['mode'=>'direct','ipv4'=>true,'hosts'=>'','fallback'=>false];
+    if ($oldSet) $GLOBALS['_srcNetProfileIndirect'] = $oldVal; else unset($GLOBALS['_srcNetProfileIndirect']);
+    foreach (['worker_url','proxy','proxy_type','proxy_auth','resolve_ip','doh_url','hosts'] as $k) {
+        if (!isset($net[$k])) $net[$k] = '';
+    }
+    if (!isset($net['ipv4'])) $net['ipv4'] = true;
+    if (!isset($net['fallback'])) $net['fallback'] = true;
+    if (function_exists('aiWorkerNormalizeUrl')) {
+        $net['worker_url'] = aiWorkerNormalizeUrl((string)($net['worker_url'] ?? ''));
+    }
+    if (trim((string)($net['worker_url'] ?? '')) === '' && function_exists('aiNetCfg')) {
+        $aiNet = aiNetCfg($cn);
+        $wu = (string)($aiNet['worker_url'] ?? '');
+        $net['worker_url'] = function_exists('aiWorkerNormalizeUrl') ? aiWorkerNormalizeUrl($wu) : trim($wu);
+    }
+    if (trim((string)($net['worker_url'] ?? '')) === '') {
+        $net['worker_url'] = 'https://proxy.fazilat-ma.workers.dev/?url={url}';
+    }
+    if (trim((string)($net['doh_url'] ?? '')) === '') $net['doh_url'] = 'https://cloudflare-dns.com/dns-query';
+    $net['mode'] = in_array((string)($net['mode'] ?? 'direct'), ['direct','doh','dns','proxy','worker'], true) ? (string)$net['mode'] : 'direct';
+    $net['fallback'] = true;
+    return $net;
+}
+
+function s4JinaFetchPlan(): array {
+    $net = s4JinaIndirectNet();
+    $modes = [];
+    $add = function(string $m) use (&$modes, $net) {
+        if (in_array($m, $modes, true)) return;
+        if ($m === 'proxy' && trim((string)($net['proxy'] ?? '')) === '') return;
+        if ($m === 'worker' && trim((string)($net['worker_url'] ?? '')) === '') return;
+        if ($m === 'dns' && trim((string)($net['resolve_ip'] ?? '')) === '') return;
+        if ($m === 'doh' && trim((string)($net['doh_url'] ?? '')) === '') return;
+        $modes[] = $m;
+    };
+    $pref = (string)($net['mode'] ?? 'direct');
+    if ($pref !== 'direct') $add($pref);
+    // Real indirect paths first; direct stays last only as a diagnostic fallback.
+    foreach (['proxy','worker','doh','dns','direct'] as $m) $add($m);
+    if (empty($modes)) $modes = ['direct'];
+    return ['net'=>$net, 'modes'=>$modes];
+}
+
+function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'direct', ?array $netOverride = null): array {
+    if ($mode !== 'direct') {
+        $net = $netOverride ?: s4JinaIndirectNet();
+        $r = srcNetFetchAttempt($readerUrl, $timeout, $net, $mode);
+        $r['jina_reader_via'] = $mode;
+        if ($mode === 'worker') $r['jina_reader_worker'] = (string)($net['worker_url'] ?? '');
         return $r;
     }
     // v10.224: برای Reader از srcNetFetchAttempt عمومی استفاده نمی‌کنیم، چون
@@ -9956,12 +10006,15 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
     $firstText = null;
     $trace = [];
     $readerVariants = s4JinaReaderUrlVariants($target);
-    foreach (['direct', 'worker'] as $via) {
+    $plan = s4JinaFetchPlan();
+    $jinaModes = is_array($plan['modes'] ?? null) ? $plan['modes'] : ['direct'];
+    $jinaNet = is_array($plan['net'] ?? null) ? $plan['net'] : s4JinaIndirectNet();
+    foreach ($jinaModes as $via) {
         foreach ($readerVariants as $variant) {
             $readerUrl = (string)($variant['url'] ?? '');
             if ($readerUrl === '') continue;
             $kind = (string)($variant['kind'] ?? 'reader');
-            $r = s4JinaFetchAttempt($readerUrl, $timeout, $via);
+            $r = s4JinaFetchAttempt($readerUrl, $timeout, (string)$via, $jinaNet);
             $r['jina_reader'] = $readerUrl;
             $body = (string)($r['html'] ?? '');
             $ps = trim($body) !== '' ? s4JinaProductsFromReaderText($body, $target) : [];
@@ -9973,7 +10026,7 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
                             'html' => s4JinaSyntheticHtml($ps, $target, 'Reader URL: ' . $readerUrl . ' · via ' . $via),
                             'mode' => 'jina-reader', 'jina_reader' => $readerUrl, 'jina_reader_via' => $via,
                             'jina_product_count' => count($ps), 'jina_reader_trace' => $trace,
-                            'source_error' => (string)($prev['error'] ?? '')];
+                            'jina_reader_modes' => $jinaModes, 'source_error' => (string)($prev['error'] ?? '')];
                 }
                 if ($firstText === null) {
                     $firstText = $r + $last;
@@ -9989,6 +10042,7 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
     }
     if ($firstText !== null) {
         $firstText['jina_reader_trace'] = $trace;
+        $firstText['jina_reader_modes'] = $jinaModes;
         if (!isset($firstText['jina_product_count'])) $firstText['jina_product_count'] = 0;
         return $firstText;
     }
@@ -9996,6 +10050,7 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
     $last['mode'] = (string)($last['mode'] ?? 'jina-reader');
     $last['error'] = trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty');
     $last['jina_reader_trace'] = $trace;
+    $last['jina_reader_modes'] = $jinaModes;
     if (!isset($last['jina_product_count'])) $last['jina_product_count'] = 0;
     return $last;
 }
@@ -10109,6 +10164,7 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
                     'snappshop_public_fallback' => 'jina-reader', 'jina_reader' => (string)($jr['jina_reader'] ?? ''),
                     'jina_reader_via' => (string)($jr['jina_reader_via'] ?? ''), 'jina_product_count' => count($ps),
                     'jina_reader_trace' => is_array($jr['jina_reader_trace'] ?? null) ? $jr['jina_reader_trace'] : [],
+                    'jina_reader_modes' => is_array($jr['jina_reader_modes'] ?? null) ? $jr['jina_reader_modes'] : [],
                     'source_error' => (string)($prev['error'] ?? '')];
         }
     }
@@ -10118,7 +10174,8 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
             'mode' => (string)($last['mode'] ?? 'snappshop-jina-reader'), 'snappshop_public_fallback' => (string)($last['snappshop_public_fallback'] ?? 'jina-reader'),
             'jina_reader' => (string)($last['jina_reader'] ?? ''), 'jina_reader_via' => (string)($last['jina_reader_via'] ?? ''),
             'jina_product_count' => (int)($last['jina_product_count'] ?? 0),
-            'jina_reader_trace' => is_array($last['jina_reader_trace'] ?? null) ? $last['jina_reader_trace'] : []];
+            'jina_reader_trace' => is_array($last['jina_reader_trace'] ?? null) ? $last['jina_reader_trace'] : [],
+            'jina_reader_modes' => is_array($last['jina_reader_modes'] ?? null) ? $last['jina_reader_modes'] : []];
 }
 
 
@@ -10392,7 +10449,26 @@ function s4RenderLogTail(int $lines = 80): string {
    (همان جایی که خروجیِ خالی معنای «صفر محصول» می‌گرفت). */
 function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): array {
     $rc = $rcfg ?? renderCfg();
-    if (empty($rc['enabled']) || (string)($rc['url'] ?? '') === '') return fetch_html($url, $timeout);
+    $renderReady = !empty($rc['enabled']) && (string)($rc['url'] ?? '') !== '';
+    if (!$renderReady) {
+        $s = fetch_html($url, $timeout);
+        if (!empty($s['ok']) && looks_like_js_shell((string)($s['html'] ?? '')) && function_exists('fetch_html_jina_reader')) {
+            $_jr = fetch_html_jina_reader($url, $timeout, is_array($s) ? $s : []);
+            if (!empty($_jr['ok']) && (int)($_jr['jina_product_count'] ?? 0) > 0) {
+                $_jr['js_shell_detected'] = true;
+                $_jr['jina_js_fallback'] = true;
+                return $_jr;
+            }
+            $s['js_shell_detected'] = true;
+            $s['jina_error'] = (string)($_jr['error'] ?? '');
+            $s['jina_reader'] = (string)($_jr['jina_reader'] ?? '');
+            $s['jina_reader_via'] = (string)($_jr['jina_reader_via'] ?? '');
+            $s['jina_product_count'] = (int)($_jr['jina_product_count'] ?? 0);
+            if (is_array($_jr['jina_reader_trace'] ?? null)) $s['jina_reader_trace'] = $_jr['jina_reader_trace'];
+            if (is_array($_jr['jina_reader_modes'] ?? null)) $s['jina_reader_modes'] = $_jr['jina_reader_modes'];
+        }
+        return $s;
+    }
     if (($rc['mode'] ?? 'auto') === 'js') {
         $r = fetch_html_render($url, $rc);
         if (!empty($r['ok'])) return $r;
@@ -10430,9 +10506,7 @@ function fetch_html_smart(string $url, int $timeout = 25, ?array $rcfg = null): 
            دامنه‌هایی مثل SnappShop/Digikala همان مسیر Reader را هم امتحان کن؛
            این دقیقاً همان نقش موتور Jina در سایت‌های JS-layered است، بدون اینکه
            رفتار سریع صفحات HTML معمولی عوض شود. */
-        $_canJinaJs = function_exists('fetch_html_jina_reader')
-            && ((function_exists('isSnappshopUrl') && isSnappshopUrl($url))
-             || (function_exists('isDigikalaUrl') && isDigikalaUrl($url)));
+        $_canJinaJs = function_exists('fetch_html_jina_reader');
         if ($_canJinaJs) {
             $_jr = fetch_html_jina_reader($url, $timeout, is_array($s) ? $s : []);
             if (!empty($_jr['ok']) && (int)($_jr['jina_product_count'] ?? 0) > 0) {
@@ -11432,7 +11506,10 @@ $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
 $_fbKind = strtolower($kind);
 $_fbSnapp = in_array($_fbKind, ['snappshop','snapp','snappshop.ir'], true);
 $_fbDigikala = in_array($_fbKind, ['digikala','dk','digikala.com'], true);
+$_fbJina = in_array($_fbKind, ['jina','jina-reader','reader','rjina','r.jina.ai'], true);
+$_fbEngineParam = isset($_GET['extractionEngine']) ? normalizeExtractionEngine((string)$_GET['extractionEngine']) : '';
 if ($url === '') {
+    if ($_fbJina) { echo json_encode(['ok'=>false,'error'=>'URL is required for generic Jina feedback'], JSON_UNESCAPED_UNICODE); exit; }
     $url = $_fbSnapp
         ? 'https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1'
         : ($_fbDigikala
@@ -11443,7 +11520,8 @@ if (!filter_var($url, FILTER_VALIDATE_URL)) { echo json_encode(['ok'=>false,'err
 $_fbIsEmalls = isEmallsUrl($url);
 $_fbIsSnapp = isSnappshopUrl($url);
 $_fbIsDigikala = function_exists('isDigikalaUrl') && isDigikalaUrl($url);
-if (!$_fbIsEmalls && !$_fbIsSnapp && !$_fbIsDigikala) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls, SnappShop or Digikala URLs'], JSON_UNESCAPED_UNICODE); exit; }
+$_fbGenericJina = $_fbJina || $_fbEngineParam === 'jina' || !empty($_GET['jina']);
+if (!$_fbIsEmalls && !$_fbIsSnapp && !$_fbIsDigikala && !$_fbGenericJina) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls, SnappShop, Digikala, or extractionEngine=jina URLs'], JSON_UNESCAPED_UNICODE); exit; }
 $timeout = max(8, min(60, (int)($_GET['timeout'] ?? 20)));
 $pages = max(1, min(3, (int)($_GET['pages'] ?? 1)));
 $profiles = loadProfiles();
@@ -11451,7 +11529,7 @@ $pkIn = trim((string)($_GET['pk'] ?? ($_GET['profile_key'] ?? '')));
 $pk = profileResolveKey($pkIn !== '' ? $pkIn : $url, $profiles) ?: profileKey($url);
 $profile = $profiles[$pk] ?? [];
 $selectors = is_array($profile['selectors'] ?? null) ? (array)$profile['selectors'] : [];
-$engine = isset($_GET['extractionEngine']) ? normalizeExtractionEngine((string)$_GET['extractionEngine']) : normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
+$engine = $_fbEngineParam !== '' ? $_fbEngineParam : normalizeExtractionEngine((string)($profile['extractionEngine'] ?? ($_fbJina ? 'jina' : 'selectors')));
 $pagType = (string)($profile['pagType'] ?? 'query_page');
 $pagVal = (string)($profile['pagVal'] ?? '');
 $briefProduct = function(array $p): array {
@@ -11529,7 +11607,7 @@ $summarizeFetch = function(string $label, array $r, array $sel, string $eng) use
         'mode' => (string)($r['mode'] ?? ''),
         'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
         'final_url' => mb_substr($base, 0, 260),
-        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error'])),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_reader_modes','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error'])),
     ];
     $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
     return $out;
@@ -11539,6 +11617,7 @@ $oldIndirect = $GLOBALS['_srcNetProfileIndirect'] ?? null;
 if ($pk !== '') srcNetSetProfileIndirect($pk);
 $directNet = ['ipv4'=>true, 'hosts'=>'', 'fallback'=>false, 'resolve_ip'=>'', 'doh_url'=>'', 'worker_url'=>'', 'proxy'=>'', 'proxy_type'=>'http', 'proxy_auth'=>''];
 $jinaVariants = ($engine === 'jina' || !empty($_GET['jina'])) && function_exists('s4JinaReaderUrlVariants') ? s4JinaReaderUrlVariants($url) : [];
+$jinaPlan = ($engine === 'jina' || !empty($_GET['jina'])) && function_exists('s4JinaFetchPlan') ? s4JinaFetchPlan() : ['modes'=>[]];
 $attempts = [];
 $attempts[] = $summarizeFetch('raw_direct_srcNetFetchAttempt', srcNetFetchAttempt($url, $timeout, $directNet, 'direct'), $selectors, $engine);
 $attempts[] = $summarizeFetch('fetch_html_current', fetch_html($url, $timeout), $selectors, $engine);
@@ -11583,6 +11662,7 @@ $out = [
         ],
     ],
     'jina_reader_variants' => $jinaVariants,
+    'jina_reader_modes' => is_array($jinaPlan['modes'] ?? null) ? $jinaPlan['modes'] : [],
     'attempts' => $attempts,
     'pages_tested' => $pageSummaries,
     'best' => $best,
@@ -11898,6 +11978,7 @@ $cnDP = loadConnections();
 $dpTimeout = (int)($cnDP['proxy_timeout_sec'] ?? 0);
 if ($dpTimeout <= 0) $dpTimeout = 45;
 $dpTimeout = max(10, min(180, $dpTimeout));
+$dpWaitMs = max(0, min(30000, (int)($_GET['wait_ms'] ?? ($_GET['selector_wait_ms'] ?? 0))));
 
 // v9.75: اتصالِ این صفحه را مطابقِ «اتصال غیرمستقیم»ِ پروفایلِ انتخاب‌شده بگذار
 srcNetSetProfileIndirect((string)($_GET['pk'] ?? ''));
@@ -12077,13 +12158,18 @@ body{padding-top:0!important}
 <script>
 (function(){
 var S={},cur=null,picked=null;var MODE='shortDesc';
-var __pickPaused=false;
+var __selectorWaitMs=__S4_SELECTOR_WAIT_MS__;
+var __pickPaused=__selectorWaitMs>0;
 function __pauseUi(){
   try{document.documentElement.classList.toggle('__pick-paused',__pickPaused);}catch(e){}
   ['__pauseBtn','__ppause'].forEach(function(id){var b=document.getElementById(id);if(!b)return;b.classList.toggle('__on',__pickPaused);b.textContent=(id==='__pauseBtn')?(__pickPaused?'▶ انتخاب':'⏸ انتخاب'):(__pickPaused?'▶':'⏸');});
   if(__pickPaused&&cur&&cur!==picked){try{cur.classList.remove('__h');}catch(e){}}
 }
 window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__post('picker_pause_state',{on:__pickPaused});};
+if(__selectorWaitMs>0){
+  try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='⏳ انتظار برای بارگذاری JS سایت...';}catch(e){}
+  setTimeout(function(){__pickPaused=false;__pauseUi();try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='روی عنصر دلخواه کلیک کنید…';}catch(e){}__post('picker_pause_state',{on:false,wait_done:true});},__selectorWaitMs);
+}
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
    حرکت در درخت المان‌ها هر بار صفحه را وسط‌چین می‌کرد؛ روی صفحهٔ کوچک
    این یعنی کاربر مدام جای خودش را گم می‌کند. نوار شناور کنار المان
@@ -12759,6 +12845,7 @@ SCRIPT;
 $script = str_replace('id="__ver" style="opacity:.65">',
     'id="__ver" style="opacity:.65">v' . APP_VERSION,
     $script);
+$script = str_replace('__S4_SELECTOR_WAIT_MS__', (string)$dpWaitMs, $script);
 
 /* v9.93: فونتِ انتخابیِ کاربر روی نوارها و پاپ‌آپِ خودِ ما هم اعمال شود.
    فقط متغیر --app-font تعریف می‌شود؛ CSS خودِ سایتِ مقصد دست نمی‌خورد. */
@@ -12798,6 +12885,7 @@ $cnVP = loadConnections();
 $vpTimeout = (int)($cnVP['proxy_timeout_sec'] ?? 0);
 if ($vpTimeout <= 0) $vpTimeout = 45;
 $vpTimeout = max(10, min(180, $vpTimeout));
+$vpWaitMs = max(0, min(30000, (int)($_GET['wait_ms'] ?? ($_GET['selector_wait_ms'] ?? 0))));
 
 // v9.75: اتصالِ این صفحه را مطابقِ «اتصال غیرمستقیم»ِ پروفایلِ انتخاب‌شده بگذار
 srcNetSetProfileIndirect((string)($_GET['pk'] ?? ''));
@@ -13017,13 +13105,18 @@ body{padding-top:130px!important}
 <script>
 (function(){
 var S={container:'',title:'',price:'',link:'',image:''},E={},cur=null,picked=null;
-var __pickPaused=false;
+var __selectorWaitMs=__S4_SELECTOR_WAIT_MS__;
+var __pickPaused=__selectorWaitMs>0;
 function __pauseUi(){
   try{document.documentElement.classList.toggle('__pick-paused',__pickPaused);}catch(e){}
   ['__pauseBtn','__ppause'].forEach(function(id){var b=document.getElementById(id);if(!b)return;b.classList.toggle('__on',__pickPaused);b.textContent=(id==='__pauseBtn')?(__pickPaused?'▶ انتخاب':'⏸ انتخاب'):(__pickPaused?'▶':'⏸');});
   if(__pickPaused&&cur&&cur!==picked){try{cur.classList.remove('__h');}catch(e){}}
 }
 window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__vpPost('vp_pause_state',{on:__pickPaused});};
+if(__selectorWaitMs>0){
+  try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='⏳ انتظار برای بارگذاری JS سایت...';}catch(e){}
+  setTimeout(function(){__pickPaused=false;__pauseUi();try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='کلیک کنید...';}catch(e){}__vpPost('vp_pause_state',{on:false,wait_done:true});},__selectorWaitMs);
+}
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
    حرکت در درخت المان‌ها هر بار صفحه را وسط‌چین می‌کرد؛ روی صفحهٔ کوچک
    این یعنی کاربر مدام جای خودش را گم می‌کند. نوار شناور کنار المان
@@ -13639,6 +13732,7 @@ SCRIPT;
 $script = str_replace('id="__ver" style="opacity:.65">',
     'id="__ver" style="opacity:.65">v' . APP_VERSION,
     $script);
+$script = str_replace('__S4_SELECTOR_WAIT_MS__', (string)$vpWaitMs, $script);
 
 $vpVals = [$fullMode ? '1' : '0', (string)($fullPageInspect ?? '0')];
 $vpIdx = 0;
@@ -38313,7 +38407,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'fetch_html_jina_' . 'reader($url') !== false);
     $add('10.221', 's4_feedback دیجی‌کالا را هم برای تست Reader می‌پذیرد',
          strpos($selfSrc, '$_fbIsDigikala') !== false
-      && strpos($selfSrc, 'Emalls, SnappShop or Digikala') !== false);
+      && (strpos($selfSrc, 'Emalls, SnappShop or Digikala') !== false
+       || strpos($selfSrc, 'Emalls, SnappShop, Digikala') !== false));
     $add('10.221', 'خلاصهٔ feedback تعداد محصول‌های parser عمومی Jina را نشان می‌دهد',
          strpos($selfSrc, "'jina_reader' => ['count'=>count(\$jinaRows)]") !== false);
     $add('10.221', 'ورودیِ 10.221 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
@@ -38330,9 +38425,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '222', '>='));
 
     /* ---------- v10.223: worker fallback برای Jina Reader ---------- */
-    $add('10.223', 'Jina Reader بعد از direct مسیر worker را هم امتحان می‌کند',
+    $add('10.223', 'Jina Reader مسیر worker را هم در برنامهٔ fetch دارد',
          function_exists('s4JinaFetch' . 'Attempt')
-      && strpos($selfSrc, "foreach (['direct', 'worker'] as \$via)") !== false);
+      && function_exists('s4JinaFetch' . 'Plan')
+      && strpos($selfSrc, 'foreach ($jinaModes as $via)') !== false
+      && strpos($selfSrc, "'worker'") !== false);
     $add('10.223', 'feedback مسیر اجرای Jina را با jina_reader_via نشان می‌دهد',
          strpos($selfSrc, "'jina_reader_via'") !== false
       && strpos($selfSrc, "{v:'10." . "223'") !== false
@@ -38415,6 +38512,28 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'function setProfileSelectValue') !== false
       && strpos($selfSrc, "{v:'10." . "229'") !== false
       && version_compare(APP_VERSION, '10.' . '229', '>='));
+
+
+    /* ---------- v10.230: Jina عمومی + اتصال غیرمستقیم و انتظار انتخابگر ---------- */
+    $_j230Plan = function_exists('s4JinaFetchPlan') ? s4JinaFetchPlan() : ['modes'=>[]];
+    $add('10.230', 'Jina Reader مسیرهای اتصال غیرمستقیم را قبل از direct امتحان می‌کند',
+         function_exists('s4JinaIndirect' . 'Net')
+      && function_exists('s4JinaFetch' . 'Plan')
+      && in_array('worker', (array)($_j230Plan['modes'] ?? []), true)
+      && in_array('direct', (array)($_j230Plan['modes'] ?? []), true));
+    $add('10.230', 'Jina feedback برای URL عمومی و نه فقط SnappShop مجاز است',
+         strpos($selfSrc, '$_fbGenericJina') !== false
+      && strpos($selfSrc, 'extractionEngine=jina URLs') !== false
+      && strpos($selfSrc, "'jina_reader_modes'") !== false);
+    $add('10.230', 'fetch_html_smart پوستهٔ JS هر دامنه‌ای را می‌تواند به Jina fallback بدهد',
+         strpos($selfSrc, "$_canJinaJs = function_exists('fetch_html_jina_reader');") !== false
+      && strpos($selfSrc, 'jina_js_fallback') !== false);
+    $add('10.230', 'پنجرهٔ تمام‌صفحهٔ انتخابگر گزینهٔ انتظار بیشتر دارد',
+         strpos($selfSrc, 'id="selectorFsWait"') !== false
+      && strpos($selfSrc, 'function selectorWaitParam') !== false
+      && strpos($selfSrc, '__S4_SELECTOR_WAIT_MS__') !== false
+      && strpos($selfSrc, "{v:'10." . "230'") !== false
+      && version_compare(APP_VERSION, '10.' . '230', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62773,6 +62892,12 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:#94a3b8;font-size:12px">
                 <input type="checkbox" id="fullMode" onchange="scheduleSave()"> <b style="color:#fbbf24">⚡ بارگذاری کامل (JS)</b>
             </label>
+            <label style="display:flex;align-items:center;gap:6px;color:#94a3b8;font-size:12px">
+                ⏳ انتظار انتخابگر
+                <select id="selectorWaitMs" onchange="selectorSyncWait(this.value);scheduleSave()" style="width:96px;padding:5px 6px;font-size:11px">
+                    <option value="0">بدون</option><option value="5000">۵ ثانیه</option><option value="10000">۱۰ ثانیه</option><option value="20000">۲۰ ثانیه</option><option value="30000">۳۰ ثانیه</option>
+                </select>
+            </label>
             <span style="font-size:10px;color:#64748b">برای سایت‌های اسکرولی و React (مثل باسلام)</span>
         </div>
         <div class="row" style="align-items:center;margin-bottom:8px">
@@ -63608,14 +63733,16 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 #selectorFsTitle{font-size:14px;margin:0;white-space:nowrap;max-width:38vw;overflow:hidden;text-overflow:ellipsis}
 #selectorFsHint{display:none!important}
 .selector-fs-btn{font-size:11px!important;padding:6px 8px!important;white-space:nowrap;flex:0 0 auto}
+.selector-fs-wait{height:30px;min-width:92px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#e2e8f0;font-size:11px;padding:0 6px;direction:rtl}
 #selectorFsPauseBtn.__on{background:#f59e0b!important;border-color:#fbbf24!important;color:#111827!important;font-weight:800}
-@media(max-width:720px){#selectorFsModal .selector-fs-head{gap:3px!important;padding:4px!important}#selectorFsTitle{font-size:12px;max-width:34vw}.selector-fs-btn{padding:5px 6px!important;min-width:34px}.selector-fs-btn .txt{display:none}}
+@media(max-width:720px){#selectorFsModal .selector-fs-head{gap:3px!important;padding:4px!important}#selectorFsTitle{font-size:12px;max-width:27vw}.selector-fs-wait{min-width:66px;width:66px;font-size:10px;padding:0 3px}.selector-fs-btn{padding:5px 6px!important;min-width:34px}.selector-fs-btn .txt{display:none}}
 </style>
 <div id="selectorFsModal" class="bsl-modal-overlay" style="display:none;z-index:100050;padding:0" onclick="if(event.target===this)selectorFsClose()">
   <div class="bsl-modal" style="width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none">
     <div class="bsl-modal-head selector-fs-head">
       <h2 id="selectorFsTitle">🔍 بارگذاری صفحه</h2>
       <button class="btn btn-amber selector-fs-btn" id="selectorFsPauseBtn" onclick="selectorFsTogglePause()" title="توقف موقت انتخاب: اول پاپ‌آپ/کشویی/تب سایت را باز کنید، سپس دوباره انتخاب را فعال کنید">⏸ <span class="txt">توقف انتخاب</span></button>
+      <select id="selectorFsWait" class="selector-fs-wait" onchange="selectorSyncWait(this.value);selectorFsReload()" title="انتظار قبل از فعال شدن انتخاب؛ برای سایت‌های JS/full-mode"><option value="0">بدون انتظار</option><option value="5000">⏳ ۵ث</option><option value="10000">⏳ ۱۰ث</option><option value="20000">⏳ ۲۰ث</option><option value="30000">⏳ ۳۰ث</option></select>
       <button class="btn btn-blue selector-fs-btn" onclick="selectorFsReload()" title="بارگذاری دوباره">🔄 <span class="txt">بارگذاری دوباره</span></button>
       <button class="btn btn-teal selector-fs-btn" onclick="selectorFsUseInline()" title="نمایش در پنل داخلی">↙ <span class="txt">پنل داخلی</span></button>
       <button class="btn btn-gray selector-fs-btn" onclick="selectorFsOpenNewTab()" title="تب جدید">🪟 <span class="txt">تب جدید</span></button>
@@ -64702,7 +64829,7 @@ function openDetailProxy(keepScroll) {
     // v9.75: کلید پروفایلِ فعلی را بفرست تا اتصالِ صفحه مطابق «اتصال غیرمستقیم»ِ
     // همین پروفایل باشد (خاموش = مستقیم). پروفایلِ فعلی = انتخابِ منو یا URL.
     const _pk = profileKey(($('profileSelect')&&$('profileSelect').value)||($('url')&&$('url').value.trim())||'');
-    $('detailFrame').src = '?detail_proxy=' + encodeURIComponent(sampleUrl) + '&pk=' + encodeURIComponent(_pk);
+    $('detailFrame').src = '?detail_proxy=' + encodeURIComponent(sampleUrl) + '&pk=' + encodeURIComponent(_pk) + selectorWaitParam();
     $('detailStatus').textContent = '⏳ در حال باز کردن صفحهٔ نمونه...';
     switchMainTab('selectors');
     // v8.66: اگر پروکسی خطا بدهد، iframe سفید می‌ماند و کاربر نمی‌فهمد چه شد
@@ -65865,18 +65992,22 @@ function selectorFsFrameWin(){const fr=$('selectorFsFrame');return fr&&fr.conten
 function selectorFsSendPause(){const w=selectorFsFrameWin();if(w)try{w.postMessage({type:selectorFsPauseType(),on:selectorFsPaused},'*');}catch(e){}}
 function selectorFsUpdatePauseBtn(){const b=$('selectorFsPauseBtn');if(!b)return;b.classList.toggle('__on',selectorFsPaused);b.innerHTML=(selectorFsPaused?'▶ <span class="txt">فعال‌سازی انتخاب</span>':'⏸ <span class="txt">توقف انتخاب</span>');}
 function selectorFsTogglePause(){selectorFsPaused=!selectorFsPaused;selectorFsUpdatePauseBtn();selectorFsSendPause();showToast(selectorFsPaused?'انتخاب موقتاً متوقف شد — حالا با صفحه تعامل کنید':'انتخاب دوباره فعال شد');}
+function selectorSyncWait(v){const ms=String(Math.max(0,Math.min(30000,parseInt(v)||0)));['selectorWaitMs','selectorFsWait'].forEach(id=>{const el=$(id);if(el&&el.value!==ms)el.value=ms;});}
+function selectorWaitValue(){const modal=$('selectorFsModal'),fs=$('selectorFsWait'),main=$('selectorWaitMs');let el=(modal&&modal.style.display!=='none'&&fs)?fs:main;if(!el&&fs)el=fs;const ms=Math.max(0,Math.min(30000,parseInt(el&&el.value)||0));selectorSyncWait(ms);return ms;}
+function selectorWaitParam(){const ms=selectorWaitValue();return ms>0?'&wait_ms='+ms:'';}
 function selectorFsBuildSrc(kind){
     if(kind==='detail'){
         const sampleUrl=detailSampleUrl(); if(!sampleUrl)return'';
         const _pk=profileKey(($('profileSelect')&&$('profileSelect').value)||($('url')&&$('url').value.trim())||'');
-        return '?detail_proxy='+encodeURIComponent(sampleUrl)+'&pk='+encodeURIComponent(_pk);
+        return '?detail_proxy='+encodeURIComponent(sampleUrl)+'&pk='+encodeURIComponent(_pk)+selectorWaitParam();
     }
     const url=$('url').value.trim(); if(!url){showToast('URL وارد کنید',true);return'';}
     const full=$('fullMode')&&$('fullMode').checked?'&full=1':'';
     const _pk=profileKey(url);
-    return '?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk);
+    return '?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk)+selectorWaitParam();
 }
 function selectorFsOpen(kind){
+    selectorSyncWait(selectorWaitValue());
     const src=selectorFsBuildSrc(kind||'list'); if(!src)return;
     selectorFsState={kind:kind||'list',src:src,inline:false};
     selectorFsPaused=false; selectorFsUpdatePauseBtn();
@@ -65912,7 +66043,7 @@ function loadVisual(){
   const full=$('fullMode')&&$('fullMode').checked?'&full=1':'';
   // v9.75: اتصالِ این صفحه را مطابق «اتصال غیرمستقیم»ِ پروفایلِ فعلی بگذار (خاموش = مستقیم)
   const _pk=profileKey(url);
-  $('vFrame').src='?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk);
+  $('vFrame').src='?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk)+selectorWaitParam();
   $('vFrame').onload=()=>{
       if($('fullMode')&&$('fullMode').checked){
           $('status').textContent='⏳ رندر JS... صبر کنید';
@@ -68995,6 +69126,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.230', t:'🌐 Jina عمومی با اتصال غیرمستقیم · ⏳ انتظار انتخابگر', items:[
+    'موتور Jina Reader دیگر direct را اول امتحان نمی‌کند؛ برای r.jina.ai مسیرهای غیرمستقیم تنظیم‌شده مثل proxy/Worker و سپس DoH/DNS را قبل از direct می‌سنجد تا محدودیت هاست ایرانی دور زده شود.',
+    'فیدبک Jina به SnappShop محدود نیست؛ هر URL معتبری با extractionEngine=jina یا s4_feedback=jina قابل تست است و خروجی مسیرهای Jina در jina_reader_modes دیده می‌شود.',
+    'fallback Jina برای پوسته‌های JavaScript از SnappShop/Digikala عمومی‌تر شد و می‌تواند بعد از شکست رندر روی هر دامنهٔ JS-layered امتحان شود.',
+    'در پنجرهٔ انتخاب سلکتور (تمام‌صفحه و بارگذاری عادی) گزینهٔ انتظار ۵/۱۰/۲۰/۳۰ ثانیه اضافه شد تا قبل از فعال شدن انتخاب، سایت‌های JS فرصت hydrate/load بیشتری داشته باشند.',
+  ]},
   {v:'10.229', t:'📌 انتخاب سریع پروفایل در نوار چسبان بالا', items:[
     'یک کشوی کوچک انتخاب پروفایل به نوار چسبان بالای صفحه، کنار دکمه‌های همبرگری/تمام‌عرض/مدیر وظیفه اضافه شد تا بدون برگشت به تب شروع بتوان پروفایل را عوض کرد.',
     'کشوی بالایی و کشوی اصلی پروفایل همگام می‌مانند: بارگذاری، ذخیره، حذف و بازیابی آخرین پروفایل هر دو را به‌روز می‌کند.',
