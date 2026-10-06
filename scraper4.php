@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.218';
+const APP_VERSION = '10.219';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -4474,6 +4474,58 @@ function aiExtractAnswer($body): string {
     return $clean !== '' ? $clean : $raw;
 }
 
+/* v10.219: ساختِ بدنه‌های جایگزین برای خطاهای شکل payload.
+   این‌ها خطای اعتبار یا ریت‌لیمیت نیستند؛ معمولاً تفاوتِ لهجهٔ OpenAI-compatible
+   است: مدل‌های reasoning بعضی سرویس‌ها max_tokens را نمی‌پذیرند و
+   max_completion_tokens می‌خواهند، یا temperature را فقط مقدار پیش‌فرض قبول
+   می‌کنند. به‌جای قرمز کردن مدل، همان درخواست یک بار با بدنهٔ اصلاح‌شده
+   امتحان می‌شود. */
+function aiPayloadRepairVariants(array $payload, array $r, string $model = ''): array {
+    $code = (int)($r['code'] ?? 0);
+    if (!in_array($code, [400, 422], true)) return [];
+    if (aiBillingFailure($r)['is'] || $code === 429) return [];
+    $hay = strtolower(aiHttpErrorMessage($r) . ' ' . (string)($r['raw'] ?? ''));
+    $out = [];
+    $add = function (array $p, string $why) use (&$out) {
+        unset($p['_s4_no_repair']);
+        $k = md5(json_encode($p, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        if (!isset($out[$k])) $out[$k] = ['payload' => $p, 'repair' => $why];
+    };
+    $mentionsMaxTokens = strpos($hay, 'max_tokens') !== false || strpos($hay, 'max tokens') !== false;
+    $mentionsMaxCompletion = strpos($hay, 'max_completion_tokens') !== false;
+    $unsupported = strpos($hay, 'unsupported') !== false || strpos($hay, 'not supported') !== false
+        || strpos($hay, 'unknown parameter') !== false || strpos($hay, 'unrecognized') !== false
+        || strpos($hay, 'invalid parameter') !== false || strpos($hay, 'extra inputs') !== false
+        || strpos($hay, 'not permitted') !== false;
+    if ($mentionsMaxTokens && ($unsupported || $mentionsMaxCompletion) && isset($payload['max_tokens'])) {
+        $p2 = $payload;
+        $p2['max_completion_tokens'] = (int)$payload['max_tokens'];
+        unset($p2['max_tokens']);
+        $add($p2, 'max_tokens→max_completion_tokens');
+        if (array_key_exists('temperature', $p2)) {
+            $p3 = $p2;
+            unset($p3['temperature']);
+            $add($p3, 'max_completion_tokens بدون temperature');
+        }
+    }
+    if ($mentionsMaxCompletion && ($unsupported || strpos($hay, 'unknown') !== false) && isset($payload['max_completion_tokens'])) {
+        $p2 = $payload;
+        $p2['max_tokens'] = (int)$payload['max_completion_tokens'];
+        unset($p2['max_completion_tokens']);
+        $add($p2, 'max_completion_tokens→max_tokens');
+    }
+    $mentionsTemp = strpos($hay, 'temperature') !== false;
+    if ($mentionsTemp && (strpos($hay, 'unsupported') !== false || strpos($hay, 'not support') !== false
+        || strpos($hay, 'only the default') !== false || strpos($hay, 'does not support') !== false
+        || strpos($hay, 'invalid') !== false || strpos($hay, 'must be') !== false)
+        && array_key_exists('temperature', $payload)) {
+        $p2 = $payload;
+        unset($p2['temperature']);
+        $add($p2, 'حذف temperature');
+    }
+    return array_values($out);
+}
+
 /**
  * آدرس «chat/completions» یک ارائه‌دهنده را می‌سازد.
  * همهٔ فرمت‌ها OpenAI-compatible اند به‌جز Cloudflare که native است.
@@ -4923,9 +4975,28 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
             return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
         }
         $r = aiHttp($ep['url'], $headers, $body, $net, $m);
-        $tried[] = ['mode' => $m, 'code' => $r['code'], 'error' => mb_substr((string)($r['error'] ?? ''), 0, 80)];
+        $tried[] = ['mode' => $m, 'code' => $r['code'], 'error' => mb_substr(aiHttpErrorMessage($r), 0, 80)];
         if (aiTestStopRequested()) {
             return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
+        }
+        /* v10.219: خطاهای ۴۰۰/۴۲۲ ناشی از اختلاف payload (max_tokens/temperature)
+           را با بدنهٔ اصلاح‌شده همان‌جا دوباره امتحان کن؛ این‌ها نه credit اند
+           و نه rate-limit، پس قابل رفعِ کدی‌اند. */
+        $repairs = aiPayloadRepairVariants($body, $r, $model);
+        if (empty($r['ok']) && $repairs) {
+            foreach ($repairs as $rv) {
+                if (aiTestStopRequested()) {
+                    return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
+                }
+                $rr = aiHttp($ep['url'], $headers, (array)$rv['payload'], $net, $m);
+                $rr['payload_repair'] = (string)$rv['repair'];
+                $rr['original_code'] = (int)($r['code'] ?? 0);
+                $tried[] = ['mode' => $m . ':payload', 'code' => $rr['code'],
+                            'error' => mb_substr(aiHttpErrorMessage($rr), 0, 80),
+                            'repair' => (string)$rv['repair']];
+                if (!empty($rr['ok'])) { $rr['tried'] = $tried; return $rr; }
+                if (!in_array((int)($rr['code'] ?? 0), [400, 422], true) || aiBillingFailure($rr)['is']) { $r = $rr; break; }
+            }
         }
         if (!empty($r['ok'])) { $r['tried'] = $tried; return $r; }
         /* v9.99: خطای ۴xx فقط وقتی «حرفِ آخرِ سرویس» است که از خودِ سرویس
@@ -29085,6 +29156,7 @@ function aiFeedbackStoreResult(array &$providers, string $pid, int $idx, string 
         'via' => (string)($r['via'] ?? ''), 'kind' => (string)($j['kind'] ?? ''),
         'note' => (string)($j['note'] ?? ''), 'feedbackFix' => true,
         'workerStyle' => (string)($r['worker_style'] ?? ''),
+        'payloadRepair' => (string)($r['payload_repair'] ?? ''),
     ];
 }
 
@@ -29175,7 +29247,8 @@ if (isset($_GET['ai_feedback_fix'])) {
         $results[] = ['provider'=>$pid, 'model'=>$mid, 'ok'=>!empty($j['ok']), 'code'=>$code,
             'kind'=>(string)($j['kind'] ?? ''), 'billing'=>(string)($j['billing'] ?? ''),
             'diag'=>(string)($j['diag']['cat'] ?? ''), 'error'=>mb_substr((string)($j['error'] ?? ''), 0, 180),
-            'via'=>(string)($r['via'] ?? ''), 'latencyMs'=>$lat, 'saved'=>$apply && !$excluded];
+            'via'=>(string)($r['via'] ?? ''), 'payloadRepair'=>(string)($r['payload_repair'] ?? ''),
+            'latencyMs'=>$lat, 'saved'=>$apply && !$excluded];
     }
     if ($apply && $results) aiProvidersSave($providers);
 
@@ -37791,6 +37864,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.218', 'ورودیِ 10.218 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "218'") !== false
       && version_compare(APP_VERSION, '10.' . '218', '>='));
+
+    /* ---------- v10.219: اصلاح خودکار payload در تست مدل‌های AI ---------- */
+    $add('10.219', 'خطای max_tokens می‌تواند به max_completion_tokens اصلاح شود',
+         function_exists('aiPayloadRepair' . 'Variants')
+      && count(aiPayloadRepairVariants(['model'=>'m','messages'=>[], 'max_tokens'=>300, 'temperature'=>0.3],
+          ['ok'=>false,'code'=>400,'body'=>['error'=>['message'=>'Unsupported parameter: max_tokens. Use max_completion_tokens instead']]], 'm')) >= 1);
+    $add('10.219', 'خطای temperature می‌تواند با حذف temperature اصلاح شود',
+         count(aiPayloadRepairVariants(['model'=>'m','messages'=>[], 'max_tokens'=>300, 'temperature'=>0.3],
+          ['ok'=>false,'code'=>400,'body'=>['error'=>['message'=>'This model does not support temperature']]], 'm')) >= 1);
+    $add('10.219', 'مسیر موازی روی خطای payload به اجرای ترتیبی قابل اصلاح fallback دارد',
+         strpos($selfSrc, 'retried_payload_' . 'seq') !== false
+      && strpos($selfSrc, 'aiPayloadRepair' . 'Variants((array)$b') !== false);
+    $add('10.219', 'جزئیات تست و فیدبک payloadRepair را نگه می‌دارند',
+         strpos($selfSrc, "'payloadRepair'=>") !== false
+      && strpos($selfSrc, 'payloadRepair') !== false);
+    $add('10.219', 'ورودیِ 10.219 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "219'") !== false
+      && version_compare(APP_VERSION, '10.' . '219', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -48310,7 +48401,8 @@ $details = ['status'=>$code, 'error'=>mb_substr((string)$err,0,300), 'response'=
             // v10.01: دستهٔ خطا و توضیحِ فارسیِ آن — مثل مسیرِ گروهی
             'kind'=>(string)$j['kind'], 'note'=>(string)$j['note'],
             // v10.17 (۳۰): این نتیجه با کدام کلید گرفته شد
-            'keyId'=>$kid, 'keySuffix'=>$ksfx, 'keyLabel'=>$slot ? (string)$slot['label'] : ''];
+            'keyId'=>$kid, 'keySuffix'=>$ksfx, 'keyLabel'=>$slot ? (string)$slot['label'] : '',
+            'payloadRepair'=>(string)($r['payload_repair'] ?? '')];
 foreach ($providers[$pid]['models'] as $i => $m) {
     if (($m['id'] ?? '') === $mid) {
         /* v10.17 (۳۰): نتیجهٔ همین کلید جدا ثبت می‌شود و «در دسترس بودن»ِ
@@ -48345,7 +48437,7 @@ echo json_encode(['ok'=>true, 'model'=>$mid, 'provider'=>$pid, 'available'=>$ok,
     // v10.01: توضیحِ فارسیِ خطا و وضعیتِ چرخشِ کلید برای نمایشِ بی‌درنگ
     'kind'=>(string)$j['kind'], 'note'=>(string)$j['note'], 'billing'=>(string)$j['billing'],
     'keysExhausted'=>!empty($r['keysExhausted']), 'keyRotated'=>(int)($r['keyRotated'] ?? 0),
-    'keyPreview'=>(string)($r['keyPreview'] ?? '')], JSON_UNESCAPED_UNICODE);
+    'keyPreview'=>(string)($r['keyPreview'] ?? ''), 'payloadRepair'=>(string)($r['payload_repair'] ?? '')], JSON_UNESCAPED_UNICODE);
 exit;
 }
 /* =====================================================================
@@ -48717,6 +48809,16 @@ function aiParallelCalls(array $jobs, array $net, int $concurrency = 4): array {
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
             $r = aiHttpFinish($b['h'], $raw, $err, $code, $eurl);
+            /* v10.219: اگر مسیر موازی با ۴۰۰/۴۲۲ ناشی از شکل payload خورد،
+               مسیر ترتیبیِ کامل را اجرا کن؛ آن مسیر بدنه‌های جایگزین
+               max_completion_tokens/بدون temperature را هم امتحان می‌کند. */
+            if (empty($r['ok']) && !aiTestStopRequested()
+                && aiPayloadRepairVariants((array)$b['pd']['body'], $r, (string)$b['pd']['job']['mid'])) {
+                $r2 = aiProviderCall($b['pd']['job']['p'], (string)$b['pd']['job']['mid'],
+                                     (array)$b['pd']['job']['payload'], $net);
+                $r2['retried_payload_seq'] = true;
+                $r = $r2;
+            }
             /* اگر مسیرِ موازی به‌خاطر واسطهٔ خراب یا خطای شبکه شکست خورد،
                همان مدل را یک بار از مسیرِ ترتیبیِ کامل (که همهٔ روش‌های
                اتصال را امتحان می‌کند) رد کن. */
@@ -49198,6 +49300,8 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
                             'kind'=>(string)$j['kind'], 'note'=>(string)$j['note'],
                             // v10.17 (۳۰): این جزئیات مالِ کدام کلید است
                             'keyId'=>$kid, 'keySuffix'=>$ksfx, 'keyLabel'=>(string)$ksf['label'],
+                            'payloadRepair'=>(string)($r['payload_repair'] ?? ''),
+                            'retriedPayloadSeq'=>!empty($r['retried_payload_seq']),
                             'retriedSeq'=>!empty($r['retried_seq'])];
                         break;
                     }
@@ -68310,6 +68414,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.219', t:'🧩 رفع خودکار خطاهای payload در تست مدل‌های AI', items:[
+    'برای خطاهای فنی ۴۰۰/۴۲۲ که ناشی از تفاوت لهجهٔ OpenAI-compatible هستند، درخواست با بدنهٔ اصلاح‌شده دوباره امتحان می‌شود؛ مثلاً max_tokens به max_completion_tokens تبدیل می‌شود یا temperature حذف می‌شود.',
+    'مسیر تست موازی مدل‌ها اگر به چنین خطای payload بخورد، همان مدل را از مسیر ترتیبی کامل عبور می‌دهد تا اصلاح payload، fallback شبکه و چرخش کلید همگی اعمال شوند.',
+    'نتیجهٔ اصلاح payload در testDetails و در گزارش فیدبک ذخیره/نمایش داده می‌شود تا مشخص باشد مدل با چه اصلاحی سبز شده است.',
+    'این اصلاح همچنان credit/quota و ۴۲۹ rate-limit را رفع‌پذیر حساب نمی‌کند و فقط خطاهای فنی قابل اصلاح را هدف می‌گیرد.',
+  ]},
   {v:'10.218', t:'🧭 فیدبک رفع AI · 🔌 اصلاح خطای پورت Worker · 🚦 تفکیک rate/credit', items:[
     'مسیر Cloudflare Worker برای درخواست‌های هوش مصنوعی دیگر URL کامل مقصد را خام داخل path نمی‌گذارد؛ مقصد به‌صورت encoded در ?url= و هدرهای X-Target-* فرستاده می‌شود تا خطاهای bad/invalid port رفع شوند.',
     'اندپوینت ?ai_feedback_fix=1 اضافه شد: direct/DoH/Worker را روی اندپوینت واقعی ارائه‌دهندهٔ فعال می‌سنجد، Worker خراب را تشخیص می‌دهد و فقط خطاهای غیرِ credit و غیرِ rate-limit را دوباره تست و در حالت apply ذخیره می‌کند.',
@@ -80365,7 +80475,7 @@ function aiFeedbackFix(){
         }
         if((d.results||[]).length){
             h+='<details style="margin-top:6px"><summary style="cursor:pointer;color:#c4b5fd">جزئیات مدل‌های دوباره‌تست‌شده</summary><div style="max-height:180px;overflow:auto;margin-top:4px">';
-            d.results.slice(0,40).forEach(x=>{h+='<div style="border-top:1px solid #1e293b;padding:3px 0">'+(x.ok?'✅':'❌')+' <span dir="ltr">'+esc(x.provider||'')+' / '+esc(x.model||'')+'</span> — HTTP '+toFa(x.code||0)+' · '+esc(x.kind||x.diag||'')+' · '+esc(x.error||'')+'</div>';});
+            d.results.slice(0,40).forEach(x=>{h+='<div style="border-top:1px solid #1e293b;padding:3px 0">'+(x.ok?'✅':'❌')+' <span dir="ltr">'+esc(x.provider||'')+' / '+esc(x.model||'')+'</span> — HTTP '+toFa(x.code||0)+' · '+esc(x.kind||x.diag||'')+(x.payloadRepair?' · اصلاح: '+esc(x.payloadRepair):'')+' · '+esc(x.error||'')+'</div>';});
             h+='</div></details>';
         }
         h+='</div>';
