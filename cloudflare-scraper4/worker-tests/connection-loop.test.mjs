@@ -17,6 +17,7 @@ async function load(entry, outfile) {
   return import(pathToFileURL(join(temp, outfile)));
 }
 const loop = await load('worker-src/connection-loop.ts', 'loop.mjs');
+const mirrors = await load('worker-src/source-mirrors.ts', 'mirrors.mjs');
 
 const PAGE = '<html><body><main>' + '<div class="product-card"><h2>کفش زنانه</h2><span class="price">۱٬۲۵۰٬۰۰۰ تومان</span></div>'.repeat(12) + '</main></body></html>';
 const CHALLENGE = '<html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div><script src="/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1"></script></body></html>';
@@ -134,7 +135,8 @@ test('when everything fails the report still diagnoses the block and says what t
   assert.equal(report.recipe, null);
   assert.ok(report.attempts.length >= 5, 'it really tried every direct shape');
   assert.equal(new Set(report.attempts.map(a => a.recipe)).size, report.attempts.length, 'no shape is tried twice');
-  assert.ok(report.attempts.every(a => a.route === 'direct'), 'worker shapes are skipped with no gateway configured');
+  assert.ok(report.attempts.every(a => a.route !== 'worker'), 'worker shapes are skipped with no gateway configured');
+  assert.ok(report.attempts.some(a => a.route === 'mirror'), 'public mirrors are the last thing tried before giving up');
   assert.match(report.advice, /Worker واسط/);
 });
 
@@ -145,7 +147,10 @@ test('an indirect-only installation never plans a direct request', async () => {
     { url: 'https://emalls.ir/x' });
   assert.equal(report.ok, false);
   assert.ok(report.attempts.length >= 2);
-  assert.ok(report.attempts.every(a => a.route === 'worker'), 'mode «worker» must never leak the server IP to the source');
+  // A public mirror also hides our address, so it stays allowed in indirect-only mode; what
+  // must never happen is a direct request from this server to the source.
+  assert.ok(report.attempts.every(a => a.route !== 'direct'), 'mode «worker» must never leak the server IP to the source');
+  assert.equal(report.attempts[0].route, 'worker');
   assert.equal(loop.planNext('forbidden', [], { hasGateway: true, allowDirect: false }).route, 'worker');
 });
 
@@ -231,6 +236,66 @@ test('a Persian query is tried with both + and %20 spellings', async () => {
   assert.match(report.advice, /نگارش آدرس/);
 });
 
+test('a public mirror is the last resort and only a verbatim one is ever remembered', async () => {
+  const bag = stateBag();
+  const seen = [];
+  const transport = async input => {
+    seen.push(input);
+    if (input.route !== 'mirror') return { status: 403, text: DENIED, url: input.url };
+    const mirror = mirrors.mirrorById(input.mirror);
+    return { status: 200, text: PAGE, url: input.url, sentUrl: mirror.build(input.url) };
+  };
+  const report = await loop.runConnectionLoop({ ...bag, transport, hasGateway: false, sleep: async () => {} }, { url: 'https://emalls.ir/x' });
+  assert.equal(report.ok, true);
+  assert.equal(report.route, 'mirror');
+  assert.equal(report.recipe, 'mirror-allorigins', 'the first verbatim mirror wins');
+  const mirrorAttempts = report.attempts.filter(a => a.route === 'mirror');
+  assert.equal(mirrorAttempts.length, 1, 'mirrors are tried only after every direct shape failed');
+  assert.ok(report.attempts.indexOf(mirrorAttempts[0]) === report.attempts.length - 1);
+  assert.match(mirrorAttempts[0].url, /allorigins/, 'the attempt table shows the mirror address that was really used');
+  assert.equal(bag.state.get('net.recipe:emalls.ir').mirror, 'allorigins');
+  assert.match(report.advice, /آینهٔ عمومی/);
+});
+
+test('mirrors can be switched off and then are never planned', async () => {
+  const bag = stateBag();
+  const src = source(() => ({ status: 403, text: DENIED }));
+  const report = await loop.runConnectionLoop({ ...bag, transport: src.transport, hasGateway: false, allowMirrors: false, sleep: async () => {} },
+    { url: 'https://emalls.ir/x' });
+  assert.equal(report.ok, false);
+  assert.ok(report.attempts.every(a => a.route === 'direct'));
+});
+
+test('an archive-only mirror diagnoses an IP block without ever becoming the recipe', async () => {
+  const bag = stateBag();
+  const transport = async input => input.mirror === 'wayback'
+    ? { status: 200, text: PAGE, url: input.url, sentUrl: mirrors.mirrorById('wayback').build(input.url) }
+    : { status: 403, text: DENIED, url: input.url };
+  const report = await loop.runConnectionLoop({ ...bag, transport, hasGateway: false, sleep: async () => {} }, { url: 'https://emalls.ir/x' });
+  assert.equal(report.ok, false, 'a rewritten archive copy is not a working connection');
+  assert.equal(report.recipe, null);
+  assert.equal(bag.state.has('net.recipe:emalls.ir'), false, 'it must never poison links and selectors');
+  assert.match(report.advice, /IP/, 'but it does prove the block is about our address');
+  assert.match(report.advice, /Worker واسط/);
+});
+
+test('the mirror table stays safe: GET addresses, verbatim flags, wayback cleanup', () => {
+  const target = 'https://emalls.ir/' + encodeURIComponent('جستجو') + '?q=1';
+  for (const mirror of mirrors.SOURCE_MIRRORS) {
+    const built = mirror.build(target);
+    assert.equal(new URL(built).protocol, 'https:');
+    assert.ok(built.includes('emalls.ir') || built.includes(encodeURIComponent(target)), 'the target travels in the mirror address');
+    assert.ok(mirror.note && mirror.label);
+  }
+  assert.deepEqual(mirrors.learnableMirrors().map(m => m.id), ['allorigins', 'codetabs', 'jina']);
+  const archived = '<!-- BEGIN WAYBACK TOOLBAR INSERT --><div id="wm-ipp"></div><!-- END WAYBACK TOOLBAR INSERT -->' +
+    '<a href="https://web.archive.org/web/20240101/https://emalls.ir/p/1">محصول</a>';
+  const clean = mirrors.unwrapMirror('wayback', archived);
+  assert.ok(!clean.includes('wm-ipp'), 'the archive toolbar is removed');
+  assert.ok(clean.includes('href="https://emalls.ir/p/1"'), 'links point back at the real site');
+  assert.equal(mirrors.unwrapMirror('allorigins', archived), archived, 'verbatim mirrors are never rewritten');
+});
+
 test('both twins expose the loop and the panel can run it (deployer page contract pins)', async () => {
   const read = name => readFile(join(root, name), 'utf8');
   const [workerApp, renderServer, dashboard, workerScraper, renderNetwork] = await Promise.all(
@@ -249,6 +314,12 @@ test('both twins expose the loop and the panel can run it (deployer page contrac
   assert.ok(renderNetwork.includes('learned.url !== url.href'), 'the node fetch path does too');
   assert.ok(dashboard.includes('آدرس ارسالی'), 'the attempt table shows the exact address of each attempt');
   assert.ok(dashboard.includes('بررسی نگارش آدرس'), 'the panel surfaces the URL encoding notes');
+  assert.ok(dashboard.includes("BSET('source.mirrors')"), 'public mirrors have an explicit on/off switch in the panel');
+  assert.ok(dashboard.includes('openLoopModal(d.loop)'), 'a failed access test shows the loop table instead of a bare error');
+  for (const [name, text] of [['worker', workerApp], ['render', renderServer]])
+    assert.ok(/source-test[\s\S]{0,1400}healSourceConnection/.test(text), `${name} twin heals the access test itself`);
+  assert.ok(workerScraper.includes('تشخیص حلقهٔ بازخورد اتصال'), 'a failed heal explains itself in the error message');
+  assert.ok(renderNetwork.includes('تشخیص حلقهٔ بازخورد اتصال'), 'the node twin does too');
 });
 
 test.after(() => rm(temp, { recursive: true, force: true }));

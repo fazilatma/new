@@ -14,6 +14,7 @@
  */
 
 import { shapeUrl, urlEncodingNotes, URL_SHAPE_LABELS, type UrlShape } from './url-shapes.js';
+import { SOURCE_MIRRORS, mirrorById, type MirrorId } from './source-mirrors.js';
 
 export type LoopVerdict =
   | 'ok'            // real page content came back
@@ -25,7 +26,7 @@ export type LoopVerdict =
   | 'mismatch'      // a real page, but not the expected content (selector found nothing)
   | 'network';      // DNS/TLS/timeout — the request never completed
 
-export type RecipeRoute = 'direct' | 'worker';
+export type RecipeRoute = 'direct' | 'worker' | 'mirror';
 
 export type ConnectionRecipe = {
   id: string;
@@ -39,6 +40,10 @@ export type ConnectionRecipe = {
    * encoded, is a different request as far as a WAF or an IIS pipeline is concerned.
    */
   url?: UrlShape;
+  /** For route «mirror»: which public mirror fetches the page on our behalf. */
+  mirror?: MirrorId;
+  /** A mirror that rewrites the page is a diagnosis only and is never remembered. */
+  diagnosticOnly?: boolean;
   headers: (target: URL) => Record<string, string>;
 };
 
@@ -99,7 +104,18 @@ export const CONNECTION_RECIPES: ConnectionRecipe[] = [
   {
     id: 'worker-ua', label: 'Worker واسط + هدرهای مرورگر بالادست', route: 'worker',
     headers: target => ({ 'x-proxy-ua': DESKTOP_UA, 'x-proxy-referer': target.origin + '/' })
-  }
+  },
+  // Public mirrors fetch the page from their own address. They are the last resort before
+  // giving up, because they answer the question the header shapes cannot: «is this block
+  // about WHO is asking rather than HOW?».
+  ...SOURCE_MIRRORS.map((mirror): ConnectionRecipe => ({
+    id: 'mirror-' + mirror.id,
+    label: mirror.label,
+    route: 'mirror',
+    mirror: mirror.id,
+    diagnosticOnly: !mirror.verbatim,
+    headers: () => ({ ...(mirror.headers || {}) })
+  }))
 ];
 
 export function recipeById(id: string): ConnectionRecipe | undefined {
@@ -135,20 +151,23 @@ export function classifyAttempt(input: { status?: number; text?: string; error?:
  */
 export const VERDICT_PLAN: Record<LoopVerdict, string[]> = {
   // A challenge is an IP/JS problem: header cosmetics never solve it, leave the network.
-  challenge: ['worker', 'worker-ua', 'direct-warm'],
+  challenge: ['worker', 'worker-ua', 'direct-warm', 'mirror-allorigins', 'mirror-codetabs', 'mirror-jina', 'mirror-wayback'],
   // A plain refusal is usually about how the request looks.
   forbidden: ['direct-referer', 'direct-hints', 'url-unescape', 'url-plus-space', 'url-space-20', 'url-lower-escapes',
-    'direct-warm', 'direct-mobile', 'direct-search-bot', 'worker', 'worker-ua'],
+    'direct-warm', 'direct-mobile', 'direct-search-bot', 'worker', 'worker-ua',
+    'mirror-allorigins', 'mirror-codetabs', 'mirror-jina', 'mirror-wayback'],
   throttled: ['direct-referer', 'direct-hints', 'worker'],
-  server: ['direct-referer', 'worker', 'worker-ua'],
+  server: ['direct-referer', 'worker', 'worker-ua', 'mirror-allorigins'],
   empty: ['direct-hints', 'url-unescape', 'url-plus-space', 'direct-warm', 'direct-mobile', 'worker'],
   mismatch: ['url-unescape', 'url-plus-space', 'direct-hints', 'direct-warm', 'direct-mobile', 'worker', 'worker-ua'],
-  network: ['direct-referer', 'worker', 'worker-ua'],
+  network: ['direct-referer', 'worker', 'worker-ua', 'mirror-allorigins', 'mirror-codetabs'],
   ok: []
 };
 
 export type PlanOptions = {
   hasGateway: boolean;
+  /** Public mirrors are a third party: the installation can switch them off. */
+  allowMirrors?: boolean;
   /**
    * False when the installation is configured for indirect access only (mode «worker» or the
    * profile's «اتصال غیرمستقیم»). A direct request would then leak the server's own IP to a
@@ -161,6 +180,7 @@ function usable(recipe: ConnectionRecipe, tried: string[], options: PlanOptions)
   if (tried.includes(recipe.id)) return false;
   if (recipe.route === 'worker' && !options.hasGateway) return false;
   if (recipe.route === 'direct' && options.allowDirect === false) return false;
+  if (recipe.route === 'mirror' && options.allowMirrors === false) return false;
   return true;
 }
 
@@ -221,14 +241,16 @@ export type LoopReport = {
 };
 
 export type LoopTransport = (input: {
-  url: string; route: RecipeRoute; headers: Record<string, string>; warm: boolean;
-}) => Promise<{ status: number; text: string; url?: string; error?: string }>;
+  url: string; route: RecipeRoute; headers: Record<string, string>; warm: boolean; mirror?: MirrorId;
+}) => Promise<{ status: number; text: string; url?: string; sentUrl?: string; error?: string }>;
 
 export type LoopDeps = {
   transport: LoopTransport;
   hasGateway: boolean;
   /** See PlanOptions.allowDirect — mirrors the configured source-connection mode. */
   allowDirect?: boolean;
+  /** See PlanOptions.allowMirrors — «آینه‌های عمومی» in the source-connection settings. */
+  allowMirrors?: boolean;
   getState: <T>(key: string, fallback: T) => Promise<T>;
   setState: (key: string, value: unknown) => Promise<void>;
   /** Content check that decides whether a 200 really is the page we wanted. */
@@ -237,7 +259,7 @@ export type LoopDeps = {
   now?: () => number;
 };
 
-export type LearnedRecipe = { recipe: string; route: RecipeRoute; shape: UrlShape; at: number; verdictBefore: LoopVerdict | null };
+export type LearnedRecipe = { recipe: string; route: RecipeRoute; shape: UrlShape; mirror?: MirrorId; at: number; verdictBefore: LoopVerdict | null };
 
 export function recipeKey(url: string): string {
   let host = '';
@@ -269,7 +291,7 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
   const attempts: LoopAttempt[] = [];
   const tried: string[] = [];
   const sent = new Set<string>();
-  const plan = { hasGateway: deps.hasGateway, allowDirect: deps.allowDirect !== false };
+  const plan = { hasGateway: deps.hasGateway, allowDirect: deps.allowDirect !== false, allowMirrors: deps.allowMirrors !== false };
   const urlNotes = urlEncodingNotes(options.url);
   const first = recipeById(options.startWith || '');
   // Start from the remembered shape when there is one, otherwise from the plain request —
@@ -278,6 +300,7 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
     : plan.allowDirect ? CONNECTION_RECIPES[0]! : planNext('forbidden', [], plan);
   let throttleWaits = 0;
   let lastVerdict: LoopVerdict = 'forbidden';
+  let diagnosis: ConnectionRecipe | null = null;
 
   /** Skips a planned recipe whose URL spelling is identical to one already sent: no new information. */
   const pick = (candidate: ConnectionRecipe | null): { recipe: ConnectionRecipe; url: string } | null => {
@@ -297,9 +320,9 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
     const { recipe: active, url: sentUrl } = current;
     tried.push(active.id);
     sent.add(active.route + ':' + sentUrl);
-    let raw: { status: number; text: string; url?: string; error?: string };
+    let raw: { status: number; text: string; url?: string; sentUrl?: string; error?: string };
     try {
-      raw = await deps.transport({ url: sentUrl, route: active.route, headers: active.headers(target), warm: Boolean(active.warm) });
+      raw = await deps.transport({ url: sentUrl, route: active.route, headers: active.headers(target), warm: Boolean(active.warm), mirror: active.mirror });
     } catch (error) {
       raw = { status: 0, text: '', error: error instanceof Error ? error.message : String(error) };
     }
@@ -312,20 +335,30 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
     const shape: UrlShape = active.url || 'canonical';
     attempts.push({
       round, recipe: active.id, label: active.label, route: active.route,
-      url: sentUrl, shape, shapeLabel: URL_SHAPE_LABELS[shape],
+      url: raw.sentUrl || sentUrl, shape, shapeLabel: URL_SHAPE_LABELS[shape],
       status: Number(raw.status || 0), verdict, note, ms: Math.max(0, now() - started),
       bytes: String(raw.text || '').length
     });
     lastVerdict = verdict;
 
+    if (verdict === 'ok' && active.diagnosticOnly) {
+      // The page itself (and the selectors) are fine — only our address is refused. Keep this
+      // as evidence, never as a standing recipe: this mirror rewrites links and markup.
+      diagnosis = active;
+      current = pick(planNext('forbidden', tried, plan));
+      continue;
+    }
+
     if (verdict === 'ok') {
-      const learned: LearnedRecipe = { recipe: active.id, route: active.route, shape, at: now(), verdictBefore: attempts[0]?.verdict ?? null };
+      const learned: LearnedRecipe = { recipe: active.id, route: active.route, shape, mirror: active.mirror, at: now(), verdictBefore: attempts[0]?.verdict ?? null };
       await deps.setState(recipeKey(canonical), learned);
       const spelling = shape === 'canonical' ? '' : ` با نگارش آدرس «${URL_SHAPE_LABELS[shape]}»`;
+      const viaMirror = active.route === 'mirror'
+        ? ' توجه: این مسیر از یک آینهٔ عمومی می‌گذرد؛ برای پایداری بلندمدت یک Worker واسط تنظیم کنید.' : '';
       return {
         ok: true, url: canonical, host: target.hostname, recipe: active.id, route: active.route,
         shape, sentUrl, urlNotes, attempts, learned: true,
-        advice: `این روش جواب داد: «${active.label}»${spelling}. از این پس همین روش برای ${target.hostname} به‌صورت خودکار استفاده می‌شود.`
+        advice: `این روش جواب داد: «${active.label}»${spelling}. از این پس همین روش برای ${target.hostname} به‌صورت خودکار استفاده می‌شود.${viaMirror}`
       };
     }
 
@@ -339,7 +372,9 @@ export async function runConnectionLoop(deps: LoopDeps, options: { url: string; 
     ok: false, url: canonical, host: target.hostname, recipe: null, route: null,
     shape: null, sentUrl: attempts.length ? attempts[attempts.length - 1]!.url : null, urlNotes,
     attempts, learned: false,
-    advice: failureAdvice(attempts, deps.hasGateway, urlNotes)
+    advice: diagnosis
+      ? `صفحه از طریق «${diagnosis.label}» کامل خوانده شد، پس آدرس و سلکتورهای شما سالم‌اند و مسدودسازی بر اساس IP سرور است. راه‌حل پایدار: یک Worker واسط با IP ایران در «روش اتصال مبدأ» وارد کنید؛ راه‌حل فوری: «آینه‌های عمومی» را روشن بگذارید.`
+      : failureAdvice(attempts, deps.hasGateway, urlNotes)
   };
 }
 

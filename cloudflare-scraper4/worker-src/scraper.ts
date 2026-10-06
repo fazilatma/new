@@ -7,6 +7,7 @@ import { diagnosticProgress, type DiagnosticObserver } from './diagnostic-progre
 import { autoHeal, learnedSourceInit, sourceNetworkFor, type LearnedInit } from './connection-heal.js';
 import { safeText, safeTextViaWorker } from './network.js';
 import { setQueryParam, deleteQueryParams, readQueryParam } from './url-shapes.js';
+import { mirrorById, unwrapMirror } from './source-mirrors.js';
 import { escapeHtml, sha256 } from './utils.js';
 import type { ExtractionEngine, Product, Profile, Selectors, VariationGroup } from './types.js';
 import { DEFAULT_SELECTORS } from './types.js';
@@ -77,8 +78,10 @@ export async function sourceText(url:string,indirect=false,maxBytes=8_000_000){
   catch(error){
     const message=error instanceof Error?error.message:String(error);
     const healed=await autoHeal(url,message).catch(()=>null);
-    if(!healed)throw error;
-    return sourceTextOnce(url,indirect,maxBytes,healed);
+    if(healed?.init)return sourceTextOnce(url,indirect,maxBytes,healed.init);
+    // Healing failed, but it learned WHY: give the user that sentence instead of the bare status.
+    if(healed?.advice)throw new Error(`${message} — تشخیص حلقهٔ بازخورد اتصال: ${healed.advice}`);
+    throw error;
   }
 }
 async function sourceTextOnce(url:string,indirect:boolean,maxBytes:number,learned?:LearnedInit){
@@ -91,6 +94,16 @@ async function sourceTextOnce(url:string,indirect:boolean,maxBytes:number,learne
   // The learned recipe also fixes the SPELLING of the address (a Persian query sent with + or
   // a double-encoded path is a different request for the source), so it replaces the URL too.
   const sent=recipe?.url||url;
+  // A learned MIRROR fetches the page from someone else's address, but the page still belongs
+  // to the source: links inside it must resolve against the original URL, so that is what is
+  // reported back as the document URL.
+  if(recipe?.route==='mirror'&&recipe.mirror){
+    const mirror=mirrorById(recipe.mirror);
+    if(mirror){
+      const page=await safeText(mirror.build(sent),maxBytes,{headers:{...mirror.headers,...recipe.headers}});
+      return {text:unwrapMirror(mirror.id,page.text),url:sent,contentType:page.contentType,route:'mirror'};
+    }
+  }
   const useWorker=Boolean(network.workerUrl)&&(indirect||network.mode==='worker'||recipe?.route==='worker');
   if(useWorker){try{return {...await safeTextViaWorker(sent,network.workerUrl,maxBytes,recipe?.route==='worker'?recipe.headers:{}),route:'worker'}}catch(error){throw new Error(`${error instanceof Error?error.message:String(error)} (route: worker)؛ قرارداد آدرس پراکسی و مجوز دامنهٔ مبدأ را بررسی کنید.`)}}
   if(network.mode==='worker'&&!network.workerUrl)throw new Error('Worker URL در تنظیمات اتصال مبدأ خالی است.');

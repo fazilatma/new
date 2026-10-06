@@ -177,7 +177,9 @@ test('both runtime entrypoints and dashboard use saved source settings and profi
   assert.match(await read('render-src/connections.ts'),/registerSourceNetworkLoader\(async url/);
   assert.match(await read('worker-src/network.ts'),/sourceWorkerUrl\(base,target\)/);
   for(const file of ['worker-src/app.ts','render-src/server.ts']){
-    const route=(await read(file)).split("app.post('/api/source-test'")[1].split('\n')[0];
+    // 1.327.0 — the handler grew a healing branch, so the signature and the body no longer
+    // share one line; pin the whole handler instead of its first line.
+    const route=(await read(file)).split("app.post('/api/source-test'")[1].split('\napp.')[0];
     assert.match(route,/profileId/);assert.match(route,/networkIndirect/);
   }
   const dashboard=await read('worker-src/dashboard.ts');

@@ -62,7 +62,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.326.0+'; } catch { return process.env.npm_package_version || '1.326.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.327.0+'; } catch { return process.env.npm_package_version || '1.327.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -986,7 +986,24 @@ app.post('/api/destination/:target/:id/status',async c=>{const target=c.req.para
 app.delete('/api/destination/:target/:id',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);if(c.req.query('confirm')!=='DELETE')return c.json({ok:false,error:'confirm DELETE is required'},400);return c.json(await destinationDelete(target as any,Number(c.req.param('id')),c.req.query('force')==='true',c.req.query('shop')||''))});
 app.post('/api/products/:profileId/:sourceKey/sync/:target',async c=>{const profile=await getProfile(c.req.param('profileId')),product=await getProduct(c.req.param('profileId'),c.req.param('sourceKey')),target=c.req.param('target');if(!profile||!product)return c.json({ok:false,error:'Product/profile not found'},404);if(target==='woo')return c.json({ok:true,result:await syncWoo(product,profile)});if(target==='basalam')return c.json({ok:true,result:await syncBasalam(product,profile)});return c.json({ok:false,error:'Invalid target'},400)});
 app.post('/api/queue-watchdog', async c => { const body=await c.req.json().catch(()=>({})) as any,settings=await getState<any>('settings',{}),stallMin=Number(body.minutes)||Math.max(1,Math.ceil(Number(settings.watchdog?.stallAfter||300)/60)),autoContinue=body.autoContinue??settings.watchdog?.autoContinue!==false;return c.json({ok:true,autoContinue,recovered:autoContinue?await recoverFailedAndStalledJobs(stallMin):0,reaped:autoContinue?0:await reapStalledJobs(stallMin)}); });
-app.post('/api/source-test', async c => { const body=await c.req.json() as any; const profile=body.profileId?await getProfile(String(body.profileId)):null; const result=await safeText(String(body.url||''),1_000_000,{indirect:Boolean(profile?.networkIndirect)}); return c.json({ok:true,bytes:Buffer.byteLength(result.text),url:result.url,route:result.route,title:(result.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim()}); });
+app.post('/api/source-test', async c => {
+  const body=await c.req.json() as any; const profile=body.profileId?await getProfile(String(body.profileId)):null; const url=String(body.url||profile?.url||'');
+  const title=(text:string)=>(text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').replace(/<[^>]+>/g,'').trim();
+  try {
+    const result=await safeText(url,1_000_000,{indirect:Boolean(profile?.networkIndirect)});
+    return c.json({ok:true,bytes:Buffer.byteLength(result.text),url:result.url,route:result.route,title:title(result.text)});
+  } catch (error) {
+    // Twin of worker-src/app.ts: the feedback loop runs on a failed test and reports back.
+    const message=error instanceof Error?error.message:String(error);
+    const listSelector=String((profile as any)?.selectors?.container||'');
+    const loop=await healSourceConnection(url,{listSelector}).catch(()=>null);
+    if (loop?.ok) {
+      const retry=await safeText(url,1_000_000,{indirect:Boolean(profile?.networkIndirect)}).catch(()=>null);
+      if (retry) return c.json({ok:true,healed:true,bytes:Buffer.byteLength(retry.text),url:retry.url,route:retry.route,loop,title:title(retry.text)});
+    }
+    return c.json({ok:false,error:message,loop:loop?{...loop,listSelector}:null});
+  }
+});
 // 1.325.0 — connection feedback loop (twin of worker-src/app.ts). Each attempt's answer
 // chooses the next request shape; the verified winner is remembered for that host.
 app.post('/api/source/connection-loop', async c => { const body=await c.req.json() as any; const profile=body.profileId?await getProfile(String(body.profileId)):null; const url=String(body.url||profile?.url||'').trim(); if(!url)return c.json({ok:false,error:'آدرس آزمایش را وارد یا یک پروفایل انتخاب کنید.'},400); const listSelector=String(body.listSelector||(profile as any)?.selectors?.container||''); const report=await healSourceConnection(url,{listSelector,maxRounds:Number(body.maxRounds)||undefined,startWith:body.startWith?String(body.startWith):undefined}); return c.json({...report,profile:profile?.name||'',listSelector}); });

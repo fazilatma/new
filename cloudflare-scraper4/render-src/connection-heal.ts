@@ -13,6 +13,7 @@ import {
   type ConnectionRecipe, type LoopDeps, type LoopReport, type LoopTransport, type RecipeRoute
 } from '../worker-src/connection-loop.js';
 import { shapeUrl, type UrlShape } from '../worker-src/url-shapes.js';
+import { mirrorById, unwrapMirror, type MirrorId } from '../worker-src/source-mirrors.js';
 
 export { shouldAutoHeal };
 /** Drops the remembered recipe for a host so the next run re-learns it from scratch. */
@@ -26,10 +27,17 @@ async function sourceNetwork(url: string) {
 
 /** Real transport: one request per attempt, with an optional warm-up of the site root. */
 export function sourceTransport(maxBytes = 4_000_000): LoopTransport {
-  return async ({ url, route, headers, warm }) => {
+  return async ({ url, route, headers, warm, mirror }) => {
     const init = (extra: Record<string, string>): ApiRequestInit =>
-      ({ headers: { ...headers, ...extra }, indirect: route === 'worker', directRoute: route === 'direct', noRecipe: true });
+      ({ headers: { ...headers, ...extra }, indirect: route === 'worker', directRoute: route !== 'worker', noRecipe: true });
     try {
+      if (route === 'mirror') {
+        const chosen = mirrorById(String(mirror || ''));
+        if (!chosen) throw new Error('آینهٔ نامعتبر برای دریافت صفحهٔ مبدأ.');
+        const sentUrl = chosen.build(url);
+        const probe = await probeSource(sentUrl, init({ ...chosen.headers }), maxBytes);
+        return { ...probe, text: unwrapMirror(chosen.id, probe.text), url, sentUrl };
+      }
       let extra: Record<string, string> = {};
       if (warm && route === 'direct') {
         const origin = new URL(url).origin + '/';
@@ -45,14 +53,15 @@ export function sourceTransport(maxBytes = 4_000_000): LoopTransport {
 
 export async function loopDeps(url: string, listSelector?: string): Promise<LoopDeps> {
   const network = await sourceNetwork(url);
-  return { transport: sourceTransport(), hasGateway: Boolean(network.workerUrl), allowDirect: network.mode !== 'worker', getState, setState, verify: selectorVerifier(listSelector) };
+  const mirrors = (await getState<any>('settings', {}))?.source?.mirrors !== false;
+  return { transport: sourceTransport(), hasGateway: Boolean(network.workerUrl), allowDirect: network.mode !== 'worker', allowMirrors: mirrors, getState, setState, verify: selectorVerifier(listSelector) };
 }
 
 export async function healSourceConnection(url: string, options: { listSelector?: string; maxRounds?: number; startWith?: string } = {}): Promise<LoopReport> {
   return runConnectionLoop(await loopDeps(url, options.listSelector), { url, maxRounds: options.maxRounds, startWith: options.startWith });
 }
 
-export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string>; url: string; shape: UrlShape } | null;
+export type LearnedInit = { recipe: ConnectionRecipe; route: RecipeRoute; headers: Record<string, string>; url: string; shape: UrlShape; mirror?: MirrorId } | null;
 
 export async function learnedSourceInit(url: string): Promise<LearnedInit> {
   const saved = await learnedRecipe(getState, url);
@@ -61,15 +70,23 @@ export async function learnedSourceInit(url: string): Promise<LearnedInit> {
   const shape: UrlShape = saved!.shape || recipe.url || 'canonical';
   try {
     const target = new URL(url);
-    return { recipe, route: recipe.route, headers: recipe.headers(target), url: shapeUrl(target.href, shape), shape };
+    return { recipe, route: recipe.route, headers: recipe.headers(target), url: shapeUrl(target.href, shape), shape, mirror: recipe.mirror };
   } catch { return null; }
 }
 
-export async function autoHeal(url: string, message: string, listSelector?: string): Promise<LearnedInit> {
+export type HealOutcome = { init: LearnedInit; advice: string; report: LoopReport } | null;
+
+/** Twin of worker-src/connection-heal.ts: a failed heal still returns its diagnosis. */
+export async function autoHeal(url: string, message: string, listSelector?: string): Promise<HealOutcome> {
   if (!shouldAutoHeal(message)) return null;
   if (!(await autoHealAllowed({ getState, setState }, url))) return null;
   const report = await healSourceConnection(url, { listSelector });
-  return report.ok ? learnedSourceInit(url) : null;
+  await setState(loopReportKey(url), { at: Date.now(), ok: report.ok, advice: report.advice, attempts: report.attempts }).catch(() => undefined);
+  return { init: report.ok ? await learnedSourceInit(url) : null, advice: report.advice, report };
+}
+
+export function loopReportKey(url: string): string {
+  try { return 'net.loop:' + new URL(url).hostname.toLowerCase(); } catch { return 'net.loop:' + url; }
 }
 
 // Installs the feedback loop into every source fetch of this runtime: replay the learned
@@ -77,10 +94,14 @@ export async function autoHeal(url: string, message: string, listSelector?: stri
 registerConnectionRecipe({
   learned: async url => {
     const learned = await learnedSourceInit(url);
-    return learned ? { headers: learned.headers, route: learned.route, url: learned.url } : null;
+    return learned ? { headers: learned.headers, route: learned.route, url: learned.url, mirror: learned.mirror } : null;
   },
   heal: async (url, message) => {
     const healed = await autoHeal(url, message);
-    return healed ? { headers: healed.headers, route: healed.route, url: healed.url } : null;
+    if (!healed) return null;
+    const init = healed.init;
+    return init
+      ? { headers: init.headers, route: init.route, url: init.url, mirror: init.mirror, advice: healed.advice }
+      : { advice: healed.advice };
   }
 });

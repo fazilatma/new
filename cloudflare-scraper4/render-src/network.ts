@@ -1,4 +1,5 @@
 import { sourceWorkerUrl, fetchSourceGateway, sourceGatewayAttempts } from '../worker-src/source-network.js';
+import { mirrorById, unwrapMirror, type MirrorId } from '../worker-src/source-mirrors.js';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
@@ -152,10 +153,11 @@ export type ApiRequestInit = RequestInit & {
  * replays the request shape the host already accepted, and one block-shaped failure heals
  * itself instead of failing identically forever. Twin: sourceText() in worker-src/scraper.ts.
  */
-export type LearnedRequestShape = { headers: Record<string, string>; route: 'direct' | 'worker'; url?: string };
+export type LearnedRequestShape = { headers: Record<string, string>; route: 'direct' | 'worker' | 'mirror'; url?: string; mirror?: MirrorId };
+export type HealedRequestShape = Partial<LearnedRequestShape> & { advice?: string };
 export type ConnectionRecipeHooks = {
   learned: (url: string) => Promise<LearnedRequestShape | null>;
-  heal: (url: string, message: string) => Promise<LearnedRequestShape | null>;
+  heal: (url: string, message: string) => Promise<HealedRequestShape | null>;
 };
 let recipeHooks: ConnectionRecipeHooks | null = null;
 export function registerConnectionRecipe(hooks: ConnectionRecipeHooks | null): void { recipeHooks = hooks; }
@@ -287,14 +289,42 @@ export function ensureTextResponse(text: string, contentType: string, url: strin
 }
 
 export async function safeText(raw: string, maxBytes = 8_000_000, init: ApiRequestInit = {}): Promise<{ text: string; url: string; route: string }> {
-  try { return await safeTextOnce(raw, maxBytes, init); }
+  try {
+    const viaMirror = await mirrorRoute(raw, init);
+    return viaMirror || await safeTextOnce(raw, maxBytes, init);
+  }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const healed = recipeHooks && init.noRecipe !== true ? await recipeHooks.heal(raw, message).catch(() => null) : null;
     if (!healed) throw error;
+    // Healing failed but diagnosed the block: that sentence is more useful than «HTTP 403».
+    if (!healed.headers) throw new Error(`${message} — تشخیص حلقهٔ بازخورد اتصال: ${healed.advice || 'هیچ روشی جواب نداد.'}`);
+    if (healed.route === 'mirror') {
+      const mirror = mirrorById(String(healed.mirror || ''));
+      if (mirror) {
+        const page = await safeTextOnce(mirror.build(healed.url || raw), maxBytes, { ...init, headers: { ...mirror.headers, ...(healed.headers as any) }, noRecipe: true, directRoute: true });
+        return { text: unwrapMirror(mirror.id, page.text), url: raw, route: 'mirror' };
+      }
+    }
     return safeTextOnce(healed.url || raw, maxBytes, { ...init, headers: { ...(healed.headers as any), ...(init.headers as any) }, indirect: init.indirect || healed.route === 'worker', noRecipe: true });
   }
 }
+/**
+ * A learned public mirror fetches the page from its own address. The body is normalised back
+ * towards the original markup and reported under the ORIGINAL url, so relative links in the
+ * page keep resolving against the real site. Twin: sourceText() in worker-src/scraper.ts.
+ */
+async function mirrorRoute(raw: string, init: ApiRequestInit, maxBytes = 8_000_000): Promise<{ text: string; url: string; route: string } | null> {
+  if (!recipeHooks || init.noRecipe === true || init.apiMode === true || init.directRoute === true) return null;
+  const learned = await recipeHooks.learned(raw).catch(() => null);
+  const mirror = learned?.route === 'mirror' ? mirrorById(String(learned.mirror || '')) : undefined;
+  if (!mirror) return null;
+  const page = await safeTextOnce(mirror.build(learned!.url || raw), maxBytes, {
+    ...init, headers: { ...mirror.headers, ...(learned!.headers as any), ...(init.headers as any) }, noRecipe: true, directRoute: true
+  });
+  return { text: unwrapMirror(mirror.id, page.text), url: raw, route: 'mirror' };
+}
+
 async function safeTextOnce(raw: string, maxBytes: number, init: ApiRequestInit): Promise<{ text: string; url: string; route: string }> {
   const response = await safeFetch(raw, init, maxBytes);
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${raw} (route: ${sourceResponses.get(response)?.route || 'direct'}, attempts: ${sourceGatewayAttempts(response).join(' → ')}); در مسیر worker، این وضعیت می‌تواند از پراکسی یا سایت مبدأ باشد. قرارداد مسیر /https://site یا الگوی ?url={url} و مجوز دامنه در پراکسی را بررسی کنید.`);
