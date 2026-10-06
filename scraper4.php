@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.225';
+const APP_VERSION = '10.226';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11870,6 +11870,8 @@ $html = preg_replace("~<base[^>]*>~i", "", $html);
 $script = <<<'SCRIPT'
 <style>
 *{cursor:crosshair!important}
+html.__pick-paused *{cursor:auto!important}
+html.__pick-paused .__h{outline:none!important}
 .__h{outline:3px solid #a855f7!important;outline-offset:2px}
 .__s{outline:3px solid #22c55e!important;background:rgba(168,85,247,.08)!important}
 .__bar{position:fixed;top:0;left:0;right:0;background:linear-gradient(180deg,#581c87,#3b0764);color:#fff;padding:0;z-index:999999;font:13px var(--app-font,Tahoma,sans-serif);box-shadow:0 4px 20px rgba(0,0,0,.6)}
@@ -11924,6 +11926,19 @@ body{padding-top:0!important}
 .__pb:disabled{opacity:.3;cursor:not-allowed}
 .__pb.__okb{background:#22c55e;border-color:#22c55e;color:#04210f;font-weight:700}
 .__pop i{font-style:normal;color:#f9a8d4;font-size:11px;padding:0 3px}
+.__pause.__on{background:#f59e0b!important;border-color:#fbbf24!important;color:#111827!important;font-weight:800}
+@media(max-width:720px){
+  .__bar .__row{padding:4px 6px;gap:4px;flex-wrap:nowrap;overflow-x:auto}
+  .__sel{max-width:42vw;font-size:10px;padding:4px 6px;flex:0 1 auto}
+  .__tag,.__cnt{display:none!important}
+  .__bar button,.__pb{font-size:11px!important;padding:4px 6px!important;border-radius:5px!important}
+  .__pop{max-width:calc(100vw - 8px);padding:2px;gap:1px}
+  .__prow{gap:2px;flex-wrap:nowrap;overflow-x:auto;max-width:calc(100vw - 14px)}
+  .__prow2{display:none!important}
+  .__psep{margin:0 1px;height:13px}
+  .__pfld{min-width:50px!important;max-width:80px!important;font-size:10px!important;padding-inline:4px!important}
+  .__pop i{display:none!important}
+}
 </style>
 <!-- v8.68: نوار کنترل از داخل صفحه بیرون رفت و به پنجرهٔ والد منتقل شد.
      قبلاً یک نوار ثابت بالای صفحه بود و body یک padding-top بزرگ می‌گرفت،
@@ -11934,6 +11949,7 @@ body{padding-top:0!important}
     <span class="__sel" id="__sel">روی عنصر دلخواه کلیک کنید…</span>
     <span class="__tag" id="__tag">-</span>
     <span class="__cnt" id="__cnt" style="display:none"></span>
+    <button class="__nav __pause" id="__pauseBtn" onclick="__togglePickPause()" title="توقف موقت انتخاب: کلیک‌ها به خود سایت برسند">⏸ انتخاب</button>
     <button class="__nav" onclick="__hideBar()" title="پنهان کردن این نوار">✕</button>
   </div>
 </div>
@@ -11953,6 +11969,7 @@ body{padding-top:0!important}
     <button class="__pb" id="__pfnext" onclick="__field(1)" title="فیلد بعدی (Tab)">›</button>
     <span class="__psep"></span>
     <i id="__pcnt"></i>
+    <button class="__pb __pause" id="__ppause" onclick="__togglePickPause()" title="توقف موقت انتخاب برای بازکردن پاپ‌آپ، کشویی یا تب داخل صفحه">⏸</button>
     <button class="__pb __okb" onclick="__done()" title="اتمام و ارسال (کلید Enter)">✓</button>
   </div>
   <div class="__prow2">
@@ -11964,6 +11981,13 @@ body{padding-top:0!important}
 <script>
 (function(){
 var S={},cur=null,picked=null;var MODE='shortDesc';
+var __pickPaused=false;
+function __pauseUi(){
+  try{document.documentElement.classList.toggle('__pick-paused',__pickPaused);}catch(e){}
+  ['__pauseBtn','__ppause'].forEach(function(id){var b=document.getElementById(id);if(!b)return;b.classList.toggle('__on',__pickPaused);b.textContent=(id==='__pauseBtn')?(__pickPaused?'▶ انتخاب':'⏸ انتخاب'):(__pickPaused?'▶':'⏸');});
+  if(__pickPaused&&cur&&cur!==picked){try{cur.classList.remove('__h');}catch(e){}}
+}
+window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__post('picker_pause_state',{on:__pickPaused});};
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
    حرکت در درخت المان‌ها هر بار صفحه را وسط‌چین می‌کرد؛ روی صفحهٔ کوچک
    این یعنی کاربر مدام جای خودش را گم می‌کند. نوار شناور کنار المان
@@ -12443,6 +12467,7 @@ function __go(dir){
 /* v8.75: میان‌برهای صفحه‌کلید — دست از موس برداشته نمی‌شود.
    ↑ والد · ↓ فرزند · → قبلی · ← بعدی · Enter اتمام · Esc پنهان کردن */
 document.addEventListener('keydown',function(e){
+  if(__pickPaused)return;
   var t=e.target;
   if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
   /* v8.76: Tab بین فیلدها می‌چرخد و به المان دست نمی‌زند، پس حتی وقتی هنوز
@@ -12498,6 +12523,7 @@ function __navState(){
 }
 
 document.addEventListener('mouseover',function(e){
+  if(__pickPaused)return;
   if(e.target.closest('.__bar')||e.target.closest('.__pop'))return;
   if(cur&&cur!==picked)cur.classList.remove('__h');
   cur=e.target;
@@ -12505,10 +12531,12 @@ document.addEventListener('mouseover',function(e){
 },true);
 
 document.addEventListener('mouseout',function(e){
+  if(__pickPaused)return;
   if(e.target&&e.target!==picked)e.target.classList.remove('__h');
 },true);
 
 document.addEventListener('click',function(e){
+  if(__pickPaused)return;
   if(e.target.closest('.__bar')||e.target.closest('.__pop'))return;
   e.preventDefault();e.stopPropagation();
   selectEl(e.target);
@@ -12594,6 +12622,8 @@ window.addEventListener('message',function(e){
     __setMode(String(d.mode||'shortDesc'));
   }else if(d.type==='picker_go'){
     __go(String(d.dir||'up'));
+  }else if(d.type==='picker_pause'){
+    window.__togglePickPause(!!d.on);
   }else if(d.type==='picker_popbar'){
     /* v9.90: نمایش/پنهان‌کردن نوار شناور از روی چک‌باکس پنل بیرونی */
     var pop=document.getElementById('__pop');
@@ -12767,6 +12797,8 @@ $fullPageInspect = !empty($_GET['fullpage_inspect']) ? '1' : '0';
 $script = <<<'SCRIPT'
 <style>
 *{cursor:crosshair!important}
+html.__pick-paused *{cursor:auto!important}
+html.__pick-paused .__h{outline:none!important}
 .__h{outline:3px solid #3b82f6!important;outline-offset:2px}
 .__s{outline:3px solid #22c55e!important;background:rgba(34,197,94,.08)!important}
 .__bar{position:fixed;top:0;left:0;right:0;background:linear-gradient(180deg,#1e293b,#0f172a);color:#fff;padding:0;z-index:999999;font:13px var(--app-font,Tahoma,sans-serif);box-shadow:0 4px 20px rgba(0,0,0,.6)}
@@ -12821,12 +12853,28 @@ body{padding-top:130px!important}
   text-overflow:ellipsis;white-space:nowrap;background:#052e16;border:1px solid #14532d;
   border-radius:4px;padding:1px 5px}
 .__pop em.__warn{color:#fbbf24;background:#3f2d05;border-color:#78350f}
+.__pause.__on{background:#f59e0b!important;border-color:#fbbf24!important;color:#111827!important;font-weight:800}
+@media(max-width:720px){
+  .__bar .__row,.__bar .__row2{padding:4px 6px;gap:4px;flex-wrap:nowrap;overflow-x:auto}
+  .__bar .__row3{display:none!important}
+  .__bar select{max-width:102px;min-width:0;font-size:10px;padding:4px 5px}
+  .__sel{max-width:34vw;font-size:10px;padding:4px 6px;flex:0 1 auto}
+  .__tag,.__cnt{display:none!important}
+  .__bar button,.__pb{font-size:11px!important;padding:4px 6px!important;border-radius:5px!important}
+  .__pop{max-width:calc(100vw - 8px);padding:2px;gap:1px}
+  .__prow{gap:2px;flex-wrap:nowrap;overflow-x:auto;max-width:calc(100vw - 14px)}
+  .__prow2{display:none!important}
+  .__psep{margin:0 1px;height:13px}
+  .__pfld{min-width:50px!important;max-width:78px!important;font-size:10px!important;padding-inline:4px!important}
+  .__pop i{display:none!important}
+}
 </style>
 <div class="__bar">
 <div class="__row">
   <select id="__m"><option value="container">📦 کانتینر</option><option value="title">📝 عنوان</option><option value="price">💰 قیمت</option><option value="link">🔗 لینک</option><option value="image">🖼️ تصویر</option></select>
   <span class="__sel" id="__sel">کلیک کنید...</span>
   <button onclick="__ok()">✓ بعدی</button>
+  <button class="__pause" id="__pauseBtn" onclick="__togglePickPause()" title="توقف موقت انتخاب برای بازکردن پاپ‌آپ، کشویی یا تب داخل صفحه">⏸ انتخاب</button>
   <button class="ok" onclick="__done()">✅ اتمام</button>
   <button class="no" onclick="if(window.__fp==='1'){window.close();}else{parent.postMessage({type:'cancel'},'*');}">✕</button>
 </div>
@@ -12861,6 +12909,7 @@ body{padding-top:130px!important}
     <button class="__pb" id="__pfnext" onclick="__vField(1)" title="فیلد بعدی (Tab)">›</button>
     <span class="__psep"></span>
     <i id="__pcnt"></i>
+    <button class="__pb __pause" id="__ppause" onclick="__togglePickPause()" title="توقف موقت انتخاب برای تعامل با صفحه">⏸</button>
     <button class="__pb __okb" onclick="__done()" title="اتمام (کلید Enter)">✓</button>
   </div>
   <div class="__prow2">
@@ -12872,6 +12921,13 @@ body{padding-top:130px!important}
 <script>
 (function(){
 var S={container:'',title:'',price:'',link:'',image:''},E={},cur=null,picked=null;
+var __pickPaused=false;
+function __pauseUi(){
+  try{document.documentElement.classList.toggle('__pick-paused',__pickPaused);}catch(e){}
+  ['__pauseBtn','__ppause'].forEach(function(id){var b=document.getElementById(id);if(!b)return;b.classList.toggle('__on',__pickPaused);b.textContent=(id==='__pauseBtn')?(__pickPaused?'▶ انتخاب':'⏸ انتخاب'):(__pickPaused?'▶':'⏸');});
+  if(__pickPaused&&cur&&cur!==picked){try{cur.classList.remove('__h');}catch(e){}}
+}
+window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__vpPost('vp_pause_state',{on:__pickPaused});};
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
    حرکت در درخت المان‌ها هر بار صفحه را وسط‌چین می‌کرد؛ روی صفحهٔ کوچک
    این یعنی کاربر مدام جای خودش را گم می‌کند. نوار شناور کنار المان
@@ -12882,8 +12938,8 @@ function __softScroll(el,o){if(!el||!__mayScroll())return;try{el.scrollIntoView(
 var __isFull='<?php echo $fullMode?"1":"0";?>';
 var __fp='<?php echo $fullPageInspect??'0';?>';
 if(__isFull==='1'){
-  document.addEventListener('click',function(e){if(e.target.closest('.__bar'))return;var a=e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();}},true);
-  window.open=function(){return null;};
+  document.addEventListener('click',function(e){if(__pickPaused)return;if(e.target.closest('.__bar'))return;var a=e.target.closest('a');if(a){e.preventDefault();e.stopPropagation();}},true);
+  var __origOpen=window.open;window.open=function(){return __pickPaused?__origOpen.apply(window,arguments):null;};
   var __oF=window.fetch;window.fetch=function(u,o){if(typeof u==='string'&&u.indexOf('?rp=')===-1&&!u.startsWith('data:')&&!u.startsWith('blob:')){try{u='?rp='+encodeURIComponent(new URL(u,location.href).href);}catch(e){}}return __oF.call(this,u,o);};
   var __oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==='string'&&u.indexOf('?rp=')===-1&&!u.startsWith('data:')&&!u.startsWith('blob:')){try{u='?rp='+encodeURIComponent(new URL(u,location.href).href);}catch(e){}}return __oX.apply(this,arguments);};
   var __oSA=HTMLElement.prototype.setAttribute;HTMLElement.prototype.setAttribute=function(n,v){if(__isFull==='1'&&(n==='src'||n==='href')&&typeof v==='string'&&v.indexOf('?rp=')===-1&&!v.startsWith('data:')&&!v.startsWith('blob:')){try{v='?rp='+encodeURIComponent(new URL(v,location.href).href);}catch(e){}}return __oSA.call(this,n,v);};
@@ -13255,6 +13311,7 @@ function selectEl(el){
 }
 
 document.addEventListener('mouseover',function(e){
+  if(__pickPaused)return;
   if(e.target.closest('.__bar')||e.target.closest('.__pop'))return;
   if(cur&&cur!==picked)cur.classList.remove('__h');
   cur=e.target;
@@ -13263,11 +13320,13 @@ document.addEventListener('mouseover',function(e){
 },true);
 
 document.addEventListener('mouseout',function(e){
+  if(__pickPaused)return;
   if(e.target&&e.target!==picked)e.target.classList.remove('__h');
   if(picked)updatePreview(picked,document.getElementById('__m').value);
 },true);
 
 document.addEventListener('click',function(e){
+  if(__pickPaused)return;
   if(e.target.closest('.__bar')||e.target.closest('.__pop'))return;
   e.preventDefault();e.stopPropagation();
   selectEl(e.target);
@@ -13277,6 +13336,7 @@ document.addEventListener('click',function(e){
    ↑ والد · ↓ فرزند · → قبلی · ← بعدی · Tab فیلد بعدی · Space ثبت و بعدی
    · Esc پاک کردن همین فیلد · Enter اتمام */
 document.addEventListener('keydown',function(e){
+  if(__pickPaused)return;
   var t=e.target;
   if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable))return;
   if(e.key==='Tab'){e.preventDefault();e.stopPropagation();__vField(e.shiftKey?-1:1);return;}
@@ -13441,6 +13501,8 @@ window.addEventListener('message',function(e){
     var sel=document.getElementById('__m');
     if(sel){ sel.value=String(d.mode||'container'); sel.dispatchEvent(new Event('change')); }
     __vpReport();
+  }else if(d.type==='vp_pause'){
+    window.__togglePickPause(!!d.on);
   }else if(d.type==='vp_go'){
     if(d.dir==='up')        __goParent();
     else if(d.dir==='down') __goChild();
@@ -38199,6 +38261,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'X-Respond-Timing: network-idle') !== false
       && strpos($selfSrc, "{v:'10." . "225'") !== false
       && version_compare(APP_VERSION, '10.' . '225', '>='));
+
+    /* ---------- v10.226: توقف موقت انتخابگر و مودال compact ---------- */
+    $add('10.226', 'مودال تمام‌صفحهٔ سلکتورها دکمهٔ توقف موقت انتخاب دارد',
+         strpos($selfSrc, 'selectorFsPauseBtn') !== false
+      && strpos($selfSrc, 'function selectorFsTogglePause') !== false);
+    $add('10.226', 'انتخابگرهای فهرست و جزئیات پیام pause را می‌پذیرند',
+         strpos($selfSrc, "d.type==='vp_pause'") !== false
+      && strpos($selfSrc, "d.type==='picker_pause'") !== false
+      && strpos($selfSrc, 'html.__pick-paused') !== false);
+    $add('10.226', 'کنترل‌های پنجرهٔ بارگذاری صفحه در موبایل فشرده و توضیحات پنهان می‌شوند',
+         strpos($selfSrc, '#selectorFsHint{display:none!important}') !== false
+      && strpos($selfSrc, '@media(max-width:720px)') !== false
+      && strpos($selfSrc, "{v:'10." . "226'") !== false
+      && version_compare(APP_VERSION, '10.' . '226', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63378,14 +63454,23 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div id="toast" class="toast"></div>
 
 <!-- v10.217: fullscreen selector page-load modal for list/detail selector tabs -->
+<style>
+#selectorFsModal .selector-fs-head{gap:5px!important;flex-wrap:nowrap!important;overflow-x:auto;padding:6px 8px!important;min-height:42px}
+#selectorFsTitle{font-size:14px;margin:0;white-space:nowrap;max-width:38vw;overflow:hidden;text-overflow:ellipsis}
+#selectorFsHint{display:none!important}
+.selector-fs-btn{font-size:11px!important;padding:6px 8px!important;white-space:nowrap;flex:0 0 auto}
+#selectorFsPauseBtn.__on{background:#f59e0b!important;border-color:#fbbf24!important;color:#111827!important;font-weight:800}
+@media(max-width:720px){#selectorFsModal .selector-fs-head{gap:3px!important;padding:4px!important}#selectorFsTitle{font-size:12px;max-width:34vw}.selector-fs-btn{padding:5px 6px!important;min-width:34px}.selector-fs-btn .txt{display:none}}
+</style>
 <div id="selectorFsModal" class="bsl-modal-overlay" style="display:none;z-index:100050;padding:0" onclick="if(event.target===this)selectorFsClose()">
   <div class="bsl-modal" style="width:100vw;max-width:100vw;height:100vh;max-height:100vh;border-radius:0;border:none">
-    <div class="bsl-modal-head" style="gap:8px;flex-wrap:wrap">
+    <div class="bsl-modal-head selector-fs-head">
       <h2 id="selectorFsTitle">🔍 بارگذاری صفحه</h2>
-      <button class="btn btn-blue" onclick="selectorFsReload()" style="font-size:11px;padding:7px 10px">🔄 بارگذاری دوباره</button>
-      <button class="btn btn-teal" onclick="selectorFsUseInline()" style="font-size:11px;padding:7px 10px">↙ نمایش در پنل داخلی</button>
-      <button class="btn btn-gray" onclick="selectorFsOpenNewTab()" style="font-size:11px;padding:7px 10px">🪟 تب جدید</button>
-      <button class="btn btn-red" onclick="selectorFsClose()" style="font-size:11px;padding:7px 10px">✕ بستن</button>
+      <button class="btn btn-amber selector-fs-btn" id="selectorFsPauseBtn" onclick="selectorFsTogglePause()" title="توقف موقت انتخاب: اول پاپ‌آپ/کشویی/تب سایت را باز کنید، سپس دوباره انتخاب را فعال کنید">⏸ <span class="txt">توقف انتخاب</span></button>
+      <button class="btn btn-blue selector-fs-btn" onclick="selectorFsReload()" title="بارگذاری دوباره">🔄 <span class="txt">بارگذاری دوباره</span></button>
+      <button class="btn btn-teal selector-fs-btn" onclick="selectorFsUseInline()" title="نمایش در پنل داخلی">↙ <span class="txt">پنل داخلی</span></button>
+      <button class="btn btn-gray selector-fs-btn" onclick="selectorFsOpenNewTab()" title="تب جدید">🪟 <span class="txt">تب جدید</span></button>
+      <button class="btn btn-red selector-fs-btn" onclick="selectorFsClose()" title="بستن">✕ <span class="txt">بستن</span></button>
     </div>
     <div id="selectorFsHint" style="padding:7px 12px;background:#0f172a;border-bottom:1px solid #334155;color:#94a3b8;font-size:11px;line-height:1.7"></div>
     <iframe id="selectorFsFrame" style="width:100%;height:100%;border:0;background:#fff;flex:1"></iframe>
@@ -65606,6 +65691,12 @@ function vpApplyState(st){
   const ms=$('vpMode'); if(ms&&st.mode&&ms.value!==st.mode)ms.value=st.mode;
 }
 
+let selectorFsPaused=false;
+function selectorFsPauseType(){return selectorFsState&&selectorFsState.kind==='detail'?'picker_pause':'vp_pause';}
+function selectorFsFrameWin(){const fr=$('selectorFsFrame');return fr&&fr.contentWindow?fr.contentWindow:null;}
+function selectorFsSendPause(){const w=selectorFsFrameWin();if(w)try{w.postMessage({type:selectorFsPauseType(),on:selectorFsPaused},'*');}catch(e){}}
+function selectorFsUpdatePauseBtn(){const b=$('selectorFsPauseBtn');if(!b)return;b.classList.toggle('__on',selectorFsPaused);b.innerHTML=(selectorFsPaused?'▶ <span class="txt">فعال‌سازی انتخاب</span>':'⏸ <span class="txt">توقف انتخاب</span>');}
+function selectorFsTogglePause(){selectorFsPaused=!selectorFsPaused;selectorFsUpdatePauseBtn();selectorFsSendPause();showToast(selectorFsPaused?'انتخاب موقتاً متوقف شد — حالا با صفحه تعامل کنید':'انتخاب دوباره فعال شد');}
 function selectorFsBuildSrc(kind){
     if(kind==='detail'){
         const sampleUrl=detailSampleUrl(); if(!sampleUrl)return'';
@@ -65620,11 +65711,10 @@ function selectorFsBuildSrc(kind){
 function selectorFsOpen(kind){
     const src=selectorFsBuildSrc(kind||'list'); if(!src)return;
     selectorFsState={kind:kind||'list',src:src,inline:false};
+    selectorFsPaused=false; selectorFsUpdatePauseBtn();
     const m=$('selectorFsModal'), fr=$('selectorFsFrame'), title=$('selectorFsTitle'), hint=$('selectorFsHint');
-    if(title)title.textContent=(kind==='detail'?'📄 بارگذاری تمام‌صفحهٔ نمونه جزئیات':'🧾 بارگذاری تمام‌صفحهٔ لیست محصولات');
-    if(hint)hint.innerHTML=(kind==='detail')
-        ? 'صفحهٔ محصول نمونه در مودال تمام‌صفحه باز شد. کنترل‌های انتخاب جزئیات داخل صفحه و پنل‌های بیرونی همچنان از همین انتخاب‌ها استفاده می‌کنند.'
-        : 'صفحهٔ لیست در مودال تمام‌صفحه باز شد. روی المان‌ها کلیک کنید؛ سلکتورها همانند پنل داخلی در فرم اصلی ثبت می‌شوند.';
+    if(title)title.textContent=(kind==='detail'?'📄 نمونه جزئیات':'🧾 لیست محصولات');
+    if(hint){hint.innerHTML='';hint.style.display='none';}
     if(fr){fr.src='about:blank';setTimeout(()=>{fr.src=src;},30);}
     if(m){m.style.display='flex';document.body.classList.add('modal-open');}
     if(kind==='detail'){
@@ -65635,7 +65725,7 @@ function selectorFsOpen(kind){
     }
 }
 function selectorFsClose(){const m=$('selectorFsModal');if(m)m.style.display='none';const fr=$('selectorFsFrame');if(fr)fr.src='about:blank';document.body.classList.remove('modal-open');}
-function selectorFsReload(){const fr=$('selectorFsFrame');if(fr&&selectorFsState.src){fr.src='about:blank';setTimeout(()=>{fr.src=selectorFsState.src;},30);}}
+function selectorFsReload(){const fr=$('selectorFsFrame');if(fr&&selectorFsState.src){selectorFsPaused=false;selectorFsUpdatePauseBtn();fr.src='about:blank';setTimeout(()=>{fr.src=selectorFsState.src;},30);}}
 function selectorFsUseInline(){
     if(selectorFsState.kind==='detail'){
         const fr=$('detailFrame'); if(fr){$('detailFrameWrap').classList.remove('hidden');fr.src=selectorFsState.src;}
@@ -66278,6 +66368,7 @@ window.addEventListener('message',e=>{
     // v8.68: صفحهٔ نمونه آماده شد — حالت فعلی پنل را به آن بگو
     pkSetMode(($('pkMode')||{}).value||'shortDesc');
     selCtlSyncFrame('pk');   // v9.90: تیک‌های نمایش را روی صفحهٔ تازه‌لودشده اعمال کن
+    if(selectorFsState&&selectorFsState.kind==='detail')selectorFsSendPause();
   } else if(e.data && e.data.type==='picker_state'){
     pkApplyState(e.data);
   } else if(e.data && e.data.type==='picker_field'){
@@ -66328,6 +66419,9 @@ window.addEventListener('message',e=>{
   } else if(e.data && e.data.type==='vp_ready'){
     vpSetMode(($('vpMode')||{}).value||'container');
     selCtlSyncFrame('vp');   // v9.90: تیک‌های نمایش را روی صفحهٔ تازه‌لودشده اعمال کن
+    if(selectorFsState&&selectorFsState.kind!=='detail')selectorFsSendPause();
+  } else if(e.data && (e.data.type==='picker_pause_state'||e.data.type==='vp_pause_state')){
+    selectorFsPaused=!!e.data.on; selectorFsUpdatePauseBtn();
   } else if(e.data && e.data.type==='cancel'){
     $('vFrame').src='about:blank';
   } else if(e.data && e.data.type==='cancel_detail'){
@@ -68733,6 +68827,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.226', t:'⏸ توقف موقت انتخاب در پنجره‌های بارگذاری صفحه', items:[
+    'در مودال‌های بارگذاری صفحهٔ تب سلکتورها دکمهٔ «توقف انتخاب» اضافه شد؛ در این حالت کلیک‌ها به خود سایت می‌رسند تا پاپ‌آپ‌ها، منوهای کشویی و تب‌های داخل صفحه باز شوند و سپس بتوان دوباره انتخاب را فعال کرد.',
+    'هم انتخابگر فهرست و هم انتخابگر جزئیات پیام pause/resume را می‌پذیرند و دکمهٔ کوچک همان حالت کنار المان هم اضافه شد.',
+    'مودال تمام‌صفحهٔ سلکتورها برای موبایل فشرده شد: توضیحات پنهان شدند، عنوان و دکمه‌ها کوتاه شدند و کنترل‌های داخل iframe هم در عرض کم compact می‌شوند.',
+  ]},
   {v:'10.225', t:'🧠 هدرهای رسمی Jina Reader برای SPA و cache', items:[
     'درخواست مستقیم Jina Reader اکنون X-Return-Format/X-Respond-With=markdown می‌فرستد تا خروجی صریحاً Markdown باشد.',
     'برای سایت‌های SPA مثل SnappShop و Digikala، X-Engine=browser و X-Respond-Timing=network-idle اضافه شد و X-Timeout با مهلت استخراج هماهنگ می‌شود.',
