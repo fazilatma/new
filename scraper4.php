@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.220';
+const APP_VERSION = '10.221';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11286,15 +11286,19 @@ $kind = trim((string)$_GET['s4_feedback']);
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
 $_fbKind = strtolower($kind);
 $_fbSnapp = in_array($_fbKind, ['snappshop','snapp','snappshop.ir'], true);
+$_fbDigikala = in_array($_fbKind, ['digikala','dk','digikala.com'], true);
 if ($url === '') {
     $url = $_fbSnapp
         ? 'https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1'
-        : 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
+        : ($_fbDigikala
+            ? 'https://www.digikala.com/search/category-kitchen-appliances/'
+            : 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145');
 }
 if (!filter_var($url, FILTER_VALIDATE_URL)) { echo json_encode(['ok'=>false,'error'=>'Invalid URL'], JSON_UNESCAPED_UNICODE); exit; }
 $_fbIsEmalls = isEmallsUrl($url);
 $_fbIsSnapp = isSnappshopUrl($url);
-if (!$_fbIsEmalls && !$_fbIsSnapp) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls or SnappShop URLs'], JSON_UNESCAPED_UNICODE); exit; }
+$_fbIsDigikala = function_exists('isDigikalaUrl') && isDigikalaUrl($url);
+if (!$_fbIsEmalls && !$_fbIsSnapp && !$_fbIsDigikala) { echo json_encode(['ok'=>false,'error'=>'This feedback endpoint is restricted to Emalls, SnappShop or Digikala URLs'], JSON_UNESCAPED_UNICODE); exit; }
 $timeout = max(8, min(60, (int)($_GET['timeout'] ?? 20)));
 $pages = max(1, min(3, (int)($_GET['pages'] ?? 1)));
 $profiles = loadProfiles();
@@ -11302,7 +11306,7 @@ $pkIn = trim((string)($_GET['pk'] ?? ($_GET['profile_key'] ?? '')));
 $pk = profileResolveKey($pkIn !== '' ? $pkIn : $url, $profiles) ?: profileKey($url);
 $profile = $profiles[$pk] ?? [];
 $selectors = is_array($profile['selectors'] ?? null) ? (array)$profile['selectors'] : [];
-$engine = normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
+$engine = isset($_GET['extractionEngine']) ? normalizeExtractionEngine((string)$_GET['extractionEngine']) : normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
 $pagType = (string)($profile['pagType'] ?? 'query_page');
 $pagVal = (string)($profile['pagVal'] ?? '');
 $briefProduct = function(array $p): array {
@@ -11341,8 +11345,9 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
     $em = function_exists('parse_emalls_products') ? parse_emalls_products($html, $baseUrl) : [];
     $snHtml = function_exists('parse_snappshop_products_html') ? parse_snappshop_products_html($html, $baseUrl) : [];
     $snReader = function_exists('snappshopProductsFromReaderText') ? snappshopProductsFromReaderText($html, $baseUrl) : [];
+    $jinaRows = function_exists('s4JinaProductsFromReaderText') ? s4JinaProductsFromReaderText($html, $baseUrl) : [];
     $first = [];
-    foreach ($profileRows ?: ($auto ?: ($heu ?: ($em ?: ($snHtml ?: $snReader)))) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
+    foreach ($profileRows ?: ($auto ?: ($heu ?: ($em ?: ($snHtml ?: ($snReader ?: $jinaRows))))) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
     return [
         'bytes' => strlen($html),
         'sha1' => substr(sha1($html), 0, 12),
@@ -11364,6 +11369,7 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
             'emalls_regex' => ['count'=>count($em)],
             'snappshop_html' => ['count'=>count($snHtml)],
             'snappshop_reader' => ['count'=>count($snReader)],
+            'jina_reader' => ['count'=>count($jinaRows)],
         ],
         'first_products' => $first,
     ];
@@ -11393,6 +11399,7 @@ $attempts[] = $summarizeFetch('fetch_html_current', fetch_html($url, $timeout), 
 $attempts[] = $summarizeFetch('fetch_html_smart_current', fetch_html_smart($url, $timeout), $selectors, $engine);
 if ($_fbIsEmalls) $attempts[] = $summarizeFetch('emalls_public_fallback_only', fetch_html_emalls_public_fallback($url, $timeout, []), $selectors, $engine);
 if ($_fbIsSnapp) $attempts[] = $summarizeFetch('snappshop_public_fallback_only', fetch_html_snappshop_public_fallback($url, $timeout, []), $selectors, $engine);
+if ($engine === 'jina' || !empty($_GET['jina'])) $attempts[] = $summarizeFetch('jina_reader_only', fetch_html_jina_reader($url, $timeout, []), $selectors, 'jina');
 $pageSummaries = [];
 for ($i = 1; $i <= $pages; $i++) {
     $pageUrl = $i === 1 ? $url : build_page_url_custom($url, $url, $i, $pagType, $pagVal);
@@ -38088,6 +38095,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.220', 'ورودیِ 10.220 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "220'") !== false
       && version_compare(APP_VERSION, '10.' . '220', '>='));
+
+    /* ---------- v10.221: feedback برای موتور Jina ---------- */
+    $add('10.221', 's4_feedback می‌تواند موتور extractionEngine=jina را override کند',
+         strpos($selfSrc, "isset(\$_GET['extractionEngine']) ? normalizeExtractionEngine") !== false);
+    $add('10.221', 's4_feedback برای Jina تلاش جداگانهٔ jina_reader_only دارد',
+         strpos($selfSrc, "'jina_reader_only'") !== false
+      && strpos($selfSrc, 'fetch_html_jina_' . 'reader($url') !== false);
+    $add('10.221', 's4_feedback دیجی‌کالا را هم برای تست Reader می‌پذیرد',
+         strpos($selfSrc, '$_fbIsDigikala') !== false
+      && strpos($selfSrc, 'Emalls, SnappShop or Digikala') !== false);
+    $add('10.221', 'خلاصهٔ feedback تعداد محصول‌های parser عمومی Jina را نشان می‌دهد',
+         strpos($selfSrc, "'jina_reader' => ['count'=>count(\$jinaRows)]") !== false);
+    $add('10.221', 'ورودیِ 10.221 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "221'") !== false
+      && version_compare(APP_VERSION, '10.' . '221', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -68622,6 +68644,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.221', t:'🧪 feedback استخراج برای موتور Jina و Digikala', items:[
+    'اندپوینت s4_feedback اکنون مقدار extractionEngine=jina را واقعاً اعمال می‌کند و تلاش جداگانهٔ jina_reader_only را در گزارش نشان می‌دهد.',
+    's4_feedback علاوه بر Emalls و SnappShop، URLهای Digikala را هم برای تست Reader می‌پذیرد تا همان حلقهٔ فیدبک روی سایت‌های مشابه اجرا شود.',
+    'خلاصهٔ HTML در feedback تعداد محصول‌های پیدا شده از parser عمومی Jina Reader را هم کنار SnappShop/Emalls نشان می‌دهد.',
+  ]},
   {v:'10.220', t:'📖 موتور استخراج Jina Reader برای SnappShop و Digikala', items:[
     'موتور استخراج جدید Jina Reader / r.jina.ai به انتخاب‌گرهای موتور اضافه شد تا سایت‌های SPA یا بلاک‌شده مثل SnappShop و Digikala بدون مرورگر سنگین هم قابل خواندن باشند.',
     'آدرس‌های r.jina.ai حتی اگر به‌شکل nested مثل نمونهٔ SnappShop وارد شوند unwrap می‌شوند و موتور هم URL canonical و هم فرم nested را امتحان می‌کند.',
