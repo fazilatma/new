@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.224';
+const APP_VERSION = '10.225';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9873,6 +9873,12 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
             CURLOPT_HTTPHEADER => [
                 'Accept: text/plain,text/markdown,*/*;q=0.8',
                 'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+                'X-Return-Format: markdown',
+                'X-Respond-With: markdown',
+                'X-Engine: browser',
+                'X-Respond-Timing: network-idle',
+                'X-Timeout: ' . (string)min(60, max(8, $timeout)),
+                'X-Cache-Tolerance: 604800',
             ],
         ]);
         $body = curl_exec($ch); $err = curl_error($ch);
@@ -38182,6 +38188,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.224', 'ورودیِ 10.224 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "224'") !== false
       && version_compare(APP_VERSION, '10.' . '224', '>='));
+
+    /* ---------- v10.225: هدرهای رسمی Jina Reader ---------- */
+    $add('10.225', 'Jina Reader خروجی Markdown و موتور browser را صریح درخواست می‌کند',
+         strpos($selfSrc, 'X-Return-Format: markdown') !== false
+      && strpos($selfSrc, 'X-Respond-With: markdown') !== false
+      && strpos($selfSrc, 'X-Engine: browser') !== false);
+    $add('10.225', 'Jina Reader اجازهٔ استفاده از cache و انتظار network-idle دارد',
+         strpos($selfSrc, 'X-Cache-Tolerance: 604800') !== false
+      && strpos($selfSrc, 'X-Respond-Timing: network-idle') !== false
+      && strpos($selfSrc, "{v:'10." . "225'") !== false
+      && version_compare(APP_VERSION, '10.' . '225', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -68716,6 +68733,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.225', t:'🧠 هدرهای رسمی Jina Reader برای SPA و cache', items:[
+    'درخواست مستقیم Jina Reader اکنون X-Return-Format/X-Respond-With=markdown می‌فرستد تا خروجی صریحاً Markdown باشد.',
+    'برای سایت‌های SPA مثل SnappShop و Digikala، X-Engine=browser و X-Respond-Timing=network-idle اضافه شد و X-Timeout با مهلت استخراج هماهنگ می‌شود.',
+    'X-Cache-Tolerance هفت‌روزه اضافه شد تا اگر r.jina.ai قبلاً صفحه را خوانده باشد، هاست بتواند از snapshot آماده استفاده کند و کمتر با Empty/451 روبه‌رو شود.',
+  ]},
   {v:'10.224', t:'🧾 درخواست مینیمال Markdown برای Jina Reader', items:[
     'فراخوانی مستقیم r.jina.ai دیگر از هدرهای عمومی مرورگری و Cache-Control:no-cache استفاده نمی‌کند تا Reader بتواند خروجی cached/قابل‌استفادهٔ خودش را برگرداند و کمتر به 451 Empty برسد.',
     'هدر Accept مخصوص text/markdown شد و مسیر worker fallback نسخهٔ قبل همچنان به‌عنوان پشتیبان باقی ماند.',
