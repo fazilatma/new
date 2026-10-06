@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.227';
+const APP_VERSION = '10.228';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -3474,6 +3474,13 @@ function aiUrlStripDefaultPort(string $url): string {
    https:// به ابتدا اضافه می‌شود. */
 function aiWorkerNormalizeUrl(string $w): string {
     $w = trim($w);
+    // v10.228: فرم‌های خراب ذخیره‌شده مثل }https://worker/?url={url}
+    // را قبل از اعتبارسنجی تمیز کن؛ یک کاراکتر اضافه کافی بود Worker کاملاً از مدار خارج شود.
+    $w = ltrim($w, " \t\n\r\0\x0B}])>");
+    if (!preg_match('~^https?://~i', $w) && preg_match('~https?://~i', $w, $m, PREG_OFFSET_CAPTURE)) {
+        $pos = (int)($m[0][1] ?? 0);
+        if ($pos > 0 && $pos <= 8) $w = substr($w, $pos);
+    }
     if ($w === '') return '';
     if (!preg_match('~^https?://~i', $w) && preg_match('~^[a-z0-9.-]+(?:/|$|\?)~i', $w)) $w = 'https://' . $w;
     $w = aiUrlStripDefaultPort($w);
@@ -38387,6 +38394,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "{v:'10." . "227'") !== false
       && version_compare(APP_VERSION, '10.' . '227', '>='));
 
+
+    /* ---------- v10.228: نرمال‌سازی Worker هوش مصنوعی ---------- */
+    $add('10.228', 'AI Worker URL کاراکتر اضافهٔ ابتدای آدرس را حذف می‌کند',
+         function_exists('aiWorkerNormalize' . 'Url')
+      && aiWorkerNormalizeUrl('}https://proxy.fazilat-ma.workers.dev/?url={url}') === 'https://proxy.fazilat-ma.workers.dev/?url={url}');
+    $add('10.228', 'حلقهٔ ai_feedback_fix تغییر Worker URL normalized را تشخیص می‌دهد',
+         strpos($selfSrc, 'Worker URL normalized') !== false
+      && strpos($selfSrc, "{v:'10." . "228'") !== false
+      && version_compare(APP_VERSION, '10.' . '228', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -68938,6 +68955,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.228', t:'🧹 ترمیم Worker URL در تست مدل‌های AI', items:[
+    'نرمال‌سازی Worker هوش مصنوعی اکنون کاراکترهای اضافهٔ ابتدای آدرس مثل }https://... را حذف می‌کند تا قالب {url} دوباره معتبر شود.',
+    'ai_feedback_fix این تغییر را به‌عنوان Worker URL normalized گزارش می‌کند و می‌تواند در حالت apply آن را ذخیره کند؛ خطاهای اعتبار/سیاست دسترسی همچنان به‌عنوان خطای واقعی مدل/ارائه‌دهنده گزارش می‌شوند.',
+  ]},
   {v:'10.227', t:'🔬 trace کامل Jina Reader برای SnappShop', items:[
     'گزارش s4_feedback اکنون فهرست URLهای Reader را با برچسب canonical/bridge/nested نشان می‌دهد و فرم nested دقیق https://r.jina.ai/http://r.jina.ai/http://https://... قابل مشاهده است.',
     'هر تلاش Jina Reader، قبل از fallback نهایی Worker، کد HTTP، مسیر direct/worker، اندازهٔ بدنه، عنوان، نمونهٔ متن و تعداد محصول parse‌شده را در jina_reader_trace ثبت می‌کند.',
