@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.221';
+const APP_VERSION = '10.222';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9747,8 +9747,9 @@ function s4JinaReaderUrls(string $url): array {
     $target = s4JinaUnwrapTargetUrl($url);
     if ($target === '') return [];
     $base = 'https://r.jina.ai/' . $target;
+    $bridge = 'https://r.jina.ai/http://' . $target;
     $nested = 'https://r.jina.ai/http://r.jina.ai/http://' . $target;
-    return $base === $nested ? [$base] : [$base, $nested];
+    return array_values(array_unique([$base, $bridge, $nested]));
 }
 
 function s4JinaMarkdownLabel(string $label): string {
@@ -38110,6 +38111,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.221', 'ورودیِ 10.221 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "221'") !== false
       && version_compare(APP_VERSION, '10.' . '221', '>='));
+
+    /* ---------- v10.222: فرم میانی URL برای Jina Reader ---------- */
+    $_jina222urls = function_exists('s4JinaReader' . 'Urls') ? s4JinaReaderUrls('https://snappshop.ir/category/kitchen-appliances?page=1') : [];
+    $add('10.222', 'Jina Reader فرم https://r.jina.ai/http://{target} را هم امتحان می‌کند',
+         in_array('https://r.jina.ai/http://https://snappshop.ir/category/kitchen-appliances?page=1', $_jina222urls, true));
+    $add('10.222', 'URLهای Jina تکراری نمی‌شوند و نسخه عقب‌تر نیست',
+         count($_jina222urls) === count(array_unique($_jina222urls))
+      && strpos($selfSrc, "{v:'10." . "222'") !== false
+      && version_compare(APP_VERSION, '10.' . '222', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -68644,6 +68654,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.222', t:'🔁 فرم سوم URL برای Jina Reader', items:[
+    'موتور Jina Reader علاوه بر فرم canonical و nested، فرم میانی https://r.jina.ai/http://{target} را هم امتحان می‌کند؛ این همان ساختاری است که بعضی نمونه‌های r.jina.ai برای URLهای https نشان می‌دهند.',
+    'ترتیب تلاش‌ها بدون تغییر رفتار UI حفظ شد و تکراری‌ها حذف می‌شوند تا اگر یک فرم روی هاست خاص 451 بدهد فرم دیگر هم شانس اجرا داشته باشد.',
+  ]},
   {v:'10.221', t:'🧪 feedback استخراج برای موتور Jina و Digikala', items:[
     'اندپوینت s4_feedback اکنون مقدار extractionEngine=jina را واقعاً اعمال می‌کند و تلاش جداگانهٔ jina_reader_only را در گزارش نشان می‌دهد.',
     's4_feedback علاوه بر Emalls و SnappShop، URLهای Digikala را هم برای تست Reader می‌پذیرد تا همان حلقهٔ فیدبک روی سایت‌های مشابه اجرا شود.',
