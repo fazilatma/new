@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.236';
+const APP_VERSION = '10.237';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -38966,7 +38966,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'bslCatalogGetForSend($tk,$vid)') !== false);
     $add('10.236', 'شروع ارسال دیگر bslCatalogGet با build شبکه‌ای صدا نمی‌زند',
          strpos($selfSrc, '$__bslCatalogWarm=bslCatalogGetForSend($tk,$vid);') !== false
-      && strpos($selfSrc, '$__bslCatalogWarm=bslCatalogGet($tk,$vid,true);') === false
+      && strpos($selfSrc, '$__bslCatalogWarm=bslCatalog' . 'Get($tk,$vid,true);') === false
       && strpos($selfSrc, 'کاتالوگ کامل از باسلام ساخته نمی‌شود') !== false);
     $add('10.236', 'lookup کاتالوگ در حالت ارسال rebuild شبکه‌ای را دور می‌زند',
          strpos($selfSrc, "!empty(\$GLOBALS['_bslSendCatalogMatrixOnly'])") !== false
@@ -38975,6 +38975,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.236', 'ورودیِ 10.236 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "236'") !== false
       && version_compare(APP_VERSION, '10.' . '236', '>='));
+    $add('10.237', 'تست v10.236 دیگر متن ممنوعهٔ build شبکه‌ای را خودش تولید نمی‌کند',
+         strpos($selfSrc, '$__bslCatalogWarm=bslCatalog' . 'Get($tk,$vid,true);') === false
+      && strpos($selfSrc, "{v:'10." . "237'") !== false
+      && version_compare(APP_VERSION, '10.' . '237', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -69711,6 +69715,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.237', t:'✅ تکمیل تست جلوگیری از rebuild کاتالوگ ارسال', items:[
+    'تست داخلی v10.236 برای نبودِ فراخوانی build شبکه‌ای کاتالوگ، با الگوی split-literal اصلاح شد تا خودِ متن تست باعث شکست کاذب نشود.',
+  ]},
   {v:'10.236', t:'📚 ارسال باسلام بدون بازسازی کاتالوگ مقصد', items:[
     'ارسال محصولات باسلام دیگر در شروع هر اجرا کاتالوگ کامل مقصد را از باسلام نمی‌سازد؛ فقط از جدول/کش تولیدشده توسط مغایرت‌گیری یا ماتریس استفاده می‌کند.',
     'اگر جدول مغایرت برای غرفه وجود نداشته باشد، ارسال به‌جای rebuild کاتالوگ با جستجوی سبک محصول‌به‌محصول ادامه می‌دهد تا توقف طولانی ابتدای ارسال حذف شود.',
