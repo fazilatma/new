@@ -326,7 +326,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.223';
+const APP_VERSION = '10.224';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9859,6 +9859,29 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
         $r = srcNetFetchAttempt($readerUrl, $timeout, $net, 'worker');
         $r['jina_reader_via'] = 'worker';
         return $r;
+    }
+    // v10.224: برای Reader از srcNetFetchAttempt عمومی استفاده نمی‌کنیم، چون
+    // هدرهای مرورگری/Cache-Control:no-cache می‌توانند کش مفید r.jina.ai را دور بزنند
+    // و روی هاست به 451 Empty برسند. این درخواست مینیمال و markdown-friendly است.
+    if (function_exists('curl_init')) {
+        $ch = curl_init($readerUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5,
+            CURLOPT_CONNECTTIMEOUT => 7, CURLOPT_TIMEOUT => $timeout, CURLOPT_ENCODING => '',
+            CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Scraper4-JinaReader/10.224; +https://r.jina.ai/)',
+            CURLOPT_HTTPHEADER => [
+                'Accept: text/plain,text/markdown,*/*;q=0.8',
+                'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+            ],
+        ]);
+        $body = curl_exec($ch); $err = curl_error($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $readerUrl;
+        curl_close($ch);
+        return ['ok' => $body !== false && $code >= 200 && $code < 400,
+                'error' => $err ?: 'Empty', 'code' => $code, 'url' => $finalUrl,
+                'html' => $body === false ? '' : $body, 'mode' => 'direct', 'jina_reader_via' => 'direct'];
     }
     $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
     $r['jina_reader_via'] = 'direct';
@@ -38150,6 +38173,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "'jina_reader_via'") !== false
       && strpos($selfSrc, "{v:'10." . "223'") !== false
       && version_compare(APP_VERSION, '10.' . '223', '>='));
+
+    /* ---------- v10.224: درخواست مینیمال Jina Reader ---------- */
+    $add('10.224', 'درخواست مستقیم Jina Reader هدر markdown مینیمال دارد',
+         strpos($selfSrc, 'Scraper4-JinaReader/10.224') !== false
+      && strpos($selfSrc, 'text/plain,text/markdown') !== false
+      && strpos($selfSrc, 'CURLOPT_HTTPHEADER => [') !== false);
+    $add('10.224', 'ورودیِ 10.224 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "224'") !== false
+      && version_compare(APP_VERSION, '10.' . '224', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -68684,6 +68716,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.224', t:'🧾 درخواست مینیمال Markdown برای Jina Reader', items:[
+    'فراخوانی مستقیم r.jina.ai دیگر از هدرهای عمومی مرورگری و Cache-Control:no-cache استفاده نمی‌کند تا Reader بتواند خروجی cached/قابل‌استفادهٔ خودش را برگرداند و کمتر به 451 Empty برسد.',
+    'هدر Accept مخصوص text/markdown شد و مسیر worker fallback نسخهٔ قبل همچنان به‌عنوان پشتیبان باقی ماند.',
+  ]},
   {v:'10.223', t:'🌐 Worker fallback برای Jina Reader', items:[
     'اگر فراخوانی مستقیم r.jina.ai از هاست با 451/Empty یا متنِ بدون محصول برگردد، موتور Jina Reader همان URLهای Reader را از مسیر Worker موجود هم امتحان می‌کند.',
     'گزارش feedback اکنون علاوه بر آدرس Reader، مسیر اجرای آن را با jina_reader_via نشان می‌دهد تا direct و worker از هم قابل تشخیص باشند.',
