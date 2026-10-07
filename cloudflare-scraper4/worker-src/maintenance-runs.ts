@@ -34,6 +34,8 @@ export type RunEvent = {
   elapsedMs?: number;
   seq?: number;
   detail?: string[];
+  /** Running bucket totals (1.337.0), so a polled run can draw the same live counters. */
+  tally?: Record<string, number>;
 };
 
 export type MaintenanceRun = {
@@ -60,7 +62,8 @@ export type RunDeps = {
   background?: (promise: Promise<unknown>) => void;
 };
 
-export const RUN_EVENT_CAP = 200;
+/** 1.337.0 — the preview reports far more steps now, so the kept window grew with it. */
+export const RUN_EVENT_CAP = 400;
 export const RUN_POINTER = 'maintenance.run.last';
 export const runKey = (id: string) => 'maintenance.run:' + id;
 
@@ -88,6 +91,11 @@ export function compactEvent(raw: any, at: string): RunEvent {
   if (Number.isFinite(Number(raw?.totalPages))) event.totalPages = Number(raw.totalPages);
   if (Number.isFinite(Number(raw?.elapsedMs))) event.elapsedMs = Number(raw.elapsedMs);
   if (Number.isFinite(Number(raw?.seq))) event.seq = Number(raw.seq);
+  if (raw?.tally && typeof raw.tally === 'object') {
+    const tally: Record<string, number> = {};
+    for (const [key, value] of Object.entries(raw.tally)) if (Number.isFinite(Number(value))) tally[String(key).slice(0, 20)] = Number(value);
+    if (Object.keys(tally).length) event.tally = tally;
+  }
   if (Array.isArray(raw?.detail)) {
     const detail = raw.detail.filter((line: unknown) => String(line ?? '').trim()).slice(0, 6).map((line: unknown) => String(line).slice(0, 160));
     if (detail.length) event.detail = detail;

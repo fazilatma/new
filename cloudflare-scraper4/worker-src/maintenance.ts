@@ -1,4 +1,4 @@
-import { actionLine, bucketTally, clip as clipText, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, sampleLines, tallySummary } from './recon-progress.js';
+import { actionLine, bucketTally, bucketLines, matchLines, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from './recon-progress.js';
 import { customerVisible } from './ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { loadConnections } from './connections.js';
@@ -274,7 +274,11 @@ export async function destinationLedgerStatus(){const settings=await getState<an
 export async function unifiedRecon(profileId=''){return unifiedReconLive(profileId)}
 
 export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
+  const p=createReconProgress(onProgress);
+  p.emit({stage:'start',name:'scope',summary:'شروع مقایسهٔ مبدأ و مقصد'+(profileId?' برای یک پروفایل':' برای همهٔ پروفایل‌ها')+' · هیچ چیزی در این مرحله نوشته یا حذف نمی‌شود'});
+  p.emit({stage:'profiles-loading',name:'local',summary:'خواندن فهرست پروفایل‌ها…'});
   const allProfilesRaw=await listProfiles();
+  p.emit({stage:'local-loading',name:'local',count:allProfilesRaw.length,summary:'پروفایل‌ها: '+faN(allProfilesRaw.length)+' · خواندن محصولات ذخیره‌شدهٔ محلی…'});
   const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
   for(const profile of allProfilesRaw)profileNames[profile.id]=profile.name||profile.id;
   const settings=await getState<any>('settings',{}) as any;
@@ -296,30 +300,69 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
 
   const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
   const skippedNoCode=local.length-eligible.length;
-  const p=createReconProgress(onProgress);
+  const eligibleByProfile=new Map<string,number>();
+  for(const row of eligible)eligibleByProfile.set(String(row.profile_id||''),(eligibleByProfile.get(String(row.profile_id||''))||0)+1);
   p.emit({stage:'local-loaded',name:'local',count:eligible.length,total:local.length,
     summary:'محصولات محلی خوانده شد: '+faN(local.length)+' مورد · قابل مقایسه (دارای پسوند کد): '+faN(eligible.length)+(skippedNoCode?' · بدون پسوند کد و نادیده‌گرفته‌شده: '+faN(skippedNoCode):''),
-    detail:eligible.slice(0,3).map((row:any)=>clipText(row.title))});
+    detail:countLines(eligibleByProfile,profileNames,5)});
+  // Why some products are not compared at all — named, with real examples, instead of a silent subtraction.
+  p.emit({stage:'suffix-rule',name:'rule',count:skippedNoCode,total:local.length,
+    summary:'قاعدهٔ مقایسه: فقط محصولاتی که پسوند کد دارند با مقصد مقایسه می‌شوند'+(suffixFormats?' · الگوی تنظیم‌شده: '+clipText(suffixFormats,60):' · الگوی پیش‌فرض «(کد ایکس)»')+(skippedNoCode?' · '+faN(skippedNoCode)+' محصول بدون پسوند، دست‌نخورده می‌مانند':' · همهٔ محصولات پسوند دارند'),
+    detail:[...eligible.slice(0,2).map((row:any)=>'مقایسه می‌شود: '+clipText(row.title,70)),
+      ...local.filter((row:any)=>!hasCodeSuffix(String(row.title||''),patterns)).slice(0,2).map((row:any)=>'نادیده: '+clipText(row.title,70))]});
+  if(zeroCountIds.size)p.emit({stage:'profiles-protected',name:'rule',count:zeroCountIds.size,
+    summary:'محافظت: '+faN(zeroCountIds.size)+' پروفایل هیچ محصول فعالی ندارد (هنوز استخراج نشده)، پس هیچ اقدامی برایشان برنامه‌ریزی نمی‌شود',
+    detail:[...zeroCountIds].slice(0,5).map(id=>clipText(profileNames[id]||id,40))});
   const accounts=await reconAccounts();
   p.emit({stage:'accounts-listed',name:'accounts',total:accounts.length,
-    summary:'مقصدهای فعال: '+faN(accounts.length),
-    detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
+    summary:'مقصدهای فعال: '+faN(accounts.length)+' · هر مقصد جداگانه خوانده و با همین '+faN(eligible.length)+' محصول محلی مقایسه می‌شود',
+    detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام')+' (کلید '+clipText(a.accountKey,18)+')')});
   const rows:UnifiedReconRow[]=[]; const failures:Array<{account:string;error:string}>=[];
-  let totalFetched=0;
+  let totalFetched=0,runningTally:Record<string,number>={};
   for(let idx=0;idx<accounts.length;idx++){
     const account=accounts[idx];
-    p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,count:idx+1,total:accounts.length,
-      summary:'مقصد '+faN(idx+1)+' از '+faN(accounts.length)+': '+account.name+' — شروع خواندن محصولات'});
+    p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,count:idx+1,total:accounts.length,tally:runningTally,
+      summary:'مقصد '+faN(idx+1)+' از '+faN(accounts.length)+': '+account.name+' ('+(account.target==='woo'?'ووکامرس':'باسلام')+') — شروع خواندن محصولات قابل فروش'});
     try{
-      const remote=await remoteForAccount(account,false,(e)=>p.ledger(account.name,e,account.target));
+      const readStart=p.elapsed();let pagesSeen=0;
+      const remote=await remoteForAccount(account,false,(e)=>{if(String(e?.type||'').startsWith('ledger-page'))pagesSeen=Math.max(pagesSeen,Number(e?.page)||0);p.ledger(account.name,e,account.target)});
+      const readMs=p.elapsed()-readStart;
       totalFetched+=remote.length;
-      p.emit({stage:'account-fetched',name:'account',account:account.name,target:account.target,count:remote.length,
-        summary:account.name+': '+faN(remote.length)+' محصول قابل فروش خوانده شد · مجموع تا اینجا '+faN(totalFetched)});
+      p.emit({stage:'account-fetched',name:'account',account:account.name,target:account.target,count:remote.length,total:totalFetched,tally:runningTally,
+        summary:account.name+': '+faN(remote.length)+' محصول قابل فروش خوانده شد در '+faDuration(readMs)+' ('+throughput(remote.length,readMs)+') · مجموع خوانده‌شده تا اینجا '+faN(totalFetched),
+        detail:[sourceNote(pagesSeen,pagesSeen===0),
+          ...remote.slice(0,3).map((item:any)=>'نمونهٔ مقصد: '+clipText(item?.name??item?.title,46)+' · '+faPrice(item?.price)+(item?.id?' · شناسه '+faN(item.id):''))]});
+      const compareStart=p.elapsed();
       const reconciled=reconcileAccount(local,remote,account,profileNames,suffixFormats,{profiles:profilesInfo,zeroCountIds,profileFilter:profileId});
+      // Stream the comparison in small batches: a long destination now scrolls past product by
+      // product with its running totals, instead of jumping from «started» to «finished».
+      // Fine-grained for a small destination, bounded for a huge one: at most ~40 batches each.
+      const CHUNK=Math.max(10,Math.ceil(reconciled.length/40));
+      for(let at=0;at<reconciled.length;at+=CHUNK){
+        const batch=reconciled.slice(at,at+CHUNK);
+        runningTally=mergeTally(runningTally,bucketTally(batch));
+        p.emit({stage:'compare',name:'compare',account:account.name,target:account.target,count:Math.min(at+CHUNK,reconciled.length),total:reconciled.length,tally:runningTally,
+          summary:account.name+': '+faN(Math.min(at+CHUNK,reconciled.length))+' از '+faN(reconciled.length)+' محصول مقایسه شد · '+tallySummary(bucketTally(batch)),
+          detail:sampleLines(batch,3)});
+      }
       rows.push(...reconciled);
       const tally=bucketTally(reconciled);
-      p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,count:reconciled.length,total:accounts.length,
-        summary:account.name+' مقایسه شد (در '+faDuration(p.elapsed())+'): '+tallySummary(tally),
+      const compareMs=p.elapsed()-compareStart;
+      // One event per kind of difference, each with its own arithmetic.
+      for(const [bucket,label] of [['priceDiff','اختلاف قیمت'],['missing','در مقصد نیست'],['extra','فقط در مقصد'],['noPrice','بدون قیمت مبدأ']] as Array<[string,string]>){
+        if(!tally[bucket])continue;
+        p.emit({stage:'bucket-'+bucket,name:'bucket',account:account.name,target:account.target,count:tally[bucket],total:reconciled.length,tally:runningTally,
+          summary:account.name+' · '+label+': '+faN(tally[bucket])+' مورد'+(bucket==='priceDiff'?' (قیمت مقصد با قیمت انتظاری این مقصد فرق دارد)':bucket==='missing'?' (در مبدأ هست، در مقصد نیست)':bucket==='extra'?' (در مقصد هست، در مبدأ نیست — فقط گزارش می‌شود)':' (قیمت مبدأ خوانده نشده، پس مقایسه نشد)'),
+          detail:bucketLines(reconciled,bucket,4)});
+      }
+      p.emit({stage:'match-methods',name:'match',account:account.name,target:account.target,count:reconciled.length,total:remote.length,tally:runningTally,
+        summary:account.name+' · چگونه محصول‌ها جفت شدند (از '+faN(remote.length)+' محصول مقصد)',
+        detail:matchLines(reconciled)});
+      if(tally.matched)p.emit({stage:'bucket-matched',name:'bucket',status:'success',account:account.name,target:account.target,count:tally.matched,total:reconciled.length,tally:runningTally,
+        summary:account.name+' · هماهنگ: '+faN(tally.matched)+' محصول دقیقاً همان قیمتی را دارند که باید (نمونه‌ها در پایین، برای اطمینان از درستی مقایسه)',
+        detail:matchedProofLines(reconciled,4)});
+      p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,count:reconciled.length,total:reconciled.length,tally:runningTally,
+        summary:account.name+' تمام شد · خواندن '+faDuration(readMs)+' + مقایسه '+faDuration(compareMs)+' · '+tallySummary(tally),
         detail:sampleLines(reconciled,4)});
       if(reconciled.length){
         onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rows:reconciled.slice(0,200),rowsCount:reconciled.length,totalRows:rows.length});
@@ -329,11 +372,23 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       failures.push({account:account.name,error:message});
       const fallback=unreachableAccountRows(local,account,profileNames,suffixFormats,message);
       rows.push(...fallback);
-      p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,
-        summary:account.name+' پاسخ نداد: '+message+' — محصولات این مقصد «پاسخ نداد» علامت خوردند'});
+      runningTally=mergeTally(runningTally,bucketTally(fallback));
+      p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,count:fallback.length,total:accounts.length,tally:runningTally,
+        summary:account.name+' پاسخ نداد: '+clipText(message,90)+' — '+faN(fallback.length)+' محصول این مقصد «پاسخ نداد» علامت خوردند و گزارش «هماهنگ» اعلام نمی‌شود',
+        detail:['علت خام: '+clipText(message,120),'راه‌حل: «تازه‌سازی دفتر حساب» یا بررسی اتصال این مقصد در بخش اتصال‌ها']});
     }
   }
+  p.emit({stage:'plan-building',name:'plan',count:rows.length,tally:runningTally,
+    summary:'ساخت برنامهٔ اقدام از '+faN(rows.length)+' سطر مقایسه‌شده…'});
   const plan=reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds});
+  const planByAccount=new Map<string,number>();
+  for(const action of plan.applicable)planByAccount.set(String(action.accountName||action.target),(planByAccount.get(String(action.accountName||action.target))||0)+1);
+  p.emit({stage:'plan-ready',name:'plan',status:'success',count:plan.applicable.length,total:plan.all.length,tally:runningTally,
+    summary:'برنامهٔ اجرا آماده شد: '+faN(plan.applicable.length)+' اقدام قابل‌اجرا ('+faN(plan.counts.updatePrice)+' اصلاح قیمت، '+faN(plan.counts.create)+' ساخت دوباره)'+(plan.counts.remove?' · '+faN(plan.counts.remove)+' مورد فقط گزارش می‌شود و هرگز حذف نمی‌شود':''),
+    detail:plan.applicable.slice(0,6).map(actionLine)});
+  if(planByAccount.size)p.emit({stage:'plan-by-destination',name:'plan',count:plan.applicable.length,tally:runningTally,
+    summary:'تقسیم اقدام‌ها بین مقصدها',
+    detail:[...planByAccount.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6).map(([name,count])=>clipText(name,34)+': '+faN(count)+' اقدام')});
   const report={
     ok:failures.length===0,at:new Date().toISOString(),profileId,
     local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
@@ -345,9 +400,19 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
     plannedCreate:plan.counts.create,plannedRemove:plan.counts.remove,planNote:PLAN_NOTE,
     failures,rows,
   };
-  p.emit({stage:'report-ready',name:'report',status:'success',count:rows.length,total:rows.length,
-    summary:'مقایسه تمام شد در '+faDuration(p.elapsed())+' · '+tallySummary(bucketTally(rows))+' · اقدام قابل اجرا: '+faN(plan.applicable.length),
-    detail:[(failures.length?'مقصد بی‌پاسخ: '+faN(failures.length):'همهٔ مقصدها پاسخ دادند'),'اصلاح قیمت: '+faN(plan.counts.updatePrice)+' · ساخت دوباره: '+faN(plan.counts.create)+' · فقط گزارش: '+faN(plan.counts.remove)]});
+  const profileGroups=byProfile(rows);
+  if(profileGroups.length)p.emit({stage:'profiles-summary',name:'report',count:profileGroups.length,tally:bucketTally(rows),
+    summary:'نتیجه به تفکیک پروفایل ('+faN(profileGroups.length)+' پروفایل)',
+    detail:profileLines(profileGroups,5)});
+  const finalTally=bucketTally(rows);
+  p.emit({stage:'report-ready',name:'report',status:'success',count:rows.length,total:rows.length,tally:finalTally,
+    summary:'مقایسه تمام شد در '+faDuration(p.elapsed())+' · '+tallySummary(finalTally)+' · اقدام قابل اجرا: '+faN(plan.applicable.length),
+    detail:[
+      (failures.length?'مقصد بی‌پاسخ: '+faN(failures.length)+' — '+clipText(failures.map(f=>f.account).join('، '),80):'همهٔ '+faN(accounts.length)+' مقصد پاسخ دادند'),
+      'محصول محلی '+faN(local.length)+' · قابل مقایسه '+faN(eligible.length)+' · خوانده‌شده از مقصدها '+faN(totalFetched)+' · سطر مقایسه '+faN(rows.length),
+      'اصلاح قیمت: '+faN(plan.counts.updatePrice)+' · ساخت دوباره: '+faN(plan.counts.create)+' · فقط گزارش: '+faN(plan.counts.remove),
+      'سرعت کلی: '+throughput(totalFetched,p.elapsed()),
+      (plan.applicable.length?'قدم بعدی: دکمهٔ «اعمال هماهنگ‌سازی» همین '+faN(plan.applicable.length)+' اقدام را اجرا می‌کند':'قدم بعدی لازم نیست؛ مبدأ و مقصد هماهنگ‌اند')]});
   await setState('recon_unified',report);
   return report;
 }

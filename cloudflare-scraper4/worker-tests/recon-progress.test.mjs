@@ -23,6 +23,8 @@ const bundle = async (source, name) => {
 };
 const progress = await bundle('worker-src/recon-progress.ts', 'progress.mjs');
 const runs = await bundle('worker-src/maintenance-runs.ts', 'runs.mjs');
+const core = await bundle('worker-src/recon-core.ts', 'core.mjs');
+const dedup = await bundle('worker-src/dedup.ts', 'dedup.mjs');
 
 /** Compile one function out of a runtime source file, with every dependency replaced by a stub. */
 async function compileFn(source, header, names, io) {
@@ -34,10 +36,7 @@ async function compileFn(source, header, names, io) {
   return new Function(...Object.keys(io), js + ';return {' + names + '};')(...Object.values(io));
 }
 const progressIo = {
-  createReconProgress: progress.createReconProgress, describeLedgerEvent: progress.describeLedgerEvent,
-  actionLine: progress.actionLine, faPrice: progress.faPrice, faDuration: progress.faDuration,
-  faN: progress.fa, clipText: progress.clip, bucketTally: progress.bucketTally,
-  tallySummary: progress.tallySummary, sampleLines: progress.sampleLines
+  ...progress, faN: progress.fa, clipText: progress.clip
 };
 
 // ——— the shared event builder ———————————————————————————————————————————————
@@ -301,4 +300,153 @@ test('a rendered phase card really contains the numbers, the duration and the ev
   assert.match(html, /از شروع: ۱۲ ثانیه/);
   assert.match(html, /<ul class="diag-stage-detail"><li>کیف — اختلاف قیمت · مبدأ ۳۰۰٬۰۰۰ · مقصد ۲۵۰٬۰۰۰<\/li><\/ul>/);
   assert.ok(!reconStageHtml({ stage: 'compare', summary: '<img src=x>' }).includes('<img'), 'summaries are escaped');
+});
+
+// ——— the sync preview: «خیلی بیشتر» detail (1.337.0) ————————————————————————
+
+/** Run the real preview of one runtime against stubbed destinations and collect every event. */
+async function previewRun(runtime, options = {}) {
+  const source = await read(runtime + '-src/maintenance.ts');
+  const local = [];
+  for (let i = 1; i <= 60; i++) local.push({ profile_id: i % 3 ? 'p1' : 'p2', source_key: 's' + i, title: 'کفش مدل ' + i + ' (کد ' + i + ')', active: 1, price: 100000 + i * 1000, data: {}, maps: [] });
+  local.push({ profile_id: 'p1', source_key: 'nc', title: 'محصول بدون پسوند کد', active: 1, price: 5000, data: {}, maps: [] });
+  const io = {
+    ...progressIo, ...core, ...dedup, PLAN_NOTE: 'فقط گزارش', msg: error => (error instanceof Error ? error.message : String(error)),
+    listProfiles: async () => [{ id: 'p1', name: 'برف باکس' }, { id: 'p2', name: 'عطر سرا' }, { id: 'p3', name: 'پروفایل خالی' }],
+    maintenanceRows: async () => local,
+    getState: async () => ({}), setState: async () => {},
+    reconAccounts: async () => [{ target: 'woo', accountKey: 'default', name: 'ووکامرس' }, { target: 'basalam', accountKey: '735703', name: 'غرفهٔ برف باکس' }],
+    remoteForAccount: async (account, _force, onProgress) => {
+      if (account.target === 'basalam') throw Error('HTTP 502 از دروازهٔ باسلام');
+      for (let page = 1; page <= 3; page++) {
+        onProgress?.({ type: 'ledger-page-start', page, totalPages: 3 });
+        onProgress?.({ type: 'ledger-page-done', page, totalPages: 3, fetched: page * 20 });
+      }
+      return local.slice(0, 55).map((row, i) => ({ id: 1000 + i, name: row.title, price: i % 4 === 0 ? row.price - 7000 : row.price, sku: '', status: 'publish' }));
+    },
+    ...(options.io || {})
+  };
+  const { unifiedReconLive } = await compileFn(source, 'export async function unifiedReconLive(', 'unifiedReconLive', io);
+  const events = [];
+  const report = await unifiedReconLive('', e => events.push(e));
+  return { report, events, steps: events.filter(e => e.type === 'progress'), local };
+}
+
+for (const runtime of ['worker', 'render']) {
+  test(runtime + ': the preview narrates the whole run, not five headlines', async () => {
+    const { steps } = await previewRun(runtime);
+    assert.ok(steps.length >= 25, runtime + ': only ' + steps.length + ' steps reported');
+    const stages = steps.map(e => e.stage);
+    for (const stage of ['start', 'profiles-loading', 'local-loading', 'local-loaded', 'suffix-rule', 'profiles-protected',
+      'accounts-listed', 'account-start', 'ledger-fetch', 'account-fetched', 'compare', 'bucket-priceDiff', 'bucket-missing',
+      'bucket-matched', 'match-methods', 'account-done', 'account-error', 'plan-building', 'plan-ready',
+      'plan-by-destination', 'profiles-summary', 'report-ready'])
+      assert.ok(stages.includes(stage), runtime + ': the preview never reports ' + stage);
+    assert.ok(steps.reduce((n, e) => n + (e.detail?.length || 0), 0) >= 40, runtime + ': too little evidence');
+    assert.deepEqual(steps.map(e => e.seq), steps.map((_, i) => i + 1), 'steps are numbered in order');
+  });
+
+  test(runtime + ': the preview explains which products it refuses to compare, and why', async () => {
+    const { steps } = await previewRun(runtime);
+    const rule = steps.find(e => e.stage === 'suffix-rule');
+    assert.match(rule.summary, /فقط محصولاتی که پسوند کد دارند با مقصد مقایسه می‌شوند/);
+    assert.match(rule.summary, /۱ محصول بدون پسوند، دست‌نخورده می‌مانند/);
+    assert.ok(rule.detail.some(line => line.startsWith('نادیده: محصول بدون پسوند کد')), 'the skipped product is named');
+    const protectedProfiles = steps.find(e => e.stage === 'profiles-protected');
+    assert.match(protectedProfiles.summary, /۱ پروفایل هیچ محصول فعالی ندارد/);
+    assert.deepEqual(protectedProfiles.detail, ['پروفایل خالی']);
+    const loaded = steps.find(e => e.stage === 'local-loaded');
+    assert.deepEqual(loaded.detail, ['برف باکس: ۴۰ محصول', 'عطر سرا: ۲۰ محصول'], 'local products are broken down per profile');
+  });
+
+  test(runtime + ': every difference is shown with its own arithmetic and its own examples', async () => {
+    const { steps } = await previewRun(runtime);
+    const diff = steps.find(e => e.stage === 'bucket-priceDiff');
+    assert.match(diff.summary, /اختلاف قیمت: ۱۴ مورد \(قیمت مقصد با قیمت انتظاری این مقصد فرق دارد\)/);
+    assert.match(diff.detail[0], /^کفش مدل 1 \(کد 1\) · مبدأ ۱۰۱٬۰۰۰ · مقصد ۹۴٬۰۰۰ · کم‌تر از انتظار ۷٬۰۰۰ \(۷٪\) · شناسه ۱۰۰۰$/);
+    const missing = steps.find(e => e.stage === 'bucket-missing');
+    assert.match(missing.detail[0], /باید با قیمت .* ساخته شود \(پروفایل .*\)/);
+    const matched = steps.find(e => e.stage === 'bucket-matched');
+    assert.match(matched.summary, /هماهنگ: ۴۱ محصول دقیقاً همان قیمتی را دارند که باید/);
+    assert.match(matched.detail[0], /^✓ .* · مبدأ ۱۰۲٬۰۰۰ = مقصد ۱۰۲٬۰۰۰ · شناسه ۱۰۰۱$/, 'in-sync products are proven, not just counted');
+    const how = steps.find(e => e.stage === 'match-methods');
+    assert.ok(how.detail.some(line => line.startsWith('تطبیق با عنوانِ پسوندخورده: ')), 'the pairing method is reported');
+  });
+
+  test(runtime + ': the comparison streams in batches with running totals', async () => {
+    const { steps } = await previewRun(runtime);
+    const batches = steps.filter(e => e.stage === 'compare');
+    assert.ok(batches.length >= 2 && batches.length <= 40, runtime + ': ' + batches.length + ' batches is not a stream');
+    assert.ok(batches.every(e => e.detail?.length), 'each batch shows example products');
+    const counts = batches.map(e => e.count);
+    assert.deepEqual(counts, [...counts].sort((a, b) => a - b), 'the counter only moves forward');
+    assert.equal(counts.at(-1), batches.at(-1).total, 'the last batch closes the destination');
+    const runningTotals = steps.filter(e => e.tally).map(e => (e.tally.matched || 0) + (e.tally.priceDiff || 0) + (e.tally.missing || 0) + (e.tally.unreachable || 0));
+    assert.deepEqual(runningTotals, [...runningTotals].sort((a, b) => a - b), 'the live counters never go backwards');
+    const final = steps.at(-1);
+    assert.equal(final.tally.matched, 41);
+    assert.equal(final.tally.priceDiff, 14);
+    assert.equal(final.tally.unreachable, 60, 'a destination that failed marks all its rows');
+  });
+
+  test(runtime + ': a destination that fails is explained, with a way out', async () => {
+    const { steps } = await previewRun(runtime);
+    const failure = steps.find(e => e.stage === 'account-error');
+    assert.equal(failure.status, 'error');
+    assert.match(failure.summary, /غرفهٔ برف باکس پاسخ نداد: HTTP 502 از دروازهٔ باسلام/);
+    assert.match(failure.summary, /گزارش «هماهنگ» اعلام نمی‌شود/);
+    assert.ok(failure.detail.some(line => line.startsWith('راه‌حل: ')), 'the operator is told what to do next');
+  });
+
+  test(runtime + ': the closing report adds up, names the next step and times itself', async () => {
+    const { steps, report } = await previewRun(runtime);
+    const plan = steps.find(e => e.stage === 'plan-ready');
+    assert.match(plan.summary, /برنامهٔ اجرا آماده شد: ۱۹ اقدام قابل‌اجرا \(۱۴ اصلاح قیمت، ۵ ساخت دوباره\)/);
+    assert.equal(plan.detail.length, 6, 'the first actions are listed, not just counted');
+    assert.match(plan.detail[0], /^💰 .* ← .*/);
+    assert.deepEqual(steps.find(e => e.stage === 'plan-by-destination').detail, ['ووکامرس: ۱۹ اقدام']);
+    assert.deepEqual(steps.find(e => e.stage === 'profiles-summary').detail.length, 2);
+    const final = steps.at(-1);
+    assert.equal(final.stage, 'report-ready');
+    assert.match(final.detail[0], /مقصد بی‌پاسخ: ۱ — غرفهٔ برف باکس/);
+    assert.match(final.detail[1], /محصول محلی ۶۱ · قابل مقایسه ۶۰ · خوانده‌شده از مقصدها ۵۵ · سطر مقایسه ۱۲۰/);
+    assert.match(final.detail[3], /سرعت کلی: /);
+    assert.match(final.detail[4], /قدم بعدی: دکمهٔ «اعمال هماهنگ‌سازی» همین ۱۹ اقدام را اجرا می‌کند/);
+    assert.equal(report.planned, 19);
+  });
+}
+
+test('a polled background run keeps the running counters too', () => {
+  const event = runs.compactEvent({ name: 'compare', stage: 'compare', tally: { matched: 41, priceDiff: 14, missing: 5 }, count: 60, total: 60 }, 'now');
+  assert.deepEqual(event.tally, { matched: 41, priceDiff: 14, missing: 5 });
+  assert.ok(runs.RUN_EVENT_CAP >= 400, 'the kept window must fit a chatty preview');
+});
+
+test('the live panel fills its counters, its destination table and its product ticker', async () => {
+  const { parseHTML } = await import('linkedom');
+  const dash = await read('worker-src/dashboard.ts');
+  const block = dash.slice(dash.indexOf('const RECON_STAGE_LABELS='), dash.indexOf('async function runReconUnifiedLive('));
+  const { window } = parseHTML('<html><body><div id="resultModal"><div class="result-body"></div></div></body></html>');
+  const esc = v => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const { openReconLiveProgress } = new Function('esc', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval',
+    'let activeReconLive=null;' + block + ';return {openReconLiveProgress};')(
+    esc, progress.fa, id => window.document.getElementById(id),
+    (_t, body) => { window.document.querySelector('.result-body').innerHTML = body; }, () => {}, window.document, () => 0, () => {});
+  const live = openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'در حال شروع…');
+  const { steps } = await previewRun('worker');
+  for (const event of steps) live.observe(event);
+  live.finish();
+  const panel = window.document.querySelector('.recon-live');
+  const chips = [...panel.querySelectorAll('.recon-chip')].map(chip => chip.textContent.trim());
+  assert.equal(chips.length, 6, 'one live counter per bucket');
+  assert.ok(chips.some(chip => chip.startsWith('۴۱ هماهنگ')), 'the matched counter is live: ' + chips.join(' | '));
+  assert.ok(chips.some(chip => chip.startsWith('۱۴ اختلاف قیمت')));
+  const destinations = [...panel.querySelectorAll('[data-recon-dest-rows] tr')].map(tr => [...tr.children].map(td => td.textContent));
+  assert.equal(destinations.length, 2, 'one row per destination');
+  assert.deepEqual(destinations[0].slice(0, 4), ['ووکامرس', '۵۵', '۶۰ / ۶۰', '۳ / ۳']);
+  assert.equal(destinations[0][5], '✓ تمام شد');
+  assert.equal(destinations[1][5], '✗ پاسخ نداد');
+  assert.ok(panel.querySelectorAll('[data-recon-ticker] li').length >= 10, 'the product ticker scrolls real comparisons');
+  assert.ok(panel.querySelectorAll('[data-diag-activity] li').length >= 60, 'the evidence log keeps every line');
+  assert.ok(panel.querySelectorAll('.diag-live-stage').length >= 15, 'each phase gets its own card');
 });
