@@ -24,6 +24,7 @@ import { AGENT_PROMPT_TEMPLATES, AGENT_TOOLS, AGENT_TOOL_MODELS, agentCronTick, 
 import { automationTick as rawautomationTick, autoreplyLogs, autoreplyRun, basalamChatMessagesOverview, basalamChatsOverview, basalamOrders, digest, generateReply } from './automation.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { destinationRows } from './basalam-accounts.js';
+import { runHostDiagnosis, type ProbeAnswer } from './host-diagnosis.js';
 import { DASHBOARD, DASHBOARD_JS } from './dashboard.js';
 import { getDestinationId, getRemoteId, flushD1Usage, getD1Usage, allProducts, listStalestProducts, clearFinishedJobs, clearProducts, createBackup, createJob, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, ensureSchema, findLearnedCategory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, getWriteQuotaState, importAutoreplyLog, importCategoryLearning, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, listQueuedJobs, markBasalamCategoriesTried, markProfileRun, profileStats, pruneFinishedJobs, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, stopJob, updateJob, upsertProduct } from './db.js';
 import { configureEnv, type Env } from './env.js';
@@ -57,7 +58,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.329.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.330.0+',time:new Date().toISOString()}));
 
 // --- Storefront layer -------------------------------------------------------
 // The shop owns "/" and the scraper dashboard moves into a folder (default "/scraper",
@@ -70,6 +71,16 @@ const shopDeps=():ShopDeps=>({
   wooFetch:(url,init)=>safeWooFetch(url,init,3_000_000) as any,
   destinationId:(profileId,sourceKey)=>getDestinationId(profileId,sourceKey,'woo')
 });
+/** One probe = one real request; failures become answers (never throw) so the loop can read them. */
+const hostProbe=async(url:string,init?:{headers?:Record<string,string>}):Promise<ProbeAnswer>=>{
+  try{
+    const response=await fetch(url,{headers:{'user-agent':'Scraper4-HostDiagnosis','accept-language':'fa-IR,fa;q=0.9',...(init?.headers||{})},redirect:'follow'});
+    const buffer=await response.arrayBuffer();
+    const bytes=buffer.byteLength;
+    const body=new TextDecoder('utf-8',{fatal:false}).decode(buffer.slice(0,Math.min(bytes,4096)));
+    return {status:response.status,contentType:response.headers.get('content-type')||'',body,bytes};
+  }catch(error:any){ return {status:0,error:error?.message||String(error)}; }
+};
 const dashboardResponse=async(c:any)=>{await ensureSchema(c.env.DB);return c.html(DASHBOARD,200,{'cache-control':'no-store'})};
 app.use('*',async(c,next)=>{
   if(c.req.method!=='GET'||!c.env.DB)return next();
@@ -80,6 +91,9 @@ app.use('*',async(c,next)=>{
   const base='/'+settings.scraperPath;
   if(path===base)return dashboardResponse(c);
   if(path===base+'/dashboard.js')return c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'});
+  // The panel asks for its assets RELATIVELY (so a subfolder mount keeps working); when the URL
+  // carries a trailing slash the browser resolves them under the scraper folder, so answer there too.
+  if(path.startsWith(base+'/assets/fonts/')){const file=path.slice((base+'/assets/fonts/').length),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);if(woff)return fontFile(woff[1],woff[2])}
   if(path===base+'/shop')return c.html(await adminPage(shopDeps()),200,{'cache-control':'no-store'});
   return next();
 });
@@ -228,14 +242,14 @@ app.get('/api/visual-diagnostics', async c => {
     const fetched=await sourceText(url,false,5_000_000);
     source={ok:true,url:fetched.url,contentType:fetched.contentType||'',bytes:fetched.text.length,title:(fetched.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').slice(0,200)};
   }catch(e){source={ok:false,error:e instanceof Error?e.message:String(e)}}
-  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.329.0+'},502);
+  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.330.0+'},502);
   try{
     const ticket=await createVisualTicket(url,false);
     const response=await renderVisualSelector(ticket,context,full);
     const html=await response.text();
     const pickerState={toolbar:html.includes('id="__s4bar"'),pauseButton:html.includes('id="__s4pause"'),saveButton:html.includes('id="__s4save"'),pickerScript:html.includes('scraper4-picker-ready'),errorReporter:html.includes('scraper4-picker-error'),activeInit:/setPicking\\(true\\)/.test(html),csp:response.headers.get('content-security-policy')||'',htmlBytes:html.length};
-    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.329.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
-  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.329.0+'},502)}
+    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.330.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
+  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.330.0+'},502)}
 });
 app.get('/api/emalls-check', async c => {
   const url = c.req.query('url') || 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
@@ -264,7 +278,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.329.0+'),listActiveJobs(),listLiveActivities()
+    Promise.resolve(c.env.WORKER_VERSION||'1.330.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=allActive.sort((a,b)=>{
@@ -299,11 +313,11 @@ app.get('/api/activity',async c=>{
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.329.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.330.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.329.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.330.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
@@ -420,6 +434,27 @@ app.get('/api/basalam/chats',async c=>c.json(await basalamChatsOverview(Number(c
 app.get('/api/basalam/chats/:id/messages',async c=>c.json(await basalamChatMessagesOverview(Number(c.req.param('id')),Number(c.req.query('limit'))||50)));
 app.get('/api/basalam/orders',async c=>c.json({ok:true,items:await basalamOrders(Number(c.req.query('limit'))||20)}));
 app.get('/api/settings',async c=>c.json({ok:true,settings:await getState('settings',{})}));
+// Host environment feedback loop: the same build behaves differently on a VPS (root mount, open
+// network) and on shared hosting (subfolder mount behind a proxy, filtered outbound), so the panel
+// asks the environment itself instead of guessing. Twin of render-src/server.ts.
+app.get('/api/diag/host',async c=>{
+  const settings=await getState('settings',{}) as any;
+  let writable:boolean|null=null,writeError='';
+  try{await setState('settings',settings);writable=true}catch(error:any){writable=false;writeError=error?.message||String(error)}
+  const profiles=await listProfiles().catch(()=>[] as any[]);
+  const sourceUrl=(profiles||[]).map((p:any)=>String(p?.url||'')).find((u:string)=>/^https?:\/\//i.test(u))||'';
+  const {settings:shopSettings}=await loadShopConfig(shopDeps()).catch(()=>({settings:{scraperPath:''}} as any));
+  return c.json(await runHostDiagnosis({
+    runtime:'cloudflare-workers',
+    version:c.env.WORKER_VERSION||'1.330.0+',
+    requestUrl:c.req.url,
+    forwardedPrefix:c.req.header('x-forwarded-prefix')||'',
+    scraperPath:String(shopSettings?.scraperPath||''),
+    sourceUrl,
+    appearance:{font:String(settings?.appearance?.font||''),fontSize:String(settings?.appearance?.fontSize||''),writable,error:writeError},
+    probe:hostProbe
+  }));
+});
 app.post('/api/settings',async c=>{await setState('settings',await c.req.json());return c.json({ok:true})});
 
 app.get('/api/backup',async c=>{const backup=await createBackup();if(c.req.query('persist')==='true'){if(!c.env.BACKUPS)return c.json({ok:false,error:'Persistent R2 backups are disabled because this deployment has no R2 subscription. Use /api/backup without persist=true to download the complete JSON backup.'},400);const key=`scraper4/${new Date().toISOString().replace(/[:.]/g,'-')}.json`;await c.env.BACKUPS.put(key,JSON.stringify(backup),{httpMetadata:{contentType:'application/json'},customMetadata:{app:'scraper4-cloudflare'}});return c.json({ok:true,persisted:true,key,backup})}return c.json(backup,200,{'content-disposition':`attachment; filename="scraper4-cloudflare-${Date.now()}.json"`})});

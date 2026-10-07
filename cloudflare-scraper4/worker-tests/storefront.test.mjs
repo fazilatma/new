@@ -594,7 +594,9 @@ test('the worker serves a stylesheet for every font the panel offers', async () 
     assert.equal(response.status, 200, name + '.css must exist on the worker too');
     const css = await response.text();
     assert.match(css, /@font-face/, name + ' must define faces');
-    assert.match(css, new RegExp('/assets/fonts/' + name + '-\\d+\\.woff2'), name + ' must fall back to the self hosted file');
+    // Relative on purpose (1.330.0+): an absolute /assets/... leaves a subfolder mount.
+    assert.match(css, new RegExp('url\\("\\./' + name + '-\\d+\\.woff2"\\)'), name + ' must fall back to the self hosted sibling file');
+    assert.ok(!css.includes('url("/assets/fonts/'), name + ' must not address the domain root');
   }
   assert.equal(fonts.fontStylesheet('nope').status, 404);
 });

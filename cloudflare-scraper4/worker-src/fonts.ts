@@ -24,9 +24,12 @@ export function fontStylesheet(name:string):Response{
   const item=font(name);if(!item)return new Response('Font not found',{status:404});
   const lower=name.toLowerCase();
   const css=Object.keys(item.weights).map(weight=>{
-    // Same origin only: /assets/fonts/*.woff2 proxies the upstream CDN server side, so no
-    // third party host ever appears in the page (and font-src can stay 'self').
-    const local=`/assets/fonts/${lower}-${weight}.woff2`;
+    // Same origin only: the woff2 sits next to this stylesheet, so no third party host ever
+    // appears in the page (font-src can stay 'self'). The URL is RELATIVE on purpose: when the
+    // app is mounted in a subfolder (shared host: example.com/app/...), an absolute
+    // "/assets/fonts/..." leaves the mount and hits the main site, which is why fonts silently
+    // fell back to Tahoma there. "./x.woff2" resolves against the stylesheet URL in every mount.
+    const local=`./${lower}-${weight}.woff2`;
     const srcList=[`url("${local}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
     return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');

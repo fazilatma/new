@@ -44,6 +44,7 @@ import { CATEGORY_FIX_LAST_KEY, categoryFixTick } from '../worker-src/destinatio
 import { AI_ENRICH_LAST_KEY, aiEnrichTick as rawaiEnrichTick } from '../worker-src/ai-enrich.js';
 import { connectionStatus, loadConnections, saveConnections } from './connections.js';
 import { destinationRows } from '../worker-src/basalam-accounts.js';
+import { runHostDiagnosis, type ProbeAnswer } from '../worker-src/host-diagnosis.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFile, fontStylesheet } from './fonts.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
@@ -63,7 +64,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.329.0+'; } catch { return process.env.npm_package_version || '1.329.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.330.0+'; } catch { return process.env.npm_package_version || '1.330.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -404,6 +405,18 @@ app.get('/health', c => c.json({
 }));
 // --- Storefront layer (twin of worker-src/app.ts) ---------------------------
 // Shop on "/", scraper dashboard in a folder (default "/scraper"), /api/* unchanged.
+/** Twin of worker-src/app.ts: one probe = one real request, errors become readable answers. */
+const hostProbe=async(url:string,init?:{headers?:Record<string,string>}):Promise<ProbeAnswer>=>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+  try{
+    const response=await fetch(url,{headers:{'user-agent':'Scraper4-HostDiagnosis','accept-language':'fa-IR,fa;q=0.9',...(init?.headers||{})},redirect:'follow',signal:controller.signal});
+    const buffer=await response.arrayBuffer();
+    const bytes=buffer.byteLength;
+    const body=new TextDecoder('utf-8',{fatal:false}).decode(buffer.slice(0,Math.min(bytes,4096)));
+    return {status:response.status,contentType:response.headers.get('content-type')||'',body,bytes};
+  }catch(error:any){ return {status:0,error:error?.message||String(error)}; }
+  finally{ clearTimeout(timer); }
+};
 const shopDeps=():ShopDeps=>({
   listProfiles:listProfiles as any,allProducts:allProducts as any,getState,setState,fetchImpl:fetch as any,
   // Twin of worker-src/app.ts: checkout is delegated to the WordPress gateway plugins.
@@ -419,6 +432,8 @@ app.use('*',async(c,next)=>{
   const base='/'+settings.scraperPath;
   if(path===base)return c.html(DASHBOARD,200,{'cache-control':'no-store'});
   if(path===base+'/dashboard.js')return c.body(DASHBOARD_JS,200,{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'});
+  // Twin of worker-src/app.ts: relative asset URLs under a trailing slash land here.
+  if(path.startsWith(base+'/assets/fonts/')){const file=path.slice((base+'/assets/fonts/').length),css=file.match(/^([a-z]+)\.css$/i),woff=file.match(/^([a-z]+)-(\d+)\.woff2$/i);if(css)return fontStylesheet(css[1]);if(woff)return fontFile(woff[1],woff[2])}
   if(path===base+'/shop')return c.html(await adminPage(shopDeps()),200,{'cache-control':'no-store'});
   return next();
 });
@@ -901,6 +916,25 @@ app.post('/api/digest',async c=>{const b=await c.req.json().catch(()=>({})) as a
 app.get('/api/basalam/chats',async c=>c.json({ok:true,items:await basalamChats(Number(c.req.query('limit'))||20)}));
 app.get('/api/basalam/orders',async c=>c.json({ok:true,items:await basalamOrders(Number(c.req.query('limit'))||20)}));
 app.get('/api/settings', async c => c.json({ ok:true, settings: await getState('settings', {}) }));
+// Twin of worker-src/app.ts: host environment feedback loop (mount, fonts, outbound, source 403).
+app.get('/api/diag/host', async c => {
+  const settings = await getState('settings', {}) as any;
+  let writable: boolean | null = null, writeError = '';
+  try { await setState('settings', settings); writable = true; } catch (error: any) { writable = false; writeError = error?.message || String(error); }
+  const profiles = await listProfiles().catch(() => [] as any[]);
+  const sourceUrl = (profiles || []).map((p: any) => String(p?.url || '')).find((u: string) => /^https?:\/\//i.test(u)) || '';
+  const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
+  return c.json(await runHostDiagnosis({
+    runtime: 'node',
+    version: process.env.npm_package_version || '1.330.0+',
+    requestUrl: c.req.url,
+    forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
+    scraperPath: String(shopSettings?.scraperPath || ''),
+    sourceUrl,
+    appearance: { font: String(settings?.appearance?.font || ''), fontSize: String(settings?.appearance?.fontSize || ''), writable, error: writeError },
+    probe: hostProbe
+  }));
+});
 app.post('/api/settings', async c => { const settings=await c.req.json(); await setState('settings',settings); return c.json({ok:true}); });
 app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-backup-${Date.now()}.json"` }));
 app.post('/api/restore', async c => c.json({ok:true,result:await restoreBackup(await c.req.json())}));

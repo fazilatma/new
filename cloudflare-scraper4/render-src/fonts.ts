@@ -13,8 +13,9 @@ export function fontStylesheet(name:string):Response{
   const lower=name.toLowerCase();
   const css=Object.keys(item.weights).map(weight=>{
     // Twin parity with worker-src/fonts.ts: the stylesheet stays same origin and the
-    // /assets/fonts/*.woff2 route does the upstream fetching (and disk caching).
-    const local=`/assets/fonts/${lower}-${weight}.woff2`;
+    // ./*.woff2 sibling route does the upstream fetching (and disk caching). Relative on
+    // purpose so a subfolder mount (example.com/app/...) keeps resolving inside the app.
+    const local=`./${lower}-${weight}.woff2`;
     const srcList=[`url("${local}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
     return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');
