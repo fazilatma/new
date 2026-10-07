@@ -450,3 +450,158 @@ test('the live panel fills its counters, its destination table and its product t
   assert.ok(panel.querySelectorAll('[data-diag-activity] li').length >= 60, 'the evidence log keeps every line');
   assert.ok(panel.querySelectorAll('.diag-live-stage').length >= 15, 'each phase gets its own card');
 });
+
+// ——— the live table: full screen, filling while the run is still going (1.338.0) ————————
+//
+// The request: «دکمهٔ نمایش جدول آخر کار نمی‌کند، کلا جدول آن بصورت زنده و تمام صفحه پر شود، حتی
+// هنگام اجرای بررسی مغایرت‌ها و پیش‌نمایش.» Two real defects were behind it: the viewer button was
+// disabled together with the operation buttons while a run was in progress, and the report only
+// existed in this browser's memory, so a reload (or a lost answer) left it with nothing to show.
+
+/** Build the real panel out of the real dashboard source: matrix renderer + live window. */
+async function panelHarness(options = {}) {
+  const { parseHTML } = await import('linkedom');
+  const dash = await read('worker-src/dashboard.ts');
+  const matrix = dash.slice(dash.indexOf('const RECON_MATRIX_CSS='), dash.indexOf('function renderDuplicateReport('));
+  const live = dash.slice(dash.indexOf('const RECON_STAGE_LABELS='), dash.indexOf('async function runReconUnifiedLive('));
+  const { window } = parseHTML('<html><body><div id="resultModal"><div class="result-body"></div></div></body></html>');
+  const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const notices = [], titles = [];
+  const built = new Function('esc', 'escAttr', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval', 'api',
+    'let activeReconLive=null;' + matrix + live + ';return {openReconLiveProgress,openReconFullscreen,renderReconMatrix,reconLiveReport};')(
+    esc, esc, progress.fa, id => window.document.getElementById(id),
+    (title, body) => { titles.push(title); window.document.querySelector('.result-body').innerHTML = body; },
+    (message, kind) => notices.push([kind || 'ok', message]), window.document, () => 0, () => {},
+    options.api || (async () => { throw Error('api not stubbed'); }));
+  return { ...built, window, notices, titles, doc: window.document };
+}
+const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .rc-table tbody tr')];
+
+for (const runtime of ['worker', 'render']) {
+  test(runtime + ': the compared rows themselves are streamed while the comparison runs', async () => {
+    const { events, report } = await previewRun(runtime);
+    const chunks = events.filter(event => event.stage === 'rows-chunk');
+    assert.ok(chunks.length >= 6, runtime + ': only ' + chunks.length + ' row batches were streamed');
+    assert.ok(chunks.every(event => event.type === 'partial' && Array.isArray(event.rows) && event.rows.length), 'every batch carries its rows');
+    const streamed = chunks.flatMap(event => event.rows);
+    assert.equal(streamed.length, report.rows.length, 'the live table receives every compared row, not a sample');
+    const reachable = chunks.filter(event => event.account === 'ووکامرس');
+    assert.deepEqual(reachable.map(event => event.rowsCount), [10, 20, 30, 40, 50, 60], 'each batch reports the running count');
+    assert.ok(chunks.some(event => event.account === 'غرفهٔ برف باکس' && event.rows.every(row => row.bucket === 'unreachable')),
+      'a destination that failed also fills the table, marked as unreachable');
+    const [row] = streamed;
+    assert.deepEqual(Object.keys(row).sort(), ['accountKey', 'accountName', 'bucket', 'delta', 'duplicateCount', 'expectedPrice',
+      'matchedBy', 'profileId', 'profileName', 'remoteId', 'remotePrice', 'remoteTitle', 'sourceKey', 'sourcePrice', 'target', 'title', 'why'],
+      'a streamed row carries exactly the fields the matrix cell draws');
+    assert.equal(row.bucket, 'priceDiff');
+    assert.equal(row.expectedPrice, 101000);
+    assert.equal(row.remotePrice, 94000);
+  });
+}
+
+test('a streamed row is a trimmed copy, never the whole product record', () => {
+  const row = progress.liveRow({ bucket: 'missing', target: 'woo', accountName: 'و'.repeat(90), title: 'ک'.repeat(200), why: 'ع'.repeat(300), sourcePrice: '120000', remotePrice: null, junk: 'x'.repeat(5000), data: { huge: true } });
+  assert.equal(row.junk, undefined, 'unknown fields never travel');
+  assert.equal(row.data, undefined);
+  assert.ok(row.title.length <= 71 && row.accountName.length <= 41 && row.why.length <= 91, 'long text is clipped');
+  assert.equal(row.sourcePrice, 120000, 'prices arrive as numbers');
+  assert.equal(row.remotePrice, null);
+  assert.equal(progress.liveRows(Array.from({ length: 500 }, () => ({ bucket: 'matched' }))).length, progress.LIVE_ROW_CHUNK);
+});
+
+test('a polled background run carries the same rows, bounded twice', async () => {
+  const event = runs.compactEvent({ stage: 'rows-chunk', account: 'ووکامرس', rowsCount: 60, rows: Array.from({ length: 500 }, (_, i) => ({ bucket: 'priceDiff', title: 'کالا ' + i, remotePrice: i, junk: 'x' })) }, 'now');
+  assert.equal(event.rows.length, runs.RUN_ROW_CHUNK, 'one stored event stays small');
+  assert.equal(event.rowsCount, 60);
+  assert.equal(event.rows[0].junk, undefined);
+  assert.equal(event.rows[0].remotePrice, 0);
+  const { events } = await previewRun('worker');
+  const written = [];
+  await runs.startMaintenanceRun('recon-unified', async observe => { for (const item of events) observe(item); return { ok: true }; },
+    { getState: async () => null, setState: async (_key, value) => written.push(value) });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const stored = written.filter(value => value && Array.isArray(value.events)).at(-1);
+  const carried = stored.events.filter(event => event.rows);
+  assert.ok(carried.length >= 6, 'the polled run also receives the rows');
+  const total = carried.reduce((n, event) => n + event.rows.length, 0);
+  assert.ok(total > 0 && total <= runs.RUN_ROW_BUDGET, 'a whole run never stores more than its row budget: ' + total);
+});
+
+test('the live window is full screen and its matrix fills while the run is still going', async () => {
+  const panel = await panelHarness();
+  const live = panel.openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'در حال شروع…');
+  assert.ok(panel.doc.getElementById('resultModal').className.includes('result-modal-full'), 'the live window opens full screen');
+  const { events } = await previewRun('worker');
+  let midRun = 0;
+  for (const event of events) {
+    live.observe(event);
+    if (!midRun && event.stage === 'account-fetched') assert.equal(matrixRows(panel.doc).length, 0, 'nothing is drawn before the first comparison');
+    if (event.stage === 'rows-chunk' && !midRun) midRun = matrixRows(panel.doc).length;
+  }
+  assert.ok(midRun >= 1 && midRun <= 15, 'the table already had rows in the middle of the run: ' + midRun);
+  live.finish();
+  const rows = matrixRows(panel.doc);
+  assert.equal(rows.length, 60, 'every compared product ends up in the live table');
+  const head = [...panel.doc.querySelectorAll('[data-recon-matrix] thead th')].map(th => th.textContent);
+  assert.deepEqual(head.slice(4), ['🛒 ووکامرس', '🏪 غرفهٔ برف باکس'], 'one live column per destination');
+  const first = [...rows[0].children].map(cell => cell.textContent);
+  assert.equal(first[0], 'کفش مدل 1 (کد 1)');
+  assert.equal(first[2], '۱۰۱٬۰۰۰');
+  assert.match(first[4], /۹۴٬۰۰۰ ← ۱۰۱٬۰۰۰/, 'the live cell shows the real arithmetic');
+  assert.match(first[5], /مقصد پاسخ نداد/);
+  assert.match(panel.doc.querySelector('[data-recon-matrix] .rc-banner').textContent, /جدول زنده — تا این لحظه ۶۰ محصول در ۲ مقصد مقایسه شده است/);
+  assert.equal(panel.doc.querySelector('[data-recon-matrix-note]').textContent, '۱۲۰ سطر مقایسه در ۲ مقصد تا این لحظه');
+});
+
+test('a single-destination run still gets a named column in the live table', async () => {
+  const panel = await panelHarness();
+  const live = panel.openReconLiveProgress('مغایرت‌گیری ووکامرس', 'شروع…');
+  live.observe({ type: 'partial', stage: 'rows-partial', target: 'woo', rowsCount: 2, rows: [
+    { bucket: 'priceDiff', title: 'کیف (کد ۳)', sourcePrice: 300000, expectedPrice: 300000, remotePrice: 250000, remoteId: 7 },
+    { bucket: 'matched', title: 'کفش (کد ۱)', sourcePrice: 100000, expectedPrice: 100000, remotePrice: 100000, remoteId: 8 }] });
+  live.finish();
+  const head = [...panel.doc.querySelectorAll('[data-recon-matrix] thead th')].map(th => th.textContent);
+  assert.equal(head.at(-1), '🛒 ووکامرس', 'the destination name is taken from the event when the row has none');
+  assert.equal(matrixRows(panel.doc).length, 2);
+});
+
+test('«نمایش جدول آخر» works with no report in this browser: it reads the stored one', async () => {
+  const { report } = await previewRun('worker');
+  let asked = '';
+  const panel = await panelHarness({ api: async path => { asked = path; return { ok: true, report, at: '2026-10-07T09:00:00.000Z' }; } });
+  await panel.openReconFullscreen();
+  assert.equal(asked, '/api/maintenance/recon-last', 'the panel asks the server for the last stored report');
+  assert.equal(panel.doc.getElementById('resultModal').className, 'result-modal-full', 'the stored table opens full screen');
+  assert.ok(panel.doc.querySelectorAll('.result-body .rc-table tbody tr').length >= 60, 'the stored report is drawn as the full matrix');
+  assert.match(panel.doc.querySelector('.rc-note').textContent, /آخرین پیش‌نمایش ذخیره‌شدهٔ سرور خوانده شد · زمان ثبت: 2026-10-07T09:00:00.000Z/);
+});
+
+test('«نمایش جدول آخر» during a run reopens the live window instead of doing nothing', async () => {
+  const { events } = await previewRun('worker');
+  const panel = await panelHarness();
+  const live = panel.openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'شروع…');
+  for (const event of events.slice(0, 20)) live.observe(event);
+  panel.doc.querySelector('.result-body').innerHTML = '<p>پنجره بسته شد</p>';
+  await panel.openReconFullscreen();
+  assert.ok(panel.doc.querySelector('.recon-live'), 'the live panel comes back');
+  assert.ok(panel.doc.getElementById('resultModal').className.includes('result-modal-full'));
+  assert.deepEqual(panel.notices.at(-1), ['info', 'یک مقایسهٔ زنده در جریان است؛ جدول در همین پنجره سطر‌به‌سطر پر می‌شود.']);
+});
+
+test('with nothing stored anywhere the button says what to do, not nothing', async () => {
+  const panel = await panelHarness({ api: async () => ({ ok: false, report: null, at: '' }) });
+  await panel.openReconFullscreen();
+  assert.deepEqual(panel.notices.at(-1), ['error', 'هنوز هیچ جدولی ساخته نشده است؛ یک‌بار «بررسی مغایرت‌ها و پیش‌نمایش هماهنگ‌سازی» را اجرا کنید.']);
+});
+
+test('the viewer button is never disabled by a running operation, and both runtimes serve it', async () => {
+  const dash = await read('worker-src/dashboard.ts');
+  assert.ok(dash.includes('[data-menu="recon"] button[data-ma]:not([data-ma="recon-fullscreen"])'),
+    'the fullscreen viewer must stay clickable while a reconciliation runs');
+  assert.ok(dash.includes("if(action==='recon-fullscreen')return await openReconFullscreen();"));
+  for (const source of ['worker-src/app.ts', 'render-src/server.ts']) {
+    const text = await read(source);
+    assert.ok(text.includes("app.get('/api/maintenance/recon-last'"), source + ' does not serve the stored report');
+    assert.ok(text.includes("getState<any>('recon_unified',null)"), source + ' must answer from the report the preview already stores');
+  }
+});

@@ -1,4 +1,4 @@
-import { actionLine, bucketTally, bucketLines, matchLines, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from '../worker-src/recon-progress.js';
+import { actionLine, bucketTally, bucketLines, liveRows, matchLines, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from '../worker-src/recon-progress.js';
 import { customerVisible } from '../worker-src/ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { basicAuth, normalizePersianText } from '../worker-src/utils.js';
@@ -222,6 +222,10 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
         p.emit({stage:'compare',name:'compare',account:account.name,target:account.target,count:Math.min(at+CHUNK,reconciled.length),total:reconciled.length,tally:runningTally,
           summary:account.name+': '+faN(Math.min(at+CHUNK,reconciled.length))+' از '+faN(reconciled.length)+' محصول مقایسه شد · '+tallySummary(bucketTally(batch)),
           detail:sampleLines(batch,3)});
+        // 1.338.0 — the compared rows themselves, so the panel's matrix fills while the run is
+        // still going instead of appearing only at the end.
+        onProgress?.({type:'partial',stage:'rows-chunk',account:account.name,target:account.target,
+          rows:liveRows(batch),rowsCount:Math.min(at+CHUNK,reconciled.length),total:reconciled.length,totalRows:rows.length+Math.min(at+CHUNK,reconciled.length)});
       }
       rows.push(...reconciled);
       const tally=bucketTally(reconciled);
@@ -243,7 +247,8 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
         summary:account.name+' تمام شد · خواندن '+faDuration(readMs)+' + مقایسه '+faDuration(compareMs)+' · '+tallySummary(tally),
         detail:sampleLines(reconciled,4)});
       if(reconciled.length){
-        onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rows:reconciled.slice(0,200),rowsCount:reconciled.length,totalRows:rows.length});
+        // سطرها همین حالا دسته‌دسته (rows-chunk) رفته‌اند؛ این رویداد فقط شمارش پایانی مقصد است.
+        onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rowsCount:reconciled.length,totalRows:rows.length});
       }
     }catch(error){
       const message=msg(error);
@@ -251,6 +256,8 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       const fallback=unreachableAccountRows(local,account,profileNames,suffixFormats,message);
       rows.push(...fallback);
       runningTally=mergeTally(runningTally,bucketTally(fallback));
+      onProgress?.({type:'partial',stage:'rows-chunk',account:account.name,target:account.target,
+        rows:liveRows(fallback),rowsCount:fallback.length,total:fallback.length,totalRows:rows.length});
       p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,count:fallback.length,total:accounts.length,tally:runningTally,
         summary:account.name+' پاسخ نداد: '+clipText(message,90)+' — '+faN(fallback.length)+' محصول این مقصد «پاسخ نداد» علامت خوردند و گزارش «هماهنگ» اعلام نمی‌شود',
         detail:['علت خام: '+clipText(message,120),'راه‌حل: «تازه‌سازی دفتر حساب» یا بررسی اتصال این مقصد در بخش اتصال‌ها']});

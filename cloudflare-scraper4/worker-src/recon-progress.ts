@@ -267,3 +267,42 @@ export function profileLines(groups: any[], limit = 5): string[] {
     extra: Number(group?.extra) || 0, noPrice: Number(group?.noPrice) || 0, unreachable: Number(group?.unreachable) || 0
   }));
 }
+
+/**
+ * 1.338.0 — the live matrix.
+ *
+ * The panel used to be able to draw the comparison table only after the whole run finished, so a
+ * ten-minute preview showed nothing but progress lines and «نمایش جدول آخر» had nothing to open.
+ * The comparison rows themselves are now streamed while the run is still going: one compact copy
+ * of every compared row, small enough to travel through the live stream AND through the stored
+ * background run, with the exact fields the matrix cell renderer reads.
+ */
+export const LIVE_ROW_CHUNK = 120;
+
+export function liveRow(row: any): Record<string, unknown> {
+  const num = (value: unknown) => (value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value));
+  return {
+    bucket: String(row?.bucket || 'matched'),
+    target: String(row?.target || ''),
+    accountKey: String(row?.accountKey || ''),
+    accountName: clip(row?.accountName, 40),
+    profileId: String(row?.profileId || ''),
+    profileName: clip(row?.profileName, 28),
+    sourceKey: String(row?.sourceKey || ''),
+    title: clip(row?.title, 70),
+    remoteTitle: clip(row?.remoteTitle, 70),
+    remoteId: row?.remoteId === null || row?.remoteId === undefined ? null : Number(row.remoteId),
+    sourcePrice: num(row?.sourcePrice),
+    expectedPrice: num(row?.expectedPrice),
+    remotePrice: num(row?.remotePrice),
+    delta: num(row?.delta),
+    matchedBy: String(row?.matchedBy || ''),
+    duplicateCount: Number(row?.duplicateCount) || 0,
+    why: clip(row?.why, 90)
+  };
+}
+
+/** The compared batch, trimmed for transport: the live table never waits for the final report. */
+export function liveRows(rows: any[], limit = LIVE_ROW_CHUNK): Array<Record<string, unknown>> {
+  return (rows || []).slice(0, limit).map(liveRow);
+}

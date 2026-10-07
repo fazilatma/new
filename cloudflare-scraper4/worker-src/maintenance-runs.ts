@@ -36,6 +36,9 @@ export type RunEvent = {
   detail?: string[];
   /** Running bucket totals (1.337.0), so a polled run can draw the same live counters. */
   tally?: Record<string, number>;
+  /** Compared rows (1.338.0): the polled run fills the same live table the stream does. */
+  rows?: any[];
+  rowsCount?: number;
 };
 
 export type MaintenanceRun = {
@@ -64,6 +67,10 @@ export type RunDeps = {
 
 /** 1.337.0 — the preview reports far more steps now, so the kept window grew with it. */
 export const RUN_EVENT_CAP = 400;
+/** 1.338.0 — how many compared rows one stored event may carry… */
+export const RUN_ROW_CHUNK = 60;
+/** …and how many a whole run may store, so a polled run stays a short poll. */
+export const RUN_ROW_BUDGET = 1500;
 export const RUN_POINTER = 'maintenance.run.last';
 export const runKey = (id: string) => 'maintenance.run:' + id;
 
@@ -76,7 +83,7 @@ export function newRunId(deps: RunDeps): string {
 }
 
 /** Shrink one observer event to the few fields the panel actually draws. */
-export function compactEvent(raw: any, at: string): RunEvent {
+export function compactEvent(raw: any, at: string, rowLimit = RUN_ROW_CHUNK): RunEvent {
   const event: RunEvent = { at, name: String(raw?.name || raw?.stage || raw?.type || 'step') };
   if (raw?.status) event.status = String(raw.status);
   if (raw?.summary || raw?.account) event.summary = String(raw.summary || raw.account).slice(0, 300);
@@ -95,6 +102,20 @@ export function compactEvent(raw: any, at: string): RunEvent {
     const tally: Record<string, number> = {};
     for (const [key, value] of Object.entries(raw.tally)) if (Number.isFinite(Number(value))) tally[String(key).slice(0, 20)] = Number(value);
     if (Object.keys(tally).length) event.tally = tally;
+  }
+  // 1.338.0 — the compared rows travel with the run, so the live table of a polled run fills
+  // exactly like the streamed one. Bounded twice: per event here, per run by the caller.
+  if (Array.isArray(raw?.rows) && rowLimit > 0) {
+    const rows = raw.rows.slice(0, rowLimit).map((row: any) => {
+      const out: Record<string, unknown> = {};
+      for (const key of ['bucket', 'target', 'accountKey', 'accountName', 'profileId', 'profileName', 'sourceKey', 'title', 'remoteTitle', 'matchedBy', 'why'])
+        if (row?.[key] !== undefined && row?.[key] !== null) out[key] = String(row[key]).slice(0, 90);
+      for (const key of ['remoteId', 'sourcePrice', 'expectedPrice', 'remotePrice', 'delta', 'duplicateCount'])
+        if (Number.isFinite(Number(row?.[key]))) out[key] = Number(row[key]);
+      return out;
+    });
+    if (rows.length) event.rows = rows;
+    if (Number.isFinite(Number(raw?.rowsCount))) event.rowsCount = Number(raw.rowsCount);
   }
   if (Array.isArray(raw?.detail)) {
     const detail = raw.detail.filter((line: unknown) => String(line ?? '').trim()).slice(0, 6).map((line: unknown) => String(line).slice(0, 160));
@@ -146,8 +167,11 @@ export async function startMaintenanceRun(op: string, work: (observe: (event: an
     run.updatedAt = stamp(deps);
     await deps.setState(runKey(run.id), run);
   };
+  let rowBudget = RUN_ROW_BUDGET;
   const observe = (event: any) => {
-    pending.push(compactEvent(event, stamp(deps)));
+    const compact = compactEvent(event, stamp(deps), Math.max(0, Math.min(RUN_ROW_CHUNK, rowBudget)));
+    if (compact.rows) rowBudget -= compact.rows.length;
+    pending.push(compact);
     writing = writing.then(() => flush(false)).catch(() => {});
   };
 

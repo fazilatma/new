@@ -67,7 +67,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.337.0+'; } catch { return process.env.npm_package_version || '1.337.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.338.0+'; } catch { return process.env.npm_package_version || '1.338.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -929,7 +929,7 @@ const hostDiagnosisNow = async (c: any) => {
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
   const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.337.0+',
+    version: process.env.npm_package_version || '1.338.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
@@ -1001,6 +1001,8 @@ app.post('/api/maintenance/ledger/refresh/live',async c=>{const b=await c.req.js
 app.post('/api/maintenance/ledger/missing',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'))});
 app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});}return maintenanceResponse(c,()=>unifiedRecon(String(b.profileId||'')))});
 app.post('/api/maintenance/recon-unified/live',async c=>{const b=await c.req.json().catch(()=>({}))as any;return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});});
+// 1.338.0 — همان گزارش ذخیره‌شدهٔ پیش‌نمایش، برای دکمهٔ «نمایش جدول آخر». Twin of worker-src/app.ts.
+app.get('/api/maintenance/recon-last',async c=>{const report=await getState<any>('recon_unified',null);return c.json({ok:!!report,report:report||null,at:report?.at||''})});
 app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await c.req.json().catch(()=>({}))as any;return maintenanceResponse(c,()=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200))});
 // Request 36b: preview (no confirm) or delete duplicates in every destination,
 // keeping the most expensive copy by default.
