@@ -78,12 +78,15 @@ async function sender(connections, io = {}) {
   const source = await read('worker-src/sync.ts');
   const slice = source.slice(source.indexOf('function basalamPrice('));
   const calls = [];
+  const uploads = [];
   const state = new Map();
   const remote = new Map();
   const loop = await compile(await read('worker-src/api-loop.ts'), 'normalizeApiBase,runApiWriteLoop,summarizeApiAttempts');
+  // 1.331.0 — the sender now runs the photo loop before a create; the scripted world answers it.
+  const photo = await compile(await read('worker-src/photo-loop.ts'), 'runPhotoLoop,summarizePhotoAttempts,photoCandidates');
   const api = await compile(accountsSource, 'basalamStalls,sendableStalls,noStallReason');
   const module = await compile(slice, 'syncBasalam', {
-    ...loop, ...api,
+    ...loop, ...api, ...photo,
     loadConnections: async () => ({ basalam: connections }),
     findLearnedCategory: async () => null,
     getDestinationId: async (profileId, sourceKey, target, key) => remote.get(key) ?? null,
@@ -96,18 +99,41 @@ async function sender(connections, io = {}) {
     desiredProduct: () => ({}),
     destinationLedger: { find: async () => null, matches: async () => false, invalidate: async () => {}, confirm: async () => {} },
     safeBasalamFetch: async (url, options) => {
+      // Photo uploads are scripted too, but they are not what these tests count.
+      if (String(url).includes('/files')) { uploads.push(String(url)); return new Response(JSON.stringify({ id: 9100 + uploads.length }), { status: 200, headers: { 'content-type': 'application/json' } }); }
       calls.push({ url, method: String(options?.method || 'GET'), auth: String(options?.headers?.authorization || '') });
       return new Response(JSON.stringify({ id: 500 + calls.length }), { status: 200, headers: { 'content-type': 'application/json' } });
     },
-    safeFetch: async () => new Response('', { status: 404 }),
+    safeFetch: async url => (String(url).includes('photo.jpg')
+      ? new Response(new Uint8Array(4096), { status: 200, headers: { 'content-type': 'image/jpeg' } })
+      : new Response('', { status: 404 })),
     toRemoteId: value => (value == null ? null : value),
     ...io
   });
-  return { syncBasalam: module.syncBasalam, calls, remote };
+  return { syncBasalam: module.syncBasalam, calls, uploads, remote };
 }
 
-const product = { sourceKey: 's1', title: 'کفش', price: 100000, priceText: '100000 تومان', images: [], stock: 3 };
+const product = { sourceKey: 's1', title: 'کفش', price: 100000, priceText: '100000 تومان', image: 'https://shoes.example/photo.jpg', images: [], stock: 3, link: 'https://shoes.example/p/1' };
 const profile = { id: 'p1', selectors: {} };
+
+// 1.331.0 — Basalam answered «422 fields:[photo]» for photoless creates and the panel blamed the
+// wrong thing. The sender must now refuse before the request, and say why, while updates continue.
+test('a photoless NEW product is refused before the request, an existing one still updates', async () => {
+  const bare = { ...product, image: '', images: [], link: '' };
+  const create = await sender(vault({ shops: [] }));
+  const refused = await create.syncBasalam(bare, profile);
+  assert.deepEqual(create.calls, [], 'no create may be sent without a photo id');
+  assert.deepEqual(create.uploads, [], 'nothing can be uploaded either');
+  assert.equal(refused.length, 1);
+  assert.match(refused[0].error, /محصول تازه بدون تصویر پذیرفته نمی‌شود/);
+  assert.match(refused[0].error, /سلکتور تصویر/, 'the refusal names the real cause');
+  assert.equal(refused[0].action, 'created');
+
+  const update = await sender(vault({ shops: [] }), { getDestinationId: async () => 4242 });
+  const done = await update.syncBasalam(bare, profile);
+  assert.equal(done[0].error, undefined, 'an existing product may be updated without photos');
+  assert.deepEqual(update.calls.map(call => new URL(call.url).pathname), ['/v1/products/4242']);
+});
 
 test('a stall registered after the first send receives the product on the very next run', async () => {
   const before = await sender(vault({ shops: [] }));

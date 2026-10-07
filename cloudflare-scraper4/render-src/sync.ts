@@ -5,6 +5,7 @@ import { toRemoteId } from '../worker-src/utils.js';
 import { findLearnedCategory, getDestinationId, getRemoteId, getState, setDestinationId, setRemoteId, setState } from './db.js';
 import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts, type ApiWriteReport, type WriteKind } from '../worker-src/api-loop.js';
 import { basalamStalls, noStallReason, sendableStalls } from '../worker-src/basalam-accounts.js';
+import { runPhotoLoop, summarizePhotoAttempts, type PhotoReport } from '../worker-src/photo-loop.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -123,10 +124,12 @@ function basalamPhotoHint(status:number,body:any):string{
   if(status!==422)return '';
   const text=JSON.stringify(body||{});
   if(!/photo|تصویر/i.test(text))return '';
-  return lastPhotoFailure
-    ? `آپلود تصویر ناموفق بود، برای همین باسلام محصول را رد کرد. علت: ${lastPhotoFailure} — `
-    : 'این محصول هیچ تصویری ندارد و باسلام بدون تصویر محصول را نمی‌پذیرد؛ برای محصولات بدون عکس، تصویر مبدأ را بررسی کنید. — ';
+  // 1.331.0 — three different causes used to share one misleading sentence. The photo loop knows
+  // which one happened, so the report says it (and never claims «no image» for a blocked download).
+  if(!lastPhotoReport)return 'باسلام شناسهٔ تصویر خواست ولی هیچ تصویری همراه این محصول فرستاده نشد. — ';
+  return `تصویر این محصول آماده نشد: ${lastPhotoReport.reason} ${lastPhotoReport.advice} [${summarizePhotoAttempts(lastPhotoReport.attempts)}] — `;
 }
+
 function basalamAuthHint(status:number,token=''):string{
   if(status===401){
     // Say WHY, using what can be determined from the token itself.
@@ -150,33 +153,36 @@ function basalamPayload(product:Product,c:any,account:BasalamAccount,categoryId:
 }
 /** Uploads images to /v1/files and returns integer ids; failures are non-fatal. */
 /** Last photo-upload failure, surfaced in the 422 that Basalam raises when `photo` is missing. */
-let lastPhotoFailure='';
-const shortUrl=(u:unknown)=>String(u).split('/').pop()?.split('?')[0]?.slice(0,40)||String(u).slice(0,40);
-async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,limit=3):Promise<number[]>{
-  const urls=[product.image,...(product.images||[])].filter(Boolean).filter((url,index,all)=>all.indexOf(url)===index).slice(0,limit);
-  const base=String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,'');
-  const ids:number[]=[];
-  const failures:string[]=[];
-  for(const url of urls){
-    try{
-      const image=await safeFetch(String(url),{headers:{accept:'image/*'}},12_000_000);
-      if(!image.ok)continue;
-      const blob=await image.blob();
-      if(!blob.size)continue;
-      const form=new FormData();
-      form.append('file',blob,(String(url).split('/').pop()||'photo.jpg').split('?')[0]);
-      form.append('file_type','product.photo');
-      const uploaded=await safeBasalamFetch(`${base}/files`,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
-      const body=await uploaded.json().catch(()=>({})) as any;
-      const id=Number(body?.id);
-      if(uploaded.ok&&Number.isFinite(id)&&id>0){ids.push(id);continue}
-      failures.push(`${shortUrl(url)}: HTTP ${uploaded.status} ${String(body?.message||body?.error||'').slice(0,80)}`);
-    }catch(error){failures.push(`${shortUrl(url)}: ${error instanceof Error?error.message.slice(0,80):String(error)}`)}
-  }
-  if(!ids.length&&failures.length)lastPhotoFailure=failures.join(' | ');
-  else lastPhotoFailure='';
-  return ids;
+let lastPhotoReport:PhotoReport|null=null;
+async function uploadBasalamPhotos(product:Product,c:any,account:BasalamAccount,limit=3):Promise<PhotoReport>{
+  const report=await runPhotoLoop(product as any,{
+    base:String(c.api||'https://openapi.basalam.com/v1').replace(/\/$/,''),
+    referer:String((product as any).link||''),
+    limit,getState,setState,
+    download:async(url,shape)=>{
+      try{
+        const response=await safeFetch(url,{headers:shape.headers},12_000_000);
+        const contentType=response.headers.get('content-type')||'';
+        if(!response.ok)return{status:response.status,contentType};
+        const blob=await response.blob();
+        return{status:response.status,contentType:contentType||blob.type||'',bytes:blob.size,data:blob};
+      }catch(error){return{status:0,error:error instanceof Error?error.message:String(error)}}
+    },
+    upload:async(url,shape,file)=>{
+      try{
+        const form=new FormData();
+        form.append(shape.fileField,file.data as Blob,file.name);
+        for(const [key,value] of Object.entries(shape.fields))form.append(key,value);
+        const response=await safeBasalamFetch(url,{method:'POST',headers:{authorization:`Bearer ${account.token}`,accept:'application/json'},body:form},3_000_000);
+        const body=await response.json().catch(()=>({}));
+        return{status:response.status,body};
+      }catch(error){return{status:0,error:error instanceof Error?error.message:String(error)}}
+    }
+  });
+  lastPhotoReport=report;
+  return report;
 }
+
 async function tryImportBasalamSdk():Promise<any>{const importer=new Function('specifier','return import(specifier)') as (specifier:string)=>Promise<any>;const candidates=['@basalam/sdk','@basalam/node-sdk','basalam-sdk','basalam'];const errors:string[]=[];for(const name of candidates)try{return{module:await importer(name),name}}catch(error){errors.push(`${name}: ${error instanceof Error?error.message:String(error)}`)}return{module:null,name:'',error:errors.join(' | ')}}
 // Basalam ships an official SDK for Python only (`pip install basalam-sdk`);
 // no npm package exists. We therefore run the real SDK through a short-lived
@@ -308,7 +314,10 @@ export async function syncBasalam(product: Product, profile: Profile): Promise<B
     try{
       await destinationLedger.invalidate(scope,existing);
       // Photos are uploaded once per stall and reused by both transports.
-      const photoIds=await uploadBasalamPhotos(product,c,account);
+      const photo=await uploadBasalamPhotos(product,c,account),photoIds=photo.ids;
+      // Basalam refuses a NEW product without a photo id (422 fields:[photo]). Asking anyway only
+      // produced an opaque rejection, so the loop's own verdict is raised before the request.
+      if(!existing&&!photoIds.length)throw new Error(`Basalam ${account.name}: محصول تازه بدون تصویر پذیرفته نمی‌شود. ${photo.reason} ${photo.advice} [${summarizePhotoAttempts(photo.attempts)}]`);
       // SDK first, REST API as the fallback.
       try{const sdk=await sendBasalamWithSdk(product,c,account,existing,categoryAttempts[0],photoIds);remoteId=toRemoteId(sdk.id||existing) ?? 0;transport='sdk'}
       catch(error){fallback=error instanceof Error?error.message:String(error);const api=await sendBasalamWithApi(product,c,account,existing,categoryAttempts,photoIds);remoteId=toRemoteId(api.id||existing) ?? 0;transport='api'}

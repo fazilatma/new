@@ -160,10 +160,19 @@ test('sync SDK path: the bridge id_str survives JSON rounding end to end', { ski
   writeFileSync(stub, `#!/bin/sh\nprintf '%s' '{"ok":true,"id":${ROUNDED},"id_str":"${BIG}","sdkVersion":"9.9.9-stub"}'\n`);
   chmodSync(stub, 0o755);
   process.env.BASALAM_PYTHON = stub;
+  // 1.331.0 — a create without a photo id is refused before the request, so the fixture carries a
+  // real image and the scripted world answers both the download and the /files upload.
+  const photoFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes('/files')) return new Response(JSON.stringify({ id: 4242 }), { status: 200, headers: { 'content-type': 'application/json' } });
+    if (url.includes('photo.jpg')) return new Response(new Uint8Array(4096), { status: 200, headers: { 'content-type': 'image/jpeg' } });
+    return new Response(JSON.stringify({ id: BIG }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
   try {
     // No pre-seeded id -> create path through the stubbed SDK transport.
     const results = await sync.syncBasalam(
-      { sourceKey: 'sdk1', title: 'هودی تست', price: 250000, priceText: '250000', images: [], stock: 3 },
+      { sourceKey: 'sdk1', title: 'هودی تست', price: 250000, priceText: '250000', image: 'http://192.0.2.1/photo.jpg', images: [], stock: 3, link: 'http://192.0.2.1/p/1' },
       { id: 'p1' },
     );
     assert.equal(results.length, 1);
@@ -172,6 +181,7 @@ test('sync SDK path: the bridge id_str survives JSON rounding end to end', { ski
     assert.equal(results[0].id, BIG, 'id_str must win over the rounded JSON number');
     assert.equal(await db.getDestinationId('p1', 'sdk1', 'basalam', '123'), BIG);
   } finally {
+    globalThis.fetch = photoFetch;
     delete process.env.BASALAM_PYTHON;
   }
 });
