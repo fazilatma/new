@@ -46,8 +46,9 @@ import { connectionStatus, loadConnections, saveConnections } from './connection
 import { destinationRows } from '../worker-src/basalam-accounts.js';
 import { runHostDiagnosis, type ProbeAnswer } from '../worker-src/host-diagnosis.js';
 import { photoCandidates } from '../worker-src/photo-loop.js';
+import { applyHostRepair } from '../worker-src/host-repair.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
-import { fontFile, fontStylesheet } from './fonts.js';
+import { fontFaceCss, fontFamilyOf, fontFile, fontStylesheet } from './fonts.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
 import { allProducts, fallbackToSqlite, sqliteFallbackReason, isLoopbackPostgres, listStalestProducts, clearFinishedJobs, clearImportHistory, clearProducts, createBackup, createJob, databaseDriver, databaseLabel, deleteJob, deleteProduct, deleteProfile, enqueueDueProfiles, findLearnedCategory, getImportHistory, getJob, getJobPriorities, getProduct, getProfile, getRunPriorities, getState, getTriedBasalamCategories, importAutoreplyLog, importCategoryLearning, isFreshDatabase, learnCategory, listCategoryLearning, listJobs, listProducts, listProfiles, markProfileRun, markBasalamCategoriesTried, migrate, pool, profileStats, reapStalledJobs, recoverFailedAndStalledJobs, restoreBackup, retryJob, saveProfile, setJobPriorities, setRunPriorities, setState, snapshotSqliteDatabase, stopJob, updateJob, upsertProduct } from './db.js';
 import { DEFAULT_SELECTORS, type ExtractionEngine, type Product, type Profile } from './types.js';
@@ -65,7 +66,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.331.0+'; } catch { return process.env.npm_package_version || '1.331.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.332.0+'; } catch { return process.env.npm_package_version || '1.332.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -918,23 +919,43 @@ app.get('/api/basalam/chats',async c=>c.json({ok:true,items:await basalamChats(N
 app.get('/api/basalam/orders',async c=>c.json({ok:true,items:await basalamOrders(Number(c.req.query('limit'))||20)}));
 app.get('/api/settings', async c => c.json({ ok:true, settings: await getState('settings', {}) }));
 // Twin of worker-src/app.ts: host environment feedback loop (mount, fonts, outbound, source 403).
-app.get('/api/diag/host', async c => {
+const hostDiagnosisNow = async (c: any) => {
   const settings = await getState('settings', {}) as any;
   let writable: boolean | null = null, writeError = '';
   try { await setState('settings', settings); writable = true; } catch (error: any) { writable = false; writeError = error?.message || String(error); }
   const profiles = await listProfiles().catch(() => [] as any[]);
   const sourceUrl = (profiles || []).map((p: any) => String(p?.url || '')).find((u: string) => /^https?:\/\//i.test(u)) || '';
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
-  return c.json(await runHostDiagnosis({
+  const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.331.0+',
+    version: process.env.npm_package_version || '1.332.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
     sourceUrl,
     appearance: { font: String(settings?.appearance?.font || ''), fontSize: String(settings?.appearance?.fontSize || ''), writable, error: writeError },
     probe: hostProbe
-  }));
+  });
+  return { diagnosis, settings };
+};
+app.get('/api/diag/host', async c => c.json((await hostDiagnosisNow(c)).diagnosis));
+// 1.332.0 — twin of worker-src/app.ts: apply what the probe answers imply, then ask again.
+app.post('/api/diag/host/repair', async c => {
+  const body = await c.req.json().catch(() => ({})) as any;
+  const { diagnosis, settings } = await hostDiagnosisNow(c);
+  const report = await applyHostRepair({
+    diagnosis, settings,
+    apply: body?.confirm === 'APPLY',
+    saveSettings: async (next: any) => { await setState('settings', next); },
+    verify: body?.confirm === 'APPLY' ? async () => (await hostDiagnosisNow(c)).diagnosis : undefined
+  });
+  return c.json({ ok: report.ok, report, diagnosis });
+});
+app.get('/api/fonts/:name/faces', async c => {
+  const name = String(c.req.param('name') || 'vazir');
+  const delivery = c.req.query('delivery') === 'cdn' ? 'cdn' : 'local';
+  const css = fontFaceCss(name, delivery);
+  return css ? c.json({ ok: true, font: name, delivery, family: fontFamilyOf(name), css }) : c.json({ ok: false, error: 'فونت ناشناخته است.' }, 404);
 });
 app.post('/api/settings', async c => { const settings=await c.req.json(); await setState('settings',settings); return c.json({ok:true}); });
 app.get('/api/backup', async c => c.json(await createBackup(), 200, { 'content-disposition': `attachment; filename="scraper4-backup-${Date.now()}.json"` }));

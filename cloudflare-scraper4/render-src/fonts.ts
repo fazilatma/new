@@ -8,17 +8,43 @@ const FONT_FILES={
 } as const;
 type FontName=keyof typeof FONT_FILES;
 function font(name:string){return FONT_FILES[name.toLowerCase() as FontName]}
-export function fontStylesheet(name:string):Response{
-  const item=font(name);if(!item)return new Response('Font not found',{status:404});
+/** Vazirmatn ships weight names (not fontcdn hashes); same CDN order as the worker twin. */
+function vazirmatnUrls(weightName:string):string[]{
+  const cap=weightName.charAt(0).toUpperCase()+weightName.slice(1);
+  return [
+    `https://cdn.fontcdn.ir/Fonts/Vazirmatn/Vazirmatn-${cap}.woff2`,
+    `https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-${cap}.woff2`,
+    `https://unpkg.com/vazirmatn@33.003/fonts/webfonts/Vazirmatn-${cap}.woff2`
+  ];
+}
+/**
+ * 1.332.0 — the same @font-face block in two deliveries.
+ *
+ * `local` keeps everything same origin: the woff2 sits next to the stylesheet and THIS app proxies
+ * it from the CDN. That is the better default, but it needs two things the shared host of a user
+ * broke at once: the /assets/fonts route must actually reach the app (a subfolder mount behind a
+ * proxy may swallow it) and the server must be able to reach the font CDNs (filtered outbound
+ * answers 502). `cdn` sidesteps both by naming the CDN file directly, so the BROWSER fetches the
+ * font; the host repair loop switches to it only after the probes proved the local path is dead.
+ */
+export function fontFaceCss(name:string,delivery:'local'|'cdn'='local'):string{
+  const item=font(name);if(!item)return '';
   const lower=name.toLowerCase();
-  const css=Object.keys(item.weights).map(weight=>{
-    // Twin parity with worker-src/fonts.ts: the stylesheet stays same origin and the
-    // ./*.woff2 sibling route does the upstream fetching (and disk caching). Relative on
-    // purpose so a subfolder mount (example.com/app/...) keeps resolving inside the app.
-    const local=`./${lower}-${weight}.woff2`;
-    const srcList=[`url("${local}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
+  return Object.keys(item.weights).map(weight=>{
+    const hash=(item.weights as Record<string,string>)[weight];
+    const remote=lower==='vazirmatn'?vazirmatnUrls(hash)[0]:`https://cdn.fontcdn.ir/Fonts/${item.folder}/${hash}.woff2`;
+    // Relative on purpose for the local delivery: "./x.woff2" resolves inside whatever subfolder
+    // the app is mounted in, while an absolute "/assets/..." leaves the mount and hits the main
+    // site (that is why fonts silently fell back to Tahoma on shared hosting).
+    const url=delivery==='cdn'?remote:`./${lower}-${weight}.woff2`;
+    const srcList=[`url("${url}") format("woff2")`,`local("${item.family}")`,'local(Tahoma)'].join(',');
     return `@font-face{font-family:"${item.family}";src:${srcList};font-weight:${weight};font-style:normal;font-display:swap}`;
   }).join('\n');
+}
+export function fontFamilyOf(name:string):string{const item=font(name);return item?item.family:''}
+export function fontStylesheet(name:string,delivery:'local'|'cdn'='local'):Response{
+  const css=fontFaceCss(name,delivery);
+  if(!css)return new Response('Font not found',{status:404});
   return new Response(css,{headers:{'content-type':'text/css; charset=utf-8','cache-control':'public, max-age=86400','access-control-allow-origin':'*','x-content-type-options':'nosniff'}});
 }
 async function fetchWithTimeout(url:string,init:RequestInit={},timeoutMs=8000):Promise<Response>{

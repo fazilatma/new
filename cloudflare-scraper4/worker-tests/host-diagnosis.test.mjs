@@ -157,7 +157,9 @@ test('every verdict keeps its Persian sentence and never leaks a bare status cod
 test('the font stylesheet addresses the woff2 relatively so a subfolder mount keeps working', async () => {
   for (const file of ['worker-src/fonts.ts', 'render-src/fonts.ts']) {
     const source = await read(file);
-    assert.ok(source.includes('const local=`./${lower}-${weight}.woff2`;'), file + ' must point at the sibling file');
+    // 1.332.0 — the same line now chooses between the sibling file and the CDN, but the local
+    // delivery must stay relative: an absolute /assets/... leaves a subfolder mount.
+    assert.ok(source.includes("const url=delivery==='cdn'?remote:`./${lower}-${weight}.woff2`;"), file + ' must point at the sibling file');
     assert.ok(!source.includes('`/assets/fonts/${lower}-${weight}.woff2`'), file + ' must not use an absolute asset URL');
   }
   const { fontStylesheet } = await import(pathToFileURL(join(root, 'worker-src/fonts.ts')).href).catch(() => ({}));
