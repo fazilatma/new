@@ -97,9 +97,15 @@ test('node listing prices match the worker Toman normalization', async () => {
   assert.ok(src.includes('price:Math.round(Number(x.price||0)/10)'), 'node basalamProducts must convert Rial to Toman');
 });
 
-test('worker preview action-count uses the configured suffix formats', async () => {
-  const src = await read('../worker-src/maintenance.ts');
-  assert.ok(src.includes('actions:planActions(rows,suffixFormats).length'), 'preview and apply must plan identically');
+test('preview and apply plan identically, in both runtimes', async () => {
+  // 1.335.0: one shared planner (reconPlan) builds the preview numbers AND the apply list,
+  // with the configured suffix formats and the zero-count protection in both.
+  for (const runtime of ['worker', 'render']) {
+    const src = await read('../' + runtime + '-src/maintenance.ts');
+    assert.ok(src.includes('reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds})'), runtime + ': the preview must use the shared planner');
+    assert.ok(src.includes('reconPlan(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds})'), runtime + ': the apply pass must use the same planner');
+    assert.ok(src.includes('plan.applicable.slice(0,cap)'), runtime + ': apply must run exactly the applicable actions');
+  }
 });
 
 test('per-target renderer shares the bucket legend with the unified table', async () => {

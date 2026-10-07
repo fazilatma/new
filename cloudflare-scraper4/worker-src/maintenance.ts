@@ -2,7 +2,7 @@ import { customerVisible } from './ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { loadConnections } from './connections.js';
 import { createJob, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
-import { byAccount, byProfile, findProfileBySuffix, planActions, planDuplicateDeletions, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
+import { byAccount, byProfile, findProfileBySuffix, planActions, planDuplicateDeletions, reconPlan, reconcileAccount, unreachableAccountRows, summarize } from './recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow, ProfileSuffixInfo } from './recon-core.js';
 import { buildDedupGroups, hasCodeSuffix, normalizeDedupKeep, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from './dedup.js';
 import { safeBasalamFetch, safeFetch, safeWooFetch } from './network.js';
@@ -149,6 +149,10 @@ export async function reconAccounts():Promise<ReconAccount[]>{
  for(const shop of shops){const id=String(shop.vendorId||'');if(!id||!shop.token||seen.has(id))continue;seen.add(id);accounts.push({target:'basalam',accountKey:id,name:'باسلام — '+(shop.name||id),pricePercent:Number(shop.pricePercent)||0,toRial:true})}
  return accounts;
 }
+// Shown with every preview so the numbers cannot be misread: products that exist only at the
+// destination are reported, never deleted by the sync pass.
+const fa0=(value:number)=>String(value).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+const PLAN_NOTE='محصولاتی که فقط در مقصد هستند گزارش می‌شوند ولی با «اعمال هماهنگ‌سازی» حذف نمی‌شوند؛ برای حذف از «تکراری‌های مقصد» یا «محصولات حذف‌شده از مبدأ» استفاده کنید.';
 const LEDGER_MAX_PAGES=500;
 const LEDGER_RETRY=3;
 const LEDGER_TTL_MS_DEFAULT=3600000;
@@ -239,53 +243,12 @@ export async function refreshDestinationLedger(force=false,onProgress?:(e:Ledger
 }
 export async function destinationLedgerStatus(){const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=ttlMs})}return {ok:true,items,maxAgeHours,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
 
-export async function unifiedRecon(profileId=''){
-  const allProfilesRaw=await listProfiles();
-  const local=await maintenanceRows(profileId) as ReconLocal[],profileNames:Record<string,string>={};
-  for(const profile of allProfilesRaw)profileNames[profile.id]=profile.name||profile.id;
-  const settings=await getState<any>('settings',{});
-  const suffixFormats=settings?.dedup?.suffixFormats||'';
-  const patterns=suffixPatterns(parseSuffixFormats(suffixFormats));
-
-  // Build profile suffix info + zero-count protection
-  const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
-  // Count products per profile (active only) for zero-check
-  let allLocalForCounts:ReconLocal[];
-  if(profileId){
-    // Need counts for all profiles, not just filtered one
-    allLocalForCounts=await maintenanceRows('') as ReconLocal[];
-  }else{
-    allLocalForCounts=local as ReconLocal[];
-  }
-  const counts=new Map<string,number>();
-  for(const row of allLocalForCounts){
-    if(row.active===false||row.active===0)continue;
-    const pid=String(row.profile_id||'');
-    counts.set(pid,(counts.get(pid)||0)+1);
-  }
-  const zeroCountIds=new Set<string>();
-  for(const p of profilesInfo){
-    if((counts.get(p.id)||0)===0)zeroCountIds.add(p.id);
-  }
-
-  const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
-  const skippedNoCode=local.length-eligible.length;
-  const accounts=await reconAccounts(),rows:UnifiedReconRow[]=[],failures:Array<{account:string;error:string}>=[];
-  for(const account of accounts){
-    try{
-      const remote=await remoteForAccount(account);
-      rows.push(...reconcileAccount(local,remote,account,profileNames,suffixFormats,{profiles:profilesInfo,zeroCountIds,profileFilter:profileId}));
-    }
-    catch(error){const message=error instanceof Error?error.message:String(error);failures.push({account:account.name,error:message});rows.push(...unreachableAccountRows(local,account,profileNames,suffixFormats,message))}
-  }
-  const protectedExtra=0; // counted inside reconcileAccount (skipped)
-  const report={ok:failures.length===0,at:new Date().toISOString(),profileId,local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
-    zeroCountProfiles:[...zeroCountIds],
-    protectedBySuffix: true,
-    ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),actions:planActions(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds}).length,failures,rows};
-  await setState('recon_unified',report);
-  return report;
-}
+/**
+ * Single implementation (1.335.0): the silent variant is the live one without a
+ * listener. Before this, two copies of the same comparison lived side by side and
+ * the apply pass used the copy the preview never ran.
+ */
+export async function unifiedRecon(profileId=''){return unifiedReconLive(profileId)}
 
 export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
   const allProfilesRaw=await listProfiles();
@@ -338,13 +301,17 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       onProgress?.({type:'progress',stage:'account-error',account:account.name,error:message,rowsSoFar:rows.length});
     }
   }
+  const plan=reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds});
   const report={
     ok:failures.length===0,at:new Date().toISOString(),profileId,
     local:eligible.length,localAll:local.length,skippedNoCode,suffixFormats,accounts:accounts.length,
     zeroCountProfiles:[...zeroCountIds],
     protectedBySuffix:true,
     ...summarize(rows),accountsBreakdown:byAccount(rows),profiles:byProfile(rows),
-    actions:planActions(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds}).length,failures,rows,
+    // planned = exactly what «اعمال هماهنگ‌سازی» will do; removals are reported, never applied.
+    actions:plan.all.length,planned:plan.applicable.length,plannedPrice:plan.counts.updatePrice,
+    plannedCreate:plan.counts.create,plannedRemove:plan.counts.remove,planNote:PLAN_NOTE,
+    failures,rows,
   };
   onProgress?.({type:'progress',stage:'report-ready',reportSummary:{matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra}});
   await setState('recon_unified',report);
@@ -471,21 +438,35 @@ export async function reconTableLive(target:Target,profileId='',onProgress?:(e:a
   return report;
 }
 
-export async function unifiedReconApply(profileId='',apply=false,limit=200){
-  if(apply)await refreshDestinationLedger(true);
-  const report=await unifiedRecon(profileId);
-  // unifiedRecon already filtered zero-count protection, but we also ensure planActions respects it
+export async function unifiedReconApply(profileId='',apply=false,limit=200,onProgress?:(e:any)=>void){
+  const step=(event:any)=>{try{onProgress?.(event)}catch{}};
+  if(apply){
+    step({type:'progress',stage:'ledger-refresh',summary:'تازه‌سازی دفتر حساب پیش از اعمال…'});
+    await refreshDestinationLedger(true,(e:any)=>step({...e,type:'progress',stage:'ledger-refresh',name:e.type}));
+  }
+  const report=await unifiedReconLive(profileId,(e:any)=>step(e));
   const allProfilesRaw=await listProfiles();
   const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
   const zeroCountIds=new Set<string>(Array.isArray((report as any).zeroCountProfiles)?(report as any).zeroCountProfiles:[]);
-  const actions=planActions(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds}).filter(action=>action.kind!=='remove').slice(0,Math.max(1,Math.min(1000,limit)));
-  if(!apply)return{ok:true,dryRun:true,planned:actions.length,actions:actions.slice(0,200),
-    matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
-    noPrice:report.noPrice,unreachable:report.unreachable,inSync:report.inSync,local:report.local,localAll:report.localAll,skippedNoCode:report.skippedNoCode,accounts:report.accounts,
-    accountsBreakdown:report.accountsBreakdown,profiles:report.profiles,failures:report.failures,
-    rows:report.rows};
-  let changed=0;const failed:any[]=[];
-  for(const action of actions){
+  // Preview and apply share one plan, so the number on screen is the number that runs.
+  const plan=reconPlan(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds});
+  const cap=Math.max(1,Math.min(1000,Number(limit)||200));
+  const actions=plan.applicable.slice(0,cap);
+  const remaining=Math.max(0,plan.applicable.length-actions.length);
+  const shared={matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
+    noPrice:report.noPrice,unreachable:report.unreachable,inSync:report.inSync,local:report.local,localAll:report.localAll,
+    skippedNoCode:report.skippedNoCode,accounts:report.accounts,accountsBreakdown:report.accountsBreakdown,
+    profiles:report.profiles,failures:report.failures,plannedRemove:plan.removals.length,planNote:PLAN_NOTE};
+  if(!apply)return{ok:true,dryRun:true,planned:plan.applicable.length,willApply:actions.length,remaining,
+    plannedPrice:plan.counts.updatePrice,plannedCreate:plan.counts.create,
+    actions:actions.slice(0,200),...shared,rows:report.rows};
+  let changed=0,queuedJobs=0,queuedProducts=0;const failed:any[]=[];
+  // One queue job per (profile, destination): the job re-sends the whole profile, so asking for it
+  // once per missing product used to queue hundreds of identical jobs for the same work.
+  const queued=new Set<string>();
+  for(let index=0;index<actions.length;index++){
+    const action=actions[index];
+    step({type:'progress',stage:'apply',name:'apply',count:index+1,total:actions.length,account:action.accountName,summary:action.title||''});
     try{
       if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
         if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
@@ -494,22 +475,27 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
       }else if(action.kind==='create'){
         // Re-publishing goes through the queue so category/photo/stock rules and
         // the Worker's CPU budget are respected.
-        await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');
-        changed++;
-      }else if(action.kind==='remove'&&action.remoteId){
-        // Present at the destination but gone from the source: WooCommerce is a
-        // real delete, Basalam has no permanent delete so it is archived (4184).
-        await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
-        changed++;
+        queuedProducts++;
+        const key=action.profileId+'\u0000'+(action.target==='woo'?'woo':'basalam');
+        if(!queued.has(key)){queued.add(key);await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');queuedJobs++}
       }
     }catch(error){failed.push({title:action.title,account:action.accountName,error:error instanceof Error?error.message:String(error)})}
   }
-  const after=changed?await unifiedRecon(profileId):report;
-  return{ok:failed.length===0,dryRun:false,planned:actions.length,changed,failed:failed.slice(0,20),
+  // Only re-compare when something actually changed at a destination. Queued jobs have not run yet,
+  // so a second full scan would cost minutes and report exactly the same numbers.
+  const after=changed?await unifiedReconLive(profileId,(e:any)=>step({...e,stage:'verify-'+(e.stage||'')})):report;
+  const notes:string[]=[];
+  if(queuedProducts)notes.push(fa0(queuedProducts)+' محصول نبود-در-مقصد به صف ارسال سپرده شد ('+fa0(queuedJobs)+' کار صف)؛ تا پایان صف، شمارش «در مقصد نیست» تغییر نمی‌کند.');
+  if(remaining)notes.push(fa0(remaining)+' اقدام به‌خاطر سقف هر نوبت باقی ماند؛ دوباره «اعمال هماهنگ‌سازی» را بزنید.');
+  if(plan.removals.length)notes.push(PLAN_NOTE);
+  if(!changed&&!queuedProducts&&!failed.length)notes.push('هیچ اقدام قابل‌اجرایی وجود نداشت.');
+  return{ok:failed.length===0,dryRun:false,planned:plan.applicable.length,processed:actions.length,changed,
+    queuedJobs,queuedProducts,remaining,failed:failed.slice(0,20),note:notes.join(' '),
     matched:after.matched,priceDiff:after.priceDiff,missing:after.missing,extra:after.extra,
-    noPrice:after.noPrice,unreachable:after.unreachable,inSync:after.inSync,local:after.local,localAll:after.localAll,skippedNoCode:after.skippedNoCode,accounts:after.accounts,
-    accountsBreakdown:after.accountsBreakdown,profiles:after.profiles,failures:after.failures,
-    rows:after.rows};
+    noPrice:after.noPrice,unreachable:after.unreachable,inSync:after.inSync,local:after.local,localAll:after.localAll,
+    skippedNoCode:after.skippedNoCode,accounts:after.accounts,accountsBreakdown:after.accountsBreakdown,
+    profiles:after.profiles,failures:after.failures,plannedRemove:plan.removals.length,planNote:PLAN_NOTE,
+    verified:changed>0,rows:after.rows};
 }
 /**
  * Request 36b — duplicate cleanup across EVERY destination.
@@ -522,15 +508,25 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200){
  * removed; `apply=true` performs the deletions. Nothing in the local scraped
  * catalogue is ever touched — only destination listings.
  */
-export async function destinationDuplicates(apply=false,limit=200,keep:'expensive'|'cheapest'='expensive',accountKey=''){
+export async function destinationDuplicates(apply=false,limit=200,keep:'expensive'|'cheapest'='expensive',accountKey='',onProgress?:(e:any)=>void){
+  const step=(event:any)=>{try{onProgress?.(event)}catch{}};
   const accounts=(await reconAccounts()).filter(a=>!accountKey||String(a.accountKey)===String(accountKey));
   const settings=await getState<any>('settings',{}),suffixFormats=settings?.dedup?.suffixFormats||'';
   const actions:any[]=[],failures:any[]=[];
-  for(const account of accounts){
+  step({type:'progress',stage:'accounts-listed',name:'accounts',total:accounts.length,summary:accounts.map(a=>a.name).join('، ')});
+  for(let index=0;index<accounts.length;index++){
+    const account=accounts[index];
+    step({type:'progress',stage:'account-start',name:'scan',account:account.name,count:index,total:accounts.length});
     try{
-      const remotes=await remoteForAccount(account,apply);
-      actions.push(...planDuplicateDeletions(remotes,account,suffixFormats,keep));
-    }catch(error){failures.push({account:account.name,error:error instanceof Error?error.message:String(error)})}
+      const remotes=await remoteForAccount(account,apply,(e:any)=>step({...e,type:'progress',stage:'ledger-fetch',name:e.type,account:account.name}));
+      const planned=planDuplicateDeletions(remotes,account,suffixFormats,keep);
+      actions.push(...planned);
+      step({type:'progress',stage:'account-done',name:'scan',account:account.name,count:index+1,total:accounts.length,summary:'تکراری: '+planned.length+' از '+remotes.length+' محصول'});
+    }catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      failures.push({account:account.name,error:message});
+      step({type:'progress',stage:'account-error',name:'scan',account:account.name,summary:message});
+    }
   }
   const byDestination=accounts.map(account=>({
     account:account.name,accountKey:account.accountKey,target:account.target,
@@ -538,16 +534,18 @@ export async function destinationDuplicates(apply=false,limit=200,keep:'expensiv
   }));
   const capped=actions.slice(0,Math.max(1,Math.min(1000,Number(limit)||200)));
   if(!apply)return{source:'ledger',ok:failures.length===0,dryRun:true,keep,planned:actions.length,willDelete:capped.length,
-    accounts:accounts.length,byDestination,failures,actions:capped.slice(0,200)};
+    remaining:Math.max(0,actions.length-capped.length),accounts:accounts.length,byDestination,failures,actions:capped.slice(0,200)};
   let deleted=0,archived=0;const failed:any[]=[];
-  for(const action of capped){
+  for(let index=0;index<capped.length;index++){
+    const action=capped[index];
+    step({type:'progress',stage:'delete',name:'delete',count:index+1,total:capped.length,account:action.accountName,summary:action.title||''});
     try{
       const result=await destinationDelete(action.target,action.remoteId,true,action.target==='basalam'?action.accountKey:'');
       if((result as any)?.archived)archived++;else deleted++;
     }catch(error){failed.push({title:action.title,account:action.accountName,id:action.remoteId,error:error instanceof Error?error.message:String(error)})}
   }
   return{source:'ledger',ok:failed.length===0&&failures.length===0,dryRun:false,keep,planned:actions.length,processed:capped.length,
-    deleted,archived,accounts:accounts.length,byDestination,failures,failed:failed.slice(0,20),actions:capped.slice(0,200)};
+    deleted,archived,remaining:Math.max(0,actions.length-capped.length),accounts:accounts.length,byDestination,failures,failed:failed.slice(0,20),actions:capped.slice(0,200)};
 }
 async function rawbasalamUpdateShop(accountKey:string,id:number|string,payload:any){
   const c=(await loadConnections()).basalam;
@@ -741,10 +739,14 @@ export async function destinationDelete(target:'woo'|'basalam',id:number,force=f
 /** Removal is restricted to acknowledged scraper ownership + a complete source scan.
  * The existing retirement policy decides report/draft/out-of-stock/trash; never hard-delete automatically.
  */
-export async function ledgerMissing(profileId='',apply=false,target='both'){
+export async function ledgerMissing(profileId='',apply=false,target='both',onProgress?:(e:any)=>void){
+ const step=(event:any)=>{try{onProgress?.(event)}catch{}};
  const local=await maintenanceRows(''),settings=await getState<any>('settings',{}),mode=String(settings.retire?.mode||'report'),items:any[]=[],failed:any[]=[];let changed=0;
  const manifests=new Map<string,any>();for(const row of local)if(!manifests.has(row.profile_id))manifests.set(row.profile_id,await getState<any>('source_scan:'+row.profile_id,null));
- for(const account of (await reconAccounts()).filter(a=>target==='both'||a.target===target)){
+ const chosen=(await reconAccounts()).filter(a=>target==='both'||a.target===target);
+ step({type:'progress',stage:'accounts-listed',name:'accounts',total:chosen.length,summary:chosen.map(a=>a.name).join('، ')});
+ for(const account of chosen){
+  step({type:'progress',stage:'account-start',name:'scan',account:account.name,count:items.length});
   const scope=await destinationScope(account.target,account.accountKey);const meta=await destinationLedger.metadata(scope);
   if(!meta||!Number.isFinite(Date.parse(meta.startedAt))||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS){failed.push({account:account.name,error:'دفتر حساب باید تازه‌سازی شود؛ حذف انجام نشد.'});continue}
   for(const row of local){if(profileId&&row.profile_id!==profileId||(row.active!==false&&row.active!==0)||!manifests.get(row.profile_id)?.complete)continue;
@@ -753,6 +755,7 @@ export async function ledgerMissing(profileId='',apply=false,target='both'){
    if(local.some(other=>other.active&&(other.maps?.some((m:any)=>m.target===account.target&&String(m.account_key)===account.accountKey&&String(m.remote_id)===String(mapped))||(account.target==='woo'&&String(other.remote_woo_id)===String(mapped)))))continue;
    if(['delete','trash'].includes(mode)&&['trash','4184'].includes(String(entry.remote.status)))continue;if(mode==='draft'&&['draft','3790'].includes(String(entry.remote.status)))continue;if(mode==='outofstock'&&Number(entry.remote.raw?.stock_quantity??entry.remote.raw?.stock??-1)===0)continue;
    const item={profileId:row.profile_id,sourceKey:row.source_key,title:row.title,target:account.target,accountKey:account.accountKey,remoteId:String(mapped),mode};items.push(item);
+   step({type:'progress',stage:'candidate',name:'candidate',account:account.name,count:items.length,summary:String(row.title||'')});
    if(!apply||mode==='report'||changed>=20)continue;
    try{
     const latest=await getState<any>('source_scan:'+row.profile_id,null),current=(await maintenanceRows(row.profile_id)).find((x:any)=>x.source_key===row.source_key);
@@ -764,6 +767,7 @@ export async function ledgerMissing(profileId='',apply=false,target='both'){
     else if(mode==='draft'){if(account.target==='woo')await wooUpdate(mapped,{status:'draft'});else await basalamUpdateShop(account.accountKey,mapped,{status:3790})}
     else continue;
     changed++;
+    step({type:'progress',stage:'applied',name:'applied',account:account.name,count:changed,total:20,summary:String(row.title||'')});
    }catch(error){failed.push({...item,error:error instanceof Error?error.message:String(error)})}
   }
  }

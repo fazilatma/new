@@ -412,6 +412,38 @@ export type PlanOptions = {
   zeroCountIds?: Set<string>;
 };
 
+/**
+ * One plan, used by BOTH the preview and the apply pass (1.335.0).
+ *
+ * Why: the preview counted every planned action, but the apply pass only ever
+ * performs price fixes and re-creations — a product that exists ONLY at the
+ * destination is reported and never deleted automatically (deletion belongs to
+ * the duplicate/retirement tools, which have their own confirmation). Counting
+ * the two differently meant the preview promised work the apply refused to do.
+ * `applicable` is exactly what pressing «اعمال هماهنگ‌سازی» will carry out.
+ */
+export type ReconPlan = {
+  all: ReconAction[];
+  applicable: ReconAction[];
+  removals: ReconAction[];
+  counts: { all: number; updatePrice: number; create: number; remove: number };
+};
+
+export function reconPlan(rows: UnifiedReconRow[], suffixFormats: unknown = '', opts: PlanOptions = {}): ReconPlan {
+  const all = planActions(rows, suffixFormats, opts);
+  const applicable = all.filter(action => action.kind !== 'remove');
+  const removals = all.filter(action => action.kind === 'remove');
+  return {
+    all, applicable, removals,
+    counts: {
+      all: all.length,
+      updatePrice: applicable.filter(action => action.kind === 'updatePrice').length,
+      create: applicable.filter(action => action.kind === 'create').length,
+      remove: removals.length
+    }
+  };
+}
+
 export function planActions(rows: UnifiedReconRow[], suffixFormats: unknown = '', opts: PlanOptions = {}): ReconAction[] {
   const actions: ReconAction[] = [];
   const profiles = opts.profiles || [];

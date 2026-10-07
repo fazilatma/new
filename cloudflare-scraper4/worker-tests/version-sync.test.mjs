@@ -1586,21 +1586,26 @@ test('the sync preview is a colour-coded matrix, not a text dump', async () => {
 
 test('the sync preview returns the data its table needs, in both runtimes', async () => {
   // The dry run used to return only a flat action list, so a matrix drawn from
-  // it would have been empty. Both runtimes must return the rows and totals.
+  // it would have been empty. Both runtimes must return the rows and totals —
+  // and since 1.335.0 the preview also returns the action count the panel draws.
   for (const runtime of ['render-src/maintenance.ts', 'worker-src/maintenance.ts']) {
     const src = await readProjectFile(runtime);
     const at = src.indexOf('export async function unifiedReconApply');
     assert.ok(at > -1, `${runtime} must expose unifiedReconApply`);
-    const body = src.slice(at, src.indexOf('\nasync function basalamUpdateShop', at));
-    const dry = body.slice(body.indexOf('if (!apply)') >= 0 ? body.indexOf('if (!apply)') : body.indexOf('if(!apply)'),
-      body.indexOf('changed'));
+    const stop = src.indexOf('\n}\n', at); // the end of unifiedReconApply itself, nothing after it
+    const body = src.slice(at, stop > at ? stop + 2 : src.length);
     for (const field of ['rows', 'accountsBreakdown', 'matched', 'priceDiff', 'missing']) {
-      assert.match(dry, new RegExp(`${field}\\s*:\\s*(?:report|after)\\.${field}`),
+      assert.match(body, new RegExp(`${field}\\s*:\\s*(?:report|after)\\.${field}`),
         `${runtime}: the dry run must return ${field} so the table can be drawn`);
     }
-    // After applying, the table must show the real post-sync state.
-    assert.match(body, /const after\s*=\s*changed\s*\?\s*await unifiedRecon\(profileId\)\s*:\s*report/,
+    const dry = body.slice(Math.min(...[body.indexOf('if (!apply)'), body.indexOf('if(!apply)')].filter(index => index >= 0)), body.indexOf('let changed'));
+    assert.match(dry, /planned\s*:\s*plan\.applicable\.length/, `${runtime}: the preview must report the number the panel shows`);
+    assert.match(dry, /\.\.\.shared/, `${runtime}: the preview and the applied result must share one set of totals`);
+    // After applying, the table must show the real post-sync state — but only when
+    // something really was written; queued work has not changed anything yet.
+    assert.match(body, /const after\s*=\s*changed\s*\?\s*await unifiedReconLive\(profileId\s*,/,
       `${runtime}: applying must re-read the state so the table reflects reality`);
+    assert.match(body, /:\s*report;/, `${runtime}: with nothing written, the first comparison is reused instead of repeated`);
   }
 });
 

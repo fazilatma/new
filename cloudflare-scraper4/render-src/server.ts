@@ -67,7 +67,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.334.0+'; } catch { return process.env.npm_package_version || '1.334.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.335.0+'; } catch { return process.env.npm_package_version || '1.335.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -929,7 +929,7 @@ const hostDiagnosisNow = async (c: any) => {
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
   const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.334.0+',
+    version: process.env.npm_package_version || '1.335.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
@@ -1011,10 +1011,10 @@ app.post('/api/maintenance/recon-table/:target/live',async c=>{const target=c.re
 // هیچ پراکسی‌ای نمی‌تواند اتصالی را قطع کند که اصلاً باز نمی‌ماند. Twin of worker-src/app.ts.
 const maintenanceOps:Record<string,(body:any,observe:(e:any)=>void)=>Promise<any>>={
   'recon-unified':(b,observe)=>unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e})),
-  'recon-unified-apply':b=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200),
+  'recon-unified-apply':(b,observe)=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200,(e:any)=>observe({name:e.stage||e.type||'apply',status:'running',summary:e.summary||e.account||e.stage||'',...e})),
   'ledger-refresh':(b,observe)=>refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e})),
-  'ledger-missing':b=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'),
-  duplicates:b=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')),
+  'ledger-missing':(b,observe)=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY','both',(e:any)=>observe({name:e.stage||e.type||'missing',status:'running',summary:e.summary||e.account||'',...e})),
+  duplicates:(b,observe)=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||''),(e:any)=>observe({name:e.stage||e.type||'duplicates',status:'running',summary:e.summary||e.account||'',...e})),
   'recon-table:woo':(b,observe)=>reconTableLive('woo',String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e})),
   'recon-table:basalam':(b,observe)=>reconTableLive('basalam',String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e})),
   'recon:woo':b=>recon('woo',String(b.profileId||'')),
