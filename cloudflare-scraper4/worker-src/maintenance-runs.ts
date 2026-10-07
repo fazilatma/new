@@ -27,6 +27,13 @@ export type RunEvent = {
   total?: number;
   account?: string;
   target?: string;
+  /** 1.336.0 — the live detail the panel needs to prove the run is really working. */
+  stage?: string;
+  page?: number;
+  totalPages?: number;
+  elapsedMs?: number;
+  seq?: number;
+  detail?: string[];
 };
 
 export type MaintenanceRun = {
@@ -74,6 +81,17 @@ export function compactEvent(raw: any, at: string): RunEvent {
   if (Number.isFinite(Number(raw?.total))) event.total = Number(raw.total);
   if (raw?.account) event.account = String(raw.account).slice(0, 120);
   if (raw?.target) event.target = String(raw.target).slice(0, 60);
+  // 1.336.0 — a background run must carry the same evidence the streaming path shows:
+  // which phase, which page, how long it has been running, and the example lines.
+  if (raw?.stage) event.stage = String(raw.stage).slice(0, 60);
+  if (Number.isFinite(Number(raw?.page))) event.page = Number(raw.page);
+  if (Number.isFinite(Number(raw?.totalPages))) event.totalPages = Number(raw.totalPages);
+  if (Number.isFinite(Number(raw?.elapsedMs))) event.elapsedMs = Number(raw.elapsedMs);
+  if (Number.isFinite(Number(raw?.seq))) event.seq = Number(raw.seq);
+  if (Array.isArray(raw?.detail)) {
+    const detail = raw.detail.filter((line: unknown) => String(line ?? '').trim()).slice(0, 6).map((line: unknown) => String(line).slice(0, 160));
+    if (detail.length) event.detail = detail;
+  }
   return event;
 }
 

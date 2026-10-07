@@ -26,6 +26,15 @@ async function compile(source, names, io = {}) {
 const temporary = await mkdtemp(join(tmpdir(), 'scraper4-recon-apply-'));
 await build({ entryPoints: [new URL('../worker-src/recon-core.ts', import.meta.url).pathname], outfile: join(temporary, 'core.mjs'), bundle: true, format: 'esm', platform: 'node', logLevel: 'silent' });
 const core = await import(pathToFileURL(join(temporary, 'core.mjs')));
+await build({ entryPoints: [new URL('../worker-src/recon-progress.ts', import.meta.url).pathname], outfile: join(temporary, 'progress.mjs'), bundle: true, format: 'esm', platform: 'node', logLevel: 'silent' });
+const progress = await import(pathToFileURL(join(temporary, 'progress.mjs')));
+/** 1.336.0 — the apply pass reports every step through the shared live-progress module. */
+const progressIo = {
+  createReconProgress: progress.createReconProgress, describeLedgerEvent: progress.describeLedgerEvent,
+  actionLine: progress.actionLine, faPrice: progress.faPrice, faDuration: progress.faDuration,
+  faN: progress.fa, clipText: progress.clip, bucketTally: progress.bucketTally,
+  tallySummary: progress.tallySummary, sampleLines: progress.sampleLines
+};
 
 const PLAN_NOTE = 'محصولاتی که فقط در مقصد هستند گزارش می‌شوند ولی با «اعمال هماهنگ‌سازی» حذف نمی‌شوند؛ برای حذف از «تکراری‌های مقصد» یا «محصولات حذف‌شده از مبدأ» استفاده کنید.';
 const fa0 = value => String(value).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
@@ -48,6 +57,7 @@ async function applyPass(runtime, rows, options = {}) {
     accounts: 1, accountsBreakdown: [], profiles: [], failures: []
   };
   const io = {
+    ...progressIo,
     PLAN_NOTE, fa0, reconPlan: core.reconPlan, msg: error => (error instanceof Error ? error.message : String(error)),
     refreshDestinationLedger: async (_force, onProgress) => { calls.refresh++; onProgress?.({ type: 'ledger', account: 'ووکامرس' }); },
     unifiedReconLive: async (_profileId, onProgress) => { calls.recon++; onProgress?.({ type: 'progress', stage: 'account-done', account: 'ووکامرس' }); return report; },

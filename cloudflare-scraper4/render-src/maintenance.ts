@@ -1,3 +1,4 @@
+import { actionLine, bucketTally, clip as clipText, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, sampleLines, tallySummary } from '../worker-src/recon-progress.js';
 import { customerVisible } from '../worker-src/ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { basicAuth, normalizePersianText } from '../worker-src/utils.js';
@@ -110,22 +111,29 @@ async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:
  return entries.map(x=>x.remote).filter(x=>customerVisible(account.target,x));
 }
 export async function refreshDestinationLedger(force=false,onProgress?:(e:LedgerProgressEvent)=>void){
+ const p=createReconProgress(onProgress as any);
  const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);
  const startedAt=new Date().toISOString(),accounts=await reconAccounts(),items:any[]=[];
  for(const account of accounts){
   try{
    const before=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
-   onProgress?.({type:'refresh-account-start',account:account.name});
-   await remoteForAccount(account,force,(e)=>onProgress?.({...e,account:account.name}),ttlMs);
+   p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,
+     summary:'شروع اسکن '+account.name+(force?' (تازه‌سازی اجباری)':' (اگر دفتر تازه باشد دوباره خوانده نمی‌شود)')});
+   await remoteForAccount(account,force,(e)=>p.ledger(account.name,e,account.target),ttlMs);
    const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));
    items.push({...account,...meta,cached:before?.generation===meta?.generation,ok:true});
-   onProgress?.({type:'refresh-account-done',account:account.name,cached:before?.generation===meta?.generation,total:meta?.count});
+   p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,count:Number(meta?.count)||0,
+     summary:account.name+': '+(before?.generation===meta?.generation?'دفتر تازه بود و دوباره خوانده نشد':'اسکن شد')+' · '+faN(Number(meta?.count)||0)+' محصول · زمان سپری‌شده '+faDuration(p.elapsed())});
   }catch(error){
    items.push({...account,ok:false,error:error instanceof Error?error.message:String(error)});
-   onProgress?.({type:'refresh-account-error',account:account.name,error:error instanceof Error?error.message:String(error)});
+   p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,
+     summary:account.name+' ناموفق: '+(error instanceof Error?error.message:String(error))+' — دفتر قبلی این مقصد دست‌نخورده ماند'});
   }
  }
  const durationMs=Math.max(0,Date.now()-Date.parse(startedAt)),report={ok:items.every(x=>x.ok),items,maxAgeHours,startedAt,completedAt:new Date().toISOString(),durationMs,durationMinutes:durationMs/60000,scannedAccounts:items.filter(x=>x.ok&&!x.cached).length,cachedAccounts:items.filter(x=>x.cached).length};
+ p.emit({stage:'report-ready',name:'report',status:report.ok?'success':'error',count:items.filter(x=>x.ok).length,total:items.length,
+   summary:'تازه‌سازی دفتر تمام شد در '+faDuration(report.durationMs)+' · اسکن‌شده: '+faN(report.scannedAccounts)+' · از دفتر تازه: '+faN(report.cachedAccounts)+' · ناموفق: '+faN(items.filter(x=>!x.ok).length),
+   detail:items.map((x:any)=>x.name+': '+(x.ok?faN(Number(x.count)||0)+' محصول':'ناموفق — '+clipText(x.error)))});
  await setState('destination_ledger:last_refresh',report);if(report.ok&&accounts.length&&report.scannedAccounts===accounts.length)await setState('destination_ledger:last_full_refresh',report);return report;
 }
 export async function destinationLedgerStatus(){const settings=await getState<any>('settings',{}),ttlMs=ledgerTtlFromSettings(settings),maxAgeHours=ledgerMaxAgeHoursFromSettings(settings);const items=[];for(const account of await reconAccounts()){const meta=await destinationLedger.metadata(await destinationScope(account.target,account.accountKey));items.push({...account,...meta,ready:!!meta,stale:!meta||meta.inventoryPolicy!=='customer-visible-v1'||Date.now()-Date.parse(meta.startedAt)>=ttlMs})}return {ok:true,items,maxAgeHours,lastRefresh:await getState<any>('destination_ledger:last_refresh',null),lastFullRefresh:await getState<any>('destination_ledger:last_full_refresh',null)}}
@@ -166,23 +174,31 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
 
   const eligible=local.filter(row=>hasCodeSuffix(String(row.title||''),patterns));
   const skippedNoCode=local.length-eligible.length;
-  onProgress?.({type:'progress',stage:'local-loaded',local:local.length,eligible:eligible.length,skippedNoCode,zeroCountProfiles:[...zeroCountIds]});
+  const p=createReconProgress(onProgress);
+  p.emit({stage:'local-loaded',name:'local',count:eligible.length,total:local.length,
+    summary:'محصولات محلی خوانده شد: '+faN(local.length)+' مورد · قابل مقایسه (دارای پسوند کد): '+faN(eligible.length)+(skippedNoCode?' · بدون پسوند کد و نادیده‌گرفته‌شده: '+faN(skippedNoCode):''),
+    detail:eligible.slice(0,3).map((row:any)=>clipText(row.title))});
   const accounts=await reconAccounts();
-  onProgress?.({type:'progress',stage:'accounts-listed',count:accounts.length,accounts:accounts.map(a=>a.name)});
+  p.emit({stage:'accounts-listed',name:'accounts',total:accounts.length,
+    summary:'مقصدهای فعال: '+faN(accounts.length),
+    detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
   const rows: UnifiedReconRow[]=[]; const failures: Array<{account:string;error:string}>=[];
   let totalFetched=0;
   for(let idx=0;idx<accounts.length;idx++){
     const account=accounts[idx];
-    onProgress?.({type:'progress',stage:'account-start',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length});
+    p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,count:idx+1,total:accounts.length,
+      summary:'مقصد '+faN(idx+1)+' از '+faN(accounts.length)+': '+account.name+' — شروع خواندن محصولات'});
     try{
-      const remote=await remoteForAccount(account,false,(e)=>{
-        onProgress?.({type:'progress',stage:'ledger-fetch',account:account.name,accountKey:account.accountKey,target:account.target,index:idx,total:accounts.length,...e});
-      });
+      const remote=await remoteForAccount(account,false,(e)=>p.ledger(account.name,e,account.target));
       totalFetched+=remote.length;
-      onProgress?.({type:'progress',stage:'account-fetched',account:account.name,remoteCount:remote.length,totalFetched});
+      p.emit({stage:'account-fetched',name:'account',account:account.name,target:account.target,count:remote.length,
+        summary:account.name+': '+faN(remote.length)+' محصول قابل فروش خوانده شد · مجموع تا اینجا '+faN(totalFetched)});
       const reconciled=reconcileAccount(local,remote,account,profileNames,suffixFormats,{profiles:profilesInfo,zeroCountIds,profileFilter:profileId});
       rows.push(...reconciled);
-      onProgress?.({type:'progress',stage:'account-done',account:account.name,accountKey:account.accountKey,reconciled:reconciled.length,rowsSoFar:rows.length,remoteCount:remote.length});
+      const tally=bucketTally(reconciled);
+      p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,count:reconciled.length,total:accounts.length,
+        summary:account.name+' مقایسه شد (در '+faDuration(p.elapsed())+'): '+tallySummary(tally),
+        detail:sampleLines(reconciled,4)});
       if(reconciled.length){
         onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rows:reconciled.slice(0,200),rowsCount:reconciled.length,totalRows:rows.length});
       }
@@ -191,7 +207,8 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       failures.push({account:account.name,error:message});
       const fallback=unreachableAccountRows(local,account,profileNames,suffixFormats,message);
       rows.push(...fallback);
-      onProgress?.({type:'progress',stage:'account-error',account:account.name,error:message,rowsSoFar:rows.length});
+      p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,
+        summary:account.name+' پاسخ نداد: '+message+' — محصولات این مقصد «پاسخ نداد» علامت خوردند'});
     }
   }
   const plan=reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds});
@@ -206,7 +223,9 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
     plannedCreate:plan.counts.create,plannedRemove:plan.counts.remove,planNote:PLAN_NOTE,
     failures,rows,
   };
-  onProgress?.({type:'progress',stage:'report-ready',reportSummary:{matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra}});
+  p.emit({stage:'report-ready',name:'report',status:'success',count:rows.length,total:rows.length,
+    summary:'مقایسه تمام شد در '+faDuration(p.elapsed())+' · '+tallySummary(bucketTally(rows))+' · اقدام قابل اجرا: '+faN(plan.applicable.length),
+    detail:[(failures.length?'مقصد بی‌پاسخ: '+faN(failures.length):'همهٔ مقصدها پاسخ دادند'),'اصلاح قیمت: '+faN(plan.counts.updatePrice)+' · ساخت دوباره: '+faN(plan.counts.create)+' · فقط گزارش: '+faN(plan.counts.remove)]});
   await setState('recon_unified',report);
   return report;
 }
@@ -218,11 +237,16 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
  * exist only at the destination are reported but never auto-deleted.
  */
 export async function unifiedReconApply(profileId = '', apply = false, limit = 200, onProgress?: (e: any) => void) {
+  const p=createReconProgress(onProgress);
   const step=(event:any)=>{try{onProgress?.(event)}catch{}};
+  const phases=apply?4:2;
+  p.emit({stage:'apply-start',name:'apply',summary:(apply?'شروع اعمال هماهنگ‌سازی':'شروع پیش‌نمایش هماهنگ‌سازی (هیچ چیزی در مقصد تغییر نمی‌کند)')+' · سقف هر نوبت '+faN(Math.max(1,Math.min(1000,Number(limit)||200)))+' اقدام'});
   if(apply){
-    step({type:'progress',stage:'ledger-refresh',summary:'تازه‌سازی دفتر حساب پیش از اعمال…'});
-    await refreshDestinationLedger(true,(e:any)=>step({...e,type:'progress',stage:'ledger-refresh',name:e.type}));
+    p.emit({stage:'ledger-refresh',name:'ledger',summary:'مرحلهٔ ۱ از '+faN(phases)+': تازه‌سازی اجباری دفتر همهٔ مقصدها تا اعمال روی داده‌های کهنه انجام نشود…'});
+    await refreshDestinationLedger(true,(e:any)=>{const d=describeLedgerEvent(e,String(e?.account||''));if(d)p.emit({...d,stage:'ledger-refresh'});});
+    p.emit({stage:'ledger-refresh-done',name:'ledger',status:'success',summary:'دفتر مقصدها تازه شد در '+faDuration(p.elapsed())});
   }
+  p.emit({stage:'recon-start',name:'recon',summary:'مرحلهٔ '+faN(apply?2:1)+' از '+faN(phases)+': مقایسهٔ کامل محصولات محلی با محصولات هر مقصد…'});
   const report=await unifiedReconLive(profileId,(e:any)=>step(e));
   const allProfilesRaw=await listProfiles();
   const profilesInfo:ProfileSuffixInfo[]=allProfilesRaw.map((p:any)=>({id:String(p.id),name:String(p.name||p.id),titleSuffix:String(p.titleSuffix||'')}));
@@ -232,6 +256,10 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   const cap=Math.max(1,Math.min(1000,Number(limit)||200));
   const actions=plan.applicable.slice(0,cap);
   const remaining=Math.max(0,plan.applicable.length-actions.length);
+  const planDetail=plan.applicable.slice(0,6).map(actionLine);
+  p.emit({stage:'plan-ready',name:'plan',status:'success',count:plan.applicable.length,total:plan.all.length,
+    summary:(apply?'برنامهٔ اجرا آماده شد':'پیش‌نمایش آماده شد')+' در '+faDuration(p.elapsed())+' · '+faN(plan.applicable.length)+' اقدام قابل‌اجرا ('+faN(plan.counts.updatePrice)+' اصلاح قیمت، '+faN(plan.counts.create)+' ساخت دوباره)'+(plan.removals.length?' · '+faN(plan.removals.length)+' مورد فقط-در-مقصد که اعمال هرگز حذفشان نمی‌کند':''),
+    detail:planDetail.length?planDetail:['هیچ اقدامی لازم نیست؛ همه‌چیز هماهنگ است.']});
   const shared={matched:report.matched,priceDiff:report.priceDiff,missing:report.missing,extra:report.extra,
     noPrice:report.noPrice,unreachable:report.unreachable,inSync:report.inSync,local:report.local,localAll:report.localAll,
     skippedNoCode:report.skippedNoCode,accounts:report.accounts,accountsBreakdown:report.accountsBreakdown,
@@ -239,33 +267,54 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
   if(!apply)return{ok:true,dryRun:true,planned:plan.applicable.length,willApply:actions.length,remaining,
     plannedPrice:plan.counts.updatePrice,plannedCreate:plan.counts.create,
     actions:actions.slice(0,200),...shared,rows:report.rows};
+  p.emit({stage:'apply-run',name:'apply',summary:'مرحلهٔ ۳ از '+faN(phases)+': اجرای '+faN(actions.length)+' اقدام از '+faN(plan.applicable.length)+(remaining?' (بقیه در نوبت بعد: '+faN(remaining)+')':'')});
   let changed=0,created=0;const failed:any[]=[];
   const products=new Map<string,any>();
   for(let index=0;index<actions.length;index++){
     const action=actions[index];
-    step({type:'progress',stage:'apply',name:'apply',count:index+1,total:actions.length,account:action.accountName,summary:action.title||''});
+    p.emit({stage:'apply',name:'apply',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+      summary:'اقدام '+faN(index+1)+' از '+faN(actions.length)+' در '+clipText(action.accountName||action.target,40)+': '+actionLine(action)});
     try{
       if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
         if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
         else await basalamUpdateShop(action.accountKey,action.remoteId,{primary_price:action.toPrice});
         changed++;
+        p.emit({stage:'apply-written',name:'apply',status:'success',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+          summary:'نوشته شد: '+clipText(action.title,60)+' · قیمت مقصد از '+faPrice(action.fromPrice)+' به '+faPrice(action.toPrice)+' تغییر کرد (شناسه '+faN(action.remoteId)+')'});
       }else if(action.kind==='create'){
         const key=`${action.profileId}\u0000${action.sourceKey}`;
         if(!products.has(key))products.set(key,await getProduct(action.profileId,action.sourceKey));
         const product=products.get(key);
         const profile=await getProfile(action.profileId);
         if(!product||!profile){failed.push({title:action.title,error:'محصول یا پروفایل پیدا نشد'});continue}
+        p.emit({stage:'create',name:'create',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+          summary:'ساخت دوباره در '+(action.target==='woo'?'ووکامرس':'باسلام')+': '+clipText(action.title,60)+' (پروفایل '+clipText(profile.name||action.profileId,30)+')'});
         if(action.target==='woo')await syncWoo(product,profile);else await syncBasalam(product,profile);
         created++;changed++;
+        p.emit({stage:'create-done',name:'create',status:'success',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+          summary:'ساخته شد: '+clipText(action.title,60)+' · قیمت ارسالی '+faPrice(action.toPrice||product.price)});
       }
-    }catch(error){failed.push({title:action.title,account:action.accountName,error:msg(error)})}
+    }catch(error){
+      const message=msg(error);
+      failed.push({title:action.title,account:action.accountName,error:message});
+      p.emit({stage:'apply-error',name:'apply',status:'error',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+        summary:'ناموفق: '+clipText(action.title,60)+' — '+clipText(message,90)});
+    }
   }
+  p.emit({stage:'apply-done',name:'apply',status:failed.length?'error':'success',count:actions.length,total:actions.length,
+    summary:'اجرا تمام شد در '+faDuration(p.elapsed())+' · نوشته‌شده '+faN(changed)+' · ساخته‌شده '+faN(created)+' · ناموفق '+faN(failed.length),
+    detail:failed.slice(0,4).map((f:any)=>'✖ '+clipText(f.title,50)+' — '+clipText(f.error,80))});
+  if(changed)p.emit({stage:'verify-start',name:'verify',summary:'مرحلهٔ ۴ از '+faN(phases)+': مقایسهٔ دوباره برای تأیید اینکه نوشتن‌ها واقعاً در مقصد ثبت شده‌اند…'});
+  else p.emit({stage:'verify-skip',name:'verify',status:'success',summary:'چیزی در مقصد نوشته نشد، پس مقایسهٔ دوباره لازم نیست.'});
   const after=changed?await unifiedReconLive(profileId,(e:any)=>step({...e,stage:'verify-'+(e.stage||'')})):report;
   const notes:string[]=[];
   if(created)notes.push(fa0(created)+' محصول نبود-در-مقصد همین‌جا ساخته شد.');
   if(remaining)notes.push(fa0(remaining)+' اقدام به‌خاطر سقف هر نوبت باقی ماند؛ دوباره «اعمال هماهنگ‌سازی» را بزنید.');
   if(plan.removals.length)notes.push(PLAN_NOTE);
   if(!changed&&!failed.length)notes.push('هیچ اقدام قابل‌اجرایی وجود نداشت.');
+  p.emit({stage:'report-ready',name:'report',status:failed.length?'error':'success',count:changed,total:actions.length,
+    summary:'پایان در '+faDuration(p.elapsed())+' · هماهنگ '+faN(after.matched)+' · اختلاف قیمت '+faN(after.priceDiff)+' · در مقصد نیست '+faN(after.missing)+' · فقط در مقصد '+faN(after.extra),
+    detail:notes.slice(0,4)});
   return{ok:failed.length===0,dryRun:false,planned:plan.applicable.length,processed:actions.length,changed,
     created,queuedJobs:0,queuedProducts:0,remaining,failed:failed.slice(0,20),note:notes.join(' '),
     matched:after.matched,priceDiff:after.priceDiff,missing:after.missing,extra:after.extra,
@@ -283,41 +332,59 @@ export async function unifiedReconApply(profileId = '', apply = false, limit = 2
  */
 export async function destinationDuplicates(apply = false, limit = 200, keep: 'expensive' | 'cheapest' = 'expensive', accountKey = '', onProgress?: (e: any) => void) {
   const step=(event:any)=>{try{onProgress?.(event)}catch{}};
+  const p=createReconProgress(onProgress);
+  const keepLabel=keep==='cheapest'?'ارزان‌ترین نسخه نگه داشته می‌شود':'گران‌ترین نسخه نگه داشته می‌شود';
+  p.emit({stage:'start',name:'duplicates',summary:(apply?'شروع حذف تکراری‌ها':'شروع بررسی تکراری‌ها (هیچ چیزی حذف نمی‌شود)')+' · '+keepLabel});
   const accounts = (await reconAccounts()).filter(a => !accountKey || String(a.accountKey) === String(accountKey));
   const settings = await getState<any>('settings', {});
   const suffixFormats = (settings as any)?.dedup?.suffixFormats || '';
   const actions: any[] = [], failures: any[] = [];
-  step({type:'progress',stage:'accounts-listed',name:'accounts',total:accounts.length,summary:accounts.map(a=>a.name).join('، ')});
+  p.emit({stage:'accounts-listed',name:'accounts',total:accounts.length,
+    summary:'مقصدهای بررسی‌شونده: '+faN(accounts.length)+(accountKey?' (فقط حساب انتخاب‌شده)':''),
+    detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
   for (let index = 0; index < accounts.length; index++) {
     const account = accounts[index];
-    step({type:'progress',stage:'account-start',name:'scan',account:account.name,count:index,total:accounts.length});
+    p.emit({stage:'account-start',name:'scan',account:account.name,target:account.target,count:index+1,total:accounts.length,
+      summary:'مقصد '+faN(index+1)+' از '+faN(accounts.length)+': '+account.name+' — خواندن فهرست محصولات'+(apply?' (تازه‌سازی اجباری دفتر)':'')+'…'});
     try {
-      const remotes = await remoteForAccount(account,apply,(e:any)=>step({...e,type:'progress',stage:'ledger-fetch',name:e.type,account:account.name}));
+      const remotes = await remoteForAccount(account,apply,(e:any)=>p.ledger(account.name,e,account.target));
       const planned = planDuplicateDeletions(remotes, account, suffixFormats, keep);
       actions.push(...planned);
-      step({type:'progress',stage:'account-done',name:'scan',account:account.name,count:index+1,total:accounts.length,summary:'تکراری: '+planned.length+' از '+remotes.length+' محصول'});
+      p.emit({stage:'account-done',name:'scan',status:'success',account:account.name,target:account.target,count:index+1,total:accounts.length,
+        summary:account.name+': '+faN(remotes.length)+' محصول خوانده شد · '+faN(planned.length)+' نسخهٔ تکراری برای حذف شناسایی شد (در '+faDuration(p.elapsed())+')',
+        detail:planned.slice(0,4).map((a:any)=>clipText(a.title,60)+' · '+faPrice(a.price)+(a.remoteId?' (شناسه '+faN(a.remoteId)+')':''))});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failures.push({ account: account.name, error: message });
-      step({type:'progress',stage:'account-error',name:'scan',account:account.name,summary:message});
+      p.emit({stage:'account-error',name:'scan',status:'error',account:account.name,target:account.target,count:index+1,total:accounts.length,
+        summary:account.name+' خوانده نشد: '+clipText(message,110)+' — تکراری‌های این مقصد در این نوبت بررسی نشدند'});
     }
   }
   const byDestination = accounts.map(account => ({
     account: account.name, accountKey: account.accountKey, target: account.target,
     duplicates: actions.filter(a => String(a.accountKey) === String(account.accountKey) && a.target === account.target).length,
   }));
+  p.emit({stage:'plan-ready',name:'plan',status:'success',count:actions.length,total:accounts.length,
+    summary:'بررسی '+faN(accounts.length)+' مقصد در '+faDuration(p.elapsed())+' تمام شد · '+faN(actions.length)+' نسخهٔ تکراری برای حذف'+(failures.length?' · '+faN(failures.length)+' مقصد پاسخ نداد':''),
+    detail:byDestination.map((d:any)=>d.account+': '+faN(d.duplicates)+' تکراری')});
   const capped = actions.slice(0, Math.max(1, Math.min(1000, Number(limit) || 200)));
   if (!apply) return { source: 'ledger', ok: failures.length === 0, dryRun: true, keep, planned: actions.length, willDelete: capped.length,
     remaining: Math.max(0, actions.length - capped.length), accounts: accounts.length, byDestination, failures, actions: capped.slice(0, 200) };
   let deleted = 0, archived = 0; const failed: any[] = [];
   for (let index = 0; index < capped.length; index++) {
     const action = capped[index];
-    step({type:'progress',stage:'delete',name:'delete',count:index+1,total:capped.length,account:action.accountName,summary:action.title||''});
+    p.emit({stage:'delete',name:'delete',count:index+1,total:capped.length,account:action.accountName,target:action.target,
+      summary:'حذف '+faN(index+1)+' از '+faN(capped.length)+': '+clipText(action.title,60)+' · '+faPrice(action.price)+' (شناسه '+faN(action.remoteId)+')'});
     try {
       const result = await destinationDelete(action.target, action.remoteId, true, action.target === 'basalam' ? action.accountKey : '');
-      if ((result as any)?.archived) archived++; else deleted++;
+      if((result as any)?.archived)archived++;else deleted++;
+      p.emit({stage:'delete-done',name:'delete',status:'success',count:index+1,total:capped.length,account:action.accountName,target:action.target,
+        summary:((result as any)?.archived?'بایگانی شد (مقصد اجازهٔ حذف کامل نداد): ':'حذف شد: ')+clipText(action.title,60)+' (شناسه '+faN(action.remoteId)+')'});
     } catch (error) { failed.push({ title: action.title, account: action.accountName, id: action.remoteId, error: error instanceof Error ? error.message : String(error) }); }
   }
+  p.emit({stage:'report-ready',name:'report',status:failed.length||failures.length?'error':'success',count:deleted+archived,total:capped.length,
+    summary:'پایان در '+faDuration(p.elapsed())+' · حذف‌شده '+faN(deleted)+' · بایگانی‌شده '+faN(archived)+' · ناموفق '+faN(failed.length)+' · باقی‌مانده '+faN(Math.max(0,actions.length-capped.length)),
+    detail:failed.slice(0,4).map((f:any)=>'✖ '+clipText(f.title,50)+' — '+clipText(f.error,80))});
   return { source: 'ledger', ok: failed.length === 0 && failures.length === 0, dryRun: false, keep, planned: actions.length, processed: capped.length,
     deleted, archived, remaining: Math.max(0, actions.length - capped.length), accounts: accounts.length, byDestination, failures, failed: failed.slice(0, 20), actions: capped.slice(0, 200) };
 }
@@ -424,32 +491,34 @@ export async function reconTable(target: 'woo' | 'basalam', profileId = '') {
 
 
 export async function reconTableLive(target:'woo'|'basalam',profileId='',onProgress?:(e:any)=>void){
-  onProgress?.({type:'progress',stage:'local-loading',target});
+  const p=createReconProgress(onProgress);
+  const targetName=target==='woo'?'ووکامرس':'باسلام';
+  p.emit({stage:'local-loading',name:'local',target,summary:'خواندن محصولات محلی برای مقایسه با '+targetName+'…'});
   const allProfilesRaw=await listProfiles();
   const local=await maintenanceRows(profileId);
-  onProgress?.({type:'progress',stage:'local-loaded',count:local.length,target});
+  p.emit({stage:'local-loaded',name:'local',target,count:local.length,summary:'محصولات محلی: '+faN(local.length)+' مورد'});
   let remote:any[]=[];
   try{
     const accounts=await reconAccounts();
     const matchedAccounts=accounts.filter(a=>a.target===target);
     if(matchedAccounts.length){
-      onProgress?.({type:'progress',stage:'accounts',count:matchedAccounts.length,target});
+      p.emit({stage:'accounts-listed',name:'accounts',target,total:matchedAccounts.length,summary:'حساب‌های '+targetName+': '+faN(matchedAccounts.length),detail:matchedAccounts.map(a=>a.name)});
       for(let i=0;i<matchedAccounts.length;i++){
         const acc=matchedAccounts[i];
-        onProgress?.({type:'progress',stage:'account-start',account:acc.name,target,index:i,total:matchedAccounts.length});
-        const part=await remoteForAccount(acc,false,(e)=>onProgress?.({type:'progress',stage:'ledger-fetch',account:acc.name,target,...e}));
+        p.emit({stage:'account-start',name:'account',account:acc.name,target,count:i+1,total:matchedAccounts.length,summary:'حساب '+faN(i+1)+' از '+faN(matchedAccounts.length)+': '+acc.name+' — شروع خواندن'});
+        const part=await remoteForAccount(acc,false,(e)=>p.ledger(acc.name,e,target));
         remote.push(...part);
-        onProgress?.({type:'progress',stage:'account-done',account:acc.name,target,fetched:remote.length});
+        p.emit({stage:'account-done',name:'account',status:'success',account:acc.name,target,count:part.length,summary:acc.name+': '+faN(part.length)+' محصول خوانده شد · مجموع '+faN(remote.length)});
       }
     }else{
-      onProgress?.({type:'progress',stage:'remote-direct',target});
+      p.emit({stage:'remote-direct',name:'remote',target,summary:'حسابی برای '+targetName+' تنظیم نشده؛ محصولات مستقیم از API خوانده می‌شوند…'});
       remote=await remoteProducts(target);
     }
   }catch{
-    onProgress?.({type:'progress',stage:'remote-fallback',target});
+    p.emit({stage:'remote-fallback',name:'remote',status:'error',target,summary:'خواندن از دفتر حساب ناموفق بود؛ همین حالا مستقیم از '+targetName+' خوانده می‌شود…'});
     remote=await remoteProducts(target);
   }
-  onProgress?.({type:'progress',stage:'remote-loaded',count:remote.length,target});
+  p.emit({stage:'remote-loaded',name:'remote',status:'success',target,count:remote.length,summary:'محصولات '+targetName+': '+faN(remote.length)+' مورد خوانده شد در '+faDuration(p.elapsed())});
 
   const settings=await getState<any>('settings',{});
   const suffixFormats=settings?.dedup?.suffixFormats||'';
@@ -519,6 +588,8 @@ export async function reconTableLive(target:'woo'|'basalam',profileId='',onProgr
     processed++;
     if(processed%50===0){
       onProgress?.({type:'partial',stage:'rows-partial',target,processed,total:remote.length,rows:rows.slice(-50),rowsCount:rows.length});
+      p.emit({stage:'compare',name:'compare',target,count:processed,total:remote.length,
+        summary:'مقایسه: '+faN(processed)+' از '+faN(remote.length)+' محصول مقصد · '+tallySummary(bucketTally(rows)),detail:sampleLines(rows.slice(-50),3)});
     }
   }
   for(const row of local){
@@ -532,13 +603,51 @@ export async function reconTableLive(target:'woo'|'basalam',profileId='',onProgr
   const inSync=summary.priceDiff===0&&summary.extra===0&&summary.missing===0;
   const report={ok:true,target,at:new Date().toISOString(),profileId,local:local.length,remote:remote.length,zeroCountProfiles:[...zeroCountIds],protectedBySuffix:true,...summary,inSync,matchedByTitle,matchedBySku,matchedById,rows};
   await setState(`recon_table_${target}`,report);
-  onProgress?.({type:'progress',stage:'report-ready',target,summary});
+  p.emit({stage:'report-ready',name:'report',status:'success',target,count:rows.length,total:rows.length,
+    summary:'جدول '+targetName+' آماده شد در '+faDuration(p.elapsed())+' · '+tallySummary(bucketTally(rows)),
+    detail:sampleLines(rows,4)});
   return report;
 }
 
 
-export async function recon(target:'woo'|'basalam',profileId=''){const local=await maintenanceRows(profileId),remote=await remoteProducts(target),byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''})}const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};await setState(`recon_${target}`,result);return result}
-export async function rebuildMap(target:'woo'|'basalam',profileId=''){const report=await recon(target,profileId);let mapped=0;for(const item of report.items)if(item.remoteId){await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);mapped++}return{ok:true,target,mapped,unmatched:report.items.length-mapped}}
+export async function recon(target:'woo'|'basalam',profileId='',onProgress?:(e:any)=>void){
+  const p=createReconProgress(onProgress);
+  const targetName=target==='woo'?'ووکامرس':'باسلام';
+  p.emit({stage:'local-loading',name:'local',target,summary:'نقشهٔ شناسه‌ها برای '+targetName+': خواندن محصولات محلی…'});
+  const local=await maintenanceRows(profileId);
+  p.emit({stage:'local-loaded',name:'local',target,count:local.length,summary:'محصولات محلی: '+faN(local.length)+' مورد'});
+  p.emit({stage:'remote-loading',name:'remote',target,summary:'خواندن فهرست محصولات '+targetName+'…'});
+  const remote=await remoteProducts(target);
+  p.emit({stage:'remote-loaded',name:'remote',status:'success',target,count:remote.length,summary:'محصولات '+targetName+': '+faN(remote.length)+' مورد خوانده شد در '+faDuration(p.elapsed())});
+  const byId=new Map(remote.map(x=>[x.id,x])),bySku=new Map(remote.filter(x=>x.sku).map(x=>[x.sku,x])),byName=new Map(remote.map(x=>[norm(x.name),x])),used=new Set<number>(),items:any[]=[];
+  for(const row of local){const mapped=target==='woo'?Number(row.remote_woo_id||0):Number(row.remote_basalam_id||0),sku=row.data?.sku||`s4-${row.profile_id}-${row.source_key}`.slice(0,100);const match=byId.get(mapped)||bySku.get(sku)||byName.get(norm(row.title));if(match)used.add(match.id);items.push({profileId:row.profile_id,sourceKey:row.source_key,title:row.title,active:row.active,remoteId:match?.id||null,matchedBy:match?(match.id===mapped?'id':match.sku===sku?'sku':'title'):'none',remoteTitle:match?.name||''});
+    if(items.length%100===0)p.emit({stage:'match',name:'match',target,count:items.length,total:local.length,summary:'تطبیق: '+faN(items.length)+' از '+faN(local.length)+' محصول محلی بررسی شد'});}
+  const byIdCount=items.filter(x=>x.matchedBy==='id').length,bySkuCount=items.filter(x=>x.matchedBy==='sku').length,byTitleCount=items.filter(x=>x.matchedBy==='title').length;
+  const result={target,at:new Date().toISOString(),local:local.length,remote:remote.length,matched:items.filter(x=>x.remoteId).length,missingRemote:items.filter(x=>!x.remoteId&&x.active).length,retired:items.filter(x=>!x.active).length,extraRemote:remote.filter(x=>!used.has(x.id)).map(x=>({id:x.id,title:x.name,status:x.status})),items};
+  p.emit({stage:'report-ready',name:'report',status:'success',target,count:result.matched,total:local.length,
+    summary:'نقشهٔ '+targetName+' آماده شد در '+faDuration(p.elapsed())+' · متصل '+faN(result.matched)+' · بدون جفت '+faN(result.missingRemote)+' · فقط در مقصد '+faN(result.extraRemote.length),
+    detail:['تطبیق با شناسه: '+faN(byIdCount),'تطبیق با کد کالا: '+faN(bySkuCount),'تطبیق با عنوان: '+faN(byTitleCount),
+      ...items.filter(x=>!x.remoteId&&x.active).slice(0,2).map((x:any)=>'بدون جفت: '+clipText(x.title,60))]});
+  await setState(`recon_${target}`,result);return result;
+}
+export async function rebuildMap(target:'woo'|'basalam',profileId='',onProgress?:(e:any)=>void){
+  const p=createReconProgress(onProgress);
+  const targetName=target==='woo'?'ووکامرس':'باسلام';
+  p.emit({stage:'start',name:'rebuild',summary:'بازسازی نقشهٔ شناسه‌های '+targetName+': اول مبدأ و مقصد مقایسه می‌شوند…'});
+  const report=await recon(target,profileId,(e:any)=>{try{onProgress?.(e)}catch{}});
+  let mapped=0;const samples:string[]=[];
+  for(const item of report.items)if(item.remoteId){
+    await setDestinationId(item.profileId,item.sourceKey,target,'default',item.remoteId);
+    await setRemoteId(item.profileId,item.sourceKey,target,item.remoteId);
+    mapped++;
+    if(samples.length<4)samples.push(clipText(item.title,50)+' → شناسه '+faN(item.remoteId)+' (تطبیق با '+({id:'شناسه',sku:'کد کالا',title:'عنوان'} as Record<string,string>)[item.matchedBy]+')');
+    if(mapped%50===0)p.emit({stage:'write',name:'rebuild',target,count:mapped,total:report.items.length,summary:'ذخیرهٔ نقشه: '+faN(mapped)+' شناسه نوشته شد'});
+  }
+  p.emit({stage:'report-ready',name:'report',status:'success',target,count:mapped,total:report.items.length,
+    summary:'نقشهٔ '+targetName+' بازسازی شد در '+faDuration(p.elapsed())+' · '+faN(mapped)+' شناسه ذخیره شد · '+faN(report.items.length-mapped)+' محصول هنوز جفت ندارد',
+    detail:samples});
+  return{ok:true,target,mapped,unmatched:report.items.length-mapped};
+}
 export async function retire(target:'woo'|'basalam',profileId:string,action:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>!x.active),preview=rows.map(x=>({profileId:x.profile_id,sourceKey:x.source_key,title:x.title,remoteId:target==='woo'?x.remote_woo_id:x.remote_basalam_id,missingSince:x.missing_since,action}));if(!apply||action==='report')return{ok:true,dryRun:true,count:preview.length,items:preview};let changed=0,failed:any[]=[];for(const item of preview){if(!item.remoteId)continue;try{if(target==='woo')await wooUpdate(item.remoteId,action==='trash'?{status:'trash'}:{status:action==='draft'?'draft':'private'});else await basalamUpdate(item.remoteId,{status:action==='trash'?'archived':action});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}
 export async function bulkEdit(target:'woo'|'basalam',input:any,apply=false){const rows=(await maintenanceRows(String(input.profileId||''))).filter(x=>x.active).filter(x=>!input.query||norm(x.title).includes(norm(input.query))).slice(0,Math.min(1000,Number(input.limit)||200)),items=rows.map(row=>{let title=String(row.title);if(input.prefix)title=String(input.prefix)+title;if(input.suffix)title+=String(input.suffix);let price=Number(row.price);if(Number(input.pricePercent))price=Math.round(price*(1+Number(input.pricePercent)/100));return{row,title,price,remoteId:target==='woo'?row.remote_woo_id:row.remote_basalam_id}});if(!apply)return{ok:true,dryRun:true,count:items.length,items:items.slice(0,100).map(x=>({title:x.row.title,newTitle:x.title,oldPrice:x.row.price,newPrice:x.price,remoteId:x.remoteId}))};let changed=0,failed:any[]=[];for(const item of items){if(!item.remoteId)continue;try{const payload:any={name:item.title};if(item.price)target==='woo'?payload.regular_price=String(item.price):payload.price=item.price;if(input.stock!==''&&input.stock!=null)target==='woo'?Object.assign(payload,{manage_stock:true,stock_quantity:Number(input.stock)}):payload.stock=Number(input.stock);if(target==='woo')await wooUpdate(item.remoteId,payload);else await basalamUpdate(item.remoteId,payload);changed++}catch(error){failed.push({title:item.row.title,error:msg(error)})}}return{ok:failed.length===0,dryRun:false,changed,failed}}
 export async function photoFix(profileId:string,apply=false){const rows=(await maintenanceRows(profileId)).filter(x=>x.active&&x.remote_woo_id&&x.data?.image),remote=await remoteProducts('woo'),byId=new Map(remote.map(x=>[x.id,x])),items=rows.filter(x=>!(byId.get(Number(x.remote_woo_id))?.images||[]).length).map(x=>({id:Number(x.remote_woo_id),title:x.title,image:x.data.image}));if(!apply)return{ok:true,dryRun:true,count:items.length,items:items.slice(0,200)};let changed=0,failed:any[]=[];for(const item of items)try{await wooUpdate(item.id,{images:[{src:item.image}]});changed++}catch(error){failed.push({title:item.title,error:msg(error)})}return{ok:failed.length===0,dryRun:false,changed,failed}}
@@ -738,21 +847,30 @@ export async function destinationDelete(target:'woo'|'basalam',id:number,force=f
  */
 export async function ledgerMissing(profileId='',apply=false,target='both',onProgress?:(e:any)=>void){
  const step=(event:any)=>{try{onProgress?.(event)}catch{}};
+ const p=createReconProgress(onProgress);
+ p.emit({stage:'start',name:'missing',summary:(apply?'شروع رسیدگی به محصولات حذف‌شده از مبدأ':'شروع بررسی محصولات حذف‌شده از مبدأ (هیچ چیزی در مقصد تغییر نمی‌کند)')});
  const local=await maintenanceRows(''),settings=await getState<any>('settings',{}),mode=String(settings.retire?.mode||'report'),items:any[]=[],failed:any[]=[];let changed=0;
+ const MODE_LABELS:Record<string,string>={report:'فقط گزارش',draft:'پیش‌نویس کردن',delete:'حذف',trash:'انتقال به زباله‌دان',outofstock:'ناموجود کردن'};
+ const modeLabel=MODE_LABELS[mode]||mode;
+ p.emit({stage:'local-loaded',name:'local',count:local.length,summary:'محصولات محلی خوانده شد: '+faN(local.length)+' · شیوهٔ رسیدگی: '+modeLabel});
  const manifests=new Map<string,any>();for(const row of local)if(!manifests.has(row.profile_id))manifests.set(row.profile_id,await getState<any>('source_scan:'+row.profile_id,null));
  const chosen=(await reconAccounts()).filter(a=>target==='both'||a.target===target);
- step({type:'progress',stage:'accounts-listed',name:'accounts',total:chosen.length,summary:chosen.map(a=>a.name).join('، ')});
+ p.emit({stage:'accounts-listed',name:'accounts',total:chosen.length,summary:'مقصدهای بررسی‌شونده: '+faN(chosen.length),detail:chosen.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
  for(const account of chosen){
-  step({type:'progress',stage:'account-start',name:'scan',account:account.name,count:items.length});
+  p.emit({stage:'account-start',name:'scan',account:account.name,target:account.target,count:items.length,total:local.length,
+    summary:'مقصد '+account.name+': بررسی دفتر حساب در برابر '+faN(local.length)+' محصول محلی…'});
   const scope=await destinationScope(account.target,account.accountKey);const meta=await destinationLedger.metadata(scope);
-  if(!meta||!Number.isFinite(Date.parse(meta.startedAt))||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS){failed.push({account:account.name,error:'دفتر حساب باید تازه‌سازی شود؛ حذف انجام نشد.'});continue}
+  if(!meta||!Number.isFinite(Date.parse(meta.startedAt))||Date.now()-Date.parse(meta.startedAt)>=LEDGER_TTL_MS){failed.push({account:account.name,error:'دفتر حساب باید تازه‌سازی شود؛ حذف انجام نشد.'});
+   p.emit({stage:'account-error',name:'scan',status:'error',account:account.name,target:account.target,
+     summary:account.name+': دفتر این مقصد کهنه است؛ برای جلوگیری از حذف اشتباه، این مقصد رد شد — اول «تازه‌سازی دفتر» را بزنید'});continue}
   for(const row of local){if(profileId&&row.profile_id!==profileId||(row.active!==false&&row.active!==0)||!manifests.get(row.profile_id)?.complete)continue;
    const mapped=row.maps?.find((m:any)=>m.target===account.target&&String(m.account_key)===account.accountKey)?.remote_id||(account.target==='woo'?row.remote_woo_id:null);if(!mapped)continue;
    const entry=await destinationLedger.find(scope,mapped);if(!entry||entry.deleted||entry.invalid||entry.profileId!==row.profile_id||entry.sourceKey!==row.source_key)continue;
    if(local.some(other=>other.active&&(other.maps?.some((m:any)=>m.target===account.target&&String(m.account_key)===account.accountKey&&String(m.remote_id)===String(mapped))||(account.target==='woo'&&String(other.remote_woo_id)===String(mapped)))))continue;
    if(['delete','trash'].includes(mode)&&['trash','4184'].includes(String(entry.remote.status)))continue;if(mode==='draft'&&['draft','3790'].includes(String(entry.remote.status)))continue;if(mode==='outofstock'&&Number(entry.remote.raw?.stock_quantity??entry.remote.raw?.stock??-1)===0)continue;
    const item={profileId:row.profile_id,sourceKey:row.source_key,title:row.title,target:account.target,accountKey:account.accountKey,remoteId:String(mapped),mode};items.push(item);
-   step({type:'progress',stage:'candidate',name:'candidate',account:account.name,count:items.length,summary:String(row.title||'')});
+   p.emit({stage:'candidate',name:'candidate',account:account.name,target:account.target,count:items.length,
+     summary:'نامزد '+faN(items.length)+': '+clipText(row.title,60)+' (شناسهٔ مقصد '+faN(String(mapped))+') — در مبدأ دیگر نیست'+(apply&&mode!=='report'?'':' · فقط گزارش')});
    if(!apply||mode==='report'||changed>=20)continue;
    try{
     const latest=await getState<any>('source_scan:'+row.profile_id,null),current=(await maintenanceRows(row.profile_id)).find((x:any)=>x.source_key===row.source_key);
@@ -764,10 +882,16 @@ export async function ledgerMissing(profileId='',apply=false,target='both',onPro
     else if(mode==='draft'){if(account.target==='woo')await wooUpdate(mapped,{status:'draft'});else await basalamUpdateShop(account.accountKey,mapped,{status:3790})}
     else continue;
     changed++;
-    step({type:'progress',stage:'applied',name:'applied',account:account.name,count:changed,total:20,summary:String(row.title||'')});
-   }catch(error){failed.push({...item,error:error instanceof Error?error.message:String(error)})}
+    p.emit({stage:'applied',name:'applied',status:'success',account:account.name,target:account.target,count:changed,total:20,
+      summary:(({delete:'حذف شد',trash:'به زباله‌دان رفت',draft:'پیش‌نویس شد',outofstock:'ناموجود شد'} as Record<string,string>)[mode]||modeLabel)+': '+clipText(row.title,60)+' (شناسهٔ مقصد '+faN(String(mapped))+')'});
+   }catch(error){const message=error instanceof Error?error.message:String(error);failed.push({...item,error:message});
+    p.emit({stage:'apply-error',name:'applied',status:'error',account:account.name,target:account.target,
+      summary:'ناموفق: '+clipText(row.title,60)+' — '+clipText(message,90)});}
   }
  }
+ p.emit({stage:'report-ready',name:'report',status:failed.length?'error':'success',count:changed,total:items.length,
+   summary:'پایان در '+faDuration(p.elapsed())+' · نامزد '+faN(items.length)+' · انجام‌شده '+faN(changed)+' · باقی‌مانده '+faN(Math.max(0,items.length-changed))+' · ناموفق '+faN(failed.length)+(mode==='report'?' · شیوه روی «فقط گزارش» است، پس چیزی در مقصد تغییر نکرد':''),
+   detail:items.slice(0,4).map((i:any)=>clipText(i.title,55)+' — '+(i.target==='woo'?'ووکامرس':'باسلام')+' · شناسه '+faN(i.remoteId))});
  return {ok:!failed.length,dryRun:!apply||mode==='report',mode,planned:items.length,changed,remaining:Math.max(0,items.length-changed),items,failed,limit:20};
 }
 

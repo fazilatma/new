@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
-import {transform} from 'esbuild';
+import {build,transform} from 'esbuild';
+import {mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 const read=p=>readFile(new URL('../'+p,import.meta.url),'utf8');
 async function compile(source,names,io={}){const js=(await transform(source.replace(/^import .*;\s*$/gm,'').replaceAll('export ',''),{loader:'ts'})).code;return new Function(...Object.keys(io),js+';return {'+names+'};')(...Object.values(io))}
+const temporary=await mkdtemp(join(tmpdir(),'scraper4-ledger-inventory-'));
+await build({entryPoints:[new URL('../worker-src/recon-progress.ts',import.meta.url).pathname],outfile:join(temporary,'progress.mjs'),bundle:true,format:'esm',platform:'node',logLevel:'silent'});
+const progress=await import(pathToFileURL(join(temporary,'progress.mjs')));
+/** 1.336.0 — maintenance operations report every step through the shared live-progress module. */
+const progressIo={createReconProgress:progress.createReconProgress,describeLedgerEvent:progress.describeLedgerEvent,actionLine:progress.actionLine,faPrice:progress.faPrice,faDuration:progress.faDuration,faN:progress.fa,clipText:progress.clip,bucketTally:progress.bucketTally,tallySummary:progress.tallySummary,sampleLines:progress.sampleLines};
 const visibility=await compile(await read('worker-src/ledger-inventory.ts'),'customerVisible');
 const details=await compile(await read('worker-src/job-details.ts'),'extractionDetails');
 test('customer-visible policy excludes inactive and hidden but not visible zero-stock products',()=>{
@@ -17,18 +26,18 @@ for(const runtime of ['worker','render']){
  const source=await read(runtime+'-src/maintenance.ts');
  test(runtime+': scan validates all endpoint rows before visibility filtering and requests active products',async()=>{
   let bad=false,duplicate=false;const a=source.indexOf('async function scanLedgerAccount('),b=source.indexOf('\nasync function remoteForAccount',a);
-  const {scanLedgerAccount}=await compile(source.slice(a,b),'scanLedgerAccount',{...visibility,destinationCatalog:async(target,query)=>{assert.equal(query.status,target==='woo'?'publish':'active');return {complete:true,total:bad?3:2,totalPages:1,products:[{id:1,status:target==='woo'?'publish':'2976',priceRaw:100,raw:{}},{id:duplicate?1:2,status:target==='woo'?'publish':'3790',raw:{catalog_visibility:'hidden'}}]}}});
+  const {scanLedgerAccount}=await compile(source.slice(a,b),'scanLedgerAccount',{...visibility,...progressIo,destinationCatalog:async(target,query)=>{assert.equal(query.status,target==='woo'?'publish':'active');return {complete:true,total:bad?3:2,totalPages:1,products:[{id:1,status:target==='woo'?'publish':'2976',priceRaw:100,raw:{}},{id:duplicate?1:2,status:target==='woo'?'publish':'3790',raw:{catalog_visibility:'hidden'}}]}}});
   for(const target of ['woo','basalam'])assert.equal((await scanLedgerAccount({target,accountKey:'1'})).length,1);
   bad=true;await assert.rejects(scanLedgerAccount({target:'woo'}),/تعداد/);bad=false;duplicate=true;await assert.rejects(scanLedgerAccount({target:'woo'}),/تکراری/);
  });
  test(runtime+': full-operation duration persists, counts cached accounts and reports failures',async()=>{
   const a=source.indexOf('export async function refreshDestinationLedger('),b=source.indexOf('\nexport async function destinationLedgerStatus',a);let clock=0,saved,fail=false;const generations={a:0,b:0};class Clock extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
-  const {refreshDestinationLedger}=await compile(source.slice(a,b),'refreshDestinationLedger',{Date:Clock,reconAccounts:async()=>[{target:'woo',accountKey:'a'},{target:'basalam',accountKey:'b'}],destinationScope:async(_t,k)=>k,destinationLedger:{metadata:async k=>({generation:generations[k]})},remoteForAccount:async(account,force)=>{clock+=60000;if(fail&&account.accountKey==='b')throw Error('timeout');if(force)generations[account.accountKey]++},setState:async(k,r)=>{saved=r}});
+  const {refreshDestinationLedger}=await compile(source.slice(a,b),'refreshDestinationLedger',{...progressIo,Date:Clock,reconAccounts:async()=>[{target:'woo',accountKey:'a'},{target:'basalam',accountKey:'b'}],destinationScope:async(_t,k)=>k,destinationLedger:{metadata:async k=>({generation:generations[k]})},remoteForAccount:async(account,force)=>{clock+=60000;if(fail&&account.accountKey==='b')throw Error('timeout');if(force)generations[account.accountKey]++},setState:async(k,r)=>{saved=r}});
   const full=await refreshDestinationLedger(true);assert.equal(full.durationMinutes,2);assert.equal(full.scannedAccounts,2);assert.equal(saved,full);
   const cached=await refreshDestinationLedger(false);assert.equal(cached.cachedAccounts,2);fail=true;const partial=await refreshDestinationLedger(true);assert.equal(partial.ok,false);assert.equal(partial.scannedAccounts,1);assert.equal(partial.items[1].error,'timeout');
  });
  test(runtime+': duplicate preview reads shared ledger; apply refreshes it and failed refresh never deletes',async()=>{
-  const a=source.indexOf('export async function destinationDuplicates('),b=source.indexOf('\n}',a)+2;let forced=[],failed=false,deletes=0;const {destinationDuplicates}=await compile(source.slice(a,b),'destinationDuplicates',{reconAccounts:async()=>[{target:'woo',accountKey:'default',name:'Woo'}],getState:async()=>({}),remoteForAccount:async(_a,force)=>{forced.push(force);if(failed)throw Error('scan failed');return[{id:1},{id:2}]},planDuplicateDeletions:rows=>[{target:'woo',remoteId:rows[1].id,accountKey:'default'}],destinationDelete:async()=>{deletes++;return{}}});
+  const a=source.indexOf('export async function destinationDuplicates('),b=source.indexOf('\n}',a)+2;let forced=[],failed=false,deletes=0;const {destinationDuplicates}=await compile(source.slice(a,b),'destinationDuplicates',{...progressIo,reconAccounts:async()=>[{target:'woo',accountKey:'default',name:'Woo'}],getState:async()=>({}),remoteForAccount:async(_a,force)=>{forced.push(force);if(failed)throw Error('scan failed');return[{id:1},{id:2}]},planDuplicateDeletions:rows=>[{target:'woo',remoteId:rows[1].id,accountKey:'default'}],destinationDelete:async()=>{deletes++;return{}}});
   const preview=await destinationDuplicates();assert.equal(preview.source,'ledger');assert.equal(preview.planned,1);assert.equal(deletes,0);await destinationDuplicates(true);assert.deepEqual(forced,[false,true]);assert.equal(deletes,1);failed=true;assert.equal((await destinationDuplicates(true)).ok,false);assert.equal(deletes,1);
  });
 }
