@@ -1,0 +1,14 @@
+{
+  "name": "proxy-browser",
+  "version": "1.0.0",
+  "description": "Two-tab Cloudflare Worker: forward proxy server + full-screen in-browser browser",
+  "main": "src/worker.js",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev src/worker.js",
+    "deploy": "wrangler deploy src/worker.js"
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}

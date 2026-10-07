@@ -1,0 +1,10 @@
+name = "proxy-browser"
+main = "src/worker.js"
+compatibility_date = "2024-09-25"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Optional access password – leave empty for public use
+ACCESS_PASSWORD = ""
+# Optional custom User-Agent for upstream requests
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
