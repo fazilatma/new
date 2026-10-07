@@ -43,6 +43,7 @@ export type RunEvent = {
   profileId?: string;
   sourceKey?: string;
   accountKey?: string;
+  accounts?: Array<{ target: string; accountKey: string; name: string }>;
   price?: number;
 };
 
@@ -101,6 +102,9 @@ export function compactEvent(raw: any, at: string, rowLimit = RUN_ROW_CHUNK): Ru
   if (raw?.sourceKey) event.sourceKey = String(raw.sourceKey).slice(0, 120);
   if (raw?.accountKey) event.accountKey = String(raw.accountKey).slice(0, 80);
   if (Number.isFinite(Number(raw?.price))) event.price = Number(raw.price);
+  // 1.341.0 — the destination list, so a polled run also draws every column up front.
+  if (Array.isArray(raw?.accounts) && raw.accounts.length) event.accounts = raw.accounts.slice(0, 40)
+    .map((item: any) => ({ target: String(item?.target || ''), accountKey: String(item?.accountKey || '').slice(0, 80), name: String(item?.name || '').slice(0, 80) }));
   // 1.336.0 — a background run must carry the same evidence the streaming path shows:
   // which phase, which page, how long it has been running, and the example lines.
   if (raw?.stage) event.stage = String(raw.stage).slice(0, 60);

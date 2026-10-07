@@ -40,6 +40,8 @@ export type ReconProgressEvent = {
   accountKey?: string;
   /** The price this step wrote (or will write) at the destination. */
   price?: number | null;
+  /** 1.341.0 — every destination column, known before the first row has been compared. */
+  accounts?: Array<{ target: string; accountKey: string; name: string }>;
   type: 'progress';
 };
 
@@ -108,6 +110,14 @@ export function createReconProgress(onProgress?: (e: any) => void, now: () => nu
     if (event.sourceKey) out.sourceKey = String(event.sourceKey).slice(0, 120);
     if (event.accountKey) out.accountKey = String(event.accountKey).slice(0, 80);
     if (Number.isFinite(Number(event.price))) out.price = Number(event.price);
+    // 1.341.0 — the destination list travels with the event, so the table can draw every column
+    // (WooCommerce and each Basalam stall) before a single row has been compared.
+    if (Array.isArray(event.accounts)) {
+      const accounts = event.accounts.slice(0, 40)
+        .map((item: any) => ({ target: String(item?.target || ''), accountKey: String(item?.accountKey || '').slice(0, 80), name: clip(item?.name || '', 80) }))
+        .filter(item => item.target || item.accountKey);
+      if (accounts.length) out.accounts = accounts;
+    }
     if (event.tally && typeof event.tally === 'object') {
       const tally: Record<string, number> = {};
       for (const [key, value] of Object.entries(event.tally)) if (Number.isFinite(Number(value))) tally[String(key).slice(0, 20)] = Number(value);

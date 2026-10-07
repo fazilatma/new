@@ -46,29 +46,14 @@ const LEDGER_TTL_MS=LEDGER_TTL_MS_DEFAULT;
 const LEDGER_MAX_AGE_HOURS=LEDGER_MAX_AGE_HOURS_DEFAULT;
 type LedgerProgressEvent={type:string;account?:string;page?:number;totalPages?:number;fetched?:number;duplicate?:number;incomplete?:boolean;error?:string;attempt?:number;[k:string]:any};
 function sleep(ms:number){return new Promise<void>(r=>setTimeout(r,ms))}
+const LEDGER_PAGE_PARALLEL=4;
+// ۱.۳۴۱.۰ — صفحه‌های ۱۰۰تایی دیگر یکی‌یکی خوانده نمی‌شوند: صفحهٔ اول تعداد کل صفحه‌ها را می‌گوید و
+// بقیه چهارتا‌چهارتا هم‌زمان درخواست می‌شوند. ادغام همچنان به‌ترتیب صفحه انجام می‌شود تا حذف
+// تکراری‌ها و شمارش‌ها دقیقاً مثل قبل و قطعی بماند.
 async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgressEvent)=>void):Promise<ReconRemote[]>{
  const all:any[]=[],seen=new Set<string>();
- let totalPages=1,duplicate=0,incomplete=false;
- for(let page=1;page<=LEDGER_MAX_PAGES;page++){
-  let result:any,lastError:any;
-  for(let attempt=1;attempt<=LEDGER_RETRY;attempt++){
-   try{
-    onProgress?.({type:'ledger-page-start',account:account.name,page,totalPages,attempt});
-    result=await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'all',shopId:account.accountKey});
-    lastError=null;
-    break;
-   }catch(error){
-    lastError=error;
-    if(attempt<LEDGER_RETRY){
-     const delay=500*attempt+Math.random()*200;
-     onProgress?.({type:'ledger-page-retry',account:account.name,page,attempt,error:error instanceof Error?error.message:String(error)});
-     await sleep(delay);
-    }
-   }
-  }
-  if(!result){
-   throw lastError||Error(`فهرست مقصد برای ${account.name} صفحه ${page} پس از ${LEDGER_RETRY} تلاش ناموفق بود.`);
-  }
+ let totalPages=1,duplicate=0,incomplete=false,lastTotal:number|null=null;
+ const take=(page:number,result:any)=>{
   if(result.complete===false){
    incomplete=true;
    onProgress?.({type:'ledger-page-incomplete',account:account.name,page});
@@ -86,16 +71,37 @@ async function scanLedgerAccount(account:ReconAccount,onProgress?:(e:LedgerProgr
    all.push({id:x.id,name:x.name,sku:x.sku,price:x.priceRaw,status:x.status,shopId:account.accountKey,shopName:account.name,raw:x.raw});
   }
   totalPages=Math.max(1,Number(result.totalPages)||totalPages);
+  if(Number.isFinite(result.total))lastTotal=Number(result.total);
   onProgress?.({type:'ledger-page-done',account:account.name,page,totalPages,fetched:all.length,duplicate,incomplete});
-  if(page>=totalPages){
-   if(Number.isFinite(result.total)&&Math.abs(all.length-Number(result.total))>Math.max(5,Math.floor(Number(result.total)*0.02))){
-    onProgress?.({type:'ledger-total-mismatch',account:account.name,expected:result.total,actual:all.length});
+ };
+ take(1,await fetchLedgerPage(account,1,totalPages,onProgress));
+ for(let next=2;next<=Math.min(totalPages,LEDGER_MAX_PAGES);){
+  const last=Math.min(next+LEDGER_PAGE_PARALLEL-1,Math.min(totalPages,LEDGER_MAX_PAGES));
+  const pages:number[]=[];
+  for(let page=next;page<=last;page++)pages.push(page);
+  const results=await Promise.all(pages.map(page=>fetchLedgerPage(account,page,totalPages,onProgress)));
+  for(let i=0;i<pages.length;i++)take(pages[i],results[i]);
+  next=last+1;
+ }
+ if(totalPages>LEDGER_MAX_PAGES)onProgress?.({type:'ledger-max-pages',account:account.name,totalPages:LEDGER_MAX_PAGES,fetched:all.length});
+ else if(lastTotal!==null&&Math.abs(all.length-lastTotal)>Math.max(5,Math.floor(lastTotal*0.02)))onProgress?.({type:'ledger-total-mismatch',account:account.name,expected:lastTotal,actual:all.length});
+ return all;
+}
+async function fetchLedgerPage(account:ReconAccount,page:number,totalPages:number,onProgress?:(e:LedgerProgressEvent)=>void):Promise<any>{
+ let lastError:any;
+ for(let attempt=1;attempt<=LEDGER_RETRY;attempt++){
+  try{
+   onProgress?.({type:'ledger-page-start',account:account.name,page,totalPages,attempt});
+   return await destinationCatalog(account.target,{page,perPage:100,status:account.target==='woo'?'publish':'all',shopId:account.accountKey});
+  }catch(error){
+   lastError=error;
+   if(attempt<LEDGER_RETRY){
+    onProgress?.({type:'ledger-page-retry',account:account.name,page,attempt,error:error instanceof Error?error.message:String(error)});
+    await sleep(500*attempt+Math.random()*200);
    }
-   return all;
   }
  }
- onProgress?.({type:'ledger-max-pages',account:account.name,totalPages:LEDGER_MAX_PAGES,fetched:all.length});
- return all;
+ throw lastError||Error(`فهرست مقصد برای ${account.name} صفحه ${page} پس از ${LEDGER_RETRY} تلاش ناموفق بود.`);
 }
 async function remoteForAccount(account:ReconAccount,force=false,onProgress?:(e:LedgerProgressEvent)=>void,ttlMs?:number):Promise<ReconRemote[]>{
  const scope=await destinationScope(account.target,account.accountKey);
@@ -195,12 +201,19 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
   p.emit({stage:'accounts-listed',name:'accounts',total:accounts.length,
     summary:'مقصدهای فعال: '+faN(accounts.length)+' · هر مقصد جداگانه خوانده و با همین '+faN(eligible.length)+' محصول محلی مقایسه می‌شود',
     detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام')+' (کلید '+clipText(a.accountKey,18)+')')});
+  // ۱.۳۴۱.۰ — همهٔ مقصدها هم‌زمان خوانده می‌شوند: ووکامرس و هر غرفهٔ باسلام با هم شروع می‌کنند و
+  // هرکدام زودتر پاسخ داد، همان لحظه مقایسه می‌شود و سطرهایش به جدول زنده می‌روند. ترتیب سطرهای
+  // گزارش نهایی همان ترتیب مقصدهاست تا شمارش‌ها قطعی بماند.
   const rows: UnifiedReconRow[]=[]; const failures: Array<{account:string;error:string}>=[];
-  let totalFetched=0,runningTally:Record<string,number>={};
-  for(let idx=0;idx<accounts.length;idx++){
-    const account=accounts[idx];
-    p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,count:idx+1,total:accounts.length,tally:runningTally,
-      summary:'مقصد '+faN(idx+1)+' از '+faN(accounts.length)+': '+account.name+' ('+(account.target==='woo'?'ووکامرس':'باسلام')+') — شروع خواندن محصولات قابل فروش'});
+  let totalFetched=0,runningTally:Record<string,number>={},streamed=0,finished=0;
+  const perAccount:UnifiedReconRow[][]=accounts.map(()=>[]);
+  p.emit({stage:'accounts-parallel',name:'accounts',count:accounts.length,total:accounts.length,
+    summary:'هر '+faN(accounts.length)+' مقصد هم‌زمان خوانده می‌شوند (نه یکی‌یکی) و هر مقصد صفحه‌های ۱۰۰تایی را '+faN(LEDGER_PAGE_PARALLEL)+'تا‌'+faN(LEDGER_PAGE_PARALLEL)+'تا موازی می‌گیرد · هر پاسخی زودتر برسد، همان لحظه در جدول می‌نشیند',
+    accounts:accounts.map(a=>({target:a.target,accountKey:a.accountKey,name:a.name})),
+    detail:accounts.map(a=>'هم‌زمان شروع شد: '+a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
+  await Promise.all(accounts.map(async(account,idx)=>{
+    p.emit({stage:'account-start',name:'account',account:account.name,target:account.target,accountKey:account.accountKey,count:idx+1,total:accounts.length,tally:runningTally,
+      summary:'مقصد '+faN(idx+1)+' از '+faN(accounts.length)+': '+account.name+' ('+(account.target==='woo'?'ووکامرس':'باسلام')+') — هم‌زمان با بقیهٔ مقصدها شروع شد'});
     try{
       const readStart=p.elapsed();let pagesSeen=0;
       const remote=await remoteForAccount(account,false,(e)=>{if(String(e?.type||'').startsWith('ledger-page'))pagesSeen=Math.max(pagesSeen,Number(e?.page)||0);p.ledger(account.name,e,account.target)});
@@ -225,9 +238,9 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
         // 1.338.0 — the compared rows themselves, so the panel's matrix fills while the run is
         // still going instead of appearing only at the end.
         onProgress?.({type:'partial',stage:'rows-chunk',account:account.name,target:account.target,
-          rows:liveRows(batch),rowsCount:Math.min(at+CHUNK,reconciled.length),total:reconciled.length,totalRows:rows.length+Math.min(at+CHUNK,reconciled.length)});
+          rows:liveRows(batch),rowsCount:Math.min(at+CHUNK,reconciled.length),total:reconciled.length,totalRows:streamed+Math.min(at+CHUNK,reconciled.length)});
       }
-      rows.push(...reconciled);
+      perAccount[idx]=reconciled;streamed+=reconciled.length;
       const tally=bucketTally(reconciled);
       const compareMs=p.elapsed()-compareStart;
       // One event per kind of difference, each with its own arithmetic.
@@ -243,26 +256,29 @@ export async function unifiedReconLive(profileId='',onProgress?:(e:any)=>void){
       if(tally.matched)p.emit({stage:'bucket-matched',name:'bucket',status:'success',account:account.name,target:account.target,count:tally.matched,total:reconciled.length,tally:runningTally,
         summary:account.name+' · هماهنگ: '+faN(tally.matched)+' محصول دقیقاً همان قیمتی را دارند که باید (نمونه‌ها در پایین، برای اطمینان از درستی مقایسه)',
         detail:matchedProofLines(reconciled,4)});
-      p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,count:reconciled.length,total:reconciled.length,tally:runningTally,
-        summary:account.name+' تمام شد · خواندن '+faDuration(readMs)+' + مقایسه '+faDuration(compareMs)+' · '+tallySummary(tally),
+      finished++;
+      p.emit({stage:'account-done',name:'account',status:'success',account:account.name,target:account.target,accountKey:account.accountKey,count:reconciled.length,total:reconciled.length,tally:runningTally,
+        summary:account.name+' تمام شد ('+faN(finished)+' از '+faN(accounts.length)+' مقصد) · خواندن '+faDuration(readMs)+' + مقایسه '+faDuration(compareMs)+' · '+tallySummary(tally),
         detail:sampleLines(reconciled,4)});
       if(reconciled.length){
         // سطرها همین حالا دسته‌دسته (rows-chunk) رفته‌اند؛ این رویداد فقط شمارش پایانی مقصد است.
-        onProgress?.({type:'partial',stage:'rows-partial',account:account.name,rowsCount:reconciled.length,totalRows:rows.length});
+        onProgress?.({type:'partial',stage:'rows-partial',account:account.name,target:account.target,rowsCount:reconciled.length,totalRows:streamed});
       }
     }catch(error){
       const message=msg(error);
       failures.push({account:account.name,error:message});
       const fallback=unreachableAccountRows(local,account,profileNames,suffixFormats,message);
-      rows.push(...fallback);
+      perAccount[idx]=fallback;streamed+=fallback.length;finished++;
       runningTally=mergeTally(runningTally,bucketTally(fallback));
       onProgress?.({type:'partial',stage:'rows-chunk',account:account.name,target:account.target,
-        rows:liveRows(fallback),rowsCount:fallback.length,total:fallback.length,totalRows:rows.length});
-      p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,count:fallback.length,total:accounts.length,tally:runningTally,
+        rows:liveRows(fallback),rowsCount:fallback.length,total:fallback.length,totalRows:streamed});
+      p.emit({stage:'account-error',name:'account',status:'error',account:account.name,target:account.target,accountKey:account.accountKey,count:fallback.length,total:accounts.length,tally:runningTally,
         summary:account.name+' پاسخ نداد: '+clipText(message,90)+' — '+faN(fallback.length)+' محصول این مقصد «پاسخ نداد» علامت خوردند و گزارش «هماهنگ» اعلام نمی‌شود',
         detail:['علت خام: '+clipText(message,120),'راه‌حل: «تازه‌سازی دفتر حساب» یا بررسی اتصال این مقصد در بخش اتصال‌ها']});
     }
-  }
+  }));
+  for(const list of perAccount)rows.push(...list);
+
   p.emit({stage:'plan-building',name:'plan',count:rows.length,tally:runningTally,
     summary:'ساخت برنامهٔ اقدام از '+faN(rows.length)+' سطر مقایسه‌شده…'});
   const plan=reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds});

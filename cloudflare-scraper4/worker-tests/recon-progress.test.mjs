@@ -311,7 +311,7 @@ async function previewRun(runtime, options = {}) {
   for (let i = 1; i <= 60; i++) local.push({ profile_id: i % 3 ? 'p1' : 'p2', source_key: 's' + i, title: 'کفش مدل ' + i + ' (کد ' + i + ')', active: 1, price: 100000 + i * 1000, data: {}, maps: [] });
   local.push({ profile_id: 'p1', source_key: 'nc', title: 'محصول بدون پسوند کد', active: 1, price: 5000, data: {}, maps: [] });
   const io = {
-    ...progressIo, ...core, ...dedup, PLAN_NOTE: 'فقط گزارش', msg: error => (error instanceof Error ? error.message : String(error)),
+    ...progressIo, ...core, ...dedup, PLAN_NOTE: 'فقط گزارش', LEDGER_PAGE_PARALLEL: 4, msg: error => (error instanceof Error ? error.message : String(error)),
     listProfiles: async () => [{ id: 'p1', name: 'برف باکس' }, { id: 'p2', name: 'عطر سرا' }, { id: 'p3', name: 'پروفایل خالی' }],
     maintenanceRows: async () => local,
     getState: async () => ({}), setState: async () => {},
@@ -423,15 +423,7 @@ test('a polled background run keeps the running counters too', () => {
 });
 
 test('the live panel fills its counters, its destination table and its product ticker', async () => {
-  const { parseHTML } = await import('linkedom');
-  const dash = await read('worker-src/dashboard.ts');
-  const block = dash.slice(dash.indexOf('const RECON_STAGE_LABELS='), dash.indexOf('async function runReconUnifiedLive('));
-  const { window } = parseHTML('<html><body><div id="resultModal"><div class="result-body"></div></div></body></html>');
-  const esc = v => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-  const { openReconLiveProgress } = new Function('esc', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval',
-    'let activeReconLive=null;' + block + ';return {openReconLiveProgress};')(
-    esc, progress.fa, id => window.document.getElementById(id),
-    (_t, body) => { window.document.querySelector('.result-body').innerHTML = body; }, () => {}, window.document, () => 0, () => {});
+  const { openReconLiveProgress, window } = await panelHarness();
   const live = openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'در حال شروع…');
   const { steps } = await previewRun('worker');
   for (const event of steps) live.observe(event);
@@ -475,7 +467,7 @@ async function panelHarness(options = {}) {
     options.api || (async () => { throw Error('api not stubbed'); }));
   return { ...built, window, notices, titles, doc: window.document };
 }
-const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .sync-table tbody tr')];
+const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .sync-table tbody tr[data-row]')];
 
 for (const runtime of ['worker', 'render']) {
   test(runtime + ': the compared rows themselves are streamed while the comparison runs', async () => {
@@ -798,4 +790,89 @@ test('the window puts the table first and folds the engineering away', async () 
   assert.ok(panelStart > 0 && fold > panelStart, 'the table is above the technical fold');
   for (const hook of ['data-recon-phases', 'data-recon-dest-table', 'data-recon-ticker', 'data-diag-stages', 'data-diag-activity'])
     assert.ok(dash.indexOf(hook, panelStart) > fold, hook + ' now lives inside the fold, not in the operator face');
+});
+
+// ۱.۳۴۱.۰ — «ریکوئست‌ها هم‌زمان و موازی برای ووکامرس و هر غرفهٔ باسلام فرستاده شوند، جدول به‌محض
+// رسیدن پاسخ پر شود، و همهٔ ستون‌ها از همان اول دیده شوند.»
+
+test('every destination is read at the same time, not one after the other', async () => {
+  for (const runtime of ['worker', 'render']) {
+    const source = await read(runtime + '-src/maintenance.ts');
+    assert.ok(source.includes('await Promise.all(accounts.map(async(account,idx)=>{'),
+      runtime + ': WooCommerce and every Basalam stall must start together');
+    assert.ok(!/for\(let idx=0;idx<accounts\.length;idx\+\+\)/.test(source), runtime + ': the old one-by-one loop is gone');
+    assert.ok(source.includes('for(const list of perAccount)rows.push(...list)'),
+      runtime + ': the report rows stay in destination order, so the numbers stay deterministic');
+    assert.ok(source.includes('const LEDGER_PAGE_PARALLEL=4'), runtime + ': the 100-item pages are fetched in parallel batches');
+    assert.ok(source.includes('const results=await Promise.all(pages.map(page=>fetchLedgerPage(account,page,totalPages,onProgress)))'),
+      runtime + ': …and merged in page order');
+    assert.ok(source.includes('perPage:100'), runtime + ': each request still asks for a 100-item page');
+  }
+});
+
+test('a slow destination no longer blocks a fast one: the fast rows arrive first', async () => {
+  const order = [];
+  const { report, events } = await previewRun('worker', { io: {
+    reconAccounts: async () => [
+      { target: 'basalam', accountKey: 'slow', name: 'غرفهٔ کند' },
+      { target: 'woo', accountKey: 'default', name: 'ووکامرس' }
+    ],
+    remoteForAccount: async account => {
+      order.push('start:' + account.name);
+      // The slow stall answers after the fast shop, even though it was listed first.
+      await new Promise(resolve => setTimeout(resolve, account.accountKey === 'slow' ? 40 : 1));
+      order.push('done:' + account.name);
+      return [];
+    }
+  } });
+  assert.deepEqual(order.slice(0, 2), ['start:غرفهٔ کند', 'start:ووکامرس'], 'both requests leave before either answer arrives');
+  assert.deepEqual(order.slice(2), ['done:ووکامرس', 'done:غرفهٔ کند'], 'and the fast one is processed as soon as it lands');
+  const fetched = events.filter(event => event.stage === 'account-fetched').map(event => event.account);
+  assert.deepEqual(fetched, ['ووکامرس', 'غرفهٔ کند'], 'the live window hears about the fast destination first');
+  assert.equal(report.accounts, 2);
+  const parallel = events.find(event => event.stage === 'accounts-parallel');
+  assert.ok(parallel, 'the window is told, in words, that the destinations run together');
+  assert.deepEqual(parallel.accounts.map(account => account.name), ['غرفهٔ کند', 'ووکامرس'], 'and it carries the column list');
+  assert.match(parallel.summary, /هم‌زمان/);
+});
+
+test('the rows of the first destination to answer are streamed before the slow one finishes', async () => {
+  const { events: seen } = await previewRun('worker', { io: {
+    reconAccounts: async () => [
+      { target: 'basalam', accountKey: 'slow', name: 'غرفهٔ کند' },
+      { target: 'woo', accountKey: 'default', name: 'ووکامرس' }
+    ],
+    remoteForAccount: async (account, _force, onProgress) => {
+      await new Promise(resolve => setTimeout(resolve, account.accountKey === 'slow' ? 40 : 1));
+      onProgress?.({ type: 'ledger-page-done', page: 1, totalPages: 1, fetched: 1 });
+      return [{ id: 1, name: 'کفش مدل 1 (کد 1)', price: 101000, sku: '', status: 'publish' }];
+    }
+  } });
+  const firstRows = seen.find(event => event.stage === 'rows-chunk');
+  assert.ok(firstRows, 'rows were streamed while the run was still going');
+  assert.equal(firstRows.account, 'ووکامرس', 'the first table rows belong to the destination that answered first');
+});
+
+test('all the columns are on the table before a single row has been compared', async () => {
+  const panel = await panelHarness();
+  const live = panel.openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'در حال شروع…');
+  live.observe({ type: 'progress', stage: 'accounts-parallel', name: 'accounts', summary: 'هم‌زمان', count: 3, total: 3,
+    accounts: [{ target: 'woo', accountKey: 'default', name: 'ووکامرس' },
+      { target: 'basalam', accountKey: '735703', name: 'غرفهٔ برف باکس' },
+      { target: 'basalam', accountKey: '900', name: 'غرفهٔ دوم' }] });
+  const head = () => [...panel.doc.querySelectorAll('[data-recon-matrix] thead th')].map(th => th.textContent);
+  assert.deepEqual(head(), ['محصول', 'قیمت پایه در مبدأ', '🛒 ووکامرس', '🏪 غرفهٔ برف باکس', '🏪 غرفهٔ دوم'],
+    'every destination has its column from the first second, even before any answer');
+  assert.match(panel.doc.querySelector('[data-recon-matrix]').textContent, /همهٔ مقصدها هم‌زمان در حال خوانده شدن‌اند/);
+  assert.match(panel.doc.querySelector('[data-recon-matrix-note]').textContent, /ستون‌ها آماده‌اند: ۳ مقصد/);
+  assert.equal([...panel.doc.querySelectorAll('[data-recon-dest-rows] tr')].length, 3, 'the technical destination table is seeded too');
+
+  // The first stall answers; its cells fill, the other stalls stay «waiting», not «missing».
+  live.observe({ type: 'partial', stage: 'rows-chunk', account: 'ووکامرس', target: 'woo', rowsCount: 1, rows: [
+    { bucket: 'priceDiff', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', profileId: 'p1', sourceKey: 's1', title: 'کیف', sourcePrice: 200000, expectedPrice: 240000, remotePrice: 200000 }] });
+  assert.deepEqual(head(), ['محصول', 'قیمت پایه در مبدأ', '🛒 ووکامرس', '🏪 غرفهٔ برف باکس', '🏪 غرفهٔ دوم'], 'the columns do not move when rows arrive');
+  const row = panel.doc.querySelector('[data-row="p1|s1"]');
+  assert.equal(row.querySelector('[data-cell$="woo:default"]').getAttribute('data-state'), 'priceDiff');
+  assert.equal(row.querySelector('[data-cell$="basalam:735703"]').getAttribute('data-state'), 'pending', 'a destination that has not answered yet says so');
+  assert.match(row.querySelector('[data-cell$="basalam:900"]').textContent, /در انتظار پاسخ این مقصد/);
 });
