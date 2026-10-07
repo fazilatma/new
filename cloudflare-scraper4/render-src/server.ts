@@ -47,6 +47,7 @@ import { destinationRows } from '../worker-src/basalam-accounts.js';
 import { runHostDiagnosis, type ProbeAnswer } from '../worker-src/host-diagnosis.js';
 import { photoCandidates } from '../worker-src/photo-loop.js';
 import { applyHostRepair } from '../worker-src/host-repair.js';
+import { readMaintenanceRun, runAdvice, runSlice, startMaintenanceRun } from '../worker-src/maintenance-runs.js';
 import { DASHBOARD, DASHBOARD_JS, setupPage } from './dashboard.js';
 import { fontFaceCss, fontFamilyOf, fontFile, fontStylesheet } from './fonts.js';
 import { githubApiFetch, githubApiPut } from './github-client.js';
@@ -66,7 +67,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.333.0+'; } catch { return process.env.npm_package_version || '1.333.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.334.0+'; } catch { return process.env.npm_package_version || '1.334.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -928,7 +929,7 @@ const hostDiagnosisNow = async (c: any) => {
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
   const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.333.0+',
+    version: process.env.npm_package_version || '1.334.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
@@ -1006,6 +1007,32 @@ app.post('/api/maintenance/recon-unified/apply',async c=>{const b=await c.req.js
 app.post('/api/maintenance/duplicates',async c=>{const b=await c.req.json().catch(()=>({}))as any;return maintenanceResponse(c,()=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')))});
 app.post('/api/maintenance/recon-table/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await reconTableLive(target as 'woo'|'basalam',String(body.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});}return c.json(await reconTable(target as 'woo'|'basalam',String(body.profileId||'')))});
 app.post('/api/maintenance/recon-table/:target/live',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({}));return diagnosticStream(async observe=>{const report=await reconTableLive(target as 'woo'|'basalam',String(body.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});});
+// 1.334.0 — مغایرت‌گیری به‌صورت کار پس‌زمینه: شروع با یک درخواست کوتاه، پیگیری با نظرسنجی کوتاه.
+// هیچ پراکسی‌ای نمی‌تواند اتصالی را قطع کند که اصلاً باز نمی‌ماند. Twin of worker-src/app.ts.
+const maintenanceOps:Record<string,(body:any,observe:(e:any)=>void)=>Promise<any>>={
+  'recon-unified':(b,observe)=>unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e})),
+  'recon-unified-apply':b=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200),
+  'ledger-refresh':(b,observe)=>refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e})),
+  'ledger-missing':b=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'),
+  duplicates:b=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||'')),
+  'recon-table:woo':(b,observe)=>reconTableLive('woo',String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e})),
+  'recon-table:basalam':(b,observe)=>reconTableLive('basalam',String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon-table',status:'running',summary:e.account||e.stage||e.type||'',...e})),
+  'recon:woo':b=>recon('woo',String(b.profileId||'')),
+  'recon:basalam':b=>recon('basalam',String(b.profileId||'')),
+  'rebuild:woo':b=>rebuildMap('woo',String(b.profileId||'')),
+  'rebuild:basalam':b=>rebuildMap('basalam',String(b.profileId||''))
+};
+app.post('/api/maintenance/run',async c=>{
+  const body=await c.req.json().catch(()=>({}))as any,op=String(body.op||''),work=maintenanceOps[op];
+  if(!work)return c.json({ok:false,error:'عملیات ناشناخته: '+op},400);
+  const run=await startMaintenanceRun(op,observe=>work(body.body||{},observe),{getState,setState,background:(promise:Promise<unknown>)=>{try{c.executionCtx.waitUntil(promise)}catch{void promise}}});
+  return c.json({ok:true,run:runSlice(run,0)});
+});
+app.get('/api/maintenance/run/:id',async c=>{
+  const run=await readMaintenanceRun(c.req.param('id'),{getState,setState});
+  if(!run)return c.json({ok:false,error:'این اجرا پیدا نشد؛ ممکن است سرویس دوباره راه‌اندازی شده باشد.',advice:runAdvice(null,Date.now())},404);
+  return c.json({ok:run.status!=='failed',run:runSlice(run,Number(c.req.query('since'))||0),advice:runAdvice(run,Date.now())});
+});
 app.post('/api/maintenance/rebuild/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json().catch(()=>({})) as any;return c.json(await rebuildMap(target as any,String(body.profileId||'')))});
 app.post('/api/maintenance/retire/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any,apply=body.confirm==='APPLY';return c.json(await retire(target as any,String(body.profileId||''),String(body.action||'report'),apply))});
 app.post('/api/maintenance/bulk/:target',async c=>{const target=c.req.param('target');if(!['woo','basalam'].includes(target))return c.json({ok:false,error:'Invalid target'},400);const body=await c.req.json() as any;return c.json(await bulkEdit(target as any,body,body.confirm==='APPLY'))});

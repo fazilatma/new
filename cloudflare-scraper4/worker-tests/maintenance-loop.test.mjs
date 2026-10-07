@@ -13,14 +13,14 @@ const read = file => readFile(join(root, file), 'utf8');
 const dashboard = await read('worker-src/dashboard.ts');
 
 const start = dashboard.indexOf('const MAINT_SHAPES=[');
-const end = dashboard.indexOf('// اجرای واقعی یک شکل');
+const end = dashboard.indexOf('// شروع کار روی سرور و بعد فقط پرسیدن حالش');
 assert.ok(start > 0 && end > start, 'the maintenance loop must stay sliceable from the panel');
 const js = (await transform(dashboard.slice(start, end), { loader: 'ts' })).code;
 
 function panel(stored = {}) {
   const store = new Map(Object.entries(stored));
   const localStorage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => void store.set(k, String(v)) };
-  const exported = 'MAINT_SHAPES,classifyMaintenanceAnswer,maintenanceAdvice,maintenanceShapeOrder,summarizeMaintenanceAttempts,runMaintenanceLoop,maintenanceFailureHtml,maintenanceBody,maintenanceLearned';
+  const exported = 'MAINT_SHAPES,classifyMaintenanceAnswer,maintenanceAdvice,maintenanceShapeOrder,summarizeMaintenanceAttempts,runMaintenanceLoop,maintenanceFailureHtml,maintenanceBody,maintenanceLearned,maintenanceOpName';
   const api = new Function('localStorage', 'esc', 'fa', js + ';return {' + exported + '};')(localStorage, String, v => String(v));
   return { ...api, store };
 }
@@ -38,10 +38,11 @@ const OK = { status: 200, contentType: 'application/json', data: { ok: true, pla
 
 test('the shapes walk from live stream to smaller and smaller plain requests', () => {
   const p = panel();
-  assert.deepEqual(p.MAINT_SHAPES.map(s => s.id), ['stream', 'json', 'json-small', 'json-tiny']);
+  assert.deepEqual(p.MAINT_SHAPES.map(s => s.id), ['stream', 'json', 'json-small', 'json-tiny', 'job']);
   assert.equal(p.MAINT_SHAPES[0].live, true);
   assert.ok(p.MAINT_SHAPES.slice(1).every(s => !s.live), 'only the first shape asks for a stream');
   assert.ok(p.MAINT_SHAPES[2].limit > p.MAINT_SHAPES[3].limit, 'each fallback asks for less work');
+  assert.equal(p.MAINT_SHAPES[4].job, true, 'the last resort keeps no connection open at all');
 });
 
 test('every answer gets a verdict and a Persian sentence, never a bare code', () => {
@@ -117,7 +118,7 @@ test('the smaller shapes really ask the server to do less', () => {
 test('a permission problem stops the loop at once and says it is not the network', async () => {
   const p = panel();
   const s = service({ stream: { status: 403, error: 'forbidden' } });
-  const result = await p.runMaintenanceLoop({ action: 'duplicates', perform: s.perform });
+  const result = await p.runMaintenanceLoop({ action: 'duplicates', readOnly: true, perform: s.perform });
   assert.equal(result.ok, false);
   assert.equal(result.cause, 'auth');
   assert.equal(s.asked.length, 1, 'no point asking the same question in another shape');
@@ -128,7 +129,7 @@ test('a permission problem stops the loop at once and says it is not the network
 test('a missing route is named as a version mismatch, not as an unstable network', async () => {
   const p = panel();
   const s = service({ stream: { status: 404 } });
-  const result = await p.runMaintenanceLoop({ action: 'recon-unified-apply', perform: s.perform });
+  const result = await p.runMaintenanceLoop({ action: 'recon-unified', readOnly: true, perform: s.perform });
   assert.equal(result.cause, 'missing');
   assert.equal(s.asked.length, 1);
   assert.match(result.advice, /نسخه/);
@@ -153,15 +154,15 @@ test('a rate limit waits once and retries the very same shape', async () => {
 
 test('when every shape fails the panel gets a table, not the words Network error', async () => {
   const p = panel();
-  const s = service({ stream: { status: 200, partial: true }, json: { status: 0, error: 'Failed to fetch' }, 'json-small': { status: 502 }, 'json-tiny': { status: 500, error: 'ledger is empty' } });
+  const s = service({ stream: { status: 200, partial: true }, json: { status: 0, error: 'Failed to fetch' }, 'json-small': { status: 502 }, 'json-tiny': { status: 500, error: 'ledger is empty' }, job: { status: 500, error: 'ledger is empty' } });
   const result = await p.runMaintenanceLoop({ action: 'duplicates', readOnly: true, perform: s.perform });
   assert.equal(result.ok, false);
-  assert.equal(result.attempts.length, 4);
+  assert.equal(result.attempts.length, 5, 'every shape, including the background one, is tried');
   assert.equal(result.cause, 'server');
   const html = p.maintenanceFailureHtml(result);
   assert.match(html, /ledger is empty/);
   assert.match(html, /جریان زنده/);
-  assert.equal((html.match(/<tr>/g) || []).length, 5, 'one header row plus one row per attempt');
+  assert.equal((html.match(/<tr>/g) || []).length, 6, 'one header row plus one row per attempt');
   assert.ok(!/undefined/.test(html));
 });
 
@@ -191,8 +192,8 @@ test('the reconciliation buttons all go through the loop, with the routes that e
 
 test('an operation that may already be running on the server is never repeated by itself', async () => {
   const p = panel();
-  const s = service({ stream: { status: 200, partial: true }, json: OK });
-  const result = await p.runMaintenanceLoop({ action: 'recon-unified-apply', perform: s.perform });
+  const s = service({ job: { status: 200, partial: true }, stream: OK, json: OK });
+  const result = await p.runMaintenanceLoop({ action: 'recon-unified-apply', readOnly: false, perform: s.perform });
   assert.equal(s.asked.length, 1, 'an apply/delete whose outcome is unknown must not be re-sent');
   assert.equal(result.ok, false);
   assert.equal(result.cause, 'unconfirmed');
@@ -201,9 +202,9 @@ test('an operation that may already be running on the server is never repeated b
   assert.match(result.advice, /تازه‌سازی دفتر حساب/, 'the honest next step is to look, not to retry');
 
   // a rejection that proves nothing ran is still safe to classify and stop on
-  const rejected = service({ stream: { status: 404 } });
-  const missing = await p.runMaintenanceLoop({ action: 'recon-unified-apply', perform: rejected.perform });
-  assert.equal(missing.cause, 'missing');
+  const rejected = service({ job: { status: 403 } });
+  const missing = await p.runMaintenanceLoop({ action: 'recon-unified-apply', readOnly: false, perform: rejected.perform });
+  assert.equal(missing.cause, 'auth');
   assert.equal(rejected.asked.length, 1);
 });
 
@@ -216,5 +217,61 @@ test('the panel marks previews read-only and apply/delete as unrepeatable', () =
     "{action:kind+':'+target,readOnly:kind==='recon'}",
     "{action:'ledger-missing',readOnly:!apply}"
   ]) assert.ok(dashboard.includes(needle), 'missing read-only marking: ' + needle);
-  assert.ok(dashboard.includes('readOnly:meta.readOnly===true'), 'maintenanceRequest must forward the flag');
+  assert.ok(dashboard.includes('readOnly:meta.readOnly'), 'maintenanceRequest must forward the flag');
+});
+
+test('an apply/delete starts in the background, where there is no long connection to cut', async () => {
+  const p = panel();
+  assert.deepEqual(p.maintenanceShapeOrder('x', false).map(s => s.id), ['job', 'stream', 'json', 'json-small', 'json-tiny']);
+  assert.deepEqual(p.maintenanceShapeOrder('x', true).map(s => s.id), ['stream', 'json', 'json-small', 'json-tiny', 'job']);
+  assert.deepEqual(p.maintenanceShapeOrder('x', undefined).map(s => s.id), ['stream', 'json', 'json-small', 'json-tiny', 'job'], 'an unmarked caller keeps the old order');
+
+  const s = service({ job: OK });
+  const result = await p.runMaintenanceLoop({ action: 'duplicates-apply', readOnly: false, perform: s.perform });
+  assert.equal(result.ok, true);
+  assert.deepEqual(s.asked, ['job']);
+  assert.equal(p.store.get('s4.maint.shape:duplicates-apply'), 'job');
+});
+
+test('an old server without the background route is not a dead end', async () => {
+  const p = panel();
+  const s = service({ job: { status: 404 }, stream: OK });
+  const result = await p.runMaintenanceLoop({ action: 'duplicates-apply', readOnly: false, perform: s.perform });
+  assert.equal(result.ok, true, 'a 404 on the start request proves nothing ran, so another shape is fair');
+  assert.deepEqual(s.asked, ['job', 'stream']);
+
+  // but an unknown outcome after that still stops a destructive operation
+  const fresh = panel();
+  const unsure = service({ job: { status: 404 }, stream: { status: 0, error: 'Failed to fetch' } });
+  const stopped = await fresh.runMaintenanceLoop({ action: 'duplicates-apply', readOnly: false, perform: unsure.perform });
+  assert.equal(stopped.cause, 'unconfirmed');
+  assert.deepEqual(unsure.asked, ['job', 'stream']);
+});
+
+test('the background op name is derived from the very route the button already used', () => {
+  const p = panel();
+  const cases = [
+    ['/api/maintenance/recon-unified', 'recon-unified'],
+    ['/api/maintenance/recon-unified/apply', 'recon-unified-apply'],
+    ['/api/maintenance/ledger/refresh', 'ledger-refresh'],
+    ['/api/maintenance/ledger/missing', 'ledger-missing'],
+    ['/api/maintenance/duplicates', 'duplicates'],
+    ['/api/maintenance/recon-table/woo', 'recon-table:woo'],
+    ['/api/maintenance/recon-table/basalam', 'recon-table:basalam'],
+    ['/api/maintenance/recon/woo', 'recon:woo'],
+    ['/api/maintenance/rebuild/basalam', 'rebuild:basalam']
+  ];
+  for (const [path, op] of cases) assert.equal(p.maintenanceOpName(path, {}), op, path);
+});
+
+test('both runtimes can start and poll a maintenance run for every button', async () => {
+  for (const file of ['worker-src/app.ts', 'render-src/server.ts']) {
+    const source = await read(file);
+    assert.ok(source.includes("app.post('/api/maintenance/run'"), file + ' must start background runs');
+    assert.ok(source.includes("app.get('/api/maintenance/run/:id'"), file + ' must answer polls');
+    assert.ok(source.includes('startMaintenanceRun'), file + ' must use the shared run store');
+    for (const op of ['recon-unified', 'recon-unified-apply', 'ledger-refresh', 'ledger-missing', 'duplicates', 'recon-table:woo', 'recon-table:basalam', 'recon:woo', 'rebuild:basalam']) {
+      assert.ok(source.includes("'" + op + "'") || source.includes(op + ':'), file + ' must map op ' + op);
+    }
+  }
 });
