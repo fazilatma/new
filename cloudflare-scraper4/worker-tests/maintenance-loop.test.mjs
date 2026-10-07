@@ -213,9 +213,9 @@ test('the panel marks previews read-only and apply/delete as unrepeatable', () =
     "readOnly:!apply,onEvent:live.observe",
     "{action:'recon-table:'+target,readOnly:true,",
     "{action:'ledger-refresh',readOnly:true,",
-    "{action:'duplicates',readOnly:!apply,onEvent:live?live.observe:undefined}",
-    "{action:kind+':'+target,readOnly:kind==='recon',onEvent:live?live.observe:undefined}",
-    "{action:'ledger-missing',readOnly:!apply,onEvent:live?live.observe:undefined}"
+    "{action:'duplicates',readOnly:!apply,onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}",
+    "{action:kind+':'+target,readOnly:kind==='recon',onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}",
+    "{action:'ledger-missing',readOnly:!apply,onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}"
   ]) assert.ok(dashboard.includes(needle), 'missing read-only marking: ' + needle);
   // 1.336.0 — the same three buttons also report their steps live, instead of running blind.
   for (const needle of ['openReconLiveProgress(taskName,', "openReconLiveProgress(apply?'📒 رسیدگی به محصولات حذف‌شده از مبدأ'", "openReconLiveProgress((kind==='recon'?'🔍 مغایرت‌گیری ':'🔗 بازسازی نگاشت ')"])

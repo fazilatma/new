@@ -275,9 +275,9 @@ test('the panel draws the detail: phase chips, elapsed time and the evidence log
 test('the four silent buttons now open the same live panel', async () => {
   const dash = await read('worker-src/dashboard.ts');
   for (const pin of [
-    "{action:'duplicates',readOnly:!apply,onEvent:live?live.observe:undefined}",
-    "{action:'ledger-missing',readOnly:!apply,onEvent:live?live.observe:undefined}",
-    "{action:kind+':'+target,readOnly:kind==='recon',onEvent:live?live.observe:undefined}"
+    "{action:'duplicates',readOnly:!apply,onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}",
+    "{action:'ledger-missing',readOnly:!apply,onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}",
+    "{action:kind+':'+target,readOnly:kind==='recon',onEvent:live?live.observe:undefined,onShape:live?live.shape:undefined}"
   ]) assert.ok(dash.includes(pin), 'a reconciliation button still runs blind: ' + pin);
 });
 
@@ -605,3 +605,90 @@ test('the viewer button is never disabled by a running operation, and both runti
     assert.ok(text.includes("getState<any>('recon_unified',null)"), source + ' must answer from the report the preview already stores');
   }
 });
+
+// ——— pressing «بررسی مغایرت‌ها و پیش‌نمایش» really shows the live table (1.339.0) ————————
+//
+// The window was there, but on a host that cuts live streams the loop had LEARNED the silent
+// «درخواست ساده» shape — and that shape reports nothing at all, so every later preview ran blind:
+// an open window with an empty table. Now a run that feeds a live window starts with a shape that
+// can report (stream, or the background run), says which shape is feeding it, and ends by drawing
+// the complete table inside the same full-screen window.
+
+/** Press the real preview button against a stubbed host that behaves like `mode`. */
+async function pressPreview(mode, options = {}) {
+  const { parseHTML } = await import('linkedom');
+  const dash = await read('worker-src/dashboard.ts');
+  const cut = (from, to) => dash.slice(dash.indexOf(from), dash.indexOf(to));
+  const { report, events } = await previewRun('worker');
+  const { window } = parseHTML('<html><body><div id="resultModal"><div class="result-body"></div></div><div id="reconResult"></div></body></html>');
+  const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const store = { ...(options.learned ? { 's4.maint.shape:recon-unified': options.learned } : {}) };
+  const notices = [], tried = [];
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const activityFetch = async url => {
+    const target = String(url);
+    tried.push(target);
+    if (target.includes('live=1')) {
+      if (mode !== 'stream') return new Response('<html>proxy</html>', { status: 502, headers: { 'content-type': 'text/html' } });
+      const lines = [{ type: 'started' }, ...events.map(event => ({ ...event, type: 'progress' })), { type: 'result', data: report }];
+      return new Response(new ReadableStream({ start(controller) { for (const line of lines) controller.enqueue(new TextEncoder().encode(JSON.stringify(line) + '\n')); controller.close(); } }),
+        { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
+    }
+    if (target.includes('/api/maintenance/run/')) {
+      const since = Number(new URL(target, 'http://host').searchParams.get('since') || 0);
+      const batch = events.slice(since, since + 12), done = since + batch.length >= events.length;
+      return json({ ok: true, run: { id: 'r1', status: done ? 'done' : 'running', events: batch, eventCount: events.length, result: done ? report : undefined } });
+    }
+    if (target.endsWith('/api/maintenance/run')) return mode === 'job' ? json({ ok: true, run: { id: 'r1', status: 'running', events: [], eventCount: 0 } }) : json({ error: 'این مسیر نیست' }, 404);
+    return mode === 'stream' ? json({ error: 'باید از جریان می‌آمد' }, 500) : json(report);
+  };
+  const io = {
+    esc, escAttr: esc, fa: progress.fa, $: id => window.document.getElementById(id),
+    modalShell: (_title, body) => { window.document.querySelector('.result-body').innerHTML = body; },
+    notice: (message, kind) => notices.push([kind || 'ok', message]), document: window.document,
+    setInterval: () => 0, clearInterval: () => {}, setTimeout: fn => globalThis.setTimeout(fn, 0),
+    activityFetch, U: path => 'http://host' + path, headers: () => ({}), activityResponseResult: () => {},
+    output: () => {}, state: { selected: 'p1' }, api: async () => ({ ok: false }),
+    localStorage: { getItem: key => store[key] || null, setItem: (key, value) => { store[key] = value; } }
+  };
+  const built = new Function(...Object.keys(io), 'let activeReconLive=null;'
+    + cut('let maintenanceBusy', 'async function apiRequest(')
+    + cut('const RECON_MATRIX_CSS=', 'function renderDuplicateReport(')
+    + cut('const RECON_STAGE_LABELS=', 'async function runReconTableLive(')
+    + ';return {runReconUnifiedLive,maintenanceShapeOrder};')(...Object.values(io));
+  const result = await built.runReconUnifiedLive(false);
+  const panel = window.document.querySelector('.recon-live');
+  return { built, result, panel, notices, tried, store, window, report };
+}
+
+test('a live window always starts with a shape that can actually report progress', async () => {
+  const { built } = await pressPreview('stream');
+  const order = (readOnly, wants) => built.maintenanceShapeOrder('x', readOnly, wants).map(shape => shape.id);
+  assert.deepEqual(order(true, false), ['stream', 'json', 'json-small', 'json-tiny', 'job'], 'a caller without a live window keeps the old order');
+  assert.deepEqual(order(true, true), ['stream', 'job', 'json', 'json-small', 'json-tiny'], 'the two shapes that report come first');
+  assert.deepEqual(order(false, true), ['job', 'stream', 'json', 'json-small', 'json-tiny'], 'a mutating run still starts in the background');
+  const blind = await pressPreview('json', { learned: 'json' });
+  assert.deepEqual(blind.built.maintenanceShapeOrder('recon-unified', true, true).map(shape => shape.id), ['job', 'json', 'stream', 'json-small', 'json-tiny'],
+    'a learned silent shape means the stream already failed here: try the background run first, not the stream again');
+});
+
+for (const [mode, learned, expected] of [['stream', '', 'جریان زنده (NDJSON) · گزارش زنده دارد'],
+  ['job', '', 'اجرای پس‌زمینه + پیگیری کوتاه · گزارش زنده دارد'],
+  ['json', 'json', 'درخواست ساده (بدون جریان) · این شکل گزارش زنده نمی‌دهد؛ جدول در پایان کار یک‌جا پر می‌شود']]) {
+  test('pressing the preview button on a «' + mode + '» host ends with the full table in the same window', async () => {
+    const { result, panel, window, store } = await pressPreview(mode, { learned });
+    assert.equal(result.planned, 19, 'the preview still returns its real answer');
+    assert.ok(panel, 'the live window is the result window — it is not thrown away');
+    assert.ok(window.document.getElementById('resultModal').className.includes('result-modal-full'), 'and it stays full screen');
+    assert.equal(panel.querySelector('[data-recon-shape]').textContent, 'شکل درخواست: ' + expected, 'the window says, honestly, what is feeding it');
+    const rows = panel.querySelectorAll('[data-recon-matrix] .rc-table tbody tr');
+    assert.equal(rows.length, 60, mode + ': the finished table holds every compared product');
+    assert.match(panel.querySelector('[data-recon-matrix-note]').textContent, /جدول کامل: ۱۲۰ سطر مقایسه/);
+    assert.match(panel.querySelector('[data-recon-matrix] .rc-banner').textContent, /پیش‌نمایش: ۱۹ اقدام آمادهٔ اجراست/, 'the final banner replaces the live one');
+    if (mode !== 'json') {
+      assert.ok(panel.querySelectorAll('[data-diag-activity] li').length >= 30, mode + ': the evidence log filled while the run was going');
+      assert.ok(panel.querySelectorAll('.diag-live-stage').length >= 15, mode + ': every phase was reported live');
+      assert.ok(['stream', 'job'].includes(store['s4.maint.shape:recon-unified']), 'the winning shape is remembered');
+    }
+  });
+}

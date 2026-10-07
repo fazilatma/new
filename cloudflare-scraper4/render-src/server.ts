@@ -67,7 +67,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.338.0+'; } catch { return process.env.npm_package_version || '1.338.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.339.0+'; } catch { return process.env.npm_package_version || '1.339.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -929,7 +929,7 @@ const hostDiagnosisNow = async (c: any) => {
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
   const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.338.0+',
+    version: process.env.npm_package_version || '1.339.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
