@@ -39,6 +39,11 @@ export type RunEvent = {
   /** Compared rows (1.338.0): the polled run fills the same live table the stream does. */
   rows?: any[];
   rowsCount?: number;
+  /** Row identity (1.340.0): which product, in which destination, this step belongs to. */
+  profileId?: string;
+  sourceKey?: string;
+  accountKey?: string;
+  price?: number;
 };
 
 export type MaintenanceRun = {
@@ -91,6 +96,11 @@ export function compactEvent(raw: any, at: string, rowLimit = RUN_ROW_CHUNK): Ru
   if (Number.isFinite(Number(raw?.total))) event.total = Number(raw.total);
   if (raw?.account) event.account = String(raw.account).slice(0, 120);
   if (raw?.target) event.target = String(raw.target).slice(0, 60);
+  // 1.340.0 — so a polled apply lights up the same table row the streamed one does.
+  if (raw?.profileId) event.profileId = String(raw.profileId).slice(0, 80);
+  if (raw?.sourceKey) event.sourceKey = String(raw.sourceKey).slice(0, 120);
+  if (raw?.accountKey) event.accountKey = String(raw.accountKey).slice(0, 80);
+  if (Number.isFinite(Number(raw?.price))) event.price = Number(raw.price);
   // 1.336.0 — a background run must carry the same evidence the streaming path shows:
   // which phase, which page, how long it has been running, and the example lines.
   if (raw?.stage) event.stage = String(raw.stage).slice(0, 60);

@@ -269,7 +269,7 @@ test('the panel draws the detail: phase chips, elapsed time and the evidence log
   assert.ok(dash.includes('data-recon-phases'), 'the phase strip exists');
   assert.ok(dash.includes("if(Array.isArray(event.detail))for(const line of event.detail)logLine('        ↳ '+line,'detail')"),
     'every detail line is appended to the scrolling evidence log');
-  assert.ok(dash.includes('<details class="diag-activity" open>'), 'the live log is open, not hidden behind a click');
+  assert.ok(dash.includes('🛠 جزئیات فنی اجرا'), 'the technical detail is still there, folded under one clear summary');
 });
 
 test('the four silent buttons now open the same live panel', async () => {
@@ -468,14 +468,14 @@ async function panelHarness(options = {}) {
   const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const notices = [], titles = [];
   const built = new Function('esc', 'escAttr', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval', 'api',
-    'let activeReconLive=null;' + matrix + live + ';return {openReconLiveProgress,openReconFullscreen,renderReconMatrix,reconLiveReport};')(
+    'let activeReconLive=null;' + matrix + live + ';return {openReconLiveProgress,openReconFullscreen,renderReconMatrix,reconLiveReport,reconSyncTable,syncTableModel};')(
     esc, esc, progress.fa, id => window.document.getElementById(id),
     (title, body) => { titles.push(title); window.document.querySelector('.result-body').innerHTML = body; },
     (message, kind) => notices.push([kind || 'ok', message]), window.document, () => 0, () => {},
     options.api || (async () => { throw Error('api not stubbed'); }));
   return { ...built, window, notices, titles, doc: window.document };
 }
-const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .rc-table tbody tr')];
+const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .sync-table tbody tr')];
 
 for (const runtime of ['worker', 'render']) {
   test(runtime + ': the compared rows themselves are streamed while the comparison runs', async () => {
@@ -543,13 +543,17 @@ test('the live window is full screen and its matrix fills while the run is still
   const rows = matrixRows(panel.doc);
   assert.equal(rows.length, 60, 'every compared product ends up in the live table');
   const head = [...panel.doc.querySelectorAll('[data-recon-matrix] thead th')].map(th => th.textContent);
-  assert.deepEqual(head.slice(4), ['🛒 ووکامرس', '🏪 غرفهٔ برف باکس'], 'one live column per destination');
+  assert.deepEqual(head, ['محصول', 'قیمت پایه در مبدأ', '🛒 ووکامرس', '🏪 غرفهٔ برف باکس'],
+    'the table reads left to right: product, source price, then one column per destination — woocommerce first');
   const first = [...rows[0].children].map(cell => cell.textContent);
-  assert.equal(first[0], 'کفش مدل 1 (کد 1)');
-  assert.equal(first[2], '۱۰۱٬۰۰۰');
-  assert.match(first[4], /۹۴٬۰۰۰ ← ۱۰۱٬۰۰۰/, 'the live cell shows the real arithmetic');
-  assert.match(first[5], /مقصد پاسخ نداد/);
-  assert.match(panel.doc.querySelector('[data-recon-matrix] .rc-banner').textContent, /جدول زنده — تا این لحظه ۶۰ محصول در ۲ مقصد مقایسه شده است/);
+  assert.match(first[0], /^کفش مدل \d+ \(کد \d+\)/, 'column one is the product name from the saved profile');
+  assert.match(first[0], /ردیف ۱/, 'and it is numbered, because the run starts at row one');
+  assert.match(first[1], /^[۰-۹٬]+$/, 'column two is the base price at the source');
+  assert.equal(rows[0].querySelectorAll('[data-cell]').length, 2, 'every destination has a cell on every row');
+  assert.equal(rows[0].querySelector('[data-cell]').getAttribute('data-state'), 'priceDiff',
+    'the run starts with the rows that actually need work');
+  assert.match(first[2], /←/, 'a price-difference cell shows «قیمت مقصد ← قیمت درست»');
+  assert.match(panel.doc.querySelector('[data-recon-matrix] .sync-banner').textContent, /در حال پر شدن — تا این لحظه ۶۰ محصول در ۲ مقصد/);
   assert.equal(panel.doc.querySelector('[data-recon-matrix-note]').textContent, '۱۲۰ سطر مقایسه در ۲ مقصد تا این لحظه');
 });
 
@@ -572,7 +576,8 @@ test('«نمایش جدول آخر» works with no report in this browser: it re
   await panel.openReconFullscreen();
   assert.equal(asked, '/api/maintenance/recon-last', 'the panel asks the server for the last stored report');
   assert.equal(panel.doc.getElementById('resultModal').className, 'result-modal-full', 'the stored table opens full screen');
-  assert.ok(panel.doc.querySelectorAll('.result-body .rc-table tbody tr').length >= 60, 'the stored report is drawn as the full matrix');
+  assert.ok(panel.doc.querySelectorAll('.result-body .sync-table tbody tr').length >= 60, 'the stored report is drawn as the sync table');
+  assert.ok(panel.doc.querySelectorAll('.result-body .rc-table tbody tr').length >= 60, 'the full matrix stays available under its fold');
   assert.match(panel.doc.querySelector('.rc-note').textContent, /آخرین پیش‌نمایش ذخیره‌شدهٔ سرور خوانده شد · زمان ثبت: 2026-10-07T09:00:00.000Z/);
 });
 
@@ -681,10 +686,10 @@ for (const [mode, learned, expected] of [['stream', '', 'جریان زنده (ND
     assert.ok(panel, 'the live window is the result window — it is not thrown away');
     assert.ok(window.document.getElementById('resultModal').className.includes('result-modal-full'), 'and it stays full screen');
     assert.equal(panel.querySelector('[data-recon-shape]').textContent, 'شکل درخواست: ' + expected, 'the window says, honestly, what is feeding it');
-    const rows = panel.querySelectorAll('[data-recon-matrix] .rc-table tbody tr');
+    const rows = panel.querySelectorAll('[data-recon-matrix] .sync-table tbody tr');
     assert.equal(rows.length, 60, mode + ': the finished table holds every compared product');
     assert.match(panel.querySelector('[data-recon-matrix-note]').textContent, /جدول کامل: ۱۲۰ سطر مقایسه/);
-    assert.match(panel.querySelector('[data-recon-matrix] .rc-banner').textContent, /پیش‌نمایش: ۱۹ اقدام آمادهٔ اجراست/, 'the final banner replaces the live one');
+    assert.match(panel.querySelector('[data-recon-matrix] .sync-banner').textContent, /پیش‌نمایش: ۱۹ اقدام آمادهٔ اجراست/, 'the final banner replaces the live one');
     if (mode !== 'json') {
       assert.ok(panel.querySelectorAll('[data-diag-activity] li').length >= 30, mode + ': the evidence log filled while the run was going');
       assert.ok(panel.querySelectorAll('.diag-live-stage').length >= 15, mode + ': every phase was reported live');
@@ -692,3 +697,105 @@ for (const [mode, learned, expected] of [['stream', '', 'جریان زنده (ND
     }
   });
 }
+
+// ۱.۳۴۰.۰ — «پنجرهٔ پیش‌نمایش بسیار نامفهوم است»: یک جدول، به زبان خودِ فروشنده.
+// ستون اول نام محصول (از پروفایل‌های ذخیره‌شده)، ستون دوم قیمت پایه در سایت مبدأ، بعد ووکامرس
+// و بعد هر غرفهٔ باسلام — و هر خانه با رنگ می‌گوید هست/نیست و قیمتش درست است یا نه.
+
+test('the sync table reads like a shopkeeper ledger: product, source price, then one column per destination', async () => {
+  const { syncTableModel, reconSyncTable } = await panelHarness();
+  const rows = [
+    { bucket: 'priceDiff', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', profileId: 'p1', profileName: 'برف باکس', sourceKey: 's1', title: 'کیف', sourcePrice: 200000, expectedPrice: 240000, remotePrice: 200000, remoteId: 11 },
+    { bucket: 'missing', target: 'basalam', accountKey: '735703', accountName: 'غرفهٔ برف باکس', profileId: 'p1', profileName: 'برف باکس', sourceKey: 's1', title: 'کیف', sourcePrice: 200000, expectedPrice: 240000 },
+    { bucket: 'matched', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', profileId: 'p1', profileName: 'برف باکس', sourceKey: 's2', title: 'کفش', sourcePrice: 100000, expectedPrice: 100000, remotePrice: 100000, remoteId: 12 },
+    { bucket: 'extra', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', remoteTitle: 'محصول قدیمی مقصد', remoteId: 99 }
+  ];
+  const model = syncTableModel(rows);
+  assert.deepEqual(model.columns.map(column => column.name), ['ووکامرس', 'غرفهٔ برف باکس'], 'woocommerce comes first, then every stall');
+  assert.deepEqual(model.products.map(product => product.title), ['کیف', 'کفش'], 'the row that needs work comes before the row that is already in sync');
+  assert.equal(model.products.length, 2, 'a product that exists only at the destination is not a profile product, so it is not a row');
+  assert.equal(model.products[0].sourcePrice, 200000, 'the base price is taken from the source side');
+
+  const html = reconSyncTable(rows, { planned: 2 });
+  assert.match(html, /قیمت پایه در مبدأ/, 'column two is named in plain Persian');
+  assert.match(html, /🛒 ووکامرس/);
+  assert.match(html, /🏪 غرفهٔ برف باکس/);
+  assert.match(html, /پیش‌نمایش: ۲ اقدام آمادهٔ اجراست/, 'the banner says how much work is waiting');
+  assert.match(html, /اجرا از ردیف اول همین جدول شروع می‌شود/, 'and promises the order the apply will follow');
+  assert.match(html, /data-row="p1\|s1"/, 'each row carries its product identity so the apply can light it up');
+  assert.match(html, /data-cell="p1\|s1\|\|woo:default" data-state="priceDiff"/);
+  assert.match(html, /data-cell="p1\|s1\|\|basalam:735703" data-state="missing"/);
+  assert.match(html, /۲۰۰٬۰۰۰ ← ۲۴۰٬۰۰۰/, 'a wrong price shows what it is and what it should become');
+  assert.match(html, /باید ۲۴۰٬۰۰۰/, 'a missing product shows the price it would be created with');
+  for (const label of ['هست · قیمت درست', 'هست · قیمت فرق دارد', 'در مقصد نیست', 'مقصد پاسخ نداد'])
+    assert.ok(html.includes(label), 'the colours are explained in a legend: ' + label);
+});
+
+test('a destination a product is not sent to is drawn as a quiet dash, not as a failure', async () => {
+  const { reconSyncTable } = await panelHarness();
+  const html = reconSyncTable([
+    { bucket: 'matched', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', profileId: 'p1', sourceKey: 's1', title: 'کیف', sourcePrice: 1000, expectedPrice: 1000, remotePrice: 1000 },
+    { bucket: 'noPrice', target: 'basalam', accountKey: 'a2', accountName: 'غرفهٔ دوم', profileId: 'p1', sourceKey: 's2', title: 'کفش' }
+  ], {});
+  assert.match(html, /data-cell="p1\|s1\|\|basalam:a2" data-state="none"/, 'the untouched cell is «none», with its own colour');
+  assert.match(html, /برای این مقصد ارسال نمی‌شود/);
+  assert.match(html, /قیمت مبدأ ثبت نشده/);
+});
+
+test('the apply order and the table order are the same order: first row first', async () => {
+  const order = progress.planOrder([
+    { kind: 'create', target: 'basalam', accountName: 'غرفهٔ ب', title: 'ب' },
+    { kind: 'other', target: 'woo', accountName: 'ووکامرس', title: 'آ' },
+    { kind: 'updatePrice', target: 'woo', accountName: 'ووکامرس', title: 'ی' },
+    { kind: 'updatePrice', target: 'basalam', accountName: 'غرفهٔ الف', title: 'آ' }
+  ]).map(action => action.kind + ':' + action.title);
+  assert.deepEqual(order, ['updatePrice:آ', 'updatePrice:ی', 'create:ب', 'other:آ'],
+    'prices first (cheapest, safest), then creations, then the rest — alphabetical inside each group');
+  for (const runtime of ['worker', 'render']) {
+    const source = await read(runtime + '-src/maintenance.ts');
+    assert.ok(source.includes('const ordered=planOrder(plan.applicable)'), runtime + ': the apply really walks that order');
+    assert.ok(source.includes('const actions=ordered.slice(0,cap)'), runtime + ': and the cap is applied after the sort, not before');
+  }
+});
+
+test('pressing «اعمال هماهنگ‌سازی» lights the table up row by row, from the first row', async () => {
+  const panel = await panelHarness();
+  const live = panel.openReconLiveProgress('هماهنگ‌سازی یکپارچه (اجرای زنده)', 'در حال شروع…');
+  live.observe({ type: 'partial', stage: 'rows-chunk', target: 'woo', account: 'ووکامرس', rowsCount: 2, rows: [
+    { bucket: 'priceDiff', target: 'woo', accountKey: 'default', accountName: 'ووکامرس', profileId: 'p1', sourceKey: 's1', title: 'کیف', sourcePrice: 200000, expectedPrice: 240000, remotePrice: 200000 },
+    { bucket: 'missing', target: 'basalam', accountKey: '735703', accountName: 'غرفهٔ برف باکس', profileId: 'p1', sourceKey: 's2', title: 'کفش', sourcePrice: 100000, expectedPrice: 120000 }
+  ] });
+  live.observe({ type: 'progress', stage: 'report-ready', summary: 'آماده' });
+  const rowOf = id => panel.doc.querySelector('[data-row="' + id + '"]');
+  assert.ok(rowOf('p1|s1') && rowOf('p1|s2'), 'both products are on the table before anything is written');
+
+  live.observe({ type: 'progress', stage: 'apply', name: 'apply', status: 'running', count: 1, total: 2, summary: 'نوشتن قیمت', target: 'woo', account: 'ووکامرس', accountKey: 'default', profileId: 'p1', sourceKey: 's1', price: 240000 });
+  const cell = rowOf('p1|s1').querySelector('[data-cell$="woo:default"]');
+  assert.equal(cell.getAttribute('data-state'), 'working', 'the cell being written says so while it is happening');
+  assert.match(cell.textContent, /در حال نوشتن…/);
+  assert.ok(rowOf('p1|s1').className.includes('sync-active'), 'and its row is highlighted');
+  assert.match(panel.doc.querySelector('[data-recon-apply-progress]').textContent, /اجرای اقدام‌ها: ۱ از ۲/);
+
+  live.observe({ type: 'progress', stage: 'apply-written', name: 'apply', status: 'done', count: 1, total: 2, summary: 'نوشته شد', target: 'woo', account: 'ووکامرس', accountKey: 'default', profileId: 'p1', sourceKey: 's1', price: 240000 });
+  assert.equal(rowOf('p1|s1').querySelector('[data-cell$="woo:default"]').getAttribute('data-state'), 'written');
+  assert.match(rowOf('p1|s1').querySelector('[data-cell$="woo:default"]').textContent, /۲۴۰٬۰۰۰/, 'the new price is shown in the cell itself');
+  assert.ok(rowOf('p1|s1').className.includes('sync-done'));
+
+  live.observe({ type: 'progress', stage: 'queued', name: 'apply', status: 'done', count: 2, total: 2, summary: 'به صف رفت', target: 'basalam', account: 'غرفهٔ برف باکس', accountKey: '735703', profileId: 'p1', sourceKey: 's2' });
+  assert.equal(rowOf('p1|s2').querySelector('[data-cell$="basalam:735703"]').getAttribute('data-state'), 'queued');
+  assert.ok(!rowOf('p1|s1').className.includes('sync-active'), 'only one row is the active row at a time');
+  assert.ok(rowOf('p1|s2').className.includes('sync-active'));
+
+  live.observe({ type: 'progress', stage: 'apply-error', name: 'apply', status: 'error', count: 2, total: 2, summary: 'HTTP 502', target: 'woo', account: 'ووکامرس', accountKey: 'default', profileId: 'p1', sourceKey: 's2' });
+  assert.equal(rowOf('p1|s2').querySelector('[data-cell$="woo:default"]').getAttribute('data-state'), 'failed');
+  assert.match(rowOf('p1|s2').querySelector('[data-cell$="woo:default"]').textContent, /ناموفق/);
+});
+
+test('the window puts the table first and folds the engineering away', async () => {
+  const dash = await read('worker-src/dashboard.ts');
+  const panelStart = dash.indexOf('<div class="recon-live-matrix">');
+  const fold = dash.indexOf('🛠 جزئیات فنی اجرا', panelStart);
+  assert.ok(panelStart > 0 && fold > panelStart, 'the table is above the technical fold');
+  for (const hook of ['data-recon-phases', 'data-recon-dest-table', 'data-recon-ticker', 'data-diag-stages', 'data-diag-activity'])
+    assert.ok(dash.indexOf(hook, panelStart) > fold, hook + ' now lives inside the fold, not in the operator face');
+});

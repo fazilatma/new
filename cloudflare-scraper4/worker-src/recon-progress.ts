@@ -34,6 +34,12 @@ export type ReconProgressEvent = {
   detail?: string[];
   /** Running bucket totals, so the panel can draw live counters without re-counting rows. */
   tally?: Record<string, number>;
+  /** 1.340.0 — which table cell this step belongs to, so the panel can light up that exact row. */
+  profileId?: string;
+  sourceKey?: string;
+  accountKey?: string;
+  /** The price this step wrote (or will write) at the destination. */
+  price?: number | null;
   type: 'progress';
 };
 
@@ -97,6 +103,11 @@ export function createReconProgress(onProgress?: (e: any) => void, now: () => nu
     if (Number.isFinite(Number(event.page))) out.page = Number(event.page);
     if (Number.isFinite(Number(event.totalPages))) out.totalPages = Number(event.totalPages);
     if (detail && detail.length) out.detail = detail;
+    // 1.340.0 — row identity: «این گام مربوط به کدام محصول در کدام مقصد است».
+    if (event.profileId) out.profileId = String(event.profileId).slice(0, 80);
+    if (event.sourceKey) out.sourceKey = String(event.sourceKey).slice(0, 120);
+    if (event.accountKey) out.accountKey = String(event.accountKey).slice(0, 80);
+    if (Number.isFinite(Number(event.price))) out.price = Number(event.price);
     if (event.tally && typeof event.tally === 'object') {
       const tally: Record<string, number> = {};
       for (const [key, value] of Object.entries(event.tally)) if (Number.isFinite(Number(value))) tally[String(key).slice(0, 20)] = Number(value);
@@ -305,4 +316,19 @@ export function liveRow(row: any): Record<string, unknown> {
 /** The compared batch, trimmed for transport: the live table never waits for the final report. */
 export function liveRows(rows: any[], limit = LIVE_ROW_CHUNK): Array<Record<string, unknown>> {
   return (rows || []).slice(0, limit).map(liveRow);
+}
+
+/**
+ * 1.340.0 — one execution order, shared by the table and the apply pass.
+ *
+ * «بعد از زدن دکمهٔ هماهنگ‌سازی، از ردیف اول این عملیات اجرا شود» — that promise only holds if the
+ * rows people read and the actions the server performs are in the same order: price fixes first
+ * (they are instant and visible), then re-creations, each alphabetically by product title.
+ */
+export function planOrder<T extends { kind?: string; title?: string; accountName?: string }>(actions: T[]): T[] {
+  const rank = (action: T) => (action?.kind === 'updatePrice' ? 0 : action?.kind === 'create' ? 1 : 2);
+  return [...(actions || [])].sort((a, b) =>
+    rank(a) - rank(b)
+    || String(a?.title || '').localeCompare(String(b?.title || ''), 'fa')
+    || String(a?.accountName || '').localeCompare(String(b?.accountName || ''), 'fa'));
 }

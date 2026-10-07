@@ -104,7 +104,9 @@ test('preview and apply plan identically, in both runtimes', async () => {
     const src = await read('../' + runtime + '-src/maintenance.ts');
     assert.ok(src.includes('reconPlan(rows,suffixFormats,{profiles:profilesInfo,zeroCountIds})'), runtime + ': the preview must use the shared planner');
     assert.ok(src.includes('reconPlan(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds})'), runtime + ': the apply pass must use the same planner');
-    assert.ok(src.includes('plan.applicable.slice(0,cap)'), runtime + ': apply must run exactly the applicable actions');
+    // 1.340.0: the same applicable list, only sorted into the order the table shows (prices, then creations).
+    assert.ok(src.includes('const ordered=planOrder(plan.applicable)') && src.includes('const actions=ordered.slice(0,cap)'),
+      runtime + ': apply must run exactly the applicable actions, in the order the table promises');
   }
 });
 

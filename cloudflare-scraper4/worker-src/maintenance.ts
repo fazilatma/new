@@ -1,4 +1,4 @@
-import { actionLine, bucketTally, bucketLines, liveRows, matchLines, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from './recon-progress.js';
+import { actionLine, bucketTally, bucketLines, liveRows, matchLines, planOrder, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from './recon-progress.js';
 import { customerVisible } from './ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { loadConnections } from './connections.js';
@@ -568,9 +568,12 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200,onPro
   // Preview and apply share one plan, so the number on screen is the number that runs.
   const plan=reconPlan(report.rows as UnifiedReconRow[],report.suffixFormats,{profiles:profilesInfo,zeroCountIds});
   const cap=Math.max(1,Math.min(1000,Number(limit)||200));
-  const actions=plan.applicable.slice(0,cap);
+  // ۱.۳۴۰.۰ — همان ترتیبی که در جدول دیده می‌شود: اول اصلاح قیمت‌ها، بعد ساخت دوباره، هر کدام
+  // به‌ترتیب نام محصول؛ پس «اجرا از ردیف اول» دقیقاً همان چیزی است که اتفاق می‌افتد.
+  const ordered=planOrder(plan.applicable);
+  const actions=ordered.slice(0,cap);
   const remaining=Math.max(0,plan.applicable.length-actions.length);
-  const planDetail=plan.applicable.slice(0,6).map(actionLine);
+  const planDetail=ordered.slice(0,6).map(actionLine);
   p.emit({stage:'plan-ready',name:'plan',status:'success',count:plan.applicable.length,total:plan.all.length,
     summary:(apply?'برنامهٔ اجرا آماده شد':'پیش‌نمایش آماده شد')+' در '+faDuration(p.elapsed())+' · '+faN(plan.applicable.length)+' اقدام قابل‌اجرا ('+faN(plan.counts.updatePrice)+' اصلاح قیمت، '+faN(plan.counts.create)+' ساخت دوباره)'+(plan.removals.length?' · '+faN(plan.removals.length)+' مورد فقط-در-مقصد که اعمال هرگز حذفشان نمی‌کند':''),
     detail:planDetail.length?planDetail:['هیچ اقدامی لازم نیست؛ همه‌چیز هماهنگ است.']});
@@ -588,14 +591,14 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200,onPro
   const queued=new Set<string>();
   for(let index=0;index<actions.length;index++){
     const action=actions[index];
-    p.emit({stage:'apply',name:'apply',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+    p.emit({stage:'apply',name:'apply',count:index+1,total:actions.length,account:action.accountName,target:action.target,profileId:action.profileId,sourceKey:action.sourceKey,accountKey:action.accountKey,price:action.toPrice,
       summary:'اقدام '+faN(index+1)+' از '+faN(actions.length)+' در '+clipText(action.accountName||action.target,40)+': '+actionLine(action)});
     try{
       if(action.kind==='updatePrice'&&action.remoteId&&action.toPrice){
         if(action.target==='woo')await wooUpdate(action.remoteId,{regular_price:String(action.toPrice)});
         else await basalamUpdateShop(action.accountKey,action.remoteId,{primary_price:action.toPrice});
         changed++;
-        p.emit({stage:'apply-written',name:'apply',status:'success',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+        p.emit({stage:'apply-written',name:'apply',status:'success',count:index+1,total:actions.length,account:action.accountName,target:action.target,profileId:action.profileId,sourceKey:action.sourceKey,accountKey:action.accountKey,price:action.toPrice,
           summary:'نوشته شد: '+clipText(action.title,60)+' · قیمت مقصد از '+faPrice(action.fromPrice)+' به '+faPrice(action.toPrice)+' تغییر کرد (شناسه '+faN(action.remoteId)+')'});
       }else if(action.kind==='create'){
         // Re-publishing goes through the queue so category/photo/stock rules and
@@ -603,15 +606,15 @@ export async function unifiedReconApply(profileId='',apply=false,limit=200,onPro
         queuedProducts++;
         const key=action.profileId+'\u0000'+(action.target==='woo'?'woo':'basalam');
         if(!queued.has(key)){queued.add(key);await createJob(action.profileId,'sync',action.target==='woo'?'woo':'basalam');queuedJobs++;
-          p.emit({stage:'queued',name:'queue',status:'success',account:action.accountName,target:action.target,
+          p.emit({stage:'queued',name:'queue',status:'success',account:action.accountName,target:action.target,profileId:action.profileId,sourceKey:action.sourceKey,accountKey:action.accountKey,
             summary:'کار صف ارسال ساخته شد برای پروفایل '+clipText(action.profileId,40)+' → '+(action.target==='woo'?'ووکامرس':'باسلام')+'؛ محصولات نبود-در-مقصد این پروفایل با همان قواعد دسته و عکس ارسال می‌شوند'});}
-        else p.emit({stage:'queued-skip',name:'queue',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+        else p.emit({stage:'queued-skip',name:'queue',count:index+1,total:actions.length,account:action.accountName,target:action.target,profileId:action.profileId,sourceKey:action.sourceKey,accountKey:action.accountKey,
           summary:clipText(action.title,60)+' به همان کار صف این پروفایل سپرده شد (کار تکراری ساخته نمی‌شود)'});
       }
     }catch(error){
       const message=error instanceof Error?error.message:String(error);
       failed.push({title:action.title,account:action.accountName,error:message});
-      p.emit({stage:'apply-error',name:'apply',status:'error',count:index+1,total:actions.length,account:action.accountName,target:action.target,
+      p.emit({stage:'apply-error',name:'apply',status:'error',count:index+1,total:actions.length,account:action.accountName,target:action.target,profileId:action.profileId,sourceKey:action.sourceKey,accountKey:action.accountKey,
         summary:'ناموفق: '+clipText(action.title,60)+' — '+clipText(message,90)});
     }
   }

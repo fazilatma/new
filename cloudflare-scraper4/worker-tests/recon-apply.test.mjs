@@ -33,7 +33,7 @@ const progressIo = {
   createReconProgress: progress.createReconProgress, describeLedgerEvent: progress.describeLedgerEvent,
   actionLine: progress.actionLine, faPrice: progress.faPrice, faDuration: progress.faDuration,
   faN: progress.fa, clipText: progress.clip, bucketTally: progress.bucketTally,
-  tallySummary: progress.tallySummary, sampleLines: progress.sampleLines
+  tallySummary: progress.tallySummary, sampleLines: progress.sampleLines, planOrder: progress.planOrder
 };
 
 const PLAN_NOTE = 'محصولاتی که فقط در مقصد هستند گزارش می‌شوند ولی با «اعمال هماهنگ‌سازی» حذف نمی‌شوند؛ برای حذف از «تکراری‌های مقصد» یا «محصولات حذف‌شده از مبدأ» استفاده کنید.';
