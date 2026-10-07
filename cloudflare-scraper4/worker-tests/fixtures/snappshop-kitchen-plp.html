@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!--
+  Snappshop kitchen PLP structure fixture (2026-09-13 user DevTools dump).
+
+  WHAT IS VERBATIM (copied byte-for-byte from the dump):
+    - the list wrapper DIV classes (PLPSection_plp-products-container__HSjLH ...)
+    - the card shape on every row: classless A[href] > ARTICLE.w-100.ProductCard_product-card__zQzqc... > classless DIV
+    - the text order inside each discounted card: [خرید قسطی] TITLE %NN OLD SALE
+    - card 1 in full: title, %63, 660,000, 244,200, the snp-1784183539 URL and its CDN image URL
+    - all 8 SALE prices (244200, 396000, 830000, 309000, 304200, 100000, 115000, 320000)
+    - the lazy placeholder URL on rows 5-8 (image-fallback.svg)
+    - card 8 having NO discount (no % row, no old price, no ProductCard_discount class)
+
+  WHAT IS PLACEHOLDER (structure-identical, content invented and labelled):
+    - rows 2-8 titles ("کالای نمونه ردیف N"), slugs (snp-100000000N), old prices and % values
+    - rows 2-4 CDN image paths (host + query params keep the real shape)
+    - the category-link noise above the grid (representative hrefs without /product/snp-)
+
+  WHAT IS ASSUMED (the dump was text-level, inner markup unseen):
+    - titles sit in H3 (from the user's DevTools XPath; the dump only shows text)
+    - the sale price sits in [class*="productPrice__new"] (the user's earlier
+      selector; old price and % badge are bare elements because no classes are known)
+  If the live page disagrees on either assumption, only that one profile
+  selector needs editing — the container/link/image selectors are dump-grounded.
+-->
+<html lang="fa" dir="rtl">
+<head><meta charset="utf-8"><title>آشپزخانه | اسنپ‌شاپ</title></head>
+<body>
+<nav>
+  <a href="https://snappshop.ir/">اسنپ‌شاپ</a>
+  <a href="https://snappshop.ir/category/kitchen-appliances">آشپزخانه</a>
+  <a href="https://snappshop.ir/category/home-appliances">لوازم خانگی</a>
+</nav>
+<div class="PLPSection_plp-products-container__HSjLH py-l px-0 px-md-s container">
+  <a href="https://snappshop.ir/product/snp-1784183539">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://cdn.snappshop.ir/products/11/24/52a44fd0-bd95-48a4-873f-403f144da7e6.jpg?q=75&amp;w=384">
+        <h3>قوری بلور زینو کد M-1100</h3>
+        <span>%63</span>
+        <div>660,000</div>
+        <div class="productPrice__new__a1B2c">244,200</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000002">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://cdn.snappshop.ir/products/sample-row-2.jpg?q=75&amp;w=384">
+        <span>خرید قسطی</span>
+        <h3>کالای نمونه ردیف ۲</h3>
+        <span>%12</span>
+        <div>450,000</div>
+        <div class="productPrice__new__d4E5f">396,000</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000003">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://cdn.snappshop.ir/products/sample-row-3.jpg?q=75&amp;w=384">
+        <span>خرید قسطی</span>
+        <h3>کالای نمونه ردیف ۳</h3>
+        <span>%25</span>
+        <div>1,100,000</div>
+        <div class="productPrice__new__g7H8i">830,000</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000004">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://cdn.snappshop.ir/products/sample-row-4.jpg?q=75&amp;w=384">
+        <h3>کالای نمونه ردیف ۴</h3>
+        <span>%12</span>
+        <div>350,000</div>
+        <div class="productPrice__new__j0K1l">309,000</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000005">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://snappshop.ir/_next/static/media/image-fallback.svg">
+        <h3>کالای نمونه ردیف ۵</h3>
+        <span>%20</span>
+        <div>380,000</div>
+        <div class="productPrice__new__m2N3o">304,200</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000006">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://snappshop.ir/_next/static/media/image-fallback.svg">
+        <h3>کالای نمونه ردیف ۶</h3>
+        <span>%17</span>
+        <div>120,000</div>
+        <div class="productPrice__new__p4Q5r">100,000</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000007">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column ProductCard_discount__Q_yG3">
+      <div>
+        <img src="https://snappshop.ir/_next/static/media/image-fallback.svg">
+        <span>خرید قسطی</span>
+        <h3>کالای نمونه ردیف ۷</h3>
+        <span>%23</span>
+        <div>150,000</div>
+        <div class="productPrice__new__s6T7u">115,000</div>
+      </div>
+    </article>
+  </a>
+  <a href="https://snappshop.ir/product/snp-1000000008">
+    <article class="w-100 ProductCard_product-card__zQzqc product cursor-pointer d-flex flex-column">
+      <div>
+        <img src="https://snappshop.ir/_next/static/media/image-fallback.svg">
+        <h3>کالای نمونه ردیف ۸</h3>
+        <div class="productPrice__new__v8W9x">320,000</div>
+      </div>
+    </article>
+  </a>
+</div>
+</body>
+</html>
