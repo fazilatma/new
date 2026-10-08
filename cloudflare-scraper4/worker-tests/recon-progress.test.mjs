@@ -459,13 +459,16 @@ async function panelHarness(options = {}) {
   const { window } = parseHTML('<html><body><div id="resultModal"><div class="result-body"></div></div></body></html>');
   const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const notices = [], titles = [];
-  const built = new Function('esc', 'escAttr', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval', 'api',
+  // the live window now writes its own start/finish clock, so the harness needs the real helpers
+  const helperSource = dash.slice(dash.indexOf('function faDigits('), dash.indexOf('function jobElapsed('));
+  const helpers = new Function('fa', 'esc', helperSource + ';return {taskTimes,taskTimesHtml,taskClock,faSpan};')(progress.fa, esc);
+  const built = new Function('esc', 'escAttr', 'fa', '$', 'modalShell', 'notice', 'document', 'setInterval', 'clearInterval', 'api', 'taskTimes',
     'let activeReconLive=null;' + matrix + live + ';return {openReconLiveProgress,openReconFullscreen,renderReconMatrix,reconLiveReport,reconSyncTable,syncTableModel};')(
     esc, esc, progress.fa, id => window.document.getElementById(id),
     (title, body) => { titles.push(title); window.document.querySelector('.result-body').innerHTML = body; },
     (message, kind) => notices.push([kind || 'ok', message]), window.document, () => 0, () => {},
-    options.api || (async () => { throw Error('api not stubbed'); }));
-  return { ...built, window, notices, titles, doc: window.document };
+    options.api || (async () => { throw Error('api not stubbed'); }), helpers.taskTimes);
+  return { ...built, ...helpers, window, notices, titles, doc: window.document };
 }
 const matrixRows = doc => [...doc.querySelectorAll('[data-recon-matrix] .sync-table tbody tr[data-row]')];
 
@@ -646,7 +649,8 @@ async function pressPreview(mode, options = {}) {
     setInterval: () => 0, clearInterval: () => {}, setTimeout: fn => globalThis.setTimeout(fn, 0),
     activityFetch, U: path => 'http://host' + path, headers: () => ({}), activityResponseResult: () => {},
     output: () => {}, state: { selected: 'p1' }, api: async () => ({ ok: false }),
-    localStorage: { getItem: key => store[key] || null, setItem: (key, value) => { store[key] = value; } }
+    localStorage: { getItem: key => store[key] || null, setItem: (key, value) => { store[key] = value; } },
+    taskTimes: new Function('fa', 'esc', dash.slice(dash.indexOf('function faDigits('), dash.indexOf('function jobElapsed(')) + ';return taskTimes;')(progress.fa, esc)
   };
   const built = new Function(...Object.keys(io), 'let activeReconLive=null;'
     + cut('let maintenanceBusy', 'async function apiRequest(')

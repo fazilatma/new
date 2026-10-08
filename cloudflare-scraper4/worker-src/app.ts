@@ -61,7 +61,7 @@ app.use('*',async(c,next)=>{configureEnv(c.env);c.set('requestId',crypto.randomU
 app.use('*',async(c,next)=>c.req.path==='/visual'?next():dashboardSecurity(c,next));
 app.onError((error,c)=>{console.error(JSON.stringify({requestId:c.get('requestId'),path:c.req.path,error:message(error)}));const text=message(error),status=/Unauthorized/.test(text)?401:/not found/i.test(text)?404:/Response exceeds|بیش از.*بایت|حداکثر.*مگابایت|too large/i.test(text)?413:/timeout|مهلت دریافت/i.test(text)?504:/invalid|required|empty|خالی|نامعتبر/i.test(text)?400:/HTTP|fetch|network|اتصال/i.test(text)?502:500;return c.json({ok:false,error:text,requestId:c.get('requestId')},status as any)});
 
-app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.343.0+',time:new Date().toISOString()}));
+app.get('/health',c=>c.json({ok:true,app:'scraper4-cloudflare',runtime:'cloudflare-workers',databaseReady:Boolean(c.env.DB),databaseError:c.env.DB?null:'D1 binding DB is missing',workerInWeb:Boolean(c.env.JOBS),authenticationRequired:false,version:c.env.WORKER_VERSION||'1.344.0+',time:new Date().toISOString()}));
 
 // --- Storefront layer -------------------------------------------------------
 // The shop owns "/" and the scraper dashboard moves into a folder (default "/scraper",
@@ -245,14 +245,14 @@ app.get('/api/visual-diagnostics', async c => {
     const fetched=await sourceText(url,false,5_000_000);
     source={ok:true,url:fetched.url,contentType:fetched.contentType||'',bytes:fetched.text.length,title:(fetched.text.match(/<title[^>]*>(.*?)<\/title>/is)?.[1]||'').slice(0,200)};
   }catch(e){source={ok:false,error:e instanceof Error?e.message:String(e)}}
-  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.343.0+'},502);
+  if(!source.ok)return c.json({ok:false,stage:'source-fetch',source,elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.344.0+'},502);
   try{
     const ticket=await createVisualTicket(url,false);
     const response=await renderVisualSelector(ticket,context,full);
     const html=await response.text();
     const pickerState={toolbar:html.includes('id="__s4bar"'),pauseButton:html.includes('id="__s4pause"'),saveButton:html.includes('id="__s4save"'),pickerScript:html.includes('scraper4-picker-ready'),errorReporter:html.includes('scraper4-picker-error'),activeInit:/setPicking\\(true\\)/.test(html),csp:response.headers.get('content-security-policy')||'',htmlBytes:html.length};
-    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.343.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
-  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.343.0+'},502)}
+    return c.json({ok:response.ok,status:response.status,version:c.env.WORKER_VERSION||'1.344.0+',elapsedMs:Date.now()-started,request:{url,context,full},source,picker:pickerState,diagnosis:pickerState.activeInit?'Picker HTML and active-selection bootstrap are present.':'Picker selection bootstrap is missing from the rendered response.'});
+  }catch(e){return c.json({ok:false,stage:'visual-render',source,error:e instanceof Error?e.message:String(e),elapsedMs:Date.now()-started,version:c.env.WORKER_VERSION||'1.344.0+'},502)}
 });
 app.get('/api/emalls-check', async c => {
   const url = c.req.query('url') || 'https://emalls.ir/%D9%84%DB%8C%D8%B3%D8%AA-%D9%82%DB%8C%D9%85%D8%AA_%DA%A9%D9%81%D8%B4-%D8%B2%D9%86%D8%A7%D9%86%D9%87~Category~13145';
@@ -281,7 +281,7 @@ app.get('/api/activity',async c=>{
     getState<any>('cron_lock',{}),
     getJobPriorities(),
     getRunPriorities(),
-    Promise.resolve(c.env.WORKER_VERSION||'1.343.0+'),listActiveJobs(),listLiveActivities()
+    Promise.resolve(c.env.WORKER_VERSION||'1.344.0+'),listActiveJobs(),listLiveActivities()
   ]);
   const profileById=new Map(profiles.map(p=>[p.id,p]));
   const active=allActive.sort((a,b)=>{
@@ -294,7 +294,7 @@ app.get('/api/activity',async c=>{
     id:r.id,kind:r.kind||'run',name:r.kind==='ai-test'?'تست مدل‌های هوش مصنوعی':r.kind==='dedup'?'حذف تکراری‌های مقصد':r.kind==='category-all'?'دسته‌بندی همهٔ باسلام':'عملیات ایجنتیک',
     status:r.status,phase:r.phase,priority:Number(runPriorities[r.kind])||0,target:r.target,progress:r.total?Math.round((Number(r.processed||r.cursor||0)/Number(r.total))*100):(r.steps&&r.maxSteps?Math.round(r.steps/r.maxSteps*100):0),
     detail:r.kind==='dedup'?`${r.scanned||0} بررسی · ${r.removed||0} حذف`:r.kind==='category-all'?`${r.processed||0}/${r.total||0}`:r.kind==='agent'?`گام ${r.steps||0}/${r.maxSteps||0}`:`${r.messageSucceeded??r.succeeded??0} موفق`,
-    updatedAt:r.updatedAt
+    createdAt:r.createdAt,startedAt:r.startedAt||null,finishedAt:r.finishedAt||null,updatedAt:r.updatedAt
   })).sort((a,b)=>{
     if(a.status!==b.status)return a.status==='queued'?-1:1; // queued (reorderable) first, then the rest
     if(a.priority!==b.priority)return b.priority-a.priority;
@@ -307,20 +307,20 @@ app.get('/api/activity',async c=>{
   return c.json({ok:true,ts:new Date().toISOString(),queue:Boolean(c.env.JOBS),version,
     quota:{writeExceeded:quotaState.writeExceeded||quotaRun,at:quotaState.at,d1:await getD1Usage()},
     counts:{profiles:profiles.length,jobs:jobs.length,active:active.length,runningRuns:runs.filter(r=>['queued','running'].includes(r.status)).length},
-    activeJobs:active.map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{extraction:extractionDetails(j),profileName:p?.name||j.profileId,workflow:j.workflow,id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId,kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
+    activeJobs:active.map(j=>{const p=profileById.get(j.profileId),started=Date.parse(j.startedAt||j.createdAt),ended=j.status==='running'?Date.now():Date.parse(j.finishedAt||j.updatedAt),minutes=Math.max(1/60,(ended-started)/60000),speed=Number((Number(j.processed||0)/minutes).toFixed(2)),engine=(p?.extractionEngineMaster||p?.extractionEngine||'auto');return{extraction:extractionDetails(j),profileName:p?.name||j.profileId,workflow:j.workflow,id:j.id,shortId:j.id.slice(0,8),profileId:j.profileId,kind:j.kind,target:j.target,status:j.status,phase:j.phase,priority:Number(priorities[j.id])||0,progress:j.total?Math.round(j.processed/j.total*100):0,detail:`${j.processed}/${j.total}`,speedPerMinute:speed,engine,createdAt:j.createdAt,startedAt:j.startedAt||null,finishedAt:j.finishedAt||null,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}}),
     runs,
     cron:{held:Boolean(cronLock?.held),ageSec:cronAge?Math.round(cronAge/1000):null,lastTick:cronLock?.at||null},
-    lastJobs:jobs.slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}))
+    lastJobs:jobs.slice(0,8).map(j=>({id:j.id,kind:j.kind,status:j.status,phase:j.phase,at:j.updatedAt,createdAt:j.createdAt,startedAt:j.startedAt||null,finishedAt:j.finishedAt||j.updatedAt,updatedAt:j.updatedAt,error:j.error?String(j.error).slice(0,120):null}))
   });
 });
 app.get('/api/selftest',async c=>c.json(await runSelftest()));
 app.get('/api/debug',async c=>c.json(await runDiagnostics()));
 app.get('/api/parity',c=>c.json({ok:true,total:PHP_MENU_CAPABILITIES.length,capabilities:PHP_MENU_CAPABILITIES,dispatcherAudit:{reference:'scraper4.php v10.170',total:178,get:150,post:28,mapped:178,missing:0,artifact:'parity-manifest.json'}}));
-app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.343.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
+app.get('/api/version',c=>c.json({ok:true,version:c.env.WORKER_VERSION||'1.344.0+',runtime:'cloudflare-workers',deployment:'wrangler versions deploy / wrangler rollback'}));
 app.get('/api/bootstrap/status',c=>c.json({ok:true,supported:false,reason:'Bootstrap restore is a Node-runtime feature (Render/VPS/Termux); Workers keep their KV state across deploys.'}));
 const githubApiFetch=(token?:unknown,version?:unknown)=>(url:string)=>safeFetch(url,{apiMode:true,headers:githubApiHeaders(token,version)},200000,15000);
 const githubApiPut=(token?:unknown,version?:unknown)=>(url:string,body:Record<string,unknown>)=>safeFetch(url,{apiMode:true,method:'PUT',headers:{...githubApiHeaders(token,version),'content-type':'application/json'},body:JSON.stringify(body)},200000,15000);
-app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.343.0+',repo))});
+app.get('/api/deployer/branches',async c=>{const raw=c.req.query('repo'),repo=raw===undefined||raw==='' ?DEFAULT_REPO:normalizeRepo(raw);if(!repo)return c.json({ok:false,stage:'list',error:'INVALID',detail:'Repo must look like owner/name.'},400);return c.json(await scanDeployerBranches(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({}))),c.env.WORKER_VERSION),c.env.WORKER_VERSION||'1.344.0+',repo))});
 app.get('/api/branch-files',async c=>{const r=await listBranchBackupFiles(githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),c.req.query('repo')??DEFAULT_REPO,c.req.query('branch'),c.req.query('path'));return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.get('/api/branch-file',async c=>{const fetcher=githubApiFetch(pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})))),repo=c.req.query('repo')??DEFAULT_REPO,branch=c.req.query('branch'),path=String(c.req.query('path')||'');const r=path.toLowerCase().endsWith('.json')||(path.split('/').pop()||'').includes('.')?await fetchBranchBackupFile(fetcher,repo,branch,path):await fetchBranchBackupSplit(fetcher,repo,branch,path);return c.json(r,!r.ok&&r.stage==='params'?400:200)});
 app.post('/api/branch-push',async c=>{const b:any=await c.req.json().catch(()=>({}));const token=pickGithubToken(c.env.GH_BACKUP_TOKEN,await getState('settings',{}).catch(()=>({})));if(c.req.query('live')==='1'){const enc=new TextEncoder(),send=(obj:unknown)=>enc.encode(JSON.stringify(obj)+'\n');const auth=!token?{ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'}:null;const stream=new ReadableStream<Uint8Array>({async start(controller){try{if(auth){controller.enqueue(send(auth));return}const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}},(stage,info)=>controller.enqueue(send(stage==='reading'?{stage}:{stage,bytes:info?.bytes||0})));controller.enqueue(send(r))}catch(error){controller.enqueue(send({ok:false,stage:'push',error:error instanceof Error?error.message:String(error)}))}finally{controller.close()}}});return new Response(stream,{headers:{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache'}})}if(!token)return c.json({ok:false,stage:'auth',error:'Push needs a GitHub token with contents:write on this repo: save one in the branch tab or set GH_BACKUP_TOKEN on the server.'},400);const r=await pushBranchBackupSplit(githubApiFetch(token),githubApiPut(token),{repoRaw:b?.repo,branchRaw:b?.branch,folderRaw:b?.path,nameRaw:b?.name,bundle:b?.bundle,database:{skipped:'d1'}});return c.json(r,!r.ok&&r.stage==='params'?400:200)});
@@ -449,7 +449,7 @@ const hostDiagnosisNow=async(c:any)=>{
   const {settings:shopSettings}=await loadShopConfig(shopDeps()).catch(()=>({settings:{scraperPath:''}} as any));
   const diagnosis=await runHostDiagnosis({
     runtime:'cloudflare-workers',
-    version:c.env.WORKER_VERSION||'1.343.0+',
+    version:c.env.WORKER_VERSION||'1.344.0+',
     requestUrl:c.req.url,
     forwardedPrefix:c.req.header('x-forwarded-prefix')||'',
     scraperPath:String(shopSettings?.scraperPath||''),
