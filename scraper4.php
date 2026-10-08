@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.237';
+const APP_VERSION = '10.238';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -6229,7 +6229,7 @@ function aicontentProgress(array $patch): void {
     }
     $cur = array_merge($cur, $patch);
     if (!empty($patch['running']) && empty($patch['done'])) {
-        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok'] as $k) unset($cur[$k]);
+        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok', 'stop_requested'] as $k) unset($cur[$k]);
     }
     $cur['log'] = $log;
     $cur['ts'] = time();
@@ -18770,7 +18770,27 @@ $prevMap=$prevProducts;
 // شمارنده‌های زنده اختلاف نداشته باشد.
 // v8.39: سقف بالاتر برای مقایسهٔ نهایی — این لیست‌ها مبنای «ارسال فقط
 // تغییرات» هستند، پس اگر بریده شوند محصولی بی‌صدا جا می‌ماند.
+/* v10.238: محصولی که اجرای کامل مبدأ صریحاً ناموجود تشخیص داده است
+   دیگر در snapshot پروفایل نگه داشته نمی‌شود. بنابراین خودِ پروفایل منبع
+   حقیقت چرخهٔ افزودن/آپدیت/حذف می‌ماند: این unset پیش از مقایسه، محصول را
+   وارد removed_items می‌کند تا مقصدها هم بازنشسته شوند. روی اجرای ناقص یا
+   فقط-list اعمال نمی‌شود تا خطای موقت استخراج باعث حذف کاذب نشود. */
+$_profilePrunedUnavailable = [];
+if ($phase !== 'list' && empty($_ranOut) && empty($_listRanOut)) {
+    foreach ($allProducts as $_apuKey => $_apuProduct) {
+        if (is_array($_apuProduct) && array_key_exists('in_stock', $_apuProduct) && empty($_apuProduct['in_stock'])) {
+            $_apuProduct['key'] = (string)$_apuKey;
+            $_apuProduct['reason'] = 'ناموجود در مبدأ — حذف از snapshot پروفایل';
+            $_profilePrunedUnavailable[] = $_apuProduct;
+            unset($allProducts[$_apuKey]);
+        }
+    }
+}
 $finalCmp=extractLiveCompare($allProducts,$prevMap,100000);
+if ($_profilePrunedUnavailable) {
+    $finalCmp['removed_items'] = mergeRetireItems((array)($finalCmp['removed_items'] ?? []), $_profilePrunedUnavailable);
+    $finalCmp['removed'] = count($finalCmp['removed_items']);
+}
 $newCount=$finalCmp['new'];
 $priceChanged=$finalCmp['price_changed'];
 $removedCount=$finalCmp['removed'];
@@ -27227,6 +27247,7 @@ function matrixBuild(array $opts = []): array {
         $matrixWooDone = $wooErr === '' && $matrixWooComplete;
         matrixProgress(['checkpoint' => $matrixCp('woo_' . ($matrixWooDone ? 'map' : 'fetch'), $rowsByKey,
             $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
+        if (!empty($wooMeta['stopped']) || matrixStopRequested()) return $stopMatrix('woo_fetch');
         if (!$matrixWooDone) {
             $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -27304,6 +27325,7 @@ function matrixBuild(array $opts = []): array {
         $matrixShopDone[(string)$vid] = $shopDone;
         matrixProgress(['checkpoint' => $matrixCp('bsl_' . ($shopDone ? 'map' : 'fetch'), $rowsByKey, $profilesDone,
             $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
+        if (!empty($shopMeta['stopped']) || matrixStopRequested()) return $stopMatrix('bsl_fetch');
         if (!$shopDone) {
             $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' کامل نشد');
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -28693,6 +28715,14 @@ function matrixQueryPage(array $opts = []): array {
 }
 
 // --- endpoints ---
+/* v10.238: توقف مستقل ساخت جدول؛ checkpoint در اولین نقطهٔ امن حفظ می‌شود. */
+if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_stop')) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @file_put_contents(SYNC_MATRIX_STOP_FILE, json_encode(['at' => time(), 'by' => 'user'], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    matrixProgress(['stop_requested' => true, 'log_add' => ['⏹ درخواست توقف ساخت جدول ثبت شد؛ در اولین نقطهٔ امن متوقف می‌شود']]);
+    echo json_encode(['ok' => true, 'stop_requested' => true], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
     header('Content-Type: application/json; charset=UTF-8');
     $prog = matrixProgressRead();
@@ -28730,7 +28760,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
        دوباره انجام می‌شود و پروفایل‌های مبدأ از ابتدا تکرار نمی‌شوند. */
     $matrixCp = null;
-    if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_PROGRESS_FILE)) {
+    if (!empty($_GET['resume'] ?? $_POST['resume'] ?? null) && is_file(SYNC_MATRIX_PROGRESS_FILE)) {
         $oldMatrix = json_decode((string)@file_get_contents(SYNC_MATRIX_PROGRESS_FILE), true);
         $oldCp = is_array($oldMatrix['checkpoint'] ?? null) ? $oldMatrix['checkpoint'] : null;
         if (is_array($oldCp)
@@ -35800,10 +35830,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
                  && !$none['known'] && $none['owned'];          // ردیفی نیست ⇒ مسیرِ عنوان
          })());
 
-    $add('10.35', 'بازنشستگی اول از دفترچه می‌پرسد و مالکِ بیگانه را نمی‌زند',
-         strpos($selfSrc, "\$own = retireOwnership('woo', \$pKey, \$profileKey);") !== false
-      && strpos($selfSrc, "\$own = retireOwnership('bsl', \$pKey, \$profileKey);") !== false
-      && substr_count($selfSrc, "\$out['not_owned']++;") >= 2);
+    $add('10.35', 'بازنشستگی مقصد منبع تطبیق ایمن دارد (مالکیت قدیمی یا snapshot پروفایل)',
+         (strpos($selfSrc, "\$own = retireOwnership('woo', \$pKey, \$profileKey);") !== false
+       && strpos($selfSrc, "\$own = retireOwnership('bsl', \$pKey, \$profileKey);") !== false
+       && substr_count($selfSrc, "\$out['not_owned']++;") >= 2)
+      || (version_compare(APP_VERSION, '10.' . '238', '>=')
+       && function_exists('retireProfileMatrix' . 'Match')));
 
     $add('10.35', 'نقشهٔ تأیید یک‌بارمصرف است و پس از مصرف باطل می‌شود',
          function_exists('retirePlanSave') && function_exists('retirePlanTake')
@@ -38979,6 +39011,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, '$__bslCatalogWarm=bslCatalog' . 'Get($tk,$vid,true);') === false
       && strpos($selfSrc, "{v:'10." . "237'") !== false
       && version_compare(APP_VERSION, '10.' . '237', '>='));
+
+    /* ---------- v10.238: توقف/ادامه ماتریس + lifecycle مبتنی بر پروفایل ---------- */
+    $add('10.238', 'ساخت جدول endpoint توقف و ادامه از checkpoint دارد',
+         strpos($selfSrc, "action','sync_matrix_stop") !== false
+      && strpos($selfSrc, "if(resume) fd.append('resume','1')") !== false
+      && strpos($selfSrc, '$_POST[' . "'resume']") !== false
+      && strpos($selfSrc, "'stop_requested' => true") !== false);
+    $add('10.238', 'محصول ناموجود فقط پس از استخراج کامل از snapshot پروفایل حذف می‌شود',
+         strpos($selfSrc, '$_profilePrunedUnavailable = []') !== false
+      && strpos($selfSrc, 'unset($allProducts[$_apuKey])') !== false
+      && strpos($selfSrc, 'empty($_ranOut) && empty($_listRanOut)') !== false);
+    $add('10.238', 'بازنشستگی مقصد بر ردیف پروفایل/ماتریس و عنوان پروفایل تکیه دارد',
+         function_exists('retireProfileMatrix' . 'Match')
+      && strpos($selfSrc, "'profile_matrix'") !== false
+      && strpos($selfSrc, "'profile_title'") !== false
+      && function_exists('profileRetirePending' . 'Write'));
+    $add('10.238', 'ورودی 10.238 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "238'") !== false
+      && version_compare(APP_VERSION, '10.' . '238', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -43925,6 +43976,21 @@ function mergeRetireItems(array $removed, array $extra): array {
     return $out;
 }
 
+/** v10.238: صف retry بازنشستگی داخل خود پروفایل، نه دفتر حساب. */
+function profileRetirePendingWrite(string $profileKey, array $items): bool {
+    if ($profileKey === '') return false;
+    $profiles = loadProfiles();
+    $resolved = profileResolveKey($profileKey, $profiles) ?? $profileKey;
+    if (!isset($profiles[$resolved]) || !is_array($profiles[$resolved])) return false;
+    if ($items) {
+        $profiles[$resolved]['_retire_pending'] = array_slice(array_values($items), 0, 5000);
+        $profiles[$resolved]['_retire_pending_at'] = time();
+    } else {
+        unset($profiles[$resolved]['_retire_pending'], $profiles[$resolved]['_retire_pending_at']);
+    }
+    return saveProfiles($profiles);
+}
+
 /**
  * v10.101: پس از استخراج (کرون یا دستی) — بایگانی/حذف ناموجودها روی مقصد.
  * مقصد از target پروفایل + تیک add/update؛ اگر تیک نبود ولی target هست،
@@ -44120,7 +44186,8 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
     }
     $removed = is_array($exRes['removed_items'] ?? null) ? $exRes['removed_items'] : [];
     $oos = collectOosRetireItems($profile);
-    $items = mergeRetireItems($removed, $oos);
+    $pending = is_array($profile['_retire_pending'] ?? null) ? $profile['_retire_pending'] : [];
+    $items = mergeRetireItems(mergeRetireItems($removed, $oos), $pending);
     if (!$items) {
         $empty['skipped'] = 'no_items';
         return $empty;
@@ -44150,6 +44217,10 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
         $cn, $items, $retTarget, $mode,
         (int)($exRes['extracted'] ?? 0), false, $name, $per, $pk
     );
+    /* خطای شبکه/محافظ، snapshot حذف‌شده را برای retry بعدی نگه می‌دارد.
+       not_found خطا نیست: ممکن است مقصد قبلاً در تلاش جزئی قبلی حذف شده باشد. */
+    $keepPending = (int)($rt['failed'] ?? 0) > 0 || (int)($rt['no_conn'] ?? 0) > 0 || !empty($rt['skipped']);
+    profileRetirePendingWrite($pk, $keepPending ? $items : []);
     try {
         if (function_exists('notifRetire')) {
             $rt['woo_action'] = $per['woo'];
@@ -44174,10 +44245,36 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
         'skipped' => (string)($rt['skipped'] ?? ''),
         'oos_merged' => count($oos),
         'removed_src' => count($removed),
+        'pending_retry' => $keepPending ? count($items) : 0,
         'woo_action' => $per['woo'],
         'bsl_action' => $per['bsl'],
         'queue_report' => $queueRep,
     ];
+}
+
+/** v10.238: شناسهٔ مقصد از عضویت محصول در snapshot پروفایل/ماتریس. */
+function retireProfileMatrixMatch(string $target, string $title, string $profileKey,
+                                  string $productKey = '', int $vendorId = 0): ?array {
+    $mx = function_exists('matrixResultLoad') ? matrixResultLoad() : [];
+    $rows = is_array($mx['rows'] ?? null) ? $mx['rows'] : [];
+    if (!$rows || $profileKey === '') return null;
+    $askProfile = strpos($profileKey, '://') !== false ? profileKey($profileKey) : $profileKey;
+    $askTitle = function_exists('matrixBareTitle')
+        ? matrixBareTitle($title, (array)($mx['suffixes'] ?? [])) : reconNormTitle($title);
+    foreach ($rows as $r) {
+        if (!is_array($r) || (int)($r['profile_hits'] ?? 0) <= 0) continue;
+        $rowProfile = (string)($r['profile_key'] ?? '');
+        if (strpos($rowProfile, '://') !== false) $rowProfile = profileKey($rowProfile);
+        if ($rowProfile !== $askProfile) continue;
+        $sameKey = $productKey !== '' && (string)($r['key'] ?? '') === $productKey;
+        $sameTitle = $askTitle !== '' && (string)($r['bare'] ?? '') === $askTitle;
+        if (!$sameKey && !$sameTitle) continue;
+        if ($target === 'woo' && !empty($r['woo']['id']))
+            return ['id' => (int)$r['woo']['id'], 'match' => 'profile_matrix'];
+        if ($target === 'bsl' && $vendorId > 0 && !empty($r['shops'][$vendorId]['id']))
+            return ['id' => (int)$r['shops'][$vendorId]['id'], 'match' => 'profile_matrix'];
+    }
+    return null;
 }
 
 function retireRemoved(array $cn, array $items, string $target, string $mode,
@@ -44215,22 +44312,15 @@ function retireRemoved(array $cn, array $items, string $target, string $mode,
                 'key' => $pKey];
 
         if ($target === 'woo' || $target === 'both') {
-            /* v10.35 (۴۷ج): اول دفترچه — هم دقیق‌تر است هم مالکیت را می‌داند */
-            $own = retireOwnership('woo', $pKey, $profileKey);
-            if ($own['known'] && !$own['owned']) {
-                $out['not_owned']++;
-                $row['woo'] = 'مالِ پروفایلِ دیگر (' . $own['owner'] . ') — دست نخورد';
-                $ex = null;
-            } elseif ($own['known']) {
-                $ex = ['id' => $own['id']];
-                $row['woo_match'] = 'ledger';
-            } else {
+            /* v10.238: تصمیم از snapshot پروفایل است، نه دفتر حساب. */
+            $ex = retireProfileMatrixMatch('woo', $title, $profileKey, $pKey);
+            if ($ex) $row['woo_match'] = (string)($ex['match'] ?? 'profile_matrix');
+            if (!$ex) {
                 $t = $suffix !== '' && mb_strpos($title, $suffix) === false ? $title . $suffix : $title;
                 $ex = wooFindByTitle($w, $t) ?: wooFindByTitle($w, $title);
-                if ($ex) $row['woo_match'] = 'title';
+                if ($ex) $row['woo_match'] = 'profile_title';
             }
-            if (isset($row['woo']) && $row['woo'] !== '') { /* مالکیتِ رد‌شده — کاری نکن */ }
-            elseif (!$ex) { $out['not_found']++; $row['woo'] = 'یافت نشد'; }
+            if (!$ex) { $out['not_found']++; $row['woo'] = 'یافت نشد در مقصد برای پروفایل'; }
             elseif ($dryRun) { $row['woo'] = 'آماده: #' . $ex['id']; }
             else {
                 $id = (int)$ex['id'];
@@ -44263,22 +44353,14 @@ function retireRemoved(array $cn, array $items, string $target, string $mode,
             $out['no_conn'] = ($out['no_conn'] ?? 0) + 1;
         }
         if (($target === 'bsl' || $target === 'both') && $tk !== '' && $vid > 0) {
-            /* v10.35 (۴۷ج): همان منطقِ مالکیت برای باسلام. کلیدِ غرفهٔ
-               پیش‌فرض خودِ productKey است (bslShopMapKey)، پس همین کافی است. */
-            $own = retireOwnership('bsl', $pKey, $profileKey);
-            if ($own['known'] && !$own['owned']) {
-                $out['not_owned']++;
-                $row['bsl'] = 'مالِ پروفایلِ دیگر (' . $own['owner'] . ') — دست نخورد';
-                $ex = null;
-            } elseif ($own['known']) {
-                $ex = ['id' => $own['id']];
-                $row['bsl_match'] = 'ledger';
-            } else {
+            /* v10.238: تصمیم از snapshot پروفایل است، نه دفتر حساب. */
+            $ex = retireProfileMatrixMatch('bsl', $title, $profileKey, $pKey, $vid);
+            if ($ex) $row['bsl_match'] = (string)($ex['match'] ?? 'profile_matrix');
+            if (!$ex) {
                 $ex = bslFindByTitle($tk, $vid, $title);
-                if ($ex) $row['bsl_match'] = 'title';
+                if ($ex) $row['bsl_match'] = 'profile_title';
             }
-            if (isset($row['bsl']) && $row['bsl'] !== '') { /* مالکیتِ رد‌شده */ }
-            elseif (!$ex) { $out['not_found']++; $row['bsl'] = 'یافت نشد'; }
+            if (!$ex) { $out['not_found']++; $row['bsl'] = 'یافت نشد در مقصد برای پروفایل'; }
             elseif ($dryRun) { $row['bsl'] = 'آماده: #' . $ex['id']; }
             else {
                 $id = (int)$ex['id'];
@@ -62399,7 +62481,9 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">
 <div style="font-size:13px;font-weight:900;color:#e9d5ff">📊 جدول مقایسهٔ نظیر‌به‌نظیر</div>
 <div style="display:flex;gap:6px;flex-wrap:wrap">
-<button class="btn btn-purple" onclick="syncMatrixStart()" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
+<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
+<button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
+<button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px;padding:6px 12px">📖 خواندن نتیجه</button>
 <button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
@@ -63039,12 +63123,12 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
                 <div style="flex:1;display:flex;flex-direction:column;gap:4px">
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">
                         <input type="checkbox" id="profileSyncWooAddUpdate" onchange="scheduleSave();updateSyncStatusText();try{updateRetireBadge()}catch(e){}">
-                        <span style="color:#c4b5fd">افزودن/آپدیت/حذف ووکامرس</span>
+                        <span style="color:#c4b5fd">ووکامرس — افزودن/آپدیت/حذف از روی پروفایل ذخیره‌شده</span>
                         <span style="color:#64748b;font-size:9px">(فقط جدید و تغییرکرده؛ رفته‌ها از مبدأ حذف می‌شوند)</span>
                     </label>
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">
                         <input type="checkbox" id="profileSyncBslAddUpdate" onchange="scheduleSave();updateSyncStatusText();try{updateRetireBadge()}catch(e){}">
-                        <span style="color:#67e8f9">افزودن/آپدیت/بایگانی باسلام</span>
+                        <span style="color:#67e8f9">باسلام — افزودن/آپدیت/بایگانی از روی پروفایل ذخیره‌شده</span>
                         <span style="color:#64748b;font-size:9px">(فقط جدید و تغییرکرده؛ رفته‌ها از مبدأ بایگانی می‌شوند)</span>
                     </label>
                 </div>
@@ -63052,7 +63136,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
             <details class="hint-mini" style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;margin-top:4px"><summary>چرا «فقط تغییرات»؟</summary>
                 <div class="hint-body" style="font-size:10px;color:#64748b;line-height:1.7">
                 💡 <b>تیکِ روشن</b> = چرخهٔ سه‌گانه: افزودن محصولِ جدید، آپدیتِ تغییرکرده‌ها، و
-                حذف (ووکامرس) / بایگانی (باسلام) برای آنچه از مبدأ رفته است. فقط تفاوت‌ها ارسال می‌شوند،
+                حذف (ووکامرس) / بایگانی (باسلام) برای آنچه از مبدأ رفته است. مبنا snapshot پروفایل ذخیره‌شده است، نه دفتر حساب؛ فقط تفاوت‌ها ارسال می‌شوند،
                 پس برای فهرست‌های بزرگ بسیار سریع‌تر است. اقدامِ دقیقِ هر مقصد در
                 «🗂 محصولات رفته از مبدأ» انتخاب می‌شود و محافظِ حذفِ انبوه هم آنجا اعمال می‌شود.
                 <br>💡 <b>تیکِ خاموش</b> = ارسالِ کاملِ همهٔ محصولات، بدون هیچ مقایسه‌ای با محصولاتِ
@@ -69715,6 +69799,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.238', t:'⏯ پایداری مغایرت‌گیری و چرخهٔ مقصد بر پایهٔ پروفایل', items:[
+    'ساخت جدول مقایسه اکنون دکمهٔ توقف مستقل و ادامه از checkpoint دارد؛ توقف نتیجهٔ نیمه‌کاره را حفظ می‌کند و شروع مجدد از پروفایل‌ها/صفحات انجام‌شده عبور می‌کند.',
+    'چرخهٔ ووکامرس و باسلام بر snapshot پروفایل ذخیره‌شده تکیه دارد، نه دفتر حساب: محصول جدید ارسال، تغییر قیمت ذخیره و در مقصد آپدیت، و محصول حذف/ناموجود از پروفایل و مقصد بازنشسته می‌شود.',
+    'محصولی که اجرای کامل مبدأ صریحاً ناموجود تشخیص دهد پیش از ذخیره از محصولات پروفایل حذف و به removed_items منتقل می‌شود؛ اجرای ناقص هرگز این پاک‌سازی را انجام نمی‌دهد؛ شکست مقصد نیز داخل خود پروفایل برای retry نوبت بعد حفظ می‌شود.',
+  ]},
   {v:'10.237', t:'✅ تکمیل تست جلوگیری از rebuild کاتالوگ ارسال', items:[
     'تست داخلی v10.236 برای نبودِ فراخوانی build شبکه‌ای کاتالوگ، با الگوی split-literal اصلاح شد تا خودِ متن تست باعث شکست کاذب نشود.',
   ]},
@@ -78053,6 +78142,12 @@ function smPaintProgress(p){
     el.innerHTML=lines.map(l=>'<div style="border-bottom:1px solid #1e293b;padding:2px 0">'+esc(l)+'</div>').join('');
     try{ el.scrollTop = el.scrollHeight; }catch(e){}
   }
+  const buildStop=$('smBuildStopBtn'), buildResume=$('smBuildResumeBtn'), buildStart=$('smBuildStartBtn');
+  const isBuild=!!p.running && !(p.job==='fix' || String(p.phase||'').indexOf('fix')>=0 || p.ok_n!=null);
+  if(buildStop) buildStop.style.display=isBuild?'':'none';
+  if(buildResume) buildResume.style.display=(!p.running && (!!p.stopped || !!p.partial || !!p.checkpoint))?'':'none';
+  if(buildStart) buildStart.disabled=!!p.running;
+  if(!p.running && p.stopped && $('smJobLabel')) $('smJobLabel').textContent='⏹ متوقف شد — ادامه از checkpoint آماده است';
   const stopBtn=$('smFixStopBtn');
   if(stopBtn) stopBtn.style.display = (p.running && (p.job==='fix' || p.phase==='woo_fix' || p.phase==='bsl_fix' || p.phase==='queued' || (p.ok_n!=null))) ? '' : (p.running && p.job==='fix' ? '' : stopBtn.style.display);
   if(stopBtn && p.running && (String(p.phase||'').indexOf('fix')>=0 || p.job==='fix' || p.ok_n!=null || p.phase==='woo_fix' || p.phase==='bsl_fix' || p.phase==='queued')){
@@ -78069,13 +78164,15 @@ function smPaintProgress(p){
       +(p.phase?(' · '+esc(String(p.phase))):'');
   }
 }
-function syncMatrixStart(){
+function syncMatrixStart(resume){
+  resume=!!resume;
   smShowJob(true);
-  if($('smJobLabel')) $('smJobLabel').textContent='🚀 ارسال جاب به سرور…';
+  if($('smJobLabel')) $('smJobLabel').textContent=resume?'⏯ ادامه از checkpoint…':'🚀 ارسال جاب به سرور…';
   if($('smBody')) $('smBody').innerHTML='<tr><td style="padding:16px;text-align:center;color:#a5b4fc">ساخت روی سرور شروع شد — می‌توانید این صفحه را باز بگذارید</td></tr>';
   const fd=new FormData();
   fd.append('action','sync_matrix_start');
   fd.append('source','manual');
+  if(resume) fd.append('resume','1');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع ناموفق',1);
@@ -78083,6 +78180,13 @@ function syncMatrixStart(){
       return;
     }
     showToast('ساخت روی سرور آغاز شد');
+    syncMatrixPoll();
+  }).catch(e=>showToast('خطا: '+e,1));
+}
+function syncMatrixStop(){
+  const fd=new FormData(); fd.append('action','sync_matrix_stop');
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    showToast(d&&d.ok?'درخواست توقف ثبت شد؛ checkpoint حفظ می‌شود':'توقف ناموفق', !(d&&d.ok));
     syncMatrixPoll();
   }).catch(e=>showToast('خطا: '+e,1));
 }
