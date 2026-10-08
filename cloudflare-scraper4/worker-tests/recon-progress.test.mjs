@@ -567,7 +567,7 @@ test('«نمایش جدول آخر» works with no report in this browser: it re
   const panel = await panelHarness({ api: async path => { asked = path; return { ok: true, report, at: '2026-10-07T09:00:00.000Z' }; } });
   await panel.openReconFullscreen();
   assert.equal(asked, '/api/maintenance/recon-last', 'the panel asks the server for the last stored report');
-  assert.equal(panel.doc.getElementById('resultModal').className, 'result-modal-full', 'the stored table opens full screen');
+  assert.equal(panel.doc.getElementById('resultModal').className, 'result-modal-full recon-fit', 'the stored table opens full screen, fitted to the device');
   assert.ok(panel.doc.querySelectorAll('.result-body .sync-table tbody tr').length >= 60, 'the stored report is drawn as the sync table');
   assert.ok(panel.doc.querySelectorAll('.result-body .rc-table tbody tr').length >= 60, 'the full matrix stays available under its fold');
   assert.match(panel.doc.querySelector('.rc-note').textContent, /آخرین پیش‌نمایش ذخیره‌شدهٔ سرور خوانده شد · زمان ثبت: 2026-10-07T09:00:00.000Z/);
@@ -875,4 +875,45 @@ test('all the columns are on the table before a single row has been compared', a
   assert.equal(row.querySelector('[data-cell$="woo:default"]').getAttribute('data-state'), 'priceDiff');
   assert.equal(row.querySelector('[data-cell$="basalam:735703"]').getAttribute('data-state'), 'pending', 'a destination that has not answered yet says so');
   assert.match(row.querySelector('[data-cell$="basalam:900"]').textContent, /در انتظار پاسخ این مقصد/);
+});
+
+
+// ——— the preview window on a phone (1.343.0) ——————————————————————————————————
+//
+// The request: «پنجره پیش‌نمایش هماهنگ‌سازی، موبایل پسند باشد، فقط جدول‌ها اسکرولی باشند.»
+// On a phone the window used to be one long scrolling page: the hero, the status lines, the
+// legend and the table all scrolled together, so the table header walked off the screen and the
+// sticky product column lost its meaning. Now the window is exactly as tall as the device and
+// the only things that scroll are the tables.
+
+test('the preview window is fitted to the device and marks itself as such', async () => {
+  const panel = await panelHarness();
+  panel.openReconLiveProgress('پیش‌نمایش هماهنگ‌سازی (زنده)', 'شروع…');
+  const classes = panel.doc.getElementById('resultModal').className.split(/\s+/);
+  assert.ok(classes.includes('result-modal-full'), 'still full screen');
+  assert.ok(classes.includes('recon-fit'), 'and fitted, so the body itself never scrolls');
+});
+
+test('only the tables scroll: the window chrome is pinned and the table wrapper takes the rest', async () => {
+  const dash = await read('worker-src/dashboard.ts');
+  const css = dash.slice(dash.indexOf('.result-modal-full{padding:0}'), dash.indexOf('.result-box{width:min(1050px,97vw)'));
+  assert.match(css, /\.recon-fit \.result-body\{[^}]*overflow:hidden/, 'the modal body is not a scroller any more');
+  assert.match(css, /\.recon-fit \.result-body>\*\{flex:0 0 auto\}/, 'banner, legend and hero keep their natural height');
+  assert.match(css, /\.recon-fit \.result-body>\.sync-wrap\{flex:1 1 auto/, 'the final table takes every remaining pixel');
+  assert.match(css, /\.recon-fit \[data-recon-matrix\]>\.sync-wrap\{flex:1 1 auto[^}]*max-height:none/, 'and so does the live one');
+  assert.match(css, /\.recon-fit \.recon-live\{[^}]*overflow:hidden/, 'the live section is a column, not a page');
+  assert.match(css, /\.recon-fit \.recon-ticker ol,\.recon-fit \.diag-activity-log\{max-height:none;overflow:visible\}/,
+    'no scroller inside a scroller: the technical lists ride the details pane');
+  assert.match(dash, /\.result-modal-full \.result-box\{[^}]*height:100dvh/, 'a phone browser bar no longer cuts the window off');
+  assert.match(dash, /\.sync-wrap\{overflow:auto[^}]*overscroll-behavior:contain/, 'scrolling the table never drags the page behind it');
+});
+
+test('on a narrow screen the table keeps its sticky column and the chrome shrinks instead', async () => {
+  const dash = await read('worker-src/dashboard.ts');
+  const phone = dash.slice(dash.indexOf('@media(max-width:700px){.sync-sticky'), dash.indexOf('@media(max-height:560px)'));
+  assert.match(phone, /\.sync-sticky\{min-width:132px/, 'the product column narrows but stays sticky');
+  assert.match(phone, /\.sync-cell\{min-width:98px\}/, 'destination cells stay readable while the table scrolls sideways');
+  assert.match(phone, /\.sync-legend\{flex-wrap:nowrap;overflow-x:auto/, 'the colour legend becomes one swipeable line instead of four stacked rows');
+  assert.match(phone, /\.recon-fit \.diag-live-hero\{padding:\.5rem/, 'the hero gives its height back to the table');
+  assert.match(dash, /@media\(max-height:560px\)\{\.recon-fit \.diag-live-hero\{display:none\}/, 'on a short screen the decoration disappears entirely');
 });
