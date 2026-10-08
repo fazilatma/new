@@ -133,7 +133,7 @@ async function pipeline(runtime,options={}){
   const saved=[],states=new Map(),snapshots=[],syncs=[];
   const list=async(...args)=>{if(options.expectedParser)assert.equal(args.at(-1),options.expectedParser);return {url:BASE,nextUrl:'',usedEngine:'cheerio',products:structuredClone(options.products||[product()])}};
   const {createAiStageRunner}=await compileFunctions(await read('worker-src/job-ai-stage.ts'),['createAiStageRunner']);
-  const io={...await compileFunctions(await read('worker-src/product-parser.ts'),['selectedProductParser']),...ai,...twins[runtime],...listHelpers,ledgerMissing:async()=>({planned:0,changed:0}),createAiStageRunner,applyStoredResultSettings:async()=>({changed:0,conflicts:0,next:null}),
+  const io={...await compileFunctions(await read('worker-src/product-parser.ts'),['selectedProductParser']),...ai,...twins[runtime],...listHelpers,ledgerMissing:async()=>({planned:0,changed:0}),profileSyncRemovals:async()=>({ok:true,blocked:'',planned:0,removedFromDestination:0,removedFromProfile:0,failed:[]}),createAiStageRunner,applyStoredResultSettings:async()=>({changed:0,conflicts:0,next:null}),
     scrapeListPage:list,scrapeListWithMeta:list,
     listSelectorsStatus:()=> 'custom',suggestSelectors:async()=>({selectors:options.rescue?{shortDesc:'.short',price:'.detail-price'}:{}}),
     claimJob:async()=>{job.status='running';return job},getJob:async()=>job,getProfile:async()=>profile,

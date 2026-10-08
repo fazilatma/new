@@ -13,7 +13,7 @@ import { createBrowserRepair } from '../scripts/browser-repair.mjs';
 import { processResources } from './process-resources.js';
 import { benchmarkPagination } from '../worker-src/benchmark-pagination.js';
 import { extractionDetails } from '../worker-src/job-details.js';
-import { refreshDestinationLedger, destinationLedgerStatus, destinationLedgerProducts, ledgerMissing } from './maintenance.js';
+import { refreshDestinationLedger, destinationLedgerStatus, destinationLedgerProducts, ledgerMissing, profileSyncRemovals } from './maintenance.js';
 import { maintenanceResponse } from '../worker-src/maintenance-response.js';
 import { saveConnectionsAndReprice, drainWooReprice } from '../worker-src/woo-reprice.js';
 import { mergeConnections } from './vault.js';
@@ -67,7 +67,7 @@ import { createVisualTicket, readVisualTicket, visualSelectorCsp, renderVisualSe
 import { requestWorkerStop, processOneJob } from './processor.js';
 import { createJobDispatcher } from './job-dispatcher.js';
 
-const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.341.0+'; } catch { return process.env.npm_package_version || '1.341.0+'; } })();
+const PACKAGE_VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '1.342.0+'; } catch { return process.env.npm_package_version || '1.342.0+'; } })();
 const runtimeVersion = () => process.env.WORKER_VERSION || PACKAGE_VERSION;
 type LibraryItem=(name:string,available:boolean,version?:string,source?:string,note?:string)=>{name:string;available:boolean;installed:boolean;version:string;source:string;note:string};
 function pythonSdkItems(item:LibraryItem,command:(name:string)=>string){
@@ -929,7 +929,7 @@ const hostDiagnosisNow = async (c: any) => {
   const { settings: shopSettings } = await loadShopConfig(shopDeps()).catch(() => ({ settings: { scraperPath: '' } } as any));
   const diagnosis = await runHostDiagnosis({
     runtime: 'node',
-    version: process.env.npm_package_version || '1.341.0+',
+    version: process.env.npm_package_version || '1.342.0+',
     requestUrl: c.req.url,
     forwardedPrefix: c.req.header('x-forwarded-prefix') || '',
     scraperPath: String(shopSettings?.scraperPath || ''),
@@ -999,6 +999,7 @@ app.get('/api/maintenance/ledger',async c=>c.json(await destinationLedgerStatus(
 app.post('/api/maintenance/ledger/refresh',async c=>{const b=await c.req.json().catch(()=>({})) as any;if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e}));return report});}return maintenanceResponse(c,()=>refreshDestinationLedger(b.force!==false))});
 app.post('/api/maintenance/ledger/refresh/live',async c=>{const b=await c.req.json().catch(()=>({})) as any;return diagnosticStream(async observe=>{const report=await refreshDestinationLedger(b.force!==false,(e:any)=>observe({name:e.type||e.stage||'ledger',status:'running',summary:e.account||e.type||'',...e}));return report});});
 app.post('/api/maintenance/ledger/missing',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY'))});
+app.post('/api/maintenance/profile-removals',async c=>{const b=await c.req.json().catch(()=>({})) as any;return maintenanceResponse(c,()=>profileSyncRemovals(String(b.profileId||''),b.confirm==='APPLY',b.target==='woo'||b.target==='basalam'?b.target:'both'))});
 app.post('/api/maintenance/recon-unified',async c=>{const b=await c.req.json().catch(()=>({}))as any;if(c.req.query('live')==='1'){return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});}return maintenanceResponse(c,()=>unifiedRecon(String(b.profileId||'')))});
 app.post('/api/maintenance/recon-unified/live',async c=>{const b=await c.req.json().catch(()=>({}))as any;return diagnosticStream(async observe=>{const report=await unifiedReconLive(String(b.profileId||''),(e:any)=>observe({name:e.stage||e.type||'recon',status:'running',summary:e.account||e.stage||e.type||'',...e}));return report});});
 // 1.338.0 — همان گزارش ذخیره‌شدهٔ پیش‌نمایش، برای دکمهٔ «نمایش جدول آخر». Twin of worker-src/app.ts.
@@ -1018,6 +1019,8 @@ const maintenanceOps:Record<string,(body:any,observe:(e:any)=>void)=>Promise<any
   'recon-unified-apply':(b,observe)=>unifiedReconApply(String(b.profileId||''),b.confirm==='APPLY',Number(b.limit)||200,observe),
   'ledger-refresh':(b,observe)=>refreshDestinationLedger(b.force!==false,observe),
   'ledger-missing':(b,observe)=>ledgerMissing(String(b.profileId||''),b.confirm==='APPLY','both',observe),
+  // ۱.۳۴۲.۰ — حذف بر پایهٔ پروفایل: مرجع تصمیم، پروفایل ذخیره‌شده است، نه دفتر حساب.
+  'profile-removals':(b,observe)=>profileSyncRemovals(String(b.profileId||''),b.confirm==='APPLY',b.target==='woo'||b.target==='basalam'?b.target:'both',observe),
   duplicates:(b,observe)=>destinationDuplicates(b.confirm==='APPLY',Number(b.limit)||200,b.keep==='cheapest'?'cheapest':'expensive',String(b.accountKey||''),observe),
   'recon-table:woo':(b,observe)=>reconTableLive('woo',String(b.profileId||''),observe),
   'recon-table:basalam':(b,observe)=>reconTableLive('basalam',String(b.profileId||''),observe),

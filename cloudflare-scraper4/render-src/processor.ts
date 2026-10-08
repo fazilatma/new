@@ -9,7 +9,7 @@ import { mapLimit, pageUrl, scrapeDetails, scrapeListWithMeta, suggestSelectors,
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from '../worker-src/dedup.js';
 import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
-import { destinationCategories, ledgerMissing } from './maintenance.js';
+import { destinationCategories, profileSyncRemovals } from './maintenance.js';
 import type { Job, Product } from './types.js';
 
 let stopping = false;
@@ -320,12 +320,24 @@ export async function processOneJob(): Promise<boolean> {
           delete (product as any)._reuseDetails;const result = await upsertProduct(profile.id, product, {source:true}); result === 'added' ? job.added++ : job.updated++;
         }
         if (job.skippedNoPrice) append(job, `${job.skippedNoPrice} محصول بدون قیمت نادیده گرفته شد.`, 'warning');
-        const retired=sourceComplete&&!job.failed&&!job.skippedNoPrice?await markMissingProducts(profile.id,products.map(p=>p.sourceKey)):0;if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
-        await setState('source_scan:'+profile.id,{jobId:job.id,complete:sourceComplete&&!job.failed&&!job.skippedNoPrice,at:new Date().toISOString(),count:products.length});
+        // ۱.۳۴۲.۰ — یک محصول بی‌قیمت یعنی «در مبدأ ناموجود شده»، نه «اسکن خراب است»؛ فقط وقتی
+        // سهمشان از ۳۰٪ (و حداقل ۵ مورد) بگذرد، اسکن مشکوک و بازنشستگی متوقف می‌شود.
+        const noPrice=Number(job.skippedNoPrice||0),suspicious=noPrice>Math.max(5,Math.round(0.3*(noPrice+products.length)));
+        if(suspicious)append(job,`${noPrice} محصول بدون قیمت خوانده شد (بیش از سقف ۳۰٪)؛ اسکن مشکوک است و هیچ محصولی بازنشسته یا حذف نشد.`,'warning');
+        else if(noPrice)append(job,`${noPrice} محصول در مبدأ بی‌قیمت/ناموجود شد و جزو «رفته از مبدأ» حساب می‌شود.`,'warning');
+        const scanTrusted=sourceComplete&&!job.failed&&!suspicious;
+        const retired=scanTrusted?await markMissingProducts(profile.id,products.map(p=>p.sourceKey)):0;if(retired)append(job,`${retired} محصول دیگر در مبدأ دیده نشد`,'warning');
+        await setState('source_scan:'+profile.id,{jobId:job.id,complete:scanTrusted,at:new Date().toISOString(),count:products.length});
         if(sourceComplete){
           let delTarget: 'woo'|'basalam'|'both'|null=null;
           try{const opts=await getState<any>('job_options:'+job.id,null);if(opts?.deleteWoo||opts?.deleteBasalam)delTarget=opts.deleteWoo&&opts.deleteBasalam?'both':opts.deleteWoo?'woo':'basalam';else if(job.target!=='none')delTarget=job.target==='both'?'both':job.target as any;}catch{}
-          if(delTarget){const removal=await ledgerMissing(profile.id,true,delTarget);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی (${delTarget}).`)}
+          // ۱.۳۴۲.۰ — حذف بر پایهٔ پروفایل: هرچه از پروفایل رفته، از مقصدها هم می‌رود و بعد
+          // ردیفش از خود پروفایل پاک می‌شود. (پیش از این فقط دفتر حساب تصمیم می‌گرفت.)
+          if(delTarget){
+            const removal=await profileSyncRemovals(profile.id,true,delTarget);
+            if(removal.blocked)append(job,`حذف بر پایهٔ پروفایل انجام نشد: ${removal.blocked}`,'warning');
+            else if(removal.planned)append(job,`بر پایهٔ پروفایل: ${removal.planned} محصول رفته از مبدأ؛ ${removal.removedFromDestination} حذف از مقصد و ${removal.removedFromProfile} حذف از پروفایل (${delTarget}).`,removal.failed.length?'warning':'info');
+          }
         }
         await markProfileRun(profile.id);
         if (job.target !== 'none') await runSync(job, profile, await allProducts(profile.id));

@@ -1,11 +1,12 @@
 import { actionLine, bucketTally, bucketLines, liveRows, matchLines, planOrder, matchedProofLines, profileLines, clip as clipText, countLines, createReconProgress, describeLedgerEvent, fa as faN, faDuration, faPrice, mergeTally, sampleLines, sourceNote, tallySummary, throughput } from '../worker-src/recon-progress.js';
+import { planProfileRemovals } from '../worker-src/profile-sync-core.js';
 import { customerVisible } from '../worker-src/ledger-inventory.js';
 import { destinationLedger, destinationScope } from './ledger.js';
 import { basicAuth, normalizePersianText } from '../worker-src/utils.js';
 import { byAccount, byProfile, findProfileBySuffix, planActions, planDuplicateDeletions, reconPlan, reconcileAccount, unreachableAccountRows, summarize } from '../worker-src/recon-core.js';
 import type { ReconAccount, ReconLocal, ReconRemote, UnifiedReconRow, ProfileSuffixInfo } from '../worker-src/recon-core.js';
 import { loadConnections } from './connections.js';
-import { getProduct, getProfile, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
+import { deleteProduct, getProduct, getProfile, getState, learnCategory, listProfiles, maintenanceRows, setDestinationId, setRemoteId, setState } from './db.js';
 import { safeBasalamFetch, safeFetch } from './network.js';
 import { normalizeApiBase, runApiWriteLoop, summarizeApiAttempts } from '../worker-src/api-loop.js';
 import { hasCodeSuffix, parseSuffixFormats, stripCodeSuffix, suffixPatterns } from '../worker-src/dedup.js';
@@ -984,6 +985,96 @@ export async function ledgerMissing(profileId='',apply=false,target='both',onPro
    summary:'پایان در '+faDuration(p.elapsed())+' · نامزد '+faN(items.length)+' · انجام‌شده '+faN(changed)+' · باقی‌مانده '+faN(Math.max(0,items.length-changed))+' · ناموفق '+faN(failed.length)+(mode==='report'?' · شیوه روی «فقط گزارش» است، پس چیزی در مقصد تغییر نکرد':''),
    detail:items.slice(0,4).map((i:any)=>clipText(i.title,55)+' — '+(i.target==='woo'?'ووکامرس':'باسلام')+' · شناسه '+faN(i.remoteId))});
  return {ok:!failed.length,dryRun:!apply||mode==='report',mode,planned:items.length,changed,remaining:Math.max(0,items.length-changed),items,failed,limit:20};
+}
+
+/**
+ * ۱.۳۴۲.۰ — حذف بر پایهٔ پروفایل (نه دفتر حساب).
+ *
+ * هرچه در پروفایلِ ذخیره‌شده نیست، در مقصد هم نباید باشد. این تابع محصولات
+ * «رفته از مبدأ» را از روی خودِ پروفایل پیدا می‌کند (نه از روی دفتر حساب)، آن‌ها
+ * را از هر مقصدی که به آن ارسال شده بودند برمی‌دارد و بعد ردیفشان را از پروفایل
+ * پاک می‌کند. دفتر حساب فقط برای یافتن شناسهٔ مقصد کمک می‌کند و اگر کهنه باشد
+ * جلوی کار را نمی‌گیرد؛ شناسهٔ مقصد از نقشهٔ ارسال (destination_map) خوانده می‌شود.
+ *
+ * نرده‌های ایمنی که سر جایشان می‌مانند: اسکن مبدأ باید کامل بوده باشد، و سقف
+ * درصد/تعداد حذف («محصولات رفته از مبدأ» در تنظیمات) رعایت می‌شود.
+ */
+export async function profileSyncRemovals(profileId='',apply=false,target:'woo'|'basalam'|'both'='both',onProgress?:(e:any)=>void){
+ const p=createReconProgress(onProgress);
+ p.emit({stage:'start',name:'profile-sync',summary:(apply?'شروع هماهنگ‌سازی حذف بر پایهٔ پروفایل':'بررسی حذف بر پایهٔ پروفایل (هیچ چیزی تغییر نمی‌کند)')+' · مرجع تصمیم: پروفایل ذخیره‌شده، نه دفتر حساب'});
+ const rows=await maintenanceRows(profileId) as any[];
+ const settings=await getState<any>('settings',{}) as any;
+ const scan=profileId?await getState<any>('source_scan:'+profileId,null):null;
+ const accounts=(await reconAccounts()).filter(a=>target==='both'||a.target===target);
+ p.emit({stage:'accounts-listed',name:'accounts',total:accounts.length,
+   summary:'مقصدهای این حذف: '+faN(accounts.length)+' · محصولات ذخیره‌شدهٔ پروفایل: '+faN(rows.length),
+   accounts:accounts.map(a=>({target:a.target,accountKey:a.accountKey,name:a.name})),
+   detail:accounts.map(a=>a.name+' — '+(a.target==='woo'?'ووکامرس':'باسلام'))});
+ const mode=String(settings?.retire?.mode||'')||'delete';
+ const plan=planProfileRemovals(rows,accounts,{
+   scanComplete:!!scan?.complete,profileId,
+   maxPct:Number(settings?.retire?.maxPct)||30,maxCount:Number(settings?.retire?.maxCount)||50});
+ const REASON_TALLY='در مبدأ نبود: '+faN(plan.stats.missing)+' · ناموجود: '+faN(plan.stats.outOfStock)+' · بی‌قیمت: '+faN(plan.stats.noPrice);
+ if(plan.blocked){
+  p.emit({stage:'plan-ready',name:'plan',status:'error',count:0,total:plan.stats.gone,
+    summary:'حذف انجام نشد — '+plan.blocked,detail:[REASON_TALLY,'محصولات زندهٔ پروفایل: '+faN(plan.stats.alive)]});
+  return {ok:false,dryRun:true,mode,blocked:plan.blocked,planned:0,candidates:plan.stats.gone,
+    removedFromDestination:0,removedFromProfile:0,items:[],failed:[],stats:plan.stats};
+ }
+ p.emit({stage:'plan-ready',name:'plan',status:'success',count:plan.removals.length,total:plan.stats.rows,
+   summary:'محصولات رفته از مبدأ: '+faN(plan.removals.length)+' از '+faN(plan.stats.rows)+' ('+faN(plan.stats.percent)+'٪) · '+REASON_TALLY+(apply?' · شیوهٔ مقصد: '+mode:' · فقط گزارش'),
+   detail:plan.removals.slice(0,6).map(item=>clipText(item.title,50)+' — '+item.reasonLabel+' · مقصدها: '+(item.targets.length?item.targets.map(t=>t.accountName).join('، '):'هیچ‌جا ارسال نشده بود'))});
+ const items:any[]=[],failed:any[]=[];let removedFromDestination=0,removedFromProfile=0;
+ for(const removal of plan.removals){
+  const record:any={...removal,destinations:[],profileRemoved:false};
+  items.push(record);
+  if(!apply){
+   p.emit({stage:'candidate',name:'candidate',count:items.length,total:plan.removals.length,
+     profileId:removal.profileId,sourceKey:removal.sourceKey,
+     summary:'نامزد حذف '+faN(items.length)+': '+clipText(removal.title,55)+' — '+removal.reasonLabel});
+   continue;
+  }
+  let allGood=true;
+  for(const destination of removal.targets){
+   p.emit({stage:'apply',name:'remove',status:'running',account:destination.accountName,target:destination.target,accountKey:destination.accountKey,
+     profileId:removal.profileId,sourceKey:removal.sourceKey,count:removedFromDestination+1,total:plan.removals.length,
+     summary:clipText(removal.title,45)+' → '+destination.accountName+': در حال حذف از مقصد…'});
+   try{
+    const remoteId=Number(destination.remoteId);
+    const shopId=destination.target==='basalam'?destination.accountKey:'';
+    if(mode==='draft'){if(destination.target==='woo')await wooUpdate(remoteId,{status:'draft'});else await basalamUpdateShop(destination.accountKey,remoteId,{status:3790})}
+    else if(mode==='outofstock'){if(destination.target==='woo')await wooUpdate(remoteId,{manage_stock:true,stock_quantity:0});else await basalamUpdateShop(destination.accountKey,remoteId,{stock:0})}
+    else if(mode==='report'){allGood=false;continue}
+    else await destinationDelete(destination.target as any,remoteId,false,shopId);
+    removedFromDestination++;record.destinations.push({...destination,done:true});
+    p.emit({stage:'apply-written',name:'remove',status:'success',account:destination.accountName,target:destination.target,accountKey:destination.accountKey,
+      profileId:removal.profileId,sourceKey:removal.sourceKey,count:removedFromDestination,total:plan.removals.length,
+      summary:clipText(removal.title,45)+' → '+destination.accountName+': '+(mode==='draft'?'پیش‌نویس شد':mode==='outofstock'?'ناموجود شد':'از مقصد حذف شد')});
+   }catch(error){
+    allGood=false;const message=error instanceof Error?error.message:String(error);
+    failed.push({...removal,account:destination.accountName,error:message});record.destinations.push({...destination,done:false,error:message});
+    p.emit({stage:'apply-error',name:'remove',status:'error',account:destination.accountName,target:destination.target,accountKey:destination.accountKey,
+      profileId:removal.profileId,sourceKey:removal.sourceKey,
+      summary:clipText(removal.title,45)+' → '+destination.accountName+': حذف نشد — '+clipText(message,70)});
+   }
+  }
+  // محصول فقط وقتی از پروفایل پاک می‌شود که دیگر در هیچ مقصدی باقی نمانده باشد؛
+  // در شیوه‌های «پیش‌نویس/ناموجود» محصول در مقصد می‌ماند، پس ردیف پروفایل هم می‌ماند.
+  if(allGood&&(mode==='delete'||mode==='trash'||!removal.targets.length)){
+   try{
+    await deleteProduct(removal.profileId,removal.sourceKey);
+    removedFromProfile++;record.profileRemoved=true;
+    p.emit({stage:'applied',name:'profile',status:'success',count:removedFromProfile,total:plan.removals.length,
+      profileId:removal.profileId,sourceKey:removal.sourceKey,
+      summary:clipText(removal.title,50)+': از پروفایل هم پاک شد'+(removal.targets.length?' (بعد از حذف در '+faN(removal.targets.length)+' مقصد)':' (هیچ‌جا ارسال نشده بود)')});
+   }catch(error){const message=error instanceof Error?error.message:String(error);failed.push({...removal,error:message});}
+  }
+ }
+ p.emit({stage:'report-ready',name:'report',status:failed.length?'error':'success',count:removedFromProfile,total:plan.removals.length,
+   summary:'پایان در '+faDuration(p.elapsed())+' · نامزد '+faN(plan.removals.length)+' · حذف از مقصد '+faN(removedFromDestination)+' · حذف از پروفایل '+faN(removedFromProfile)+' · ناموفق '+faN(failed.length)+(apply?'':' · فقط گزارش بود'),
+   detail:[REASON_TALLY,'مرجع تصمیم: پروفایل ذخیره‌شده (دفتر حساب فقط برای یافتن شناسهٔ مقصد به کار رفت)']});
+ return {ok:!failed.length,dryRun:!apply,mode,blocked:'',planned:plan.removals.length,candidates:plan.stats.gone,
+   removedFromDestination,removedFromProfile,items,failed,stats:plan.stats};
 }
 
 export async function destinationLedgerProducts(target:string,accountKey:string,offset=0){const account=(await reconAccounts()).find(a=>a.target===target&&a.accountKey===accountKey);if(!account)throw Error('مقصد دفتر حساب پیدا نشد.');const scope=await destinationScope(account.target,account.accountKey),meta=await destinationLedger.metadata(scope),entries=(await destinationLedger.entries(scope)).filter(x=>customerVisible(account.target,x.remote));const start=Math.max(0,Math.floor(offset)||0);return {ok:true,account,meta,total:entries.length,offset:start,limit:50,items:entries.slice(start,start+50),next:start+50<entries.length?start+50:null}}

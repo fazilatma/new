@@ -5,7 +5,7 @@ import { createAiStageRunner } from './job-ai-stage.js';
 import { applyStoredResultSettings, claimJob, deleteState, findMissingProducts, getJob, getProduct, getProfile, getState, listProducts, markMissingProducts, markProfileRun, saveProfile, setState, stopRequested, updateJob, upsertProduct } from './db.js';
 import { getEnv } from './env.js';
 import { assignProductBasalamCategory, generateProductDescription, productNeedsBasalamCategory, productNeedsEnrichment } from './ai.js';
-import { destinationCategories, ledgerMissing } from './maintenance.js';
+import { destinationCategories, profileSyncRemovals } from './maintenance.js';
 import { listSelectorsStatus, mapLimit, pageUrl, scrapeDetails, scrapeListPage, suggestSelectors } from './scraper.js';
 import { syncBasalam, syncWoo } from './sync.js';
 import { hasCodeSuffix, parseSuffixFormats, suffixPatterns } from './dedup.js';
@@ -13,7 +13,7 @@ import { message } from './utils.js';
 import type { Job, Product, Profile } from './types.js';
 
 type ProcessResult='complete'|'continue'|'ignored';
-type ScrapeCheckpoint={rawPricing?:boolean;page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
+type ScrapeCheckpoint={rawPricing?:boolean;page:number;url:string;nextUrl:string;index:number;products?:Product[];seen:string[];retireSafe?:boolean;noPriceCount?:number;listSelectorsFilled?:boolean;listRescued?:boolean;detailRescued?:boolean;detailSelectorsFilled?:boolean;autoSelectorsAllowed?:boolean;engineSelectorsSaved?:boolean};
 type SyncCheckpoint={offset:number;applied?:boolean;applyAfter?:string};
 const stateKey=(jobId:string)=>`job_checkpoint:${jobId}`;
 // Small chunks leave room for stage progress, AI checkpoints and destination requests.
@@ -265,7 +265,10 @@ async function runScrapeChunk(job:Job,profile:Profile):Promise<boolean>{
     checkpoint.index++;job.processed++;
     const previous=previousByKey.get(product.sourceKey)||null,rawPrice=rawPriceByKey.get(product.sourceKey)??product.price;
     if(rawPrice<=0||product.price<=0){
-      checkpoint.retireSafe=false;
+      // ۱.۳۴۲.۰ — یک محصول بی‌قیمت یعنی «در مبدأ ناموجود شده»، نه «اسکن خراب است».
+      // پس کل بازنشستگی را باطل نمی‌کند؛ فقط وقتی سهمشان زیاد شود (سلکتور شکسته)
+      // اسکن مشکوک شمرده می‌شود. شمارش در finishScrape سنجیده می‌شود.
+      checkpoint.noPriceCount=(checkpoint.noPriceCount||0)+1;
       job.skippedNoPrice=(job.skippedNoPrice||0)+1;
       append(job,`${product.title}: قیمت ندارد؛ نادیده گرفته و ذخیره نشد.`,'warning','zero-price',reportItem(product,{newPrice:rawPrice}));
       continue;
@@ -298,6 +301,13 @@ async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint)
   if(job.workflow==='list-only'){checkpoint.retireSafe=false;append(job,'پایان استخراج فهرست؛ جزئیات، دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});return}
   if(job.workflow==='list-details'){checkpoint.retireSafe=false;append(job,'پایان استخراج بک‌اند: فقط فهرست و جزئیات ذخیره شد؛ دسته‌بندی، توضیح‌سازی، بازنشستگی و ارسال اجرا نشد.');await setState('source_scan:'+profile.id,{jobId:job.id,complete:false,listOnly:true});return}
   job.phase='retire';
+  // سهم محصولات بی‌قیمت: تا ۳۰٪ (و حداقل ۵ مورد) طبیعی است (ناموجود شدن)، بیشتر از آن
+  // یعنی احتمالاً سلکتور قیمت شکسته و نباید چیزی بازنشسته شود.
+  const noPrice=Number(checkpoint.noPriceCount||0),priced=checkpoint.seen.length;
+  if(noPrice>Math.max(5,Math.round(0.3*(noPrice+priced)))){
+    checkpoint.retireSafe=false;
+    append(job,`${noPrice} محصول بدون قیمت خوانده شد (بیش از سقف ۳۰٪)؛ اسکن مشکوک است و هیچ محصولی بازنشسته یا حذف نشد.`,'warning');
+  }else if(noPrice)append(job,`${noPrice} محصول در مبدأ بی‌قیمت/ناموجود شد و جزو «رفته از مبدأ» حساب می‌شود.`,'warning');
   if(checkpoint.retireSafe&&checkpoint.seen.length){
     const missing=await findMissingProducts(profile.id,checkpoint.seen),retired=await markMissingProducts(profile.id,checkpoint.seen);
     for(const product of missing.slice(0,1000))append(job,`${product.title}: دیگر در مبدأ دیده نشد و بازنشسته شد.`,'warning','removed',reportItem(product));
@@ -309,7 +319,13 @@ async function finishScrape(job:Job,profile:Profile,checkpoint:ScrapeCheckpoint)
     let delTarget: 'woo'|'basalam'|'both'|null=null;
     if(opts?.deleteWoo||opts?.deleteBasalam)delTarget=opts.deleteWoo&&opts.deleteBasalam?'both':opts.deleteWoo?'woo':'basalam';
     else if(job.target!=='none')delTarget=job.target==='both'?'both':job.target as any;
-    if(delTarget){const removal=await ledgerMissing(profile.id,true,delTarget);if(removal.planned)append(job,`دفتر حساب: ${removal.planned} مورد حذف‌شده از مبدأ؛ ${removal.changed} اقدام طبق سیاست بازنشستگی (${delTarget}).`)}
+    // ۱.۳۴۲.۰ — حذف بر پایهٔ پروفایل: هرچه از پروفایل رفته، از مقصدها هم می‌رود و
+    // بعد ردیفش از خود پروفایل پاک می‌شود. (پیش از این فقط دفتر حساب تصمیم می‌گرفت.)
+    if(delTarget){
+      const removal=await profileSyncRemovals(profile.id,true,delTarget);
+      if(removal.blocked)append(job,`حذف بر پایهٔ پروفایل انجام نشد: ${removal.blocked}`,'warning');
+      else if(removal.planned)append(job,`بر پایهٔ پروفایل: ${removal.planned} محصول رفته از مبدأ؛ ${removal.removedFromDestination} حذف از مقصد و ${removal.removedFromProfile} حذف از پروفایل (${delTarget}).`,removal.failed.length?'warning':'info');
+    }
   }
   await markProfileRun(profile.id);
 }
