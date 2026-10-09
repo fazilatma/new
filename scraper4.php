@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.248';
+const APP_VERSION = '10.249';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9770,16 +9770,25 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
         CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5,
         CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => $timeout, CURLOPT_ENCODING => '',
         CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
-        CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
         CURLOPT_REFERER => $url, CURLOPT_COOKIEFILE => '',
         CURLOPT_HTTPHEADER => [
             'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7', 'Cache-Control: no-cache', 'Origin: '.$origin,
-            'Sec-Ch-Ua: "Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"', 'Sec-Ch-Ua-Mobile: ?0',
+            'Sec-Ch-Ua: "Not/A)Brand";v="8", "Chromium";v="141", "Google Chrome";v="141"', 'Sec-Ch-Ua-Mobile: ?0',
             'Sec-Ch-Ua-Platform: "Windows"', 'Sec-Fetch-Dest: document', 'Sec-Fetch-Mode: navigate',
             'Sec-Fetch-Site: none', 'Sec-Fetch-User: ?1', 'Upgrade-Insecure-Requests: 1',
         ],
     ]);
+    /* v10.249: ایمالز در بعضی ترکیب‌های هاست/libcurl با ALPN/HTTP2 اتصال را
+       قبل از پاسخ می‌بندد، در حالی که مرورگر مستقیم باز می‌کند. مسیر مبدأ را
+       برای این دامنه روی HTTP/1.1 و IPv4 پایدار می‌کنیم. */
+    if (function_exists('isEmallsUrl') && isEmallsUrl($url)) {
+        if (defined('CURL_HTTP_VERSION_1_1')) curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        curl_setopt($ch, CURLOPT_FRESH_CONNECT, true);
+        curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
+    }
     if ($mode === 'dns' || $mode === 'doh') {
         $ip = '';
         if ($mode === 'dns') $ip = (string)($net['resolve_ip'] ?? '');
@@ -9915,22 +9924,17 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
         $last = $r;
     }
 
-    $readerUrl = 'https://r.jina.ai/' . $url;
-    $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
-    $r['emalls_public_fallback'] = 'jina-reader';
+    /* v10.249: از زنجیرهٔ عمومی Reader استفاده کن تا proxy/worker تنظیم‌شده،
+       URLهای canonical/bridge و trace تشخیصی همگی فعال باشند. مسیر قدیمی فقط
+       direct می‌زد؛ روی هاست ایران r.jina.ai بسته بود و fallback ایمالز می‌مرد. */
+    $r = fetch_html_jina_reader($url, $timeout, $last);
     $body = (string)($r['html'] ?? '');
-    if (!empty($r['ok']) && trim($body) !== '') {
-        $ps = emallsProductsFromReaderText($body, $url);
-        if (!empty($ps)) {
-            return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $url,
-                    'html' => emallsSyntheticHtml($ps, $url, 'Jina Reader'), 'mode' => 'emalls-jina-reader',
-                    'emalls_public_fallback' => 'jina-reader', 'source_error' => (string)($prev['error'] ?? '')];
-        }
-        if (emallsLooksUsefulHtml($body)) {
-            return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $url,
-                    'html' => '<!doctype html><html lang="fa" dir="rtl"><meta charset="UTF-8"><body><pre style="white-space:pre-wrap;font-family:tahoma,sans-serif;line-height:1.8">' . h($body) . '</pre></body></html>',
-                    'mode' => 'emalls-jina-reader-text', 'emalls_public_fallback' => 'jina-reader', 'source_error' => (string)($prev['error'] ?? '')];
-        }
+    if (!empty($r['ok']) && trim($body) !== '' && (int)($r['jina_product_count'] ?? 0) > 0) {
+        $r['url'] = $url;
+        $r['mode'] = 'emalls-jina-reader';
+        $r['emalls_public_fallback'] = 'jina-reader-chain';
+        $r['source_error'] = (string)($prev['error'] ?? '');
+        return $r;
     }
     $last = $r + $last;
     $last['url'] = $url;
@@ -10093,6 +10097,13 @@ function s4JinaGenericProductsFromReaderText(string $text, string $baseUrl): arr
 
 function s4JinaProductsFromReaderText(string $text, string $baseUrl): array {
     $target = s4JinaUnwrapTargetUrl($baseUrl);
+    /* v10.249: الگوی عمومی فقط /product/ را می‌شناخت و لینک پایدار ایمالز
+       (~id~123) را صفر محصول می‌دید؛ بنابراین fallback جدید Jina هم عملاً
+       HTML متنی برمی‌گرداند. parser اختصاصی باید قبل از generic اجرا شود. */
+    if (function_exists('isEmallsUrl') && isEmallsUrl($target)) {
+        $ps = emallsProductsFromReaderText($text, $target);
+        if ($ps) return $ps;
+    }
     if (function_exists('isSnappshopUrl') && isSnappshopUrl($target)) {
         $ps = snappshopProductsFromReaderText($text, $target);
         if ($ps) return $ps;
@@ -10528,14 +10539,16 @@ function fetch_html(string $url, int $timeout = 25): array {
     $last = null;
     foreach ($modes as $m) {
         $last = srcNetFetchAttempt($url, $timeout, $__srcNet, $m);
-        if (!empty($last['ok'])) {
-            if (function_exists('isEmallsUrl') && isEmallsUrl($url)
-                && function_exists('emallsNeedsProductSignal') && emallsNeedsProductSignal($url)
-                && stripos((string)($last['html'] ?? ''), '~id~') === false) {
-                // v10.192: پاسخ ۲۰۰ ولی بدون کارت محصول برای صفحهٔ فهرست ایمالز، عملاً همان Empty است؛ برو سراغ fallback عمومی.
-            } else {
-                return $last;
-            }
+        $emallsNoProducts = !empty($last['ok']) && function_exists('isEmallsUrl') && isEmallsUrl($url)
+            && function_exists('emallsNeedsProductSignal') && emallsNeedsProductSignal($url)
+            && stripos((string)($last['html'] ?? ''), '~id~') === false;
+        if (!empty($last['ok']) && !$emallsNoProducts) return $last;
+        if ($emallsNoProducts) {
+            /* v10.249: HTTP 200 پوسته/صفحهٔ ضدربات پاسخ منطقی نیست. قبلاً break
+               می‌کرد و proxy/worker بعدی هرگز امتحان نمی‌شد. */
+            $last['error'] = 'Emalls HTTP 200 without product links';
+            $last['emalls_empty_shell'] = true;
+            continue;
         }
         // اگر خطای قطعیِ منطقی (مثل ۴۰۴/۴۰۰) بود، امتحانِ روشِ دیگر بی‌فایده است
         if ($last['code'] > 0 && !in_array($last['code'], [403, 429], true)) break;
@@ -10566,7 +10579,13 @@ function fetch_html(string $url, int $timeout = 25): array {
             if ($__m === 'direct') continue;
             $__try = srcNetFetchAttempt($url, $timeout, $__srcNet2, $__m);
             $__try['profile_direct_emalls_fallback'] = true;
-            if (!empty($__try['ok'])) { $GLOBALS['_srcNetProfileIndirect'] = $__oldProfileIndirect; return $__try; }
+            $__hasProducts = !emallsNeedsProductSignal($url) || stripos((string)($__try['html'] ?? ''), '~id~') !== false;
+            if (!empty($__try['ok']) && $__hasProducts) { $GLOBALS['_srcNetProfileIndirect'] = $__oldProfileIndirect; return $__try; }
+            if (!empty($__try['ok']) && !$__hasProducts) {
+                $__try['ok'] = false; $__try['error'] = 'Emalls fallback returned HTTP 200 without product links';
+                $__try['emalls_empty_shell'] = true; $last = $__try;
+                continue;
+            }
             $last = $__try;
             if ($__try['code'] > 0 && !in_array($__try['code'], [403, 429], true)) break;
         }
@@ -39490,6 +39509,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.248', 'ورودی 10.248 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "248'") !== false
       && version_compare(APP_VERSION, '10.' . '248', '>='));
+
+    /* ---------- v10.249: Emalls connection recovery ---------- */
+    $_t249md = "![تصویر](https://files.emalls.ir/x.jpg)\n## [کفش تست](https://emalls.ir/item~id~987654)\n۱,۲۳۴,۰۰۰\nمشاهده فروشندگان (۲)";
+    $_t249p = function_exists('s4JinaProductsFromReader' . 'Text') ? s4JinaProductsFromReaderText($_t249md, 'https://emalls.ir/list~Category~1') : [];
+    $add('10.249', 'parser عمومی Jina لینک پایدار ~id~ ایمالز را محصول می‌بیند',
+         count($_t249p) === 1 && strpos((string)(reset($_t249p)['link'] ?? ''), '~id~987654') !== false);
+    $add('10.249', 'HTTP 200 بدون محصول ایمالز مسیر fallback را متوقف نمی‌کند',
+         strpos($selfSrc, '$emallsNoProducts') !== false
+      && strpos($selfSrc, "'emalls_empty_shell'") !== false
+      && strpos($selfSrc, 'continue;') !== false);
+    $add('10.249', 'ایمالز از Jina chain غیرمستقیم و HTTP/1.1 پایدار استفاده می‌کند',
+         strpos($selfSrc, 'fetch_html_jina_reader(' . '$url, $timeout, $last)') !== false
+      && strpos($selfSrc, 'CURL_HTTP_VERSION_1_1') !== false
+      && strpos($selfSrc, 'CURLOPT_FORBID_REUSE') !== false);
+    $add('10.249', 'ورودی 10.249 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "249'") !== false
+      && version_compare(APP_VERSION, '10.' . '249', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70355,6 +70391,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.249', t:'🛍 بازیابی اتصال و استخراج پروفایل ایمالز', items:[
+    'واکشی ایمالز روی هاست‌های ناسازگار با ALPN به HTTP/1.1 و IPv4 پایدار شد و fingerprint مرورگر به‌روز شد',
+    'پاسخ HTTP 200 بدون لینک محصول دیگر موفق تلقی نمی‌شود و مسیرهای جایگزین بعدی واقعاً امتحان می‌شوند',
+    'fallback ایمالز اکنون از زنجیرهٔ عمومی Jina با proxy/worker و parser اختصاصی لینک‌های ~id~ استفاده می‌کند'
+  ]},
   {v:'10.248', t:'📊 مبنای عملیات پروفایل/مغایرت + کران داخلی ثانیه‌ای', items:[
     'بالای تیک‌های Woo و باسلام یک سوییچ مبنا اضافه شد: پروفایل‌های ذخیره‌شده یا جدول و نتیجهٔ مغایرت‌گیری',
     'در حالت جدول، فقط missing/قیمت مغایر همان پروفایل صف می‌شود و حذف/بایگانی فقط با تأیید مقصد در جدول انجام می‌شود',
