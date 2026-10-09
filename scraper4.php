@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.252';
+const APP_VERSION = '10.253';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9808,6 +9808,16 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
        قبل از پاسخ می‌بندد، در حالی که مرورگر مستقیم باز می‌کند. مسیر مبدأ را
        برای این دامنه روی HTTP/1.1 و IPv4 پایدار می‌کنیم. */
     if (function_exists('isEmallsUrl') && isEmallsUrl($url)) {
+        /* v10.253: هدر ناوبری واقعی. Origin روی GET و Referer برابر خود URL
+           رفتار مرورگر نیست و WAF ایمالز می‌تواند اتصال را بی‌پاسخ ببندد. */
+        curl_setopt($ch, CURLOPT_REFERER, 'https://emalls.ir/');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Cache-Control: max-age=0', 'Sec-Fetch-Dest: document', 'Sec-Fetch-Mode: navigate',
+            'Sec-Fetch-Site: same-origin', 'Sec-Fetch-User: ?1', 'Upgrade-Insecure-Requests: 1',
+            'Connection: close',
+        ]);
         if (defined('CURL_HTTP_VERSION_1_1')) curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
         /* v10.252: بعضی OpenSSL/libcurlهای هاست روی ClientHelloِ TLS 1.3
@@ -9851,11 +9861,29 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
     }
     $body = curl_exec($ch); $err = curl_error($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $emallsRetry='';
+    /* v10.253: پاسخ Empty ایمالز می‌تواند challenge مبتنی بر session باشد یا
+       از اجبار TLS/IP نسخهٔ قبل بیاید. یک‌بار همان handle/cookie-engine ابتدا
+       صفحهٔ اصلی را گرم می‌کند و سپس URL هدف را با TLS/IP خودکار می‌گیرد. */
+    if($mode==='direct'&&function_exists('isEmallsUrl')&&isEmallsUrl($url)
+        &&($body===false||$code===0||$code===403||$code===429)){
+        $firstErr=$err;$firstCode=$code;
+        if(defined('CURLOPT_SSLVERSION')&&defined('CURL_SSLVERSION_DEFAULT'))curl_setopt($ch,CURLOPT_SSLVERSION,CURL_SSLVERSION_DEFAULT);
+        if(defined('CURLOPT_IPRESOLVE')&&defined('CURL_IPRESOLVE_WHATEVER'))curl_setopt($ch,CURLOPT_IPRESOLVE,CURL_IPRESOLVE_WHATEVER);
+        if(defined('CURLOPT_SSL_CIPHER_LIST'))@curl_setopt($ch,CURLOPT_SSL_CIPHER_LIST,'DEFAULT');
+        curl_setopt($ch,CURLOPT_URL,'https://emalls.ir/');
+        curl_setopt($ch,CURLOPT_TIMEOUT,min(12,$timeout));
+        @curl_exec($ch);
+        curl_setopt($ch,CURLOPT_URL,$url);curl_setopt($ch,CURLOPT_REFERER,'https://emalls.ir/');curl_setopt($ch,CURLOPT_TIMEOUT,$timeout);
+        $body=curl_exec($ch);$err=curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);
+        $emallsRetry='first HTTP '.$firstCode.' '.($firstErr?:'Empty').' → warm-session HTTP '.$code.' '.($err?:'');
+    }
     $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
     if ($mode === 'worker') $finalUrl = $url; // v10.191: لینک‌های نسبی باید نسبت به سایت مبدأ حل شوند، نه آدرس Worker.
     curl_close($ch);
     $out=['ok'=>$body!==false&&$code>=200&&$code<400,'error'=>$err?:'Empty','code'=>$code,
         'url'=>$finalUrl,'html'=>$body===false?'':$body,'mode'=>$mode];
+    if($emallsRetry!=='')$out['emalls_warm_retry']=$emallsRetry;
     /* مسیر stream فقط برای direct و فقط پس از شکست/پوستهٔ بی‌محصول است؛
        proxy/worker انتخاب‌شدهٔ کاربر را دور نمی‌زند و درخواست اضافهٔ عادی ندارد. */
     $emallsEmpty=!empty($out['ok'])&&function_exists('emallsNeedsProductSignal')&&emallsNeedsProductSignal($url)
@@ -9948,6 +9976,7 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
         return ['ok' => false, 'error' => 'not emalls', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
     }
     $timeout = max(8, min(60, $timeout));
+    $originPrev=$prev;
     $last = ['ok' => false, 'error' => (string)($prev['error'] ?? 'Empty'), 'code' => (int)($prev['code'] ?? 0), 'url' => $url, 'html' => '', 'mode' => 'emalls-public'];
 
     $workers = ['https://proxy.fazilat-ma.workers.dev/?url={url}'];
@@ -10004,7 +10033,13 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
         $r['jina_reader_modes']=array_values(array_unique(array_merge((array)($r['jina_reader_modes']??[]),['direct'])));}
     $last = $r + $last;
     $last['url'] = $url;
-    $last['error'] = trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty');
+    foreach(['emalls_warm_retry','stream_error','stream_code','curl_error','curl_code','emalls_auto_doh'] as $dk)
+        if(!array_key_exists($dk,$last)&&array_key_exists($dk,$originPrev))$last[$dk]=$originPrev[$dk];
+    $lastErr=trim((string)($last['error']??''));
+    if($lastErr===''||strcasecmp($lastErr,'Empty')===0){
+        $parts=[];foreach(['emalls_warm_retry','stream_error','curl_error'] as $dk){$v=trim((string)($originPrev[$dk]??''));if($v!==''&&strcasecmp($v,'Empty')!==0)$parts[]=$v;}
+        $last['error']=$parts?('Emalls transports failed: '.implode(' | ',$parts)):'Emalls returned no HTTP response on cURL, PHP stream, DoH, Worker, or Reader';
+    }else $last['error']=$lastErr;
     return $last;
 }
 
@@ -12021,7 +12056,7 @@ $summarizeFetch = function(string $label, array $r, array $sel, string $eng) use
         'mode' => (string)($r['mode'] ?? ''),
         'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
         'final_url' => mb_substr($base, 0, 260),
-        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_reader_modes','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error','emalls_auto_doh','stream_error','stream_code','curl_error','curl_code'])),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_reader_modes','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error','emalls_auto_doh','stream_error','stream_code','curl_error','curl_code','emalls_warm_retry'])),
     ];
     $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
     return $out;
@@ -39633,6 +39668,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.252', 'ورودی 10.252 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "252'") !== false
       && version_compare(APP_VERSION, '10.' . '252', '>='));
+
+    /* ---------- v10.253: Emalls warm session / Empty ---------- */
+    $add('10.253', 'هدر ناوبری ایمالز Origin جعلی ندارد و Referer ریشه است',
+         strpos($selfSrc, "CURLOPT_REFERER, 'https://emalls.ir/'") !== false
+      && strpos($selfSrc, "'Sec-Fetch-Site: same-origin'") !== false);
+    $add('10.253', 'Empty با warm-up صفحه اصلی و cookie-engine همان handle retry می‌شود',
+         strpos($selfSrc, "CURLOPT_URL,'https://emalls.ir/'") !== false
+      && strpos($selfSrc, "'emalls_warm_retry'") !== false
+      && strpos($selfSrc, 'CURL_IPRESOLVE_WHATEVER') !== false);
+    $add('10.253', 'شکست نهایی ایمالز دیگر پیام مبهم Empty نیست',
+         strpos($selfSrc, 'Emalls transports failed:') !== false
+      && strpos($selfSrc, 'Emalls returned no HTTP response') !== false);
+    $add('10.253', 'ورودی 10.253 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "253'") !== false
+      && version_compare(APP_VERSION, '10.' . '253', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70498,6 +70548,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.253', t:'🍪 بازیابی session ایمالز برای خطای Empty', items:[
+    'هدرهای مشکوک Origin/Referer قبلی حذف و هدر ناوبری واقعی مرورگر برای ایمالز اعمال شد',
+    'پس از Empty، همان cookie-engine ابتدا صفحهٔ اصلی ایمالز را warm-up و سپس URL دسته را با TLS/IP خودکار دوباره می‌گیرد',
+    'اگر همهٔ مسیرها شکست بخورند، خطای واقعی زنجیره به‌جای پیام مبهم Empty نمایش داده می‌شود'
+  ]},
   {v:'10.252', t:'🔐 بازیابی TLS و transport ایمالز', items:[
     'برای ناسازگاری ClientHello هاست با ایمالز، cURL این دامنه روی TLS 1.2 و cipher سازگار اجرا می‌شود',
     'اگر cURL همچنان SSL_ERROR_SYSCALL بدهد، PHP stream مستقل همان صفحه را با TLS 1.2 دریافت می‌کند',
