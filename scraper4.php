@@ -73,6 +73,7 @@ const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
 const SYNC_MATRIX_RESULT_FILE   = __DIR__ . '/sync_matrix_result.json';   // v10.113
+const SYNC_MATRIX_LIVE_FILE     = __DIR__ . '/sync_matrix_live.json';     // v10.247
 const SYNC_MATRIX_LOCK_FILE     = __DIR__ . '/sync_matrix.lock';          // v10.113
 const SYNC_MATRIX_STOP_FILE     = __DIR__ . '/sync_matrix_stop.json';      // v10.131
 const SYNC_MATRIX_FIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_fix_progress.json'; // v10.118
@@ -327,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.246';
+const APP_VERSION = '10.247';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27110,6 +27111,48 @@ function matrixResultSave(array $data): bool {
     return false !== @file_put_contents(SYNC_MATRIX_RESULT_FILE, $json, LOCK_EX);
 }
 
+/** v10.247: از checkpoint جاری یک snapshot قابل‌نمایش می‌سازد. این فایل
+ * نتیجهٔ نهایی را بازنویسی نمی‌کند و فقط برای سوییچ «پر شدن زنده» است. */
+function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bool {
+    $rows = is_array($cp['profile_rows'] ?? null) ? $cp['profile_rows'] : [];
+    $suffixes = matrixCollectSuffixes();
+    $shops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+    $shopsMeta = [];
+    foreach($shops as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0)continue;
+        $shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??($sh['name']??('غرفه '.$vid))),
+            'is_default'=>!empty($sh['is_default'])];}
+    $ensure = static function(string $bare,string $title) use (&$rows): void {
+        if(isset($rows[$bare]))return;
+        $rows[$bare]=['bare'=>$bare,'title'=>$title,'key'=>'','profile'=>'','profile_key'=>'','src_price'=>0,
+            'profile_price'=>0,'woo_expect'=>0,'bsl_expect'=>0,'profile_hits'=>0,'woo'=>null,'shops'=>[]];
+    };
+    foreach((array)($cp['woo_rows']??[]) as $wr){if(!is_array($wr))continue;
+        $bare=matrixBareTitle((string)($wr['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($wr['title']??''));
+        $rows[$bare]['woo']=['id'=>(int)($wr['id']??0),'title'=>(string)($wr['title']??''),
+            'price'=>(int)($wr['price']??0),'status'=>(string)($wr['status']??'')];}
+    foreach((array)($cp['shop_rows']??[]) as $vid=>$remote){foreach((array)$remote as $br){if(!is_array($br))continue;
+        $bare=matrixBareTitle((string)($br['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($br['title']??''));
+        $expect=(int)($rows[$bare]['bsl_expect']??0);$actual=(int)($br['price_toman']??0);
+        $rows[$bare]['shops'][(int)$vid]=['id'=>(int)($br['id']??0),'title'=>(string)($br['title']??''),
+            'price'=>$actual,'price_rial'=>(int)($br['price']??0),'status'=>(int)($br['status']??0),
+            'stock'=>(int)($br['stock']??0),'expect'=>$expect,'tone'=>matrixPriceTone($expect,$actual)];}}
+    $outRows=[];$sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,
+        'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,'in_all'=>0,'only_profile'=>0];
+    foreach($rows as $r){if(!is_array($r))continue;$hasProf=(int)($r['profile_hits']??0)>0;$hasWoo=!empty($r['woo']);
+        $wooTone=($hasProf&&$hasWoo)?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):'na';
+        $bad=$wooTone==='bad'||$wooTone==='warn';foreach((array)($r['shops']??[]) as $sc){$t=(string)($sc['tone']??'na');if($t==='bad'||$t==='warn')$bad=true;}
+        $r['woo_tone']=$wooTone;$r['flags']=$bad?['price_mismatch']:[];
+        $r['status']=$bad?'mismatch':($hasProf&&($hasWoo||!empty($r['shops']))?'partial':($hasProf?'only_profile':'only_dest'));
+        if($bad)$sum['price_mismatch']++;if($r['status']==='only_profile')$sum['only_profile']++;
+        $sum['total']++;$outRows[]=$r;}
+    usort($outRows,static function($a,$b){return strcmp((string)($a['bare']??''),(string)($b['bare']??''));});
+    $data=['ok'=>true,'live_partial'=>true,'generated_at'=>time(),'source'=>$source,'shops'=>$shopsMeta,
+        'woo_cfg'=>destPriceCfg($cn,'woocommerce'),'bsl_cfg'=>destPriceCfg($cn,'basalam'),'summary'=>$sum,
+        'rows'=>$outRows,'woo_count'=>count((array)($cp['woo_rows']??[])),'row_count'=>count($outRows)];
+    $json=json_encode($data,JSON_UNESCAPED_UNICODE);if($json===false)return false;
+    return false!==@file_put_contents(SYNC_MATRIX_LIVE_FILE,$json,LOCK_EX);
+}
+
 /**
  * v10.244: واکشی یک/چند دور از همهٔ مقصدها به‌صورت واقعی و هم‌زمان.
  * در هر دور یک صفحهٔ Woo و یک صفحه از هر غرفه داخل یک curl_multi می‌رود.
@@ -27244,6 +27287,7 @@ function matrixBuild(array $opts = []): array {
     $profileFilter = trim((string)($opts['profile'] ?? 'all'));
     $source = (string)($opts['source'] ?? 'manual');
     $parallelDest = !empty($opts['parallel_destinations']);
+    $liveFill = !empty($opts['live_fill']);
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
@@ -27263,18 +27307,18 @@ function matrixBuild(array $opts = []): array {
     if (!array_key_exists('shop_done', $resumeCp) && $matrixShopCp) {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
-    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
+    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
+            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill];
     };
 
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial',
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill,
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -27301,13 +27345,14 @@ function matrixBuild(array $opts = []): array {
     };
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, $cn, $source): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill];
+        if($liveFill) matrixLiveSnapshot($cp,$cn,$source);
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
             'log_add' => ['↻ وقفهٔ کوتاه برای پاسخ‌گویی سرور؛ ادامهٔ خودکار از checkpoint']]);
@@ -27675,6 +27720,7 @@ function matrixBuild(array $opts = []): array {
             'log_add' => ['❌ ' . $out['error']]]);
         return $out;
     }
+    @unlink(SYNC_MATRIX_LIVE_FILE);
     matrixProgress([
         'running' => false, 'done' => true, 'error' => '', 'pct' => 100,
         'phase' => 'done', 'summary' => $sum, 'row_count' => count($rows),
@@ -28798,9 +28844,12 @@ function matrixJobRun(array $opts = []): array {
 
 /** فیلتر + صفحه‌بندی روی نتیجهٔ ذخیره‌شده (بدون rebuild) */
 function matrixQueryPage(array $opts = []): array {
-    $data = matrixResultLoad();
+    $prog = matrixProgressRead();
+    $useLive = !empty($opts['live_fill']) && is_file(SYNC_MATRIX_LIVE_FILE)
+        && (!empty($prog['running']) || !empty($prog['yielded']) || !empty($prog['partial']));
+    $data = $useLive ? json_decode((string)@file_get_contents(SYNC_MATRIX_LIVE_FILE), true) : matrixResultLoad();
+    if (!is_array($data)) $data = [];
     if (!$data || empty($data['rows'])) {
-        $prog = matrixProgressRead();
         return [
             'ok' => false,
             'error' => 'هنوز جدولی ساخته نشده',
@@ -28888,6 +28937,7 @@ function matrixQueryPage(array $opts = []): array {
         'generated_at' => $data['generated_at'] ?? 0,
         'source' => $data['source'] ?? '',
         'row_count_all' => (int)($data['row_count'] ?? count($data['rows'] ?? [])),
+        'live_partial' => !empty($data['live_partial']),
         'running' => !empty($prog['running']) || !empty($fixProg['running']),
         'progress' => !empty($fixProg['running']) || (!empty($fixProg['done']) && empty($prog['running'])) ? $fixProg : $prog,
         'fix_progress' => $fixProg,
@@ -28986,6 +29036,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'background' => true,
         'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
+        'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
     ];
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
@@ -29002,6 +29053,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     }
     if ($matrixCp && isset($matrixCp['fetch_mode']))
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
+    if ($matrixCp && array_key_exists('live_fill', $matrixCp))
+        $opts['live_fill'] = !empty($matrixCp['live_fill']);
     $opts['checkpoint'] = $matrixCp;
     // قفل زود — حذف cursor و مصرف stop فقط بعد از مالکیت واقعی انجام می‌شود.
     $lockFile = SYNC_MATRIX_LOCK_FILE;
@@ -29037,6 +29090,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $opts['run_started_at'] = microtime(true);
     }
     if ($matrixCp === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
+    if ($matrixCp === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
     if (!$lockRecovered) matrixStopClear();
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
@@ -29084,6 +29138,7 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_dup' => !empty($_GET['only_dup']) || !empty($_POST['only_dup']),
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
+        'live_fill' => !empty($_GET['live_fill']) || !empty($_POST['live_fill']),
     ];
     // refresh=1 فقط وضعیت/شروع را پیشنهاد می‌کند — دیگر در همان درخواست rebuild نمی‌کند
     if (!empty($_GET['refresh']) || !empty($_POST['refresh'])) {
@@ -39379,6 +39434,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.246', 'ورودی 10.246 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "246'") !== false
       && version_compare(APP_VERSION, '10.' . '246', '>='));
+
+    /* ---------- v10.247: live matrix fill ---------- */
+    $add('10.247', 'snapshot زنده از checkpoint جدا از نتیجه نهایی ساخته می‌شود',
+         defined('SYNC_MATRIX_LIVE_FILE') && function_exists('matrixLiveSnapshot')
+      && strpos($selfSrc, 'live_partial') !== false
+      && strpos($selfSrc, 'matrixLiveSnapshot(' . '$cp,$cn,$source)') !== false);
+    $add('10.247', 'سوییچ پر شدن زنده ذخیره و به start/query متصل است',
+         strpos($selfSrc, 'id="smLiveFill"') !== false
+      && strpos($selfSrc, "s4_matrix_live_fill") !== false
+      && strpos($selfSrc, "fd.append('live_fill'") !== false);
+    $add('10.247', 'poll ساخت جدول در حالت زنده صفحه را بی‌صدا تازه می‌کند',
+         strpos($selfSrc, '$' . "('smLiveFill')") !== false
+      && strpos($selfSrc, 'syncMatrixLoad(window._smPage||1,true)') !== false);
+    $add('10.247', 'ورودی 10.247 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "247'") !== false
+      && version_compare(APP_VERSION, '10.' . '247', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62843,6 +62914,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <label class="prof-net-switch" title="خاموش: مقصدها پشت‌سرهم · روشن: ووکامرس و همه غرفه‌ها هم‌زمان">
 <input type="checkbox" id="smParallelDest" style="display:none" onchange="syncMatrixModeUi(true)"><span class="prof-net-slider"></span></label>
 </div>
+<div style="display:flex;align-items:center;gap:7px;padding:4px 8px;background:#0f172a;border:1px solid #334155;border-radius:20px">
+<span id="smLiveFillLabel" style="font-size:10px;color:#94a3b8">پر شدن زنده: خاموش</span>
+<label class="prof-net-switch" title="نمایش و به‌روزرسانی جدول بعد از دریافت هر بستهٔ محصولات">
+<input type="checkbox" id="smLiveFill" style="display:none" onchange="syncMatrixLiveUi(true)"><span class="prof-net-slider"></span></label>
+</div>
 <div style="display:flex;gap:6px;flex-wrap:wrap">
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
@@ -70162,6 +70238,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.247', t:'🟢 پر شدن زندهٔ جدول هنگام دریافت بسته‌ها', items:[
+    'سوییچ اسلایدری مستقل «پر شدن زنده» کنار حالت سری/موازی اضافه شد و انتخاب مرورگر حفظ می‌شود',
+    'بعد از هر continuation و checkpoint، بسته‌های دریافت‌شده در snapshot جدا از نتیجهٔ نهایی ذخیره و صفحه‌بندی می‌شوند',
+    'هنگام ساخت، جدول هر سه ثانیه بی‌صدا تازه می‌شود و بسته‌های ۱۰۰تایی/۵۰تایی دریافت‌شده را نمایش می‌دهد'
+  ]},
   {v:'10.246', t:'🔌 رفع خطای HTTP 0 باسلام در واکشی موازی', items:[
     'حالت CURLM_CALL_MULTI_PERFORM در libcurl قدیمی اکنون درست تکرار می‌شود و دیگر handle ناتمام HTTP 0 خوانده نمی‌شود',
     'بازگشت select=-1 با مکث کوتاه مدیریت و مهلت باسلام از ۶ به ۱۵ ثانیه افزایش یافت تا اتصال سالمِ کند قطع نشود',
@@ -78565,6 +78646,13 @@ function syncMatrixModeUi(save){
   if(save)try{localStorage.setItem('s4_matrix_parallel',on?'1':'0')}catch(e){}
 }
 try{if($('smParallelDest'))$('smParallelDest').checked=localStorage.getItem('s4_matrix_parallel')==='1';syncMatrixModeUi(false)}catch(e){}
+function syncMatrixLiveUi(save){
+  const on=!!($('smLiveFill')&&$('smLiveFill').checked);
+  if($('smLiveFillLabel')){$('smLiveFillLabel').textContent='پر شدن زنده: '+(on?'روشن':'خاموش');$('smLiveFillLabel').style.color=on?'#4ade80':'#94a3b8';}
+  if(save)try{localStorage.setItem('s4_matrix_live_fill',on?'1':'0')}catch(e){}
+  if(on && save)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+}
+try{if($('smLiveFill'))$('smLiveFill').checked=localStorage.getItem('s4_matrix_live_fill')==='1';syncMatrixLiveUi(false)}catch(e){}
 function syncMatrixStart(resume,automatic){
   resume=!!resume; automatic=!!automatic;
   if(!automatic) window._smMatrixStopWanted=false;
@@ -78576,6 +78664,7 @@ function syncMatrixStart(resume,automatic){
   fd.append('source','manual');
   if(resume) fd.append('resume','1');
   fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
+  fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع ناموفق',1);
@@ -78611,6 +78700,10 @@ function syncMatrixPoll(){
       const p = d.progress || {};
       if(d.fix_running && d.fix_progress) smPaintProgress(d.fix_progress);
       else smPaintProgress(p);
+      if(($('smLiveFill')||{}).checked && (d.build_running || p.yielded)){
+        window._smLiveTick=(window._smLiveTick||0)+1;
+        if(window._smLiveTick%2===0)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+      }
       if(d.running || d.fix_running || d.build_running){
         /* while fixing, refresh table every few ticks so cells update live */
         if(d.fix_running){
@@ -78779,12 +78872,13 @@ function syncMatrixLoad(page, silent){
   fd.append('page', String(page));
   fd.append('per_page', String(($('smPer')||{}).value||50));
   fd.append('q', ($('smQ')||{}).value||'');
+  if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked) fd.append('only_dup','1');
   fetch('', {method:'POST', body:fd}).then(r=>r.json()).then(d=>{
     if(d && d.progress) smPaintProgress(d.progress);
-    if(d && d.running){ syncMatrixPoll(); }
+    if(d && d.running && !silent){ syncMatrixPoll(); }
     if(!d || !d.ok){
       if(d && d.need_build){
         if(body) body.innerHTML='<tr><td style="padding:16px;text-align:center;color:#fbbf24">هنوز جدولی روی سرور نیست. «🚀 ساخت روی سرور» را بزنید'
@@ -78821,7 +78915,7 @@ function syncMatrixLoad(page, silent){
     const when = d.generated_at ? new Date(d.generated_at*1000).toLocaleString('fa-IR') : '—';
     window._smLastPages = d.pages||1;
     if(meta){
-      meta.innerHTML = '📖 از فایل سرور · '+when+' · منبع '+(d.source||'—')
+      meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
         +' · WC: '+smFa(d.woo_count||0)
         +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
