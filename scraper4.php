@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.244';
+const APP_VERSION = '10.245';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27130,8 +27130,11 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             $page = max(1, (int)($cur['page'] ?? 0) + 1);
             $url = rtrim((string)$w['store_url'], '/') . '/wp-json/wc/v3/products?per_page=100&status=any&page=' . $page;
             $ch = curl_init($url);
+            /* v10.245: درخواست HTTP دستی نباید از پنجرهٔ کوتاه worker بیرون بزند؛
+               در cli-server پاسخ اولیه تا پایان PHP واقعاً تحویل proxy نمی‌شود و
+               timeout بلند، به 500 دروازه و قفل ظاهری رابط منجر می‌شد. */
             curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>1, CURLOPT_FOLLOWLOCATION=>1,
-                CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>45, CURLOPT_SSL_VERIFYPEER=>0,
+                CURLOPT_CONNECTTIMEOUT=>4, CURLOPT_TIMEOUT=>6, CURLOPT_SSL_VERIFYPEER=>0,
                 CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERPWD=>(string)$w['consumer_key'].':'.(string)($w['consumer_secret']??''),
                 CURLOPT_HTTPHEADER=>['Accept: application/json']]);
             $jobs[] = ['kind'=>'woo','page'=>$page,'ch'=>$ch];
@@ -27148,7 +27151,11 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             $page=max(1,(int)($cur['page']??0)+1);
             $ep='vendors/'.$vid.'/products?page='.$page.'&per_page=100'.bslActiveStatusQuery();
             $net=bslNetCfg($cn); $mode=!empty($net['indirect'])?(string)($net['mode']??'direct'):'direct';
-            $ch=curl_init(); curl_setopt_array($ch,bslCurlOpts(bslApiBase().$ep,$tk,'GET',null,false,$net,$mode));
+            $ch=curl_init(); $bslOpts=bslCurlOpts(bslApiBase().$ep,$tk,'GET',null,false,$net,$mode);
+            /* همان سقف کوتاه Woo برای جلوگیری از 500/worker hang. گزینه‌ها اینجا
+               override می‌شوند تا رفتار عمومی درخواست‌های باسلام تغییر نکند. */
+            $bslOpts[CURLOPT_CONNECTTIMEOUT]=4; $bslOpts[CURLOPT_TIMEOUT]=6;
+            curl_setopt_array($ch,$bslOpts);
             $jobs[]=['kind'=>'bsl','vid'=>$vid,'page'=>$page,'ch'=>$ch];
         }
         if (!$jobs) return ['ok'=>true,'complete'=>true,'rounds'=>$round,'requests'=>$requests];
@@ -27192,6 +27199,19 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             }
         }
         curl_multi_close($mh);
+        /* v10.245: دقیقاً یک round در هر درخواست continuation. قبلاً اگر پاسخ‌ها
+           سریع بودند حلقه تا deadline دورهای متعدد می‌رفت و اگر یکی کند بود همان
+           round می‌توانست از مهلت proxy عبور کند. checkpoint همین دور حفظ شده و
+           UI دور بعد را با درخواست تازه اجرا می‌کند. */
+        $allDone=$wooDone;
+        foreach($shops as $doneShop){
+            if(!is_array($doneShop))continue;
+            $doneVid=(int)($doneShop['vendor_id']??0);
+            $doneTk=trim((string)($doneShop['token']??($cn['basalam']['token']??'')));
+            if($doneVid>0 && $doneTk!=='' && empty($shopDone[(string)$doneVid])){$allDone=false;break;}
+        }
+        if($allDone)return ['ok'=>true,'complete'=>true,'rounds'=>$round,'requests'=>$requests];
+        return ['ok'=>true,'yielded'=>true,'rounds'=>$round,'requests'=>$requests];
     }
     return ['ok'=>true,'yielded'=>true,'rounds'=>$round,'requests'=>$requests];
 }
@@ -39318,6 +39338,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.244', 'ورودی 10.244 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "244'") !== false
       && version_compare(APP_VERSION, '10.' . '244', '>='));
+
+    /* ---------- v10.245: bounded parallel slices / 500 recovery ---------- */
+    $add('10.245', 'دور موازی timeout کوتاه و فقط یک round در هر continuation دارد',
+         strpos($selfSrc, 'CURLOPT_CONNECTTIMEOUT=>4, CURLOPT_TIMEOUT=>6') !== false
+      && strpos($selfSrc, '$bslOpts[CURLOPT_CONNECTTIMEOUT]=4; $bslOpts[CURLOPT_TIMEOUT]=6;') !== false
+      && strpos($selfSrc, "return ['ok'=>true,'yielded'=>true,'rounds'=>" . '$round') !== false);
+    $add('10.245', 'خطای پاسخ start رابط را متوقف نمی‌کند و polling ادامه می‌یابد',
+         strpos($selfSrc, "خطای شروع/پاسخ سرور:") !== false
+      && strpos($selfSrc, "syncMatrixPoll();\n  });\n}\nfunction syncMatrixStop") !== false);
+    $add('10.245', 'ورودی 10.245 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "245'") !== false
+      && version_compare(APP_VERSION, '10.' . '245', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70101,6 +70133,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.245', t:'🛡 رفع خطای 500 و گیرکردن واکشی موازی', items:[
+    'هر continuation فقط یک دور موازی اجرا می‌کند و checkpoint همان دور را حفظ می‌کند',
+    'timeout شبکهٔ دور موازی داخل پنجرهٔ امن worker محدود شد تا proxy خطای 500 ندهد',
+    'اگر پاسخ start خراب یا غیر JSON باشد، رابط polling وضعیت را ادامه می‌دهد و قفل ظاهری نمی‌شود'
+  ]},
   {v:'10.244', t:'⚡ سوییچ واکشی سری/موازی مقصدها', items:[
     'کنار دکمه ساخت جدول یک سوییچ اسلایدری سری/موازی اضافه شد و انتخاب در مرورگر حفظ می‌شود.',
     'در حالت موازی، هر دور یک صفحه ووکامرس و یک صفحه از تمام غرفه‌های باسلام با curl_multi هم‌زمان دریافت و جداگانه checkpoint می‌شود؛ در نبود curl_multi خودکار به حالت سری برمی‌گردد.',
@@ -78513,7 +78550,12 @@ function syncMatrixStart(resume,automatic){
     }
     showToast('ساخت روی سرور آغاز شد');
     syncMatrixPoll();
-  }).catch(e=>showToast('خطا: '+e,1));
+  }).catch(e=>{
+    /* v10.245: حتی اگر proxy پاسخ start را 500/غیر JSON کرد، worker ممکن است
+       checkpoint نوشته باشد. polling را رها نکن تا رابط ظاهراً قفل نشود. */
+    showToast('خطای شروع/پاسخ سرور: '+e+' — وضعیت دوباره بررسی می‌شود',1);
+    syncMatrixPoll();
+  });
 }
 function syncMatrixStop(){
   window._smMatrixStopWanted=true;
