@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.243';
+const APP_VERSION = '10.244';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27111,6 +27111,92 @@ function matrixResultSave(array $data): bool {
 }
 
 /**
+ * v10.244: واکشی یک/چند دور از همهٔ مقصدها به‌صورت واقعی و هم‌زمان.
+ * در هر دور یک صفحهٔ Woo و یک صفحه از هر غرفه داخل یک curl_multi می‌رود.
+ */
+function matrixFetchDestinationsParallel(array $cn, array $shops,
+        array &$wooRows, bool &$wooDone, int &$wooPage, bool &$wooComplete,
+        array &$shopRows, array &$shopPages, array &$shopDone): array {
+    if (!function_exists('curl_multi_init')) return ['ok' => false, 'fallback' => true, 'error' => 'curl_multi unavailable'];
+    $w = is_array($cn['woocommerce'] ?? null) ? $cn['woocommerce'] : [];
+    $round = 0; $requests = 0;
+    while (!matrixSliceExpired()) {
+        if (matrixStopRequested()) return ['ok' => true, 'stopped' => true, 'rounds' => $round, 'requests' => $requests];
+        $jobs = [];
+        if (!$wooDone && trim((string)($w['store_url'] ?? '')) !== ''
+            && trim((string)($w['consumer_key'] ?? '')) !== '') {
+            $cur = reconFetchCursorLoad('woo', 0);
+            if (count((array)($cur['rows'] ?? [])) > count($wooRows)) $wooRows = (array)$cur['rows'];
+            $page = max(1, (int)($cur['page'] ?? 0) + 1);
+            $url = rtrim((string)$w['store_url'], '/') . '/wp-json/wc/v3/products?per_page=100&status=any&page=' . $page;
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>1, CURLOPT_FOLLOWLOCATION=>1,
+                CURLOPT_CONNECTTIMEOUT=>8, CURLOPT_TIMEOUT=>45, CURLOPT_SSL_VERIFYPEER=>0,
+                CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERPWD=>(string)$w['consumer_key'].':'.(string)($w['consumer_secret']??''),
+                CURLOPT_HTTPHEADER=>['Accept: application/json']]);
+            $jobs[] = ['kind'=>'woo','page'=>$page,'ch'=>$ch];
+        } elseif (!$wooDone) {
+            return ['ok'=>false,'error'=>'تنظیمات API ووکامرس ناقص است'];
+        }
+        foreach ($shops as $sh) {
+            if (!is_array($sh)) continue;
+            $vid=(int)($sh['vendor_id']??0); $tk=trim((string)($sh['token']??($cn['basalam']['token']??'')));
+            if ($vid<=0 || $tk==='' || !empty($shopDone[(string)$vid])) continue;
+            $cur = reconFetchCursorLoad('bsl_active', $vid);
+            if (count((array)($cur['rows'] ?? [])) > count((array)($shopRows[(string)$vid] ?? [])))
+                $shopRows[(string)$vid] = (array)$cur['rows'];
+            $page=max(1,(int)($cur['page']??0)+1);
+            $ep='vendors/'.$vid.'/products?page='.$page.'&per_page=100'.bslActiveStatusQuery();
+            $net=bslNetCfg($cn); $mode=!empty($net['indirect'])?(string)($net['mode']??'direct'):'direct';
+            $ch=curl_init(); curl_setopt_array($ch,bslCurlOpts(bslApiBase().$ep,$tk,'GET',null,false,$net,$mode));
+            $jobs[]=['kind'=>'bsl','vid'=>$vid,'page'=>$page,'ch'=>$ch];
+        }
+        if (!$jobs) return ['ok'=>true,'complete'=>true,'rounds'=>$round,'requests'=>$requests];
+        $mh=curl_multi_init(); foreach($jobs as $j) curl_multi_add_handle($mh,$j['ch']);
+        $running=null; do { $st=curl_multi_exec($mh,$running); if($running) curl_multi_select($mh,.35); }
+        while($running>0 && $st===CURLM_OK);
+        $round++; $requests += count($jobs);
+        foreach ($jobs as $j) {
+            $ch=$j['ch']; $raw=(string)curl_multi_getcontent($ch); $err=(string)curl_error($ch);
+            $code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE); $body=@json_decode($raw,true);
+            curl_multi_remove_handle($mh,$ch); curl_close($ch);
+            if ($code<200 || $code>=300 || $err!=='') {
+                curl_multi_close($mh);
+                return ['ok'=>false,'error'=>($j['kind']==='woo'?'Woo':'Basalam #'.(int)($j['vid']??0)).' HTTP '.$code.' '.$err,
+                    'rounds'=>$round,'requests'=>$requests];
+            }
+            if ($j['kind']==='woo') {
+                $batch=is_array($body)?$body:[]; $pageRows=[];
+                foreach($batch as $pr) if(is_array($pr) && trim((string)($pr['name']??''))!=='')
+                    $pageRows[]=['id'=>(int)($pr['id']??0),'title'=>(string)$pr['name'],
+                        'price'=>(int)preg_replace('~\D~','',(string)($pr['regular_price']??'0')),
+                        'status'=>(string)($pr['status']??''),'via'=>'api_parallel'];
+                if($pageRows){$wooRows=array_merge($wooRows,$pageRows);reconFetchCursorAppend('woo',0,(int)$j['page'],$pageRows);}
+                $wooPage=(int)$j['page'];
+                if(count($batch)<100){$wooDone=true;$wooComplete=true;}
+                $line='⚡ موازی · Woo صفحه '.$wooPage.': '.count($batch).' (مجموع '.count($wooRows).')';
+                matrixProgress(['phase'=>'parallel_fetch','woo_page'=>$wooPage,'woo_fetched'=>count($wooRows),'log_add'=>[$line]]);
+            } else {
+                $vid=(int)$j['vid']; $batch=is_array($body['data']??null)?$body['data']:[]; $pageRows=[];
+                foreach($batch as $pr){if(!is_array($pr))continue;$rev=$pr['revision']['data']??[];
+                    $name=trim((string)($pr['title']??($pr['name']??($rev['title']??''))));if($name==='')continue;
+                    $rial=(int)($rev['primary_price']??($pr['primary_price']??0));
+                    $pageRows[]=['id'=>(int)($pr['id']??0),'title'=>$name,'price'=>$rial,'price_toman'=>(int)round($rial/10),
+                        'status'=>(int)(is_array($pr['status']??null)?($pr['status']['value']??0):($pr['status']??0)),
+                        'stock'=>(int)($rev['stock']??($rev['inventory']??($pr['stock']??0)))];}
+                if(!isset($shopRows[(string)$vid]))$shopRows[(string)$vid]=[];
+                if($pageRows){$shopRows[(string)$vid]=array_merge($shopRows[(string)$vid],$pageRows);reconFetchCursorAppend('bsl_active',$vid,(int)$j['page'],$pageRows);}
+                $shopPages[(string)$vid]=(int)$j['page']; if(count($batch)<100)$shopDone[(string)$vid]=true;
+                matrixProgress(['phase'=>'parallel_fetch','vendor_id'=>$vid,'page'=>(int)$j['page'],
+                    'log_add'=>['⚡ موازی · غرفه #'.$vid.' صفحه '.(int)$j['page'].': '.count($batch).' (مجموع '.count($shopRows[(string)$vid]).')']]);
+            }
+        }
+        curl_multi_close($mh);
+    }
+    return ['ok'=>true,'yielded'=>true,'rounds'=>$round,'requests'=>$requests];
+}
+
+/**
  * ساخت کامل ماتریس روی سرور با گزارش پیشرفت.
  * $opts: profile, source (manual|recon_auto|cron)
  */
@@ -27121,6 +27207,7 @@ function matrixBuild(array $opts = []): array {
     $suffixes = matrixCollectSuffixes();
     $profileFilter = trim((string)($opts['profile'] ?? 'all'));
     $source = (string)($opts['source'] ?? 'manual');
+    $parallelDest = !empty($opts['parallel_destinations']);
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
@@ -27140,18 +27227,18 @@ function matrixBuild(array $opts = []): array {
     if (!array_key_exists('shop_done', $resumeCp) && $matrixShopCp) {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
-    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
+    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $at];
+            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
     };
 
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt,
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial',
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -27163,13 +27250,13 @@ function matrixBuild(array $opts = []): array {
     $rowsByKey = $profileRows;
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
         matrixProgress(['running' => false, 'done' => true, 'stopped' => true, 'partial' => true,
             'stale' => true, 'phase' => 'stopped', 'checkpoint' => $cp,
             'log_add' => ['⏹ ساخت جدول متوقف شد — checkpoint حفظ شد']]);
@@ -27178,13 +27265,13 @@ function matrixBuild(array $opts = []): array {
     };
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
             'log_add' => ['↻ وقفهٔ کوتاه برای پاسخ‌گویی سرور؛ ادامهٔ خودکار از checkpoint']]);
@@ -27249,6 +27336,28 @@ function matrixBuild(array $opts = []): array {
         'checkpoint' => $matrixCp('woo_fetch', $rowsByKey, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['✅ ' . count($rowsByKey) . ' عنوان یکتا از پروفایل‌ها'],
     ]);
+
+    /* v10.244: در حالت موازی، Woo و همهٔ غرفه‌ها صفحه‌به‌صفحه هم‌زمان
+       واکشی می‌شوند؛ بخش‌های پایین فقط mapping دادهٔ آماده را انجام می‌دهند. */
+    if ($parallelDest) {
+        $parallelShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+        matrixProgress(['phase'=>'parallel_fetch','pct'=>30,
+            'log_add'=>['⚡ حالت موازی: ووکامرس + '.count($parallelShops).' غرفه هم‌زمان']]);
+        $pr = matrixFetchDestinationsParallel($cn, $parallelShops, $matrixWooCp, $matrixWooDone,
+            $matrixWooPage, $matrixWooComplete, $matrixShopCp, $matrixShopPages, $matrixShopDone);
+        matrixProgress(['checkpoint'=>$matrixCp('parallel_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone)]);
+        if (matrixStopRequested() || !empty($pr['stopped'])) return $stopMatrix('parallel_fetch');
+        if (!empty($pr['fallback'])) {
+            $parallelDest=false;
+            matrixProgress(['fetch_mode'=>'serial','log_add'=>['⚠️ curl_multi در دسترس نیست؛ ادامهٔ سری']]);
+        } elseif (empty($pr['ok'])) {
+            $why=(string)($pr['error']??'خطای واکشی موازی');
+            matrixProgress(['running'=>false,'done'=>true,'partial'=>true,'stale'=>true,'error'=>$why,
+                'phase'=>'stopped','checkpoint'=>$matrixCp('parallel_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone),
+                'log_add'=>['❌ '.$why.' — checkpoint حفظ شد']]);
+            return ['ok'=>false,'partial'=>true,'error'=>$why];
+        } elseif (!empty($pr['yielded'])) return $yieldMatrix('parallel_fetch');
+    }
 
     // Woo
     if (matrixStopRequested()) return $stopMatrix('woo_fetch');
@@ -28787,7 +28896,7 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     $logs = array_slice(is_array($p['log'] ?? null) ? $p['log'] : [], -12);
     echo json_encode(['ok' => true, 'version' => APP_VERSION,
         'running' => !empty($p['running']), 'phase' => (string)($p['phase'] ?? ''),
-        'pct' => (int)($p['pct'] ?? 0), 'stopped' => !empty($p['stopped']),
+        'pct' => (int)($p['pct'] ?? 0), 'fetch_mode' => (string)($p['fetch_mode'] ?? 'serial'), 'stopped' => !empty($p['stopped']),
         'yielded' => !empty($p['yielded']), 'error' => (string)($p['error'] ?? ''),
         'lock_held' => $lockHeld, 'lock_recovered' => !empty($p['lock_recovered']),
         'profile_rows' => count((array)($cp['profile_rows'] ?? [])),
@@ -28840,6 +28949,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
         'background' => true,
         'run_started_at' => microtime(true),
+        'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
     ];
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
@@ -28854,6 +28964,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
             $matrixCp = $oldCp;
         }
     }
+    if ($matrixCp && isset($matrixCp['fetch_mode']))
+        $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
     $opts['checkpoint'] = $matrixCp;
     // قفل زود — حذف cursor و مصرف stop فقط بعد از مالکیت واقعی انجام می‌شود.
     $lockFile = SYNC_MATRIX_LOCK_FILE;
@@ -39193,6 +39305,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "'woo_fetched' => count(" . '$rows)') !== false
       && strpos($selfSrc, "{v:'10." . "243'") !== false
       && version_compare(APP_VERSION, '10.' . '243', '>='));
+
+    /* ---------- v10.244: parallel destinations ---------- */
+    $add('10.244', 'واکشی موازی همه مقصدها با curl_multi و fallback سری وجود دارد',
+         function_exists('matrixFetchDestinations' . 'Parallel')
+      && strpos($selfSrc, 'curl_multi_add_handle($mh') !== false
+      && strpos($selfSrc, "'fallback' => true") !== false);
+    $add('10.244', 'سوییچ اسلایدری سری/موازی به start و checkpoint وصل است',
+         strpos($selfSrc, 'id="smParallelDest"') !== false
+      && strpos($selfSrc, "fd.append('parallel_destinations'") !== false
+      && strpos($selfSrc, "'fetch_mode' => " . '$parallelDest' . " ? 'parallel' : 'serial'") !== false);
+    $add('10.244', 'ورودی 10.244 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "244'") !== false
+      && version_compare(APP_VERSION, '10.' . '244', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62652,6 +62777,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div id="syncMatrixBox" style="margin-top:12px;padding:12px;background:linear-gradient(135deg,#0f172a,#1e1b4b);border:1px solid #6d28d9;border-radius:12px">
 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">
 <div style="font-size:13px;font-weight:900;color:#e9d5ff">📊 جدول مقایسهٔ نظیر‌به‌نظیر</div>
+<div style="display:flex;align-items:center;gap:7px;padding:4px 8px;background:#0f172a;border:1px solid #334155;border-radius:20px">
+<span id="smFetchModeLabel" style="font-size:10px;color:#94a3b8">سری</span>
+<label class="prof-net-switch" title="خاموش: مقصدها پشت‌سرهم · روشن: ووکامرس و همه غرفه‌ها هم‌زمان">
+<input type="checkbox" id="smParallelDest" style="display:none" onchange="syncMatrixModeUi(true)"><span class="prof-net-slider"></span></label>
+</div>
 <div style="display:flex;gap:6px;flex-wrap:wrap">
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
@@ -69971,6 +70101,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.244', t:'⚡ سوییچ واکشی سری/موازی مقصدها', items:[
+    'کنار دکمه ساخت جدول یک سوییچ اسلایدری سری/موازی اضافه شد و انتخاب در مرورگر حفظ می‌شود.',
+    'در حالت موازی، هر دور یک صفحه ووکامرس و یک صفحه از تمام غرفه‌های باسلام با curl_multi هم‌زمان دریافت و جداگانه checkpoint می‌شود؛ در نبود curl_multi خودکار به حالت سری برمی‌گردد.',
+  ]},
   {v:'10.243', t:'✅ اصلاح تست پیشرفت فیدبک ووکامرس', items:[
     'الگوی selftest پیشرفت صفحهٔ ووکامرس split-literal شد تا interpolation خود تست باعث شکست کاذب نشود.',
   ]},
@@ -78354,6 +78488,12 @@ function smPaintProgress(p){
       +(p.phase?(' · '+esc(String(p.phase))):'');
   }
 }
+function syncMatrixModeUi(save){
+  const on=!!($('smParallelDest')&&$('smParallelDest').checked);
+  if($('smFetchModeLabel')){$('smFetchModeLabel').textContent=on?'موازی':'سری';$('smFetchModeLabel').style.color=on?'#4ade80':'#94a3b8';}
+  if(save)try{localStorage.setItem('s4_matrix_parallel',on?'1':'0')}catch(e){}
+}
+try{if($('smParallelDest'))$('smParallelDest').checked=localStorage.getItem('s4_matrix_parallel')==='1';syncMatrixModeUi(false)}catch(e){}
 function syncMatrixStart(resume,automatic){
   resume=!!resume; automatic=!!automatic;
   if(!automatic) window._smMatrixStopWanted=false;
@@ -78364,6 +78504,7 @@ function syncMatrixStart(resume,automatic){
   fd.append('action','sync_matrix_start');
   fd.append('source','manual');
   if(resume) fd.append('resume','1');
+  fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع ناموفق',1);
