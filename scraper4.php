@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.240';
+const APP_VERSION = '10.241';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27077,7 +27077,15 @@ function matrixProgress(array $patch): void {
     $cur['ts'] = time();
     writeProgress(SYNC_MATRIX_PROGRESS_FILE, $cur);
 }
-function matrixStopRequested(): bool { return is_file(SYNC_MATRIX_STOP_FILE); }
+function matrixStopRequested(): bool {
+    if (!is_file(SYNC_MATRIX_STOP_FILE)) return false;
+    $runAt = (float)($GLOBALS['_matrixRunStartedAt'] ?? 0);
+    if ($runAt <= 0) return true;
+    $sig = json_decode((string)@file_get_contents(SYNC_MATRIX_STOP_FILE), true);
+    $stopAt = (float)($sig['at'] ?? 0);
+    /* signal قدیمی برای worker یتیم است؛ اجرای تازه آن را مصرف نمی‌کند. */
+    return $stopAt <= 0 || $stopAt > $runAt;
+}
 /** v10.239: پایان برش کوتاه اجرای ماتریس؛ فرصت می‌دهد سرور تک‌پردازه درخواست توقف را بخواند. */
 function matrixSliceExpired(): bool {
     $d = (float)($GLOBALS['_matrixSliceDeadline'] ?? 0);
@@ -27115,6 +27123,7 @@ function matrixBuild(array $opts = []): array {
     $source = (string)($opts['source'] ?? 'manual');
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
+    $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
     $GLOBALS['_matrixSliceDeadline'] = $source === 'manual' ? microtime(true) + 8.0 : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
@@ -28745,7 +28754,7 @@ function matrixQueryPage(array $opts = []): array {
 /* v10.238: توقف مستقل ساخت جدول؛ checkpoint در اولین نقطهٔ امن حفظ می‌شود. */
 if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_stop')) {
     header('Content-Type: application/json; charset=UTF-8');
-    @file_put_contents(SYNC_MATRIX_STOP_FILE, json_encode(['at' => time(), 'by' => 'user'], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    @file_put_contents(SYNC_MATRIX_STOP_FILE, json_encode(['at' => microtime(true), 'by' => 'user'], JSON_UNESCAPED_UNICODE), LOCK_EX);
     /* v10.240: وضعیت UI همان لحظه متوقف می‌شود؛ worker اگر هنوز زنده باشد
        فایل stop را در نقطهٔ امن بعدی می‌بیند و همین checkpoint را تثبیت می‌کند. */
     $stopState = matrixProgressRead();
@@ -28792,6 +28801,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'profile' => (string)($_GET['profile'] ?? $_POST['profile'] ?? 'all'),
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
         'background' => true,
+        'run_started_at' => microtime(true),
     ];
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
@@ -28810,22 +28820,47 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     // قفل زود — حذف cursor و مصرف stop فقط بعد از مالکیت واقعی انجام می‌شود.
     $lockFile = SYNC_MATRIX_LOCK_FILE;
     $fp = @fopen($lockFile, 'c');
+    $lockRecovered = false;
     if (!$fp || !flock($fp, LOCK_EX | LOCK_NB)) {
         if ($fp) @fclose($fp);
-        echo json_encode(['ok' => false, 'error' => 'یک ساخت جدول در حال اجراست', 'running' => true], JSON_UNESCAPED_UNICODE);
-        exit;
+        $staleState = matrixProgressRead();
+        $canRecover = empty($staleState['running']) && !empty($staleState['stopped'])
+            && is_file(SYNC_MATRIX_STOP_FILE);
+        if (!$canRecover) {
+            echo json_encode(['ok' => false, 'error' => 'یک ساخت جدول در حال اجراست', 'running' => true,
+                'lock_recoverable' => false], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        /* v10.241: flock پردازهٔ یتیم را نمی‌توان unlock کرد؛ inode قفل را
+           کنار می‌گذاریم و روی مسیر تازه قفل می‌گیریم. signal قدیمی باقی
+           می‌ماند تا worker قبلی متوقف شود، ولی اجرای تازه با زمان signal
+           آن را نادیده می‌گیرد. */
+        $orphanLock = $lockFile . '.orphan.' . date('Ymd_His') . '.' . substr(md5(uniqid('', true)), 0, 6);
+        if (!@rename($lockFile, $orphanLock)) {
+            echo json_encode(['ok' => false, 'error' => 'قفل متوقف‌شده قابل بازیابی نیست',
+                'running' => false, 'lock_recoverable' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $fp = @fopen($lockFile, 'c');
+        if (!$fp || !flock($fp, LOCK_EX | LOCK_NB)) {
+            if ($fp) @fclose($fp);
+            echo json_encode(['ok' => false, 'error' => 'گرفتن قفل تازه ناموفق بود'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $lockRecovered = true;
+        $opts['run_started_at'] = microtime(true);
     }
     if ($matrixCp === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
-    matrixStopClear();
+    if (!$lockRecovered) matrixStopClear();
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => (int)($matrixCp['started_at'] ?? time()),
-        'source' => $opts['source'], 'profile' => $opts['profile'],
+        'source' => $opts['source'], 'profile' => $opts['profile'], 'lock_recovered' => $lockRecovered,
         'checkpoint' => $matrixCp ?: ['phase' => 'profiles', 'profile_filter' => ($opts['profile'] ?: 'all'),
             'profile_rows' => [], 'profiles_done' => [], 'started_at' => time()],
-        'log_add' => ['🚀 ' . ($matrixCp ? 'ادامه ساخت جدول از checkpoint' : 'جاب ساخت جدول در صف سرور') . '...'],
+        'log_add' => [($lockRecovered ? '♻️ قفل یتیم بازیابی شد — ' : '🚀 ') . ($matrixCp ? 'ادامه ساخت جدول از checkpoint' : 'جاب ساخت جدول در صف سرور') . '...'],
     ]);
-    $early = json_encode(['ok' => true, 'started' => true, 'message' => 'ساخت روی سرور شروع شد'], JSON_UNESCAPED_UNICODE);
+    $early = json_encode(['ok' => true, 'started' => true, 'lock_recovered' => $lockRecovered, 'message' => 'ساخت روی سرور شروع شد'], JSON_UNESCAPED_UNICODE);
     header('Connection: close');
     header('Content-Length: ' . strlen($early));
     echo $early;
@@ -39091,6 +39126,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "240'") !== false
       && version_compare(APP_VERSION, '10.' . '240', '>='));
 
+    /* ---------- v10.241: feedback lock recovery ---------- */
+    $add('10.241', 'قفل یتیم فقط برای state متوقف بازیابی می‌شود',
+         strpos($selfSrc, '$canRecover = empty($staleState') !== false
+      && strpos($selfSrc, "'.orphan.'") !== false
+      && strpos($selfSrc, "'lock_recovered' => $lockRecovered") !== false);
+    $add('10.241', 'signal قدیمی اجرای تازه را متوقف نمی‌کند',
+         strpos($selfSrc, "['_matrixRunStartedAt']") !== false
+      && strpos($selfSrc, '$stopAt > $runAt') !== false
+      && strpos($selfSrc, "matrixStopRequested()") !== false);
+    $add('10.241', 'ورودی 10.241 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "241'") !== false
+      && version_compare(APP_VERSION, '10.' . '241', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -46383,7 +46431,8 @@ function reconProgress(array $patch): void {
 }
 
 function reconStopRequested(): bool {
-    return is_file(RECON_STOP_FILE) || (defined('SYNC_MATRIX_STOP_FILE') && is_file(SYNC_MATRIX_STOP_FILE))
+    return is_file(RECON_STOP_FILE)
+        || (function_exists('matrixStopRequested') && matrixStopRequested())
         || (function_exists('matrixSliceExpired') && matrixSliceExpired());
 }
 function reconStopClear(): void { @unlink(RECON_STOP_FILE); }
@@ -69860,6 +69909,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.241', t:'♻️ بازیابی قفل یتیم ساخت جدول', items:[
+    'لوپ فیدبک endpoint نشان داد شروع با خطای «یک ساخت جدول در حال اجراست» رد می‌شد، در حالی که state قبلاً stopped بود؛ علت flock باقی‌مانده از worker قدیمی بود.',
+    'اگر state متوقف و signal توقف موجود باشد، lock قدیمی به inode یتیم منتقل و lock تازه گرفته می‌شود؛ اجرای جدید signal قدیمی را با timestamp نادیده می‌گیرد و worker قدیمی همچنان همان signal را می‌بیند.',
+  ]},
   {v:'10.240', t:'🛑 ثبت فوری وضعیت توقف جدول', items:[
     'درخواست توقف علاوه بر نوشتن signal، همان لحظه running را خاموش و وضعیت stopped را با checkpoint فعلی ثبت می‌کند؛ بنابراین جاب مرده/کهنه دیگر در رابط برای همیشه «در حال اجرا» نمی‌ماند.',
   ]},
