@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.251';
+const APP_VERSION = '10.252';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9762,6 +9762,30 @@ function srcPace(string $host, int $gapMs): void {
     $last[$host] = microtime(true);
 }
 
+/** v10.252: transport مستقل از cURL برای ایمالز. بعضی هاست‌ها cURL را با
+ * SSL_ERROR_SYSCALL می‌بندند ولی PHP stream همان URL را با TLS 1.2 می‌گیرد. */
+function emallsPhpStreamFetch(string $url, int $timeout = 25): array {
+    if (!(function_exists('isEmallsUrl') && isEmallsUrl($url)))
+        return ['ok'=>false,'error'=>'not emalls','code'=>0,'url'=>$url,'html'=>'','mode'=>'php-stream'];
+    if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN))
+        return ['ok'=>false,'error'=>'allow_url_fopen disabled','code'=>0,'url'=>$url,'html'=>'','mode'=>'php-stream'];
+    $timeout=max(5,min(60,$timeout));
+    $headers="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+        ."Accept-Language: fa-IR,fa;q=0.9,en;q=0.7\r\n"
+        ."Cache-Control: no-cache\r\nConnection: close\r\n";
+    $ssl=['verify_peer'=>false,'verify_peer_name'=>false,'SNI_enabled'=>true,
+        'peer_name'=>(string)(parse_url($url,PHP_URL_HOST)?:'emalls.ir'),'ciphers'=>'DEFAULT@SECLEVEL=1'];
+    if(defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT'))$ssl['crypto_method']=STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+    $ctx=stream_context_create(['http'=>['method'=>'GET','timeout'=>$timeout,'follow_location'=>1,'max_redirects'=>5,
+        'ignore_errors'=>true,'protocol_version'=>1.1,'user_agent'=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36','header'=>$headers],
+        'ssl'=>$ssl]);
+    $http_response_header=[];$body=@file_get_contents($url,false,$ctx);$resp=$http_response_header;
+    $code=0;foreach((array)$resp as $line)if(preg_match('~^HTTP/\S+\s+(\d{3})~i',(string)$line,$m))$code=(int)$m[1];
+    $err=error_get_last();$ok=$body!==false&&$code>=200&&$code<400;
+    return ['ok'=>$ok,'error'=>$ok?'':(string)($err['message']??'PHP stream Empty'),'code'=>$code,
+        'url'=>$url,'html'=>$body===false?'':(string)$body,'mode'=>'emalls-php-stream'];
+}
+
 function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode): array {
     $parsed = parse_url($url); $origin = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
     $host = strtolower((string)($parsed['host'] ?? ''));
@@ -9786,6 +9810,16 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
     if (function_exists('isEmallsUrl') && isEmallsUrl($url)) {
         if (defined('CURL_HTTP_VERSION_1_1')) curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        /* v10.252: بعضی OpenSSL/libcurlهای هاست روی ClientHelloِ TLS 1.3
+           ایمالز با SSL_ERROR_SYSCALL قطع می‌شوند، در حالی که مرورگر با
+           fallback به TLS 1.2 باز می‌کند. حداکثر TLS را برای همین دامنه 1.2
+           می‌کنیم؛ روی نسخه‌های قدیمی که MAX ثابت ندارند حداقل 1.2 اعمال می‌شود. */
+        if (defined('CURLOPT_SSLVERSION') && defined('CURL_SSLVERSION_TLSv1_2')) {
+            $tls12 = CURL_SSLVERSION_TLSv1_2;
+            if (defined('CURL_SSLVERSION_MAX_TLSv1_2')) $tls12 |= CURL_SSLVERSION_MAX_TLSv1_2;
+            curl_setopt($ch, CURLOPT_SSLVERSION, $tls12);
+        }
+        if (defined('CURLOPT_SSL_CIPHER_LIST')) @curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'DEFAULT@SECLEVEL=1');
         curl_setopt($ch, CURLOPT_FRESH_CONNECT, true);
         curl_setopt($ch, CURLOPT_FORBID_REUSE, true);
     }
@@ -9820,9 +9854,19 @@ function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode)
     $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $url;
     if ($mode === 'worker') $finalUrl = $url; // v10.191: لینک‌های نسبی باید نسبت به سایت مبدأ حل شوند، نه آدرس Worker.
     curl_close($ch);
-    return ['ok' => $body !== false && $code >= 200 && $code < 400,
-            'error' => $err ?: 'Empty', 'code' => $code, 'url' => $finalUrl,
-            'html' => $body === false ? '' : $body, 'mode' => $mode];
+    $out=['ok'=>$body!==false&&$code>=200&&$code<400,'error'=>$err?:'Empty','code'=>$code,
+        'url'=>$finalUrl,'html'=>$body===false?'':$body,'mode'=>$mode];
+    /* مسیر stream فقط برای direct و فقط پس از شکست/پوستهٔ بی‌محصول است؛
+       proxy/worker انتخاب‌شدهٔ کاربر را دور نمی‌زند و درخواست اضافهٔ عادی ندارد. */
+    $emallsEmpty=!empty($out['ok'])&&function_exists('emallsNeedsProductSignal')&&emallsNeedsProductSignal($url)
+        &&stripos((string)$out['html'],'~id~')===false;
+    if($mode==='direct'&&function_exists('isEmallsUrl')&&isEmallsUrl($url)
+        &&(empty($out['ok'])||$emallsEmpty)&&function_exists('emallsPhpStreamFetch')){
+        $stream=emallsPhpStreamFetch($url,$timeout);$stream['curl_error']=(string)$out['error'];
+        $stream['curl_code']=(int)$out['code'];if(!empty($stream['ok']))return $stream;
+        $out['stream_error']=(string)($stream['error']??'');$out['stream_code']=(int)($stream['code']??0);
+    }
+    return $out;
 }
 
 function emallsLooksUsefulHtml(string $html): bool {
@@ -10574,6 +10618,16 @@ function fetch_html(string $url, int $timeout = 25): array {
         }
         // اگر خطای قطعیِ منطقی (مثل ۴۰۴/۴۰۰) بود، امتحانِ روشِ دیگر بی‌فایده است
         if ($last['code'] > 0 && !in_array($last['code'], [403, 429], true)) break;
+    }
+
+    /* v10.252: اگر transport مستقیم حتی پاسخ HTTP نگرفت، DNS رمزگذاری‌شده
+       را خودکار یک بار امتحان کن. این برای رکورد DNS/مسیر قدیمی دیتاسنتر است،
+       نه دورزدن تنظیم پروفایل؛ فقط ایمالز و فقط code=0. */
+    if(function_exists('isEmallsUrl')&&isEmallsUrl($url)&&(int)($last['code']??0)===0){
+        $__dohNet=$__srcNet;$__dohNet['doh_url']=trim((string)($__dohNet['doh_url']??''))?:'https://cloudflare-dns.com/dns-query';
+        $__doh=srcNetFetchAttempt($url,min(20,$timeout),$__dohNet,'doh');$__doh['emalls_auto_doh']=true;
+        $__dohGood=!empty($__doh['ok'])&&(!emallsNeedsProductSignal($url)||stripos((string)($__doh['html']??''),'~id~')!==false);
+        if($__dohGood)return $__doh;$last=$__doh;
     }
 
     /* v10.191: بعضی پروفایل‌های قدیمیِ ایمالز با «اتصال غیرمستقیم» خاموش
@@ -11967,7 +12021,7 @@ $summarizeFetch = function(string $label, array $r, array $sel, string $eng) use
         'mode' => (string)($r['mode'] ?? ''),
         'error' => mb_substr((string)($r['error'] ?? ''), 0, 260),
         'final_url' => mb_substr($base, 0, 260),
-        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_reader_modes','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error'])),
+        'flags' => array_intersect_key($r, array_flip(['profile_direct_emalls_fallback','emalls_public_fallback','snappshop_public_fallback','jina_reader','jina_reader_via','jina_product_count','jina_reader_trace','jina_reader_modes','jina_js_fallback','jina_error','source_error','render_error','js_shell_detected','emalls_static_error','emalls_auto_doh','stream_error','stream_code','curl_error','curl_code'])),
     ];
     $out['html'] = $summarizeHtml($html, $base, $sel, $eng);
     return $out;
@@ -39563,6 +39617,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.251', 'ورودی 10.251 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "251'") !== false
       && version_compare(APP_VERSION, '10.' . '251', '>='));
+
+    /* ---------- v10.252: Emalls TLS/transport recovery ---------- */
+    $add('10.252', 'اتصال cURL ایمالز TLS 1.2 و cipher سازگار دارد',
+         strpos($selfSrc, 'CURL_SSLVERSION_TLSv1_2') !== false
+      && strpos($selfSrc, 'CURL_SSLVERSION_MAX_TLSv1_2') !== false
+      && strpos($selfSrc, 'DEFAULT@SECLEVEL=1') !== false);
+    $add('10.252', 'پس از شکست cURL، transport مستقل PHP stream برای ایمالز وجود دارد',
+         function_exists('emallsPhpStreamFetch')
+      && strpos($selfSrc, "'emalls-php-stream'") !== false
+      && strpos($selfSrc, "'curl_error'") !== false);
+    $add('10.252', 'خطای شبکه code=0 ایمالز یک تلاش خودکار DoH دارد',
+         strpos($selfSrc, "'emalls_auto_doh'") !== false
+      && strpos($selfSrc, "srcNetFetchAttempt(" . '$url,min(20,$timeout),$__dohNet' . ",'doh')") !== false);
+    $add('10.252', 'ورودی 10.252 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "252'") !== false
+      && version_compare(APP_VERSION, '10.' . '252', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70428,6 +70498,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.252', t:'🔐 بازیابی TLS و transport ایمالز', items:[
+    'برای ناسازگاری ClientHello هاست با ایمالز، cURL این دامنه روی TLS 1.2 و cipher سازگار اجرا می‌شود',
+    'اگر cURL همچنان SSL_ERROR_SYSCALL بدهد، PHP stream مستقل همان صفحه را با TLS 1.2 دریافت می‌کند',
+    'اگر هیچ پاسخ HTTP نرسد، یک تلاش خودکار DoH انجام و جزئیات خطای cURL/stream در feedback ثبت می‌شود'
+  ]},
   {v:'10.251', t:'⏱ محدودکردن fallback مستقیم ایمالز', items:[
     'fallback مستقیم فقط canonical Reader را با سقف ۱۵ ثانیه آزمایش می‌کند تا سه timeout پیاپی دوباره خطای 500 نسازد'
   ]},
