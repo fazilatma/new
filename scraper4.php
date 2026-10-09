@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.247';
+const APP_VERSION = '10.248';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1316,8 +1316,14 @@ function s4WorkerLoopFromCli(): void {
             if ($once) break;
             continue;
         }
-        if ($tick > 0 && (time() - $lastCron) >= $tick) {
-            s4WorkerStateWrite(['phase' => 'cron_tick']);
+        /* v10.248: فاصلهٔ کران داخلی از تنظیمات عمومی و برحسب ثانیه؛
+           در هر دور دوباره خوانده می‌شود تا بدون restart سرویس اعمال شود. */
+        $workerCn = loadConnections();
+        $cronEnabled = !array_key_exists('internal_cron_enabled', $workerCn) || !empty($workerCn['internal_cron_enabled']);
+        $rawTick = array_key_exists('internal_cron_sec', $workerCn) ? (int)$workerCn['internal_cron_sec'] : $tick;
+        $effectiveTick = ($cronEnabled && $rawTick > 0) ? max(5, min(86400, $rawTick)) : 0;
+        if ($effectiveTick > 0 && (time() - $lastCron) >= $effectiveTick) {
+            s4WorkerStateWrite(['phase' => 'cron_tick', 'cron_tick' => $effectiveTick]);
             $cr = s4WorkerRunCronChild();
             $lastCron = time();
             s4WorkerStateWrite(['phase' => 'idle', 'last_cron_at' => $lastCron,
@@ -16616,6 +16622,8 @@ if (isset($_POST['notif_remind_max']))   $conn['notif_remind_max']   = max(0, (i
 if (isset($_POST['queue_dedup']))       $conn['queue_dedup']       = !empty($_POST['queue_dedup']) && $_POST['queue_dedup'] !== 'false';
 if (isset($_POST['queue_dedup_stale'])) $conn['queue_dedup_stale'] = max(0, (int)$_POST['queue_dedup_stale']);
 if (isset($_POST['cron_lock_min']))     $conn['cron_lock_min']     = max(1, min(240, (int)$_POST['cron_lock_min']));
+if (isset($_POST['internal_cron_enabled'])) $conn['internal_cron_enabled'] = !empty($_POST['internal_cron_enabled']) && $_POST['internal_cron_enabled'] !== 'false';
+if (isset($_POST['internal_cron_sec'])) $conn['internal_cron_sec'] = max(5, min(86400, (int)$_POST['internal_cron_sec']));
 if (isset($_POST['keep_reports']))      $conn['keep_reports']      = max(1, min(200, (int)$_POST['keep_reports']));
 // v8.69: آپدیت محتوای تازه روی محصولات موجود (پیش‌فرض روشن)
 if (isset($_POST['content_sync']))      $conn['content_sync']      = !empty($_POST['content_sync']) && $_POST['content_sync'] !== 'false';
@@ -22559,9 +22567,24 @@ if ($stageOpen) {
 if (in_array($stageNow, ['list_done', 'detail'], true)) $pResult['detail_stalled'] = $stageAge;
 
 $orderedProducts = profileOrderedProducts($profile);
-$changedProducts = $changedKeys === null
-    ? $orderedProducts
-    : profileOrderedProducts($profile, $changedKeys);
+$actionBasis = (($syncCfg['actionBasis'] ?? 'profile') === 'matrix') ? 'matrix' : 'profile';
+$wooActionKeys = $changedKeys; $bslActionKeys = $changedKeys;
+if ($actionBasis === 'matrix' && !$pricingChanged && !$shopPricingChanged) {
+    if ($wooOnlyChanged) {
+        $mk = syncMatrixActionKeys($profile, (string)$key, 'woo', $cn);
+        $wooActionKeys = is_array($mk) ? $mk : [];
+        if ($mk === null) $pResult['matrix_basis_error'] = 'نتیجهٔ جدول مغایرت موجود نیست';
+    }
+    if ($bslOnlyChanged) {
+        $mk = syncMatrixActionKeys($profile, (string)$key, 'bsl', $cn);
+        $bslActionKeys = is_array($mk) ? $mk : [];
+        if ($mk === null) $pResult['matrix_basis_error'] = 'نتیجهٔ جدول مغایرت موجود نیست';
+    }
+    $pResult['action_basis'] = 'matrix';
+}
+$wooChangedProducts = $wooActionKeys === null ? $orderedProducts : profileOrderedProducts($profile, $wooActionKeys);
+$bslChangedProducts = $bslActionKeys === null ? $orderedProducts : profileOrderedProducts($profile, $bslActionKeys);
+$changedProducts = count($wooChangedProducts) >= count($bslChangedProducts) ? $wooChangedProducts : $bslChangedProducts;
 
 /* =====================================================================
    v10.34 (۴۸ج): «ارسالِ کامل بدون مقایسه» وقتی تیک خاموش است.
@@ -22589,7 +22612,7 @@ manualSyncProgress(['phase' => 'صف‌سازی و ارسال', 'current' => 2],
 if ($target === 'woo' || $target === 'both') {
 // v8.21: Queue products for WooCommerce (not just set sync state)
 // v8.39: با تیک «افزودن/آپدیت ووکامرس» فقط تغییرات ارسال می‌شود
-$wooSend = $wooOnlyChanged ? $changedProducts : $orderedProducts;
+$wooSend = $wooOnlyChanged ? $wooChangedProducts : $orderedProducts;
 if(!empty($wooSend)){
 $wooSuffix=trim($profile['titleSuffix']??'') ?: trim($cn['basalam']['title_suffix']??'');
 // v8.56: دستهٔ ووکامرس این پروفایل، وگرنه دستهٔ پیش‌فرض تنظیمات عمومی
@@ -22645,7 +22668,7 @@ $syncState[$key]=array_merge(is_array($syncState[$key]??null)?$syncState[$key]:[
 }
 if ($target === 'bsl' || $target === 'both') {
 // v8.39: با تیک «افزودن/آپدیت باسلام» فقط تغییرات ارسال می‌شود
-$bslSend = $bslOnlyChanged ? $changedProducts : $orderedProducts;
+$bslSend = $bslOnlyChanged ? $bslChangedProducts : $orderedProducts;
 if (!empty($bslSend)) {
 $queueId = 'cron_' . $key . '_' . $now;
 $qFile = __DIR__ . '/bsl_queue_products_' . $queueId . '.json';
@@ -39451,6 +39474,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "247'") !== false
       && version_compare(APP_VERSION, '10.' . '247', '>='));
 
+    /* ---------- v10.248: profile/matrix action basis + internal cron ---------- */
+    $add('10.248', 'سوییچ مبنای پروفایل/جدول در syncConfig ذخیره می‌شود',
+         strpos($selfSrc, 'id="profileSyncBasisMatrix"') !== false
+      && strpos($selfSrc, 'actionBasis:') !== false
+      && strpos($selfSrc, "sc.actionBasis==='matrix'") !== false);
+    $add('10.248', 'برنامهٔ عملیات جدول فقط کلیدهای missing/mismatch همان پروفایل را می‌دهد',
+         function_exists('syncMatrixActionKeys')
+      && function_exists('retireMatrixExtraMatch')
+      && strpos($selfSrc, "'matrix_result_missing'") !== false);
+    $add('10.248', 'کران داخلی worker با فاصله ثانیه‌ای ذخیره و زنده اعمال می‌شود',
+         strpos($selfSrc, 'id="internalCronSec"') !== false
+      && strpos($selfSrc, "'internal_cron_sec'") !== false
+      && strpos($selfSrc, '$effectiveTick') !== false);
+    $add('10.248', 'ورودی 10.248 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "248'") !== false
+      && version_compare(APP_VERSION, '10.' . '248', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -43593,7 +43633,15 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         $out['log'][] = '⚠️ محصولی روی دیسک نیست — صف ارسال خالی';
         return $out;
     }
-    $out['log'][] = '📦 ' . count($products) . ' محصول برای صف ارسال';
+    $wooProducts=$products;$bslProducts=$products;
+    if (($syncCfg['actionBasis'] ?? 'profile') === 'matrix') {
+        $wk=syncMatrixActionKeys($profile,$key,'woo',$cn);$bk=syncMatrixActionKeys($profile,$key,'bsl',$cn);
+        $wooProducts=[];foreach((array)$wk as $k)if(isset($products[$k]))$wooProducts[$k]=$products[$k];
+        $bslProducts=[];foreach((array)$bk as $k)if(isset($products[$k]))$bslProducts[$k]=$products[$k];
+        $out['log'][]=($wk===null||$bk===null)?'⚠️ مبنای جدول: نتیجهٔ مغایرت موجود نیست؛ ارسال امن متوقف شد'
+            :('📊 مبنای جدول: WC '.count($wooProducts).' · باسلام '.count($bslProducts).' ردیف مغایر');
+    }
+    $out['log'][] = '📦 ' . count($products) . ' محصول در پروفایل ذخیره‌شده';
 
     $wooOn = ($target === 'woo' || $target === 'both') && !empty($syncCfg['wooAddUpdate']);
     $bslOn = ($target === 'bsl' || $target === 'both') && !empty($syncCfg['bslAddUpdate']);
@@ -43612,9 +43660,9 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
     $stamp = date('Ymd_His');
     $safeKey = preg_replace('~[^a-zA-Z0-9_\-]+~', '_', $key);
 
-    if ($wooOn && function_exists('wooReadQueue') && function_exists('wooWriteQueue')) {
+    if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue')) {
         try {
-            $wooSend = array_values($products);
+            $wooSend = array_values($wooProducts);
             $wooQFile = $qDir . '/woo_queue_' . $safeKey . '_' . $stamp . '.json';
             @file_put_contents($wooQFile, json_encode($wooSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             $wooQueue = wooReadQueue();
@@ -43651,9 +43699,9 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         }
     }
 
-    if ($bslOn && function_exists('bslReadQueue') && function_exists('bslWriteQueue')) {
+    if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue')) {
         try {
-            $bslSend = array_values($products);
+            $bslSend = array_values($bslProducts);
             $qFile = $qDir . '/bsl_queue_' . $safeKey . '_' . $stamp . '.json';
             @file_put_contents($qFile, json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             $queue = bslReadQueue();
@@ -44612,6 +44660,19 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
         $empty['skipped'] = 'no_items';
         return $empty;
     }
+    /* حالت جدول: حذف/بایگانی فقط وقتی مجاز است که نتیجهٔ مغایرت همین
+       محصول را واقعاً در مقصد نشان دهد؛ نتیجهٔ خالی هرگز به حذف کور منجر نمی‌شود. */
+    if (($syncCfg['actionBasis'] ?? 'profile') === 'matrix') {
+        $mx=matrixResultLoad(); if(empty($mx['rows'])){$empty['skipped']='matrix_result_missing';return $empty;}
+        $safe=[];$shops=function_exists('bslAllShops')?bslAllShops($cn):[];
+        foreach($items as $it){$title=(string)($it['title']??'');$ik=(string)($it['key']??'');$found=false;
+            if(($target==='woo'||$target==='both')&&(retireProfileMatrixMatch('woo',$title,$profileKey,$ik,0)||retireMatrixExtraMatch('woo',$title,0)))$found=true;
+            if(!$found&&($target==='bsl'||$target==='both'))foreach($shops as $sh){$vid=(int)($sh['vendor_id']??0);
+                if($vid>0&&(retireProfileMatrixMatch('bsl',$title,$profileKey,$ik,$vid)||retireMatrixExtraMatch('bsl',$title,$vid))){$found=true;break;}}
+            if($found)$safe[]=$it;
+        }
+        $items=$safe;if(!$items){$empty['skipped']='no_matrix_destination_discrepancy';return $empty;}
+    }
 
     $mode = (string)($cn['retire_mode'] ?? 'off');
     $auW = !empty($syncCfg['wooAddUpdate']);
@@ -44670,6 +44731,46 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
         'bsl_action' => $per['bsl'],
         'queue_report' => $queueRep,
     ];
+}
+
+/** v10.248: کلید محصولات لازم برای add/update از نتیجهٔ ذخیره‌شدهٔ مغایرت.
+ * فقط ردیف‌های متعلق به همین پروفایل خوانده می‌شوند؛ نبود نتیجه = null تا
+ * caller عملیات را امن نگه دارد و به ارسال کامل سقوط نکند. */
+function syncMatrixActionKeys(array $profile, string $profileKey, string $target, array $cn = []): ?array {
+    $mx = function_exists('matrixResultLoad') ? matrixResultLoad() : [];
+    $rows = is_array($mx['rows'] ?? null) ? $mx['rows'] : [];
+    if (!$rows) return null;
+    $ask = strpos($profileKey, '://') !== false ? profileKey($profileKey) : $profileKey;
+    $byBare = [];$validKeys=[];
+    foreach(profileOrderedProducts($profile, null, true) as $p){
+        $k=(string)($p['key']??'');$bare=matrixBareTitle((string)($p['title']??''),(array)($mx['suffixes']??[]));
+        if($k!=='')$validKeys[$k]=true;if($k!==''&&$bare!=='')$byBare[$bare]=$k;
+    }
+    $keys=[];$shopIds=[];
+    if($target==='bsl')foreach((function_exists('bslAllShops')?bslAllShops($cn):[]) as $sh){$v=(int)($sh['vendor_id']??0);if($v>0)$shopIds[]=$v;}
+    foreach($rows as $r){if(!is_array($r)||(int)($r['profile_hits']??0)<=0)continue;
+        $rp=(string)($r['profile_key']??'');if(strpos($rp,'://')!==false)$rp=profileKey($rp);if($rp!==$ask)continue;
+        $need=false;
+        if($target==='woo'){
+            $tone=(string)($r['woo_tone']??'na');
+            $need=empty($r['woo'])||in_array($tone,['bad','warn','missing_dst'],true);
+        }else{
+            foreach($shopIds as $vid){$cell=$r['shops'][$vid]??null;$tone=is_array($cell)?(string)($cell['tone']??'na'):'missing_dst';
+                if(!$cell||in_array($tone,['bad','warn','missing_dst'],true)){$need=true;break;}}
+        }
+        if(!$need)continue;$k=(string)($r['key']??'');if(($k===''||!isset($validKeys[$k]))&&isset($byBare[(string)($r['bare']??'')]))$k=$byBare[(string)$r['bare']];
+        if($k!==''&&isset($validKeys[$k]))$keys[$k]=true;
+    }
+    return array_keys($keys);
+}
+
+/** مقصدِ extra در جدول برای یک عنوان حذف‌شدهٔ تأییدشده از snapshot پروفایل. */
+function retireMatrixExtraMatch(string $target, string $title, int $vendorId = 0): ?array {
+    $mx=matrixResultLoad();$ask=matrixBareTitle($title,(array)($mx['suffixes']??[]));if($ask==='')return null;
+    foreach((array)($mx['rows']??[]) as $r){if(!is_array($r)||(int)($r['profile_hits']??0)>0||(string)($r['bare']??'')!==$ask)continue;
+        if($target==='woo'&&!empty($r['woo']['id']))return ['id'=>(int)$r['woo']['id'],'match'=>'matrix_extra'];
+        if($target==='bsl'&&$vendorId>0&&!empty($r['shops'][$vendorId]['id']))return ['id'=>(int)$r['shops'][$vendorId]['id'],'match'=>'matrix_extra'];
+    }return null;
 }
 
 /** v10.238: شناسهٔ مقصد از عضویت محصول در snapshot پروفایل/ماتریس. */
@@ -62704,6 +62805,15 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 </div>
 
 <div style="font-size:11px;color:#fbbf24;font-weight:700;margin:10px 0 5px;padding-top:8px;border-top:1px solid #334155">⏱ کران‌جاب</div>
+<label style="display:flex;align-items:center;gap:8px;font-size:11px;color:#e2e8f0;cursor:pointer;margin-bottom:6px">
+<label class="prof-net-switch"><input type="checkbox" id="internalCronEnabled" checked style="display:none"><span class="prof-net-slider"></span></label>
+<span>کران‌جاب داخلی worker فعال باشد</span></label>
+<div class="crow"><label>فاصلهٔ کران داخلی:</label>
+<input type="number" id="internalCronSec" value="60" min="5" max="86400" step="1" style="max-width:100px" dir="ltr">
+<span style="font-size:10px;color:#64748b">ثانیه</span></div>
+<div style="font-size:10px;color:#64748b;line-height:1.7;margin-bottom:6px">
+worker دائمی در این فاصله مسیر cron_run را اجرا می‌کند؛ حداقل ۵ ثانیه. اگر سرویس worker نصب/فعال نباشد، کران خارجی همچنان لازم است.
+</div>
 <div class="crow"><label>قفل ضد هم‌پوشانی:</label>
 <input type="number" id="cronLockMin" value="30" min="1" max="240" style="max-width:80px" dir="ltr">
 <span style="font-size:10px;color:#64748b">دقیقه</span></div>
@@ -63559,7 +63669,14 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 
             <div class="row" style="margin-bottom:4px;align-items:center">
                 <label style="min-width:80px;font-size:12px;color:#94a3b8">➕🔄 حالت:</label>
-                <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+                <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#111827;border:1px solid #334155;border-radius:10px;margin-bottom:2px">
+                        <span id="profileSyncBasisLabel" style="font-size:10px;color:#c4b5fd;flex:1">مبنا: پروفایل‌های ذخیره‌شده</span>
+                        <label class="prof-net-switch" title="خاموش: پروفایل ذخیره‌شده · روشن: نتیجهٔ جدول مغایرت‌گیری">
+                            <input type="checkbox" id="profileSyncBasisMatrix" style="display:none" onchange="syncBasisUi();scheduleSave();updateSyncStatusText()"><span class="prof-net-slider"></span>
+                        </label>
+                    </div>
+                    <div style="font-size:9px;color:#64748b;line-height:1.6;margin:-2px 2px 2px">در حالت جدول، فقط ردیف‌های missing/مغایرت همان پروفایل و نتیجهٔ ذخیره‌شدهٔ جدول مبنای افزودن، آپدیت و حذف امن هستند.</div>
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">
                         <input type="checkbox" id="profileSyncWooAddUpdate" onchange="scheduleSave();updateSyncStatusText();try{updateRetireBadge()}catch(e){}">
                         <span style="color:#c4b5fd">ووکامرس — افزودن/آپدیت/حذف از روی پروفایل ذخیره‌شده</span>
@@ -70238,6 +70355,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.248', t:'📊 مبنای عملیات پروفایل/مغایرت + کران داخلی ثانیه‌ای', items:[
+    'بالای تیک‌های Woo و باسلام یک سوییچ مبنا اضافه شد: پروفایل‌های ذخیره‌شده یا جدول و نتیجهٔ مغایرت‌گیری',
+    'در حالت جدول، فقط missing/قیمت مغایر همان پروفایل صف می‌شود و حذف/بایگانی فقط با تأیید مقصد در جدول انجام می‌شود',
+    'در تنظیمات عمومی، کران‌جاب داخلی worker با روشن/خاموش و فاصلهٔ ۵ تا ۸۶۴۰۰ ثانیه اضافه شد و بدون restart اعمال می‌شود'
+  ]},
   {v:'10.247', t:'🟢 پر شدن زندهٔ جدول هنگام دریافت بسته‌ها', items:[
     'سوییچ اسلایدری مستقل «پر شدن زنده» کنار حالت سری/موازی اضافه شد و انتخاب مرورگر حفظ می‌شود',
     'بعد از هر continuation و checkpoint، بسته‌های دریافت‌شده در snapshot جدا از نتیجهٔ نهایی ذخیره و صفحه‌بندی می‌شوند',
@@ -78521,7 +78643,7 @@ const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enable
 const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
-if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
+if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();if(b.token&&bslAllCats.length===0){loadBslCats();}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
 arApplyCfg(cn.autoreply||{});arLoad();
@@ -79007,7 +79129,7 @@ fd.append('ai_net',JSON.stringify(getAiNet()));
 fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
 fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
 fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
-fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
+fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
   web_search:!!($('aiContentAutoWeb')&&$('aiContentAutoWeb').checked),
@@ -86456,6 +86578,11 @@ function sendImportToBsl(){
     switchMainTab('send');
     queueBslSend(ps,catId);
 }
+function syncBasisUi(){
+    const mx=!!($('profileSyncBasisMatrix')&&$('profileSyncBasisMatrix').checked);
+    const el=$('profileSyncBasisLabel');
+    if(el){el.textContent=mx?'مبنا: جدول و نتایج مغایرت‌گیری':'مبنا: پروفایل‌های ذخیره‌شده';el.style.color=mx?'#4ade80':'#c4b5fd';}
+}
 function loadProfileSyncConfig(){
     // Load from current profile via server
     const url=$('url').value.trim();
@@ -86471,6 +86598,8 @@ function loadProfileSyncConfig(){
             // v7.81: Load add/update checkboxes
             $('profileSyncWooAddUpdate').checked=!!sc.wooAddUpdate;
             $('profileSyncBslAddUpdate').checked=!!sc.bslAddUpdate;
+            if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=(sc.actionBasis==='matrix');
+            syncBasisUi();
             // v9.45: بدون استخراج (پروفایل‌های اکسل/CSV)
             if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=!!sc.noExtract;
             // v10.21 (۳۴الف): تازه‌سازیِ دوره‌ای — نبودِ کلید یعنی روشن
@@ -86481,6 +86610,8 @@ function loadProfileSyncConfig(){
             $('profileSyncEn').checked=false;
             $('profileSyncWooAddUpdate').checked=false;
             $('profileSyncBslAddUpdate').checked=false;
+            if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=false;
+            syncBasisUi();
             if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=false;
             syncToggleNoExtractBox();
             $('profileSyncStatus').textContent='';
@@ -86497,6 +86628,7 @@ function getSyncConfig(){
         // v7.81: Add/Update mode checkboxes — stored in profile for future use
         wooAddUpdate:$('profileSyncWooAddUpdate').checked,
         bslAddUpdate:$('profileSyncBslAddUpdate').checked,
+        actionBasis:($('profileSyncBasisMatrix')&&$('profileSyncBasisMatrix').checked)?'matrix':'profile',
         // v9.45: بدون استخراج — فقط آپدیت دوره‌ای قیمت/موجودی (پروفایل‌های اکسل/CSV)
         noExtract:!!($('profileSyncNoExtract')&&$('profileSyncNoExtract').checked),
         /* v10.21 (۳۴الف): تازه‌سازیِ دوره‌ایِ قیمت/موجودی از صفحهٔ محصول.
@@ -86553,7 +86685,8 @@ function updateSyncStatusText(){
        پس نشان‌دادن حالتِ ووکامرس/باسلام گمراه‌کننده است. */
     const tg=$('profileSyncTarget')?$('profileSyncTarget').value:'woo';
     if(tg==='none'){$('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | 🚫 بدون ارسال (فقط استخراج)'+ne;return;}
-    $('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | '+wm+' | '+bm+ne;
+    const basis=($('profileSyncBasisMatrix')&&$('profileSyncBasisMatrix').checked)?'📊 مبنا: جدول مغایرت':'📁 مبنا: پروفایل';
+    $('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | '+basis+' | '+wm+' | '+bm+ne;
 }
 function refreshSyncStatus(){
     fetch('?sync_status=1').then(r=>r.json()).then(d=>{
@@ -86589,6 +86722,8 @@ applyProfile=function(p){
         // v7.81: Load add/update checkboxes
         $('profileSyncWooAddUpdate').checked=!!p.syncConfig.wooAddUpdate;
         $('profileSyncBslAddUpdate').checked=!!p.syncConfig.bslAddUpdate;
+        if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=(p.syncConfig.actionBasis==='matrix');
+        syncBasisUi();
         // v9.45: بدون استخراج (پروفایل‌های اکسل/CSV)
         if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=!!p.syncConfig.noExtract;
         // v10.21 (۳۴الف)
@@ -86599,6 +86734,8 @@ applyProfile=function(p){
         $('profileSyncEn').checked=false;
         $('profileSyncWooAddUpdate').checked=false;
         $('profileSyncBslAddUpdate').checked=false;
+        if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=false;
+        syncBasisUi();
         if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=false;
         syncToggleNoExtractBox();
         $('profileSyncStatus').textContent='';
