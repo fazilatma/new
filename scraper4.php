@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.249';
+const APP_VERSION = '10.250';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9936,6 +9936,26 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
         $r['source_error'] = (string)($prev['error'] ?? '');
         return $r;
     }
+    /* v10.250: روی هاست فعلی Worker به‌جای markdown صفحهٔ Cloudflare 403
+       می‌گیرد. فقط برای ایمالز، direct Reader را به‌عنوان آخرین شانس امتحان
+       می‌کنیم؛ مسیر اصلی همچنان indirect است و این شاخه بعد از شکست آن می‌آید. */
+    $directTrace=[];
+    foreach(s4JinaReaderUrlVariants($url) as $variant){
+        $readerUrl=(string)($variant['url']??'');if($readerUrl==='')continue;
+        $dr=s4JinaFetchAttempt($readerUrl,$timeout,'direct',[]);
+        $raw=(string)($dr['html']??'');$ps=trim($raw)!==''?emallsProductsFromReaderText($raw,$url):[];
+        $directTrace[]=s4JinaReaderTraceEntry('direct',(string)($variant['kind']??'reader'),$readerUrl,$dr,$url);
+        if(!empty($dr['ok'])&&$ps){
+            return ['ok'=>true,'error'=>'','code'=>(int)($dr['code']??200),'url'=>$url,
+                'html'=>emallsSyntheticHtml($ps,$url,'Jina Reader direct after indirect failure'),
+                'mode'=>'emalls-jina-reader-direct','emalls_public_fallback'=>'jina-reader-direct',
+                'jina_reader'=>$readerUrl,'jina_reader_via'=>'direct','jina_product_count'=>count($ps),
+                'jina_reader_trace'=>array_merge((array)($r['jina_reader_trace']??[]),$directTrace),
+                'jina_reader_modes'=>array_values(array_unique(array_merge((array)($r['jina_reader_modes']??[]),['direct'])))];
+        }
+    }
+    if($directTrace){$r['jina_reader_trace']=array_merge((array)($r['jina_reader_trace']??[]),$directTrace);
+        $r['jina_reader_modes']=array_values(array_unique(array_merge((array)($r['jina_reader_modes']??[]),['direct'])));}
     $last = $r + $last;
     $last['url'] = $url;
     $last['error'] = trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty');
@@ -39526,6 +39546,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.249', 'ورودی 10.249 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "249'") !== false
       && version_compare(APP_VERSION, '10.' . '249', '>='));
+
+    /* ---------- v10.250: Emalls direct Reader final fallback ---------- */
+    $add('10.250', 'پس از شکست indirect، ایمالز نسخه‌های direct Reader را امتحان می‌کند',
+         strpos($selfSrc, "s4JinaFetchAttempt(" . '$readerUrl,$timeout' . ",'direct',[])") !== false
+      && strpos($selfSrc, "'jina-reader-direct'") !== false
+      && strpos($selfSrc, '$directTrace') !== false);
+    $add('10.250', 'ورودی 10.250 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "250'") !== false
+      && version_compare(APP_VERSION, '10.' . '250', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70391,6 +70420,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.250', t:'🌐 مسیر نهایی مستقیم Reader برای ایمالز', items:[
+    'پس از شکست Worker با Cloudflare 403، فقط برای ایمالز نسخه‌های direct Jina Reader نیز امتحان می‌شوند',
+    'محصولات markdown با parser اختصاصی ~id~ به کارت قابل انتخاب و استخراج تبدیل می‌شوند',
+    'trace هر تلاش مستقیم همراه نتیجه نگه داشته می‌شود تا شکست شبکه بی‌پیام نماند'
+  ]},
   {v:'10.249', t:'🛍 بازیابی اتصال و استخراج پروفایل ایمالز', items:[
     'واکشی ایمالز روی هاست‌های ناسازگار با ALPN به HTTP/1.1 و IPv4 پایدار شد و fingerprint مرورگر به‌روز شد',
     'پاسخ HTTP 200 بدون لینک محصول دیگر موفق تلقی نمی‌شود و مسیرهای جایگزین بعدی واقعاً امتحان می‌شوند',
