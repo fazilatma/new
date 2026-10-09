@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.239';
+const APP_VERSION = '10.240';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28746,8 +28746,14 @@ function matrixQueryPage(array $opts = []): array {
 if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_stop')) {
     header('Content-Type: application/json; charset=UTF-8');
     @file_put_contents(SYNC_MATRIX_STOP_FILE, json_encode(['at' => time(), 'by' => 'user'], JSON_UNESCAPED_UNICODE), LOCK_EX);
-    matrixProgress(['stop_requested' => true, 'log_add' => ['⏹ درخواست توقف ساخت جدول ثبت شد؛ در اولین نقطهٔ امن متوقف می‌شود']]);
-    echo json_encode(['ok' => true, 'stop_requested' => true], JSON_UNESCAPED_UNICODE);
+    /* v10.240: وضعیت UI همان لحظه متوقف می‌شود؛ worker اگر هنوز زنده باشد
+       فایل stop را در نقطهٔ امن بعدی می‌بیند و همین checkpoint را تثبیت می‌کند. */
+    $stopState = matrixProgressRead();
+    matrixProgress(['running' => false, 'done' => true, 'stopped' => true, 'partial' => true,
+        'stop_requested' => true, 'phase' => 'stopped', 'finished_at' => time(),
+        'checkpoint' => is_array($stopState['checkpoint'] ?? null) ? $stopState['checkpoint'] : null,
+        'log_add' => ['⏹ ساخت جدول متوقف شد؛ checkpoint حفظ شد']]);
+    echo json_encode(['ok' => true, 'stop_requested' => true, 'stopped' => true], JSON_UNESCAPED_UNICODE);
     exit;
 }
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
@@ -39075,6 +39081,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.239', 'ورودی 10.239 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "239'") !== false
       && version_compare(APP_VERSION, '10.' . '239', '>='));
+
+    /* ---------- v10.240: توقف فوری state ---------- */
+    $add('10.240', 'endpoint توقف running را فوری خاموش و checkpoint را حفظ می‌کند',
+         strpos($selfSrc, '$stopState = matrixProgressRead()') !== false
+      && strpos($selfSrc, "'running' => false, 'done' => true, 'stopped' => true") !== false
+      && strpos($selfSrc, "'stopped' => true], JSON_UNESCAPED_UNICODE") !== false);
+    $add('10.240', 'ورودی 10.240 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "240'") !== false
+      && version_compare(APP_VERSION, '10.' . '240', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -69845,6 +69860,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.240', t:'🛑 ثبت فوری وضعیت توقف جدول', items:[
+    'درخواست توقف علاوه بر نوشتن signal، همان لحظه running را خاموش و وضعیت stopped را با checkpoint فعلی ثبت می‌کند؛ بنابراین جاب مرده/کهنه دیگر در رابط برای همیشه «در حال اجرا» نمی‌ماند.',
+  ]},
   {v:'10.239', t:'⏹ توقف واقعی ساخت جدول روی سرور تک‌پردازه', items:[
     'ساخت دستی جدول به برش‌های کوتاه هشت‌ثانیه‌ای تقسیم شد تا PHP CLI server بین برش‌ها بتواند درخواست توقف را واقعاً دریافت کند؛ UI در حالت عادی ادامه را خودکار انجام می‌دهد.',
     'با زدن توقف، ادامهٔ خودکار همان لحظه غیرفعال می‌شود، checkpoint حفظ می‌شود و حداکثر پس از پایان درخواست شبکه/برش جاری عملیات می‌ایستد.',
