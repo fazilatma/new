@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.250';
+const APP_VERSION = '10.251';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9940,9 +9940,11 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
        می‌گیرد. فقط برای ایمالز، direct Reader را به‌عنوان آخرین شانس امتحان
        می‌کنیم؛ مسیر اصلی همچنان indirect است و این شاخه بعد از شکست آن می‌آید. */
     $directTrace=[];
-    foreach(s4JinaReaderUrlVariants($url) as $variant){
+    /* یک canonical کافی است؛ سه variant مستقیم روی هاست مسدود، هر صفحه را تا
+       ۳×timeout نگه می‌داشت و دوباره خودِ proxy را به 500 می‌رساند. */
+    foreach(array_slice(s4JinaReaderUrlVariants($url),0,1) as $variant){
         $readerUrl=(string)($variant['url']??'');if($readerUrl==='')continue;
-        $dr=s4JinaFetchAttempt($readerUrl,$timeout,'direct',[]);
+        $dr=s4JinaFetchAttempt($readerUrl,min(15,$timeout),'direct',[]);
         $raw=(string)($dr['html']??'');$ps=trim($raw)!==''?emallsProductsFromReaderText($raw,$url):[];
         $directTrace[]=s4JinaReaderTraceEntry('direct',(string)($variant['kind']??'reader'),$readerUrl,$dr,$url);
         if(!empty($dr['ok'])&&$ps){
@@ -39555,6 +39557,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.250', 'ورودی 10.250 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "250'") !== false
       && version_compare(APP_VERSION, '10.' . '250', '>='));
+    $add('10.251', 'fallback مستقیم ایمالز به canonical و سقف 15 ثانیه محدود است',
+         strpos($selfSrc, 'array_' . 'slice(s4JinaReaderUrlVariants($url),0,1)') !== false
+      && strpos($selfSrc, 'min(' . '15,$timeout)') !== false);
+    $add('10.251', 'ورودی 10.251 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "251'") !== false
+      && version_compare(APP_VERSION, '10.' . '251', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70420,6 +70428,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.251', t:'⏱ محدودکردن fallback مستقیم ایمالز', items:[
+    'fallback مستقیم فقط canonical Reader را با سقف ۱۵ ثانیه آزمایش می‌کند تا سه timeout پیاپی دوباره خطای 500 نسازد'
+  ]},
   {v:'10.250', t:'🌐 مسیر نهایی مستقیم Reader برای ایمالز', items:[
     'پس از شکست Worker با Cloudflare 403، فقط برای ایمالز نسخه‌های direct Jina Reader نیز امتحان می‌شوند',
     'محصولات markdown با parser اختصاصی ~id~ به کارت قابل انتخاب و استخراج تبدیل می‌شوند',
