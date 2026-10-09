@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.245';
+const APP_VERSION = '10.246';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27134,7 +27134,7 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
                در cli-server پاسخ اولیه تا پایان PHP واقعاً تحویل proxy نمی‌شود و
                timeout بلند، به 500 دروازه و قفل ظاهری رابط منجر می‌شد. */
             curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>1, CURLOPT_FOLLOWLOCATION=>1,
-                CURLOPT_CONNECTTIMEOUT=>4, CURLOPT_TIMEOUT=>6, CURLOPT_SSL_VERIFYPEER=>0,
+                CURLOPT_CONNECTTIMEOUT=>6, CURLOPT_TIMEOUT=>15, CURLOPT_SSL_VERIFYPEER=>0,
                 CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERPWD=>(string)$w['consumer_key'].':'.(string)($w['consumer_secret']??''),
                 CURLOPT_HTTPHEADER=>['Accept: application/json']]);
             $jobs[] = ['kind'=>'woo','page'=>$page,'ch'=>$ch];
@@ -27154,23 +27154,35 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             $ch=curl_init(); $bslOpts=bslCurlOpts(bslApiBase().$ep,$tk,'GET',null,false,$net,$mode);
             /* همان سقف کوتاه Woo برای جلوگیری از 500/worker hang. گزینه‌ها اینجا
                override می‌شوند تا رفتار عمومی درخواست‌های باسلام تغییر نکند. */
-            $bslOpts[CURLOPT_CONNECTTIMEOUT]=4; $bslOpts[CURLOPT_TIMEOUT]=6;
+            $bslOpts[CURLOPT_CONNECTTIMEOUT]=6; $bslOpts[CURLOPT_TIMEOUT]=15;
             curl_setopt_array($ch,$bslOpts);
             $jobs[]=['kind'=>'bsl','vid'=>$vid,'page'=>$page,'ch'=>$ch];
         }
         if (!$jobs) return ['ok'=>true,'complete'=>true,'rounds'=>$round,'requests'=>$requests];
         $mh=curl_multi_init(); foreach($jobs as $j) curl_multi_add_handle($mh,$j['ch']);
-        $running=null; do { $st=curl_multi_exec($mh,$running); if($running) curl_multi_select($mh,.35); }
-        while($running>0 && $st===CURLM_OK);
-        $round++; $requests += count($jobs);
+        /* v10.246: روی libcurl قدیمی، curl_multi_exec می‌تواند
+           CURLM_CALL_MULTI_PERFORM برگرداند؛ این خطا نیست و باید فوراً دوباره
+           صدا زده شود. حلقهٔ قبلی همان‌جا خارج می‌شد و handle ناتمام را به شکل
+           HTTP 0 با error خالی گزارش می‌کرد. select=-1 هم با مکث کوتاه retry می‌شود. */
+        $running=0; $st=CURLM_OK;
+        do {
+            do {
+                $st=curl_multi_exec($mh,$running);
+            } while(defined('CURLM_CALL_MULTI_PERFORM') && $st===CURLM_CALL_MULTI_PERFORM);
+            if($st!==CURLM_OK) break;
+            if($running>0){$selected=curl_multi_select($mh,.35);if($selected===-1)usleep(10000);}
+        } while($running>0);
+        $round++; $requests += count($jobs); $failures=[];
         foreach ($jobs as $j) {
             $ch=$j['ch']; $raw=(string)curl_multi_getcontent($ch); $err=(string)curl_error($ch);
             $code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE); $body=@json_decode($raw,true);
             curl_multi_remove_handle($mh,$ch); curl_close($ch);
-            if ($code<200 || $code>=300 || $err!=='') {
-                curl_multi_close($mh);
-                return ['ok'=>false,'error'=>($j['kind']==='woo'?'Woo':'Basalam #'.(int)($j['vid']??0)).' HTTP '.$code.' '.$err,
-                    'rounds'=>$round,'requests'=>$requests];
+            if ($code<200 || $code>=300 || $err!=='' || $st!==CURLM_OK) {
+                $multiMsg=$st!==CURLM_OK ? ('curl_multi '.(function_exists('curl_multi_strerror')?curl_multi_strerror($st):(string)$st)) : '';
+                $why=trim($err.' '.$multiMsg);
+                if($why==='')$why='پاسخ HTTP دریافت نشد (اتصال یا libcurl ناتمام)';
+                $failures[]=($j['kind']==='woo'?'Woo':'Basalam #'.(int)($j['vid']??0)).' HTTP '.$code.' — '.$why;
+                continue;
             }
             if ($j['kind']==='woo') {
                 $batch=is_array($body)?$body:[]; $pageRows=[];
@@ -27199,6 +27211,10 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             }
         }
         curl_multi_close($mh);
+        /* موفق‌های همین round حتی اگر مقصد دیگری شکست خورد checkpoint شدند؛
+           سپس خطای دقیقِ نخست برگردانده می‌شود تا کاربر صفحه‌های موفق را از دست ندهد. */
+        if($failures)return ['ok'=>false,'error'=>$failures[0],
+            'errors'=>$failures,'rounds'=>$round,'requests'=>$requests];
         /* v10.245: دقیقاً یک round در هر درخواست continuation. قبلاً اگر پاسخ‌ها
            سریع بودند حلقه تا deadline دورهای متعدد می‌رفت و اگر یکی کند بود همان
            round می‌توانست از مهلت proxy عبور کند. checkpoint همین دور حفظ شده و
@@ -39341,8 +39357,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
 
     /* ---------- v10.245: bounded parallel slices / 500 recovery ---------- */
     $add('10.245', 'دور موازی timeout کوتاه و فقط یک round در هر continuation دارد',
-         strpos($selfSrc, 'CURLOPT_CONNECTTIMEOUT=>4, CURLOPT_TIMEOUT=>6') !== false
-      && strpos($selfSrc, '$bslOpts[CURLOPT_CONNECTTIMEOUT]=4; $bslOpts[CURLOPT_TIMEOUT]=6;') !== false
+         strpos($selfSrc, 'CURLOPT_CONNECTTIMEOUT=>6, CURLOPT_TIMEOUT=>15') !== false
+      && strpos($selfSrc, '$bslOpts[CURLOPT_CONNECTTIMEOUT]=6; $bslOpts[CURLOPT_TIMEOUT]=15;') !== false
       && strpos($selfSrc, "return ['ok'=>true,'yielded'=>true,'rounds'=>" . '$round') !== false);
     $add('10.245', 'خطای پاسخ start رابط را متوقف نمی‌کند و polling ادامه می‌یابد',
          strpos($selfSrc, "خطای شروع/پاسخ سرور:") !== false
@@ -39350,6 +39366,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.245', 'ورودی 10.245 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "245'") !== false
       && version_compare(APP_VERSION, '10.' . '245', '>='));
+
+    /* ---------- v10.246: old-libcurl HTTP 0 ---------- */
+    $add('10.246', 'حلقه curl_multi حالت CALL_MULTI_PERFORM و select منفی را مدیریت می‌کند',
+         strpos($selfSrc, "defined('CURLM_CALL_MULTI_PERFORM')") !== false
+      && strpos($selfSrc, '$selected===-1') !== false
+      && strpos($selfSrc, 'usleep(10000)') !== false);
+    $add('10.246', 'پاسخ‌های موفق پیش از برگرداندن خطای مقصد دیگر checkpoint می‌شوند',
+         strpos($selfSrc, '$failures=[]') !== false
+      && strpos($selfSrc, "if(\$failures)return ['ok'=>false") !== false
+      && strpos($selfSrc, 'پاسخ HTTP دریافت نشد') !== false);
+    $add('10.246', 'ورودی 10.246 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "246'") !== false
+      && version_compare(APP_VERSION, '10.' . '246', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70133,6 +70162,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.246', t:'🔌 رفع خطای HTTP 0 باسلام در واکشی موازی', items:[
+    'حالت CURLM_CALL_MULTI_PERFORM در libcurl قدیمی اکنون درست تکرار می‌شود و دیگر handle ناتمام HTTP 0 خوانده نمی‌شود',
+    'بازگشت select=-1 با مکث کوتاه مدیریت و مهلت باسلام از ۶ به ۱۵ ثانیه افزایش یافت تا اتصال سالمِ کند قطع نشود',
+    'موفق‌های هر دور قبل از گزارش مقصد ناموفق checkpoint می‌شوند و متن خطای HTTP 0 اکنون علت قابل‌فهم دارد'
+  ]},
   {v:'10.245', t:'🛡 رفع خطای 500 و گیرکردن واکشی موازی', items:[
     'هر continuation فقط یک دور موازی اجرا می‌کند و checkpoint همان دور را حفظ می‌کند',
     'timeout شبکهٔ دور موازی داخل پنجرهٔ امن worker محدود شد تا proxy خطای 500 ندهد',
