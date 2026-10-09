@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.241';
+const APP_VERSION = '10.242';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27281,7 +27281,7 @@ function matrixBuild(array $opts = []): array {
         matrixProgress(['checkpoint' => $matrixCp('woo_' . ($matrixWooDone ? 'map' : 'fetch'), $rowsByKey,
             $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
         if (matrixStopRequested()) return $stopMatrix('woo_fetch');
-        if (matrixSliceExpired() || (!empty($wooMeta['stopped']) && !matrixStopRequested())) return $yieldMatrix('woo_fetch');
+        if (!empty($wooMeta['stopped']) && !matrixStopRequested()) return $yieldMatrix('woo_fetch');
         if (!$matrixWooDone) {
             $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -27361,7 +27361,7 @@ function matrixBuild(array $opts = []): array {
         matrixProgress(['checkpoint' => $matrixCp('bsl_' . ($shopDone ? 'map' : 'fetch'), $rowsByKey, $profilesDone,
             $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
         if (matrixStopRequested()) return $stopMatrix('bsl_fetch');
-        if (matrixSliceExpired() || (!empty($shopMeta['stopped']) && !matrixStopRequested())) return $yieldMatrix('bsl_fetch');
+        if (!empty($shopMeta['stopped']) && !matrixStopRequested()) return $yieldMatrix('bsl_fetch');
         if (!$shopDone) {
             $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' کامل نشد');
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -28765,6 +28765,44 @@ if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matr
     echo json_encode(['ok' => true, 'stop_requested' => true, 'stopped' => true], JSON_UNESCAPED_UNICODE);
     exit;
 }
+/* v10.242: endpoint فیدبک جمع‌وجور؛ بدون dump کردن هزاران ردیف checkpoint. */
+if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_matrix_feedback')) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $p = matrixProgressRead();
+    $cp = is_array($p['checkpoint'] ?? null) ? $p['checkpoint'] : [];
+    $wooCur = function_exists('reconFetchCursorLoad') ? reconFetchCursorLoad('woo', 0) : ['rows' => [], 'page' => 0];
+    $lockHeld = false; $lf = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
+    if ($lf) { $lockHeld = !@flock($lf, LOCK_EX | LOCK_NB); if (!$lockHeld) @flock($lf, LOCK_UN); @fclose($lf); }
+    $probe = null;
+    if (!empty($_GET['probe'] ?? $_POST['probe'] ?? null)) {
+        $w = loadConnections()['woocommerce'] ?? [];
+        $t0 = microtime(true);
+        $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''),
+            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page=1');
+        $probe = ['ok' => !empty($r['ok']), 'code' => (int)($r['code'] ?? 0),
+            'ms' => (int)round((microtime(true) - $t0) * 1000),
+            'rows' => is_array($r['body'] ?? null) ? count($r['body']) : 0,
+            'error' => mb_substr((string)($r['error'] ?? ''), 0, 180)];
+    }
+    $logs = array_slice(is_array($p['log'] ?? null) ? $p['log'] : [], -12);
+    echo json_encode(['ok' => true, 'version' => APP_VERSION,
+        'running' => !empty($p['running']), 'phase' => (string)($p['phase'] ?? ''),
+        'pct' => (int)($p['pct'] ?? 0), 'stopped' => !empty($p['stopped']),
+        'yielded' => !empty($p['yielded']), 'error' => (string)($p['error'] ?? ''),
+        'lock_held' => $lockHeld, 'lock_recovered' => !empty($p['lock_recovered']),
+        'profile_rows' => count((array)($cp['profile_rows'] ?? [])),
+        'profiles_done' => count((array)($cp['profiles_done'] ?? [])),
+        'woo_checkpoint_rows' => count((array)($cp['woo_rows'] ?? [])),
+        'woo_checkpoint_page' => (int)($cp['woo_page'] ?? 0),
+        'woo_done' => !empty($cp['woo_done']),
+        'woo_cursor_rows' => count((array)($wooCur['rows'] ?? [])),
+        'woo_cursor_page' => (int)($wooCur['page'] ?? 0),
+        'woo_fetched_live' => (int)($p['woo_fetched'] ?? 0),
+        'woo_page_live' => (int)($p['woo_page'] ?? 0),
+        'probe' => $probe, 'logs' => $logs], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
     header('Content-Type: application/json; charset=UTF-8');
     $prog = matrixProgressRead();
@@ -39139,6 +39177,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "241'") !== false
       && version_compare(APP_VERSION, '10.' . '241', '>='));
 
+    /* ---------- v10.242: compact feedback ---------- */
+    $add('10.242', 'endpoint فیدبک ماتریس compact و probe ووکامرس دارد',
+         strpos($selfSrc, 'isset($_GET[' . "'sync_matrix_feedback'])") !== false
+      && strpos($selfSrc, "'woo_cursor_page'") !== false
+      && strpos($selfSrc, "products?per_page=1&status=any&page=1") !== false);
+    $add('10.242', 'پیشرفت صفحه ووکامرس داخل progress ماتریس منعکس می‌شود',
+         strpos($selfSrc, "'woo_fetched' => count($rows)") !== false
+      && strpos($selfSrc, '$wooPageLine') !== false);
+    $add('10.242', 'ورودی 10.242 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "242'") !== false
+      && version_compare(APP_VERSION, '10.' . '242', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -46644,8 +46694,15 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
         }
         $rows = array_merge($rows, $pageRows); reconFetchCursorAppend('woo', 0, $page, $pageRows);
         $meta['page'] = $page;
+        $wooPageLine = '📄 ووکامرس صفحهٔ ' . $page . ': ' . count($batch)
+            . ' محصول (مجموع ' . count($rows) . ')';
         reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
-            'log_add' => ['📄 صفحهٔ ' . $page . ': ' . count($batch) . ' محصول (مجموع ' . count($rows) . ')']]);
+            'log_add' => [$wooPageLine]]);
+        $mxState = function_exists('matrixProgressRead') ? matrixProgressRead() : [];
+        if (!empty($mxState['running'])) {
+            matrixProgress(['phase' => 'woo_fetch', 'woo_fetched' => count($rows), 'woo_page' => $page,
+                'log_add' => [$wooPageLine]]);
+        }
         if (count($batch) < 100) { $meta['complete'] = true; break; }
         usleep(150000);
     }
@@ -69909,6 +69966,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.242', t:'🔬 فیدبک جمع‌وجور و پیشرفت واقعی ووکامرس', items:[
+    'endpoint جدید sync_matrix_feedback وضعیت lock/checkpoint/cursor ووکامرس و probe واقعی REST را بدون خروجی چندصدصفحه‌ای گزارش می‌کند.',
+    'هر صفحهٔ ووکامرس در progress ماتریس ثبت می‌شود و خطای HTTP دیگر به‌اشتباه صرفاً yield نمی‌شود؛ بنابراین علت توقف در woo_fetch قابل مشاهده و قابل اصلاح است.',
+  ]},
   {v:'10.241', t:'♻️ بازیابی قفل یتیم ساخت جدول', items:[
     'لوپ فیدبک endpoint نشان داد شروع با خطای «یک ساخت جدول در حال اجراست» رد می‌شد، در حالی که state قبلاً stopped بود؛ علت flock باقی‌مانده از worker قدیمی بود.',
     'اگر state متوقف و signal توقف موجود باشد، lock قدیمی به inode یتیم منتقل و lock تازه گرفته می‌شود؛ اجرای جدید signal قدیمی را با timestamp نادیده می‌گیرد و worker قدیمی همچنان همان signal را می‌بیند.',
