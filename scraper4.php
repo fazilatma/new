@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.238';
+const APP_VERSION = '10.239';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27071,13 +27071,18 @@ function matrixProgress(array $patch): void {
     }
     $cur = array_merge($cur, $patch);
     if (!empty($patch['running']) && empty($patch['done'])) {
-        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok'] as $k) unset($cur[$k]);
+        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok', 'stop_requested', 'yielded'] as $k) unset($cur[$k]);
     }
     $cur['log'] = $log;
     $cur['ts'] = time();
     writeProgress(SYNC_MATRIX_PROGRESS_FILE, $cur);
 }
 function matrixStopRequested(): bool { return is_file(SYNC_MATRIX_STOP_FILE); }
+/** v10.239: پایان برش کوتاه اجرای ماتریس؛ فرصت می‌دهد سرور تک‌پردازه درخواست توقف را بخواند. */
+function matrixSliceExpired(): bool {
+    $d = (float)($GLOBALS['_matrixSliceDeadline'] ?? 0);
+    return $d > 0 && microtime(true) >= $d;
+}
 function matrixStopClear(): void { @unlink(SYNC_MATRIX_STOP_FILE); }
 
 function matrixProgressRead(): array {
@@ -27108,6 +27113,9 @@ function matrixBuild(array $opts = []): array {
     $suffixes = matrixCollectSuffixes();
     $profileFilter = trim((string)($opts['profile'] ?? 'all'));
     $source = (string)($opts['source'] ?? 'manual');
+    /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
+       اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
+    $GLOBALS['_matrixSliceDeadline'] = $source === 'manual' ? microtime(true) + 8.0 : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
     $profileRows = is_array($resumeCp['profile_rows'] ?? null) ? $resumeCp['profile_rows'] : [];
@@ -27159,10 +27167,25 @@ function matrixBuild(array $opts = []): array {
         matrixStopClear();
         return ['ok' => true, 'stopped' => true, 'partial' => true, 'checkpoint' => $cp];
     };
+    $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
+        &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
+        &$matrixShopPages, &$matrixShopDone, $profileFilter): array {
+        $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
+            'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
+            'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
+            'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
+            'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
+            'started_at' => $startedAt];
+        matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
+            'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
+            'log_add' => ['↻ وقفهٔ کوتاه برای پاسخ‌گویی سرور؛ ادامهٔ خودکار از checkpoint']]);
+        return ['ok' => true, 'yielded' => true, 'partial' => true, 'checkpoint' => $cp];
+    };
     $profiles = loadProfiles();
     $pN = 0; $pTot = max(1, count($profiles));
     foreach ($profiles as $pk => $profile) {
         if (matrixStopRequested()) return $stopMatrix('profiles');
+        if (matrixSliceExpired()) return $yieldMatrix('profiles');
         $pN++;
         if ($profileFilter !== '' && $profileFilter !== 'all' && $profileFilter !== $pk) continue;
         if (isset($profilesDoneSet[(string)$pk])) continue;
@@ -27220,6 +27243,7 @@ function matrixBuild(array $opts = []): array {
 
     // Woo
     if (matrixStopRequested()) return $stopMatrix('woo_fetch');
+    if (matrixSliceExpired()) return $yieldMatrix('woo_fetch');
     $wooErr = '';
     $wooRows = array_values(array_filter($matrixWooCp, 'is_array'));
     $w = $cn['woocommerce'] ?? [];
@@ -27247,7 +27271,8 @@ function matrixBuild(array $opts = []): array {
         $matrixWooDone = $wooErr === '' && $matrixWooComplete;
         matrixProgress(['checkpoint' => $matrixCp('woo_' . ($matrixWooDone ? 'map' : 'fetch'), $rowsByKey,
             $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
-        if (!empty($wooMeta['stopped']) || matrixStopRequested()) return $stopMatrix('woo_fetch');
+        if (matrixStopRequested()) return $stopMatrix('woo_fetch');
+        if (matrixSliceExpired() || (!empty($wooMeta['stopped']) && !matrixStopRequested())) return $yieldMatrix('woo_fetch');
         if (!$matrixWooDone) {
             $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -27295,6 +27320,7 @@ function matrixBuild(array $opts = []): array {
     $sN = 0;
     foreach ($shopList as $sh) {
         if (matrixStopRequested()) return $stopMatrix('bsl_fetch');
+        if (matrixSliceExpired()) return $yieldMatrix('bsl_fetch');
         if (!is_array($sh)) continue;
         $vid = (int)($sh['vendor_id'] ?? 0);
         $tok = trim((string)($sh['token'] ?? ($cn['basalam']['token'] ?? '')));
@@ -27325,7 +27351,8 @@ function matrixBuild(array $opts = []): array {
         $matrixShopDone[(string)$vid] = $shopDone;
         matrixProgress(['checkpoint' => $matrixCp('bsl_' . ($shopDone ? 'map' : 'fetch'), $rowsByKey, $profilesDone,
             $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
-        if (!empty($shopMeta['stopped']) || matrixStopRequested()) return $stopMatrix('bsl_fetch');
+        if (matrixStopRequested()) return $stopMatrix('bsl_fetch');
+        if (matrixSliceExpired() || (!empty($shopMeta['stopped']) && !matrixStopRequested())) return $yieldMatrix('bsl_fetch');
         if (!$shopDone) {
             $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' کامل نشد');
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -28730,19 +28757,23 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     $has = is_file(SYNC_MATRIX_RESULT_FILE);
     $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
     $anyRun = !empty($prog['running']) || !empty($fix['running']);
+    $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
+        || !empty($prog['stop_requested']) || !empty($prog['stopped']);
+    $shownProgress = !empty($fix['running']) ? $fix
+        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running'])) ? $fix : $prog));
     echo json_encode([
         'ok' => true,
         'running' => $anyRun,
         'build_running' => !empty($prog['running']),
         'fix_running' => !empty($fix['running']),
         'done' => !empty($prog['done']) || !empty($fix['done']),
-        'progress' => !empty($fix['running']) || (!empty($fix['done']) && empty($prog['running'])) ? $fix : $prog,
+        'progress' => $shownProgress,
         'build_progress' => $prog,
         'fix_progress' => $fix,
         'has_result' => $has,
         'result_age_sec' => $age,
         'result_rows' => $has ? (int)((matrixResultLoad()['row_count'] ?? 0)) : 0,
-        'job' => !empty($fix['running']) ? 'fix' : (!empty($prog['running']) ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
+        'job' => !empty($fix['running']) ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -39031,6 +39062,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "238'") !== false
       && version_compare(APP_VERSION, '10.' . '238', '>='));
 
+    /* ---------- v10.239: cooperative slices برای توقف واقعی ---------- */
+    $add('10.239', 'ماتریس دستی deadline کوتاه و حالت yielded دارد',
+         function_exists('matrixSlice' . 'Expired')
+      && strpos($selfSrc, "microtime(true) + 8.0") !== false
+      && strpos($selfSrc, "'yielded' => true") !== false
+      && strpos($selfSrc, '$buildOwnState') !== false);
+    $add('10.239', 'واکنش توقف بین برش‌ها ادامه خودکار را قطع می‌کند',
+         strpos($selfSrc, 'window._smMatrixStopWanted=true') !== false
+      && strpos($selfSrc, 'syncMatrixStart(true,true)') !== false
+      && strpos($selfSrc, 'p.yielded && !window._smMatrixStopWanted') !== false);
+    $add('10.239', 'ورودی 10.239 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "239'") !== false
+      && version_compare(APP_VERSION, '10.' . '239', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -46323,7 +46368,8 @@ function reconProgress(array $patch): void {
 }
 
 function reconStopRequested(): bool {
-    return is_file(RECON_STOP_FILE) || (defined('SYNC_MATRIX_STOP_FILE') && is_file(SYNC_MATRIX_STOP_FILE));
+    return is_file(RECON_STOP_FILE) || (defined('SYNC_MATRIX_STOP_FILE') && is_file(SYNC_MATRIX_STOP_FILE))
+        || (function_exists('matrixSliceExpired') && matrixSliceExpired());
 }
 function reconStopClear(): void { @unlink(RECON_STOP_FILE); }
 
@@ -69799,6 +69845,10 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.239', t:'⏹ توقف واقعی ساخت جدول روی سرور تک‌پردازه', items:[
+    'ساخت دستی جدول به برش‌های کوتاه هشت‌ثانیه‌ای تقسیم شد تا PHP CLI server بین برش‌ها بتواند درخواست توقف را واقعاً دریافت کند؛ UI در حالت عادی ادامه را خودکار انجام می‌دهد.',
+    'با زدن توقف، ادامهٔ خودکار همان لحظه غیرفعال می‌شود، checkpoint حفظ می‌شود و حداکثر پس از پایان درخواست شبکه/برش جاری عملیات می‌ایستد.',
+  ]},
   {v:'10.238', t:'⏯ پایداری مغایرت‌گیری و چرخهٔ مقصد بر پایهٔ پروفایل', items:[
     'ساخت جدول مقایسه اکنون دکمهٔ توقف مستقل و ادامه از checkpoint دارد؛ توقف نتیجهٔ نیمه‌کاره را حفظ می‌کند و شروع مجدد از پروفایل‌ها/صفحات انجام‌شده عبور می‌کند.',
     'چرخهٔ ووکامرس و باسلام بر snapshot پروفایل ذخیره‌شده تکیه دارد، نه دفتر حساب: محصول جدید ارسال، تغییر قیمت ذخیره و در مقصد آپدیت، و محصول حذف/ناموجود از پروفایل و مقصد بازنشسته می‌شود.',
@@ -78164,8 +78214,9 @@ function smPaintProgress(p){
       +(p.phase?(' · '+esc(String(p.phase))):'');
   }
 }
-function syncMatrixStart(resume){
-  resume=!!resume;
+function syncMatrixStart(resume,automatic){
+  resume=!!resume; automatic=!!automatic;
+  if(!automatic) window._smMatrixStopWanted=false;
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent=resume?'⏯ ادامه از checkpoint…':'🚀 ارسال جاب به سرور…';
   if($('smBody')) $('smBody').innerHTML='<tr><td style="padding:16px;text-align:center;color:#a5b4fc">ساخت روی سرور شروع شد — می‌توانید این صفحه را باز بگذارید</td></tr>';
@@ -78184,9 +78235,13 @@ function syncMatrixStart(resume){
   }).catch(e=>showToast('خطا: '+e,1));
 }
 function syncMatrixStop(){
+  window._smMatrixStopWanted=true;
+  if($('smJobLabel')) $('smJobLabel').textContent='⏹ درخواست توقف… (حداکثر تا پایان برش جاری)';
+  if($('smBuildStopBtn')) $('smBuildStopBtn').disabled=true;
   const fd=new FormData(); fd.append('action','sync_matrix_stop');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-    showToast(d&&d.ok?'درخواست توقف ثبت شد؛ checkpoint حفظ می‌شود':'توقف ناموفق', !(d&&d.ok));
+    showToast(d&&d.ok?'ساخت متوقف شد؛ checkpoint حفظ شد':'توقف ناموفق', !(d&&d.ok));
+    if($('smBuildStopBtn')) $('smBuildStopBtn').disabled=false;
     syncMatrixPoll();
   }).catch(e=>showToast('خطا: '+e,1));
 }
@@ -78208,6 +78263,11 @@ function syncMatrixPoll(){
           }
         }
       } else {
+        if(p.yielded && !window._smMatrixStopWanted){
+          if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
+          setTimeout(()=>syncMatrixStart(true,true),250);
+          return;
+        }
         if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
         if(d.has_result){
           /* بعد از اصلاح: برو آخرین صفحه تا ردیف گزارش دیده شود + باکس گزارش */
