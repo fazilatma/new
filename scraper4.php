@@ -327,7 +327,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.242';
+const APP_VERSION = '10.243';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -39183,11 +39183,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'woo_cursor_page'") !== false
       && strpos($selfSrc, "products?per_page=1&status=any&page=1") !== false);
     $add('10.242', 'پیشرفت صفحه ووکامرس داخل progress ماتریس منعکس می‌شود',
-         strpos($selfSrc, "'woo_fetched' => count($rows)") !== false
+         strpos($selfSrc, "'woo_fetched' => count(" . '$rows)') !== false
       && strpos($selfSrc, '$wooPageLine') !== false);
     $add('10.242', 'ورودی 10.242 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "242'") !== false
       && version_compare(APP_VERSION, '10.' . '242', '>='));
+
+    $add('10.243', 'تست پیشرفت ووکامرس دیگر $rows را interpolate نمی‌کند',
+         strpos($selfSrc, "'woo_fetched' => count(" . '$rows)') !== false
+      && strpos($selfSrc, "{v:'10." . "243'") !== false
+      && version_compare(APP_VERSION, '10.' . '243', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -69966,6 +69971,9 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.243', t:'✅ اصلاح تست پیشرفت فیدبک ووکامرس', items:[
+    'الگوی selftest پیشرفت صفحهٔ ووکامرس split-literal شد تا interpolation خود تست باعث شکست کاذب نشود.',
+  ]},
   {v:'10.242', t:'🔬 فیدبک جمع‌وجور و پیشرفت واقعی ووکامرس', items:[
     'endpoint جدید sync_matrix_feedback وضعیت lock/checkpoint/cursor ووکامرس و probe واقعی REST را بدون خروجی چندصدصفحه‌ای گزارش می‌کند.',
     'هر صفحهٔ ووکامرس در progress ماتریس ثبت می‌شود و خطای HTTP دیگر به‌اشتباه صرفاً yield نمی‌شود؛ بنابراین علت توقف در woo_fetch قابل مشاهده و قابل اصلاح است.',
