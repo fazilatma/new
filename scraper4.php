@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.259';
+const APP_VERSION = '10.260';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1126,7 +1126,7 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         'profile' => (string)($opts['profile'] ?? 'all'),
         'parallel_destinations' => !empty($opts['parallel_destinations']),
         'live_fill' => !empty($opts['live_fill']),
-        'coded_only' => !array_key_exists('coded_only', $opts) || !empty($opts['coded_only']),
+        'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
         'resume' => $resume, 'requested_at' => microtime(true),
         /* فقط یک ساخت ماتریس می‌تواند pending/running باشد. */
@@ -1157,18 +1157,17 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         'background' => true, 'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($payload['parallel_destinations']),
         'live_fill' => !empty($payload['live_fill']),
-        'coded_only' => !array_key_exists('coded_only', $payload) || !empty($payload['coded_only']),
+        'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($payload['slice_seconds'] ?? 8))),
         'checkpoint' => null,
     ];
     if ($resume) {
         $old = matrixProgressRead();
         $cp = is_array($old['checkpoint'] ?? null) ? $old['checkpoint'] : null;
-        if ($cp && (string)($cp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')) {
+        if ($cp && empty($cp['coded_only']) && (string)($cp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')) {
             $opts['checkpoint'] = $cp;
             if (isset($cp['fetch_mode'])) $opts['parallel_destinations'] = (string)$cp['fetch_mode'] === 'parallel';
             if (array_key_exists('live_fill', $cp)) $opts['live_fill'] = !empty($cp['live_fill']);
-            if (array_key_exists('coded_only', $cp)) $opts['coded_only'] = !empty($cp['coded_only']);
             if (isset($cp['slice_seconds'])) $opts['slice_seconds'] = max(2, min(20, (int)$cp['slice_seconds']));
         }
     }
@@ -1218,7 +1217,7 @@ function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
         'profile'=>(string)($opts['profile']??'all'),
         'parallel_destinations'=>!empty($opts['parallel_destinations']),
         'live_fill'=>!empty($opts['live_fill']),
-        'coded_only'=>!array_key_exists('coded_only',$opts)||!empty($opts['coded_only']),
+        'coded_only'=>false,
         'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
         'resume'=>$resume,
     ];
@@ -1258,7 +1257,7 @@ function s4ScheduleMatrixServerContinuation(array $opts): bool {
     $post=http_build_query([
         'action'=>'sync_matrix_start','source'=>'manual','resume'=>'1',
         'parallel_destinations'=>!empty($opts['parallel_destinations'])?'1':'0',
-        'live_fill'=>!empty($opts['live_fill'])?'1':'0','coded_only'=>!empty($opts['coded_only'])?'1':'0',
+        'live_fill'=>!empty($opts['live_fill'])?'1':'0',
         'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
     ]);
     $cookie=(string)($_SERVER['HTTP_COOKIE']??'');
@@ -27451,7 +27450,7 @@ function matrixResultSave(array $data): bool {
  * نتیجهٔ نهایی را بازنویسی نمی‌کند و فقط برای سوییچ «پر شدن زنده» است. */
 function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bool {
     $rows = is_array($cp['profile_rows'] ?? null) ? $cp['profile_rows'] : [];
-    $codedOnly = !array_key_exists('coded_only', $cp) || !empty($cp['coded_only']);
+    $codedOnly = false;
     $suffixes = matrixCollectSuffixes();
     $shops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $shopsMeta = [];
@@ -27629,7 +27628,7 @@ function matrixBuild(array $opts = []): array {
     $source = (string)($opts['source'] ?? 'manual');
     $parallelDest = !empty($opts['parallel_destinations']);
     $liveFill = !empty($opts['live_fill']);
-    $codedOnly = !array_key_exists('coded_only', $opts) || !empty($opts['coded_only']);
+    $codedOnly = false;
     /* v10.254: زمان هر برش دستی قابل تنظیم است؛ ۲..۲۰ ثانیه تا هم تعداد
        بسته‌ها کم/زیاد شود و هم از timeout رایج proxy ها عبور نکند. */
     $sliceSeconds = max(2, min(20, (int)($opts['slice_seconds'] ?? 8)));
@@ -28243,7 +28242,7 @@ function matrixFixBslPrice(string $tk, int $vid, int $pid, int $priceToman): arr
  *   send_woo / send_bsl    — در پروفایل هست، در مقصد نیست → ارسال
  *   del_woo / del_bsl      — در پروفایل نیست، در مقصد هست → حذف/بایگانی
  */
-function matrixFixCollectJobs(array $data, string $scope = 'all', bool $codedOnly = false): array {
+function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = []): array {
     $jobs = [];
     $shops = is_array($data['shops'] ?? null) ? $data['shops'] : [];
     /* اگر meta غرفه خالی است، از خود ردیف‌ها vendor_id را دربیاور */
@@ -28276,7 +28275,7 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', bool $codedOnl
     }
     foreach ((array)($data['rows'] ?? []) as $ri => $r) {
         if (!is_array($r)) continue;
-        if ($codedOnly && !matrixRowHasCode($r)) continue;
+        if (!matrixRowMatchesViewFilters($r, $data, $viewFilters)) continue;
         $bare = (string)($r['bare'] ?? '');
         if ($bare === '' || str_starts_with($bare, '__report_') || !empty($r['is_report'])) continue;
         $title = (string)($r['title'] ?? $bare);
@@ -28748,8 +28747,9 @@ function matrixFixRun(array $opts = []): array {
         return ['ok' => false, 'error' => 'no_matrix'];
     }
 
-    $codedOnly = array_key_exists('coded_only', $opts) ? !empty($opts['coded_only']) : !empty($data['coded_only']);
-    $jobs = matrixFixCollectJobs($data, $scope, $codedOnly);
+    $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
+    if(is_array($fixCp['view_filters']??null))$viewFilters=$fixCp['view_filters'];
+    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters);
     $total = count($jobs);
     $nPrice = $nSend = $nDel = 0;
     foreach ($jobs as $j) {
@@ -28766,7 +28766,7 @@ function matrixFixRun(array $opts = []): array {
         'fail_n' => (int)($fixCp['fail_n'] ?? 0), 'skip_n' => (int)($fixCp['skip_n'] ?? 0),
         'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
         'price_n' => (int)($fixCp['price_n'] ?? 0), 'done_jobs' => $doneJobs,
-        'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'started_at' => $fixStartedAt,
+        'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
             'price_n' => (int)($fixCp['price_n'] ?? 0)],
@@ -28786,7 +28786,7 @@ function matrixFixRun(array $opts = []): array {
         $stats = [
             'at' => time(), 'ok' => 0, 'fail' => 0, 'total' => 0,
             'sent' => 0, 'deleted' => 0, 'priced' => 0,
-            'stopped' => false, 'scope' => $scope,
+            'stopped' => false, 'scope' => $scope, 'view_filters' => $viewFilters,
             'details' => [['ok' => true, 'label' => $emptyMsg]],
         ];
         matrixFixAppendReportRows($stats);
@@ -29094,7 +29094,7 @@ function matrixFixRun(array $opts = []): array {
         if ($jobOk) { $doneJobs[] = $jk; $doneJobSet[$jk] = true; }
         $incomplete = $stopped || count($doneJobs) < $total;
         matrixFixProgress(['done_jobs' => $doneJobs,
-            'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'started_at' => $fixStartedAt,
+            'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
@@ -29125,7 +29125,7 @@ function matrixFixRun(array $opts = []): array {
         'ok' => $okN, 'fail' => $failN, 'total' => $total,
         'partial' => $incomplete,
         'sent' => $sentN, 'deleted' => $delN, 'priced' => $priceN,
-        'stopped' => $stopped, 'scope' => $scope,
+        'stopped' => $stopped, 'scope' => $scope, 'view_filters' => $viewFilters,
         'details' => $details,
     ];
     matrixFixAppendReportRows($stats);
@@ -29138,7 +29138,7 @@ function matrixFixRun(array $opts = []): array {
         'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
         'finished_at' => time(),
         'done_jobs' => $doneJobs,
-        'checkpoint' => $incomplete ? ['scope' => $scope, 'done_jobs' => $doneJobs, 'started_at' => $fixStartedAt,
+        'checkpoint' => $incomplete ? ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
             'cur' => $n ?? 0, 'total' => $total] : null,
         'log_add' => [
@@ -29193,6 +29193,52 @@ function matrixJobRun(array $opts = []): array {
     return $res;
 }
 
+/** آیا ردیف با فیلترهای فعال رابط ماتریس سازگار است؟ همین تابع هم برای
+ * نمایش و هم برای «اصلاح مغایرت‌ها» استفاده می‌شود تا عملیات دقیقاً روی
+ * مجموعهٔ دیده‌شده انجام شود. */
+function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
+    $q=matrixBareTitle((string)($opts['q']??''),[]);
+    if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
+        &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
+    $flags=(array)($r['flags']??[]);$st=(string)($r['status']??'');
+    if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&(int)($r['profile_hits']??0)<2)return false;
+    if(!empty($opts['only_mismatch'])&&$st!=='mismatch'&&!in_array('price_mismatch',$flags,true))return false;
+    if(!empty($opts['only_missing'])&&$st!=='missing'&&$st!=='only_profile'
+        &&!in_array('missing_woo',$flags,true)&&!in_array('missing_bsl',$flags,true))return false;
+    $type=trim((string)($opts['filter_type']??''));$value=trim((string)($opts['filter_value']??''));
+    if($type===''||$value==='')return true;
+    $valid=['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price'];
+    if(!in_array($type,$valid,true))return true;
+    $hasProf=(int)($r['profile_hits']??0)>0||trim((string)($r['profile_key']??''))!=='';$dest=null;
+    if($value==='woo')$dest=is_array($r['woo']??null)?$r['woo']:null;
+    elseif(preg_match('/^bsl:(\d+)$/',$value,$m)){$vid=(int)$m[1];$dest=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);}
+    if($type==='status')return $st===$value;
+    if($type==='profile')return (string)($r['profile_key']??'')===$value||(string)($r['profile']??'')===$value;
+    if($type==='present_dest')return $dest!==null;
+    if($type==='missing_dest')return $hasProf&&$dest===null;
+    if($type==='mismatch_dest'){$tone=$value==='woo'?(string)($r['woo_tone']??''):(string)($dest['tone']??'');return $dest!==null&&in_array($tone,['bad','warn'],true);}
+    if($type==='duplicate'){
+        if($value==='any')return (bool)preg_grep('/^dup_/',$flags)||!empty($r['woo_dup'])||(int)($r['profile_hits']??0)>1;
+        if($value==='profile')return in_array('dup_profile',$flags,true)||(int)($r['profile_hits']??0)>1;
+        if($value==='woo')return in_array('dup_woo',$flags,true)||!empty($r['woo_dup']);
+        return in_array('dup_bsl',$flags,true);
+    }
+    if($type==='presence'){
+        $hasWoo=!empty($r['woo']);$shopN=count(array_filter((array)($r['shops']??[]),'is_array'));$shopTotal=count((array)($data['shops']??[]));
+        if($value==='only_profile')return $hasProf&&!$hasWoo&&$shopN===0;
+        if($value==='only_dest')return !$hasProf&&($hasWoo||$shopN>0);
+        if($value==='in_all')return $hasProf&&$hasWoo&&$shopN>=$shopTotal;
+        return $hasProf&&(!$hasWoo||$shopN<$shopTotal);
+    }
+    if($type==='price'){
+        $pp=(int)($r['profile_price']??0);$wp=(int)($r['woo']['price']??0);$we=(int)($r['woo_expect']??0);
+        if($value==='has_price')return $pp>0;if($value==='no_price')return $pp<=0;
+        if($value==='woo_higher')return $wp>0&&$we>0&&$wp>$we;
+        return $wp>0&&$we>0&&$wp<$we;
+    }
+    return true;
+}
+
 /** فیلتر + صفحه‌بندی روی نتیجهٔ ذخیره‌شده (بدون rebuild) */
 function matrixQueryPage(array $opts = []): array {
     $prog = matrixProgressRead();
@@ -29209,15 +29255,11 @@ function matrixQueryPage(array $opts = []): array {
             'progress' => $prog,
         ];
     }
-    $q = matrixBareTitle((string)($opts['q'] ?? ''), []);
-    $onlyDup = !empty($opts['only_dup']);
-    $onlyMismatch = !empty($opts['only_mismatch']);
-    $onlyMissing = !empty($opts['only_missing']);
-    $codedOnly = !empty($opts['coded_only']);
     $filterType = trim((string)($opts['filter_type'] ?? ''));
     $filterValue = trim((string)($opts['filter_value'] ?? ''));
     $validFilterTypes = ['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price'];
     if (!in_array($filterType, $validFilterTypes, true) || $filterValue === '') { $filterType=''; $filterValue=''; }
+    $opts['filter_type']=$filterType; $opts['filter_value']=$filterValue;
     /* گزینه‌های دراپ‌داون از کل فایل نتیجه ساخته می‌شوند، نه فقط صفحهٔ فعلی. */
     $profileOptions = [];
     foreach ((array)$data['rows'] as $fr) {
@@ -29229,56 +29271,8 @@ function matrixQueryPage(array $opts = []): array {
     $all = [];
     foreach ((array)$data['rows'] as $r) {
         if (!is_array($r)) continue;
-        if ($q !== '' && mb_strpos((string)($r['bare'] ?? ''), $q) === false
-            && mb_strpos(matrixBareTitle((string)($r['title'] ?? ''), []), $q) === false) {
-            continue;
-        }
-        $flags = (array)($r['flags'] ?? []);
-        $st = (string)($r['status'] ?? '');
-        /* ردیف‌های گزارش کار/نتیجه همیشه می‌آیند */
         $isRep = !empty($r['is_report']) || str_starts_with((string)($r['bare'] ?? ''), '__report_');
-        if (!$isRep) {
-            if ($codedOnly && !matrixRowHasCode($r)) continue;
-            if ($filterType !== '') {
-                $match = true;
-                $hasProf = (int)($r['profile_hits']??0)>0 || trim((string)($r['profile_key']??''))!=='';
-                $destCell = null;
-                if ($filterValue === 'woo') $destCell = is_array($r['woo']??null) ? $r['woo'] : null;
-                elseif (preg_match('/^bsl:(\d+)$/', $filterValue, $fm)) {
-                    $fvid=(int)$fm[1]; $destCell=is_array($r['shops'][$fvid]??null)?$r['shops'][$fvid]:(is_array($r['shops'][(string)$fvid]??null)?$r['shops'][(string)$fvid]:null);
-                }
-                if ($filterType === 'status') $match=(string)($r['status']??'')===$filterValue;
-                elseif ($filterType === 'profile') $match=(string)($r['profile_key']??'')===$filterValue || (string)($r['profile']??'')===$filterValue;
-                elseif ($filterType === 'present_dest') $match=$destCell!==null;
-                elseif ($filterType === 'missing_dest') $match=$hasProf && $destCell===null;
-                elseif ($filterType === 'mismatch_dest') {
-                    $tone=$filterValue==='woo'?(string)($r['woo_tone']??''):(string)($destCell['tone']??'');
-                    $match=$destCell!==null && in_array($tone,['bad','warn'],true);
-                } elseif ($filterType === 'duplicate') {
-                    $flags=(array)($r['flags']??[]);
-                    if ($filterValue==='any') $match=(bool)preg_grep('/^dup_/', $flags) || !empty($r['woo_dup']) || (int)($r['profile_hits']??0)>1;
-                    elseif ($filterValue==='profile') $match=in_array('dup_profile',$flags,true)||(int)($r['profile_hits']??0)>1;
-                    elseif ($filterValue==='woo') $match=in_array('dup_woo',$flags,true)||!empty($r['woo_dup']);
-                    else $match=in_array('dup_bsl',$flags,true);
-                } elseif ($filterType === 'presence') {
-                    $hasWoo=!empty($r['woo']); $shopN=count(array_filter((array)($r['shops']??[]),'is_array')); $shopTotal=count((array)($data['shops']??[]));
-                    if ($filterValue==='only_profile') $match=$hasProf&&!$hasWoo&&$shopN===0;
-                    elseif ($filterValue==='only_dest') $match=!$hasProf&&($hasWoo||$shopN>0);
-                    elseif ($filterValue==='in_all') $match=$hasProf&&$hasWoo&&$shopN>=$shopTotal;
-                    else $match=$hasProf&&(!$hasWoo||$shopN<$shopTotal);
-                } elseif ($filterType === 'price') {
-                    $pp=(int)($r['profile_price']??0); $wp=(int)($r['woo']['price']??0); $we=(int)($r['woo_expect']??0);
-                    if ($filterValue==='has_price') $match=$pp>0;
-                    elseif ($filterValue==='no_price') $match=$pp<=0;
-                    elseif ($filterValue==='woo_higher') $match=$wp>0&&$we>0&&$wp>$we;
-                    else $match=$wp>0&&$we>0&&$wp<$we;
-                }
-                if (!$match) continue;
-            }
-            if ($onlyDup && !preg_grep('/^dup_/', $flags) && empty($r['woo_dup']) && (int)($r['profile_hits'] ?? 0) < 2) continue;
-            if ($onlyMismatch && $st !== 'mismatch' && !in_array('price_mismatch', $flags, true)) continue;
-            if ($onlyMissing && $st !== 'missing' && $st !== 'only_profile' && !in_array('missing_woo', $flags, true) && !in_array('missing_bsl', $flags, true)) continue;
-        }
+        if (!$isRep && !matrixRowMatchesViewFilters($r,$data,$opts)) continue;
         $all[] = $r;
     }
     /* گزارش‌ها را جدا کن و فقط در صفحهٔ آخر بچسبان */
@@ -29346,7 +29340,6 @@ function matrixQueryPage(array $opts = []): array {
         'ok' => true,
         'from_file' => true,
         'server_side' => true,
-        'coded_only' => $codedOnly,
         'filter_type'=>$filterType, 'filter_value'=>$filterValue,
         'filter_options'=>['destinations'=>$destOptions,'profiles'=>$profileOptionRows],
         'sort' => $sort, 'sort_dir' => $sortDir,
@@ -29354,6 +29347,7 @@ function matrixQueryPage(array $opts = []): array {
         'per_page' => $per,
         'pages' => $pages,
         'total' => $total,
+        'actionable_total' => count($main),
         'summary' => $data['summary'] ?? [],
         'shops' => $data['shops'] ?? [],
         'woo_cfg' => $data['woo_cfg'] ?? [],
@@ -29481,7 +29475,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
         'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
-        'coded_only' => !array_key_exists('coded_only', $_GET + $_POST) || !empty($_GET['coded_only'] ?? $_POST['coded_only'] ?? null),
+        'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($_GET['slice_seconds'] ?? $_POST['slice_seconds'] ?? 8))),
     ];
     /* v10.255: اگر worker دائمی حاضر است، request وب اصلاً سازندهٔ جدول نیست؛
@@ -29528,7 +29522,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     if (!empty($_GET['resume'] ?? $_POST['resume'] ?? null) && is_file(SYNC_MATRIX_PROGRESS_FILE)) {
         $oldMatrix = json_decode((string)@file_get_contents(SYNC_MATRIX_PROGRESS_FILE), true);
         $oldCp = is_array($oldMatrix['checkpoint'] ?? null) ? $oldMatrix['checkpoint'] : null;
-        if (is_array($oldCp)
+        if (is_array($oldCp) && empty($oldCp['coded_only'])
             && (string)($oldCp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')
             && is_array($oldCp['profile_rows'] ?? null)) {
             $matrixCp = $oldCp;
@@ -29538,8 +29532,6 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
     if ($matrixCp && array_key_exists('live_fill', $matrixCp))
         $opts['live_fill'] = !empty($matrixCp['live_fill']);
-    if ($matrixCp && array_key_exists('coded_only', $matrixCp))
-        $opts['coded_only'] = !empty($matrixCp['coded_only']);
     if ($matrixCp && isset($matrixCp['slice_seconds']))
         $opts['slice_seconds'] = max(2, min(20, (int)$matrixCp['slice_seconds']));
     $opts['checkpoint'] = $matrixCp;
@@ -29628,7 +29620,6 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_dup' => !empty($_GET['only_dup']) || !empty($_POST['only_dup']),
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
-        'coded_only' => !empty($_GET['coded_only']) || !empty($_POST['coded_only']),
         'filter_type' => (string)($_GET['filter_type'] ?? $_POST['filter_type'] ?? ''),
         'filter_value' => (string)($_GET['filter_value'] ?? $_POST['filter_value'] ?? ''),
         'sort' => (string)($_GET['sort'] ?? $_POST['sort'] ?? ''),
@@ -29690,7 +29681,14 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'scope' => (string)($_GET['scope'] ?? $_POST['scope'] ?? 'all'),
         'delay_ms' => (int)($_GET['delay_ms'] ?? $_POST['delay_ms'] ?? 180),
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
-        'coded_only' => !array_key_exists('coded_only', $_GET + $_POST) || !empty($_GET['coded_only'] ?? $_POST['coded_only'] ?? null),
+        'view_filters' => [
+            'q'=>(string)($_GET['q']??$_POST['q']??''),
+            'only_dup'=>!empty($_GET['only_dup']??$_POST['only_dup']??null),
+            'only_mismatch'=>!empty($_GET['only_mismatch']??$_POST['only_mismatch']??null),
+            'only_missing'=>!empty($_GET['only_missing']??$_POST['only_missing']??null),
+            'filter_type'=>(string)($_GET['filter_type']??$_POST['filter_type']??''),
+            'filter_value'=>(string)($_GET['filter_value']??$_POST['filter_value']??''),
+        ],
     ];
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
@@ -40062,18 +40060,9 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '255', '>='));
 
     /* ---------- v10.256: coded-only matrix + readable fullscreen ---------- */
-    $add('10.256', 'فیلتر پیش‌فرض محصولات دارای پسوند کد در ساخت و نمایش فعال است',
+    $add('10.256', 'تشخیص پسوند کد برای تطبیق عنوان موجود است',
          function_exists('matrixTitleHas' . 'Code')
-      && function_exists('matrixRowHas' . 'Code')
-      && strpos($selfSrc, 'id="smCodedOnly" checked') !== false
-      && strpos($selfSrc, "fd.append('coded_only'") !== false);
-    $add('10.256', 'انتخاب کددار در worker و checkpoint حفظ می‌شود',
-         strpos($selfSrc, "'coded_only' => \$payload['coded_only']") !== false
-      && strpos($selfSrc, "'coded_only' => \$codedOnly") !== false
-      && strpos($selfSrc, "array_key_exists('coded_only', \$cp)") !== false);
-    $add('10.256', 'اصلاح مغایرت نیز به ردیف‌های کددار محدود می‌شود',
-         strpos($selfSrc, 'matrixFixCollectJobs($data, $scope, $codedOnly)') !== false
-      && strpos($selfSrc, 'if ($codedOnly && !matrixRowHasCode($r)) continue;') !== false);
+      && function_exists('matrixRowHas' . 'Code'));
     $add('10.256', 'جدول دکمه و چیدمان تمام‌صفحه و متن روشن دارد',
          strpos($selfSrc, 'id="smFullscreenBtn"') !== false
       && strpos($selfSrc, 'function syncMatrixFullscreen()') !== false
@@ -40106,11 +40095,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'function smRenderFilterValues') !== false);
     $add('10.258', 'فیلترهای مقصد/غرفه و پروفایل سمت سرور اجرا می‌شوند',
          strpos($selfSrc, "'present_dest','missing_dest','mismatch_dest'") !== false
-      && strpos($selfSrc, "preg_match('/^bsl:(\\d+)$/', \$filterValue") !== false
+      && strpos($selfSrc, "preg_match('/^bsl:(\\d+)$/',\$value") !== false
       && strpos($selfSrc, "'filter_options'=>") !== false);
     $add('10.258', 'فیلتر پیش از صفحه‌بندی و همراه مرتب‌سازی اعمال می‌شود',
-         strpos($selfSrc, 'if ($filterType !== \'\')') !== false
-      && strpos($selfSrc, '$page = max(1, (int)($opts[\'page\']') !== false);
+         strpos($selfSrc, 'matrixRowMatchesViewFilters($r,$data,$opts)') !== false
+      && strpos($selfSrc, '$page = max(1, (int)($opts[\'page\']') !== false
+      && strpos($selfSrc, 'matrixRowMatchesViewFilters($r,$data,$opts)') < strpos($selfSrc, '$page = max(1, (int)($opts[\'page\']'));
     $add('10.258', 'توضیحات جدول به details کشویی تبدیل شده است',
          strpos($selfSrc, 'id="smHelpDetails"') !== false
       && strpos($selfSrc, 'توضیحات و راهنمای رنگ‌ها') !== false);
@@ -40134,6 +40124,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.259', 'ورودی 10.259 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "259'") !== false
       && version_compare(APP_VERSION, '10.' . '259', '>='));
+
+    /* ---------- v10.260: fix only visible filtered rows ---------- */
+    $add('10.260', 'نمایش و اصلاح از تابع مشترک فیلتر ردیف استفاده می‌کنند',
+         function_exists('matrixRowMatchesView' . 'Filters')
+      && strpos($selfSrc, 'matrixRowMatchesViewFilters($r,$data,$opts)') !== false
+      && strpos($selfSrc, 'matrixRowMatchesViewFilters($r, $data, $viewFilters)') !== false);
+    $add('10.260', 'فیلترهای فعال همراه درخواست اصلاح و checkpoint آن حفظ می‌شوند',
+         strpos($selfSrc, "fd.append('filter_type',ft)") !== false
+      && strpos($selfSrc, "'view_filters' => \$viewFilters") !== false
+      && strpos($selfSrc, "'only_mismatch'=>") !== false);
+    $add('10.260', 'گزینهٔ فقط پسوند کد از رابط و درخواست‌ها حذف شده است',
+         strpos($selfSrc, 'id="sm' . 'CodedOnly"') === false
+      && strpos($selfSrc, "fd.append('coded_" . "only'") === false);
+    $add('10.260', 'ورودی 10.260 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "260'") !== false
+      && version_compare(APP_VERSION, '10.' . '260', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63685,9 +63691,6 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label class="prof-net-switch" title="نمایش و به‌روزرسانی جدول بعد از دریافت هر بستهٔ محصولات">
 <input type="checkbox" id="smLiveFill" style="display:none" onchange="syncMatrixLiveUi(true)"><span class="prof-net-slider"></span></label>
 </div>
-<label style="display:flex;align-items:center;gap:6px;padding:5px 9px;background:#052e16;border:1px solid #16a34a;border-radius:20px;color:#dcfce7;font-size:10.5px;cursor:pointer" title="فقط عنوان‌هایی که با پسوندی مثل (کد:۱۲۳) تمام می‌شوند در ساخت، مغایرت‌گیری و نمایش شرکت کنند">
-<input type="checkbox" id="smCodedOnly" checked onchange="syncMatrixCodedUi(true)"> فقط دارای پسوند (کد:ایکس)
-</label>
 <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#0f172a;border:1px solid #334155;border-radius:20px" title="مدت هر برش واکشی پیش از وقفه و ادامهٔ خودکار">
 <span style="font-size:10px;color:#94a3b8;white-space:nowrap">زمان برش</span>
 <input type="range" id="smSliceSeconds" min="2" max="20" step="1" value="8" oninput="syncMatrixSliceUi(true)" style="width:90px">
@@ -63721,7 +63724,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — در حالت پیش‌فرض فقط عنوان‌های دارای پسوند <b>(کد:ایکس)</b> مشارکت می‌کنند و پس از احراز کد، تطبیق با حذف پسوند انجام می‌شود. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -63749,9 +63752,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <option value="100">۱۰۰ / صفحه</option>
 <option value="200">۲۰۰ / صفحه</option>
 </select>
-<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMis"> فقط مغایرت قیمت</label>
-<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMiss"> فقط ناقص</label>
-<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyDup"> فقط تکراری</label>
+<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMis" onchange="syncMatrixLoad(1)"> فقط مغایرت قیمت</label>
+<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMiss" onchange="syncMatrixLoad(1)"> فقط ناقص</label>
+<label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyDup" onchange="syncMatrixLoad(1)"> فقط تکراری</label>
 <button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px">اعمال فیلترها</button>
 <button class="btn btn-gray" onclick="smResetFilters()" style="font-size:11px">پاک‌کردن فیلترها</button>
 </div>
@@ -71037,6 +71040,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.260', t:'🎯 اصلاح فقط ردیف‌های فیلترشده', items:[
+    'جستجو، فیلتر پیشرفته، فقط مغایرت، فقط ناقص و فقط تکراری عیناً به عملیات اصلاح ارسال می‌شوند',
+    'ساخت jobهای قیمت/ارسال/حذف از همان تابع مشترک نمایش جدول عبور می‌کند و خارج فیلتر دست‌نخورده می‌ماند',
+    'گزینهٔ فقط دارای پسوند کد حذف شد و همهٔ محصولات بدون نیاز به تیک در ساخت و نمایش مشارکت می‌کنند'
+  ]},
   {v:'10.259', t:'🧵 استقلال کامل ادامهٔ ماتریس از مرورگر', items:[
     'اگر worker دائمی فعال نباشد، ساخت ماتریس در پردازهٔ detached PHP CLI ادامه پیدا می‌کند و با خواب گوشی قطع نمی‌شود',
     'فرمان CLI اختصاصی matrix_build همهٔ برش‌ها و checkpointها را تا پایان در همان پردازه ادامه می‌دهد',
@@ -79568,15 +79576,6 @@ function syncMatrixLiveUi(save){
   if(on && save)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 }
 try{if($('smLiveFill'))$('smLiveFill').checked=localStorage.getItem('s4_matrix_live_fill')==='1';syncMatrixLiveUi(false)}catch(e){}
-function syncMatrixCodedUi(save){
-  const on=!!($('smCodedOnly')&&$('smCodedOnly').checked);
-  if(save)try{localStorage.setItem('s4_matrix_coded_only',on?'1':'0')}catch(e){}
-  if(save)try{syncMatrixLoad(1)}catch(e){}
-}
-try{
-  const cv=localStorage.getItem('s4_matrix_coded_only');
-  if($('smCodedOnly'))$('smCodedOnly').checked=(cv===null||cv==='1');
-}catch(e){}
 function syncMatrixFullscreen(){
   const wrap=$('smTableWrap');if(!wrap)return;
   if(document.fullscreenElement){document.exitFullscreen().catch(()=>{});return;}
@@ -79607,7 +79606,6 @@ function syncMatrixStart(resume,automatic){
   if(resume) fd.append('resume','1');
   fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
   fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
-  fd.append('coded_only',($('smCodedOnly')&&$('smCodedOnly').checked)?'1':'0');
   fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
@@ -79683,7 +79681,7 @@ function syncMatrixPoll(){
 /* v10.117: اصلاح مغایرت از روی جدول */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
-  if(!confirm('مغایرت‌گیری کامل از روی جدول؟\n• اصلاح قیمت ناهماهنگ\n• ارسال (در پروفایل هست / در مقصد نیست)\n• حذف/بایگانی (فقط در مقصد)\nمحدوده: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه'))+'\nدو ردیف گزارش به انتهای جدول اضافه می‌شود.')) return;
+  if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف/بایگانی موارد اضافی\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent='🔧 شروع اصلاح…';
   if($('smFixStopBtn')) $('smFixStopBtn').style.display='';
@@ -79692,7 +79690,12 @@ function syncMatrixFixStart(scope){
   fd.append('action','sync_matrix_fix_start');
   fd.append('scope', scope);
   fd.append('source','manual');
-  fd.append('coded_only',($('smCodedOnly')&&$('smCodedOnly').checked)?'1':'0');
+  fd.append('q',($('smQ')||{}).value||'');
+  if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');
+  if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');
+  if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');
+  const ft=($('smFilterType')||{}).value||'',fv=($('smFilterValue')||{}).value||'';
+  if(ft&&fv){fd.append('filter_type',ft);fd.append('filter_value',fv);}
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع اصلاح ناموفق',1);
@@ -79823,7 +79826,6 @@ function syncMatrixLoad(page, silent){
   const filterType=($('smFilterType')||{}).value||'',filterValue=($('smFilterValue')||{}).value||'';
   if(filterType&&filterValue){fd.append('filter_type',filterType);fd.append('filter_value',filterValue);}
   if(window._smSort){fd.append('sort',window._smSort);fd.append('sort_dir',window._smSortDir||'asc');}
-  if(($('smCodedOnly')||{}).checked) fd.append('coded_only','1');
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
@@ -79842,6 +79844,7 @@ function syncMatrixLoad(page, silent){
       return;
     }
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
+    window._smFilteredTotal=parseInt(d.actionable_total!=null?d.actionable_total:d.total)||0;
     if(d.filter_options){
       window._smFilterData=d.filter_options;
       let wanted=($('smFilterValue')||{}).value||'';try{if(!wanted)wanted=localStorage.getItem('s4_matrix_filter_value')||''}catch(e){}
@@ -79875,7 +79878,7 @@ function syncMatrixLoad(page, silent){
     if(meta){
       meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
-        +(d.coded_only?' · 🔑 فقط کددار':' · همهٔ محصولات')
+        +' · همهٔ محصولات'
         +(d.filter_type?' · 🔎 '+esc((($('smFilterType')||{}).selectedOptions?.[0]?.textContent||d.filter_type))+': '+esc((($('smFilterValue')||{}).selectedOptions?.[0]?.textContent||d.filter_value)):'')
         +' · WC: '+smFa(d.woo_count||0)
         +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
