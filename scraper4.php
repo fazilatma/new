@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.257';
+const APP_VERSION = '10.258';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29135,6 +29135,18 @@ function matrixQueryPage(array $opts = []): array {
     $onlyMismatch = !empty($opts['only_mismatch']);
     $onlyMissing = !empty($opts['only_missing']);
     $codedOnly = !empty($opts['coded_only']);
+    $filterType = trim((string)($opts['filter_type'] ?? ''));
+    $filterValue = trim((string)($opts['filter_value'] ?? ''));
+    $validFilterTypes = ['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price'];
+    if (!in_array($filterType, $validFilterTypes, true) || $filterValue === '') { $filterType=''; $filterValue=''; }
+    /* گزینه‌های دراپ‌داون از کل فایل نتیجه ساخته می‌شوند، نه فقط صفحهٔ فعلی. */
+    $profileOptions = [];
+    foreach ((array)$data['rows'] as $fr) {
+        if (!is_array($fr) || !empty($fr['is_report'])) continue;
+        $fk=trim((string)($fr['profile_key']??'')); $fn=trim((string)($fr['profile']??''));
+        if ($fk!=='' || $fn!=='') $profileOptions[$fk!==''?$fk:$fn]=$fn!==''?$fn:$fk;
+    }
+    natcasesort($profileOptions);
     $all = [];
     foreach ((array)$data['rows'] as $r) {
         if (!is_array($r)) continue;
@@ -29148,6 +29160,42 @@ function matrixQueryPage(array $opts = []): array {
         $isRep = !empty($r['is_report']) || str_starts_with((string)($r['bare'] ?? ''), '__report_');
         if (!$isRep) {
             if ($codedOnly && !matrixRowHasCode($r)) continue;
+            if ($filterType !== '') {
+                $match = true;
+                $hasProf = (int)($r['profile_hits']??0)>0 || trim((string)($r['profile_key']??''))!=='';
+                $destCell = null;
+                if ($filterValue === 'woo') $destCell = is_array($r['woo']??null) ? $r['woo'] : null;
+                elseif (preg_match('/^bsl:(\d+)$/', $filterValue, $fm)) {
+                    $fvid=(int)$fm[1]; $destCell=is_array($r['shops'][$fvid]??null)?$r['shops'][$fvid]:(is_array($r['shops'][(string)$fvid]??null)?$r['shops'][(string)$fvid]:null);
+                }
+                if ($filterType === 'status') $match=(string)($r['status']??'')===$filterValue;
+                elseif ($filterType === 'profile') $match=(string)($r['profile_key']??'')===$filterValue || (string)($r['profile']??'')===$filterValue;
+                elseif ($filterType === 'present_dest') $match=$destCell!==null;
+                elseif ($filterType === 'missing_dest') $match=$hasProf && $destCell===null;
+                elseif ($filterType === 'mismatch_dest') {
+                    $tone=$filterValue==='woo'?(string)($r['woo_tone']??''):(string)($destCell['tone']??'');
+                    $match=$destCell!==null && in_array($tone,['bad','warn'],true);
+                } elseif ($filterType === 'duplicate') {
+                    $flags=(array)($r['flags']??[]);
+                    if ($filterValue==='any') $match=(bool)preg_grep('/^dup_/', $flags) || !empty($r['woo_dup']) || (int)($r['profile_hits']??0)>1;
+                    elseif ($filterValue==='profile') $match=in_array('dup_profile',$flags,true)||(int)($r['profile_hits']??0)>1;
+                    elseif ($filterValue==='woo') $match=in_array('dup_woo',$flags,true)||!empty($r['woo_dup']);
+                    else $match=in_array('dup_bsl',$flags,true);
+                } elseif ($filterType === 'presence') {
+                    $hasWoo=!empty($r['woo']); $shopN=count(array_filter((array)($r['shops']??[]),'is_array')); $shopTotal=count((array)($data['shops']??[]));
+                    if ($filterValue==='only_profile') $match=$hasProf&&!$hasWoo&&$shopN===0;
+                    elseif ($filterValue==='only_dest') $match=!$hasProf&&($hasWoo||$shopN>0);
+                    elseif ($filterValue==='in_all') $match=$hasProf&&$hasWoo&&$shopN>=$shopTotal;
+                    else $match=$hasProf&&(!$hasWoo||$shopN<$shopTotal);
+                } elseif ($filterType === 'price') {
+                    $pp=(int)($r['profile_price']??0); $wp=(int)($r['woo']['price']??0); $we=(int)($r['woo_expect']??0);
+                    if ($filterValue==='has_price') $match=$pp>0;
+                    elseif ($filterValue==='no_price') $match=$pp<=0;
+                    elseif ($filterValue==='woo_higher') $match=$wp>0&&$we>0&&$wp>$we;
+                    else $match=$wp>0&&$we>0&&$wp<$we;
+                }
+                if (!$match) continue;
+            }
             if ($onlyDup && !preg_grep('/^dup_/', $flags) && empty($r['woo_dup']) && (int)($r['profile_hits'] ?? 0) < 2) continue;
             if ($onlyMismatch && $st !== 'mismatch' && !in_array('price_mismatch', $flags, true)) continue;
             if ($onlyMissing && $st !== 'missing' && $st !== 'only_profile' && !in_array('missing_woo', $flags, true) && !in_array('missing_bsl', $flags, true)) continue;
@@ -29209,11 +29257,19 @@ function matrixQueryPage(array $opts = []): array {
             }
         }
     }
+    $destOptions = [['value'=>'woo','label'=>'ووکامرس']];
+    foreach ((array)($data['shops']??[]) as $ds) {
+        if (!is_array($ds) || (int)($ds['vendor_id']??0)<=0) continue;
+        $destOptions[]=['value'=>'bsl:'.(int)$ds['vendor_id'],'label'=>(string)($ds['name']??('#'.(int)$ds['vendor_id']))];
+    }
+    $profileOptionRows=[]; foreach($profileOptions as $pv=>$pl)$profileOptionRows[]=['value'=>(string)$pv,'label'=>(string)$pl];
     return [
         'ok' => true,
         'from_file' => true,
         'server_side' => true,
         'coded_only' => $codedOnly,
+        'filter_type'=>$filterType, 'filter_value'=>$filterValue,
+        'filter_options'=>['destinations'=>$destOptions,'profiles'=>$profileOptionRows],
         'sort' => $sort, 'sort_dir' => $sortDir,
         'page' => $page,
         'per_page' => $per,
@@ -29478,6 +29534,8 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
         'coded_only' => !empty($_GET['coded_only']) || !empty($_POST['coded_only']),
+        'filter_type' => (string)($_GET['filter_type'] ?? $_POST['filter_type'] ?? ''),
+        'filter_value' => (string)($_GET['filter_value'] ?? $_POST['filter_value'] ?? ''),
         'sort' => (string)($_GET['sort'] ?? $_POST['sort'] ?? ''),
         'sort_dir' => (string)($_GET['sort_dir'] ?? $_POST['sort_dir'] ?? 'asc'),
         'live_fill' => !empty($_GET['live_fill']) || !empty($_POST['live_fill']),
@@ -39945,6 +40003,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.257', 'ورودی 10.257 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "257'") !== false
       && version_compare(APP_VERSION, '10.' . '257', '>='));
+
+    /* ---------- v10.258: advanced dependent matrix filters ---------- */
+    $add('10.258', 'دو دراپ‌داون وابستهٔ نوع و نام فیلتر وجود دارد',
+         strpos($selfSrc, 'id="smFilterType"') !== false
+      && strpos($selfSrc, 'id="smFilterValue"') !== false
+      && strpos($selfSrc, 'function smRenderFilterValues') !== false);
+    $add('10.258', 'فیلترهای مقصد/غرفه و پروفایل سمت سرور اجرا می‌شوند',
+         strpos($selfSrc, "'present_dest','missing_dest','mismatch_dest'") !== false
+      && strpos($selfSrc, "preg_match('/^bsl:(\\d+)$/', \$filterValue") !== false
+      && strpos($selfSrc, "'filter_options'=>") !== false);
+    $add('10.258', 'فیلتر پیش از صفحه‌بندی و همراه مرتب‌سازی اعمال می‌شود',
+         strpos($selfSrc, 'if ($filterType !== \'\')') !== false
+      && strpos($selfSrc, '$page = max(1, (int)($opts[\'page\']') !== false);
+    $add('10.258', 'توضیحات جدول به details کشویی تبدیل شده است',
+         strpos($selfSrc, 'id="smHelpDetails"') !== false
+      && strpos($selfSrc, 'توضیحات و راهنمای رنگ‌ها') !== false);
+    $add('10.258', 'ورودی 10.258 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "258'") !== false
+      && version_compare(APP_VERSION, '10.' . '258', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63528,7 +63605,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div id="smFixBanner" style="display:none;margin-bottom:8px;padding:8px 10px;background:linear-gradient(90deg,#14532d33,#1e3a8a33);border:1px solid #22c55e55;border-radius:8px;font-size:11px;color:#bbf7d0"></div>
 <div id="smFixReport" style="display:none;margin-bottom:10px;padding:12px 14px;background:linear-gradient(135deg,#0f172a,#14532d44);border:1px solid #34d39966;border-radius:10px;color:#e2e8f0"></div>
-<div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-bottom:8px">
+<details id="smHelpDetails" style="margin-bottom:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 9px">
+<summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
+<div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
 پروفایل × ووکامرس × غرفه‌ها — در حالت پیش‌فرض فقط عنوان‌های دارای پسوند <b>(کد:ایکس)</b> مشارکت می‌کنند و پس از احراز کد، تطبیق با حذف پسوند انجام می‌شود. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
@@ -63537,9 +63616,21 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <span style="background:#1e3a8a;color:#bfdbfe;padding:1px 6px;border-radius:4px">فقط مبدأ</span>
 <span style="background:#334155;color:#e2e8f0;padding:1px 6px;border-radius:4px">فقط مقصد</span>
 <span style="background:#4c1d95;color:#e9d5ff;padding:1px 6px;border-radius:4px">تکراری</span>
-</div>
+</div></details>
 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center">
 <input type="search" id="smQ" placeholder="جستجوی عنوان…" style="flex:1;min-width:140px;font-size:12px" onkeydown="if(event.key==='Enter')syncMatrixLoad(1)">
+<select id="smFilterType" style="min-width:150px;font-size:12px" onchange="smFilterTypeChanged(true)">
+<option value="">نوع فیلتر: همه</option>
+<option value="status">وضعیت ردیف</option>
+<option value="profile">پروفایل مبدأ</option>
+<option value="present_dest">موجود در مقصد/غرفه</option>
+<option value="missing_dest">ناموجود در مقصد/غرفه</option>
+<option value="mismatch_dest">مغایرت قیمت مقصد/غرفه</option>
+<option value="duplicate">نوع تکراری</option>
+<option value="presence">ترکیب حضور در مبدأ/مقصد</option>
+<option value="price">وضعیت قیمت</option>
+</select>
+<select id="smFilterValue" style="min-width:170px;font-size:12px" onchange="smFilterValueChanged()" disabled><option value="">نام فیلتر</option></select>
 <select id="smPer" style="max-width:110px;font-size:12px" onchange="syncMatrixLoad(1)">
 <option value="25">۲۵ / صفحه</option>
 <option value="50" selected>۵۰ / صفحه</option>
@@ -63549,7 +63640,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMis"> فقط مغایرت قیمت</label>
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMiss"> فقط ناقص</label>
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyDup"> فقط تکراری</label>
-<button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px">اعمال فیلتر</button>
+<button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px">اعمال فیلترها</button>
+<button class="btn btn-gray" onclick="smResetFilters()" style="font-size:11px">پاک‌کردن فیلترها</button>
 </div>
 <div id="smSummary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:11px"></div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
@@ -70833,6 +70925,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.258', t:'🔎 فیلترهای ترکیبی پیشرفتهٔ جدول مغایرت', items:[
+    'دو دراپ‌داون وابستهٔ «نوع فیلتر / نام فیلتر» برای وضعیت، پروفایل، مقصد، غرفه، تکراری، حضور و قیمت اضافه شد',
+    'فیلتر مقصد می‌تواند موجود، ناموجود یا مغایرت قیمت را برای ووکامرس یا هر غرفه جداگانه نشان دهد',
+    'فیلتر روی کل نتیجه و پیش از صفحه‌بندی اجرا و انتخاب آن در مرورگر حفظ می‌شود؛ توضیحات نیز کشویی شد'
+  ]},
   {v:'10.257', t:'↕️ جدول تمام‌صفحهٔ مستقل، مرتب‌سازی و تغییر عرض ستون', items:[
     'تمام‌صفحه اکنون فقط ظرف خود جدول را باز می‌کند و بخش‌های تنظیمات/گزارش بیرون آن می‌مانند',
     'سرستون‌ها با کلیک، کل نتیجه را پیش از صفحه‌بندی صعودی/نزولی مرتب می‌کنند و جهت با فلش مشخص است',
@@ -79242,8 +79339,42 @@ function smCell(html, tone){
   const bg=smToneBg(tone), fg=smToneFg(tone);
   return '<td style="padding:7px 8px;border-bottom:1px solid #1e293b;background:'+bg+';color:'+fg+';vertical-align:top;line-height:1.55;overflow-wrap:anywhere">'+html+'</td>';
 }
-window._smSort='';window._smSortDir='asc';window._smColWidths={};
+window._smSort='';window._smSortDir='asc';window._smColWidths={};window._smFilterData={destinations:[],profiles:[]};
 try{window._smSort=localStorage.getItem('s4_matrix_sort')||'';window._smSortDir=localStorage.getItem('s4_matrix_sort_dir')||'asc';window._smColWidths=JSON.parse(localStorage.getItem('s4_matrix_col_widths')||'{}')||{};}catch(e){}
+function smFilterStaticOptions(type){
+  const m={
+    status:[['ok','یکسان'],['mismatch','مغایرت قیمت'],['missing','ناقص/ناموجود'],['only_profile','فقط مبدأ'],['only_dest','فقط مقصد'],['partial','نیمه‌کامل']],
+    duplicate:[['any','هر نوع تکراری'],['profile','تکراری در پروفایل'],['woo','تکراری ووکامرس'],['bsl','تکراری باسلام']],
+    presence:[['only_profile','فقط در مبدأ'],['only_dest','فقط در مقصد'],['in_all','موجود در همهٔ مقصدها'],['missing_any','حداقل در یک مقصد ناموجود']],
+    price:[['has_price','دارای قیمت پروفایل'],['no_price','بدون قیمت پروفایل'],['woo_higher','قیمت واقعی WC بیشتر از انتظار'],['woo_lower','قیمت واقعی WC کمتر از انتظار']]
+  };return m[type]||[];
+}
+function smRenderFilterValues(preferred){
+  const type=($('smFilterType')||{}).value||'',sel=$('smFilterValue');if(!sel)return;
+  let opts=[];
+  if(type==='profile')opts=window._smFilterData.profiles||[];
+  else if(['present_dest','missing_dest','mismatch_dest'].includes(type))opts=window._smFilterData.destinations||[];
+  else opts=smFilterStaticOptions(type).map(x=>({value:x[0],label:x[1]}));
+  const wanted=preferred!=null?String(preferred):String(sel.value||'');
+  sel.innerHTML='<option value="">'+(type?'انتخاب نام فیلتر…':'نام فیلتر')+'</option>'+opts.map(o=>'<option value="'+esc(o.value)+'">'+esc(o.label)+'</option>').join('');
+  sel.disabled=!type;if(opts.some(o=>String(o.value)===wanted))sel.value=wanted;
+}
+function smFilterTypeChanged(user){
+  smRenderFilterValues('');
+  try{localStorage.setItem('s4_matrix_filter_type',($('smFilterType')||{}).value||'');localStorage.removeItem('s4_matrix_filter_value')}catch(e){}
+  if(user)syncMatrixLoad(1);
+}
+function smFilterValueChanged(){
+  try{localStorage.setItem('s4_matrix_filter_type',($('smFilterType')||{}).value||'');localStorage.setItem('s4_matrix_filter_value',($('smFilterValue')||{}).value||'')}catch(e){}
+  syncMatrixLoad(1);
+}
+function smResetFilters(){
+  if($('smFilterType'))$('smFilterType').value='';smRenderFilterValues('');
+  ['smOnlyMis','smOnlyMiss','smOnlyDup'].forEach(id=>{if($(id))$(id).checked=false;});if($('smQ'))$('smQ').value='';
+  try{localStorage.removeItem('s4_matrix_filter_type');localStorage.removeItem('s4_matrix_filter_value')}catch(e){}
+  syncMatrixLoad(1);
+}
+try{const ft=localStorage.getItem('s4_matrix_filter_type')||'',fv=localStorage.getItem('s4_matrix_filter_value')||'';if($('smFilterType'))$('smFilterType').value=ft;smRenderFilterValues(fv)}catch(e){}
 function smDefaultColWidth(k){if(k==='n')return 52;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
 function smTh(label,key,sortable){
   const active=window._smSort===key, arrow=active?(window._smSortDir==='desc'?' ▼':' ▲'):'';
@@ -79572,6 +79703,8 @@ function syncMatrixLoad(page, silent){
   fd.append('page', String(page));
   fd.append('per_page', String(($('smPer')||{}).value||50));
   fd.append('q', ($('smQ')||{}).value||'');
+  const filterType=($('smFilterType')||{}).value||'',filterValue=($('smFilterValue')||{}).value||'';
+  if(filterType&&filterValue){fd.append('filter_type',filterType);fd.append('filter_value',filterValue);}
   if(window._smSort){fd.append('sort',window._smSort);fd.append('sort_dir',window._smSortDir||'asc');}
   if(($('smCodedOnly')||{}).checked) fd.append('coded_only','1');
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
@@ -79592,6 +79725,12 @@ function syncMatrixLoad(page, silent){
       return;
     }
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
+    if(d.filter_options){
+      window._smFilterData=d.filter_options;
+      let wanted=($('smFilterValue')||{}).value||'';try{if(!wanted)wanted=localStorage.getItem('s4_matrix_filter_value')||''}catch(e){}
+      smRenderFilterValues(wanted);
+      if(!filterValue&&wanted&&($('smFilterValue')||{}).value===wanted){setTimeout(()=>syncMatrixLoad(1,true),0);return;}
+    }
     const shops = d.shops||[];
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
     const colKeys=['n','title','profile','src_price','profile_price','woo_expect','woo_actual'];
@@ -79620,6 +79759,7 @@ function syncMatrixLoad(page, silent){
       meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
         +(d.coded_only?' · 🔑 فقط کددار':' · همهٔ محصولات')
+        +(d.filter_type?' · 🔎 '+esc((($('smFilterType')||{}).selectedOptions?.[0]?.textContent||d.filter_type))+': '+esc((($('smFilterValue')||{}).selectedOptions?.[0]?.textContent||d.filter_value)):'')
         +' · WC: '+smFa(d.woo_count||0)
         +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
         +(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')
