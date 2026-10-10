@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.271';
+const APP_VERSION = '10.272';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29811,6 +29811,28 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     header('Content-Type: application/json; charset=UTF-8');
     $prog = matrixProgressRead();
     $fix = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
+    /* running یتیمِ build را خود status ترمیم می‌کند؛ UI نباید پنج دقیقه منتظر
+       ops_feedback بماند یا دکمه را قفل‌شده ببیند. heartbeat کهنه + flock آزاد
+       شرط اجباری است تا فاصلهٔ کوتاه بین دو child سالم recovery کاذب نسازد. */
+    $progBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($prog):(int)($prog['ts']??$prog['started_at']??0);
+    if(!empty($prog['running'])&&$progBeat>0&&(time()-$progBeat)>180){
+        $mf=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$matrixFree=$mf&&@flock($mf,LOCK_EX|LOCK_NB);
+        if($matrixFree){
+            @flock($mf,LOCK_UN);
+            matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'stale'=>true,'phase'=>'بازیابی خودکار',
+                'log_add'=>['♻️ running یتیم شناسایی شد؛ قفل آزاد است و ادامه از checkpoint به worker سپرده شد']]);
+            $rcp=is_array($prog['checkpoint']??null)?$prog['checkpoint']:[];
+            $ro=['profile'=>(string)($prog['profile']??$rcp['profile_filter']??'all'),
+                'parallel_destinations'=>(string)($prog['fetch_mode']??$rcp['fetch_mode']??'')==='parallel',
+                'live_fill'=>!empty($prog['live_fill']??$rcp['live_fill']??false),
+                'selected_destinations'=>array_key_exists('selected_destinations',$rcp)?array_values((array)$rcp['selected_destinations']):(array_key_exists('selected_destinations',$prog)?array_values((array)$prog['selected_destinations']):null),
+                'slice_seconds'=>max(2,min(20,(int)($prog['slice_seconds']??$rcp['slice_seconds']??8)))];
+            if(function_exists('s4WorkerIsActive')&&s4WorkerIsActive())s4WorkerEnqueueMatrixBuild($ro,true);
+            elseif(function_exists('s4SpawnMatrixBuildChild'))s4SpawnMatrixBuildChild($ro,true);
+            $prog=matrixProgressRead();
+        }
+        if($mf)@fclose($mf);
+    }
     /* state قدیمیِ running نباید دکمهٔ ساخت را برای همیشه قفل کند. فقط وقتی
        heartbeat کهنه و lock واقعاً آزاد است، آن را stopped می‌کنیم. */
     if(!empty($fix['running'])&&(time()-(int)($fix['ts']??$fix['started_at']??0))>180){
@@ -40719,6 +40741,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.271', 'ورودی 10.271 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "271'") !== false
       && version_compare(APP_VERSION, '10.' . '271', '>='));
+
+    /* ---------- v10.272: stale build recovery from status ---------- */
+    $add('10.272', 'status، running یتیم build را فقط با heartbeat کهنه و lock آزاد ترمیم می‌کند',
+         strpos($selfSrc, "time()-\$progBeat)>180") !== false
+      && strpos($selfSrc, "SYNC_MATRIX_LOCK_FILE,'c'") !== false
+      && strpos($selfSrc, "running یتیم شناسایی شد") !== false);
+    $add('10.272', 'checkpoint یتیم فوری به worker یا fallback مستقل سپرده می‌شود',
+         strpos($selfSrc, "s4WorkerEnqueueMatrixBuild(\$ro,true)") !== false
+      && strpos($selfSrc, "s4SpawnMatrixBuildChild(\$ro,true)") !== false
+      && strpos($selfSrc, "selected_destinations',$rcp") !== false);
+    $add('10.272', 'ورودی 10.272 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "272'") !== false
+      && version_compare(APP_VERSION, '10.' . '272', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71647,6 +71682,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.272', t:'🩺 شروع و بازیابی فوری ساخت جدول در production', items:[
+    'status هر running یتیم build را با دو شرط heartbeat بیش از ۱۸۰ ثانیه و flock آزاد تشخیص می‌دهد؛ process سالم هرگز اشتباهاً stale نمی‌شود',
+    'checkpoint یتیم همان لحظه به worker فعال سپرده می‌شود و دیگر به repair pulse پنج‌دقیقه‌ای یا بازماندن دکمه در حالت قفل وابسته نیست',
+    'اگر worker در دسترس نباشد fallback مستقل سرور فعال می‌شود؛ مقصدهای انتخابی، profile، حالت واکشی و زمان برش از checkpoint حفظ می‌شوند'
+  ]},
   {v:'10.271', t:'🧠 رفع توقف و exit 137 در ساخت جدول مغایرت', items:[
     'worker دیگر یک process پرحافظه را برای هزاران checkpoint زنده نگه نمی‌دارد؛ هر برش در PHP CLI تازه اجرا و heap آن کامل به سیستم‌عامل برگردانده می‌شود',
     'daemon کم‌حافظه برش‌ها را مستقل از مرورگر تا پایان زنجیره می‌کند و بین processها فقط checkpoint اتمیک را تحویل می‌دهد',
