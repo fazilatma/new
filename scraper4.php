@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.267';
+const APP_VERSION = '10.268';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11403,9 +11403,8 @@ function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
     return ['ok'=>$body!==false&&$code>=200&&$code<300,'code'=>$code,'error'=>$err?:($code>=200&&$code<300?'':'HTTP '.$code),'body'=>$body===false?'':(string)$body];
 }
 function s4CodeUpdateAdminAuth():array{
-    if(!function_exists('current_user_can')){
-        $wp=dirname(__DIR__,3).'/wp-load.php';if(is_file($wp))@require_once $wp;
-    }
+    /* direct endpoint نباید wp-load را وسط فایل ۶MB دوباره bootstrap کند؛ در
+       اجرای plugin توابع وردپرس از قبل حاضرند، و در اجرای مستقیم token کافی است. */
     $admin=function_exists('current_user_can')&&current_user_can('manage_options');
     $nonce=(string)($_POST['_wpnonce']??($_SERVER['HTTP_X_WP_NONCE']??''));
     return ['admin'=>$admin,'ok'=>$admin&&function_exists('wp_verify_nonce')&&wp_verify_nonce($nonce,'s4_code_update')];
@@ -11445,7 +11444,7 @@ function s4CodeUpdateRun():array{
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
 }
 if(isset($_GET['code_update_status'])){
-    header('Content-Type: application/json; charset=UTF-8');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
         'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
         'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
@@ -40571,6 +40570,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.267', 'ورودی 10.267 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "267'") !== false
       && version_compare(APP_VERSION, '10.' . '267', '>='));
+
+    /* ---------- v10.268: browser reload after code deployment ---------- */
+    $add('10.268', 'tab باز نسخهٔ نصب‌شده را دوره‌ای و هنگام focus بررسی می‌کند',
+         strpos($selfSrc, 'function s4WatchInstalled' . 'Code()') !== false
+      && strpos($selfSrc, 'setInterval(s4WatchInstalledCode,30000)') !== false
+      && strpos($selfSrc, "addEventListener('focus',s4WatchInstalledCode)") !== false);
+    $add('10.268', 'نسخهٔ تازه با cache-buster و location.replace خودکار بارگذاری می‌شود',
+         strpos($selfSrc, 'function s4ReloadForNew' . 'Code(') !== false
+      && strpos($selfSrc, "searchParams.set('_v',Date.now())") !== false
+      && strpos($selfSrc, 'location.replace(u.toString())') !== false);
+    $add('10.268', 'status آپدیت no-store است و direct request وردپرس را دوباره bootstrap نمی‌کند',
+         strpos($selfSrc, "Cache-Control: no-store, no-cache") !== false
+      && strpos($selfSrc, "dirname(__DIR__," . "3).'/wp-load.php'") === false);
+    $add('10.268', 'ورودی 10.268 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "268'") !== false
+      && version_compare(APP_VERSION, '10.' . '268', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71476,11 +71491,33 @@ renderDetailFieldsList();
  *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
 let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false;
+/* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
+   tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
+const S4_LOADED_VERSION='<?=APP_VERSION?>';
+window._s4CodeReloading=false;
+function s4ReloadForNewCode(nextVersion){
+  if(window._s4CodeReloading)return;window._s4CodeReloading=true;
+  try{showToast('✅ کد '+String(nextVersion||'جدید')+' نصب شد — صفحه رفرش می‌شود');}catch(e){}
+  setTimeout(()=>{const u=new URL(location.href);u.searchParams.set('_v',Date.now());location.replace(u.toString());},900);
+}
+function s4WatchInstalledCode(){
+  if(window._s4CodeReloading||document.visibilityState==='hidden')return;
+  fetch('?code_update_status=1&_watch='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+    .then(r=>r.ok?r.json():null).then(d=>{if(d&&d.ok&&d.version&&String(d.version)!==String(S4_LOADED_VERSION))s4ReloadForNewCode(d.version);}).catch(()=>{});
+}
+setInterval(s4WatchInstalledCode,30000);
+window.addEventListener('focus',s4WatchInstalledCode);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4WatchInstalledCode();});
 
 /* ==================================================================
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.268', t:'🔄 رفرش خودکار مرورگر پس از آپدیت کد', items:[
+    'هر tab باز هر ۳۰ ثانیه و همچنین هنگام برگشت فوکوس، نسخهٔ نصب‌شده را با نسخه‌ای که بارگذاری کرده مقایسه می‌کند',
+    'پس از نصب توسط deploy.php، code_update یا tab دیگر، پیام کوتاه نمایش داده می‌شود و صفحه با cache-buster خودکار reload می‌شود',
+    'مسیر code_update_status بدون cache پاسخ می‌دهد و دیگر در اجرای مستقیم wp-load را دوباره bootstrap نمی‌کند'
+  ]},
   {v:'10.267', t:'🛠 اجرای worker در هاست LiteSpeed/lsphp', items:[
     'فیدبک مسیر production جدید نشان داد PHP_BINARY برابر lsphp است و آرگومان‌های -d فقط Usage چاپ می‌کنند؛ بنابراین worker، cron و child ماتریس واقعاً شروع نمی‌شدند',
     'همهٔ فرمان‌های CLI اکنون از سازندهٔ مشترک استفاده می‌کنند و برای lsphp با -q وارد حالت CLI می‌شوند؛ PHP CLI معمولی همچنان محدودیت زمان/حافظهٔ صریح دارد',
@@ -79752,11 +79789,7 @@ function vcUpdate(skipConfirm) {
                 vcStat('✓ نصب شد' + (res.backup ? ' · بکاپ: <code>' + esc(res.backup) + '</code>' : '') +
                        ' — بارگذاری مجدد...', '#4ade80');
                 showToast('✓ به‌روزرسانی انجام شد — صفحه رفرش می‌شود');
-                setTimeout(() => {
-                    const u = new URL(location.href);
-                    u.searchParams.set('_v', Date.now());   // دور زدن کش مرورگر
-                    location.replace(u.toString());
-                }, 1400);
+                s4ReloadForNewCode(res.version||res.to_version||'جدید');
             });
     }).catch(() => {
         showToast('خطا در ارتباط با نصب‌کننده', true);
