@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.279';
+const APP_VERSION = '10.280';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -18589,6 +18589,25 @@ $logs=['📄 صفحه '.$page.': '.($res['ok']?'✓':'✗').' (HTTP '.(int)($res
 unset($_finUrl,$_finNote);
 if(!$res['ok']){
 $logs[]='❌ خطا: '.mb_substr($res['error']??'HTTP error',0,80);
+/* v10.280: 404/410 بعد از حداقل یک صفحهٔ موفق، خطای اتصال نیست؛ پاسخ
+   استانداردِ بسیاری از فروشگاه‌ها برای «صفحهٔ بعدی وجود ندارد» است.
+   قبلاً صفحهٔ ۵۷ و ۵۸ آوند هر دو 404 می‌شدند و ۱۱۰۳ محصولِ کامل به‌غلط
+   failed/resumable ثبت می‌شد. اینجا پایان طبیعی اعلام می‌کنیم و اجازه
+   می‌دهیم final compare/save عادی پایین اجرا شود. */
+$_httpCode=(int)($res['code']??0);
+if($page>1 && count($allProducts)>0 && in_array($_httpCode,[404,410],true)){
+    $totalPages=max(1,$page-1);
+    $logs[]='🏁 HTTP '.$_httpCode.' در صفحهٔ '.$page.' — صفحهٔ قبلی آخرین صفحه بود؛ استخراج کامل است.';
+    $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
+        $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی: HTTP '.$_httpCode.' در صفحهٔ '.$page;
+        $_qeEnd['pag_stop_url']=$pageUrl;$_qeEnd['resumable']=false;$_qeEnd['resume_page']=0;break;}unset($_qeEnd);extractWriteQueue($_qEnd);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$totalPages,
+        'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
+        'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$totalPages,'page_ok'=>true,
+        'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
+    unset($_qEnd,$_httpCode);break;
+}
+unset($_httpCode);
 // v8.91: علت شکست صفحهٔ اول را نگه دار تا محافظِ پایین بداند
 // «صفر محصول» به‌خاطر قطعی بوده، نه به‌خاطر خالی شدن فروشگاه.
 if($page===1)$fetchFail='صفحهٔ اول باز نشد: '.mb_substr($res['error']??('HTTP '.(int)($res['code']??0)),0,60);
@@ -21891,12 +21910,26 @@ if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
     $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
     $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];$wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
+    /* کارت‌های ساخته‌شده پیش از v10.279 هم با آخرین ردیف صف غنی شوند؛
+       کلیک روی کارت قدیمی نباید مودال خالی باز کند. */
+    $_eq=extractReadQueue();$_lastEx=[];foreach((array)($_eq['entries']??[]) as $_ee){if(!is_array($_ee))continue;$_ep=(string)($_ee['profile_key']??'');if($_ep!=='')$_lastEx[$_ep]=$_ee;}
     foreach($rows as &$sr){$pk=(string)($sr['profile_key']??'');if($pk==='')continue;
+        if(empty($sr['stage_details']['extract'])&&isset($_lastEx[$pk])){
+            $_eh=$_lastEx[$pk];$sr['stage_details']['extract']=['counts'=>[
+                'extracted'=>(int)($_eh['products_count']??0),'new'=>(int)($_eh['new']??0),
+                'updated'=>(int)($_eh['price_changed']??0),'removed'=>(int)($_eh['removed']??0),
+                'unchanged'=>(int)($_eh['unchanged']??0)],'lists'=>[],
+                'data'=>['status'=>(string)($_eh['status']??''),'pages'=>(int)($_eh['current']??0),'error'=>(string)($_eh['error']??'')],
+                'report'=>(string)($_eh['error']??($_eh['pag_stop_reason']??'گزارش آخرین استخراج بک‌اند'))];
+        }
+        if(empty($sr['stage_details']['pricing'])&&!empty($sr['pricing']))$sr['stage_details']['pricing']=[
+            'counts'=>['products'=>(int)($sr['pricing']['products']??0)],'data'=>$sr['pricing'],
+            'report'=>'ضرایب ذخیره‌شدهٔ این اجرا'];
         if((string)($sr['stage']??'')==='extract'&&(string)($xp['profile_key']??'')===$pk&&!empty($xp['running'])){
             $sr['stage_details']['extract']=syncExtractStageDetails($xp);
             $cur=(int)($xp['current']??0);$tot=(int)($xp['total']??0);$sr['stage_progress']=$tot>0?min(99,(int)round($cur*100/$tot)):35;
         }
-        if((string)($sr['stage']??'')==='send'){
+        if((string)($sr['stage']??'')==='send'||empty($sr['stage_details']['send'])){
             $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];$dest=[];
             foreach([['bsl',(array)($bq['entries']??[])],['woo',(array)($wq['entries']??[])]] as [$dn,$entries])foreach($entries as $qe){
                 if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk)continue;
@@ -41014,6 +41047,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.279', 'ورودی 10.279 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "279'") !== false
       && version_compare(APP_VERSION, '10.' . '279', '>='));
+
+    /* ---------- v10.280: natural pagination end + visible modal ---------- */
+    $add('10.280', '404/410 بعد از صفحات موفق پایان طبیعی است نه استخراج ناقص',
+         strpos($selfSrc, "in_array(\$_httpCode,[404,410],true)") !== false
+      && strpos($selfSrc, "'natural_end'=>true") !== false
+      && strpos($selfSrc, "'resumable'=>false,'resume_page'=>0") !== false);
+    $add('10.280', 'پایان طبیعی با دلیل HTTP در صف ثبت و سپس از حلقه خارج می‌شود',
+         strpos($selfSrc, "'pag_stop_reason']='پایان طبیعی صفحه‌بندی: HTTP '") !== false
+      && strpos($selfSrc, "صفحهٔ قبلی آخرین صفحه بود؛ استخراج کامل است") !== false);
+    $add('10.280', 'مودال برای فرار از overflow و transform مستقیماً به body منتقل می‌شود',
+         strpos($selfSrc, "modal.parentNode!==document.body") !== false
+      && strpos($selfSrc, "document.body.appendChild(modal)") !== false);
+    $add('10.280', 'کارت قدیمی از صف استخراج و snapshot ضرایب جزئیات می‌گیرد',
+         strpos($selfSrc, "empty(\$sr['stage_details']['extract'])") !== false
+      && strpos($selfSrc, "\$_lastEx[\$_ep]=\$_ee") !== false
+      && strpos($selfSrc, "empty(\$sr['stage_details']['pricing'])") !== false);
+    $add('10.280', 'ورودی 10.280 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "280'") !== false
+      && version_compare(APP_VERSION, '10.' . '280', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70651,6 +70703,9 @@ function syncDetailOpen(rowIndex,stage,filterKey){
   const row=syncPipeRows[rowIndex]||{},det=((row.stage_details||{})[stage])||{};
   const labels={extract:'استخراج بک‌اند',pricing:'ذخیره و اعمال ضرایب',send:'صف و ارسال',done:'گزارش پایان'};
   const title=$('syncDetailTitle'),body=$('syncDetailBody'),modal=$('syncDetailModal');if(!body||!modal)return;
+  /* fixed داخل پنل‌های transform/overflow بعضی تم‌ها محبوس می‌شود؛ مودال را
+     هنگام اولین کلیک مستقیماً زیر body می‌بریم تا همیشه واقعاً دیده شود. */
+  if(modal.parentNode!==document.body)document.body.appendChild(modal);
   if(title)title.textContent=(labels[stage]||stage)+' — '+(row.profile_name||row.profile_key||'');
   const counts=det.counts&&typeof det.counts==='object'?det.counts:{};
   let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:7px">'+Object.entries(counts).map(([k,v])=>'<div class="sync-pipe-count" style="cursor:default"><b>'+toFa(parseInt(v)||0)+'</b>'+esc(syncCountLabels[k]||k)+'</div>').join('')+'</div>';
@@ -72089,6 +72144,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.280', t:'🏁 تشخیص پایان واقعی صفحات و مودال همیشه‌قابل‌مشاهده', items:[
+    'HTTP 404 یا 410 در صفحهٔ دوم به بعد، وقتی صفحات قبلی محصول داده‌اند، پایان طبیعی صفحه‌بندی است؛ دیگر استخراج کامل failed/resumable ثبت نمی‌شود',
+    'نمونهٔ production آوند با ۱۱۰۳ محصول و ۵۶ صفحه اکنون در 404 صفحهٔ ۵۷ با موفقیت نهایی می‌شود، نه اینکه صفحهٔ ۵۷ و ۵۸ را خطای متوالی بداند',
+    'پایان طبیعی در لاگ، pag_stop_reason و کارت صف با URL و HTTP ثبت می‌شود و final compare/save عادی همچنان اجرا می‌گردد',
+    'مودال جزئیات هنگام کلیک مستقیماً به body منتقل می‌شود تا transform یا overflow پنل‌ها و تم‌ها آن را پنهان نکنند',
+    'کارت‌های قدیمیِ فاقد stage_details نیز از آخرین صف استخراج، snapshot ضرایب و صف‌های مقصد غنی می‌شوند؛ کلیک دیگر پنجرهٔ خالی نشان نمی‌دهد'
+  ]},
   {v:'10.279', t:'📊 کارت مرحله‌ای، شمارنده و گزارش مودال', items:[
     'هر مستطیل مرحله اکنون خودش یک نوار پیشرفت رنگی است؛ مرحلهٔ فعال stripe متحرک، درصد زنده و متن وضعیت دارد و مرحلهٔ تمام‌شده تا ۱۰۰٪ سبز پر می‌شود',
     'زیر هر مرحله کارت‌های شمارندهٔ مربعی متناسب نمایش داده می‌شود: استخراج‌شده، جدید، آپدیت، حذف‌شده، بدون تغییر، گران/ارزان و برای ارسال صف‌شده، ارسال‌شده، ردشده و خطا',
