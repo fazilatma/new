@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.256';
+const APP_VERSION = '10.257';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29161,6 +29161,26 @@ function matrixQueryPage(array $opts = []): array {
         if (!empty($rr['is_report']) || str_starts_with((string)($rr['bare'] ?? ''), '__report_')) $reports[] = $rr;
         else $main[] = $rr;
     }
+    /* v10.257: مرتب‌سازی واقعی سمت سرور، پیش از صفحه‌بندی؛ نه فقط ردیف‌های صفحهٔ جاری. */
+    $sort = trim((string)($opts['sort'] ?? ''));
+    $sortDir = strtolower((string)($opts['sort_dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+    $validSort = ['title','profile','src_price','profile_price','woo_expect','woo_actual','status'];
+    if ($sort !== '' && !in_array($sort, $validSort, true) && !preg_match('/^shop:\d+$/', $sort)) $sort = '';
+    if ($sort !== '') {
+        $statusRank = ['mismatch'=>0,'missing'=>1,'only_profile'=>2,'only_dest'=>3,'partial'=>4,'ok'=>5];
+        usort($main, static function ($a, $b) use ($sort, $sortDir, $statusRank) {
+            $numeric = in_array($sort, ['src_price','profile_price','woo_expect','woo_actual'], true) || str_starts_with($sort, 'shop:');
+            if ($sort === 'title') { $av=(string)($a['title']??$a['bare']??''); $bv=(string)($b['title']??$b['bare']??''); }
+            elseif ($sort === 'profile') { $av=(string)($a['profile']??''); $bv=(string)($b['profile']??''); }
+            elseif ($sort === 'status') { $av=(int)($statusRank[(string)($a['status']??'')]??99); $bv=(int)($statusRank[(string)($b['status']??'')]??99); $numeric=true; }
+            elseif ($sort === 'woo_actual') { $av=(int)($a['woo']['price']??0); $bv=(int)($b['woo']['price']??0); }
+            elseif (str_starts_with($sort, 'shop:')) { $vid=(int)substr($sort,5); $av=(int)($a['shops'][$vid]['price']??$a['shops'][(string)$vid]['price']??0); $bv=(int)($b['shops'][$vid]['price']??$b['shops'][(string)$vid]['price']??0); }
+            else { $av=(int)($a[$sort]??0); $bv=(int)($b[$sort]??0); }
+            $cmp=$numeric?($av<=>$bv):strnatcasecmp((string)$av,(string)$bv);
+            if ($cmp===0) $cmp=strnatcasecmp((string)($a['bare']??''),(string)($b['bare']??''));
+            return $sortDir==='desc' ? -$cmp : $cmp;
+        });
+    }
     $page = max(1, (int)($opts['page'] ?? 1));
     $per = (int)($opts['per_page'] ?? 50);
     if ($per < 10) $per = 10;
@@ -29194,6 +29214,7 @@ function matrixQueryPage(array $opts = []): array {
         'from_file' => true,
         'server_side' => true,
         'coded_only' => $codedOnly,
+        'sort' => $sort, 'sort_dir' => $sortDir,
         'page' => $page,
         'per_page' => $per,
         'pages' => $pages,
@@ -29457,6 +29478,8 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
         'coded_only' => !empty($_GET['coded_only']) || !empty($_POST['coded_only']),
+        'sort' => (string)($_GET['sort'] ?? $_POST['sort'] ?? ''),
+        'sort_dir' => (string)($_GET['sort_dir'] ?? $_POST['sort_dir'] ?? 'asc'),
         'live_fill' => !empty($_GET['live_fill']) || !empty($_POST['live_fill']),
     ];
     // refresh=1 فقط وضعیت/شروع را پیشنهاد می‌کند — دیگر در همان درخواست rebuild نمی‌کند
@@ -39905,6 +39928,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.256', 'ورودی 10.256 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "256'") !== false
       && version_compare(APP_VERSION, '10.' . '256', '>='));
+
+    /* ---------- v10.257: sortable/resizable table-only fullscreen ---------- */
+    $add('10.257', 'تمام‌صفحه فقط روی ظرف جدول اعمال می‌شود',
+         strpos($selfSrc, "const wrap=\$('smTableWrap')") !== false
+      && strpos($selfSrc, '#smTableWrap:fullscreen') !== false
+      && strpos($selfSrc, 'id="smTableFsExit"') !== false);
+    $add('10.257', 'مرتب‌سازی سرور پیش از صفحه‌بندی انجام می‌شود',
+         strpos($selfSrc, "'sort_dir' =>") !== false
+      && strpos($selfSrc, 'usort($main, static function') !== false
+      && strpos($selfSrc, 'function smSort(key)') !== false);
+    $add('10.257', 'عرض ستون‌ها با drag تغییر و ذخیره می‌شود',
+         strpos($selfSrc, 'function smResizeStart(e,handle)') !== false
+      && strpos($selfSrc, 's4_matrix_col_widths') !== false
+      && strpos($selfSrc, 'class="sm-col-resizer"') !== false);
+    $add('10.257', 'ورودی 10.257 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "257'") !== false
+      && version_compare(APP_VERSION, '10.' . '257', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63432,12 +63472,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 
 <!-- v10.112: جدول مقایسهٔ پیشرفته -->
 <style>
-#syncMatrixBox:fullscreen{padding:16px!important;margin:0!important;border:0!important;border-radius:0!important;overflow:auto;background:#0f172a!important;color:#f8fafc}
-#syncMatrixBox:fullscreen #smTableWrap{max-height:none!important;height:calc(100vh - 245px)}
-#syncMatrixBox.sm-fullscreen-fallback{position:fixed!important;inset:0!important;z-index:999999!important;margin:0!important;border-radius:0!important;overflow:auto!important;background:#0f172a!important}
-#syncMatrixBox.sm-fullscreen-fallback #smTableWrap{max-height:none!important;height:calc(100vh - 245px)}
+#smTableWrap:fullscreen{max-height:none!important;height:100vh!important;border:0!important;border-radius:0!important;background:#020617!important;padding:8px;overflow:auto!important}
+#smTableWrap.sm-table-fullscreen-fallback{position:fixed!important;inset:0!important;z-index:999999!important;max-height:none!important;height:100vh!important;border:0!important;border-radius:0!important;background:#020617!important;padding:8px;overflow:auto!important}
+#smTableFsExit{display:none;position:fixed;top:12px;left:12px;z-index:1000001}
+#smTableWrap:fullscreen #smTableFsExit,#smTableWrap.sm-table-fullscreen-fallback #smTableFsExit{display:block}
 #smTable,#smTable td,#smTable th{color:#f1f5f9;font-weight:500}
-#smTable th{font-weight:800;color:#fff}
+#smTable th{font-weight:800;color:#fff;position:relative;white-space:nowrap;user-select:none}
+#smTable th.sm-sortable{cursor:pointer;padding-left:17px!important}
+#smTable th.sm-sortable:hover{background:#334155;color:#fff}
+.sm-col-resizer{position:absolute;left:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:4;touch-action:none}
+.sm-col-resizer:hover{background:#38bdf866}
 </style>
 <div id="syncMatrixBox" style="margin-top:12px;padding:12px;background:linear-gradient(135deg,#0f172a,#1e1b4b);border:1px solid #6d28d9;border-radius:12px">
 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -63510,7 +63554,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div id="smSummary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:11px"></div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
 <div id="smTableWrap" style="overflow:auto;max-height:min(70vh,640px);border:1px solid #475569;border-radius:8px;background:#020617">
-<table id="smTable" style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
+<button type="button" id="smTableFsExit" class="btn btn-red" onclick="syncMatrixFullscreen()">✕ خروج از تمام‌صفحه</button>
+<table id="smTable" style="width:100%;min-width:720px;table-layout:fixed;border-collapse:collapse;font-size:12px">
+<colgroup id="smCols"></colgroup>
 <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
 <tr id="smHead"></tr>
 </thead>
@@ -70787,6 +70833,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.257', t:'↕️ جدول تمام‌صفحهٔ مستقل، مرتب‌سازی و تغییر عرض ستون', items:[
+    'تمام‌صفحه اکنون فقط ظرف خود جدول را باز می‌کند و بخش‌های تنظیمات/گزارش بیرون آن می‌مانند',
+    'سرستون‌ها با کلیک، کل نتیجه را پیش از صفحه‌بندی صعودی/نزولی مرتب می‌کنند و جهت با فلش مشخص است',
+    'مرز هر ستون با ماوس یا لمس قابل کشیدن است و عرض‌های انتخابی در مرورگر ذخیره می‌شوند'
+  ]},
   {v:'10.256', t:'🔎 ماتریس خواناتر، تمام‌صفحه و محدود به محصولات کددار', items:[
     'رنگ و اندازهٔ متن سلول‌های جدول روشن‌تر و خواناتر شد و دکمهٔ نمایش/خروج تمام‌صفحه اضافه شد',
     'گزینهٔ پیش‌فرض «فقط دارای پسوند (کد:ایکس)» به ساخت، نمایش و اصلاح مغایرت‌ها اضافه شد',
@@ -79189,7 +79240,31 @@ function smToneFg(t){
 }
 function smCell(html, tone){
   const bg=smToneBg(tone), fg=smToneFg(tone);
-  return '<td style="padding:7px 8px;border-bottom:1px solid #1e293b;background:'+bg+';color:'+fg+';vertical-align:top;line-height:1.55">'+html+'</td>';
+  return '<td style="padding:7px 8px;border-bottom:1px solid #1e293b;background:'+bg+';color:'+fg+';vertical-align:top;line-height:1.55;overflow-wrap:anywhere">'+html+'</td>';
+}
+window._smSort='';window._smSortDir='asc';window._smColWidths={};
+try{window._smSort=localStorage.getItem('s4_matrix_sort')||'';window._smSortDir=localStorage.getItem('s4_matrix_sort_dir')||'asc';window._smColWidths=JSON.parse(localStorage.getItem('s4_matrix_col_widths')||'{}')||{};}catch(e){}
+function smDefaultColWidth(k){if(k==='n')return 52;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
+function smTh(label,key,sortable){
+  const active=window._smSort===key, arrow=active?(window._smSortDir==='desc'?' ▼':' ▲'):'';
+  return '<th data-col="'+esc(key)+'" class="'+(sortable?'sm-sortable':'')+'" '+(sortable?'onclick="smSort(\''+esc(key)+'\')" title="برای مرتب‌سازی کلیک کنید"':'')+' style="padding:8px;text-align:right;border-bottom:1px solid #475569">'+esc(label)+arrow+'<span class="sm-col-resizer" title="برای تغییر عرض بکشید" onclick="event.stopPropagation()" onpointerdown="smResizeStart(event,this)"></span></th>';
+}
+function smRenderCols(keys){
+  const cg=$('smCols'),table=$('smTable'),wrap=$('smTableWrap');if(!cg||!table)return;
+  let total=0;cg.innerHTML=keys.map(k=>{const w=Math.max(55,Math.min(700,parseInt(window._smColWidths[k])||smDefaultColWidth(k)));total+=w;return '<col data-col="'+esc(k)+'" style="width:'+w+'px">';}).join('');
+  table.style.width=Math.max(total,(wrap?wrap.clientWidth:720))+'px';
+}
+function smResizeStart(e,handle){
+  e.preventDefault();e.stopPropagation();const th=handle.parentElement,key=th&&th.dataset.col;let col=null;document.querySelectorAll('#smCols col').forEach(c=>{if(c.dataset.col===key)col=c;});if(!col)return;
+  const startX=e.clientX,startW=col.getBoundingClientRect().width,table=$('smTable'),startTableW=table?table.getBoundingClientRect().width:720;
+  const move=ev=>{const w=Math.max(55,Math.min(700,startW+(startX-ev.clientX)));col.style.width=w+'px';window._smColWidths[key]=Math.round(w);if(table)table.style.width=Math.max(startTableW+(w-startW),($('smTableWrap')||{}).clientWidth||720)+'px';};
+  const up=()=>{document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);try{localStorage.setItem('s4_matrix_col_widths',JSON.stringify(window._smColWidths))}catch(x){}};
+  document.addEventListener('pointermove',move);document.addEventListener('pointerup',up,{once:true});
+}
+function smSort(key){
+  if(window._smSort===key)window._smSortDir=window._smSortDir==='asc'?'desc':'asc';else{window._smSort=key;window._smSortDir='asc';}
+  try{localStorage.setItem('s4_matrix_sort',window._smSort);localStorage.setItem('s4_matrix_sort_dir',window._smSortDir)}catch(e){}
+  syncMatrixLoad(1);
 }
 function smShowJob(on){
   const bar=$('smJobBar'); if(bar) bar.style.display=on?'block':'none';
@@ -79255,15 +79330,16 @@ try{
   if($('smCodedOnly'))$('smCodedOnly').checked=(cv===null||cv==='1');
 }catch(e){}
 function syncMatrixFullscreen(){
-  const box=$('syncMatrixBox');if(!box)return;
+  const wrap=$('smTableWrap');if(!wrap)return;
   if(document.fullscreenElement){document.exitFullscreen().catch(()=>{});return;}
-  if(box.classList.contains('sm-fullscreen-fallback')){box.classList.remove('sm-fullscreen-fallback');document.body.style.overflow='';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='⛶ تمام‌صفحه';return;}
-  const fallback=()=>{box.classList.add('sm-fullscreen-fallback');document.body.style.overflow='hidden';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='✕ خروج از تمام‌صفحه';};
-  if(box.requestFullscreen){box.requestFullscreen().catch(fallback);}
+  if(wrap.classList.contains('sm-table-fullscreen-fallback')){wrap.classList.remove('sm-table-fullscreen-fallback');document.body.style.overflow='';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='⛶ تمام‌صفحه';return;}
+  const fallback=()=>{wrap.classList.add('sm-table-fullscreen-fallback');document.body.style.overflow='hidden';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='✕ خروج از تمام‌صفحه';};
+  if(wrap.requestFullscreen){wrap.requestFullscreen().catch(fallback);}
   else fallback();
 }
 document.addEventListener('fullscreenchange',function(){
-  const b=$('smFullscreenBtn');if(b)b.textContent=document.fullscreenElement?'✕ خروج از تمام‌صفحه':'⛶ تمام‌صفحه';
+  const on=document.fullscreenElement===$('smTableWrap');
+  const b=$('smFullscreenBtn');if(b)b.textContent=on?'✕ خروج از تمام‌صفحه':'⛶ تمام‌صفحه';
 });
 function syncMatrixSliceUi(save){
   const el=$('smSliceSeconds');const n=Math.max(2,Math.min(20,parseInt(el&&el.value)||8));
@@ -79496,6 +79572,7 @@ function syncMatrixLoad(page, silent){
   fd.append('page', String(page));
   fd.append('per_page', String(($('smPer')||{}).value||50));
   fd.append('q', ($('smQ')||{}).value||'');
+  if(window._smSort){fd.append('sort',window._smSort);fd.append('sort_dir',window._smSortDir||'asc');}
   if(($('smCodedOnly')||{}).checked) fd.append('coded_only','1');
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
@@ -79516,18 +79593,18 @@ function syncMatrixLoad(page, silent){
     }
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
     const shops = d.shops||[];
-    let h = '<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">#</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">عنوان (بدون پسوند)</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">پروفایل</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">مبدأ</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">قیمت پروفایل</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">WC انتظار</th>'
-      +'<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">WC واقعی</th>';
+    if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
+    const colKeys=['n','title','profile','src_price','profile_price','woo_expect','woo_actual'];
+    let h = smTh('#','n',false)+smTh('عنوان (بدون پسوند)','title',true)+smTh('پروفایل','profile',true)
+      +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true)
+      +smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
     shops.forEach(s=>{
-      h += '<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">🏪 '+(s.name||('#'+s.vendor_id))+'</th>';
+      const sk='shop:'+String(s.vendor_id||0);colKeys.push(sk);
+      h += smTh('🏪 '+(s.name||('#'+s.vendor_id)),sk,true);
     });
-    h += '<th style="padding:8px;text-align:right;border-bottom:1px solid #475569">وضعیت</th>';
+    colKeys.push('status');h += smTh('وضعیت','status',true);
     if(head) head.innerHTML = h;
+    smRenderCols(colKeys);
 
     const s = d.summary||{};
     if(sum){
