@@ -31,5 +31,8 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'providers' => require __DIR__.'/providers.php',
+    /* Laravel 12 loads application providers from bootstrap/providers.php.
+       Requiring config/providers.php here is both redundant and invalid: that
+       file does not exist in a standard Laravel 12 project and made Composer's
+       package:discover fail during deployment. */
 ];

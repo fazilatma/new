@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.0');
+define('WCP_VERSION', '2.9.3');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -1202,6 +1202,12 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     ] : [
         '.git', '.git*', '.git-cache', 'node_modules', '.env.wcp'
     ];
+    /* Composer owns vendor just as npm owns node_modules. During preserved
+       deploys rsync --delete must not descend into the installed dependency
+       tree: files may belong to another runtime UID and produced noisy
+       "cannot delete non-empty directory" warnings. composer install below
+       remains the sole, deterministic owner of updates/removals in vendor. */
+    if ($shouldPreserve && is_file($src . '/composer.json')) $rsyncExcludes[] = 'vendor/';
     $excludeArgs = implode(' ', array_map(fn($x) => '--exclude=' . escapeshellarg($x), $rsyncExcludes));
 
     // Ensure destination directory exists and has permissive write rights
