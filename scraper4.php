@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.262';
+const APP_VERSION = '10.263';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -938,6 +938,10 @@ function s4WorkerStateLoad(): array {
 
 function s4WorkerStateWrite(array $patch): void {
     $cur = s4WorkerStateLoad();
+    /* deploy ممکن است فایل state را در حالی حذف کند که daemon قدیمی هنوز زنده
+       است. هر heartbeat خود daemon باید هویت را دوباره بسازد، وگرنه active=false
+       می‌شود و همهٔ fallbackها گمان می‌کنند worker مرده است. */
+    if(!empty($GLOBALS['_s4WorkerDaemon']))$patch=array_merge(['running'=>true,'pid'=>(int)@getmypid()],$patch);
     $cur = array_merge($cur, $patch, ['version' => APP_VERSION, 'heartbeat' => time()]);
     @file_put_contents(WORKER_STATE_FILE, json_encode($cur, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
@@ -988,13 +992,12 @@ function s4WorkerExtractBeatForRow(string $rowId, string $profileKey = ''): arra
 
 function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
-    if (empty($st['running'])) return false;
     $hb = (int)($st['heartbeat'] ?? 0);
-    if ($hb > 0 && time() - $hb <= $staleSec) return true;
+    if (!empty($st['running']) && $hb > 0 && time() - $hb <= $staleSec) return true;
     /* هنگام اجرای job طولانی، خودِ worker ممکن است در runBackendExtract یا child
        منتظر بماند و heartbeat ننویسد؛ زنده‌بودن PID هنوز نشانهٔ معتبر است. */
     $pid = (int)($st['pid'] ?? 0);
-    if (s4WorkerPidAlive($pid)) return true;
+    if (!empty($st['running']) && s4WorkerPidAlive($pid)) return true;
     $fp = @fopen(WORKER_LOCK_FILE, 'c');
     if ($fp) {
         $free = @flock($fp, LOCK_EX | LOCK_NB);
@@ -1208,6 +1211,19 @@ function s4WorkerRunMatrixBuild(array $payload): array {
     }
 }
 
+/** ماتریس پرحافظه را هرگز داخل daemon دائمی اجرا نکن: OOM/Fatal آن نباید
+ * ارسال باسلام، cron و همهٔ jobهای دیگر را هم با خود متوقف کند. */
+function s4WorkerRunMatrixChild(array $payload): array {
+    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
+    $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
+    $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');$php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $cmd=escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
+    $out=[];$rc=0;@exec($cmd,$out,$rc);$tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
+    for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
+    if(is_array($decoded)){$decoded['child_exit_code']=$rc;return $decoded;}
+    return ['ok'=>false,'error'=>'matrix_child_exit_'.$rc,'tail'=>mb_substr($tail,-2000),'child_exit_code'=>$rc];
+}
+
 /** v10.259: fallback واقعی برای سروری که worker دائمی نصب/فعال نیست.
  * یک PHP CLI جدا و detached همهٔ برش‌های ماتریس را ادامه می‌دهد. */
 function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
@@ -1296,6 +1312,21 @@ function s4CliPhpBinary(): string {
     return 'php';
 }
 
+/** v10.263: روی نصب Apache/LiteSpeed که server.sh اجرا نیست، اندپوینت سلامت
+ * می‌تواند daemon CLI را دوباره زنده کند. flock از daemon تکراری جلوگیری می‌کند. */
+function s4SpawnPersistentWorker(): array {
+    if(s4WorkerIsActive())return ['ok'=>true,'already_active'=>true,'state'=>s4WorkerStateLoad()];
+    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
+    if(strtoupper(substr(PHP_OS,0,3))==='WIN')return ['ok'=>false,'error'=>'windows_detach_unsupported'];
+    if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
+    $php=s4CliPhpBinary();$probe=[];$prc=0;@exec(escapeshellarg($php).' -v 2>&1',$probe,$prc);if($prc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable'];
+    $mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';$log=__DIR__.'/logs/worker.log';
+    $cmd='nohup '.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem).' '.escapeshellarg(__FILE__).' worker --tick=60 >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
+    $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
+    if($rc!==0||$pid<=0)return ['ok'=>false,'error'=>'worker_spawn_failed','exit_code'=>$rc,'log'=>$log];
+    return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
+}
+
 function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
@@ -1350,7 +1381,7 @@ function s4WorkerRunJob(array $job): array {
         return s4WorkerRunManualSyncChild($pk, !empty($payload['resume']));
     }
     if ($type === 'matrix_build') {
-        return s4WorkerRunMatrixBuild($payload);
+        return s4WorkerRunMatrixChild($payload);
     }
     if ($type === 'backend_extract') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
@@ -1423,6 +1454,10 @@ function s4WorkerRunJob(array $job): array {
     return ['ok' => false, 'error' => 'نوع job ناشناخته: ' . $type];
 }
 
+function s4WorkerRecoverOrphanJobs(int $newPid): int {
+    $n=0;s4WorkerQueueMutate(function(&$q)use($newPid,&$n){$now=time();foreach($q['entries'] as &$e){if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;$attempts=(int)($e['attempts']??0);$e['status']=$attempts<4?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;$e['error']=$attempts<4?'worker قبلی قطع شد؛ بازیابی خودکار در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;$n++;}unset($e);return['ok'=>true];});return$n;
+}
+
 function s4WorkerLoopFromCli(): void {
     @set_time_limit(0); @ignore_user_abort(true);
     $argv = (array)($GLOBALS['argv'] ?? $_SERVER['argv'] ?? []);
@@ -1440,9 +1475,10 @@ function s4WorkerLoopFromCli(): void {
         echo "worker already running\n";
         return;
     }
-    $pid = (int)@getmypid();
+    $pid = (int)@getmypid();$GLOBALS['_s4WorkerDaemon']=true;
+    $recovered=s4WorkerRecoverOrphanJobs($pid);
     s4WorkerStateWrite(['running' => true, 'pid' => $pid, 'phase' => 'starting',
-        'started_at' => time(), 'cron_tick' => $tick, 'last_error' => '']);
+        'started_at' => time(), 'cron_tick' => $tick, 'last_error' => '', 'recovered_orphans'=>$recovered]);
     register_shutdown_function(function () use ($lockFp) {
         s4WorkerStateWrite(['running' => false, 'phase' => 'stopped', 'stopped_at' => time()]);
         if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
@@ -21626,7 +21662,9 @@ if (isset($_GET['manual_sync_status'])) {
     if (!empty($msSt['running']) && empty($msSt['done'])) {
         $msIdleD = time() - (int)($msSt['last_progress_ts'] ?? ($msSt['ts'] ?? 0));
         $msMaxD  = max(120, (int)(loadConnections()['stall_after'] ?? 300));
-        if ($msIdleD > $msMaxD) {
+        $msLockProbe=@fopen(MANUAL_SYNC_LOCK_FILE,'c');$msLockHeld=false;if($msLockProbe){$msFree=@flock($msLockProbe,LOCK_EX|LOCK_NB);$msLockHeld=!$msFree;if($msFree)@flock($msLockProbe,LOCK_UN);@fclose($msLockProbe);}
+        /* سکوت شبکه‌ای دلیل مرگ نیست؛ flock زنده شاهد قطعیِ ادامهٔ child است. */
+        if ($msIdleD > $msMaxD && !$msLockHeld) {
             $msSt['running']   = false;
             $msSt['done']      = true;
             $msSt['cancelled'] = false;
@@ -29509,6 +29547,32 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
         'woo_page_live' => (int)($p['woo_page'] ?? 0),
         'probe' => $probe, 'logs' => $logs], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/* v10.263: فیدبک یکپارچهٔ عملیات + ترمیم. برای loop مانیتورینگ خارجی:
+   ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
+if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
+    header('Content-Type: application/json; charset=UTF-8');$now=time();$repair=!empty($_GET['repair']??$_POST['repair']??null);
+    $wst=s4WorkerStateLoad();$wq=s4WorkerLoadQueue();$whb=(int)($wst['heartbeat']??0);$workerActive=s4WorkerIsActive();
+    $mx=matrixProgressRead();$mxBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
+    $mxFp=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$mxLocked=false;if($mxFp){$free=@flock($mxFp,LOCK_EX|LOCK_NB);$mxLocked=!$free;if($free)@flock($mxFp,LOCK_UN);@fclose($mxFp);}
+    $cronFile=__DIR__.'/cron_last_run.json';$cronAt=is_file($cronFile)?(int)@filemtime($cronFile):0;$cronAge=$cronAt>0?max(0,$now-$cronAt):null;
+    $active=[];foreach((array)($wq['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['status']??''),['pending','running'],true))$active[]=['id'=>(string)($e['id']??''),'type'=>(string)($e['type']??''),'status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0)];
+    $actions=[];
+    if($repair&&!$workerActive){$actions['worker']=s4SpawnPersistentWorker();usleep(250000);$workerActive=s4WorkerIsActive();$wst=s4WorkerStateLoad();$whb=(int)($wst['heartbeat']??0);}
+    if($repair&&!empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120)){
+        matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'stale'=>true,'phase'=>'بازیابی خودکار','log_add'=>['♻️ فیدبک عملیات: worker ماتریس مرده بود؛ ادامه از checkpoint']]);
+        $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
+        /* daemon زنده مالک recovery باشد تا child را wait و exit/OOM را ثبت کند؛
+           detached فقط fallback نصب‌هایی است که daemon واقعاً بالا نمی‌آید. */
+        $actions['matrix']=$workerActive?s4WorkerEnqueueMatrixBuild($mxResumeOpts,true):s4SpawnMatrixBuildChild($mxResumeOpts,true);
+    }
+    $healthy=$workerActive&&($cronAge===null||$cronAge<900)&&!( !empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120));
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'now'=>$now,'healthy'=>$healthy,'repair'=>$repair,
+        'worker'=>['active'=>$workerActive,'heartbeat_age'=>$whb>0?max(0,$now-$whb):null,'state'=>$wst,'active_jobs'=>$active],
+        'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
+        'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
+        'actions'=>$actions,'next'=>'این URL را هر ۵ دقیقه با repair=1 فراخوانی کنید'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
@@ -40252,6 +40316,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.262', 'ورودی 10.262 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "262'") !== false
       && version_compare(APP_VERSION, '10.' . '262', '>='));
+
+    /* ---------- v10.263: operation feedback/self-healing ---------- */
+    $add('10.263', 'اندپوینت فیدبک عملیات worker و cron و ماتریس را یکجا تشخیص و ترمیم می‌کند',
+         strpos($selfSrc, "['ops_" . "feedback']") !== false
+      && function_exists('s4SpawnPersistent' . 'Worker')
+      && strpos($selfSrc, "'actions'=>\$actions") !== false);
+    $add('10.263', 'ماتریس پرحافظه در child جدا اجرا می‌شود تا daemon ارسال و cron با OOM نمیرد',
+         function_exists('s4WorkerRunMatrix' . 'Child')
+      && strpos($selfSrc, 'return s4WorkerRunMatrixChild($payload)') !== false
+      && strpos($selfSrc, "'child_exit_code'") !== false);
+    $add('10.263', 'worker تازه jobهای running یتیم را بازیابی و state حذف‌شده در deploy را بازسازی می‌کند',
+         function_exists('s4WorkerRecoverOrphan' . 'Jobs')
+      && strpos($selfSrc, "\$GLOBALS['_s4Worker" . "Daemon']=true") !== false
+      && strpos($selfSrc, "['running'=>true,'pid'=>(int)@getmypid()]") !== false);
+    $add('10.263', 'سکوت همگام‌سازی تا وقتی flock زنده است به‌اشتباه مرگ اعلام نمی‌شود',
+         strpos($selfSrc, "\$msIdleD > \$msMaxD && !\$msLockHeld") !== false);
+    $add('10.263', 'ورودی 10.263 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "263'") !== false
+      && version_compare(APP_VERSION, '10.' . '263', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71157,6 +71240,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.263', t:'🫀 فیدبک و خودترمیمی فعالیت‌های سرور', items:[
+    'حلقهٔ فیدبک نشان داد worker دائمی خاموش، cron بیش از یک روز قطع و ماتریس با state در حال اجرا ولی lock آزاد رها شده بود؛ اندپوینت ops_feedback همه را یکجا گزارش و repair می‌کند',
+    'ساخت ماتریس اکنون در child جدا اجرا می‌شود تا OOM یا Fatal آن daemon مشترکِ ارسال باسلام، صف‌ها و cron را از بین نبرد؛ worker تازه jobهای یتیم را بازیابی می‌کند',
+    'حذف worker_state هنگام deploy دیگر worker زنده را نامرئی نمی‌کند؛ رابط هر پنج دقیقه pulse ترمیم می‌زند و همین endpoint برای مانیتور خارجی/cron قابل فراخوانی است',
+    'همگام‌سازی کند تا وقتی flock واقعی زنده است صرفاً به‌علت سکوت چنددقیقه‌ای نیمه‌کاره اعلام نمی‌شود'
+  ]},
   {v:'10.262', t:'🧩 فیلترهای چندگانهٔ AND / OR برای ماتریس', items:[
     'فیلتر پسوند (کد:ایکس) به‌صورت «دارای پسوند / بدون پسوند» داخل فیلترهای پیشرفته قرار گرفت و گزینهٔ مستقل قبلی همچنان حذف است',
     'می‌توان تا ۲۰ شرط را ساخت و آن‌ها را با AND (همهٔ شرط‌ها) یا OR (حداقل یک شرط) ترکیب، حذف و در مرورگر حفظ کرد',
@@ -89593,6 +89682,13 @@ function renderSendCard(d){
     let reasonStr=(d.result==='update'&&(d.update_reason||d.changes||d.changes_detail))?'<div class="scard-reason">📋 '+bslReportDetailHtml(d,'updated')+'</div>':'';
     return '<div class="scard scard-'+d.result+'">'+img+'<div class="scard-body"><div class="scard-title">'+esc(d.title||'—')+'</div><div class="scard-meta"><span class="scard-price">💰 '+priceStr+'</span><span class="scard-cat">📂 '+esc(catStr)+'</span>'+(d.link?'<span><a href="'+esc(d.link)+'" target="_blank" style="color:#60a5fa">🔗</a></span>':'')+'</div><div class="scard-result '+rc2+'">'+ri2+' '+changesStr+'</div>'+reasonStr+retStr+errStr+ridStr+findStr+'</div></div>';
 }
+/* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
+   daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
+(function opsFeedbackPulse(){
+  if(window._s4OpsPulse)return;window._s4OpsPulse=true;
+  const beat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store'}).catch(()=>{});
+  setTimeout(beat,1500);setInterval(beat,300000);
+})();
 </script>
 </body>
 </html>
