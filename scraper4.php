@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.258';
+const APP_VERSION = '10.259';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1207,6 +1207,73 @@ function s4WorkerRunMatrixBuild(array $payload): array {
     } finally {
         @flock($fp, LOCK_UN); @fclose($fp);
     }
+}
+
+/** v10.259: fallback واقعی برای سروری که worker دائمی نصب/فعال نیست.
+ * یک PHP CLI جدا و detached همهٔ برش‌های ماتریس را ادامه می‌دهد. */
+function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
+    if (!function_exists('exec')) return ['ok'=>false,'error'=>'exec_disabled'];
+    if (strtoupper(substr(PHP_OS,0,3))==='WIN') return ['ok'=>false,'error'=>'windows_detach_unsupported'];
+    $payload=[
+        'profile'=>(string)($opts['profile']??'all'),
+        'parallel_destinations'=>!empty($opts['parallel_destinations']),
+        'live_fill'=>!empty($opts['live_fill']),
+        'coded_only'=>!array_key_exists('coded_only',$opts)||!empty($opts['coded_only']),
+        'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
+        'resume'=>$resume,
+    ];
+    $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);
+    if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
+    if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
+    $php=s4CliPhpBinary();$probe=[];$probeRc=0;
+    @exec(escapeshellarg($php).' -v 2>&1',$probe,$probeRc);
+    if($probeRc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable','tail'=>mb_substr(trim(implode("\n",$probe)),-500)];
+    $mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $log=__DIR__.'/logs/matrix-worker.log';
+    matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'worker_child'=>true,
+        'phase'=>'راه‌اندازی پردازهٔ مستقل سرور','source'=>'worker_child',
+        'log_add'=>['🧵 worker دائمی در دسترس نبود؛ پردازهٔ مستقل CLI شروع می‌شود و به مرورگر وابسته نیست']]);
+    $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
+    $cmd='nohup '.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem)
+        .' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg)
+        .' >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
+    $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;
+    foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
+    if($rc!==0||$pid<=0){matrixProgress(['running'=>false,'done'=>true,'error'=>'راه‌اندازی پردازهٔ مستقل ناموفق بود','phase'=>'spawn_failed']);return ['ok'=>false,'error'=>'spawn_failed','exit_code'=>$rc,'log'=>$log];}
+    matrixProgress(['running'=>true,'done'=>false,'worker_child'=>true,'child_pid'=>$pid,
+        'phase'=>'پردازهٔ مستقل سرور','log_add'=>['✅ پردازهٔ مستقل ماتریس PID '.$pid.' فعال شد']]);
+    return ['ok'=>true,'pid'=>$pid,'log'=>$log];
+}
+
+/** آخرین fallback برای هاستِ بدون exec: هر برش، درخواست ادامهٔ بعدی را خودش
+ * پس از آزادشدن lock صدا می‌زند؛ مرورگر هیچ نقشی در زنجیره ندارد. */
+function s4ScheduleMatrixServerContinuation(array $opts): bool {
+    if(!function_exists('curl_init'))return false;
+    $host=trim((string)($_SERVER['HTTP_HOST']??''));$uri=(string)($_SERVER['REQUEST_URI']??($_SERVER['SCRIPT_NAME']??''));
+    $path=(string)(parse_url($uri,PHP_URL_PATH)??'');
+    if($host===''||$path===''||!preg_match('/^[A-Za-z0-9.\-:\[\]]+$/',$host))return false;
+    $https=!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off';
+    if(!$https&&strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO']??''))==='https')$https=true;
+    $url=($https?'https':'http').'://'.$host.$path;
+    $post=http_build_query([
+        'action'=>'sync_matrix_start','source'=>'manual','resume'=>'1',
+        'parallel_destinations'=>!empty($opts['parallel_destinations'])?'1':'0',
+        'live_fill'=>!empty($opts['live_fill'])?'1':'0','coded_only'=>!empty($opts['coded_only'])?'1':'0',
+        'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
+    ]);
+    $cookie=(string)($_SERVER['HTTP_COOKIE']??'');
+    matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'server_chain'=>true,
+        'phase'=>'ادامهٔ خودکار سرور','log_add'=>['↻ سرور برش بعدی را مستقل از مرورگر فراخوانی می‌کند']]);
+    register_shutdown_function(static function()use($url,$post,$cookie){
+        $ch=@curl_init($url);if(!$ch)return;
+        @curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$post,CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>0,
+            CURLOPT_HTTPHEADER=>array_values(array_filter(['Content-Type: application/x-www-form-urlencoded',$cookie!==''?'Cookie: '.$cookie:'']))]);
+        @curl_exec($ch);$errno=(int)@curl_errno($ch);$err=(string)@curl_error($ch);@curl_close($ch);
+        if(in_array($errno,[5,6,7],true))matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,
+            'phase'=>'yielded','log_add'=>['⚠️ ادامهٔ داخلی سرور وصل نشد: '.$err]]);
+    });
+    return true;
 }
 
 function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
@@ -21444,6 +21511,9 @@ if (isCliRun()) {
         $_GET['force'] = '1';
         $_GET['direct'] = '1';                      // childِ worker دوباره enqueue نکند
         if (in_array('resume', $_cliArgs, true) || in_array('--resume', $_cliArgs, true)) $_GET['resume'] = '1';
+    } elseif ($_cliCmd === 'matrix_build' || $_cliCmd === 'matrix') {
+        $_GET['matrix_build_cli'] = '1';
+        $_GET['matrix_payload'] = (string)($_cliArgs[1] ?? '');
     } elseif ($_cliCmd === 'backend_extract' || $_cliCmd === 'extract') {
         $_GET['backend_extract_cli'] = '1';         // php scraper4.php backend_extract <profile_key>
         $_GET['profile_key'] = (string)($_cliArgs[1] ?? '');
@@ -21480,6 +21550,15 @@ if (isset($_GET['worker_run'])) {
     }
     s4WorkerLoopFromCli();
     exit;
+}
+if (isset($_GET['matrix_build_cli'])) {
+    $enc=trim((string)($_GET['matrix_payload']??''));
+    $enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
+    $payload=json_decode((string)base64_decode($enc,true),true);
+    if(!is_array($payload)){$resMxCli=['ok'=>false,'error'=>'invalid_matrix_payload'];}
+    else{$resMxCli=s4WorkerRunMatrixBuild($payload);}
+    echo json_encode($resMxCli,JSON_UNESCAPED_UNICODE).PHP_EOL;
+    exit(!empty($resMxCli['ok'])?0:1);
 }
 if (isset($_GET['backend_extract_cli'])) {
     $pk = trim((string)($_GET['profile_key'] ?? ''));
@@ -29429,6 +29508,19 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
             'message'=>'ساخت به worker دائمی سرور سپرده شد'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    /* v10.259: بدون worker دائمی هم request مرورگر ادامه‌دهنده نیست؛ در صورت
+       دسترسی PHP CLI، یک child کاملاً detached مالک همهٔ برش‌ها می‌شود. */
+    $matrixLockHeld=false;$matrixProbe=@fopen(SYNC_MATRIX_LOCK_FILE,'c');
+    if($matrixProbe){$matrixLockHeld=!@flock($matrixProbe,LOCK_EX|LOCK_NB);if(!$matrixLockHeld)@flock($matrixProbe,LOCK_UN);@fclose($matrixProbe);}
+    if($matrixLockHeld){echo json_encode(['ok'=>false,'error'=>'یک ساخت جدول در پردازهٔ سرور در حال اجراست','running'=>true],JSON_UNESCAPED_UNICODE);exit;}
+    $resumeRequested=!empty($_GET['resume']??$_POST['resume']??null);
+    $spawn=function_exists('s4SpawnMatrixBuildChild')?s4SpawnMatrixBuildChild($opts,$resumeRequested):['ok'=>false,'error'=>'spawn_unavailable'];
+    if(!empty($spawn['ok'])){
+        echo json_encode(['ok'=>true,'started'=>true,'worker'=>true,'worker_child'=>true,
+            'pid'=>(int)($spawn['pid']??0),'message'=>'ساخت در پردازهٔ مستقل سرور شروع شد؛ مرورگر قابل بستن است'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    /* فقط روی هاست‌هایی که exec/PHP CLI را بسته‌اند fallback قدیمی اجرا می‌شود. */
+    $opts['spawn_error']=(string)($spawn['error']??'unknown');
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
        دوباره انجام می‌شود و پروفایل‌های مبدأ از ابتدا تکرار نمی‌شوند. */
@@ -29510,8 +29602,11 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         @fclose($fp);
     });
     try {
-        matrixBuild($opts);
+        $matrixRunResult=matrixBuild($opts);
         matrixStopClear();
+        if(!empty($matrixRunResult['yielded'])&&!empty($opts['spawn_error'])){
+            s4ScheduleMatrixServerContinuation($opts);
+        }
     } catch (Throwable $e) {
         $matrixErrState = matrixProgressRead();
         matrixStopClear();
@@ -40022,6 +40117,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.258', 'ورودی 10.258 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "258'") !== false
       && version_compare(APP_VERSION, '10.' . '258', '>='));
+
+    /* ---------- v10.259: browser-independent matrix continuation ---------- */
+    $add('10.259', 'بدون worker دائمی، child جداگانهٔ CLI ماتریس اجرا می‌شود',
+         function_exists('s4SpawnMatrixBuild' . 'Child')
+      && strpos($selfSrc, "'nohup '.escapeshellarg(\$php)") !== false
+      && strpos($selfSrc, "'worker_child'=>true") !== false);
+    $add('10.259', 'فرمان CLI ماتریس payload را اجرا می‌کند',
+         strpos($selfSrc, "\$_cliCmd === 'matrix_" . "build'") !== false
+      && strpos($selfSrc, "isset(\$_GET['matrix_build_cli'])") !== false
+      && strpos($selfSrc, 's4WorkerRunMatrixBuild($payload)') !== false);
+    $add('10.259', 'هاست بدون exec زنجیرهٔ ادامهٔ داخلی سرور دارد',
+         function_exists('s4ScheduleMatrixServer' . 'Continuation')
+      && strpos($selfSrc, "'server_chain'=>true") !== false
+      && strpos($selfSrc, 's4ScheduleMatrixServerContinuation($opts)') !== false);
+    $add('10.259', 'ورودی 10.259 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "259'") !== false
+      && version_compare(APP_VERSION, '10.' . '259', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70925,6 +71037,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.259', t:'🧵 استقلال کامل ادامهٔ ماتریس از مرورگر', items:[
+    'اگر worker دائمی فعال نباشد، ساخت ماتریس در پردازهٔ detached PHP CLI ادامه پیدا می‌کند و با خواب گوشی قطع نمی‌شود',
+    'فرمان CLI اختصاصی matrix_build همهٔ برش‌ها و checkpointها را تا پایان در همان پردازه ادامه می‌دهد',
+    'روی هاست بدون exec نیز هر برش، ادامهٔ بعدی را با زنجیرهٔ داخلی سرور فراخوانی می‌کند؛ JavaScript فقط نمایشگر است'
+  ]},
   {v:'10.258', t:'🔎 فیلترهای ترکیبی پیشرفتهٔ جدول مغایرت', items:[
     'دو دراپ‌داون وابستهٔ «نوع فیلتر / نام فیلتر» برای وضعیت، پروفایل، مقصد، غرفه، تکراری، حضور و قیمت اضافه شد',
     'فیلتر مقصد می‌تواند موجود، ناموجود یا مغایرت قیمت را برای ووکامرس یا هر غرفه جداگانه نشان دهد',
