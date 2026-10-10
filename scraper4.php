@@ -311,6 +311,10 @@ const BSL_CATS_TTL  = 2592000;  // ۳۰ روز
 const MANUAL_SYNC_PROGRESS_FILE = __DIR__ . '/manual_sync_progress.json';
 const MANUAL_SYNC_LOCK_FILE     = __DIR__ . '/manual_sync.lock';
 const MANUAL_SYNC_STOP_FILE     = __DIR__ . '/manual_sync_stop.json';
+/* v10.277: وضعیت چهارمرحله‌ای مشترک همگام‌سازی دستی و دوره‌ای؛ مستقل از
+   progress استخراج است تا کارت هر پروفایل ترتیب extract→pricing→send را ببیند. */
+const SYNC_PIPELINE_FILE        = __DIR__ . '/sync_pipeline.json';
+const SYNC_PIPELINE_LOCK_FILE   = __DIR__ . '/sync_pipeline.lock';
 const SYNC_REPORT_FILE          = __DIR__ . '/sync_report.json';
 const SYNC_REPORT_KEEP          = 200;
 /* v10.39 (۵۲): ادامهٔ خودکارِ کارهای رهاشده.
@@ -328,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.276';
+const APP_VERSION = '10.277';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -21883,6 +21887,10 @@ if (isset($_GET['manual_sync_status'])) {
     echo json_encode(['ok' => true, 'progress' => $msSt], JSON_UNESCAPED_UNICODE);
     exit;
 }
+if(isset($_GET['sync_pipeline_status'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['ok'=>true,'rows'=>syncPipelineRows(),'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
 if (isset($_GET['manual_sync'])) {
     /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
        از request وب جدا می‌شود. childِ CLI با direct=1 از enqueue دوباره رد می‌شود. */
@@ -22017,6 +22025,7 @@ if (isset($_GET['manual_sync'])) {
         ],
         'total_log_count' => 3,
     ]);
+    syncPipelineMark($_msKey,$_msName,'extract','manual',['message'=>'اجرای دقیق استخراج بک‌اند']);
 
     /* پاسخ فوری + keep-conn (مثل backend_extract + msKeepConn) */
     if (function_exists('msKeepConnStart')) {
@@ -22094,6 +22103,15 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress([], '⚠️ استخراج شکست — ادامه با محصولات ذخیره‌شده برای ارسال');
     }
 
+    /* ── ۲) ذخیره و اعمال ضرایب ──
+       profile تازهٔ ذخیره‌شده و connections دوباره خوانده می‌شوند؛ payload
+       ارسال در مرحلهٔ بعد با prepareForSend همین ضرایب را واقعاً اعمال می‌کند. */
+    $_msAll=loadProfiles();$_msProf=$_msAll[$_msKey]??$_msProf;$_msCn=loadConnections();
+    $_msPricing=syncPricingSnapshot((array)$_msProf,$_msCn);
+    manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_msPricing],
+        '💰 ضرایب ذخیره‌شده بارگذاری و برای '.(int)$_msPricing['products'].' محصول فعال شد');
+    syncPipelineMark($_msKey,$_msName,'pricing','manual',['pricing'=>$_msPricing,'message'=>'ضرایب ذخیره و اعمال شد']);
+
     if (manualSyncStopped()) {
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, array_merge(readProgress(MANUAL_SYNC_PROGRESS_FILE), [
             'running' => false, 'done' => true, 'stale' => true, 'cancelled' => true,
@@ -22110,7 +22128,8 @@ if (isset($_GET['manual_sync'])) {
         exit;
     }
 
-    /* ── ۲) صف‌سازی ارسال (باسلام / ووکامرس) — همان منطق کران برای یک پروفایل ── */
+    /* ── ۳) صف‌سازی و ارسال (باسلام / ووکامرس) ── */
+    syncPipelineMark($_msKey,$_msName,'send','manual',['pricing'=>$_msPricing??[],'message'=>'صف‌سازی و ارسال']);
     if ($_msResumeQueueDone && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey) {
         $_msTarget = (string)($_msResumeCp['target'] ?? ($_msSyncCfg['target'] ?? 'woo'));
         if (!in_array($_msTarget, ['woo', 'bsl', 'both', 'none'], true)) $_msTarget = 'woo';
@@ -22270,10 +22289,13 @@ if (isset($_GET['manual_sync'])) {
         $_msPartialP['recent_log'][] = $_msPartialP['error'];
         $_msPartialP['recent_log'] = array_slice((array)$_msPartialP['recent_log'], -40);
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msPartialP);
+        syncPipelineMark($_msKey,$_msName,$_msSendStopped?'stopped':'error','manual',
+            ['message'=>$_msPartialP['error'],'pricing'=>$_msPricing??[]]);
         @unlink(MANUAL_SYNC_STOP_FILE);
         exit;
     }
     try { cronMarkRun($_msKey, 'manual_done'); } catch (Throwable $e) {}
+    syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[]]);
     manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], '✅ همگام‌سازی دستی تمام شد');
     $_msDone = readProgress(MANUAL_SYNC_PROGRESS_FILE);
     $_msDone['running'] = false;
@@ -22766,6 +22788,8 @@ cronMarkRun($key, 'running');
 if (!isset($syncState[$key]) || !is_array($syncState[$key])) $syncState[$key] = [];
 $syncState[$key]['lastRun'] = $now;
 $pResult['status'] = 'syncing'; $pResult['target'] = $target;
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
+    ['message'=>'اجرای دقیق استخراج بک‌اند']);
 manualSyncProgress(['phase' => 'استخراج', 'current' => 1,
     'last_title' => (string)($profile['name'] ?? $key)],
     '🔎 استخراج: ' . (string)($profile['name'] ?? $key));   // v10.35 (۴۷ه)
@@ -23016,6 +23040,15 @@ if (manualSyncActive()) {
 }
 }   // پایانِ else حالتِ عادی (مقابل noExtract) — v9.45
 
+/* مرحلهٔ دوم مشترک: بعد از ذخیرهٔ خروجی استخراج، تنظیمات تازه دوباره خوانده
+   و امضای ضرایب ثبت می‌شود. ساخت payload در پایین همان ضرایب را اعمال می‌کند. */
+$profiles=loadProfiles();$profile=$profiles[$key]??$profile;$cn=loadConnections();
+$_pipePricing=syncPricingSnapshot((array)$profile,$cn);
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'pricing',manualSyncActive()?'manual':'periodic',
+    ['pricing'=>$_pipePricing,'message'=>'ضرایب ذخیره و برای ارسال اعمال شد']);
+manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_pipePricing],
+    '💰 ضرایب ذخیره‌شده برای '.(int)$_pipePricing['products'].' محصول اعمال شد');
+
 // Now get products from profile (either freshly scraped or previously saved)
 // v8.39: اگر تیک «افزودن/آپدیت» فعال باشد، فقط محصولات جدید و
 // تغییرکرده فرستاده می‌شوند نه کل فهرست.
@@ -23158,7 +23191,9 @@ if ($changedKeys !== null) {
     $pResult['catalog_size'] = count($orderedProducts);
 }
 
-manualSyncProgress(['phase' => 'صف‌سازی و ارسال', 'current' => 2],
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'send',manualSyncActive()?'manual':'periodic',
+    ['pricing'=>$_pipePricing??[],'send_total'=>count($changedProducts),'message'=>'صف‌سازی و ارسال']);
+manualSyncProgress(['phase' => 'ارسال', 'current' => 3],
     '📤 آمادهٔ ارسال: ' . count($changedProducts) . ' از ' . count($orderedProducts));   // v10.35 (۴۷ه)
 
 if ($target === 'woo' || $target === 'both') {
@@ -23312,6 +23347,9 @@ try {
 } catch (Throwable $e) {
     $pResult['report'] = ['error' => mb_substr($e->getMessage(), 0, 160)];
 }
+$_pipeFailed=!empty($pResult['extract_error'])||!empty($pResult['add_update_hold']);
+syncPipelineMark((string)$key,(string)($profile['name']??$key),$_pipeFailed?'error':'done',manualSyncActive()?'manual':'periodic',
+    ['pricing'=>$_pipePricing??[],'message'=>$_pipeFailed?(string)($pResult['extract_error']??$pResult['add_update_hold']):'همگام‌سازی کامل شد']);
 $results['profiles'][] = $pResult;
 }
 saveSyncState($syncState);
@@ -40873,6 +40911,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "276'") !== false
       && version_compare(APP_VERSION, '10.' . '276', '>='));
 
+    /* ---------- v10.277: shared sync pipeline + visual cards ---------- */
+    $add('10.277', 'دستی و دوره‌ای هر دو چهار مرحلهٔ extract/pricing/send/done را ثبت می‌کنند',
+         function_exists('syncPipelineMark') && function_exists('syncPricingSnapshot')
+      && substr_count($selfSrc, "'pricing',manualSyncActive()?'manual':'periodic'") >= 1
+      && substr_count($selfSrc, "'send',manualSyncActive()?'manual':'periodic'") >= 1
+      && strpos($selfSrc, "syncPipelineMark(\$_msKey,\$_msName,'extract','manual'") !== false);
+    $add('10.277', 'مرحلهٔ ضرایب پس از reload پروفایل و قبل از صف/ارسال اجرا می‌شود',
+         strpos($selfSrc, "\$_msPricing=syncPricingSnapshot((array)\$_msProf,\$_msCn)") !== false
+      && strpos($selfSrc, "'profile_signature'=>profilePriceSignature(\$profile)") !== false
+      && strpos($selfSrc, "'destination_signature'=>shopPricingSignature(\$cn)") !== false);
+    $add('10.277', 'اندپوینت و کارت زندهٔ چهارمرحله‌ای با نشانگر اکنون وجود دارد',
+         strpos($selfSrc, "isset(\$_GET['sync_pipeline_status'])") !== false
+      && strpos($selfSrc, 'id="syncPipelineCards"') !== false
+      && strpos($selfSrc, "setInterval(syncPipelineRender,3000)") !== false
+      && strpos($selfSrc, '>اکنون</span>') !== false);
+    $add('10.277', 'ورودی 10.277 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "277'") !== false
+      && version_compare(APP_VERSION, '10.' . '277', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -44362,6 +44419,41 @@ function selfBaseUrl(): string {
  *  پیشرفت، دکمهٔ توقف و «ادامه»)، مثل بقیهٔ کارها یک فایلِ پیشرفتِ
  *  استاندارد می‌نویسد.
  * ===================================================================== */
+
+/** وضعیت بصریِ زنجیرهٔ مشترکِ دستی/دوره‌ای را با flock اتمیک ثبت می‌کند. */
+function syncPipelineMark(string $profileKey,string $profileName,string $stage,string $trigger,array $extra=[]):void{
+    if($profileKey==='')return;
+    $allowed=['queued','extract','pricing','send','done','error','stopped'];
+    if(!in_array($stage,$allowed,true))$stage='error';
+    $lf=@fopen(SYNC_PIPELINE_LOCK_FILE,'c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
+    try{
+        $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))$all=[];
+        $old=is_array($all[$profileKey]??null)?$all[$profileKey]:[];
+        $started=in_array($stage,['queued','extract'],true)?time():(int)($old['started_at']??time());
+        if(in_array($stage,['error','stopped'],true)&&!isset($extra['failed_stage']))$extra['failed_stage']=(string)($old['stage']??'extract');
+        $all[$profileKey]=array_merge($old,$extra,[
+            'profile_key'=>$profileKey,'profile_name'=>$profileName?:$profileKey,
+            'stage'=>$stage,'trigger'=>$trigger==='periodic'?'periodic':'manual',
+            'started_at'=>$started,'updated_at'=>time(),
+            'done'=>in_array($stage,['done','error','stopped'],true),
+        ]);
+        uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
+        if(count($all)>40)$all=array_slice($all,0,40,true);
+        $tmp=SYNC_PIPELINE_FILE.'.tmp.'.getmypid();
+        if(@file_put_contents($tmp,json_encode($all,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)!==false){@rename($tmp,SYNC_PIPELINE_FILE);}
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function syncPipelineRows():array{
+    $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))return[];
+    uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
+    return array_values($all);
+}
+function syncPricingSnapshot(array $profile,array $cn):array{
+    $products=profileOrderedProducts($profile);
+    return ['profile_signature'=>profilePriceSignature($profile),'destination_signature'=>shopPricingSignature($cn),
+        'products'=>count($products),'price_mode'=>(string)($profile['priceMode']??'none'),
+        'price_value'=>(string)($profile['priceVal']??0),'round'=>(int)($profile['roundPrice']??0)];
+}
 
 /** آیا این اجرا یک همگام‌سازیِ دستی است؟ */
 function manualSyncActive(): bool {
@@ -65274,6 +65366,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <div id="msPhase" style="font-size:11px;color:#34d399;margin-top:4px"></div>
                     <div id="msLog" style="max-height:160px;overflow-y:auto;font-size:10.5px;color:#94a3b8;margin-top:4px;line-height:1.8"></div>
                 </div>
+                <div id="syncPipelineCards" style="margin-top:9px;display:grid;gap:7px"></div>
                 <div id="msReport" style="margin-top:8px"></div>
 <div id="syncDiagnoseBox" style="display:none;margin-top:8px"></div>
             </div>
@@ -70385,6 +70478,35 @@ function msSetState(txt,cls){
   if(el){el.textContent=txt;el.className='cst '+(cls||'off');}
 }
 
+function syncPipelineRender(){
+  const host=$('syncPipelineCards');if(!host)return;
+  fetch('?sync_pipeline_status=1').then(r=>r.json()).then(d=>{
+    const rows=Array.isArray(d.rows)?d.rows.slice(0,8):[];
+    if(!rows.length){host.innerHTML='';return;}
+    const stages=[['extract','⚡','استخراج بک‌اند'],['pricing','💰','ذخیره و اعمال ضرایب'],['send','📤','ارسال'],['done','✓','پایان']];
+    const idx={queued:0,extract:0,pricing:1,send:2,done:3,error:Math.max(0,0),stopped:Math.max(0,0)};
+    host.innerHTML=rows.map(row=>{
+      const bad=row.stage==='error'||row.stage==='stopped', cur=idx[bad?(row.failed_stage||'extract'):row.stage]??0, terminal=row.stage==='done';
+      const steps=stages.map((s,i)=>{
+        const complete=terminal||i<cur, active=!terminal&&i===cur;
+        const bg=bad&&active?'#7f1d1d':active?'#1d4ed8':complete?'#064e3b':'#111827';
+        const bd=bad&&active?'#f87171':active?'#60a5fa':complete?'#34d399':'#334155';
+        const col=active||complete?'#f8fafc':'#64748b';
+        return '<div style="position:relative;flex:1;min-width:112px;padding:7px 8px;border:1px solid '+bd+';border-radius:8px;background:'+bg+';color:'+col+';font-size:10px;font-weight:'+(active?'900':'600')+';box-shadow:'+(active?'0 0 0 2px '+bd+'33,0 5px 16px #0005':'none')+'">'
+          +(active?'<span style="position:absolute;top:-7px;right:8px;background:'+bd+';color:#07111f;border-radius:9px;padding:1px 6px;font-size:8px">اکنون</span>':'')
+          +'<span style="font-size:13px">'+(complete?'✓':s[1])+'</span> '+s[2]+'</div>';
+      }).join('<span style="color:#475569;align-self:center">←</span>');
+      const trig=row.trigger==='periodic'?'⏱ دوره‌ای':'👤 دستی';
+      return '<div style="padding:9px;background:#0b1220;border:1px solid '+(bad?'#7f1d1d':terminal?'#14532d':'#334155')+';border-radius:11px">'
+        +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><b style="color:#e2e8f0;font-size:11px;flex:1">'+esc(row.profile_name||row.profile_key||'—')+'</b>'
+        +'<span style="font-size:9px;color:'+(row.trigger==='periodic'?'#fbbf24':'#7dd3fc')+'">'+trig+'</span></div>'
+        +'<div style="display:flex;gap:5px;align-items:stretch;overflow-x:auto;padding-top:5px">'+steps+'</div>'
+        +(row.message?'<div style="margin-top:6px;color:'+(bad?'#fca5a5':'#94a3b8')+';font-size:9.5px">'+esc(row.message)+'</div>':'')+'</div>';
+    }).join('');
+  }).catch(()=>{});
+}
+setInterval(syncPipelineRender,3000);setTimeout(syncPipelineRender,500);
+
 function startManualSync(){
   const url=($('url')&&$('url').value.trim())
             ||($('profileSelect')&&$('profileSelect').value.trim())||'';
@@ -71804,6 +71926,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.277', t:'🎛 زنجیرهٔ یکسان و کارت بصری همگام‌سازی', items:[
+    'همگام‌سازی دستی و دوره‌ای هر دو زنجیرهٔ صریح و یکسان دارند: استخراج بک‌اند، بارگذاری و اعمال ضرایب ذخیره‌شده، صف‌سازی/ارسال و پایان',
+    'پس از استخراج، پروفایل و تنظیمات مقصد دوباره از دیسک خوانده می‌شوند و امضای ضریب پروفایل، مقصد و غرفه‌ها پیش از ساخت payload ثبت می‌شود',
+    'فایل وضعیت اتمیک مستقل برای هر پروفایل مرحله، نوع دستی/دوره‌ای، زمان، شمار محصولات و snapshot قیمت‌گذاری را نگه می‌دارد',
+    'کارت‌های زندهٔ هر پروفایل چهار مرحله را با رنگ سبز برای انجام‌شده، آبی درخشان و نشانگر «اکنون» برای مرحله جاری، خاکستری برای بعدی و قرمز برای خطا نمایش می‌دهند',
+    'کارت‌ها هر سه ثانیه مستقل از مرورگر اجراکننده تازه می‌شوند و عملیات دوره‌ای و دستی را با badge جدا نشان می‌دهند'
+  ]},
   {v:'10.276', t:'🔄 شروع واقعی همگام‌سازی دستی در worker', items:[
     'علت production مشخص شد: enqueue فایل progress را running+queued می‌نوشت و child همان worker چند لحظه بعد نشانگر خودش را اجرای موازی می‌پنداشت و پیش از استخراج با busy خارج می‌شد',
     'child مستقیم worker اکنون نشانگر queued متعلق به خودش را تحویل می‌گیرد؛ flock واقعی همچنان هر اجرای موازی واقعی را مسدود می‌کند',
