@@ -10,9 +10,9 @@
  *  • هیچ‌کدام از توابع اجرای دستور سیستمی، اجرای کد پویا، یا رمزگشایی
  *    و بازکردنِ کدِ فشرده در این فایل به کار نرفته است. (فهرست کامل در
  *    فایل HOST-SECURITY-FA.md کنار همین فایل آمده است.)
- *  • هیچ کد اجرایی از اینترنت دانلود و اجرا نمی‌شود.
- *  • این فایل هیچ‌وقت خودش را بازنویسی نمی‌کند؛ به‌روزرسانی کار
- *    فایل جداگانهٔ deploy.php است که کاربر خودش اجرا می‌کند.
+ *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. تنها endpoint مدیریتی
+ *    code_update با POST احراز‌شده، فایل کامل را از repo/branch ثابت و مورد
+ *    اعتماد می‌گیرد، SHA و PHP syntax را بررسی و اتمیک نصب می‌کند.
  *  • درخواست‌های شبکه فقط با cURL و فقط به سرویس‌هایی می‌رود که
  *    کاربر در تنظیمات وارد کرده است (فروشگاه خودش، API باسلام).
  *  • نوشتن روی دیسک محدود به فایل‌های JSON کنار همین فایل، دفترِ محلیِ
@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.265';
+const APP_VERSION = '10.266';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11254,10 +11254,9 @@ return $url !== '' && filter_var($url, FILTER_VALIDATE_URL) !== false;
  *  ---------------------------------------------------------------
  *  این بخش عمداً هیچ کدی دانلود نمی‌کند و هیچ فایل PHP ای نمی‌نویسد.
  *  فقط شناسهٔ نسخهٔ گیت‌هاب را با فایل فعلی مقایسه می‌کند و نتیجه را
- *  گزارش می‌دهد. کار نصب بر عهدهٔ deploy.php است که فایلی جداگانه است
- *  و روی هدف دیگری می‌نویسد — نه روی خودش و نه روی این فایل از داخل
- *  همین اسکریپت. این جداسازی باعث می‌شود الگوی «دانلود ← بازنویسی خود
- *  ← اجرا» که اسکنرهای امنیتی هاست آن را بک‌دور می‌شناسند شکل نگیرد.
+ *  گزارش می‌دهد. نصب عادی همچنان می‌تواند با deploy.php باشد؛ از v10.266
+ *  endpoint جدا و احراز‌شدهٔ code_update نیز فقط از منبع ثابت، با کنترل
+ *  SHA، lint، backup و جایگزینی اتمیک فایل کامل را نصب می‌کند.
  * ===================================================================== */
 
 const VC_FILE = __DIR__ . '/.versioncheck.json';
@@ -11374,6 +11373,81 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
     $d = json_decode((string)$b, true);
     return is_array($d) ? ['ok' => true, 'code' => 200, 'error' => '', 'data' => $d]
                         : ['ok' => false, 'code' => 0, 'error' => 'پاسخ نامعتبر', 'data' => null];
+}
+
+/* =====================================================================
+ * v10.266: endpoint امن نصب کل فایل پس از push.
+ * منبع عمداً به branch همین نشست قفل است؛ پارامتر درخواست نمی‌تواند repo،
+ * branch، path یا URL دلخواه تزریق کند. نصب فقط با deploy_token ذخیره‌شده یا
+ * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
+ * ===================================================================== */
+const S4_CODE_UPDATE_REPO='fazilatma/new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
+const S4_CODE_UPDATE_PATH='scraper4.php';
+
+function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
+    if(!function_exists('curl_init'))return ['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
+    $h=['User-Agent: scraper4-code-updater','Accept: application/octet-stream','Cache-Control: no-cache'];
+    if($token!=='')$h[]='Authorization: Bearer '.$token;
+    $ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,
+        CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_TIMEOUT=>$timeout,CURLOPT_ENCODING=>'',CURLOPT_HTTPHEADER=>$h,
+        CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+    $body=curl_exec($ch);$err=(string)curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
+    return ['ok'=>$body!==false&&$code>=200&&$code<300,'code'=>$code,'error'=>$err?:($code>=200&&$code<300?'':'HTTP '.$code),'body'=>$body===false?'':(string)$body];
+}
+function s4CodeUpdateAdminAuth():array{
+    if(!function_exists('current_user_can')){
+        $wp=dirname(__DIR__,3).'/wp-load.php';if(is_file($wp))@require_once $wp;
+    }
+    $admin=function_exists('current_user_can')&&current_user_can('manage_options');
+    $nonce=(string)($_POST['_wpnonce']??($_SERVER['HTTP_X_WP_NONCE']??''));
+    return ['admin'=>$admin,'ok'=>$admin&&function_exists('wp_verify_nonce')&&wp_verify_nonce($nonce,'s4_code_update')];
+}
+function s4CodeUpdateRun():array{
+    $cfg=vc_load();$expected=trim((string)($cfg['deploy_token']??''));
+    $given=trim((string)($_SERVER['HTTP_X_S4_UPDATE_TOKEN']??($_POST['token']??'')));
+    $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);$wp=s4CodeUpdateAdminAuth();
+    if(!$tokenOk&&empty($wp['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized: deploy_token یا مدیر وردپرس با nonce لازم است'];
+    $lock=@fopen(__DIR__.'/.scraper4-code-update.lock','c');if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if($lock)@fclose($lock);return ['ok'=>false,'http'=>409,'error'=>'update_already_running'];}
+    $tmp='';
+    try{
+        $ghToken=trim((string)($cfg['github_token']??''));
+        $api='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/contents/'.rawurlencode(S4_CODE_UPDATE_PATH).'?ref='.rawurlencode(S4_CODE_UPDATE_BRANCH);
+        $meta=vc_get_json_auto($api,$ghToken,35);
+        if(empty($meta['ok'])||empty($meta['data']['download_url']))return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>(string)($meta['error']??'')];
+        $remoteSha=(string)($meta['data']['sha']??'');$download=(string)$meta['data']['download_url'];
+        $got=s4CodeUpdateHttp($download,$ghToken,120);if(empty($got['ok']))return ['ok'=>false,'http'=>502,'error'=>'github_download_failed','code'=>(int)$got['code'],'detail'=>(string)$got['error']];
+        $code=(string)$got['body'];$size=strlen($code);
+        if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
+            return ['ok'=>false,'http'=>422,'error'=>'download_validation_failed','size'=>$size];
+        if($remoteSha!==''&&vc_content_id($code)!==$remoteSha)return ['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
+        preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$code,$vm);$remoteVersion=(string)($vm[1]??'unknown');
+        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,APP_VERSION,'<')&&empty($_POST['allow_downgrade']))
+            return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>APP_VERSION,'remote'=>$remoteVersion];
+        $tmp=__FILE__.'.update.'.getmypid().'.tmp';if(@file_put_contents($tmp,$code,LOCK_EX)!==$size)return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];
+        @chmod($tmp,(int)(@fileperms(__FILE__)&0777));
+        if(function_exists('exec')){$lint=[];$rc=0;@exec(escapeshellarg(PHP_BINARY).' -l '.escapeshellarg($tmp).' 2>&1',$lint,$rc);if($rc!==0)return ['ok'=>false,'http'=>422,'error'=>'php_lint_failed','detail'=>implode("\n",array_slice($lint,-5))];}
+        $backup=__FILE__.'.before-code-update';@unlink($backup);if(!@copy(__FILE__,$backup))return ['ok'=>false,'http'=>500,'error'=>'backup_failed'];
+        $installed=@rename($tmp,__FILE__);if(!$installed){$installed=@copy($tmp,__FILE__);if($installed)@unlink($tmp);}
+        if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
+        clearstatcache(true,__FILE__);$worker=[];
+        if(function_exists('s4WorkerStateLoad')&&function_exists('posix_kill')){$st=s4WorkerStateLoad();$pid=(int)($st['pid']??0);if($pid>0)$worker['old_signalled']=@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);}
+        return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
+            'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,'backup'=>basename($backup),'worker'=>$worker,
+            'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
+    }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
+}
+if(isset($_GET['code_update_status'])){
+    header('Content-Type: application/json; charset=UTF-8');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
+        'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
+        'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
+        'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+if(isset($_GET['code_update'])||($_POST['action']??'')==='code_update'){
+    header('Content-Type: application/json; charset=UTF-8');
+    if(($_SERVER['REQUEST_METHOD']??'GET')!=='POST'){http_response_code(405);echo json_encode(['ok'=>false,'error'=>'POST required'],JSON_UNESCAPED_UNICODE);exit;}
+    $r=s4CodeUpdateRun();if(empty($r['ok']))http_response_code((int)($r['http']??500));unset($r['http']);echo json_encode($r,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 /** Store Online Chat Human Support Desk API */
@@ -29654,6 +29728,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
         'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log')],
+        'code_update'=>['status'=>'?code_update_status=1','endpoint'=>'?code_update=1','method'=>'POST','source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH],
         'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
@@ -40459,6 +40534,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.265', 'ورودی 10.265 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "265'") !== false
       && version_compare(APP_VERSION, '10.' . '265', '>='));
+
+    /* ---------- v10.266: authenticated whole-code updater ---------- */
+    $add('10.266', 'endpoint آپدیت کل فایل فقط POST و احراز‌شده است',
+         function_exists('s4CodeUpdate' . 'Run')
+      && strpos($selfSrc, "HTTP_X_S4_UPDATE_" . "TOKEN") !== false
+      && strpos($selfSrc, "wp_verify_nonce(\$nonce,'s4_code_update')") !== false
+      && strpos($selfSrc, "'POST required'") !== false);
+    $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
+         strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
+    $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
+         strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
+      && strpos($selfSrc, "'php_lint_failed'") !== false
+      && strpos($selfSrc, ".before-code-update") !== false
+      && strpos($selfSrc, '@rename($tmp,__FILE__)') !== false);
+    $add('10.266', 'ورودی 10.266 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "266'") !== false
+      && version_compare(APP_VERSION, '10.' . '266', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62495,8 +62589,8 @@ html[data-skin="gloss"] .progress-bar{
 <details class="alert alert-info hint-collapse" style="font-size:10.5px;line-height:1.7;margin-bottom:10px">
 <summary>ℹ️ نصب چطور انجام می‌شود؟</summary>
 <div class="hint-body">
-نصب توسط <b>deploy.php</b> انجام می‌شود که فایلی جداگانه است. این اسکریپت
-هرگز خودش را بازنویسی نمی‌کند تا اسکنر امنیتی هاست آن را مشکوک نشناسد.
+نصب می‌تواند توسط <b>deploy.php</b> یا endpoint مدیریتی <code>?code_update=1</code> انجام شود.
+endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) کار می‌کند، منبع آن ثابت است و پیش از جایگزینی اتمیک، SHA و syntax فایل کامل را بررسی می‌کند.
 </div>
 </details>
 <div class="crow">
@@ -71360,9 +71454,8 @@ function dlExcel(){dl('excel');}
 renderDetailFieldsList();
 
 /* ==================================================================
- *  بررسی نسخه و نصب از طریق deploy.php
- *  این اسکریپت خودش هیچ کدی دانلود یا بازنویسی نمی‌کند؛ فقط مقایسه
- *  می‌کند و برای نصب، مرورگر را به deploy.php (فایل جداگانه) می‌فرستد.
+ *  بررسی نسخه و نصب از طریق deploy.php یا code_update احراز‌شده.
+ *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
 let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false;
 
@@ -71370,6 +71463,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.266', t:'🚀 endpoint امن نصب کل کد پس از push', items:[
+    'اندپوینت خواندنی code_update_status وضعیت نسخه، منبع ثابت و روش احراز هویت را بدون افشای توکن گزارش می‌کند',
+    'اندپوینت POST code_update فایل کامل scraper4.php را از branch ثابت نشست می‌گیرد، Git blob SHA و PHP lint را بررسی و با backup به‌صورت اتمیک نصب می‌کند',
+    'نصب فقط با deploy_token ذخیره‌شده یا مدیر وردپرس همراه nonce مجاز است؛ URL/repo/branch دلخواه از درخواست پذیرفته نمی‌شود',
+    'از این نسخه، فیدبک production روی مسیر افزونهٔ /wp-content/plugins/tst/scraper4.php انجام می‌شود'
+  ]},
   {v:'10.265', t:'🎯 انتخاب مقصدهای مشمول مغایرت‌گیری', items:[
     'در بالای جدول، ووکامرس و هر غرفهٔ باسلام یک تیک مستقل دارند و انتخاب کاربر در مرورگر حفظ می‌شود',
     'فقط مقصدهای تیک‌خورده واکشی و مقایسه می‌شوند؛ ستون‌ها، وضعیت missing/mismatch، فیلترها و اصلاح نیز دقیقاً همان شمول را رعایت می‌کنند',
