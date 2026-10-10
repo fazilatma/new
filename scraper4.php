@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.260';
+const APP_VERSION = '10.261';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11817,6 +11817,7 @@ exit;
 }
 $key = profileKey($url);
 $profiles = loadProfiles();
+$oldMxPriceSig = matrixPricingFingerprint($profiles, loadConnections());
 $detailSelectors = json_decode($_POST['detailSelectors'] ?? '{}', true) ?: [];
 $productsData = json_decode($_POST['products'] ?? '[]', true) ?: [];
 $productsOrder = json_decode($_POST['productsOrder'] ?? '[]', true) ?: [];
@@ -11978,7 +11979,9 @@ $profiles[$key] = [
 ];
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($_saved['ok']) {
-echo json_encode(['ok' => true, 'key' => $key, 'message' => 'پروفایل ذخیره شد', 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
+$newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
+$mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+echo json_encode(['ok' => true, 'key' => $key, 'message' => 'پروفایل ذخیره شد', 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
@@ -16749,6 +16752,7 @@ if (($_POST['action'] ?? '') === 'save_connections') {
 ob_clean();
 header('Content-Type: application/json; charset=UTF-8');
 $conn = loadConnections();
+$oldMxShopSig = function_exists('shopPricingSignature') ? shopPricingSignature($conn) : '';
 if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true) ?: [];
     $_wMode = strtolower(trim((string)($w['sync_mode'] ?? 'api')));
     if (!in_array($_wMode, ['api', 'direct'], true)) $_wMode = 'api';
@@ -16953,8 +16957,11 @@ if (isset($_POST['digest_hour']))       $conn['digest_hour']       = max(0, min(
 if (isset($_POST['digest_hours']))      $conn['digest_hours']      = max(1, min(168, (int)$_POST['digest_hours']));
 if (isset($_POST['digest_tz']))         $conn['digest_tz']         = trim((string)$_POST['digest_tz']);
 $_savedC = writeJsonFile(CONNECTIONS_FILE, $conn);
-if ($_savedC['ok']) echo json_encode(['ok'=>true,'message'=>'ذخیره شد'], JSON_UNESCAPED_UNICODE);
-else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
+if ($_savedC['ok']) {
+    $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
+    $mxRefresh=$oldMxShopSig!==$newMxShopSig?matrixRefreshExpectedPrices('destination_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh], JSON_UNESCAPED_UNICODE);
+} else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -27432,6 +27439,54 @@ function matrixStopClear(): void { @unlink(SYNC_MATRIX_STOP_FILE); }
 function matrixProgressRead(): array {
     return localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
 }
+function matrixPricingFingerprint(?array $profiles=null, ?array $cn=null): string {
+    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=[];
+    foreach($profiles as $pk=>$p){if(!is_array($p))continue;$parts[]=(string)$pk.'|'.(string)($p['priceMode']??'none').'|'.(string)($p['priceVal']??0).'|'.(string)($p['roundPrice']??0);}
+    sort($parts,SORT_STRING);$parts[]='dest|'.shopPricingSignature($cn);
+    return hash('sha256',implode("\n",$parts));
+}
+
+/** بدون واکشی دوبارهٔ مقصدها، قیمت‌های مورد انتظار و وضعیت تمام ردیف‌ها را
+ * با آخرین ضرایب پروفایل/ووکامرس/باسلام/غرفه‌ها بازسازی می‌کند. */
+function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
+    if(!is_file(SYNC_MATRIX_RESULT_FILE))return ['ok'=>true,'changed'=>false,'reason'=>'no_result'];
+    $run=matrixProgressRead();$fixRun=function_exists('matrixFixProgressRead')?matrixFixProgressRead():[];
+    if(!empty($run['running'])||!empty($fixRun['running']))return ['ok'=>true,'changed'=>false,'reason'=>!empty($run['running'])?'matrix_running':'fix_running'];
+    $lf=@fopen(__DIR__.'/.sync_matrix_reprice.lock','c');
+    if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return ['ok'=>true,'changed'=>false,'reason'=>'busy'];}
+    try{
+        $data=matrixResultLoad();if(!$data||!is_array($data['rows']??null))return ['ok'=>true,'changed'=>false,'reason'=>'empty'];
+        $profiles=loadProfiles();$cn=loadConnections();$wooCfg=destPriceCfg($cn,'woocommerce');$bslCfg=destPriceCfg($cn,'basalam');
+        $shopList=function_exists('bslAllShops')?bslAllShops($cn):[];$shopBy=[];$shopsMeta=[];
+        foreach($shopList as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0)continue;$shopBy[$vid]=$sh;$shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??$sh['name']??('#'.$vid)),'is_default'=>!empty($sh['is_default'])];}
+        $sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,'in_all'=>0,'only_profile'=>0];$changed=0;
+        foreach($data['rows'] as &$r){
+            if(!is_array($r)||!empty($r['is_report'])||str_starts_with((string)($r['bare']??''),'__report_'))continue;
+            $before=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);
+            $pk=(string)($r['profile_key']??'');$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:null;$hasProf=(int)($r['profile_hits']??0)>0;
+            if($hasProf&&$profile){$raw=(int)($r['src_price']??0);$pp=profileFinalPrice($profile,(string)$raw);$r['profile_price']=$pp;$r['woo_expect']=$pp>0?destAdjustPrice($pp,$wooCfg):0;$r['bsl_expect']=$pp>0?destAdjustPrice($pp,$bslCfg):0;}
+            $hasWoo=!empty($r['woo']);$wooTone=$hasProf&&$hasWoo?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):($hasProf?'missing_dst':($hasWoo?'extra':'na'));
+            $r['woo_tone']=$wooTone;$shopCount=0;$shopOk=0;$shopBad=0;$shopMiss=0;$dupBsl=false;
+            foreach($shopsMeta as $sm){$vid=(int)$sm['vendor_id'];$cell=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
+                if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$adj=bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
+                elseif($hasProf)$shopMiss++;}
+            $flags=array_values(array_filter(array_map('strval',(array)($r['flags']??[])),static function($f){return str_starts_with($f,'dup_');}));
+            if((int)($r['profile_hits']??0)>1){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
+            if($wooTone==='missing_dst'){$flags[]='missing_woo';$sum['missing_woo']++;}if($wooTone==='extra'){$flags[]='extra_woo';$sum['extra_woo']++;}if(in_array($wooTone,['bad','warn'],true)||$shopBad>0){$flags[]='price_mismatch';$sum['price_mismatch']++;}if($shopMiss>0&&$hasProf){$flags[]='missing_bsl';$sum['missing_bsl']++;}
+            $r['flags']=array_values(array_unique($flags));$r['shop_ok']=$shopOk;$r['shop_bad']=$shopBad;$r['shop_miss']=$shopMiss;
+            if($hasProf&&$hasWoo&&$shopMiss===0&&$wooTone==='ok'&&$shopBad===0){$r['status']='ok';$sum['ok']++;$sum['in_all']++;}
+            elseif($hasProf&&!$hasWoo&&$shopCount===0){$r['status']='only_profile';$sum['only_profile']++;}
+            elseif(!$hasProf)$r['status']='only_dest';elseif(in_array($wooTone,['bad','warn'],true)||$shopBad>0)$r['status']='mismatch';elseif($wooTone==='missing_dst'||$shopMiss>0)$r['status']='missing';else$r['status']='partial';
+            $sum['total']++;$after=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);if($before!==$after)$changed++;
+        }unset($r);
+        $order=['mismatch'=>0,'missing'=>1,'only_profile'=>2,'only_dest'=>3,'partial'=>4,'ok'=>5];
+        usort($data['rows'],static function($a,$b)use($order){$ar=!empty($a['is_report'])||str_starts_with((string)($a['bare']??''),'__report_');$br=!empty($b['is_report'])||str_starts_with((string)($b['bare']??''),'__report_');if($ar!==$br)return$ar?1:-1;$oa=$order[(string)($a['status']??'')]??9;$ob=$order[(string)($b['status']??'')]??9;return$oa!==$ob?$oa<=>$ob:strcmp((string)($a['bare']??''),(string)($b['bare']??''));});
+        $data['summary']=$sum;$data['woo_cfg']=$wooCfg;$data['bsl_cfg']=$bslCfg;$data['shops']=$shopsMeta;$data['pricing_signature']=matrixPricingFingerprint($profiles,$cn);$data['repriced_at']=time();$data['repriced_reason']=$reason;
+        $ok=matrixResultSave($data);if($ok)matrixProgress(['pricing_refreshed_at'=>time(),'pricing_refreshed_rows'=>$changed,'log_add'=>['⚡ ضرایب تازه فوراً روی جدول اعمال شد: '.$changed.' ردیف']]);
+        return ['ok'=>$ok,'changed'=>$ok,'rows'=>$changed,'signature'=>$data['pricing_signature']];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+
 function matrixResultLoad(): array {
     if (!is_file(SYNC_MATRIX_RESULT_FILE)) return [];
     $d = json_decode((string)@file_get_contents(SYNC_MATRIX_RESULT_FILE), true);
@@ -28016,7 +28071,7 @@ function matrixBuild(array $opts = []): array {
             $status = 'only_profile'; $sum['only_profile']++;
         } elseif (!$hasProf) {
             $status = 'only_dest';
-        } elseif ($wooTone === 'bad' || $shopBad > 0) {
+        } elseif ($wooTone === 'bad' || $wooTone === 'warn' || $shopBad > 0) {
             $status = 'mismatch';
         } elseif ($wooTone === 'missing_dst' || $shopMiss > 0) {
             $status = 'missing';
@@ -28045,6 +28100,7 @@ function matrixBuild(array $opts = []): array {
         'generated_at' => time(),
         'source' => $source,
         'coded_only' => $codedOnly,
+        'pricing_signature' => matrixPricingFingerprint($profiles, $cn),
         'suffixes' => $suffixes,
         'shops' => $shopsMeta,
         'woo_cfg' => $wooCfg,
@@ -29246,6 +29302,9 @@ function matrixQueryPage(array $opts = []): array {
         && (!empty($prog['running']) || !empty($prog['yielded']) || !empty($prog['partial']));
     $data = $useLive ? json_decode((string)@file_get_contents(SYNC_MATRIX_LIVE_FILE), true) : matrixResultLoad();
     if (!is_array($data)) $data = [];
+    if(!$useLive&&$data&&((string)($data['pricing_signature']??'')!==matrixPricingFingerprint())){
+        matrixRefreshExpectedPrices('lazy_signature_check');$data=matrixResultLoad();
+    }
     if (!$data || empty($data['rows'])) {
         return [
             'ok' => false,
@@ -40140,6 +40199,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.260', 'ورودی 10.260 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "260'") !== false
       && version_compare(APP_VERSION, '10.' . '260', '>='));
+
+    /* ---------- v10.261: refresh matrix prices after coefficient saves ---------- */
+    $add('10.261', 'اثر انگشت ضرایب و بازقیمت‌گذاری محلی ماتریس وجود دارد',
+         function_exists('matrixPricing' . 'Fingerprint')
+      && function_exists('matrixRefreshExpected' . 'Prices')
+      && strpos($selfSrc, "'pricing_" . "signature'") !== false);
+    $add('10.261', 'ذخیرهٔ پروفایل و مقصد فقط با تغییر ضرایب بازقیمت‌گذاری می‌کند',
+         strpos($selfSrc, "matrixRefreshExpectedPrices('profile_" . "price_change')") !== false
+      && strpos($selfSrc, "matrixRefreshExpectedPrices('destination_" . "price_change')") !== false
+      && strpos($selfSrc, "'matrix_" . "repriced'=>\$mxRefresh") !== false);
+    $add('10.261', 'خواندن ماتریس امضای قدیمی را خودکار ترمیم می‌کند و رابط جدول بازخوانی می‌شود',
+         strpos($selfSrc, "matrixRefreshExpectedPrices('lazy_" . "signature_check')") !== false
+      && strpos($selfSrc, 'd.matrix_' . 'repriced&&d.matrix_repriced.changed') !== false);
+    $add('10.261', 'ورودی 10.261 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "261'") !== false
+      && version_compare(APP_VERSION, '10.' . '261', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -67557,6 +67632,7 @@ function saveProfileSilent() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
+                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p.url === data.url);
                 const entry = {key: d.key, name: data.name || parseUrlHost(data.url), url: data.url, updatedAt: Math.floor(Date.now()/1000)};
                 if (existingIdx >= 0) {
@@ -67603,6 +67679,7 @@ function saveProfile() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
+                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p.url === data.url);
                 const entry = {key: d.key, name: data.name, url: data.url, updatedAt: Math.floor(Date.now()/1000)};
                 if (existingIdx >= 0) {
@@ -71040,6 +71117,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.261', t:'⚡ بازقیمت‌گذاری فوری ماتریس با تغییر ضرایب', items:[
+    'ذخیرهٔ ضریب پروفایل، ووکامرس یا هر غرفهٔ باسلام قیمت مورد انتظار و وضعیت مغایرت را مستقیماً در نتیجهٔ ذخیره‌شده بازمحاسبه می‌کند',
+    'این بازقیمت‌گذاری محلی است و قیمت‌های مشاهده‌شده را حفظ می‌کند؛ بنابراین هیچ کاتالوگ راه دوری دوباره دریافت نمی‌شود',
+    'اثر انگشت تنظیمات، ماتریس قدیمی را هنگام بازشدن خودکار ترمیم می‌کند و جدول بازِ مرورگر پس از ذخیره فوراً بارگذاری مجدد می‌شود'
+  ]},
   {v:'10.260', t:'🎯 اصلاح فقط ردیف‌های فیلترشده', items:[
     'جستجو، فیلتر پیشرفته، فقط مغایرت، فقط ناقص و فقط تکراری عیناً به عملیات اصلاح ارسال می‌شوند',
     'ساخت jobهای قیمت/ارسال/حذف از همان تابع مشترک نمایش جدول عبور می‌کند و خارج فیلتر دست‌نخورده می‌ماند',
@@ -79979,7 +80061,8 @@ fd.append('ai_content_auto',JSON.stringify({
   per_run:parseInt(($('aiContentAutoPerRun')||{}).value)||8
 }));
 fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-if(!window._connSaveNoToast)showToast(d.ok?'✓ ذخیره شد':'خطا',!d.ok);
+if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+if(!window._connSaveNoToast)showToast(d.ok?(d.matrix_repriced&&d.matrix_repriced.changed?'✓ ذخیره شد؛ جدول مغایرت فوراً به‌روز شد':'✓ ذخیره شد'):'خطا',!d.ok);
 window._connSaveNoToast=false;_connSaveIndicator(d.ok?'ok':'err');
 }).catch(()=>{if(!window._connSaveNoToast)showToast('خطا',1);window._connSaveNoToast=false;_connSaveIndicator('err');});}
 /* v10.89: scheduleConnSave - auto-save all settings */
