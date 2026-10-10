@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.281';
+const APP_VERSION = '10.282';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -880,6 +880,44 @@ function queueCfgChanged(?array $oldCfg, array $newCfg): bool {
 
 function extractWriteQueue(array $queue): void {
 @file_put_contents(EXTRACT_QUEUE_FILE, json_encode($queue, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+/* v10.282: هر همگام‌سازی باید یک ردیف قابل‌ردیابی در «صف استخراج بک‌اند»
+   داشته باشد. اجرای واقعیِ runBackendExtract خودش ردیف می‌سازد؛ این helper
+   فقط حالت‌هایی را پوشش می‌دهد که پیش از ساخت ردیف رد شده‌اند، از checkpoint
+   استفاده کرده‌اند، یا پروفایل عمداً مرحلهٔ واکشی را رد کرده است. */
+function extractEnsureSyncQueueRow(string $profileKey, array $profile, string $trigger,
+                                   string $phase, array $result, string $note = ''): string {
+    $trigger = $trigger === 'manual_sync' ? 'manual_sync' : 'periodic_sync';
+    $existingId = trim((string)($result['queue_id'] ?? ''));
+    $queue = extractReadQueue();
+    if ($existingId !== '' && empty($result['duplicate']) && empty($result['locked']) && empty($result['checkpoint_reused'])) {
+        foreach ((array)($queue['entries'] ?? []) as $row) {
+            if ((string)($row['id'] ?? '') === $existingId) return $existingId;
+        }
+    }
+    $now = time();
+    $id = 'exsync_' . preg_replace('~[^a-zA-Z0-9_.-]+~', '_', $profileKey)
+        . '_' . $now . '_' . substr(bin2hex(random_bytes(3)), 0, 6);
+    $stageError = trim((string)($result['sync_stage_error'] ?? ''));
+    $ok = !empty($result['ok']) && $stageError === '';
+    $skipped = !empty($result['no_extract']) || !empty($result['checkpoint_reused']);
+    $error = $stageError !== '' ? $stageError : trim((string)($result['error'] ?? ''));
+    if (!$ok && $error === '') $error = 'مرحلهٔ استخراج همگام‌سازی اجرا نشد';
+    $queue['entries'][] = [
+        'id'=>$id, 'status'=>$ok?'done':'failed', 'profile_key'=>$profileKey,
+        'profile_name'=>(string)($profile['name'] ?? $profileKey),
+        'url'=>(string)($profile['url'] ?? ''), 'started_at'=>$now, 'done_at'=>$now,
+        'products_count'=>(int)($result['extracted'] ?? count((array)($profile['products'] ?? []))),
+        'total'=>(int)($result['total'] ?? 0), 'current'=>(int)($result['current'] ?? 0),
+        'new'=>(int)($result['new'] ?? 0), 'price_changed'=>(int)($result['price_changed'] ?? 0),
+        'removed'=>(int)($result['removed'] ?? 0), 'unchanged'=>(int)($result['unchanged'] ?? 0),
+        'trigger'=>$trigger, 'phase'=>in_array($phase,['list','detail'],true)?$phase:'list',
+        'sync_stage'=>true, 'sync_skipped'=>$skipped, 'error'=>$ok?'':$error,
+        'note_title'=>$note !== '' ? $note : ($skipped?'مرحلهٔ استخراج از دادهٔ ذخیره‌شده استفاده کرد':'گزارش مرحلهٔ استخراج همگام‌سازی'),
+    ];
+    extractWriteQueue($queue);
+    return $id;
 }
 
 /* =====================================================================
@@ -18331,7 +18369,7 @@ if($dup!==null){
     /* v10.79/v10.80: دستی = آستانهٔ کوتاه؛ خودکار هم waiting/paused و running مرده را برمی‌دارد
        (قبلاً waiting با started_at=0 تا ابد جلوی enqueue می‌ایستاد). */
     $_dupIsManual = in_array((string)$trigger, ['manual', 'manual_sync', 'manual_resume'], true);
-    $_dupIsAuto   = in_array((string)$trigger, ['auto', 'cron', 'watchdog_resume'], true);
+    $_dupIsAuto   = in_array((string)$trigger, ['auto', 'cron', 'periodic_sync', 'watchdog_resume'], true);
     $_dupSt = (string)($dup['status'] ?? '');
     if ($_dupIsManual) {
         $_dupMax = min($_dupMax, 90);
@@ -18380,7 +18418,7 @@ return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
    انجام نشود؛ اکنون فقط workerِ صاحبِ lock فایلِ مشترک را آغاز می‌کند. */
 localTaskDbForget(EXTRACT_PROGRESS_FILE); @unlink(EXTRACT_PROGRESS_FILE);
 @unlink(EXTRACT_STOP_FILE);
-$queue['entries'][]=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,'profile_name'=>$profile['name']??$profileKey,'started_at'=>time(),'products_count'=>0,'total'=>0,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase];
+$queue['entries'][]=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,'profile_name'=>$profile['name']??$profileKey,'started_at'=>time(),'products_count'=>0,'total'=>0,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase,'sync_stage'=>in_array((string)$trigger,['manual_sync','periodic_sync'],true)];
 extractWriteQueue($queue);
 
 // v8.22: نسخهٔ قبلی را همین ابتدا بخوان تا مقایسه بتواند زنده انجام شود
@@ -18481,7 +18519,7 @@ if($phase==='detail'){
         foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='done';$qe['done_at']=time();$qe['products_count']=0;$qe['detail_skip_why']='no_products';$qe['detail_total']=0;$qe['detail_no_link']=0;$qe['detail_already']=0;break;}}unset($qe);
         extractWriteQueue($queue);
         extractLockRelease($queueId);   // v10.32 (۴۵ب)
-        return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'extracted'=>0,'phase'=>'detail','note'=>'فهرستی وجود ندارد'];
+        return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>0,'phase'=>'detail','note'=>'فهرستی وجود ندارد'];
     }
 }
 /* v9.44: جزئیات «هم‌زمان با» استخراج هر محصول انجام می‌شود — بجای فاز ۲ی جداگانه.
@@ -18520,7 +18558,7 @@ $queue=extractReadQueue();
 foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true];
 }
 /* v10.122: بودجهٔ فهرست — تمیز بایست تا نوبت بعد از صفحهٔ قبلی ادامه دهد */
 if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($allProducts)>0){
@@ -18553,7 +18591,7 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
     }unset($qe);
     extractWriteQueue($queue);
     extractLockRelease($queueId);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'extracted'=>count($allProducts),
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),
         'ran_out'=>true,'resume_needed'=>true,'resume_page'=>max(1,$page-1),'partial'=>true,
         'products_saved'=>true,'profile_key'=>$pkFinal];
 }
@@ -18640,7 +18678,7 @@ if($_pageFailStreak>=2 && count($allProducts)>0){
     }unset($qe);
     extractWriteQueue($queue);
     extractLockRelease($queueId);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'extracted'=>count($allProducts),'partial'=>true,'resume_needed'=>true,'resume_page'=>$_rpF,'products_saved'=>true,'profile_key'=>$pkFinal];
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'partial'=>true,'resume_needed'=>true,'resume_page'=>$_rpF,'products_saved'=>true,'profile_key'=>$pkFinal];
 }
 continue;
 }
@@ -18895,7 +18933,7 @@ notifRunFailure(loadConnections(),'استخراج',$profile['name']??$profileKey
     ?'استخراج هیچ محصولی برنگرداند و متوقف شد تا داده‌های قبلی پاک نشوند. علت: '
     :'استخراج هیچ محصولی پیدا نکرد. علت: ').$_why);
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
-return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>'استخراج بی‌نتیجه — '.$_why,
+return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'queue_id'=>$queueId,'error'=>'استخراج بی‌نتیجه — '.$_why,
         'guard'=>'empty_result','kept'=>count($prevByKey)];
 }
 
@@ -18924,7 +18962,7 @@ if($_prevN>=8 && $_newN>0 && $_newN < (int)max(3, floor($_prevN * 0.45))){
     foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='failed';$qe['done_at']=time();$qe['error']=$_why;$qe['products_count']=$_prevN;break;}}unset($qe);
     extractWriteQueue($queue);
     extractLockRelease($queueId);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$_why,'guard'=>'soft_collapse','kept'=>$_prevN,'extracted'=>$_newN];
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'queue_id'=>$queueId,'error'=>$_why,'guard'=>'soft_collapse','kept'=>$_prevN,'extracted'=>$_newN];
 }
 
 /* v8.94: مرحلهٔ ۱ تمام شد — همین‌جا ذخیره کن.
@@ -19101,7 +19139,7 @@ $queue=extractReadQueue();
 foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'detail_done'=>$detailDone];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'detail_done'=>$detailDone];
 }
 $detailDone++;
 $_pTitle=mb_substr(trim((string)($p['title']??$key)),0,42);
@@ -19501,7 +19539,7 @@ extractWriteQueue($queue);
 // v10.21 (۳۴الف): سینکِ «بدون استخراج» باید بداند چند صفحه واقعاً باز شد و
 // آیا بودجهٔ زمانی تمام شد (تا در نوبتِ بعدی از همان‌جا ادامه دهد)
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!empty($_ranOut),'extract_stage'=>(!empty($_ranOut)?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!empty($_ranOut),'extract_stage'=>(!empty($_ranOut)?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
 }
 
 if(isset($_GET['worker_status'])){
@@ -22106,6 +22144,7 @@ if (isset($_GET['manual_sync'])) {
     }
     if ($_msResumeExtractDone && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey) {
         $_msEx = $_msResumeCp['extract'];
+        $_msEx['checkpoint_reused'] = true;
         manualSyncProgress(['phase' => 'استخراج تمام', 'current' => 2],
             '↻ استخراجِ کاملِ checkpoint دوباره اجرا نشد');
     } else {
@@ -22115,6 +22154,9 @@ if (isset($_GET['manual_sync'])) {
         /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم؛ trigger=manual_sync */
         $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
     }
+    $_msQueueId = extractEnsureSyncQueueRow($_msKey, (array)$_msProf, 'manual_sync', $_msPhase,
+        (array)$_msEx, !empty($_msEx['checkpoint_reused']) ? 'استخراج این همگام‌سازی از checkpoint کامل بازیابی شد' : 'مرحلهٔ استخراج همگام‌سازی دستی');
+    $_msEx['queue_id'] = $_msQueueId;
     manualSyncProgress(['checkpoint' => ['extract' => $_msEx]], '');
     $_msExtractDetail=syncExtractStageDetails((array)$_msEx);
     syncPipelineMark($_msKey,$_msName,'extract','manual',[
@@ -22904,7 +22946,7 @@ if ($noExtract) {
         $pResult['step'] = 'no_extract_detail';
         $pResult['detail_linked'] = $_neLinked;
         // فازِ detail: فقط صفحاتِ محصول باز می‌شوند، صفحهٔ فهرست هرگز
-        $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'auto', false, 'detail', false); /* v10.53 (۶۷): همگام‌سازیِ دستی ⇒ برچسبِ جدا در صف */
+        $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, 'detail', false); /* v10.282: هر دو نوع همگام‌سازی با برچسب روشن در صف استخراج */
         if (!empty($exRes['ok'])) {
             $pResult['extracted']      = (int)($exRes['extracted'] ?? 0);
             $pResult['extract_method'] = 'no_extract_detail';
@@ -22923,8 +22965,8 @@ if ($noExtract) {
         } else {
             $pResult['extract_error'] = $exRes['error'] ?? 'خطای نامشخص';
             notifRunFailure($cn, 'تازه‌سازی جزئیات', $profile['name'] ?? $key, $pResult['extract_error']);
-            // شکستِ تازه‌سازی نباید جلوی ارسالِ دوره‌ای را بگیرد
-            $exRes = ['ok'=>true,'extracted'=>0,'no_extract'=>true,
+            // شکستِ تازه‌سازی نباید جلوی ارسالِ دوره‌ای را بگیرد، ولی ردیف صف باید خطای واقعی را نشان دهد
+            $exRes = ['ok'=>true,'extracted'=>0,'no_extract'=>true,'sync_stage_error'=>$pResult['extract_error'],
                       'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
                       'new_items'=>[],'changed_items'=>[],'removed_items'=>[],
                       'price_up'=>0,'price_down'=>0];
@@ -23003,7 +23045,7 @@ try {
         'reason' => 'پاک‌سازی پیش از extract خودکار',
     ]);
 } catch (Throwable $_preEx) {}
-$exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'auto', false, $stepMode); /* v10.53 (۶۷) / v10.81 */
+$exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, $stepMode); /* v10.282: مرحلهٔ استخراج هر sync در صف بک‌اند */
 $pResult['step'] = $stepMode;
 
 /* v9.67: «استخراج تفصیلیِ جداگانه» در هر اجرای کران حذف شد.
@@ -23114,6 +23156,13 @@ if (manualSyncActive()) {
 /* مرحلهٔ دوم مشترک: بعد از ذخیرهٔ خروجی استخراج، تنظیمات تازه دوباره خوانده
    و امضای ضرایب ثبت می‌شود. ساخت payload در پایین همان ضرایب را اعمال می‌کند. */
 $profiles=loadProfiles();$profile=$profiles[$key]??$profile;$cn=loadConnections();
+$_syncExtractTrigger = manualSyncActive() ? 'manual_sync' : 'periodic_sync';
+$_syncExtractPhase = !empty($noExtract) ? 'detail' : (string)($stepMode ?? 'list');
+$_syncExtractQid = extractEnsureSyncQueueRow((string)$key, (array)$profile, $_syncExtractTrigger,
+    $_syncExtractPhase, (array)($exRes ?? []), !empty($noExtract)
+        ? 'مرحلهٔ استخراج همگام‌سازی از محصولات ذخیره‌شده/جزئیات استفاده کرد'
+        : 'مرحلهٔ استخراج همگام‌سازی دوره‌ای');
+$exRes['queue_id'] = $_syncExtractQid;
 $_pipeExtractDetail=syncExtractStageDetails((array)($exRes??[]));
 syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
     ['stage_details'=>['extract'=>$_pipeExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
@@ -41092,6 +41141,29 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.281', 'ورودی 10.281 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "281'") !== false
       && version_compare(APP_VERSION, '10.' . '281', '>='));
+
+    /* ---------- v10.282: sync extraction in backend queue ---------- */
+    $add('10.282', 'هر همگام‌سازی برای حالت‌های ردشده و checkpoint هم ردیف استخراج می‌سازد',
+         function_exists('extractEnsureSyncQueueRow')
+      && strpos($selfSrc, "'sync_stage'=>true") !== false
+      && strpos($selfSrc, "'checkpoint_reused'") !== false);
+    $add('10.282', 'استخراج واقعی دستی و دوره‌ای با هویت همگام‌سازی وارد صف می‌شود',
+         strpos($selfSrc, "['manual_sync','periodic_sync']") !== false
+      && substr_count($selfSrc, "'periodic_sync', false") >= 2
+      && strpos($selfSrc, "'ok'=>true,'queue_id'=>\$queueId,'extracted'=>count(\$allProducts)") !== false);
+    $add('10.282', 'نتیجهٔ صف استخراج به گزارش مرحلهٔ همان همگام‌سازی متصل می‌شود',
+         strpos($selfSrc, '$_msEx[' . "'queue_id'] = \$_msQueueId") !== false
+      && strpos($selfSrc, '$exRes[' . "'queue_id'] = \$_syncExtractQid") !== false);
+    $add('10.282', 'صف استخراج برچسب روشن دستی و دوره‌ای و توضیح حالت skip دارد',
+         strpos($selfSrc, 'استخراجِ همگام‌سازی دوره‌ای') !== false
+      && strpos($selfSrc, 'استخراجِ همگام‌سازی دستی') !== false
+      && strpos($selfSrc, 'e.sync_stage&&e.note_title') !== false);
+    $add('10.282', 'خطای تازه‌سازی noExtract در ردیف استخراج پنهان نمی‌شود',
+         strpos($selfSrc, "'sync_stage_error'=>\$pResult['extract_error']") !== false
+      && strpos($selfSrc, "\$stageError = trim((string)(\$result['sync_stage_error']") !== false);
+    $add('10.282', 'ورودی 10.282 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "282'") !== false
+      && version_compare(APP_VERSION, '10.' . '282', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71220,13 +71292,15 @@ function renderExtractQueue(entries, progress){
         html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
         html+='<span style="color:'+statusColors[st]+';font-weight:700;font-size:12px">'+statusLabels[st]+'</span>';
         // v8.27: منشأ اجرا — دستی یا خودکار (کران‌جاب)
-        if(e.trigger==='auto'){
+        if(e.trigger==='periodic_sync'){
+            html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">🔄 استخراجِ همگام‌سازی دوره‌ای</span>';
+        }else if(e.trigger==='auto'){
             html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">⏱ خودکار</span>';
         }else if(e.trigger==='manual'){
             html+='<span style="color:#a78bfa;font-size:10px;background:#4c1d9520;padding:1px 6px;border-radius:4px">👤 دستی</span>';
         }else if(e.trigger==='manual_sync'){
             /* v10.53 (۶۷): اجرایِ همگام‌سازیِ دستی — با برچسبِ جدا از «دستیِ عادی» */
-            html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px">🤝 هنگامِ همگام‌سازیِ دستی</span>';
+            html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px">🤝 استخراجِ همگام‌سازی دستی</span>';
         }
         /* v9.04: کدام مرحله؟ بدون این، ردیف «فهرست» با شمارندهٔ صفرِ
            جزئیات شبیه یک اجرای ناموفق به نظر می‌رسید. */
@@ -71257,6 +71331,9 @@ function renderExtractQueue(entries, progress){
 
         // ردیف ۳: متن پیشرفت
         if(progText)html+='<div style="color:#94a3b8;font-size:10px;margin-top:3px">'+progText+'</div>';
+        if(e.sync_stage&&e.note_title){
+            html+='<div style="color:'+(e.sync_skipped?'#fbbf24':'#7dd3fc')+';font-size:9.5px;margin-top:3px">'+(e.sync_skipped?'↪ ':'🔗 ')+esc(e.note_title)+'</div>';
+        }
 
         /* v8.90: نشان‌های شمارشی — تصاویر، فیلدها، تنوع‌ها و شکست‌ها.
            تا حالا فقط تعداد محصول دیده می‌شد و معلوم نبود از دل جزئیات چه
@@ -72173,6 +72250,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.282', t:'🔗 نمایش استخراج هر همگام‌سازی در صف بک‌اند', items:[
+    'استخراج واقعی همگام‌سازی دستی و دوره‌ای با برچسب مستقل در همان صف استخراج بک‌اند نمایش داده می‌شود',
+    'اگر استخراج پیش از ساخت ردیف رد شود، از checkpoint بازیابی شود یا پروفایل بدون استخراج باشد، یک ردیف نهایی و قابل‌گزارش برای همان همگام‌سازی ساخته می‌شود',
+    'ردیف‌های دوره‌ای و دستی هویت روشن دارند و حالت استفاده از دادهٔ ذخیره‌شده یا جزئیات با توضیح زرد مشخص می‌شود',
+    'شناسهٔ ردیف صف استخراج به گزارش مرحلهٔ همگام‌سازی متصل می‌شود تا جزئیات هر اجرا به همان کارت درست برسد'
+  ]},
   {v:'10.281', t:'🧭 کارت روشن و واکنش‌گرای صف‌های ارسال', items:[
     'صف‌های باسلام و ووکامرس اکنون یک کارت بصری مشترک اما با رنگ و نشان مقصد متفاوت دارند؛ وضعیت با عبارت روشن فارسی، نام پروفایل، فروشگاه/بسته و دامنهٔ کل کار نمایش داده می‌شود',
     'نوار پیشرفت، تعداد پردازش‌شده و باقی‌مانده و شش شاخص جدا برای جدید، آپدیت، ردشده، خطا، پردازش و باقی‌مانده در نگاه اول دیده می‌شود',
