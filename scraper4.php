@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.270';
+const APP_VERSION = '10.271';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1188,7 +1188,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         if ($opts['checkpoint'] === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
         /* stop قدیمی را matrixStopRequested با run_started_at نادیده می‌گیرد؛ حذفش
            اینجا race می‌ساخت و ممکن بود stop تازهٔ کاربر درست قبل از شروع پاک شود. */
-        $segments = 0; $res = ['ok'=>false,'error'=>'matrix_not_started'];
+        $segments = 0;$maxSegments=!empty($payload['one_segment'])?1:10000; $res = ['ok'=>false,'error'=>'matrix_not_started'];
         do {
             $segments++;
             s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments]);
@@ -1203,9 +1203,9 @@ function s4WorkerRunMatrixBuild(array $payload): array {
                 'phase'=>'وقفهٔ کوتاه worker','checkpoint'=>$opts['checkpoint']]);
             /* وقفه همچنان وجود دارد، اما ادامه را خود worker انجام می‌دهد نه JavaScript. */
             usleep(250000);
-        } while ($segments < 10000 && !matrixStopRequested());
+        } while ($segments < $maxSegments && !matrixStopRequested());
         $res['worker_segments'] = $segments;
-        if ($segments >= 10000 && !empty($res['yielded'])) return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
+        if ($maxSegments>=10000&&$segments >= $maxSegments && !empty($res['yielded'])) return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
         matrixStopClear();
         return $res;
     } catch (Throwable $e) {
@@ -1223,13 +1223,32 @@ function s4WorkerRunMatrixBuild(array $payload): array {
  * ارسال باسلام، cron و همهٔ jobهای دیگر را هم با خود متوقف کند. */
 function s4WorkerRunMatrixChild(array $payload): array {
     if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
-    $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
-    $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');$php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
-    $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
-    $out=[];$rc=0;@exec($cmd,$out,$rc);$tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
-    for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
-    if(is_array($decoded)){$decoded['child_exit_code']=$rc;return $decoded;}
-    return ['ok'=>false,'error'=>'matrix_child_exit_'.$rc,'tail'=>mb_substr($tail,-2000),'child_exit_code'=>$rc];
+    $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $segments=0;$retries=0;$resume=!empty($payload['resume']);
+    do{
+        $segments++;$part=$payload;$part['one_segment']=true;$part['resume']=$resume;
+        $raw=json_encode($part,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
+        $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
+        $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
+        $out=[];$rc=0;@exec($cmd,$out,$rc);$tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
+        for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
+        if($rc!==0||!is_array($decoded)){
+            if(matrixStopRequested())return ['ok'=>true,'stopped'=>true,'partial'=>true,'child_exit_code'=>$rc,'worker_segments'=>$segments];
+            $retries++;$resume=true;
+            matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'worker'=>true,'phase'=>'بازیابی برش worker',
+                'log_add'=>['⚠️ برش '.$segments.' با exit '.(int)$rc.' قطع شد؛ حافظه آزاد و از checkpoint تکرار می‌شود']]);
+            if($retries<=2){usleep(500000);continue;}
+            return ['ok'=>false,'error'=>'matrix_child_exit_'.$rc,'tail'=>mb_substr($tail,-2000),'child_exit_code'=>$rc,'worker_segments'=>$segments];
+        }
+        $decoded['child_exit_code']=$rc;$decoded['worker_segments']=$segments;$retries=0;
+        if(empty($decoded['yielded']))return $decoded;
+        $resume=true;
+        s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments,'matrix_child_recycled'=>true]);
+        /* مهم: process هر برش اینجا تمام شده است؛ heap بزرگ PHP واقعاً به OS
+           برمی‌گردد و برش بعدی checkpoint را در process تازه باز می‌کند. */
+        unset($decoded,$out,$part,$raw);usleep(250000);
+    }while($segments<10000&&!matrixStopRequested());
+    return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
 }
 
 /** v10.259: fallback واقعی برای سروری که worker دائمی نصب/فعال نیست.
@@ -40684,6 +40703,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "270'") !== false
       && version_compare(APP_VERSION, '10.' . '270', '>='));
 
+    /* ---------- v10.271: recycle matrix child per checkpoint ---------- */
+    $add('10.271', 'هر برش ماتریس در process تازه اجرا می‌شود و heap قبلی آزاد می‌گردد',
+         strpos($selfSrc, "\$part['one_segment']=true") !== false
+      && strpos($selfSrc, "\$maxSegments=!empty(\$payload['one_segment'])?1:10000") !== false
+      && strpos($selfSrc, 'matrix_child_recycled') !== false);
+    $add('10.271', 'daemon برش‌های yielded را تا پایان ادامه می‌دهد و checkpoint را resume می‌کند',
+         strpos($selfSrc, "if(empty(\$decoded['yielded']))return \$decoded") !== false
+      && strpos($selfSrc, "\$resume=true;") !== false
+      && strpos($selfSrc, "while(\$segments<10000&&!matrixStopRequested())") !== false);
+    $add('10.271', 'exit موقت retry محدود دارد ولی stop کاربر هرگز retry نمی‌شود',
+         strpos($selfSrc, "if(matrixStopRequested())return ['ok'=>true,'stopped'=>true") !== false
+      && strpos($selfSrc, 'if($retries<=2)') !== false
+      && strpos($selfSrc, "بازیابی برش worker") !== false);
+    $add('10.271', 'ورودی 10.271 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "271'") !== false
+      && version_compare(APP_VERSION, '10.' . '271', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -71611,6 +71647,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.271', t:'🧠 رفع توقف و exit 137 در ساخت جدول مغایرت', items:[
+    'worker دیگر یک process پرحافظه را برای هزاران checkpoint زنده نگه نمی‌دارد؛ هر برش در PHP CLI تازه اجرا و heap آن کامل به سیستم‌عامل برگردانده می‌شود',
+    'daemon کم‌حافظه برش‌ها را مستقل از مرورگر تا پایان زنجیره می‌کند و بین processها فقط checkpoint اتمیک را تحویل می‌دهد',
+    'قطع موقت یک برش، از آخرین checkpoint تا دو بار در process تمیز بازیابی می‌شود و exit code و شمارهٔ برش در گزارش worker ثبت می‌گردد',
+    'توقف کاربر قبل از retry بررسی می‌شود تا برش متوقف‌شده دوباره اجرا نشود؛ checkpoint فعلی برای Resume محفوظ می‌ماند'
+  ]},
   {v:'10.270', t:'♻️ آپدیت خودکار مستقل از deploy.php', items:[
     'نسخهٔ نصب‌شده حداکثر هر دو دقیقه branch ثابت و مورد اعتماد را با Git blob SHA مقایسه می‌کند و فایل کامل را خودکار، lint‌شده و اتمیک نصب می‌کند',
     'بررسی هم از tab مرورگر و هم از worker داخلی انجام می‌شود؛ بنابراین deploy.php، کلیک نصب و بازماندن یک صفحهٔ خاص پیش‌نیاز نیست',
