@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.264';
+const APP_VERSION = '10.265';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1129,6 +1129,7 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         'profile' => (string)($opts['profile'] ?? 'all'),
         'parallel_destinations' => !empty($opts['parallel_destinations']),
         'live_fill' => !empty($opts['live_fill']),
+        'selected_destinations' => array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):null,
         'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
         'resume' => $resume, 'requested_at' => microtime(true),
@@ -1160,6 +1161,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         'background' => true, 'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($payload['parallel_destinations']),
         'live_fill' => !empty($payload['live_fill']),
+        'selected_destinations' => array_key_exists('selected_destinations',$payload)&&$payload['selected_destinations']!==null?array_values((array)$payload['selected_destinations']):null,
         'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($payload['slice_seconds'] ?? 8))),
         'checkpoint' => null,
@@ -1171,6 +1173,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             $opts['checkpoint'] = $cp;
             if (isset($cp['fetch_mode'])) $opts['parallel_destinations'] = (string)$cp['fetch_mode'] === 'parallel';
             if (array_key_exists('live_fill', $cp)) $opts['live_fill'] = !empty($cp['live_fill']);
+            if (isset($cp['selected_destinations'])) $opts['selected_destinations'] = array_values((array)$cp['selected_destinations']);
             if (isset($cp['slice_seconds'])) $opts['slice_seconds'] = max(2, min(20, (int)$cp['slice_seconds']));
         }
     }
@@ -1235,6 +1238,7 @@ function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
         'profile'=>(string)($opts['profile']??'all'),
         'parallel_destinations'=>!empty($opts['parallel_destinations']),
         'live_fill'=>!empty($opts['live_fill']),
+        'selected_destinations'=>array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):null,
         'coded_only'=>false,
         'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
         'resume'=>$resume,
@@ -1276,6 +1280,7 @@ function s4ScheduleMatrixServerContinuation(array $opts): bool {
         'action'=>'sync_matrix_start','source'=>'manual','resume'=>'1',
         'parallel_destinations'=>!empty($opts['parallel_destinations'])?'1':'0',
         'live_fill'=>!empty($opts['live_fill'])?'1':'0',
+        'selected_destinations'=>json_encode(array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):matrixNormalizeDestinations(null)),
         'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
     ]);
     $cookie=(string)($_SERVER['HTTP_COOKIE']??'');
@@ -27483,6 +27488,16 @@ function matrixStopClear(): void { @unlink(SYNC_MATRIX_STOP_FILE); }
 function matrixProgressRead(): array {
     return localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
 }
+/** مقصدهای قابل انتخاب ماتریس: woo و bsl:<vendor_id>. null یعنی سازگاری
+ * با نسخه‌های قبلی و انتخاب همه؛ آرایهٔ خالی عمداً هیچ مقصدی است. */
+function matrixNormalizeDestinations($raw, ?array $cn=null): array {
+    $cn=$cn??loadConnections();$valid=['woo'=>true];
+    foreach((function_exists('bslAllShops')?bslAllShops($cn):[]) as $sh){$vid=(int)($sh['vendor_id']??0);if($vid>0)$valid['bsl:'.$vid]=true;}
+    if($raw===null)return array_keys($valid);
+    if(is_string($raw)){$decoded=json_decode($raw,true);$raw=is_array($decoded)?$decoded:preg_split('/\s*,\s*/',trim($raw),-1,PREG_SPLIT_NO_EMPTY);}
+    $out=[];foreach((array)$raw as $key){$key=trim((string)$key);if(isset($valid[$key]))$out[$key]=true;}
+    return array_keys($out);
+}
 /** v10.264: checkpointهای نسخه‌های قبل raw و map را همزمان نگه می‌داشتند و
  * هر resume شناسهٔ Woo یکسان را دوباره به woo_extra می‌افزود. این مهاجرت
  * درجا checkpoint موجود را بدون واکشی شبکه کوچک و idempotent می‌کند. */
@@ -27515,15 +27530,16 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
     try{
         $data=matrixResultLoad();if(!$data||!is_array($data['rows']??null))return ['ok'=>true,'changed'=>false,'reason'=>'empty'];
         $profiles=loadProfiles();$cn=loadConnections();$wooCfg=destPriceCfg($cn,'woocommerce');$bslCfg=destPriceCfg($cn,'basalam');
+        $repriceSelected=matrixNormalizeDestinations($data['selected_destinations']??null,$cn);$repriceSet=array_fill_keys($repriceSelected,true);$repriceWoo=isset($repriceSet['woo']);
         $shopList=function_exists('bslAllShops')?bslAllShops($cn):[];$shopBy=[];$shopsMeta=[];
-        foreach($shopList as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0)continue;$shopBy[$vid]=$sh;$shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??$sh['name']??('#'.$vid)),'is_default'=>!empty($sh['is_default'])];}
+        foreach($shopList as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0||!isset($repriceSet['bsl:'.$vid]))continue;$shopBy[$vid]=$sh;$shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??$sh['name']??('#'.$vid)),'is_default'=>!empty($sh['is_default'])];}
         $sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,'in_all'=>0,'only_profile'=>0];$changed=0;
         foreach($data['rows'] as &$r){
             if(!is_array($r)||!empty($r['is_report'])||str_starts_with((string)($r['bare']??''),'__report_'))continue;
             $before=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);
             $pk=(string)($r['profile_key']??'');$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:null;$hasProf=(int)($r['profile_hits']??0)>0;
             if($hasProf&&$profile){$raw=(int)($r['src_price']??0);$pp=profileFinalPrice($profile,(string)$raw);$r['profile_price']=$pp;$r['woo_expect']=$pp>0?destAdjustPrice($pp,$wooCfg):0;$r['bsl_expect']=$pp>0?destAdjustPrice($pp,$bslCfg):0;}
-            $hasWoo=!empty($r['woo']);$wooTone=$hasProf&&$hasWoo?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):($hasProf?'missing_dst':($hasWoo?'extra':'na'));
+            $hasWoo=$repriceWoo&&!empty($r['woo']);$wooTone=$repriceWoo?($hasProf&&$hasWoo?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):($hasProf?'missing_dst':($hasWoo?'extra':'na'))):'na';
             $r['woo_tone']=$wooTone;$shopCount=0;$shopOk=0;$shopBad=0;$shopMiss=0;$dupBsl=false;
             foreach($shopsMeta as $sm){$vid=(int)$sm['vendor_id'];$cell=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
                 if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$adj=bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
@@ -27532,9 +27548,10 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
             if((int)($r['profile_hits']??0)>1){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
             if($wooTone==='missing_dst'){$flags[]='missing_woo';$sum['missing_woo']++;}if($wooTone==='extra'){$flags[]='extra_woo';$sum['extra_woo']++;}if(in_array($wooTone,['bad','warn'],true)||$shopBad>0){$flags[]='price_mismatch';$sum['price_mismatch']++;}if($shopMiss>0&&$hasProf){$flags[]='missing_bsl';$sum['missing_bsl']++;}
             $r['flags']=array_values(array_unique($flags));$r['shop_ok']=$shopOk;$r['shop_bad']=$shopBad;$r['shop_miss']=$shopMiss;
-            if($hasProf&&$hasWoo&&$shopMiss===0&&$wooTone==='ok'&&$shopBad===0){$r['status']='ok';$sum['ok']++;$sum['in_all']++;}
-            elseif($hasProf&&!$hasWoo&&$shopCount===0){$r['status']='only_profile';$sum['only_profile']++;}
-            elseif(!$hasProf)$r['status']='only_dest';elseif(in_array($wooTone,['bad','warn'],true)||$shopBad>0)$r['status']='mismatch';elseif($wooTone==='missing_dst'||$shopMiss>0)$r['status']='missing';else$r['status']='partial';
+            $wooOk=!$repriceWoo||($hasWoo&&$wooTone==='ok');$hasAnySelectedDest=($repriceWoo&&$hasWoo)||$shopCount>0;
+            if($hasProf&&$wooOk&&$shopMiss===0&&$shopBad===0){$r['status']='ok';$sum['ok']++;$sum['in_all']++;}
+            elseif($hasProf&&!$hasAnySelectedDest){$r['status']='only_profile';$sum['only_profile']++;}
+            elseif(!$hasProf)$r['status']='only_dest';elseif(($repriceWoo&&in_array($wooTone,['bad','warn'],true))||$shopBad>0)$r['status']='mismatch';elseif(($repriceWoo&&$wooTone==='missing_dst')||$shopMiss>0)$r['status']='missing';else$r['status']='partial';
             $sum['total']++;$after=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);if($before!==$after)$changed++;
         }unset($r);
         $order=['mismatch'=>0,'missing'=>1,'only_profile'=>2,'only_dest'=>3,'partial'=>4,'ok'=>5];
@@ -27565,9 +27582,10 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
     $rows = is_array($cp['profile_rows'] ?? null) ? $cp['profile_rows'] : [];
     $codedOnly = false;
     $suffixes = matrixCollectSuffixes();
+    $liveSelected=matrixNormalizeDestinations($cp['selected_destinations']??null,$cn);$liveSet=array_fill_keys($liveSelected,true);$liveWoo=isset($liveSet['woo']);
     $shops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $shopsMeta = [];
-    foreach($shops as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0)continue;
+    foreach($shops as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0||!isset($liveSet['bsl:'.$vid]))continue;
         $shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??($sh['name']??('غرفه '.$vid))),
             'is_default'=>!empty($sh['is_default'])];}
     $ensure = static function(string $bare,string $title) use (&$rows): void {
@@ -27575,12 +27593,12 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
         $rows[$bare]=['bare'=>$bare,'title'=>$title,'key'=>'','profile'=>'','profile_key'=>'','src_price'=>0,
             'profile_price'=>0,'woo_expect'=>0,'bsl_expect'=>0,'profile_hits'=>0,'woo'=>null,'shops'=>[]];
     };
-    foreach((array)($cp['woo_rows']??[]) as $wr){if(!is_array($wr))continue;
+    foreach(($liveWoo?(array)($cp['woo_rows']??[]):[]) as $wr){if(!is_array($wr))continue;
         if($codedOnly&&!matrixTitleHasCode((string)($wr['title']??'')))continue;
         $bare=matrixBareTitle((string)($wr['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($wr['title']??''));
         $rows[$bare]['woo']=['id'=>(int)($wr['id']??0),'title'=>(string)($wr['title']??''),
             'price'=>(int)($wr['price']??0),'status'=>(string)($wr['status']??'')];}
-    foreach((array)($cp['shop_rows']??[]) as $vid=>$remote){foreach((array)$remote as $br){if(!is_array($br))continue;
+    foreach((array)($cp['shop_rows']??[]) as $vid=>$remote){if(!isset($liveSet['bsl:'.(int)$vid]))continue;foreach((array)$remote as $br){if(!is_array($br))continue;
         if($codedOnly&&!matrixTitleHasCode((string)($br['title']??'')))continue;
         $bare=matrixBareTitle((string)($br['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($br['title']??''));
         $expect=(int)($rows[$bare]['bsl_expect']??0);$actual=(int)($br['price_toman']??0);
@@ -27597,7 +27615,7 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
         if($bad)$sum['price_mismatch']++;if($r['status']==='only_profile')$sum['only_profile']++;
         $sum['total']++;$outRows[]=$r;}
     usort($outRows,static function($a,$b){return strcmp((string)($a['bare']??''),(string)($b['bare']??''));});
-    $data=['ok'=>true,'live_partial'=>true,'generated_at'=>time(),'source'=>$source,'coded_only'=>$codedOnly,'shops'=>$shopsMeta,
+    $data=['ok'=>true,'live_partial'=>true,'generated_at'=>time(),'source'=>$source,'coded_only'=>$codedOnly,'selected_destinations'=>$liveSelected,'shops'=>$shopsMeta,
         'woo_cfg'=>destPriceCfg($cn,'woocommerce'),'bsl_cfg'=>destPriceCfg($cn,'basalam'),'summary'=>$sum,
         'rows'=>$outRows,'woo_count'=>count((array)($cp['woo_rows']??[])),'row_count'=>count($outRows)];
     $json=json_encode($data,JSON_UNESCAPED_UNICODE);if($json===false)return false;
@@ -27610,7 +27628,7 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
  */
 function matrixFetchDestinationsParallel(array $cn, array $shops,
         array &$wooRows, bool &$wooDone, int &$wooPage, bool &$wooComplete,
-        array &$shopRows, array &$shopPages, array &$shopDone): array {
+        array &$shopRows, array &$shopPages, array &$shopDone, bool $includeWoo=true): array {
     if (!function_exists('curl_multi_init')) return ['ok' => false, 'fallback' => true, 'error' => 'curl_multi unavailable'];
     $w = is_array($cn['woocommerce'] ?? null) ? $cn['woocommerce'] : [];
     $round = 0; $requests = 0;
@@ -27621,7 +27639,7 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
         $deadline=(float)($GLOBALS['_matrixSliceDeadline']??0);
         if($round>0&&$deadline>0&&($deadline-microtime(true))<5.0)break;
         $jobs = [];
-        if (!$wooDone && trim((string)($w['store_url'] ?? '')) !== ''
+        if ($includeWoo && !$wooDone && trim((string)($w['store_url'] ?? '')) !== ''
             && trim((string)($w['consumer_key'] ?? '')) !== '') {
             $cur = reconFetchCursorLoad('woo', 0);
             if (count((array)($cur['rows'] ?? [])) > count($wooRows)) $wooRows = (array)$cur['rows'];
@@ -27636,7 +27654,7 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
                 CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERPWD=>(string)$w['consumer_key'].':'.(string)($w['consumer_secret']??''),
                 CURLOPT_HTTPHEADER=>['Accept: application/json']]);
             $jobs[] = ['kind'=>'woo','page'=>$page,'ch'=>$ch];
-        } elseif (!$wooDone) {
+        } elseif ($includeWoo && !$wooDone) {
             return ['ok'=>false,'error'=>'تنظیمات API ووکامرس ناقص است'];
         }
         foreach ($shops as $sh) {
@@ -27715,7 +27733,7 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             'errors'=>$failures,'rounds'=>$round,'requests'=>$requests];
         /* v10.254: دورهای بعدی تا پایان پنجرهٔ قابل‌تنظیم ادامه دارند. timeout
            هر درخواست شبکه همچنان محدود است و cursor هر صفحه مستقل ذخیره می‌شود. */
-        $allDone=$wooDone;
+        $allDone=!$includeWoo||$wooDone;
         foreach($shops as $doneShop){
             if(!is_array($doneShop))continue;
             $doneVid=(int)($doneShop['vendor_id']??0);
@@ -27742,6 +27760,9 @@ function matrixBuild(array $opts = []): array {
     $parallelDest = !empty($opts['parallel_destinations']);
     $liveFill = !empty($opts['live_fill']);
     $codedOnly = false;
+    $rawSelected=array_key_exists('selected_destinations',$opts)?$opts['selected_destinations']:null;
+    $selectedDestinations=matrixNormalizeDestinations($rawSelected,$cn);
+    $selectedSet=array_fill_keys($selectedDestinations,true);$includeWoo=isset($selectedSet['woo']);
     /* v10.254: زمان هر برش دستی قابل تنظیم است؛ ۲..۲۰ ثانیه تا هم تعداد
        بسته‌ها کم/زیاد شود و هم از timeout رایج proxy ها عبور نکند. */
     $sliceSeconds = max(2, min(20, (int)($opts['slice_seconds'] ?? 8)));
@@ -27750,6 +27771,7 @@ function matrixBuild(array $opts = []): array {
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
     $GLOBALS['_matrixSliceDeadline'] = in_array($source, ['manual','worker'], true) ? microtime(true) + $sliceSeconds : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
+    if(array_key_exists('selected_destinations',$resumeCp)){$selectedDestinations=matrixNormalizeDestinations($resumeCp['selected_destinations'],$cn);$selectedSet=array_fill_keys($selectedDestinations,true);$includeWoo=isset($selectedSet['woo']);}
     $compactStats=$resumeCp?matrixCompactCheckpoint($resumeCp):[];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
     $profileRows = is_array($resumeCp['profile_rows'] ?? null) ? $resumeCp['profile_rows'] : [];
@@ -27765,8 +27787,8 @@ function matrixBuild(array $opts = []): array {
     if (!array_key_exists('shop_done', $resumeCp) && $matrixShopCp) {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
-    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
-        return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
+    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone, &$selectedDestinations): array {
+        return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
@@ -27776,7 +27798,7 @@ function matrixBuild(array $opts = []): array {
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds,
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'selected_destinations'=>$selectedDestinations, 'slice_seconds' => $sliceSeconds,
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -27791,8 +27813,8 @@ function matrixBuild(array $opts = []): array {
     unset($profileRows,$resumeCp,$opts['checkpoint']);
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds): array {
-        $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds, &$selectedDestinations): array {
+        $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
@@ -27806,8 +27828,8 @@ function matrixBuild(array $opts = []): array {
     };
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source): array {
-        $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
+        $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
@@ -27880,14 +27902,16 @@ function matrixBuild(array $opts = []): array {
         'log_add' => ['✅ ' . count($rowsByKey) . ' عنوان یکتا از پروفایل‌ها'],
     ]);
 
-    /* v10.244: در حالت موازی، Woo و همهٔ غرفه‌ها صفحه‌به‌صفحه هم‌زمان
+    $allMatrixShops=function_exists('bslAllShops')?bslAllShops($cn):[];$shopList=[];
+    foreach($allMatrixShops as $mxShop){$mxVid=(int)($mxShop['vendor_id']??0);if($mxVid>0&&isset($selectedSet['bsl:'.$mxVid]))$shopList[]=$mxShop;}
+    /* v10.244: در حالت موازی، فقط مقصدهای تیک‌خورده صفحه‌به‌صفحه هم‌زمان
        واکشی می‌شوند؛ بخش‌های پایین فقط mapping دادهٔ آماده را انجام می‌دهند. */
     if ($parallelDest) {
-        $parallelShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+        $parallelShops = $shopList;
         matrixProgress(['phase'=>'parallel_fetch','pct'=>30,
             'log_add'=>['⚡ حالت موازی: ووکامرس + '.count($parallelShops).' غرفه هم‌زمان']]);
         $pr = matrixFetchDestinationsParallel($cn, $parallelShops, $matrixWooCp, $matrixWooDone,
-            $matrixWooPage, $matrixWooComplete, $matrixShopCp, $matrixShopPages, $matrixShopDone);
+            $matrixWooPage, $matrixWooComplete, $matrixShopCp, $matrixShopPages, $matrixShopDone, $includeWoo);
         matrixProgress(['checkpoint'=>$matrixCp('parallel_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone)]);
         if (matrixStopRequested() || !empty($pr['stopped'])) return $stopMatrix('parallel_fetch');
         if (!empty($pr['fallback'])) {
@@ -27902,7 +27926,8 @@ function matrixBuild(array $opts = []): array {
         } elseif (!empty($pr['yielded'])) return $yieldMatrix('parallel_fetch');
     }
 
-    // Woo
+    // Woo — مقصد بدون تیک اصلاً واکشی یا در وضعیت مغایرت محاسبه نمی‌شود.
+    if(!$includeWoo){$matrixWooCp=[];$matrixWooDone=true;$matrixWooComplete=true;}
     if (matrixStopRequested()) return $stopMatrix('woo_fetch');
     if (matrixSliceExpired()) return $yieldMatrix('woo_fetch');
     $wooErr = '';
@@ -27995,7 +28020,6 @@ function matrixBuild(array $opts = []): array {
     // Basalam shops
     $shopsMeta = [];
     $bslErr = '';
-    $shopList = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $sTot = max(1, count($shopList));
     $sN = 0;
     foreach ($shopList as $sh) {
@@ -28112,7 +28136,7 @@ function matrixBuild(array $opts = []): array {
     ];
     foreach ($rowsByKey as $bare => $r) {
         $hasProf = ($r['profile_hits'] ?? 0) > 0;
-        $hasWoo = !empty($r['woo']);
+        $hasWoo = $includeWoo && !empty($r['woo']);
         $shopCount = 0; $shopOk = 0; $shopBad = 0; $shopMiss = 0;
         foreach ($shopsMeta as $sm) {
             $vid = (int)$sm['vendor_id'];
@@ -28126,11 +28150,11 @@ function matrixBuild(array $opts = []): array {
             }
         }
         $wooTone = 'na';
-        if ($hasProf && $hasWoo) {
+        if ($includeWoo && $hasProf && $hasWoo) {
             $wooTone = matrixPriceTone((int)$r['woo_expect'], (int)($r['woo']['price'] ?? 0));
-        } elseif ($hasProf && !$hasWoo) {
+        } elseif ($includeWoo && $hasProf && !$hasWoo) {
             $wooTone = 'missing_dst';
-        } elseif (!$hasProf && $hasWoo) {
+        } elseif ($includeWoo && !$hasProf && $hasWoo) {
             $wooTone = 'extra';
         }
         $flags = [];
@@ -28148,15 +28172,17 @@ function matrixBuild(array $opts = []): array {
         if (in_array('price_mismatch', $flags, true)) { $sum['price_mismatch']++; }
 
         $status = 'partial';
-        if ($hasProf && $hasWoo && $shopMiss === 0 && $wooTone === 'ok' && $shopBad === 0) {
+        $wooOk=!$includeWoo||($hasWoo&&$wooTone==='ok');
+        $hasAnySelectedDest=($includeWoo&&$hasWoo)||$shopCount>0;
+        if ($hasProf && $wooOk && $shopMiss === 0 && $shopBad === 0) {
             $status = 'ok'; $sum['ok']++; $sum['in_all']++;
-        } elseif ($hasProf && !$hasWoo && $shopCount === 0) {
+        } elseif ($hasProf && !$hasAnySelectedDest) {
             $status = 'only_profile'; $sum['only_profile']++;
         } elseif (!$hasProf) {
             $status = 'only_dest';
-        } elseif ($wooTone === 'bad' || $wooTone === 'warn' || $shopBad > 0) {
+        } elseif (($includeWoo&&($wooTone === 'bad' || $wooTone === 'warn')) || $shopBad > 0) {
             $status = 'mismatch';
-        } elseif ($wooTone === 'missing_dst' || $shopMiss > 0) {
+        } elseif (($includeWoo&&$wooTone === 'missing_dst') || $shopMiss > 0) {
             $status = 'missing';
         }
 
@@ -28183,6 +28209,7 @@ function matrixBuild(array $opts = []): array {
         'generated_at' => time(),
         'source' => $source,
         'coded_only' => $codedOnly,
+        'selected_destinations'=>$selectedDestinations,
         'pricing_signature' => matrixPricingFingerprint($profiles, $cn),
         'suffixes' => $suffixes,
         'shops' => $shopsMeta,
@@ -29487,7 +29514,8 @@ function matrixQueryPage(array $opts = []): array {
             }
         }
     }
-    $destOptions = [['value'=>'woo','label'=>'ووکامرس']];
+    $querySelected=matrixNormalizeDestinations($data['selected_destinations']??null);
+    $destOptions = in_array('woo',$querySelected,true)?[['value'=>'woo','label'=>'ووکامرس']]:[];
     foreach ((array)($data['shops']??[]) as $ds) {
         if (!is_array($ds) || (int)($ds['vendor_id']??0)<=0) continue;
         $destOptions[]=['value'=>'bsl:'.(int)$ds['vendor_id'],'label'=>(string)($ds['name']??('#'.(int)$ds['vendor_id']))];
@@ -29507,6 +29535,7 @@ function matrixQueryPage(array $opts = []): array {
         'total' => $total,
         'actionable_total' => count($main),
         'summary' => $data['summary'] ?? [],
+        'selected_destinations'=>$querySelected,
         'shops' => $data['shops'] ?? [],
         'woo_cfg' => $data['woo_cfg'] ?? [],
         'bsl_cfg' => $data['bsl_cfg'] ?? [],
@@ -29613,7 +29642,8 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     if($repair&&!$workerActive){$actions['worker']=s4SpawnPersistentWorker();usleep(350000);$workerActive=s4WorkerIsActive();$wst=s4WorkerStateLoad();$whb=(int)($wst['heartbeat']??0);}
     if($repair&&!empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120)){
         matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'stale'=>true,'phase'=>'بازیابی خودکار','log_add'=>['♻️ فیدبک عملیات: worker ماتریس مرده بود؛ ادامه از checkpoint']]);
-        $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
+        $mxResumeCp=is_array($mx['checkpoint']??null)?$mx['checkpoint']:[];
+        $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'selected_destinations'=>array_key_exists('selected_destinations',$mxResumeCp)?array_values((array)$mxResumeCp['selected_destinations']):(array_key_exists('selected_destinations',$mx)?array_values((array)$mx['selected_destinations']):null),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
         /* daemon زنده مالک recovery باشد تا child را wait و exit/OOM را ثبت کند؛
            detached فقط fallback نصب‌هایی است که daemon واقعاً بالا نمی‌آید. */
         $actions['matrix']=$workerActive?s4WorkerEnqueueMatrixBuild($mxResumeOpts,true):s4SpawnMatrixBuildChild($mxResumeOpts,true);
@@ -29666,9 +29696,11 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
         'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
+        'selected_destinations' => matrixNormalizeDestinations($_GET['selected_destinations'] ?? $_POST['selected_destinations'] ?? null),
         'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($_GET['slice_seconds'] ?? $_POST['slice_seconds'] ?? 8))),
     ];
+    if(!$opts['selected_destinations']){echo json_encode(['ok'=>false,'error'=>'حداقل ووکامرس یا یک غرفه را انتخاب کنید'],JSON_UNESCAPED_UNICODE);exit;}
     /* v10.255: اگر worker دائمی حاضر است، request وب اصلاً سازندهٔ جدول نیست؛
        فقط job ثبت می‌کند. بنابراین ادامه به polling/جاوااسکریپت و بیدارماندن گوشی وابسته نیست. */
     if (function_exists('s4WorkerIsActive') && s4WorkerIsActive()) {
@@ -29723,6 +29755,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
     if ($matrixCp && array_key_exists('live_fill', $matrixCp))
         $opts['live_fill'] = !empty($matrixCp['live_fill']);
+    if ($matrixCp && isset($matrixCp['selected_destinations']))
+        $opts['selected_destinations'] = array_values((array)$matrixCp['selected_destinations']);
     if ($matrixCp && isset($matrixCp['slice_seconds']))
         $opts['slice_seconds'] = max(2, min(20, (int)$matrixCp['slice_seconds']));
     $opts['checkpoint'] = $matrixCp;
@@ -29767,7 +29801,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'phase' => 'start', 'started_at' => (int)($matrixCp['started_at'] ?? time()),
         'source' => $opts['source'], 'profile' => $opts['profile'], 'coded_only' => $opts['coded_only'], 'lock_recovered' => $lockRecovered,
         'checkpoint' => $matrixCp ?: ['phase' => 'profiles', 'profile_filter' => ($opts['profile'] ?: 'all'),
-            'profile_rows' => [], 'profiles_done' => [], 'coded_only' => $opts['coded_only'], 'started_at' => time()],
+            'profile_rows' => [], 'profiles_done' => [], 'coded_only' => $opts['coded_only'], 'selected_destinations'=>$opts['selected_destinations'], 'started_at' => time()],
         'log_add' => [($lockRecovered ? '♻️ قفل یتیم بازیابی شد — ' : '🚀 ') . ($matrixCp ? 'ادامه ساخت جدول از checkpoint' : 'جاب ساخت جدول در صف سرور') . '...'],
     ]);
     $early = json_encode(['ok' => true, 'started' => true, 'lock_recovered' => $lockRecovered, 'message' => 'ساخت روی سرور شروع شد'], JSON_UNESCAPED_UNICODE);
@@ -40407,6 +40441,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.264', 'ورودی 10.264 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "264'") !== false
       && version_compare(APP_VERSION, '10.' . '264', '>='));
+
+    /* ---------- v10.265: selected matrix destinations ---------- */
+    $add('10.265', 'لیست تیک‌دار ووکامرس/غرفه‌ها به درخواست ساخت ارسال می‌شود',
+         strpos($selfSrc, 'id="smDestinationList"') !== false
+      && strpos($selfSrc, "fd.append('selected_" . "destinations'") !== false
+      && strpos($selfSrc, 'sm-destination-check') !== false);
+    $add('10.265', 'انتخاب مقصد در worker و checkpoint حفظ و در build اعمال می‌شود',
+         function_exists('matrixNormalize' . 'Destinations')
+      && strpos($selfSrc, "'selected_destinations'=>\$selectedDestinations") !== false
+      && strpos($selfSrc, "isset(\$selectedSet['bsl:'") !== false
+      && strpos($selfSrc, '$includeWoo') !== false);
+    $add('10.265', 'نتیجه و قیمت‌گذاری مجدد فقط شمول انتخاب‌شده را محاسبه می‌کنند',
+         strpos($selfSrc, '$repriceWoo=isset($repriceSet[') !== false
+      && strpos($selfSrc, "'selected_destinations'=>\$querySelected") !== false
+      && strpos($selfSrc, 'if(includeWoo)colKeys.push') !== false);
+    $add('10.265', 'ورودی 10.265 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "265'") !== false
+      && version_compare(APP_VERSION, '10.' . '265', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63975,6 +64027,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button class="btn btn-red" onclick="syncMatrixFixStop()" id="smFixStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف اصلاح</button>
 </div>
 </div>
+<details id="smDestinationDetails" open style="margin:-1px 0 8px;padding:7px 9px;background:#0f172a;border:1px solid #475569;border-radius:8px">
+<summary style="cursor:pointer;color:#bae6fd;font-size:11px;font-weight:800">🎯 مقصدهای مشمول مغایرت‌گیری <span id="smDestinationCount" style="color:#4ade80"></span></summary>
+<div style="font-size:10px;color:#94a3b8;margin:6px 0">ووکامرس و هر غرفه را جداگانه تیک بزنید. مقصد بدون تیک واکشی، مقایسه و اصلاح نمی‌شود.</div>
+<div id="smDestinationList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+<div style="display:flex;gap:6px;margin-top:6px"><button type="button" class="btn btn-gray" onclick="smDestinationToggleAll(true)" style="font-size:9px;padding:3px 7px">انتخاب همه</button><button type="button" class="btn btn-gray" onclick="smDestinationToggleAll(false)" style="font-size:9px;padding:3px 7px">حذف همه</button></div>
+</details>
 <div id="smJobBar" style="display:none;margin-bottom:8px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px">
 <div style="display:flex;justify-content:space-between;font-size:11px;color:#e2e8f0;margin-bottom:4px">
 <span id="smJobLabel">در حال ساخت…</span><span id="smJobPct">0٪</span>
@@ -71312,6 +71370,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.265', t:'🎯 انتخاب مقصدهای مشمول مغایرت‌گیری', items:[
+    'در بالای جدول، ووکامرس و هر غرفهٔ باسلام یک تیک مستقل دارند و انتخاب کاربر در مرورگر حفظ می‌شود',
+    'فقط مقصدهای تیک‌خورده واکشی و مقایسه می‌شوند؛ ستون‌ها، وضعیت missing/mismatch، فیلترها و اصلاح نیز دقیقاً همان شمول را رعایت می‌کنند',
+    'انتخاب مقصد داخل checkpoint و payload worker حفظ می‌شود تا ادامهٔ سرورساید پس از بستن مرورگر یا بازیابی worker با همان انتخاب انجام شود'
+  ]},
   {v:'10.264', t:'🧹 رفع قطعی گیرکردن و OOM ساخت جدول', items:[
     'فیدبک production خطای matrix_child_exit_255 را نشان داد: هر resume همان ۲۵هزار محصول ووکامرس را دوباره map و همان ID را در woo_extra تکثیر می‌کرد؛ checkpoint در هر دور بزرگ‌تر می‌شد',
     'map ووکامرس اکنون idempotent است، تکرارهای مصنوعی checkpointهای قبلی را پاک می‌کند و raw ووکامرس پس از map از حافظه و checkpoint حذف می‌شود',
@@ -79681,7 +79744,7 @@ const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.ena
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
-updN();if(b.token&&bslAllCats.length===0){loadBslCats();}
+updN();if(b.token&&bslAllCats.length===0){loadBslCats();}syncMatrixRenderDestinations(b);
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
 arApplyCfg(cn.autoreply||{});arLoad();
 try{
@@ -79852,6 +79915,19 @@ function smPaintProgress(p){
       +(p.phase?(' · '+esc(String(p.phase))):'');
   }
 }
+function smDestinationExcluded(){try{return JSON.parse(localStorage.getItem('s4_matrix_dest_excluded')||'[]')||[]}catch(e){return[];}}
+function syncMatrixRenderDestinations(bsl){
+  const box=$('smDestinationList');if(!box)return;bsl=bsl||{};const items=[{key:'woo',label:'🛒 ووکامرس'}],seen={};
+  const add=v=>{const id=parseInt(v&&v.vendor_id)||0;if(!id||seen[id]||!String(v&&(v.token||'')))return;seen[id]=1;items.push({key:'bsl:'+id,label:'🏪 '+String((v.shop_name||v.name)||('غرفه '+id))+' (#'+id+')'});};
+  add({vendor_id:bsl.vendor_id,token:bsl.token,shop_name:bsl.shop_name||'غرفهٔ پیش‌فرض'});(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(add);
+  const excluded=new Set(smDestinationExcluded().map(String));box.innerHTML=items.map(x=>'<label style="display:flex;align-items:center;gap:5px;padding:5px 8px;background:#1e293b;border:1px solid #475569;border-radius:7px;color:#e2e8f0;cursor:pointer"><input class="sm-destination-check" type="checkbox" value="'+esc(x.key)+'" '+(excluded.has(x.key)?'':'checked')+' onchange="smDestinationChanged()" style="width:14px;height:14px">'+esc(x.label)+'</label>').join('');smDestinationChanged(false);
+}
+function smDestinationChanged(save){
+  const all=Array.from(document.querySelectorAll('.sm-destination-check')),selected=all.filter(x=>x.checked);if($('smDestinationCount'))$('smDestinationCount').textContent='('+smFa(selected.length)+' از '+smFa(all.length)+')';
+  if(save!==false)try{localStorage.setItem('s4_matrix_dest_excluded',JSON.stringify(all.filter(x=>!x.checked).map(x=>x.value)))}catch(e){}
+}
+function smDestinationToggleAll(on){document.querySelectorAll('.sm-destination-check').forEach(x=>x.checked=!!on);smDestinationChanged(true);}
+function smSelectedDestinations(){return Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>x.value);}
 function syncMatrixModeUi(save){
   const on=!!($('smParallelDest')&&$('smParallelDest').checked);
   if($('smFetchModeLabel')){$('smFetchModeLabel').textContent=on?'موازی':'سری';$('smFetchModeLabel').style.color=on?'#4ade80':'#94a3b8';}
@@ -79889,11 +79965,13 @@ function syncMatrixStart(resume,automatic){
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent=resume?'⏯ ادامه از checkpoint…':'🚀 ارسال جاب به سرور…';
   if($('smBody')) $('smBody').innerHTML='<tr><td style="padding:16px;text-align:center;color:#a5b4fc">ساخت روی سرور شروع شد — می‌توانید این صفحه را باز بگذارید</td></tr>';
+  const selectedDest=smSelectedDestinations();if(!selectedDest.length){showToast('حداقل ووکامرس یا یک غرفه را تیک بزنید',1);return;}
   const fd=new FormData();
   fd.append('action','sync_matrix_start');
   fd.append('source','manual');
   if(resume) fd.append('resume','1');
   fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
+  fd.append('selected_destinations',JSON.stringify(selectedDest));
   fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
   fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
@@ -80135,12 +80213,12 @@ function syncMatrixLoad(page, silent){
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
     window._smFilteredTotal=parseInt(d.actionable_total!=null?d.actionable_total:d.total)||0;
     if(d.filter_options){window._smFilterData=d.filter_options;smRenderFilterValues(($('smFilterValue')||{}).value||'');smRenderFilterRules();}
-    const shops = d.shops||[];
+    const shops = d.shops||[],resultDests=Array.isArray(d.selected_destinations)?d.selected_destinations:[],includeWoo=!resultDests.length||resultDests.includes('woo');
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
-    const colKeys=['n','title','profile','src_price','profile_price','woo_expect','woo_actual'];
+    const colKeys=['n','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
     let h = smTh('#','n',false)+smTh('عنوان (بدون پسوند)','title',true)+smTh('پروفایل','profile',true)
-      +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true)
-      +smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
+      +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true);
+    if(includeWoo)h+=smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
     shops.forEach(s=>{
       const sk='shop:'+String(s.vendor_id||0);colKeys.push(sk);
       h += smTh('🏪 '+(s.name||('#'+s.vendor_id)),sk,true);
@@ -80153,7 +80231,7 @@ function syncMatrixLoad(page, silent){
     if(sum){
       const chip=(lab,val,bg)=>'<span style="background:'+bg+';color:#fff;padding:4px 8px;border-radius:8px;font-weight:800">'+lab+': '+smFa(val||0)+'</span>';
       sum.innerHTML = chip('کل فایل',d.row_count_all||s.total,'#4c1d95')+chip('این فیلتر',d.total,'#5b21b6')+chip('یکسان',s.ok,'#166534')+chip('مغایرت',s.price_mismatch,'#b91c1c')
-        +chip('نیست در WC',s.missing_woo,'#1d4ed8')+chip('نیست در غرفه',s.missing_bsl,'#0369a1')
+        +(includeWoo?chip('نیست در WC',s.missing_woo,'#1d4ed8'):'')+chip('نیست در غرفه',s.missing_bsl,'#0369a1')
         +chip('تکراری پروفایل',s.dup_profile,'#7c3aed');
     }
     const wc = d.woo_cfg||{}, bc=d.bsl_cfg||{};
@@ -80164,9 +80242,7 @@ function syncMatrixLoad(page, silent){
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
         +' · همهٔ محصولات'
         +((d.filters||[]).length?' · 🔎 '+smFa(d.filters.length)+' فیلتر ('+(d.filter_join==='or'?'OR':'AND')+')':'')
-        +' · WC: '+smFa(d.woo_count||0)
-        +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
-        +(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')
+        +(includeWoo?(' · WC: '+smFa(d.woo_count||0)+' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')+(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')):' · WC خارج از شمول')
         +(d.bsl_error?(' · ⚠️ BSL: '+d.bsl_error):'');
     }
     try{ smPaintReports(d); }catch(e){}
@@ -80181,7 +80257,7 @@ function syncMatrixLoad(page, silent){
           const bg = (r.report_type==='work') ? '#1e3a5f' : '#14532d';
           let tr='<tr style="background:'+bg+'">';
           tr += smCell(smFa(start+i+1),'na');
-          tr += '<td colspan="'+ (6 + (shops.length||0) + 1) +'" style="padding:10px 12px;border-bottom:1px solid #334155;color:#e2e8f0;vertical-align:top">';
+          tr += '<td colspan="'+ Math.max(1,colKeys.length-1) +'" style="padding:10px 12px;border-bottom:1px solid #334155;color:#e2e8f0;vertical-align:top">';
           tr += '<div style="font-weight:900;font-size:12px;margin-bottom:6px;color:#fde68a">'+esc(r.title||'گزارش')+'</div>';
           tr += '<div style="font-size:11px;color:#bbf7d0;margin-bottom:6px">'+esc(r.report_text||'')+'</div>';
           tr += '<div style="font-size:10.5px;line-height:1.7;max-height:160px;overflow:auto">'+lines+'</div>';
@@ -80201,11 +80277,10 @@ function syncMatrixLoad(page, silent){
         tr += smCell(esc(r.profile||'—')+(r.profile_key?' <span style="opacity:.6">('+esc(r.profile_key)+')</span>':''),'na');
         tr += smCell(smMoney(r.src_price), r.src_price>0?'na':'no_src');
         tr += smCell(smMoney(r.profile_price), r.profile_price>0?'na':'no_src');
-        tr += smCell(smMoney(r.woo_expect), r.woo_expect>0?'na':'no_src');
-        if(r.woo){
-          tr += smCell(smMoney(r.woo.price)+'<div style="font-size:9px;opacity:.75">#'+smFa(r.woo.id)+' · '+esc(r.woo.status||'')+'</div>', r.woo_tone||'na');
-        } else {
-          tr += smCell(r.profile_hits?'نیست':'—', r.profile_hits?'missing_dst':'na');
+        if(includeWoo){
+          tr += smCell(smMoney(r.woo_expect), r.woo_expect>0?'na':'no_src');
+          if(r.woo)tr += smCell(smMoney(r.woo.price)+'<div style="font-size:9px;opacity:.75">#'+smFa(r.woo.id)+' · '+esc(r.woo.status||'')+'</div>', r.woo_tone||'na');
+          else tr += smCell(r.profile_hits?'نیست':'—', r.profile_hits?'missing_dst':'na');
         }
         shops.forEach(s=>{
           const cell = (r.shops&&r.shops[s.vendor_id]) ? r.shops[s.vendor_id] : null;
