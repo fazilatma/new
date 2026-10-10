@@ -10,9 +10,9 @@
  *  • هیچ‌کدام از توابع اجرای دستور سیستمی، اجرای کد پویا، یا رمزگشایی
  *    و بازکردنِ کدِ فشرده در این فایل به کار نرفته است. (فهرست کامل در
  *    فایل HOST-SECURITY-FA.md کنار همین فایل آمده است.)
- *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. تنها endpoint مدیریتی
- *    code_update با POST احراز‌شده، فایل کامل را از repo/branch ثابت و مورد
- *    اعتماد می‌گیرد، SHA و PHP syntax را بررسی و اتمیک نصب می‌کند.
+ *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. updater داخلی فقط فایل
+ *    کامل را از repo/branch ثابت و مورد اعتماد می‌گیرد، SHA و PHP syntax را
+ *    بررسی و اتمیک نصب می‌کند؛ URL یا کد دلخواه از درخواست نمی‌پذیرد.
  *  • درخواست‌های شبکه فقط با cURL و فقط به سرویس‌هایی می‌رود که
  *    کاربر در تنظیمات وارد کرده است (فروشگاه خودش، API باسلام).
  *  • نوشتن روی دیسک محدود به فایل‌های JSON کنار همین فایل، دفترِ محلیِ
@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.269';
+const APP_VERSION = '10.270';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1500,10 +1500,11 @@ function s4WorkerLoopFromCli(): void {
         s4WorkerStateWrite(['running' => false, 'phase' => 'stopped', 'stopped_at' => time()]);
         if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
     });
-    $lastCron = time();
+    $lastCron = time();$restartAfterUpdate=false;
     echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
     while (true) {
         if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
+        if(function_exists('s4AutoCodeUpdateTick')){$au=s4AutoCodeUpdateTick(false);if(!empty($au['updated'])||!empty($au['restart_required'])){$restartAfterUpdate=true;echo '['.date('Y-m-d H:i:s')."] code updated; worker restart requested\n";break;}}
         $job = s4WorkerClaimJob();
         if ($job) {
             $jid = (string)($job['id'] ?? '');
@@ -1551,6 +1552,7 @@ function s4WorkerLoopFromCli(): void {
             sleep($idle);
         }
     }
+    if($restartAfterUpdate)register_shutdown_function(static function(){usleep(300000);s4SpawnPersistentWorker();});
     echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker stopped\n";
 }
 
@@ -11394,6 +11396,8 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
 const S4_CODE_UPDATE_REPO='fazilatma/new';
 const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
+const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
+const S4_CODE_UPDATE_INTERVAL=120;
 
 function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
     if(!function_exists('curl_init'))return ['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
@@ -11412,11 +11416,14 @@ function s4CodeUpdateAdminAuth():array{
     $nonce=(string)($_POST['_wpnonce']??($_SERVER['HTTP_X_WP_NONCE']??''));
     return ['admin'=>$admin,'ok'=>$admin&&function_exists('wp_verify_nonce')&&wp_verify_nonce($nonce,'s4_code_update')];
 }
-function s4CodeUpdateRun():array{
-    $cfg=vc_load();$expected=trim((string)($cfg['deploy_token']??''));
-    $given=trim((string)($_SERVER['HTTP_X_S4_UPDATE_TOKEN']??($_POST['token']??'')));
-    $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);$wp=s4CodeUpdateAdminAuth();
-    if(!$tokenOk&&empty($wp['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized: deploy_token یا مدیر وردپرس با nonce لازم است'];
+function s4CodeUpdateRun(bool $trustedAuto=false):array{
+    $cfg=vc_load();
+    if(!$trustedAuto){
+        $expected=trim((string)($cfg['deploy_token']??''));
+        $given=trim((string)($_SERVER['HTTP_X_S4_UPDATE_TOKEN']??($_POST['token']??'')));
+        $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);$wp=s4CodeUpdateAdminAuth();
+        if(!$tokenOk&&empty($wp['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized: deploy_token یا مدیر وردپرس با nonce لازم است'];
+    }
     $lock=@fopen(__DIR__.'/.scraper4-code-update.lock','c');if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if($lock)@fclose($lock);return ['ok'=>false,'http'=>409,'error'=>'update_already_running'];}
     $tmp='';
     try{
@@ -11424,7 +11431,10 @@ function s4CodeUpdateRun():array{
         $api='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/contents/'.rawurlencode(S4_CODE_UPDATE_PATH).'?ref='.rawurlencode(S4_CODE_UPDATE_BRANCH);
         $meta=vc_get_json_auto($api,$ghToken,35);
         if(empty($meta['ok'])||empty($meta['data']['download_url']))return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>(string)($meta['error']??'')];
-        $remoteSha=(string)($meta['data']['sha']??'');$download=(string)$meta['data']['download_url'];
+        $remoteSha=(string)($meta['data']['sha']??'');
+        $localCode=(string)@file_get_contents(__FILE__);$localSha=vc_content_id($localCode);preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$localCode,$lvm);$diskVersion=(string)($lvm[1]??APP_VERSION);
+        if($remoteSha!==''&&hash_equals($remoteSha,$localSha))return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>$diskVersion,'restart_required'=>$diskVersion!==APP_VERSION,'sha'=>substr($remoteSha,0,12)];
+        $download=(string)$meta['data']['download_url'];
         $got=s4CodeUpdateHttp($download,$ghToken,120);if(empty($got['ok']))return ['ok'=>false,'http'=>502,'error'=>'github_download_failed','code'=>(int)$got['code'],'detail'=>(string)$got['error']];
         $code=(string)$got['body'];$size=strlen($code);
         if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
@@ -11439,17 +11449,42 @@ function s4CodeUpdateRun():array{
         $backup=__FILE__.'.before-code-update';@unlink($backup);if(!@copy(__FILE__,$backup))return ['ok'=>false,'http'=>500,'error'=>'backup_failed'];
         $installed=@rename($tmp,__FILE__);if(!$installed){$installed=@copy($tmp,__FILE__);if($installed)@unlink($tmp);}
         if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
-        clearstatcache(true,__FILE__);$worker=[];
-        if(function_exists('s4WorkerStateLoad')&&function_exists('posix_kill')){$st=s4WorkerStateLoad();$pid=(int)($st['pid']??0);if($pid>0)$worker['old_signalled']=@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);}
+        clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);$worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
         return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
             'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
 }
+/** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
+ * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
+function s4AutoCodeUpdateTick(bool $force=false):array{
+    $now=time();$state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
+    if(!$force&&$now-(int)($state['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($state['to_version'])&&(string)$state['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$state];}
+    $gate=@fopen(__DIR__.'/.scraper4-auto-update.lock','c');if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['ok'=>true,'skipped'=>true,'reason'=>'busy'];}
+    try{
+        clearstatcache(true,S4_CODE_UPDATE_STATE_FILE);$latest=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$latest=$j;}
+        if(!$force&&$now-(int)($latest['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($latest['to_version'])&&(string)$latest['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$latest];}
+        /* پیش از شبکه timestamp بنویس تا شکست GitHub نیز requestهای بعدی را طوفانی نکند. */
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode(['checked_at'=>$now,'checking'=>true,'local_version'=>APP_VERSION],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $res=s4CodeUpdateRun(true);$save=['checked_at'=>$now,'finished_at'=>time(),'ok'=>!empty($res['ok']),
+            'updated'=>!empty($res['updated']),'from_version'=>APP_VERSION,'to_version'=>(string)($res['to_version']??$res['version']??APP_VERSION),
+            'error'=>(string)($res['error']??''),'sha'=>(string)($res['sha']??'')];
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($save,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+        return $res+['auto'=>true];
+    }finally{@flock($gate,LOCK_UN);@fclose($gate);}
+}
+/* مرورگر endpoint سبک زیر را دوره‌ای صدا می‌زند؛ worker نیز پایین loop آن را
+ * اجرا می‌کند. requestهای عادی هرگز منتظر شبکهٔ GitHub نمی‌مانند. */
+if(isset($_GET['code_auto_update'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    echo json_encode(s4AutoCodeUpdateTick(!empty($_GET['force']??$_POST['force']??null)),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
 if(isset($_GET['code_update_status'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
+    $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
-        'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
+        'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
+        'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
         'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
@@ -40629,6 +40664,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.269', 'ورودی 10.269 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "269'") !== false
       && version_compare(APP_VERSION, '10.' . '269', '>='));
+
+    /* ---------- v10.270: deploy.php-independent auto update ---------- */
+    $add('10.270', 'auto updater دوره‌ای از منبع ثابت و بدون deploy.php نصب می‌کند',
+         function_exists('s4AutoCodeUpdate' . 'Tick')
+      && defined('S4_CODE_UPDATE_INTERVAL')
+      && strpos($selfSrc, "'deploy_php_required'=>false") !== false
+      && strpos($selfSrc, "s4CodeUpdateRun(true)") !== false);
+    $add('10.270', 'SHA یکسان دانلود و backup تکراری را حذف و flock طوفان درخواست را مهار می‌کند',
+         strpos($selfSrc, "hash_equals(\$remoteSha,\$localSha)") !== false
+      && strpos($selfSrc, '.scraper4-auto-update.lock') !== false
+      && strpos($selfSrc, "'checking'=>true") !== false);
+    $add('10.270', 'مرورگر و worker هر دو update را مستقل بررسی و نسخه RAM قدیمی را خارج می‌کنند',
+         strpos($selfSrc, "?code_auto_update=1&_watch=") !== false
+      && strpos($selfSrc, "!empty(\$au['restart_required'])") !== false
+      && strpos($selfSrc, "if(\$restartAfterUpdate)register_shutdown_function") !== false
+      && strpos($selfSrc, "isset(\$_GET['code_auto_update'])") !== false);
+    $add('10.270', 'ورودی 10.270 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "270'") !== false
+      && version_compare(APP_VERSION, '10.' . '270', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71545,9 +71599,10 @@ function s4ReloadForNewCode(nextVersion){
 }
 function s4WatchInstalledCode(){
   if(window._s4CodeReloading||document.visibilityState==='hidden')return;
-  fetch('?code_update_status=1&_watch='+Date.now(),{cache:'no-store',credentials:'same-origin'})
-    .then(r=>r.ok?r.json():null).then(d=>{if(d&&d.ok&&d.version&&String(d.version)!==String(S4_LOADED_VERSION))s4ReloadForNewCode(d.version);}).catch(()=>{});
+  fetch('?code_auto_update=1&_watch='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+    .then(r=>r.ok?r.json():null).then(d=>{const v=d&&(d.to_version||d.version||(d.state&&d.state.to_version));if(d&&d.ok&&v&&String(v)!==String(S4_LOADED_VERSION))s4ReloadForNewCode(v);}).catch(()=>{});
 }
+setTimeout(s4WatchInstalledCode,1500);
 setInterval(s4WatchInstalledCode,30000);
 window.addEventListener('focus',s4WatchInstalledCode);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4WatchInstalledCode();});
@@ -71556,6 +71611,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.270', t:'♻️ آپدیت خودکار مستقل از deploy.php', items:[
+    'نسخهٔ نصب‌شده حداکثر هر دو دقیقه branch ثابت و مورد اعتماد را با Git blob SHA مقایسه می‌کند و فایل کامل را خودکار، lint‌شده و اتمیک نصب می‌کند',
+    'بررسی هم از tab مرورگر و هم از worker داخلی انجام می‌شود؛ بنابراین deploy.php، کلیک نصب و بازماندن یک صفحهٔ خاص پیش‌نیاز نیست',
+    'فایل state و دو flock جدا جلوی درخواست همزمان، مصرف سهمیهٔ GitHub و نصب تکراری را می‌گیرند؛ در حالت بدون تغییر هیچ دانلود کامل یا backup ساخته نمی‌شود',
+    'worker در میانهٔ job کشته نمی‌شود و پس از پایان امن، اختلاف نسخهٔ RAM و فایل را تشخیص می‌دهد، خارج می‌شود و پردازهٔ نسخهٔ تازه را خودکار جایگزین می‌کند'
+  ]},
   {v:'10.269', t:'⏹ توقف قطعی ساخت و اصلاح مغایرت', items:[
     'دکمهٔ توقف دیگر فقط signal ثبت نمی‌کند: state همان لحظه stopped می‌شود و runner فعال با PID خودش TERM/KILL می‌گیرد',
     'job ماتریس pending یا running در صف cancelled می‌شود و نتیجهٔ دیررس parent دیگر آن را به failed/done برنمی‌گرداند',
