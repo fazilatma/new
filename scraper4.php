@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.282';
+const APP_VERSION = '10.283';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -41068,7 +41068,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "runBackendExtract(\$_msKey, 'manual_sync', false, \$_msPhase, false)") !== false);
     $add('10.278', 'همگام‌سازی دوره‌ای نیز با فاز list بک‌اند آغاز می‌شود',
          strpos($selfSrc, "\$stepMode = 'list';") !== false
-      && strpos($selfSrc, "runBackendExtract(\$key, manualSyncActive() ? 'manual_sync' : 'auto', false, \$stepMode)") !== false);
+      && strpos($selfSrc, "runBackendExtract(\$key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, \$stepMode)") !== false);
     $add('10.278', 'تایم‌لاین عمودی واکنش‌گرا و بدون اسکرول افقی جای طرح قبلی را گرفته است',
          strpos($selfSrc, '.sync-pipe-track:before') !== false
       && strpos($selfSrc, '@media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr') !== false
@@ -41164,6 +41164,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.282', 'ورودی 10.282 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "282'") !== false
       && version_compare(APP_VERSION, '10.' . '282', '>='));
+    $add('10.283', 'آزمون مسیر سریع دوره‌ای با برچسب صف periodic_sync هم‌راستا است',
+         strpos($selfSrc, "manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, \$stepMode") !== false
+      && strpos($selfSrc, "{v:'10." . "283'") !== false
+      && version_compare(APP_VERSION, '10.' . '283', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72250,6 +72254,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.283', t:'✅ هم‌راستاسازی آزمون استخراج دوره‌ای با صف جدید', items:[
+    'آزمون قدیمی مسیر سریع همگام‌سازی دوره‌ای اکنون برچسب periodic_sync جدید را می‌پذیرد و همچنان اجرای phase=list را الزام می‌کند'
+  ]},
   {v:'10.282', t:'🔗 نمایش استخراج هر همگام‌سازی در صف بک‌اند', items:[
     'استخراج واقعی همگام‌سازی دستی و دوره‌ای با برچسب مستقل در همان صف استخراج بک‌اند نمایش داده می‌شود',
     'اگر استخراج پیش از ساخت ردیف رد شود، از checkpoint بازیابی شود یا پروفایل بدون استخراج باشد، یک ردیف نهایی و قابل‌گزارش برای همان همگام‌سازی ساخته می‌شود',
