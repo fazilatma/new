@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.277';
+const APP_VERSION = '10.278';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -22041,7 +22041,10 @@ if (isset($_GET['manual_sync'])) {
     /* ── ۱) استخراج = عین دکمهٔ استخراج بک‌اند ── */
     $_msSyncCfg = is_array($_msProf['syncConfig'] ?? null) ? $_msProf['syncConfig'] : [];
     $_msNoEx = !empty($_msSyncCfg['noExtract']);
-    $_msPhase = 'all';
+    /* v10.278: دقیقاً تنظیم سریع دکمهٔ «استخراج بک‌اند»: phase=list و
+       force_all=false. همگام‌سازی دیگر مخفیانه phase=all/جزئیات را اجرا
+       نمی‌کند. فقط پروفایلِ صریحاً noExtract همان استثنای detail را دارد. */
+    $_msPhase = 'list';
     if ($_msNoEx) {
         $_msPhase = 'detail';
         manualSyncProgress([], '📋 پروفایل بدون‌استخراج فهرست — فاز detail');
@@ -22055,7 +22058,7 @@ if (isset($_GET['manual_sync'])) {
             '⚡ استخراج بک‌اند: ' . $_msName);
         msAlive('extract');
         /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم؛ trigger=manual_sync */
-        $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, true);
+        $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
     }
     manualSyncProgress(['checkpoint' => ['extract' => $_msEx]], '');
     $_msResults['extract'] = [
@@ -22923,7 +22926,9 @@ $detailWasUnfinished = in_array($stagePrev, ['list_done', 'detail'], true)
    محصولاتِ ازقبل‌کامل دوباره باز نمی‌شوند، پس دیگر «هر کران همهٔ جزئیات» نیست.
    اگر اجرای قبلی وسطِ جزئیات کشته شده باشد (stage=detail تازه)، مستقیم همان را
    با فازِ detail ادامه می‌دهیم (بدون گرفتن دوبارهٔ فهرست). */
-$stepMode = ($stagePrev === 'detail' && $stagePrevAge <= $stageStale) ? 'detail' : 'all';
+/* v10.278: همگام‌سازی دوره‌ای نیز دقیقاً همان استخراج بک‌اند سریع را آغاز
+   می‌کند: list، بدون force_all و بدون گذرِ پنهانِ جزئیات. */
+$stepMode = 'list';
 /* v10.81: قبل از extract خودکار، موانع کهنهٔ همین پروفایل را بردار — مثل دکمهٔ بک‌اند */
 try {
     extractClearStaleBlockers((string)$key, [
@@ -40921,14 +40926,30 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "\$_msPricing=syncPricingSnapshot((array)\$_msProf,\$_msCn)") !== false
       && strpos($selfSrc, "'profile_signature'=>profilePriceSignature(\$profile)") !== false
       && strpos($selfSrc, "'destination_signature'=>shopPricingSignature(\$cn)") !== false);
-    $add('10.277', 'اندپوینت و کارت زندهٔ چهارمرحله‌ای با نشانگر اکنون وجود دارد',
+    $add('10.277', 'اندپوینت و کارت زندهٔ چهارمرحله‌ای با نشانگر مرحلهٔ فعال وجود دارد',
          strpos($selfSrc, "isset(\$_GET['sync_pipeline_status'])") !== false
       && strpos($selfSrc, 'id="syncPipelineCards"') !== false
       && strpos($selfSrc, "setInterval(syncPipelineRender,3000)") !== false
-      && strpos($selfSrc, '>اکنون</span>') !== false);
+      && strpos($selfSrc, "active?'در حال انجام'") !== false);
     $add('10.277', 'ورودی 10.277 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "277'") !== false
       && version_compare(APP_VERSION, '10.' . '277', '>='));
+
+    /* ---------- v10.278: exact fast backend extraction + responsive timeline ---------- */
+    $add('10.278', 'همگام‌سازی دستی دقیقاً فاز سریع list و force_all=false را اجرا می‌کند',
+         strpos($selfSrc, "\$_msPhase = 'list';") !== false
+      && strpos($selfSrc, "runBackendExtract(\$_msKey, 'manual_sync', false, \$_msPhase, false)") !== false);
+    $add('10.278', 'همگام‌سازی دوره‌ای نیز با فاز list بک‌اند آغاز می‌شود',
+         strpos($selfSrc, "\$stepMode = 'list';") !== false
+      && strpos($selfSrc, "runBackendExtract(\$key, manualSyncActive() ? 'manual_sync' : 'auto', false, \$stepMode)") !== false);
+    $add('10.278', 'تایم‌لاین عمودی واکنش‌گرا و بدون اسکرول افقی جای طرح قبلی را گرفته است',
+         strpos($selfSrc, '.sync-pipe-track:before') !== false
+      && strpos($selfSrc, '@media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr') !== false
+      && strpos($selfSrc, 'class="sync-pipe-step') !== false
+      && strpos($selfSrc, "active?'در حال انجام'") !== false);
+    $add('10.278', 'ورودی 10.278 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "278'") !== false
+      && version_compare(APP_VERSION, '10.' . '278', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65350,7 +65371,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 </div>
                 <div style="font-size:10.5px;color:#64748b;line-height:1.7;margin-bottom:8px">
                     کلِ فرآیندِ همین پروفایل را همین حالا اجرا می‌کند:
-                    <b style="color:#93c5fd">استخراج</b> ← <b style="color:#fbbf24">بایگانیِ رفته‌ها</b> ←
+                    <b style="color:#93c5fd">استخراج بک‌اند سریع (همان دکمه)</b> ← <b style="color:#fbbf24">ذخیره و اعمال ضرایب</b> ←
                     <b style="color:#c4b5fd">صف‌سازی و ارسال</b> ← <b style="color:#34d399">گزارشِ کامل</b>.
                     منتظرِ نوبتِ زمان‌بندی نمی‌ماند و در پایان، گزارش هم در مدیر وظیفه ثبت
                     می‌شود و هم به پیام‌رسان می‌رود.
@@ -65366,7 +65387,22 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <div id="msPhase" style="font-size:11px;color:#34d399;margin-top:4px"></div>
                     <div id="msLog" style="max-height:160px;overflow-y:auto;font-size:10.5px;color:#94a3b8;margin-top:4px;line-height:1.8"></div>
                 </div>
-                <div id="syncPipelineCards" style="margin-top:9px;display:grid;gap:7px"></div>
+                <style>
+                  .sync-pipe-list{margin-top:10px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+                  .sync-pipe-card{background:linear-gradient(160deg,#0b1220,#111827);border:1px solid #273449;border-radius:14px;padding:11px;min-width:0;box-shadow:0 8px 24px #02061755}
+                  .sync-pipe-head{display:flex;align-items:center;gap:7px;margin-bottom:9px}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+                  .sync-pipe-badge{font-size:9px;padding:2px 7px;border-radius:999px;white-space:nowrap}.sync-pipe-track{position:relative;display:grid;gap:5px;padding-right:3px}
+                  .sync-pipe-track:before{content:"";position:absolute;right:15px;top:17px;bottom:17px;width:2px;background:#243147}
+                  .sync-pipe-step{position:relative;z-index:1;display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px;border-radius:10px;border:1px solid transparent;transition:.2s}
+                  .sync-pipe-dot{width:29px;height:29px;border-radius:50%;display:grid;place-items:center;background:#172033;border:2px solid #334155;color:#64748b;font-size:12px;font-weight:900}
+                  .sync-pipe-name{font-size:10.5px;color:#64748b;font-weight:650}.sync-pipe-state{font-size:8.5px;color:#64748b}
+                  .sync-pipe-step.done .sync-pipe-dot{background:#064e3b;border-color:#34d399;color:#d1fae5}.sync-pipe-step.done .sync-pipe-name{color:#a7f3d0}
+                  .sync-pipe-step.active{background:linear-gradient(90deg,#172554cc,#0f1c35);border-color:#3b82f6;box-shadow:0 0 0 2px #3b82f622}.sync-pipe-step.active .sync-pipe-dot{background:#2563eb;border-color:#93c5fd;color:white;box-shadow:0 0 14px #3b82f688}.sync-pipe-step.active .sync-pipe-name{color:white;font-weight:900}.sync-pipe-step.active .sync-pipe-state{color:#93c5fd;font-weight:800}
+                  .sync-pipe-step.failed{background:#3f1218;border-color:#ef4444}.sync-pipe-step.failed .sync-pipe-dot{background:#991b1b;border-color:#fca5a5;color:white}.sync-pipe-step.failed .sync-pipe-name,.sync-pipe-step.failed .sync-pipe-state{color:#fecaca}
+                  .sync-pipe-msg{margin-top:8px;border-top:1px dashed #273449;padding-top:7px;color:#94a3b8;font-size:9.5px;line-height:1.7}
+                  @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:6px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}}
+                </style>
+                <div id="syncPipelineCards" class="sync-pipe-list"></div>
                 <div id="msReport" style="margin-top:8px"></div>
 <div id="syncDiagnoseBox" style="display:none;margin-top:8px"></div>
             </div>
@@ -70483,25 +70519,23 @@ function syncPipelineRender(){
   fetch('?sync_pipeline_status=1').then(r=>r.json()).then(d=>{
     const rows=Array.isArray(d.rows)?d.rows.slice(0,8):[];
     if(!rows.length){host.innerHTML='';return;}
-    const stages=[['extract','⚡','استخراج بک‌اند'],['pricing','💰','ذخیره و اعمال ضرایب'],['send','📤','ارسال'],['done','✓','پایان']];
-    const idx={queued:0,extract:0,pricing:1,send:2,done:3,error:Math.max(0,0),stopped:Math.max(0,0)};
+    const stages=[['extract','⚡','استخراج بک‌اند سریع'],['pricing','٪','ذخیره و اعمال ضرایب'],['send','↑','ساخت صف و ارسال'],['done','✓','پایان و گزارش']];
+    const idx={queued:0,extract:0,pricing:1,send:2,done:3};
     host.innerHTML=rows.map(row=>{
-      const bad=row.stage==='error'||row.stage==='stopped', cur=idx[bad?(row.failed_stage||'extract'):row.stage]??0, terminal=row.stage==='done';
+      const bad=row.stage==='error'||row.stage==='stopped';
+      const cur=idx[bad?(row.failed_stage||'extract'):row.stage]??0,terminal=row.stage==='done';
       const steps=stages.map((s,i)=>{
-        const complete=terminal||i<cur, active=!terminal&&i===cur;
-        const bg=bad&&active?'#7f1d1d':active?'#1d4ed8':complete?'#064e3b':'#111827';
-        const bd=bad&&active?'#f87171':active?'#60a5fa':complete?'#34d399':'#334155';
-        const col=active||complete?'#f8fafc':'#64748b';
-        return '<div style="position:relative;flex:1;min-width:112px;padding:7px 8px;border:1px solid '+bd+';border-radius:8px;background:'+bg+';color:'+col+';font-size:10px;font-weight:'+(active?'900':'600')+';box-shadow:'+(active?'0 0 0 2px '+bd+'33,0 5px 16px #0005':'none')+'">'
-          +(active?'<span style="position:absolute;top:-7px;right:8px;background:'+bd+';color:#07111f;border-radius:9px;padding:1px 6px;font-size:8px">اکنون</span>':'')
-          +'<span style="font-size:13px">'+(complete?'✓':s[1])+'</span> '+s[2]+'</div>';
-      }).join('<span style="color:#475569;align-self:center">←</span>');
-      const trig=row.trigger==='periodic'?'⏱ دوره‌ای':'👤 دستی';
-      return '<div style="padding:9px;background:#0b1220;border:1px solid '+(bad?'#7f1d1d':terminal?'#14532d':'#334155')+';border-radius:11px">'
-        +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><b style="color:#e2e8f0;font-size:11px;flex:1">'+esc(row.profile_name||row.profile_key||'—')+'</b>'
-        +'<span style="font-size:9px;color:'+(row.trigger==='periodic'?'#fbbf24':'#7dd3fc')+'">'+trig+'</span></div>'
-        +'<div style="display:flex;gap:5px;align-items:stretch;overflow-x:auto;padding-top:5px">'+steps+'</div>'
-        +(row.message?'<div style="margin-top:6px;color:'+(bad?'#fca5a5':'#94a3b8')+';font-size:9.5px">'+esc(row.message)+'</div>':'')+'</div>';
+        const complete=terminal||i<cur,active=!terminal&&i===cur,failed=bad&&active;
+        const cls=failed?'failed':active?'active':complete?'done':'';
+        const state=failed?(row.stage==='stopped'?'متوقف':'خطا'):active?'در حال انجام':complete?'انجام شد':'در انتظار';
+        return '<div class="sync-pipe-step '+cls+'"><span class="sync-pipe-dot">'+(complete?'✓':failed?'!':s[1])+'</span>'
+          +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+'</span></div>';
+      }).join('');
+      const periodic=row.trigger==='periodic';
+      return '<article class="sync-pipe-card"><header class="sync-pipe-head"><span class="sync-pipe-title">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
+        +'<span class="sync-pipe-badge" style="color:'+(periodic?'#fde68a':'#bae6fd')+';background:'+(periodic?'#713f123d':'#0759853d')+'">'+(periodic?'⏱ دوره‌ای':'👤 دستی')+'</span></header>'
+        +'<div class="sync-pipe-track">'+steps+'</div>'
+        +(row.message?'<div class="sync-pipe-msg" style="color:'+(bad?'#fca5a5':'#94a3b8')+'">'+esc(row.message)+'</div>':'')+'</article>';
     }).join('');
   }).catch(()=>{});
 }
@@ -70516,7 +70550,7 @@ function startManualSync(){
     return;
   }
   if(!confirm('کلِ فرآیندِ همین پروفایل همین حالا اجرا شود؟\n\n'
-     +'استخراج ← بایگانیِ محصولاتِ رفته ← صف‌سازی و ارسال ← گزارش\n\n'
+     +'استخراج بک‌اند سریع ← اعمال ضرایب ← صف‌سازی و ارسال ← گزارش\n\n'
      +'بسته به تعدادِ محصولات ممکن است چند دقیقه طول بکشد؛ بستنِ صفحه کار را قطع نمی‌کند.'))return;
   /* v10.79: کلید واقعی پروفایل (از آرایهٔ profiles / currentProfileKey)
      — نه فقط profileKey(url) که گاهی با کلید روی دیسک یکی نیست
@@ -71926,6 +71960,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.278', t:'⚡ استخراج بک‌اند واقعی و تایم‌لاین واکنش‌گرا', items:[
+    'همگام‌سازی دستی دیگر phase=all و force_all اجرا نمی‌کند؛ دقیقاً مثل دکمهٔ استخراج بک‌اند سریع با phase=list و force_all=false آغاز می‌شود',
+    'همگام‌سازی دوره‌ای نیز همیشه با همان فاز list سریع شروع می‌شود و گذر پنهان جزئیات را قبل از اعمال ضرایب اجرا نمی‌کند',
+    'طرح افقی قبلی حذف و با تایم‌لاین عمودی جایگزین شد: دایرهٔ مرحله، خط اتصال، وضعیت متنی و برجسته‌سازی کامل مرحلهٔ جاری',
+    'در دسکتاپ کارت‌ها دو ستونه‌اند و زیر ۷۲۰ پیکسل کاملاً تک‌ستونه می‌شوند؛ هیچ اسکرول افقی یا خانهٔ فشرده روی موبایل وجود ندارد',
+    'رنگ سبز برای انجام‌شده، آبی درخشان برای جاری، خاکستری برای انتظار و قرمز برای خطا/توقف حفظ شده اما خوانایی با وضعیت متنی بیشتر شده است'
+  ]},
   {v:'10.277', t:'🎛 زنجیرهٔ یکسان و کارت بصری همگام‌سازی', items:[
     'همگام‌سازی دستی و دوره‌ای هر دو زنجیرهٔ صریح و یکسان دارند: استخراج بک‌اند، بارگذاری و اعمال ضرایب ذخیره‌شده، صف‌سازی/ارسال و پایان',
     'پس از استخراج، پروفایل و تنظیمات مقصد دوباره از دیسک خوانده می‌شوند و امضای ضریب پروفایل، مقصد و غرفه‌ها پیش از ساخت payload ثبت می‌شود',
