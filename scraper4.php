@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.254';
+const APP_VERSION = '10.255';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1121,6 +1121,91 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
     return $enq;
 }
 
+function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
+    $payload = [
+        'profile' => (string)($opts['profile'] ?? 'all'),
+        'parallel_destinations' => !empty($opts['parallel_destinations']),
+        'live_fill' => !empty($opts['live_fill']),
+        'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
+        'resume' => $resume, 'requested_at' => microtime(true),
+        /* فقط یک ساخت ماتریس می‌تواند pending/running باشد. */
+        'dedup_key' => 'matrix_build',
+    ];
+    $enq = s4WorkerEnqueue('matrix_build', $payload, 'ساخت جدول مغایرت');
+    if (!empty($enq['ok']) && empty($enq['duplicate'])) {
+        $old = $resume ? matrixProgressRead() : [];
+        $cp = $resume && is_array($old['checkpoint'] ?? null) ? $old['checkpoint'] : null;
+        matrixProgress([
+            'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
+            'phase' => 'در صف worker', 'pct' => (int)($old['pct'] ?? 1),
+            'source' => 'worker', 'profile' => $payload['profile'],
+            'slice_seconds' => $payload['slice_seconds'], 'checkpoint' => $cp,
+            'job_id' => (string)($enq['job_id'] ?? ''),
+            'started_at' => (int)($cp['started_at'] ?? time()),
+            'log_add' => ['🧵 ساخت جدول به worker دائمی سپرده شد — بستن مرورگر یا خواب گوشی اثری ندارد'],
+        ]);
+    }
+    return $enq;
+}
+
+/** اجرای کامل ماتریس در worker، با برش‌های checkpointدار ولی بدون وابستگی به polling مرورگر. */
+function s4WorkerRunMatrixBuild(array $payload): array {
+    $resume = !empty($payload['resume']);
+    $opts = [
+        'profile' => (string)($payload['profile'] ?? 'all'), 'source' => 'worker',
+        'background' => true, 'run_started_at' => microtime(true),
+        'parallel_destinations' => !empty($payload['parallel_destinations']),
+        'live_fill' => !empty($payload['live_fill']),
+        'slice_seconds' => max(2, min(20, (int)($payload['slice_seconds'] ?? 8))),
+        'checkpoint' => null,
+    ];
+    if ($resume) {
+        $old = matrixProgressRead();
+        $cp = is_array($old['checkpoint'] ?? null) ? $old['checkpoint'] : null;
+        if ($cp && (string)($cp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')) {
+            $opts['checkpoint'] = $cp;
+            if (isset($cp['fetch_mode'])) $opts['parallel_destinations'] = (string)$cp['fetch_mode'] === 'parallel';
+            if (array_key_exists('live_fill', $cp)) $opts['live_fill'] = !empty($cp['live_fill']);
+            if (isset($cp['slice_seconds'])) $opts['slice_seconds'] = max(2, min(20, (int)$cp['slice_seconds']));
+        }
+    }
+    $fp = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
+    if (!$fp || !@flock($fp, LOCK_EX)) { if ($fp) @fclose($fp); return ['ok'=>false,'error'=>'matrix_lock_failed']; }
+    try {
+        if ($opts['checkpoint'] === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
+        if ($opts['checkpoint'] === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
+        /* stop قدیمی را matrixStopRequested با run_started_at نادیده می‌گیرد؛ حذفش
+           اینجا race می‌ساخت و ممکن بود stop تازهٔ کاربر درست قبل از شروع پاک شود. */
+        $segments = 0; $res = ['ok'=>false,'error'=>'matrix_not_started'];
+        do {
+            $segments++;
+            s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments]);
+            $res = matrixBuild($opts);
+            if (empty($res['yielded'])) break;
+            $opts['checkpoint'] = is_array($res['checkpoint'] ?? null) ? $res['checkpoint'] : null;
+            if (!$opts['checkpoint']) break;
+            /* yielded برای fallback مرورگر یعنی «درخواست بعدی بساز»، اما در worker
+               همان job مالک ادامه است؛ وضعیت را running نگه دار تا UI درخواست موازی نسازد. */
+            matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'queued'=>false,'worker'=>true,
+                'phase'=>'وقفهٔ کوتاه worker','checkpoint'=>$opts['checkpoint']]);
+            /* وقفه همچنان وجود دارد، اما ادامه را خود worker انجام می‌دهد نه JavaScript. */
+            usleep(250000);
+        } while ($segments < 10000 && !matrixStopRequested());
+        $res['worker_segments'] = $segments;
+        if ($segments >= 10000 && !empty($res['yielded'])) return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
+        matrixStopClear();
+        return $res;
+    } catch (Throwable $e) {
+        $state = matrixProgressRead();
+        matrixProgress(['running'=>false,'done'=>true,'stale'=>true,'error'=>$e->getMessage(),'pct'=>100,
+            'checkpoint'=>is_array($state['checkpoint'] ?? null)?$state['checkpoint']:null,
+            'log_add'=>['❌ خطای worker: '.$e->getMessage().' — checkpoint حفظ شد']]);
+        return ['ok'=>false,'error'=>$e->getMessage()];
+    } finally {
+        @flock($fp, LOCK_UN); @fclose($fp);
+    }
+}
+
 function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
@@ -1194,6 +1279,9 @@ function s4WorkerRunJob(array $job): array {
     if ($type === 'manual_sync') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         return s4WorkerRunManualSyncChild($pk, !empty($payload['resume']));
+    }
+    if ($type === 'matrix_build') {
+        return s4WorkerRunMatrixBuild($payload);
     }
     if ($type === 'backend_extract') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
@@ -27449,7 +27537,7 @@ function matrixBuild(array $opts = []): array {
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
-    $GLOBALS['_matrixSliceDeadline'] = $source === 'manual' ? microtime(true) + $sliceSeconds : 0;
+    $GLOBALS['_matrixSliceDeadline'] = in_array($source, ['manual','worker'], true) ? microtime(true) + $sliceSeconds : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
     $profileRows = is_array($resumeCp['profile_rows'] ?? null) ? $resumeCp['profile_rows'] : [];
@@ -29108,6 +29196,18 @@ function matrixQueryPage(array $opts = []): array {
 if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_stop')) {
     header('Content-Type: application/json; charset=UTF-8');
     @file_put_contents(SYNC_MATRIX_STOP_FILE, json_encode(['at' => microtime(true), 'by' => 'user'], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    /* اگر job هنوز pending است، همان‌جا از صف لغو شود؛ در حالت running فایل stop
+       را در اولین مرز امن می‌بیند. این مانع شروع دیرهنگام بعد از زدن توقف است. */
+    if (function_exists('s4WorkerQueueMutate')) {
+        s4WorkerQueueMutate(function (&$q) {
+            $now=time();
+            foreach ($q['entries'] as &$e) {
+                if (!is_array($e) || (string)($e['type']??'')!=='matrix_build' || (string)($e['status']??'')!=='pending') continue;
+                $e['status']='cancelled'; $e['updated_at']=$now; $e['done_at']=$now; $e['error']='stopped_by_user';
+            }
+            unset($e); return ['ok'=>true];
+        });
+    }
     /* v10.240: وضعیت UI همان لحظه متوقف می‌شود؛ worker اگر هنوز زنده باشد
        فایل stop را در نقطهٔ امن بعدی می‌بیند و همین checkpoint را تثبیت می‌کند. */
     $stopState = matrixProgressRead();
@@ -29198,6 +29298,30 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
         'slice_seconds' => max(2, min(20, (int)($_GET['slice_seconds'] ?? $_POST['slice_seconds'] ?? 8))),
     ];
+    /* v10.255: اگر worker دائمی حاضر است، request وب اصلاً سازندهٔ جدول نیست؛
+       فقط job ثبت می‌کند. بنابراین ادامه به polling/جاوااسکریپت و بیدارماندن گوشی وابسته نیست. */
+    if (function_exists('s4WorkerIsActive') && s4WorkerIsActive()) {
+        $matrixLockHeld = false; $matrixProbe = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
+        if ($matrixProbe) {
+            $matrixLockHeld = !@flock($matrixProbe, LOCK_EX | LOCK_NB);
+            if (!$matrixLockHeld) @flock($matrixProbe, LOCK_UN);
+            @fclose($matrixProbe);
+        }
+        if ($matrixLockHeld) {
+            echo json_encode(['ok'=>false,'error'=>'یک ساخت جدول در worker در حال اجراست','running'=>true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $resumeRequested = !empty($_GET['resume'] ?? $_POST['resume'] ?? null);
+        $enq = s4WorkerEnqueueMatrixBuild($opts, $resumeRequested);
+        if (empty($enq['ok'])) {
+            echo json_encode(['ok'=>false,'error'=>'ثبت job ماتریس در worker ناموفق بود: '.(string)($enq['error']??'unknown')], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode(['ok'=>true,'started'=>true,'queued'=>true,'worker'=>true,
+            'duplicate'=>!empty($enq['duplicate']),'job_id'=>(string)($enq['job_id']??''),
+            'message'=>'ساخت به worker دائمی سرور سپرده شد'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
        دوباره انجام می‌شود و پروفایل‌های مبدأ از ابتدا تکرار نمی‌شوند. */
@@ -39707,6 +39831,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.254', 'ورودی 10.254 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "254'") !== false
       && version_compare(APP_VERSION, '10.' . '254', '>='));
+
+    /* ---------- v10.255: matrix belongs to persistent worker ---------- */
+    $add('10.255', 'ساخت ماتریس در worker دائمی صف می‌شود',
+         function_exists('s4WorkerEnqueue' . 'MatrixBuild')
+      && function_exists('s4WorkerRun' . 'MatrixBuild')
+      && strpos($selfSrc, "s4WorkerEnqueueMatrix" . "Build(\$opts") !== false);
+    $add('10.255', 'worker همهٔ برش‌ها را بدون polling مرورگر ادامه می‌دهد',
+         strpos($selfSrc, "'source' => 'worker'") !== false
+      && strpos($selfSrc, 'while ($segments < 10000') !== false
+      && strpos($selfSrc, "matrixProgress(['running'=>true") !== false);
+    $add('10.255', 'نوع job ماتریس در dispatcher worker اجرا می‌شود',
+         strpos($selfSrc, "\$type === 'matrix_" . "build'") !== false
+      && strpos($selfSrc, 'return s4WorkerRunMatrixBuild($payload)') !== false);
+    $add('10.255', 'توقف، job ماتریس pending را هم لغو می‌کند',
+         strpos($selfSrc, "\$e['status']='cancelled'") !== false
+      && strpos($selfSrc, "\$e['error']='stopped_by_user'") !== false);
+    $add('10.255', 'ورودی 10.255 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "255'") !== false
+      && version_compare(APP_VERSION, '10.' . '255', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -70577,6 +70720,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.255', t:'🧵 ساخت واقعی ماتریس در worker سرور', items:[
+    'ساخت جدول هنگام فعال‌بودن worker فقط در صف ثبت می‌شود و کاملاً بیرون از request مرورگر اجرا می‌گردد',
+    'خود worker همهٔ برش‌ها را از checkpoint ادامه می‌دهد؛ بستن مرورگر یا خواب گوشی دیگر عملیات را متوقف نمی‌کند',
+    'وقفهٔ قابل‌تنظیم و توقف واقعی حفظ شده و رابط فقط وضعیت ذخیره‌شدهٔ سرور را می‌خواند'
+  ]},
   {v:'10.254', t:'⏱ تنظیم زمان برش واکشی ماتریس', items:[
     'اسلایدر ۲ تا ۲۰ ثانیه کنار سوییچ‌های ماتریس اضافه شد؛ مقدار در مرورگر و checkpoint حفظ می‌شود',
     'زمان بیشتر معمولاً صفحات ۱۰۰تایی بیشتری پیش از وقفه می‌گیرد و زمان کمتر توقف/پاسخ‌گویی سریع‌تری می‌دهد',
@@ -79050,7 +79198,10 @@ function syncMatrixStart(resume,automatic){
       if(d&&d.running) syncMatrixPoll();
       return;
     }
-    showToast('ساخت روی سرور آغاز شد');
+    if(d.worker){
+      showToast('ساخت به worker دائمی سپرده شد؛ می‌توانید مرورگر را ببندید');
+      if($('smBody')) $('smBody').innerHTML='<tr><td style="padding:16px;text-align:center;color:#4ade80">worker سرور مستقل در حال ساخت است — بستن مرورگر یا خواب گوشی اثری ندارد</td></tr>';
+    }else showToast('ساخت روی سرور آغاز شد (برای ادامهٔ برش‌ها صفحه باز بماند)');
     syncMatrixPoll();
   }).catch(e=>{
     /* v10.245: حتی اگر proxy پاسخ start را 500/غیر JSON کرد، worker ممکن است
