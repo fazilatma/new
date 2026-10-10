@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.268';
+const APP_VERSION = '10.269';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1057,6 +1057,9 @@ function s4WorkerFinishJob(string $jobId, string $status, array $result = [], st
         $now = time();
         foreach ($q['entries'] as &$e) {
             if (!is_array($e) || (string)($e['id'] ?? '') !== $jobId) continue;
+            /* stop endpoint ممکن است child را کشته و job را cancelled کرده باشد؛
+               نتیجهٔ دیررس parent نباید آن را دوباره failed/done کند. */
+            if((string)($e['status']??'')==='cancelled'){$e['updated_at']=$now;$e['done_at']=$e['done_at']??$now;break;}
             $e['status'] = $status;
             $e['updated_at'] = $now;
             $e['done_at'] = $now;
@@ -27564,6 +27567,17 @@ function matrixSliceExpired(): bool {
     return $d > 0 && microtime(true) >= $d;
 }
 function matrixStopClear(): void { @unlink(SYNC_MATRIX_STOP_FILE); }
+/** توقف سختِ runner پس از ثبت signal/state. برای child ماتریس یا request اصلاح
+ * است؛ PID daemon مشترک هرگز به‌عنوان runner ثبت نمی‌شود. */
+function matrixTerminateRunner(array $state): array {
+    $pid=(int)($state['runner_pid']??0);$self=(int)@getmypid();
+    $out=['pid'=>$pid,'signalled'=>false,'killed'=>false];
+    if($pid<=1||$pid===$self||!function_exists('posix_kill'))return $out;
+    $alive=@posix_kill($pid,0);if(!$alive)return $out;
+    $out['signalled']=@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);usleep(250000);
+    if(@posix_kill($pid,0))$out['killed']=@posix_kill($pid,defined('SIGKILL')?SIGKILL:9);
+    return $out;
+}
 
 function matrixProgressRead(): array {
     return localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
@@ -27878,7 +27892,7 @@ function matrixBuild(array $opts = []): array {
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'selected_destinations'=>$selectedDestinations, 'slice_seconds' => $sliceSeconds,
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'runner_pid'=>(int)@getmypid(), 'runner_kind'=>'matrix_build', 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'selected_destinations'=>$selectedDestinations, 'slice_seconds' => $sliceSeconds,
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -29648,8 +29662,8 @@ if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matr
         s4WorkerQueueMutate(function (&$q) {
             $now=time();
             foreach ($q['entries'] as &$e) {
-                if (!is_array($e) || (string)($e['type']??'')!=='matrix_build' || (string)($e['status']??'')!=='pending') continue;
-                $e['status']='cancelled'; $e['updated_at']=$now; $e['done_at']=$now; $e['error']='stopped_by_user';
+                if (!is_array($e) || (string)($e['type']??'')!=='matrix_build' || !in_array((string)($e['status']??''),['pending','running'],true)) continue;
+                $e['status']='cancelled'; $e['updated_at']=$now; $e['done_at']=$now; $e['cancel_requested_at']=$now; $e['error']='stopped_by_user';
             }
             unset($e); return ['ok'=>true];
         });
@@ -29661,7 +29675,8 @@ if (isset($_GET['sync_matrix_stop']) || (($_POST['action'] ?? '') === 'sync_matr
         'stop_requested' => true, 'phase' => 'stopped', 'finished_at' => time(),
         'checkpoint' => is_array($stopState['checkpoint'] ?? null) ? $stopState['checkpoint'] : null,
         'log_add' => ['⏹ ساخت جدول متوقف شد؛ checkpoint حفظ شد']]);
-    echo json_encode(['ok' => true, 'stop_requested' => true, 'stopped' => true], JSON_UNESCAPED_UNICODE);
+    $terminated=matrixTerminateRunner($stopState);
+    echo json_encode(['ok' => true, 'stop_requested' => true, 'stopped' => true,'runner'=>$terminated], JSON_UNESCAPED_UNICODE);
     exit;
 }
 /* v10.242: endpoint فیدبک جمع‌وجور؛ بدون dump کردن هزاران ردیف checkpoint. */
@@ -29742,6 +29757,13 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     header('Content-Type: application/json; charset=UTF-8');
     $prog = matrixProgressRead();
     $fix = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
+    /* state قدیمیِ running نباید دکمهٔ ساخت را برای همیشه قفل کند. فقط وقتی
+       heartbeat کهنه و lock واقعاً آزاد است، آن را stopped می‌کنیم. */
+    if(!empty($fix['running'])&&(time()-(int)($fix['ts']??$fix['started_at']??0))>180){
+        $ff=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$free=$ff&&@flock($ff,LOCK_EX|LOCK_NB);
+        if($free){@flock($ff,LOCK_UN);matrixFixProgress(['running'=>false,'done'=>true,'stopped'=>true,'stale'=>true,'phase'=>'stopped','finished_at'=>time(),'log_add'=>['⏹ state قدیمی اصلاح آزاد شد']]);$fix=matrixFixProgressRead();}
+        if($ff)@fclose($ff);
+    }
     $has = is_file(SYNC_MATRIX_RESULT_FILE);
     $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
     $anyRun = !empty($prog['running']) || !empty($fix['running']);
@@ -29975,9 +29997,12 @@ if (isset($_GET['sync_matrix_fix_status']) || (($_POST['action'] ?? '') === 'syn
 
 if (isset($_GET['sync_matrix_fix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_fix_stop')) {
     header('Content-Type: application/json; charset=UTF-8');
-    @file_put_contents(SYNC_MATRIX_FIX_STOP_FILE, json_encode(['at' => time()]), LOCK_EX);
-    matrixFixProgress(['log_add' => ['⏹ درخواست توقف ثبت شد…']]);
-    echo json_encode(['ok' => true, 'stopping' => true], JSON_UNESCAPED_UNICODE);
+    @file_put_contents(SYNC_MATRIX_FIX_STOP_FILE, json_encode(['at' => microtime(true),'by'=>'user']), LOCK_EX);
+    $fixStopState=matrixFixProgressRead();
+    matrixFixProgress(['running'=>false,'done'=>true,'stopped'=>true,'cancelled'=>true,'stop_requested'=>true,
+        'phase'=>'stopped','finished_at'=>time(),'log_add'=>['⏹ اصلاح فوراً توسط کاربر متوقف شد']]);
+    $terminated=matrixTerminateRunner($fixStopState);
+    echo json_encode(['ok' => true, 'stopping' => false,'stopped'=>true,'runner'=>$terminated], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -30030,7 +30055,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     matrixFixStopClear();
     matrixFixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
-        'phase' => 'queued', 'started_at' => (int)($matrixFixCp['started_at'] ?? time()), 'source' => $opts['source'],
+        'phase' => 'queued', 'started_at' => (int)($matrixFixCp['started_at'] ?? time()), 'runner_pid'=>(int)@getmypid(), 'runner_kind'=>'matrix_fix', 'source' => $opts['source'],
         'scope' => $opts['scope'], 'delay_ms' => $opts['delay_ms'],
         'job' => 'fix', 'log' => [], 'live' => [],
         'checkpoint' => $matrixFixCp ?: ['scope' => $opts['scope'], 'done_jobs' => [], 'started_at' => time()],
@@ -40586,6 +40611,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.268', 'ورودی 10.268 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "268'") !== false
       && version_compare(APP_VERSION, '10.' . '268', '>='));
+
+    /* ---------- v10.269: hard stop matrix build/fix ---------- */
+    $add('10.269', 'runner ساخت و اصلاح PID دارد و stop آن را واقعاً خاتمه می‌دهد',
+         function_exists('matrixTerminate' . 'Runner')
+      && strpos($selfSrc, "'runner_pid'=>(int)@getmypid()") !== false
+      && strpos($selfSrc, "defined('SIGKILL')") !== false);
+    $add('10.269', 'صف running/pending لغو و نتیجهٔ دیررس parent وضعیت cancelled را حفظ می‌کند',
+         strpos($selfSrc, "['pending','running']") !== false
+      && strpos($selfSrc, "==='cancelled'") !== false
+      && strpos($selfSrc, "'cancel_requested_at'") !== false);
+    $add('10.269', 'رابط پس از توقف دکمه ساخت را فوراً فعال می‌کند',
+         strpos($selfSrc, "$('smBuildStartBtn').disabled=false") !== false
+      && strpos($selfSrc, "اصلاح متوقف شد") !== false
+      && strpos($selfSrc, "state قدیمی اصلاح آزاد شد") !== false
+      && strpos($selfSrc, "const isFix=(p.job==='fix'") !== false);
+    $add('10.269', 'ورودی 10.269 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "269'") !== false
+      && version_compare(APP_VERSION, '10.' . '269', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71513,6 +71556,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.269', t:'⏹ توقف قطعی ساخت و اصلاح مغایرت', items:[
+    'دکمهٔ توقف دیگر فقط signal ثبت نمی‌کند: state همان لحظه stopped می‌شود و runner فعال با PID خودش TERM/KILL می‌گیرد',
+    'job ماتریس pending یا running در صف cancelled می‌شود و نتیجهٔ دیررس parent دیگر آن را به failed/done برنمی‌گرداند',
+    'رابط بلافاصله دکمه‌های توقف را می‌بندد، دکمهٔ ساخت روی سرور را فعال و وضعیت را دوباره polling می‌کند',
+    'توقف اصلاح نیز checkpoint و نتیجهٔ فعلی را حفظ می‌کند؛ state قدیمی running با heartbeat کهنه و lock آزاد خودکار پاک می‌شود و دکمهٔ ادامهٔ ساخت اشتباهاً برای job اصلاح نمایش داده نمی‌شود'
+  ]},
   {v:'10.268', t:'🔄 رفرش خودکار مرورگر پس از آپدیت کد', items:[
     'هر tab باز هر ۳۰ ثانیه و همچنین هنگام برگشت فوکوس، نسخهٔ نصب‌شده را با نسخه‌ای که بارگذاری کرده مقایسه می‌کند',
     'پس از نصب توسط deploy.php، code_update یا tab دیگر، پیام کوتاه نمایش داده می‌شود و صفحه با cache-buster خودکار reload می‌شود',
@@ -80049,9 +80098,10 @@ function smPaintProgress(p){
     try{ el.scrollTop = el.scrollHeight; }catch(e){}
   }
   const buildStop=$('smBuildStopBtn'), buildResume=$('smBuildResumeBtn'), buildStart=$('smBuildStartBtn');
-  const isBuild=!!p.running && !(p.job==='fix' || String(p.phase||'').indexOf('fix')>=0 || p.ok_n!=null);
+  const isFix=(p.job==='fix'||String(p.phase||'').indexOf('fix')>=0||p.ok_n!=null);
+  const isBuild=!!p.running&&!isFix;
   if(buildStop) buildStop.style.display=isBuild?'':'none';
-  if(buildResume) buildResume.style.display=(!p.running && (!!p.stopped || !!p.partial || !!p.checkpoint))?'':'none';
+  if(buildResume) buildResume.style.display=(!isFix&&!p.running && (!!p.stopped || !!p.partial || !!p.checkpoint))?'':'none';
   if(buildStart) buildStart.disabled=!!p.running;
   if(!p.running && p.stopped && $('smJobLabel')) $('smJobLabel').textContent='⏹ متوقف شد — ادامه از checkpoint آماده است';
   const stopBtn=$('smFixStopBtn');
@@ -80154,9 +80204,11 @@ function syncMatrixStop(){
   const fd=new FormData(); fd.append('action','sync_matrix_stop');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     showToast(d&&d.ok?'ساخت متوقف شد؛ checkpoint حفظ شد':'توقف ناموفق', !(d&&d.ok));
-    if($('smBuildStopBtn')) $('smBuildStopBtn').disabled=false;
+    if($('smBuildStopBtn')){$('smBuildStopBtn').disabled=false;$('smBuildStopBtn').style.display='none';}
+    if($('smBuildStartBtn'))$('smBuildStartBtn').disabled=false;
+    if(d&&d.ok){smPaintProgress({running:false,done:true,stopped:true,phase:'stopped',pct:100});}
     syncMatrixPoll();
-  }).catch(e=>showToast('خطا: '+e,1));
+  }).catch(e=>{if($('smBuildStopBtn'))$('smBuildStopBtn').disabled=false;showToast('خطا: '+e,1);});
 }
 function syncMatrixPoll(){
   if(window._smPoll) clearInterval(window._smPoll);
@@ -80230,10 +80282,15 @@ function syncMatrixFixStart(scope){
   }).catch(e=>showToast('خطا: '+e,1));
 }
 function syncMatrixFixStop(){
+  const btn=$('smFixStopBtn');if(btn){btn.disabled=true;btn.textContent='⏳ توقف…';}
   const fd=new FormData(); fd.append('action','sync_matrix_fix_stop');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-    showToast(d&&d.ok?'درخواست توقف ثبت شد':'توقف ناموفق', !(d&&d.ok));
-  }).catch(()=>{});
+    showToast(d&&d.ok?'اصلاح متوقف شد':'توقف ناموفق', !(d&&d.ok));
+    if(btn){btn.disabled=false;btn.textContent='⏹ توقف اصلاح';btn.style.display='none';}
+    if($('smBuildStartBtn'))$('smBuildStartBtn').disabled=false;
+    if(d&&d.ok)smPaintProgress({running:false,done:true,stopped:true,phase:'stopped',pct:100,job:'fix'});
+    syncMatrixPoll();
+  }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='⏹ توقف اصلاح';}});
 }
 window._smFixDestLists=[];
 function smFixOperationLabel(kind){
