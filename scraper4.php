@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.274';
+const APP_VERSION = '10.275';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11464,7 +11464,16 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
             return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>APP_VERSION,'remote'=>$remoteVersion];
         $tmp=__FILE__.'.update.'.getmypid().'.tmp';if(@file_put_contents($tmp,$code,LOCK_EX)!==$size)return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];
         @chmod($tmp,(int)(@fileperms(__FILE__)&0777));
-        if(function_exists('exec')){$lint=[];$rc=0;@exec(escapeshellarg(PHP_BINARY).' -l '.escapeshellarg($tmp).' 2>&1',$lint,$rc);if($rc!==0)return ['ok'=>false,'http'=>422,'error'=>'php_lint_failed','detail'=>implode("\n",array_slice($lint,-5))];}
+        if(function_exists('exec')){
+            $lint=[];$rc=0;$lintPhp=function_exists('s4CliPhpBinary')?s4CliPhpBinary():(defined('PHP_BINARY')?(string)PHP_BINARY:'php');
+            /* request وب LiteSpeed معمولاً PHP_BINARY=lsphp دارد. lsphp -l در
+               LSAPI mode بدون خروجی fail می‌شود؛ binary واقعی php کنار آن را
+               برای lint ترجیح بده، سپس سازندهٔ CLI سازگار را به‌کار ببر. */
+            if(stripos(basename($lintPhp),'lsphp')!==false){$plain=dirname($lintPhp).'/php';if(is_file($plain)&&is_executable($plain))$lintPhp=$plain;}
+            $lintBase=function_exists('s4CliPhpCommand')?s4CliPhpCommand($lintPhp,'256M'):escapeshellarg($lintPhp);
+            @exec($lintBase.' -l '.escapeshellarg($tmp).' 2>&1',$lint,$rc);
+            if($rc!==0)return ['ok'=>false,'http'=>422,'error'=>'php_lint_failed','binary'=>$lintPhp,'exit_code'=>$rc,'detail'=>implode("\n",array_slice($lint,-5))];
+        }
         $backup=__FILE__.'.before-code-update';@unlink($backup);if(!@copy(__FILE__,$backup))return ['ok'=>false,'http'=>500,'error'=>'backup_failed'];
         $installed=@rename($tmp,__FILE__);if(!$installed){$installed=@copy($tmp,__FILE__);if($installed)@unlink($tmp);}
         if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
@@ -40818,6 +40827,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.274', 'ورودی 10.274 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "274'") !== false
       && version_compare(APP_VERSION, '10.' . '274', '>='));
+
+    /* ---------- v10.275: LiteSpeed-safe updater lint ---------- */
+    $add('10.275', 'updater برای lint وب، php واقعی کنار lsphp و فرمان CLI سازگار را انتخاب می‌کند',
+         strpos($selfSrc, "stripos(basename(\$lintPhp),'lsphp')") !== false
+      && strpos($selfSrc, "dirname(\$lintPhp).'/php'") !== false
+      && strpos($selfSrc, "s4CliPhpCommand(\$lintPhp,'256M')") !== false);
+    $add('10.275', 'خطای lint اکنون binary و exit code تشخیصی دارد',
+         strpos($selfSrc, "'binary'=>\$lintPhp,'exit_code'=>\$rc") !== false);
+    $add('10.275', 'ورودی 10.275 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "275'") !== false
+      && version_compare(APP_VERSION, '10.' . '275', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71750,6 +71770,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.275', t:'🔧 نصب خودکار سازگار با LiteSpeed', items:[
+    'lint آپدیتر در request وب دیگر lsphp را با -l در LSAPI mode اجرا نمی‌کند؛ binary واقعی php کنار lsphp را ترجیح می‌دهد',
+    'فرمان lint از همان سازندهٔ CLI سازگار worker استفاده می‌کند و در خطا binary و exit code را برای تشخیص دقیق برمی‌گرداند',
+    'این اصلاح اجازه می‌دهد آپدیت خودکار کامل از خود صفحهٔ production نیز نصب شود، نه فقط از worker CLI'
+  ]},
   {v:'10.274', t:'📄 رفع توقف ایمالز روی صفحهٔ دوم', items:[
     'فیدبک production تأیید کرد تنظیمات ۱۰۰ صفحه و الگوی ~page~{page} درست است، اما یک transport موقتاً صفحهٔ ۱ را برای URL صفحهٔ ۲ برگرداند و محافظ duplicate زود متوقف شد',
     'پیش از توقف به‌علت صفر محصول تازه، صفحهٔ ایمالز با direct، PHP stream و سپس Jina Reader مستقل بازخوانی می‌شود و فقط پاسخ دارای productKey تازه پذیرفته می‌شود',
