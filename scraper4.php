@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.266';
+const APP_VERSION = '10.267';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1222,7 +1222,7 @@ function s4WorkerRunMatrixChild(array $payload): array {
     if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
     $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
     $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');$php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
-    $cmd=escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
+    $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
     $out=[];$rc=0;@exec($cmd,$out,$rc);$tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
     for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
     if(is_array($decoded)){$decoded['child_exit_code']=$rc;return $decoded;}
@@ -1255,7 +1255,7 @@ function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
         'phase'=>'راه‌اندازی پردازهٔ مستقل سرور','source'=>'worker_child',
         'log_add'=>['🧵 worker دائمی در دسترس نبود؛ پردازهٔ مستقل CLI شروع می‌شود و به مرورگر وابسته نیست']]);
     $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
-    $cmd='nohup '.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem)
+    $cmd='nohup '.s4CliPhpCommand($php,$mem)
         .' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg)
         .' >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
     $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;
@@ -1300,9 +1300,9 @@ function s4ScheduleMatrixServerContinuation(array $opts): bool {
 
 function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
-    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    $php = s4CliPhpBinary();
     $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
-    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+    $cmd = s4CliPhpCommand($php,$mem)
         . ' ' . escapeshellarg(__FILE__) . ' manual_sync ' . escapeshellarg($profileKey)
         . ($resume ? ' --resume' : '') . ' 2>&1';
     $out = []; $rc = 0;
@@ -1318,6 +1318,13 @@ function s4CliPhpBinary(): string {
     if (defined('PHP_BINDIR') && PHP_BINDIR && is_file(PHP_BINDIR . '/php')) return PHP_BINDIR . '/php';
     return 'php';
 }
+/** LiteSpeed در PHP_BINARY معمولاً lsphp می‌دهد؛ این binary با -d وارد LSAPI
+ * mode و فقط Usage چاپ می‌کند. -q + script آن را صریحاً در CLI mode می‌برد. */
+function s4CliPhpCommand(string $php,string $mem='512M'): string {
+    $base=strtolower(basename($php));
+    if(str_contains($base,'lsphp'))return escapeshellarg($php).' -q';
+    return escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
+}
 
 /** v10.263: روی نصب Apache/LiteSpeed که server.sh اجرا نیست، اندپوینت سلامت
  * می‌تواند daemon CLI را دوباره زنده کند. flock از daemon تکراری جلوگیری می‌کند. */
@@ -1328,7 +1335,7 @@ function s4SpawnPersistentWorker(): array {
     if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
     $php=s4CliPhpBinary();$probe=[];$prc=0;@exec(escapeshellarg($php).' -v 2>&1',$probe,$prc);if($prc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable'];
     $mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';$log=__DIR__.'/logs/worker.log';
-    $cmd='nohup '.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem).' '.escapeshellarg(__FILE__).' worker --tick=60 >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
+    $cmd='nohup '.s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' worker --tick=60 >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
     $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
     if($rc!==0||$pid<=0)return ['ok'=>false,'error'=>'worker_spawn_failed','exit_code'=>$rc,'log'=>$log];
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
@@ -1346,7 +1353,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
     if ($probeRc !== 0) return ['ok' => false, 'error' => 'php_cli_unavailable', 'php' => $php, 'tail' => mb_substr(trim(implode("\n", $probeOut)), -500)];
     $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
     $log = __DIR__ . '/logs/backend-extract.log';
-    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+    $cmd = s4CliPhpCommand($php,$mem)
         . ' ' . escapeshellarg(__FILE__) . ' backend_extract ' . escapeshellarg($profileKey)
         . ' --phase=' . escapeshellarg($phase)
         . ($forceAll ? ' --force-all' : '')
@@ -1369,10 +1376,10 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
 
 function s4WorkerRunCronChild(): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
-    $php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+    $php = s4CliPhpBinary();
     $mem = (string)@ini_get('memory_limit');
     if ($mem === '') $mem = '512M';
-    $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=' . escapeshellarg($mem)
+    $cmd = s4CliPhpCommand($php,$mem)
         . ' ' . escapeshellarg(__FILE__) . ' cron_run 2>&1';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -40554,6 +40561,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "266'") !== false
       && version_compare(APP_VERSION, '10.' . '266', '>='));
 
+    /* ---------- v10.267: LiteSpeed CLI compatibility ---------- */
+    $add('10.267', 'lsphp با -q و PHP CLI عادی با -d از سازندهٔ مشترک اجرا می‌شود',
+         function_exists('s4CliPhp' . 'Command')
+      && strpos($selfSrc, "str_contains(\$base,'lsphp')") !== false
+      && strpos($selfSrc, "return escapeshellarg(\$php).' -q'") !== false);
+    $add('10.267', 'worker، ماتریس، استخراج دستی و cron همگی فرمان مشترک CLI دارند',
+         substr_count($selfSrc, 's4CliPhpCommand($php,$mem)') >= 6);
+    $add('10.267', 'ورودی 10.267 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "267'") !== false
+      && version_compare(APP_VERSION, '10.' . '267', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -71463,6 +71481,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.267', t:'🛠 اجرای worker در هاست LiteSpeed/lsphp', items:[
+    'فیدبک مسیر production جدید نشان داد PHP_BINARY برابر lsphp است و آرگومان‌های -d فقط Usage چاپ می‌کنند؛ بنابراین worker، cron و child ماتریس واقعاً شروع نمی‌شدند',
+    'همهٔ فرمان‌های CLI اکنون از سازندهٔ مشترک استفاده می‌کنند و برای lsphp با -q وارد حالت CLI می‌شوند؛ PHP CLI معمولی همچنان محدودیت زمان/حافظهٔ صریح دارد',
+    'فیدبک‌های بعدی از مسیر افزونهٔ wp-content/plugins/tst/scraper4.php خوانده می‌شوند'
+  ]},
   {v:'10.266', t:'🚀 endpoint امن نصب کل کد پس از push', items:[
     'اندپوینت خواندنی code_update_status وضعیت نسخه، منبع ثابت و روش احراز هویت را بدون افشای توکن گزارش می‌کند',
     'اندپوینت POST code_update فایل کامل scraper4.php را از branch ثابت نشست می‌گیرد، Git blob SHA و PHP lint را بررسی و با backup به‌صورت اتمیک نصب می‌کند',
