@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.263';
+const APP_VERSION = '10.264';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1174,6 +1174,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             if (isset($cp['slice_seconds'])) $opts['slice_seconds'] = max(2, min(20, (int)$cp['slice_seconds']));
         }
     }
+    unset($old,$cp);
     $fp = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
     if (!$fp || !@flock($fp, LOCK_EX)) { if ($fp) @fclose($fp); return ['ok'=>false,'error'=>'matrix_lock_failed']; }
     try {
@@ -1187,8 +1188,9 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments]);
             $res = matrixBuild($opts);
             if (empty($res['yielded'])) break;
-            $opts['checkpoint'] = is_array($res['checkpoint'] ?? null) ? $res['checkpoint'] : null;
-            if (!$opts['checkpoint']) break;
+            $nextCp=is_array($res['checkpoint']??null)?$res['checkpoint']:null;
+            $opts['checkpoint']=$nextCp;unset($res,$nextCp);
+            if (!$opts['checkpoint']) {$res=['ok'=>false,'error'=>'matrix_checkpoint_missing'];break;}
             /* yielded برای fallback مرورگر یعنی «درخواست بعدی بساز»، اما در worker
                همان job مالک ادامه است؛ وضعیت را running نگه دار تا UI درخواست موازی نسازد. */
             matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'queued'=>false,'worker'=>true,
@@ -1497,9 +1499,11 @@ function s4WorkerLoopFromCli(): void {
                 $ok = !empty($res['ok']);
                 s4WorkerFinishJob($jid, ($ok && empty($res['resume_needed'])) ? 'done' : ($ok ? 'paused' : 'failed'), ['ok' => $ok,
                     'extracted' => (int)($res['extracted'] ?? 0), 'queue_id' => (string)($res['queue_id'] ?? ''),
-                    'worker_segments' => (int)($res['worker_segments'] ?? 0), 'resume_needed' => !empty($res['resume_needed'])],
+                    'worker_segments' => (int)($res['worker_segments'] ?? 0), 'resume_needed' => !empty($res['resume_needed']),
+                    'child_exit_code'=>(int)($res['child_exit_code']??0),'tail'=>mb_substr((string)($res['tail']??''),-2000)],
                     $ok ? '' : (string)($res['error'] ?? 'job failed'));
-                s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => $ok, 'last_error' => $ok ? '' : (string)($res['error'] ?? '')]);
+                s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => $ok, 'last_error' => $ok ? '' : (string)($res['error'] ?? ''),
+                    'last_job_detail'=>mb_substr((string)($res['tail']??''),-2000)]);
                 echo '[' . date('Y-m-d H:i:s') . "] job done: $jid ok=" . ($ok ? '1' : '0') . "\n";
             } catch (Throwable $e) {
                 s4WorkerFinishJob($jid, 'failed', [], $e->getMessage());
@@ -1515,7 +1519,9 @@ function s4WorkerLoopFromCli(): void {
         $cronEnabled = !array_key_exists('internal_cron_enabled', $workerCn) || !empty($workerCn['internal_cron_enabled']);
         $rawTick = array_key_exists('internal_cron_sec', $workerCn) ? (int)$workerCn['internal_cron_sec'] : $tick;
         $effectiveTick = ($cronEnabled && $rawTick > 0) ? max(5, min(86400, $rawTick)) : 0;
-        if ($effectiveTick > 0 && (time() - $lastCron) >= $effectiveTick) {
+        $mxPriority=matrixProgressRead();
+        $matrixNeedsWorker=!empty($mxPriority['running'])||!empty($mxPriority['yielded']);
+        if ($effectiveTick > 0 && !$matrixNeedsWorker && (time() - $lastCron) >= $effectiveTick) {
             s4WorkerStateWrite(['phase' => 'cron_tick', 'cron_tick' => $effectiveTick]);
             $cr = s4WorkerRunCronChild();
             $lastCron = time();
@@ -27477,6 +27483,20 @@ function matrixStopClear(): void { @unlink(SYNC_MATRIX_STOP_FILE); }
 function matrixProgressRead(): array {
     return localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
 }
+/** v10.264: checkpointهای نسخه‌های قبل raw و map را همزمان نگه می‌داشتند و
+ * هر resume شناسهٔ Woo یکسان را دوباره به woo_extra می‌افزود. این مهاجرت
+ * درجا checkpoint موجود را بدون واکشی شبکه کوچک و idempotent می‌کند. */
+function matrixCompactCheckpoint(array &$cp): array {
+    if(!is_array($cp['profile_rows']??null))$cp['profile_rows']=[];$rows=&$cp['profile_rows'];$mappedWoo=0;$removedExtra=0;
+    foreach($rows as &$r){if(!is_array($r))continue;$primary=(int)($r['woo']['id']??0);if($primary>0)$mappedWoo++;$clean=[];$seen=[];
+        foreach((array)($r['woo_extra']??[])as$ex){$id=(int)($ex['id']??0);if($id<=0||$id===$primary||isset($seen[$id])){$removedExtra++;continue;}$seen[$id]=true;$clean[]=$ex;}
+        if($clean){$r['woo_extra']=$clean;$r['woo_dup']=true;}else{unset($r['woo_extra'],$r['woo_dup']);}
+    }unset($r);$droppedWoo=0;$droppedShops=0;
+    if(!empty($cp['woo_done'])&&$mappedWoo>0){$droppedWoo=count((array)($cp['woo_rows']??[]));$cp['woo_rows']=[];if((string)($cp['phase']??'')==='woo_fetch')$cp['phase']='bsl_fetch';}
+    foreach((array)($cp['shop_done']??[])as$vid=>$done)if($done&&!empty($cp['shop_rows'][(string)$vid])){$droppedShops+=count((array)$cp['shop_rows'][(string)$vid]);$cp['shop_rows'][(string)$vid]=[];}
+    return ['mapped_woo'=>$mappedWoo,'removed_extra'=>$removedExtra,'dropped_woo_raw'=>$droppedWoo,'dropped_shop_raw'=>$droppedShops];
+}
+
 function matrixPricingFingerprint(?array $profiles=null, ?array $cn=null): string {
     $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=[];
     foreach($profiles as $pk=>$p){if(!is_array($p))continue;$parts[]=(string)$pk.'|'.(string)($p['priceMode']??'none').'|'.(string)($p['priceVal']??0).'|'.(string)($p['roundPrice']??0);}
@@ -27730,6 +27750,7 @@ function matrixBuild(array $opts = []): array {
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
     $GLOBALS['_matrixSliceDeadline'] = in_array($source, ['manual','worker'], true) ? microtime(true) + $sliceSeconds : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
+    $compactStats=$resumeCp?matrixCompactCheckpoint($resumeCp):[];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
     $profileRows = is_array($resumeCp['profile_rows'] ?? null) ? $resumeCp['profile_rows'] : [];
     $profilesDone = array_values(array_unique(array_map('strval', (array)($resumeCp['profiles_done'] ?? []))));
@@ -27765,6 +27786,9 @@ function matrixBuild(array $opts = []): array {
     $bslCfg = destPriceCfg($cn, 'basalam');
 
     $rowsByKey = $profileRows;
+    /* فقط یک owner برای آرایهٔ بزرگ بماند؛ وگرنه نخستین map به‌علت COW یک
+       کپی کامل دیگر از checkpoint می‌سازد و سقف ۵۱۲MB را می‌شکند. */
+    unset($profileRows,$resumeCp,$opts['checkpoint']);
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds): array {
@@ -27919,9 +27943,10 @@ function matrixBuild(array $opts = []): array {
             return ['ok' => false, 'partial' => true, 'error' => $why];
         }
     }
+    $wooCount=count($wooRows);if($wooCount===0&&$matrixWooDone)foreach($rowsByKey as $wcRow)if(!empty($wcRow['woo']))$wooCount++;
     matrixProgress([
         'phase' => 'woo_map', 'pct' => 48,
-        'log_add' => ['✅ ووکامرس: ' . count($wooRows) . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : '')],
+        'log_add' => ['✅ ووکامرس: ' . $wooCount . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : '')],
     ]);
     foreach ($wooRows as $wr) {
         if ($codedOnly && !matrixTitleHasCode((string)($wr['title'] ?? ''))) continue;
@@ -27942,13 +27967,30 @@ function matrixBuild(array $opts = []): array {
             ];
         }
         if ($rowsByKey[$bare]['woo'] !== null) {
-            $rowsByKey[$bare]['woo_dup'] = true;
-            if (!isset($rowsByKey[$bare]['woo_extra'])) $rowsByKey[$bare]['woo_extra'] = [];
-            $rowsByKey[$bare]['woo_extra'][] = $cell;
+            /* resume ممکن است همان raw catalog را دوباره روی profile_rowsِ از قبل
+               map‌شده ببیند. شناسهٔ یکسان تکراری نیست و نباید woo_extra را در هر
+               segment بزرگ‌تر کند؛ همین رشد علت OOM/exit 255 بود. */
+            $oldWoo=is_array($rowsByKey[$bare]['woo']??null)?$rowsByKey[$bare]['woo']:[];
+            $primaryId=(int)($oldWoo['id']??0);$cleanExtra=[];$extraIds=[];
+            foreach((array)($rowsByKey[$bare]['woo_extra']??[]) as $ex){$xid=(int)($ex['id']??0);if($xid<=0||$xid===$primaryId||isset($extraIds[$xid]))continue;$extraIds[$xid]=true;$cleanExtra[]=$ex;}
+            if($cleanExtra){$rowsByKey[$bare]['woo_extra']=$cleanExtra;$rowsByKey[$bare]['woo_dup']=true;}else{unset($rowsByKey[$bare]['woo_extra'],$rowsByKey[$bare]['woo_dup']);}
+            $sameId=$primaryId>0&&$primaryId===(int)$cell['id'];
+            if(!$sameId){
+                $rowsByKey[$bare]['woo_dup'] = true;
+                if (!isset($rowsByKey[$bare]['woo_extra'])) $rowsByKey[$bare]['woo_extra'] = [];
+                $seenExtra=false;foreach((array)$rowsByKey[$bare]['woo_extra'] as $ex)if((int)($ex['id']??0)>0&&(int)($ex['id']??0)===(int)$cell['id']){$seenExtra=true;break;}
+                if(!$seenExtra)$rowsByKey[$bare]['woo_extra'][] = $cell;
+            }
         } else {
             $rowsByKey[$bare]['woo'] = $cell;
         }
     }
+    /* پس از map، raw Woo دیگر لازم نیست: نگه‌داشتن ۲۵هزار raw کنار ۱۵هزار
+       ردیف map‌شده حافظه/checkpoint را دوبرابر می‌کرد. checkpoint فشرده و
+       اتمیک یعنی resume بعدی مستقیماً از bsl_fetch ادامه می‌دهد. */
+    $matrixWooCp=[];$wooRows=[];
+    matrixProgress(['phase'=>'bsl_fetch','checkpoint'=>$matrixCp('bsl_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,true),
+        'log_add'=>['🧹 checkpoint ووکامرس پس از map فشرده شد']]);
 
     // Basalam shops
     $shopsMeta = [];
@@ -28051,9 +28093,12 @@ function matrixBuild(array $opts = []): array {
                 'tone' => matrixPriceTone($shopExpect, (int)$cell['price']),
             ]);
         }
-        matrixProgress([
-            'log_add' => ['  ✓ ' . $sname . ': ' . count($remote) . ' محصول'],
-        ]);
+        $remoteCount=count($remote);
+        /* غرفهٔ کامل داخل rowsByKey map شده؛ raw آن از checkpoint حذف شود تا
+           غرفهٔ دوم و compare با دو نسخهٔ کامل کاتالوگ وارد OOM نشوند. */
+        $matrixShopCp[(string)$vid]=[];$remote=[];
+        matrixProgress(['checkpoint'=>$matrixCp('bsl_mapped',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone),
+            'log_add'=>['  ✓ '.$sname.': '.$remoteCount.' محصول · checkpoint فشرده شد']]);
     }
 
     matrixProgress(['phase' => 'compare', 'pct' => 85, 'log_add' => ['⚖️ محاسبه وضعیت‌ها...']]);
@@ -28147,7 +28192,7 @@ function matrixBuild(array $opts = []): array {
         'rows' => $rows,
         'woo_error' => $wooErr,
         'bsl_error' => $bslErr,
-        'woo_count' => count($wooRows),
+        'woo_count' => $wooCount,
         'profile_count' => count($profiles),
         'row_count' => count($rows),
     ];
@@ -29558,8 +29603,14 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     $mxFp=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$mxLocked=false;if($mxFp){$free=@flock($mxFp,LOCK_EX|LOCK_NB);$mxLocked=!$free;if($free)@flock($mxFp,LOCK_UN);@fclose($mxFp);}
     $cronFile=__DIR__.'/cron_last_run.json';$cronAt=is_file($cronFile)?(int)@filemtime($cronFile):0;$cronAge=$cronAt>0?max(0,$now-$cronAt):null;
     $active=[];foreach((array)($wq['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['status']??''),['pending','running'],true))$active[]=['id'=>(string)($e['id']??''),'type'=>(string)($e['type']??''),'status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0)];
+    $tailLog=static function(string $name):array{$f=__DIR__.'/logs/'.$name;if(!is_file($f))return[];$sz=(int)@filesize($f);$raw=(string)@file_get_contents($f,false,null,max(0,$sz-16000));$ls=preg_split('/\R/',$raw);return array_slice(array_values(array_filter($ls,static fn($x)=>trim((string)$x)!=='')),-15);};
     $actions=[];
-    if($repair&&!$workerActive){$actions['worker']=s4SpawnPersistentWorker();usleep(250000);$workerActive=s4WorkerIsActive();$wst=s4WorkerStateLoad();$whb=(int)($wst['heartbeat']??0);}
+    /* daemon قدیمی پس از deploy همان کد قبلی را تا ابد در RAM دارد. در repair
+       فقط با PID و version ثبت‌شدهٔ خودش پایانش می‌دهیم تا worker تازه بالا آید. */
+    if($repair&&$workerActive&&(string)($wst['version']??'')!==APP_VERSION&&function_exists('posix_kill')){
+        $oldPid=(int)($wst['pid']??0);$actions['old_worker_restart']=['pid'=>$oldPid,'from'=>(string)($wst['version']??''),'to'=>APP_VERSION,'signalled'=>$oldPid>0?@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15):false];usleep(500000);$workerActive=s4WorkerIsActive(1);
+    }
+    if($repair&&!$workerActive){$actions['worker']=s4SpawnPersistentWorker();usleep(350000);$workerActive=s4WorkerIsActive();$wst=s4WorkerStateLoad();$whb=(int)($wst['heartbeat']??0);}
     if($repair&&!empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120)){
         matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'stale'=>true,'phase'=>'بازیابی خودکار','log_add'=>['♻️ فیدبک عملیات: worker ماتریس مرده بود؛ ادامه از checkpoint']]);
         $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
@@ -29572,7 +29623,8 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         'worker'=>['active'=>$workerActive,'heartbeat_age'=>$whb>0?max(0,$now-$whb):null,'state'=>$wst,'active_jobs'=>$active],
         'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
-        'actions'=>$actions,'next'=>'این URL را هر ۵ دقیقه با repair=1 فراخوانی کنید'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log')],
+        'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
@@ -40335,6 +40387,26 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.263', 'ورودی 10.263 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "263'") !== false
       && version_compare(APP_VERSION, '10.' . '263', '>='));
+
+    /* ---------- v10.264: compact/idempotent matrix checkpoints ---------- */
+    $add('10.264', 'checkpoint قدیمی raw تکراری و woo_extra مصنوعی را درجا فشرده می‌کند',
+         function_exists('matrixCompact' . 'Checkpoint')
+      && strpos($selfSrc, "'dropped_woo_" . "raw'") !== false
+      && strpos($selfSrc, "unset(\$r['woo_extra'],\$r['woo_dup'])") !== false);
+    $add('10.264', 'map ووکامرس در resume بر اساس ID idempotent و raw پس از map حذف می‌شود',
+         strpos($selfSrc, '$sameId=$primaryId>0') !== false
+      && strpos($selfSrc, '$matrixWooCp=[];$wooRows=[]') !== false
+      && strpos($selfSrc, 'checkpoint ووکامرس پس از map فشرده شد') !== false);
+    $add('10.264', 'raw غرفهٔ map‌شده از checkpoint حذف و خطای child با tail حفظ می‌شود',
+         strpos($selfSrc, '$matrixShopCp[(string)$vid]=[];$remote=[]') !== false
+      && strpos($selfSrc, "'child_exit_code'=>(int)(\$res['child_exit_code']") !== false
+      && strpos($selfSrc, "'logs'=>['worker'=>\$tailLog") !== false);
+    $add('10.264', 'ماتریس بر cron داخلی اولویت دارد و repair daemon نسخهٔ قدیمی را پس از deploy عوض می‌کند',
+         strpos($selfSrc, '$matrixNeedsWorker=!empty($mxPriority[') !== false
+      && strpos($selfSrc, "'old_worker_restart'") !== false);
+    $add('10.264', 'ورودی 10.264 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "264'") !== false
+      && version_compare(APP_VERSION, '10.' . '264', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71240,6 +71312,12 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.264', t:'🧹 رفع قطعی گیرکردن و OOM ساخت جدول', items:[
+    'فیدبک production خطای matrix_child_exit_255 را نشان داد: هر resume همان ۲۵هزار محصول ووکامرس را دوباره map و همان ID را در woo_extra تکثیر می‌کرد؛ checkpoint در هر دور بزرگ‌تر می‌شد',
+    'map ووکامرس اکنون idempotent است، تکرارهای مصنوعی checkpointهای قبلی را پاک می‌کند و raw ووکامرس پس از map از حافظه و checkpoint حذف می‌شود',
+    'raw هر غرفه نیز پس از map حذف می‌شود؛ خطای child، exit code و tail لاگ در worker و ops_feedback باقی می‌ماند تا مرگ بعدی بی‌دلیل نباشد',
+    'worker داخلی و pulse فیدبک برای ادامه کافی‌اند و در نبود cron خارجی نیز عملیات سرور ادامه پیدا می‌کند؛ تا پایان ماتریس، cron داخلی کار سنگین تازه‌ای را جلوتر از آن شروع نمی‌کند'
+  ]},
   {v:'10.263', t:'🫀 فیدبک و خودترمیمی فعالیت‌های سرور', items:[
     'حلقهٔ فیدبک نشان داد worker دائمی خاموش، cron بیش از یک روز قطع و ماتریس با state در حال اجرا ولی lock آزاد رها شده بود؛ اندپوینت ops_feedback همه را یکجا گزارش و repair می‌کند',
     'ساخت ماتریس اکنون در child جدا اجرا می‌شود تا OOM یا Fatal آن daemon مشترکِ ارسال باسلام، صف‌ها و cron را از بین نبرد؛ worker تازه jobهای یتیم را بازیابی می‌کند',
