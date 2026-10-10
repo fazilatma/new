@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.255';
+const APP_VERSION = '10.256';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1126,6 +1126,7 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         'profile' => (string)($opts['profile'] ?? 'all'),
         'parallel_destinations' => !empty($opts['parallel_destinations']),
         'live_fill' => !empty($opts['live_fill']),
+        'coded_only' => !array_key_exists('coded_only', $opts) || !empty($opts['coded_only']),
         'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
         'resume' => $resume, 'requested_at' => microtime(true),
         /* فقط یک ساخت ماتریس می‌تواند pending/running باشد. */
@@ -1139,7 +1140,7 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
             'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
             'phase' => 'در صف worker', 'pct' => (int)($old['pct'] ?? 1),
             'source' => 'worker', 'profile' => $payload['profile'],
-            'slice_seconds' => $payload['slice_seconds'], 'checkpoint' => $cp,
+            'coded_only' => $payload['coded_only'], 'slice_seconds' => $payload['slice_seconds'], 'checkpoint' => $cp,
             'job_id' => (string)($enq['job_id'] ?? ''),
             'started_at' => (int)($cp['started_at'] ?? time()),
             'log_add' => ['🧵 ساخت جدول به worker دائمی سپرده شد — بستن مرورگر یا خواب گوشی اثری ندارد'],
@@ -1156,6 +1157,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         'background' => true, 'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($payload['parallel_destinations']),
         'live_fill' => !empty($payload['live_fill']),
+        'coded_only' => !array_key_exists('coded_only', $payload) || !empty($payload['coded_only']),
         'slice_seconds' => max(2, min(20, (int)($payload['slice_seconds'] ?? 8))),
         'checkpoint' => null,
     ];
@@ -1166,6 +1168,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             $opts['checkpoint'] = $cp;
             if (isset($cp['fetch_mode'])) $opts['parallel_destinations'] = (string)$cp['fetch_mode'] === 'parallel';
             if (array_key_exists('live_fill', $cp)) $opts['live_fill'] = !empty($cp['live_fill']);
+            if (array_key_exists('coded_only', $cp)) $opts['coded_only'] = !empty($cp['coded_only']);
             if (isset($cp['slice_seconds'])) $opts['slice_seconds'] = max(2, min(20, (int)$cp['slice_seconds']));
         }
     }
@@ -27274,6 +27277,19 @@ function matrixCollectSuffixes(): array {
     }
     return array_keys($sfx);
 }
+/** آیا عنوان با شناسهٔ صریح محصول مثل «(کد:۱۲۳)» تمام می‌شود؟ */
+function matrixTitleHasCode(string $title): bool {
+    $t = function_exists('persianToEnglish') ? persianToEnglish(trim($title)) : trim($title);
+    return (bool)preg_match('~\(\s*(?:کد|کُد|code|sku)\s*[:：]\s*[^()\s][^()]*?\s*\)\s*$~iu', $t);
+}
+function matrixRowHasCode(array $r): bool {
+    if (matrixTitleHasCode((string)($r['title'] ?? ''))) return true;
+    if (is_array($r['woo'] ?? null) && matrixTitleHasCode((string)($r['woo']['title'] ?? ''))) return true;
+    foreach ((array)($r['shops'] ?? []) as $cell) {
+        if (is_array($cell) && matrixTitleHasCode((string)($cell['title'] ?? ''))) return true;
+    }
+    return false;
+}
 function matrixBareTitle(string $title, array $suffixes = []): string {
     $t = trim($title);
     usort($suffixes, function ($a, $b) {
@@ -27356,6 +27372,7 @@ function matrixResultSave(array $data): bool {
  * نتیجهٔ نهایی را بازنویسی نمی‌کند و فقط برای سوییچ «پر شدن زنده» است. */
 function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bool {
     $rows = is_array($cp['profile_rows'] ?? null) ? $cp['profile_rows'] : [];
+    $codedOnly = !array_key_exists('coded_only', $cp) || !empty($cp['coded_only']);
     $suffixes = matrixCollectSuffixes();
     $shops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $shopsMeta = [];
@@ -27368,10 +27385,12 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
             'profile_price'=>0,'woo_expect'=>0,'bsl_expect'=>0,'profile_hits'=>0,'woo'=>null,'shops'=>[]];
     };
     foreach((array)($cp['woo_rows']??[]) as $wr){if(!is_array($wr))continue;
+        if($codedOnly&&!matrixTitleHasCode((string)($wr['title']??'')))continue;
         $bare=matrixBareTitle((string)($wr['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($wr['title']??''));
         $rows[$bare]['woo']=['id'=>(int)($wr['id']??0),'title'=>(string)($wr['title']??''),
             'price'=>(int)($wr['price']??0),'status'=>(string)($wr['status']??'')];}
     foreach((array)($cp['shop_rows']??[]) as $vid=>$remote){foreach((array)$remote as $br){if(!is_array($br))continue;
+        if($codedOnly&&!matrixTitleHasCode((string)($br['title']??'')))continue;
         $bare=matrixBareTitle((string)($br['title']??''),$suffixes);if($bare==='')continue;$ensure($bare,(string)($br['title']??''));
         $expect=(int)($rows[$bare]['bsl_expect']??0);$actual=(int)($br['price_toman']??0);
         $rows[$bare]['shops'][(int)$vid]=['id'=>(int)($br['id']??0),'title'=>(string)($br['title']??''),
@@ -27387,7 +27406,7 @@ function matrixLiveSnapshot(array $cp, array $cn, string $source = 'manual'): bo
         if($bad)$sum['price_mismatch']++;if($r['status']==='only_profile')$sum['only_profile']++;
         $sum['total']++;$outRows[]=$r;}
     usort($outRows,static function($a,$b){return strcmp((string)($a['bare']??''),(string)($b['bare']??''));});
-    $data=['ok'=>true,'live_partial'=>true,'generated_at'=>time(),'source'=>$source,'shops'=>$shopsMeta,
+    $data=['ok'=>true,'live_partial'=>true,'generated_at'=>time(),'source'=>$source,'coded_only'=>$codedOnly,'shops'=>$shopsMeta,
         'woo_cfg'=>destPriceCfg($cn,'woocommerce'),'bsl_cfg'=>destPriceCfg($cn,'basalam'),'summary'=>$sum,
         'rows'=>$outRows,'woo_count'=>count((array)($cp['woo_rows']??[])),'row_count'=>count($outRows)];
     $json=json_encode($data,JSON_UNESCAPED_UNICODE);if($json===false)return false;
@@ -27531,6 +27550,7 @@ function matrixBuild(array $opts = []): array {
     $source = (string)($opts['source'] ?? 'manual');
     $parallelDest = !empty($opts['parallel_destinations']);
     $liveFill = !empty($opts['live_fill']);
+    $codedOnly = !array_key_exists('coded_only', $opts) || !empty($opts['coded_only']);
     /* v10.254: زمان هر برش دستی قابل تنظیم است؛ ۲..۲۰ ثانیه تا هم تعداد
        بسته‌ها کم/زیاد شود و هم از timeout رایج proxy ها عبور نکند. */
     $sliceSeconds = max(2, min(20, (int)($opts['slice_seconds'] ?? 8)));
@@ -27553,18 +27573,18 @@ function matrixBuild(array $opts = []): array {
     if (!array_key_exists('shop_done', $resumeCp) && $matrixShopCp) {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
-    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
+    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds];
+            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
     };
 
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds,
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds,
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -27576,13 +27596,13 @@ function matrixBuild(array $opts = []): array {
     $rowsByKey = $profileRows;
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$sliceSeconds): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'slice_seconds' => $sliceSeconds];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
         matrixProgress(['running' => false, 'done' => true, 'stopped' => true, 'partial' => true,
             'stale' => true, 'phase' => 'stopped', 'checkpoint' => $cp,
             'log_add' => ['⏹ ساخت جدول متوقف شد — checkpoint حفظ شد']]);
@@ -27591,13 +27611,13 @@ function matrixBuild(array $opts = []): array {
     };
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$sliceSeconds, $cn, $source): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
         if($liveFill) matrixLiveSnapshot($cp,$cn,$source);
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
@@ -27622,6 +27642,7 @@ function matrixBuild(array $opts = []): array {
         }
         foreach (profileOrderedProducts($profile, null, true) as $p) {
             $title = (string)($p['title'] ?? '');
+            if ($codedOnly && !matrixTitleHasCode($title)) continue;
             $bare = matrixBareTitle($title, $suffixes);
             if ($bare === '') continue;
             $raw = (int)extractPriceNum((string)($p['price'] ?? $p['orig_price'] ?? '0'));
@@ -27732,6 +27753,7 @@ function matrixBuild(array $opts = []): array {
         'log_add' => ['✅ ووکامرس: ' . count($wooRows) . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : '')],
     ]);
     foreach ($wooRows as $wr) {
+        if ($codedOnly && !matrixTitleHasCode((string)($wr['title'] ?? ''))) continue;
         $bare = matrixBareTitle((string)($wr['title'] ?? ''), $suffixes);
         if ($bare === '') continue;
         $cell = [
@@ -27821,6 +27843,7 @@ function matrixBuild(array $opts = []): array {
         }
         $seen = [];
         foreach ($remote as $br) {
+            if ($codedOnly && !matrixTitleHasCode((string)($br['title'] ?? ''))) continue;
             $bare = matrixBareTitle((string)($br['title'] ?? ''), $suffixes);
             if ($bare === '') continue;
             $cell = [
@@ -27943,6 +27966,7 @@ function matrixBuild(array $opts = []): array {
         'ok' => true,
         'generated_at' => time(),
         'source' => $source,
+        'coded_only' => $codedOnly,
         'suffixes' => $suffixes,
         'shops' => $shopsMeta,
         'woo_cfg' => $wooCfg,
@@ -28140,7 +28164,7 @@ function matrixFixBslPrice(string $tk, int $vid, int $pid, int $priceToman): arr
  *   send_woo / send_bsl    — در پروفایل هست، در مقصد نیست → ارسال
  *   del_woo / del_bsl      — در پروفایل نیست، در مقصد هست → حذف/بایگانی
  */
-function matrixFixCollectJobs(array $data, string $scope = 'all'): array {
+function matrixFixCollectJobs(array $data, string $scope = 'all', bool $codedOnly = false): array {
     $jobs = [];
     $shops = is_array($data['shops'] ?? null) ? $data['shops'] : [];
     /* اگر meta غرفه خالی است، از خود ردیف‌ها vendor_id را دربیاور */
@@ -28173,6 +28197,7 @@ function matrixFixCollectJobs(array $data, string $scope = 'all'): array {
     }
     foreach ((array)($data['rows'] ?? []) as $ri => $r) {
         if (!is_array($r)) continue;
+        if ($codedOnly && !matrixRowHasCode($r)) continue;
         $bare = (string)($r['bare'] ?? '');
         if ($bare === '' || str_starts_with($bare, '__report_') || !empty($r['is_report'])) continue;
         $title = (string)($r['title'] ?? $bare);
@@ -28644,7 +28669,8 @@ function matrixFixRun(array $opts = []): array {
         return ['ok' => false, 'error' => 'no_matrix'];
     }
 
-    $jobs = matrixFixCollectJobs($data, $scope);
+    $codedOnly = array_key_exists('coded_only', $opts) ? !empty($opts['coded_only']) : !empty($data['coded_only']);
+    $jobs = matrixFixCollectJobs($data, $scope, $codedOnly);
     $total = count($jobs);
     $nPrice = $nSend = $nDel = 0;
     foreach ($jobs as $j) {
@@ -29108,6 +29134,7 @@ function matrixQueryPage(array $opts = []): array {
     $onlyDup = !empty($opts['only_dup']);
     $onlyMismatch = !empty($opts['only_mismatch']);
     $onlyMissing = !empty($opts['only_missing']);
+    $codedOnly = !empty($opts['coded_only']);
     $all = [];
     foreach ((array)$data['rows'] as $r) {
         if (!is_array($r)) continue;
@@ -29120,6 +29147,7 @@ function matrixQueryPage(array $opts = []): array {
         /* ردیف‌های گزارش کار/نتیجه همیشه می‌آیند */
         $isRep = !empty($r['is_report']) || str_starts_with((string)($r['bare'] ?? ''), '__report_');
         if (!$isRep) {
+            if ($codedOnly && !matrixRowHasCode($r)) continue;
             if ($onlyDup && !preg_grep('/^dup_/', $flags) && empty($r['woo_dup']) && (int)($r['profile_hits'] ?? 0) < 2) continue;
             if ($onlyMismatch && $st !== 'mismatch' && !in_array('price_mismatch', $flags, true)) continue;
             if ($onlyMissing && $st !== 'missing' && $st !== 'only_profile' && !in_array('missing_woo', $flags, true) && !in_array('missing_bsl', $flags, true)) continue;
@@ -29165,6 +29193,7 @@ function matrixQueryPage(array $opts = []): array {
         'ok' => true,
         'from_file' => true,
         'server_side' => true,
+        'coded_only' => $codedOnly,
         'page' => $page,
         'per_page' => $per,
         'pages' => $pages,
@@ -29296,6 +29325,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
         'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
+        'coded_only' => !array_key_exists('coded_only', $_GET + $_POST) || !empty($_GET['coded_only'] ?? $_POST['coded_only'] ?? null),
         'slice_seconds' => max(2, min(20, (int)($_GET['slice_seconds'] ?? $_POST['slice_seconds'] ?? 8))),
     ];
     /* v10.255: اگر worker دائمی حاضر است، request وب اصلاً سازندهٔ جدول نیست؛
@@ -29339,6 +29369,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
     if ($matrixCp && array_key_exists('live_fill', $matrixCp))
         $opts['live_fill'] = !empty($matrixCp['live_fill']);
+    if ($matrixCp && array_key_exists('coded_only', $matrixCp))
+        $opts['coded_only'] = !empty($matrixCp['coded_only']);
     if ($matrixCp && isset($matrixCp['slice_seconds']))
         $opts['slice_seconds'] = max(2, min(20, (int)$matrixCp['slice_seconds']));
     $opts['checkpoint'] = $matrixCp;
@@ -29381,9 +29413,9 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => (int)($matrixCp['started_at'] ?? time()),
-        'source' => $opts['source'], 'profile' => $opts['profile'], 'lock_recovered' => $lockRecovered,
+        'source' => $opts['source'], 'profile' => $opts['profile'], 'coded_only' => $opts['coded_only'], 'lock_recovered' => $lockRecovered,
         'checkpoint' => $matrixCp ?: ['phase' => 'profiles', 'profile_filter' => ($opts['profile'] ?: 'all'),
-            'profile_rows' => [], 'profiles_done' => [], 'started_at' => time()],
+            'profile_rows' => [], 'profiles_done' => [], 'coded_only' => $opts['coded_only'], 'started_at' => time()],
         'log_add' => [($lockRecovered ? '♻️ قفل یتیم بازیابی شد — ' : '🚀 ') . ($matrixCp ? 'ادامه ساخت جدول از checkpoint' : 'جاب ساخت جدول در صف سرور') . '...'],
     ]);
     $early = json_encode(['ok' => true, 'started' => true, 'lock_recovered' => $lockRecovered, 'message' => 'ساخت روی سرور شروع شد'], JSON_UNESCAPED_UNICODE);
@@ -29424,6 +29456,7 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_dup' => !empty($_GET['only_dup']) || !empty($_POST['only_dup']),
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
+        'coded_only' => !empty($_GET['coded_only']) || !empty($_POST['coded_only']),
         'live_fill' => !empty($_GET['live_fill']) || !empty($_POST['live_fill']),
     ];
     // refresh=1 فقط وضعیت/شروع را پیشنهاد می‌کند — دیگر در همان درخواست rebuild نمی‌کند
@@ -29481,6 +29514,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'scope' => (string)($_GET['scope'] ?? $_POST['scope'] ?? 'all'),
         'delay_ms' => (int)($_GET['delay_ms'] ?? $_POST['delay_ms'] ?? 180),
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
+        'coded_only' => !array_key_exists('coded_only', $_GET + $_POST) || !empty($_GET['coded_only'] ?? $_POST['coded_only'] ?? null),
     ];
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
@@ -39850,6 +39884,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.255', 'ورودی 10.255 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "255'") !== false
       && version_compare(APP_VERSION, '10.' . '255', '>='));
+
+    /* ---------- v10.256: coded-only matrix + readable fullscreen ---------- */
+    $add('10.256', 'فیلتر پیش‌فرض محصولات دارای پسوند کد در ساخت و نمایش فعال است',
+         function_exists('matrixTitleHas' . 'Code')
+      && function_exists('matrixRowHas' . 'Code')
+      && strpos($selfSrc, 'id="smCodedOnly" checked') !== false
+      && strpos($selfSrc, "fd.append('coded_only'") !== false);
+    $add('10.256', 'انتخاب کددار در worker و checkpoint حفظ می‌شود',
+         strpos($selfSrc, "'coded_only' => \$payload['coded_only']") !== false
+      && strpos($selfSrc, "'coded_only' => \$codedOnly") !== false
+      && strpos($selfSrc, "array_key_exists('coded_only', \$cp)") !== false);
+    $add('10.256', 'اصلاح مغایرت نیز به ردیف‌های کددار محدود می‌شود',
+         strpos($selfSrc, 'matrixFixCollectJobs($data, $scope, $codedOnly)') !== false
+      && strpos($selfSrc, 'if ($codedOnly && !matrixRowHasCode($r)) continue;') !== false);
+    $add('10.256', 'جدول دکمه و چیدمان تمام‌صفحه و متن روشن دارد',
+         strpos($selfSrc, 'id="smFullscreenBtn"') !== false
+      && strpos($selfSrc, 'function syncMatrixFullscreen()') !== false
+      && strpos($selfSrc, "na:'#f1f5f9'") !== false);
+    $add('10.256', 'ورودی 10.256 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "256'") !== false
+      && version_compare(APP_VERSION, '10.' . '256', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63376,6 +63431,14 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button class="btn btn-teal" onclick="reconScanAll()" style="width:100%;margin-top:6px;font-size:11px">⚖ بررسی کامل: ووکامرس + همهٔ غرفه‌ها</button>
 
 <!-- v10.112: جدول مقایسهٔ پیشرفته -->
+<style>
+#syncMatrixBox:fullscreen{padding:16px!important;margin:0!important;border:0!important;border-radius:0!important;overflow:auto;background:#0f172a!important;color:#f8fafc}
+#syncMatrixBox:fullscreen #smTableWrap{max-height:none!important;height:calc(100vh - 245px)}
+#syncMatrixBox.sm-fullscreen-fallback{position:fixed!important;inset:0!important;z-index:999999!important;margin:0!important;border-radius:0!important;overflow:auto!important;background:#0f172a!important}
+#syncMatrixBox.sm-fullscreen-fallback #smTableWrap{max-height:none!important;height:calc(100vh - 245px)}
+#smTable,#smTable td,#smTable th{color:#f1f5f9;font-weight:500}
+#smTable th{font-weight:800;color:#fff}
+</style>
 <div id="syncMatrixBox" style="margin-top:12px;padding:12px;background:linear-gradient(135deg,#0f172a,#1e1b4b);border:1px solid #6d28d9;border-radius:12px">
 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px">
 <div style="font-size:13px;font-weight:900;color:#e9d5ff">📊 جدول مقایسهٔ نظیر‌به‌نظیر</div>
@@ -63389,6 +63452,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label class="prof-net-switch" title="نمایش و به‌روزرسانی جدول بعد از دریافت هر بستهٔ محصولات">
 <input type="checkbox" id="smLiveFill" style="display:none" onchange="syncMatrixLiveUi(true)"><span class="prof-net-slider"></span></label>
 </div>
+<label style="display:flex;align-items:center;gap:6px;padding:5px 9px;background:#052e16;border:1px solid #16a34a;border-radius:20px;color:#dcfce7;font-size:10.5px;cursor:pointer" title="فقط عنوان‌هایی که با پسوندی مثل (کد:۱۲۳) تمام می‌شوند در ساخت، مغایرت‌گیری و نمایش شرکت کنند">
+<input type="checkbox" id="smCodedOnly" checked onchange="syncMatrixCodedUi(true)"> فقط دارای پسوند (کد:ایکس)
+</label>
 <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#0f172a;border:1px solid #334155;border-radius:20px" title="مدت هر برش واکشی پیش از وقفه و ادامهٔ خودکار">
 <span style="font-size:10px;color:#94a3b8;white-space:nowrap">زمان برش</span>
 <input type="range" id="smSliceSeconds" min="2" max="20" step="1" value="8" oninput="syncMatrixSliceUi(true)" style="width:90px">
@@ -63399,6 +63465,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px;padding:6px 12px">📖 خواندن نتیجه</button>
+<button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
 <button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('bsl')" style="font-size:10px;padding:5px 10px">فقط غرفه‌ها</button>
@@ -63419,7 +63486,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div id="smFixReport" style="display:none;margin-bottom:10px;padding:12px 14px;background:linear-gradient(135deg,#0f172a,#14532d44);border:1px solid #34d39966;border-radius:10px;color:#e2e8f0"></div>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-bottom:8px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — تطبیق <b>بدون پسوند</b> و بدون «کد محصول». از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — در حالت پیش‌فرض فقط عنوان‌های دارای پسوند <b>(کد:ایکس)</b> مشارکت می‌کنند و پس از احراز کد، تطبیق با حذف پسوند انجام می‌شود. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -63442,8 +63509,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div id="smSummary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:11px"></div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
-<div style="overflow:auto;max-height:min(70vh,640px);border:1px solid #334155;border-radius:8px">
-<table id="smTable" style="width:100%;border-collapse:collapse;font-size:11px;min-width:720px">
+<div id="smTableWrap" style="overflow:auto;max-height:min(70vh,640px);border:1px solid #475569;border-radius:8px;background:#020617">
+<table id="smTable" style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
 <thead style="position:sticky;top:0;background:#1e293b;z-index:2">
 <tr id="smHead"></tr>
 </thead>
@@ -70720,6 +70787,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.256', t:'🔎 ماتریس خواناتر، تمام‌صفحه و محدود به محصولات کددار', items:[
+    'رنگ و اندازهٔ متن سلول‌های جدول روشن‌تر و خواناتر شد و دکمهٔ نمایش/خروج تمام‌صفحه اضافه شد',
+    'گزینهٔ پیش‌فرض «فقط دارای پسوند (کد:ایکس)» به ساخت، نمایش و اصلاح مغایرت‌ها اضافه شد',
+    'انتخاب فیلتر در مرورگر حفظ و در worker و checkpoint ادامهٔ ساخت نیز بدون تغییر نگهداری می‌شود'
+  ]},
   {v:'10.255', t:'🧵 ساخت واقعی ماتریس در worker سرور', items:[
     'ساخت جدول هنگام فعال‌بودن worker فقط در صف ثبت می‌شود و کاملاً بیرون از request مرورگر اجرا می‌گردد',
     'خود worker همهٔ برش‌ها را از checkpoint ادامه می‌دهد؛ بستن مرورگر یا خواب گوشی دیگر عملیات را متوقف نمی‌کند',
@@ -79113,7 +79185,7 @@ function smToneBg(t){
   return ({ok:'#14532d',warn:'#713f12',bad:'#7f1d1d',missing_dst:'#1e3a8a',extra:'#334155',no_src:'#3f3f46',na:'#0f172a'})[t]||'#0f172a';
 }
 function smToneFg(t){
-  return ({ok:'#bbf7d0',warn:'#fde68a',bad:'#fecaca',missing_dst:'#bfdbfe',extra:'#e2e8f0',no_src:'#d4d4d8',na:'#64748b'})[t]||'#94a3b8';
+  return ({ok:'#dcfce7',warn:'#fef3c7',bad:'#fee2e2',missing_dst:'#dbeafe',extra:'#f1f5f9',no_src:'#e2e8f0',na:'#f1f5f9'})[t]||'#e2e8f0';
 }
 function smCell(html, tone){
   const bg=smToneBg(tone), fg=smToneFg(tone);
@@ -79173,6 +79245,26 @@ function syncMatrixLiveUi(save){
   if(on && save)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 }
 try{if($('smLiveFill'))$('smLiveFill').checked=localStorage.getItem('s4_matrix_live_fill')==='1';syncMatrixLiveUi(false)}catch(e){}
+function syncMatrixCodedUi(save){
+  const on=!!($('smCodedOnly')&&$('smCodedOnly').checked);
+  if(save)try{localStorage.setItem('s4_matrix_coded_only',on?'1':'0')}catch(e){}
+  if(save)try{syncMatrixLoad(1)}catch(e){}
+}
+try{
+  const cv=localStorage.getItem('s4_matrix_coded_only');
+  if($('smCodedOnly'))$('smCodedOnly').checked=(cv===null||cv==='1');
+}catch(e){}
+function syncMatrixFullscreen(){
+  const box=$('syncMatrixBox');if(!box)return;
+  if(document.fullscreenElement){document.exitFullscreen().catch(()=>{});return;}
+  if(box.classList.contains('sm-fullscreen-fallback')){box.classList.remove('sm-fullscreen-fallback');document.body.style.overflow='';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='⛶ تمام‌صفحه';return;}
+  const fallback=()=>{box.classList.add('sm-fullscreen-fallback');document.body.style.overflow='hidden';if($('smFullscreenBtn'))$('smFullscreenBtn').textContent='✕ خروج از تمام‌صفحه';};
+  if(box.requestFullscreen){box.requestFullscreen().catch(fallback);}
+  else fallback();
+}
+document.addEventListener('fullscreenchange',function(){
+  const b=$('smFullscreenBtn');if(b)b.textContent=document.fullscreenElement?'✕ خروج از تمام‌صفحه':'⛶ تمام‌صفحه';
+});
 function syncMatrixSliceUi(save){
   const el=$('smSliceSeconds');const n=Math.max(2,Math.min(20,parseInt(el&&el.value)||8));
   if(el)el.value=String(n);if($('smSliceSecondsLabel'))$('smSliceSecondsLabel').textContent=smFa(n)+' ث';
@@ -79191,6 +79283,7 @@ function syncMatrixStart(resume,automatic){
   if(resume) fd.append('resume','1');
   fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
   fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
+  fd.append('coded_only',($('smCodedOnly')&&$('smCodedOnly').checked)?'1':'0');
   fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
@@ -79275,6 +79368,7 @@ function syncMatrixFixStart(scope){
   fd.append('action','sync_matrix_fix_start');
   fd.append('scope', scope);
   fd.append('source','manual');
+  fd.append('coded_only',($('smCodedOnly')&&$('smCodedOnly').checked)?'1':'0');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع اصلاح ناموفق',1);
@@ -79402,6 +79496,7 @@ function syncMatrixLoad(page, silent){
   fd.append('page', String(page));
   fd.append('per_page', String(($('smPer')||{}).value||50));
   fd.append('q', ($('smQ')||{}).value||'');
+  if(($('smCodedOnly')||{}).checked) fd.append('coded_only','1');
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
@@ -79447,6 +79542,7 @@ function syncMatrixLoad(page, silent){
     if(meta){
       meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
+        +(d.coded_only?' · 🔑 فقط کددار':' · همهٔ محصولات')
         +' · WC: '+smFa(d.woo_count||0)
         +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
         +(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')
