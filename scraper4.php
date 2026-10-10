@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.261';
+const APP_VERSION = '10.262';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29249,22 +29249,21 @@ function matrixJobRun(array $opts = []): array {
     return $res;
 }
 
-/** آیا ردیف با فیلترهای فعال رابط ماتریس سازگار است؟ همین تابع هم برای
- * نمایش و هم برای «اصلاح مغایرت‌ها» استفاده می‌شود تا عملیات دقیقاً روی
- * مجموعهٔ دیده‌شده انجام شود. */
-function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
-    $q=matrixBareTitle((string)($opts['q']??''),[]);
-    if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
-        &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
+/** v10.262: فیلترهای چندگانهٔ امن و backward-compatible برای نمایش و اصلاح. */
+function matrixNormalizeViewFilterRules(array $opts): array {
+    $valid=['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price','code_suffix'];
+    $raw=is_array($opts['filters']??null)?$opts['filters']:[];$out=[];
+    foreach($raw as $rule){
+        if(!is_array($rule))continue;$type=trim((string)($rule['type']??''));$value=trim((string)($rule['value']??''));
+        if($value!==''&&in_array($type,$valid,true))$out[]=['type'=>$type,'value'=>$value];
+        if(count($out)>=20)break;
+    }
+    /* clients from v10.258–10.261 still send one legacy pair */
+    if(!$out){$type=trim((string)($opts['filter_type']??''));$value=trim((string)($opts['filter_value']??''));if($value!==''&&in_array($type,$valid,true))$out[]=['type'=>$type,'value'=>$value];}
+    return $out;
+}
+function matrixRowMatchesOneViewFilter(array $r,array $data,string $type,string $value): bool {
     $flags=(array)($r['flags']??[]);$st=(string)($r['status']??'');
-    if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&(int)($r['profile_hits']??0)<2)return false;
-    if(!empty($opts['only_mismatch'])&&$st!=='mismatch'&&!in_array('price_mismatch',$flags,true))return false;
-    if(!empty($opts['only_missing'])&&$st!=='missing'&&$st!=='only_profile'
-        &&!in_array('missing_woo',$flags,true)&&!in_array('missing_bsl',$flags,true))return false;
-    $type=trim((string)($opts['filter_type']??''));$value=trim((string)($opts['filter_value']??''));
-    if($type===''||$value==='')return true;
-    $valid=['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price'];
-    if(!in_array($type,$valid,true))return true;
     $hasProf=(int)($r['profile_hits']??0)>0||trim((string)($r['profile_key']??''))!=='';$dest=null;
     if($value==='woo')$dest=is_array($r['woo']??null)?$r['woo']:null;
     elseif(preg_match('/^bsl:(\d+)$/',$value,$m)){$vid=(int)$m[1];$dest=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);}
@@ -29292,7 +29291,23 @@ function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
         if($value==='woo_higher')return $wp>0&&$we>0&&$wp>$we;
         return $wp>0&&$we>0&&$wp<$we;
     }
+    if($type==='code_suffix'){$has=matrixTitleHasCode((string)($r['title']??$r['bare']??''));return$value==='has_code'?$has:!$has;}
     return true;
+}
+/** جستجو/فیلترهای سریع همیشه AND هستند؛ قواعد پیشرفته با AND یا OR انتخابی ترکیب می‌شوند. */
+function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
+    $q=matrixBareTitle((string)($opts['q']??''),[]);
+    if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
+        &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
+    $flags=(array)($r['flags']??[]);$st=(string)($r['status']??'');
+    if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&(int)($r['profile_hits']??0)<2)return false;
+    if(!empty($opts['only_mismatch'])&&$st!=='mismatch'&&!in_array('price_mismatch',$flags,true))return false;
+    if(!empty($opts['only_missing'])&&$st!=='missing'&&$st!=='only_profile'
+        &&!in_array('missing_woo',$flags,true)&&!in_array('missing_bsl',$flags,true))return false;
+    $rules=matrixNormalizeViewFilterRules($opts);if(!$rules)return true;
+    $join=strtolower((string)($opts['filter_join']??'and'))==='or'?'or':'and';
+    foreach($rules as $rule){$hit=matrixRowMatchesOneViewFilter($r,$data,$rule['type'],$rule['value']);if($join==='and'&&!$hit)return false;if($join==='or'&&$hit)return true;}
+    return $join==='and';
 }
 
 /** فیلتر + صفحه‌بندی روی نتیجهٔ ذخیره‌شده (بدون rebuild) */
@@ -29314,11 +29329,11 @@ function matrixQueryPage(array $opts = []): array {
             'progress' => $prog,
         ];
     }
-    $filterType = trim((string)($opts['filter_type'] ?? ''));
-    $filterValue = trim((string)($opts['filter_value'] ?? ''));
-    $validFilterTypes = ['status','profile','present_dest','missing_dest','mismatch_dest','duplicate','presence','price'];
-    if (!in_array($filterType, $validFilterTypes, true) || $filterValue === '') { $filterType=''; $filterValue=''; }
-    $opts['filter_type']=$filterType; $opts['filter_value']=$filterValue;
+    $filterRules=matrixNormalizeViewFilterRules($opts);
+    $filterJoin=strtolower((string)($opts['filter_join']??'and'))==='or'?'or':'and';
+    $opts['filters']=$filterRules;$opts['filter_join']=$filterJoin;
+    /* legacy response fields remain for old embedded/plugin clients */
+    $filterType=(string)($filterRules[0]['type']??'');$filterValue=(string)($filterRules[0]['value']??'');
     /* گزینه‌های دراپ‌داون از کل فایل نتیجه ساخته می‌شوند، نه فقط صفحهٔ فعلی. */
     $profileOptions = [];
     foreach ((array)$data['rows'] as $fr) {
@@ -29400,6 +29415,7 @@ function matrixQueryPage(array $opts = []): array {
         'from_file' => true,
         'server_side' => true,
         'filter_type'=>$filterType, 'filter_value'=>$filterValue,
+        'filters'=>$filterRules, 'filter_join'=>$filterJoin,
         'filter_options'=>['destinations'=>$destOptions,'profiles'=>$profileOptionRows],
         'sort' => $sort, 'sort_dir' => $sortDir,
         'page' => $page,
@@ -29681,6 +29697,8 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
         'filter_type' => (string)($_GET['filter_type'] ?? $_POST['filter_type'] ?? ''),
         'filter_value' => (string)($_GET['filter_value'] ?? $_POST['filter_value'] ?? ''),
+        'filters' => (static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?$v:[];})(($_GET['filters_json'] ?? $_POST['filters_json'] ?? '[]')),
+        'filter_join' => (string)($_GET['filter_join'] ?? $_POST['filter_join'] ?? 'and'),
         'sort' => (string)($_GET['sort'] ?? $_POST['sort'] ?? ''),
         'sort_dir' => (string)($_GET['sort_dir'] ?? $_POST['sort_dir'] ?? 'asc'),
         'live_fill' => !empty($_GET['live_fill']) || !empty($_POST['live_fill']),
@@ -29747,6 +29765,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             'only_missing'=>!empty($_GET['only_missing']??$_POST['only_missing']??null),
             'filter_type'=>(string)($_GET['filter_type']??$_POST['filter_type']??''),
             'filter_value'=>(string)($_GET['filter_value']??$_POST['filter_value']??''),
+            'filters'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?$v:[];})(($_GET['filters_json']??$_POST['filters_json']??'[]')),
+            'filter_join'=>(string)($_GET['filter_join']??$_POST['filter_join']??'and'),
         ],
     ];
     $matrixFixCp = null;
@@ -40190,7 +40210,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'matrixRowMatchesViewFilters($r,$data,$opts)') !== false
       && strpos($selfSrc, 'matrixRowMatchesViewFilters($r, $data, $viewFilters)') !== false);
     $add('10.260', 'فیلترهای فعال همراه درخواست اصلاح و checkpoint آن حفظ می‌شوند',
-         strpos($selfSrc, "fd.append('filter_type',ft)") !== false
+         strpos($selfSrc, "fd.append('filters_" . "json'") !== false
       && strpos($selfSrc, "'view_filters' => \$viewFilters") !== false
       && strpos($selfSrc, "'only_mismatch'=>") !== false);
     $add('10.260', 'گزینهٔ فقط پسوند کد از رابط و درخواست‌ها حذف شده است',
@@ -40215,6 +40235,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.261', 'ورودی 10.261 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "261'") !== false
       && version_compare(APP_VERSION, '10.' . '261', '>='));
+
+    /* ---------- v10.262: multiple AND/OR matrix filters ---------- */
+    $add('10.262', 'قواعد چندگانهٔ فیلتر با AND و OR سمت سرور ارزیابی می‌شوند',
+         function_exists('matrixNormalizeViewFilter' . 'Rules')
+      && function_exists('matrixRowMatchesOneView' . 'Filter')
+      && strpos($selfSrc, "\$opts['filter_" . "join']") !== false);
+    $add('10.262', 'پسوند کد فقط یک معیار فیلتر است و گزینهٔ مستقل قبلی برنگشته است',
+         strpos($selfSrc, "value=\"code_" . "suffix\"") !== false
+      && strpos($selfSrc, "[['has_" . "code'") !== false
+      && strpos($selfSrc, 'id="sm' . 'CodedOnly"') === false);
+    $add('10.262', 'همان JSON فیلترها به نمایش و اصلاح مغایرت ارسال و در checkpoint نگهداری می‌شود',
+         substr_count($selfSrc, "fd.append('filters_" . "json'") >= 2
+      && strpos($selfSrc, "'filters'=>(static function") !== false
+      && strpos($selfSrc, "'view_filters' => \$viewFilters") !== false);
+    $add('10.262', 'ورودی 10.262 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "262'") !== false
+      && version_compare(APP_VERSION, '10.' . '262', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63799,7 +63836,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -63819,8 +63856,10 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <option value="duplicate">نوع تکراری</option>
 <option value="presence">ترکیب حضور در مبدأ/مقصد</option>
 <option value="price">وضعیت قیمت</option>
+<option value="code_suffix">پسوند (کد:ایکس)</option>
 </select>
 <select id="smFilterValue" style="min-width:170px;font-size:12px" onchange="smFilterValueChanged()" disabled><option value="">نام فیلتر</option></select>
+<select id="smFilterJoin" style="max-width:105px;font-size:12px" onchange="smFilterJoinChanged()"><option value="and">AND · همه</option><option value="or">OR · یکی</option></select>
 <select id="smPer" style="max-width:110px;font-size:12px" onchange="syncMatrixLoad(1)">
 <option value="25">۲۵ / صفحه</option>
 <option value="50" selected>۵۰ / صفحه</option>
@@ -63833,6 +63872,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px">اعمال فیلترها</button>
 <button class="btn btn-gray" onclick="smResetFilters()" style="font-size:11px">پاک‌کردن فیلترها</button>
 </div>
+<div id="smFilterRules" style="display:flex;flex-wrap:wrap;gap:5px;margin:-2px 0 8px;font-size:10.5px"></div>
 <div id="smSummary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:11px"></div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
 <div id="smTableWrap" style="overflow:auto;max-height:min(70vh,640px);border:1px solid #475569;border-radius:8px;background:#020617">
@@ -71117,6 +71157,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.262', t:'🧩 فیلترهای چندگانهٔ AND / OR برای ماتریس', items:[
+    'فیلتر پسوند (کد:ایکس) به‌صورت «دارای پسوند / بدون پسوند» داخل فیلترهای پیشرفته قرار گرفت و گزینهٔ مستقل قبلی همچنان حذف است',
+    'می‌توان تا ۲۰ شرط را ساخت و آن‌ها را با AND (همهٔ شرط‌ها) یا OR (حداقل یک شرط) ترکیب، حذف و در مرورگر حفظ کرد',
+    'نمایش، شمارش و اصلاح مغایرت دقیقاً یک JSON فیلتر مشترک دارند؛ بنابراین اصلاح فقط روی کل مجموعهٔ فیلترشده و نه صرفاً صفحهٔ قابل‌مشاهده اجرا می‌شود'
+  ]},
   {v:'10.261', t:'⚡ بازقیمت‌گذاری فوری ماتریس با تغییر ضرایب', items:[
     'ذخیرهٔ ضریب پروفایل، ووکامرس یا هر غرفهٔ باسلام قیمت مورد انتظار و وضعیت مغایرت را مستقیماً در نتیجهٔ ذخیره‌شده بازمحاسبه می‌کند',
     'این بازقیمت‌گذاری محلی است و قیمت‌های مشاهده‌شده را حفظ می‌کند؛ بنابراین هیچ کاتالوگ راه دوری دوباره دریافت نمی‌شود',
@@ -79546,42 +79591,37 @@ function smCell(html, tone){
   const bg=smToneBg(tone), fg=smToneFg(tone);
   return '<td style="padding:7px 8px;border-bottom:1px solid #1e293b;background:'+bg+';color:'+fg+';vertical-align:top;line-height:1.55;overflow-wrap:anywhere">'+html+'</td>';
 }
-window._smSort='';window._smSortDir='asc';window._smColWidths={};window._smFilterData={destinations:[],profiles:[]};
-try{window._smSort=localStorage.getItem('s4_matrix_sort')||'';window._smSortDir=localStorage.getItem('s4_matrix_sort_dir')||'asc';window._smColWidths=JSON.parse(localStorage.getItem('s4_matrix_col_widths')||'{}')||{};}catch(e){}
+window._smSort='';window._smSortDir='asc';window._smColWidths={};window._smFilterData={destinations:[],profiles:[]};window._smFilterRules=[];
+try{window._smSort=localStorage.getItem('s4_matrix_sort')||'';window._smSortDir=localStorage.getItem('s4_matrix_sort_dir')||'asc';window._smColWidths=JSON.parse(localStorage.getItem('s4_matrix_col_widths')||'{}')||{};window._smFilterRules=JSON.parse(localStorage.getItem('s4_matrix_filters')||'[]')||[];if($('smFilterJoin'))$('smFilterJoin').value=localStorage.getItem('s4_matrix_filter_join')==='or'?'or':'and';}catch(e){window._smFilterRules=[];}
 function smFilterStaticOptions(type){
   const m={
     status:[['ok','یکسان'],['mismatch','مغایرت قیمت'],['missing','ناقص/ناموجود'],['only_profile','فقط مبدأ'],['only_dest','فقط مقصد'],['partial','نیمه‌کامل']],
     duplicate:[['any','هر نوع تکراری'],['profile','تکراری در پروفایل'],['woo','تکراری ووکامرس'],['bsl','تکراری باسلام']],
     presence:[['only_profile','فقط در مبدأ'],['only_dest','فقط در مقصد'],['in_all','موجود در همهٔ مقصدها'],['missing_any','حداقل در یک مقصد ناموجود']],
-    price:[['has_price','دارای قیمت پروفایل'],['no_price','بدون قیمت پروفایل'],['woo_higher','قیمت واقعی WC بیشتر از انتظار'],['woo_lower','قیمت واقعی WC کمتر از انتظار']]
+    price:[['has_price','دارای قیمت پروفایل'],['no_price','بدون قیمت پروفایل'],['woo_higher','قیمت واقعی WC بیشتر از انتظار'],['woo_lower','قیمت واقعی WC کمتر از انتظار']],
+    code_suffix:[['has_code','دارای پسوند (کد:ایکس)'],['no_code','بدون پسوند (کد:ایکس)']]
   };return m[type]||[];
 }
+function smFilterOptions(type){if(type==='profile')return window._smFilterData.profiles||[];if(['present_dest','missing_dest','mismatch_dest'].includes(type))return window._smFilterData.destinations||[];return smFilterStaticOptions(type).map(x=>({value:x[0],label:x[1]}));}
 function smRenderFilterValues(preferred){
-  const type=($('smFilterType')||{}).value||'',sel=$('smFilterValue');if(!sel)return;
-  let opts=[];
-  if(type==='profile')opts=window._smFilterData.profiles||[];
-  else if(['present_dest','missing_dest','mismatch_dest'].includes(type))opts=window._smFilterData.destinations||[];
-  else opts=smFilterStaticOptions(type).map(x=>({value:x[0],label:x[1]}));
+  const type=($('smFilterType')||{}).value||'',sel=$('smFilterValue');if(!sel)return;const opts=smFilterOptions(type);
   const wanted=preferred!=null?String(preferred):String(sel.value||'');
   sel.innerHTML='<option value="">'+(type?'انتخاب نام فیلتر…':'نام فیلتر')+'</option>'+opts.map(o=>'<option value="'+esc(o.value)+'">'+esc(o.label)+'</option>').join('');
   sel.disabled=!type;if(opts.some(o=>String(o.value)===wanted))sel.value=wanted;
 }
-function smFilterTypeChanged(user){
-  smRenderFilterValues('');
-  try{localStorage.setItem('s4_matrix_filter_type',($('smFilterType')||{}).value||'');localStorage.removeItem('s4_matrix_filter_value')}catch(e){}
-  if(user)syncMatrixLoad(1);
-}
-function smFilterValueChanged(){
-  try{localStorage.setItem('s4_matrix_filter_type',($('smFilterType')||{}).value||'');localStorage.setItem('s4_matrix_filter_value',($('smFilterValue')||{}).value||'')}catch(e){}
-  syncMatrixLoad(1);
-}
+function smFilterLabel(rule){const ts=($('smFilterType')&&Array.from($('smFilterType').options).find(o=>o.value===rule.type));const vs=smFilterOptions(rule.type).find(o=>String(o.value)===String(rule.value));return(ts?ts.textContent:rule.type)+' : '+(vs?vs.label:rule.value);}
+function smSaveFilterRules(){try{localStorage.setItem('s4_matrix_filters',JSON.stringify(window._smFilterRules||[]));localStorage.setItem('s4_matrix_filter_join',($('smFilterJoin')||{}).value||'and')}catch(e){}}
+function smRenderFilterRules(){const box=$('smFilterRules'),rules=window._smFilterRules||[];if(!box)return;box.innerHTML=rules.map((r,i)=>'<span style="display:inline-flex;gap:5px;align-items:center;padding:4px 7px;border:1px solid #0891b2;border-radius:99px;background:#083344;color:#cffafe">'+esc(smFilterLabel(r))+'<button type="button" onclick="smRemoveFilterRule('+i+')" style="border:0;background:transparent;color:#fda4af;cursor:pointer;padding:0">✕</button></span>').join('');}
+function smFilterTypeChanged(){smRenderFilterValues('');}
+function smFilterValueChanged(){const type=($('smFilterType')||{}).value||'',value=($('smFilterValue')||{}).value||'';if(!type||!value)return;if((window._smFilterRules||[]).length>=20){showToast('حداکثر ۲۰ فیلتر',1);return;}window._smFilterRules.push({type:type,value:value});smSaveFilterRules();smRenderFilterRules();$('smFilterValue').value='';syncMatrixLoad(1);}
+function smRemoveFilterRule(i){window._smFilterRules.splice(i,1);smSaveFilterRules();smRenderFilterRules();syncMatrixLoad(1);}
+function smFilterJoinChanged(){smSaveFilterRules();smRenderFilterRules();syncMatrixLoad(1);}
 function smResetFilters(){
-  if($('smFilterType'))$('smFilterType').value='';smRenderFilterValues('');
+  window._smFilterRules=[];if($('smFilterType'))$('smFilterType').value='';smRenderFilterValues('');smRenderFilterRules();
   ['smOnlyMis','smOnlyMiss','smOnlyDup'].forEach(id=>{if($(id))$(id).checked=false;});if($('smQ'))$('smQ').value='';
-  try{localStorage.removeItem('s4_matrix_filter_type');localStorage.removeItem('s4_matrix_filter_value')}catch(e){}
-  syncMatrixLoad(1);
+  try{localStorage.removeItem('s4_matrix_filters')}catch(e){}syncMatrixLoad(1);
 }
-try{const ft=localStorage.getItem('s4_matrix_filter_type')||'',fv=localStorage.getItem('s4_matrix_filter_value')||'';if($('smFilterType'))$('smFilterType').value=ft;smRenderFilterValues(fv)}catch(e){}
+smRenderFilterValues('');smRenderFilterRules();
 function smDefaultColWidth(k){if(k==='n')return 52;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
 function smTh(label,key,sortable){
   const active=window._smSort===key, arrow=active?(window._smSortDir==='desc'?' ▼':' ▲'):'';
@@ -79776,8 +79816,8 @@ function syncMatrixFixStart(scope){
   if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');
-  const ft=($('smFilterType')||{}).value||'',fv=($('smFilterValue')||{}).value||'';
-  if(ft&&fv){fd.append('filter_type',ft);fd.append('filter_value',fv);}
+  fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));
+  fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع اصلاح ناموفق',1);
@@ -79905,8 +79945,8 @@ function syncMatrixLoad(page, silent){
   fd.append('page', String(page));
   fd.append('per_page', String(($('smPer')||{}).value||50));
   fd.append('q', ($('smQ')||{}).value||'');
-  const filterType=($('smFilterType')||{}).value||'',filterValue=($('smFilterValue')||{}).value||'';
-  if(filterType&&filterValue){fd.append('filter_type',filterType);fd.append('filter_value',filterValue);}
+  fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));
+  fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
   if(window._smSort){fd.append('sort',window._smSort);fd.append('sort_dir',window._smSortDir||'asc');}
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
@@ -79927,12 +79967,7 @@ function syncMatrixLoad(page, silent){
     }
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
     window._smFilteredTotal=parseInt(d.actionable_total!=null?d.actionable_total:d.total)||0;
-    if(d.filter_options){
-      window._smFilterData=d.filter_options;
-      let wanted=($('smFilterValue')||{}).value||'';try{if(!wanted)wanted=localStorage.getItem('s4_matrix_filter_value')||''}catch(e){}
-      smRenderFilterValues(wanted);
-      if(!filterValue&&wanted&&($('smFilterValue')||{}).value===wanted){setTimeout(()=>syncMatrixLoad(1,true),0);return;}
-    }
+    if(d.filter_options){window._smFilterData=d.filter_options;smRenderFilterValues(($('smFilterValue')||{}).value||'');smRenderFilterRules();}
     const shops = d.shops||[];
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
     const colKeys=['n','title','profile','src_price','profile_price','woo_expect','woo_actual'];
@@ -79961,7 +79996,7 @@ function syncMatrixLoad(page, silent){
       meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
         +' · همهٔ محصولات'
-        +(d.filter_type?' · 🔎 '+esc((($('smFilterType')||{}).selectedOptions?.[0]?.textContent||d.filter_type))+': '+esc((($('smFilterValue')||{}).selectedOptions?.[0]?.textContent||d.filter_value)):'')
+        +((d.filters||[]).length?' · 🔎 '+smFa(d.filters.length)+' فیلتر ('+(d.filter_join==='or'?'OR':'AND')+')':'')
         +' · WC: '+smFa(d.woo_count||0)
         +' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')
         +(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')
