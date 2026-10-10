@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.273';
+const APP_VERSION = '10.274';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -18608,6 +18608,37 @@ $pageProducts=parse_list_by_engine($res['html'],$res['url'],$selectors,$extractE
 if($_usedEngine!=='' && ($_usedEngine!==$extractEngine || $page===1)){
     $logs[]='⚙ موتورِ استفاده‌شده: '.extractionEngineLabel($_usedEngine);
 }
+
+/* v10.274: ایمالز گاهی در یکی از transportهای fallback برای ~page~N همان
+   محتوای صفحهٔ ۱ را برمی‌گرداند. URL درست است ولی محافظِ duplicate اجرای
+   سالم را همان صفحهٔ ۲ تمام می‌کرد. پیش از تصمیم به توقف، صفحهٔ بدون محصول
+   تازه را با transportهای مستقل و بدون زنجیرهٔ cache دوباره می‌خوانیم؛ فقط
+   پاسخی پذیرفته می‌شود که واقعاً حداقل یک productKey تازه داشته باشد. */
+$_freshPageRows=static function(array $rows,array $seen):int{$n=0;foreach($rows as $k=>$_p)if(!isset($seen[$k]))$n++;return $n;};
+if($page>$_startPage && function_exists('isEmallsUrl') && isEmallsUrl($pageUrl)
+    && $_freshPageRows($pageProducts,$seenKeys)===0){
+    $logs[]='♻️ ایمالز: پاسخ صفحهٔ '.$page.' تکراری بود؛ بازخوانی مستقل پیش از توقف…';
+    $_retryFetchers=[];
+    $_retryFetchers['direct']=static function()use($pageUrl){
+        $net=['ipv4'=>true,'hosts'=>'','fallback'=>false,'resolve_ip'=>'','doh_url'=>'','worker_url'=>'','proxy'=>'','proxy_type'=>'http','proxy_auth'=>''];
+        return srcNetFetchAttempt($pageUrl,25,$net,'direct');
+    };
+    if(function_exists('emallsPhpStreamFetch'))$_retryFetchers['php-stream']=static fn()=>emallsPhpStreamFetch($pageUrl,25);
+    if(function_exists('fetch_html_jina_reader'))$_retryFetchers['jina-reader']=static fn()=>fetch_html_jina_reader($pageUrl,25,[]);
+    foreach($_retryFetchers as $_retryMode=>$_retryFn){
+        usleep(250000);
+        try{$_rr=$_retryFn();}catch(Throwable $_re){$_rr=['ok'=>false,'error'=>$_re->getMessage()];}
+        if(empty($_rr['ok'])||trim((string)($_rr['html']??''))===''){
+            $logs[]='   • '.$_retryMode.': ناموفق '.mb_substr((string)($_rr['error']??''),0,70);continue;
+        }
+        $_retryUsed='';$_retryRows=parse_list_by_engine((string)$_rr['html'],(string)($_rr['url']??$pageUrl),$selectors,$extractEngine,$_retryUsed);
+        $_retryFresh=$_freshPageRows($_retryRows,$seenKeys);
+        $logs[]='   • '.$_retryMode.': '.count($_retryRows).' محصول · '.$_retryFresh.' تازه';
+        if($_retryFresh>0){$res=$_rr;$pageProducts=$_retryRows;$_usedEngine=$_retryUsed;$logs[]='✅ صفحهٔ '.$page.' با '.$_retryMode.' بازیابی شد';break;}
+    }
+    unset($_retryFetchers,$_retryMode,$_retryFn,$_rr,$_retryRows,$_retryFresh,$_retryUsed);
+}
+unset($_freshPageRows);
 
 /* 🔍 v9.88 — تشخیصِ «مرورگر ۲۰ تا نشان می‌دهد ولی استخراج کم می‌آورد».
    انتخابگرِ بصری سایت را داخل iframe و با جاوااسکریپتِ کامل بارگذاری می‌کند،
@@ -40773,6 +40804,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.273', 'ورودی 10.273 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "273'") !== false
       && version_compare(APP_VERSION, '10.' . '273', '>='));
+
+    /* ---------- v10.274: Emalls duplicate-page transport recovery ---------- */
+    $add('10.274', 'صفحهٔ تکراری ایمالز پیش از توقف با transport مستقل بازخوانی می‌شود',
+         strpos($selfSrc, "isEmallsUrl(\$pageUrl)") !== false
+      && strpos($selfSrc, "srcNetFetchAttempt(\$pageUrl,25,\$net,'direct')") !== false
+      && strpos($selfSrc, "emallsPhpStreamFetch(\$pageUrl,25)") !== false
+      && strpos($selfSrc, "fetch_html_jina_reader(\$pageUrl,25,[])") !== false);
+    $add('10.274', 'retry فقط پاسخ دارای productKey تازه را می‌پذیرد و جزئیات transport را لاگ می‌کند',
+         strpos($selfSrc, "\$_freshPageRows(\$pageProducts,\$seenKeys)===0") !== false
+      && strpos($selfSrc, "if(\$_retryFresh>0){\$res=\$_rr;\$pageProducts=\$_retryRows") !== false
+      && strpos($selfSrc, "محصول · '.\$_retryFresh.' تازه") !== false);
+    $add('10.274', 'ورودی 10.274 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "274'") !== false
+      && version_compare(APP_VERSION, '10.' . '274', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71705,6 +71750,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.274', t:'📄 رفع توقف ایمالز روی صفحهٔ دوم', items:[
+    'فیدبک production تأیید کرد تنظیمات ۱۰۰ صفحه و الگوی ~page~{page} درست است، اما یک transport موقتاً صفحهٔ ۱ را برای URL صفحهٔ ۲ برگرداند و محافظ duplicate زود متوقف شد',
+    'پیش از توقف به‌علت صفر محصول تازه، صفحهٔ ایمالز با direct، PHP stream و سپس Jina Reader مستقل بازخوانی می‌شود و فقط پاسخ دارای productKey تازه پذیرفته می‌شود',
+    'URL و checkpoint قبلی دست‌نخورده می‌ماند؛ retry فقط برای ایمالز، فقط از صفحهٔ دوم به بعد و فقط هنگام پاسخ کاملاً تکراری اجرا می‌شود',
+    'لاگ استخراج تعداد کل و تازهٔ هر transport را نشان می‌دهد تا چالش، cache یا پاسخ تکراری از تنظیم اشتباه صفحه‌بندی تفکیک شود'
+  ]},
   {v:'10.273', t:'🟢 چراغ زندهٔ هاست/سرور و انتقال تمام‌عرض به منو', items:[
     'دکمهٔ بنفش تمام‌عرض از نوار بالای صفحه حذف و داخل سربرگ منوی همبرگری بازشده قرار گرفت؛ وضعیت فعال آن همچنان ذخیره می‌شود',
     'جای قبلی دکمه یک چراغ پالسر ظریف دارد: پاسخ runtime سبز، زمان بررسی کهربایی و timeout/خطای شبکه قرمز نمایش داده می‌شود',
