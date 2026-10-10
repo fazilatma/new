@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.253';
+const APP_VERSION = '10.254';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27318,6 +27318,10 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
     $round = 0; $requests = 0;
     while (!matrixSliceExpired()) {
         if (matrixStopRequested()) return ['ok' => true, 'stopped' => true, 'rounds' => $round, 'requests' => $requests];
+        /* round تازه را در چند ثانیهٔ آخر شروع نکن؛ یک API کند می‌تواند تا
+           ۱۵ ثانیه طول بکشد و از سقف رایج ۳۰ ثانیهٔ proxy عبور کند. */
+        $deadline=(float)($GLOBALS['_matrixSliceDeadline']??0);
+        if($round>0&&$deadline>0&&($deadline-microtime(true))<5.0)break;
         $jobs = [];
         if (!$wooDone && trim((string)($w['store_url'] ?? '')) !== ''
             && trim((string)($w['consumer_key'] ?? '')) !== '') {
@@ -27411,10 +27415,8 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
            سپس خطای دقیقِ نخست برگردانده می‌شود تا کاربر صفحه‌های موفق را از دست ندهد. */
         if($failures)return ['ok'=>false,'error'=>$failures[0],
             'errors'=>$failures,'rounds'=>$round,'requests'=>$requests];
-        /* v10.245: دقیقاً یک round در هر درخواست continuation. قبلاً اگر پاسخ‌ها
-           سریع بودند حلقه تا deadline دورهای متعدد می‌رفت و اگر یکی کند بود همان
-           round می‌توانست از مهلت proxy عبور کند. checkpoint همین دور حفظ شده و
-           UI دور بعد را با درخواست تازه اجرا می‌کند. */
+        /* v10.254: دورهای بعدی تا پایان پنجرهٔ قابل‌تنظیم ادامه دارند. timeout
+           هر درخواست شبکه همچنان محدود است و cursor هر صفحه مستقل ذخیره می‌شود. */
         $allDone=$wooDone;
         foreach($shops as $doneShop){
             if(!is_array($doneShop))continue;
@@ -27423,7 +27425,7 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
             if($doneVid>0 && $doneTk!=='' && empty($shopDone[(string)$doneVid])){$allDone=false;break;}
         }
         if($allDone)return ['ok'=>true,'complete'=>true,'rounds'=>$round,'requests'=>$requests];
-        return ['ok'=>true,'yielded'=>true,'rounds'=>$round,'requests'=>$requests];
+        /* مقصدهای ناتمام در round بعد، تا deadline همین برش، یک صفحهٔ دیگر می‌گیرند. */
     }
     return ['ok'=>true,'yielded'=>true,'rounds'=>$round,'requests'=>$requests];
 }
@@ -27441,10 +27443,13 @@ function matrixBuild(array $opts = []): array {
     $source = (string)($opts['source'] ?? 'manual');
     $parallelDest = !empty($opts['parallel_destinations']);
     $liveFill = !empty($opts['live_fill']);
+    /* v10.254: زمان هر برش دستی قابل تنظیم است؛ ۲..۲۰ ثانیه تا هم تعداد
+       بسته‌ها کم/زیاد شود و هم از timeout رایج proxy ها عبور نکند. */
+    $sliceSeconds = max(2, min(20, (int)($opts['slice_seconds'] ?? 8)));
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
-    $GLOBALS['_matrixSliceDeadline'] = $source === 'manual' ? microtime(true) + 8.0 : 0;
+    $GLOBALS['_matrixSliceDeadline'] = $source === 'manual' ? microtime(true) + $sliceSeconds : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
     $profileRows = is_array($resumeCp['profile_rows'] ?? null) ? $resumeCp['profile_rows'] : [];
@@ -27460,18 +27465,18 @@ function matrixBuild(array $opts = []): array {
     if (!array_key_exists('shop_done', $resumeCp) && $matrixShopCp) {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
-    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
+    $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone): array {
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill];
+            'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds];
     };
 
     matrixProgress([
         'running' => true, 'done' => false, 'error' => '',
         'phase' => 'profiles', 'pct' => $profilesDone ? 2 : 2, 'source' => $source,
-        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill,
+        'profile' => $profileFilter, 'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds,
         'checkpoint' => $matrixCp('profiles', $profileRows, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
         'log_add' => ['🚀 ' . ($profilesDone ? 'ادامه ساخت جدول مقایسه' : 'شروع ساخت جدول مقایسه')
             . ' (سرورساید) — منبع: ' . $source],
@@ -27483,13 +27488,13 @@ function matrixBuild(array $opts = []): array {
     $rowsByKey = $profileRows;
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$sliceSeconds): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial'];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'slice_seconds' => $sliceSeconds];
         matrixProgress(['running' => false, 'done' => true, 'stopped' => true, 'partial' => true,
             'stale' => true, 'phase' => 'stopped', 'checkpoint' => $cp,
             'log_add' => ['⏹ ساخت جدول متوقف شد — checkpoint حفظ شد']]);
@@ -27498,17 +27503,17 @@ function matrixBuild(array $opts = []): array {
     };
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
-        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, $cn, $source): array {
+        &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$sliceSeconds, $cn, $source): array {
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'),
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
             'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
-            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill];
+            'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'slice_seconds' => $sliceSeconds];
         if($liveFill) matrixLiveSnapshot($cp,$cn,$source);
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
-            'log_add' => ['↻ وقفهٔ کوتاه برای پاسخ‌گویی سرور؛ ادامهٔ خودکار از checkpoint']]);
+            'log_add' => ['↻ پایان برش '.$sliceSeconds.' ثانیه‌ای؛ وقفهٔ کوتاه و ادامهٔ خودکار از checkpoint']]);
         return ['ok' => true, 'yielded' => true, 'partial' => true, 'checkpoint' => $cp];
     };
     $profiles = loadProfiles();
@@ -29135,7 +29140,8 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     $logs = array_slice(is_array($p['log'] ?? null) ? $p['log'] : [], -12);
     echo json_encode(['ok' => true, 'version' => APP_VERSION,
         'running' => !empty($p['running']), 'phase' => (string)($p['phase'] ?? ''),
-        'pct' => (int)($p['pct'] ?? 0), 'fetch_mode' => (string)($p['fetch_mode'] ?? 'serial'), 'stopped' => !empty($p['stopped']),
+        'pct' => (int)($p['pct'] ?? 0), 'fetch_mode' => (string)($p['fetch_mode'] ?? 'serial'),
+        'slice_seconds' => (int)($p['slice_seconds'] ?? ($cp['slice_seconds'] ?? 8)), 'stopped' => !empty($p['stopped']),
         'yielded' => !empty($p['yielded']), 'error' => (string)($p['error'] ?? ''),
         'lock_held' => $lockHeld, 'lock_recovered' => !empty($p['lock_recovered']),
         'profile_rows' => count((array)($cp['profile_rows'] ?? [])),
@@ -29190,6 +29196,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         'run_started_at' => microtime(true),
         'parallel_destinations' => !empty($_GET['parallel_destinations'] ?? $_POST['parallel_destinations'] ?? null),
         'live_fill' => !empty($_GET['live_fill'] ?? $_POST['live_fill'] ?? null),
+        'slice_seconds' => max(2, min(20, (int)($_GET['slice_seconds'] ?? $_POST['slice_seconds'] ?? 8))),
     ];
     /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
        ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
@@ -29208,6 +29215,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
     if ($matrixCp && array_key_exists('live_fill', $matrixCp))
         $opts['live_fill'] = !empty($matrixCp['live_fill']);
+    if ($matrixCp && isset($matrixCp['slice_seconds']))
+        $opts['slice_seconds'] = max(2, min(20, (int)$matrixCp['slice_seconds']));
     $opts['checkpoint'] = $matrixCp;
     // قفل زود — حذف cursor و مصرف stop فقط بعد از مالکیت واقعی انجام می‌شود.
     $lockFile = SYNC_MATRIX_LOCK_FILE;
@@ -39683,6 +39692,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.253', 'ورودی 10.253 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "253'") !== false
       && version_compare(APP_VERSION, '10.' . '253', '>='));
+
+    /* ---------- v10.254: configurable matrix slice ---------- */
+    $add('10.254', 'زمان برش ماتریس از 2 تا 20 ثانیه قابل تنظیم است',
+         strpos($selfSrc, 'id="smSliceSeconds"') !== false
+      && strpos($selfSrc, "fd.append('slice_seconds'") !== false
+      && strpos($selfSrc, "'slice_seconds' => " . '$sliceSeconds') !== false);
+    $add('10.254', 'زمان برش در checkpoint و resume حفظ می‌شود',
+         strpos($selfSrc, "isset(" . '$matrixCp' . "['slice_seconds'])") !== false
+      && strpos($selfSrc, "s4_matrix_slice_seconds") !== false);
+    $add('10.254', 'واکشی موازی تا deadline چند round ادامه می‌دهد',
+         strpos($selfSrc, 'while (!matrixSliceExpired())') !== false
+      && strpos($selfSrc, 'مقصدهای ناتمام در round بعد') !== false);
+    $add('10.254', 'ورودی 10.254 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "254'") !== false
+      && version_compare(APP_VERSION, '10.' . '254', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63222,6 +63246,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label class="prof-net-switch" title="نمایش و به‌روزرسانی جدول بعد از دریافت هر بستهٔ محصولات">
 <input type="checkbox" id="smLiveFill" style="display:none" onchange="syncMatrixLiveUi(true)"><span class="prof-net-slider"></span></label>
 </div>
+<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;background:#0f172a;border:1px solid #334155;border-radius:20px" title="مدت هر برش واکشی پیش از وقفه و ادامهٔ خودکار">
+<span style="font-size:10px;color:#94a3b8;white-space:nowrap">زمان برش</span>
+<input type="range" id="smSliceSeconds" min="2" max="20" step="1" value="8" oninput="syncMatrixSliceUi(true)" style="width:90px">
+<b id="smSliceSecondsLabel" style="font-size:10px;color:#fbbf24;min-width:34px">۸ ث</b>
+</div>
 <div style="display:flex;gap:6px;flex-wrap:wrap">
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
@@ -70548,6 +70577,11 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.254', t:'⏱ تنظیم زمان برش واکشی ماتریس', items:[
+    'اسلایدر ۲ تا ۲۰ ثانیه کنار سوییچ‌های ماتریس اضافه شد؛ مقدار در مرورگر و checkpoint حفظ می‌شود',
+    'زمان بیشتر معمولاً صفحات ۱۰۰تایی بیشتری پیش از وقفه می‌گیرد و زمان کمتر توقف/پاسخ‌گویی سریع‌تری می‌دهد',
+    'حالت موازی نیز تا پایان پنجرهٔ انتخابی چند round اجرا می‌کند و cursor مستقل هر مقصد محفوظ می‌ماند'
+  ]},
   {v:'10.253', t:'🍪 بازیابی session ایمالز برای خطای Empty', items:[
     'هدرهای مشکوک Origin/Referer قبلی حذف و هدر ناوبری واقعی مرورگر برای ایمالز اعمال شد',
     'پس از Empty، همان cookie-engine ابتدا صفحهٔ اصلی ایمالز را warm-up و سپس URL دسته را با TLS/IP خودکار دوباره می‌گیرد',
@@ -78991,6 +79025,12 @@ function syncMatrixLiveUi(save){
   if(on && save)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 }
 try{if($('smLiveFill'))$('smLiveFill').checked=localStorage.getItem('s4_matrix_live_fill')==='1';syncMatrixLiveUi(false)}catch(e){}
+function syncMatrixSliceUi(save){
+  const el=$('smSliceSeconds');const n=Math.max(2,Math.min(20,parseInt(el&&el.value)||8));
+  if(el)el.value=String(n);if($('smSliceSecondsLabel'))$('smSliceSecondsLabel').textContent=smFa(n)+' ث';
+  if(save)try{localStorage.setItem('s4_matrix_slice_seconds',String(n))}catch(e){}
+}
+try{const v=parseInt(localStorage.getItem('s4_matrix_slice_seconds')||'8');if($('smSliceSeconds'))$('smSliceSeconds').value=String(Math.max(2,Math.min(20,v||8)));syncMatrixSliceUi(false)}catch(e){}
 function syncMatrixStart(resume,automatic){
   resume=!!resume; automatic=!!automatic;
   if(!automatic) window._smMatrixStopWanted=false;
@@ -79003,6 +79043,7 @@ function syncMatrixStart(resume,automatic){
   if(resume) fd.append('resume','1');
   fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
   fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
+  fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع ناموفق',1);
