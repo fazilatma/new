@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.275';
+const APP_VERSION = '10.276';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1330,7 +1330,19 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
     $txt = trim(implode("\n", $out));
-    return ['ok' => $rc === 0, 'exit_code' => $rc, 'tail' => mb_substr($txt, -2000)];
+    /* v10.276: exit=0 به‌تنهایی موفقیت نیست. endpoint می‌تواند JSONِ
+       {ok:false,busy:true} برگرداند و PHP همچنان با صفر خارج شود؛ همین باعث
+       می‌شد worker یک همگام‌سازیِ اصلاً شروع‌نشده را done ثبت کند. */
+    $payload = null;
+    for ($i = count($out) - 1; $i >= 0; $i--) {
+        $candidate = json_decode(trim((string)$out[$i]), true);
+        if (is_array($candidate) && array_key_exists('ok', $candidate)) { $payload = $candidate; break; }
+    }
+    $logicalOk = !is_array($payload) || !empty($payload['ok']);
+    return ['ok' => $rc === 0 && $logicalOk, 'exit_code' => $rc,
+        'error' => (!$logicalOk ? (string)($payload['error'] ?? 'manual_sync_rejected') : ($rc !== 0 ? 'manual_sync_child_exit_' . $rc : '')),
+        'busy' => is_array($payload) && !empty($payload['busy']),
+        'tail' => mb_substr($txt, -2000)];
 }
 
 function s4CliPhpBinary(): string {
@@ -21911,7 +21923,15 @@ if (isset($_GET['manual_sync'])) {
     $_msAge  = time() - (int)($_msPrev['last_progress_ts'] ?? ($_msPrev['ts'] ?? 0));
     $_msResumeCp = is_array($_msPrev['checkpoint'] ?? null) ? $_msPrev['checkpoint'] : [];
     $_msResumeRequested = !empty($_GET['resume']);
-    if (!empty($_msPrev['running']) && empty($_msPrev['done']) && empty($_GET['takeover'])) {
+    /* v10.276: enqueue عمداً progress را running+queued می‌نویسد. child همان
+       worker چند لحظه بعد با direct=1 می‌آمد و این نشانگرِ خودش را «اجرای
+       موازی» می‌پنداشت؛ پس قبل از runBackendExtract با busy خارج می‌شد.
+       flock بالا همچنان اجرای موازی واقعی را منع می‌کند، بنابراین فقط child
+       مستقیم اجازه دارد نشانگر queued متعلق به worker را تحویل بگیرد. */
+    $_msOwnsQueuedMarker = !empty($_GET['direct'])
+        && !empty($_msPrev['worker']) && !empty($_msPrev['queued']);
+    if (!empty($_msPrev['running']) && empty($_msPrev['done'])
+        && empty($_GET['takeover']) && !$_msOwnsQueuedMarker) {
         $_msMaxD = max(120, (int)(loadConnections()['stall_after'] ?? 300));
         if ($_msAge >= $_msMaxD) {
             $_msPrev['running'] = false; $_msPrev['done'] = true;
@@ -40838,6 +40858,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.275', 'ورودی 10.275 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "275'") !== false
       && version_compare(APP_VERSION, '10.' . '275', '>='));
+
+    /* ---------- v10.276: worker manual-sync handoff ---------- */
+    $add('10.276', 'child مستقیم worker نشانگر queued خودش را تحویل می‌گیرد ولی flock حفظ شده است',
+         strpos($selfSrc, "\$_msOwnsQueuedMarker = !empty(\$_GET['direct'])") !== false
+      && strpos($selfSrc, "!empty(\$_msPrev['worker']) && !empty(\$_msPrev['queued'])") !== false
+      && strpos($selfSrc, "&& empty(\$_GET['takeover']) && !\$_msOwnsQueuedMarker") !== false
+      && strpos($selfSrc, "flock(\$_msLockFp, LOCK_EX | LOCK_NB)") !== false);
+    $add('10.276', 'worker پاسخ JSON با ok=false و exit صفر را موفق ثبت نمی‌کند',
+         strpos($selfSrc, "\$logicalOk = !is_array(\$payload) || !empty(\$payload['ok'])") !== false
+      && strpos($selfSrc, "'ok' => \$rc === 0 && \$logicalOk") !== false
+      && strpos($selfSrc, "'busy' => is_array(\$payload) && !empty(\$payload['busy'])") !== false);
+    $add('10.276', 'ورودی 10.276 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "276'") !== false
+      && version_compare(APP_VERSION, '10.' . '276', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -71770,6 +71804,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.276', t:'🔄 شروع واقعی همگام‌سازی دستی در worker', items:[
+    'علت production مشخص شد: enqueue فایل progress را running+queued می‌نوشت و child همان worker چند لحظه بعد نشانگر خودش را اجرای موازی می‌پنداشت و پیش از استخراج با busy خارج می‌شد',
+    'child مستقیم worker اکنون نشانگر queued متعلق به خودش را تحویل می‌گیرد؛ flock واقعی همچنان هر اجرای موازی واقعی را مسدود می‌کند',
+    'پاسخ JSON ناموفق با exit code صفر دیگر در صف done/موفق ثبت نمی‌شود و دلیل busy یا خطای واقعی در گزارش worker باقی می‌ماند',
+    'مسیر استخراج و صفحه‌بندی تغییر نکرده است؛ همگام‌سازی دستی پس از تحویل صف دقیقاً همان runBackendExtract سریع را اجرا می‌کند'
+  ]},
   {v:'10.275', t:'🔧 نصب خودکار سازگار با LiteSpeed', items:[
     'lint آپدیتر در request وب دیگر lsphp را با -l در LSAPI mode اجرا نمی‌کند؛ binary واقعی php کنار lsphp را ترجیح می‌دهد',
     'فرمان lint از همان سازندهٔ CLI سازگار worker استفاده می‌کند و در خطا binary و exit code را برای تشخیص دقیق برمی‌گرداند',
