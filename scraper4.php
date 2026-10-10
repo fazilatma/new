@@ -328,7 +328,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.272';
+const APP_VERSION = '10.273';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32398,8 +32398,8 @@ if (isset($_GET['selftest'])) {
          && strpos($selfSrc, '🌐 اتصال') !== false);
 
     /* ---------- v9.61: دکمهٔ تمام‌عرض منو + رفعِ خالی بودنِ تب‌های هوش مصنوعی ---------- */
-    $add('9.61', 'دکمهٔ «تمام عرض کردن منو» (⛶) کنار همبرگر اضافه شده',
-         strpos($selfSrc, 'class="fullwidth' . '-btn" id="full' . 'Btn"') !== false
+    $add('9.61', 'دکمهٔ «تمام عرض کردن منو» (⛶) داخل منوی همبرگر موجود است',
+         strpos($selfSrc, 'class="panel-fullwidth' . '-btn" id="full' . 'Btn"') !== false
          && strpos($selfSrc, 'function toggleFull' . 'Settings(') !== false);
     $add('9.61', 'پنل تنظیمات در حالت تمام‌عرض، عرضِ کامل صفحه و بی‌سقف می‌شود',
          strpos($selfSrc, '.settings-panel.full' . '{width:100vw') !== false
@@ -40754,6 +40754,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.272', 'ورودی 10.272 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "272'") !== false
       && version_compare(APP_VERSION, '10.' . '272', '>='));
+
+    /* ---------- v10.273: runtime pulse + full-width inside menu ---------- */
+    $add('10.273', 'دکمهٔ تمام‌عرض داخل سربرگ منوی همبرگر است و از نوار اصلی حذف شده',
+         strpos($selfSrc, 'class="panel-fullwidth' . '-btn" id="full' . 'Btn"') !== false
+      && substr_count($selfSrc, 'id="full' . 'Btn"') === 1
+      && strpos($selfSrc, '<div class="hdr-tools" id="hdrTools">' . "\n" . '<button class="hamburger-btn"') !== false);
+    $add('10.273', 'چراغ runtime سه حالت بررسی، آنلاین و آفلاین با pulse سبز/قرمز دارد',
+         strpos($selfSrc, 'id="runtime' . 'Pulse"') !== false
+      && strpos($selfSrc, '.runtime-pulse.online .runtime-pulse-core') !== false
+      && strpos($selfSrc, '.runtime-pulse.offline .runtime-pulse-core') !== false
+      && strpos($selfSrc, '@keyframes runtime' . 'Pulse') !== false);
+    $add('10.273', 'سلامت هاست/سرور دوره‌ای، timeoutدار و با کلیک قابل بررسی فوری است',
+         strpos($selfSrc, 'async function s4RuntimeHealth' . 'Check') !== false
+      && strpos($selfSrc, "?whoami=1&_health=") !== false
+      && strpos($selfSrc, "setInterval(()=>s4RuntimeHealthCheck(false),15000)") !== false
+      && strpos($selfSrc, "/\\/sc(?:\\/|$)/i.test(location.pathname)") !== false);
+    $add('10.273', 'ورودی 10.273 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "273'") !== false
+      && version_compare(APP_VERSION, '10.' . '273', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -61975,6 +61994,10 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 /* v9.61: دکمهٔ «تمام‌عرض کردن منو» کنار همبرگر — پنل تنظیمات را به‌جای
    ۴۰۰ پیکسل، تمام عرض صفحه می‌کند تا همهٔ محتوا/بخش‌ها در یک نگاه باز شوند. */
 .fullwidth-btn{position:fixed;top:10px;left:60px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}.fullwidth-btn:hover{background:#334155}.fullwidth-btn.active{background:#7c3aed;color:#fff}.settings-panel.full{width:100vw;max-width:100vw}.settings-panel.full:not(.open){left:-100vw!important;right:auto}.settings-panel.full.open{left:0!important;right:0}.settings-panel.full .smenu-body.open{max-height:none;overflow:visible}body.spanel-full .settings-overlay.open{background:rgba(0,0,0,.55)}
+/* v10.273: کنترل تمام‌عرض داخل خود منوی بازشده است، نه نوار اصلی. */
+.settings-panel-actions{display:flex;align-items:center;gap:7px;margin-right:auto}.panel-fullwidth-btn{height:31px;padding:0 10px;border-radius:8px;border:1px solid #6d28d9;background:#2e1065;color:#ddd6fe;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;transition:background .2s,border-color .2s,transform .2s}.panel-fullwidth-btn:hover{background:#4c1d95;border-color:#a78bfa;transform:translateY(-1px)}.panel-fullwidth-btn.active{background:#7c3aed;border-color:#c4b5fd;color:#fff;box-shadow:0 0 0 3px #7c3aed30}.settings-panel.full .panel-fullwidth-btn span:last-child::after{content:' را بستن'}
+/* چراغ وضعیت محیط اجرا: پاسخ endpoint=سبز، timeout/شبکه=قرمز، بررسی=کهربایی. */
+.runtime-pulse{position:static;flex:0 0 52px;width:52px;height:44px;margin:0;border-radius:0;border:1px solid #475569;border-right-width:0;background:#0b1220;color:#94a3b8;display:grid;grid-template-columns:16px 14px;align-items:center;justify-content:center;gap:2px;cursor:pointer;overflow:visible}.runtime-pulse-core{grid-area:1/1;width:11px;height:11px;justify-self:center;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px #f59e0b;position:relative;z-index:2;transition:background .25s,box-shadow .25s}.runtime-pulse-ring{grid-area:1/1;justify-self:center;width:11px;height:11px;border-radius:50%;background:#f59e0b80;animation:runtimePulse 1.7s ease-out infinite}.runtime-pulse-tag{grid-area:1/2;font-size:8px;font-weight:900;letter-spacing:.2px;color:#fcd34d;min-width:12px;text-align:center}.runtime-pulse.online .runtime-pulse-core{background:#22c55e;box-shadow:0 0 5px #22c55e,0 0 13px #22c55e}.runtime-pulse.online .runtime-pulse-ring{background:#22c55e99}.runtime-pulse.online .runtime-pulse-tag{color:#86efac}.runtime-pulse.offline .runtime-pulse-core{background:#ef4444;box-shadow:0 0 6px #ef4444,0 0 14px #ef4444}.runtime-pulse.offline .runtime-pulse-ring{background:#ef444499;animation-duration:1s}.runtime-pulse.offline .runtime-pulse-tag{color:#fca5a5}.runtime-pulse:hover{background:#162033}.runtime-pulse:focus-visible{outline:2px solid #67e8f9;outline-offset:-2px}@keyframes runtimePulse{0%{transform:scale(.8);opacity:.9}75%,100%{transform:scale(2.7);opacity:0}}@media(max-width:430px){.runtime-pulse{flex-basis:44px;width:44px}.runtime-pulse-tag{display:none}.panel-fullwidth-btn span:last-child{display:none}.panel-fullwidth-btn{width:34px;padding:0}}
 /* v10.19 (۳۲): دکمهٔ مدیر وظیفه — سومین دکمهٔ شناورِ هدر، کنارِ ☰ و ⛶ */
 .tasks-btn{position:fixed;top:10px;left:110px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}
 /* v10.82 (96): دکمهٔ چت باسلام در نوارِ هدر — کنارِ مدیرِ وظیفه */
@@ -62649,7 +62672,7 @@ html[data-skin="gloss"] .progress-bar{
      تمام‌عرضِ باقی‌مانده را می‌گیرد و برچسبِ گویا دارد -->
 <div class="hdr-tools" id="hdrTools">
 <button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>
-<button class="fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن">⛶</button>
+<button class="runtime-pulse checking" id="runtimePulse" type="button" onclick="s4RuntimeHealthCheck(true)" title="در حال بررسی وضعیت محیط اجرا" aria-label="در حال بررسی وضعیت محیط اجرا"><span class="runtime-pulse-ring" aria-hidden="true"></span><span class="runtime-pulse-core" aria-hidden="true"></span><span class="runtime-pulse-tag" id="runtimePulseTag">…</span></button>
 <!-- v10.229: انتخاب سریع پروفایل، همیشه در نوار چسبان بالای صفحه -->
 <select class="hdr-profile-select" id="hdrProfileSelect" onchange="selectHeaderProfile(this.value)" title="انتخاب سریع پروفایل" aria-label="انتخاب سریع پروفایل"><option value="">پروفایل...</option></select>
 <button class="tasks-btn" id="tasksBtn" onclick="tmOpen()" title="مدیر وظیفه — کارهای در حال اجرا"><span aria-hidden="true">📋</span><span class="tasks-lbl">مدیر وظیفه</span><span class="tasks-sub" id="tasksSub">کارهای پس‌زمینه</span><span class="tasks-badge" id="tasksBadge">0</span></button>
@@ -62708,7 +62731,7 @@ html[data-skin="gloss"] .progress-bar{
 
 <div class="settings-overlay" id="settingsOverlay" onclick="toggleSettingsPanel()"></div>
 <div class="settings-panel" id="settingsPanel">
-<div class="settings-panel-head"><h2>☰ تنظیمات عمومی</h2><span id="connSaveInd" style="font-size:13px;min-width:16px;text-align:center;transition:color .3s" title=""></span><button class="btn btn-gray" onclick="toggleSettingsPanel()" style="font-size:14px;padding:4px 10px">✕</button></div>
+<div class="settings-panel-head"><h2>☰ تنظیمات عمومی</h2><span id="connSaveInd" style="font-size:13px;min-width:16px;text-align:center;transition:color .3s" title=""></span><div class="settings-panel-actions"><button class="panel-fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن"><span aria-hidden="true">⛶</span><span>تمام‌عرض</span></button><button class="btn btn-gray" onclick="toggleSettingsPanel()" style="font-size:14px;padding:4px 10px" title="بستن منو">✕</button></div></div>
 <div class="settings-panel-body" style="padding:0">
 
 <!-- v9.59: ذخیره (دانلود) و بازیابی همهٔ تنظیمات — برای جابه‌جایی/نوسازی هاست یا PaaS -->
@@ -71682,6 +71705,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.273', t:'🟢 چراغ زندهٔ هاست/سرور و انتقال تمام‌عرض به منو', items:[
+    'دکمهٔ بنفش تمام‌عرض از نوار بالای صفحه حذف و داخل سربرگ منوی همبرگری بازشده قرار گرفت؛ وضعیت فعال آن همچنان ذخیره می‌شود',
+    'جای قبلی دکمه یک چراغ پالسر ظریف دارد: پاسخ runtime سبز، زمان بررسی کهربایی و timeout/خطای شبکه قرمز نمایش داده می‌شود',
+    'چراغ مسیر /sc را «سرور» و مسیر افزونه را «هاست» می‌شناسد، هر ۱۵ ثانیه pulse سبک می‌زند و با کلیک فوراً دوباره بررسی می‌شود',
+    'tooltip و aria-label وضعیت دقیق را اعلام می‌کنند و در موبایل برچسب کوچک چراغ و متن دکمهٔ تمام‌عرض جمع می‌شود'
+  ]},
   {v:'10.272', t:'🩺 شروع و بازیابی فوری ساخت جدول در production', items:[
     'status هر running یتیم build را با دو شرط heartbeat بیش از ۱۸۰ ثانیه و flock آزاد تشخیص می‌دهد؛ process سالم هرگز اشتباهاً stale نمی‌شود',
     'checkpoint یتیم همان لحظه به worker فعال سپرده می‌شود و دیگر به repair pulse پنج‌دقیقه‌ای یا بازماندن دکمه در حالت قفل وابسته نیست',
@@ -90190,6 +90219,27 @@ function renderSendCard(d){
     let reasonStr=(d.result==='update'&&(d.update_reason||d.changes||d.changes_detail))?'<div class="scard-reason">📋 '+bslReportDetailHtml(d,'updated')+'</div>':'';
     return '<div class="scard scard-'+d.result+'">'+img+'<div class="scard-body"><div class="scard-title">'+esc(d.title||'—')+'</div><div class="scard-meta"><span class="scard-price">💰 '+priceStr+'</span><span class="scard-cat">📂 '+esc(catStr)+'</span>'+(d.link?'<span><a href="'+esc(d.link)+'" target="_blank" style="color:#60a5fa">🔗</a></span>':'')+'</div><div class="scard-result '+rc2+'">'+ri2+' '+changesStr+'</div>'+reasonStr+retStr+errStr+ridStr+findStr+'</div></div>';
 }
+/* v10.273: چراغ زندهٔ نوار بالا. /sc محیط سروری و مسیر افزونه محیط هاست
+   نام‌گذاری می‌شود؛ معیار «زنده» پاسخ معتبر خود همین runtime است، نه آنلاین
+   بودن مرورگر. کلیک روی چراغ یک بررسی فوری انجام می‌دهد. */
+let s4RuntimeHealthBusy=false;
+async function s4RuntimeHealthCheck(force=false){
+  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;
+  const serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
+  s4RuntimeHealthBusy=true;
+  if(force||!el.dataset.checked){el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='…';el.title='در حال بررسی '+kind+'…';}
+  const ac=typeof AbortController!=='undefined'?new AbortController():null,timer=ac?setTimeout(()=>ac.abort(),7000):null;
+  try{
+    const r=await fetch('?whoami=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
+    if(!r.ok)throw new Error('HTTP '+r.status);const text=await r.text();if(!text||text.indexOf('PHP:')<0)throw new Error('invalid response');
+    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(Date.now());if(tag)tag.textContent=short;
+    el.title='● '+kind+' زنده است · PHP پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
+  }catch(e){
+    el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
+    el.title='● '+kind+' پاسخ نمی‌دهد — برای بررسی دوباره کلیک کنید';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
+  }finally{if(timer)clearTimeout(timer);s4RuntimeHealthBusy=false;}
+}
+(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('offline',()=>{const e=document.getElementById('runtimePulse');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';}});})();
 /* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
    daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
 (function opsFeedbackPulse(){
