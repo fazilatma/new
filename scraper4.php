@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.278';
+const APP_VERSION = '10.279';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -21889,7 +21889,26 @@ if (isset($_GET['manual_sync_status'])) {
 }
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
-    echo json_encode(['ok'=>true,'rows'=>syncPipelineRows(),'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
+    $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];$wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
+    foreach($rows as &$sr){$pk=(string)($sr['profile_key']??'');if($pk==='')continue;
+        if((string)($sr['stage']??'')==='extract'&&(string)($xp['profile_key']??'')===$pk&&!empty($xp['running'])){
+            $sr['stage_details']['extract']=syncExtractStageDetails($xp);
+            $cur=(int)($xp['current']??0);$tot=(int)($xp['total']??0);$sr['stage_progress']=$tot>0?min(99,(int)round($cur*100/$tot)):35;
+        }
+        if((string)($sr['stage']??'')==='send'){
+            $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];$dest=[];
+            foreach([['bsl',(array)($bq['entries']??[])],['woo',(array)($wq['entries']??[])]] as [$dn,$entries])foreach($entries as $qe){
+                if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk)continue;
+                if(!in_array((string)($qe['status']??''),['waiting','running','paused','done'],true))continue;
+                $agg['queued']+=(int)($qe['total']??0);$agg['sent']+=(int)($qe['sent']??$qe['current']??0);
+                $agg['updated']+=(int)($qe['updated']??0);$agg['failed']+=(int)($qe['failed']??0);$agg['skipped']+=(int)($qe['skipped']??0);
+                $dest[]=['destination'=>$dn,'status'=>(string)($qe['status']??''),'current'=>(int)($qe['current']??0),'total'=>(int)($qe['total']??0),'failed'=>(int)($qe['failed']??0)];
+            }
+            if($dest){$sr['stage_details']['send']=['counts'=>$agg,'data'=>['destinations'=>$dest],'report'=>'پیشرفت زندهٔ صف‌های مقصد'];$sr['stage_progress']=$agg['queued']>0?min(99,(int)round($agg['sent']*100/$agg['queued'])):25;}
+        }
+    }unset($sr);
+    echo json_encode(['ok'=>true,'rows'=>$rows,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if (isset($_GET['manual_sync'])) {
     /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
@@ -22061,6 +22080,9 @@ if (isset($_GET['manual_sync'])) {
         $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
     }
     manualSyncProgress(['checkpoint' => ['extract' => $_msEx]], '');
+    $_msExtractDetail=syncExtractStageDetails((array)$_msEx);
+    syncPipelineMark($_msKey,$_msName,'extract','manual',[
+        'stage_details'=>['extract'=>$_msExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
     $_msResults['extract'] = [
         'ok' => !empty($_msEx['ok']),
         'error' => (string)($_msEx['error'] ?? ''),
@@ -22113,7 +22135,10 @@ if (isset($_GET['manual_sync'])) {
     $_msPricing=syncPricingSnapshot((array)$_msProf,$_msCn);
     manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_msPricing],
         '💰 ضرایب ذخیره‌شده بارگذاری و برای '.(int)$_msPricing['products'].' محصول فعال شد');
-    syncPipelineMark($_msKey,$_msName,'pricing','manual',['pricing'=>$_msPricing,'message'=>'ضرایب ذخیره و اعمال شد']);
+    syncPipelineMark($_msKey,$_msName,'pricing','manual',['pricing'=>$_msPricing,
+        'stage_details'=>['pricing'=>['counts'=>['products'=>(int)$_msPricing['products']],
+            'data'=>$_msPricing,'report'=>'تنظیمات قیمت پروفایل، مقصد و غرفه‌ها دوباره از دیسک خوانده و روی payload ارسال اعمال شد']],
+        'message'=>'ضرایب ذخیره و اعمال شد']);
 
     if (manualSyncStopped()) {
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, array_merge(readProgress(MANUAL_SYNC_PROGRESS_FILE), [
@@ -22265,6 +22290,9 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress([], '⚠️ ارسال: ' . mb_substr($e->getMessage(), 0, 200));
         $_msResults['ms_server_send'] = ['error' => $e->getMessage()];
     }
+    $_msSendDetail=syncSendStageDetails(array_merge((array)($_msResults['enqueue']??[]),(array)($_msResults['ms_server_send']??[])));
+    syncPipelineMark($_msKey,$_msName,'send','manual',['stage_details'=>['send'=>$_msSendDetail],
+        'message'=>!empty($_msSendDetail['report'])?$_msSendDetail['report']:'گزارش ارسال آماده شد']);
 
     /* ── ۴) گزارش ── */
     /* v10.130: خطای صف/ارسال یا توقفِ نرم، پایانِ موفقِ زنجیره نیست. آن را
@@ -22298,7 +22326,9 @@ if (isset($_GET['manual_sync'])) {
         exit;
     }
     try { cronMarkRun($_msKey, 'manual_done'); } catch (Throwable $e) {}
-    syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[]]);
+    syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
+        'stage_details'=>['done'=>['counts'=>['products'=>(int)($_msResults['extract']['extracted']??0)],
+            'data'=>$_msResults,'report'=>'استخراج، اعمال ضرایب و ارسال با موفقیت پایان یافت']]]);
     manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], '✅ همگام‌سازی دستی تمام شد');
     $_msDone = readProgress(MANUAL_SYNC_PROGRESS_FILE);
     $_msDone['running'] = false;
@@ -23048,9 +23078,14 @@ if (manualSyncActive()) {
 /* مرحلهٔ دوم مشترک: بعد از ذخیرهٔ خروجی استخراج، تنظیمات تازه دوباره خوانده
    و امضای ضرایب ثبت می‌شود. ساخت payload در پایین همان ضرایب را اعمال می‌کند. */
 $profiles=loadProfiles();$profile=$profiles[$key]??$profile;$cn=loadConnections();
+$_pipeExtractDetail=syncExtractStageDetails((array)($exRes??[]));
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
+    ['stage_details'=>['extract'=>$_pipeExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
 $_pipePricing=syncPricingSnapshot((array)$profile,$cn);
 syncPipelineMark((string)$key,(string)($profile['name']??$key),'pricing',manualSyncActive()?'manual':'periodic',
-    ['pricing'=>$_pipePricing,'message'=>'ضرایب ذخیره و برای ارسال اعمال شد']);
+    ['pricing'=>$_pipePricing,'stage_details'=>['pricing'=>['counts'=>['products'=>(int)$_pipePricing['products']],
+        'data'=>$_pipePricing,'report'=>'ضرایب پروفایل، مقصد و غرفه‌ها روی payload ارسال اعمال شد']],
+     'message'=>'ضرایب ذخیره و برای ارسال اعمال شد']);
 manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_pipePricing],
     '💰 ضرایب ذخیره‌شده برای '.(int)$_pipePricing['products'].' محصول اعمال شد');
 
@@ -23353,8 +23388,15 @@ try {
     $pResult['report'] = ['error' => mb_substr($e->getMessage(), 0, 160)];
 }
 $_pipeFailed=!empty($pResult['extract_error'])||!empty($pResult['add_update_hold']);
+$_pipeSendRaw=['queued'=>(int)(($pResult['woo_total']??0)+($pResult['bsl_total']??0)),
+    'failed'=>$_pipeFailed?1:0,'woo'=>$pResult['woo']??'','woo_total'=>(int)($pResult['woo_total']??0),
+    'bsl'=>$pResult['bsl']??'','bsl_total'=>(int)($pResult['bsl_total']??0),'data'=>$pResult];
 syncPipelineMark((string)$key,(string)($profile['name']??$key),$_pipeFailed?'error':'done',manualSyncActive()?'manual':'periodic',
-    ['pricing'=>$_pipePricing??[],'message'=>$_pipeFailed?(string)($pResult['extract_error']??$pResult['add_update_hold']):'همگام‌سازی کامل شد']);
+    ['pricing'=>$_pipePricing??[],'stage_details'=>[
+        'send'=>syncSendStageDetails($_pipeSendRaw),
+        'done'=>['counts'=>['products'=>(int)($pResult['extracted']??0)],'data'=>$pResult,
+            'report'=>$_pipeFailed?'همگام‌سازی با خطا پایان یافت':'همگام‌سازی و صف‌سازی مقصدها کامل شد']],
+     'message'=>$_pipeFailed?(string)($pResult['extract_error']??$pResult['add_update_hold']):'همگام‌سازی کامل شد']);
 $results['profiles'][] = $pResult;
 }
 saveSyncState($syncState);
@@ -40951,6 +40993,28 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "278'") !== false
       && version_compare(APP_VERSION, '10.' . '278', '>='));
 
+    /* ---------- v10.279: clickable stage progress/cards/modal ---------- */
+    $add('10.279', 'جزئیات مرحله‌ها بدون پاک‌کردن مرحلهٔ قبلی merge می‌شوند',
+         function_exists('syncExtractStageDetails') && function_exists('syncSendStageDetails')
+      && strpos($selfSrc, "\$extra['stage_details']=array_replace") !== false
+      && strpos($selfSrc, "'lists'=>['new'=>\$pick") !== false);
+    $add('10.279', 'کارت مستطیلی هر مرحله نوار پیشرفت و شمارنده‌های قابل‌کلیک دارد',
+         strpos($selfSrc, '.sync-pipe-step:after') !== false
+      && strpos($selfSrc, '--pipe-progress:') !== false
+      && strpos($selfSrc, 'class="sync-pipe-count" onclick=') !== false);
+    $add('10.279', 'مودال جزئیات و فهرست محصولات روی دسکتاپ و موبایل وجود دارد',
+         strpos($selfSrc, 'id="syncDetailModal"') !== false
+      && strpos($selfSrc, 'function syncDetailOpen(') !== false
+      && strpos($selfSrc, 'sync-detail-product') !== false
+      && strpos($selfSrc, '.sync-detail-modal{align-items:flex-end') !== false);
+    $add('10.279', 'اندپوینت کارت پیشرفت استخراج و صف‌های مقصد را زنده تزریق می‌کند',
+         strpos($selfSrc, "\$sr['stage_progress']") !== false
+      && strpos($selfSrc, "['bsl',(array)(\$bq['entries']??[])]") !== false
+      && strpos($selfSrc, "'report'=>'پیشرفت زندهٔ صف‌های مقصد'") !== false);
+    $add('10.279', 'ورودی 10.279 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "279'") !== false
+      && version_compare(APP_VERSION, '10.' . '279', '>='));
+
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
          function_exists('src' . 'NetCfg') && function_exists('src' . 'NetApplies'));
@@ -44452,6 +44516,10 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
         $old=is_array($all[$profileKey]??null)?$all[$profileKey]:[];
         $started=in_array($stage,['queued','extract'],true)?time():(int)($old['started_at']??time());
         if(in_array($stage,['error','stopped'],true)&&!isset($extra['failed_stage']))$extra['failed_stage']=(string)($old['stage']??'extract');
+        /* هر مرحله گزارش خودش را نگه می‌دارد؛ ورود به pricing نباید لیست
+           محصولات extraction را پاک کند و send نیز pricing را حفظ می‌کند. */
+        if(is_array($extra['stage_details']??null))$extra['stage_details']=array_replace(
+            is_array($old['stage_details']??null)?$old['stage_details']:[],$extra['stage_details']);
         $all[$profileKey]=array_merge($old,$extra,[
             'profile_key'=>$profileKey,'profile_name'=>$profileName?:$profileKey,
             'stage'=>$stage,'trigger'=>$trigger==='periodic'?'periodic':'manual',
@@ -44474,6 +44542,29 @@ function syncPricingSnapshot(array $profile,array $cn):array{
     return ['profile_signature'=>profilePriceSignature($profile),'destination_signature'=>shopPricingSignature($cn),
         'products'=>count($products),'price_mode'=>(string)($profile['priceMode']??'none'),
         'price_value'=>(string)($profile['priceVal']??0),'round'=>(int)($profile['roundPrice']??0)];
+}
+/** گزارش قابل‌کلیک استخراج؛ فهرست‌ها سقف دارند تا state چندمگابایتی نشود. */
+function syncExtractStageDetails(array $r):array{
+    $pick=static function($rows):array{
+        $out=[];foreach((array)$rows as $p){if(!is_array($p))continue;$out[]=[
+            'title'=>(string)($p['title']??$p['name']??'—'),'price'=>(string)($p['price']??''),
+            'link'=>(string)($p['link']??''),'key'=>(string)($p['key']??'')];if(count($out)>=120)break;}return$out;
+    };
+    return ['counts'=>[
+        'extracted'=>(int)($r['extracted']??0),'new'=>(int)($r['new']??0),
+        'updated'=>(int)($r['price_changed']??0),'removed'=>(int)($r['removed']??0),
+        'unchanged'=>(int)($r['unchanged']??0),'price_up'=>(int)($r['price_up']??0),'price_down'=>(int)($r['price_down']??0)],
+        'lists'=>['new'=>$pick($r['new_items']??[]),'updated'=>$pick($r['changed_items']??[]),
+            'removed'=>$pick($r['removed_items']??[])],
+        'queue_id'=>(string)($r['queue_id']??''),'error'=>(string)($r['error']??''),
+        'report'=>'استخراج بک‌اند سریع · phase=list · force_all=false'];
+}
+function syncSendStageDetails(array $r):array{
+    return ['counts'=>[
+        'queued'=>(int)($r['queued']??$r['total']??0),'sent'=>(int)($r['sent']??0),
+        'updated'=>(int)($r['updated']??0),'failed'=>(int)($r['failed']??0),
+        'skipped'=>(int)($r['skipped']??0)],'data'=>$r,
+        'report'=>(string)($r['message']??$r['error']??'صف مقصدها ساخته و به worker ارسال سپرده شد')];
 }
 
 /** آیا این اجرا یک همگام‌سازیِ دستی است؟ */
@@ -65393,16 +65484,27 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                   .sync-pipe-head{display:flex;align-items:center;gap:7px;margin-bottom:9px}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
                   .sync-pipe-badge{font-size:9px;padding:2px 7px;border-radius:999px;white-space:nowrap}.sync-pipe-track{position:relative;display:grid;gap:5px;padding-right:3px}
                   .sync-pipe-track:before{content:"";position:absolute;right:15px;top:17px;bottom:17px;width:2px;background:#243147}
-                  .sync-pipe-step{position:relative;z-index:1;display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px;border-radius:10px;border:1px solid transparent;transition:.2s}
+                  .sync-pipe-step{position:relative;z-index:1;display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px;border-radius:10px;border:1px solid transparent;transition:.2s;overflow:hidden;cursor:pointer;isolation:isolate}
+                  .sync-pipe-step:after{content:"";position:absolute;z-index:-1;inset:0 auto 0 0;width:var(--pipe-progress,0%);background:linear-gradient(90deg,#2563eb28,#38bdf81f);transition:width .45s ease}
+                  .sync-pipe-step.active:after{background:repeating-linear-gradient(115deg,#2563eb35 0 12px,#38bdf822 12px 24px);animation:pipeFlow 1.2s linear infinite}.sync-pipe-step.done:after{background:linear-gradient(90deg,#05966930,#34d39918)}
+                  @keyframes pipeFlow{from{background-position:0 0}to{background-position:48px 0}}
                   .sync-pipe-dot{width:29px;height:29px;border-radius:50%;display:grid;place-items:center;background:#172033;border:2px solid #334155;color:#64748b;font-size:12px;font-weight:900}
-                  .sync-pipe-name{font-size:10.5px;color:#64748b;font-weight:650}.sync-pipe-state{font-size:8.5px;color:#64748b}
+                  .sync-pipe-name{font-size:10.5px;color:#64748b;font-weight:650}.sync-pipe-state{font-size:8.5px;color:#64748b}.sync-pipe-mini{grid-column:2/4;display:flex;gap:5px;flex-wrap:wrap}.sync-pipe-count{min-width:54px;padding:5px 6px;border:1px solid #334155;border-radius:8px;background:#0b1324;color:#cbd5e1;text-align:center;font-size:8.5px;cursor:pointer}.sync-pipe-count b{display:block;font-size:12px;color:#f8fafc}
+                  .sync-detail-modal{position:fixed;inset:0;z-index:10090;background:#020617d9;display:none;align-items:center;justify-content:center;padding:12px}.sync-detail-modal.open{display:flex}.sync-detail-sheet{width:min(760px,100%);max-height:min(88vh,760px);overflow:auto;background:#0f172a;border:1px solid #475569;border-radius:16px;box-shadow:0 24px 80px #000a;padding:14px}.sync-detail-top{display:flex;align-items:center;gap:8px;position:sticky;top:-14px;background:#0f172af2;padding:10px 0;z-index:2}.sync-detail-body{display:grid;gap:8px}.sync-detail-product{padding:9px;border:1px solid #273449;border-radius:9px;background:#111827;color:#cbd5e1;font-size:10px;line-height:1.7}.sync-detail-product a{color:#7dd3fc}
                   .sync-pipe-step.done .sync-pipe-dot{background:#064e3b;border-color:#34d399;color:#d1fae5}.sync-pipe-step.done .sync-pipe-name{color:#a7f3d0}
                   .sync-pipe-step.active{background:linear-gradient(90deg,#172554cc,#0f1c35);border-color:#3b82f6;box-shadow:0 0 0 2px #3b82f622}.sync-pipe-step.active .sync-pipe-dot{background:#2563eb;border-color:#93c5fd;color:white;box-shadow:0 0 14px #3b82f688}.sync-pipe-step.active .sync-pipe-name{color:white;font-weight:900}.sync-pipe-step.active .sync-pipe-state{color:#93c5fd;font-weight:800}
                   .sync-pipe-step.failed{background:#3f1218;border-color:#ef4444}.sync-pipe-step.failed .sync-pipe-dot{background:#991b1b;border-color:#fca5a5;color:white}.sync-pipe-step.failed .sync-pipe-name,.sync-pipe-step.failed .sync-pipe-state{color:#fecaca}
                   .sync-pipe-msg{margin-top:8px;border-top:1px dashed #273449;padding-top:7px;color:#94a3b8;font-size:9.5px;line-height:1.7}
-                  @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:6px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}}
+                  @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:7px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}.sync-pipe-count{flex:1;min-width:64px}.sync-detail-modal{align-items:flex-end;padding:0}.sync-detail-sheet{width:100%;max-height:88vh;border-radius:18px 18px 0 0;padding:13px}.sync-detail-top{top:-13px}}
+                  @media(prefers-reduced-motion:reduce){.sync-pipe-step.active:after{animation:none}}
                 </style>
                 <div id="syncPipelineCards" class="sync-pipe-list"></div>
+                <div id="syncDetailModal" class="sync-detail-modal" onclick="if(event.target===this)syncDetailClose()">
+                  <section class="sync-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="syncDetailTitle">
+                    <div class="sync-detail-top"><b id="syncDetailTitle" style="color:#f8fafc;flex:1">جزئیات مرحله</b><button class="btn btn-gray" onclick="syncDetailClose()">✕</button></div>
+                    <div id="syncDetailBody" class="sync-detail-body"></div>
+                  </section>
+                </div>
                 <div id="msReport" style="margin-top:8px"></div>
 <div id="syncDiagnoseBox" style="display:none;margin-top:8px"></div>
             </div>
@@ -70514,22 +70616,28 @@ function msSetState(txt,cls){
   if(el){el.textContent=txt;el.className='cst '+(cls||'off');}
 }
 
+let syncPipeRows=[];
+const syncCountLabels={extracted:'استخراج',new:'جدید',updated:'آپدیت',removed:'حذف/رفته',unchanged:'بدون تغییر',price_up:'گران',price_down:'ارزان',products:'محصول',queued:'صف‌شده',sent:'ارسال',failed:'خطا',skipped:'ردشده'};
 function syncPipelineRender(){
   const host=$('syncPipelineCards');if(!host)return;
   fetch('?sync_pipeline_status=1').then(r=>r.json()).then(d=>{
-    const rows=Array.isArray(d.rows)?d.rows.slice(0,8):[];
+    syncPipeRows=Array.isArray(d.rows)?d.rows.slice(0,8):[];const rows=syncPipeRows;
     if(!rows.length){host.innerHTML='';return;}
     const stages=[['extract','⚡','استخراج بک‌اند سریع'],['pricing','٪','ذخیره و اعمال ضرایب'],['send','↑','ساخت صف و ارسال'],['done','✓','پایان و گزارش']];
     const idx={queued:0,extract:0,pricing:1,send:2,done:3};
-    host.innerHTML=rows.map(row=>{
+    host.innerHTML=rows.map((row,ri)=>{
       const bad=row.stage==='error'||row.stage==='stopped';
       const cur=idx[bad?(row.failed_stage||'extract'):row.stage]??0,terminal=row.stage==='done';
+      const details=row.stage_details||{};
       const steps=stages.map((s,i)=>{
-        const complete=terminal||i<cur,active=!terminal&&i===cur,failed=bad&&active;
+        const complete=terminal||i<cur,active=!terminal&&i===cur,failed=bad&&active,det=details[s[0]]||{};
         const cls=failed?'failed':active?'active':complete?'done':'';
         const state=failed?(row.stage==='stopped'?'متوقف':'خطا'):active?'در حال انجام':complete?'انجام شد':'در انتظار';
-        return '<div class="sync-pipe-step '+cls+'"><span class="sync-pipe-dot">'+(complete?'✓':failed?'!':s[1])+'</span>'
-          +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+'</span></div>';
+        let pct=complete?100:0;if(active){pct=Math.max(6,Math.min(99,parseInt(row.stage_progress)||42));if(s[0]==='send'&&det.counts&&!row.stage_progress){const q=parseInt(det.counts.queued)||0,done=(parseInt(det.counts.sent)||0)+(parseInt(det.counts.updated)||0)+(parseInt(det.counts.failed)||0);if(q>0)pct=Math.max(8,Math.min(96,Math.round(done*100/q)));}}
+        const counts=det.counts&&typeof det.counts==='object'?Object.entries(det.counts).filter(x=>parseInt(x[1])||['extracted','products','queued'].includes(x[0])).slice(0,7):[];
+        const minis=counts.length?'<span class="sync-pipe-mini">'+counts.map(([k,v])=>'<button type="button" class="sync-pipe-count" onclick="event.stopPropagation();syncDetailOpen('+ri+',\''+s[0]+'\',\''+k+'\')"><b>'+toFa(parseInt(v)||0)+'</b>'+esc(syncCountLabels[k]||k)+'</button>').join('')+'</span>':'';
+        return '<div class="sync-pipe-step '+cls+'" style="--pipe-progress:'+pct+'%" onclick="syncDetailOpen('+ri+',\''+s[0]+'\')"><span class="sync-pipe-dot">'+(complete?'✓':failed?'!':s[1])+'</span>'
+          +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+' · '+toFa(pct)+'٪</span>'+minis+'</div>';
       }).join('');
       const periodic=row.trigger==='periodic';
       return '<article class="sync-pipe-card"><header class="sync-pipe-head"><span class="sync-pipe-title">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
@@ -70539,6 +70647,27 @@ function syncPipelineRender(){
     }).join('');
   }).catch(()=>{});
 }
+function syncDetailOpen(rowIndex,stage,filterKey){
+  const row=syncPipeRows[rowIndex]||{},det=((row.stage_details||{})[stage])||{};
+  const labels={extract:'استخراج بک‌اند',pricing:'ذخیره و اعمال ضرایب',send:'صف و ارسال',done:'گزارش پایان'};
+  const title=$('syncDetailTitle'),body=$('syncDetailBody'),modal=$('syncDetailModal');if(!body||!modal)return;
+  if(title)title.textContent=(labels[stage]||stage)+' — '+(row.profile_name||row.profile_key||'');
+  const counts=det.counts&&typeof det.counts==='object'?det.counts:{};
+  let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:7px">'+Object.entries(counts).map(([k,v])=>'<div class="sync-pipe-count" style="cursor:default"><b>'+toFa(parseInt(v)||0)+'</b>'+esc(syncCountLabels[k]||k)+'</div>').join('')+'</div>';
+  if(det.report)html+='<div class="sync-detail-product" style="border-color:#2563eb;color:#bfdbfe">'+esc(String(det.report))+'</div>';
+  let lists=det.lists&&typeof det.lists==='object'?det.lists:{};
+  let keys=filterKey&&Array.isArray(lists[filterKey])?[filterKey]:Object.keys(lists);
+  const listNames={new:'محصولات جدید',updated:'محصولات آپدیت‌شده',removed:'محصولات حذف‌شده/رفته'};
+  keys.forEach(k=>{const arr=Array.isArray(lists[k])?lists[k]:[];if(!arr.length)return;html+='<h4 style="color:#e2e8f0;margin:7px 0 0">'+esc(listNames[k]||k)+' · '+toFa(arr.length)+'</h4>'+arr.map(p=>'<div class="sync-detail-product"><b style="color:#f8fafc">'+esc(p.title||'—')+'</b>'+(p.price?'<div>قیمت: '+esc(p.price)+'</div>':'')+(p.link?'<a href="'+esc(p.link)+'" target="_blank" rel="noopener">مشاهده محصول ↗</a>':'')+'</div>').join('');});
+  if(filterKey&&(!lists[filterKey]||!lists[filterKey].length))html+='<div class="sync-detail-product">برای این شمارنده فهرست محصول جداگانه‌ای ثبت نشده است؛ گزارش و شمارندهٔ کامل مرحله در بالا دیده می‌شود.</div>';
+  const data=det.data&&typeof det.data==='object'?det.data:{};
+  if(Array.isArray(data.destinations)&&data.destinations.length)html+='<h4 style="color:#e2e8f0;margin:7px 0 0">صف‌های مقصد</h4>'+data.destinations.map(x=>'<div class="sync-detail-product"><b>'+(x.destination==='bsl'?'باسلام':'ووکامرس')+'</b> · '+esc(x.status||'')+'<div>'+toFa(x.current||0)+' از '+toFa(x.total||0)+' · خطا '+toFa(x.failed||0)+'</div></div>').join('');
+  const simple=Object.entries(data).filter(x=>['string','number','boolean'].includes(typeof x[1])).slice(0,20);
+  if(simple.length)html+='<details class="sync-detail-product"><summary style="cursor:pointer;color:#93c5fd">داده‌های فنی مرحله</summary><div style="margin-top:7px">'+simple.map(([k,v])=>'<div><span style="color:#64748b">'+esc(k)+':</span> '+esc(String(v))+'</div>').join('')+'</div></details>';
+  body.innerHTML=html||'<div class="sync-detail-product">این مرحله هنوز شروع نشده و جزئیاتی ثبت نشده است.</div>';modal.classList.add('open');document.body.style.overflow='hidden';
+}
+function syncDetailClose(){const m=$('syncDetailModal');if(m)m.classList.remove('open');document.body.style.overflow='';}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')syncDetailClose();});
 setInterval(syncPipelineRender,3000);setTimeout(syncPipelineRender,500);
 
 function startManualSync(){
@@ -71960,6 +72089,14 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.279', t:'📊 کارت مرحله‌ای، شمارنده و گزارش مودال', items:[
+    'هر مستطیل مرحله اکنون خودش یک نوار پیشرفت رنگی است؛ مرحلهٔ فعال stripe متحرک، درصد زنده و متن وضعیت دارد و مرحلهٔ تمام‌شده تا ۱۰۰٪ سبز پر می‌شود',
+    'زیر هر مرحله کارت‌های شمارندهٔ مربعی متناسب نمایش داده می‌شود: استخراج‌شده، جدید، آپدیت، حذف‌شده، بدون تغییر، گران/ارزان و برای ارسال صف‌شده، ارسال‌شده، ردشده و خطا',
+    'کلیک روی خود مرحله مودال گزارش کامل همان مرحله را باز می‌کند؛ کلیک روی شمارندهٔ جدید/آپدیت/حذف مودال را مستقیم روی فهرست محصولات همان گروه می‌برد',
+    'فهرست محصول عنوان، قیمت و لینک صفحه را نشان می‌دهد و برای کنترل حجم state از هر گروه حداکثر ۱۲۰ ردیف نمونه نگه می‌دارد',
+    'پیشرفت استخراج از فایل progress و پیشرفت ارسال از صف‌های باسلام و ووکامرس زنده به کارت تزریق می‌شود؛ جزئیات مقصدها نیز در مودال دیده می‌شود',
+    'مودال روی موبایل به‌شکل bottom sheet تمام‌عرض، با ارتفاع محدود و اسکرول داخلی باز می‌شود و با لمس بیرون، دکمه بستن یا Escape بسته می‌شود'
+  ]},
   {v:'10.278', t:'⚡ استخراج بک‌اند واقعی و تایم‌لاین واکنش‌گرا', items:[
     'همگام‌سازی دستی دیگر phase=all و force_all اجرا نمی‌کند؛ دقیقاً مثل دکمهٔ استخراج بک‌اند سریع با phase=list و force_all=false آغاز می‌شود',
     'همگام‌سازی دوره‌ای نیز همیشه با همان فاز list سریع شروع می‌شود و گذر پنهان جزئیات را قبل از اعمال ضرایب اجرا نمی‌کند',
