@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.280';
+const APP_VERSION = '10.281';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -346,7 +346,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/14';
+const APP_VERSION_DATE = '1405/07/19';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -21925,6 +21925,9 @@ if(isset($_GET['sync_pipeline_status'])){
         if(empty($sr['stage_details']['pricing'])&&!empty($sr['pricing']))$sr['stage_details']['pricing']=[
             'counts'=>['products'=>(int)($sr['pricing']['products']??0)],'data'=>$sr['pricing'],
             'report'=>'ضرایب ذخیره‌شدهٔ این اجرا'];
+        if(empty($sr['stage_details']['extract'])&&(string)($xp['profile_key']??'')===$pk){
+            $sr['stage_details']['extract']=syncExtractStageDetails($xp);
+        }
         if((string)($sr['stage']??'')==='extract'&&(string)($xp['profile_key']??'')===$pk&&!empty($xp['running'])){
             $sr['stage_details']['extract']=syncExtractStageDetails($xp);
             $cur=(int)($xp['current']??0);$tot=(int)($xp['total']??0);$sr['stage_progress']=$tot>0?min(99,(int)round($cur*100/$tot)):35;
@@ -41066,6 +41069,29 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.280', 'ورودی 10.280 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "280'") !== false
       && version_compare(APP_VERSION, '10.' . '280', '>='));
+
+    /* ---------- v10.281: destination queue visual cards ---------- */
+    $add('10.281', 'باسلام و ووکامرس از کارت بصری مشترک با هویت مقصد استفاده می‌کنند',
+         strpos($selfSrc, 'function sendQueueVisualCard(e,opt)') !== false
+      && strpos($selfSrc, "destination:'باسلام'") !== false
+      && strpos($selfSrc, "destination:'ووکامرس'") !== false);
+    $add('10.281', 'کارت ارسال پیشرفت، پردازش‌شده، باقی‌مانده و شاخص‌های نتیجه را جدا نشان می‌دهد',
+         strpos($selfSrc, 'sendq-progress-head') !== false
+      && strpos($selfSrc, "metric(e.updated,'آپدیت'") !== false
+      && strpos($selfSrc, "metric(remain,'باقی'") !== false);
+    $add('10.281', 'گزارش جزئیات و عملیات کارت از نظر تعاملی جدا هستند',
+         strpos($selfSrc, 'مشاهدهٔ گزارش و محصولات') !== false
+      && strpos($selfSrc, 'sendq-actions') !== false
+      && strpos($selfSrc, 'event.stopPropagation()') !== false);
+    $add('10.281', 'کارت ارسال روی موبایل سه‌ستونه و دکمه‌ها تمام‌عرض است',
+         strpos($selfSrc, '@media(max-width:720px){.sendq-card') !== false
+      && strpos($selfSrc, '.sendq-metrics{grid-template-columns:repeat(3,1fr)}') !== false);
+    $add('10.281', 'مرحلهٔ همگام‌سازی دعوت روشن به جزئیات دارد و progress قدیمی بازیابی می‌شود',
+         strpos($selfSrc, 'مشاهده جزئیات ›') !== false
+      && strpos($selfSrc, "empty(\$sr['stage_details']['extract'])&&(string)(\$xp['profile_key']??'')===\$pk") !== false);
+    $add('10.281', 'ورودی 10.281 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "281'") !== false
+      && version_compare(APP_VERSION, '10.' . '281', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62253,7 +62279,10 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .profile-indicator{display:inline-block;padding:3px 8px;border-radius:4px;font-size:10px}.saved{background:#14532d;color:#86efac;border:1px solid #22c55e}.unsaved{background:#78350f;color:#fbbf24;border:1px solid #f59e0b}.toast{position:fixed;top:80px;left:50%;transform:translateX(-50%);background:#14532d;color:#86efac;padding:12px 20px;border-radius:8px;border:1px solid #22c55e;box-shadow:0 8px 20px rgba(0,0,0,.5);z-index:99999;font-weight:700;font-size:12px;opacity:0;transition:opacity .3s,top .3s;pointer-events:none;max-width:90%;text-align:center}.toast.show{opacity:1;top:60px}.toast.error{background:#7f1d1d;color:#fca5a5;border-color:#ef4444}.row label{color:#94a3b8;font-size:12px;min-width:80px;display:flex;align-items:center}input[type="checkbox"]{margin-left:5px}.section-title{font-size:13px;color:#67e8f9;margin-bottom:8px;font-weight:700;display:flex;align-items:center;gap:6px}
 .section-title.purple{color:#c4b5fd}.empty-state{text-align:center;padding:40px 20px;color:#64748b}.empty-state .icon{font-size:48px;margin-bottom:10px;opacity:.5}.empty-state p{font-size:13px}.switch{position:relative;display:inline-block;width:36px;height:20px}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;cursor:pointer;inset:0;background:#475569;transition:.2s;border-radius:20px}.slider:before{position:absolute;content:"";height:14px;width:14px;right:3px;bottom:3px;background:#fff;transition:.2s;border-radius:50%}input:checked+.slider{background:#a855f7}input:checked+.slider:before{transform:translateX(-16px)}.cc{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;margin-bottom:14px}.cc.wc{border-color:#7c3aed}.cc.bs{border-color:#0891b2}.cch{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;cursor:pointer}
 .cch h3{font-size:14px;margin:0;display:flex;align-items:center;gap:6px}.ccb{overflow:hidden}.ccb.collapsed{max-height:0!important;padding:0;margin:0;overflow:hidden}.cst{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700}.cst.on{background:#14532d;color:#86efac}.cst.off{background:#475569;color:#94a3b8}.cst.tg{background:#78350f;color:#fbbf24}.crow{display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap}.crow label{min-width:100px;color:#94a3b8;font-size:12px;flex-shrink:0}.crow input,.crow select{flex:1;min-width:150px}.cact{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.sres{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;max-height:500px;overflow-y:auto;font-size:11px;margin-top:10px}.sres .ok2{color:#4ade80;padding:2px 0;border-bottom:1px solid #1e293b}
-.sres .no2{color:#f87171;padding:2px 0;border-bottom:1px solid #1e293b}.sres a{color:#60a5fa;text-decoration:none}.scard{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px;margin:4px 0;display:flex;gap:8px;align-items:flex-start;transition:border-color .2s}.scard:hover{border-color:#475569}.scard-img{width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#0f172a}.scard-noimg{width:48px;height:48px;border-radius:6px;flex-shrink:0;background:#0f172a;display:flex;align-items:center;justify-content:center;color:#475569;font-size:18px}.scard-body{flex:1;min-width:0;direction:rtl}.scard-title{color:#e2e8f0;font-weight:700;font-size:11px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl}.scard-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px;margin-bottom:2px;direction:rtl}
+.sres .no2{color:#f87171;padding:2px 0;border-bottom:1px solid #1e293b}.sres a{color:#60a5fa;text-decoration:none}
+/* v10.281: کارت شهودی و مشترک صف‌های باسلام/ووکامرس */
+.sendq-card{--sq:#38bdf8;position:relative;overflow:hidden;background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:12px;margin:8px 0;box-shadow:0 8px 22px #02061755;cursor:pointer;transition:.18s}.sendq-card:hover{border-color:var(--sq);transform:translateY(-1px)}.sendq-card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--sq)}.sendq-head{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:9px;align-items:center}.sendq-logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--sq) 18%,#0f172a);border:1px solid color-mix(in srgb,var(--sq) 45%,#334155);font-size:18px}.sendq-name{color:#f8fafc;font-weight:850;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sendq-context{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}.sendq-chip{padding:2px 6px;border-radius:999px;background:#1e293b;color:#94a3b8;font-size:8.5px}.sendq-status{padding:5px 8px;border-radius:999px;font-size:9px;font-weight:850;white-space:nowrap}.sendq-progress-head{display:flex;justify-content:space-between;gap:8px;margin-top:11px;color:#cbd5e1;font-size:10px}.sendq-track{height:9px;background:#1e293b;border-radius:999px;overflow:hidden;margin-top:5px;border:1px solid #334155}.sendq-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--sq),color-mix(in srgb,var(--sq) 55%,white));transition:width .5s}.sendq-card.is-running .sendq-fill{background:repeating-linear-gradient(115deg,var(--sq) 0 12px,color-mix(in srgb,var(--sq) 55%,white) 12px 24px);animation:pipeFlow 1.2s linear infinite}.sendq-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:5px;margin-top:10px}.sendq-metric{background:#0f172a;border:1px solid #273449;border-radius:8px;padding:6px 4px;text-align:center;color:#64748b;font-size:8px}.sendq-metric b{display:block;color:#e2e8f0;font-size:12px;margin-bottom:1px}.sendq-foot{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:8px;border-top:1px dashed #334155}.sendq-hint{color:#7dd3fc;font-size:9px;font-weight:700;flex:1}.sendq-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}.sendq-actions button{font-size:9px!important;padding:4px 7px!important;border-radius:7px!important}.sendq-reason{margin-top:8px;padding:7px 8px;border-radius:8px;background:#7f1d1d25;color:#fca5a5;font-size:9px;line-height:1.6}@media(max-width:720px){.sendq-card{padding:10px;border-radius:12px}.sendq-head{grid-template-columns:34px minmax(0,1fr);}.sendq-logo{width:34px;height:34px}.sendq-status{grid-column:1/3;justify-self:start}.sendq-metrics{grid-template-columns:repeat(3,1fr)}.sendq-foot{align-items:flex-start;flex-direction:column}.sendq-actions{width:100%;justify-content:stretch}.sendq-actions button{flex:1}.sendq-card:hover{transform:none}}
+.scard{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px;margin:4px 0;display:flex;gap:8px;align-items:flex-start;transition:border-color .2s}.scard:hover{border-color:#475569}.scard-img{width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#0f172a}.scard-noimg{width:48px;height:48px;border-radius:6px;flex-shrink:0;background:#0f172a;display:flex;align-items:center;justify-content:center;color:#475569;font-size:18px}.scard-body{flex:1;min-width:0;direction:rtl}.scard-title{color:#e2e8f0;font-weight:700;font-size:11px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl}.scard-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px;margin-bottom:2px;direction:rtl}
 .scard-meta span{display:inline-flex;align-items:center;gap:2px}.scard-price{color:#4ade80;font-family:monospace;font-size:10px;direction:ltr}.scard-cat{color:#c084fc;font-size:9px}.scard-unit{color:#64748b;font-size:9px}.scard-result{font-size:10px;font-weight:700;margin-top:2px}.scard-ok{color:#4ade80}.scard-up{color:#facc15}.scard-skip{color:#94a3b8}.scard-fail{color:#f87171}.scard-retired{color:#fbbf24}.scard.scard-ok{border-left:3px solid #4ade80}.scard.scard-up{border-left:3px solid #facc15}.scard.scard-skip{border-left:3px solid #94a3b8}.scard.scard-fail{border-left:3px solid #f87171}.scard.scard-retired{border-left:3px solid #fbbf24}.scard-err{color:#f87171;font-size:9px;margin-top:2px;direction:rtl;background:#7f1d1d20;padding:1px 6px;border-radius:3px}.scard-reason{color:#fbbf24;font-size:9px;margin-top:2px;direction:rtl;background:#42200620;padding:1px 6px;border-radius:3px}.scard-rid{color:#60a5fa;font-size:9px;direction:ltr}
 .ssum{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.ssum .si{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;text-align:center}.ssum .si b{font-size:18px;display:block}.ssum .si span{color:#64748b;font-size:10px}@media(min-width:900px){body{padding:16px;padding-bottom:16px}h1{font-size:22px}.main-tabs{position:static;border-top:none;box-shadow:none;background:#1e293b;border:1px solid #334155;border-radius:12px;margin-bottom:14px;padding:3px}.main-tab{padding:12px;border-radius:8px;flex-direction:row;gap:8px;font-size:13px}.main-tab .t-icon{font-size:16px}.main-tab.active{background:#3b82f6}.main-tab .badge{position:static;margin-right:4px;min-width:auto}.visual-container{grid-template-columns:1fr 320px}.grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}.btn{padding:10px 16px}.profile-row{flex-wrap:nowrap}}
 .bsl-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100001;display:flex;align-items:center;justify-content:center;padding:10px}.bsl-modal{background:#0f172a;border:1px solid #334155;border-radius:14px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;width:900px}.bsl-modal-head{padding:12px 16px;background:#1e293b;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between}.bsl-modal-head h2{margin:0;font-size:15px;color:#67e8f9}
@@ -70689,7 +70718,7 @@ function syncPipelineRender(){
         const counts=det.counts&&typeof det.counts==='object'?Object.entries(det.counts).filter(x=>parseInt(x[1])||['extracted','products','queued'].includes(x[0])).slice(0,7):[];
         const minis=counts.length?'<span class="sync-pipe-mini">'+counts.map(([k,v])=>'<button type="button" class="sync-pipe-count" onclick="event.stopPropagation();syncDetailOpen('+ri+',\''+s[0]+'\',\''+k+'\')"><b>'+toFa(parseInt(v)||0)+'</b>'+esc(syncCountLabels[k]||k)+'</button>').join('')+'</span>':'';
         return '<div class="sync-pipe-step '+cls+'" style="--pipe-progress:'+pct+'%" onclick="syncDetailOpen('+ri+',\''+s[0]+'\')"><span class="sync-pipe-dot">'+(complete?'✓':failed?'!':s[1])+'</span>'
-          +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+' · '+toFa(pct)+'٪</span>'+minis+'</div>';
+          +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+' · '+toFa(pct)+'٪<b style="display:block;color:#7dd3fc;margin-top:2px">مشاهده جزئیات ›</b></span>'+minis+'</div>';
       }).join('');
       const periodic=row.trigger==='periodic';
       return '<article class="sync-pipe-card"><header class="sync-pipe-head"><span class="sync-pipe-title">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
@@ -72144,6 +72173,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.281', t:'🧭 کارت روشن و واکنش‌گرای صف‌های ارسال', items:[
+    'صف‌های باسلام و ووکامرس اکنون یک کارت بصری مشترک اما با رنگ و نشان مقصد متفاوت دارند؛ وضعیت با عبارت روشن فارسی، نام پروفایل، فروشگاه/بسته و دامنهٔ کل کار نمایش داده می‌شود',
+    'نوار پیشرفت، تعداد پردازش‌شده و باقی‌مانده و شش شاخص جدا برای جدید، آپدیت، ردشده، خطا، پردازش و باقی‌مانده در نگاه اول دیده می‌شود',
+    'دعوت واضح «مشاهدهٔ گزارش و محصولات» کل کارت را به گزارش جزئیات متصل می‌کند و دکمه‌های عملیاتی در بخش جدا و امن قرار گرفته‌اند',
+    'چیدمان موبایل سه‌ستونه و تمام‌عرض است و دکمه‌ها بدون فشردگی در ردیف مستقل می‌نشینند؛ کارت‌های تاریخی نیز هرکدام یک کار مستقل باقی می‌مانند و با هم جمع نمی‌شوند',
+    'روی مستطیل هر مرحلهٔ همگام‌سازی نیز عبارت صریح «مشاهده جزئیات» افزوده شد و جزئیات استخراج پاک‌شده از فایل progress هم بازیابی می‌شود'
+  ]},
   {v:'10.280', t:'🏁 تشخیص پایان واقعی صفحات و مودال همیشه‌قابل‌مشاهده', items:[
     'HTTP 404 یا 410 در صفحهٔ دوم به بعد، وقتی صفحات قبلی محصول داده‌اند، پایان طبیعی صفحه‌بندی است؛ دیگر استخراج کامل failed/resumable ثبت نمی‌شود',
     'نمونهٔ production آوند با ۱۱۰۳ محصول و ۵۶ صفحه اکنون در 404 صفحهٔ ۵۷ با موفقیت نهایی می‌شود، نه اینکه صفحهٔ ۵۷ و ۵۸ را خطای متوالی بداند',
@@ -86242,6 +86278,22 @@ function sendQueueRetireAgg(entries){
     });
     return {retired:retired,notFound:notFound,failed:failed};
 }
+function sendQueueVisualCard(e,opt){
+    opt=opt||{};const total=parseInt(e.total)||0,cur=Math.min(total,parseInt(e.current)||0);
+    const done=e.status==='done',failed=e.status==='failed',pct=done?100:(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0);
+    const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
+    const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
+    const processed=done?total:cur,remain=Math.max(0,total-processed),status=labels[e.status]||e.status;
+    let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(e.retire_report||e.kind==='retire'||e.trigger==='retire')chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
+    const metric=(n,l,c)=>'<div class="sendq-metric"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
+    const reason=e.fail_reason||e.error||'';
+    return '<article class="sendq-card is-'+esc(e.status||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
+      +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name">'+esc(e.profile_name||'ارسال محصولات')+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[e.status]+';background:'+colors[e.status]+'18;border:1px solid '+colors[e.status]+'55">'+status+'</span></div>'
+      +'<div class="sendq-progress-head"><b>'+toFa(pct)+'٪ انجام شده</b><span>'+toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
+      +'<div class="sendq-metrics">'+metric(e.sent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(e.skipped,'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
+      +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
+      +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
+}
 function renderBslQueue(q){
     const section=$('bslQueueSection');
     const list=$('bslQueueList');
@@ -86278,6 +86330,13 @@ function renderBslQueue(q){
               +'<span style="flex:1"></span>'
               +'<span style="color:#475569;font-weight:400">همهٔ وظایفِ همین ارسال</span></div>';
         }else if(!e.batch_id){__batch='';}
+        let __acts='';
+        if(e.status==='running')__acts='<button class="btn btn-blue" onclick="restartBslServer(\''+e.id+'\')">↻ راه‌اندازی مجدد</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
+        else if(e.status==='paused')__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
+        else if(e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startBslServer(\''+e.id+'\')">▶ شروع ارسال</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
+        else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
+        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
+        return;
         let progText='';
         let progPercent=0;
         if(e.status==='running'&&e.current>0&&e.total>0){
@@ -86484,6 +86543,11 @@ function renderWooQueue(q){
     const statusBg={waiting:'#42200630',running:'#7c3aed20',paused:'#7c2d1220',done:'#14532d20',failed:'#7f1d1d20'};
     let html='';
     entries.forEach(e=>{
+        let __acts='';
+        if(e.status==='running'||e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startWooServer(\''+e.id+'\')">▶ شروع سرور</button><button class="btn btn-red" onclick="deleteWooQueue(\''+e.id+'\')">حذف</button>';
+        else __acts='<button class="btn btn-gray" onclick="deleteWooQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
+        html+=sendQueueVisualCard(e,{accent:'#a78bfa',icon:'🌐',destination:'ووکامرس',detailFn:'showWooQueueDetail',actions:__acts});
+        return;
         let progText='';let progPercent=0;
         if(e.status==='running'&&e.current>0&&e.total>0){
             progText=toFa(e.current)+'/'+toFa(e.total)+' ('+Math.round(e.current/e.total*100)+'٪)';
