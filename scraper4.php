@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.320';
+const APP_VERSION = '10.321';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30828,7 +30828,20 @@ if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_f
     if($bare===''||!$selected){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'ردیف یا مقصد انتخاب‌شده معتبر نیست'],JSON_UNESCAPED_UNICODE);exit;}
     $data=matrixResultLoad();$row=null;foreach((array)($data['rows']??[])as$rr){if(is_array($rr)&&empty($rr['is_report'])&&hash_equals($bare,(string)($rr['bare']??''))){$row=$rr;break;}}
     if(!$row){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'ردیف در snapshot فعلی پیدا نشد؛ جدول را تازه کنید'],JSON_UNESCAPED_UNICODE);exit;}
-    $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);if(!$locked){if($fp)@fclose($fp);http_response_code(409);echo json_encode(['ok'=>false,'busy'=>true,'error'=>'یک اصلاح دیگر در حال اجراست؛ پس از پایان آن دوباره تلاش کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);$lockRecovery=null;
+    if(!$locked){
+        $busyState=matrixFixProgressRead();$recoverable=empty($busyState['running'])&&(!empty($busyState['stale'])||!empty($busyState['stopped'])||!empty($busyState['done']));
+        if($recoverable){
+            $lockRecovery=['attempted'=>true,'phase'=>(string)($busyState['phase']??''),'runner_pid'=>(int)($busyState['runner_pid']??$busyState['child_pid']??0)];
+            $lockRecovery['runner']=matrixTerminateRunner($busyState);
+            $staleJobId=(string)($busyState['job_id']??'');
+            if($staleJobId!==''&&function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q)use($staleJobId){$now=time();foreach($q['entries']as&$e){if(!is_array($e)||(string)($e['id']??'')!==$staleJobId||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='running')continue;$e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['error']='stale_lock_recovered_by_row_fix';}unset($e);return['ok'=>true];});
+            for($try=0;$try<25&&!$locked;$try++){usleep(100000);$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);}
+            $lockRecovery['acquired']=$locked;
+            if($locked)matrixFixProgress(['running'=>false,'done'=>true,'stale'=>false,'stopped'=>true,'phase'=>'stale_lock_recovered','log_add'=>['♻️ قفل یتیم اصلاح پیش از اجرای تک‌ردیف آزاد شد']]);
+        }
+        if(!$locked){if($fp)@fclose($fp);http_response_code(409);echo json_encode(['ok'=>false,'busy'=>true,'error'=>$recoverable?'قفل پردازهٔ یتیم هنوز آزاد نشد؛ چند ثانیه دیگر دوباره تلاش کنید':'یک اصلاح زندهٔ دیگر در حال اجراست؛ برای جلوگیری از عملیات همزمان صبر کنید','lock'=>['phase'=>(string)($busyState['phase']??''),'running'=>!empty($busyState['running']),'stale'=>!empty($busyState['stale']),'stopped'=>!empty($busyState['stopped']),'runner_pid'=>(int)($busyState['runner_pid']??$busyState['child_pid']??0)],'recovery'=>$lockRecovery],JSON_UNESCAPED_UNICODE);exit;}
+    }
     $GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']=true;$GLOBALS['S4_MATRIX_ROW_TRACE']=[];$before=matrixFixProgressRead();$started=microtime(true);
     try{
         matrixFixStopClear();
@@ -30837,7 +30850,7 @@ if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_f
         $result=matrixFixRun($opts);$after=matrixFixProgressRead();$logs=array_values(array_filter((array)($after['log']??[]),static fn($x)=>(int)($x['t']??0)>=(int)$started));
         echo json_encode(['ok'=>!empty($result['ok'])&&empty($result['partial']),'version'=>APP_VERSION,'row'=>['bare'=>$bare,'title'=>(string)($row['title']??$bare)],
             'selected_destinations'=>$selected,'result'=>$result,'requests_responses'=>$GLOBALS['S4_MATRIX_ROW_TRACE'],
-            'logs'=>array_slice($logs,-80),'elapsed_ms'=>(int)round((microtime(true)-$started)*1000)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+            'logs'=>array_slice($logs,-80),'lock_recovery'=>$lockRecovery,'elapsed_ms'=>(int)round((microtime(true)-$started)*1000)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
     }catch(Throwable $e){http_response_code(500);echo json_encode(['ok'=>false,'error'=>$e->getMessage(),'requests_responses'=>$GLOBALS['S4_MATRIX_ROW_TRACE']],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);}
     finally{$GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']=false;@flock($fp,LOCK_UN);@fclose($fp);}exit;
 }
@@ -42180,6 +42193,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.320', 'ورودی 10.320 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "320'") !== false
       && version_compare(APP_VERSION, '10.' . '320', '>='));
+    $add('10.321', 'اصلاح تک‌ردیف قفل یتیم stopped/stale را بازیابی و 409 زنده را حفظ می‌کند',
+         strpos($selfSrc, "stale_lock_recovered_by_row_fix") !== false
+      && strpos($selfSrc, "\$recoverable=empty(\$busyState['running'])") !== false
+      && strpos($selfSrc, "'lock_recovery'=>\$lockRecovery") !== false);
+    $add('10.321', 'ورودی 10.321 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "321'") !== false
+      && version_compare(APP_VERSION, '10.' . '321', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73411,6 +73431,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.321', t:'🔓 رفع خطای 409 بایگانی تک‌ردیف ناشی از قفل یتیم', items:[
+    'اگر progress قبلی stopped/stale/done باشد اما child قدیمی هنوز flock را نگه داشته باشد، مودال runner یتیم را خاتمه می‌دهد و تا ۲.۵ ثانیه قفل را دوباره می‌گیرد.',
+    'job متناظر یتیم cancelled می‌شود تا parent نتیجهٔ دیررس را دوباره فعال نکند؛ سپس بایگانی همان ردیف اجرا می‌شود.',
+    '409 فقط برای اصلاح واقعاً زنده باقی می‌ماند و پاسخ آن phase، runner PID و نتیجهٔ تلاش recovery را برای عیب‌یابی نشان می‌دهد.'
+  ]},
   {v:'10.320', t:'🛰 نمایش request/response واقعی لایهٔ HTTP در اصلاح تک‌ردیف', items:[
     'علاوه بر خلاصهٔ عملیات، wrapper واقعی WooCommerce و Basalam اکنون method، endpoint، payload نهایی و پاسخ واقعی HTTP/API را در trace مودال ثبت می‌کند.',
     'payload ترمیم‌شدهٔ retry باسلام نیز همان نسخهٔ نهایی ارسال‌شده را نشان می‌دهد و همهٔ credentialها همچنان redacted هستند.',
