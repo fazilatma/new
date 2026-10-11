@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.287';
+const APP_VERSION = '10.288';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -23394,7 +23394,7 @@ if ($target === 'woo' || $target === 'both') {
 // v8.39: با تیک «افزودن/آپدیت ووکامرس» فقط تغییرات ارسال می‌شود
 $wooSend = $wooOnlyChanged ? $wooChangedProducts : $orderedProducts;
 if(!empty($wooSend)){
-$wooSuffix=trim($profile['titleSuffix']??'') ?: trim($cn['basalam']['title_suffix']??'');
+$wooSuffix=trim($profile['titleSuffix']??'') ?: trim($cn['woocommerce']['title_suffix']??'');
 // v8.56: دستهٔ ووکامرس این پروفایل، وگرنه دستهٔ پیش‌فرض تنظیمات عمومی
 $wooCatId=(int)($profile['wooCategoryId']??0);
 if($wooCatId<=0)$wooCatId=(int)($cn['woocommerce']['default_category']??0);
@@ -23425,7 +23425,10 @@ $wooQueueId='cron_woo_'.$key.'_'.$now;
 // v8.36: فایل مخصوص همین اجرا — قبلاً همه روی WOO_PRODUCTS_FILE می‌نوشتند
 // و اجرای بعدی محصولات اجرای قبلی را می‌فرستاد.
 $wooQFile=__DIR__.'/woo_queue_products_'.$wooQueueId.'.json';
-@file_put_contents($wooQFile,json_encode($wooSend,JSON_UNESCAPED_UNICODE),LOCK_EX);
+$wooPayload=json_encode($wooSend,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+$wooFileOk=is_string($wooPayload)&&@file_put_contents($wooQFile,$wooPayload,LOCK_EX)===strlen($wooPayload);
+if(!$wooFileOk){$pResult['woo']='file_save_error';$pResult['woo_error']='ذخیره فایل محصولات صف ووکامرس ناموفق بود';}
+else {
 // v8.56: در یک اجرای کران ممکن است چند پروفایل صف شوند. قبلاً همه با
 // وضعیت «running» ثبت می‌شدند و هرکدام روی فایل مشترک می‌نوشتند؛ نتیجه
 // این بود که محصولاتِ آخرین پروفایل با تنظیماتِ اولین پروفایل ارسال
@@ -23439,6 +23442,7 @@ if($wooStatus==='running'){
 $wooQueue['entries'][]=['id'=>$wooQueueId,'status'=>$wooStatus,'products_file'=>$wooQFile,'total'=>count($wooSend),'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$wooStatus==='running'?$now:0,'done_at'=>0,'profile_key'=>$key,'profile_name'=>($profile['name']??$key),'only_changed'=>$wooOnlyChanged,'trigger'=>(manualSyncActive()?'manual_sync':'cron'),/* v10.53 (۶۷) */'config'=>['title_suffix'=>$wooSuffix,'category_id'=>$wooCatId,'force_all'=>$wooForceAll]];
 wooWriteQueue($wooQueue);
 $pResult['woo']='queued';$pResult['woo_total']=count($wooSend);$pResult['woo_status']=$wooStatus;
+}
 }
 } else { $pResult['woo'] = $wooOnlyChanged ? 'no_changes' : 'no_products'; }
 /* v9.11: کلیدهای دیگرِ همین پروفایل نباید پاک شوند. این انتساب کل
@@ -27991,7 +27995,7 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
                 if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$adj=bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
                 elseif($hasProf)$shopMiss++;}
             $flags=array_values(array_filter(array_map('strval',(array)($r['flags']??[])),static function($f){return str_starts_with($f,'dup_');}));
-            if((int)($r['profile_hits']??0)>1){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
+            if(matrixProfileDuplicateCount($r)>0){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
             if($wooTone==='missing_dst'){$flags[]='missing_woo';$sum['missing_woo']++;}if($wooTone==='extra'){$flags[]='extra_woo';$sum['extra_woo']++;}if(in_array($wooTone,['bad','warn'],true)||$shopBad>0){$flags[]='price_mismatch';$sum['price_mismatch']++;}if($shopMiss>0&&$hasProf){$flags[]='missing_bsl';$sum['missing_bsl']++;}
             $r['flags']=array_values(array_unique($flags));$r['shop_ok']=$shopOk;$r['shop_bad']=$shopBad;$r['shop_miss']=$shopMiss;
             $wooOk=!$repriceWoo||($hasWoo&&$wooTone==='ok');$hasAnySelectedDest=($repriceWoo&&$hasWoo)||$shopCount>0;
@@ -28196,6 +28200,17 @@ function matrixFetchDestinationsParallel(array $cn, array $shops,
  * ساخت کامل ماتریس روی سرور با گزارش پیشرفت.
  * $opts: profile, source (manual|recon_auto|cron)
  */
+function matrixProfileExactTitle(string $title): string {
+    $t = trim(strtr($title, ['ي'=>'ی','ك'=>'ک','۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9','٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9']));
+    $t = preg_replace('/[\x{200c}\x{200e}\x{200f}]+/u', ' ', $t);
+    $t = trim((string)preg_replace('/\s+/u', ' ', $t));
+    return function_exists('mb_strtolower') ? mb_strtolower($t, 'UTF-8') : strtolower($t);
+}
+
+function matrixProfileDuplicateCount(array $row): int {
+    return max(0, (int)($row['profile_duplicate_hits'] ?? 0));
+}
+
 function matrixBuild(array $opts = []): array {
     @set_time_limit(0);
     @ignore_user_abort(true);
@@ -28303,7 +28318,9 @@ function matrixBuild(array $opts = []): array {
                 'log_add' => ['📁 پروفایل ' . $pN . '/' . $pTot . ' — ' . $pname],
             ]);
         }
+        $profileProductPos = 0;
         foreach (profileOrderedProducts($profile, null, true) as $p) {
+            $profileProductPos++;
             $title = (string)($p['title'] ?? '');
             if ($codedOnly && !matrixTitleHasCode($title)) continue;
             $bare = matrixBareTitle($title, $suffixes);
@@ -28316,16 +28333,35 @@ function matrixBuild(array $opts = []): array {
                 ? destAdjustPrice($profP, $wooCfg) : $profP;
             $bslExpect = $profP > 0 && ($bslCfg['mode'] ?? 'none') !== 'none'
                 ? destAdjustPrice($profP, $bslCfg) : $profP;
+            $profileExact = matrixProfileExactTitle($title);
+            $productKey = trim((string)($p['key'] ?? ''));
+            $profileRef = (string)$pk . '|' . ($productKey !== '' ? $productKey : ('row:' . $profileProductPos));
             if (!isset($rowsByKey[$bare])) {
                 $rowsByKey[$bare] = [
                     'bare' => $bare, 'title' => $title, 'key' => (string)($p['key'] ?? ''),
                     'profile' => $pname, 'profile_key' => (string)$pk,
                     'src_price' => $raw, 'profile_price' => $profP,
                     'woo_expect' => $wooExpect, 'bsl_expect' => $bslExpect,
-                    'profile_hits' => 1, 'woo' => null, 'shops' => [],
+                    'profile_hits' => 1, 'profile_duplicate_hits' => 0,
+                    '_profile_exact' => $profileExact, '_profile_ref' => $profileRef, 'woo' => null, 'shops' => [],
                 ];
             } else {
-                $rowsByKey[$bare]['profile_hits']++;
+                if (!isset($rowsByKey[$bare]['_profile_variants'])) {
+                    $firstExact = (string)($rowsByKey[$bare]['_profile_exact'] ?? matrixProfileExactTitle((string)($rowsByKey[$bare]['title'] ?? '')));
+                    $firstRef = (string)($rowsByKey[$bare]['_profile_ref'] ?? 'legacy:first');
+                    $rowsByKey[$bare]['_profile_variants'] = [$firstExact => [$firstRef => true]];
+                }
+                $knownRefs = (array)($rowsByKey[$bare]['_profile_variants'][$profileExact] ?? []);
+                if (!isset($knownRefs[$profileRef])) {
+                    $rowsByKey[$bare]['_profile_variants'][$profileExact][$profileRef] = true;
+                    $rowsByKey[$bare]['profile_hits'] = (int)($rowsByKey[$bare]['profile_hits'] ?? 0) + 1;
+                    if ($knownRefs) {
+                        $rowsByKey[$bare]['profile_duplicate_hits'] = (int)($rowsByKey[$bare]['profile_duplicate_hits'] ?? 0) + 1;
+                        $rowsByKey[$bare]['profile_duplicate_titles'] = array_values(array_unique(array_merge(
+                            (array)($rowsByKey[$bare]['profile_duplicate_titles'] ?? []), [$title]
+                        )));
+                    }
+                }
                 if ($rowsByKey[$bare]['profile_price'] <= 0 && $profP > 0) {
                     $rowsByKey[$bare]['profile_price'] = $profP;
                     $rowsByKey[$bare]['woo_expect'] = $wooExpect;
@@ -28613,7 +28649,7 @@ function matrixBuild(array $opts = []): array {
             $wooTone = 'extra';
         }
         $flags = [];
-        if (($r['profile_hits'] ?? 0) > 1) { $flags[] = 'dup_profile'; $sum['dup_profile']++; }
+        if (matrixProfileDuplicateCount($r) > 0) { $flags[] = 'dup_profile'; $sum['dup_profile']++; }
         if (!empty($r['woo_dup'])) { $flags[] = 'dup_woo'; $sum['dup_woo']++; }
         foreach ($r['shops'] as $sc) {
             if (!empty($sc['dup'])) { $flags[] = 'dup_bsl'; $sum['dup_bsl']++; break; }
@@ -28647,6 +28683,7 @@ function matrixBuild(array $opts = []): array {
         $r['shop_ok'] = $shopOk;
         $r['shop_bad'] = $shopBad;
         $r['shop_miss'] = $shopMiss;
+        unset($r['_profile_exact'], $r['_profile_ref'], $r['_profile_variants']);
         $rows[] = $r;
         $sum['total']++;
     }
@@ -29819,8 +29856,8 @@ function matrixRowMatchesOneViewFilter(array $r,array $data,string $type,string 
     if($type==='missing_dest')return $hasProf&&$dest===null;
     if($type==='mismatch_dest'){$tone=$value==='woo'?(string)($r['woo_tone']??''):(string)($dest['tone']??'');return $dest!==null&&in_array($tone,['bad','warn'],true);}
     if($type==='duplicate'){
-        if($value==='any')return (bool)preg_grep('/^dup_/',$flags)||!empty($r['woo_dup'])||(int)($r['profile_hits']??0)>1;
-        if($value==='profile')return in_array('dup_profile',$flags,true)||(int)($r['profile_hits']??0)>1;
+        if($value==='any')return (bool)preg_grep('/^dup_/',$flags)||!empty($r['woo_dup'])||matrixProfileDuplicateCount($r)>0;
+        if($value==='profile')return in_array('dup_profile',$flags,true)||matrixProfileDuplicateCount($r)>0;
         if($value==='woo')return in_array('dup_woo',$flags,true)||!empty($r['woo_dup']);
         return in_array('dup_bsl',$flags,true);
     }
@@ -29846,7 +29883,7 @@ function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
     if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
         &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
     $flags=(array)($r['flags']??[]);$st=(string)($r['status']??'');
-    if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&(int)($r['profile_hits']??0)<2)return false;
+    if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&matrixProfileDuplicateCount($r)<1)return false;
     if(!empty($opts['only_mismatch'])&&$st!=='mismatch'&&!in_array('price_mismatch',$flags,true))return false;
     if(!empty($opts['only_missing'])&&$st!=='missing'&&$st!=='only_profile'
         &&!in_array('missing_woo',$flags,true)&&!in_array('missing_bsl',$flags,true))return false;
@@ -41297,6 +41334,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.287', 'ورودی 10.287 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "287'") !== false
       && version_compare(APP_VERSION, '10.' . '287', '>='));
+    $add('10.288', 'پسوند/کد متفاوت در عنوان پروفایل به‌اشتباه تکراری شمرده نمی‌شود',
+         matrixProfileExactTitle('کالا (کد: ۱۲)') !== matrixProfileExactTitle('کالا (کد: ۱۳)')
+      && function_exists('matrixProfileDuplicate' . 'Count')
+      && strpos($selfSrc, 'matrixProfileDuplicateCount($r) > 0') !== false);
+    $add('10.288', 'محصولات ارسال دستی از خوانش استاندارد همهٔ قالب‌های ذخیرهٔ پروفایل می‌آیند',
+         strpos($selfSrc, 'foreach (profileOrderedProducts($profile, null, true) as $entry)') !== false
+      && strpos($selfSrc, "manualSyncProfileRunning('woo', \$key)") !== false
+      && strpos($selfSrc, "manualSyncProfileRunning('bsl', \$key)") !== false);
+    $add('10.288', 'فایل محصول صف پیش از ثبت اتمیک اعتبارسنجی و پسوند ووکامرس مستقل است',
+         strpos($selfSrc, "file_put_contents(\$wooQFile, \$wooJson, LOCK_EX) !== strlen(\$wooJson)") !== false
+      && strpos($selfSrc, "\$cn['woocommerce']['title_suffix']") !== false
+      && strpos($selfSrc, "\$pResult['woo']='file_save_error'") !== false);
+    $add('10.288', 'اندپوینت ممیزی ارسال هر دو صف و فایل‌ها و ردیف‌های فعال تکراری را بررسی می‌کند',
+         strpos($selfSrc, "isset(\$_GET['send_pipeline_" . "audit'])") !== false
+      && strpos($selfSrc, "'duplicate_active_profile'") !== false
+      && strpos($selfSrc, "'missing_products_file'") !== false);
+    $add('10.288', 'ورودی 10.288 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "288'") !== false
+      && version_compare(APP_VERSION, '10.' . '288', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -45479,6 +45535,15 @@ function msQueuePendingRow(string $which): ?array {
  * v10.81: صف‌سازی ارسال برای یک پروفایل بعد از استخراج بک‌اند (همگام دستی).
  * منطق خلاصه‌شده از حلقهٔ کران — بدون قفل کران.
  */
+function manualSyncProfileRunning(string $which, string $profileKey): bool {
+    $q = $which === 'bsl' ? bslReadQueue() : wooReadQueue();
+    foreach ((array)($q['entries'] ?? []) as $entry) {
+        if (is_array($entry) && (string)($entry['profile_key'] ?? '') === $profileKey
+            && (string)($entry['status'] ?? '') === 'running') return true;
+    }
+    return false;
+}
+
 function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $exRes): array {
     $out = ['log' => [], 'woo' => false, 'bsl' => false];
     $syncCfg = is_array($profile['syncConfig'] ?? null) ? $profile['syncConfig'] : [];
@@ -45491,12 +45556,13 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
     $now = time();
     /* Build product list from profile disk */
     $products = [];
-    foreach ((array)($profile['products'] ?? []) as $entry) {
-        if (is_array($entry) && count($entry) === 2 && is_array($entry[1])) {
-            $pk = (string)$entry[0];
-            $products[$pk] = $entry[1];
-            $products[$pk]['key'] = $pk;
-        }
+    foreach (profileOrderedProducts($profile, null, true) as $entry) {
+        if (!is_array($entry)) continue;
+        $pk = trim((string)($entry['key'] ?? ''));
+        if ($pk === '') $pk = productKey((string)($entry['title'] ?? ''), (string)($entry['link'] ?? ''));
+        if ($pk === '') continue;
+        $entry['key'] = $pk;
+        $products[$pk] = $entry;
     }
     if (!$products) {
         $out['log'][] = '⚠️ محصولی روی دیسک نیست — صف ارسال خالی';
@@ -45529,18 +45595,20 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
     $stamp = date('Ymd_His');
     $safeKey = preg_replace('~[^a-zA-Z0-9_\-]+~', '_', $key);
 
-    if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue')) {
+    if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue') && !manualSyncProfileRunning('woo', $key)) {
         try {
             $wooSend = array_values($wooProducts);
             $wooQFile = $qDir . '/woo_queue_' . $safeKey . '_' . $stamp . '.json';
-            @file_put_contents($wooQFile, json_encode($wooSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            $wooJson = json_encode($wooSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($wooJson) || @file_put_contents($wooQFile, $wooJson, LOCK_EX) !== strlen($wooJson))
+                throw new RuntimeException('ذخیره فایل محصولات صف ووکامرس ناموفق بود');
             $wooQueue = wooReadQueue();
             if (!isset($wooQueue['entries']) || !is_array($wooQueue['entries'])) $wooQueue['entries'] = [];
             /* clear stale for this profile */
             foreach ($wooQueue['entries'] as &$we) {
                 if (!is_array($we)) continue;
                 if ((string)($we['profile_key'] ?? '') !== $key) continue;
-                if (in_array((string)($we['status'] ?? ''), ['waiting', 'running', 'paused'], true)) {
+                if (in_array((string)($we['status'] ?? ''), ['waiting', 'paused'], true)) {
                     $we['status'] = 'failed';
                     $we['error'] = 'جایگزین همگام دستی';
                     $we['done_at'] = $now;
@@ -45548,8 +45616,9 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             }
             unset($we);
             $wooQueueId = 'woo_' . $safeKey . '_' . time() . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
-            $wooSuffix = (string)($profile['titleSuffix'] ?? '');
-            $wooCatId = (int)($syncCfg['wooCategoryId'] ?? 0);
+            $wooSuffix = trim((string)($profile['titleSuffix'] ?? '')) ?: trim((string)($cn['woocommerce']['title_suffix'] ?? ''));
+            $wooCatId = (int)($profile['wooCategoryId'] ?? $syncCfg['wooCategoryId'] ?? 0);
+            if ($wooCatId <= 0) $wooCatId = (int)($cn['woocommerce']['default_category'] ?? 0);
             $wooQueue['entries'][] = [
                 'id' => $wooQueueId, 'status' => 'waiting',
                 'products_file' => $wooQFile, 'total' => count($wooSend),
@@ -45568,17 +45637,19 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         }
     }
 
-    if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue')) {
+    if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue') && !manualSyncProfileRunning('bsl', $key)) {
         try {
             $bslSend = array_values($bslProducts);
             $qFile = $qDir . '/bsl_queue_' . $safeKey . '_' . $stamp . '.json';
-            @file_put_contents($qFile, json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            $bslJson = json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($bslJson) || @file_put_contents($qFile, $bslJson, LOCK_EX) !== strlen($bslJson))
+                throw new RuntimeException('ذخیره فایل محصولات صف باسلام ناموفق بود');
             $queue = bslReadQueue();
             if (!isset($queue['entries']) || !is_array($queue['entries'])) $queue['entries'] = [];
             foreach ($queue['entries'] as &$be) {
                 if (!is_array($be)) continue;
                 if ((string)($be['profile_key'] ?? '') !== $key) continue;
-                if (in_array((string)($be['status'] ?? ''), ['waiting', 'running', 'paused'], true)) {
+                if (in_array((string)($be['status'] ?? ''), ['waiting', 'paused'], true)) {
                     $be['status'] = 'failed';
                     $be['error'] = 'جایگزین همگام دستی';
                     $be['done_at'] = $now;
@@ -45617,7 +45688,15 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         }
     }
 
-    if (!$out['woo'] && !$out['bsl']) {
+    if ($wooOn && manualSyncProfileRunning('woo', $key)) {
+        $out['woo_existing'] = true;
+        $out['log'][] = 'ℹ️ ارسال ووکامرس همین پروفایل هم‌اکنون در حال اجراست؛ صف تکراری ساخته نشد';
+    }
+    if ($bslOn && manualSyncProfileRunning('bsl', $key)) {
+        $out['bsl_existing'] = true;
+        $out['log'][] = 'ℹ️ ارسال باسلام همین پروفایل هم‌اکنون در حال اجراست؛ صف تکراری ساخته نشد';
+    }
+    if (!$out['woo'] && !$out['bsl'] && empty($out['woo_existing']) && empty($out['bsl_existing'])) {
         $out['log'][] = 'ℹ️ مقصد فعالی برای صف ارسال نبود (target=' . $target . ')';
     }
     return $out;
@@ -55735,6 +55814,55 @@ function wooQueueProductsFile(string $queueId): string {
         }
     }
     return WOO_PRODUCTS_FILE;
+}
+
+/* ممیزی یک‌جای تمام مسیرهای ارسال دستی/همگام‌سازی؛ فقط تشخیصی و بدون افشای مسیر/توکن. */
+if (isset($_GET['send_pipeline_audit'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $scan = static function (string $dest, array $q): array {
+        $issues = []; $statusCounts = []; $triggerCounts = []; $activeProfiles = []; $validFiles = 0;
+        foreach ((array)($q['entries'] ?? []) as $e) {
+            if (!is_array($e)) continue;
+            $id = (string)($e['id'] ?? ''); $st = (string)($e['status'] ?? 'unknown');
+            $profile = (string)($e['profile_key'] ?? ''); $trigger = (string)($e['trigger'] ?? 'legacy');
+            $statusCounts[$st] = ($statusCounts[$st] ?? 0) + 1;
+            $triggerCounts[$trigger] = ($triggerCounts[$trigger] ?? 0) + 1;
+            if (in_array($st, ['waiting','running','paused'], true) && $profile !== '') $activeProfiles[$profile][] = $id;
+            $file = (string)($e['products_file'] ?? '');
+            if ($file === '' || !is_file($file)) {
+                if (in_array($st, ['waiting','running','paused'], true)) $issues[] = ['key'=>'missing_products_file','queue_id'=>$id,'profile'=>$profile,'status'=>$st];
+                continue;
+            }
+            $raw = (string)@file_get_contents($file); $products = json_decode($raw, true);
+            if (!is_array($products)) $issues[] = ['key'=>'invalid_products_json','queue_id'=>$id,'profile'=>$profile,'status'=>$st];
+            else {
+                $validFiles++;
+                $declared = (int)($e['total'] ?? 0);
+                if ($declared !== count($products)) $issues[] = ['key'=>'total_mismatch','queue_id'=>$id,'profile'=>$profile,'declared'=>$declared,'actual'=>count($products)];
+            }
+            if ((int)($e['current'] ?? 0) > (int)($e['total'] ?? 0)) $issues[] = ['key'=>'cursor_overflow','queue_id'=>$id,'profile'=>$profile];
+            if ($st === 'running' && (int)($e['started_at'] ?? 0) > 0 && time() - (int)$e['started_at'] > 3600)
+                $issues[] = ['key'=>'stale_running','queue_id'=>$id,'profile'=>$profile,'age_sec'=>time()-(int)$e['started_at']];
+        }
+        foreach ($activeProfiles as $profile => $ids) if (count($ids) > 1)
+            $issues[] = ['key'=>'duplicate_active_profile','profile'=>$profile,'queue_ids'=>$ids];
+        return ['destination'=>$dest,'entries'=>count((array)($q['entries']??[])),'status_counts'=>(object)$statusCounts,
+            'trigger_counts'=>(object)$triggerCounts,'valid_product_files'=>$validFiles,'issues'=>$issues];
+    };
+    $wooAudit = $scan('woocommerce', wooReadQueue()); $bslAudit = $scan('basalam', bslReadQueue());
+    $issues = array_merge($wooAudit['issues'], $bslAudit['issues']);
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'healthy'=>!$issues,'issue_count'=>count($issues),
+        'destinations'=>[$wooAudit,$bslAudit], 'fixes_present'=>[
+            'canonical_profile_products'=>true,'atomic_queue_product_files'=>true,
+            'running_profile_dedup'=>true,'destination_specific_woo_suffix'=>true,
+            'basalam_422_repair'=>true,'multi_shop_fanout'=>true,
+        ], 'solutions'=>[
+            'missing_products_file'=>'ردیف فعال بدون فایل محصول باید ناموفق و از پروفایل دوباره صف شود',
+            'duplicate_active_profile'=>'برای هر پروفایل و مقصد فقط یک ردیف فعال نگه داشته شود',
+            'stale_running'=>'قفل worker بررسی و ردیف از checkpoint ادامه داده شود',
+            'total_mismatch'=>'total از تعداد واقعی فایل محصولات بازسازی شود',
+        ]], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
 }
 
 /* v10.285: فیدبک یک‌جای همهٔ خطاهای ماندگار صف ارسال باسلام.
@@ -72428,6 +72556,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.288', t:'🧪 رفع تشخیص تکراری کاذب و ممیزی کامل ارسال', items:[
+    'تکراری پروفایل فقط وقتی ثبت می‌شود که عنوان کامل و دقیقاً نرمال‌شده واقعاً بیش از یک بار باشد؛ محصولاتی که فقط پسوند/کد متفاوت دارند دیگر تکراری کاذب نیستند',
+    'ارسال همگام‌سازی دستی اکنون همهٔ قالب‌های ذخیرهٔ محصولات پروفایل را با خوانش استاندارد پشتیبانی می‌کند',
+    'برای پروفایلی که ارسالش در حال اجراست صف تکراری ساخته نمی‌شود و فایل محصولات هر صف پیش از ثبت به‌صورت اتمیک کنترل می‌شود',
+    'پسوند عنوان ووکامرس دیگر از تنظیمات باسلام نشت نمی‌کند و دستهٔ پروفایل در ارسال دستی اولویت درست دارد',
+    'اندپوینت send_pipeline_audit صف‌های دستی/دوره‌ای، فایل محصول، شمارنده‌ها، کارهای مانده و ردیف فعال تکراری را یکجا گزارش می‌کند'
+  ]},
   {v:'10.287', t:'🧬 حذف تکراری‌ها در اصلاح مغایرت', items:[
     'اصلاح مغایرت اکنون تکراری‌های ووکامرس و هر غرفهٔ باسلام را نیز حذف یا بایگانی می‌کند',
     'کاربر می‌تواند نگه‌داری جدیدترین یا گران‌ترین نسخه را انتخاب کند؛ معیار در checkpoint و اجرای دوره‌ای حفظ می‌شود',
@@ -81461,7 +81596,7 @@ function syncMatrixLoad(page, silent){
         (r.flags||[]).forEach(f=>{
           if(String(f).indexOf('dup')===0) flags+=' <span style="background:#6d28d9;color:#fff;border-radius:4px;padding:0 5px;font-size:10px">تکراری</span>';
         });
-        if((r.profile_hits||0)>1) flags+=' <span style="color:#e9d5ff;font-size:10px">×'+smFa(r.profile_hits)+' پروفایل</span>';
+        if((r.profile_duplicate_hits||0)>0) flags+=' <span style="color:#e9d5ff;font-size:10px">'+smFa((r.profile_duplicate_hits||0)+1)+' عنوان دقیقاً یکسان در پروفایل</span>';
         let tr = '<tr>';
         tr += smCell(smFa(start+i+1),'na');
         tr += smCell('<div style="font-weight:700;max-width:220px">'+esc(r.title||r.bare||'')+'</div><div style="font-size:9px;opacity:.7;direction:ltr">'+esc(r.bare||'')+'</div>','na');
