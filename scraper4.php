@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.312';
+const APP_VERSION = '10.313';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1327,7 +1327,8 @@ function s4WorkerRunMatrixChild(array $payload): array {
         $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
         $out=[];$rc=0;@exec($cmd,$out,$rc);$tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
         for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
-        if($rc!==0||!is_array($decoded)){
+        $decodedSliceOk=is_array($decoded)&&(!empty($decoded['ok'])||!empty($decoded['yielded'])||!empty($decoded['resume_needed']));
+        if(!is_array($decoded)||($rc!==0&&!$decodedSliceOk)){
             if(matrixStopRequested())return ['ok'=>true,'stopped'=>true,'partial'=>true,'child_exit_code'=>$rc,'worker_segments'=>$segments];
             $retries++;$resume=true;
             matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'worker'=>true,'phase'=>'بازیابی برش worker',
@@ -22084,7 +22085,10 @@ if (isset($_GET['matrix_build_cli'])) {
     if(!is_array($payload)){$resMxCli=['ok'=>false,'error'=>'invalid_matrix_payload'];}
     else{$resMxCli=s4WorkerRunMatrixBuild($payload);}
     echo json_encode($resMxCli,JSON_UNESCAPED_UNICODE).PHP_EOL;
-    exit(!empty($resMxCli['ok'])?0:1);
+    /* پایان سالمِ یک time-slice الزاماً ok نهایی ندارد؛ yielded یعنی checkpoint
+       معتبر نوشته شده و parent باید برش بعد را اجرا کند، نه اینکه exit 1 را crash بداند. */
+    $matrixSliceOk=!empty($resMxCli['ok'])||!empty($resMxCli['yielded'])||!empty($resMxCli['resume_needed']);
+    exit($matrixSliceOk?0:1);
 }
 if (isset($_GET['matrix_fix_cli'])) {
     $enc=trim((string)($_GET['matrix_fix_payload']??''));$enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
@@ -42052,6 +42056,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.312', 'ورودی 10.312 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "312'") !== false
       && version_compare(APP_VERSION, '10.' . '312', '>='));
+    $add('10.313', 'پایان سالم برش ماتریس با yielded دیگر exit 1 و crash شمرده نمی‌شود',
+         strpos($selfSrc, "\$matrixSliceOk=!empty(\$resMxCli['ok'])||!empty(\$resMxCli['yielded'])") !== false
+      && strpos($selfSrc, "\$decodedSliceOk=is_array(\$decoded)") !== false);
+    $add('10.313', 'ورودی 10.313 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "313'") !== false
+      && version_compare(APP_VERSION, '10.' . '313', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73277,6 +73287,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.313', t:'♻️ رفع شکست کاذب برش‌های ساخت جدول پیش از اصلاح', items:[
+    'فیدبک worker نشان داد برش سالم و checkpoint‌دار ماتریس به‌علت نداشتن ok نهایی با exit 1 اشتباه گرفته و پس از سه بار failed می‌شد.',
+    'yielded و resume_needed اکنون پایان سالم برش هستند؛ parent بدون بازسازی و شکست کاذب از checkpoint به برش بعد می‌رود.'
+  ]},
   {v:'10.312', t:'🛟 بازیابی تصویر برای محصولات fast-list بدون عکس ذخیره‌شده', items:[
     'اگر پروفایل تصویر ندارد، اصلاح فقط برای همان محصول صفحهٔ جزئیات را می‌خواند و تصویر اصلی را استخراج و برای باسلام آپلود می‌کند.',
     'تنها وقتی هم پروفایل و هم صفحهٔ جزئیات واقعاً بدون تصویر باشند، محصول با دلیل دقیق محلی رد می‌شود؛ درخواست 422 بیهوده ارسال نمی‌شود.'
