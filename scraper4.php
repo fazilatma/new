@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.324';
+const APP_VERSION = '10.325';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29240,7 +29240,7 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         /* job باید شناسهٔ واقعیِ عضو فعلی پروفایل را حمل کند. profile_key/key
            قدیمیِ ماتریس علت اصلی «در پروفایل پیدا نشد» در ارسال باسلام بود. */
         $resolvedProductKey=trim((string)($memberProduct['key']??$productKey));
-        $base = ['bare' => $bare, 'title' => $title,
+        $base = ['bare' => $bare, 'title' => $title, 'only_dest' => !$hasProf,
             'profile_key' => (string)($member['profile_key'] ?? $r['profile_key'] ?? ''),
             'product_key' => $resolvedProductKey];
 
@@ -29706,13 +29706,17 @@ function matrixFixRun(array $opts = []): array {
     if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
     if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
     $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
+    /* اجرای تازه فقط-مقصدها را اول بایگانی می‌کند؛ checkpoint قدیمی ترتیب
+       قبلی را حفظ می‌کند تا تغییر نسخه وسط run باعث پرش cursor نشود. */
+    $archiveFirst=!$fixCp||(string)($fixCp['job_order']??'')==='archive_first';
+    if($archiveFirst){$decorated=[];foreach($jobs as $ix=>$jj){$kind=(string)($jj['kind']??'');$rank=(!empty($jj['only_dest'])&&str_starts_with($kind,'del_'))?0:(str_starts_with($kind,'dedup_')?1:(str_starts_with($kind,'price_')?2:(str_starts_with($kind,'send_')?3:4)));$decorated[]=['rank'=>$rank,'ix'=>$ix,'job'=>$jj];}usort($decorated,static fn($a,$b)=>($a['rank']<=>$b['rank'])?:($a['ix']<=>$b['ix']));$jobs=array_column($decorated,'job');}
     $total = count($jobs);
-    $nPrice = $nSend = $nDel = 0;
+    $nPrice = $nSend = $nDel = $nOnlyDestDel = 0;
     foreach ($jobs as $j) {
         $k = (string)($j['kind'] ?? '');
         if (str_starts_with($k, 'price_')) $nPrice++;
         elseif (str_starts_with($k, 'send_')) $nSend++;
-        elseif (str_starts_with($k, 'del_') || str_starts_with($k, 'dedup_')) $nDel++;
+        elseif (str_starts_with($k, 'del_') || str_starts_with($k, 'dedup_')) { $nDel++; if(!empty($j['only_dest'])&&str_starts_with($k,'del_'))$nOnlyDestDel++; }
     }
     matrixFixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
@@ -29725,17 +29729,17 @@ function matrixFixRun(array $opts = []): array {
         'planned' => array_map(static function(array $j): array { return [
             'kind'=>(string)($j['kind']??''), 'title'=>(string)($j['title']??$j['bare']??''),
             'bare'=>(string)($j['bare']??''), 'id'=>(int)($j['id']??0),
-            'shop'=>(string)($j['shop_name']??''),
+            'shop'=>(string)($j['shop_name']??''), 'only_dest'=>!empty($j['only_dest']),
         ]; }, array_slice($jobs, 0, 500)),
         'planned_total' => $total, 'planned_limited' => $total > 500,
-        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
             'price_n' => (int)($fixCp['price_n'] ?? 0)],
         'live' => [],
         'log_add' => array_merge([
             '🔧 شروع مغایرت‌گیری کامل از جدول — محدوده: ' . $scope . ' · نگه‌داری تکراری: ' . dedupKeepLabel($duplicateKeep),
-            '📋 ' . $total . ' کار: 💰' . $nPrice . ' قیمت · 📤' . $nSend . ' ارسال · 🗑' . $nDel . ' حذف',
+            '📋 ' . $total . ' کار: 💰' . $nPrice . ' قیمت · 📤' . $nSend . ' ارسال · 🗑' . $nDel . ' حذف (فقط مقصد: ' . $nOnlyDestDel . ')',
         ], array_map(function ($j) {
             return '  → ' . (string)($j['kind'] ?? '') . ' · ' . mb_substr((string)($j['title'] ?? $j['bare'] ?? ''), 0, 40);
         }, array_slice($jobs, 0, 8))),
@@ -30096,7 +30100,7 @@ function matrixFixRun(array $opts = []): array {
         }
 
         if($rateLimited){
-            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
+            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
                 'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$ji,'total'=>$total];
             matrixFixProgress(['running'=>true,'done'=>false,'checkpoint'=>$retryCp,'cur'=>$ji,'total'=>$total]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'rate_limited'=>true,'retry_after'=>$rateRetryAfter,'total'=>$total,'cur'=>$ji];
@@ -30107,7 +30111,7 @@ function matrixFixRun(array $opts = []): array {
         if ($jobOk) { $doneJobs[] = $jk; $doneJobSet[$jk] = true; }
         $incomplete = $stopped || count($doneJobs) < $total;
         matrixFixProgress(['done_jobs' => $doneJobs,
-            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
@@ -30116,7 +30120,7 @@ function matrixFixRun(array $opts = []): array {
         $segmentItems++;
         if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
-                'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,
+                'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,
                     'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
         }
@@ -30159,7 +30163,7 @@ function matrixFixRun(array $opts = []): array {
         'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
         'finished_at' => time(),
         'done_jobs' => $doneJobs,
-        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
             'cur' => $n ?? 0, 'total' => $total] : null,
         'log_add' => [
@@ -42231,6 +42235,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.324', 'ورودی 10.324 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "324'") !== false
       && version_compare(APP_VERSION, '10.' . '324', '>='));
+    $add('10.325', 'فقط-مقصدها در اصلاح کلی job حذف دارند و در اجرای تازه اول بایگانی می‌شوند',
+         strpos($selfSrc, "'only_dest' => !\$hasProf") !== false
+      && strpos($selfSrc, "\$nOnlyDestDel") !== false
+      && strpos($selfSrc, "'job_order'=>'archive_first'") !== false);
+    $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "325'") !== false
+      && version_compare(APP_VERSION, '10.' . '325', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73468,6 +73479,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.325', t:'🗑 تضمین بایگانی فقط-مقصدها در اصلاح کلی', items:[
+    'فیدبک اجرای واقعی ۳۴۷۸ job را نشان داد که ۲۱۶۱ مورد حذف داشت، اما چون ارسال‌ها جلوتر بودند کاربر بایگانی فقط-مقصد را دیر می‌دید.',
+    'در اجرای تازه، حذف/بایگانی ردیف‌های فقط مقصد پیش از ارسال‌های missing انجام می‌شود و شمار جداگانهٔ «فقط مقصد» در برنامهٔ عملیات ثبت می‌شود.',
+    'ترتیب archive_first داخل checkpoint ذخیره می‌شود؛ اجرای قدیمیِ در حال انجام ترتیب خود را حفظ می‌کند تا cursor با تغییر نسخه هیچ ردیفی را جا نیندازد.'
+  ]},
   {v:'10.324', t:'☑️ انتخاب ردیف‌ها و اصلاح گروهی انتخاب‌شده‌ها', items:[
     'هر ردیف محصول checkbox مستقل دارد و checkbox بالای جدول همهٔ ردیف‌های فیلترشده را در تمام صفحه‌ها انتخاب می‌کند.',
     'دکمهٔ «اصلاح انتخاب‌شده‌ها» فقط bare-keyهای صریح انتخاب‌شده را به worker پایدار می‌سپارد؛ در حالت انتخاب همه، استثناهای برداشته‌شده نیز رعایت می‌شوند.',
