@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.310';
+const APP_VERSION = '10.311';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -10027,9 +10027,12 @@ if($r['ok']&&!empty($r['body']['id']))return['ok'=>1,'file_id'=>$r['body']['id']
 $bslErr=$r['body']['error_description']??$r['body']['message']??$r['error']??'';
 if(is_array($bslErr))$bslErr=json_encode($bslErr,JSON_UNESCAPED_UNICODE);
 $logMsg='BSL upload attempt '.$attempt.' fail ['.$fmtLog.']: '.mb_substr($bslErr,0,100).' (HTTP'.($r['code']??'?').')';
+/* آپلود تصویر هم جزو همان سهمیه است؛ روی 429 سه بار پشت سر هم POST نزن. */
+if((int)($r['code']??0)===429)return ['ok'=>0,'error'=>$logMsg,'error_code'=>429,
+    'retry_after'=>max(0,(int)($r['retry_after']??0)),'rate_source'=>(string)($r['rate_source']??'')];
 if($attempt<3){usleep($retryDelay*1000);}
 }
-return['ok'=>0,'error'=>$logMsg];
+return['ok'=>0,'error'=>$logMsg,'error_code'=>(int)($r['code']??0)];
 };
 
 $existing=glob(UPLOAD_DIR.'img_'.$cacheKey.'.*');
@@ -10040,6 +10043,7 @@ if(!$fdata||!isImageData($fdata)){@unlink($f);continue;}
 $up=$bslFileUpload($f);
 if(!empty($up['ok']))return['ok'=>1,'file_id'=>$up['file_id']];
 $log[]=$up['error'];
+if((int)($up['error_code']??0)===429)return $up;
 
 }
 }
@@ -10051,7 +10055,7 @@ $log[]='file saved ok ('.filesize($localPath).'b)';
 $up=$bslFileUpload($localPath);
 if(!empty($up['ok']))return['ok'=>1,'file_id'=>$up['file_id']];
 $log[]=$up['error'];
-return['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']'];
+return array_merge($up,['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']']);
 }else{
 $log[]='saveImageLocal failed';
 }
@@ -10067,7 +10071,7 @@ if($localPath2&&file_exists($localPath2)&&filesize($localPath2)>200){
 $up2=$bslFileUpload($localPath2);
 if(!empty($up2['ok']))return['ok'=>1,'file_id'=>$up2['file_id']];
 $log[]=$up2['error'];
-return['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']'];
+return array_merge($up2,['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']']);
 }
 $log[]='fresh file not valid';
 }else{
@@ -10091,16 +10095,19 @@ return['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']'
  * خروجی: ['ok'=>bool,'main'=>int|null,'ids'=>[int...],'ok_n'=>int,'fail_n'=>int,'note'=>string]
  */
 function bslUploadMany(string $tk, array $imgUrls, int $max = 10): array {
-    $ids = []; $failN = 0; $firstErr = '';
+    $ids = []; $failN = 0; $firstErr = ''; $firstMeta=[];
     foreach (galleryDedupe($imgUrls, max(1, $max)) as $u) {
         $up = bslUpload($tk, (string)$u);
         if (!empty($up['ok']) && !empty($up['file_id'])) { $ids[] = (int)$up['file_id']; continue; }
         $failN++;
-        if ($firstErr === '') $firstErr = mb_substr((string)($up['error'] ?? '?'), 0, 80);
+        if ($firstErr === '') {$firstErr = mb_substr((string)($up['error'] ?? '?'), 0, 180);$firstMeta=$up;}
+        if((int)($up['error_code']??0)===429)break;
     }
     $okN = count($ids);
     return ['ok' => $okN > 0, 'main' => $okN > 0 ? $ids[0] : null, 'ids' => $ids,
             'ok_n' => $okN, 'fail_n' => $failN,
+            'error_code'=>(int)($firstMeta['error_code']??0),'retry_after'=>(int)($firstMeta['retry_after']??0),
+            'rate_source'=>(string)($firstMeta['rate_source']??''),'error_detail'=>$firstErr,
             'note' => $okN > 0
                 ? ($okN . ' تصویر آپلود شد' . ($failN > 0 ? ' (' . $failN . ' ناموفق)' : ''))
                 : ('هیچ تصویری آپلود نشد' . ($firstErr !== '' ? ' — ' . $firstErr : ''))];
@@ -20457,10 +20464,25 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     bslApplyContent($_buTmp, array_merge($p, ['short_desc' => $brief, 'long_desc' => $desc]));
     if (!empty($_buTmp['brief'])) $brief = (string)$_buTmp['brief'];
     if (!empty($_buTmp['description'])) $desc = (string)$_buTmp['description'];
+    /* endpoint ساخت باسلام photo را اجباری می‌داند. مسیر اصلاح قبلاً برخلاف
+       فرستنده‌های اصلی مستقیماً POST می‌زد و همهٔ محصولات با 422 رد می‌شدند. */
+    $imgUrls=function_exists('productImageList')?productImageList($p):[];
+    if(!$imgUrls)return ['ok'=>false,'error'=>'محصول تصویر قابل ارسال ندارد','error_code'=>422,
+        'error_step'=>'photo_prepare','error_detail'=>'پیش از ساخت محصول در باسلام حداقل یک تصویر در پروفایل لازم است'];
+    $oldProductLink=$GLOBALS['_currentProductLink']??null;
+    $GLOBALS['_currentProductLink']=(string)($p['link']??$p['url']??'');
+    $uploaded=bslUploadMany($tk,$imgUrls,max(1,min(3,(int)($opts['upload_max_photos']??1))));
+    if($oldProductLink===null)unset($GLOBALS['_currentProductLink']);else $GLOBALS['_currentProductLink']=$oldProductLink;
+    if(empty($uploaded['ok'])||(int)($uploaded['main']??0)<=0)return ['ok'=>false,
+        'error'=>(string)($uploaded['note']??'آپلود تصویر باسلام ناموفق بود'),
+        'error_code'=>(int)($uploaded['error_code']??0),'error_step'=>'photo_upload',
+        'error_detail'=>(string)($uploaded['error_detail']??$uploaded['note']??''),
+        'retry_after'=>(int)($uploaded['retry_after']??0),'rate_source'=>(string)($uploaded['rate_source']??'')];
+    $photoId=(int)$uploaded['main'];$photoIds=array_values(array_map('intval',(array)($uploaded['ids']??[$photoId])));
     $bp = ['name' => mb_substr($title, 0, 120), 'brief' => mb_substr($brief, 0, 250),
            'description' => $desc, 'primary_price' => $priceRial, 'stock' => $stock,
            'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW,
-           'is_wholesale' => false, 'category_id' => $catUsed, 'status' => 3790];
+           'is_wholesale' => false, 'category_id' => $catUsed, 'photo'=>$photoId,'photos'=>$photoIds,'status' => 3790];
     if (!empty($p['sku'])) $bp['sku'] = $p['sku'];
     $r = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
     if (!empty($r['ok']) && !empty($r['body']['id'])) {
@@ -29381,6 +29403,9 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         'preparation_days' => (int)($b['preparation_days'] ?? 3),
         'weight' => (int)($b['weight'] ?? 500),
         'package_weight' => (int)($b['package_weight'] ?? 0),
+        /* اصلاح انبوه برای ساخت فقط تصویر شاخص را آپلود می‌کند؛ گالری بعداً
+           قابل تکمیل است و درخواست اضافه باعث rate-limit نمی‌شود. */
+        'upload_max_photos' => 1,
         'category_id' => (int)($profile['bslCategoryId'] ?? ($b['category_id'] ?? 0)),
         'fallback_cat_ids' => array_values(array_filter(array_map('intval', (array)($b['fallback_cat_ids'] ?? [])))),
         'auto_category' => !empty($b['auto_category']) || (int)($profile['bslCategoryId'] ?? ($b['category_id'] ?? 0)) <= 0,
@@ -30704,6 +30729,32 @@ if (isset($_GET['sync_matrix_fix_status']) || (($_POST['action'] ?? '') === 'syn
         'job' => 'fix',
     ], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/* فیدبک متمرکز اصلاح باسلام: کوچک، read-only و مناسب پایش بیرونی؛ برخلاف
+   ops_feedback کل صف/لاگ‌های بزرگ را برنمی‌گرداند و روی هاست 500 نمی‌شود. */
+if(isset($_GET['sync_matrix_fix_feedback'])||(($_POST['action']??'')==='sync_matrix_fix_feedback')){
+    header('Content-Type: application/json; charset=UTF-8');
+    $p=matrixFixProgressRead();$logs=array_values((array)($p['log']??[]));$codes=[];$photoRequired=0;$rateN=0;
+    foreach($logs as $row){$m=(string)(is_array($row)?($row['m']??''):$row);
+        if(preg_match_all('~HTTP\s*(\d{3})~i',$m,$mm))foreach($mm[1] as $c)$codes[$c]=($codes[$c]??0)+1;
+        if(stripos($m,'photo')!==false||mb_stripos($m,'شناسه تصویر')!==false)$photoRequired++;
+        if(stripos($m,'429')!==false)$rateN++;
+    }
+    $data=matrixResultLoad();$sample=[];$sendJobs=$data?matrixFixCollectJobs($data,'bsl',[],'newest'):[];
+    foreach($sendJobs as $j){if((string)($j['kind']??'')!=='send_bsl')continue;
+        $f=matrixFixFindProduct((string)($j['bare']??''),(string)($j['profile_key']??''),(string)($j['product_key']??''));
+        $imgs=$f&&function_exists('productImageList')?productImageList((array)$f['product']):[];
+        $sample[]=['title'=>(string)($j['title']??''),'vendor_id'=>(int)($j['vendor_id']??0),'found'=>(bool)$f,'images'=>count($imgs)];
+        if(count($sample)>=10)break;
+    }
+    $w=s4WorkerStateLoad();
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'running'=>!empty($p['running']),'phase'=>(string)($p['phase']??''),
+        'cur'=>(int)($p['cur']??0),'total'=>(int)($p['total']??0),'ok_n'=>(int)($p['ok_n']??0),'fail_n'=>(int)($p['fail_n']??0),
+        'http_codes'=>$codes,'photo_required_logs'=>$photoRequired,'rate_429_logs'=>$rateN,
+        'worker'=>['active'=>s4WorkerIsActive(),'version'=>(string)($w['version']??''),'pid'=>(int)($w['pid']??0)],
+        'send_readiness_sample'=>$sample,
+        'repairs'=>['create_uploads_photo'=>true,'photo_429_stops_immediately'=>true,'create_requires_local_image'=>true]],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if (isset($_GET['sync_matrix_fix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_fix_stop')) {
@@ -41969,6 +42020,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.310', 'ورودی 10.310 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "310'") !== false
       && version_compare(APP_VERSION, '10.' . '310', '>='));
+    $add('10.311', 'ساخت محصول باسلام در اصلاح ابتدا تصویر را آپلود و photo/photos می‌فرستد',
+         strpos($selfSrc, "\$uploaded=bslUploadMany(\$tk,\$imgUrls") !== false
+      && strpos($selfSrc, "'photo'=>\$photoId,'photos'=>\$photoIds") !== false
+      && strpos($selfSrc, "'upload_max_photos' => 1") !== false);
+    $add('10.311', '429 آپلود تصویر بدون تکرار متوقف و تا worker منتقل می‌شود',
+         strpos($selfSrc, "if((int)(\$up['error_code']??0)===429)return \$up") !== false
+      && strpos($selfSrc, "'error_step'=>'photo_" . "upload'") !== false);
+    $add('10.311', 'فیدبک کوچک و read-only اصلاح باسلام موجود است',
+         strpos($selfSrc, "sync_matrix_fix_" . "feedback") !== false
+      && strpos($selfSrc, "'send_readiness_" . "sample'=>\$sample") !== false);
+    $add('10.311', 'ورودی 10.311 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "311'") !== false
+      && version_compare(APP_VERSION, '10.' . '311', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73194,6 +73258,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.311', t:'🖼 رفع شکست کامل ارسال باسلام در اصلاح مغایرت', items:[
+    'فیدبک زنده نشان داد علت صفر موفقیت، پاسخ 422 صریح باسلام با fields=[photo] و پیام «شناسه تصویر الزامی است» بوده است.',
+    'پیش از POST ساخت، تصویر شاخص محصول از پروفایل آماده و در endpoint فایل باسلام آپلود می‌شود و شناسه‌های photo/photos در payload قرار می‌گیرند.',
+    'در اصلاح انبوه فقط تصویر شاخص آپلود می‌شود تا سرعت حفظ و احتمال 429 کم شود؛ 429 آپلود نیز بدون retry اضافی در checkpoint نگه داشته می‌شود.',
+    'endpoint سبک sync_matrix_fix_feedback وضعیت HTTPها، آمادگی تصویر نمونه‌ها، نسخه worker و شمار موفق/ناموفق را بدون اطلاعات محرمانه گزارش می‌دهد.'
+  ]},
   {v:'10.310', t:'🔢 بازگرداندن کارت‌های مربعی اصلاح مغایرت به محل قابل‌دید', items:[
     'کارت‌های کل، پردازش‌شده، موفق، ناموفق، قیمت، ارسال و حذف اکنون بالای لاگ زنده قرار دارند و زیر لاگ بلند پنهان نمی‌شوند.',
     'همهٔ کارت‌ها همچنان مربعی و کلیک‌پذیر هستند و فهرست محصولات مربوط به همان شمارنده را باز می‌کنند.'
