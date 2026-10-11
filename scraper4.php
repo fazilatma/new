@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.319';
+const APP_VERSION = '10.320';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -3138,11 +3138,14 @@ return $idx - 1;
 }
 function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null): array {
 $url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');
+$traceReq=['layer'=>'http_actual','request'=>['destination'=>'woocommerce','method'=>$m,'endpoint'=>'wc/v3/'.ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d]];
 $ch=curl_init($url);
 curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>60,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
 if($d!==null)curl_setopt($ch,CURLOPT_POSTFIELDS,json_encode($d,JSON_UNESCAPED_UNICODE));
 $b=curl_exec($ch);$e=curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
-return ['ok'=>$code>=200&&$code<300,'code'=>$code,'error'=>$e,'body'=>@json_decode($b,true),'raw'=>$b];
+$out=['ok'=>$code>=200&&$code<300,'code'=>$code,'error'=>$e,'body'=>@json_decode($b,true),'raw'=>$b];
+if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$traceReq['at']=microtime(true);$traceReq['response']=function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($out):$out;$GLOBALS['S4_MATRIX_ROW_TRACE'][]=$traceReq;}
+return $out;
 }
 
 /**
@@ -7624,6 +7627,7 @@ function bslRepairValidationPayload(array $r,array $payload):array{
 
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
 $url=bslApiBase().ltrim($ep,'/');
+$traceReturn=function(array $response)use($m,$ep,&$d){if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
 if($net===null)$net = function_exists('bslNetCfg') ? bslNetCfg() : ['indirect'=>false,'mode'=>'direct','fallback'=>false];
 
 // ترتیب روش‌ها: عادی مستقیم؛ اگر «اتصال غیرمستقیم» روشن باشد، اول روشِ تنظیم‌شده،
@@ -7666,7 +7670,7 @@ if(file_exists(BSL_STOP_FILE)){
 // v9.84: فقط سیگنالِ تازه معتبر است. قدیمی‌تر از نگه‌داشت = جامانده،
 // پاکش کن و ادامه بده؛ وگرنه یک توقفِ هفتهٔ پیش تا ابد کار را می‌بندد.
 $stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if($stopAge<=BSL_STOP_HOLD_SEC){return ['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>''];}
+if($stopAge<=BSL_STOP_HOLD_SEC){return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);}
 @unlink(BSL_STOP_FILE);
 clearstatcache(true,BSL_STOP_FILE);
 }
@@ -7676,7 +7680,7 @@ $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
 if((int)($r['code']??0)===422&&!$mp&&is_array($d)&&stripos($ep,'product')!==false){
     $_vr=bslRepairValidationPayload($r,$d);
     if(!empty($_vr['changed'])){
-        $_first=$r;$r=bslReqMode($url,$tk,$m,$_vr['payload'],false,$net,$mode);
+        $_first=$r;$d=$_vr['payload'];$r=bslReqMode($url,$tk,$m,$d,false,$net,$mode);
         $r['validation_retried']=true;$r['validation_repaired_fields']=$_vr['fields'];
         $r['validation_first_error']=bslErrText($_first);
     }
@@ -7687,14 +7691,14 @@ if($r['code']>0)break;                 // پاسخ گرفته شد (موفق ی�
 if($attempt<$maxRetries&&$r['error']!=='')sleep($retryDelay);   // خطای شبکه → تلاش دوباره
 }
 $r['mode']=$mode;
-if(!empty($r['ok']))return $r;
+if(!empty($r['ok']))return $traceReturn($r);
 /* 429 پاسخ واقعی HTTP است، نه خرابی مسیر شبکه. امتحان‌کردن proxy/DoH/direct
    دیگر در همان لحظه فقط چند درخواست اضافه می‌سازد و محدودیت را شدیدتر می‌کند. */
-if((int)($r['code']??0)===429)return $r;
+if((int)($r['code']??0)===429)return $traceReturn($r);
 // 403 ممکن است فقط به IP/روش اتصال مربوط باشد؛ روش جایگزین هنوز معنا دارد.
-if($r['code']>0&&(int)$r['code']!==403)return $r;
+if($r['code']>0&&(int)$r['code']!==403)return $traceReturn($r);
 }
-return $last;
+return $traceReturn($last);
 }
 
 /* =====================================================================
@@ -29201,7 +29205,7 @@ function matrixFixTraceExchange(array $job,array $response): void {
     elseif($kind==='send_bsl'){$req['method']='POST';$req['endpoint']='vendors/'.$vid.'/products';$req['payload']=['title'=>(string)($job['title']??''),'expected_price'=>(int)($job['expect']??0),'photo'=>'uploaded-before-create','product_key'=>(string)($job['product_key']??'')];}
     elseif($kind==='del_woo'||$kind==='dedup_woo'){$req['method']='DELETE';$req['endpoint']='products/'.$id;$req['payload']=['force'=>true];}
     elseif($kind==='del_bsl'||$kind==='dedup_bsl'){$req['method']='PATCH';$req['endpoint']='vendors/'.$vid.'/products/'.$id;$req['payload']=['status'=>'archived'];}
-    $GLOBALS['S4_MATRIX_ROW_TRACE'][]=['at'=>microtime(true),'request'=>$req,'response'=>matrixFixTraceSanitize($response)];
+    $GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'operation_summary','at'=>microtime(true),'request'=>$req,'response'=>matrixFixTraceSanitize($response)];
 }
 
 function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
@@ -42169,6 +42173,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.319', 'ورودی 10.319 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "319'") !== false
       && version_compare(APP_VERSION, '10.' . '319', '>='));
+    $add('10.320', 'trace شامل request/response واقعی لایه HTTP ووکامرس و باسلام است',
+         substr_count($selfSrc, "'layer'=>'http_" . "actual'") >= 2
+      && strpos($selfSrc, "'layer'=>'operation_" . "summary'") !== false
+      && strpos($selfSrc, "\$traceReturn(\$r)") !== false);
+    $add('10.320', 'ورودی 10.320 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "320'") !== false
+      && version_compare(APP_VERSION, '10.' . '320', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73400,6 +73411,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.320', t:'🛰 نمایش request/response واقعی لایهٔ HTTP در اصلاح تک‌ردیف', items:[
+    'علاوه بر خلاصهٔ عملیات، wrapper واقعی WooCommerce و Basalam اکنون method، endpoint، payload نهایی و پاسخ واقعی HTTP/API را در trace مودال ثبت می‌کند.',
+    'payload ترمیم‌شدهٔ retry باسلام نیز همان نسخهٔ نهایی ارسال‌شده را نشان می‌دهد و همهٔ credentialها همچنان redacted هستند.',
+    'traceها با برچسب http_actual و operation_summary جدا شده‌اند تا عیب‌یابی مسیر شبکه از نتیجهٔ منطقی عملیات قابل تشخیص باشد.'
+  ]},
   {v:'10.319', t:'⚡ اصلاح واقعی تک‌ردیف همراه request/response عیب‌یابی', items:[
     'مودال تفصیلی اکنون دکمهٔ اجرای واقعی دارد و فقط همان bare-key دقیق را در مقصدهای انتخاب‌شده اصلاح می‌کند.',
     'در خود مودال request ارسالی، HTTP response، trace هر عملیات مقصد، زمان اجرا و لاگ‌ها نمایش داده می‌شوند.',
