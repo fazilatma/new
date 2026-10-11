@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.315';
+const APP_VERSION = '10.316';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -42089,6 +42089,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.315', 'ورودی 10.315 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "315'") !== false
       && version_compare(APP_VERSION, '10.' . '315', '>='));
+    $add('10.316', 'هر ردیف جدول دکمه و مودال جزئیات تفصیلی مغایرت دارد',
+         strpos($selfSrc, "smOpenRow" . "Discrepancy") !== false
+      && strpos($selfSrc, "جزئیات تفصیلی مغایرت") !== false
+      && strpos($selfSrc, "colKeys.push('action')") !== false);
+    $add('10.316', 'ورودی 10.316 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "316'") !== false
+      && version_compare(APP_VERSION, '10.' . '316', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73314,6 +73321,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.316', t:'🔧 مودال تفصیلی مغایرت برای تک‌تک ردیف‌های جدول', items:[
+    'ستون «اصلاح مغایرت» و دکمهٔ مستقل به همهٔ ردیف‌های محصول اضافه شد.',
+    'مودال هر ردیف وضعیت تطبیق، قیمت مبدأ و پروفایل، انتظار و مقدار واقعی ووکامرس و تک‌تک غرفه‌ها، اختلاف مبلغ و درصد، شناسه‌ها، موجودی، تکراری‌ها و اقدام اصلاحی مورد انتظار را نشان می‌دهد.',
+    'مودال واکنش‌گراست و روی موبایل نیز کارت‌های مقصد را به‌صورت ستونی نمایش می‌دهد.'
+  ]},
   {v:'10.315', t:'♻️ حفظ نتیجهٔ yielded در child تک‌برشی ماتریس', items:[
     'فیدبک تازه نشان داد child پس از یک برش سالم فقط worker_segments را برمی‌گرداند؛ نتیجهٔ yielded پیش از return پاک می‌شد و parent باز هم exit 1 می‌دید.',
     'child تک‌برشی اکنون همان yielded و checkpoint کامل را تحویل parent می‌دهد تا تمام برش‌های بعدی بدون retry کاذب اجرا شوند.'
@@ -82406,6 +82418,28 @@ function smFixDestinationGroups(st){
 }
 
 function smPaintReports(d){ /* این پنل عمداً نمایش داده نمی‌شود. */ }
+function smRowStatusLabel(status){return ({ok:'یکسان و بدون اقدام',mismatch:'مغایرت قیمت/اطلاعات',missing:'در یک یا چند مقصد ناموجود',only_profile:'فقط در پروفایل',only_dest:'فقط در مقصد و خارج از پروفایل',partial:'اطلاعات ناقص',removed:'حذف‌شده',only_dest_removed:'حذف‌شده از مقصد'})[String(status||'')]||String(status||'نامشخص');}
+function smRowDelta(actual,expected){actual=Number(actual)||0;expected=Number(expected)||0;if(!actual||!expected)return '—';const d=actual-expected,p=Math.round((d/expected)*10000)/100;return (d>0?'+':'')+smMoney(d)+' ('+(p>0?'+':'')+smFa(p)+'٪)';}
+function smRowDetailCard(title,body,color){return '<section style="background:#0b1220;border:1px solid '+(color||'#334155')+';border-radius:11px;overflow:hidden"><div style="padding:8px 10px;background:#1e293b;color:#f8fafc;font-weight:900">'+title+'</div><div style="padding:10px;line-height:1.9">'+body+'</div></section>';}
+function smOpenRowDiscrepancy(index){
+  const r=(window._smVisibleRows||[])[Number(index)],shops=window._smVisibleShops||[];if(!r)return;
+  const money=v=>Number(v)>0?smMoney(Number(v)):'ناموجود / صفر';
+  const line=(k,v,c)=>'<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #334155;padding:3px 0"><span style="color:#94a3b8">'+esc(k)+'</span><b style="color:'+(c||'#e2e8f0')+';text-align:left;word-break:break-word">'+v+'</b></div>';
+  const operations=[];
+  const onlyDest=String(r.status||'')==='only_dest'||!(Number(r.profile_hits)||0);
+  if(onlyDest)operations.push('حذف یا بایگانی محصول از مقصد؛ زیرا در پروفایل ذخیره‌شده وجود ندارد.');
+  if(window._smVisibleIncludeWoo){if(!r.woo&&!onlyDest)operations.push('ارسال محصول به ووکامرس.');else if(r.woo&&Number(r.woo_expect)>0&&Number(r.woo.price)!==Number(r.woo_expect))operations.push('اصلاح قیمت ووکامرس از '+money(r.woo.price)+' به '+money(r.woo_expect)+'.');if(r.woo&&r.woo.dup)operations.push('حذف نسخه‌های تکراری ووکامرس طبق انتخاب نگه‌داری.');}
+  shops.forEach(sh=>{const c=r.shops&&(r.shops[sh.vendor_id]||r.shops[String(sh.vendor_id)]),name=sh.name||('#'+sh.vendor_id),exp=Number(c&&c.expect||r.bsl_expect)||0;if(!c&&!onlyDest)operations.push('ارسال محصول به غرفه «'+name+'».');else if(c&&exp>0&&Number(c.price)!==exp)operations.push('اصلاح قیمت غرفه «'+name+'» از '+money(c.price)+' به '+money(exp)+'.');if(c&&c.dup)operations.push('حذف نسخه‌های تکراری در غرفه «'+name+'».');});
+  if(!operations.length)operations.push('برای این snapshot اقدام اصلاحی لازم نیست؛ مقادیر مقصد با انتظار برابر هستند.');
+  let modal=document.getElementById('smRowDiscrepancyModal');if(!modal){modal=document.createElement('div');modal.id='smRowDiscrepancyModal';modal.style.cssText='position:fixed;inset:0;background:#000c;z-index:100006;display:flex;align-items:center;justify-content:center;padding:10px';modal.onclick=e=>{if(e.target===modal)modal.style.display='none'};document.body.appendChild(modal);}
+  let overview=line('وضعیت',esc(smRowStatusLabel(r.status)),String(r.status)==='ok'?'#86efac':'#fca5a5')+line('عنوان نمایشی',esc(r.title||r.bare||'—'))+line('کلید تطبیق',esc(r.bare||'—'))+line('پروفایل',onlyDest?'<span style="color:#fca5a5">وجود ندارد</span>':esc(r.profile||r.profile_key||'—'))+line('تعداد تطبیق در پروفایل',smFa(r.profile_hits||0))+line('قیمت مبدأ',money(r.src_price))+line('قیمت ذخیره‌شدهٔ پروفایل',money(r.profile_price));
+  let destinations='';
+  if(window._smVisibleIncludeWoo){const w=r.woo||null;destinations+=smRowDetailCard('🛒 ووکامرس',line('شناسه',w&&w.id?smFa(w.id):'ناموجود')+line('قیمت مورد انتظار',money(r.woo_expect))+line('قیمت واقعی',w?money(w.price):'ناموجود','#67e8f9')+line('اختلاف',w?smRowDelta(w.price,r.woo_expect):'—')+line('وضعیت محصول',esc(w&&w.status||'—'))+line('تکراری',w&&w.dup?'بله':'خیر'),w?'#7c3aed':'#b91c1c');}
+  shops.forEach(sh=>{const c=r.shops&&(r.shops[sh.vendor_id]||r.shops[String(sh.vendor_id)]),exp=Number(c&&c.expect||r.bsl_expect)||0;destinations+=smRowDetailCard('🏪 '+esc(sh.name||('#'+sh.vendor_id)),line('شناسه غرفه',smFa(sh.vendor_id||0))+line('شناسه محصول',c&&c.id?smFa(c.id):'ناموجود')+line('قیمت مورد انتظار',money(exp))+line('قیمت واقعی',c?money(c.price):'ناموجود','#67e8f9')+line('اختلاف',c?smRowDelta(c.price,exp):'—')+line('موجودی',c&&c.stock!=null?smFa(c.stock):'—')+line('وضعیت',c&&c.status!=null?smFa(c.status):'—')+line('تکراری',c&&c.dup?'بله':'خیر'),c?'#0891b2':'#b91c1c');});
+  const flags=(r.flags||[]).length?'<div style="color:#c4b5fd">'+(r.flags||[]).map(esc).join(' · ')+'</div>':'<div style="color:#94a3b8">بدون پرچم اضافی</div>';
+  const ops='<ol style="margin:0;padding-right:22px;color:#fde68a">'+operations.map(x=>'<li style="padding:3px 0">'+esc(x)+'</li>').join('')+'</ol>';
+  modal.innerHTML='<div style="width:min(1050px,98vw);max-height:94vh;background:#0f172a;border:1px solid #64748b;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><header style="padding:11px 14px;background:linear-gradient(90deg,#312e81,#1e293b);display:flex;justify-content:space-between;align-items:center;gap:10px"><div><b style="color:#fff">🔧 جزئیات تفصیلی مغایرت</b><div style="font-size:10px;color:#c7d2fe;margin-top:3px">'+esc(r.title||r.bare||'—')+'</div></div><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">✕</button></header><div style="padding:11px;overflow:auto;display:grid;gap:10px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+smRowDetailCard('📋 مشخصات و مبنای مقایسه',overview,'#6366f1')+smRowDetailCard('🧭 اقدام اصلاحی مورد انتظار',ops,'#d97706')+'</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+destinations+'</div>'+smRowDetailCard('🏷 پرچم‌ها و تشخیص تکمیلی',flags,'#7c3aed')+'<div style="font-size:10px;color:#94a3b8;padding:2px 3px">این جزئیات از همان snapshot و ضرایب فعلی جدول ساخته شده است. اجرای دکمهٔ اصلی «اصلاح مغایرت‌ها» فقط روی فیلترها و مقصدهای انتخاب‌شده انجام می‌شود.</div></div></div>';modal.style.display='flex';
+}
 function syncMatrixLoad(page, silent){
   page = page || 1; window._smPage = page;
   silent = !!silent;
@@ -82451,6 +82485,7 @@ function syncMatrixLoad(page, silent){
       h += smTh('🏪 '+(s.name||('#'+s.vendor_id)),sk,true);
     });
     colKeys.push('status');h += smTh('وضعیت','status',true);
+    colKeys.push('action');h += smTh('اصلاح مغایرت','action',false);
     if(head) head.innerHTML = h;
     smRenderCols(colKeys);
 
@@ -82474,6 +82509,9 @@ function syncMatrixLoad(page, silent){
     }
     try{ smPaintReports(d); }catch(e){}
     const rows = d.rows||[];
+    window._smVisibleRows=rows;
+    window._smVisibleShops=shops;
+    window._smVisibleIncludeWoo=includeWoo;
     if(!rows.length){
       if(body) body.innerHTML='<tr><td colspan="20" style="padding:16px;text-align:center;color:#94a3b8">ردیفی در این فیلتر/صفحه نیست</td></tr>';
     } else if(body){
@@ -82521,6 +82559,7 @@ function syncMatrixLoad(page, silent){
           }
         });
         tr += smCell(st[0]+flags, st[1]);
+        tr += smCell('<button type="button" class="btn btn-purple" onclick="smOpenRowDiscrepancy('+i+')" style="font-size:10px;padding:6px 9px;white-space:nowrap">🔧 اصلاح مغایرت</button>','na');
         tr += '</tr>';
         return tr;
       }).join('');
