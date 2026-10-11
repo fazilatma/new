@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.318';
+const APP_VERSION = '10.319';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29184,6 +29184,26 @@ function matrixFixProfileMembership(array $data): array {
     return ['keys'=>$keys, 'bares'=>$bares];
 }
 
+/** ردیابی امنٔ اجرای تک‌ردیفی؛ هیچ token/secret/header محرمانه‌ای برنمی‌گرداند. */
+function matrixFixTraceSanitize($v,int $depth=0){
+    if($depth>5)return '[depth-limited]';
+    if(is_string($v))return mb_substr($v,0,4000);
+    if(!is_array($v))return $v;
+    $out=[];$n=0;foreach($v as $k=>$x){if(++$n>60){$out['_truncated']=true;break;}$lk=strtolower((string)$k);if(preg_match('/token|secret|authorization|consumer_key|cookie|password/',$lk)){$out[$k]='[redacted]';continue;}$out[$k]=matrixFixTraceSanitize($x,$depth+1);}return $out;
+}
+function matrixFixTraceExchange(array $job,array $response): void {
+    if(empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']))return;
+    $kind=(string)($job['kind']??'');$id=(int)($job['id']??0);$vid=(int)($job['vendor_id']??0);
+    $req=['operation'=>$kind,'destination'=>str_ends_with($kind,'_woo')?'woocommerce':'basalam','method'=>'','endpoint'=>'','payload'=>[]];
+    if($kind==='price_woo'){$req['method']='PUT';$req['endpoint']='products/'.$id;$req['payload']=['regular_price'=>(string)(int)($job['to']??0),'price'=>(string)(int)($job['to']??0)];}
+    elseif($kind==='price_bsl'){$req['method']='PATCH';$req['endpoint']='vendors/'.$vid.'/products/'.$id;$req['payload']=['primary_price'=>(int)($job['to']??0)*10];}
+    elseif($kind==='send_woo'){$req['method']='POST';$req['endpoint']='products';$req['payload']=['title'=>(string)($job['title']??''),'expected_price'=>(int)($job['expect']??0),'product_key'=>(string)($job['product_key']??'')];}
+    elseif($kind==='send_bsl'){$req['method']='POST';$req['endpoint']='vendors/'.$vid.'/products';$req['payload']=['title'=>(string)($job['title']??''),'expected_price'=>(int)($job['expect']??0),'photo'=>'uploaded-before-create','product_key'=>(string)($job['product_key']??'')];}
+    elseif($kind==='del_woo'||$kind==='dedup_woo'){$req['method']='DELETE';$req['endpoint']='products/'.$id;$req['payload']=['force'=>true];}
+    elseif($kind==='del_bsl'||$kind==='dedup_bsl'){$req['method']='PATCH';$req['endpoint']='vendors/'.$vid.'/products/'.$id;$req['payload']=['status'=>'archived'];}
+    $GLOBALS['S4_MATRIX_ROW_TRACE'][]=['at'=>microtime(true),'request'=>$req,'response'=>matrixFixTraceSanitize($response)];
+}
+
 function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
     $jobs = [];
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
@@ -29638,6 +29658,7 @@ function matrixFixRun(array $opts = []): array {
     if (!in_array($scope, ['all', 'woo', 'bsl'], true)) $scope = 'all';
     $delayMs = max(50, min(2000, (int)($opts['delay_ms'] ?? 180)));
     $source = (string)($opts['source'] ?? 'manual');
+    $rowMode=!empty($opts['row_mode']);
     $fixCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $duplicateKeep = (string)($fixCp['duplicate_keep'] ?? $opts['duplicate_keep'] ?? 'newest');
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
@@ -29725,7 +29746,7 @@ function matrixFixRun(array $opts = []): array {
             'stopped' => false, 'scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'view_filters' => $viewFilters,
             'details' => [['ok' => true, 'label' => $emptyMsg]],
         ];
-        matrixFixAppendReportRows($stats);
+        if(!$rowMode)matrixFixAppendReportRows($stats);
         matrixFixProgress([
             'running' => false, 'done' => true, 'pct' => 100, 'phase' => 'done',
             'ok_n' => 0, 'fail_n' => 0, 'total' => 0, 'cur' => 0,
@@ -29777,6 +29798,7 @@ function matrixFixRun(array $opts = []): array {
                     . ' — ' . number_format($from) . ' → ' . number_format($to)],
             ]);
             $res = matrixFixWooPrice($cn, (int)$job['id'], $to);
+            matrixFixTraceExchange($job,$res);
             if (!empty($res['ok'])) {
                 $jobOk = true; $okN++; $priceN++;
                 matrixResultPatchRow($bare, [
@@ -29817,6 +29839,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress(['fail_n' => $failN, 'log_add' => ['  ❌ توکن غرفه نیست']]);
             } else {
                 $res = matrixFixBslPrice($tok, $vid, (int)$job['id'], $to);
+            matrixFixTraceExchange($job,$res);
                 if (!empty($res['ok'])) {
                     $jobOk = true; $okN++; $priceN++;
                     matrixResultPatchRow($bare, [
@@ -29857,6 +29880,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress(['fail_n' => $failN, 'log_add' => ['  ❌ در پروفایل پیدا نشد']]);
             } else {
                 $res = matrixFixSendWoo($cn, $found, (int)($job['expect'] ?? 0));
+            matrixFixTraceExchange($job,$res);
                 if (!empty($res['ok'])) {
                     $jobOk = true; $okN++; $sentN++;
                     $id = (int)($res['id'] ?? 0);
@@ -29905,6 +29929,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress(['fail_n' => $failN, 'log_add' => ['  ❌ توکن غرفه نیست']]);
             } else {
                 $res = matrixFixSendBsl($cn, $found, $vid, $tok, (int)($job['expect'] ?? 0));
+            matrixFixTraceExchange($job,$res);
                 if (!empty($res['ok'])) {
                     $jobOk = true; $okN++; $sentN++;
                     $id = (int)($res['id'] ?? 0);
@@ -29949,6 +29974,7 @@ function matrixFixRun(array $opts = []): array {
                 'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('حذف تکراری WC (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') · ') : 'حذف WC · ') . $title . ' #' . (int)$job['id']],
             ]);
             $res = matrixFixDelWoo($cn, (int)$job['id']);
+            matrixFixTraceExchange($job,$res);
             if (!empty($res['ok'])) {
                 $jobOk = true; $okN++; $delN++;
                 if ($isDuplicateDelete) {
@@ -30013,6 +30039,7 @@ function matrixFixRun(array $opts = []): array {
                 'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('بایگانی تکراری (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') ') : 'بایگانی ') . $sname . ' · ' . $title . ' #' . (int)$job['id']],
             ]);
             $res = matrixFixDelBsl($cn, (int)$job['id'], $vid);
+            matrixFixTraceExchange($job,$res);
             if (!empty($res['ok'])) {
                 $jobOk = true; $okN++; $delN++;
                 $dataNow = matrixResultLoad();
@@ -30117,7 +30144,7 @@ function matrixFixRun(array $opts = []): array {
         'stopped' => $stopped, 'scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'view_filters' => $viewFilters,
         'details' => $details,
     ];
-    matrixFixAppendReportRows($stats);
+    if(!$rowMode)matrixFixAppendReportRows($stats);
 
     matrixFixProgress([
         'running' => false, 'done' => true, 'partial' => $incomplete,
@@ -30229,6 +30256,8 @@ function matrixRowMatchesOneViewFilter(array $r,array $data,string $type,string 
 }
 /** جستجو/فیلترهای سریع همیشه AND هستند؛ قواعد پیشرفته با AND یا OR انتخابی ترکیب می‌شوند. */
 function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
+    $exactBare=trim((string)($opts['exact_bare']??''));
+    if($exactBare!==''&&!hash_equals($exactBare,(string)($r['bare']??'')))return false;
     $q=matrixBareTitle((string)($opts['q']??''),[]);
     if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
         &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
@@ -30784,6 +30813,29 @@ if(isset($_GET['sync_matrix_fix_feedback'])||(($_POST['action']??'')==='sync_mat
         'worker'=>['active'=>s4WorkerIsActive(),'version'=>(string)($w['version']??''),'pid'=>(int)($w['pid']??0)],
         'send_readiness_sample'=>$sample,
         'repairs'=>['create_uploads_photo'=>true,'photo_429_stops_immediately'=>true,'create_requires_local_image'=>true]],JSON_UNESCAPED_UNICODE);exit;
+}
+
+/* v10.319: اصلاح واقعی یک ردیف + trace امن request/response برای عیب‌یابی مودال. */
+if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_fix_row')){
+    header('Content-Type: application/json; charset=UTF-8');
+    if(($_SERVER['REQUEST_METHOD']??'GET')!=='POST'){http_response_code(405);echo json_encode(['ok'=>false,'error'=>'POST required'],JSON_UNESCAPED_UNICODE);exit;}
+    $bare=trim((string)($_POST['bare']??''));$scope=(string)($_POST['scope']??'all');if(!in_array($scope,['all','woo','bsl'],true))$scope='all';
+    $selected=matrixNormalizeDestinations($_POST['selected_destinations']??null);$keep=(string)($_POST['duplicate_keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
+    if($bare===''||!$selected){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'ردیف یا مقصد انتخاب‌شده معتبر نیست'],JSON_UNESCAPED_UNICODE);exit;}
+    $data=matrixResultLoad();$row=null;foreach((array)($data['rows']??[])as$rr){if(is_array($rr)&&empty($rr['is_report'])&&hash_equals($bare,(string)($rr['bare']??''))){$row=$rr;break;}}
+    if(!$row){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'ردیف در snapshot فعلی پیدا نشد؛ جدول را تازه کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);if(!$locked){if($fp)@fclose($fp);http_response_code(409);echo json_encode(['ok'=>false,'busy'=>true,'error'=>'یک اصلاح دیگر در حال اجراست؛ پس از پایان آن دوباره تلاش کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    $GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']=true;$GLOBALS['S4_MATRIX_ROW_TRACE']=[];$before=matrixFixProgressRead();$started=microtime(true);
+    try{
+        matrixFixStopClear();
+        $opts=['scope'=>$scope,'delay_ms'=>180,'source'=>'row_modal','duplicate_keep'=>$keep,'selected_destinations'=>$selected,'row_mode'=>true,
+            'view_filters'=>['exact_bare'=>$bare],'checkpoint'=>null];
+        $result=matrixFixRun($opts);$after=matrixFixProgressRead();$logs=array_values(array_filter((array)($after['log']??[]),static fn($x)=>(int)($x['t']??0)>=(int)$started));
+        echo json_encode(['ok'=>!empty($result['ok'])&&empty($result['partial']),'version'=>APP_VERSION,'row'=>['bare'=>$bare,'title'=>(string)($row['title']??$bare)],
+            'selected_destinations'=>$selected,'result'=>$result,'requests_responses'=>$GLOBALS['S4_MATRIX_ROW_TRACE'],
+            'logs'=>array_slice($logs,-80),'elapsed_ms'=>(int)round((microtime(true)-$started)*1000)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    }catch(Throwable $e){http_response_code(500);echo json_encode(['ok'=>false,'error'=>$e->getMessage(),'requests_responses'=>$GLOBALS['S4_MATRIX_ROW_TRACE']],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);}
+    finally{$GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']=false;@flock($fp,LOCK_UN);@fclose($fp);}exit;
 }
 
 if (isset($_GET['sync_matrix_fix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_fix_stop')) {
@@ -42109,6 +42161,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.318', 'ورودی 10.318 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "318'") !== false
       && version_compare(APP_VERSION, '10.' . '318', '>='));
+    $add('10.319', 'مودال اجرای واقعی تک‌ردیف و trace امن request/response دارد',
+         strpos($selfSrc, "sync_matrix_fix_" . "row") !== false
+      && strpos($selfSrc, "function smRunRowFix") !== false
+      && strpos($selfSrc, "requests_responses") !== false
+      && strpos($selfSrc, "function matrixFixTraceSanitize") !== false);
+    $add('10.319', 'ورودی 10.319 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "319'") !== false
+      && version_compare(APP_VERSION, '10.' . '319', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73340,6 +73400,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.319', t:'⚡ اصلاح واقعی تک‌ردیف همراه request/response عیب‌یابی', items:[
+    'مودال تفصیلی اکنون دکمهٔ اجرای واقعی دارد و فقط همان bare-key دقیق را در مقصدهای انتخاب‌شده اصلاح می‌کند.',
+    'در خود مودال request ارسالی، HTTP response، trace هر عملیات مقصد، زمان اجرا و لاگ‌ها نمایش داده می‌شوند.',
+    'token، secret، authorization و cookie پیش از نمایش trace حذف می‌شوند؛ اجرای همزمان نیز با lock رد می‌شود تا دوباره‌کاری رخ ندهد.'
+  ]},
   {v:'10.318', t:'📐 نگه‌داشتن دکمه‌های مودال داخل کادر نمایش', items:[
     'ارتفاع مودال بر اساس viewport واقعی موبایل محدود شد و فقط بخش محتوای میانی اسکرول می‌شود.',
     'هدر و نوار دکمه‌های پایین دیگر همراه محتوای بلند از کادر خارج نمی‌شوند و safe-area پایین گوشی نیز رعایت می‌شود.',
@@ -82466,7 +82531,20 @@ function smOpenRowDiscrepancy(index){
   shops.forEach(sh=>{const c=r.shops&&(r.shops[sh.vendor_id]||r.shops[String(sh.vendor_id)]),exp=Number(c&&c.expect||r.bsl_expect)||0;destinations+=smRowDetailCard('🏪 '+esc(sh.name||('#'+sh.vendor_id)),line('شناسه غرفه',smFa(sh.vendor_id||0))+line('شناسه محصول',c&&c.id?smFa(c.id):'ناموجود')+line('قیمت مورد انتظار',money(exp))+line('قیمت واقعی',c?money(c.price):'ناموجود','#67e8f9')+line('اختلاف',c?smRowDelta(c.price,exp):'—')+line('موجودی',c&&c.stock!=null?smFa(c.stock):'—')+line('وضعیت',c&&c.status!=null?smFa(c.status):'—')+line('تکراری',c&&c.dup?'بله':'خیر'),c?'#0891b2':'#b91c1c');});
   const flags=(r.flags||[]).length?'<div style="color:#c4b5fd">'+(r.flags||[]).map(esc).join(' · ')+'</div>':'<div style="color:#94a3b8">بدون پرچم اضافی</div>';
   const ops='<ol style="margin:0;padding-right:22px;color:#fde68a">'+operations.map(x=>'<li style="padding:3px 0">'+esc(x)+'</li>').join('')+'</ol>';
-  modal.innerHTML='<div style="width:min(1050px,98vw);max-height:calc(100dvh - 20px);min-height:0;background:#0f172a;border:1px solid #64748b;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><header style="padding:11px 14px;background:linear-gradient(90deg,#312e81,#1e293b);display:flex;flex:0 0 auto;justify-content:space-between;align-items:center;gap:10px"><div><b style="color:#fff">🔧 جزئیات تفصیلی مغایرت</b><div style="font-size:10px;color:#c7d2fe;margin-top:3px">'+esc(r.title||r.bare||'—')+'</div></div><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">✕</button></header><div style="padding:11px;overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain;display:grid;gap:10px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+smRowDetailCard('📋 مشخصات و مبنای مقایسه',overview,'#6366f1')+smRowDetailCard('🧭 اقدام اصلاحی مورد انتظار',ops,'#d97706')+'</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+destinations+'</div>'+smRowDetailCard('🏷 پرچم‌ها و تشخیص تکمیلی',flags,'#7c3aed')+'<div style="font-size:10px;color:#94a3b8;padding:2px 3px">این جزئیات از همان snapshot و ضرایب فعلی جدول ساخته شده است. اجرای دکمهٔ اصلی «اصلاح مغایرت‌ها» فقط روی فیلترها و مقصدهای انتخاب‌شده انجام می‌شود.</div></div></div>';modal.style.display='flex';
+  modal.innerHTML='<div style="width:min(1050px,98vw);max-height:calc(100dvh - 20px);min-height:0;background:#0f172a;border:1px solid #64748b;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><header style="padding:11px 14px;background:linear-gradient(90deg,#312e81,#1e293b);display:flex;flex:0 0 auto;justify-content:space-between;align-items:center;gap:10px"><div><b style="color:#fff">🔧 جزئیات تفصیلی مغایرت</b><div style="font-size:10px;color:#c7d2fe;margin-top:3px">'+esc(r.title||r.bare||'—')+'</div></div><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">✕</button></header><div style="padding:11px;overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain;display:grid;gap:10px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+smRowDetailCard('📋 مشخصات و مبنای مقایسه',overview,'#6366f1')+smRowDetailCard('🧭 اقدام اصلاحی مورد انتظار',ops,'#d97706')+'</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+destinations+'</div>'+smRowDetailCard('🏷 پرچم‌ها و تشخیص تکمیلی',flags,'#7c3aed')+'<div style="font-size:10px;color:#94a3b8;padding:2px 3px">این جزئیات از همان snapshot و ضرایب فعلی جدول ساخته شده است.</div><div id="smRowFixDebug" style="display:none;background:#020617;border:1px solid #475569;border-radius:9px;padding:9px;font-size:10px;overflow:auto"></div></div><footer style="flex:0 0 auto;padding:9px 12px;padding-bottom:max(9px,env(safe-area-inset-bottom));background:#1e293b;border-top:1px solid #475569;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">بستن</button><button id="smRowFixRunBtn" class="btn btn-green" type="button" onclick="smRunRowFix('+index+')" style="font-weight:900">⚡ اجرای واقعی اصلاح همین ردیف</button></footer></div>';modal.style.display='flex';
+}
+function smRunRowFix(index){
+  const r=(window._smVisibleRows||[])[Number(index)],btn=document.getElementById('smRowFixRunBtn'),box=document.getElementById('smRowFixDebug');if(!r||!box)return;
+  const selected=smSelectedDestinations();if(!selected.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
+  if(!confirm('اصلاح واقعی فقط همین ردیف انجام شود؟\n'+String(r.title||r.bare||'')))return;
+  const request={action:'sync_matrix_fix_row',bare:String(r.bare||''),scope:'all',selected_destinations:selected,duplicate_keep:(($('smDuplicateKeep')||{}).value||'newest')};
+  box.style.display='block';box.innerHTML='<div style="color:#fde68a;font-weight:900;margin-bottom:6px">⏳ در حال اجرای واقعی…</div><div style="color:#93c5fd;font-size:10px">REQUEST</div><pre style="direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word">'+esc(JSON.stringify(request,null,2))+'</pre>';
+  if(btn){btn.disabled=true;btn.textContent='⏳ در حال اصلاح…';}
+  const fd=new FormData();Object.keys(request).forEach(k=>fd.append(k,Array.isArray(request[k])?JSON.stringify(request[k]):String(request[k])));
+  fetch('',{method:'POST',body:fd}).then(async resp=>{let d=null,raw='';try{raw=await resp.text();d=JSON.parse(raw);}catch(e){d={ok:false,error:'پاسخ JSON معتبر نیست',http_status:resp.status,raw:raw};}return {status:resp.status,data:d};}).then(x=>{
+    const d=x.data||{};box.innerHTML='<div style="color:'+(d.ok?'#86efac':'#fca5a5')+';font-weight:900;margin-bottom:6px">'+(d.ok?'✅ اصلاح واقعی انجام شد':'❌ اصلاح انجام نشد')+' · HTTP '+smFa(x.status)+'</div><div style="color:#93c5fd;font-size:10px">REQUEST</div><pre style="direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word">'+esc(JSON.stringify(request,null,2))+'</pre><div style="color:#c4b5fd;font-size:10px;margin-top:8px">RESPONSE / TRACE</div><pre style="direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word;max-height:330px;overflow:auto">'+esc(JSON.stringify(d,null,2))+'</pre>';
+    if(d.ok){showToast('اصلاح همین ردیف با موفقیت انجام شد');setTimeout(()=>syncMatrixLoad(window._smPage||1,true),500);}else showToast(d.error||'اصلاح ردیف ناموفق بود',1);
+  }).catch(e=>{box.innerHTML+='<div style="color:#fca5a5">NETWORK ERROR: '+esc(String(e))+'</div>';showToast('خطای شبکه در اصلاح ردیف',1);}).finally(()=>{if(btn){btn.disabled=false;btn.textContent='⚡ اجرای واقعی اصلاح همین ردیف';}});
 }
 function syncMatrixLoad(page, silent){
   page = page || 1; window._smPage = page;
