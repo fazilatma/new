@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.311';
+const APP_VERSION = '10.312';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -20467,8 +20467,18 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     /* endpoint ساخت باسلام photo را اجباری می‌داند. مسیر اصلاح قبلاً برخلاف
        فرستنده‌های اصلی مستقیماً POST می‌زد و همهٔ محصولات با 422 رد می‌شدند. */
     $imgUrls=function_exists('productImageList')?productImageList($p):[];
+    /* پروفایل‌های fast-list قدیمی گاهی URL تصویر را ذخیره نکرده‌اند. فقط برای
+       همان محصولِ در حال ساخت، صفحهٔ جزئیات را یک بار بخوان و تصویر اصلی را نجات بده. */
+    $detailLink=trim((string)($p['link']??$p['url']??''));
+    if(!$imgUrls&&$detailLink!==''){
+        $detailRes=fetch_html($detailLink,20);
+        if(!empty($detailRes['ok'])&&!empty($detailRes['html'])){
+            $rescued=extractImageFromHtml((string)$detailRes['html'],$detailLink);
+            if($rescued!=='')$imgUrls=[$rescued];
+        }
+    }
     if(!$imgUrls)return ['ok'=>false,'error'=>'محصول تصویر قابل ارسال ندارد','error_code'=>422,
-        'error_step'=>'photo_prepare','error_detail'=>'پیش از ساخت محصول در باسلام حداقل یک تصویر در پروفایل لازم است'];
+        'error_step'=>'photo_prepare','error_detail'=>'پروفایل و صفحهٔ جزئیات هیچ تصویر معتبری ندارند؛ باسلام ساخت بدون photo را قبول نمی‌کند'];
     $oldProductLink=$GLOBALS['_currentProductLink']??null;
     $GLOBALS['_currentProductLink']=(string)($p['link']??$p['url']??'');
     $uploaded=bslUploadMany($tk,$imgUrls,max(1,min(3,(int)($opts['upload_max_photos']??1))));
@@ -30745,7 +30755,9 @@ if(isset($_GET['sync_matrix_fix_feedback'])||(($_POST['action']??'')==='sync_mat
     foreach($sendJobs as $j){if((string)($j['kind']??'')!=='send_bsl')continue;
         $f=matrixFixFindProduct((string)($j['bare']??''),(string)($j['profile_key']??''),(string)($j['product_key']??''));
         $imgs=$f&&function_exists('productImageList')?productImageList((array)$f['product']):[];
-        $sample[]=['title'=>(string)($j['title']??''),'vendor_id'=>(int)($j['vendor_id']??0),'found'=>(bool)$f,'images'=>count($imgs)];
+        $fp=$f?(array)$f['product']:[];$detailLink=trim((string)($fp['link']??$fp['url']??''));
+        $sample[]=['title'=>(string)($j['title']??''),'vendor_id'=>(int)($j['vendor_id']??0),'found'=>(bool)$f,
+            'images'=>count($imgs),'detail_rescue_available'=>$detailLink!==''];
         if(count($sample)>=10)break;
     }
     $w=s4WorkerStateLoad();
@@ -42033,6 +42045,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.311', 'ورودی 10.311 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "311'") !== false
       && version_compare(APP_VERSION, '10.' . '311', '>='));
+    $add('10.312', 'محصول بدون تصویر ذخیره‌شده از صفحهٔ جزئیات تصویر نجات می‌دهد',
+         strpos($selfSrc, "if(!\$imgUrls&&\$detailLink!=='')") !== false
+      && strpos($selfSrc, "\$rescued=extractImageFromHtml") !== false
+      && strpos($selfSrc, "'detail_rescue_" . "available'=>") !== false);
+    $add('10.312', 'ورودی 10.312 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "312'") !== false
+      && version_compare(APP_VERSION, '10.' . '312', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73258,6 +73277,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.312', t:'🛟 بازیابی تصویر برای محصولات fast-list بدون عکس ذخیره‌شده', items:[
+    'اگر پروفایل تصویر ندارد، اصلاح فقط برای همان محصول صفحهٔ جزئیات را می‌خواند و تصویر اصلی را استخراج و برای باسلام آپلود می‌کند.',
+    'تنها وقتی هم پروفایل و هم صفحهٔ جزئیات واقعاً بدون تصویر باشند، محصول با دلیل دقیق محلی رد می‌شود؛ درخواست 422 بیهوده ارسال نمی‌شود.'
+  ]},
   {v:'10.311', t:'🖼 رفع شکست کامل ارسال باسلام در اصلاح مغایرت', items:[
     'فیدبک زنده نشان داد علت صفر موفقیت، پاسخ 422 صریح باسلام با fields=[photo] و پیام «شناسه تصویر الزامی است» بوده است.',
     'پیش از POST ساخت، تصویر شاخص محصول از پروفایل آماده و در endpoint فایل باسلام آپلود می‌شود و شناسه‌های photo/photos در payload قرار می‌گیرند.',
