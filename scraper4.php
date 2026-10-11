@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.290';
+const APP_VERSION = '10.291';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -17598,7 +17598,7 @@ function s4ProductPricingForProfile(array $profile, array $p, ?array $cn = null)
     $bsl = destAdjustPrice($profilePrice, destPriceCfg($cn, 'basalam'));
     $shops = [];
     foreach (bslAllShops($cn) as $shop) {
-        $sp = bslShopPriceForProfile($profile, $raw, $shop, (int)($profile['roundPrice'] ?? 0));
+        $sp = bslShopPriceForProfile($profile, $raw, $shop, (int)($cn['basalam']['price_round'] ?? 0));
         $shops[] = [
             'vendor_id'=>(int)($shop['vendor_id'] ?? 0), 'name'=>(string)($shop['shop_name'] ?? ''),
             'is_default'=>!empty($shop['is_default']), 'price'=>(int)($sp['price'] ?? 0),
@@ -27992,7 +27992,7 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
             $hasWoo=$repriceWoo&&!empty($r['woo']);$wooTone=$repriceWoo?($hasProf&&$hasWoo?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):($hasProf?'missing_dst':($hasWoo?'extra':'na'))):'na';
             $r['woo_tone']=$wooTone;$shopCount=0;$shopOk=0;$shopBad=0;$shopMiss=0;$dupBsl=false;
             foreach($shopsMeta as $sm){$vid=(int)$sm['vendor_id'];$cell=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
-                if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$adj=bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
+                if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$raw=(string)($r['src_price']??'0');$adj=($profile&&extractPriceNum($raw)>0)?bslShopPriceForProfile($profile,$raw,$shopBy[$vid],(int)($bslCfg['round']??0)):bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$r['shop_expect'][$vid]=$expect;$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
                 elseif($hasProf)$shopMiss++;}
             $flags=array_values(array_filter(array_map('strval',(array)($r['flags']??[])),static function($f){return str_starts_with($f,'dup_');}));
             if(matrixProfileDuplicateCount($r)>0){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
@@ -28598,8 +28598,15 @@ function matrixBuild(array $opts = []): array {
             $shopExpect = $baseExpect;
             $profP = (int)($rowsByKey[$bare]['profile_price'] ?? 0);
             if ($profP > 0 && function_exists('bslShopPriceFor')) {
-                $afterDest = $baseExpect > 0 ? $baseExpect : $profP;
-                $adj = bslShopPriceFor($afterDest, $sh, (int)($bslCfg['round'] ?? 0));
+                $profileKeyForPrice = (string)($rowsByKey[$bare]['profile_key'] ?? '');
+                $profileForPrice = is_array($profiles[$profileKeyForPrice] ?? null) ? $profiles[$profileKeyForPrice] : null;
+                $rawForPrice = (string)($rowsByKey[$bare]['src_price'] ?? '0');
+                if ($profileForPrice && extractPriceNum($rawForPrice) > 0) {
+                    $adj = bslShopPriceForProfile($profileForPrice, $rawForPrice, $sh, (int)($bslCfg['round'] ?? 0));
+                } else {
+                    $afterDest = $baseExpect > 0 ? $baseExpect : $profP;
+                    $adj = bslShopPriceFor($afterDest, $sh, (int)($bslCfg['round'] ?? 0));
+                }
                 if (!empty($adj['price'])) $shopExpect = (int)$adj['price'];
             }
             $rowsByKey[$bare]['shops'][$vid] = array_merge($cell, [
@@ -28625,15 +28632,30 @@ function matrixBuild(array $opts = []): array {
         'dup_profile' => 0, 'dup_woo' => 0, 'dup_bsl' => 0,
         'in_all' => 0, 'only_profile' => 0, 'only_dest' => 0,
     ];
+    $matrixShopByVid = [];
+    foreach ($shopList as $matrixShopCfg) if (is_array($matrixShopCfg) && (int)($matrixShopCfg['vendor_id'] ?? 0) > 0) $matrixShopByVid[(int)$matrixShopCfg['vendor_id']] = $matrixShopCfg;
     foreach ($rowsByKey as $bare => $r) {
         $hasProf = ($r['profile_hits'] ?? 0) > 0;
+        $rowProfileKey = (string)($r['profile_key'] ?? '');
+        $rowProfileCfg = is_array($profiles[$rowProfileKey] ?? null) ? $profiles[$rowProfileKey] : null;
         $hasWoo = $includeWoo && !empty($r['woo']);
         $shopCount = 0; $shopOk = 0; $shopBad = 0; $shopMiss = 0;
         foreach ($shopsMeta as $sm) {
             $vid = (int)$sm['vendor_id'];
+            $shopExpected = (int)($r['shop_expect'][$vid] ?? $r['bsl_expect'] ?? 0);
+            if ($hasProf && $rowProfileCfg && isset($matrixShopByVid[$vid])) {
+                $rawForShop = (string)($r['src_price'] ?? '0');
+                if (extractPriceNum($rawForShop) > 0) {
+                    $shopCalc = bslShopPriceForProfile($rowProfileCfg, $rawForShop, $matrixShopByVid[$vid], (int)($bslCfg['round'] ?? 0));
+                    if ((int)($shopCalc['price'] ?? 0) > 0) $shopExpected = (int)$shopCalc['price'];
+                }
+            }
+            if ($hasProf) $r['shop_expect'][$vid] = $shopExpected;
             if (!empty($r['shops'][$vid])) {
                 $shopCount++;
-                $t = $r['shops'][$vid]['tone'] ?? 'na';
+                $r['shops'][$vid]['expect'] = $shopExpected;
+                $r['shops'][$vid]['tone'] = matrixPriceTone($shopExpected, (int)($r['shops'][$vid]['price'] ?? 0));
+                $t = $r['shops'][$vid]['tone'];
                 if ($t === 'ok') $shopOk++;
                 elseif ($t === 'bad' || $t === 'warn') $shopBad++;
             } elseif ($hasProf) {
@@ -29122,10 +29144,9 @@ function matrixFixSendWoo(array $cn, array $found, int $expect = 0): array {
 function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $expect = 0): array {
     $p = $found['product'];
     $profile = $found['profile'];
-    /* اگر expect از جدول داریم، final_price را همسو کن تا bslUpsert همان را بفرستد */
-    if ($expect > 0) {
-        $p = array_merge($p, ['final_price' => $expect, 'price' => (string)$expect]);
-    }
+    /* محصول با قیمت خام خودش می‌رود؛ bslUpsertToShop تعدیل پروفایل و همان
+       غرفه را دقیقاً یک بار اعمال می‌کند. نوشتن expect داخل price باعث اعمال
+       دوبارهٔ ضریب روی قیمتِ از قبل تعدیل‌شده می‌شد. */
     $shop = null;
     foreach (function_exists('bslAllShops') ? bslAllShops($cn) : [] as $sh) {
         if ((int)($sh['vendor_id'] ?? 0) === $vid) { $shop = $sh; break; }
@@ -29153,7 +29174,7 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
     $r = bslUpsertToShop($p, $shop, $opts);
     if (!empty($r['ok'])) {
         $id = (int)($r['id'] ?? 0);
-        $price = 0;
+        $price = $expect > 0 ? $expect : 0;
         /* read expect from product */
         $profP = (int)($p['final_price'] ?? 0);
         if ($profP <= 0) $profP = profileFinalPrice($profile, (string)($p['price'] ?? ''));
@@ -29161,7 +29182,7 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         if ($profP > 0 && ($bslCfg['mode'] ?? 'none') !== 'none' && function_exists('destAdjustPrice')) {
             $profP = destAdjustPrice($profP, $bslCfg);
         }
-        if ($profP > 0 && function_exists('bslShopPriceFor')) {
+        if ($price <= 0 && $profP > 0 && function_exists('bslShopPriceFor')) {
             $adj = bslShopPriceFor($profP, $shop, (int)($bslCfg['round'] ?? 0));
             if (!empty($adj['price'])) $price = (int)$adj['price'];
         }
@@ -41375,6 +41396,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.290', 'ورودی 10.290 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "290'") !== false
       && version_compare(APP_VERSION, '10.' . '290', '>='));
+    $add('10.291', 'قیمت مورد انتظار هر غرفهٔ غیرپیش‌فرض با همان تابع ارسال محاسبه می‌شود',
+         substr_count($selfSrc, 'bslShopPriceForProfile($rowProfileCfg') >= 1
+      && strpos($selfSrc, "\$r['shop_expect'][\$vid] = \$shopExpected") !== false
+      && strpos($selfSrc, "\$r['shop_expect'][\$vid]=\$expect") !== false);
+    $add('10.291', 'ارسال missing از ماتریس ضریب غرفه را دوباره روی expect اعمال نمی‌کند',
+         strpos($selfSrc, 'نوشتن expect داخل price باعث اعمال') !== false
+      && strpos($selfSrc, "\$price = \$expect > 0 ? \$expect : 0") !== false
+      && strpos($selfSrc, "['final_price' => \$expect, 'price' => (string)\$expect]") === false);
+    $add('10.291', 'تب نتایج نام پروفایل و تعداد محصول و ستون‌های شکست قیمت مقصدها را دارد',
+         strpos($selfSrc, 'id="resultProfileCount"') !== false
+      && strpos($selfSrc, 'function resultPricingHeaders()') !== false
+      && strpos($selfSrc, 'ضریب تعدیل پروفایل') !== false);
+    $add('10.291', 'کلیک ردیف نتایج مودال صفحه‌مانند با گالری، توضیحات و همه فیلدها باز می‌کند',
+         strpos($selfSrc, 'function resultProductOpen(encodedKey)') !== false
+      && strpos($selfSrc, 'مشاهده صفحه کامل محصول') !== false
+      && strpos($selfSrc, 'همهٔ فیلدهای محصول') !== false);
+    $add('10.291', 'ورودی 10.291 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "291'") !== false
+      && version_compare(APP_VERSION, '10.' . '291', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66669,6 +66709,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <button class="sub-tab active" data-v="table" onclick="switchView('table')">📋 جدول</button>
             <button class="sub-tab" data-v="text" onclick="switchView('text')">📝 متن</button>
         </div>
+        <div id="resultProfileSummary" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0;padding:9px 11px;background:#0f172a;border:1px solid #334155;border-radius:9px;color:#cbd5e1;font-size:11px">
+            <span>📁 پروفایل انتخاب‌شده: <b id="resultProfileName" style="color:#bae6fd">—</b></span>
+            <span style="margin-right:auto">📦 تعداد محصولات: <b id="resultProfileCount" style="color:#4ade80;font-size:14px">۰</b></span>
+            <span style="color:#94a3b8">برای مشاهدهٔ صفحهٔ کامل محصول، روی ردیف جدول کلیک کنید.</span>
+        </div>
         <div class="row">
             <button class="btn btn-pink" onclick="startDetailExtractionServer()" id="btnExtractDetail" style="flex:2" title="روی سرور اجرا می‌شود — بستن صفحه کار را قطع نمی‌کند">🔍 استخراج تفصیلی (سرور)</button>
             <button class="btn btn-orange" onclick="fetchMissingImages()" id="btnFetchMissing" style="flex:2">🖼️ دریافت و آماده‌سازی تصاویر</button>
@@ -70238,6 +70283,8 @@ function update(){
   fxSetNum('numP',  toFa(products.size));
   fxSetNum('numPg', toFa(pages));
   fxSetNum('numD',  toFa(details));
+  fxSetNum('resultProfileCount',toFa(products.size));
+  const rpn=$('resultProfileName'),ps=$('profileSelect');if(rpn)rpn.textContent=(ps&&ps.options&&ps.selectedIndex>=0?(ps.options[ps.selectedIndex].text||ps.value):'—')||'—';
   if(extractSpeedStartMs) updateSpeedCard(products.size, 0);
 
   const badge = $('resultsBadge');
@@ -70567,8 +70614,6 @@ function ensureKey(p,fallback){
    می‌ماند و همان رفتار قبلی را دارد. */
 function cardHtml(p,_k){
   let title = getFinalTitle(p.title);
-  let price = getFinalPrice(p.price);
-  let origPrice = getOriginalPrice(p.price);
   let origDiffers = origPrice !== '0' && origPrice !== price;
   let shortDesc = '';
   if (detailSel.shortDesc && detailSel.shortDesc.enabled && p.shortDesc) {
@@ -70591,8 +70636,6 @@ function renderCard(p,k){
   if(!_k)return;                       // بدون کلید نمی‌توان کارت ساخت
   const el=$('vGrid').querySelector(`[data-k="${_k}"]`);
   let title = getFinalTitle(p.title);
-  let price = getFinalPrice(p.price);
-  let origPrice = getOriginalPrice(p.price);
   let origDiffers = origPrice !== '0' && origPrice !== price;
   let shortDesc = '';
   if (detailSel.shortDesc && detailSel.shortDesc.enabled && p.shortDesc) {
@@ -70621,11 +70664,65 @@ function renderCard(p,k){
        d.style.display=matchFilter(_st)?'':'none';$('vGrid').appendChild(d);fxWatchCard(d);}
 }
 
+/* v10.291: شکست کامل قیمت برای جدول/مودال نتایج؛ همان قواعد ارسال. */
+function resultAdjLabel(mode,val){
+  mode=String(mode||'none');val=parseFloat(val)||0;
+  if(mode==='percent')return (val>=0?'+':'')+toFa(val)+'٪';
+  if(mode==='multiplier')return '×'+toFa(val);
+  return 'بدون تعدیل';
+}
+function resultRoundPrice(n,round){n=Math.round(parseFloat(n)||0);round=parseInt(round)||0;return round>0?Math.round(n/round)*round:n;}
+function resultPriceBreakdown(p){
+  const raw=extractNumber(p&&p.price);const pm=($('priceMode')||{}).value||'none';const pv=parseFloat(($('priceVal')||{}).value)||0;
+  const profilePrice=getFinalPriceNum(p&&p.price);const out={raw:raw,profileMode:pm,profileVal:pv,profilePrice:profilePrice,dests:[]};
+  const w=(cn&&cn.woocommerce)||{};
+  const wFinal=destAdjustPreviewNum(profilePrice,w.price_mode||'none',parseFloat(w.price_val)||0,parseInt(w.price_round)||0);
+  out.dests.push({key:'woo',name:'ووکامرس',mode:w.price_mode||'none',val:parseFloat(w.price_val)||0,price:wFinal});
+  const b=(cn&&cn.basalam)||{};const br=parseInt(b.price_round)||0;
+  if((parseInt(b.vendor_id)||0)>0||b.token){
+    const z=bslCombinedPreview(raw,pm,pv,b.price_mode||'none',parseFloat(b.price_val)||0);
+    out.dests.push({key:'bsl:'+String(parseInt(b.vendor_id)||0),name:b.shop_name||'غرفهٔ پیش‌فرض',mode:b.price_mode||'none',val:parseFloat(b.price_val)||0,price:resultRoundPrice(z.price,br)});
+  }
+  (Array.isArray(b.vendors)?b.vendors:[]).forEach((v,idx)=>{
+    if(!v)return;const z=bslCombinedPreview(raw,pm,pv,v.price_mode||'none',parseFloat(v.price_val)||0);
+    out.dests.push({key:'bsl:'+String(parseInt(v.vendor_id)||idx),name:v.shop_name||v.name||('غرفه '+toFa(idx+1)),mode:v.price_mode||'none',val:parseFloat(v.price_val)||0,price:resultRoundPrice(z.price,br)});
+  });
+  return out;
+}
+function resultMoney(n){n=parseInt(n)||0;return n>0?toFa(n.toLocaleString('en-US')):'—';}
+function resultPricingCells(p){
+  const q=resultPriceBreakdown(p);let h='<td class="td-orig">'+resultMoney(q.raw)+'</td><td>'+esc(resultAdjLabel(q.profileMode,q.profileVal))+'</td><td>'+resultMoney(q.profilePrice)+'</td>';
+  q.dests.forEach(d=>{h+='<td title="'+esc(d.name)+'">'+esc(resultAdjLabel(d.mode,d.val))+'</td><td style="color:#86efac;font-weight:800">'+resultMoney(d.price)+'</td>';});
+  return h;
+}
+function resultPricingHeaders(){
+  const q=resultPriceBreakdown({price:'100000'});let h='<th>قیمت مبدأ</th><th>ضریب تعدیل پروفایل</th><th>قیمت پروفایل</th>';
+  q.dests.forEach(d=>{h+='<th>تعدیل '+esc(d.name)+'</th><th>قیمت نهایی '+esc(d.name)+'</th>';});return h;
+}
+function resultKeyArg(k){return encodeURIComponent(String(k||'')).replace(/'/g,'%27');}
+function resultProductClose(){const m=document.getElementById('resultProductModal');if(m)m.style.display='none';}
+function resultProductOpen(encodedKey){
+  const k=decodeURIComponent(String(encodedKey||'')),p=products.get(k);if(!p)return;
+  let m=document.getElementById('resultProductModal');if(!m){m=document.createElement('div');m.id='resultProductModal';m.onclick=e=>{if(e.target===m)resultProductClose();};document.body.appendChild(m);}
+  m.style.cssText='position:fixed;inset:0;z-index:100050;background:rgba(2,6,23,.86);display:flex;align-items:center;justify-content:center;padding:12px;direction:rtl';
+  const q=resultPriceBreakdown(p),imgs=Array.from(new Set([p.image].concat(Array.isArray(p.images)?p.images:[]).filter(Boolean)));
+  const image=imgs[0]||'';const short=stripHtml(p.shortDesc||p.short_desc||p.brief||'');const long=stripHtml(p.longDesc||p.long_desc||p.description||'');
+  let pricing='<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr><th style="padding:7px">مرحله/مقصد</th><th>تعدیل</th><th>قیمت نهایی</th></tr></thead><tbody>';
+  pricing+='<tr><td style="padding:7px">مبدأ</td><td>—</td><td>'+resultMoney(q.raw)+'</td></tr><tr><td style="padding:7px">پروفایل</td><td>'+esc(resultAdjLabel(q.profileMode,q.profileVal))+'</td><td>'+resultMoney(q.profilePrice)+'</td></tr>';
+  q.dests.forEach(d=>{pricing+='<tr><td style="padding:7px">'+esc(d.name)+'</td><td>'+esc(resultAdjLabel(d.mode,d.val))+'</td><td style="color:#86efac;font-weight:900">'+resultMoney(d.price)+'</td></tr>';});pricing+='</tbody></table>';
+  const known=['title','price','link','image','images','shortDesc','short_desc','brief','longDesc','long_desc','description','key'];let fields='';
+  Object.keys(p).filter(x=>!known.includes(x)&&p[x]!==''&&p[x]!=null).forEach(x=>{let v=p[x];if(typeof v==='object')v=JSON.stringify(v);fields+='<div style="padding:7px;border:1px solid #334155;border-radius:7px"><b style="color:#93c5fd">'+esc(x)+'</b><div style="margin-top:3px;white-space:pre-wrap;word-break:break-word">'+esc(String(v))+'</div></div>';});
+  const gallery=imgs.map(u=>'<img src="?image_proxy='+encodeURIComponent(u)+'" loading="lazy" style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #475569">').join('');
+  m.innerHTML='<article style="width:min(1050px,97vw);max-height:94vh;overflow:auto;background:#0f172a;border:1px solid #475569;border-radius:14px;color:#e2e8f0;box-shadow:0 20px 70px #000;padding:14px">'
+    +'<header style="display:flex;justify-content:space-between;gap:10px;align-items:start"><div><div style="font-size:16px;font-weight:900">'+esc(getFinalTitle(p.title)||'بدون عنوان')+'</div><div style="color:#86efac;font-size:18px;font-weight:900;margin-top:5px">'+resultMoney(q.profilePrice)+'</div></div><button class="btn btn-gray" onclick="resultProductClose()">✕</button></header>'
+    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:12px"><div>'+(image?'<img src="?image_proxy='+encodeURIComponent(image)+'" style="width:100%;max-height:320px;object-fit:contain;background:#fff;border-radius:10px">':'<div style="padding:60px 10px;text-align:center;background:#1e293b;border-radius:10px">بدون تصویر</div>')+'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+gallery+'</div></div>'
+    +'<div><div style="background:#111827;border:1px solid #334155;border-radius:10px;overflow:auto">'+pricing+'</div>'+(short?'<h4 style="color:#fbbf24">توضیح کوتاه</h4><p style="line-height:1.9">'+esc(short)+'</p>':'')+(long?'<h4 style="color:#fbbf24">توضیحات محصول</h4><p style="line-height:1.9;white-space:pre-wrap">'+esc(long)+'</p>':'')+(p.link?'<a href="'+esc(p.link)+'" target="_blank" class="btn btn-blue" onclick="event.stopPropagation()">مشاهده صفحه مبدأ</a>':'')+'</div></div>'
+    +(fields?'<h4 style="color:#c4b5fd">همهٔ فیلدهای محصول</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px">'+fields+'</div>':'')+'</article>';
+}
+
 /* v10.31 (۴۴): همان تفکیک برای ردیفِ جدول. */
 function rowHtml(p,i){
   let title = getFinalTitle(p.title);
-  let price = getFinalPrice(p.price);
-  let origPrice = getOriginalPrice(p.price);
   let customTd = isCustomColEnabled() ? `<td>${esc(getCustomColVal())}</td>` : '';
   let detailTds = '';
   const enabledFields = getDetailColumns();
@@ -70653,62 +70750,22 @@ function rowHtml(p,i){
   }else{
       galTd=`<td class="td-gal" style="color:#64748b;font-size:10px">${_n===1?'۱ عکس':'—'}</td>`;
   }
-  return `<td>${toFa(i)}</td><td>${statusBadge(_st)}${esc(title)}</td><td class="td-orig">${esc(origPrice)}</td><td style="direction:ltr;text-align:right">${esc(price)}</td>
-  <td>${p.link?`<a href="${esc(p.link)}" target="_blank">لینک</a>`:'-'}</td><td style="direction:ltr;text-align:left;font-size:9px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.image||'')}">${esc(p.image||'-')}</td>${galTd}${detailTds}${customTd}`;
+  return `<td>${toFa(i)}</td><td>${statusBadge(_st)}${esc(title)}</td>${resultPricingCells(p)}
+  <td>${p.link?`<a href="${esc(p.link)}" target="_blank" onclick="event.stopPropagation()">لینک</a>`:'-'}</td><td style="direction:ltr;text-align:left;font-size:9px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.image||'')}">${esc(p.image||'-')}</td>${galTd}${detailTds}${customTd}`;
 }
 
 function renderRow(p,i,k){
-  const _k=ensureKey(p,k);
-  if(!_k)return;
-  const el=$('tBody').querySelector(`[data-k="${_k}"]`);
-  let title = getFinalTitle(p.title);
-  let price = getFinalPrice(p.price);
-  let origPrice = getOriginalPrice(p.price);
-  let customTd = isCustomColEnabled() ? `<td>${esc(getCustomColVal())}</td>` : '';
-  let detailTds = '';
-  const enabledFields = getDetailColumns();   // v10.15: قیمت ستونِ جدا نمی‌گیرد
-  enabledFields.forEach(f => {
-      const val = p[f.key] || '';
-      let display = val;
-      if (f.key === 'shortDesc' || f.key === 'longDesc') {
-          display = shortText(stripHtml(val), 60);
-      }
-      detailTds += `<td class="td-detail" title="${esc(stripHtml(val))}">${esc(display) || '-'}</td>`;
-  });
-
-  // v8.40: نشان جدید/آپدیت کنار عنوان
-  const _st=prodStatus(p);
-  /* v8.84: ستون گالری — تعداد عکس‌ها با پیش‌نمایش کوچک.
-     تا حالا فقط «تصویر شاخص» در جدول بود و معلوم نمی‌شد کدام محصول
-     گالری چندعکسی دارد و کدام ندارد؛ همان چیزی که موقع بررسی پاک شدن
-     گالری‌ها لازم بود. */
-  const _imgs=Array.isArray(p.images)?p.images.filter(Boolean):[];
-  const _n=_imgs.length;
-  let galTd;
-  if(_n>1){
-      const thumbs=_imgs.slice(0,4).map(u=>
-          `<img src="?image_proxy=${encodeURIComponent(u)}" loading="lazy" `
-        + `style="width:22px;height:22px;object-fit:cover;border-radius:3px;border:1px solid #334155">`).join('');
-      galTd=`<td class="td-gal" title="${esc(_imgs.join('\n'))}">`
-          + `<div style="display:flex;gap:2px;align-items:center">`
-          + `<b style="color:#f9a8d4;font-size:10px">🖼 ${toFa(_n)}</b>${thumbs}`
-          + (_n>4?`<span style="color:#64748b;font-size:9px">+${toFa(_n-4)}</span>`:'')
-          + `</div></td>`;
-  }else{
-      galTd=`<td class="td-gal" style="color:#64748b;font-size:10px">${_n===1?'۱ عکس':'—'}</td>`;
-  }
-  const html=`<td>${toFa(i)}</td><td>${statusBadge(_st)}${esc(title)}</td><td class="td-orig">${esc(origPrice)}</td><td style="direction:ltr;text-align:right">${esc(price)}</td>
-  <td>${p.link?`<a href="${esc(p.link)}" target="_blank">لینک</a>`:'-'}</td><td style="direction:ltr;text-align:left;font-size:9px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.image||'')}">${esc(p.image||'-')}</td>${galTd}${detailTds}${customTd}`;
-  if(el){el.innerHTML=html;el.style.display=matchFilter(_st)?'':'none';}
-  else{const tr=document.createElement('tr');tr.dataset.k=_k;tr.innerHTML=html;
-       tr.style.display=matchFilter(_st)?'':'none';$('tBody').appendChild(tr);}
+  const _k=ensureKey(p,k);if(!_k)return;
+  const tb=$('tBody'),el=tb&&tb.querySelector(`[data-k="${_k}"]`),st=prodStatus(p),html=rowHtml(p,i);
+  if(el){el.innerHTML=html;el.style.display=matchFilter(st)?'':'none';el.onclick=()=>resultProductOpen(resultKeyArg(_k));}
+  else if(tb){const tr=document.createElement('tr');tr.dataset.k=_k;tr.innerHTML=html;tr.style.cursor='pointer';tr.title='مشاهده صفحه کامل محصول';tr.onclick=()=>resultProductOpen(resultKeyArg(_k));tr.style.display=matchFilter(st)?'':'none';tb.appendChild(tr);}
 }
 
 function updateTableHeaders() {
     let thead = $('tBody').parentElement.querySelector('thead tr');
     if(!thead) return;
     // v8.84: ستون گالری بعد از «تصویر» می‌آید — همان ترتیبی که renderRow می‌سازد
-    let baseHeaders = '<th>#</th><th>عنوان</th><th>قیمت اولیه</th><th>قیمت نهایی</th><th>لینک</th><th>تصویر</th><th>🖼 گالری</th>';
+    let baseHeaders = '<th>#</th><th>عنوان</th>'+resultPricingHeaders()+'<th>لینک</th><th>تصویر</th><th>🖼 گالری</th>';
     const enabledFields = getDetailColumns();   // v10.15: قیمت ستونِ جدا نمی‌گیرد
     enabledFields.forEach(f => {
         baseHeaders += `<th>${f.icon} ${esc(f.label)}</th>`;
@@ -70775,7 +70832,7 @@ function rvBuildTable(){
     const _k=ensureKey(p,k);
     if(!_k)return;
     const st=prodStatus(p);
-    buf.push('<tr data-k="'+esc(_k)+'"'+(matchFilter(st)?'':' style="display:none"')+'>'
+    buf.push('<tr data-k="'+esc(_k)+'" title="مشاهده صفحه کامل محصول" style="cursor:pointer;'+(matchFilter(st)?'':'display:none;')+'" onclick="resultProductOpen(\''+resultKeyArg(_k)+'\')">'
              +rowHtml(p,i+1)+'</tr>');
   });
   tb.innerHTML=buf.join('');
@@ -72582,6 +72639,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.291', t:'🧾 قیمت دقیق غرفه‌ها و صفحهٔ کامل محصول در نتایج', items:[
+    'ماتریس برای غرفه‌های غیرپیش‌فرض دقیقاً از همان محاسبهٔ قیمت مسیر ارسال استفاده می‌کند و انتظار هر غرفه حتی برای محصول missing جدا ذخیره می‌شود',
+    'اعمال دوبارهٔ ضریب غرفه هنگام ارسال محصول missing از اصلاح مغایرت حذف شد',
+    'تب نتایج نام پروفایل انتخاب‌شده و تعداد محصولات آن را نمایش می‌دهد',
+    'جدول نتایج قیمت مبدأ، تعدیل پروفایل، قیمت پروفایل و برای هر مقصد تعدیل و قیمت نهایی جدا دارد',
+    'با کلیک روی هر ردیف، مودال صفحه‌مانند محصول با تصویر، گالری، توضیحات، قیمت مقصدها و همه فیلدهای استخراج‌شده باز می‌شود'
+  ]},
   {v:'10.290', t:'🏷 توضیح روشن محصولات خارج از پروفایل در جدول مغایرت', items:[
     'عنوان‌هایی که فقط از ووکامرس یا غرفه آمده‌اند اکنون صریحاً «عنوان از مقصد؛ در پروفایل ذخیره‌شده نیست» برچسب می‌خورند',
     'ستون پروفایل برای این ردیف‌ها به‌جای خط تیره، «وجود ندارد» نشان می‌دهد و وضعیت فقط مقصد روشن‌تر است',
@@ -81097,6 +81161,7 @@ const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();if(b.token&&bslAllCats.length===0){loadBslCats();}syncMatrixRenderDestinations(b);
+try{if(typeof rvDirty!=='undefined'){rvDirty.table=true;if(resultsVisible()&&rvCurView==='table')rvBuildTable();}}catch(e){}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
 arApplyCfg(cn.autoreply||{});arLoad();
 try{
