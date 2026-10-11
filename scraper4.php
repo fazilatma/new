@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.296';
+const APP_VERSION = '10.297';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1198,6 +1198,38 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
     return $enq;
 }
 
+function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
+    $payload = ['scope'=>(string)($opts['scope']??'all'),'delay_ms'=>max(50,min(2000,(int)($opts['delay_ms']??180))),
+        'source'=>(string)($opts['source']??'manual'),'duplicate_keep'=>(string)($opts['duplicate_keep']??'newest'),
+        'view_filters'=>is_array($opts['view_filters']??null)?$opts['view_filters']:[],
+        'resume'=>$resume,'dedup_key'=>'matrix_fix','requested_at'=>microtime(true)];
+    $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
+    if(!empty($enq['ok'])&&empty($enq['duplicate'])){
+        $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
+        matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
+            'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
+            'started_at'=>(int)($cp['started_at']??time()),'checkpoint'=>$cp?:['scope'=>$payload['scope'],'duplicate_keep'=>$payload['duplicate_keep'],'view_filters'=>$payload['view_filters'],'done_jobs'=>[],'started_at'=>time()],
+            'log_add'=>['🧵 اصلاح مغایرت به worker دائمی سپرده شد — مستقل از مرورگر و محدودیت PHP-FPM ادامه می‌یابد']]);
+    }
+    return $enq;
+}
+function s4WorkerRunMatrixFix(array $payload): array {
+    $scope=(string)($payload['scope']??'all');$resume=!empty($payload['resume']);
+    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'checkpoint'=>null];
+    if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
+    $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
+    try{matrixFixStopClear();matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
+    catch(Throwable $e){$st=matrixFixProgressRead();matrixFixProgress(['running'=>false,'done'=>true,'stale'=>true,'error'=>$e->getMessage(),'checkpoint'=>is_array($st['checkpoint']??null)?$st['checkpoint']:null,'log_add'=>['❌ خطای worker اصلاح: '.$e->getMessage().' — checkpoint حفظ شد']]);return ['ok'=>false,'error'=>$e->getMessage()];}
+    finally{@flock($fp,LOCK_UN);@fclose($fp);}
+}
+function s4WorkerRunMatrixFixChild(array $payload): array {
+    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];$raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
+    $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');$php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_fix '.escapeshellarg($arg).' 2>&1';$out=[];$rc=0;@exec($cmd,$out,$rc);$decoded=null;
+    for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}if(!is_array($decoded))$decoded=['ok'=>false,'error'=>'matrix_fix_child_no_json'];
+    $decoded['child_exit_code']=$rc;$decoded['tail']=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}return $decoded;
+}
+
 /** اجرای کامل ماتریس در worker، با برش‌های checkpointدار ولی بدون وابستگی به polling مرورگر. */
 function s4WorkerRunMatrixBuild(array $payload): array {
     $resume = !empty($payload['resume']);
@@ -1472,6 +1504,9 @@ function s4WorkerRunJob(array $job): array {
     }
     if ($type === 'matrix_build') {
         return s4WorkerRunMatrixChild($payload);
+    }
+    if ($type === 'matrix_fix') {
+        return s4WorkerRunMatrixFixChild($payload);
     }
     if ($type === 'backend_extract') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
@@ -21882,6 +21917,9 @@ if (isCliRun()) {
     } elseif ($_cliCmd === 'matrix_build' || $_cliCmd === 'matrix') {
         $_GET['matrix_build_cli'] = '1';
         $_GET['matrix_payload'] = (string)($_cliArgs[1] ?? '');
+    } elseif ($_cliCmd === 'matrix_fix') {
+        $_GET['matrix_fix_cli'] = '1';
+        $_GET['matrix_fix_payload'] = (string)($_cliArgs[1] ?? '');
     } elseif ($_cliCmd === 'backend_extract' || $_cliCmd === 'extract') {
         $_GET['backend_extract_cli'] = '1';         // php scraper4.php backend_extract <profile_key>
         $_GET['profile_key'] = (string)($_cliArgs[1] ?? '');
@@ -21927,6 +21965,11 @@ if (isset($_GET['matrix_build_cli'])) {
     else{$resMxCli=s4WorkerRunMatrixBuild($payload);}
     echo json_encode($resMxCli,JSON_UNESCAPED_UNICODE).PHP_EOL;
     exit(!empty($resMxCli['ok'])?0:1);
+}
+if (isset($_GET['matrix_fix_cli'])) {
+    $enc=trim((string)($_GET['matrix_fix_payload']??''));$enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
+    $payload=json_decode((string)base64_decode($enc,true),true);$resFixCli=is_array($payload)?s4WorkerRunMatrixFix($payload):['ok'=>false,'error'=>'invalid_matrix_fix_payload'];
+    echo json_encode($resFixCli,JSON_UNESCAPED_UNICODE).PHP_EOL;exit(!empty($resFixCli['ok'])?0:1);
 }
 if (isset($_GET['backend_extract_cli'])) {
     $pk = trim((string)($_GET['profile_key'] ?? ''));
@@ -30515,6 +30558,27 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         exit;
     }
     $lockFile = SYNC_MATRIX_FIX_LOCK_FILE;
+    /* v10.297: کار بلند اصلاح را به child مستقل worker بسپار. ابتدا lock را
+       probe می‌کنیم تا اجرای وبیِ قدیمی یا worker دیگر دوباره‌کاری نسازد. */
+    if (s4WorkerIsActive()) {
+        $probe = @fopen($lockFile, 'c');
+        $free = $probe && @flock($probe, LOCK_EX | LOCK_NB);
+        if (!$free) {
+            if ($probe) @fclose($probe);
+            echo json_encode(['ok'=>false,'error'=>'یک اصلاح در حال اجراست','running'=>true],JSON_UNESCAPED_UNICODE); exit;
+        }
+        @flock($probe, LOCK_UN); @fclose($probe);
+        $oldFix = matrixFixProgressRead();
+        $oldCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
+        $sameFilters = $oldCp && json_encode($oldCp['view_filters'] ?? []) === json_encode($opts['view_filters']);
+        $resumeWorker = $oldCp && !empty($oldCp['done_jobs'])
+            && (string)($oldCp['scope'] ?? 'all') === $opts['scope']
+            && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters;
+        matrixFixStopClear();
+        $enq = s4WorkerEnqueueMatrixFix($opts, (bool)$resumeWorker);
+        echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
+            'running'=>!empty($enq['ok']),'worker'=>true,'resumed'=>(bool)$resumeWorker],$enq),JSON_UNESCAPED_UNICODE); exit;
+    }
     $fp = @fopen($lockFile, 'c');
     if (!$fp || !flock($fp, LOCK_EX | LOCK_NB)) {
         if ($fp) @fclose($fp);
@@ -41515,6 +41579,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.296', 'ورودی 10.296 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "296'") !== false
       && version_compare(APP_VERSION, '10.' . '296', '>='));
+    $add('10.297', 'اصلاح مغایرت در worker و child مستقل اجرا می‌شود نه PHP-FPM جداشده',
+         strpos($selfSrc, "function s4WorkerEnqueueMatrixFix") !== false
+      && strpos($selfSrc, "function s4WorkerRunMatrixFixChild") !== false
+      && strpos($selfSrc, "if (\$type === 'matrix_fix')") !== false);
+    $add('10.297', 'فرمان CLI اصلاح lock و checkpoint را در پردازهٔ مستقل نگه می‌دارد',
+         strpos($selfSrc, "\$_cliCmd === 'matrix_fix'") !== false
+      && strpos($selfSrc, "isset(\$_GET['matrix_fix_cli'])") !== false
+      && strpos($selfSrc, "runner_kind'=>'matrix_fix_worker'") !== false);
+    $add('10.297', 'شروع دوبارهٔ همان فیلتر checkpoint موفق قبلی را خودکار ادامه می‌دهد',
+         strpos($selfSrc, "\$resumeWorker = \$oldCp && !empty(\$oldCp['done_jobs'])") !== false
+      && strpos($selfSrc, "'resumed'=>(bool)\$resumeWorker") !== false);
+    $add('10.297', 'ورودی 10.297 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "297'") !== false
+      && version_compare(APP_VERSION, '10.' . '297', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72739,6 +72817,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.297', t:'🧵 اجرای پایدار اصلاح مغایرت در worker مستقل', items:[
+    'اصلاح مغایرت دیگر پس از بستن پاسخ وب در PHP-FPM ادامه نمی‌یابد؛ job در صف worker و child مستقل CLI اجرا می‌شود',
+    'محدودیت زمانی هاست، بسته‌شدن مرورگر و خواب گوشی عملیات را وسط راه قطع نمی‌کند',
+    'checkpoint پس از هر محصول حفظ می‌شود و شروع دوباره با همان محدوده و فیلتر، کارهای موفق را تکرار نمی‌کند',
+    'lock مشترک از اجرای همزمان اصلاح وبی و worker جلوگیری می‌کند'
+  ]},
   {v:'10.296', t:'💹 اعمال قطعی ضریب غرفه‌های غیرپیش‌فرض در همه مسیرها', items:[
     'برای محصول missing نیز shop_expect اختصاصی هر غرفه ساخته می‌شود و دیگر به انتظار عمومی باسلام برنمی‌گردد',
     'ارسال عادی، چندغرفه‌ای و تصحیح مغایرت همگی قیمت خام canonical محصول را به محاسبهٔ پروفایل و غرفه می‌دهند',
