@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.313';
+const APP_VERSION = '10.314';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1222,7 +1222,7 @@ function s4WorkerRunMatrixFix(array $payload): array {
     $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'min_matrix_generated_at'=>max(0,(int)($payload['min_matrix_generated_at']??0)),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
-    try{matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
+    try{matrixFixClearStaleStop((float)($payload['requested_at']??0));matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
     catch(Throwable $e){$st=matrixFixProgressRead();matrixFixProgress(['running'=>false,'done'=>true,'stale'=>true,'error'=>$e->getMessage(),'checkpoint'=>is_array($st['checkpoint']??null)?$st['checkpoint']:null,'log_add'=>['❌ خطای worker اصلاح: '.$e->getMessage().' — checkpoint حفظ شد']]);return ['ok'=>false,'error'=>$e->getMessage()];}
     finally{@flock($fp,LOCK_UN);@fclose($fp);}
 }
@@ -28991,7 +28991,7 @@ function matrixFixProgress(array $patch): void {
     }
     $cur = array_merge($cur, $patch);
     if (!empty($patch['running']) && empty($patch['done'])) {
-        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok'] as $k) unset($cur[$k]);
+        foreach (['stale', 'stopped', 'cancelled', 'stalled', 'partial', 'incomplete', 'error', 'result_ok', 'stop_requested'] as $k) unset($cur[$k]);
     }
     $cur['log'] = $log;
     $cur['ts'] = time();
@@ -29024,6 +29024,14 @@ function matrixFixStopRequested(): bool {
 
 function matrixFixStopClear(): void {
     @unlink(SYNC_MATRIX_FIX_STOP_FILE);
+}
+/** Stop باقی‌مانده از اجرای قبلی نباید job تازهٔ صف را فوراً متوقف کند؛ اما
+ * stopی که پس از ثبت همین job نوشته شده است درخواست واقعی کاربر است. */
+function matrixFixClearStaleStop(float $requestedAt): void {
+    if (!is_file(SYNC_MATRIX_FIX_STOP_FILE)) return;
+    $d=json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_STOP_FILE),true);
+    $stopAt=is_array($d)?(float)($d['at']??0):0.0;
+    if($requestedAt>0&&($stopAt<=0||$stopAt<$requestedAt))@unlink(SYNC_MATRIX_FIX_STOP_FILE);
 }
 
 /** به‌روزرسانی یک ردیف در فایل نتیجهٔ ماتریس (با کلید bare) */
@@ -30505,7 +30513,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     }
     /* state قدیمیِ running نباید دکمهٔ ساخت را برای همیشه قفل کند. فقط وقتی
        heartbeat کهنه و lock واقعاً آزاد است، آن را stopped می‌کنیم. */
-    if(!empty($fix['running'])&&(time()-(int)($fix['ts']??$fix['started_at']??0))>180){
+    if(!empty($fix['running'])&&empty($fix['queued'])&&(time()-(int)($fix['ts']??$fix['started_at']??0))>180){
         $ff=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$free=$ff&&@flock($ff,LOCK_EX|LOCK_NB);
         if($free){@flock($ff,LOCK_UN);matrixFixProgress(['running'=>false,'done'=>true,'stopped'=>true,'stale'=>true,'phase'=>'stopped','finished_at'=>time(),'log_add'=>['⏹ state قدیمی اصلاح آزاد شد']]);$fix=matrixFixProgressRead();}
         if($ff)@fclose($ff);
@@ -30749,7 +30757,7 @@ if (isset($_GET['sync_matrix_fix_status']) || (($_POST['action'] ?? '') === 'syn
    ops_feedback کل صف/لاگ‌های بزرگ را برنمی‌گرداند و روی هاست 500 نمی‌شود. */
 if(isset($_GET['sync_matrix_fix_feedback'])||(($_POST['action']??'')==='sync_matrix_fix_feedback')){
     header('Content-Type: application/json; charset=UTF-8');
-    $p=matrixFixProgressRead();$logs=array_values((array)($p['log']??[]));$codes=[];$photoRequired=0;$rateN=0;
+    $p=matrixFixProgressRead();$runAt=(int)($p['started_at']??0);$logs=array_values(array_filter((array)($p['log']??[]),static fn($r)=>$runAt<=0||(int)($r['t']??0)>=$runAt));$codes=[];$photoRequired=0;$rateN=0;
     foreach($logs as $row){$m=(string)(is_array($row)?($row['m']??''):$row);
         if(preg_match_all('~HTTP\s*(\d{3})~i',$m,$mm))foreach($mm[1] as $c)$codes[$c]=($codes[$c]??0)+1;
         if(stripos($m,'photo')!==false||mb_stripos($m,'شناسه تصویر')!==false)$photoRequired++;
@@ -30776,6 +30784,7 @@ if(isset($_GET['sync_matrix_fix_feedback'])||(($_POST['action']??'')==='sync_mat
 if (isset($_GET['sync_matrix_fix_stop']) || (($_POST['action'] ?? '') === 'sync_matrix_fix_stop')) {
     header('Content-Type: application/json; charset=UTF-8');
     @file_put_contents(SYNC_MATRIX_FIX_STOP_FILE, json_encode(['at' => microtime(true),'by'=>'user']), LOCK_EX);
+    if(function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q){$now=time();foreach($q['entries'] as &$e){if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'||!in_array((string)($e['status']??''),['pending','running'],true))continue;$e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['cancel_requested_at']=$now;$e['error']='stopped_by_user';}unset($e);return ['ok'=>true];});
     $fixStopState=matrixFixProgressRead();
     matrixFixProgress(['running'=>false,'done'=>true,'stopped'=>true,'cancelled'=>true,'stop_requested'=>true,
         'phase'=>'stopped','finished_at'=>time(),'log_add'=>['⏹ اصلاح فوراً توسط کاربر متوقف شد']]);
@@ -42062,6 +42071,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.313', 'ورودی 10.313 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "313'") !== false
       && version_compare(APP_VERSION, '10.' . '313', '>='));
+    $add('10.314', 'اصلاح صف‌شده هنگام انتظار برای ماتریس stale و متوقف نمی‌شود',
+         strpos($selfSrc, "!empty(\$fix['running'])&&empty(\$fix['queued'])") !== false
+      && strpos($selfSrc, "function matrixFixClear" . "StaleStop") !== false
+      && strpos($selfSrc, "(string)(\$e['type']??'')!=='matrix_" . "fix'") !== false);
+    $add('10.314', 'ورودی 10.314 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "314'") !== false
+      && version_compare(APP_VERSION, '10.' . '314', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73287,6 +73303,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.314', t:'🧵 جلوگیری از توقف اصلاح باسلام در زمان انتظار برای ساخت جدول', items:[
+    'فیدبک endpoint نشان داد job اصلاح که پشت ساخت ماتریس در صف بود، پس از ۱۸۰ ثانیه به‌اشتباه stale و stopped می‌شد.',
+    'وضعیت queued دیگر به‌عنوان پردازهٔ مرده پاک نمی‌شود؛ stop قدیمی فقط اگر قبل از ثبت job باشد مصرف می‌شود و stop واقعی کاربر job صف را نیز لغو می‌کند.',
+    'فیدبک متمرکز اکنون کدهای HTTP را فقط از اجرای جاری می‌شمارد تا خطاهای تاریخی 422 نتیجهٔ تازه را آلوده نکنند.'
+  ]},
   {v:'10.313', t:'♻️ رفع شکست کاذب برش‌های ساخت جدول پیش از اصلاح', items:[
     'فیدبک worker نشان داد برش سالم و checkpoint‌دار ماتریس به‌علت نداشتن ok نهایی با exit 1 اشتباه گرفته و پس از سه بار failed می‌شد.',
     'yielded و resume_needed اکنون پایان سالم برش هستند؛ parent بدون بازسازی و شکست کاذب از checkpoint به برش بعد می‌رود.'
