@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.317';
+const APP_VERSION = '10.318';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -42102,6 +42102,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.317', 'ورودی 10.317 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "317'") !== false
       && version_compare(APP_VERSION, '10.' . '317', '>='));
+    $add('10.318', 'دکمه‌ها و هدر مودال داخل viewport و بدنه اسکرولی می‌مانند',
+         strpos($selfSrc, ".bsl-modal-body{flex:1 1 auto;min-height:0;max-height:none!important") !== false
+      && strpos($selfSrc, "max-height:calc(100dvh - 20px)") !== false
+      && strpos($selfSrc, "padding-bottom:max(8px,env(safe-area-inset-bottom))") !== false);
+    $add('10.318', 'ورودی 10.318 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "318'") !== false
+      && version_compare(APP_VERSION, '10.' . '318', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -63497,6 +63504,12 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .bsl-modal-head h2{font-size:13px}
 }.bsl-modal-body{overflow:auto;flex:1;padding:8px}.bsl-modal-table{width:100%;border-collapse:collapse;font-size:11px}.bsl-modal-table th{background:#1e293b;color:#67e8f9;padding:8px;text-align:center;font-size:11px;border:1px solid #334155;white-space:nowrap}
 .bsl-modal-table td{padding:6px 8px;border:1px solid #1e293b;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bsl-modal-table td.td-name{max-width:none;white-space:normal;overflow:visible;line-height:1.4;font-size:12px;direction:rtl;unicode-bidi:plaintext}.bsl-modal-table tr:hover td{background:#1e293b80}.bsl-modal-table .td-id{color:#94a3b8;font-family:monospace;text-align:center}.bsl-modal-table .td-price{color:#fbbf24;font-family:monospace;text-align:center;direction:ltr}.bsl-modal-table .td-stock{color:#22c55e;text-align:center}.bsl-modal-table .td-status{text-align:center}.bsl-modal-table .td-img{width:40px;height:40px;object-fit:cover;border-radius:4px}.bsl-modal-pager{padding:8px 16px;background:#1e293b;border-top:1px solid #334155;display:flex;align-items:center;justify-content:center;gap:8px}
+/* v10.318: هدر و دکمه‌های مودال همیشه داخل viewport بمانند؛ فقط بدنه اسکرول شود. */
+.bsl-modal{max-height:calc(100vh - 20px);max-height:calc(100dvh - 20px);min-height:0}
+.bsl-modal-head{flex:0 0 auto;position:relative;z-index:3}
+.bsl-modal-body{flex:1 1 auto;min-height:0;max-height:none!important;overflow-y:auto!important;overscroll-behavior:contain}
+.bsl-modal-pager{flex:0 0 auto;position:relative;z-index:3;flex-wrap:wrap;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+@media(max-height:700px),(max-width:620px){.bsl-modal-overlay{padding:4px;align-items:center}.bsl-modal{max-height:calc(100vh - 8px);max-height:calc(100dvh - 8px);border-radius:10px}.bsl-modal-head{padding:7px 9px}.bsl-modal-pager{padding:6px 8px;padding-bottom:max(6px,env(safe-area-inset-bottom))}}
 .bsl-tabs{display:flex;gap:2px;padding:0 12px;background:#1e293b;border-bottom:1px solid #334155;flex-wrap:wrap;direction:rtl}.bsl-tab{padding:6px 12px;font-size:11px;color:#94a3b8;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;white-space:nowrap;border-radius:6px 6px 0 0}.bsl-tab:hover{color:#e2e8f0;background:#334155}.bsl-tab.active{color:#67e8f9;border-bottom-color:#67e8f9;background:#0f172a;font-weight:700}.bsl-tab .tab-count{font-size:9px;color:#64748b;margin-right:2px}.hamburger-btn{position:fixed;top:10px;left:10px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}.hamburger-btn:hover{background:#334155}
 /* v9.61: دکمهٔ «تمام‌عرض کردن منو» کنار همبرگر — پنل تنظیمات را به‌جای
    ۴۰۰ پیکسل، تمام عرض صفحه می‌کند تا همهٔ محتوا/بخش‌ها در یک نگاه باز شوند. */
@@ -71401,7 +71414,7 @@ function resultProductOpen(encodedKey){
   const known=['title','price','link','image','images','shortDesc','short_desc','brief','longDesc','long_desc','description','key'];let fields='';
   Object.keys(p).filter(x=>!known.includes(x)&&p[x]!==''&&p[x]!=null).forEach(x=>{let v=p[x];if(typeof v==='object')v=JSON.stringify(v);fields+='<div style="padding:7px;border:1px solid #334155;border-radius:7px"><b style="color:#93c5fd">'+esc(x)+'</b><div style="margin-top:3px;white-space:pre-wrap;word-break:break-word">'+esc(String(v))+'</div></div>';});
   const gallery=imgs.map(u=>'<img src="?image_proxy='+encodeURIComponent(u)+'" loading="lazy" style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #475569">').join('');
-  m.innerHTML='<article style="width:min(1050px,97vw);max-height:94vh;overflow:auto;background:#0f172a;border:1px solid #475569;border-radius:14px;color:#e2e8f0;box-shadow:0 20px 70px #000;padding:14px">'
+  m.innerHTML='<article style="width:min(1050px,97vw);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;background:#0f172a;border:1px solid #475569;border-radius:14px;color:#e2e8f0;box-shadow:0 20px 70px #000;padding:14px">'
     +'<header style="display:flex;justify-content:space-between;gap:10px;align-items:start"><div><div style="font-size:16px;font-weight:900">'+esc(getFinalTitle(p.title)||'بدون عنوان')+'</div><div style="color:#86efac;font-size:18px;font-weight:900;margin-top:5px">'+resultMoney(q.profilePrice)+'</div></div><button class="btn btn-gray" onclick="resultProductClose()">✕</button></header>'
     +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:12px"><div>'+(image?'<img src="?image_proxy='+encodeURIComponent(image)+'" style="width:100%;max-height:320px;object-fit:contain;background:#fff;border-radius:10px">':'<div style="padding:60px 10px;text-align:center;background:#1e293b;border-radius:10px">بدون تصویر</div>')+'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+gallery+'</div></div>'
     +'<div><div style="background:#111827;border:1px solid #334155;border-radius:10px;overflow:auto">'+pricing+'</div>'+(short?'<h4 style="color:#fbbf24">توضیح کوتاه</h4><p style="line-height:1.9">'+esc(short)+'</p>':'')+(long?'<h4 style="color:#fbbf24">توضیحات محصول</h4><p style="line-height:1.9;white-space:pre-wrap">'+esc(long)+'</p>':'')+(p.link?'<a href="'+esc(p.link)+'" target="_blank" class="btn btn-blue" onclick="event.stopPropagation()">مشاهده صفحه مبدأ</a>':'')+'</div></div>'
@@ -73327,6 +73340,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.318', t:'📐 نگه‌داشتن دکمه‌های مودال داخل کادر نمایش', items:[
+    'ارتفاع مودال بر اساس viewport واقعی موبایل محدود شد و فقط بخش محتوای میانی اسکرول می‌شود.',
+    'هدر و نوار دکمه‌های پایین دیگر همراه محتوای بلند از کادر خارج نمی‌شوند و safe-area پایین گوشی نیز رعایت می‌شود.',
+    'مودال تفصیلی مغایرت و مودال کامل محصول نیز min-height و overscroll صحیح گرفتند.'
+  ]},
   {v:'10.317', t:'👁 قرارگیری دکمهٔ اصلاح هر ردیف در بخش همیشه قابل‌دید جدول', items:[
     'ستون دکمه از انتهای افقی جدول به کنار شمارهٔ ردیف منتقل شد تا بدون اسکرول افقی دیده شود.',
     'دکمه پهن‌تر و برجسته‌تر شده و همچنان مودال تفصیلی همان ردیف را باز می‌کند.'
@@ -82448,7 +82466,7 @@ function smOpenRowDiscrepancy(index){
   shops.forEach(sh=>{const c=r.shops&&(r.shops[sh.vendor_id]||r.shops[String(sh.vendor_id)]),exp=Number(c&&c.expect||r.bsl_expect)||0;destinations+=smRowDetailCard('🏪 '+esc(sh.name||('#'+sh.vendor_id)),line('شناسه غرفه',smFa(sh.vendor_id||0))+line('شناسه محصول',c&&c.id?smFa(c.id):'ناموجود')+line('قیمت مورد انتظار',money(exp))+line('قیمت واقعی',c?money(c.price):'ناموجود','#67e8f9')+line('اختلاف',c?smRowDelta(c.price,exp):'—')+line('موجودی',c&&c.stock!=null?smFa(c.stock):'—')+line('وضعیت',c&&c.status!=null?smFa(c.status):'—')+line('تکراری',c&&c.dup?'بله':'خیر'),c?'#0891b2':'#b91c1c');});
   const flags=(r.flags||[]).length?'<div style="color:#c4b5fd">'+(r.flags||[]).map(esc).join(' · ')+'</div>':'<div style="color:#94a3b8">بدون پرچم اضافی</div>';
   const ops='<ol style="margin:0;padding-right:22px;color:#fde68a">'+operations.map(x=>'<li style="padding:3px 0">'+esc(x)+'</li>').join('')+'</ol>';
-  modal.innerHTML='<div style="width:min(1050px,98vw);max-height:94vh;background:#0f172a;border:1px solid #64748b;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><header style="padding:11px 14px;background:linear-gradient(90deg,#312e81,#1e293b);display:flex;justify-content:space-between;align-items:center;gap:10px"><div><b style="color:#fff">🔧 جزئیات تفصیلی مغایرت</b><div style="font-size:10px;color:#c7d2fe;margin-top:3px">'+esc(r.title||r.bare||'—')+'</div></div><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">✕</button></header><div style="padding:11px;overflow:auto;display:grid;gap:10px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+smRowDetailCard('📋 مشخصات و مبنای مقایسه',overview,'#6366f1')+smRowDetailCard('🧭 اقدام اصلاحی مورد انتظار',ops,'#d97706')+'</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+destinations+'</div>'+smRowDetailCard('🏷 پرچم‌ها و تشخیص تکمیلی',flags,'#7c3aed')+'<div style="font-size:10px;color:#94a3b8;padding:2px 3px">این جزئیات از همان snapshot و ضرایب فعلی جدول ساخته شده است. اجرای دکمهٔ اصلی «اصلاح مغایرت‌ها» فقط روی فیلترها و مقصدهای انتخاب‌شده انجام می‌شود.</div></div></div>';modal.style.display='flex';
+  modal.innerHTML='<div style="width:min(1050px,98vw);max-height:calc(100dvh - 20px);min-height:0;background:#0f172a;border:1px solid #64748b;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><header style="padding:11px 14px;background:linear-gradient(90deg,#312e81,#1e293b);display:flex;flex:0 0 auto;justify-content:space-between;align-items:center;gap:10px"><div><b style="color:#fff">🔧 جزئیات تفصیلی مغایرت</b><div style="font-size:10px;color:#c7d2fe;margin-top:3px">'+esc(r.title||r.bare||'—')+'</div></div><button class="btn btn-gray" type="button" onclick="document.getElementById(\'smRowDiscrepancyModal\').style.display=\'none\'">✕</button></header><div style="padding:11px;overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain;display:grid;gap:10px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+smRowDetailCard('📋 مشخصات و مبنای مقایسه',overview,'#6366f1')+smRowDetailCard('🧭 اقدام اصلاحی مورد انتظار',ops,'#d97706')+'</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">'+destinations+'</div>'+smRowDetailCard('🏷 پرچم‌ها و تشخیص تکمیلی',flags,'#7c3aed')+'<div style="font-size:10px;color:#94a3b8;padding:2px 3px">این جزئیات از همان snapshot و ضرایب فعلی جدول ساخته شده است. اجرای دکمهٔ اصلی «اصلاح مغایرت‌ها» فقط روی فیلترها و مقصدهای انتخاب‌شده انجام می‌شود.</div></div></div>';modal.style.display='flex';
 }
 function syncMatrixLoad(page, silent){
   page = page || 1; window._smPage = page;
