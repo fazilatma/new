@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.309';
+const APP_VERSION = '10.310';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29735,7 +29735,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN, 'price_n' => $priceN,
                     'log_add' => ['  ✅ WC #' . (int)$job['id'] . ' · ' . number_format($to) . ' (' . ($res['via'] ?? '') . ')'],
-                    'live_add' => ['ok' => true, 'kind' => 'price_woo', 'bare' => $bare, 'title' => $title, 'to' => $to, 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => 'price_woo', 'to' => $to, 't' => time()],
                 ]);
             } else {
                 $failN++;
@@ -29744,7 +29744,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN,
                     'log_add' => ['  ❌ WC · ' . $title . ' — ' . $err],
-                    'live_add' => ['ok' => false, 'kind' => 'price_woo', 'bare' => $bare, 'error' => $err, 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'price_woo', 'error' => $err, 't' => time()],
                 ]);
             }
         }
@@ -29778,7 +29778,7 @@ function matrixFixRun(array $opts = []): array {
                     matrixFixProgress([
                         'ok_n' => $okN, 'fail_n' => $failN, 'price_n' => $priceN,
                         'log_add' => ['  ✅ ' . $sname . ' #' . (int)$job['id'] . ' · ' . number_format($to)],
-                        'live_add' => ['ok' => true, 'kind' => 'price_bsl', 'bare' => $bare, 'shop' => $sname, 'to' => $to, 't' => time()],
+                        'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => 'price_bsl', 'shop' => $sname, 'to' => $to, 't' => time()],
                     ]);
                 } else {
                     $failN++;
@@ -29787,7 +29787,7 @@ function matrixFixRun(array $opts = []): array {
                     matrixFixProgress([
                         'ok_n' => $okN, 'fail_n' => $failN,
                         'log_add' => ['  ❌ ' . $sname . ' · ' . $err],
-                        'live_add' => ['ok' => false, 'kind' => 'price_bsl', 'error' => $err, 't' => time()],
+                        'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'price_bsl', 'error' => $err, 't' => time()],
                     ]);
                 }
             }
@@ -29819,7 +29819,7 @@ function matrixFixRun(array $opts = []): array {
                     matrixFixProgress([
                         'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN,
                         'log_add' => ['  ✅ ارسال WC' . ($id ? (' #' . $id) : '') . ' · ' . ($res['via'] ?? '')],
-                        'live_add' => ['ok' => true, 'kind' => 'send_woo', 'bare' => $bare, 'id' => $id, 't' => time()],
+                        'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => 'send_woo', 'id' => $id, 't' => time()],
                     ]);
                 } else {
                     $failN++;
@@ -29828,7 +29828,7 @@ function matrixFixRun(array $opts = []): array {
                     matrixFixProgress([
                         'ok_n' => $okN, 'fail_n' => $failN,
                         'log_add' => ['  ❌ ارسال WC — ' . $err],
-                        'live_add' => ['ok' => false, 'kind' => 'send_woo', 'error' => $err, 't' => time()],
+                        'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'send_woo', 'error' => $err, 't' => time()],
                     ]);
                 }
             }
@@ -29869,7 +29869,7 @@ function matrixFixRun(array $opts = []): array {
                     matrixFixProgress([
                         'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN,
                         'log_add' => ['  ✅ ارسال ' . $sname . ($id ? (' #' . $id) : '') . ' · ' . ($res['action'] ?? '')],
-                        'live_add' => ['ok' => true, 'kind' => 'send_bsl', 'bare' => $bare, 'shop' => $sname, 'id' => $id, 't' => time()],
+                        'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => 'send_bsl', 'shop' => $sname, 'id' => $id, 't' => time()],
                     ]);
                 } else {
                     $err = (string)($res['error'] ?? 'خطا');
@@ -29883,7 +29883,7 @@ function matrixFixRun(array $opts = []): array {
                         matrixFixProgress([
                             'ok_n' => $okN, 'fail_n' => $failN,
                             'log_add' => ['  ❌ ارسال ' . $sname . ' — ' . $err . (!empty($res['error_detail'])?(' · '.mb_substr((string)$res['error_detail'],0,180)):'')],
-                            'live_add' => ['ok' => false, 'kind' => 'send_bsl', 'error' => $err, 't' => time()],
+                            'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'send_bsl', 'error' => $err, 't' => time()],
                         ]);
                     }
                 }
@@ -29938,7 +29938,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN, 'del_n' => $delN,
                     'log_add' => ['  ✅ حذف/زباله‌دان WC #' . (int)$job['id']],
-                    'live_add' => ['ok' => true, 'kind' => $kind, 'id' => (int)$job['id'], 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => $kind, 'id' => (int)$job['id'], 't' => time()],
                 ]);
             } else {
                 $failN++;
@@ -29947,7 +29947,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN,
                     'log_add' => ['  ❌ حذف WC — ' . $err],
-                    'live_add' => ['ok' => false, 'kind' => 'del_woo', 'error' => $err, 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'del_woo', 'error' => $err, 't' => time()],
                 ]);
             }
         }
@@ -29997,7 +29997,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN, 'del_n' => $delN,
                     'log_add' => ['  ✅ بایگانی ' . $sname . ' #' . (int)$job['id']],
-                    'live_add' => ['ok' => true, 'kind' => $kind, 'shop' => $sname, 'id' => (int)$job['id'], 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => true, 'kind' => $kind, 'shop' => $sname, 'id' => (int)$job['id'], 't' => time()],
                 ]);
             } else {
                 $failN++;
@@ -30006,7 +30006,7 @@ function matrixFixRun(array $opts = []): array {
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN,
                     'log_add' => ['  ❌ بایگانی ' . $sname . ' — ' . $err],
-                    'live_add' => ['ok' => false, 'kind' => 'del_bsl', 'error' => $err, 't' => time()],
+                    'live_add' => ['title' => $title, 'bare' => $bare, 'ok' => false, 'kind' => 'del_bsl', 'error' => $err, 't' => time()],
                 ]);
             }
         }
@@ -41961,6 +41961,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.309', 'ورودی 10.309 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "309'") !== false
       && version_compare(APP_VERSION, '10.' . '309', '>='));
+    $add('10.310', 'کارت‌های مربعی اصلاح بالای لاگ و در دید مستقیم هستند',
+         (static function()use($selfSrc){$cards=strpos($selfSrc,'id="smFixLive"');$log=strpos($selfSrc,'id="smJobLog"');return $cards!==false&&$log!==false&&$cards<$log;})()
+      && strpos($selfSrc, 'aspect-ratio:1/1') !== false
+      && strpos($selfSrc, "onclick=\"smOpenFixCounter") !== false
+      && (static function()use($selfSrc){$a="'live_"."add' => [";$b="'live_"."add' => ['title' => \$title, 'bare' => \$bare";return substr_count($selfSrc,$a)===substr_count($selfSrc,$b);})());
+    $add('10.310', 'ورودی 10.310 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "310'") !== false
+      && version_compare(APP_VERSION, '10.' . '310', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65724,8 +65732,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div style="height:8px;background:#1e293b;border-radius:99px;overflow:hidden">
 <div id="smJobFill" style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#2563eb);transition:width .3s"></div>
 </div>
+<!-- شمارنده‌های اصلاح باید بالای لاگ و همیشه در دید باشند؛ قبلاً زیر لاگ بلند گم می‌شدند. -->
+<div id="smFixLive" style="display:none;margin:10px 0 8px;position:relative;z-index:2"></div>
 <div id="smJobLog" style="margin-top:6px;max-height:220px;overflow:auto;font-size:10.5px;color:#e2e8f0;line-height:1.7;font-family:ui-monospace,Tahoma,sans-serif;direction:rtl"></div>
-<div id="smFixLive" style="display:none;margin-top:8px"></div>
 </div>
 <div id="smFixBanner" style="display:none;margin-bottom:8px;padding:8px 10px;background:linear-gradient(90deg,#14532d33,#1e3a8a33);border:1px solid #22c55e55;border-radius:8px;font-size:11px;color:#bbf7d0"></div>
 <details id="smHelpDetails" style="margin-bottom:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 9px">
@@ -73185,6 +73194,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.310', t:'🔢 بازگرداندن کارت‌های مربعی اصلاح مغایرت به محل قابل‌دید', items:[
+    'کارت‌های کل، پردازش‌شده، موفق، ناموفق، قیمت، ارسال و حذف اکنون بالای لاگ زنده قرار دارند و زیر لاگ بلند پنهان نمی‌شوند.',
+    'همهٔ کارت‌ها همچنان مربعی و کلیک‌پذیر هستند و فهرست محصولات مربوط به همان شمارنده را باز می‌کنند.'
+  ]},
   {v:'10.309', t:'🔎 نمایش منبع واقعی HTTP 429 در اصلاح مغایرت', items:[
     'در اجرای زندهٔ v10.308 یک پاسخ واقعی HTTP 429 در محصول ۵۹ ثبت شد و worker دقیقاً ۳۰ ثانیه صبر کرد و از checkpoint ادامه داد.',
     'اطلاعات connection mode، Server/Via و Retry-After اکنون از wrapper ارسال نیز عبور می‌کند و در لاگ اصلاح گم نمی‌شود.'
