@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.316';
+const APP_VERSION = '10.317';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -42096,6 +42096,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.316', 'ورودی 10.316 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "316'") !== false
       && version_compare(APP_VERSION, '10.' . '316', '>='));
+    $add('10.317', 'دکمهٔ اصلاح هر ردیف کنار شماره و در ابتدای قابل‌دید جدول است',
+         strpos($selfSrc, "const colKeys=['n','action','title'") !== false
+      && strpos($selfSrc, "if(k==='action')return 132") !== false);
+    $add('10.317', 'ورودی 10.317 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "317'") !== false
+      && version_compare(APP_VERSION, '10.' . '317', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73321,6 +73327,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.317', t:'👁 قرارگیری دکمهٔ اصلاح هر ردیف در بخش همیشه قابل‌دید جدول', items:[
+    'ستون دکمه از انتهای افقی جدول به کنار شمارهٔ ردیف منتقل شد تا بدون اسکرول افقی دیده شود.',
+    'دکمه پهن‌تر و برجسته‌تر شده و همچنان مودال تفصیلی همان ردیف را باز می‌کند.'
+  ]},
   {v:'10.316', t:'🔧 مودال تفصیلی مغایرت برای تک‌تک ردیف‌های جدول', items:[
     'ستون «اصلاح مغایرت» و دکمهٔ مستقل به همهٔ ردیف‌های محصول اضافه شد.',
     'مودال هر ردیف وضعیت تطبیق، قیمت مبدأ و پروفایل، انتظار و مقدار واقعی ووکامرس و تک‌تک غرفه‌ها، اختلاف مبلغ و درصد، شناسه‌ها، موجودی، تکراری‌ها و اقدام اصلاحی مورد انتظار را نشان می‌دهد.',
@@ -82091,7 +82101,7 @@ function smResetFilters(){
   try{localStorage.removeItem('s4_matrix_filters')}catch(e){}syncMatrixLoad(1);
 }
 smRenderFilterValues('');smRenderFilterRules();
-function smDefaultColWidth(k){if(k==='n')return 52;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
+function smDefaultColWidth(k){if(k==='n')return 52;if(k==='action')return 132;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
 function smTh(label,key,sortable){
   const active=window._smSort===key, arrow=active?(window._smSortDir==='desc'?' ▼':' ▲'):'';
   return '<th data-col="'+esc(key)+'" class="'+(sortable?'sm-sortable':'')+'" '+(sortable?'onclick="smSort(\''+esc(key)+'\')" title="برای مرتب‌سازی کلیک کنید"':'')+' style="padding:8px;text-align:right;border-bottom:1px solid #475569">'+esc(label)+arrow+'<span class="sm-col-resizer" title="برای تغییر عرض بکشید" onclick="event.stopPropagation()" onpointerdown="smResizeStart(event,this)"></span></th>';
@@ -82476,8 +82486,8 @@ function syncMatrixLoad(page, silent){
     if(d.filter_options){window._smFilterData=d.filter_options;smRenderFilterValues(($('smFilterValue')||{}).value||'');smRenderFilterRules();}
     const shops = d.shops||[],resultDests=Array.isArray(d.selected_destinations)?d.selected_destinations:[],includeWoo=!resultDests.length||resultDests.includes('woo');
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
-    const colKeys=['n','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
-    let h = smTh('#','n',false)+smTh('عنوان تطبیقی (پروفایل یا مقصد)','title',true)+smTh('پروفایل','profile',true)
+    const colKeys=['n','action','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
+    let h = smTh('#','n',false)+smTh('اصلاح مغایرت','action',false)+smTh('عنوان تطبیقی (پروفایل یا مقصد)','title',true)+smTh('پروفایل','profile',true)
       +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true);
     if(includeWoo)h+=smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
     shops.forEach(s=>{
@@ -82485,7 +82495,6 @@ function syncMatrixLoad(page, silent){
       h += smTh('🏪 '+(s.name||('#'+s.vendor_id)),sk,true);
     });
     colKeys.push('status');h += smTh('وضعیت','status',true);
-    colKeys.push('action');h += smTh('اصلاح مغایرت','action',false);
     if(head) head.innerHTML = h;
     smRenderCols(colKeys);
 
@@ -82538,6 +82547,7 @@ function syncMatrixLoad(page, silent){
         if((r.profile_duplicate_hits||0)>0) flags+=' <span style="color:#e9d5ff;font-size:10px">'+smFa((r.profile_duplicate_hits||0)+1)+' عنوان دقیقاً یکسان در پروفایل</span>';
         let tr = '<tr>';
         tr += smCell(smFa(start+i+1),'na');
+        tr += smCell('<button type="button" class="btn btn-purple" onclick="smOpenRowDiscrepancy('+i+')" style="font-size:10px;padding:7px 10px;white-space:nowrap;width:100%;font-weight:900;box-shadow:0 3px 10px #4c1d9588">🔧 اصلاح مغایرت</button>','na');
         const onlyDest=r.status==='only_dest'||!(r.profile_hits||0);
         const originBadge=onlyDest?'<div style="margin-top:3px"><span style="background:#475569;color:#f8fafc;border-radius:4px;padding:1px 6px;font-size:9px">عنوان از مقصد؛ در پروفایل ذخیره‌شده نیست</span></div>':'';
         tr += smCell('<div style="font-weight:700;max-width:220px">'+esc(r.title||r.bare||'')+'</div>'+originBadge+'<div style="font-size:9px;opacity:.7;direction:ltr">'+esc(r.bare||'')+'</div>','na');
@@ -82559,7 +82569,6 @@ function syncMatrixLoad(page, silent){
           }
         });
         tr += smCell(st[0]+flags, st[1]);
-        tr += smCell('<button type="button" class="btn btn-purple" onclick="smOpenRowDiscrepancy('+i+')" style="font-size:10px;padding:6px 9px;white-space:nowrap">🔧 اصلاح مغایرت</button>','na');
         tr += '</tr>';
         return tr;
       }).join('');
