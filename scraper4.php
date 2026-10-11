@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.292';
+const APP_VERSION = '10.293';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -41421,6 +41421,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.292', 'ورودی 10.292 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "292'") !== false
       && version_compare(APP_VERSION, '10.' . '292', '>='));
+    $add('10.293', 'خانهٔ مقصد موجود/ناموجود و قیمت را صریح نمایش می‌دهد',
+         strpos($selfSrc, "function smDestinationCell(actual, expected, id, extra)") !== false
+      && strpos($selfSrc, "قیمت: '+smMoney(actual)") !== false
+      && substr_count($selfSrc, "<b>ناموجود</b>','price_missing'") >= 2);
+    $add('10.293', 'رنگ خانهٔ مقصد جهت اختلاف قیمت را از هم جدا می‌کند',
+         strpos($selfSrc, "actual>expected?'price_high':'price_low'") !== false
+      && strpos($selfSrc, "price_high:'#3730a3'") !== false
+      && strpos($selfSrc, "price_low:'#9a5b08'") !== false
+      && strpos($selfSrc, "price_missing:'#991b1b'") !== false);
+    $add('10.293', 'ورودی 10.293 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "293'") !== false
+      && version_compare(APP_VERSION, '10.' . '293', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72645,6 +72657,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.293', t:'🎨 وضعیت و جهت قیمت روشن در خانه‌های مقصد ماتریس', items:[
+    'خانهٔ هر مقصد برای محصول پیدا‌شده عبارت موجود و قیمت را با برچسب صریح قیمت نمایش می‌دهد',
+    'قیمت مطابق انتظار سبز، بالاتر از انتظار آبی، پایین‌تر از انتظار نارنجی و محصول ناموجود قرمز نمایش داده می‌شود',
+    'خط تیرهٔ مبهم خانه‌های مقصد با وضعیت صریح ناموجود جایگزین شد'
+  ]},
   {v:'10.292', t:'♻️ بازقیمت‌گذاری خودکار ماتریس موجود با فرمول صحیح غرفه', items:[
     'نتیجهٔ ذخیره‌شدهٔ ماتریس با تشخیص نسخهٔ فرمول قیمت، بدون واکشی دوبارهٔ کاتالوگ مقصدها بازقیمت‌گذاری می‌شود',
     'پس از به‌روزرسانی صفحه، انتظار قیمت غرفه‌های غیرپیش‌فرض فوراً از تنظیمات پروفایل و همان غرفه محاسبه می‌شود'
@@ -81239,10 +81256,23 @@ function smMoney(n){
   try{ return toFa(n.toLocaleString('en-US')); }catch(e){ return String(n); }
 }
 function smToneBg(t){
-  return ({ok:'#14532d',warn:'#713f12',bad:'#7f1d1d',missing_dst:'#1e3a8a',extra:'#334155',no_src:'#3f3f46',na:'#0f172a'})[t]||'#0f172a';
+  return ({ok:'#14532d',price_high:'#3730a3',price_low:'#9a5b08',price_missing:'#991b1b',warn:'#713f12',bad:'#7f1d1d',missing_dst:'#1e3a8a',extra:'#334155',no_src:'#3f3f46',na:'#0f172a'})[t]||'#0f172a';
 }
 function smToneFg(t){
-  return ({ok:'#dcfce7',warn:'#fef3c7',bad:'#fee2e2',missing_dst:'#dbeafe',extra:'#f1f5f9',no_src:'#e2e8f0',na:'#f1f5f9'})[t]||'#e2e8f0';
+  return ({ok:'#dcfce7',price_high:'#e0e7ff',price_low:'#fff7d6',price_missing:'#fee2e2',warn:'#fef3c7',bad:'#fee2e2',missing_dst:'#dbeafe',extra:'#f1f5f9',no_src:'#e2e8f0',na:'#f1f5f9'})[t]||'#e2e8f0';
+}
+/* رنگ جهت قیمت فقط برای خانهٔ مقصد است: برابر سبز، بالاتر آبی، پایین‌تر نارنجی، ناموجود قرمز. */
+function smDestinationPriceTone(actual, expected, exists){
+  actual=parseInt(actual)||0; expected=parseInt(expected)||0;
+  if(!exists) return 'price_missing';
+  if(expected<=0||actual<=0) return 'no_src';
+  if(actual===expected) return 'ok';
+  return actual>expected?'price_high':'price_low';
+}
+function smDestinationCell(actual, expected, id, extra){
+  const tone=smDestinationPriceTone(actual,expected,true);
+  return smCell('<div style="font-weight:900">موجود</div><div>قیمت: '+smMoney(actual)+'</div>'
+    +'<div style="font-size:9px;opacity:.82">قیمت مورد انتظار: '+smMoney(expected)+(id?' · #'+smFa(id):'')+'</div>'+(extra||''),tone);
 }
 function smCell(html, tone){
   const bg=smToneBg(tone), fg=smToneFg(tone);
@@ -81718,16 +81748,16 @@ function syncMatrixLoad(page, silent){
         tr += smCell(smMoney(r.profile_price), r.profile_price>0?'na':'no_src');
         if(includeWoo){
           tr += smCell(smMoney(r.woo_expect), r.woo_expect>0?'na':'no_src');
-          if(r.woo)tr += smCell(smMoney(r.woo.price)+'<div style="font-size:9px;opacity:.75">#'+smFa(r.woo.id)+' · '+esc(r.woo.status||'')+'</div>', r.woo_tone||'na');
-          else tr += smCell(r.profile_hits?'نیست':'—', r.profile_hits?'missing_dst':'na');
+          if(r.woo)tr += smDestinationCell(r.woo.price,r.woo_expect,r.woo.id,'<div style="font-size:9px;opacity:.75">'+esc(r.woo.status||'')+'</div>');
+          else tr += smCell('<b>ناموجود</b>','price_missing');
         }
         shops.forEach(s=>{
           const cell = (r.shops&&r.shops[s.vendor_id]) ? r.shops[s.vendor_id] : null;
           if(cell){
             const exp = cell.expect||r.bsl_expect||0;
-            tr += smCell(smMoney(cell.price)+'<div style="font-size:9px;opacity:.75">انتظار '+smMoney(exp)+' · #'+smFa(cell.id)+'</div>'+(cell.dup?' <b>تکراری</b>':''), cell.tone||'na');
+            tr += smDestinationCell(cell.price,exp,cell.id,cell.dup?' <b>تکراری</b>':'');
           } else {
-            tr += smCell(r.profile_hits?'نیست':'—', r.profile_hits?'missing_dst':'na');
+            tr += smCell('<b>ناموجود</b>','price_missing');
           }
         });
         tr += smCell(st[0]+flags, st[1]);
