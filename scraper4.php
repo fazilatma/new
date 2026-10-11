@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.284';
+const APP_VERSION = '10.285';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -7485,6 +7485,51 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
     return $out;
 }
 
+/* v10.285: خطای اعتبارسنجی محتوای باسلام گاهی محل دقیق متن ممنوع را در
+   messages[].detected می‌دهد. همان قطعه از همان فیلد حذف و درخواست فقط یک بار
+   تکرار می‌شود؛ قیمت، موجودی و سایر جزئیات دست‌نخورده می‌مانند. */
+function bslValidationDetected(array $r): array {
+    $body=is_array($r['body']??null)?$r['body']:[];$msgs=[];
+    foreach([$body['messages']??null,$body['data']['messages']??null,$body['errors']??null] as $m)
+        if(is_array($m))foreach($m as $row)if(is_array($row))$msgs[]=$row;
+    $out=[];
+    foreach($msgs as $msg){
+        $fields=array_values(array_filter(array_map('strval',(array)($msg['fields']??[]))));
+        foreach((array)($msg['detected']??[]) as $det){if(!is_array($det))continue;$out[]=[
+            'fields'=>$fields,'signal'=>trim((string)($det['signal']??'')),
+            'snippet'=>trim((string)($det['snippet']??'')),'message'=>trim((string)($msg['message']??''))];}
+    }
+    return $out;
+}
+function bslRemoveForbiddenFragment(string $text,string $snippet,string $signal=''):string{
+    if($text==='')return $text;
+    /* برای اینکه تگ‌هایی مثل <em> وسط snippet مانع تطبیق نشوند، فقط در retry
+       ترمیمی متن را plain می‌کنیم؛ اطلاعات محصول می‌ماند و HTML تبلیغاتی حذف می‌شود. */
+    $text=html_entity_decode(strip_tags($text),ENT_QUOTES|ENT_HTML5,'UTF-8');
+    $clean=html_entity_decode(strip_tags($snippet),ENT_QUOTES|ENT_HTML5,'UTF-8');
+    $clean=trim($clean," \t\n\r\0\x0B….");
+    if(mb_strlen($clean,'UTF-8')>=8)$text=str_ireplace($clean,' ',$text);
+    /* اگر snippet با سه‌نقطه از وسط جمله شروع شده باشد، کل جملهٔ تبلیغاتی را
+       حذف می‌کنیم؛ این دقیقاً موارد پیج/کانال/شماره/لینک را پوشش می‌دهد. */
+    if($signal!==''||$clean!=='')$text=preg_replace('~[^.!؟\n]*(?:کانال\s*(?:تلگرام)?|تلگرام|پیج|صفحه\s*اینستا(?:گرام)?|اینستاگرام|واتساپ|شماره\s*(?:تماس|تلفن)|https?://|www\.)[^.!؟\n]*(?:[.!؟\n]|$)~iu',' ',$text)??$text;
+    $text=preg_replace('~[ \t]{2,}~u',' ',$text)??$text;
+    return trim($text);
+}
+function bslRepairValidationPayload(array $r,array $payload):array{
+    if((int)($r['code']??0)!==422)return ['changed'=>false,'payload'=>$payload,'fields'=>[]];
+    $changed=[];
+    foreach(bslValidationDetected($r) as $det){
+        $fields=$det['fields']?:['description','brief'];
+        foreach($fields as $field){
+            if(!array_key_exists($field,$payload)||!is_string($payload[$field]))continue;
+            $new=bslRemoveForbiddenFragment((string)$payload[$field],(string)$det['snippet'],(string)$det['signal']);
+            if($new===(string)$payload[$field])continue;
+            $payload[$field]=$new;$changed[$field]=true;
+        }
+    }
+    return ['changed'=>!empty($changed),'payload'=>$payload,'fields'=>array_keys($changed)];
+}
+
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
 $url=bslApiBase().ltrim($ep,'/');
 if($net===null)$net = function_exists('bslNetCfg') ? bslNetCfg() : ['indirect'=>false,'mode'=>'direct','fallback'=>false];
@@ -7535,6 +7580,16 @@ clearstatcache(true,BSL_STOP_FILE);
 }
 }
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
+/* v10.285: یک retry ترمیمی برای متن ممنوع؛ فقط درخواست محصول و فقط JSON. */
+if((int)($r['code']??0)===422&&!$mp&&is_array($d)&&stripos($ep,'product')!==false){
+    $_vr=bslRepairValidationPayload($r,$d);
+    if(!empty($_vr['changed'])){
+        $_first=$r;$r=bslReqMode($url,$tk,$m,$_vr['payload'],false,$net,$mode);
+        $r['validation_retried']=true;$r['validation_repaired_fields']=$_vr['fields'];
+        $r['validation_first_error']=bslErrText($_first);
+    }
+    unset($_vr,$_first);
+}
 $last=$r;
 if($r['code']>0)break;                 // پاسخ گرفته شد (موفق یا خطای منطقی)؛ دوباره نمی‌زنیم
 if($attempt<$maxRetries&&$r['error']!=='')sleep($retryDelay);   // خطای شبکه → تلاش دوباره
@@ -21946,6 +22001,16 @@ if (isset($_GET['manual_sync_status'])) {
     }
     echo json_encode(['ok' => true, 'progress' => $msSt], JSON_UNESCAPED_UNICODE);
     exit;
+}
+if(isset($_GET['sync_pipeline_clear_done'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    $lf=@fopen(SYNC_PIPELINE_LOCK_FILE,'c');$removed=0;$kept=0;
+    if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);echo json_encode(['ok'=>false,'error'=>'pipeline_lock_busy'],JSON_UNESCAPED_UNICODE);exit;}
+    try{$all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))$all=[];
+        foreach($all as $k=>$row){$done=!empty($row['done'])||in_array((string)($row['stage']??''),['done','error','stopped'],true);if($done){unset($all[$k]);$removed++;}else $kept++;}
+        $tmp=SYNC_PIPELINE_FILE.'.tmp.'.getmypid();if(@file_put_contents($tmp,json_encode($all,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)!==false)@rename($tmp,SYNC_PIPELINE_FILE);
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    echo json_encode(['ok'=>true,'removed'=>$removed,'kept_active'=>$kept],JSON_UNESCAPED_UNICODE);exit;
 }
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
@@ -41188,6 +41253,31 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.284', 'ورودی 10.284 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "284'") !== false
       && version_compare(APP_VERSION, '10.' . '284', '>='));
+    $add('10.285', 'پاک‌سازی pipeline فقط ردیف‌های terminal را حذف می‌کند',
+         strpos($selfSrc, "isset(\$_GET['sync_pipeline_clear_done'])") !== false
+      && strpos($selfSrc, "['done','error','stopped']") !== false
+      && strpos($selfSrc, 'kept_active') !== false);
+    $add('10.285', 'دکمهٔ پاک‌سازی همگام‌سازی‌های تمام‌شده در رابط وجود دارد',
+         strpos($selfSrc, 'function syncPipelineClearDone()') !== false
+      && strpos($selfSrc, '🧹 پاک‌سازی تمام‌شده‌ها') !== false);
+    $add('10.285', 'فیدبک همهٔ failed_details باسلام را گروه‌بندی و راه‌حل می‌دهد',
+         strpos($selfSrc, "isset(\$_GET['bsl_send_feedback'])") !== false
+      && strpos($selfSrc, "'errors_total'=>\$total") !== false
+      && strpos($selfSrc, "'forbidden_content_retry'=>true") !== false);
+    $add('10.285', 'detected باسلام قطعهٔ ممنوع و فیلد مربوط را استخراج می‌کند',
+         function_exists('bslValidationDetected')&&function_exists('bslRepairValidationPayload')
+      && strpos($selfSrc, "\$msg['detected']") !== false
+      && strpos($selfSrc, "\$msg['fields']") !== false);
+    $add('10.285', 'HTTP 422 محصول پس از حذف قطعهٔ ممنوع فقط یک بار retry می‌شود',
+         strpos($selfSrc, "bslRepairValidationPayload(\$r,\$d)") !== false
+      && strpos($selfSrc, "\$r['validation_retried']=true") !== false
+      && strpos($selfSrc, "stripos(\$ep,'product')!==false") !== false);
+    $add('10.285', 'گزارش خطا تلاش ترمیم و فیلدهای پاک‌شده را نگه می‌دارد',
+         strpos($selfSrc, "'repair_attempted'=>!empty(\$r['validation_retried'])") !== false
+      && strpos($selfSrc, "'repair_fields'=>array_values") !== false);
+    $add('10.285', 'ورودی 10.285 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "285'") !== false
+      && version_compare(APP_VERSION, '10.' . '285', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -45950,7 +46040,9 @@ function bslSendErrorInfo(array $r, string $step = '', string $endpoint = ''): a
     $kind = $code === 0 ? 'network' : ($code === 401 || $code === 403 ? 'auth' : ($code === 422 ? 'validation' : ($code === 429 ? 'rate_limit' : 'http')));
     return ['error' => $msg, 'error_code' => $code, 'error_step' => $step,
         'endpoint' => $endpoint, 'reason_kind' => $kind,
-        'error_detail' => mb_substr($raw !== '' ? $raw : $msg, 0, 260, 'UTF-8')];
+        'repair_attempted'=>!empty($r['validation_retried']),
+        'repair_fields'=>array_values((array)($r['validation_repaired_fields']??[])),
+        'error_detail' => mb_substr($raw !== '' ? $raw : $msg, 0, 520, 'UTF-8')];
 }
 
 /**
@@ -55620,6 +55712,34 @@ function wooQueueProductsFile(string $queueId): string {
         }
     }
     return WOO_PRODUCTS_FILE;
+}
+
+/* v10.285: فیدبک یک‌جای همهٔ خطاهای ماندگار صف ارسال باسلام.
+   خروجی فقط دادهٔ خطا را می‌دهد و توکن/پیکربندی محرمانه را هرگز برنمی‌گرداند. */
+if(isset($_GET['bsl_send_feedback'])){
+header('Content-Type: application/json; charset=UTF-8');
+$q=bslReadQueue();$groups=[];$samples=[];$total=0;$entriesWithError=0;
+$solution=function(int $code,string $kind,string $detail):array{
+    if($code===422&&(stripos($detail,'detected')!==false||preg_match('~پیج|کانال|تلگرام|اینستا|غیرمجاز~u',$detail)))
+        return ['key'=>'forbidden_content','title'=>'محتوای تبلیغاتی/راه ارتباطی ممنوع','solution'=>'قطعهٔ detected از description/brief حذف و درخواست یک بار خودکار تکرار می‌شود','auto_repair'=>true];
+    if($code===422&&preg_match('~category|دسته~iu',$detail))return ['key'=>'category_validation','title'=>'دسته‌بندی نامعتبر','solution'=>'دستهٔ برگ و سپس دسته‌های جایگزین امتحان شود','auto_repair'=>false];
+    if(in_array($code,[401,403],true))return ['key'=>'auth','title'=>'توکن یا دسترسی غرفه','solution'=>'توکن و vendor_id همان غرفه بازبینی شود','auto_repair'=>false];
+    if($code===404)return ['key'=>'stale_product_id','title'=>'شناسهٔ محصول قدیمی/ناموجود','solution'=>'نگاشت محلی حذف و محصول در همان غرفه دوباره جست‌وجو شود','auto_repair'=>false];
+    if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر ادامه یابد','auto_repair'=>false];
+    if($code===0)return ['key'=>'network','title'=>'شبکه/توقف','solution'=>'وضعیت stop، پراکسی و اتصال باسلام بررسی و سپس resume شود','auto_repair'=>false];
+    return ['key'=>$kind?:'other','title'=>'خطای دیگر','solution'=>'جزئیات خام و مرحلهٔ ثبت‌شده بررسی شود','auto_repair'=>false];
+};
+foreach((array)($q['entries']??[]) as $e){if(!is_array($e))continue;$details=(array)($e['failed_details']??[]);
+    if(!$details&&(!empty($e['fail_reason'])||($e['status']??'')==='failed'))$details=[['error'=>(string)($e['fail_reason']??'وظیفه ناموفق'),'error_code'=>0,'reason_kind'=>'queue']];
+    if(!$details)continue;$entriesWithError++;
+    foreach($details as $d){if(!is_array($d))continue;$total++;$code=(int)($d['error_code']??0);$kind=(string)($d['reason_kind']??'');$detail=(string)($d['error_detail']??$d['error']??'');$sol=$solution($code,$kind,$detail);$k=$sol['key'];
+        if(!isset($groups[$k]))$groups[$k]=array_merge($sol,['count'=>0,'codes'=>[],'steps'=>[]]);
+        $groups[$k]['count']++;$groups[$k]['codes'][(string)$code]=($groups[$k]['codes'][(string)$code]??0)+1;$step=(string)($d['error_step']??'');if($step!=='')$groups[$k]['steps'][$step]=($groups[$k]['steps'][$step]??0)+1;
+        if(count($samples)<80)$samples[]=['queue_id'=>(string)($e['id']??''),'profile'=>(string)($e['profile_name']??''),'shop'=>(string)($e['shop_name']??''),'vendor_id'=>(int)($e['shop_vendor_id']??0),'title'=>(string)($d['title']??''),'code'=>$code,'kind'=>$kind,'step'=>$step,'endpoint'=>(string)($d['endpoint']??''),'error'=>(string)($d['error']??''),'detail'=>$detail,'diagnosis'=>$sol['title'],'auto_repair'=>$sol['auto_repair']];
+    }
+}
+foreach($groups as &$g){$g['codes']=(object)$g['codes'];$g['steps']=(object)$g['steps'];}unset($g);
+echo json_encode(['ok'=>true,'version'=>APP_VERSION,'entries_scanned'=>count((array)($q['entries']??[])),'entries_with_error'=>$entriesWithError,'errors_total'=>$total,'groups'=>array_values($groups),'samples'=>$samples,'repairs'=>['forbidden_content_retry'=>true]],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 if(isset($_GET['bsl_queue_status'])){
@@ -65649,6 +65769,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <button class="btn btn-red hidden" id="manualSyncStopBtn" onclick="stopManualSync()" style="flex:0;font-size:11px;padding:8px 12px">⏹ توقف</button>
                     <button class="btn btn-gray" onclick="srLoad()" style="flex:0;font-size:11px;padding:8px 12px" title="گزارشِ همگام‌سازی‌های قبلی">📄 گزارش‌ها</button>
                     <button class="btn btn-gray" onclick="syncDiagnose()" style="flex:0;font-size:11px;padding:8px 12px" title="چرا همگام‌سازی کار نمی‌کند؟ — معاینهٔ کلِ زنجیره">🩺 تشخیص</button>
+                    <button class="btn btn-gray" onclick="syncPipelineClearDone()" style="flex:0;font-size:11px;padding:8px 12px" title="پاک‌سازی همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف؛ کارهای فعال حفظ می‌شوند">🧹 پاک‌سازی تمام‌شده‌ها</button>
                 </div>
                 <div id="manualSyncProgress" style="display:none;margin-top:8px">
                     <div class="progress"><div class="progress-bar" id="msBar" style="background:linear-gradient(90deg,#059669,#34d399);width:0%"></div></div>
@@ -70794,6 +70915,13 @@ function msSetState(txt,cls){
 }
 
 let syncPipeRows=[];
+function syncPipelineClearDone(){
+  if(!confirm('همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف پاک شوند؟ کارهای فعال باقی می‌مانند.'))return;
+  fetch('?sync_pipeline_clear_done=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    if(!d.ok){showToast(d.error||'پاک‌سازی انجام نشد',1);return;}
+    showToast('🧹 '+toFa(d.removed||0)+' همگام‌سازی تمام‌شده پاک شد');syncPipelineRender();
+  }).catch(()=>showToast('خطا در پاک‌سازی همگام‌سازی‌ها',1));
+}
 const syncCountLabels={extracted:'استخراج',new:'جدید',updated:'آپدیت',removed:'حذف/رفته',unchanged:'بدون تغییر',price_up:'گران',price_down:'ارزان',products:'محصول',queued:'صف‌شده',sent:'ارسال',failed:'خطا',skipped:'ردشده'};
 function syncPipelineRender(){
   const host=$('syncPipelineCards');if(!host)return;
@@ -72275,6 +72403,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.285', t:'🧹 پاک‌سازی همگام‌سازی و ترمیم هوشمند خطای باسلام', items:[
+    'دکمهٔ پاک‌سازی، همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف را حذف می‌کند و ردیف‌های فعال را دست‌نخورده نگه می‌دارد',
+    'اندپوینت bsl_send_feedback همهٔ failed_details صف باسلام را گروه‌بندی، نمونه‌برداری و برای هر نوع خطا راه‌حل عملی گزارش می‌کند',
+    'در HTTP 422 محتوایی، fields و detected پاسخ باسلام خوانده می‌شود؛ فقط قطعهٔ ممنوع از description/brief حذف و همان درخواست یک بار خودکار تکرار می‌گردد',
+    'تلاش ترمیم و نام فیلدهای پاک‌شده در گزارش خطا ذخیره می‌شود و جزئیات خام برای تشخیص تا ۵۲۰ نویسه حفظ می‌گردد'
+  ]},
   {v:'10.284', t:'🏷 منشأ استخراج و شمارندهٔ مهم حذف/بایگانی', items:[
     'همهٔ ردیف‌های صف استخراج بک‌اند، شامل worker و ادامهٔ خودکار، اکنون صریحاً «استخراج دستی» یا «استخراج دوره‌ای» نوشته می‌شوند',
     'کارت‌های صف ارسال باسلام شمارندهٔ برجستهٔ بایگانی‌شده و کارت‌های ووکامرس شمارندهٔ حذف/زباله‌دان دارند',
