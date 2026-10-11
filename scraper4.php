@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.288';
+const APP_VERSION = '10.289';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -41353,6 +41353,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.288', 'ورودی 10.288 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "288'") !== false
       && version_compare(APP_VERSION, '10.' . '288', '>='));
+    $add('10.289', 'ناسازگاری شمارندهٔ ردیف تمام‌شده هشدار تاریخی است نه خرابی ارسال فعال',
+         strpos($selfSrc, "else \$notices[] = \$item") !== false
+      && strpos($selfSrc, "'notice_count'=>count(\$notices)") !== false);
+    $add('10.289', 'ورودی 10.289 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "289'") !== false
+      && version_compare(APP_VERSION, '10.' . '289', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -55820,7 +55826,7 @@ function wooQueueProductsFile(string $queueId): string {
 if (isset($_GET['send_pipeline_audit'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $scan = static function (string $dest, array $q): array {
-        $issues = []; $statusCounts = []; $triggerCounts = []; $activeProfiles = []; $validFiles = 0;
+        $issues = []; $notices = []; $statusCounts = []; $triggerCounts = []; $activeProfiles = []; $validFiles = 0;
         foreach ((array)($q['entries'] ?? []) as $e) {
             if (!is_array($e)) continue;
             $id = (string)($e['id'] ?? ''); $st = (string)($e['status'] ?? 'unknown');
@@ -55838,7 +55844,10 @@ if (isset($_GET['send_pipeline_audit'])) {
             else {
                 $validFiles++;
                 $declared = (int)($e['total'] ?? 0);
-                if ($declared !== count($products)) $issues[] = ['key'=>'total_mismatch','queue_id'=>$id,'profile'=>$profile,'declared'=>$declared,'actual'=>count($products)];
+                if ($declared !== count($products)) {
+                    $item = ['key'=>'total_mismatch','queue_id'=>$id,'profile'=>$profile,'status'=>$st,'declared'=>$declared,'actual'=>count($products)];
+                    if (in_array($st, ['waiting','running','paused'], true)) $issues[] = $item; else $notices[] = $item;
+                }
             }
             if ((int)($e['current'] ?? 0) > (int)($e['total'] ?? 0)) $issues[] = ['key'=>'cursor_overflow','queue_id'=>$id,'profile'=>$profile];
             if ($st === 'running' && (int)($e['started_at'] ?? 0) > 0 && time() - (int)$e['started_at'] > 3600)
@@ -55847,12 +55856,13 @@ if (isset($_GET['send_pipeline_audit'])) {
         foreach ($activeProfiles as $profile => $ids) if (count($ids) > 1)
             $issues[] = ['key'=>'duplicate_active_profile','profile'=>$profile,'queue_ids'=>$ids];
         return ['destination'=>$dest,'entries'=>count((array)($q['entries']??[])),'status_counts'=>(object)$statusCounts,
-            'trigger_counts'=>(object)$triggerCounts,'valid_product_files'=>$validFiles,'issues'=>$issues];
+            'trigger_counts'=>(object)$triggerCounts,'valid_product_files'=>$validFiles,'issues'=>$issues,'notices'=>$notices];
     };
     $wooAudit = $scan('woocommerce', wooReadQueue()); $bslAudit = $scan('basalam', bslReadQueue());
     $issues = array_merge($wooAudit['issues'], $bslAudit['issues']);
+    $notices = array_merge($wooAudit['notices'], $bslAudit['notices']);
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'healthy'=>!$issues,'issue_count'=>count($issues),
-        'destinations'=>[$wooAudit,$bslAudit], 'fixes_present'=>[
+        'notice_count'=>count($notices),'destinations'=>[$wooAudit,$bslAudit], 'fixes_present'=>[
             'canonical_profile_products'=>true,'atomic_queue_product_files'=>true,
             'running_profile_dedup'=>true,'destination_specific_woo_suffix'=>true,
             'basalam_422_repair'=>true,'multi_shop_fanout'=>true,
@@ -72556,6 +72566,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.289', t:'🩺 تفکیک خطای فعال از سابقهٔ قدیمی در ممیزی ارسال', items:[
+    'ناسازگاری شمارندهٔ یک ردیف تمام‌شده فقط اطلاع تاریخی است و دیگر سلامت ارسالهای فعال را خراب نشان نمی‌دهد',
+    'ممیزی همچنان همین سابقه‌ها را در notices نگه می‌دارد تا چیزی پنهان نشود'
+  ]},
   {v:'10.288', t:'🧪 رفع تشخیص تکراری کاذب و ممیزی کامل ارسال', items:[
     'تکراری پروفایل فقط وقتی ثبت می‌شود که عنوان کامل و دقیقاً نرمال‌شده واقعاً بیش از یک بار باشد؛ محصولاتی که فقط پسوند/کد متفاوت دارند دیگر تکراری کاذب نیستند',
     'ارسال همگام‌سازی دستی اکنون همهٔ قالب‌های ذخیرهٔ محصولات پروفایل را با خوانش استاندارد پشتیبانی می‌کند',
