@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.293';
+const APP_VERSION = '10.294';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -18127,6 +18127,15 @@ function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = [
     saveProfiles($profilesNow);
 }
 
+/** v10.294: فقط استخراج واقعاً نیمه‌کاره باید از checkpoint صفحه ادامه یابد.
+ * list_done یعنی فهرست قبلی کامل شده؛ page_try آن نباید اجرای دوره‌ای تازه را
+ * از صفحات پایانی آغاز کند یا محصولات قبلی را seen فرض کند. */
+function extractListShouldResume(array $profile, string $trigger): bool {
+    if (!empty($profile['_extract_list_incomplete']) || !empty($profile['_extract_resume_req'])) return true;
+    if ((string)($profile['_extract_stage'] ?? '') === 'list') return true;
+    return in_array($trigger, ['manual_resume','watchdog_resume','auto_resume'], true);
+}
+
 /** v10.122: صفحهٔ شروعِ ادامه — یک صفحه قبل از جایی که گیر کرده */
 function extractResumeStartPage(array $profile): int {
     $try = (int)($profile['_extract_list_page_try'] ?? 0);
@@ -18525,9 +18534,7 @@ $_startPage=1;
 $_resumeFrom=0;
 $_listBudget=0;$_listDeadline=0;$_listRanOut=false;
 if($phase!=='detail'){
-    $_inc=!empty($profile['_extract_list_incomplete'])
-        || in_array((string)($profile['_extract_stage']??''),['list','list_done'],true)
-        || !empty($profile['_extract_resume_req']);
+    $_inc=extractListShouldResume($profile,(string)$trigger);
     $_hasPrev=count($prevByKey)>0;
     $_resumeReq=!empty($profile['_extract_resume_req'])
         || in_array((string)$trigger,['manual_resume','watchdog_resume','auto_resume'],true);
@@ -41433,6 +41440,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.293', 'ورودی 10.293 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "293'") !== false
       && version_compare(APP_VERSION, '10.' . '293', '>='));
+    $add('10.294', 'همگام‌سازی تازهٔ پروفایل چندصفحه‌ای list_done را ادامهٔ نیمه‌کاره نمی‌پندارد',
+         !extractListShouldResume(['_extract_stage'=>'list_' . 'done','_extract_list_page_try'=>100], 'periodic_' . 'sync')
+      && !extractListShouldResume(['_extract_stage'=>'list_' . 'done','_extract_list_page_try'=>100], 'manual_' . 'sync'));
+    $add('10.294', 'ادامهٔ واقعی فهرست نیمه‌کاره و watchdog همچنان حفظ شده است',
+         extractListShouldResume(['_extract_stage'=>'list','_extract_list_incomplete'=>true], 'periodic_' . 'sync')
+      && extractListShouldResume(['_extract_stage'=>'list_' . 'done'], 'watchdog_' . 'resume'));
+    $add('10.294', 'مسیر همگام‌سازی از تصمیم‌گیر مشترک ادامهٔ صفحه استفاده می‌کند',
+         strpos($selfSrc, "\$_inc=extractListShouldResume(\$profile,(string)\$trigger);") !== false);
+    $add('10.294', 'ورودی 10.294 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "294'") !== false
+      && version_compare(APP_VERSION, '10.' . '294', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72657,6 +72675,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.294', t:'📚 استخراج همهٔ صفحات ایمالز هنگام همگام‌سازی', items:[
+    'پایان موفق استخراج فهرست دیگر به‌اشتباه checkpoint نیمه‌کاره محسوب نمی‌شود',
+    'همگام‌سازی تازهٔ ایمالز از صفحهٔ اول با مجموعهٔ خالی seen آغاز می‌شود و همهٔ صفحات تنظیم‌شده را می‌خواند',
+    'ادامه از صفحهٔ میانی فقط برای استخراج واقعاً نیمه‌کاره یا اجرای صریح resume حفظ شده است'
+  ]},
   {v:'10.293', t:'🎨 وضعیت و جهت قیمت روشن در خانه‌های مقصد ماتریس', items:[
     'خانهٔ هر مقصد برای محصول پیدا‌شده عبارت موجود و قیمت را با برچسب صریح قیمت نمایش می‌دهد',
     'قیمت مطابق انتظار سبز، بالاتر از انتظار آبی، پایین‌تر از انتظار نارنجی و محصول ناموجود قرمز نمایش داده می‌شود',
