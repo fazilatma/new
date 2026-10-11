@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.283';
+const APP_VERSION = '10.284';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -11508,6 +11508,9 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         $localCode=(string)@file_get_contents(__FILE__);$localSha=vc_content_id($localCode);preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$localCode,$lvm);$diskVersion=(string)($lvm[1]??APP_VERSION);
         if($remoteSha!==''&&hash_equals($remoteSha,$localSha))return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>$diskVersion,'restart_required'=>$diskVersion!==APP_VERSION,'sha'=>substr($remoteSha,0,12)];
         $download=(string)$meta['data']['download_url'];
+        /* v10.284: GitHub metadata زودتر از raw CDN تازه می‌شود؛ SHA را cache-buster
+           می‌کنیم تا push پیاپی به git_blob_sha_mismatch کاذب نخورد. */
+        if($remoteSha!=='')$download.=(strpos($download,'?')===false?'?':'&').'s4sha='.rawurlencode($remoteSha);
         $got=s4CodeUpdateHttp($download,$ghToken,120);if(empty($got['ok']))return ['ok'=>false,'http'=>502,'error'=>'github_download_failed','code'=>(int)$got['code'],'detail'=>(string)$got['error']];
         $code=(string)$got['body'];$size=strlen($code);
         if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
@@ -41156,7 +41159,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$exRes[' . "'queue_id'] = \$_syncExtractQid") !== false);
     $add('10.282', 'صف استخراج برچسب روشن دستی و دوره‌ای و توضیح حالت skip دارد',
          strpos($selfSrc, 'استخراجِ همگام‌سازی دوره‌ای') !== false
-      && strpos($selfSrc, 'استخراجِ همگام‌سازی دستی') !== false
+      && strpos($selfSrc, 'استخراج همگام‌سازی · دستی') !== false
       && strpos($selfSrc, 'e.sync_stage&&e.note_title') !== false);
     $add('10.282', 'خطای تازه‌سازی noExtract در ردیف استخراج پنهان نمی‌شود',
          strpos($selfSrc, "'sync_stage_error'=>\$pResult['extract_error']") !== false
@@ -41168,6 +41171,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, \$stepMode") !== false
       && strpos($selfSrc, "{v:'10." . "283'") !== false
       && version_compare(APP_VERSION, '10.' . '283', '>='));
+    $add('10.284', 'همهٔ triggerهای worker و resume به دستی یا دوره‌ای نگاشت می‌شوند',
+         strpos($selfSrc, "['manual','manual_sync','manual_resume','worker','worker_child']") !== false
+      && strpos($selfSrc, "['periodic_sync','auto','cron','watchdog_resume','auto_resume']") !== false);
+    $add('10.284', 'کارت ارسال شمارندهٔ برجستهٔ حذف و بایگانی دارد',
+         strpos($selfSrc, 'sendq-metric-retired') !== false
+      && strpos($selfSrc, "metric(retired,opt.retireLabel||'حذف/بایگانی'") !== false);
+    $add('10.284', 'باسلام و ووکامرس عنوان حذف مخصوص مقصد را می‌فرستند',
+         strpos($selfSrc, "retireLabel:'بایگانی‌شده'") !== false
+      && strpos($selfSrc, "retireLabel:'حذف/زباله‌دان'") !== false);
+    $add('10.284', 'وظیفهٔ بازنشستگی مقدار sent را همزمان جدید و حذف‌شده نمی‌شمارد',
+         strpos($selfSrc, 'const newSent=isRetire?0:') !== false
+      && strpos($selfSrc, 'isRetire?e.sent:0') !== false);
+    $add('10.284', 'updater دانلود raw را با SHA بدون کش می‌گیرد',
+         strpos($selfSrc, "'s4sha='.rawurlencode(\$remoteSha)") !== false);
+    $add('10.284', 'ورودی 10.284 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "284'") !== false
+      && version_compare(APP_VERSION, '10.' . '284', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -62357,7 +62377,7 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .cch h3{font-size:14px;margin:0;display:flex;align-items:center;gap:6px}.ccb{overflow:hidden}.ccb.collapsed{max-height:0!important;padding:0;margin:0;overflow:hidden}.cst{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700}.cst.on{background:#14532d;color:#86efac}.cst.off{background:#475569;color:#94a3b8}.cst.tg{background:#78350f;color:#fbbf24}.crow{display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap}.crow label{min-width:100px;color:#94a3b8;font-size:12px;flex-shrink:0}.crow input,.crow select{flex:1;min-width:150px}.cact{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.sres{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;max-height:500px;overflow-y:auto;font-size:11px;margin-top:10px}.sres .ok2{color:#4ade80;padding:2px 0;border-bottom:1px solid #1e293b}
 .sres .no2{color:#f87171;padding:2px 0;border-bottom:1px solid #1e293b}.sres a{color:#60a5fa;text-decoration:none}
 /* v10.281: کارت شهودی و مشترک صف‌های باسلام/ووکامرس */
-.sendq-card{--sq:#38bdf8;position:relative;overflow:hidden;background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:12px;margin:8px 0;box-shadow:0 8px 22px #02061755;cursor:pointer;transition:.18s}.sendq-card:hover{border-color:var(--sq);transform:translateY(-1px)}.sendq-card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--sq)}.sendq-head{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:9px;align-items:center}.sendq-logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--sq) 18%,#0f172a);border:1px solid color-mix(in srgb,var(--sq) 45%,#334155);font-size:18px}.sendq-name{color:#f8fafc;font-weight:850;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sendq-context{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}.sendq-chip{padding:2px 6px;border-radius:999px;background:#1e293b;color:#94a3b8;font-size:8.5px}.sendq-status{padding:5px 8px;border-radius:999px;font-size:9px;font-weight:850;white-space:nowrap}.sendq-progress-head{display:flex;justify-content:space-between;gap:8px;margin-top:11px;color:#cbd5e1;font-size:10px}.sendq-track{height:9px;background:#1e293b;border-radius:999px;overflow:hidden;margin-top:5px;border:1px solid #334155}.sendq-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--sq),color-mix(in srgb,var(--sq) 55%,white));transition:width .5s}.sendq-card.is-running .sendq-fill{background:repeating-linear-gradient(115deg,var(--sq) 0 12px,color-mix(in srgb,var(--sq) 55%,white) 12px 24px);animation:pipeFlow 1.2s linear infinite}.sendq-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:5px;margin-top:10px}.sendq-metric{background:#0f172a;border:1px solid #273449;border-radius:8px;padding:6px 4px;text-align:center;color:#64748b;font-size:8px}.sendq-metric b{display:block;color:#e2e8f0;font-size:12px;margin-bottom:1px}.sendq-foot{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:8px;border-top:1px dashed #334155}.sendq-hint{color:#7dd3fc;font-size:9px;font-weight:700;flex:1}.sendq-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}.sendq-actions button{font-size:9px!important;padding:4px 7px!important;border-radius:7px!important}.sendq-reason{margin-top:8px;padding:7px 8px;border-radius:8px;background:#7f1d1d25;color:#fca5a5;font-size:9px;line-height:1.6}@media(max-width:720px){.sendq-card{padding:10px;border-radius:12px}.sendq-head{grid-template-columns:34px minmax(0,1fr);}.sendq-logo{width:34px;height:34px}.sendq-status{grid-column:1/3;justify-self:start}.sendq-metrics{grid-template-columns:repeat(3,1fr)}.sendq-foot{align-items:flex-start;flex-direction:column}.sendq-actions{width:100%;justify-content:stretch}.sendq-actions button{flex:1}.sendq-card:hover{transform:none}}
+.sendq-card{--sq:#38bdf8;position:relative;overflow:hidden;background:linear-gradient(145deg,#111827,#0b1220);border:1px solid #334155;border-radius:14px;padding:12px;margin:8px 0;box-shadow:0 8px 22px #02061755;cursor:pointer;transition:.18s}.sendq-card:hover{border-color:var(--sq);transform:translateY(-1px)}.sendq-card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--sq)}.sendq-head{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:9px;align-items:center}.sendq-logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--sq) 18%,#0f172a);border:1px solid color-mix(in srgb,var(--sq) 45%,#334155);font-size:18px}.sendq-name{color:#f8fafc;font-weight:850;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sendq-context{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}.sendq-chip{padding:2px 6px;border-radius:999px;background:#1e293b;color:#94a3b8;font-size:8.5px}.sendq-status{padding:5px 8px;border-radius:999px;font-size:9px;font-weight:850;white-space:nowrap}.sendq-progress-head{display:flex;justify-content:space-between;gap:8px;margin-top:11px;color:#cbd5e1;font-size:10px}.sendq-track{height:9px;background:#1e293b;border-radius:999px;overflow:hidden;margin-top:5px;border:1px solid #334155}.sendq-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--sq),color-mix(in srgb,var(--sq) 55%,white));transition:width .5s}.sendq-card.is-running .sendq-fill{background:repeating-linear-gradient(115deg,var(--sq) 0 12px,color-mix(in srgb,var(--sq) 55%,white) 12px 24px);animation:pipeFlow 1.2s linear infinite}.sendq-metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin-top:10px}.sendq-metric{background:#0f172a;border:1px solid #273449;border-radius:8px;padding:6px 4px;text-align:center;color:#64748b;font-size:8px}.sendq-metric b{display:block;color:#e2e8f0;font-size:12px;margin-bottom:1px}.sendq-metric-retired{border-color:#be185d;background:#50072455;color:#f9a8d4;box-shadow:inset 0 0 0 1px #f472b622}.sendq-foot{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:8px;border-top:1px dashed #334155}.sendq-hint{color:#7dd3fc;font-size:9px;font-weight:700;flex:1}.sendq-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}.sendq-actions button{font-size:9px!important;padding:4px 7px!important;border-radius:7px!important}.sendq-reason{margin-top:8px;padding:7px 8px;border-radius:8px;background:#7f1d1d25;color:#fca5a5;font-size:9px;line-height:1.6}@media(max-width:720px){.sendq-card{padding:10px;border-radius:12px}.sendq-head{grid-template-columns:34px minmax(0,1fr);}.sendq-logo{width:34px;height:34px}.sendq-status{grid-column:1/3;justify-self:start}.sendq-metrics{grid-template-columns:repeat(3,1fr)}.sendq-foot{align-items:flex-start;flex-direction:column}.sendq-actions{width:100%;justify-content:stretch}.sendq-actions button{flex:1}.sendq-card:hover{transform:none}}
 .scard{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px;margin:4px 0;display:flex;gap:8px;align-items:flex-start;transition:border-color .2s}.scard:hover{border-color:#475569}.scard-img{width:48px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#0f172a}.scard-noimg{width:48px;height:48px;border-radius:6px;flex-shrink:0;background:#0f172a;display:flex;align-items:center;justify-content:center;color:#475569;font-size:18px}.scard-body{flex:1;min-width:0;direction:rtl}.scard-title{color:#e2e8f0;font-weight:700;font-size:11px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl}.scard-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px;margin-bottom:2px;direction:rtl}
 .scard-meta span{display:inline-flex;align-items:center;gap:2px}.scard-price{color:#4ade80;font-family:monospace;font-size:10px;direction:ltr}.scard-cat{color:#c084fc;font-size:9px}.scard-unit{color:#64748b;font-size:9px}.scard-result{font-size:10px;font-weight:700;margin-top:2px}.scard-ok{color:#4ade80}.scard-up{color:#facc15}.scard-skip{color:#94a3b8}.scard-fail{color:#f87171}.scard-retired{color:#fbbf24}.scard.scard-ok{border-left:3px solid #4ade80}.scard.scard-up{border-left:3px solid #facc15}.scard.scard-skip{border-left:3px solid #94a3b8}.scard.scard-fail{border-left:3px solid #f87171}.scard.scard-retired{border-left:3px solid #fbbf24}.scard-err{color:#f87171;font-size:9px;margin-top:2px;direction:rtl;background:#7f1d1d20;padding:1px 6px;border-radius:3px}.scard-reason{color:#fbbf24;font-size:9px;margin-top:2px;direction:rtl;background:#42200620;padding:1px 6px;border-radius:3px}.scard-rid{color:#60a5fa;font-size:9px;direction:ltr}
 .ssum{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.ssum .si{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;text-align:center}.ssum .si b{font-size:18px;display:block}.ssum .si span{color:#64748b;font-size:10px}@media(min-width:900px){body{padding:16px;padding-bottom:16px}h1{font-size:22px}.main-tabs{position:static;border-top:none;box-shadow:none;background:#1e293b;border:1px solid #334155;border-radius:12px;margin-bottom:14px;padding:3px}.main-tab{padding:12px;border-radius:8px;flex-direction:row;gap:8px;font-size:13px}.main-tab .t-icon{font-size:16px}.main-tab.active{background:#3b82f6}.main-tab .badge{position:static;margin-right:4px;min-width:auto}.visual-container{grid-template-columns:1fr 320px}.grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}.btn{padding:10px 16px}.profile-row{flex-wrap:nowrap}}
@@ -71295,16 +71315,17 @@ function renderExtractQueue(entries, progress){
         html+='<div style="display:flex;justify-content:space-between;align-items:center">';
         html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
         html+='<span style="color:'+statusColors[st]+';font-weight:700;font-size:12px">'+statusLabels[st]+'</span>';
-        // v8.27: منشأ اجرا — دستی یا خودکار (کران‌جاب)
-        if(e.trigger==='periodic_sync'){
-            html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">🔄 استخراجِ همگام‌سازی دوره‌ای</span>';
-        }else if(e.trigger==='auto'){
-            html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">⏱ خودکار</span>';
-        }else if(e.trigger==='manual'){
-            html+='<span style="color:#a78bfa;font-size:10px;background:#4c1d9520;padding:1px 6px;border-radius:4px">👤 دستی</span>';
-        }else if(e.trigger==='manual_sync'){
-            /* v10.53 (۶۷): اجرایِ همگام‌سازیِ دستی — با برچسبِ جدا از «دستیِ عادی» */
-            html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px">🤝 استخراجِ همگام‌سازی دستی</span>';
+        // v10.284: منشأ همهٔ ردیف‌ها، از جمله worker و resume، صریحاً دستی یا دوره‌ای باشد
+        const exManual=['manual','manual_sync','manual_resume','worker','worker_child'].includes(e.trigger);
+        const exPeriodic=['periodic_sync','auto','cron','watchdog_resume','auto_resume'].includes(e.trigger);
+        if(exManual){
+            const isSync=e.trigger==='manual_sync';
+            html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px">'+(isSync?'🤝 استخراج همگام‌سازی · دستی':'👤 استخراج دستی')+'</span>';
+        }else if(exPeriodic){
+            const isSync=e.trigger==='periodic_sync';
+            html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">'+(isSync?'🔄 استخراج همگام‌سازی · دوره‌ای':'⏱ استخراج دوره‌ای')+'</span>';
+        }else{
+            html+='<span style="color:#cbd5e1;font-size:10px;background:#334155;padding:1px 6px;border-radius:4px">👤 استخراج دستی</span>';
         }
         /* v9.04: کدام مرحله؟ بدون این، ردیف «فهرست» با شمارندهٔ صفرِ
            جزئیات شبیه یک اجرای ناموفق به نظر می‌رسید. */
@@ -72254,6 +72275,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.284', t:'🏷 منشأ استخراج و شمارندهٔ مهم حذف/بایگانی', items:[
+    'همهٔ ردیف‌های صف استخراج بک‌اند، شامل worker و ادامهٔ خودکار، اکنون صریحاً «استخراج دستی» یا «استخراج دوره‌ای» نوشته می‌شوند',
+    'کارت‌های صف ارسال باسلام شمارندهٔ برجستهٔ بایگانی‌شده و کارت‌های ووکامرس شمارندهٔ حذف/زباله‌دان دارند',
+    'در وظیفهٔ بازنشستگی، مقدار sent دیگر به‌اشتباه «جدید» شمرده نمی‌شود و همان عدد فقط در شمارندهٔ حذف/بایگانی قرار می‌گیرد',
+    'دانلود updater با SHA نسخه cache-bust می‌شود تا pushهای پیاپی به خطای کاذب git_blob_sha_mismatch نخورند'
+  ]},
   {v:'10.283', t:'✅ هم‌راستاسازی آزمون استخراج دوره‌ای با صف جدید', items:[
     'آزمون قدیمی مسیر سریع همگام‌سازی دوره‌ای اکنون برچسب periodic_sync جدید را می‌پذیرد و همچنان اجرای phase=list را الزام می‌کند'
   ]},
@@ -86374,13 +86401,16 @@ function sendQueueVisualCard(e,opt){
     const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
     const processed=done?total:cur,remain=Math.max(0,total-processed),status=labels[e.status]||e.status;
-    let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(e.retire_report||e.kind==='retire'||e.trigger==='retire')chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
-    const metric=(n,l,c)=>'<div class="sendq-metric"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
+    const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
+    const retired=parseInt(e.retired??e.archived??e.deleted??(isRetire?e.sent:0))||0;
+    const newSent=isRetire?0:(parseInt(e.sent)||0);
+    let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
+    const metric=(n,l,c,important)=>'<div class="sendq-metric'+(important?' sendq-metric-retired':'')+'"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
     const reason=e.fail_reason||e.error||'';
     return '<article class="sendq-card is-'+esc(e.status||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
       +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name">'+esc(e.profile_name||'ارسال محصولات')+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[e.status]+';background:'+colors[e.status]+'18;border:1px solid '+colors[e.status]+'55">'+status+'</span></div>'
       +'<div class="sendq-progress-head"><b>'+toFa(pct)+'٪ انجام شده</b><span>'+toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
-      +'<div class="sendq-metrics">'+metric(e.sent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(e.skipped,'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
+      +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
       +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
 }
@@ -86425,7 +86455,7 @@ function renderBslQueue(q){
         else if(e.status==='paused')__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         else if(e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startBslServer(\''+e.id+'\')">▶ شروع ارسال</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
-        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
+        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
         let progText='';
         let progPercent=0;
@@ -86636,7 +86666,7 @@ function renderWooQueue(q){
         let __acts='';
         if(e.status==='running'||e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startWooServer(\''+e.id+'\')">▶ شروع سرور</button><button class="btn btn-red" onclick="deleteWooQueue(\''+e.id+'\')">حذف</button>';
         else __acts='<button class="btn btn-gray" onclick="deleteWooQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
-        html+=sendQueueVisualCard(e,{accent:'#a78bfa',icon:'🌐',destination:'ووکامرس',detailFn:'showWooQueueDetail',actions:__acts});
+        html+=sendQueueVisualCard(e,{accent:'#a78bfa',icon:'🌐',destination:'ووکامرس',retireLabel:'حذف/زباله‌دان',detailFn:'showWooQueueDetail',actions:__acts});
         return;
         let progText='';let progPercent=0;
         if(e.status==='running'&&e.current>0&&e.total>0){
