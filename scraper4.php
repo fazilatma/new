@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.301';
+const APP_VERSION = '10.302';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1202,12 +1202,13 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
     $payload = ['scope'=>(string)($opts['scope']??'all'),'delay_ms'=>max(50,min(2000,(int)($opts['delay_ms']??180))),
         'source'=>(string)($opts['source']??'manual'),'duplicate_keep'=>(string)($opts['duplicate_keep']??'newest'),
         'view_filters'=>is_array($opts['view_filters']??null)?$opts['view_filters']:[],
+        'selected_destinations'=>array_values((array)($opts['selected_destinations']??[])),
         'resume'=>$resume,'dedup_key'=>'matrix_fix','requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
         matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
-            'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
+            'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'selected_destinations'=>$payload['selected_destinations'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
             'started_at'=>(int)($cp['started_at']??time()),'checkpoint'=>$cp?:['scope'=>$payload['scope'],'duplicate_keep'=>$payload['duplicate_keep'],'view_filters'=>$payload['view_filters'],'done_jobs'=>[],'started_at'=>time()],
             'log_add'=>['🧵 اصلاح مغایرت به worker دائمی سپرده شد — مستقل از مرورگر و محدودیت PHP-FPM ادامه می‌یابد']]);
     }
@@ -1215,7 +1216,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
 }
 function s4WorkerRunMatrixFix(array $payload): array {
     $scope=(string)($payload['scope']??'all');$resume=!empty($payload['resume']);
-    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
+    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
     try{matrixFixStopClear();matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
@@ -9665,6 +9666,16 @@ function bslCatalogRows(string $tk, int $vid, bool $build = true): array {
         return ['rows' => [], 'from' => 'none', 'partial' => true, 'at' => 0];
     return ['rows' => $c['rows'], 'from' => $from,
             'partial' => !empty($c['partial']), 'at' => (int)($c['at'] ?? 0)];
+}
+
+function bslFindExistingQuick(string $tk, int $vid, string $title): ?array {
+    /* فقط یک endpoint هدفمند؛ برای recovery خطای duplicate در اصلاح مغایرت.
+       بر خلاف bslFindExisting هیچ پیمایش کاتالوگ یا آبشار چند-endpointی ندارد. */
+    $cat=bslCatalogLookupRow($tk,$vid,$title,true);
+    if(($cat['state']??'')==='hit'&&is_array($cat['row']??null))return $cat['row'];
+    $r=bslReq($tk,'GET','vendors/'.$vid.'/products?per_page=20'.bslStatusQuery().'&title='.urlencode(trim($title)),null,false,null,true,1);
+    if(empty($r['ok']))return null;$rows=$r['body']['data']??[];if(!is_array($rows))return null;
+    $how='';return findRemoteByTitle($rows,$title,'','title',$how);
 }
 
 function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true): ?array {
@@ -20430,6 +20441,17 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         bslShopMapRecord($p, $shop, (int)$r['body']['id'], $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
         return ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'update_reason' => 'ایجاد محصول جدید'];
     }
+    /* اگر create سریع گفت نام تکراری، فقط با یک endpoint هدفمند شناسه را
+       پیدا و PATCH کن. این هم 422 تکراری را حل می‌کند، هم دوباره کل غرفه را
+       نمی‌پیماید که عملیات اصلاح ظاهراً وسط راه متوقف شود. */
+    if(!empty($opts['skip_find_existing'])&&bslIsDuplicateName($r)){
+        $dup=bslFindExistingQuick($tk,$vid,$title);$dupId=(int)($dup['id']??0);
+        if($dupId>0){$bu=$bp;unset($bu['name'],$bu['brief'],$bu['description'],$bu['is_wholesale']);$bu['status']=2976;
+            $ur=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$dupId,$bu,false,null,false,1);
+            if(empty($ur['ok']))$ur=bslReq($tk,'PATCH','products/'.$dupId,$bu,false,null,false,1);
+            if(!empty($ur['ok'])){bslShopMapRecord($p,$shop,$dupId,$title,$priceRial,$stock);return ['ok'=>true,'id'=>$dupId,'action'=>'duplicate_updated','update_reason'=>'نام تکراری با جستجوی سریع پیدا و به‌روز شد'];}
+        }
+    }
     $fb = bslTryCreateWithFallback($tk, $vid, $bp, $fallback, $title, $autoCat, $flatCats, $cData);
     if (!empty($fb['ok']) && !empty($fb['body']['id'])) {
         bslShopMapRecord($p, $shop, (int)$fb['body']['id'], $title);  // v10.20 (۳۳الف)
@@ -29541,7 +29563,8 @@ function matrixFixRun(array $opts = []): array {
     /* مقصد خاموش اصلاً job و log اصلاح تولید نمی‌کند؛ نتیجهٔ قدیمی ماتریس
        نباید ووکامرس خاموش را دوباره وارد صف کند. */
     $cn = loadConnections();
-    $selectedFix=array_fill_keys(matrixNormalizeDestinations($data['selected_destinations']??null,$cn),true);
+    $requestedDest=array_key_exists('selected_destinations',$opts)&&is_array($opts['selected_destinations'])?$opts['selected_destinations']:($data['selected_destinations']??null);
+    $selectedFix=array_fill_keys(matrixNormalizeDestinations($requestedDest,$cn),true);
     if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
     if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
     $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
@@ -30584,6 +30607,13 @@ if (isset($_GET['sync_matrix_fix_status']) || (($_POST['action'] ?? '') === 'syn
     $prog = matrixFixProgressRead();
     $since = max(0, (int)($_GET['since'] ?? $_POST['since'] ?? 0));
     $log = is_array($prog['log'] ?? null) ? $prog['log'] : [];
+    $fixSelected=array_values((array)($prog['selected_destinations']??[]));
+    if($fixSelected&&!in_array('woo',$fixSelected,true)){
+        $log=array_values(array_filter($log,static function($row){$m=(string)($row['m']??'');return stripos($m,'WC')===false&&mb_stripos($m,'ووکامرس')===false;}));
+        $prog['planned']=array_values(array_filter((array)($prog['planned']??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
+        $prog['live']=array_values(array_filter((array)($prog['live']??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
+    }
+    $prog['log']=$log;
     $logTotal = count($log);
     if ($since > 0 && $since < $logTotal) {
         $prog['log_delta'] = array_slice($log, $since);
@@ -30622,6 +30652,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'delay_ms' => (int)($_GET['delay_ms'] ?? $_POST['delay_ms'] ?? 180),
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
         'duplicate_keep' => (string)($_GET['duplicate_keep'] ?? $_POST['duplicate_keep'] ?? 'newest'),
+        'selected_destinations' => matrixNormalizeDestinations($_GET['selected_destinations'] ?? $_POST['selected_destinations'] ?? null),
         'view_filters' => [
             'q'=>(string)($_GET['q']??$_POST['q']??''),
             'only_dup'=>!empty($_GET['only_dup']??$_POST['only_dup']??null),
@@ -30633,6 +30664,9 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             'filter_join'=>(string)($_GET['filter_join']??$_POST['filter_join']??'and'),
         ],
     ];
+    if (!$opts['selected_destinations']) {
+        echo json_encode(['ok'=>false,'error'=>'حداقل یک مقصد مشمول برای اصلاح انتخاب کنید'],JSON_UNESCAPED_UNICODE); exit;
+    }
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
         $oldFix = json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PROGRESS_FILE), true);
@@ -30652,9 +30686,14 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         exit;
     }
     $lockFile = SYNC_MATRIX_FIX_LOCK_FILE;
-    /* v10.297: کار بلند اصلاح را به child مستقل worker بسپار. ابتدا lock را
-       probe می‌کنیم تا اجرای وبیِ قدیمی یا worker دیگر دوباره‌کاری نسازد. */
-    if (s4WorkerIsActive()) {
+    /* endpoint شروع خودش worker را تضمین می‌کند؛ برگشتن به PHP-FPM همان علت
+       اصلی قطع‌شدن وسط راه بود. اگر worker بالا نیاید، صریح خطا بده. */
+    $fixWorkerActive=s4WorkerIsActive();
+    if(!$fixWorkerActive){$spawnFixWorker=s4SpawnPersistentWorker();usleep(400000);$fixWorkerActive=s4WorkerIsActive();}
+    if(!$fixWorkerActive){echo json_encode(['ok'=>false,'error'=>'worker پایدار سرور راه‌اندازی نشد؛ اصلاح برای جلوگیری از قطع‌شدن شروع نشد','worker_start'=>$spawnFixWorker??null],JSON_UNESCAPED_UNICODE);exit;}
+    /* کار بلند اصلاح را به child مستقل worker بسپار. ابتدا lock را probe
+       می‌کنیم تا اجرای worker دیگر دوباره‌کاری نسازد. */
+    if ($fixWorkerActive) {
         $probe = @fopen($lockFile, 'c');
         $free = $probe && @flock($probe, LOCK_EX | LOCK_NB);
         if (!$free) {
@@ -30665,9 +30704,10 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         $oldFix = matrixFixProgressRead();
         $oldCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
         $sameFilters = $oldCp && json_encode($oldCp['view_filters'] ?? []) === json_encode($opts['view_filters']);
+        $sameDestinations = !$oldCp || json_encode(array_values((array)($oldFix['selected_destinations']??[]))) === json_encode($opts['selected_destinations']);
         $resumeWorker = $oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
             && (string)($oldCp['scope'] ?? 'all') === $opts['scope']
-            && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters;
+            && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters && $sameDestinations;
         matrixFixStopClear();
         $enq = s4WorkerEnqueueMatrixFix($opts, (bool)$resumeWorker);
         echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
@@ -41733,6 +41773,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.301', 'ورودی 10.301 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "301'") !== false
       && version_compare(APP_VERSION, '10.' . '301', '>='));
+    $add('10.302', 'تیک‌های مقصد در درخواست اصلاح تا worker و فیلتر job منتقل می‌شوند',
+         strpos($selfSrc, "fd.append('selected_destinations',JSON.stringify(selectedDestinations))") !== false
+      && strpos($selfSrc, "'selected_destinations'=>array_values((array)(\$opts['selected_destinations']??[]))") !== false
+      && strpos($selfSrc, "\$requestedDest=array_key_exists('selected_destinations',\$opts)") !== false);
+    $add('10.302', 'endpoint اصلاح worker را راه می‌اندازد و هرگز به PHP-FPM بلند برنمی‌گردد',
+         strpos($selfSrc, "\$spawnFixWorker=s4SpawnPersistentWorker()") !== false
+      && strpos($selfSrc, "اصلاح برای جلوگیری از قطع‌شدن شروع نشد") !== false);
+    $add('10.302', '422 نام تکراری باسلام با یک endpoint سریع به PATCH تبدیل می‌شود',
+         strpos($selfSrc, "function bslFindExistingQuick") !== false
+      && strpos($selfSrc, "'action'=>'duplicate_updated'") !== false
+      && strpos($selfSrc, "'skip_find_existing' => true") !== false);
+    $add('10.302', 'status اصلاح لاگ مقصد انتخاب‌نشده را نیز حذف می‌کند',
+         strpos($selfSrc, "!in_array('woo',\$fixSelected,true)") !== false
+      && strpos($selfSrc, "mb_stripos(\$m,'ووکامرس')") !== false);
+    $add('10.302', 'ورودی 10.302 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "302'") !== false
+      && version_compare(APP_VERSION, '10.' . '302', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72957,6 +73014,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.302', t:'🔌 اصلاح endpointمحور مقصدها و باسلام', items:[
+    'انتخاب فعلی تیک‌های شمول عیناً به endpoint، صف، child و فیلتر job می‌رود؛ بدون تیک ووکامرس هیچ job یا log ووکامرس وجود ندارد',
+    'endpoint شروع، worker پایدار را خودش راه می‌اندازد و اگر ممکن نباشد به‌جای اجرای شکننده در PHP-FPM صریحاً خطا می‌دهد',
+    'ارسال باسلام مستقیم و کوتاه است؛ 422 نام تکراری با یک جست‌وجوی endpoint هدفمند به PATCH همان محصول تبدیل می‌شود',
+    'پاسخ status نیز planned/live/log مقصدهای خارج از شمول را فیلتر می‌کند'
+  ]},
   {v:'10.301', t:'✅ تکمیل پنج اصلاح مغایرت گزارش‌شده', items:[
     'قیمت هر غرفهٔ غیرپیش‌فرض هنگام ساخت job از تنظیمات زندهٔ همان غرفه و پروفایل محاسبه و عیناً ارسال می‌شود',
     'ارسال missing باسلام دیگر برای هر محصول کل مقصد را جست‌وجو نمی‌کند؛ دستهٔ معتبر نیز از کش دسته‌ها انتخاب می‌شود تا توقف و 422 برطرف شود',
@@ -81862,6 +81925,8 @@ function syncMatrixFixStart(scope){
   fd.append('scope', scope);
   fd.append('source','manual');
   fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
+  const selectedDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
+  fd.append('selected_destinations',JSON.stringify(selectedDestinations));
   fd.append('q',($('smQ')||{}).value||'');
   if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');
