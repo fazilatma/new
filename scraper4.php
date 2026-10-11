@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.306';
+const APP_VERSION = '10.307';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1203,6 +1203,9 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         'source'=>(string)($opts['source']??'manual'),'duplicate_keep'=>(string)($opts['duplicate_keep']??'newest'),
         'view_filters'=>is_array($opts['view_filters']??null)?$opts['view_filters']:[],
         'selected_destinations'=>array_values((array)($opts['selected_destinations']??[])),
+        /* اگر fix پشت build اجباری صف شده، نتیجه باید واقعاً متعلق به همان build باشد؛
+           شکست build نباید باعث اجرای fix روی فایل قدیمی و پیام «کاری نیست» شود. */
+        'min_matrix_generated_at'=>max(0,(int)($opts['min_matrix_generated_at']??0)),
         'resume'=>$resume,'dedup_key'=>'matrix_fix','requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
@@ -1216,7 +1219,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
 }
 function s4WorkerRunMatrixFix(array $payload): array {
     $scope=(string)($payload['scope']??'all');$resume=!empty($payload['resume']);
-    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
+    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'min_matrix_generated_at'=>max(0,(int)($payload['min_matrix_generated_at']??0)),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
     try{matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
@@ -29575,12 +29578,19 @@ function matrixFixRun(array $opts = []): array {
     };
 
     $data = matrixResultLoad();
+    $minMatrixAt=max(0,(int)($opts['min_matrix_generated_at']??0));
     if (!$data || empty($data['rows'])) {
         matrixFixProgress([
             'running' => false, 'done' => true, 'error' => 'جدول مقایسه موجود نیست — اول بسازید',
             'pct' => 100, 'log_add' => ['❌ جدول مقایسه روی سرور نیست'],
         ]);
         return ['ok' => false, 'error' => 'no_matrix'];
+    }
+    if($minMatrixAt>0&&(int)($data['generated_at']??0)<$minMatrixAt){
+        $msg='بازسازی تازهٔ جدول کامل نشد؛ اصلاح روی نتیجهٔ قدیمی اجرا نشد';
+        matrixFixProgress(['running'=>false,'done'=>true,'error'=>$msg,'pct'=>100,'phase'=>'build_failed',
+            'log_add'=>['❌ '.$msg]]);
+        return ['ok'=>false,'error'=>'fresh_matrix_not_ready'];
     }
 
     $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
@@ -30714,21 +30724,31 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
-    /* اگر جدول با تیک‌ها/ضرایب فعلی سازگار نیست، endpoint خودش ابتدا build
-       تازه و سپس fix را در همان صف worker می‌چیند؛ «کاری نیست» کاذب نمی‌دهد. */
+    /* اصلاح دستی همیشه روی snapshot تازه اجرا می‌شود. صرفاً برابر بودن تیک‌ها و
+       pricing_signature کافی نیست: پروفایل یا کاتالوگ مقصد ممکن است پس از ساخت
+       قبلی عوض شده باشد و همان فایل قدیمی پیام کاذب «کاری نیست» تولید کند. */
     $fixMatrix=is_file(SYNC_MATRIX_RESULT_FILE)?matrixResultLoad():[];
     $fixHave=array_values((array)($fixMatrix['selected_destinations']??[]));sort($fixHave);
     $fixWant=array_values($opts['selected_destinations']);sort($fixWant);
-    $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
+    $forceFresh=(string)$opts['source']==='manual';
+    $fixNeedsBuild=$forceFresh||!$fixMatrix||$fixHave!==$fixWant
         ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
     if($fixNeedsBuild){
         $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
         if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای بازسازی خودکار جدول آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+        $freshRequestedAt=time();
         $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
             'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],false);
+        if(empty($buildEnq['ok'])){
+            echo json_encode(['ok'=>false,'error'=>'بازسازی تازهٔ جدول در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;
+        }
+        $opts['min_matrix_generated_at']=$freshRequestedAt;
         $fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
+        if(empty($fixEnq['ok'])){
+            echo json_encode(['ok'=>false,'error'=>'ساخت جدول صف شد اما اصلاح در صف قرار نگرفت','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+        }
         echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,
-            'message'=>'جدول با تنظیمات فعلی بازسازی و اصلاح بلافاصله پس از آن اجرا می‌شود','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+            'message'=>'جدول تازه ساخته می‌شود و اصلاح بلافاصله فقط روی همان نتیجه اجرا خواهد شد','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
     /* don't run while matrix build is running */
     $mxProg = matrixProgressRead();
@@ -41881,14 +41901,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "setTimeout(syncMatrixAutoLate,6000)") !== false
       && strpos($selfSrc, "Number(d.result_age_sec||0)>1800") !== false);
     $add('10.306', 'دکمهٔ خواندن نتیجه حذف شده است',
-         strpos($selfSrc, '📖 خواندن نتیجه') === false);
+         strpos($selfSrc, '📖 خواندن ' . 'نتیجه') === false);
     $add('10.306', 'اصلاح روی جدول ناسازگار build و fix را پشت‌سرهم صف می‌کند',
-         strpos($selfSrc, "\$fixNeedsBuild=!\$fixMatrix") !== false
+         strpos($selfSrc, "\$fixNeedsBuild=\$forceFresh||!\$fixMatrix") !== false
       && strpos($selfSrc, "'refreshing_matrix'=>true") !== false
       && strpos($selfSrc, "'waiting_for_matrix'=>true") !== false);
     $add('10.306', 'ورودی 10.306 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "306'") !== false
       && version_compare(APP_VERSION, '10.' . '306', '>='));
+    $add('10.307', 'اصلاح دستی همیشه پس از ساخت snapshot تازه در همان صف اجرا می‌شود',
+         strpos($selfSrc, "\$forceFresh=(string)\$opts['source']==='manual'") !== false
+      && strpos($selfSrc, "\$opts['min_matrix_generated_at']=\$freshRequestedAt") !== false);
+    $add('10.307', 'شکست ساخت تازه اجازهٔ اصلاح روی جدول قدیمی و پیام کاذب نمی‌دهد',
+         strpos($selfSrc, "'fresh_matrix_not_ready'") !== false
+      && strpos($selfSrc, "min_matrix_generated_at") !== false);
+    $add('10.307', 'ورودی 10.307 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "307'") !== false
+      && version_compare(APP_VERSION, '10.' . '307', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73112,6 +73141,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.307', t:'✅ اصلاح مغایرت فقط روی جدول تازه و معتبر', items:[
+    'پیش از هر اصلاح دستی، ساخت تازهٔ جدول و سپس اصلاح در همان صف worker قرار می‌گیرد؛ بنابراین تغییرات جدید پروفایل و مقصد نادیده نمی‌ماند.',
+    'اگر ساخت تازه شکست بخورد، اصلاح روی فایل قدیمی اجرا نمی‌شود و دیگر پیام اشتباه «کاری برای انجام نیست» نمایش داده نخواهد شد.',
+    'بارگذاری خودکار و سبک جدول در پایان load همچنان بدون دکمه و با استفادهٔ فوری از cache انجام می‌شود.'
+  ]},
   {v:'10.306', t:'♻️ جدول مغایرت خودکار و سبک در پایان بارگذاری', items:[
     'دکمهٔ خواندن نتیجه حذف شد؛ نتیجهٔ کش‌شده شش ثانیه پس از load به‌صورت خودکار نمایش داده می‌شود',
     'اگر نتیجه بیش از ۳۰ دقیقه عمر داشته باشد، ضرایب عوض شده باشند یا تیک مقصدها فرق کند، rebuild در worker پس‌زمینه آغاز می‌شود',
