@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.304';
+const APP_VERSION = '10.305';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -20383,6 +20383,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     $prepD   = (int)($opts['preparation_days'] ?? 3);
     $weight  = (int)($opts['weight'] ?? 500);
     $pkgW    = (int)($opts['package_weight'] ?? ($weight + 100));
+    if ($pkgW <= 0) $pkgW = max(1, $weight + 100); // باسلام وزن بسته‌بندی صفر را با 422 رد می‌کند
     $catId   = (int)($opts['category_id'] ?? 0);
     $fallback= is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
     $autoCat = !empty($opts['auto_category']);
@@ -20422,9 +20423,13 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     }
     if ($catUsed <= 0 && $autoCat && !empty($flatCats)) {
         $_ac = autoMatchBslCategory($title, $flatCats);
+        if ($_ac <= 0) $_ac = autoMatchBslCategoryForce($title, $flatCats);
         if ($_ac > 0) $catUsed = $_ac;
     }
+    if ($catUsed <= 0) foreach ($fallback as $_fc) { $_fc=(int)$_fc; if($_fc>0){$catUsed=$_fc;break;} }
     if ($catUsed > 0 && !empty($cData) && is_array($cData)) $catUsed = findLeafCategory($catUsed, $cData);
+    if ($catUsed <= 0) return ['ok'=>false,'error'=>'دسته‌بندی معتبر باسلام برای محصول تعیین نشده','error_code'=>422,
+        'error_detail'=>'category_id خالی است؛ دستهٔ پروفایل، دستهٔ پیش‌فرض یا دستهٔ جایگزین تنظیم کنید'];
     $brief = trim(strip_tags((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? '')));
     $desc  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
     if ($brief === '') $brief = trim(strip_tags($title));
@@ -29842,7 +29847,7 @@ function matrixFixRun(array $opts = []): array {
                         $details[] = matrixFixDetail('bsl', $sname, 'send', $title, false, 'ارسال ' . $sname . ' · ' . $title . ' — ' . $err, 0, ['vendor_id' => $vid, 'error' => $err]);
                         matrixFixProgress([
                             'ok_n' => $okN, 'fail_n' => $failN,
-                            'log_add' => ['  ❌ ارسال ' . $sname . ' — ' . $err],
+                            'log_add' => ['  ❌ ارسال ' . $sname . ' — ' . $err . (!empty($res['error_detail'])?(' · '.mb_substr((string)$res['error_detail'],0,180)):'')],
                             'live_add' => ['ok' => false, 'kind' => 'send_bsl', 'error' => $err, 't' => time()],
                         ]);
                     }
@@ -41843,6 +41848,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.304', 'ورودی 10.304 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "304'") !== false
       && version_compare(APP_VERSION, '10.' . '304', '>='));
+    $add('10.305', 'payload باسلام وزن بسته‌بندی صفر ارسال نمی‌کند',
+         strpos($selfSrc, "if (\$pkgW <= 0) \$pkgW = max(1, \$weight + 100)") !== false);
+    $add('10.305', 'قبل از create دسته معتبر انتخاب یا خطای روشن داده می‌شود',
+         strpos($selfSrc, "autoMatchBslCategoryForce(\$title, \$flatCats)") !== false
+      && strpos($selfSrc, "دسته‌بندی معتبر باسلام برای محصول تعیین نشده") !== false);
+    $add('10.305', 'ورودی 10.305 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "305'") !== false
+      && version_compare(APP_VERSION, '10.' . '305', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73067,6 +73080,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.305', t:'🧾 رفع ریشهٔ HTTP 422 باسلام', items:[
+    'package_weight صفر دیگر به endpoint باسلام ارسال نمی‌شود و به وزن محصول به‌علاوهٔ بسته‌بندی تبدیل می‌شود',
+    'پیش از create، دستهٔ پروفایل/خودکار/جایگزین به دستهٔ معتبر تبدیل می‌شود؛ بدون دسته درخواست نامعتبر ارسال نمی‌شود',
+    'جزئیات واقعی validation باسلام در log اصلاح نمایش داده می‌شود تا پیام عمومی 422 پنهان نماند'
+  ]},
   {v:'10.304', t:'⏳ backoff واقعی باسلام و پاک‌سازی log اجرای جاری', items:[
     'status فقط logهای بعد از started_at اجرای فعلی را برمی‌گرداند؛ آثار اجرای قدیمی و ووکامرس قدیمی دیگر نمایش داده نمی‌شوند',
     'HTTP 429 باسلام شکست محسوب نمی‌شود و cursor را جلو نمی‌برد؛ همان محصول پس از ۳۰ ثانیه دوباره تلاش می‌شود',
