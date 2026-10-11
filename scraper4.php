@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.308';
+const APP_VERSION = '10.309';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29415,6 +29415,9 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
     }
     return ['ok' => false, 'error' => (string)($r['error'] ?? 'ارسال باسلام ناموفق'),
         'error_code'=>(int)($r['error_code']??0),'error_detail'=>(string)($r['error_detail']??''),
+        /* اطلاعات اثبات 429 نباید در wrapper اصلاح گم شود. */
+        'retry_after'=>max(0,(int)($r['retry_after']??0)),
+        'rate_source'=>trim((string)($r['rate_source']??'')),
         'repair_attempted'=>!empty($r['repair_attempted'])];
 }
 
@@ -41952,6 +41955,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.308', 'ورودی 10.308 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "308'") !== false
       && version_compare(APP_VERSION, '10.' . '308', '>='));
+    $add('10.309', 'wrapper اصلاح منبع و زمان انتظار 429 را تا لاگ worker حفظ می‌کند',
+         substr_count($selfSrc, "'rate_source'=>trim((string)(\$r['rate_source']") >= 2
+      && substr_count($selfSrc, "'retry_after'=>max(0,(int)(\$r['retry_after']") >= 2);
+    $add('10.309', 'ورودی 10.309 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "309'") !== false
+      && version_compare(APP_VERSION, '10.' . '309', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73176,6 +73185,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.309', t:'🔎 نمایش منبع واقعی HTTP 429 در اصلاح مغایرت', items:[
+    'در اجرای زندهٔ v10.308 یک پاسخ واقعی HTTP 429 در محصول ۵۹ ثبت شد و worker دقیقاً ۳۰ ثانیه صبر کرد و از checkpoint ادامه داد.',
+    'اطلاعات connection mode، Server/Via و Retry-After اکنون از wrapper ارسال نیز عبور می‌کند و در لاگ اصلاح گم نمی‌شود.'
+  ]},
   {v:'10.308', t:'🐢 تشخیص واقعی و مهار HTTP 429 باسلام', items:[
     'بخش گزارش آخرین مغایرت‌گیری از رابط حذف شد.',
     'کد 429 مستقیماً از status واقعی HTTP ثبت می‌شود؛ هدرهای Server/Via و Retry-After برای تشخیص منبع و زمان انتظار نگه‌داری می‌شوند.',
