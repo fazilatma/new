@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.297';
+const APP_VERSION = '10.298';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29441,6 +29441,10 @@ function matrixFixRun(array $opts = []): array {
     $doneJobs = array_values(array_unique(array_map('strval', (array)($fixCp['done_jobs'] ?? []))));
     $doneJobSet = $doneJobs ? array_fill_keys($doneJobs, true) : [];
     $fixStartedAt = (int)($fixCp['started_at'] ?? time());
+    /* v10.298: اگر child/هاست میان کار قطع شد، حتی شکست‌های پیشین نباید
+       باعث بازگشت cursor به ابتدای صف شوند. اجرای دستی تازه بدون checkpoint
+       همچنان همهٔ موارد را از اول ارزیابی می‌کند. */
+    $resumeCursor = max(0, (int)($fixCp['cur'] ?? 0));
     $jobKey = static function (array $j): string {
         return (string)($j['kind'] ?? '') . '|' . (string)($j['bare'] ?? '') . '|'
             . (int)($j['id'] ?? 0) . '|' . (int)($j['vendor_id'] ?? 0);
@@ -29470,7 +29474,7 @@ function matrixFixRun(array $opts = []): array {
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => $fixStartedAt, 'source' => $source,
         'scope' => $scope, 'delay_ms' => $delayMs, 'duplicate_keep' => $duplicateKeep, 'job' => 'fix',
-        'total' => $total, 'cur' => 0, 'ok_n' => (int)($fixCp['ok_n'] ?? 0),
+        'total' => $total, 'cur' => $resumeCursor, 'ok_n' => (int)($fixCp['ok_n'] ?? 0),
         'fail_n' => (int)($fixCp['fail_n'] ?? 0), 'skip_n' => (int)($fixCp['skip_n'] ?? 0),
         'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
         'price_n' => (int)($fixCp['price_n'] ?? 0), 'done_jobs' => $doneJobs,
@@ -29531,7 +29535,7 @@ function matrixFixRun(array $opts = []): array {
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
-        if (isset($doneJobSet[$jk])) continue;
+        if ($ji < $resumeCursor || isset($doneJobSet[$jk])) continue;
         if (matrixFixStopRequested()) {
             $stopped = true;
             matrixFixProgress(['log_add' => ['⏹ توقف توسط کاربر']]);
@@ -30571,7 +30575,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         $oldFix = matrixFixProgressRead();
         $oldCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
         $sameFilters = $oldCp && json_encode($oldCp['view_filters'] ?? []) === json_encode($opts['view_filters']);
-        $resumeWorker = $oldCp && !empty($oldCp['done_jobs'])
+        $resumeWorker = $oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
             && (string)($oldCp['scope'] ?? 'all') === $opts['scope']
             && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters;
         matrixFixStopClear();
@@ -41593,6 +41597,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.297', 'ورودی 10.297 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "297'") !== false
       && version_compare(APP_VERSION, '10.' . '297', '>='));
+    $add('10.298', 'بازیابی اصلاح از cursor پایدار checkpoint ادامه می‌یابد',
+         strpos($selfSrc, "\$resumeCursor = max(0, (int)(\$fixCp['cur'] ?? 0))") !== false
+      && strpos($selfSrc, "if (\$ji < \$resumeCursor || isset(\$doneJobSet[\$jk])) continue;") !== false
+      && strpos($selfSrc, "(int)(\$oldCp['cur'] ?? 0) > 0") !== false);
+    $add('10.298', 'ورودی 10.298 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "298'") !== false
+      && version_compare(APP_VERSION, '10.' . '298', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72817,6 +72828,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.298', t:'⏩ ادامهٔ دقیق اصلاح از cursor ذخیره‌شده', items:[
+    'checkpoint اکنون علاوه بر موفق‌ها، جای دقیق حرکت در صف را برای بازیابی پس از قطع child استفاده می‌کند',
+    'پس از وقفه، اصلاح از مورد بعدی ادامه پیدا می‌کند و خطاهای قبلی باعث بازگشت دوباره به مورد اول نمی‌شوند'
+  ]},
   {v:'10.297', t:'🧵 اجرای پایدار اصلاح مغایرت در worker مستقل', items:[
     'اصلاح مغایرت دیگر پس از بستن پاسخ وب در PHP-FPM ادامه نمی‌یابد؛ job در صف worker و child مستقل CLI اجرا می‌شود',
     'محدودیت زمانی هاست، بسته‌شدن مرورگر و خواب گوشی عملیات را وسط راه قطع نمی‌کند',
