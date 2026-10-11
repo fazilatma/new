@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.302';
+const APP_VERSION = '10.303';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28935,6 +28935,20 @@ function matrixFixProgressRead(): array {
     return localTaskStateRead(SYNC_MATRIX_FIX_PROGRESS_FILE, []);
 }
 
+/** یک منبع مشترک برای هر دو status endpoint؛ مقصد خارج از تیک حتی اگر در
+ * log قدیمی روی دیسک مانده باشد هرگز به UI برنمی‌گردد. */
+function matrixFixVisibleProgress(array $prog, $requestedDestinations=null): array {
+    $selected=$requestedDestinations!==null
+        ? matrixNormalizeDestinations($requestedDestinations)
+        : array_values((array)($prog['selected_destinations']??[]));
+    if($selected)$prog['selected_destinations']=$selected;
+    if($selected&&!in_array('woo',$selected,true)){
+        $prog['log']=array_values(array_filter((array)($prog['log']??[]),static function($row){$m=(string)($row['m']??'');return stripos($m,'WC')===false&&mb_stripos($m,'ووکامرس')===false;}));
+        foreach(['planned','live'] as $k)$prog[$k]=array_values(array_filter((array)($prog[$k]??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
+    }
+    return $prog;
+}
+
 function matrixFixStopRequested(): bool {
     return is_file(SYNC_MATRIX_FIX_STOP_FILE);
 }
@@ -29116,9 +29130,12 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $memberRaw=$memberProduct?extractSourcePrice($memberProduct):(string)($r['src_price']??'0');
         $memberProfilePrice=$memberProfile?profileFinalPrice($memberProfile,$memberRaw):0;
         $wooExpectedNow=$memberProfilePrice>0?destAdjustPrice($memberProfilePrice,$wooCfgNow):0;
+        /* job باید شناسهٔ واقعیِ عضو فعلی پروفایل را حمل کند. profile_key/key
+           قدیمیِ ماتریس علت اصلی «در پروفایل پیدا نشد» در ارسال باسلام بود. */
+        $resolvedProductKey=trim((string)($memberProduct['key']??$productKey));
         $base = ['bare' => $bare, 'title' => $title,
-            'profile_key' => (string)($r['profile_key'] ?? ''),
-            'product_key' => $productKey];
+            'profile_key' => (string)($member['profile_key'] ?? $r['profile_key'] ?? ''),
+            'product_key' => $resolvedProductKey];
 
         $wooItems = [];
         if (is_array($r['woo'] ?? null)) $wooItems[] = $r['woo'];
@@ -30365,6 +30382,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     header('Content-Type: application/json; charset=UTF-8');
     $prog = matrixProgressRead();
     $fix = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
+    $visibleDestRaw=$_GET['selected_destinations']??$_POST['selected_destinations']??null;
+    if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     /* running یتیمِ build را خود status ترمیم می‌کند؛ UI نباید پنج دقیقه منتظر
        ops_feedback بماند یا دکمه را قفل‌شده ببیند. heartbeat کهنه + flock آزاد
        شرط اجباری است تا فاصلهٔ کوتاه بین دو child سالم recovery کاذب نسازد. */
@@ -30394,6 +30413,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         if($free){@flock($ff,LOCK_UN);matrixFixProgress(['running'=>false,'done'=>true,'stopped'=>true,'stale'=>true,'phase'=>'stopped','finished_at'=>time(),'log_add'=>['⏹ state قدیمی اصلاح آزاد شد']]);$fix=matrixFixProgressRead();}
         if($ff)@fclose($ff);
     }
+    if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     $has = is_file(SYNC_MATRIX_RESULT_FILE);
     $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
     $anyRun = !empty($prog['running']) || !empty($fix['running']);
@@ -30604,16 +30624,9 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
 /* v10.117: اصلاح مغایرت از جدول مقایسه */
 if (isset($_GET['sync_matrix_fix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_fix_status')) {
     header('Content-Type: application/json; charset=UTF-8');
-    $prog = matrixFixProgressRead();
+    $prog = matrixFixVisibleProgress(matrixFixProgressRead(),$_GET['selected_destinations']??$_POST['selected_destinations']??null);
     $since = max(0, (int)($_GET['since'] ?? $_POST['since'] ?? 0));
     $log = is_array($prog['log'] ?? null) ? $prog['log'] : [];
-    $fixSelected=array_values((array)($prog['selected_destinations']??[]));
-    if($fixSelected&&!in_array('woo',$fixSelected,true)){
-        $log=array_values(array_filter($log,static function($row){$m=(string)($row['m']??'');return stripos($m,'WC')===false&&mb_stripos($m,'ووکامرس')===false;}));
-        $prog['planned']=array_values(array_filter((array)($prog['planned']??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
-        $prog['live']=array_values(array_filter((array)($prog['live']??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
-    }
-    $prog['log']=$log;
     $logTotal = count($log);
     if ($since > 0 && $since < $logTotal) {
         $prog['log_delta'] = array_slice($log, $since);
@@ -41790,6 +41803,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.302', 'ورودی 10.302 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "302'") !== false
       && version_compare(APP_VERSION, '10.' . '302', '>='));
+    $add('10.303', 'status اصلی UI نیز تیک‌های زنده را برای حذف log مقصد می‌فرستد',
+         strpos($selfSrc, "function matrixFixVisibleProgress") !== false
+      && strpos($selfSrc, "fd.append('selected_destinations',JSON.stringify(visibleDestinations))") !== false
+      && strpos($selfSrc, "\$fix=matrixFixVisibleProgress(\$fix,\$visibleDestRaw)") !== false);
+    $add('10.303', 'job باسلام شناسهٔ واقعی محصول و پروفایل فعلی را حمل می‌کند',
+         strpos($selfSrc, "\$resolvedProductKey=trim((string)(\$memberProduct['key']") !== false
+      && strpos($selfSrc, "'profile_key' => (string)(\$member['profile_key']") !== false);
+    $add('10.303', 'ورودی 10.303 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "303'") !== false
+      && version_compare(APP_VERSION, '10.' . '303', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73014,6 +73037,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.303', t:'🧹 حذف قطعی log ووکامرس و رفع محصول‌نیافتن باسلام', items:[
+    'poll اصلی رابط نیز در هر درخواست تیک‌های زندهٔ مقصد را می‌فرستد؛ status مشترک log/planned/live ووکامرس را همان لحظه حذف می‌کند',
+    'job باسلام به‌جای profile_key و key قدیمی ماتریس، شناسهٔ واقعی محصول در پروفایل ذخیره‌شدهٔ فعلی را می‌گیرد',
+    'خطای پرتکرار «در پروفایل پیدا نشد» برای محصولاتی که واقعاً عضو پروفایل‌اند برطرف شد'
+  ]},
   {v:'10.302', t:'🔌 اصلاح endpointمحور مقصدها و باسلام', items:[
     'انتخاب فعلی تیک‌های شمول عیناً به endpoint، صف، child و فیلتر job می‌رود؛ بدون تیک ووکامرس هیچ job یا log ووکامرس وجود ندارد',
     'endpoint شروع، worker پایدار را خودش راه می‌اندازد و اگر ممکن نباشد به‌جای اجرای شکننده در PHP-FPM صریحاً خطا می‌دهد',
@@ -81874,6 +81902,8 @@ function syncMatrixPoll(){
   if(window._smPoll) clearInterval(window._smPoll);
   const tick=()=>{
     const fd=new FormData(); fd.append('action','sync_matrix_status');
+    const visibleDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
+    fd.append('selected_destinations',JSON.stringify(visibleDestinations));
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
       if(!d||!d.ok)return;
       const p = d.progress || {};
