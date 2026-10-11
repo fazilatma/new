@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.305';
+const APP_VERSION = '10.306';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30439,6 +30439,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     $has = is_file(SYNC_MATRIX_RESULT_FILE);
     $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
+    $statusResult=$has?matrixResultLoad():[];
     $anyRun = !empty($prog['running']) || !empty($fix['running']);
     $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
         || !empty($prog['stop_requested']) || !empty($prog['stopped']);
@@ -30455,7 +30456,9 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'fix_progress' => $fix,
         'has_result' => $has,
         'result_age_sec' => $age,
-        'result_rows' => $has ? (int)((matrixResultLoad()['row_count'] ?? 0)) : 0,
+        'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
+        'result_destinations'=>array_values((array)($statusResult['selected_destinations']??[])),
+        'result_pricing_stale'=>$has&&((string)($statusResult['pricing_signature']??'')!==matrixPricingFingerprint()),
         'job' => !empty($fix['running']) ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
     ], JSON_UNESCAPED_UNICODE);
     exit;
@@ -30711,14 +30714,31 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
-    if (!is_file(SYNC_MATRIX_RESULT_FILE)) {
-        echo json_encode(['ok' => false, 'error' => 'اول جدول مقایسه را بسازید'], JSON_UNESCAPED_UNICODE);
-        exit;
+    /* اگر جدول با تیک‌ها/ضرایب فعلی سازگار نیست، endpoint خودش ابتدا build
+       تازه و سپس fix را در همان صف worker می‌چیند؛ «کاری نیست» کاذب نمی‌دهد. */
+    $fixMatrix=is_file(SYNC_MATRIX_RESULT_FILE)?matrixResultLoad():[];
+    $fixHave=array_values((array)($fixMatrix['selected_destinations']??[]));sort($fixHave);
+    $fixWant=array_values($opts['selected_destinations']);sort($fixWant);
+    $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
+        ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
+    if($fixNeedsBuild){
+        $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
+        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای بازسازی خودکار جدول آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
+            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],false);
+        $fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
+        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,
+            'message'=>'جدول با تنظیمات فعلی بازسازی و اصلاح بلافاصله پس از آن اجرا می‌شود','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
     /* don't run while matrix build is running */
     $mxProg = matrixProgressRead();
     if (!empty($mxProg['running'])) {
-        echo json_encode(['ok' => false, 'error' => 'ساخت جدول در حال اجراست — صبر کنید', 'running' => true], JSON_UNESCAPED_UNICODE);
+        if(s4WorkerIsActive()){
+            $fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
+            echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
+                'waiting_for_matrix'=>true,'message'=>'اصلاح در صف است و خودکار پس از پایان ساخت جدول آغاز می‌شود']+$fixEnq,JSON_UNESCAPED_UNICODE);exit;
+        }
+        echo json_encode(['ok' => false, 'error' => 'ساخت جدول در حال اجراست ولی worker پایدار در دسترس نیست', 'running' => true], JSON_UNESCAPED_UNICODE);
         exit;
     }
     $lockFile = SYNC_MATRIX_FIX_LOCK_FILE;
@@ -41856,6 +41876,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.305', 'ورودی 10.305 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "305'") !== false
       && version_compare(APP_VERSION, '10.' . '305', '>='));
+    $add('10.306', 'جدول در مرحلهٔ پایانی load خودکار خوانده و در صورت نیاز rebuild می‌شود',
+         strpos($selfSrc, "function syncMatrixAutoLate") !== false
+      && strpos($selfSrc, "setTimeout(syncMatrixAutoLate,6000)") !== false
+      && strpos($selfSrc, "Number(d.result_age_sec||0)>1800") !== false);
+    $add('10.306', 'دکمهٔ خواندن نتیجه حذف شده است',
+         strpos($selfSrc, '📖 خواندن نتیجه') === false);
+    $add('10.306', 'اصلاح روی جدول ناسازگار build و fix را پشت‌سرهم صف می‌کند',
+         strpos($selfSrc, "\$fixNeedsBuild=!\$fixMatrix") !== false
+      && strpos($selfSrc, "'refreshing_matrix'=>true") !== false
+      && strpos($selfSrc, "'waiting_for_matrix'=>true") !== false);
+    $add('10.306', 'ورودی 10.306 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "306'") !== false
+      && version_compare(APP_VERSION, '10.' . '306', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -65597,7 +65630,6 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
-<button class="btn btn-cyan" onclick="syncMatrixLoad(1)" style="font-size:11px;padding:6px 12px">📖 خواندن نتیجه</button>
 <button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
 <button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
@@ -73080,6 +73112,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.306', t:'♻️ جدول مغایرت خودکار و سبک در پایان بارگذاری', items:[
+    'دکمهٔ خواندن نتیجه حذف شد؛ نتیجهٔ کش‌شده شش ثانیه پس از load به‌صورت خودکار نمایش داده می‌شود',
+    'اگر نتیجه بیش از ۳۰ دقیقه عمر داشته باشد، ضرایب عوض شده باشند یا تیک مقصدها فرق کند، rebuild در worker پس‌زمینه آغاز می‌شود',
+    'شروع اصلاح روی جدول ناسازگار به‌جای «کاری نیست»، build و سپس fix را به‌ترتیب در صف می‌گذارد',
+    'اگر ساخت از قبل در حال اجرا باشد، اصلاح پشت آن صف می‌شود و نیاز به کلیک دوباره ندارد'
+  ]},
   {v:'10.305', t:'🧾 رفع ریشهٔ HTTP 422 باسلام', items:[
     'package_weight صفر دیگر به endpoint باسلام ارسال نمی‌شود و به وزن محصول به‌علاوهٔ بسته‌بندی تبدیل می‌شود',
     'پیش از create، دستهٔ پروفایل/خودکار/جایگزین به دستهٔ معتبر تبدیل می‌شود؛ بدون دسته درخواست نامعتبر ارسال نمی‌شود',
@@ -82307,17 +82345,24 @@ function syncMatrixLoad(page, silent){
     if(body) body.innerHTML='<tr><td style="padding:12px;color:#f87171">خطای شبکه: '+esc(String(e))+'</td></tr>';
   });
 }
-/* هنگام باز شدن صفحه، اگر نتیجهٔ سرور هست یک‌بار بخوان؛ اگر جاب running است poll کن */
-document.addEventListener('DOMContentLoaded', function(){
+/* مرحلهٔ پایانی بارگذاری: نتیجهٔ کش‌شده فوراً و سبک خوانده می‌شود و فقط
+   اگر مقصدها/ضرایب عوض شده یا نتیجه قدیمی است، rebuild به worker سپرده می‌شود. */
+function syncMatrixAutoLate(){
   try{
-    const fd=new FormData(); fd.append('action','sync_matrix_status');
+    const selected=smSelectedDestinations();if(!selected.length)return;
+    const fd=new FormData();fd.append('action','sync_matrix_status');fd.append('selected_destinations',JSON.stringify(selected));
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
       if(!d||!d.ok)return;
-      if(d.running){ smPaintProgress(d.progress||{}); syncMatrixPoll(); }
-      else if(d.has_result){ /* silent */ }
+      if(d.has_result)syncMatrixLoad(1,true);
+      if(d.running){smPaintProgress(d.progress||{});syncMatrixPoll();return;}
+      const have=(d.result_destinations||[]).map(String).sort(),want=selected.map(String).sort();
+      const scopeChanged=JSON.stringify(have)!==JSON.stringify(want);
+      const stale=!d.has_result||scopeChanged||!!d.result_pricing_stale||Number(d.result_age_sec||0)>1800;
+      if(stale)syncMatrixStart(false,true);
     }).catch(()=>{});
   }catch(e){}
-});
+}
+window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
 fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
