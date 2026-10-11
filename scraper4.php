@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.295';
+const APP_VERSION = '10.296';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -20129,7 +20129,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     foreach ($shops as $sh) {
         $vid = (int)($sh['vendor_id'] ?? 0); $tk = trim((string)($sh['token'] ?? ''));
         if ($vid <= 0 || $tk === '') continue;
-        $rawP = (string)($p['price'] ?? ($p['orig_price'] ?? ''));
+        $rawP = extractSourcePrice($p);
         if ($profile && $rawP !== '' && extractPriceNum($rawP) > 0) {
             $pf = bslShopPriceForProfile($profile, $rawP, $sh, $round);
         } else {
@@ -27970,7 +27970,7 @@ function matrixCompactCheckpoint(array &$cp): array {
 }
 
 function matrixPricingFingerprint(?array $profiles=null, ?array $cn=null): string {
-    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=['matrix-pricing-schema-v2-shop-profile'];
+    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=['matrix-pricing-schema-v3-missing-shop-expect'];
     foreach($profiles as $pk=>$p){if(!is_array($p))continue;$parts[]=(string)$pk.'|'.(string)($p['priceMode']??'none').'|'.(string)($p['priceVal']??0).'|'.(string)($p['roundPrice']??0);}
     sort($parts,SORT_STRING);$parts[]='dest|'.shopPricingSignature($cn);
     return hash('sha256',implode("\n",$parts));
@@ -27998,9 +27998,26 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
             if($hasProf&&$profile){$raw=(int)($r['src_price']??0);$pp=profileFinalPrice($profile,(string)$raw);$r['profile_price']=$pp;$r['woo_expect']=$pp>0?destAdjustPrice($pp,$wooCfg):0;$r['bsl_expect']=$pp>0?destAdjustPrice($pp,$bslCfg):0;}
             $hasWoo=$repriceWoo&&!empty($r['woo']);$wooTone=$repriceWoo?($hasProf&&$hasWoo?matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)):($hasProf?'missing_dst':($hasWoo?'extra':'na'))):'na';
             $r['woo_tone']=$wooTone;$shopCount=0;$shopOk=0;$shopBad=0;$shopMiss=0;$dupBsl=false;
-            foreach($shopsMeta as $sm){$vid=(int)$sm['vendor_id'];$cell=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
-                if($cell){$shopCount++;$base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$raw=(string)($r['src_price']??'0');$adj=($profile&&extractPriceNum($raw)>0)?bslShopPriceForProfile($profile,$raw,$shopBy[$vid],(int)($bslCfg['round']??0)):bslShopPriceFor($base>0?$base:$pp,$shopBy[$vid],(int)($bslCfg['round']??0));$expect=(int)($adj['price']??$base);$r['shop_expect'][$vid]=$expect;$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;}
-                elseif($hasProf)$shopMiss++;}
+            foreach($shopsMeta as $sm){
+                $vid=(int)$sm['vendor_id'];
+                $cell=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
+                $base=(int)($r['bsl_expect']??0);$pp=(int)($r['profile_price']??0);$raw=(string)($r['src_price']??'0');$expect=$base>0?$base:$pp;
+                /* v10.296: انتظار هر غرفه حتی وقتی محصول هنوز در آن مقصد نیست
+                   باید ساخته شود؛ وگرنه job ارسال missing به expect عمومی
+                   باسلام برمی‌گشت و ضریب غرفهٔ غیرپیش‌فرض ناپدید می‌شد. */
+                if($hasProf&&isset($shopBy[$vid])){
+                    $adj=($profile&&extractPriceNum($raw)>0)
+                        ?bslShopPriceForProfile($profile,$raw,$shopBy[$vid],(int)($bslCfg['round']??0))
+                        :bslShopPriceFor($expect,$shopBy[$vid],(int)($bslCfg['round']??0));
+                    if((int)($adj['price']??0)>0)$expect=(int)$adj['price'];
+                    $r['shop_expect'][$vid]=$expect;
+                }
+                if($cell){
+                    $shopCount++;$cell['expect']=$expect;$cell['tone']=matrixPriceTone($expect,(int)($cell['price']??0));$cell['shop_name']=(string)$sm['name'];
+                    if($cell['tone']==='ok')$shopOk++;elseif(in_array($cell['tone'],['bad','warn'],true))$shopBad++;
+                    if(!empty($cell['dup']))$dupBsl=true;$r['shops'][$vid]=$cell;
+                }elseif($hasProf)$shopMiss++;
+            }
             $flags=array_values(array_filter(array_map('strval',(array)($r['flags']??[])),static function($f){return str_starts_with($f,'dup_');}));
             if(matrixProfileDuplicateCount($r)>0){$flags[]='dup_profile';$sum['dup_profile']++;}if(!empty($r['woo_dup'])){$flags[]='dup_woo';$sum['dup_woo']++;}if($dupBsl){$flags[]='dup_bsl';$sum['dup_bsl']++;}
             if($wooTone==='missing_dst'){$flags[]='missing_woo';$sum['missing_woo']++;}if($wooTone==='extra'){$flags[]='extra_woo';$sum['extra_woo']++;}if(in_array($wooTone,['bad','warn'],true)||$shopBad>0){$flags[]='price_mismatch';$sum['price_mismatch']++;}if($shopMiss>0&&$hasProf){$flags[]='missing_bsl';$sum['missing_bsl']++;}
@@ -29186,7 +29203,13 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
     $r = bslUpsertToShop($p, $shop, $opts);
     if (!empty($r['ok'])) {
         $id = (int)($r['id'] ?? 0);
-        $price = $expect > 0 ? $expect : 0;
+        /* پاسخ جدول باید همان قیمت canonical مسیر ارسال باشد، نه expect که
+           ممکن است از ماتریس قدیمی و بدون ضریب غرفه آمده باشد. */
+        $rawCanonical = extractSourcePrice($p);
+        $canonical = extractPriceNum($rawCanonical)>0
+            ? bslShopPriceForProfile($profile,$rawCanonical,$shop,(int)($b['price_round']??0)) : [];
+        $price = (int)($canonical['price'] ?? 0);
+        if($price<=0)$price = $expect > 0 ? $expect : 0;
         /* read expect from product */
         $profP = (int)($p['final_price'] ?? 0);
         if ($profP <= 0) $profP = profileFinalPrice($profile, (string)($p['price'] ?? ''));
@@ -41478,6 +41501,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.295', 'ورودی 10.295 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "295'") !== false
       && version_compare(APP_VERSION, '10.' . '295', '>='));
+    $add('10.296', 'بازقیمت‌گذاری برای خانهٔ missing هم انتظار اختصاصی غرفه را ذخیره می‌کند',
+         strpos($selfSrc, "matrix-pricing-schema-v3-missing-shop-expect") !== false
+      && strpos($selfSrc, "\$r['shop_expect'][\$vid]=\$expect") !== false
+      && strpos($selfSrc, "expect عمومی") !== false);
+    $add('10.296', 'مسیرهای ارسال غرفه قیمت خام canonical را مبنا می‌گیرند',
+         strpos($selfSrc, "\$rawP = extractSourcePrice(\$p);") !== false
+      && strpos($selfSrc, "\$__rawP=extractSourcePrice(\$p);") !== false
+      && strpos($selfSrc, "\$rawCanonical = extractSourcePrice(\$p);") !== false);
+    $add('10.296', 'نتیجهٔ تصحیح قیمت canonical غرفه را به ماتریس برمی‌گرداند',
+         strpos($selfSrc, "\$canonical = extractPriceNum(\$rawCanonical)>0") !== false
+      && strpos($selfSrc, "bslShopPriceForProfile(\$profile,\$rawCanonical,\$shop") !== false);
+    $add('10.296', 'ورودی 10.296 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "296'") !== false
+      && version_compare(APP_VERSION, '10.' . '296', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -57487,7 +57524,7 @@ foreach($__liveShops as $__sh){
             clearstatcache(true,BSL_STOP_FILE);
             if(file_exists(BSL_STOP_FILE)) break;
             $__pt=trim($p['title']??$p['name']??''); if($__pt==='')continue;
-            $__rawP=(string)($p['price']??($p['orig_price']??''));
+            $__rawP=extractSourcePrice($p);
             if($__rawP!=='' && extractPriceNum($__rawP)>0 && $__profile2){
                 $__pf=bslShopPriceForProfile($__profile2,$__rawP,$__sh,$shopRound);
             } else {
@@ -72702,6 +72739,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.296', t:'💹 اعمال قطعی ضریب غرفه‌های غیرپیش‌فرض در همه مسیرها', items:[
+    'برای محصول missing نیز shop_expect اختصاصی هر غرفه ساخته می‌شود و دیگر به انتظار عمومی باسلام برنمی‌گردد',
+    'ارسال عادی، چندغرفه‌ای و تصحیح مغایرت همگی قیمت خام canonical محصول را به محاسبهٔ پروفایل و غرفه می‌دهند',
+    'پس از ارسال، ماتریس قیمت محاسبه‌شدهٔ واقعی همان غرفه را ثبت می‌کند نه مقدار قدیمی job',
+    'ماتریس ذخیره‌شده با نسخهٔ جدید فرمول بدون واکشی دوبارهٔ مقصدها خودکار بازقیمت‌گذاری می‌شود'
+  ]},
   {v:'10.295', t:'🔢 کارت‌های مربعی و فهرست محصولات اصلاح مغایرت', items:[
     'هنگام اصلاح مغایرت، شمارنده‌های کل، پردازش‌شده، موفق، ناموفق، قیمت، ارسال و حذف به‌شکل کارت مربعی نمایش داده می‌شوند',
     'کلیک روی هر کارت مودال فهرست محصولات همان گروه را با عملیات، مقصد، شناسه و نتیجه باز می‌کند',
