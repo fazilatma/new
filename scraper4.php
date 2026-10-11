@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.289';
+const APP_VERSION = '10.290';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27983,7 +27983,7 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
         $repriceSelected=matrixNormalizeDestinations($data['selected_destinations']??null,$cn);$repriceSet=array_fill_keys($repriceSelected,true);$repriceWoo=isset($repriceSet['woo']);
         $shopList=function_exists('bslAllShops')?bslAllShops($cn):[];$shopBy=[];$shopsMeta=[];
         foreach($shopList as $sh){if(!is_array($sh))continue;$vid=(int)($sh['vendor_id']??0);if($vid<=0||!isset($repriceSet['bsl:'.$vid]))continue;$shopBy[$vid]=$sh;$shopsMeta[]=['vendor_id'=>$vid,'name'=>(string)($sh['shop_name']??$sh['name']??('#'.$vid)),'is_default'=>!empty($sh['is_default'])];}
-        $sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,'in_all'=>0,'only_profile'=>0];$changed=0;
+        $sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,'in_all'=>0,'only_profile'=>0,'only_dest'=>0];$changed=0;
         foreach($data['rows'] as &$r){
             if(!is_array($r)||!empty($r['is_report'])||str_starts_with((string)($r['bare']??''),'__report_'))continue;
             $before=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);
@@ -28001,7 +28001,7 @@ function matrixRefreshExpectedPrices(string $reason='settings_save'): array {
             $wooOk=!$repriceWoo||($hasWoo&&$wooTone==='ok');$hasAnySelectedDest=($repriceWoo&&$hasWoo)||$shopCount>0;
             if($hasProf&&$wooOk&&$shopMiss===0&&$shopBad===0){$r['status']='ok';$sum['ok']++;$sum['in_all']++;}
             elseif($hasProf&&!$hasAnySelectedDest){$r['status']='only_profile';$sum['only_profile']++;}
-            elseif(!$hasProf)$r['status']='only_dest';elseif(($repriceWoo&&in_array($wooTone,['bad','warn'],true))||$shopBad>0)$r['status']='mismatch';elseif(($repriceWoo&&$wooTone==='missing_dst')||$shopMiss>0)$r['status']='missing';else$r['status']='partial';
+            elseif(!$hasProf){$r['status']='only_dest';$sum['only_dest']++;}elseif(($repriceWoo&&in_array($wooTone,['bad','warn'],true))||$shopBad>0)$r['status']='mismatch';elseif(($repriceWoo&&$wooTone==='missing_dst')||$shopMiss>0)$r['status']='missing';else$r['status']='partial';
             $sum['total']++;$after=json_encode([(int)($r['profile_price']??0),(int)($r['woo_expect']??0),(int)($r['bsl_expect']??0),(string)($r['status']??''),(array)($r['flags']??[])]);if($before!==$after)$changed++;
         }unset($r);
         $order=['mismatch'=>0,'missing'=>1,'only_profile'=>2,'only_dest'=>3,'partial'=>4,'ok'=>5];
@@ -28623,7 +28623,7 @@ function matrixBuild(array $opts = []): array {
         'total' => 0, 'ok' => 0, 'price_mismatch' => 0, 'missing_woo' => 0,
         'missing_bsl' => 0, 'extra_woo' => 0, 'extra_bsl' => 0,
         'dup_profile' => 0, 'dup_woo' => 0, 'dup_bsl' => 0,
-        'in_all' => 0, 'only_profile' => 0,
+        'in_all' => 0, 'only_profile' => 0, 'only_dest' => 0,
     ];
     foreach ($rowsByKey as $bare => $r) {
         $hasProf = ($r['profile_hits'] ?? 0) > 0;
@@ -28670,7 +28670,7 @@ function matrixBuild(array $opts = []): array {
         } elseif ($hasProf && !$hasAnySelectedDest) {
             $status = 'only_profile'; $sum['only_profile']++;
         } elseif (!$hasProf) {
-            $status = 'only_dest';
+            $status = 'only_dest'; $sum['only_dest']++;
         } elseif (($includeWoo&&($wooTone === 'bad' || $wooTone === 'warn')) || $shopBad > 0) {
             $status = 'mismatch';
         } elseif (($includeWoo&&$wooTone === 'missing_dst') || $shopMiss > 0) {
@@ -29939,6 +29939,11 @@ function matrixQueryPage(array $opts = []): array {
         if (!empty($rr['is_report']) || str_starts_with((string)($rr['bare'] ?? ''), '__report_')) $reports[] = $rr;
         else $main[] = $rr;
     }
+    $filteredStatusCounts = [];
+    foreach ($main as $mr) {
+        $ms = (string)($mr['status'] ?? 'unknown');
+        $filteredStatusCounts[$ms] = ($filteredStatusCounts[$ms] ?? 0) + 1;
+    }
     /* v10.257: مرتب‌سازی واقعی سمت سرور، پیش از صفحه‌بندی؛ نه فقط ردیف‌های صفحهٔ جاری. */
     $sort = trim((string)($opts['sort'] ?? ''));
     $sortDir = strtolower((string)($opts['sort_dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
@@ -30007,6 +30012,7 @@ function matrixQueryPage(array $opts = []): array {
         'pages' => $pages,
         'total' => $total,
         'actionable_total' => count($main),
+        'filtered_status_counts' => (object)$filteredStatusCounts,
         'summary' => $data['summary'] ?? [],
         'selected_destinations'=>$querySelected,
         'shops' => $data['shops'] ?? [],
@@ -41359,6 +41365,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.289', 'ورودی 10.289 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "289'") !== false
       && version_compare(APP_VERSION, '10.' . '289', '>='));
+    $add('10.290', 'عنوان مقصدیِ خارج از پروفایل در جدول و تأیید اصلاح صریح برچسب می‌خورد',
+         strpos($selfSrc, 'عنوان از مقصد؛ در پروفایل ذخیره‌شده نیست') !== false
+      && strpos($selfSrc, 'window._smFilteredOnlyDest') !== false
+      && strpos($selfSrc, 'این موارد در پروفایل نیستند و حذف/بایگانی می‌شوند') !== false);
+    $add('10.290', 'شمارندهٔ فقط مقصد برای کل جدول و فیلتر جاری موجود است',
+         strpos($selfSrc, "'only_dest' => 0") !== false
+      && strpos($selfSrc, "'filtered_status_counts' =>") !== false);
+    $add('10.290', 'ورودی 10.290 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "290'") !== false
+      && version_compare(APP_VERSION, '10.' . '290', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72566,6 +72582,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.290', t:'🏷 توضیح روشن محصولات خارج از پروفایل در جدول مغایرت', items:[
+    'عنوان‌هایی که فقط از ووکامرس یا غرفه آمده‌اند اکنون صریحاً «عنوان از مقصد؛ در پروفایل ذخیره‌شده نیست» برچسب می‌خورند',
+    'ستون پروفایل برای این ردیف‌ها به‌جای خط تیره، «وجود ندارد» نشان می‌دهد و وضعیت فقط مقصد روشن‌تر است',
+    'شمارندهٔ فقط مقصد و هشدار تعداد دقیق ردیف‌های فیلترشده پیش از حذف/بایگانی اضافه شد'
+  ]},
   {v:'10.289', t:'🩺 تفکیک خطای فعال از سابقهٔ قدیمی در ممیزی ارسال', items:[
     'ناسازگاری شمارندهٔ یک ردیف تمام‌شده فقط اطلاع تاریخی است و دیگر سلامت ارسالهای فعال را خراب نشان نمی‌دهد',
     'ممیزی همچنان همین سابقه‌ها را در notices نگه می‌دارد تا چیزی پنهان نشود'
@@ -81382,7 +81403,7 @@ function syncMatrixPoll(){
 /* v10.117: اصلاح مغایرت از روی جدول */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
-  if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
+  if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\n⚠ ردیف‌های «فقط مقصد» در فیلتر فعلی: '+smFa(window._smFilteredOnlyDest||0)+'؛ این موارد در پروفایل نیستند و حذف/بایگانی می‌شوند.\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent='🔧 شروع اصلاح…';
   if($('smFixStopBtn')) $('smFixStopBtn').style.display='';
@@ -81552,11 +81573,12 @@ function syncMatrixLoad(page, silent){
     }
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
     window._smFilteredTotal=parseInt(d.actionable_total!=null?d.actionable_total:d.total)||0;
+    window._smFilteredOnlyDest=parseInt((d.filtered_status_counts||{}).only_dest)||0;
     if(d.filter_options){window._smFilterData=d.filter_options;smRenderFilterValues(($('smFilterValue')||{}).value||'');smRenderFilterRules();}
     const shops = d.shops||[],resultDests=Array.isArray(d.selected_destinations)?d.selected_destinations:[],includeWoo=!resultDests.length||resultDests.includes('woo');
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
     const colKeys=['n','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
-    let h = smTh('#','n',false)+smTh('عنوان (بدون پسوند)','title',true)+smTh('پروفایل','profile',true)
+    let h = smTh('#','n',false)+smTh('عنوان تطبیقی (پروفایل یا مقصد)','title',true)+smTh('پروفایل','profile',true)
       +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true);
     if(includeWoo)h+=smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
     shops.forEach(s=>{
@@ -81572,7 +81594,7 @@ function syncMatrixLoad(page, silent){
       const chip=(lab,val,bg)=>'<span style="background:'+bg+';color:#fff;padding:4px 8px;border-radius:8px;font-weight:800">'+lab+': '+smFa(val||0)+'</span>';
       sum.innerHTML = chip('کل فایل',d.row_count_all||s.total,'#4c1d95')+chip('این فیلتر',d.total,'#5b21b6')+chip('یکسان',s.ok,'#166534')+chip('مغایرت',s.price_mismatch,'#b91c1c')
         +(includeWoo?chip('نیست در WC',s.missing_woo,'#1d4ed8'):'')+chip('نیست در غرفه',s.missing_bsl,'#0369a1')
-        +chip('تکراری پروفایل',s.dup_profile,'#7c3aed');
+        +chip('فقط مقصد',s.only_dest,'#475569')+chip('تکراری پروفایل',s.dup_profile,'#7c3aed');
     }
     const wc = d.woo_cfg||{}, bc=d.bsl_cfg||{};
     const when = d.generated_at ? new Date(d.generated_at*1000).toLocaleString('fa-IR') : '—';
@@ -81580,7 +81602,7 @@ function syncMatrixLoad(page, silent){
     if(meta){
       meta.innerHTML = (d.live_partial?'🟢 نمایش زندهٔ بسته‌های دریافت‌شده · ':'📖 از فایل سرور · ')+when+' · منبع '+(d.source||'—')
         +' · صفحه '+smFa(d.page)+'/'+smFa(d.pages)+' · نمایش '+smFa(d.total)+' ردیف فیلترشده'
-        +' · همهٔ محصولات'
+        +' · همهٔ محصولات پروفایل‌ها و مقصدهای انتخابی (ردیف «فقط مقصد» عمداً برای شناسایی محصول اضافی نمایش داده می‌شود)'
         +((d.filters||[]).length?' · 🔎 '+smFa(d.filters.length)+' فیلتر ('+(d.filter_join==='or'?'OR':'AND')+')':'')
         +(includeWoo?(' · WC: '+smFa(d.woo_count||0)+' · dest WC: '+(wc.mode||'none')+(wc.mode&&wc.mode!=='none'?(' '+wc.val):'')+(d.woo_error?(' · ⚠️ WC: '+d.woo_error):'')):' · WC خارج از شمول')
         +(d.bsl_error?(' · ⚠️ BSL: '+d.bsl_error):'');
@@ -81604,7 +81626,7 @@ function syncMatrixLoad(page, silent){
           tr += '</td></tr>';
           return tr;
         }
-        const stMap={ok:['✅ یکسان','ok'],mismatch:['❌ مغایرت','bad'],missing:['📤 ناقص','missing_dst'],only_profile:['📘 فقط مبدأ','missing_dst'],only_dest:['📦 فقط مقصد','extra'],partial:['➖ ناقص','warn'],removed:['🗑 حذف‌شد','extra'],only_dest_removed:['🗑 حذف‌شد','extra'],report:['📋 گزارش','na']};
+        const stMap={ok:['✅ یکسان','ok'],mismatch:['❌ مغایرت','bad'],missing:['📤 ناقص','missing_dst'],only_profile:['📘 فقط مبدأ','missing_dst'],only_dest:['📦 فقط مقصد؛ در پروفایل نیست','extra'],partial:['➖ ناقص','warn'],removed:['🗑 حذف‌شد','extra'],only_dest_removed:['🗑 حذف‌شد','extra'],report:['📋 گزارش','na']};
         const st=stMap[r.status]||['?','na'];
         let flags='';
         (r.flags||[]).forEach(f=>{
@@ -81613,8 +81635,10 @@ function syncMatrixLoad(page, silent){
         if((r.profile_duplicate_hits||0)>0) flags+=' <span style="color:#e9d5ff;font-size:10px">'+smFa((r.profile_duplicate_hits||0)+1)+' عنوان دقیقاً یکسان در پروفایل</span>';
         let tr = '<tr>';
         tr += smCell(smFa(start+i+1),'na');
-        tr += smCell('<div style="font-weight:700;max-width:220px">'+esc(r.title||r.bare||'')+'</div><div style="font-size:9px;opacity:.7;direction:ltr">'+esc(r.bare||'')+'</div>','na');
-        tr += smCell(esc(r.profile||'—')+(r.profile_key?' <span style="opacity:.6">('+esc(r.profile_key)+')</span>':''),'na');
+        const onlyDest=r.status==='only_dest'||!(r.profile_hits||0);
+        const originBadge=onlyDest?'<div style="margin-top:3px"><span style="background:#475569;color:#f8fafc;border-radius:4px;padding:1px 6px;font-size:9px">عنوان از مقصد؛ در پروفایل ذخیره‌شده نیست</span></div>':'';
+        tr += smCell('<div style="font-weight:700;max-width:220px">'+esc(r.title||r.bare||'')+'</div>'+originBadge+'<div style="font-size:9px;opacity:.7;direction:ltr">'+esc(r.bare||'')+'</div>','na');
+        tr += smCell(onlyDest?'<b style="color:#fca5a5">وجود ندارد</b>':(esc(r.profile||'—')+(r.profile_key?' <span style="opacity:.6">('+esc(r.profile_key)+')</span>':'')),onlyDest?'extra':'na');
         tr += smCell(smMoney(r.src_price), r.src_price>0?'na':'no_src');
         tr += smCell(smMoney(r.profile_price), r.profile_price>0?'na':'no_src');
         if(includeWoo){
