@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.299';
+const APP_VERSION = '10.300';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29045,9 +29045,32 @@ function matrixFixDuplicateSplit(array $items, string $keep): array {
     ]);
 }
 
+function matrixFixProfileMembership(array $data): array {
+    $profiles = loadProfiles();
+    $wanted = (string)($data['profile_filter'] ?? $data['profile'] ?? 'all');
+    $suffixes = function_exists('matrixCollectSuffixes') ? matrixCollectSuffixes() : [];
+    $keys = []; $bares = [];
+    foreach ($profiles as $pk => $profile) {
+        if (!is_array($profile)) continue;
+        if ($wanted !== '' && $wanted !== 'all' && (string)$pk !== $wanted) continue;
+        foreach (profileOrderedProducts($profile, null, true) as $p) {
+            if (!is_array($p)) continue;
+            $key = trim((string)($p['key'] ?? ''));
+            if ($key !== '') $keys[$key] = true;
+            $bare = matrixBareTitle((string)($p['title'] ?? $p['name'] ?? ''), $suffixes);
+            if ($bare !== '') $bares[$bare] = true;
+        }
+    }
+    return ['keys'=>$keys, 'bares'=>$bares];
+}
+
 function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
     $jobs = [];
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
+    /* عضویت را از خود پروفایل‌های ذخیره‌شده می‌خوانیم، نه فیلدهای قدیمی
+       profile_price/profile_key در نتیجهٔ ماتریس. آن فیلدهای stale باعث می‌شدند
+       محصول حذف‌شده از پروفایل، هنوز «دارای پروفایل» فرض و در مقصد باقی بماند. */
+    $membership = matrixFixProfileMembership($data);
     $shopsMeta = [];
     foreach ((array)($data['shops'] ?? []) as $sh) {
         if (!is_array($sh)) continue;
@@ -29058,14 +29081,12 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         if (!is_array($r) || !empty($r['is_report']) || !matrixRowMatchesViewFilters($r, $data, $viewFilters)) continue;
         $bare = (string)($r['bare'] ?? '');
         $title = (string)($r['title'] ?? $bare);
-        $status = (string)($r['status'] ?? '');
-        $hasProf = (int)($r['profile_hits'] ?? 0) > 0 || (int)($r['profile_price'] ?? 0) > 0
-            || trim((string)($r['profile_key'] ?? '')) !== '' || trim((string)($r['profile'] ?? '')) !== '';
-        if ($status === 'only_dest') $hasProf = false;
-        if (in_array($status, ['only_profile', 'missing'], true)) $hasProf = true;
+        $productKey = trim((string)($r['key'] ?? ''));
+        $hasProf = ($productKey !== '' && isset($membership['keys'][$productKey]))
+            || ($bare !== '' && isset($membership['bares'][$bare]));
         $base = ['bare' => $bare, 'title' => $title,
             'profile_key' => (string)($r['profile_key'] ?? ''),
-            'product_key' => (string)($r['key'] ?? '')];
+            'product_key' => $productKey];
 
         $wooItems = [];
         if (is_array($r['woo'] ?? null)) $wooItems[] = $r['woo'];
@@ -41674,6 +41695,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.299', 'ورودی 10.299 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "299'") !== false
       && version_compare(APP_VERSION, '10.' . '299', '>='));
+    $add('10.300', 'عضویت اصلاح از محصولات واقعی پروفایل ذخیره‌شده تعیین می‌شود',
+         strpos($selfSrc, "function matrixFixProfileMembership") !== false
+      && strpos($selfSrc, "isset(\$membership['keys'][\$productKey])") !== false
+      && strpos($selfSrc, "isset(\$membership['bares'][\$bare])") !== false
+      && strpos($selfSrc, "profile_price/profile_key") !== false);
+    $add('10.300', 'ورودی 10.300 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "300'") !== false
+      && version_compare(APP_VERSION, '10.' . '300', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72898,6 +72927,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.300', t:'🗑️ حذف قطعی محصولات خارج‌شده از پروفایل', items:[
+    'در اصلاح مغایرت، عضویت محصول مستقیماً از پروفایل‌های ذخیره‌شده بررسی می‌شود، نه اطلاعات قدیمی جدول',
+    'اگر محصول در ووکامرس یا هر غرفهٔ باسلام باشد ولی دیگر در پروفایل نباشد، از ووکامرس حذف و در باسلام بایگانی می‌شود',
+    'اگر چند نسخهٔ مقصدی از محصول خارج‌شده از پروفایل وجود داشته باشد، همهٔ نسخه‌ها حذف یا بایگانی می‌شوند'
+  ]},
   {v:'10.299', t:'🛡️ اصلاح پایدار مغایرت و ارسال دقیق باسلام', items:[
     'اصلاح بزرگ در childهای کوتاه checkpointدار اجرا می‌شود تا محدودیت هاست یا توقف یک درخواست کل عملیات را نبندد',
     'ووکامرس غیرفعال هیچ job یا لاگی در اصلاح مغایرت تولید نمی‌کند',
