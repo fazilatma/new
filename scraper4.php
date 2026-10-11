@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.322';
+const APP_VERSION = '10.323';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30832,7 +30832,7 @@ if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_f
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);$lockRecovery=null;
     if(!$locked){
         $busyState=matrixFixProgressRead();$busyPid=(int)($busyState['runner_pid']??$busyState['child_pid']??0);$busyPidAlive=$busyPid>0&&s4WorkerPidAlive($busyPid);
-        $recoverable=(empty($busyState['running'])&&(!empty($busyState['stale'])||!empty($busyState['stopped'])||!empty($busyState['done'])))||(!empty($busyState['queued'])&&!$busyPidAlive);
+        $recoverable=!empty($busyState['queued'])||(empty($busyState['running'])&&(!empty($busyState['stale'])||!empty($busyState['stopped'])||!empty($busyState['done'])));
         if($recoverable){
             $lockRecovery=['attempted'=>true,'phase'=>(string)($busyState['phase']??''),'queued'=>!empty($busyState['queued']),'runner_pid'=>$busyPid,'runner_alive'=>$busyPidAlive];
             $lockRecovery['runner']=matrixTerminateRunner($busyState);
@@ -42209,6 +42209,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.322', 'ورودی 10.322 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "322'") !== false
       && version_compare(APP_VERSION, '10.' . '322', '>='));
+    $add('10.323', 'queued هرگز مالک runner نیست و قفل ارثی حتی با PID زنده بازیابی می‌شود',
+         strpos($selfSrc, "\$recoverable=!empty(\$busyState['queued'])") !== false
+      && strpos($selfSrc, "matrixTerminateRunner(\$busyState)") !== false);
+    $add('10.323', 'ورودی 10.323 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "323'") !== false
+      && version_compare(APP_VERSION, '10.' . '323', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73440,6 +73446,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.323', t:'🔓 بازیابی قطعی flock ارثی در حالت queued', items:[
+    'queued یعنی job هنوز child خود را شروع نکرده است؛ بنابراین runner_pid موجود، حتی اگر process آن هنوز زنده باشد، متعلق به اجرای قبلی و مالک یتیم قفل است.',
+    'اصلاح تک‌ردیف اکنون در هر state صف‌شده runner ارثی را پایان می‌دهد، flock را می‌گیرد و بایگانی را اجرا می‌کند؛ PID زنده دیگر 409 کاذب نمی‌سازد.'
+  ]},
   {v:'10.322', t:'🔓 رفع 409 در state صف‌شده با runner قدیمی', items:[
     'فیدبک نشان داد job تازه pending بود اما runner_pid اجرای قبلی در progress باقی مانده و همراه flock یتیم، state را به‌اشتباه زنده نشان می‌داد.',
     'هنگام enqueue مالکیت runner قبلی پاک می‌شود؛ queued بدون PID زنده نیز می‌تواند قفل یتیم را بازیابی و اصلاح/بایگانی تک‌ردیف را اجرا کند.',
