@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.314';
+const APP_VERSION = '10.315';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1290,8 +1290,13 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             $res = matrixBuild($opts);
             if (empty($res['yielded'])) break;
             $nextCp=is_array($res['checkpoint']??null)?$res['checkpoint']:null;
-            $opts['checkpoint']=$nextCp;unset($res,$nextCp);
+            $opts['checkpoint']=$nextCp;
             if (!$opts['checkpoint']) {$res=['ok'=>false,'error'=>'matrix_checkpoint_missing'];break;}
+            /* child یک‌برشی باید همان yielded/checkpoint را به parent پس بدهد.
+               unset کردن res پیش از خروج فقط {worker_segments:1} می‌ساخت و
+               parent آن را matrix_child_exit_1 تلقی می‌کرد. */
+            if($maxSegments===1){$res['worker_segments']=$segments;return $res;}
+            unset($res,$nextCp);
             /* yielded برای fallback مرورگر یعنی «درخواست بعدی بساز»، اما در worker
                همان job مالک ادامه است؛ وضعیت را running نگه دار تا UI درخواست موازی نسازد. */
             matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'queued'=>false,'worker'=>true,
@@ -42078,6 +42083,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.314', 'ورودی 10.314 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "314'") !== false
       && version_compare(APP_VERSION, '10.' . '314', '>='));
+    $add('10.315', 'child تک‌برشی نتیجه yielded و checkpoint را پیش از خروج حفظ می‌کند',
+         strpos($selfSrc, "if(\$maxSegments===1){\$res['worker_" . "segments']=\$segments;return \$res;}") !== false
+      && strpos($selfSrc, "unset کردن res پیش از خروج") !== false);
+    $add('10.315', 'ورودی 10.315 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "315'") !== false
+      && version_compare(APP_VERSION, '10.' . '315', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73303,6 +73314,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.315', t:'♻️ حفظ نتیجهٔ yielded در child تک‌برشی ماتریس', items:[
+    'فیدبک تازه نشان داد child پس از یک برش سالم فقط worker_segments را برمی‌گرداند؛ نتیجهٔ yielded پیش از return پاک می‌شد و parent باز هم exit 1 می‌دید.',
+    'child تک‌برشی اکنون همان yielded و checkpoint کامل را تحویل parent می‌دهد تا تمام برش‌های بعدی بدون retry کاذب اجرا شوند.'
+  ]},
   {v:'10.314', t:'🧵 جلوگیری از توقف اصلاح باسلام در زمان انتظار برای ساخت جدول', items:[
     'فیدبک endpoint نشان داد job اصلاح که پشت ساخت ماتریس در صف بود، پس از ۱۸۰ ثانیه به‌اشتباه stale و stopped می‌شد.',
     'وضعیت queued دیگر به‌عنوان پردازهٔ مرده پاک نمی‌شود؛ stop قدیمی فقط اگر قبل از ثبت job باشد مصرف می‌شود و stop واقعی کاربر job صف را نیز لغو می‌کند.',
