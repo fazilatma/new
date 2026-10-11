@@ -42223,7 +42223,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "323'") !== false
       && version_compare(APP_VERSION, '10.' . '323', '>='));
     $add('10.324', 'انتخاب ردیف، انتخاب همهٔ فیلتر و اصلاح انتخاب‌شده‌ها موجود است',
-         strpos($selfSrc, "id="smSelectAllTop"") !== false
+         strpos($selfSrc, 'id="' . 'smSelectAllTop"') !== false
       && strpos($selfSrc, "function syncMatrixFixSelected") !== false
       && strpos($selfSrc, "selected_bares_json") !== false
       && strpos($selfSrc, "excluded_bares_json") !== false
