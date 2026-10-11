@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.285';
+const APP_VERSION = '10.286';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -41278,6 +41278,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.285', 'ورودی 10.285 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "285'") !== false
       && version_compare(APP_VERSION, '10.' . '285', '>='));
+    $add('10.286', 'فیدبک جایگزینی تنظیمات صف را خطای شبکه نمی‌شمارد',
+         strpos($selfSrc, "\$kind==='queue'") !== false
+      && strpos($selfSrc, "'key'=>'queue_replaced'") !== false
+      && strpos($selfSrc, "{v:'10." . "286'") !== false
+      && version_compare(APP_VERSION, '10.' . '286', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -55726,6 +55731,7 @@ $solution=function(int $code,string $kind,string $detail):array{
     if(in_array($code,[401,403],true))return ['key'=>'auth','title'=>'توکن یا دسترسی غرفه','solution'=>'توکن و vendor_id همان غرفه بازبینی شود','auto_repair'=>false];
     if($code===404)return ['key'=>'stale_product_id','title'=>'شناسهٔ محصول قدیمی/ناموجود','solution'=>'نگاشت محلی حذف و محصول در همان غرفه دوباره جست‌وجو شود','auto_repair'=>false];
     if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر ادامه یابد','auto_repair'=>false];
+    if($kind==='queue')return ['key'=>'queue_replaced','title'=>'ردیف قدیمی با تنظیمات تازه جایگزین شده','solution'=>'خطای API نیست و اقدام لازم ندارد؛ ردیف جدید ادامه می‌دهد','auto_repair'=>false];
     if($code===0)return ['key'=>'network','title'=>'شبکه/توقف','solution'=>'وضعیت stop، پراکسی و اتصال باسلام بررسی و سپس resume شود','auto_repair'=>false];
     return ['key'=>$kind?:'other','title'=>'خطای دیگر','solution'=>'جزئیات خام و مرحلهٔ ثبت‌شده بررسی شود','auto_repair'=>false];
 };
@@ -72403,6 +72409,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.286', t:'🧭 تفکیک خطای واقعی از جایگزینی صف', items:[
+    'فیدبک باسلام ردیف قدیمیِ جایگزین‌شده به‌علت تغییر تنظیمات را دیگر خطای شبکه نمی‌شمارد و آن را وضعیت بی‌نیاز از اقدام گزارش می‌کند'
+  ]},
   {v:'10.285', t:'🧹 پاک‌سازی همگام‌سازی و ترمیم هوشمند خطای باسلام', items:[
     'دکمهٔ پاک‌سازی، همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف را حذف می‌کند و ردیف‌های فعال را دست‌نخورده نگه می‌دارد',
     'اندپوینت bsl_send_feedback همهٔ failed_details صف باسلام را گروه‌بندی، نمونه‌برداری و برای هر نوع خطا راه‌حل عملی گزارش می‌کند',
