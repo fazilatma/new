@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.300';
+const APP_VERSION = '10.301';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1206,7 +1206,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
-        matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
+        matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
             'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
             'started_at'=>(int)($cp['started_at']??time()),'checkpoint'=>$cp?:['scope'=>$payload['scope'],'duplicate_keep'=>$payload['duplicate_keep'],'view_filters'=>$payload['view_filters'],'done_jobs'=>[],'started_at'=>time()],
             'log_add'=>['🧵 اصلاح مغایرت به worker دائمی سپرده شد — مستقل از مرورگر و محدودیت PHP-FPM ادامه می‌یابد']]);
@@ -6565,6 +6565,7 @@ function aiAutoFillMissingAcrossProfiles(?array $cn = null, int $limit = 0): arr
 function aicontentProgress(array $patch): void {
     $cur = localTaskStateRead(AICONTENT_PROGRESS_FILE, []);
     $log = is_array($cur['log'] ?? null) ? $cur['log'] : [];
+    if (!empty($patch['reset_log'])) { $log=[]; $cur['live']=[]; unset($patch['reset_log']); }
     if (isset($patch['log_add'])) {
         foreach ((array)$patch['log_add'] as $l) {
             if (is_array($l)) $log[] = array_merge(['t' => time()], $l);
@@ -20377,7 +20378,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
 
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
-    $existing = bslFindExisting($tk, $vid, $title, $__mk, !array_key_exists('find_deep_scan',$opts)||!empty($opts['find_deep_scan']));
+    $existing = !empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, !array_key_exists('find_deep_scan',$opts)||!empty($opts['find_deep_scan']));
     $exId = is_array($existing) ? (int)($existing['id'] ?? 0) : 0;
 
     if ($exId > 0) {
@@ -29056,9 +29057,10 @@ function matrixFixProfileMembership(array $data): array {
         foreach (profileOrderedProducts($profile, null, true) as $p) {
             if (!is_array($p)) continue;
             $key = trim((string)($p['key'] ?? ''));
-            if ($key !== '') $keys[$key] = true;
+            $rec=['profile_key'=>(string)$pk,'profile'=>$profile,'product'=>$p];
+            if ($key !== '') $keys[$key] = $rec;
             $bare = matrixBareTitle((string)($p['title'] ?? $p['name'] ?? ''), $suffixes);
-            if ($bare !== '') $bares[$bare] = true;
+            if ($bare !== '') $bares[$bare] = $rec;
         }
     }
     return ['keys'=>$keys, 'bares'=>$bares];
@@ -29071,6 +29073,8 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
        profile_price/profile_key در نتیجهٔ ماتریس. آن فیلدهای stale باعث می‌شدند
        محصول حذف‌شده از پروفایل، هنوز «دارای پروفایل» فرض و در مقصد باقی بماند. */
     $membership = matrixFixProfileMembership($data);
+    $cnNow=loadConnections();$wooCfgNow=destPriceCfg($cnNow,'woocommerce');$bslCfgNow=destPriceCfg($cnNow,'basalam');
+    $shopNow=[];foreach(bslAllShops($cnNow) as $shNow){$vNow=(int)($shNow['vendor_id']??0);if($vNow>0)$shopNow[$vNow]=$shNow;}
     $shopsMeta = [];
     foreach ((array)($data['shops'] ?? []) as $sh) {
         if (!is_array($sh)) continue;
@@ -29082,8 +29086,14 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $bare = (string)($r['bare'] ?? '');
         $title = (string)($r['title'] ?? $bare);
         $productKey = trim((string)($r['key'] ?? ''));
-        $hasProf = ($productKey !== '' && isset($membership['keys'][$productKey]))
-            || ($bare !== '' && isset($membership['bares'][$bare]));
+        $member = $productKey !== '' ? ($membership['keys'][$productKey] ?? null) : null;
+        if (!$member && $bare !== '') $member=$membership['bares'][$bare]??null;
+        $hasProf = is_array($member);
+        $memberProfile=$hasProf&&is_array($member['profile']??null)?$member['profile']:null;
+        $memberProduct=$hasProf&&is_array($member['product']??null)?$member['product']:null;
+        $memberRaw=$memberProduct?extractSourcePrice($memberProduct):(string)($r['src_price']??'0');
+        $memberProfilePrice=$memberProfile?profileFinalPrice($memberProfile,$memberRaw):0;
+        $wooExpectedNow=$memberProfilePrice>0?destAdjustPrice($memberProfilePrice,$wooCfgNow):0;
         $base = ['bare' => $bare, 'title' => $title,
             'profile_key' => (string)($r['profile_key'] ?? ''),
             'product_key' => $productKey];
@@ -29107,12 +29117,12 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
 
         if ($scope === 'all' || $scope === 'woo') {
             if ($hasProf && $woo) {
-                $exp = (int)($r['woo_expect'] ?? 0); $got = (int)($woo['price'] ?? 0);
+                $exp = $wooExpectedNow>0?$wooExpectedNow:(int)($r['woo_expect'] ?? 0); $got = (int)($woo['price'] ?? 0);
                 if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
                     'kind' => 'price_woo', 'id' => (int)($woo['id'] ?? 0), 'from' => $got, 'to' => $exp,
                 ];
-            } elseif ($hasProf && !$woo && (int)($r['woo_expect'] ?? 0) > 0) {
-                $jobs[] = $base + ['kind' => 'send_woo', 'expect' => (int)$r['woo_expect']];
+            } elseif ($hasProf && !$woo && ($wooExpectedNow>0||(int)($r['woo_expect']??0)>0)) {
+                $jobs[] = $base + ['kind' => 'send_woo', 'expect' => $wooExpectedNow>0?$wooExpectedNow:(int)$r['woo_expect']];
             } elseif (!$hasProf && $woo) {
                 $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)];
             }
@@ -29146,6 +29156,7 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
             if ($scope !== 'all' && $scope !== 'bsl') continue;
             $expectMap = (array)($r['shop_expect'] ?? []);
             $exp = (int)($cell['expect'] ?? $expectMap[$vid] ?? $expectMap[(string)$vid] ?? $r['bsl_expect'] ?? $r['profile_price'] ?? 0);
+            if($hasProf&&$memberProfile&&isset($shopNow[$vid])&&extractPriceNum($memberRaw)>0){$curAdj=bslShopPriceForProfile($memberProfile,$memberRaw,$shopNow[$vid],(int)($bslCfgNow['round']??0));if((int)($curAdj['price']??0)>0)$exp=(int)$curAdj['price'];}
             if ($hasProf && $cell) {
                 $got = (int)($cell['price'] ?? 0);
                 if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
@@ -29292,6 +29303,7 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         /* ماتریس همین غرفه را کامل واکشی کرده؛ پیمایش دوبارهٔ کل کاتالوگ
            برای هر missing هم عملیات را متوقف‌نما می‌کرد هم بسیار کند بود. */
         'find_deep_scan' => false,
+        'skip_find_existing' => true,
         'round' => (int)($b['price_round'] ?? 0),
         'stock' => (int)($b['stock'] ?? 10),
         'preparation_days' => (int)($b['preparation_days'] ?? 3),
@@ -29299,7 +29311,9 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         'package_weight' => (int)($b['package_weight'] ?? 0),
         'category_id' => (int)($profile['bslCategoryId'] ?? ($b['category_id'] ?? 0)),
         'fallback_cat_ids' => array_values(array_filter(array_map('intval', (array)($b['fallback_cat_ids'] ?? [])))),
-        'auto_category' => !empty($b['auto_category']),
+        'auto_category' => !empty($b['auto_category']) || (int)($profile['bslCategoryId'] ?? ($b['category_id'] ?? 0)) <= 0,
+        'flat_cats' => function_exists('bslCatsAll') ? bslCatsAll($tok) : [],
+        'cdata' => [],
     ];
     if (!function_exists('bslUpsertToShop')) {
         return ['ok' => false, 'error' => 'bslUpsertToShop نیست'];
@@ -29527,8 +29541,10 @@ function matrixFixRun(array $opts = []): array {
     /* مقصد خاموش اصلاً job و log اصلاح تولید نمی‌کند؛ نتیجهٔ قدیمی ماتریس
        نباید ووکامرس خاموش را دوباره وارد صف کند. */
     $cn = loadConnections();
-    if (empty($cn['woocommerce']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
+    $selectedFix=array_fill_keys(matrixNormalizeDestinations($data['selected_destinations']??null,$cn),true);
+    if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
     if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
+    $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
     $total = count($jobs);
     $nPrice = $nSend = $nDel = 0;
     foreach ($jobs as $j) {
@@ -41697,12 +41713,26 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '299', '>='));
     $add('10.300', 'عضویت اصلاح از محصولات واقعی پروفایل ذخیره‌شده تعیین می‌شود',
          strpos($selfSrc, "function matrixFixProfileMembership") !== false
-      && strpos($selfSrc, "isset(\$membership['keys'][\$productKey])") !== false
-      && strpos($selfSrc, "isset(\$membership['bares'][\$bare])") !== false
+      && strpos($selfSrc, "\$membership['keys'][\$productKey] ?? null") !== false
+      && strpos($selfSrc, "\$membership['bares'][\$bare]??null") !== false
       && strpos($selfSrc, "profile_price/profile_key") !== false);
     $add('10.300', 'ورودی 10.300 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "300'") !== false
       && version_compare(APP_VERSION, '10.' . '300', '>='));
+    $add('10.301', 'قیمت اصلاح از ضرایب زندهٔ پروفایل و همان غرفه محاسبه می‌شود',
+         strpos($selfSrc, "\$curAdj=bslShopPriceForProfile") !== false
+      && strpos($selfSrc, "\$wooExpectedNow") !== false
+      && strpos($selfSrc, "'forced_price_toman' => max(0, \$expect)") !== false);
+    $add('10.301', 'مقصد انتخاب‌نشده job ندارد و log اجرای تازه پاک می‌شود',
+         strpos($selfSrc, "!isset(\$selectedFix['woo'])") !== false
+      && strpos($selfSrc, "'reset_log'=>!\$resume") !== false
+      && strpos($selfSrc, "if (!empty(\$patch['reset_log']))") !== false);
+    $add('10.301', 'اصلاح missing باسلام جستجوی کامل تکراری ندارد و دسته را از کش می‌یابد',
+         strpos($selfSrc, "'skip_find_existing' => true") !== false
+      && strpos($selfSrc, "'flat_cats' => function_exists('bslCatsAll')") !== false);
+    $add('10.301', 'ورودی 10.301 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "301'") !== false
+      && version_compare(APP_VERSION, '10.' . '301', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72927,6 +72957,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.301', t:'✅ تکمیل پنج اصلاح مغایرت گزارش‌شده', items:[
+    'قیمت هر غرفهٔ غیرپیش‌فرض هنگام ساخت job از تنظیمات زندهٔ همان غرفه و پروفایل محاسبه و عیناً ارسال می‌شود',
+    'ارسال missing باسلام دیگر برای هر محصول کل مقصد را جست‌وجو نمی‌کند؛ دستهٔ معتبر نیز از کش دسته‌ها انتخاب می‌شود تا توقف و 422 برطرف شود',
+    'ووکامرس یا غرفهٔ انتخاب‌نشده هیچ job ندارد و log قدیمی در شروع اجرای تازه پاک می‌شود',
+    'محصول مقصدیِ خارج‌شده از پروفایل همچنان حذف یا بایگانی می‌شود'
+  ]},
   {v:'10.300', t:'🗑️ حذف قطعی محصولات خارج‌شده از پروفایل', items:[
     'در اصلاح مغایرت، عضویت محصول مستقیماً از پروفایل‌های ذخیره‌شده بررسی می‌شود، نه اطلاعات قدیمی جدول',
     'اگر محصول در ووکامرس یا هر غرفهٔ باسلام باشد ولی دیگر در پروفایل نباشد، از ووکامرس حذف و در باسلام بایگانی می‌شود',
