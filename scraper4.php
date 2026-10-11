@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.294';
+const APP_VERSION = '10.295';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28795,8 +28795,13 @@ function matrixFixProgress(array $patch): void {
     }
     if (isset($patch['live_add']) && is_array($patch['live_add'])) {
         $live = is_array($cur['live'] ?? null) ? $cur['live'] : [];
-        $live[] = $patch['live_add'];
-        if (count($live) > 80) $live = array_slice($live, -80);
+        $item = $patch['live_add'];
+        if (empty($item['title'])) $item['title'] = (string)($cur['current_title'] ?? $item['bare'] ?? '');
+        if (empty($item['bare'])) $item['bare'] = (string)($cur['current_bare'] ?? '');
+        if (empty($item['kind'])) $item['kind'] = (string)($cur['current_kind'] ?? '');
+        $live[] = $item;
+        /* فهرست زنده برای مودال شمارنده‌ها؛ کران حافظه از بادکردن state جلوگیری می‌کند. */
+        if (count($live) > 500) $live = array_slice($live, -500);
         $cur['live'] = $live;
         unset($patch['live_add']);
     }
@@ -29403,6 +29408,12 @@ function matrixFixRun(array $opts = []): array {
         'fail_n' => (int)($fixCp['fail_n'] ?? 0), 'skip_n' => (int)($fixCp['skip_n'] ?? 0),
         'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
         'price_n' => (int)($fixCp['price_n'] ?? 0), 'done_jobs' => $doneJobs,
+        'planned' => array_map(static function(array $j): array { return [
+            'kind'=>(string)($j['kind']??''), 'title'=>(string)($j['title']??$j['bare']??''),
+            'bare'=>(string)($j['bare']??''), 'id'=>(int)($j['id']??0),
+            'shop'=>(string)($j['shop_name']??''),
+        ]; }, array_slice($jobs, 0, 500)),
+        'planned_total' => $total, 'planned_limited' => $total > 500,
         'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
@@ -29466,6 +29477,7 @@ function matrixFixRun(array $opts = []): array {
         $title = mb_substr((string)$job['title'], 0, 48);
         $bare = (string)$job['bare'];
         $kind = (string)($job['kind'] ?? '');
+        matrixFixProgress(['current_title'=>$title,'current_bare'=>$bare,'current_kind'=>$kind]);
 
         /* ========== PRICE WOO ========== */
         if ($kind === 'price_woo') {
@@ -41451,6 +41463,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.294', 'ورودی 10.294 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "294'") !== false
       && version_compare(APP_VERSION, '10.' . '294', '>='));
+    $add('10.295', 'شمارنده‌های زندهٔ اصلاح مغایرت کارت مربعی و کلیک‌پذیر هستند',
+         strpos($selfSrc, 'function smPaintFixCounterCards(p)') !== false
+      && strpos($selfSrc, 'aspect-ratio:1/1') !== false
+      && strpos($selfSrc, 'smOpenFixCounter') !== false);
+    $add('10.295', 'هر کارت فهرست محصولات مربوط به موفق، خطا، قیمت، ارسال و حذف را جدا می‌کند',
+         strpos($selfSrc, "if(key==='price')return live.filter") !== false
+      && strpos($selfSrc, "if(key==='send')return live.filter") !== false
+      && strpos($selfSrc, "if(key==='delete')return live.filter") !== false);
+    $add('10.295', 'فهرست زنده نام محصول را حفظ و با سقف امن ذخیره می‌کند',
+         strpos($selfSrc, "\$item['title'] = (string)(\$cur['current_title']") !== false
+      && strpos($selfSrc, 'if (count($live) > 500)') !== false
+      && strpos($selfSrc, "'planned_total' => \$total") !== false);
+    $add('10.295', 'ورودی 10.295 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "295'") !== false
+      && version_compare(APP_VERSION, '10.' . '295', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72675,6 +72702,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.295', t:'🔢 کارت‌های مربعی و فهرست محصولات اصلاح مغایرت', items:[
+    'هنگام اصلاح مغایرت، شمارنده‌های کل، پردازش‌شده، موفق، ناموفق، قیمت، ارسال و حذف به‌شکل کارت مربعی نمایش داده می‌شوند',
+    'کلیک روی هر کارت مودال فهرست محصولات همان گروه را با عملیات، مقصد، شناسه و نتیجه باز می‌کند',
+    'فهرست زنده تا ۵۰۰ محصول را با نام نگه می‌دارد و عدد روی کارت همیشه شمار واقعی عملیات است'
+  ]},
   {v:'10.294', t:'📚 استخراج همهٔ صفحات ایمالز هنگام همگام‌سازی', items:[
     'پایان موفق استخراج فهرست دیگر به‌اشتباه checkpoint نیمه‌کاره محسوب نمی‌شود',
     'همگام‌سازی تازهٔ ایمالز از صفحهٔ اول با مجموعهٔ خالی seen آغاز می‌شود و همهٔ صفحات تنظیم‌شده را می‌خواند',
@@ -81395,6 +81427,7 @@ function smPaintProgress(p){
       +' · 💰'+smFa(p.price_n||0)+' · 📤'+smFa(p.sent_n||0)+' · 🗑'+smFa(p.del_n||0)
       +(p.phase?(' · '+esc(String(p.phase))):'');
   }
+  if(isFix) smPaintFixCounterCards(p);
 }
 function smDestinationExcluded(){try{return JSON.parse(localStorage.getItem('s4_matrix_dest_excluded')||'[]')||[]}catch(e){return[];}}
 function syncMatrixRenderDestinations(bsl){
@@ -81568,6 +81601,42 @@ function syncMatrixFixStop(){
     if(d&&d.ok)smPaintProgress({running:false,done:true,stopped:true,phase:'stopped',pct:100,job:'fix'});
     syncMatrixPoll();
   }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='⏹ توقف اصلاح';}});
+}
+window._smFixCounterState={};
+function smFixCounterItems(p,key){
+  const live=Array.isArray(p.live)?p.live:[], planned=Array.isArray(p.planned)?p.planned:[];
+  if(key==='total')return planned;
+  if(key==='processed')return live;
+  if(key==='ok')return live.filter(x=>x&&x.ok===true);
+  if(key==='fail')return live.filter(x=>x&&x.ok===false);
+  if(key==='price')return live.filter(x=>x&&String(x.kind||'').indexOf('price_')===0&&x.ok===true);
+  if(key==='send')return live.filter(x=>x&&String(x.kind||'').indexOf('send_')===0&&x.ok===true);
+  if(key==='delete')return live.filter(x=>x&&(/^(del_|dedup_)/).test(String(x.kind||''))&&x.ok===true);
+  return [];
+}
+function smPaintFixCounterCards(p){
+  const box=$('smFixLive');if(!box)return;window._smFixCounterState=p||{};
+  const cards=[
+    ['total','کل کارها',p.total||0,'#4c1d95','📋'],['processed','پردازش‌شده',p.cur||0,'#075985','⚙️'],
+    ['ok','موفق',p.ok_n||0,'#166534','✅'],['fail','ناموفق',p.fail_n||0,'#991b1b','❌'],
+    ['price','اصلاح قیمت',p.price_n||0,'#854d0e','💰'],['send','ارسال‌شده',p.sent_n||0,'#0369a1','📤'],
+    ['delete','حذف / بایگانی',p.del_n||0,'#9f1239','🗑️']
+  ];
+  box.style.display='block';
+  box.innerHTML='<div style="font-size:11px;color:#c4b5fd;font-weight:900;margin-bottom:7px">برای مشاهدهٔ محصولات هر شمارنده روی کارت کلیک کنید</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,108px));gap:8px;align-items:start">'
+    +cards.map(c=>'<button type="button" onclick="smOpenFixCounter(\''+c[0]+'\')" style="aspect-ratio:1/1;width:100%;border:1px solid #ffffff33;border-radius:12px;background:'+c[3]+';color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;box-shadow:0 5px 15px #0004;padding:7px"><span style="font-size:19px">'+c[4]+'</span><b style="font-size:20px;line-height:1">'+smFa(c[2])+'</b><span style="font-size:9.5px;line-height:1.25">'+c[1]+'</span></button>').join('')+'</div>';
+}
+function smOpenFixCounter(key){
+  const p=window._smFixCounterState||{},items=smFixCounterItems(p,key);
+  const labels={total:'کل کارهای اصلاح',processed:'پردازش‌شده',ok:'موفق',fail:'ناموفق',price:'اصلاح قیمت',send:'ارسال‌شده',delete:'حذف / بایگانی'};
+  let modal=document.getElementById('smFixCounterModal');if(!modal){modal=document.createElement('div');modal.id='smFixCounterModal';modal.style.cssText='position:fixed;inset:0;background:#000b;z-index:100003;display:flex;align-items:center;justify-content:center;padding:12px';modal.onclick=e=>{if(e.target===modal)modal.style.display='none'};document.body.appendChild(modal);}
+  let h='<div style="width:min(860px,96vw);max-height:90vh;background:#0f172a;border:1px solid #64748b;border-radius:13px;overflow:hidden;display:flex;flex-direction:column;direction:rtl"><div style="padding:11px 14px;background:#1e293b;display:flex;justify-content:space-between;align-items:center"><b style="color:#fde68a">'+esc(labels[key]||key)+' · '+smFa(items.length)+' محصول نمایشی</b><button class="btn btn-gray" onclick="document.getElementById(\'smFixCounterModal\').style.display=\'none\'">✕</button></div>';
+  if((key==='total'&&p.planned_limited)||((p[key+'_n']||0)>items.length))h+='<div style="padding:7px 12px;background:#78350f;color:#fef3c7;font-size:10px">برای سبک ماندن گزارش زنده، حداکثر ۵۰۰ محصول اخیر/برنامه‌ریزی‌شده نمایش داده می‌شود؛ عدد کارت شمار واقعی است.</div>';
+  h+='<div style="overflow:auto;padding:8px 12px"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr><th style="padding:7px;text-align:right">#</th><th style="padding:7px;text-align:right">محصول</th><th style="padding:7px">عملیات</th><th style="padding:7px">مقصد/شناسه</th><th style="padding:7px">نتیجه</th></tr></thead><tbody>';
+  if(!items.length)h+='<tr><td colspan="5" style="padding:18px;text-align:center;color:#94a3b8">هنوز محصولی در این گروه ثبت نشده است.</td></tr>';
+  items.forEach((x,i)=>{const ok=x.ok===false?'❌ '+esc(x.error||'ناموفق'):(x.ok===true?'✅ موفق':'⏳ برنامه‌ریزی‌شده');h+='<tr style="border-top:1px solid #334155"><td style="padding:7px">'+smFa(i+1)+'</td><td style="padding:7px">'+esc(x.title||x.bare||'—')+'</td><td style="padding:7px;text-align:center;color:#c4b5fd">'+esc(smFixOperationLabel(String(x.kind||'').replace('_woo','').replace('_bsl','')))+'</td><td style="padding:7px;text-align:center;color:#67e8f9">'+esc(x.shop||'')+(x.id?(' #'+smFa(x.id)):'')+'</td><td style="padding:7px;max-width:260px">'+ok+'</td></tr>';});
+  h+='</tbody></table></div></div>';modal.innerHTML=h;modal.style.display='flex';
 }
 window._smFixDestLists=[];
 function smFixOperationLabel(kind){
