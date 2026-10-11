@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.323';
+const APP_VERSION = '10.324';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1206,7 +1206,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         /* اگر fix پشت build اجباری صف شده، نتیجه باید واقعاً متعلق به همان build باشد؛
            شکست build نباید باعث اجرای fix روی فایل قدیمی و پیام «کاری نیست» شود. */
         'min_matrix_generated_at'=>max(0,(int)($opts['min_matrix_generated_at']??0)),
-        'resume'=>$resume,'dedup_key'=>'matrix_fix','requested_at'=>microtime(true)];
+        'resume'=>$resume,'dedup_key'=>((string)($opts['source']??'')==='manual_selected'?'matrix_fix_selected|'.substr(sha1(json_encode([$opts['view_filters']??[],$opts['selected_destinations']??[]],JSON_UNESCAPED_UNICODE)),0,16):'matrix_fix'),'requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
@@ -30261,8 +30261,13 @@ function matrixRowMatchesOneViewFilter(array $r,array $data,string $type,string 
 }
 /** جستجو/فیلترهای سریع همیشه AND هستند؛ قواعد پیشرفته با AND یا OR انتخابی ترکیب می‌شوند. */
 function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
+    $rowBare=(string)($r['bare']??'');
     $exactBare=trim((string)($opts['exact_bare']??''));
-    if($exactBare!==''&&!hash_equals($exactBare,(string)($r['bare']??'')))return false;
+    if($exactBare!==''&&!hash_equals($exactBare,$rowBare))return false;
+    $selectedBares=array_values(array_unique(array_filter(array_map('strval',(array)($opts['selected_bares']??[])),static fn($x)=>$x!=='')));
+    if($selectedBares&&!in_array($rowBare,$selectedBares,true))return false;
+    $excludedBares=array_values(array_unique(array_filter(array_map('strval',(array)($opts['excluded_bares']??[])),static fn($x)=>$x!=='')));
+    if($excludedBares&&in_array($rowBare,$excludedBares,true))return false;
     $q=matrixBareTitle((string)($opts['q']??''),[]);
     if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
         &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
@@ -30888,6 +30893,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             'filter_value'=>(string)($_GET['filter_value']??$_POST['filter_value']??''),
             'filters'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?$v:[];})(($_GET['filters_json']??$_POST['filters_json']??'[]')),
             'filter_join'=>(string)($_GET['filter_join']??$_POST['filter_join']??'and'),
+            'selected_bares'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?array_values(array_unique(array_filter(array_map('strval',$v)))):[];})(($_GET['selected_bares_json']??$_POST['selected_bares_json']??'[]')),
+            'excluded_bares'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?array_values(array_unique(array_filter(array_map('strval',$v)))):[];})(($_GET['excluded_bares_json']??$_POST['excluded_bares_json']??'[]')),
         ],
     ];
     if (!$opts['selected_destinations']) {
@@ -42215,6 +42222,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.323', 'ورودی 10.323 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "323'") !== false
       && version_compare(APP_VERSION, '10.' . '323', '>='));
+    $add('10.324', 'انتخاب ردیف، انتخاب همهٔ فیلتر و اصلاح انتخاب‌شده‌ها موجود است',
+         strpos($selfSrc, "id="smSelectAllTop"") !== false
+      && strpos($selfSrc, "function syncMatrixFixSelected") !== false
+      && strpos($selfSrc, "selected_bares_json") !== false
+      && strpos($selfSrc, "excluded_bares_json") !== false
+      && strpos($selfSrc, "matrix_fix_selected|") !== false);
+    $add('10.324', 'ورودی 10.324 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "324'") !== false
+      && version_compare(APP_VERSION, '10.' . '324', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -66031,6 +66047,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div id="smFilterRules" style="display:flex;flex-wrap:wrap;gap:5px;margin:-2px 0 8px;font-size:10.5px"></div>
 <div id="smSummary" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;font-size:11px"></div>
+<div id="smSelectionBar" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;background:#172554;border:1px solid #3b82f6;border-radius:9px">
+<label style="display:flex;align-items:center;gap:6px;color:#dbeafe;font-size:11px;font-weight:900;cursor:pointer"><input type="checkbox" id="smSelectAllTop" onchange="smToggleSelectAllFiltered(this.checked)" style="width:17px;height:17px"> انتخاب همهٔ ردیف‌های فیلترشده</label>
+<span id="smSelectedCount" style="color:#93c5fd;font-size:11px">۰ انتخاب</span>
+<button type="button" id="smFixSelectedBtn" class="btn btn-green" onclick="syncMatrixFixSelected()" style="font-size:11px;padding:7px 12px;font-weight:900" disabled>🔧 اصلاح انتخاب‌شده‌ها</button>
+<button type="button" class="btn btn-gray" onclick="smClearSelection()" style="font-size:10px;padding:6px 9px">پاک‌کردن انتخاب</button>
+</div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
 <div id="smTableWrap" style="overflow:auto;max-height:min(70vh,640px);border:1px solid #475569;border-radius:8px;background:#020617">
 <button type="button" id="smTableFsExit" class="btn btn-red" onclick="syncMatrixFullscreen()">✕ خروج از تمام‌صفحه</button>
@@ -73446,6 +73468,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.324', t:'☑️ انتخاب ردیف‌ها و اصلاح گروهی انتخاب‌شده‌ها', items:[
+    'هر ردیف محصول checkbox مستقل دارد و checkbox بالای جدول همهٔ ردیف‌های فیلترشده را در تمام صفحه‌ها انتخاب می‌کند.',
+    'دکمهٔ «اصلاح انتخاب‌شده‌ها» فقط bare-keyهای صریح انتخاب‌شده را به worker پایدار می‌سپارد؛ در حالت انتخاب همه، استثناهای برداشته‌شده نیز رعایت می‌شوند.',
+    'تعداد انتخاب‌ها زنده نمایش داده می‌شود و با تغییر فیلتر انتخاب قبلی پاک می‌شود تا محصول ناخواسته اصلاح نشود.'
+  ]},
   {v:'10.323', t:'🔓 بازیابی قطعی flock ارثی در حالت queued', items:[
     'queued یعنی job هنوز child خود را شروع نکرده است؛ بنابراین runner_pid موجود، حتی اگر process آن هنوز زنده باشد، متعلق به اجرای قبلی و مالک یتیم قفل است.',
     'اصلاح تک‌ردیف اکنون در هر state صف‌شده runner ارثی را پایان می‌دهد، flock را می‌گیرد و بایگانی را اجرا می‌کند؛ PID زنده دیگر 409 کاذب نمی‌سازد.'
@@ -82249,7 +82276,28 @@ function smResetFilters(){
   try{localStorage.removeItem('s4_matrix_filters')}catch(e){}syncMatrixLoad(1);
 }
 smRenderFilterValues('');smRenderFilterRules();
-function smDefaultColWidth(k){if(k==='n')return 52;if(k==='action')return 132;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
+window._smSelectedBares=new Set();window._smExcludedBares=new Set();window._smSelectAllFiltered=false;window._smCurrentRows=[];
+function smRowIsSelected(bare){bare=String(bare||'');return window._smSelectAllFiltered?!window._smExcludedBares.has(bare):window._smSelectedBares.has(bare);}
+function smSelectionCount(){return window._smSelectAllFiltered?Math.max(0,(parseInt(window._smFilteredTotal)||0)-window._smExcludedBares.size):window._smSelectedBares.size;}
+function smUpdateSelectionUi(){
+  const n=smSelectionCount(),top=$('smSelectAllTop'),head=$('smSelectAllHead'),btn=$('smFixSelectedBtn'),count=$('smSelectedCount');
+  if(top)top.checked=!!window._smSelectAllFiltered;if(head)head.checked=!!window._smSelectAllFiltered;
+  document.querySelectorAll('.sm-row-check').forEach(el=>{el.checked=smRowIsSelected(el.dataset.bare||'');});
+  if(count)count.textContent=smFa(n)+' انتخاب'+(window._smSelectAllFiltered?' از کل فیلتر':'');if(btn)btn.disabled=n<1;
+}
+function smToggleSelectAllFiltered(on){window._smSelectAllFiltered=!!on;window._smSelectedBares.clear();window._smExcludedBares.clear();smUpdateSelectionUi();}
+function smToggleRowSelection(bare,on){bare=String(bare||'');if(window._smSelectAllFiltered){if(on)window._smExcludedBares.delete(bare);else window._smExcludedBares.add(bare);}else{if(on)window._smSelectedBares.add(bare);else window._smSelectedBares.delete(bare);}smUpdateSelectionUi();}
+function smClearSelection(){window._smSelectAllFiltered=false;window._smSelectedBares.clear();window._smExcludedBares.clear();smUpdateSelectionUi();}
+function syncMatrixFixSelected(){
+  const total=smSelectionCount();if(total<1){showToast('حداقل یک ردیف را انتخاب کنید',1);return;}const selectedDestinations=smSelectedDestinations();if(!selectedDestinations.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
+  if(!confirm('اصلاح واقعی '+smFa(total)+' ردیف انتخاب‌شده انجام شود؟'))return;
+  const fd=new FormData();fd.append('action','sync_matrix_fix_start');fd.append('source','manual_selected');fd.append('scope','all');fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));fd.append('selected_destinations',JSON.stringify(selectedDestinations));
+  fd.append('q',($('smQ')||{}).value||'');if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
+  if(window._smSelectAllFiltered)fd.append('excluded_bares_json',JSON.stringify(Array.from(window._smExcludedBares)));else fd.append('selected_bares_json',JSON.stringify(Array.from(window._smSelectedBares)));
+  const btn=$('smFixSelectedBtn');if(btn){btn.disabled=true;btn.textContent='⏳ ثبت در worker…';}
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{if(!d||!d.ok){showToast((d&&d.error)||'شروع اصلاح انتخاب‌شده‌ها ناموفق بود',1);return;}showToast('اصلاح '+smFa(total)+' ردیف انتخاب‌شده به worker سپرده شد');syncMatrixPoll();}).catch(e=>showToast('خطا: '+e,1)).finally(()=>{if(btn){btn.disabled=smSelectionCount()<1;btn.textContent='🔧 اصلاح انتخاب‌شده‌ها';}});
+}
+function smDefaultColWidth(k){if(k==='select')return 48;if(k==='n')return 52;if(k==='action')return 132;if(k==='title')return 250;if(k==='profile')return 145;if(k==='status')return 125;if(String(k).indexOf('shop:')===0)return 170;return 125;}
 function smTh(label,key,sortable){
   const active=window._smSort===key, arrow=active?(window._smSortDir==='desc'?' ▼':' ▲'):'';
   return '<th data-col="'+esc(key)+'" class="'+(sortable?'sm-sortable':'')+'" '+(sortable?'onclick="smSort(\''+esc(key)+'\')" title="برای مرتب‌سازی کلیک کنید"':'')+' style="padding:8px;text-align:right;border-bottom:1px solid #475569">'+esc(label)+arrow+'<span class="sm-col-resizer" title="برای تغییر عرض بکشید" onclick="event.stopPropagation()" onpointerdown="smResizeStart(event,this)"></span></th>';
@@ -82647,8 +82695,8 @@ function syncMatrixLoad(page, silent){
     if(d.filter_options){window._smFilterData=d.filter_options;smRenderFilterValues(($('smFilterValue')||{}).value||'');smRenderFilterRules();}
     const shops = d.shops||[],resultDests=Array.isArray(d.selected_destinations)?d.selected_destinations:[],includeWoo=!resultDests.length||resultDests.includes('woo');
     if(typeof d.sort==='string'){window._smSort=d.sort;window._smSortDir=d.sort_dir||'asc';}
-    const colKeys=['n','action','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
-    let h = smTh('#','n',false)+smTh('اصلاح مغایرت','action',false)+smTh('عنوان تطبیقی (پروفایل یا مقصد)','title',true)+smTh('پروفایل','profile',true)
+    const colKeys=['select','n','action','title','profile','src_price','profile_price'];if(includeWoo)colKeys.push('woo_expect','woo_actual');
+    let h = '<th data-col="select" style="padding:8px;text-align:center;border-bottom:1px solid #475569"><input type="checkbox" id="smSelectAllHead" title="انتخاب همهٔ ردیف‌های فیلترشده" onchange="smToggleSelectAllFiltered(this.checked)" style="width:17px;height:17px"></th>'+smTh('#','n',false)+smTh('اصلاح مغایرت','action',false)+smTh('عنوان تطبیقی (پروفایل یا مقصد)','title',true)+smTh('پروفایل','profile',true)
       +smTh('مبدأ','src_price',true)+smTh('قیمت پروفایل','profile_price',true);
     if(includeWoo)h+=smTh('WC انتظار','woo_expect',true)+smTh('WC واقعی','woo_actual',true);
     shops.forEach(s=>{
@@ -82679,6 +82727,8 @@ function syncMatrixLoad(page, silent){
     }
     try{ smPaintReports(d); }catch(e){}
     const rows = d.rows||[];
+    window._smCurrentRows=rows;
+    const selSig=JSON.stringify({q:($('smQ')||{}).value||'',rules:window._smFilterRules||[],join:($('smFilterJoin')||{}).value||'and',mis:!!(($('smOnlyMis')||{}).checked),miss:!!(($('smOnlyMiss')||{}).checked),dup:!!(($('smOnlyDup')||{}).checked)});if(window._smSelectionFilterSig&&window._smSelectionFilterSig!==selSig)smClearSelection();window._smSelectionFilterSig=selSig;
     window._smVisibleRows=rows;
     window._smVisibleShops=shops;
     window._smVisibleIncludeWoo=includeWoo;
@@ -82691,8 +82741,9 @@ function syncMatrixLoad(page, silent){
           const lines=(r.report_lines||[]).map(x=>'<div style="padding:2px 0;border-bottom:1px solid #33415544">'+esc(String(x))+'</div>').join('');
           const bg = (r.report_type==='work') ? '#1e3a5f' : '#14532d';
           let tr='<tr style="background:'+bg+'">';
+          tr += smCell('','na');
           tr += smCell(smFa(start+i+1),'na');
-          tr += '<td colspan="'+ Math.max(1,colKeys.length-1) +'" style="padding:10px 12px;border-bottom:1px solid #334155;color:#e2e8f0;vertical-align:top">';
+          tr += '<td colspan="'+ Math.max(1,colKeys.length-2) +'" style="padding:10px 12px;border-bottom:1px solid #334155;color:#e2e8f0;vertical-align:top">';
           tr += '<div style="font-weight:900;font-size:12px;margin-bottom:6px;color:#fde68a">'+esc(r.title||'گزارش')+'</div>';
           tr += '<div style="font-size:11px;color:#bbf7d0;margin-bottom:6px">'+esc(r.report_text||'')+'</div>';
           tr += '<div style="font-size:10.5px;line-height:1.7;max-height:160px;overflow:auto">'+lines+'</div>';
@@ -82707,6 +82758,7 @@ function syncMatrixLoad(page, silent){
         });
         if((r.profile_duplicate_hits||0)>0) flags+=' <span style="color:#e9d5ff;font-size:10px">'+smFa((r.profile_duplicate_hits||0)+1)+' عنوان دقیقاً یکسان در پروفایل</span>';
         let tr = '<tr>';
+        tr += smCell('<input type="checkbox" class="sm-row-check" data-bare="'+esc(r.bare||'')+'" '+(smRowIsSelected(r.bare)?'checked':'')+' onchange="smToggleRowSelection(this.dataset.bare,this.checked)" onclick="event.stopPropagation()" style="width:17px;height:17px">','na');
         tr += smCell(smFa(start+i+1),'na');
         tr += smCell('<button type="button" class="btn btn-purple" onclick="smOpenRowDiscrepancy('+i+')" style="font-size:10px;padding:7px 10px;white-space:nowrap;width:100%;font-weight:900;box-shadow:0 3px 10px #4c1d9588">🔧 اصلاح مغایرت</button>','na');
         const onlyDest=r.status==='only_dest'||!(r.profile_hits||0);
@@ -82733,6 +82785,7 @@ function syncMatrixLoad(page, silent){
         tr += '</tr>';
         return tr;
       }).join('');
+      smUpdateSelectionUi();
     }
     if(pager){
       let pg='';
