@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.298';
+const APP_VERSION = '10.299';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1215,7 +1215,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
 }
 function s4WorkerRunMatrixFix(array $payload): array {
     $scope=(string)($payload['scope']??'all');$resume=!empty($payload['resume']);
-    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'checkpoint'=>null];
+    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
     try{matrixFixStopClear();matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
@@ -1223,11 +1223,26 @@ function s4WorkerRunMatrixFix(array $payload): array {
     finally{@flock($fp,LOCK_UN);@fclose($fp);}
 }
 function s4WorkerRunMatrixFixChild(array $payload): array {
-    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];$raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
-    $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');$php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
-    $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_fix '.escapeshellarg($arg).' 2>&1';$out=[];$rc=0;@exec($cmd,$out,$rc);$decoded=null;
-    for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}if(!is_array($decoded))$decoded=['ok'=>false,'error'=>'matrix_fix_child_no_json'];
-    $decoded['child_exit_code']=$rc;$decoded['tail']=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}return $decoded;
+    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
+    $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $segments=0;$last=['ok'=>false,'error'=>'matrix_fix_not_started'];$tails=[];
+    do{
+        $segments++;$payload['max_items']=max(1,min(50,(int)($payload['max_items']??20)));
+        $payload['resume']=$segments>1||!empty($payload['resume']);
+        $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
+        $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
+        $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_fix '.escapeshellarg($arg).' 2>&1';$out=[];$rc=0;@exec($cmd,$out,$rc);$decoded=null;
+        for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
+        if(!is_array($decoded))$decoded=['ok'=>false,'error'=>'matrix_fix_child_no_json'];
+        $tail=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($tail!=='')$tails[]=$tail;
+        $decoded['child_exit_code']=$rc;if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
+        $last=$decoded;s4WorkerStateWrite(['phase'=>'job','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time()]);
+        if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
+        usleep(150000);
+    }while($segments<10000&&!matrixFixStopRequested());
+    $last['worker_segments']=$segments;$last['tail']=mb_substr(implode("\n",array_slice($tails,-3)),-2000);
+    if($segments>=10000&&!empty($last['yielded']))return ['ok'=>false,'error'=>'matrix_fix_segment_limit','worker_segments'=>$segments,'tail'=>$last['tail']];
+    return $last;
 }
 
 /** اجرای کامل ماتریس در worker، با برش‌های checkpointدار ولی بدون وابستگی به polling مرورگر. */
@@ -7561,6 +7576,22 @@ function bslRepairValidationPayload(array $r,array $payload):array{
             if($new===(string)$payload[$field])continue;
             $payload[$field]=$new;$changed[$field]=true;
         }
+    }
+    /* بعضی پاسخ‌های 422 فقط پیام عمومی دارند و detected نمی‌فرستند.
+       یک payload محافظه‌کارِ بدون HTML/لینک/اطلاعات تماس بساز و یک بار امتحان کن. */
+    if (!$changed) {
+        foreach (['name','brief','description'] as $field) {
+            if (!isset($payload[$field]) || !is_string($payload[$field])) continue;
+            $old=(string)$payload[$field];
+            $new=html_entity_decode(strip_tags($old),ENT_QUOTES|ENT_HTML5,'UTF-8');
+            $new=preg_replace('~https?://\S+|www\.\S+|(?:تلگرام|اینستاگرام|واتساپ|شماره\s*(?:تماس|تلفن))[^.!؟\n]*~iu',' ',$new)??$new;
+            $new=preg_replace('~[\x00-\x08\x0B\x0C\x0E-\x1F]+~u',' ',$new)??$new;
+            $new=trim(preg_replace('~\s{2,}~u',' ',$new)??$new);
+            if($field==='name')$new=mb_substr($new,0,120,'UTF-8');
+            if($field==='brief')$new=mb_substr($new,0,250,'UTF-8');
+            if($new!==$old&&$new!==''){$payload[$field]=$new;$changed[$field]=true;}
+        }
+        if(isset($payload['sku'])&&trim((string)$payload['sku'])===''){unset($payload['sku']);$changed['sku']=true;}
     }
     return ['changed'=>!empty($changed),'payload'=>$payload,'fields'=>array_keys($changed)];
 }
@@ -20318,9 +20349,12 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if ($title === '') return ['ok' => false, 'error' => 'عنوان خالی'];
     $round  = (int)($opts['round'] ?? 0);
     $profile= is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
+    $forcedPrice = max(0, (int)($opts['forced_price_toman'] ?? 0));
     // قیمتِ این غرفه: لایهٔ پروفایل (اگر قیمتِ خام بود) + لایهٔ خودِ غرفه
     $rawP  = (string)($p['price'] ?? ($p['orig_price'] ?? ''));
-    if ($profile && $rawP !== '' && extractPriceNum($rawP) > 0) {
+    if ($forcedPrice > 0) {
+        $pf = ['price'=>$forcedPrice,'forced'=>true];
+    } elseif ($profile && $rawP !== '' && extractPriceNum($rawP) > 0) {
         $pf = bslShopPriceForProfile($profile, $rawP, $shop, $round);
     } else {
         $baseP = (int)preg_replace("/[^0-9]/", "", (string)($p['final_price'] ?? '0'));
@@ -20343,7 +20377,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
 
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
-    $existing = bslFindExisting($tk, $vid, $title, $__mk);
+    $existing = bslFindExisting($tk, $vid, $title, $__mk, !array_key_exists('find_deep_scan',$opts)||!empty($opts['find_deep_scan']));
     $exId = is_array($existing) ? (int)($existing['id'] ?? 0) : 0;
 
     if ($exId > 0) {
@@ -29231,6 +29265,12 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
     $b = $cn['basalam'] ?? [];
     $opts = [
         'profile' => $profile,
+        /* expect قیمت نهاییِ همان غرفه در ماتریس است؛ با گزینهٔ صریح از
+           اعمال دوبارهٔ ضریب جلوگیری و همان عدد دقیق ارسال می‌شود. */
+        'forced_price_toman' => max(0, $expect),
+        /* ماتریس همین غرفه را کامل واکشی کرده؛ پیمایش دوبارهٔ کل کاتالوگ
+           برای هر missing هم عملیات را متوقف‌نما می‌کرد هم بسیار کند بود. */
+        'find_deep_scan' => false,
         'round' => (int)($b['price_round'] ?? 0),
         'stock' => (int)($b['stock'] ?? 10),
         'preparation_days' => (int)($b['preparation_days'] ?? 3),
@@ -29251,8 +29291,7 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         $rawCanonical = extractSourcePrice($p);
         $canonical = extractPriceNum($rawCanonical)>0
             ? bslShopPriceForProfile($profile,$rawCanonical,$shop,(int)($b['price_round']??0)) : [];
-        $price = (int)($canonical['price'] ?? 0);
-        if($price<=0)$price = $expect > 0 ? $expect : 0;
+        $price = $expect > 0 ? $expect : (int)($canonical['price'] ?? 0);
         /* read expect from product */
         $profP = (int)($p['final_price'] ?? 0);
         if ($profP <= 0) $profP = profileFinalPrice($profile, (string)($p['price'] ?? ''));
@@ -29267,7 +29306,9 @@ function matrixFixSendBsl(array $cn, array $found, int $vid, string $tok, int $e
         if ($price <= 0) $price = $profP;
         return ['ok' => true, 'id' => $id, 'price' => $price, 'action' => (string)($r['action'] ?? 'upsert')];
     }
-    return ['ok' => false, 'error' => (string)($r['error'] ?? 'ارسال باسلام ناموفق')];
+    return ['ok' => false, 'error' => (string)($r['error'] ?? 'ارسال باسلام ناموفق'),
+        'error_code'=>(int)($r['error_code']??0),'error_detail'=>(string)($r['error_detail']??''),
+        'repair_attempted'=>!empty($r['repair_attempted'])];
 }
 
 function matrixFixDelWoo(array $cn, int $pid): array {
@@ -29462,6 +29503,11 @@ function matrixFixRun(array $opts = []): array {
     $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
     if(is_array($fixCp['view_filters']??null))$viewFilters=$fixCp['view_filters'];
     $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep);
+    /* مقصد خاموش اصلاً job و log اصلاح تولید نمی‌کند؛ نتیجهٔ قدیمی ماتریس
+       نباید ووکامرس خاموش را دوباره وارد صف کند. */
+    $cn = loadConnections();
+    if (empty($cn['woocommerce']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
+    if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
     $total = count($jobs);
     $nPrice = $nSend = $nDel = 0;
     foreach ($jobs as $j) {
@@ -29518,7 +29564,6 @@ function matrixFixRun(array $opts = []): array {
         return ['ok' => true, 'total' => 0, 'ok_n' => 0, 'fail_n' => 0, 'empty' => true];
     }
 
-    $cn = loadConnections();
     $shopTok = [];
     foreach (function_exists('bslAllShops') ? bslAllShops($cn) : [] as $sh) {
         if (!is_array($sh)) continue;
@@ -29532,6 +29577,7 @@ function matrixFixRun(array $opts = []): array {
     $sentN = (int)($fixCp['sent_n'] ?? 0); $delN = (int)($fixCp['del_n'] ?? 0); $priceN = (int)($fixCp['price_n'] ?? 0);
     $stopped = false;
     $details = [];
+    $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
@@ -29848,6 +29894,13 @@ function matrixFixRun(array $opts = []): array {
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
         usleep($delayMs * 1000);
+        $segmentItems++;
+        if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
+            matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
+                'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,
+                    'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
+            return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
+        }
     }
 
     /* recount summary */
@@ -41604,6 +41657,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.298', 'ورودی 10.298 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "298'") !== false
       && version_compare(APP_VERSION, '10.' . '298', '>='));
+    $add('10.299', 'اصلاح مغایرت در childهای کوتاه و checkpointدار ادامه می‌یابد',
+         strpos($selfSrc, "'max_items'=>max(1,min(50") !== false
+      && strpos($selfSrc, "'yielded'=>true,'resume_needed'=>true") !== false
+      && strpos($selfSrc, "'job_segment'=>\$segments") !== false);
+    $add('10.299', 'مقصد خاموش از job و log اصلاح حذف می‌شود',
+         strpos($selfSrc, "empty(\$cn['woocommerce']['enabled'])") !== false
+      && strpos($selfSrc, "!str_ends_with((string)(\$j['kind'] ?? ''), '_woo')") !== false);
+    $add('10.299', 'ارسال باسلام قیمت دقیق غرفه را بدون اعمال دوبارهٔ ضریب می‌فرستد',
+         strpos($selfSrc, "'forced_price_toman' => max(0, \$expect)") !== false
+      && strpos($selfSrc, "\$forcedPrice > 0") !== false
+      && strpos($selfSrc, "'find_deep_scan' => false") !== false);
+    $add('10.299', 'پاسخ عمومی 422 باسلام یک retry پاک‌سازی‌شده دارد',
+         strpos($selfSrc, "بعضی پاسخ‌های 422 فقط پیام عمومی") !== false
+      && strpos($selfSrc, "['name','brief','description']") !== false);
+    $add('10.299', 'ورودی 10.299 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "299'") !== false
+      && version_compare(APP_VERSION, '10.' . '299', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72828,6 +72898,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.299', t:'🛡️ اصلاح پایدار مغایرت و ارسال دقیق باسلام', items:[
+    'اصلاح بزرگ در childهای کوتاه checkpointدار اجرا می‌شود تا محدودیت هاست یا توقف یک درخواست کل عملیات را نبندد',
+    'ووکامرس غیرفعال هیچ job یا لاگی در اصلاح مغایرت تولید نمی‌کند',
+    'برای غرفه‌های غیرپیش‌فرض همان قیمت نهایی محاسبه‌شدهٔ ماتریس ارسال می‌شود و ضریب گم یا دوباره اعمال نمی‌شود',
+    'خطای عمومی 422 باسلام با payload پاک‌سازی‌شده یک بار ترمیم و با جزئیات بهتر گزارش می‌شود'
+  ]},
   {v:'10.298', t:'⏩ ادامهٔ دقیق اصلاح از cursor ذخیره‌شده', items:[
     'checkpoint اکنون علاوه بر موفق‌ها، جای دقیق حرکت در صف را برای بازیابی پس از قطع child استفاده می‌کند',
     'پس از وقفه، اصلاح از مورد بعدی ادامه پیدا می‌کند و خطاهای قبلی باعث بازگشت دوباره به مورد اول نمی‌شوند'
