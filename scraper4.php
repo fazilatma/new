@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.321';
+const APP_VERSION = '10.322';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1212,6 +1212,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
         matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
             'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'selected_destinations'=>$payload['selected_destinations'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
+            'runner_pid'=>0,'child_pid'=>0,'runner_kind'=>'','finished_at'=>0,
             'started_at'=>(int)($cp['started_at']??time()),'checkpoint'=>$cp?:['scope'=>$payload['scope'],'duplicate_keep'=>$payload['duplicate_keep'],'view_filters'=>$payload['view_filters'],'done_jobs'=>[],'started_at'=>time()],
             'log_add'=>['🧵 اصلاح مغایرت به worker دائمی سپرده شد — مستقل از مرورگر و محدودیت PHP-FPM ادامه می‌یابد']]);
     }
@@ -30830,9 +30831,10 @@ if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_f
     if(!$row){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'ردیف در snapshot فعلی پیدا نشد؛ جدول را تازه کنید'],JSON_UNESCAPED_UNICODE);exit;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');$locked=$fp&&@flock($fp,LOCK_EX|LOCK_NB);$lockRecovery=null;
     if(!$locked){
-        $busyState=matrixFixProgressRead();$recoverable=empty($busyState['running'])&&(!empty($busyState['stale'])||!empty($busyState['stopped'])||!empty($busyState['done']));
+        $busyState=matrixFixProgressRead();$busyPid=(int)($busyState['runner_pid']??$busyState['child_pid']??0);$busyPidAlive=$busyPid>0&&s4WorkerPidAlive($busyPid);
+        $recoverable=(empty($busyState['running'])&&(!empty($busyState['stale'])||!empty($busyState['stopped'])||!empty($busyState['done'])))||(!empty($busyState['queued'])&&!$busyPidAlive);
         if($recoverable){
-            $lockRecovery=['attempted'=>true,'phase'=>(string)($busyState['phase']??''),'runner_pid'=>(int)($busyState['runner_pid']??$busyState['child_pid']??0)];
+            $lockRecovery=['attempted'=>true,'phase'=>(string)($busyState['phase']??''),'queued'=>!empty($busyState['queued']),'runner_pid'=>$busyPid,'runner_alive'=>$busyPidAlive];
             $lockRecovery['runner']=matrixTerminateRunner($busyState);
             $staleJobId=(string)($busyState['job_id']??'');
             if($staleJobId!==''&&function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q)use($staleJobId){$now=time();foreach($q['entries']as&$e){if(!is_array($e)||(string)($e['id']??'')!==$staleJobId||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='running')continue;$e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['error']='stale_lock_recovered_by_row_fix';}unset($e);return['ok'=>true];});
@@ -30840,7 +30842,7 @@ if(isset($_GET['sync_matrix_fix_row'])||(($_POST['action']??'')==='sync_matrix_f
             $lockRecovery['acquired']=$locked;
             if($locked)matrixFixProgress(['running'=>false,'done'=>true,'stale'=>false,'stopped'=>true,'phase'=>'stale_lock_recovered','log_add'=>['♻️ قفل یتیم اصلاح پیش از اجرای تک‌ردیف آزاد شد']]);
         }
-        if(!$locked){if($fp)@fclose($fp);http_response_code(409);echo json_encode(['ok'=>false,'busy'=>true,'error'=>$recoverable?'قفل پردازهٔ یتیم هنوز آزاد نشد؛ چند ثانیه دیگر دوباره تلاش کنید':'یک اصلاح زندهٔ دیگر در حال اجراست؛ برای جلوگیری از عملیات همزمان صبر کنید','lock'=>['phase'=>(string)($busyState['phase']??''),'running'=>!empty($busyState['running']),'stale'=>!empty($busyState['stale']),'stopped'=>!empty($busyState['stopped']),'runner_pid'=>(int)($busyState['runner_pid']??$busyState['child_pid']??0)],'recovery'=>$lockRecovery],JSON_UNESCAPED_UNICODE);exit;}
+        if(!$locked){if($fp)@fclose($fp);http_response_code(409);echo json_encode(['ok'=>false,'busy'=>true,'error'=>$recoverable?'قفل پردازهٔ یتیم هنوز آزاد نشد؛ چند ثانیه دیگر دوباره تلاش کنید':'یک اصلاح زندهٔ دیگر در حال اجراست؛ برای جلوگیری از عملیات همزمان صبر کنید','lock'=>['phase'=>(string)($busyState['phase']??''),'running'=>!empty($busyState['running']),'queued'=>!empty($busyState['queued']),'stale'=>!empty($busyState['stale']),'stopped'=>!empty($busyState['stopped']),'runner_pid'=>$busyPid,'runner_alive'=>$busyPidAlive],'recovery'=>$lockRecovery],JSON_UNESCAPED_UNICODE);exit;}
     }
     $GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE']=true;$GLOBALS['S4_MATRIX_ROW_TRACE']=[];$before=matrixFixProgressRead();$started=microtime(true);
     try{
@@ -42200,6 +42202,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.321', 'ورودی 10.321 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "321'") !== false
       && version_compare(APP_VERSION, '10.' . '321', '>='));
+    $add('10.322', 'queued تازه مالک runner قدیمی نیست و قفل یتیم آن قابل بازیابی است',
+         strpos($selfSrc, "'runner_pid'=>0,'child_pid'=>0") !== false
+      && strpos($selfSrc, "!empty(\$busyState['queued'])&&!\$busyPidAlive") !== false
+      && strpos($selfSrc, "'runner_alive'=>\$busyPidAlive") !== false);
+    $add('10.322', 'ورودی 10.322 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "322'") !== false
+      && version_compare(APP_VERSION, '10.' . '322', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73431,6 +73440,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.322', t:'🔓 رفع 409 در state صف‌شده با runner قدیمی', items:[
+    'فیدبک نشان داد job تازه pending بود اما runner_pid اجرای قبلی در progress باقی مانده و همراه flock یتیم، state را به‌اشتباه زنده نشان می‌داد.',
+    'هنگام enqueue مالکیت runner قبلی پاک می‌شود؛ queued بدون PID زنده نیز می‌تواند قفل یتیم را بازیابی و اصلاح/بایگانی تک‌ردیف را اجرا کند.',
+    'پاسخ 409 اکنون queued و runner_alive را هم نشان می‌دهد تا قفل واقعی از state ارثی قابل تشخیص باشد.'
+  ]},
   {v:'10.321', t:'🔓 رفع خطای 409 بایگانی تک‌ردیف ناشی از قفل یتیم', items:[
     'اگر progress قبلی stopped/stale/done باشد اما child قدیمی هنوز flock را نگه داشته باشد، مودال runner یتیم را خاتمه می‌دهد و تا ۲.۵ ثانیه قفل را دوباره می‌گیرد.',
     'job متناظر یتیم cancelled می‌شود تا parent نتیجهٔ دیررس را دوباره فعال نکند؛ سپس بایگانی همان ردیف اجرا می‌شود.',
