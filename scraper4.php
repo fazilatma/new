@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.303';
+const APP_VERSION = '10.304';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1219,7 +1219,7 @@ function s4WorkerRunMatrixFix(array $payload): array {
     $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
-    try{matrixFixStopClear();matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
+    try{matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
     catch(Throwable $e){$st=matrixFixProgressRead();matrixFixProgress(['running'=>false,'done'=>true,'stale'=>true,'error'=>$e->getMessage(),'checkpoint'=>is_array($st['checkpoint']??null)?$st['checkpoint']:null,'log_add'=>['❌ خطای worker اصلاح: '.$e->getMessage().' — checkpoint حفظ شد']]);return ['ok'=>false,'error'=>$e->getMessage()];}
     finally{@flock($fp,LOCK_UN);@fclose($fp);}
 }
@@ -1239,7 +1239,9 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $decoded['child_exit_code']=$rc;if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
         $last=$decoded;s4WorkerStateWrite(['phase'=>'job','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time()]);
         if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
-        usleep(150000);
+        $retryAfter=max(0,min(300,(int)($decoded['retry_after']??0)));
+        if($retryAfter>0){s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);}
+        else usleep(150000);
     }while($segments<10000&&!matrixFixStopRequested());
     $last['worker_segments']=$segments;$last['tail']=mb_substr(implode("\n",array_slice($tails,-3)),-2000);
     if($segments>=10000&&!empty($last['yielded']))return ['ok'=>false,'error'=>'matrix_fix_segment_limit','worker_segments'=>$segments,'tail'=>$last['tail']];
@@ -28942,6 +28944,8 @@ function matrixFixVisibleProgress(array $prog, $requestedDestinations=null): arr
         ? matrixNormalizeDestinations($requestedDestinations)
         : array_values((array)($prog['selected_destinations']??[]));
     if($selected)$prog['selected_destinations']=$selected;
+    $runStarted=(int)($prog['started_at']??0);
+    if($runStarted>0)$prog['log']=array_values(array_filter((array)($prog['log']??[]),static fn($row)=>(int)($row['t']??0)>=$runStarted));
     if($selected&&!in_array('woo',$selected,true)){
         $prog['log']=array_values(array_filter((array)($prog['log']??[]),static function($row){$m=(string)($row['m']??'');return stripos($m,'WC')===false&&mb_stripos($m,'ووکامرس')===false;}));
         foreach(['planned','live'] as $k)$prog[$k]=array_values(array_filter((array)($prog[$k]??[]),static fn($x)=>!str_ends_with((string)($x['kind']??''),'_woo')));
@@ -29654,6 +29658,7 @@ function matrixFixRun(array $opts = []): array {
     $sentN = (int)($fixCp['sent_n'] ?? 0); $delN = (int)($fixCp['del_n'] ?? 0); $priceN = (int)($fixCp['price_n'] ?? 0);
     $stopped = false;
     $details = [];
+    $rateLimited=false;$rateRetryAfter=0;
     $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
 
     foreach ($jobs as $ji => $job) {
@@ -29828,14 +29833,19 @@ function matrixFixRun(array $opts = []): array {
                         'live_add' => ['ok' => true, 'kind' => 'send_bsl', 'bare' => $bare, 'shop' => $sname, 'id' => $id, 't' => time()],
                     ]);
                 } else {
-                    $failN++;
                     $err = (string)($res['error'] ?? 'خطا');
-                    $details[] = matrixFixDetail('bsl', $sname, 'send', $title, false, 'ارسال ' . $sname . ' · ' . $title . ' — ' . $err, 0, ['vendor_id' => $vid, 'error' => $err]);
-                    matrixFixProgress([
-                        'ok_n' => $okN, 'fail_n' => $failN,
-                        'log_add' => ['  ❌ ارسال ' . $sname . ' — ' . $err],
-                        'live_add' => ['ok' => false, 'kind' => 'send_bsl', 'error' => $err, 't' => time()],
-                    ]);
+                    if((int)($res['error_code']??0)===429){
+                        $rateLimited=true;$rateRetryAfter=30;
+                        matrixFixProgress(['phase'=>'bsl_rate_wait','log_add'=>['⏳ محدودیت نرخ باسلام؛ همین محصول حفظ شد و worker پس از ۳۰ ثانیه از checkpoint دوباره تلاش می‌کند']]);
+                    }else{
+                        $failN++;
+                        $details[] = matrixFixDetail('bsl', $sname, 'send', $title, false, 'ارسال ' . $sname . ' · ' . $title . ' — ' . $err, 0, ['vendor_id' => $vid, 'error' => $err]);
+                        matrixFixProgress([
+                            'ok_n' => $okN, 'fail_n' => $failN,
+                            'log_add' => ['  ❌ ارسال ' . $sname . ' — ' . $err],
+                            'live_add' => ['ok' => false, 'kind' => 'send_bsl', 'error' => $err, 't' => time()],
+                        ]);
+                    }
                 }
             }
         }
@@ -29961,6 +29971,13 @@ function matrixFixRun(array $opts = []): array {
             }
         }
 
+        if($rateLimited){
+            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
+                'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$ji,'total'=>$total];
+            matrixFixProgress(['running'=>true,'done'=>false,'checkpoint'=>$retryCp,'cur'=>$ji,'total'=>$total]);
+            return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'rate_limited'=>true,'retry_after'=>$rateRetryAfter,'total'=>$total,'cur'=>$ji];
+        }
+
         /* فقط کارِ واقعاً موفق از صفِ checkpoint حذف می‌شود؛ شکست
            باید در اجرای بعدی دوباره امتحان شود. */
         if ($jobOk) { $doneJobs[] = $jk; $doneJobSet[$jk] = true; }
@@ -29970,7 +29987,8 @@ function matrixFixRun(array $opts = []): array {
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
-        usleep($delayMs * 1000);
+        $effectiveDelayMs=str_ends_with($kind,'_bsl')?max(1000,$delayMs):$delayMs;
+        usleep($effectiveDelayMs * 1000);
         $segmentItems++;
         if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
@@ -41813,6 +41831,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.303', 'ورودی 10.303 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "303'") !== false
       && version_compare(APP_VERSION, '10.' . '303', '>='));
+    $add('10.304', 'لاگ‌های پیش از started_at اجرای فعلی به UI برنمی‌گردند',
+         strpos($selfSrc, "\$runStarted=(int)(\$prog['started_at']??0)") !== false
+      && strpos($selfSrc, ">=\$runStarted") !== false);
+    $add('10.304', 'HTTP 429 باسلام cursor را جلو نمی‌برد و با backoff ادامه می‌دهد',
+         strpos($selfSrc, "\$rateLimited=true;\$rateRetryAfter=30") !== false
+      && strpos($selfSrc, "'cur'=>\$ji") !== false
+      && strpos($selfSrc, "'phase'=>'rate_wait'") !== false);
+    $add('10.304', 'در اصلاح باسلام فاصله امن endpoint رعایت می‌شود',
+         strpos($selfSrc, "str_ends_with(\$kind,'_bsl')?max(1000,\$delayMs)") !== false);
+    $add('10.304', 'ورودی 10.304 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "304'") !== false
+      && version_compare(APP_VERSION, '10.' . '304', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73037,6 +73067,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.304', t:'⏳ backoff واقعی باسلام و پاک‌سازی log اجرای جاری', items:[
+    'status فقط logهای بعد از started_at اجرای فعلی را برمی‌گرداند؛ آثار اجرای قدیمی و ووکامرس قدیمی دیگر نمایش داده نمی‌شوند',
+    'HTTP 429 باسلام شکست محسوب نمی‌شود و cursor را جلو نمی‌برد؛ همان محصول پس از ۳۰ ثانیه دوباره تلاش می‌شود',
+    'بین endpointهای اصلاح باسلام حداقل یک ثانیه فاصله اعمال می‌شود تا محدودیت نرخ دوباره ایجاد نشود',
+    'سیگنال توقف دیگر در شروع هر child پاک نمی‌شود و واقعاً عملیات segmentشده را متوقف می‌کند'
+  ]},
   {v:'10.303', t:'🧹 حذف قطعی log ووکامرس و رفع محصول‌نیافتن باسلام', items:[
     'poll اصلی رابط نیز در هر درخواست تیک‌های زندهٔ مقصد را می‌فرستد؛ status مشترک log/planned/live ووکامرس را همان لحظه حذف می‌کند',
     'job باسلام به‌جای profile_key و key قدیمی ماتریس، شناسهٔ واقعی محصول در پروفایل ذخیره‌شدهٔ فعلی را می‌گیرد',
