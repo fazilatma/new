@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.291';
+const APP_VERSION = '10.292';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27963,7 +27963,7 @@ function matrixCompactCheckpoint(array &$cp): array {
 }
 
 function matrixPricingFingerprint(?array $profiles=null, ?array $cn=null): string {
-    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=[];
+    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=['matrix-pricing-schema-v2-shop-profile'];
     foreach($profiles as $pk=>$p){if(!is_array($p))continue;$parts[]=(string)$pk.'|'.(string)($p['priceMode']??'none').'|'.(string)($p['priceVal']??0).'|'.(string)($p['roundPrice']??0);}
     sort($parts,SORT_STRING);$parts[]='dest|'.shopPricingSignature($cn);
     return hash('sha256',implode("\n",$parts));
@@ -41415,6 +41415,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.291', 'ورودی 10.291 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "291'") !== false
       && version_compare(APP_VERSION, '10.' . '291', '>='));
+    $add('10.292', 'ماتریس ذخیره‌شده با فرمول قدیمی غرفه بدون واکشی مجدد خودکار بازقیمت‌گذاری می‌شود',
+         strpos($selfSrc, "matrix-pricing-schema-v2-shop-profile") !== false
+      && strpos($selfSrc, "matrixRefreshExpectedPrices('lazy_signature_check')") !== false);
+    $add('10.292', 'ورودی 10.292 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "292'") !== false
+      && version_compare(APP_VERSION, '10.' . '292', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -72639,6 +72645,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.292', t:'♻️ بازقیمت‌گذاری خودکار ماتریس موجود با فرمول صحیح غرفه', items:[
+    'نتیجهٔ ذخیره‌شدهٔ ماتریس با تشخیص نسخهٔ فرمول قیمت، بدون واکشی دوبارهٔ کاتالوگ مقصدها بازقیمت‌گذاری می‌شود',
+    'پس از به‌روزرسانی صفحه، انتظار قیمت غرفه‌های غیرپیش‌فرض فوراً از تنظیمات پروفایل و همان غرفه محاسبه می‌شود'
+  ]},
   {v:'10.291', t:'🧾 قیمت دقیق غرفه‌ها و صفحهٔ کامل محصول در نتایج', items:[
     'ماتریس برای غرفه‌های غیرپیش‌فرض دقیقاً از همان محاسبهٔ قیمت مسیر ارسال استفاده می‌کند و انتظار هر غرفه حتی برای محصول missing جدا ذخیره می‌شود',
     'اعمال دوبارهٔ ضریب غرفه هنگام ارسال محصول missing از اصلاح مغایرت حذف شد',
