@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.286';
+const APP_VERSION = '10.287';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28428,6 +28428,7 @@ function matrixBuild(array $opts = []): array {
             'title' => (string)($wr['title'] ?? ''),
             'price' => (int)($wr['price'] ?? 0),
             'status' => (string)($wr['status'] ?? ''),
+            'date_created' => (string)($wr['date_created'] ?? ''),
         ];
         if (!isset($rowsByKey[$bare])) {
             $rowsByKey[$bare] = [
@@ -28536,6 +28537,7 @@ function matrixBuild(array $opts = []): array {
                 'price_rial' => (int)($br['price'] ?? 0),
                 'status' => (int)($br['status'] ?? 0),
                 'stock' => (int)($br['stock'] ?? 0),
+                'date_created' => (string)($br['date_created'] ?? ''),
             ];
             if (!isset($rowsByKey[$bare])) {
                 $rowsByKey[$bare] = [
@@ -28546,7 +28548,14 @@ function matrixBuild(array $opts = []): array {
                 ];
             }
             if (isset($seen[$bare])) {
-                $rowsByKey[$bare]['shops'][$vid]['dup'] = true;
+                $oldCell = $rowsByKey[$bare]['shops'][$vid] ?? null;
+                if (is_array($oldCell)) {
+                    $existingIds = [];
+                    foreach ((array)($rowsByKey[$bare]['shop_extra'][$vid] ?? []) as $ex) $existingIds[(int)($ex['id'] ?? 0)] = true;
+                    $oldId = (int)($oldCell['id'] ?? 0);
+                    if ($oldId > 0 && !isset($existingIds[$oldId])) $rowsByKey[$bare]['shop_extra'][$vid][] = $oldCell;
+                }
+                $cell['dup'] = true;
             }
             $seen[$bare] = true;
             $baseExpect = (int)($rowsByKey[$bare]['bsl_expect'] ?? 0);
@@ -28854,168 +28863,117 @@ function matrixFixBslPrice(string $tk, int $vid, int $pid, int $priceToman): arr
  *   send_woo / send_bsl    — در پروفایل هست، در مقصد نیست → ارسال
  *   del_woo / del_bsl      — در پروفایل نیست، در مقصد هست → حذف/بایگانی
  */
-function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = []): array {
+function matrixFixDuplicateSplit(array $items, string $keep): array {
+    $items = array_values(array_filter($items, static function ($x) {
+        return is_array($x) && (int)($x['id'] ?? 0) > 0;
+    }));
+    if (!$items) return ['keep' => null, 'drop' => []];
+    if (count($items) === 1) return ['keep' => $items[0], 'drop' => []];
+    foreach ($items as &$it) {
+        if (isset($it['status']) && is_string($it['status'])) $it['wstatus'] = $it['status'];
+    }
+    unset($it);
+    return dedupPickKeeper($items, [
+        'keep' => in_array($keep, ['newest', 'expensive'], true) ? $keep : 'newest',
+        'tie' => 'newest',
+        'prefer_active' => false,
+    ]);
+}
+
+function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
     $jobs = [];
-    $shops = is_array($data['shops'] ?? null) ? $data['shops'] : [];
-    /* اگر meta غرفه خالی است، از خود ردیف‌ها vendor_id را دربیاور */
-    if (!$shops) {
-        $seen = [];
-        foreach ((array)($data['rows'] ?? []) as $r) {
-            if (!is_array($r) || empty($r['shops']) || !is_array($r['shops'])) continue;
-            foreach ($r['shops'] as $vk => $cell) {
-                $vid = (int)$vk;
-                if ($vid <= 0 && is_array($cell)) $vid = (int)($cell['vendor_id'] ?? 0);
-                if ($vid <= 0 || isset($seen[$vid])) continue;
-                $seen[$vid] = true;
-                $shops[] = [
-                    'vendor_id' => $vid,
-                    'name' => (string)(is_array($cell) ? ($cell['shop_name'] ?? ('#' . $vid)) : ('#' . $vid)),
-                ];
-            }
-        }
+    if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
+    $shopsMeta = [];
+    foreach ((array)($data['shops'] ?? []) as $sh) {
+        if (!is_array($sh)) continue;
+        $vid = (int)($sh['vendor_id'] ?? 0);
+        if ($vid > 0) $shopsMeta[$vid] = $sh;
     }
-    /* اگر هنوز خالی و scope bsl/all، از connections */
-    if (!$shops && ($scope === 'all' || $scope === 'bsl') && function_exists('bslAllShops') && function_exists('loadConnections')) {
-        try {
-            foreach (bslAllShops(loadConnections()) as $sh) {
-                if (!is_array($sh)) continue;
-                $vid = (int)($sh['vendor_id'] ?? 0);
-                if ($vid <= 0) continue;
-                $shops[] = ['vendor_id' => $vid, 'name' => (string)($sh['shop_name'] ?? $sh['name'] ?? ('#' . $vid))];
-            }
-        } catch (Throwable $e) { /* ignore */ }
-    }
-    foreach ((array)($data['rows'] ?? []) as $ri => $r) {
-        if (!is_array($r)) continue;
-        if (!matrixRowMatchesViewFilters($r, $data, $viewFilters)) continue;
+    foreach ((array)($data['rows'] ?? []) as $r) {
+        if (!is_array($r) || !empty($r['is_report']) || !matrixRowMatchesViewFilters($r, $data, $viewFilters)) continue;
         $bare = (string)($r['bare'] ?? '');
-        if ($bare === '' || str_starts_with($bare, '__report_') || !empty($r['is_report'])) continue;
         $title = (string)($r['title'] ?? $bare);
-        $flags = array_map('strval', (array)($r['flags'] ?? []));
         $status = (string)($r['status'] ?? '');
-        $hits = (int)($r['profile_hits'] ?? 0);
-        $pkey = trim((string)($r['profile_key'] ?? ''));
-        $prodKey = trim((string)($r['key'] ?? ''));
-        $profName = trim((string)($r['profile'] ?? ''));
-        $profPrice = (int)($r['profile_price'] ?? 0);
-        $hasProf = $hits > 0 || $profPrice > 0 || $pkey !== '' || $profName !== '';
-        /* اگر status صریحاً only_dest است، مبدأ نیست */
+        $hasProf = (int)($r['profile_hits'] ?? 0) > 0 || (int)($r['profile_price'] ?? 0) > 0
+            || trim((string)($r['profile_key'] ?? '')) !== '' || trim((string)($r['profile'] ?? '')) !== '';
         if ($status === 'only_dest') $hasProf = false;
         if (in_array($status, ['only_profile', 'missing'], true)) $hasProf = true;
+        $base = ['bare' => $bare, 'title' => $title,
+            'profile_key' => (string)($r['profile_key'] ?? ''),
+            'product_key' => (string)($r['key'] ?? '')];
 
-        /* ---- Woo ---- */
-        if ($scope === 'all' || $scope === 'woo') {
-            $wooRaw = $r['woo'] ?? null;
-            $woo = (is_array($wooRaw) && ((int)($wooRaw['id'] ?? 0) > 0 || (int)($wooRaw['price'] ?? 0) > 0 || trim((string)($wooRaw['title'] ?? '')) !== ''))
-                ? $wooRaw : null;
-            $wooTone = (string)($r['woo_tone'] ?? '');
-            $expect = (int)($r['woo_expect'] ?? 0);
-            if ($expect <= 0 && $profPrice > 0) $expect = $profPrice;
-            $wid = $woo ? (int)($woo['id'] ?? 0) : 0;
-            $got = $woo ? (int)($woo['price'] ?? 0) : 0;
-            $flagMissWoo = in_array('missing_woo', $flags, true) || $wooTone === 'missing_dst'
-                || in_array($status, ['missing', 'only_profile'], true);
-            $flagExtraWoo = in_array('extra_woo', $flags, true) || $wooTone === 'extra' || ($status === 'only_dest' && $woo);
-            $flagPrice = in_array('price_mismatch', $flags, true)
-                || in_array($wooTone, ['bad', 'warn'], true)
-                || $status === 'mismatch';
-
-            if ($hasProf && !$woo) {
-                $jobs[] = [
-                    'kind' => 'send_woo', 'bare' => $bare, 'title' => $title,
-                    'row_i' => $ri, 'profile_key' => $pkey, 'product_key' => $prodKey,
-                    'expect' => $expect, 'why' => 'missing_woo',
+        $wooItems = [];
+        if (is_array($r['woo'] ?? null)) $wooItems[] = $r['woo'];
+        foreach ((array)($r['woo_extra'] ?? []) as $x) if (is_array($x)) $wooItems[] = $x;
+        $wooPick = matrixFixDuplicateSplit($wooItems, $duplicateKeep);
+        $woo = is_array($wooPick['keep'] ?? null) ? $wooPick['keep'] : null;
+        if (($scope === 'all' || $scope === 'woo') && count($wooItems) > 1) {
+            if ($hasProf) {
+                foreach ((array)$wooPick['drop'] as $drop) $jobs[] = $base + [
+                    'kind' => 'dedup_woo', 'id' => (int)$drop['id'], 'keeper' => $woo,
+                    'duplicate_keep' => $duplicateKeep,
                 ];
-            } elseif ($hasProf && $woo && $wid > 0 && $expect > 0 && $got !== $expect) {
-                $need = $flagPrice || ($got > 0 && abs($got - $expect) / max($expect, 1) > 0.01)
-                    || ($got <= 0 && $expect > 0);
-                if ($need) {
-                    $jobs[] = [
-                        'kind' => 'price_woo', 'bare' => $bare, 'title' => $title,
-                        'row_i' => $ri, 'id' => $wid, 'from' => $got, 'to' => $expect,
-                        'why' => 'price_woo',
-                    ];
-                }
-            } elseif (!$hasProf && $woo && $wid > 0) {
-                $jobs[] = [
-                    'kind' => 'del_woo', 'bare' => $bare, 'title' => $title,
-                    'row_i' => $ri, 'id' => $wid, 'why' => 'extra_woo',
-                ];
-            } elseif ($hasProf && $flagMissWoo && !$woo) {
-                /* already covered */
+            } else {
+                foreach ($wooItems as $drop) $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)$drop['id']];
+                $woo = null; // all destination-only copies are removed
             }
         }
 
-        /* ---- BSL shops ---- */
-        if ($scope === 'all' || $scope === 'bsl') {
-            $rowShops = is_array($r['shops'] ?? null) ? $r['shops'] : [];
-            foreach ($shops as $sm) {
-                if (!is_array($sm)) continue;
-                $vid = (int)($sm['vendor_id'] ?? 0);
-                if ($vid <= 0) continue;
-                $sname = (string)($sm['name'] ?? $sm['shop_name'] ?? ('#' . $vid));
-                $cell = null;
-                if (isset($rowShops[$vid]) && is_array($rowShops[$vid])) $cell = $rowShops[$vid];
-                elseif (isset($rowShops[(string)$vid]) && is_array($rowShops[(string)$vid])) $cell = $rowShops[(string)$vid];
-                /* بعضی JSONها کلید را به‌صورت لیست نگه می‌دارند */
-                if ($cell === null) {
-                    foreach ($rowShops as $k => $c) {
-                        if (!is_array($c)) continue;
-                        if ((int)$k === $vid || (int)($c['vendor_id'] ?? 0) === $vid) { $cell = $c; break; }
-                    }
-                }
-                $hasCell = is_array($cell) && ((int)($cell['id'] ?? 0) > 0 || (int)($cell['price'] ?? 0) > 0);
+        if ($scope === 'all' || $scope === 'woo') {
+            if ($hasProf && $woo) {
+                $exp = (int)($r['woo_expect'] ?? 0); $got = (int)($woo['price'] ?? 0);
+                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                    'kind' => 'price_woo', 'id' => (int)($woo['id'] ?? 0), 'from' => $got, 'to' => $exp,
+                ];
+            } elseif ($hasProf && !$woo && (int)($r['woo_expect'] ?? 0) > 0) {
+                $jobs[] = $base + ['kind' => 'send_woo', 'expect' => (int)$r['woo_expect']];
+            } elseif (!$hasProf && $woo) {
+                $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)];
+            }
+        }
 
-                if ($hasProf && !$hasCell) {
-                    $jobs[] = [
-                        'kind' => 'send_bsl', 'bare' => $bare, 'title' => $title,
-                        'row_i' => $ri, 'vendor_id' => $vid, 'shop_name' => $sname,
-                        'profile_key' => $pkey, 'product_key' => $prodKey,
-                        'expect' => (int)($r['bsl_expect'] ?? $profPrice),
-                        'why' => 'missing_bsl',
+        $shopIds = array_unique(array_merge(array_keys($shopsMeta), array_keys((array)($r['shops'] ?? [])), array_keys((array)($r['shop_extra'] ?? []))));
+        foreach ($shopIds as $vidRaw) {
+            $vid = (int)$vidRaw; if ($vid <= 0) continue;
+            $cellItems = [];
+            $mainCell = $r['shops'][$vid] ?? $r['shops'][(string)$vid] ?? null;
+            if (is_array($mainCell)) $cellItems[] = $mainCell;
+            $extraCells = $r['shop_extra'][$vid] ?? $r['shop_extra'][(string)$vid] ?? [];
+            foreach ((array)$extraCells as $x) if (is_array($x)) $cellItems[] = $x;
+            $pick = matrixFixDuplicateSplit($cellItems, $duplicateKeep);
+            $cell = is_array($pick['keep'] ?? null) ? $pick['keep'] : null;
+            $sh = $shopsMeta[$vid] ?? [];
+            $sname = (string)($cell['shop_name'] ?? $sh['name'] ?? $sh['shop_name'] ?? ('غرفه ' . $vid));
+            if (($scope === 'all' || $scope === 'bsl') && count($cellItems) > 1) {
+                if ($hasProf) {
+                    foreach ((array)$pick['drop'] as $drop) $jobs[] = $base + [
+                        'kind' => 'dedup_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid,
+                        'shop_name' => $sname, 'keeper' => $cell, 'duplicate_keep' => $duplicateKeep,
                     ];
-                } elseif ($hasProf && $hasCell) {
-                    $expect = (int)($cell['expect'] ?? ($r['bsl_expect'] ?? 0));
-                    if ($expect <= 0) $expect = (int)($r['bsl_expect'] ?? $profPrice);
-                    $got = (int)($cell['price'] ?? 0);
-                    $bid = (int)($cell['id'] ?? 0);
-                    $tone = (string)($cell['tone'] ?? '');
-                    $need = in_array($tone, ['bad', 'warn'], true)
-                        || in_array('price_mismatch', $flags, true)
-                        || ($got > 0 && $expect > 0 && abs($got - $expect) / max($expect, 1) > 0.01)
-                        || ($got <= 0 && $expect > 0 && $bid > 0);
-                    if ($need && $bid > 0 && $expect > 0 && $got !== $expect) {
-                        $jobs[] = [
-                            'kind' => 'price_bsl', 'bare' => $bare, 'title' => $title,
-                            'row_i' => $ri, 'id' => $bid, 'vendor_id' => $vid,
-                            'shop_name' => $sname, 'from' => $got, 'to' => $expect,
-                            'why' => 'price_bsl',
-                        ];
-                    }
-                } elseif (!$hasProf && $hasCell) {
-                    $bid = (int)($cell['id'] ?? 0);
-                    if ($bid > 0) {
-                        $jobs[] = [
-                            'kind' => 'del_bsl', 'bare' => $bare, 'title' => $title,
-                            'row_i' => $ri, 'id' => $bid, 'vendor_id' => $vid,
-                            'shop_name' => $sname, 'why' => 'extra_bsl',
-                        ];
-                    }
+                } else {
+                    foreach ($cellItems as $drop) $jobs[] = $base + [
+                        'kind' => 'del_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid, 'shop_name' => $sname,
+                    ];
+                    $cell = null;
                 }
+            }
+            if ($scope !== 'all' && $scope !== 'bsl') continue;
+            $expectMap = (array)($r['shop_expect'] ?? []);
+            $exp = (int)($cell['expect'] ?? $expectMap[$vid] ?? $expectMap[(string)$vid] ?? $r['bsl_expect'] ?? $r['profile_price'] ?? 0);
+            if ($hasProf && $cell) {
+                $got = (int)($cell['price'] ?? 0);
+                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                    'kind' => 'price_bsl', 'id' => (int)($cell['id'] ?? 0), 'vendor_id' => $vid,
+                    'shop_name' => $sname, 'from' => $got, 'to' => $exp,
+                ];
+            } elseif ($hasProf && !$cell && $exp > 0) {
+                $jobs[] = $base + ['kind' => 'send_bsl', 'vendor_id' => $vid, 'shop_name' => $sname, 'expect' => $exp];
+            } elseif (!$hasProf && $cell) {
+                $jobs[] = $base + ['kind' => 'del_bsl', 'id' => (int)($cell['id'] ?? 0),
+                    'vendor_id' => $vid, 'shop_name' => $sname];
             }
         }
     }
-    $order = [
-        'del_woo' => 0, 'del_bsl' => 1,
-        'price_woo' => 2, 'price_bsl' => 3,
-        'send_woo' => 4, 'send_bsl' => 5,
-    ];
-    usort($jobs, function ($a, $b) use ($order) {
-        $oa = $order[$a['kind'] ?? ''] ?? 9;
-        $ob = $order[$b['kind'] ?? ''] ?? 9;
-        if ($oa !== $ob) return $oa <=> $ob;
-        return strcmp((string)($a['bare'] ?? ''), (string)($b['bare'] ?? ''));
-    });
     return $jobs;
 }
 
@@ -29342,6 +29300,8 @@ function matrixFixRun(array $opts = []): array {
     $delayMs = max(50, min(2000, (int)($opts['delay_ms'] ?? 180)));
     $source = (string)($opts['source'] ?? 'manual');
     $fixCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
+    $duplicateKeep = (string)($fixCp['duplicate_keep'] ?? $opts['duplicate_keep'] ?? 'newest');
+    if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
     $doneJobs = array_values(array_unique(array_map('strval', (array)($fixCp['done_jobs'] ?? []))));
     $doneJobSet = $doneJobs ? array_fill_keys($doneJobs, true) : [];
     $fixStartedAt = (int)($fixCp['started_at'] ?? time());
@@ -29361,30 +29321,30 @@ function matrixFixRun(array $opts = []): array {
 
     $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
     if(is_array($fixCp['view_filters']??null))$viewFilters=$fixCp['view_filters'];
-    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters);
+    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep);
     $total = count($jobs);
     $nPrice = $nSend = $nDel = 0;
     foreach ($jobs as $j) {
         $k = (string)($j['kind'] ?? '');
         if (str_starts_with($k, 'price_')) $nPrice++;
         elseif (str_starts_with($k, 'send_')) $nSend++;
-        elseif (str_starts_with($k, 'del_')) $nDel++;
+        elseif (str_starts_with($k, 'del_') || str_starts_with($k, 'dedup_')) $nDel++;
     }
     matrixFixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => $fixStartedAt, 'source' => $source,
-        'scope' => $scope, 'delay_ms' => $delayMs, 'job' => 'fix',
+        'scope' => $scope, 'delay_ms' => $delayMs, 'duplicate_keep' => $duplicateKeep, 'job' => 'fix',
         'total' => $total, 'cur' => 0, 'ok_n' => (int)($fixCp['ok_n'] ?? 0),
         'fail_n' => (int)($fixCp['fail_n'] ?? 0), 'skip_n' => (int)($fixCp['skip_n'] ?? 0),
         'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
         'price_n' => (int)($fixCp['price_n'] ?? 0), 'done_jobs' => $doneJobs,
-        'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
             'price_n' => (int)($fixCp['price_n'] ?? 0)],
         'live' => [],
         'log_add' => array_merge([
-            '🔧 شروع مغایرت‌گیری کامل از جدول — محدوده: ' . $scope,
+            '🔧 شروع مغایرت‌گیری کامل از جدول — محدوده: ' . $scope . ' · نگه‌داری تکراری: ' . dedupKeepLabel($duplicateKeep),
             '📋 ' . $total . ' کار: 💰' . $nPrice . ' قیمت · 📤' . $nSend . ' ارسال · 🗑' . $nDel . ' حذف',
         ], array_map(function ($j) {
             return '  → ' . (string)($j['kind'] ?? '') . ' · ' . mb_substr((string)($j['title'] ?? $j['bare'] ?? ''), 0, 40);
@@ -29398,7 +29358,7 @@ function matrixFixRun(array $opts = []): array {
         $stats = [
             'at' => time(), 'ok' => 0, 'fail' => 0, 'total' => 0,
             'sent' => 0, 'deleted' => 0, 'priced' => 0,
-            'stopped' => false, 'scope' => $scope, 'view_filters' => $viewFilters,
+            'stopped' => false, 'scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'view_filters' => $viewFilters,
             'details' => [['ok' => true, 'label' => $emptyMsg]],
         ];
         matrixFixAppendReportRows($stats);
@@ -29610,39 +29570,55 @@ function matrixFixRun(array $opts = []): array {
             }
         }
         /* ========== DEL WOO ========== */
-        elseif ($kind === 'del_woo') {
+        elseif ($kind === 'del_woo' || $kind === 'dedup_woo') {
+            $isDuplicateDelete = $kind === 'dedup_woo';
             matrixFixProgress([
                 'phase' => 'woo_del', 'pct' => $pct, 'cur' => $n, 'total' => $total,
-                'log_add' => ['🗑 [' . $n . '/' . $total . '] حذف WC · ' . $title . ' #' . (int)$job['id']],
+                'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('حذف تکراری WC (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') · ') : 'حذف WC · ') . $title . ' #' . (int)$job['id']],
             ]);
             $res = matrixFixDelWoo($cn, (int)$job['id']);
             if (!empty($res['ok'])) {
                 $jobOk = true; $okN++; $delN++;
-                matrixResultPatchRow($bare, [
-                    'woo' => null, 'woo_tone' => 'na',
-                    'status' => 'only_dest_removed',
-                    'fix_del_woo_at' => time(),
-                    'flags' => [],
-                ]);
-                /* mark gone */
-                $dataNow = matrixResultLoad();
-                foreach ((array)($dataNow['rows'] ?? []) as $rr) {
-                    if ((string)($rr['bare'] ?? '') !== $bare) continue;
-                    $stillBsl = false;
-                    foreach ((array)($rr['shops'] ?? []) as $c) if (!empty($c['id'])) $stillBsl = true;
-                    matrixResultPatchRow($bare, [
-                        'woo' => null,
-                        'woo_tone' => 'na',
-                        'status' => $stillBsl ? 'only_dest' : 'removed',
-                        'title' => $title . ' (حذف‌شده از WC)',
-                    ]);
-                    break;
+                if ($isDuplicateDelete) {
+                    $dataNow = matrixResultLoad();
+                    foreach ((array)($dataNow['rows'] ?? []) as $rr) {
+                        if ((string)($rr['bare'] ?? '') !== $bare) continue;
+                        $keeper = is_array($job['keeper'] ?? null) ? $job['keeper'] : ($rr['woo'] ?? null);
+                        $extras = [];
+                        foreach ((array)($rr['woo_extra'] ?? []) as $x) {
+                            $xid = (int)($x['id'] ?? 0);
+                            if ($xid !== (int)$job['id'] && $xid !== (int)($keeper['id'] ?? 0)) $extras[] = $x;
+                        }
+                        if (is_array($keeper)) unset($keeper['dup']);
+                        $patch = ['woo' => $keeper, 'woo_extra' => $extras, 'fix_dedup_woo_at' => time()];
+                        if (!$extras) {
+                            $patch['woo_dup'] = false;
+                            $patch['flags'] = array_values(array_filter((array)($rr['flags'] ?? []), static fn($f) => $f !== 'dup_woo'));
+                        }
+                        matrixResultPatchRow($bare, $patch);
+                        break;
+                    }
+                } else {
+                    matrixResultPatchRow($bare, ['woo' => null, 'woo_tone' => 'na',
+                        'status' => 'only_dest_removed', 'fix_del_woo_at' => time(), 'flags' => []]);
+                    $dataNow = matrixResultLoad();
+                    foreach ((array)($dataNow['rows'] ?? []) as $rr) {
+                        if ((string)($rr['bare'] ?? '') !== $bare) continue;
+                        $stillBsl = false;
+                        foreach ((array)($rr['shops'] ?? []) as $c) if (!empty($c['id'])) $stillBsl = true;
+                        matrixResultPatchRow($bare, ['woo' => null, 'woo_tone' => 'na',
+                            'status' => $stillBsl ? 'only_dest' : 'removed',
+                            'title' => $title . ' (حذف‌شده از WC)']);
+                        break;
+                    }
                 }
-                $details[] = matrixFixDetail('woo', 'ووکامرس', 'delete', $title, true, 'حذف WC · ' . $title . ' #' . (int)$job['id'], (int)$job['id']);
+                $details[] = matrixFixDetail('woo', 'ووکامرس', $isDuplicateDelete ? 'deduplicate' : 'delete', $title, true,
+                    ($isDuplicateDelete ? ('حذف تکراری WC (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') · ') : 'حذف WC · ') . $title . ' #' . (int)$job['id'],
+                    (int)$job['id'], $isDuplicateDelete ? ['criterion' => (string)($job['duplicate_keep'] ?? 'newest')] : []);
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN, 'del_n' => $delN,
                     'log_add' => ['  ✅ حذف/زباله‌دان WC #' . (int)$job['id']],
-                    'live_add' => ['ok' => true, 'kind' => 'del_woo', 'id' => (int)$job['id'], 't' => time()],
+                    'live_add' => ['ok' => true, 'kind' => $kind, 'id' => (int)$job['id'], 't' => time()],
                 ]);
             } else {
                 $failN++;
@@ -29656,38 +29632,52 @@ function matrixFixRun(array $opts = []): array {
             }
         }
         /* ========== DEL BSL ========== */
-        elseif ($kind === 'del_bsl') {
+        elseif ($kind === 'del_bsl' || $kind === 'dedup_bsl') {
+            $isDuplicateDelete = $kind === 'dedup_bsl';
             $vid = (int)($job['vendor_id'] ?? 0);
             $sname = (string)($job['shop_name'] ?? ('#' . $vid));
             matrixFixProgress([
                 'phase' => 'bsl_del', 'pct' => $pct, 'cur' => $n, 'total' => $total,
-                'log_add' => ['🗑 [' . $n . '/' . $total . '] بایگانی ' . $sname . ' · ' . $title . ' #' . (int)$job['id']],
+                'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('بایگانی تکراری (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') ' : 'بایگانی ') . $sname . ' · ' . $title . ' #' . (int)$job['id']],
             ]);
             $res = matrixFixDelBsl($cn, (int)$job['id'], $vid);
             if (!empty($res['ok'])) {
                 $jobOk = true; $okN++; $delN++;
-                matrixResultPatchRow($bare, [
-                    'shops' => [$vid => null],
-                    'fix_del_bsl_at' => time(),
-                ]);
-                /* clear shop cell properly */
                 $dataNow = matrixResultLoad();
                 foreach ((array)($dataNow['rows'] ?? []) as $rr) {
                     if ((string)($rr['bare'] ?? '') !== $bare) continue;
                     $shops = is_array($rr['shops'] ?? null) ? $rr['shops'] : [];
-                    unset($shops[$vid]);
-                    matrixResultPatchRow($bare, [
-                        'shops' => $shops,
-                        'status' => empty($shops) && empty($rr['woo']) ? 'removed' : (string)($rr['status'] ?? 'only_dest'),
-                        'title' => $title . ' (بایگانی از ' . $sname . ')',
-                    ]);
+                    $shopExtra = is_array($rr['shop_extra'] ?? null) ? $rr['shop_extra'] : [];
+                    if ($isDuplicateDelete) {
+                        $keeper = is_array($job['keeper'] ?? null) ? $job['keeper'] : ($shops[$vid] ?? null);
+                        $shops[$vid] = $keeper;
+                        $left = [];
+                        foreach ((array)($shopExtra[$vid] ?? []) as $x) {
+                            $xid = (int)($x['id'] ?? 0);
+                            if ($xid !== (int)$job['id'] && $xid !== (int)($keeper['id'] ?? 0)) $left[] = $x;
+                        }
+                        $shopExtra[$vid] = $left;
+                        if (is_array($keeper)) unset($shops[$vid]['dup']);
+                        $stillDup = false;
+                        foreach ($shopExtra as $more) if (!empty($more)) { $stillDup = true; break; }
+                        $patch = ['shops' => $shops, 'shop_extra' => $shopExtra, 'fix_dedup_bsl_at' => time()];
+                        if (!$stillDup) $patch['flags'] = array_values(array_filter((array)($rr['flags'] ?? []), static fn($f) => $f !== 'dup_bsl'));
+                        matrixResultPatchRow($bare, $patch);
+                    } else {
+                        unset($shops[$vid]);
+                        matrixResultPatchRow($bare, ['shops' => $shops,
+                            'status' => empty($shops) && empty($rr['woo']) ? 'removed' : (string)($rr['status'] ?? 'only_dest'),
+                            'title' => $title . ' (بایگانی از ' . $sname . ')', 'fix_del_bsl_at' => time()]);
+                    }
                     break;
                 }
-                $details[] = matrixFixDetail('bsl', $sname, 'delete', $title, true, 'بایگانی ' . $sname . ' · ' . $title . ' #' . (int)$job['id'], (int)$job['id'], ['vendor_id' => $vid]);
+                $details[] = matrixFixDetail('bsl', $sname, $isDuplicateDelete ? 'deduplicate' : 'delete', $title, true,
+                    ($isDuplicateDelete ? ('بایگانی تکراری (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') ') : 'بایگانی ') . $sname . ' · ' . $title . ' #' . (int)$job['id'],
+                    (int)$job['id'], ['vendor_id' => $vid, 'criterion' => (string)($job['duplicate_keep'] ?? '')]);
                 matrixFixProgress([
                     'ok_n' => $okN, 'fail_n' => $failN, 'del_n' => $delN,
                     'log_add' => ['  ✅ بایگانی ' . $sname . ' #' . (int)$job['id']],
-                    'live_add' => ['ok' => true, 'kind' => 'del_bsl', 'shop' => $sname, 'id' => (int)$job['id'], 't' => time()],
+                    'live_add' => ['ok' => true, 'kind' => $kind, 'shop' => $sname, 'id' => (int)$job['id'], 't' => time()],
                 ]);
             } else {
                 $failN++;
@@ -29706,7 +29696,7 @@ function matrixFixRun(array $opts = []): array {
         if ($jobOk) { $doneJobs[] = $jk; $doneJobSet[$jk] = true; }
         $incomplete = $stopped || count($doneJobs) < $total;
         matrixFixProgress(['done_jobs' => $doneJobs,
-            'checkpoint' => ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
@@ -29737,7 +29727,7 @@ function matrixFixRun(array $opts = []): array {
         'ok' => $okN, 'fail' => $failN, 'total' => $total,
         'partial' => $incomplete,
         'sent' => $sentN, 'deleted' => $delN, 'priced' => $priceN,
-        'stopped' => $stopped, 'scope' => $scope, 'view_filters' => $viewFilters,
+        'stopped' => $stopped, 'scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'view_filters' => $viewFilters,
         'details' => $details,
     ];
     matrixFixAppendReportRows($stats);
@@ -29750,7 +29740,7 @@ function matrixFixRun(array $opts = []): array {
         'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
         'finished_at' => time(),
         'done_jobs' => $doneJobs,
-        'checkpoint' => $incomplete ? ['scope' => $scope, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
             'cur' => $n ?? 0, 'total' => $total] : null,
         'log_add' => [
@@ -30388,6 +30378,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'scope' => (string)($_GET['scope'] ?? $_POST['scope'] ?? 'all'),
         'delay_ms' => (int)($_GET['delay_ms'] ?? $_POST['delay_ms'] ?? 180),
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
+        'duplicate_keep' => (string)($_GET['duplicate_keep'] ?? $_POST['duplicate_keep'] ?? 'newest'),
         'view_filters' => [
             'q'=>(string)($_GET['q']??$_POST['q']??''),
             'only_dup'=>!empty($_GET['only_dup']??$_POST['only_dup']??null),
@@ -30432,7 +30423,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'phase' => 'queued', 'started_at' => (int)($matrixFixCp['started_at'] ?? time()), 'runner_pid'=>(int)@getmypid(), 'runner_kind'=>'matrix_fix', 'source' => $opts['source'],
         'scope' => $opts['scope'], 'delay_ms' => $opts['delay_ms'],
         'job' => 'fix', 'log' => [], 'live' => [],
-        'checkpoint' => $matrixFixCp ?: ['scope' => $opts['scope'], 'done_jobs' => [], 'started_at' => time()],
+        'checkpoint' => $matrixFixCp ?: ['scope' => $opts['scope'], 'duplicate_keep' => $opts['duplicate_keep'], 'done_jobs' => [], 'started_at' => time()],
         'log_add' => ['🚀 ' . ($matrixFixCp ? 'ادامه اصلاح مغایرت از checkpoint' : 'جاب اصلاح مغایرت در صف سرور') . '…'],
     ]);
     $early = json_encode(['ok' => true, 'started' => true, 'message' => 'اصلاح روی سرور شروع شد', 'running' => true], JSON_UNESCAPED_UNICODE);
@@ -41283,6 +41274,29 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'key'=>'queue_replaced'") !== false
       && strpos($selfSrc, "{v:'10." . "286'") !== false
       && version_compare(APP_VERSION, '10.' . '286', '>='));
+    $mxExp = matrixFixDuplicateSplit([
+        ['id' => 10, 'price' => 100, 'date_created' => '2025-01-01'],
+        ['id' => 20, 'price' => 300, 'date_created' => '2024-01-01'],
+    ], 'expensive');
+    $mxNew = matrixFixDuplicateSplit([['id' => 10, 'price' => 100], ['id' => 20, 'price' => 90]], 'newest');
+    $add('10.287', 'انتخاب نگه‌دارندهٔ تکراری در ماتریس جدیدترین و گران‌ترین را درست اجرا می‌کند',
+         (int)($mxExp['keep']['id'] ?? 0) === 20 && (int)($mxNew['keep']['id'] ?? 0) === 20
+      && count((array)($mxExp['drop'] ?? [])) === 1);
+    $add('10.287', 'جزئیات همهٔ تکراری‌های باسلام و تاریخ مقصدها در ماتریس حفظ می‌شود',
+         strpos($selfSrc, "['shop_" . "extra'][\$vid][]") !== false
+      && strpos($selfSrc, "'date_" . "created' => (string)(\$wr['date_created']") !== false);
+    $add('10.287', 'اصلاح مغایرت job حذف تکراری ووکامرس و باسلام می‌سازد',
+         strpos($selfSrc, "'kind' => 'dedup_" . "woo'") !== false
+      && strpos($selfSrc, "'kind' => 'dedup_" . "bsl'") !== false
+      && strpos($selfSrc, "'duplicate_keep' => \$duplicateKeep") !== false);
+    $add('10.287', 'معیار نگه‌داری از رابط تا checkpoint و اجرای دوره‌ای منتقل می‌شود',
+         strpos($selfSrc, 'id="smDuplicate' . 'Keep"') !== false
+      && strpos($selfSrc, "fd.append('duplicate_" . "keep'") !== false
+      && strpos($selfSrc, "'duplicate_keep' => \$duplicateKeep") !== false
+      && strpos($selfSrc, "'source' => 'recon_auto'") !== false);
+    $add('10.287', 'ورودی 10.287 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "287'") !== false
+      && version_compare(APP_VERSION, '10.' . '287', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -48910,7 +48924,7 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
             $name = trim((string)($pr['name'] ?? '')); if ($name === '') continue;
             $pageRows[] = ['id' => (int)($pr['id'] ?? 0), 'title' => $name,
                 'price' => (int)preg_replace('~\D~', '', (string)($pr['regular_price'] ?? '0')),
-                'status' => (string)($pr['status'] ?? ''), 'via' => 'api'];
+                'status' => (string)($pr['status'] ?? ''), 'date_created' => (string)($pr['date_created_gmt'] ?? $pr['date_created'] ?? ''), 'via' => 'api'];
         }
         $rows = array_merge($rows, $pageRows); reconFetchCursorAppend('woo', 0, $page, $pageRows);
         $meta['page'] = $page;
@@ -48958,7 +48972,8 @@ function reconFetchBsl(string $tk, int $vid, int $maxPages = 0, bool $customerVi
             $rial = (int)($rev['primary_price'] ?? ($pr['primary_price'] ?? 0));
             $rows[] = ['id' => (int)($pr['id'] ?? 0), 'title' => $name,
                 'price' => $rial, 'price_toman' => (int)round($rial / 10), 'status' => $st,
-                'stock' => (int)($rev['stock'] ?? ($rev['inventory'] ?? ($pr['stock'] ?? ($pr['inventory'] ?? 0))))];
+                'stock' => (int)($rev['stock'] ?? ($rev['inventory'] ?? ($pr['stock'] ?? ($pr['inventory'] ?? 0)))),
+                    'date_created' => (string)($pr['created_at'] ?? ($pr['createdAt'] ?? ($rev['created_at'] ?? '')))];
         }
         reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
             'log_add' => ['📄 صفحهٔ ' . $page . ': ' . count($batch) . ' محصول'
@@ -49018,7 +49033,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
                 $name = trim((string)($pr['name'] ?? '')); if ($name === '') continue;
                 $pageRows[] = ['id' => (int)($pr['id'] ?? 0), 'title' => $name,
                     'price' => (int)preg_replace('~\D~', '', (string)($pr['regular_price'] ?? '0')),
-                    'status' => (string)($pr['status'] ?? ''), 'via' => 'api'];
+                    'status' => (string)($pr['status'] ?? ''), 'date_created' => (string)($pr['date_created_gmt'] ?? $pr['date_created'] ?? ''), 'via' => 'api'];
             }
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
@@ -49035,7 +49050,8 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
                 $rial = (int)($rev['primary_price'] ?? ($pr['primary_price'] ?? 0));
                 $pageRows[] = ['id' => (int)($pr['id'] ?? 0), 'title' => $name, 'price' => $rial,
                     'price_toman' => (int)round($rial / 10), 'status' => $st,
-                    'stock' => (int)($rev['stock'] ?? ($rev['inventory'] ?? ($pr['stock'] ?? ($pr['inventory'] ?? 0))))];
+                    'stock' => (int)($rev['stock'] ?? ($rev['inventory'] ?? ($pr['stock'] ?? ($pr['inventory'] ?? 0)))),
+                    'date_created' => (string)($pr['created_at'] ?? ($pr['createdAt'] ?? ($rev['created_at'] ?? '')))];
             }
         }
         $rows = array_merge($rows, $pageRows); reconFetchCursorAppend($cursorTarget, $vid, $page, $pageRows);
@@ -50081,7 +50097,9 @@ function reconAutoTick(array $cn, int $now = 0): array {
                 if (!empty($cfg['woo']) && empty($cfg['bsl'])) $scope = 'woo';
                 elseif (!empty($cfg['bsl']) && empty($cfg['woo'])) $scope = 'bsl';
                 reconProgress(['log_add' => ['🔧 اصلاح از جدول — scope=' . $scope]]);
-                $fx = matrixFixRun(['scope' => $scope, 'source' => 'recon_auto', 'delay_ms' => 120]);
+                $autoKeep = (string)((dedupCfg($cn)['keep'] ?? 'newest'));
+                if (!in_array($autoKeep, ['newest', 'expensive'], true)) $autoKeep = 'newest';
+                $fx = matrixFixRun(['scope' => $scope, 'source' => 'recon_auto', 'delay_ms' => 120, 'duplicate_keep' => $autoKeep]);
                 $out['matrix_fix'] = [
                     'ok' => !empty($fx['ok']),
                     'total' => (int)($fx['total'] ?? 0),
@@ -64939,7 +64957,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <input type="range" id="smSliceSeconds" min="2" max="20" step="1" value="8" oninput="syncMatrixSliceUi(true)" style="width:90px">
 <b id="smSliceSecondsLabel" style="font-size:10px;color:#fbbf24;min-width:34px">۸ ث</b>
 </div>
-<div style="display:flex;gap:6px;flex-wrap:wrap">
+<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+<label style="font-size:10px;color:#c4b5fd">نگه‌داری تکراری: <select id="smDuplicateKeep" style="font-size:10px;padding:4px 6px"><option value="newest">جدیدترین</option><option value="expensive">گران‌ترین</option></select></label>
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
@@ -64973,7 +64992,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف تکراری‌ها</b> با نگه‌داری جدیدترین یا گران‌ترین + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -72409,6 +72428,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.287', t:'🧬 حذف تکراری‌ها در اصلاح مغایرت', items:[
+    'اصلاح مغایرت اکنون تکراری‌های ووکامرس و هر غرفهٔ باسلام را نیز حذف یا بایگانی می‌کند',
+    'کاربر می‌تواند نگه‌داری جدیدترین یا گران‌ترین نسخه را انتخاب کند؛ معیار در checkpoint و اجرای دوره‌ای حفظ می‌شود',
+    'تمام شناسه‌ها، قیمت و زمان ساخت نامزدهای تکراری باسلام و ووکامرس برای تصمیم امن نگه‌داری می‌شوند',
+    'گزارش زنده و گزارش مقصد، حذف تکراری و معیار انتخاب‌شده را جداگانه نمایش می‌دهند'
+  ]},
   {v:'10.286', t:'🧭 تفکیک خطای واقعی از جایگزینی صف', items:[
     'فیدبک باسلام ردیف قدیمیِ جایگزین‌شده به‌علت تغییر تنظیمات را دیگر خطای شبکه نمی‌شمارد و آن را وضعیت بی‌نیاز از اقدام گزارش می‌کند'
   ]},
@@ -81208,7 +81233,7 @@ function syncMatrixPoll(){
 /* v10.117: اصلاح مغایرت از روی جدول */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
-  if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف/بایگانی موارد اضافی\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
+  if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent='🔧 شروع اصلاح…';
   if($('smFixStopBtn')) $('smFixStopBtn').style.display='';
@@ -81217,6 +81242,7 @@ function syncMatrixFixStart(scope){
   fd.append('action','sync_matrix_fix_start');
   fd.append('scope', scope);
   fd.append('source','manual');
+  fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
   fd.append('q',($('smQ')||{}).value||'');
   if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');
@@ -81247,7 +81273,7 @@ function syncMatrixFixStop(){
 }
 window._smFixDestLists=[];
 function smFixOperationLabel(kind){
-  return ({price:'اصلاح قیمت',send:'ارسال محصول',delete:'حذف / بایگانی'})[kind]||kind||'اصلاح';
+  return ({price:'اصلاح قیمت',send:'ارسال محصول',delete:'حذف / بایگانی',deduplicate:'حذف تکراری'})[kind]||kind||'اصلاح';
 }
 function smOpenFixDestination(index){
   const group=window._smFixDestLists[index];
