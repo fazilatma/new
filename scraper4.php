@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.307';
+const APP_VERSION = '10.308';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -7453,13 +7453,26 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
 
 function bslReqMode(string $url, string $tk, string $m, $d, bool $mp, array $net, string $mode): array {
     $opt = bslCurlOpts($url, $tk, $m, $d, $mp, $net, $mode);
+    /* هدرهای واقعی پاسخ را نگه می‌داریم تا 429 باسلام/پروکسی از یک پیام
+       حدسی قابل تشخیص باشد و Retry-After دقیقاً رعایت شود. */
+    $responseHeaders=[];
+    $opt[CURLOPT_HEADERFUNCTION]=static function($ch,string $line)use(&$responseHeaders):int{
+        $len=strlen($line);$p=strpos($line,':');
+        if($p!==false){$k=strtolower(trim(substr($line,0,$p)));$v=trim(substr($line,$p+1));if($k!=='')$responseHeaders[$k]=$v;}
+        return $len;
+    };
     $ch = curl_init();
     curl_setopt_array($ch, $opt);
     $b = curl_exec($ch); $e = curl_error($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     curl_close($ch);
+    $body=@json_decode((string)$b,true);
+    $retryAfter=(int)($responseHeaders['retry-after']??0);
+    if($retryAfter<=0&&is_array($body))$retryAfter=(int)($body['retry_after']??$body['retryAfter']??$body['data']['retry_after']??0);
+    $server=trim((string)($responseHeaders['server']??$responseHeaders['via']??''));
     return ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
-            'body' => @json_decode($b, true), 'raw' => $b, 'mode' => $mode];
+            'body' => $body, 'raw' => $b, 'mode' => $mode,'response_headers'=>$responseHeaders,
+            'retry_after'=>$retryAfter,'rate_source'=>trim($mode.($server!==''?' · '.$server:''))];
 }
 
 /* =====================================================================
@@ -7669,8 +7682,11 @@ if($attempt<$maxRetries&&$r['error']!=='')sleep($retryDelay);   // خطای شب
 }
 $r['mode']=$mode;
 if(!empty($r['ok']))return $r;
-// خطای منطقی غیر از 403/429 یعنی شبکه سالم است؛ روشِ دیگر فایده‌ای ندارد
-if($r['code']>0&&!in_array($r['code'],[403,429],true))return $r;
+/* 429 پاسخ واقعی HTTP است، نه خرابی مسیر شبکه. امتحان‌کردن proxy/DoH/direct
+   دیگر در همان لحظه فقط چند درخواست اضافه می‌سازد و محدودیت را شدیدتر می‌کند. */
+if((int)($r['code']??0)===429)return $r;
+// 403 ممکن است فقط به IP/روش اتصال مربوط باشد؛ روش جایگزین هنوز معنا دارد.
+if($r['code']>0&&(int)$r['code']!==403)return $r;
 }
 return $last;
 }
@@ -20451,6 +20467,11 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         bslShopMapRecord($p, $shop, (int)$r['body']['id'], $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
         return ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'update_reason' => 'ایجاد محصول جدید'];
     }
+    /* 429 را هرگز وارد مسیر دستهٔ جایگزین نکن: آن مسیر یک POST دیگر می‌زد و
+       محدودیت واقعی نرخ را تشدید می‌کرد. همان پاسخ و Retry-After حفظ شود. */
+    if((int)($r['code']??0)===429){
+        return array_merge(['ok'=>false],bslSendErrorInfo($r,'shop_create','vendors/'.$vid.'/products'));
+    }
     /* اگر create سریع گفت نام تکراری، فقط با یک endpoint هدفمند شناسه را
        پیدا و PATCH کن. این هم 422 تکراری را حل می‌کند، هم دوباره کل غرفه را
        نمی‌پیماید که عملیات اصلاح ظاهراً وسط راه متوقف شود. */
@@ -29850,8 +29871,9 @@ function matrixFixRun(array $opts = []): array {
                 } else {
                     $err = (string)($res['error'] ?? 'خطا');
                     if((int)($res['error_code']??0)===429){
-                        $rateLimited=true;$rateRetryAfter=30;
-                        matrixFixProgress(['phase'=>'bsl_rate_wait','log_add'=>['⏳ محدودیت نرخ باسلام؛ همین محصول حفظ شد و worker پس از ۳۰ ثانیه از checkpoint دوباره تلاش می‌کند']]);
+                        $rateLimited=true;$rateRetryAfter=max(30,min(300,(int)($res['retry_after']??0)));
+                        $rateOrigin=trim((string)($res['rate_source']??''));
+                        matrixFixProgress(['phase'=>'bsl_rate_wait','log_add'=>['⏳ HTTP 429 واقعی دریافت شد'.($rateOrigin!==''?' از '.$rateOrigin:'').'؛ همین محصول حفظ شد و worker پس از '.$rateRetryAfter.' ثانیه از checkpoint دوباره تلاش می‌کند']]);
                     }else{
                         $failN++;
                         $details[] = matrixFixDetail('bsl', $sname, 'send', $title, false, 'ارسال ' . $sname . ' · ' . $title . ' — ' . $err, 0, ['vendor_id' => $vid, 'error' => $err]);
@@ -41880,7 +41902,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "\$runStarted=(int)(\$prog['started_at']??0)") !== false
       && strpos($selfSrc, ">=\$runStarted") !== false);
     $add('10.304', 'HTTP 429 باسلام cursor را جلو نمی‌برد و با backoff ادامه می‌دهد',
-         strpos($selfSrc, "\$rateLimited=true;\$rateRetryAfter=30") !== false
+         strpos($selfSrc, "\$rateLimited=true;\$rateRetryAfter=max(30") !== false
       && strpos($selfSrc, "'cur'=>\$ji") !== false
       && strpos($selfSrc, "'phase'=>'rate_wait'") !== false);
     $add('10.304', 'در اصلاح باسلام فاصله امن endpoint رعایت می‌شود',
@@ -41918,6 +41940,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.307', 'ورودی 10.307 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "307'") !== false
       && version_compare(APP_VERSION, '10.' . '307', '>='));
+    $add('10.308', 'پنل گزارش قدیمی مغایرت‌گیری از رابط حذف شده است',
+         strpos($selfSrc, 'id="smFix' . 'Report"') === false);
+    $add('10.308', '429 با هدر واقعی و Retry-After ثبت می‌شود',
+         strpos($selfSrc, 'CURLOPT_HEADER' . 'FUNCTION') !== false
+      && strpos($selfSrc, "'rate_source'=>") !== false
+      && strpos($selfSrc, "'retry_after'=>") !== false);
+    $add('10.308', '429 باعث fallback شبکه یا POST دستهٔ جایگزین نمی‌شود',
+         strpos($selfSrc, "if((int)(\$r['code']??0)===429)return \$r") !== false
+      && strpos($selfSrc, "if((int)(\$r['code']??0)===429){") !== false);
+    $add('10.308', 'ورودی 10.308 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "308'") !== false
+      && version_compare(APP_VERSION, '10.' . '308', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -46705,6 +46739,8 @@ function bslSendErrorInfo(array $r, string $step = '', string $endpoint = ''): a
         'endpoint' => $endpoint, 'reason_kind' => $kind,
         'repair_attempted'=>!empty($r['validation_retried']),
         'repair_fields'=>array_values((array)($r['validation_repaired_fields']??[])),
+        'retry_after'=>max(0,(int)($r['retry_after']??0)),
+        'rate_source'=>trim((string)($r['rate_source']??$r['mode']??'')),
         'error_detail' => mb_substr($raw !== '' ? $raw : $msg, 0, 520, 'UTF-8')];
 }
 
@@ -65683,7 +65719,6 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div id="smFixLive" style="display:none;margin-top:8px"></div>
 </div>
 <div id="smFixBanner" style="display:none;margin-bottom:8px;padding:8px 10px;background:linear-gradient(90deg,#14532d33,#1e3a8a33);border:1px solid #22c55e55;border-radius:8px;font-size:11px;color:#bbf7d0"></div>
-<div id="smFixReport" style="display:none;margin-bottom:10px;padding:12px 14px;background:linear-gradient(135deg,#0f172a,#14532d44);border:1px solid #34d39966;border-radius:10px;color:#e2e8f0"></div>
 <details id="smHelpDetails" style="margin-bottom:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 9px">
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
@@ -73141,6 +73176,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.308', t:'🐢 تشخیص واقعی و مهار HTTP 429 باسلام', items:[
+    'بخش گزارش آخرین مغایرت‌گیری از رابط حذف شد.',
+    'کد 429 مستقیماً از status واقعی HTTP ثبت می‌شود؛ هدرهای Server/Via و Retry-After برای تشخیص منبع و زمان انتظار نگه‌داری می‌شوند.',
+    'پس از 429 دیگر مسیرهای شبکه یا دسته‌های جایگزین امتحان نمی‌شوند؛ این درخواست‌های اضافی خودشان محدودیت نرخ را تشدید می‌کردند.',
+    'worker همان محصول را در checkpoint نگه می‌دارد و مطابق Retry-After، بین ۳۰ تا ۳۰۰ ثانیه، صبر می‌کند.'
+  ]},
   {v:'10.307', t:'✅ اصلاح مغایرت فقط روی جدول تازه و معتبر', items:[
     'پیش از هر اصلاح دستی، ساخت تازهٔ جدول و سپس اصلاح در همان صف worker قرار می‌گیرد؛ بنابراین تغییرات جدید پروفایل و مقصد نادیده نمی‌ماند.',
     'اگر ساخت تازه شکست بخورد، اصلاح روی فایل قدیمی اجرا نمی‌شود و دیگر پیام اشتباه «کاری برای انجام نیست» نمایش داده نخواهد شد.',
@@ -82195,58 +82236,7 @@ function smFixDestinationGroups(st){
   return window._smFixDestLists;
 }
 
-function smPaintReports(d){
-  const box = $('smFixReport');
-  if(!box) return;
-  const reps = (d && d.reports) ? d.reports : [];
-  const st = (d && d.fix_stats) ? d.fix_stats : null;
-  if((!reps || !reps.length) && !st){ box.style.display='none'; box.innerHTML=''; return; }
-  let html = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
-    +'<div style="font-weight:900;color:#fde68a;font-size:13px">📋 گزارش آخرین مغایرت‌گیری'
-    +(d.fix_at?(' <span style="font-weight:600;color:#94a3b8;font-size:10px">· '+new Date(d.fix_at*1000).toLocaleString('fa-IR')+'</span>'):'')
-    +'</div>'
-    +'<button type="button" class="btn btn-gray" style="font-size:10px;padding:3px 8px" onclick="$(\'smFixReport\').style.display=\'none\'">بستن</button>'
-    +'</div>';
-  if(st){
-    html += '<div style="font-size:12px;color:#bbf7d0;margin-bottom:8px;font-weight:700">'
-      + (st.stopped?'⏹ متوقف — ':'✅ ')
-      +'موفق '+smFa(st.ok||0)+' · ناموفق '+smFa(st.fail||0)+' از '+smFa(st.total||0)
-      +' · 💰'+smFa(st.priced||0)+' · 📤'+smFa(st.sent||0)+' · 🗑'+smFa(st.deleted||0)
-      +' · محدوده '+(st.scope||'all')
-      +'</div>';
-  }
-  const destinationGroups=smFixDestinationGroups(st);
-  if(destinationGroups.length){
-    html += '<div style="margin:8px 0 10px;padding:8px 10px;background:#0b1220;border:1px solid #334155;border-radius:8px">';
-    html += '<div style="font-size:11px;color:#67e8f9;font-weight:900;margin-bottom:6px">📍 فهرست اصلاحات بر اساس مقصد — برای دیدن محصولات کلیک کنید</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">';
-    destinationGroups.forEach(function(g,i){
-      html += '<button type="button" class="btn btn-gray" onclick="smOpenFixDestination('+i+')" style="font-size:10.5px;padding:5px 9px;border-color:#22c55e88;color:#bbf7d0">✅ '+esc(g.label)+' · '+smFa(g.items.length)+' اصلاح</button>';
-    });
-    const allFixed=destinationGroups.reduce(function(n,g){return n+g.items.length;},0);
-    html += '<span style="font-size:10px;color:#94a3b8">جمع: '+smFa(allFixed)+'</span></div></div>';
-  }
-  (reps||[]).forEach(r=>{
-    if(!r) return;
-    const bg = r.report_type==='work' ? 'rgba(30,58,95,.55)' : 'rgba(20,83,45,.55)';
-    html += '<div style="background:'+bg+';border:1px solid #334155;border-radius:8px;padding:8px 10px;margin-bottom:6px">';
-    html += '<div style="font-weight:800;color:#fde68a;margin-bottom:4px">'+esc(r.title||'گزارش')+'</div>';
-    if(r.report_text) html += '<div style="font-size:11px;color:#bbf7d0;margin-bottom:4px">'+esc(r.report_text)+'</div>';
-    const lines = r.report_lines||[];
-    if(lines.length){
-      html += '<div style="font-size:10.5px;line-height:1.75;max-height:180px;overflow:auto;direction:rtl">';
-      lines.forEach(x=>{ html += '<div style="border-bottom:1px solid #33415544;padding:2px 0">'+esc(String(x))+'</div>'; });
-      html += '</div>';
-    }
-    html += '</div>';
-  });
-  if(st && st.total===0){
-    html += '<div style="font-size:11px;color:#fbbf24;margin-top:4px">⚠️ کاری برای اجرا پیدا نشد. اگر جدول مغایرت نشان می‌دهد، یک‌بار «🚀 ساخت روی سرور» بزنید و دوباره اصلاح کنید. جزئیات در باکس بالا.</div>';
-  }
-  box.innerHTML = html;
-  box.style.display = 'block';
-  try{ box.scrollIntoView({behavior:'smooth',block:'nearest'}); }catch(e){}
-}
+function smPaintReports(d){ /* این پنل عمداً نمایش داده نمی‌شود. */ }
 function syncMatrixLoad(page, silent){
   page = page || 1; window._smPage = page;
   silent = !!silent;
