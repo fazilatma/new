@@ -29638,7 +29638,7 @@ function matrixFixRun(array $opts = []): array {
             $sname = (string)($job['shop_name'] ?? ('#' . $vid));
             matrixFixProgress([
                 'phase' => 'bsl_del', 'pct' => $pct, 'cur' => $n, 'total' => $total,
-                'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('بایگانی تکراری (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') ' : 'بایگانی ') . $sname . ' · ' . $title . ' #' . (int)$job['id']],
+                'log_add' => ['🗑 [' . $n . '/' . $total . '] ' . ($isDuplicateDelete ? ('بایگانی تکراری (' . dedupKeepLabel((string)($job['duplicate_keep'] ?? 'newest')) . ') ') : 'بایگانی ') . $sname . ' · ' . $title . ' #' . (int)$job['id']],
             ]);
             $res = matrixFixDelBsl($cn, (int)$job['id'], $vid);
             if (!empty($res['ok'])) {
