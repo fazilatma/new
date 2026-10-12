@@ -333,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.329';
+const APP_VERSION = '10.330';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30493,7 +30493,11 @@ function matrixQueryPage(array $opts = []): array {
         $destOptions[]=['value'=>'bsl:'.(int)$ds['vendor_id'],'label'=>(string)($ds['name']??('#'.(int)$ds['vendor_id']))];
     }
     $profileOptionRows=[]; foreach($profileOptions as $pv=>$pl)$profileOptionRows[]=['value'=>(string)$pv,'label'=>(string)$pl];
-    $liveSummary=matrixLiveSummary($data);
+    $liveSummaryAll=matrixLiveSummary($data);
+    /* chipهای وضعیت باید دقیقاً دربارهٔ «این فیلتر» باشند؛ فقط chip کل فایل
+       summary کل را نشان می‌دهد. بنابراین هر تغییر جستجو/AND/OR همان لحظه
+       همهٔ شمارنده‌های وضعیت را نیز بازحساب می‌کند. */
+    $filteredData=$data;$filteredData['rows']=$main;$liveSummary=matrixLiveSummary($filteredData);
     return [
         'ok' => true,
         'from_file' => true,
@@ -30509,6 +30513,7 @@ function matrixQueryPage(array $opts = []): array {
         'actionable_total' => count($main),
         'filtered_status_counts' => (object)$filteredStatusCounts,
         'summary' => $liveSummary,
+        'summary_all' => $liveSummaryAll,
         'selected_destinations'=>$querySelected,
         'shops' => $data['shops'] ?? [],
         'woo_cfg' => $data['woo_cfg'] ?? [],
@@ -30522,7 +30527,7 @@ function matrixQueryPage(array $opts = []): array {
         'woo_count' => $data['woo_count'] ?? 0,
         'generated_at' => $data['generated_at'] ?? 0,
         'source' => $data['source'] ?? '',
-        'row_count_all' => (int)$liveSummary['total'],
+        'row_count_all' => (int)$liveSummaryAll['total'],
         'live_partial' => !empty($data['live_partial']),
         'running' => !empty($prog['running']) || !empty($fixProg['running']),
         'progress' => !empty($fixProg['running']) || (!empty($fixProg['done']) && empty($prog['running'])) ? $fixProg : $prog,
@@ -42344,6 +42349,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.330', 'chipهای وضعیت از مجموعهٔ فیلترشده و کل فایل از summary سراسری می‌آیند',
+         strpos($selfSrc, "\$filteredData['rows']=\$main") !== false
+      && strpos($selfSrc, "'summary_all' => \$liveSummaryAll") !== false
+      && strpos($selfSrc, "'row_count_all' => (int)\$liveSummaryAll['total']") !== false);
+    $add('10.330', 'ورودی 10.330 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "330'") !== false
+      && version_compare(APP_VERSION, '10.' . '330', '>='));
     $add('10.329', 'حذف BSL cell مقصد را واقعاً پاک و حذف‌های قبلی را از checkpoint repair می‌کند',
          strpos($selfSrc, 'function matrixApplyCompletedDeleteOverlay') !== false
       && strpos($selfSrc, "'shops' => [\$vid=>null]") !== false
@@ -73647,6 +73659,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.330', t:'🎯 همهٔ chipهای وضعیت تابع فیلتر جاری', items:[
+    'یکسان، مغایرت، نیست در WC/غرفه، فقط مقصد و تکراری‌ها اکنون از تمام ردیف‌های منطبق با فیلتر جاری محاسبه می‌شوند، نه از کل snapshot.',
+    'کل فایل همچنان شمار واقعی کل ردیف‌های فعال را نشان می‌دهد و این فیلتر تعداد ردیف‌های منطبق را؛ هر دو نیز حین اصلاح زنده‌اند.',
+    'جستجو و فیلترهای مرکب AND/OR در یک پاسخ، جدول و همهٔ chipهای وضعیت را هماهنگ تغییر می‌دهند.'
+  ]},
   {v:'10.329', t:'🧹 اصلاح زندهٔ شمارنده پس از بایگانی BSL', items:[
     'ریشهٔ ثابت‌ماندن chipها رفع شد: آرایهٔ خالی shops قبلاً merge می‌شد و مقصد بایگانی‌شده در snapshot باقی می‌ماند.',
     'حذف جدید cell همان vendor را با null واقعاً پاک می‌کند؛ حذف‌های موفق قبلی نیز از done_jobs به‌صورت idempotent ترمیم می‌شوند.',
