@@ -73,6 +73,7 @@ const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
 const MATRIX_CRON_PULSE_FILE = __DIR__ . '/matrix_cron_pulse.json'; // v10.337
+const SYNC_MATRIX_CHECKPOINT_FILE = __DIR__ . '/sync_matrix_checkpoint.json.gz'; // v10.338
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
 const SYNC_MATRIX_RESULT_FILE   = __DIR__ . '/sync_matrix_result.json';   // v10.113
 const SYNC_MATRIX_LIVE_FILE     = __DIR__ . '/sync_matrix_live.json';     // v10.247
@@ -340,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.337';
+const APP_VERSION = '10.338';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1310,6 +1311,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
     if (!$fp || !@flock($fp, LOCK_EX)) { if ($fp) @fclose($fp); return ['ok'=>false,'error'=>'matrix_lock_failed']; }
     try {
         if ($opts['checkpoint'] === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
+        if ($opts['checkpoint'] === null) @unlink(SYNC_MATRIX_CHECKPOINT_FILE);
         if ($opts['checkpoint'] === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
         /* stop قدیمی را matrixStopRequested با run_started_at نادیده می‌گیرد؛ حذفش
            اینجا race می‌ساخت و ممکن بود stop تازهٔ کاربر درست قبل از شروع پاک شود. */
@@ -1325,7 +1327,11 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             /* child یک‌برشی باید همان yielded/checkpoint را به parent پس بدهد.
                unset کردن res پیش از خروج فقط {worker_segments:1} می‌ساخت و
                parent آن را matrix_child_exit_1 تلقی می‌کرد. */
-            if($maxSegments===1){$res['worker_segments']=$segments;return $res;}
+            if($maxSegments===1){
+                /* checkpoint همین لحظه توسط matrixProgress در فایل gzip اتمیک ذخیره
+                   شده؛ فرستادن دوبارهٔ صدها MB روی stdout علت توقف واکشی مقصد بود. */
+                unset($res['checkpoint']);$res['checkpoint_external']=true;$res['worker_segments']=$segments;return $res;
+            }
             unset($res,$nextCp);
             /* yielded برای fallback مرورگر یعنی «درخواست بعدی بساز»، اما در worker
                همان job مالک ادامه است؛ وضعیت را running نگه دار تا UI درخواست موازی نسازد. */
@@ -28206,7 +28212,29 @@ function matrixPriceTone(int $src, int $dst): string {
     if ($diff <= 0.05) return 'warn';
     return 'bad';
 }
+/** v10.338: checkpoint بزرگ ماتریس از progress/API جداست. progress فقط metadata
+ * کوچک دارد؛ child بعدی نسخهٔ gzip را مستقیم از دیسک hydrate می‌کند. */
+function matrixCheckpointSave(array $cp): array {
+    $json=json_encode($cp,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    if($json===false)return ['_external'=>true,'error'=>'encode_failed'];
+    $blob=function_exists('gzencode')?gzencode($json,3):$json;if($blob===false)$blob=$json;
+    $tmp=SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.'.getmypid();$ok=@file_put_contents($tmp,$blob,LOCK_EX)!==false;
+    if($ok){$ok=@rename($tmp,SYNC_MATRIX_CHECKPOINT_FILE);if(!$ok){$ok=@copy($tmp,SYNC_MATRIX_CHECKPOINT_FILE);@unlink($tmp);}}else @unlink($tmp);
+    return ['_external'=>true,'ok'=>$ok,'file'=>basename(SYNC_MATRIX_CHECKPOINT_FILE),'bytes'=>$ok?(int)@filesize(SYNC_MATRIX_CHECKPOINT_FILE):0,
+        'phase'=>(string)($cp['phase']??''),'started_at'=>(int)($cp['started_at']??0),
+        'profile_rows'=>count((array)($cp['profile_rows']??[])),'woo_page'=>(int)($cp['woo_page']??0),
+        'shop_pages'=>(array)($cp['shop_pages']??[]),'selected_destinations'=>(array)($cp['selected_destinations']??[])];
+}
+function matrixCheckpointLoad(): ?array {
+    if(!is_file(SYNC_MATRIX_CHECKPOINT_FILE))return null;$blob=(string)@file_get_contents(SYNC_MATRIX_CHECKPOINT_FILE);if($blob==='')return null;
+    if(substr($blob,0,2)==="\x1f\x8b"&&function_exists('gzdecode')){$raw=@gzdecode($blob);if($raw!==false)$blob=$raw;}
+    $cp=json_decode($blob,true);return is_array($cp)?$cp:null;
+}
 function matrixProgress(array $patch): void {
+    if(array_key_exists('checkpoint',$patch)){
+        if(is_array($patch['checkpoint'])&&empty($patch['checkpoint']['_external']))$patch['checkpoint']=matrixCheckpointSave($patch['checkpoint']);
+        elseif($patch['checkpoint']===null)@unlink(SYNC_MATRIX_CHECKPOINT_FILE);
+    }
     $cur = localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
     $log = is_array($cur['log'] ?? null) ? $cur['log'] : [];
     if (isset($patch['log_add'])) {
@@ -28251,8 +28279,13 @@ function matrixTerminateRunner(array $state): array {
     return $out;
 }
 
-function matrixProgressRead(): array {
-    return localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
+function matrixProgressRead(bool $hydrateCheckpoint=true): array {
+    $s=localTaskStateRead(SYNC_MATRIX_PROGRESS_FILE, []);
+    if($hydrateCheckpoint&&is_array($s['checkpoint']??null)&&!empty($s['checkpoint']['_external'])){
+        $cp=matrixCheckpointLoad();if($cp!==null)$s['checkpoint']=$cp;
+        else{$s['checkpoint_error']='external_checkpoint_missing_or_invalid';$s['checkpoint']=null;}
+    }
+    return $s;
 }
 /** مقصدهای قابل انتخاب ماتریس: woo و bsl:<vendor_id>. null یعنی سازگاری
  * با نسخه‌های قبلی و انتخاب همه؛ آرایهٔ خالی عمداً هیچ مقصدی است. */
@@ -30662,7 +30695,7 @@ function matrixLiveSummary(array $data): array {
 
 /** فیلتر + صفحه‌بندی روی نتیجهٔ ذخیره‌شده (بدون rebuild) */
 function matrixQueryPage(array $opts = []): array {
-    $prog = matrixProgressRead();
+    $prog = matrixProgressRead(false);
     $useLive = !empty($opts['live_fill']) && is_file(SYNC_MATRIX_LIVE_FILE)
         && (!empty($prog['running']) || !empty($prog['yielded']) || !empty($prog['partial']));
     $data = $useLive ? json_decode((string)@file_get_contents(SYNC_MATRIX_LIVE_FILE), true) : matrixResultLoad();
@@ -30746,7 +30779,7 @@ function matrixQueryPage(array $opts = []): array {
     if ($page >= $pages && $reports) {
         $slice = array_merge($slice, $reports);
     }
-    $prog = matrixProgressRead();
+    $prog = matrixProgressRead(false);
     $fixProg = $liveFixProg;
     /* گزارش‌ها همیشه جداگانه هم برگردند (نه فقط صفحهٔ آخر) */
     $allReports = [];
@@ -30918,7 +30951,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
     header('Content-Type: application/json; charset=UTF-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    $prog = matrixProgressRead();
+    $prog = matrixProgressRead(false);
     $fix = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
     $visibleDestRaw=$_GET['selected_destinations']??$_POST['selected_destinations']??null;
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
@@ -30932,7 +30965,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
             @flock($mf,LOCK_UN);
             matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'stale'=>true,'phase'=>'بازیابی خودکار',
                 'log_add'=>['♻️ running یتیم شناسایی شد؛ قفل آزاد است و ادامه از checkpoint به worker سپرده شد']]);
-            $rcp=is_array($prog['checkpoint']??null)?$prog['checkpoint']:[];
+            $resumeState=matrixProgressRead(true);
+            $rcp=is_array($resumeState['checkpoint']??null)?$resumeState['checkpoint']:[];
             $ro=['profile'=>(string)($prog['profile']??$rcp['profile_filter']??'all'),
                 'parallel_destinations'=>(string)($prog['fetch_mode']??$rcp['fetch_mode']??'')==='parallel',
                 'live_fill'=>!empty($prog['live_fill']??$rcp['live_fill']??false),
@@ -30940,7 +30974,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
                 'slice_seconds'=>max(2,min(20,(int)($prog['slice_seconds']??$rcp['slice_seconds']??8)))];
             if(function_exists('s4WorkerIsActive')&&s4WorkerIsActive())s4WorkerEnqueueMatrixBuild($ro,true);
             elseif(function_exists('s4SpawnMatrixBuildChild'))s4SpawnMatrixBuildChild($ro,true);
-            $prog=matrixProgressRead();
+            $prog=matrixProgressRead(false);
         }
         if($mf)@fclose($mf);
     }
@@ -31154,7 +31188,7 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
             'ok' => true,
             'need_start' => true,
             'message' => 'برای ساخت مجدد sync_matrix_start را صدا بزنید',
-            'progress' => matrixProgressRead(),
+            'progress' => matrixProgressRead(false),
             'has_result' => is_file(SYNC_MATRIX_RESULT_FILE),
         ], JSON_UNESCAPED_UNICODE);
         exit;
@@ -42630,6 +42664,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.338', 'checkpoint حجیم از progress/API و stdout child جدا شده است',
+         strpos($selfSrc, 'function matrixCheckpointSave') !== false
+      && strpos($selfSrc, 'SYNC_MATRIX_CHECKPOINT_FILE') !== false
+      && strpos($selfSrc, "unset(\$res['checkpoint'])") !== false
+      && strpos($selfSrc, "'checkpoint_external'=>true") !== false);
+    $add('10.338', 'status و صفحه‌بندی checkpoint صدها MB را hydrate نمی‌کنند',
+         substr_count($selfSrc, 'matrixProgressRead(false)') >= 5
+      && strpos($selfSrc, 'sync_matrix_checkpoint.json.gz') !== false);
+    $add('10.338', 'ورودی 10.338 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "338'") !== false
+      && version_compare(APP_VERSION, '10.' . '338', '>='));
     $add('10.337', 'چهار موتور cron/delay برای تمام build و fixهای مغایرت موجود است',
          strpos($selfSrc, "['cron_only','delay_only','cron_first','delay_first']") !== false
       && strpos($selfSrc, 'function matrixExecutionDecision') !== false
@@ -74085,6 +74130,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.338', t:'🚑 رفع توقف واقعی واکشی مقصد در checkpoint عظیم', items:[
+    'علت توقف مشخص شد: profile_rows حدود ۱۵هزار ردیفی داخل هر progress، پاسخ status و خروجی stdout هر child تکرار می‌شد و حجم بین‌پردازه‌ای به صدها مگابایت می‌رسید.',
+    'checkpoint کامل اکنون اتمیک و فشرده در فایل gzip مستقل است؛ progress/API فقط metadata کوچک و شمار صفحات را نگه می‌دارد.',
+    'child دیگر checkpoint را روی stdout برنمی‌گرداند و parent برای resume آن را مستقیم از فایل می‌خواند؛ polling رابط نیز checkpoint را hydrate نمی‌کند.'
+  ]},
   {v:'10.337', t:'⚡ موتور چهارحالتهٔ کران/وقفه برای مغایرت‌گیری', items:[
     'تنظیم واحد «روش ادامه» به بخش مغایرت اضافه شد: فقط ضربان کران بیرونی، فقط وقفهٔ worker، کران با fallback وقفه، یا worker با پشتیبانی کران.',
     'ضربان بیرونی ?cron_run=1 کارهای paused جدول/اصلاح را resume و worker مرده را repair می‌کند؛ cron داخلی worker به‌اشتباه ضربان بیرونی شمرده نمی‌شود.',
