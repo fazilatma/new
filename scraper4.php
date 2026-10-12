@@ -71,6 +71,7 @@ const CATTRIED_MAX_PRODUCTS = 2000;   // سقفِ حجم؛ قدیمی‌ترها
 const RECON_PROGRESS_FILE = __DIR__ . '/recon_progress.json'; // v8.49
 const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
+const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
 const SYNC_MATRIX_RESULT_FILE   = __DIR__ . '/sync_matrix_result.json';   // v10.113
 const SYNC_MATRIX_LIVE_FILE     = __DIR__ . '/sync_matrix_live.json';     // v10.247
@@ -332,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.326';
+const APP_VERSION = '10.327';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1123,6 +1124,20 @@ function s4WorkerFinishJob(string $jobId, string $status, array $result = [], st
     });
 }
 
+/** v10.327: تحویل امن job بلند به daemon تازه، پیش از سقف عمر پردازهٔ هاست. */
+function s4WorkerRequeueForRecycle(string $jobId): bool {
+    $ret=s4WorkerQueueMutate(function(&$q)use($jobId){$now=time();foreach($q['entries'] as &$e){
+        if(!is_array($e)||(string)($e['id']??'')!==$jobId)continue;
+        if((string)($e['status']??'')==='cancelled')return ['ok'=>false,'cancelled'=>true];
+        $e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;
+        $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;
+        /* planned recycle شکست نیست و نباید سقف چهار تلاشِ orphan recovery را مصرف کند. */
+        $e['attempts']=max(0,(int)($e['attempts']??0)-1);
+        $e['recycles']=(int)($e['recycles']??0)+1;unset($e['done_at']);return ['ok'=>true,'requeued'=>true];
+    }unset($e);return ['ok'=>false,'error'=>'job_not_found'];});
+    return !empty($ret['requeued']);
+}
+
 function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
@@ -1246,9 +1261,11 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $retryAfter=max(0,min(300,(int)($decoded['retry_after']??0)));
         if($retryAfter>0){s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);}
         else usleep(150000);
-    }while($segments<10000&&!matrixFixStopRequested());
+    }while($segments<8&&!matrixFixStopRequested());
     $last['worker_segments']=$segments;$last['tail']=mb_substr(implode("\n",array_slice($tails,-3)),-2000);
-    if($segments>=10000&&!empty($last['yielded']))return ['ok'=>false,'error'=>'matrix_fix_segment_limit','worker_segments'=>$segments,'tail'=>$last['tail']];
+    /* هاست daemonهای طولانی را حدود چند دقیقه می‌کشد. پیش از آن، همان job با
+       checkpoint به daemon تازه تحویل می‌شود؛ این چرخه به مرورگر وابسته نیست. */
+    if($segments>=8&&!empty($last['yielded'])){$last['ok']=true;$last['resume_needed']=true;$last['daemon_recycle']=true;}
     return $last;
 }
 
@@ -1649,6 +1666,11 @@ function s4WorkerLoopFromCli(): void {
             try {
                 $res = s4WorkerRunJob($job);
                 $ok = !empty($res['ok']);
+                if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jid)){
+                    s4WorkerStateWrite(['phase'=>'recycle','last_job_id'=>$jid,'last_job_ok'=>true,'last_error'=>'','recycle_reason'=>'matrix_fix_host_budget']);
+                    echo '['.date('Y-m-d H:i:s')."] matrix fix checkpoint handed to fresh worker: $jid\n";
+                    $restartAfterUpdate=true;break;
+                }
                 s4WorkerFinishJob($jid, ($ok && empty($res['resume_needed'])) ? 'done' : ($ok ? 'paused' : 'failed'), ['ok' => $ok,
                     'extracted' => (int)($res['extracted'] ?? 0), 'queue_id' => (string)($res['queue_id'] ?? ''),
                     'worker_segments' => (int)($res['worker_segments'] ?? 0), 'resume_needed' => !empty($res['resume_needed']),
@@ -22868,8 +22890,12 @@ $now = time();
 $profiles = loadProfiles();
 $syncState = loadSyncState();
 $cn = loadConnections();
+/* v10.327: cron خارجی نگهبان daemon هم هست. اگر هاست daemon را کشته باشد،
+   بدون نیاز به صفحهٔ باز، jobهای checkpointدار دوباره claim می‌شوند. */
+try { if(!s4WorkerIsActive()) { $workerWake=s4SpawnPersistentWorker(); } } catch(Throwable $_workerWakeErr) { $workerWake=['ok'=>false,'error'=>$_workerWakeErr->getMessage()]; }
 // v8.37: ok صریح، تا ابزارهای بیرونی بتوانند موفقیت اجرا را تشخیص دهند
 $results = ['ok' => true, 'time' => $now, 'profiles' => []];
+if(isset($workerWake))$results['worker_wake']=$workerWake;
 // v10.21 (۳۴ج): نبضِ ابتدای اجرا در گزارش هم بماند
 if (!empty($results_heartbeat)) $results['heartbeat'] = $results_heartbeat;
 
@@ -27934,6 +27960,13 @@ if (isset($_GET['queues_overview'])) {
                      'bsl' => $mk($bs['entries'] ?? []),
                      'woo' => $mk($wo['entries'] ?? [])]], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/** v10.327: گزارش اختصاصی اجراهای مغایرت‌گیری دوره‌ای */
+if(isset($_GET['recon_auto_log'])){
+    header('Content-Type: application/json; charset=UTF-8');$rows=[];
+    if(is_file(RECON_AUTO_LOG_FILE)){$d=json_decode((string)@file_get_contents(RECON_AUTO_LOG_FILE),true);if(is_array($d))$rows=$d;}
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'config'=>reconAutoCfg(),'state'=>reconAutoStateLoad(),'entries'=>array_slice($rows,-80)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 /** v8.49: وضعیت زندهٔ مغایرت‌گیری */
@@ -42246,6 +42279,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.327', 'اصلاح بلند بین daemonهای تازه checkpoint-handoff می‌شود',
+         strpos($selfSrc, 'function s4WorkerRequeueForRecycle') !== false
+      && strpos($selfSrc, "'daemon_recycle'=>true") !== false
+      && strpos($selfSrc, 'matrix_fix_host_budget') !== false);
+    $add('10.327', 'مغایرت دوره‌ای worker-backed و گزارش آن قابل مشاهده است',
+         strpos($selfSrc, "isset(\$_GET['recon_auto_log'])") !== false
+      && strpos($selfSrc, 'reconAutoLoadLog') !== false
+      && strpos($selfSrc, "'source'=>'recon_auto'") !== false);
+    $add('10.327', 'ورودی 10.327 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "327'") !== false
+      && version_compare(APP_VERSION, '10.' . '327', '>='));
     $add('10.326', 'resume بایگانی روی فهرست کوچک‌شونده فقط با done_jobs و بدون cursor عددی است',
          strpos($selfSrc, "if((string)(\$fixCp['job_order']??'')==='archive_first')\$resumeCursor=0") !== false
       && strpos($selfSrc, "فهرست کوچک‌شده") !== false);
@@ -50112,6 +50156,12 @@ function reconAutoStateLoad(): array {
 function reconAutoStateSave(array $s): void {
     @file_put_contents(RECON_AUTO_STATE_FILE, json_encode($s, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
+function reconAutoLog(string $event, array $data=[]): void {
+    $rows=[];if(is_file(RECON_AUTO_LOG_FILE)){$d=json_decode((string)@file_get_contents(RECON_AUTO_LOG_FILE),true);if(is_array($d))$rows=$d;}
+    $rows[]=['t'=>time(),'event'=>$event,'version'=>APP_VERSION,'data'=>$data];
+    if(count($rows)>200)$rows=array_slice($rows,-200);
+    @file_put_contents(RECON_AUTO_LOG_FILE,json_encode($rows,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+}
 
 /** تنظیمات اصلاح دوره‌ای دسته با AI + یادگیری */
 function catfixAutoCfg(?array $cn = null): array {
@@ -50924,6 +50974,27 @@ function reconAutoTick(array $cn, int $now = 0): array {
         $st['last_run'] = $now;
         $st['last_start'] = $now;
         reconAutoStateSave($st);
+
+        /* v10.327: مسیر دوره‌ای جدول را داخل cron اجرا نکن. cron فقط build/fix را
+           در صف daemon می‌گذارد و فوراً تمام می‌شود؛ worker از checkpoint و مستقل
+           از مرورگر ادامه می‌دهد. legacy recon فقط وقتی هر دو گزینهٔ جدول خاموش‌اند. */
+        $matrixPath=!empty($cfg['build_matrix'])||!empty($cfg['matrix_fix']);
+        if($matrixPath){
+            $scope='all';if(!empty($cfg['woo'])&&empty($cfg['bsl']))$scope='woo';elseif(!empty($cfg['bsl'])&&empty($cfg['woo']))$scope='bsl';
+            $requested=time();$workerReady=s4WorkerIsActive();if(!$workerReady){s4SpawnPersistentWorker();usleep(350000);$workerReady=s4WorkerIsActive();}
+            $build=!empty($cfg['build_matrix'])?s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,'selected_destinations'=>null,'slice_seconds'=>8],false):['ok'=>true,'skipped'=>true];
+            $fix=['ok'=>true,'skipped'=>true];
+            if(!empty($cfg['matrix_fix'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
+                $fix=s4WorkerEnqueueMatrixFix(['scope'=>$scope,'source'=>'recon_auto','delay_ms'=>120,'duplicate_keep'=>$keep,'view_filters'=>[],'selected_destinations'=>matrixNormalizeDestinations(null,$cn),'min_matrix_generated_at'=>!empty($cfg['build_matrix'])?$requested:0],false);
+            }
+            $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'build'=>$build,'fix'=>$fix];
+            $out['ran']=true;$out['queued']=true;$out['jobs']=$queued;$out['ok']=$workerReady&&!empty($build['ok'])&&!empty($fix['ok']);$out['skipped']='';
+            $st['last_finish']=time();$st['last_results']=['queued'=>$queued];reconAutoStateSave($st);
+            reconProgress(['running'=>false,'done'=>true,'phase'=>'queued','source'=>'recon_auto','result_ok'=>$out['ok'],
+                'log_add'=>['⏰ مغایرت‌گیری دوره‌ای به worker مستقل سپرده شد','📊 build: '.(!empty($build['duplicate'])?'از قبل در صف':(!empty($build['ok'])?'صف شد':'خطا')).' · 🔧 fix: '.(!empty($fix['duplicate'])?'از قبل در صف':(!empty($fix['ok'])?'صف شد':'خطا'))]]);
+            reconAutoLog($out['ok']?'queued':'queue_failed',$queued);
+            return $out;
+        }
 
         $results = [];
     $targets = [];
@@ -66131,6 +66202,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <input type="checkbox" id="reconAutoMatrixFix" checked onchange="reconAutoSave()" style="width:14px;height:14px;margin-top:2px">
 <span><b>🔧 اصلاح از روی جدول</b> — قیمت ناهماهنگ + ارسال missing + حذف/بایگانی extra (همان «اصلاح مغایرت‌ها»ی جدول؛ مسیر اصلی اعمال دوره‌ای از v10.121)</span></label>
 <div id="reconAutoStatus" style="font-size:10.5px;color:#67e8f9;margin-top:6px"></div>
+<details style="margin-top:8px" ontoggle="if(this.open)reconAutoLoadLog()">
+<summary style="cursor:pointer;color:#fcd34d;font-size:11px;font-weight:800">📋 گزارش مغایرت‌گیری دوره‌ای</summary>
+<button type="button" class="btn btn-gray" onclick="reconAutoLoadLog()" style="margin-top:6px;font-size:10px">↻ تازه‌سازی گزارش</button>
+<pre id="reconAutoLog" style="white-space:pre-wrap;max-height:220px;overflow:auto;background:#020617;border:1px solid #334155;border-radius:8px;padding:8px;font-size:10px;color:#cbd5e1">برای مشاهده، گزارش را باز کنید.</pre>
+</details>
 </div>
 <!-- v8.65: دفترچهٔ شناسه‌ها -->
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #334155">
@@ -73489,6 +73565,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.327', t:'♾ ادامهٔ اصلاح بدون مرورگر + گزارش مغایرت‌گیری دوره‌ای', items:[
+    'اصلاح ماتریس هر ۸ segment checkpoint را به daemon تازه تحویل می‌دهد تا سقف عمر پردازهٔ هاست دیگر عملیات را نیمه‌کاره متوقف نکند.',
+    'cron خارجی daemon مرده را خودکار زنده می‌کند؛ build/fix دوره‌ای فقط در صف worker قرار می‌گیرند و داخل request طولانی cron اجرا نمی‌شوند.',
+    'بخش گزارش اختصاصی مغایرت‌گیری دوره‌ای و endpoint recon_auto_log اضافه شد.'
+  ]},
   {v:'10.326', t:'🧭 جلوگیری از جاافتادن بایگانی‌ها میان segmentهای worker', items:[
     'فیدبک زنده نشان داد پس از ۲۰ بایگانی موفق، فایل ماتریس کوچک شد ولی cursor=20 روی فهرست تازه اعمال و ۲۰ کار بعدی ناخواسته رد می‌شد.',
     'در ترتیب archive_first، resume اکنون همیشه فهرست باقی‌مانده را از صفر می‌خواند و done_jobs مانع تکرار عملیات موفق می‌شود؛ بنابراین هیچ فقط-مقصدی بین segmentها جا نمی‌افتد.'
@@ -78163,6 +78244,15 @@ function reconAutoApplyCfg(c){
   reconAutoBadge();
   const st=$('reconAutoStatus');
   if(st && c.enabled) st.textContent='فعال · هر '+(c.interval_h||6)+' ساعت · مسیر جدول';
+}
+function reconAutoLoadLog(){
+  const box=$('reconAutoLog');if(box)box.textContent='در حال خواندن گزارش…';
+  fetch('?recon_auto_log=1&_=' + Date.now()).then(r=>r.json()).then(d=>{
+    if(!box)return;const rows=(d.entries||[]).slice().reverse();const st=d.state||{};
+    let lines=['نسخه '+(d.version||'')+' · آخرین شروع: '+(st.last_start?new Date(st.last_start*1000).toLocaleString('fa-IR'):'—')];
+    rows.forEach(x=>{const dt=new Date((x.t||0)*1000).toLocaleString('fa-IR');const z=x.data||{};lines.push(dt+' · '+(x.event||'')+' · worker='+(z.worker_ready===false?'خاموش':'فعال')+' · build='+((z.build||{}).job_id||((z.build||{}).skipped?'رد شد':'—'))+' · fix='+((z.fix||{}).job_id||((z.fix||{}).skipped?'رد شد':'—')));});
+    box.textContent=lines.join('\n');
+  }).catch(e=>{if(box)box.textContent='خطا در خواندن گزارش: '+e.message;});
 }
 function reconAutoBadge(){
   const b=$('reconAutoBadge'); if(!b) return;
