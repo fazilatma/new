@@ -333,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.328';
+const APP_VERSION = '10.329';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29077,6 +29077,22 @@ function matrixFixClearStaleStop(float $requestedAt): void {
     if($requestedAt>0&&($stopAt<=0||$stopAt<$requestedAt))@unlink(SYNC_MATRIX_FIX_STOP_FILE);
 }
 
+/** v10.329: حذف‌های موفق checkpoint را روی snapshot اعمال می‌کند. نسخه‌های
+ * پیشین در حذف BSL آرایهٔ shops خالی را merge می‌کردند و cell قدیمی در فایل
+ * می‌ماند؛ done_jobs حقیقت قطعی عملیات API است و repair idempotent است. */
+function matrixApplyCompletedDeleteOverlay(array &$data,array $doneJobs): int {
+    if(!is_array($data['rows']??null)||!$doneJobs)return 0;$byBare=[];
+    foreach($data['rows']as$i=>$r)if(is_array($r)&&isset($r['bare']))$byBare[(string)$r['bare']]=$i;$changed=0;
+    foreach(array_unique(array_map('strval',$doneJobs))as$key){$parts=explode('|',$key);if(count($parts)<4)continue;
+        $kind=array_shift($parts);$vid=(int)array_pop($parts);$id=(int)array_pop($parts);$bare=implode('|',$parts);
+        if(!in_array($kind,['del_bsl','del_woo'],true)||!isset($byBare[$bare]))continue;$i=$byBare[$bare];$r=$data['rows'][$i];
+        if($kind==='del_woo'){$cur=(int)($r['woo']['id']??0);if($cur>0&&($id<=0||$cur===$id)){$data['rows'][$i]['woo']=null;$data['rows'][$i]['woo_tone']='na';$changed++;}}
+        else{$shops=is_array($r['shops']??null)?$r['shops']:[];$cell=is_array($shops[$vid]??null)?$shops[$vid]:(is_array($shops[(string)$vid]??null)?$shops[(string)$vid]:null);$cur=(int)($cell['id']??0);
+            if($cur>0&&($id<=0||$cur===$id)){unset($shops[$vid],$shops[(string)$vid]);$data['rows'][$i]['shops']=$shops;$changed++;}}
+    }
+    return $changed;
+}
+
 /** به‌روزرسانی یک ردیف در فایل نتیجهٔ ماتریس (با کلید bare) */
 function matrixResultPatchRow(string $bare, array $rowPatch, ?array $summaryPatch = null): bool {
     $data = matrixResultLoad();
@@ -29717,6 +29733,9 @@ function matrixFixRun(array $opts = []): array {
     };
 
     $data = matrixResultLoad();
+    /* repair ردیف‌های حذف‌شدهٔ segmentهای قبلی، سپس ادامهٔ worker. زیر lock
+       اختصاصی matrix-fix هستیم، پس ذخیره با patch همزمان race ندارد. */
+    if($data&&$doneJobs&&matrixApplyCompletedDeleteOverlay($data,$doneJobs)>0)matrixResultSave($data);
     $minMatrixAt=max(0,(int)($opts['min_matrix_generated_at']??0));
     if (!$data || empty($data['rows'])) {
         matrixFixProgress([
@@ -30109,8 +30128,8 @@ function matrixFixRun(array $opts = []): array {
                         if (!$stillDup) $patch['flags'] = array_values(array_filter((array)($rr['flags'] ?? []), static fn($f) => $f !== 'dup_bsl'));
                         matrixResultPatchRow($bare, $patch);
                     } else {
-                        unset($shops[$vid]);
-                        matrixResultPatchRow($bare, ['shops' => $shops,
+                        unset($shops[$vid],$shops[(string)$vid]);
+                        matrixResultPatchRow($bare, ['shops' => [$vid=>null],
                             'status' => empty($shops) && empty($rr['woo']) ? 'removed' : (string)($rr['status'] ?? 'only_dest'),
                             'title' => $title . ' (بایگانی از ' . $sname . ')', 'fix_del_bsl_at' => time()]);
                     }
@@ -30372,6 +30391,8 @@ function matrixQueryPage(array $opts = []): array {
         && (!empty($prog['running']) || !empty($prog['yielded']) || !empty($prog['partial']));
     $data = $useLive ? json_decode((string)@file_get_contents(SYNC_MATRIX_LIVE_FILE), true) : matrixResultLoad();
     if (!is_array($data)) $data = [];
+    $liveFixProg=function_exists('matrixFixProgressRead')?matrixFixProgressRead():[];
+    if($data&&is_array($liveFixProg['checkpoint']['done_jobs']??null))matrixApplyCompletedDeleteOverlay($data,$liveFixProg['checkpoint']['done_jobs']);
     if(!$useLive&&$data&&((string)($data['pricing_signature']??'')!==matrixPricingFingerprint())){
         matrixRefreshExpectedPrices('lazy_signature_check');$data=matrixResultLoad();
     }
@@ -30449,7 +30470,7 @@ function matrixQueryPage(array $opts = []): array {
         $slice = array_merge($slice, $reports);
     }
     $prog = matrixProgressRead();
-    $fixProg = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
+    $fixProg = $liveFixProg;
     /* گزارش‌ها همیشه جداگانه هم برگردند (نه فقط صفحهٔ آخر) */
     $allReports = [];
     if (!empty($data['reports']) && is_array($data['reports'])) {
@@ -42323,6 +42344,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.329', 'حذف BSL cell مقصد را واقعاً پاک و حذف‌های قبلی را از checkpoint repair می‌کند',
+         strpos($selfSrc, 'function matrixApplyCompletedDeleteOverlay') !== false
+      && strpos($selfSrc, "'shops' => [\$vid=>null]") !== false
+      && strpos($selfSrc, 'matrixApplyCompletedDeleteOverlay(\$data,\$doneJobs)') !== false);
+    $add('10.329', 'ورودی 10.329 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "329'") !== false
+      && version_compare(APP_VERSION, '10.' . '329', '>='));
     $add('10.328', 'همه chipهای ماتریس از ردیف جاری زنده محاسبه می‌شوند',
          strpos($selfSrc, 'function matrixLiveSummary') !== false
       && strpos($selfSrc, "'summary' => \$liveSummary") !== false
@@ -73619,6 +73647,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.329', t:'🧹 اصلاح زندهٔ شمارنده پس از بایگانی BSL', items:[
+    'ریشهٔ ثابت‌ماندن chipها رفع شد: آرایهٔ خالی shops قبلاً merge می‌شد و مقصد بایگانی‌شده در snapshot باقی می‌ماند.',
+    'حذف جدید cell همان vendor را با null واقعاً پاک می‌کند؛ حذف‌های موفق قبلی نیز از done_jobs به‌صورت idempotent ترمیم می‌شوند.',
+    'overlay زنده باعث می‌شود chipها حتی پیش از segment بعدی، نتیجهٔ واقعی عملیات موفق را نشان دهند.'
+  ]},
   {v:'10.328', t:'🔢 شمارنده‌های کاملاً زندهٔ جدول مغایرت', items:[
     'کل فایل، یکسان، مغایرت، نیست در WC/غرفه، فقط مقصد و تکراری‌ها در هر polling از ردیف‌های جاری دوباره محاسبه می‌شوند.',
     'ردیف حذف/بایگانی‌شده که دیگر نه در پروفایل و نه در مقصد وجود دارد از کل فایل و نتیجهٔ فیلتر زنده خارج می‌شود.',
