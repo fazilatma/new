@@ -333,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.331';
+const APP_VERSION = '10.332';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1625,7 +1625,13 @@ function s4WorkerRunJob(array $job): array {
 }
 
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
-    $n=0;s4WorkerQueueMutate(function(&$q)use($newPid,&$n){$now=time();foreach($q['entries'] as &$e){if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;$attempts=(int)($e['attempts']??0);$e['status']=$attempts<4?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;$e['error']=$attempts<4?'worker قبلی قطع شد؛ بازیابی خودکار در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;$n++;}unset($e);return['ok'=>true];});return$n;
+    $n=0;s4WorkerQueueMutate(function(&$q)use($newPid,&$n){$now=time();foreach($q['entries'] as &$e){
+        if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
+        $attempts=(int)($e['attempts']??0);$isCheckpointFix=(string)($e['type']??'')==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
+        $recover=$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
+        $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
+        if($recover&&$isCheckpointFix){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['attempts']=0;}$n++;
+    }unset($e);return['ok'=>true];});return$n;
 }
 
 function s4WorkerLoopFromCli(): void {
@@ -42361,6 +42367,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.332', 'orphan اصلاح checkpointدار مستقل از سقف چهار تلاش بازیابی می‌شود',
+         strpos($selfSrc, '\$isCheckpointFix') !== false
+      && strpos($selfSrc, "\$e['payload']['resume']=true") !== false
+      && strpos($selfSrc, "\$e['attempts']=0") !== false);
+    $add('10.332', 'ورودی 10.332 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "332'") !== false
+      && version_compare(APP_VERSION, '10.' . '332', '>='));
     $add('10.331', 'کارت‌های مربع هر ثانیه no-store و با processed تجمعی تازه می‌شوند',
          strpos($selfSrc, "window._smPoll=setInterval(tick, 1000)") !== false
       && strpos($selfSrc, "cache:'no-store'") !== false
@@ -73683,6 +73696,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.332', t:'♻️ بازیابی نامحدود worker اصلاح checkpointدار', items:[
+    'job اصلاحی که checkpoint و recycle دارد دیگر به‌علت چهار بار مرگ اجباری هاست failed نمی‌شود.',
+    'worker تازه payload را با resume=true و شمار تلاش تازه claim می‌کند تا کارت‌های زنده و عملیات هر دو ادامه یابند.'
+  ]},
   {v:'10.331', t:'🔴 کارت‌های مربع واقعاً زنده + پایان حلقهٔ شکست', items:[
     'status هر یک ثانیه با no-store خوانده و زمان آخرین به‌روزرسانی روی کارت‌ها نمایش داده می‌شود.',
     'کارت پردازش‌شده دیگر cursor محلی ۱ تا ۲۰ نیست و شمار تجمعی یکتای موفق+ناموفق را نشان می‌دهد.',
