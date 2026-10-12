@@ -333,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.330';
+const APP_VERSION = '10.331';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29718,6 +29718,11 @@ function matrixFixRun(array $opts = []): array {
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
     $doneJobs = array_values(array_unique(array_map('strval', (array)($fixCp['done_jobs'] ?? []))));
     $doneJobSet = $doneJobs ? array_fill_keys($doneJobs, true) : [];
+    /* شکست قطعی در همان اجرای worker فقط یک بار امتحان می‌شود. بدون این لیست،
+       archive_first هر segment را از صفر می‌خواند و ۲۰ شکست اول تا ابد تکرار
+       می‌شدند؛ cur کارت‌ها نیز دائماً ۱..۲۰ می‌چرخید. 429 عمداً attempted نیست. */
+    $attemptedJobs=array_values(array_unique(array_map('strval',(array)($fixCp['attempted_jobs']??[]))));
+    $attemptedJobSet=$attemptedJobs?array_fill_keys($attemptedJobs,true):[];
     $fixStartedAt = (int)($fixCp['started_at'] ?? time());
     /* v10.298: اگر child/هاست میان کار قطع شد، حتی شکست‌های پیشین نباید
        باعث بازگشت cursor به ابتدای صف شوند. اجرای دستی تازه بدون checkpoint
@@ -29788,7 +29793,7 @@ function matrixFixRun(array $opts = []): array {
             'shop'=>(string)($j['shop_name']??''), 'only_dest'=>!empty($j['only_dest']),
         ]; }, array_slice($jobs, 0, 500)),
         'planned_total' => $total, 'planned_limited' => $total > 500,
-        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
             'price_n' => (int)($fixCp['price_n'] ?? 0)],
@@ -29832,6 +29837,9 @@ function matrixFixRun(array $opts = []): array {
     $defTok = trim((string)($cn['basalam']['token'] ?? ''));
 
     $okN = (int)($fixCp['ok_n'] ?? 0); $failN = (int)($fixCp['fail_n'] ?? 0);
+    /* checkpoint قدیمی attempted_jobs نداشت و همان ۲۰ خطا را هزاران بار
+       می‌شمرد؛ شمار ناموفق را یک بار برای مهاجرت این run از نو آغاز کن. */
+    if(!array_key_exists('attempted_jobs',$fixCp)&&$failN>0)$failN=0;
     $sentN = (int)($fixCp['sent_n'] ?? 0); $delN = (int)($fixCp['del_n'] ?? 0); $priceN = (int)($fixCp['price_n'] ?? 0);
     $stopped = false;
     $details = [];
@@ -29840,7 +29848,7 @@ function matrixFixRun(array $opts = []): array {
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
-        if ($ji < $resumeCursor || isset($doneJobSet[$jk])) continue;
+        if ($ji < $resumeCursor || isset($doneJobSet[$jk]) || isset($attemptedJobSet[$jk])) continue;
         if (matrixFixStopRequested()) {
             $stopped = true;
             matrixFixProgress(['log_add' => ['⏹ توقف توسط کاربر']]);
@@ -30156,18 +30164,20 @@ function matrixFixRun(array $opts = []): array {
         }
 
         if($rateLimited){
-            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
+            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
                 'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$ji,'total'=>$total];
             matrixFixProgress(['running'=>true,'done'=>false,'checkpoint'=>$retryCp,'cur'=>$ji,'total'=>$total]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'rate_limited'=>true,'retry_after'=>$rateRetryAfter,'total'=>$total,'cur'=>$ji];
         }
 
-        /* فقط کارِ واقعاً موفق از صفِ checkpoint حذف می‌شود؛ شکست
-           باید در اجرای بعدی دوباره امتحان شود. */
+        /* موفق و ناموفق هر دو در این run مصرف می‌شوند؛ اجرای دستی تازه می‌تواند
+           شکست‌ها را دوباره امتحان کند. rate-limit بالاتر return شده و مصرف نمی‌شود. */
         if ($jobOk) { $doneJobs[] = $jk; $doneJobSet[$jk] = true; }
-        $incomplete = $stopped || count($doneJobs) < $total;
-        matrixFixProgress(['done_jobs' => $doneJobs,
-            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        else { $attemptedJobs[]=$jk; $attemptedJobSet[$jk]=true; }
+        $processedN=count($doneJobSet)+count($attemptedJobSet);
+        $incomplete = $stopped;
+        matrixFixProgress(['done_jobs' => $doneJobs,'attempted_jobs'=>$attemptedJobs,'processed_n'=>$processedN,
+            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
@@ -30176,7 +30186,7 @@ function matrixFixRun(array $opts = []): array {
         $segmentItems++;
         if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
-                'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'view_filters'=>$viewFilters,
+                'processed_n'=>count($doneJobSet)+count($attemptedJobSet),'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,
                     'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
         }
@@ -30200,7 +30210,8 @@ function matrixFixRun(array $opts = []): array {
         matrixResultSave($dataF);
     }
 
-    $incomplete = $stopped || count($doneJobs) < $total;
+    $incomplete = $stopped || $failN > 0;
+    $processedN=count($doneJobSet)+count($attemptedJobSet);
     $stats = [
         'at' => time(),
         'ok' => $okN, 'fail' => $failN, 'total' => $total,
@@ -30216,10 +30227,10 @@ function matrixFixRun(array $opts = []): array {
         'stale' => $incomplete, 'pct' => 100,
         'phase' => $stopped ? 'stopped' : ($incomplete ? 'partial' : 'done'),
         'ok_n' => $okN, 'fail_n' => $failN, 'cur' => $n ?? $total, 'total' => $total,
-        'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
+        'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN, 'processed_n'=>$processedN,
         'finished_at' => time(),
-        'done_jobs' => $doneJobs,
-        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs,
+        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
             'cur' => $n ?? 0, 'total' => $total] : null,
         'log_add' => [
@@ -30640,6 +30651,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
 
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
     header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     $prog = matrixProgressRead();
     $fix = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
     $visibleDestRaw=$_GET['selected_destinations']??$_POST['selected_destinations']??null;
@@ -42349,6 +42361,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.331', 'کارت‌های مربع هر ثانیه no-store و با processed تجمعی تازه می‌شوند',
+         strpos($selfSrc, "window._smPoll=setInterval(tick, 1000)") !== false
+      && strpos($selfSrc, "cache:'no-store'") !== false
+      && strpos($selfSrc, 'p.processed_n!=null') !== false
+      && strpos($selfSrc, 'smFixCardsFresh') !== false);
+    $add('10.331', 'شکست‌های قطعی در segment بعدی بی‌نهایت تکرار نمی‌شوند',
+         strpos($selfSrc, "\$fixCp['attempted_jobs']") !== false
+      && strpos($selfSrc, 'isset(\$attemptedJobSet[\$jk])') !== false
+      && strpos($selfSrc, "'attempted_jobs'=>\$attemptedJobs") !== false);
+    $add('10.331', 'ورودی 10.331 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "331'") !== false
+      && version_compare(APP_VERSION, '10.' . '331', '>='));
     $add('10.330', 'chipهای وضعیت از مجموعهٔ فیلترشده و کل فایل از summary سراسری می‌آیند',
          strpos($selfSrc, "\$filteredData['rows']=\$main") !== false
       && strpos($selfSrc, "'summary_all' => \$liveSummaryAll") !== false
@@ -73659,6 +73683,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.331', t:'🔴 کارت‌های مربع واقعاً زنده + پایان حلقهٔ شکست', items:[
+    'status هر یک ثانیه با no-store خوانده و زمان آخرین به‌روزرسانی روی کارت‌ها نمایش داده می‌شود.',
+    'کارت پردازش‌شده دیگر cursor محلی ۱ تا ۲۰ نیست و شمار تجمعی یکتای موفق+ناموفق را نشان می‌دهد.',
+    'شکست قطعی در همان run فقط یک بار مصرف می‌شود؛ ۲۰ شکست اول دیگر در هر segment بی‌نهایت تکرار نمی‌شوند (429 همچنان retry می‌شود).'
+  ]},
   {v:'10.330', t:'🎯 همهٔ chipهای وضعیت تابع فیلتر جاری', items:[
     'یکسان، مغایرت، نیست در WC/غرفه، فقط مقصد و تکراری‌ها اکنون از تمام ردیف‌های منطبق با فیلتر جاری محاسبه می‌شوند، نه از کل snapshot.',
     'کل فایل همچنان شمار واقعی کل ردیف‌های فعال را نشان می‌دهد و این فیلتر تعداد ردیف‌های منطبق را؛ هر دو نیز حین اصلاح زنده‌اند.',
@@ -82687,7 +82716,7 @@ function syncMatrixPoll(){
     const fd=new FormData(); fd.append('action','sync_matrix_status');
     const visibleDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
     fd.append('selected_destinations',JSON.stringify(visibleDestinations));
-    fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    fetch('?sm_live_status=1&_='+Date.now(),{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{
       if(!d||!d.ok)return;
       const p = d.progress || {};
       if(d.fix_running && d.fix_progress) smPaintProgress(d.fix_progress);
@@ -82723,7 +82752,7 @@ function syncMatrixPoll(){
     }).catch(()=>{});
   };
   tick();
-  window._smPoll=setInterval(tick, 1500);
+  window._smPoll=setInterval(tick, 1000);
 }
 /* v10.117: اصلاح مغایرت از روی جدول */
 function syncMatrixFixStart(scope){
@@ -82783,15 +82812,15 @@ function smFixCounterItems(p,key){
 function smPaintFixCounterCards(p){
   const box=$('smFixLive');if(!box)return;window._smFixCounterState=p||{};
   const cards=[
-    ['total','کل کارها',p.total||0,'#4c1d95','📋'],['processed','پردازش‌شده',p.cur||0,'#075985','⚙️'],
+    ['total','کل کارها',p.total||0,'#4c1d95','📋'],['processed','پردازش‌شده',p.processed_n!=null?p.processed_n:((p.ok_n||0)+(p.fail_n||0)),'#075985','⚙️'],
     ['ok','موفق',p.ok_n||0,'#166534','✅'],['fail','ناموفق',p.fail_n||0,'#991b1b','❌'],
     ['price','اصلاح قیمت',p.price_n||0,'#854d0e','💰'],['send','ارسال‌شده',p.sent_n||0,'#0369a1','📤'],
     ['delete','حذف / بایگانی',p.del_n||0,'#9f1239','🗑️']
   ];
   box.style.display='block';
-  box.innerHTML='<div style="font-size:11px;color:#c4b5fd;font-weight:900;margin-bottom:7px">برای مشاهدهٔ محصولات هر شمارنده روی کارت کلیک کنید</div>'
+  box.innerHTML='<div style="font-size:11px;color:#c4b5fd;font-weight:900;margin-bottom:7px">برای مشاهدهٔ محصولات هر شمارنده روی کارت کلیک کنید · <span id="smFixCardsFresh" style="color:#67e8f9">به‌روزرسانی '+new Date().toLocaleTimeString('fa-IR')+'</span></div>'
     +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,108px));gap:8px;align-items:start">'
-    +cards.map(c=>'<button type="button" onclick="smOpenFixCounter(\''+c[0]+'\')" style="aspect-ratio:1/1;width:100%;border:1px solid #ffffff33;border-radius:12px;background:'+c[3]+';color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;box-shadow:0 5px 15px #0004;padding:7px"><span style="font-size:19px">'+c[4]+'</span><b style="font-size:20px;line-height:1">'+smFa(c[2])+'</b><span style="font-size:9.5px;line-height:1.25">'+c[1]+'</span></button>').join('')+'</div>';
+    +cards.map(c=>'<button id="smFixCard-'+c[0]+'" data-value="'+String(c[2])+'" type="button" onclick="smOpenFixCounter(\''+c[0]+'\')" style="aspect-ratio:1/1;width:100%;border:1px solid #ffffff33;border-radius:12px;background:'+c[3]+';color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;box-shadow:0 5px 15px #0004;padding:7px;transition:transform .18s,filter .18s"><span style="font-size:19px">'+c[4]+'</span><b style="font-size:20px;line-height:1">'+smFa(c[2])+'</b><span style="font-size:9.5px;line-height:1.25">'+c[1]+'</span></button>').join('')+'</div>';
 }
 function smOpenFixCounter(key){
   const p=window._smFixCounterState||{},items=smFixCounterItems(p,key);
