@@ -72,6 +72,7 @@ const RECON_PROGRESS_FILE = __DIR__ . '/recon_progress.json'; // v8.49
 const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
+const MATRIX_CRON_PULSE_FILE = __DIR__ . '/matrix_cron_pulse.json'; // v10.337
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
 const SYNC_MATRIX_RESULT_FILE   = __DIR__ . '/sync_matrix_result.json';   // v10.113
 const SYNC_MATRIX_LIVE_FILE     = __DIR__ . '/sync_matrix_live.json';     // v10.247
@@ -339,7 +340,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.336';
+const APP_VERSION = '10.337';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1191,13 +1192,16 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
 }
 
 function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
+    $execDriver=function_exists('matrixExecutionDecision')?matrixExecutionDecision():['accelerated'=>false];
+    $requestedSlice=max(2,min(20,(int)($opts['slice_seconds']??8)));
+    if(!empty($execDriver['accelerated']))$requestedSlice=20;
     $payload = [
         'profile' => (string)($opts['profile'] ?? 'all'),
         'parallel_destinations' => !empty($opts['parallel_destinations']),
         'live_fill' => !empty($opts['live_fill']),
         'selected_destinations' => array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):null,
         'coded_only' => false,
-        'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
+        'slice_seconds' => $requestedSlice,
         'resume' => $resume, 'requested_at' => microtime(true),
         /* periodic chain may require its own guaranteed fresh build behind an
            already-running manual build; callers can provide a chain key. */
@@ -1254,7 +1258,8 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
     $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
     $segments=0;$last=['ok'=>false,'error'=>'matrix_fix_not_started'];$tails=[];
     do{
-        $segments++;$payload['max_items']=max(1,min(50,(int)($payload['max_items']??20)));
+        $segments++;$driver=matrixExecutionDecision();$defaultItems=!empty($driver['accelerated'])?50:20;
+        $payload['max_items']=max(1,min(100,(int)($payload['max_items']??$defaultItems)));
         $payload['resume']=$segments>1||!empty($payload['resume']);
         $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
@@ -1267,7 +1272,7 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
         $retryAfter=max(0,min(300,(int)($decoded['retry_after']??0)));
         if($retryAfter>0){s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);}
-        else usleep(150000);
+        else {$driver=matrixExecutionDecision();if(empty($driver['can_run'])){$last['ok']=true;$last['resume_needed']=true;$last['scheduler_wait']=true;break;}$pauseUs=matrixExecutionPauseUs(150000);if($pauseUs>0)usleep($pauseUs);}
     }while($segments<8&&!matrixFixStopRequested());
     $last['worker_segments']=$segments;$last['tail']=mb_substr(implode("\n",array_slice($tails,-3)),-2000);
     /* هاست daemonهای طولانی را حدود چند دقیقه می‌کشد. پیش از آن، همان job با
@@ -1370,9 +1375,10 @@ function s4WorkerRunMatrixChild(array $payload): array {
         if(empty($decoded['yielded']))return $decoded;
         $resume=true;
         s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments,'matrix_child_recycled'=>true]);
-        /* مهم: process هر برش اینجا تمام شده است؛ heap بزرگ PHP واقعاً به OS
-           برمی‌گردد و برش بعدی checkpoint را در process تازه باز می‌کند. */
-        unset($decoded,$out,$part,$raw);usleep(250000);
+        $driver=matrixExecutionDecision();
+        if(empty($driver['can_run']))return $decoded+['ok'=>true,'resume_needed'=>true,'scheduler_wait'=>true,'execution_mode'=>$driver['mode']];
+        /* pulse خارجی تازه: بدون وقفه و با child بعدی؛ در fallback فقط pause تنظیمی. */
+        unset($decoded,$out,$part,$raw);$pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
     }while($segments<10000&&!matrixStopRequested());
     return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
 }
@@ -1486,6 +1492,43 @@ function s4CliPhpCommand(string $php,string $mem='512M'): string {
     return escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
 }
 
+/** v10.337: scheduler مشترک تمام build/fixهای ماتریس.
+ * cron pulse خارجی یک lease سریع می‌دهد؛ pause فقط fallback checkpoint است و
+ * با delay ایمنی API باسلام (429) اشتباه گرفته نمی‌شود. */
+function matrixExecutionCfg(?array $cn=null): array {
+    $cn=$cn??loadConnections();$r=is_array($cn['recon_auto']??null)?$cn['recon_auto']:[];
+    $mode=(string)($r['execution_mode']??'cron_first');
+    if(!in_array($mode,['cron_only','delay_only','cron_first','delay_first'],true))$mode='cron_first';
+    return ['mode'=>$mode,'pause_ms'=>max(0,min(2000,(int)($r['execution_pause_ms']??250))),
+        'lease_sec'=>max(30,min(900,(int)($r['cron_lease_sec']??180)))];
+}
+function matrixCronPulseRead(): array {
+    if(!is_file(MATRIX_CRON_PULSE_FILE))return [];$d=json_decode((string)@file_get_contents(MATRIX_CRON_PULSE_FILE),true);return is_array($d)?$d:[];
+}
+function matrixCronPulseFresh(?array $cfg=null): bool {
+    $cfg=$cfg??matrixExecutionCfg();$p=matrixCronPulseRead();return (int)($p['at']??0)>0&&(time()-(int)$p['at'])<=(int)$cfg['lease_sec'];
+}
+function matrixExecutionDecision(?array $cfg=null): array {
+    $cfg=$cfg??matrixExecutionCfg();$fresh=matrixCronPulseFresh($cfg);$m=(string)$cfg['mode'];
+    return $cfg+['cron_fresh'=>$fresh,'can_run'=>$m!=='cron_only'||$fresh,
+        'accelerated'=>$fresh&&in_array($m,['cron_only','cron_first'],true)];
+}
+function matrixExecutionPauseUs(int $legacyUs=250000): int {
+    $d=matrixExecutionDecision();if(!empty($d['accelerated']))return 0;
+    return max(0,(int)$d['pause_ms'])*1000;
+}
+function matrixCronPulse(string $source='external'): array {
+    $state=['at'=>time(),'source'=>$source,'pid'=>(int)@getmypid(),'version'=>APP_VERSION];
+    @file_put_contents(MATRIX_CRON_PULSE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    $resumed=0;
+    if(function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q)use(&$resumed){
+        foreach($q['entries'] as &$e){if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='paused')continue;
+            $e['status']='pending';$e['updated_at']=time();$e['worker_pid']=0;$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['error']='';$resumed++;
+        }unset($e);return ['ok'=>true];
+    });
+    return $state+['resumed'=>$resumed];
+}
+
 /** v10.263: روی نصب Apache/LiteSpeed که server.sh اجرا نیست، اندپوینت سلامت
  * می‌تواند daemon CLI را دوباره زنده کند. flock از daemon تکراری جلوگیری می‌کند. */
 function s4SpawnPersistentWorker(): array {
@@ -1539,7 +1582,7 @@ function s4WorkerRunCronChild(): array {
     $php = s4CliPhpBinary();
     $mem = (string)@ini_get('memory_limit');
     if ($mem === '') $mem = '512M';
-    $cmd = s4CliPhpCommand($php,$mem)
+    $cmd = 'S4_INTERNAL_CRON=1 ' . s4CliPhpCommand($php,$mem)
         . ' ' . escapeshellarg(__FILE__) . ' cron_run 2>&1';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -1554,10 +1597,11 @@ function s4WorkerRunJob(array $job): array {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         return s4WorkerRunManualSyncChild($pk, !empty($payload['resume']));
     }
-    if ($type === 'matrix_build') {
-        return s4WorkerRunMatrixChild($payload);
-    }
-    if ($type === 'matrix_fix') {
+    if ($type === 'matrix_build' || $type === 'matrix_fix') {
+        $driver=matrixExecutionDecision();
+        if(empty($driver['can_run']))return ['ok'=>true,'resume_needed'=>true,'scheduler_wait'=>true,
+            'error'=>'waiting_for_external_cron_pulse','execution_mode'=>$driver['mode']];
+        if($type==='matrix_build')return s4WorkerRunMatrixChild($payload);
         return s4WorkerRunMatrixFixChild($payload);
     }
     if ($type === 'backend_extract') {
@@ -12392,9 +12436,11 @@ $profilePatch = [
 'url' => $url,
 /* نام خالی هرگز نام معتبر قبلی را به host تبدیل نکند. host فقط برای
    ساخت نخستین پروفایلِ واقعاً بی‌نام fallback است. */
-'name' => trim((string)($_POST['name'] ?? '')) !== ''
-    ? trim((string)$_POST['name'])
-    : (trim((string)($existingProfile['name'] ?? '')) ?: parse_url($url, PHP_URL_HOST)),
+'name' => ($isAutosave && trim((string)($existingProfile['name'] ?? ''))!=='')
+    ? trim((string)$existingProfile['name'])
+    : (trim((string)($_POST['name'] ?? '')) !== ''
+        ? trim((string)$_POST['name'])
+        : (trim((string)($existingProfile['name'] ?? '')) ?: parse_url($url, PHP_URL_HOST))),
 'pages' => array_key_exists('pages', $_POST)
     ? max(1, min(100, (int)$_POST['pages']))
     : (int)($profiles[$key]['pages'] ?? 10),
@@ -17278,6 +17324,8 @@ if (isset($_POST['recon_auto'])) {
     $iv = max(1, min(168, (int)($ra['interval_h'] ?? 6)));
     $mode = (string)($ra['extra_mode'] ?? 'off');
     if (!function_exists('retireModes') || !isset(retireModes()[$mode])) $mode = 'off';
+    $execMode=(string)($ra['execution_mode']??'cron_first');
+    if(!in_array($execMode,['cron_only','delay_only','cron_first','delay_first'],true))$execMode='cron_first';
     $conn['recon_auto'] = [
         'enabled' => !empty($ra['enabled']),
         'woo' => !isset($ra['woo']) || !empty($ra['woo']),
@@ -17293,6 +17341,9 @@ if (isset($_POST['recon_auto'])) {
         /* v10.113: بعد از مغایرت دوره‌ای، جدول مقایسه را سمت سرور بساز */
         'build_matrix' => !isset($ra['build_matrix']) || !empty($ra['build_matrix']),
         'matrix_fix' => !isset($ra['matrix_fix']) || !empty($ra['matrix_fix']),
+        'execution_mode'=>$execMode,
+        'execution_pause_ms'=>max(0,min(2000,(int)($ra['execution_pause_ms']??250))),
+        'cron_lease_sec'=>max(30,min(900,(int)($ra['cron_lease_sec']??180))),
     ];
 }
 if (isset($_POST['catfix_auto'])) {
@@ -22752,10 +22803,22 @@ if (isset($_GET['manual_sync'])) {
 
 
 
+if(isset($_GET['matrix_execution_status'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $d=matrixExecutionDecision();echo json_encode(['ok'=>true,'version'=>APP_VERSION,'execution'=>$d,'pulse'=>matrixCronPulseRead(),
+        'external_cron_url'=>selfBaseUrl().'?cron_run=1'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 if (isset($_GET['cron_run']) || (($_POST['action'] ?? '') === 'cron_run')) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(0);
 @ignore_user_abort(true);
+/* v10.337: فقط cron بیرونی lease سریع ماتریس را تازه می‌کند. cron داخلی
+   worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند. */
+if((string)getenv('S4_INTERNAL_CRON')!=='1'){
+    $GLOBALS['_matrixExternalPulse']=matrixCronPulse(PHP_SAPI==='cli'?'external_cli':'external_http');
+    if(!s4WorkerIsActive())s4SpawnPersistentWorker();
+}
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -42567,6 +42630,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.337', 'چهار موتور cron/delay برای تمام build و fixهای مغایرت موجود است',
+         strpos($selfSrc, "['cron_only','delay_only','cron_first','delay_first']") !== false
+      && strpos($selfSrc, 'function matrixExecutionDecision') !== false
+      && strpos($selfSrc, 'id="reconExecMode"') !== false
+      && strpos($selfSrc, "isset(\$_GET['matrix_execution_status'])") !== false);
+    $add('10.337', 'ضربان بیرونی مسیر سریع و resume کار paused را فعال می‌کند',
+         strpos($selfSrc, 'function matrixCronPulse(') !== false
+      && strpos($selfSrc, "\$e['status']='pending'") !== false
+      && strpos($selfSrc, "S4_INTERNAL_CRON=1") !== false
+      && strpos($selfSrc, "if(!empty(\$execDriver['accelerated']))\$requestedSlice=20") !== false);
+    $add('10.337', 'autosave هرگز نام موجود پروفایل را تغییر نمی‌دهد',
+         strpos($selfSrc, "\$isAutosave && trim((string)(\$existingProfile['name']") !== false
+      && strpos($selfSrc, 'name: oldEntry.name || data.name') !== false);
+    $add('10.337', 'ورودی 10.337 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "337'") !== false
+      && version_compare(APP_VERSION, '10.' . '337', '>='));
     $add('10.336', 'autosave قدیمی نمی‌تواند نام و تنظیمات پروفایل تازه‌تر را بازنویسی کند',
          strpos($selfSrc, "'stale_" . "profile'") !== false
       && strpos($selfSrc, "fd.append('auto" . "save','1')") !== false
@@ -50513,6 +50592,8 @@ function reconAutoCfg(?array $cn = null): array {
     if ($iv > 168) $iv = 168;
     $mode = (string)($r['extra_mode'] ?? 'off');
     if (!function_exists('retireModes') || !isset(retireModes()[$mode])) $mode = 'off';
+    $execMode=(string)($r['execution_mode']??'cron_first');
+    if(!in_array($execMode,['cron_only','delay_only','cron_first','delay_first'],true))$execMode='cron_first';
     return [
         'enabled'       => !empty($r['enabled']),
         'woo'           => !isset($r['woo']) || !empty($r['woo']),
@@ -50527,6 +50608,9 @@ function reconAutoCfg(?array $cn = null): array {
         'enqueue_missing' => !empty($r['enqueue_missing']), // صف‌کردن محصولاتِ «در مقصد نیست»
         'build_matrix'  => !isset($r['build_matrix']) || !empty($r['build_matrix']), // v10.113
         'matrix_fix'    => !isset($r['matrix_fix']) || !empty($r['matrix_fix']), // v10.121
+        'execution_mode'=>$execMode,
+        'execution_pause_ms'=>max(0,min(2000,(int)($r['execution_pause_ms']??250))),
+        'cron_lease_sec'=>max(30,min(900,(int)($r['cron_lease_sec']??180))),
     ];
 }
 
@@ -51375,7 +51459,7 @@ function reconAutoTick(array $cn, int $now = 0): array {
                 $fix=s4WorkerEnqueueMatrixFix(['scope'=>$scope,'source'=>'recon_auto','delay_ms'=>120,'duplicate_keep'=>$keep,'view_filters'=>[],'selected_destinations'=>$periodicDest,'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chainKey],false);
             }elseif(!empty($cfg['matrix_fix'])){$fix=['ok'=>false,'skipped'=>true,'error'=>'matrix_build_queue_failed'];}
 
-            $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'build'=>$build,'fix'=>$fix];
+            $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'execution'=>matrixExecutionDecision(),'build'=>$build,'fix'=>$fix];
             $out['ran']=true;$out['queued']=true;$out['jobs']=$queued;$out['ok']=$workerReady&&!empty($build['ok'])&&!empty($fix['ok']);$out['skipped']='';
             $st['last_finish']=time();$st['last_results']=['queued'=>$queued];reconAutoStateSave($st);
             reconProgress(['running'=>false,'done'=>true,'phase'=>'queued','source'=>'recon_auto','result_ok'=>$out['ok'],
@@ -66590,6 +66674,18 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label style="display:flex;gap:8px;align-items:flex-start;font-size:11px;color:#bbf7d0;margin:6px 0 4px;cursor:pointer;line-height:1.6">
 <input type="checkbox" id="reconAutoMatrixFix" checked onchange="reconAutoSave()" style="width:14px;height:14px;margin-top:2px">
 <span><b>🔧 اصلاح از روی جدول</b> — قیمت ناهماهنگ + ارسال missing + حذف/بایگانی extra (همان «اصلاح مغایرت‌ها»ی جدول؛ مسیر اصلی اعمال دوره‌ای از v10.121)</span></label>
+<div style="margin-top:10px;padding:9px;background:#020617;border:1px solid #0e7490;border-radius:9px">
+<div style="font-size:11px;font-weight:900;color:#67e8f9;margin-bottom:6px">⚡ موتور اجرای همهٔ عملیات جدول و اصلاح</div>
+<div class="crow"><label style="flex:0 0 auto">روش ادامه:</label><select id="reconExecMode" onchange="reconAutoSave();reconExecUi()" style="flex:1;font-size:10.5px">
+<option value="cron_only">فقط ضربان کران بیرونی — سریع، بدون fallback وقفه</option>
+<option value="delay_only">فقط وقفهٔ عمدی worker — مستقل از کران</option>
+<option value="cron_first">اول کران بیرونی، سپس fallback وقفهٔ عمدی (پیشنهادی)</option>
+<option value="delay_first">اول worker با وقفه، کران فقط پشتیبان خرابی</option>
+</select></div>
+<div class="crow"><label>وقفهٔ fallback (ms):</label><input id="reconExecPause" type="number" min="0" max="2000" step="25" value="250" onchange="reconAutoSave()" style="flex:1"><label>اعتبار ضربان (ث):</label><input id="reconCronLease" type="number" min="30" max="900" step="10" value="180" onchange="reconAutoSave()" style="flex:1"></div>
+<div id="reconExecHint" style="font-size:10px;color:#94a3b8;line-height:1.8">کران بیرونی: <code>?cron_run=1</code>. با ضربان تازه، وقفهٔ بین checkpointها صفر، برش ساخت ۲۰ ثانیه و بستهٔ اصلاح بزرگ‌تر می‌شود. تأخیر ایمنی API باسلام برای جلوگیری از 429 حذف نمی‌شود.</div>
+<button type="button" class="btn btn-gray" onclick="reconExecStatus()" style="font-size:10px;margin-top:5px">🫀 وضعیت آخرین ضربان</button><span id="reconExecStatus" style="font-size:10px;color:#67e8f9;margin-right:6px"></span>
+</div>
 <div id="reconAutoStatus" style="font-size:10.5px;color:#67e8f9;margin-top:6px"></div>
 <details style="margin-top:8px" ontoggle="if(this.open)reconAutoLoadLog()">
 <summary style="cursor:pointer;color:#fcd34d;font-size:11px;font-weight:800">📋 گزارش مغایرت‌گیری دوره‌ای</summary>
@@ -70400,7 +70496,7 @@ function saveProfileSilent() {
                 if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p.url === data.url);
                 const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
-                const entry = {key: d.key, name: data.name || oldEntry.name || parseUrlHost(data.url), url: data.url, updatedAt: currentProfileUpdatedAt};
+                const entry = {key: d.key, name: oldEntry.name || data.name || parseUrlHost(data.url), url: data.url, updatedAt: currentProfileUpdatedAt};
                 if (existingIdx >= 0) {
                     profiles[existingIdx] = entry;
                 } else {
@@ -73989,6 +74085,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.337', t:'⚡ موتور چهارحالتهٔ کران/وقفه برای مغایرت‌گیری', items:[
+    'تنظیم واحد «روش ادامه» به بخش مغایرت اضافه شد: فقط ضربان کران بیرونی، فقط وقفهٔ worker، کران با fallback وقفه، یا worker با پشتیبانی کران.',
+    'ضربان بیرونی ?cron_run=1 کارهای paused جدول/اصلاح را resume و worker مرده را repair می‌کند؛ cron داخلی worker به‌اشتباه ضربان بیرونی شمرده نمی‌شود.',
+    'در lease کران، pause بین checkpointها صفر، برش build بیست‌ثانیه‌ای و بستهٔ fix بزرگ‌تر است تا سربار serialize/restart کمتر و سرعت بیشتر شود؛ تأخیر ضد 429 باسلام حفظ شده است.',
+    'autosave دیگر تحت هیچ شرایطی نام موجود profile را تغییر نمی‌دهد؛ تغییر نام فقط با ذخیرهٔ دستی انجام می‌شود.'
+  ]},
   {v:'10.336', t:'🛡️ پروفایل پایدار + واکشی مقصد کم‌حافظه + ترتیب قطعی دوره‌ای', items:[
     'پاسخ دیررس انتخاب قبلی و autosave فرم بارگذاری‌نشده دیگر پروفایل فعال را برنمی‌گرداند؛ revision قدیمی رد می‌شود و نام خالی نام قبلی را به host تبدیل نمی‌کند.',
     'شناسهٔ پایدار آخرین پروفایل کنار URL ذخیره می‌شود و فیلدهای ناشناخته/lifecycle در save_profile حفظ می‌شوند.',
@@ -78680,7 +78782,10 @@ function reconAutoCollect(){
     notify: !!($('reconAutoNotify')||{}).checked,
     enqueue_missing: !!($('reconAutoEnqueue')||{}).checked,
     build_matrix: ($('reconAutoMatrix') ? !!$('reconAutoMatrix').checked : true),
-    matrix_fix: ($('reconAutoMatrixFix') ? !!$('reconAutoMatrixFix').checked : true)
+    matrix_fix: ($('reconAutoMatrixFix') ? !!$('reconAutoMatrixFix').checked : true),
+    execution_mode: (($('reconExecMode')||{}).value||'cron_first'),
+    execution_pause_ms: Math.max(0,Math.min(2000,parseInt(($('reconExecPause')||{}).value||'250')||0)),
+    cron_lease_sec: Math.max(30,Math.min(900,parseInt(($('reconCronLease')||{}).value||'180')||180))
   };
 }
 function reconAutoSave(){
@@ -78709,9 +78814,19 @@ function reconAutoApplyCfg(c){
   chk('reconAutoMatrixFix', c.matrix_fix!==false);
   set('reconAutoIv', c.interval_h||6);
   set('reconAutoMode', c.extra_mode||'off');
-  reconAutoBadge();
+  set('reconExecMode',c.execution_mode||'cron_first');set('reconExecPause',c.execution_pause_ms===undefined?250:c.execution_pause_ms);set('reconCronLease',c.cron_lease_sec||180);
+  reconExecUi();reconAutoBadge();
   const st=$('reconAutoStatus');
   if(st && c.enabled) st.textContent='فعال · هر '+(c.interval_h||6)+' ساعت · مسیر جدول';
+}
+function reconExecUi(){
+  const m=(($('reconExecMode')||{}).value)||'cron_first',p=$('reconExecPause');
+  if(p)p.disabled=(m==='cron_only');
+  const h=$('reconExecHint');if(h){const labels={cron_only:'فقط ضربان بیرونی کار را آزاد می‌کند؛ اگر کران قطع شود job در checkpoint منتظر می‌ماند.',delay_only:'worker مستقل از کران و با وقفهٔ تنظیمی ادامه می‌دهد.',cron_first:'ضربان تازه با مسیر سریع و بدون pause؛ اگر کران قطع شد worker با وقفه ادامه می‌دهد.',delay_first:'worker مسیر اصلی است و کران بیرونی فقط worker مرده/کار paused را نجات می‌دهد.'};h.innerHTML=esc(labels[m]||labels.cron_first)+' کران بیرونی: <code>?cron_run=1</code>. تأخیر ایمنی API باسلام برای جلوگیری از 429 حذف نمی‌شود.';}
+}
+function reconExecStatus(){
+  const o=$('reconExecStatus');if(o)o.textContent='در حال بررسی…';
+  fetch('?matrix_execution_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{if(!o)return;const p=d.pulse||{},age=p.at?Math.max(0,Math.floor(Date.now()/1000-p.at)):null;o.textContent=(d.execution&&d.execution.cron_fresh?'🟢':'🟠')+' '+(age===null?'هنوز ضربانی نیست':('آخرین ضربان '+toFa(age)+' ثانیه پیش'))+' · '+((d.execution||{}).mode||'');}).catch(()=>{if(o)o.textContent='خطای خواندن وضعیت';});
 }
 function reconAutoLoadLog(){
   const box=$('reconAutoLog');if(box)box.textContent='در حال خواندن گزارش…';
