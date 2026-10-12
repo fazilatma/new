@@ -333,7 +333,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.327';
+const APP_VERSION = '10.328';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30323,6 +30323,48 @@ function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
     return $join==='and';
 }
 
+/** v10.328: وضعیت chipها از خود ردیف‌های جاری محاسبه می‌شود، نه summary
+ * زمان ساخت. اصلاح worker هر ردیف را patch می‌کند و این تابع همان لحظه اثرش را
+ * در کل فایل/یکسان/مغایرت/missing/فقط مقصد/تکراری منعکس می‌کند. */
+function matrixRowIsLiveActive(array $r): bool {
+    if(!empty($r['is_report'])||str_starts_with((string)($r['bare']??''),'__report_'))return false;
+    if((int)($r['profile_hits']??0)>0||trim((string)($r['profile_key']??''))!=='')return true;
+    if(!empty($r['woo']['id']))return true;
+    foreach((array)($r['shops']??[])as$c)if(is_array($c)&&!empty($c['id']))return true;
+    return false;
+}
+function matrixLiveSummary(array $data): array {
+    $sum=['total'=>0,'ok'=>0,'price_mismatch'=>0,'missing_woo'=>0,'missing_bsl'=>0,
+        'extra_woo'=>0,'extra_bsl'=>0,'dup_profile'=>0,'dup_woo'=>0,'dup_bsl'=>0,
+        'in_all'=>0,'only_profile'=>0,'only_dest'=>0];
+    $selected=matrixNormalizeDestinations($data['selected_destinations']??null);$set=array_fill_keys($selected,true);$useWoo=isset($set['woo']);
+    $shopIds=[];foreach((array)($data['shops']??[])as$sh){$vid=(int)($sh['vendor_id']??0);if($vid>0&&isset($set['bsl:'.$vid]))$shopIds[]=$vid;}
+    foreach((array)($data['rows']??[])as$r){
+        if(!is_array($r)||!matrixRowIsLiveActive($r))continue;$sum['total']++;
+        $hasProf=(int)($r['profile_hits']??0)>0||trim((string)($r['profile_key']??''))!=='';
+        $hasWoo=$useWoo&&!empty($r['woo']['id']);$wooBad=false;$wooMissing=false;
+        if($useWoo&&$hasProf){if(!$hasWoo)$wooMissing=true;else$wooBad=in_array(matrixPriceTone((int)($r['woo_expect']??0),(int)($r['woo']['price']??0)),['bad','warn'],true);}
+        $shopPresent=0;$shopMissing=0;$shopBad=false;$dupBsl=false;
+        foreach($shopIds as$vid){$c=is_array($r['shops'][$vid]??null)?$r['shops'][$vid]:(is_array($r['shops'][(string)$vid]??null)?$r['shops'][(string)$vid]:null);
+            if($c&&!empty($c['id'])){$shopPresent++;$expect=(int)($c['expect']??$r['shop_expect'][$vid]??$r['bsl_expect']??0);if(in_array(matrixPriceTone($expect,(int)($c['price']??0)),['bad','warn'],true))$shopBad=true;if(!empty($c['dup']))$dupBsl=true;}
+            elseif($hasProf)$shopMissing++;
+            foreach((array)($r['shop_extra'][$vid]??[])as$x)if(is_array($x)&&!empty($x['id'])){$dupBsl=true;break;}
+        }
+        if(matrixProfileDuplicateCount($r)>0)$sum['dup_profile']++;
+        if(!empty($r['woo_dup'])||!empty($r['woo_extra']))$sum['dup_woo']++;
+        if($dupBsl)$sum['dup_bsl']++;
+        if($wooMissing)$sum['missing_woo']++;if($shopMissing>0)$sum['missing_bsl']++;
+        if($wooBad||$shopBad)$sum['price_mismatch']++;
+        if(!$hasProf&&$hasWoo)$sum['extra_woo']++;if(!$hasProf&&$shopPresent>0)$sum['extra_bsl']++;
+        $anyDest=$hasWoo||$shopPresent>0;
+        $allOk=(!$useWoo||($hasWoo&&!$wooBad))&&$shopMissing===0&&!$shopBad;
+        if($hasProf&&$allOk){$sum['ok']++;$sum['in_all']++;}
+        elseif($hasProf&&!$anyDest)$sum['only_profile']++;
+        elseif(!$hasProf&&$anyDest)$sum['only_dest']++;
+    }
+    return $sum;
+}
+
 /** فیلتر + صفحه‌بندی روی نتیجهٔ ذخیره‌شده (بدون rebuild) */
 function matrixQueryPage(array $opts = []): array {
     $prog = matrixProgressRead();
@@ -30359,6 +30401,7 @@ function matrixQueryPage(array $opts = []): array {
     foreach ((array)$data['rows'] as $r) {
         if (!is_array($r)) continue;
         $isRep = !empty($r['is_report']) || str_starts_with((string)($r['bare'] ?? ''), '__report_');
+        if(!$isRep&&!matrixRowIsLiveActive($r))continue;
         if (!$isRep && !matrixRowMatchesViewFilters($r,$data,$opts)) continue;
         $all[] = $r;
     }
@@ -30429,6 +30472,7 @@ function matrixQueryPage(array $opts = []): array {
         $destOptions[]=['value'=>'bsl:'.(int)$ds['vendor_id'],'label'=>(string)($ds['name']??('#'.(int)$ds['vendor_id']))];
     }
     $profileOptionRows=[]; foreach($profileOptions as $pv=>$pl)$profileOptionRows[]=['value'=>(string)$pv,'label'=>(string)$pl];
+    $liveSummary=matrixLiveSummary($data);
     return [
         'ok' => true,
         'from_file' => true,
@@ -30443,7 +30487,7 @@ function matrixQueryPage(array $opts = []): array {
         'total' => $total,
         'actionable_total' => count($main),
         'filtered_status_counts' => (object)$filteredStatusCounts,
-        'summary' => $data['summary'] ?? [],
+        'summary' => $liveSummary,
         'selected_destinations'=>$querySelected,
         'shops' => $data['shops'] ?? [],
         'woo_cfg' => $data['woo_cfg'] ?? [],
@@ -30457,7 +30501,7 @@ function matrixQueryPage(array $opts = []): array {
         'woo_count' => $data['woo_count'] ?? 0,
         'generated_at' => $data['generated_at'] ?? 0,
         'source' => $data['source'] ?? '',
-        'row_count_all' => (int)($data['row_count'] ?? count($data['rows'] ?? [])),
+        'row_count_all' => (int)$liveSummary['total'],
         'live_partial' => !empty($data['live_partial']),
         'running' => !empty($prog['running']) || !empty($fixProg['running']),
         'progress' => !empty($fixProg['running']) || (!empty($fixProg['done']) && empty($prog['running'])) ? $fixProg : $prog,
@@ -42279,6 +42323,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.328', 'همه chipهای ماتریس از ردیف جاری زنده محاسبه می‌شوند',
+         strpos($selfSrc, 'function matrixLiveSummary') !== false
+      && strpos($selfSrc, "'summary' => \$liveSummary") !== false
+      && strpos($selfSrc, "'row_count_all' => (int)\$liveSummary['total']") !== false);
+    $add('10.328', 'ردیف کاملاً حذف‌شده از کل فایل و فیلتر زنده خارج است',
+         strpos($selfSrc, 'function matrixRowIsLiveActive') !== false
+      && strpos($selfSrc, 'if(!\$isRep&&!matrixRowIsLiveActive(\$r))continue') !== false);
+    $add('10.328', 'ورودی 10.328 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "328'") !== false
+      && version_compare(APP_VERSION, '10.' . '328', '>='));
     $add('10.327', 'اصلاح بلند بین daemonهای تازه checkpoint-handoff می‌شود',
          strpos($selfSrc, 'function s4WorkerRequeueForRecycle') !== false
       && strpos($selfSrc, "'daemon_recycle'=>true") !== false
@@ -73565,6 +73619,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.328', t:'🔢 شمارنده‌های کاملاً زندهٔ جدول مغایرت', items:[
+    'کل فایل، یکسان، مغایرت، نیست در WC/غرفه، فقط مقصد و تکراری‌ها در هر polling از ردیف‌های جاری دوباره محاسبه می‌شوند.',
+    'ردیف حذف/بایگانی‌شده که دیگر نه در پروفایل و نه در مقصد وجود دارد از کل فایل و نتیجهٔ فیلتر زنده خارج می‌شود.',
+    'پس از هر اصلاح موفق، همهٔ chipها همراه «این فیلتر» بدون rebuild و بدون refresh دستی تغییر می‌کنند.'
+  ]},
   {v:'10.327', t:'♾ ادامهٔ اصلاح بدون مرورگر + گزارش مغایرت‌گیری دوره‌ای', items:[
     'اصلاح ماتریس هر ۸ segment checkpoint را به daemon تازه تحویل می‌دهد تا سقف عمر پردازهٔ هاست دیگر عملیات را نیمه‌کاره متوقف نکند.',
     'cron خارجی daemon مرده را خودکار زنده می‌کند؛ build/fix دوره‌ای فقط در صف worker قرار می‌گیرند و داخل request طولانی cron اجرا نمی‌شوند.',
