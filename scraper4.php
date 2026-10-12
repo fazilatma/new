@@ -332,7 +332,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.325';
+const APP_VERSION = '10.326';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29674,6 +29674,10 @@ function matrixFixRun(array $opts = []): array {
        باعث بازگشت cursor به ابتدای صف شوند. اجرای دستی تازه بدون checkpoint
        همچنان همهٔ موارد را از اول ارزیابی می‌کند. */
     $resumeCursor = max(0, (int)($fixCp['cur'] ?? 0));
+    /* archive_first فایل ماتریس را بعد از هر موفقیت کوچک می‌کند؛ cursor عددی
+       روی فهرست کوچک‌شده، ابتدای کارهای باقی‌مانده را جا می‌انداخت. کلیدهای
+       done_jobs مرجع resume هستند، پس در این ترتیب cursor باید از صفر باشد. */
+    if((string)($fixCp['job_order']??'')==='archive_first')$resumeCursor=0;
     $jobKey = static function (array $j): string {
         return (string)($j['kind'] ?? '') . '|' . (string)($j['bare'] ?? '') . '|'
             . (int)($j['id'] ?? 0) . '|' . (int)($j['vendor_id'] ?? 0);
@@ -42242,6 +42246,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.326', 'resume بایگانی روی فهرست کوچک‌شونده فقط با done_jobs و بدون cursor عددی است',
+         strpos($selfSrc, "if((string)(\$fixCp['job_order']??'')==='archive_first')\$resumeCursor=0") !== false
+      && strpos($selfSrc, "فهرست کوچک‌شده") !== false);
+    $add('10.326', 'ورودی 10.326 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "326'") !== false
+      && version_compare(APP_VERSION, '10.' . '326', '>='));
 
     /* ---------- v9.00: راه عبور برای سایت مبدأ ---------- */
     $add('9.00', 'تنظیمات عبور سایت مبدأ جدا از هوش مصنوعی',
@@ -73479,6 +73489,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.326', t:'🧭 جلوگیری از جاافتادن بایگانی‌ها میان segmentهای worker', items:[
+    'فیدبک زنده نشان داد پس از ۲۰ بایگانی موفق، فایل ماتریس کوچک شد ولی cursor=20 روی فهرست تازه اعمال و ۲۰ کار بعدی ناخواسته رد می‌شد.',
+    'در ترتیب archive_first، resume اکنون همیشه فهرست باقی‌مانده را از صفر می‌خواند و done_jobs مانع تکرار عملیات موفق می‌شود؛ بنابراین هیچ فقط-مقصدی بین segmentها جا نمی‌افتد.'
+  ]},
   {v:'10.325', t:'🗑 تضمین بایگانی فقط-مقصدها در اصلاح کلی', items:[
     'فیدبک اجرای واقعی ۳۴۷۸ job را نشان داد که ۲۱۶۱ مورد حذف داشت، اما چون ارسال‌ها جلوتر بودند کاربر بایگانی فقط-مقصد را دیر می‌دید.',
     'در اجرای تازه، حذف/بایگانی ردیف‌های فقط مقصد پیش از ارسال‌های missing انجام می‌شود و شمار جداگانهٔ «فقط مقصد» در برنامهٔ عملیات ثبت می‌شود.',
