@@ -80,6 +80,7 @@ const SYNC_MATRIX_STOP_FILE     = __DIR__ . '/sync_matrix_stop.json';      // v1
 const SYNC_MATRIX_FIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_fix_progress.json'; // v10.118
 const SYNC_MATRIX_FIX_LOCK_FILE     = __DIR__ . '/sync_matrix_fix.lock';          // v10.117
 const SYNC_MATRIX_FIX_STOP_FILE     = __DIR__ . '/sync_matrix_fix_stop.json';     // v10.117
+const SYNC_MATRIX_FIX_ERRORS_FILE   = __DIR__ . '/sync_matrix_fix_errors.json';   // v10.333
 const CATFIX_AUTO_STATE_FILE = __DIR__ . '/catfix_auto_state.json'; // v10.107
 const RECON_FETCH_MAX_PAGES = 400; // v10.107: غرفه‌های بزرگ
 const SUFFIX_PROGRESS_FILE = __DIR__ . '/suffix_progress.json'; // v8.53
@@ -333,7 +334,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.332';
+const APP_VERSION = '10.333';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -347,7 +348,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/19';
+const APP_VERSION_DATE = '1405/07/20';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -9738,7 +9739,7 @@ function bslFindExistingQuick(string $tk, int $vid, string $title): ?array {
     $how='';return findRemoteByTitle($rows,$title,'','title',$how);
 }
 
-function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true): ?array {
+function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true, bool $trustCatalogMiss = true): ?array {
     $q = bslNormalizeTitle($title);
     $statuses = bslStatusQuery();
     // v8.72: اول شناسهٔ ثبت‌شده. باسلام می‌گوید «نام قبلاً برای محصول دیگری
@@ -9776,7 +9777,7 @@ function bslFindExisting(string $tk, int $vid, string $title, string $productKey
         bslCatalogSaved(1);
         return $__catRow['row'];
     }
-    if (($__catRow['state'] ?? '') === 'miss') { bslCatalogSaved(1); return null; }
+    if (($__catRow['state'] ?? '') === 'miss' && $trustCatalogMiss) { bslCatalogSaved(1); return null; }
 
     /* v8.79: پارامتر درست «title» است نه «search». باسلام پارامتر ناشناخته
        را بی‌صدا نادیده می‌گیرد، پس تا حالا این درخواست یک صفحهٔ دلخواه از
@@ -20547,7 +20548,12 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
        پیدا و PATCH کن. این هم 422 تکراری را حل می‌کند، هم دوباره کل غرفه را
        نمی‌پیماید که عملیات اصلاح ظاهراً وسط راه متوقف شود. */
     if(!empty($opts['skip_find_existing'])&&bslIsDuplicateName($r)){
-        $dup=bslFindExistingQuick($tk,$vid,$title);$dupId=(int)($dup['id']??0);
+        $dup=bslFindExistingQuick($tk,$vid,$title);
+        /* Active catalog can truthfully say missing while an archived/inactive item still
+           reserves the same title. Only after Basalam confirms duplicate, bypass that
+           active-catalog miss and search every status/deep endpoint. */
+        if(!$dup)$dup=bslFindExisting($tk,$vid,$title,$__mk,true,false);
+        $dupId=(int)($dup['id']??0);
         if($dupId>0){$bu=$bp;unset($bu['name'],$bu['brief'],$bu['description'],$bu['is_wholesale']);$bu['status']=2976;
             $ur=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$dupId,$bu,false,null,false,1);
             if(empty($ur['ok']))$ur=bslReq($tk,'PATCH','products/'.$dupId,$bu,false,null,false,1);
@@ -29099,6 +29105,29 @@ function matrixApplyCompletedDeleteOverlay(array &$data,array $doneJobs): int {
     return $changed;
 }
 
+/** v10.333: خطای کوتاه هر ردیف مستقل از بازسازی snapshot حفظ می‌شود. */
+function matrixFixErrorsLoad(): array {
+    $d=localTaskStateRead(SYNC_MATRIX_FIX_ERRORS_FILE,[]);
+    return is_array($d['rows']??null)?$d['rows']:[];
+}
+function matrixFixErrorShort(string $error): string {
+    $error=trim((string)preg_replace('/\s+/u',' ',$error));
+    return mb_substr($error!==''?$error:'خطای نامشخص',0,140);
+}
+function matrixFixRecordRowError(string $bare,string $kind,string $error): void {
+    if($bare==='')return;$rows=matrixFixErrorsLoad();
+    $rows[$bare]=['error'=>matrixFixErrorShort($error),'kind'=>$kind,'at'=>time()];
+    @file_put_contents(SYNC_MATRIX_FIX_ERRORS_FILE,json_encode(['version'=>APP_VERSION,'rows'=>$rows],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+}
+function matrixFixClearRowError(string $bare): void {
+    $rows=matrixFixErrorsLoad();if(!isset($rows[$bare]))return;unset($rows[$bare]);
+    @file_put_contents(SYNC_MATRIX_FIX_ERRORS_FILE,json_encode(['version'=>APP_VERSION,'rows'=>$rows],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+}
+function matrixFixApplyErrors(array &$data): void {
+    $holds=matrixFixErrorsLoad();if(!$holds)return;
+    foreach((array)($data['rows']??[]) as $i=>$r){$bare=(string)($r['bare']??'');if($bare!==''&&isset($holds[$bare])){$data['rows'][$i]['fix_error']=(string)($holds[$bare]['error']??'خطا');$data['rows'][$i]['fix_error_kind']=(string)($holds[$bare]['kind']??'');$data['rows'][$i]['fix_error_at']=(int)($holds[$bare]['at']??0);}}
+}
+
 /** به‌روزرسانی یک ردیف در فایل نتیجهٔ ماتریس (با کلید bare) */
 function matrixResultPatchRow(string $bare, array $rowPatch, ?array $summaryPatch = null): bool {
     $data = matrixResultLoad();
@@ -29266,6 +29295,9 @@ function matrixFixTraceExchange(array $job,array $response): void {
 
 function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
     $jobs = [];
+    $errorHolds=matrixFixErrorsLoad();
+    $exactRetry=trim((string)($viewFilters['exact_bare']??''));
+    if($exactRetry!=='')matrixFixClearRowError($exactRetry);
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
     /* عضویت را از خود پروفایل‌های ذخیره‌شده می‌خوانیم، نه فیلدهای قدیمی
        profile_price/profile_key در نتیجهٔ ماتریس. آن فیلدهای stale باعث می‌شدند
@@ -29279,9 +29311,29 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $vid = (int)($sh['vendor_id'] ?? 0);
         if ($vid > 0) $shopsMeta[$vid] = $sh;
     }
-    foreach ((array)($data['rows'] ?? []) as $r) {
+    $orderedRows=array_values((array)($data['rows']??[]));
+    /* Match the visible table order, including a user-selected server-side sort. */
+    $rowSort=trim((string)($viewFilters['sort']??''));$rowSortDir=strtolower((string)($viewFilters['sort_dir']??'asc'))==='desc'?'desc':'asc';
+    $validRowSort=['title','profile','src_price','profile_price','woo_expect','woo_actual','status'];
+    if($rowSort!==''&&(in_array($rowSort,$validRowSort,true)||preg_match('/^shop:\d+$/',$rowSort))){
+        $statusRank=['mismatch'=>0,'missing'=>1,'only_profile'=>2,'only_dest'=>3,'partial'=>4,'ok'=>5];
+        usort($orderedRows,static function($a,$b)use($rowSort,$rowSortDir,$statusRank){
+            $numeric=in_array($rowSort,['src_price','profile_price','woo_expect','woo_actual'],true)||str_starts_with($rowSort,'shop:');
+            if($rowSort==='title'){$av=(string)($a['title']??$a['bare']??'');$bv=(string)($b['title']??$b['bare']??'');}
+            elseif($rowSort==='profile'){$av=(string)($a['profile']??'');$bv=(string)($b['profile']??'');}
+            elseif($rowSort==='status'){$av=(int)($statusRank[(string)($a['status']??'')]??99);$bv=(int)($statusRank[(string)($b['status']??'')]??99);$numeric=true;}
+            elseif($rowSort==='woo_actual'){$av=(int)($a['woo']['price']??0);$bv=(int)($b['woo']['price']??0);}
+            elseif(str_starts_with($rowSort,'shop:')){$vid=(int)substr($rowSort,5);$av=(int)($a['shops'][$vid]['price']??$a['shops'][(string)$vid]['price']??0);$bv=(int)($b['shops'][$vid]['price']??$b['shops'][(string)$vid]['price']??0);}
+            else{$av=(int)($a[$rowSort]??0);$bv=(int)($b[$rowSort]??0);}
+            $cmp=$numeric?($av<=>$bv):strnatcasecmp((string)$av,(string)$bv);if($cmp===0)$cmp=strnatcasecmp((string)($a['bare']??''),(string)($b['bare']??''));return$rowSortDir==='desc'?-$cmp:$cmp;
+        });
+    }
+    foreach ($orderedRows as $r) {
         if (!is_array($r) || !empty($r['is_report']) || !matrixRowMatchesViewFilters($r, $data, $viewFilters)) continue;
         $bare = (string)($r['bare'] ?? '');
+        /* bulk pass temporarily ignores rows that failed previously; clicking that exact
+           row is an explicit retry and clears the hold above. */
+        if($exactRetry===''&&isset($errorHolds[$bare]))continue;
         $title = (string)($r['title'] ?? $bare);
         $productKey = trim((string)($r['key'] ?? ''));
         $member = $productKey !== '' ? ($membership['keys'][$productKey] ?? null) : null;
@@ -29734,10 +29786,10 @@ function matrixFixRun(array $opts = []): array {
        باعث بازگشت cursor به ابتدای صف شوند. اجرای دستی تازه بدون checkpoint
        همچنان همهٔ موارد را از اول ارزیابی می‌کند. */
     $resumeCursor = max(0, (int)($fixCp['cur'] ?? 0));
-    /* archive_first فایل ماتریس را بعد از هر موفقیت کوچک می‌کند؛ cursor عددی
-       روی فهرست کوچک‌شده، ابتدای کارهای باقی‌مانده را جا می‌انداخت. کلیدهای
-       done_jobs مرجع resume هستند، پس در این ترتیب cursor باید از صفر باشد. */
-    if((string)($fixCp['job_order']??'')==='archive_first')$resumeCursor=0;
+    /* هر اصلاح موفق فهرست jobهای snapshot را کوچک می‌کند؛ cursor عددی روی
+       فهرست کوچک‌شده، کارهای باقی‌مانده را جا می‌اندازد. done_jobs مرجع resume
+       است، پس برای ترتیب‌های patchشونده cursor همیشه از صفر ارزیابی می‌شود. */
+    if(in_array((string)($fixCp['job_order']??''),['archive_first','row_order'],true))$resumeCursor=0;
     $jobKey = static function (array $j): string {
         return (string)($j['kind'] ?? '') . '|' . (string)($j['bare'] ?? '') . '|'
             . (int)($j['id'] ?? 0) . '|' . (int)($j['vendor_id'] ?? 0);
@@ -29773,10 +29825,8 @@ function matrixFixRun(array $opts = []): array {
     if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
     if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
     $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
-    /* اجرای تازه فقط-مقصدها را اول بایگانی می‌کند؛ checkpoint قدیمی ترتیب
-       قبلی را حفظ می‌کند تا تغییر نسخه وسط run باعث پرش cursor نشود. */
-    $archiveFirst=!$fixCp||(string)($fixCp['job_order']??'')==='archive_first';
-    if($archiveFirst){$decorated=[];foreach($jobs as $ix=>$jj){$kind=(string)($jj['kind']??'');$rank=(!empty($jj['only_dest'])&&str_starts_with($kind,'del_'))?0:(str_starts_with($kind,'dedup_')?1:(str_starts_with($kind,'price_')?2:(str_starts_with($kind,'send_')?3:4)));$decorated[]=['rank'=>$rank,'ix'=>$ix,'job'=>$jj];}usort($decorated,static fn($a,$b)=>($a['rank']<=>$b['rank'])?:($a['ix']<=>$b['ix']));$jobs=array_column($decorated,'job');}
+    /* v10.333: matrixFixCollectJobs already emits every operation of row 1, then
+       every operation of row 2, etc. Never regroup globally by operation type. */
     $total = count($jobs);
     $nPrice = $nSend = $nDel = $nOnlyDestDel = 0;
     foreach ($jobs as $j) {
@@ -29799,7 +29849,7 @@ function matrixFixRun(array $opts = []): array {
             'shop'=>(string)($j['shop_name']??''), 'only_dest'=>!empty($j['only_dest']),
         ]; }, array_slice($jobs, 0, 500)),
         'planned_total' => $total, 'planned_limited' => $total > 500,
-        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'row_order', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => (int)($fixCp['ok_n'] ?? 0), 'fail_n' => (int)($fixCp['fail_n'] ?? 0),
             'sent_n' => (int)($fixCp['sent_n'] ?? 0), 'del_n' => (int)($fixCp['del_n'] ?? 0),
             'price_n' => (int)($fixCp['price_n'] ?? 0)],
@@ -29861,7 +29911,7 @@ function matrixFixRun(array $opts = []): array {
             break;
         }
         $n = $ji + 1;
-        $jobOk = false;
+        $jobOk = false; $err = '';
         $pct = 5 + (int)round(90 * $n / max(1, $total));
         $title = mb_substr((string)$job['title'], 0, 48);
         $bare = (string)$job['bare'];
@@ -30169,8 +30219,14 @@ function matrixFixRun(array $opts = []): array {
             }
         }
 
+        if(!$jobOk&&!$rateLimited){
+            $lastDetail=$details?end($details):[];
+            $rowError=$err!==''?$err:(string)($lastDetail['error']??$lastDetail['label']??'عملیات ناموفق');
+            matrixFixRecordRowError($bare,$kind,$rowError);
+            matrixResultPatchRow($bare,['fix_error'=>matrixFixErrorShort($rowError),'fix_error_kind'=>$kind,'fix_error_at'=>time()]);
+        }
         if($rateLimited){
-            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
+            $retryCp=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'row_order','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,'started_at'=>$fixStartedAt,
                 'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$ji,'total'=>$total];
             matrixFixProgress(['running'=>true,'done'=>false,'checkpoint'=>$retryCp,'cur'=>$ji,'total'=>$total]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'rate_limited'=>true,'retry_after'=>$rateRetryAfter,'total'=>$total,'cur'=>$ji];
@@ -30183,7 +30239,7 @@ function matrixFixRun(array $opts = []): array {
         $processedN=count($doneJobSet)+count($attemptedJobSet);
         $incomplete = $stopped;
         matrixFixProgress(['done_jobs' => $doneJobs,'attempted_jobs'=>$attemptedJobs,'processed_n'=>$processedN,
-            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+            'checkpoint' => ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'row_order', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
                 'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN,
                 'price_n' => $priceN, 'cur' => $n, 'total' => $total],
             'cur' => $n, 'total' => $total]);
@@ -30192,7 +30248,7 @@ function matrixFixRun(array $opts = []): array {
         $segmentItems++;
         if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
-                'processed_n'=>count($doneJobSet)+count($attemptedJobSet),'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'archive_first','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,
+                'processed_n'=>count($doneJobSet)+count($attemptedJobSet),'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'row_order','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,
                     'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
         }
@@ -30236,7 +30292,7 @@ function matrixFixRun(array $opts = []): array {
         'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN, 'processed_n'=>$processedN,
         'finished_at' => time(),
         'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs,
-        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'archive_first', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
+        'checkpoint' => $incomplete ? ['scope' => $scope, 'duplicate_keep' => $duplicateKeep, 'job_order'=>'row_order', 'done_jobs' => $doneJobs, 'attempted_jobs'=>$attemptedJobs, 'view_filters' => $viewFilters, 'started_at' => $fixStartedAt,
             'ok_n' => $okN, 'fail_n' => $failN, 'sent_n' => $sentN, 'del_n' => $delN, 'price_n' => $priceN,
             'cur' => $n ?? 0, 'total' => $total] : null,
         'log_add' => [
@@ -30408,6 +30464,7 @@ function matrixQueryPage(array $opts = []): array {
         && (!empty($prog['running']) || !empty($prog['yielded']) || !empty($prog['partial']));
     $data = $useLive ? json_decode((string)@file_get_contents(SYNC_MATRIX_LIVE_FILE), true) : matrixResultLoad();
     if (!is_array($data)) $data = [];
+    if($data)matrixFixApplyErrors($data);
     $liveFixProg=function_exists('matrixFixProgressRead')?matrixFixProgressRead():[];
     if($data&&is_array($liveFixProg['checkpoint']['done_jobs']??null))matrixApplyCompletedDeleteOverlay($data,$liveFixProg['checkpoint']['done_jobs']);
     if(!$useLive&&$data&&((string)($data['pricing_signature']??'')!==matrixPricingFingerprint())){
@@ -31022,6 +31079,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             'filter_value'=>(string)($_GET['filter_value']??$_POST['filter_value']??''),
             'filters'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?$v:[];})(($_GET['filters_json']??$_POST['filters_json']??'[]')),
             'filter_join'=>(string)($_GET['filter_join']??$_POST['filter_join']??'and'),
+            'sort'=>(string)($_GET['sort']??$_POST['sort']??''),
+            'sort_dir'=>(string)($_GET['sort_dir']??$_POST['sort_dir']??'asc'),
             'selected_bares'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?array_values(array_unique(array_filter(array_map('strval',$v)))):[];})(($_GET['selected_bares_json']??$_POST['selected_bares_json']??'[]')),
             'excluded_bares'=>(static function($raw){$v=json_decode((string)$raw,true);return is_array($v)?array_values(array_unique(array_filter(array_map('strval',$v)))):[];})(($_GET['excluded_bares_json']??$_POST['excluded_bares_json']??'[]')),
         ],
@@ -42360,13 +42419,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.324', 'ورودی 10.324 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "324'") !== false
       && version_compare(APP_VERSION, '10.' . '324', '>='));
-    $add('10.325', 'فقط-مقصدها در اصلاح کلی job حذف دارند و در اجرای تازه اول بایگانی می‌شوند',
+    $add('10.325', 'فقط-مقصدها در اصلاح کلی job حذف دارند',
          strpos($selfSrc, "'only_dest' => !\$hasProf") !== false
-      && strpos($selfSrc, "\$nOnlyDestDel") !== false
-      && strpos($selfSrc, "'job_order'=>'archive_first'") !== false);
+      && strpos($selfSrc, "\$nOnlyDestDel") !== false);
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.333', 'اصلاح به ترتیب ردیف است و خطای ردیف برای عبور بعد نگه داشته می‌شود',
+         strpos($selfSrc, "'job_order'=>'row_order'") !== false
+      && strpos($selfSrc, 'function matrixFixRecordRowError') !== false
+      && strpos($selfSrc, 'isset($errorHolds[$bare])') !== false
+      && strpos($selfSrc, '$orderedRows') !== false
+      && strpos($selfSrc, 'r.fix_error||') !== false);
+    $add('10.333', 'duplicate باسلام miss کاتالوگ فعال را فقط پس از 422 دور می‌زند',
+         strpos($selfSrc, 'bool $trustCatalogMiss = true') !== false
+      && strpos($selfSrc, 'bslFindExisting($tk,$vid,$title,$__mk,true,false)') !== false);
+    $add('10.333', 'ورودی 10.333 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "333'") !== false
+      && version_compare(APP_VERSION, '10.' . '333', '>='));
     $add('10.332', 'orphan اصلاح checkpointدار مستقل از سقف چهار تلاش بازیابی می‌شود',
          strpos($selfSrc, '\$isCheckpointFix') !== false
       && strpos($selfSrc, "\$e['payload']['resume']=true") !== false
@@ -73696,6 +73766,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.333', t:'📋 اصلاح دقیقاً ردیف‌به‌ردیف + خطای ماندگار', items:[
+    'عملیات دیگر بر اساس نوع گروه‌بندی نمی‌شوند؛ همهٔ کارهای هر ردیف پیش از رفتن به ردیف بعد تکمیل می‌شوند.',
+    'جدول هنگام اصلاح هر ثانیه تازه می‌شود؛ خطای کوتاه در ستون وضعیت می‌ماند و آن ردیف در عبور جمعی بعدی موقتاً رد می‌شود.',
+    'اگر باسلام برای ردیف ظاهراً ناموجود نام تکراری بدهد، جستجو از miss کاتالوگ فعال عبور می‌کند و محصول غیرفعال/بایگانی‌شده را PATCH و فعال می‌کند.'
+  ]},
   {v:'10.332', t:'♻️ بازیابی نامحدود worker اصلاح checkpointدار', items:[
     'job اصلاحی که checkpoint و recycle دارد دیگر به‌علت چهار بار مرگ اجباری هاست failed نمی‌شود.',
     'worker تازه payload را با resume=true و شمار تلاش تازه claim می‌کند تا کارت‌های زنده و عملیات هر دو ادامه یابند.'
@@ -82746,8 +82821,12 @@ function syncMatrixPoll(){
         /* while fixing, refresh table every few ticks so cells update live */
         if(d.fix_running){
           window._smFixTick = (window._smFixTick||0)+1;
-          if(window._smFixTick % 3 === 0){
-            try{ syncMatrixLoad(window._smPage||1, true); }catch(e){}
+          /* Every status tick: the affected row/status becomes visible immediately,
+             without overlapping multi-megabyte matrix requests. */
+          if(!window._smTableRefreshBusy){
+            window._smTableRefreshBusy=true;
+            try{Promise.resolve(syncMatrixLoad(window._smPage||1,true)).finally(()=>{window._smTableRefreshBusy=false;});}
+            catch(e){window._smTableRefreshBusy=false;}
           }
         }
       } else {
@@ -82792,6 +82871,7 @@ function syncMatrixFixStart(scope){
   if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');
   fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));
   fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
+  fd.append('sort',window._smSort||'');fd.append('sort_dir',window._smSortDir||'asc');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع اصلاح ناموفق',1);
@@ -82951,7 +83031,7 @@ function syncMatrixLoad(page, silent){
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked) fd.append('only_dup','1');
-  fetch('', {method:'POST', body:fd}).then(r=>r.json()).then(d=>{
+  return fetch('', {method:'POST', body:fd}).then(r=>r.json()).then(d=>{
     if(d && d.progress) smPaintProgress(d.progress);
     if(d && d.running && !silent){ syncMatrixPoll(); }
     if(!d || !d.ok){
@@ -83056,7 +83136,8 @@ function syncMatrixLoad(page, silent){
             tr += smCell('<b>ناموجود</b>','price_missing');
           }
         });
-        tr += smCell(st[0]+flags, st[1]);
+        const rowErr=String(r.fix_error||'').trim();
+        tr += smCell(rowErr?('<b>❌ '+esc(rowErr)+'</b><div style="font-size:9px;opacity:.75;margin-top:3px">در عبور بعدی موقتاً رد می‌شود</div>'):(st[0]+flags), rowErr?'bad':st[1]);
         tr += '</tr>';
         return tr;
       }).join('');
