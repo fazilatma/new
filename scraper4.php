@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.339';
+const APP_VERSION = '10.340';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1237,9 +1237,12 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
-        matrixFixProgress(['running'=>true,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>(int)($old['pct']??1),
+        /* queued یعنی منتظر build؛ هنوز runner اصلاح نیست و نباید UI ساخت را بپوشاند. */
+        matrixFixProgress(['running'=>false,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>1,
             'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'selected_destinations'=>$payload['selected_destinations'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
             'runner_pid'=>0,'child_pid'=>0,'runner_kind'=>'','finished_at'=>0,
+            'cur'=>0,'total'=>0,'ok_n'=>0,'fail_n'=>0,'skip_n'=>0,'sent_n'=>0,'del_n'=>0,'price_n'=>0,'processed_n'=>0,
+            'done_jobs'=>[],'attempted_jobs'=>[],'live'=>[],'details'=>[],
             'started_at'=>(int)($cp['started_at']??time()),'checkpoint'=>$cp?:['scope'=>$payload['scope'],'duplicate_keep'=>$payload['duplicate_keep'],'view_filters'=>$payload['view_filters'],'done_jobs'=>[],'started_at'=>time()],
             'log_add'=>['🧵 اصلاح مغایرت به worker دائمی سپرده شد — مستقل از مرورگر و محدودیت PHP-FPM ادامه می‌یابد']]);
     }
@@ -30780,7 +30783,7 @@ function matrixQueryPage(array $opts = []): array {
         $slice = array_merge($slice, $reports);
     }
     $prog = matrixProgressRead(false);
-    $fixProg = $liveFixProg;
+    $fixProg = $liveFixProg;$queryFixRunning=!empty($fixProg['running'])&&empty($fixProg['queued']);
     /* گزارش‌ها همیشه جداگانه هم برگردند (نه فقط صفحهٔ آخر) */
     $allReports = [];
     if (!empty($data['reports']) && is_array($data['reports'])) {
@@ -30839,9 +30842,9 @@ function matrixQueryPage(array $opts = []): array {
         'source' => $data['source'] ?? '',
         'row_count_all' => (int)$liveSummaryAll['total'],
         'live_partial' => !empty($data['live_partial']),
-        'running' => !empty($prog['running']) || !empty($fixProg['running']),
-        'progress' => !empty($fixProg['running']) || (!empty($fixProg['done']) && empty($prog['running'])) ? $fixProg : $prog,
-        'fix_progress' => $fixProg,
+        'running' => !empty($prog['running']) || $queryFixRunning || !empty($fixProg['queued']),
+        'progress' => $queryFixRunning || (!empty($fixProg['done']) && empty($prog['running']) && empty($fixProg['queued'])) ? $fixProg : $prog,
+        'fix_progress' => $queryFixRunning ? $fixProg : array_intersect_key($fixProg,array_fill_keys(['running','queued','done','phase','pct','cur','total','ok_n','fail_n','processed_n'],true)),
         'note' => 'خواندن از فایل سرور · بدون rebuild · صفحه‌بندی سمت سرور',
     ];
 }
@@ -30986,19 +30989,20 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         if($ff)@fclose($ff);
     }
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
+    $actualFixRunning=!empty($fix['running'])&&empty($fix['queued']);
     $has = is_file(SYNC_MATRIX_RESULT_FILE);
     $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
     $statusResult=$has?matrixResultLoad():[];
-    $anyRun = !empty($prog['running']) || !empty($fix['running']);
+    $anyRun = !empty($prog['running']) || $actualFixRunning || !empty($fix['queued']);
     $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
         || !empty($prog['stop_requested']) || !empty($prog['stopped']);
-    $shownProgress = !empty($fix['running']) ? $fix
-        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running'])) ? $fix : $prog));
+    $shownProgress = $actualFixRunning ? $fix
+        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running']) && empty($fix['queued'])) ? $fix : $prog));
     /* v10.339: status هر ثانیه poll می‌شود. فرستادن progress اصلاح قدیمی با
        صدها detail/live و تکرار log ساخت، UI را ظاهراً منجمد می‌کرد. */
     $buildView=$prog;unset($buildView['log']);
     $fixView=$fix;
-    if(empty($fix['running'])){
+    if(!$actualFixRunning){
         $keep=['running','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
         $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
     }
@@ -31006,7 +31010,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'ok' => true,
         'running' => $anyRun,
         'build_running' => !empty($prog['running']),
-        'fix_running' => !empty($fix['running']),
+        'fix_running' => $actualFixRunning,
+        'fix_queued' => !empty($fix['queued']),
         'done' => !empty($prog['done']) || !empty($fix['done']),
         'progress' => $shownProgress,
         'build_progress' => $buildView,
@@ -31016,7 +31021,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
         'result_destinations'=>array_values((array)($statusResult['selected_destinations']??[])),
         'result_pricing_stale'=>$has&&((string)($statusResult['pricing_signature']??'')!==matrixPricingFingerprint()),
-        'job' => !empty($fix['running']) ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
+        'job' => $actualFixRunning ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -42672,6 +42677,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.340', 'fix صف‌شده runner شمرده نمی‌شود و progress build را نمی‌پوشاند',
+         strpos($selfSrc, "\$actualFixRunning=!empty(\$fix['running'])&&empty(\$fix['queued'])") !== false
+      && strpos($selfSrc, "'fix_queued' => !empty(\$fix['queued'])") !== false
+      && strpos($selfSrc, "\$shownProgress = \$actualFixRunning ? \$fix") !== false);
+    $add('10.340', 'enqueue اصلاح state اجرای قبلی را پاک و queued واقعی ثبت می‌کند',
+         strpos($selfSrc, "matrixFixProgress(['running'=>false,'done'=>false,'queued'=>true") !== false
+      && strpos($selfSrc, "'done_jobs'=>[],'attempted_jobs'=>[],'live'=>[],'details'=>[]") !== false);
+    $add('10.340', 'ورودی 10.340 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "340'") !== false
+      && version_compare(APP_VERSION, '10.' . '340', '>='));
     $add('10.339', 'status ساخت، progress اصلاح قدیمی و log تکراری را حمل نمی‌کند',
          strpos($selfSrc, "\$buildView=\$prog;unset(\$buildView['log'])") !== false
       && strpos($selfSrc, "if(empty(\$fix['running']))") !== false);
@@ -74148,6 +74163,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.340', t:'🧭 جداسازی «اصلاح در صف» از عملیات فعال build', items:[
+    'اصلاحی که طبق ترتیب build→fix منتظر بود، به‌اشتباه running ثبت می‌شد و UI به‌جای واکشی فعال، کارت و شمارنده‌های اصلاح قبلی را نشان می‌داد.',
+    'queued اکنون state مستقل است؛ build فعال همیشه در progress اصلی دیده می‌شود و fix فقط پس از claim واقعی worker به running تبدیل می‌شود.',
+    'هنگام enqueue، live/details/done_jobs و شمارنده‌های اجرای قبلی پاک می‌شوند تا status حجیم و گمراه‌کننده نماند.'
+  ]},
   {v:'10.339', t:'📈 نمایش واقعی حرکت واکشی مقصد + status سبک', items:[
     'واکشی در سرور در حال حرکت بود اما درصد کل فاز Woo روی ۳۲٪ ثابت می‌ماند؛ اکنون شماره صفحه و شمار محصول زنده در عنوان و درصد مرحله‌ای دیده می‌شود.',
     'sync_matrix_status دیگر log ساخت را دوبار و جزئیات حجیم اصلاح قبلی را هنگام build برنمی‌گرداند؛ polling رابط سریع و پاسخ‌گو می‌ماند.',
