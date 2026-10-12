@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.338';
+const APP_VERSION = '10.339';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30994,6 +30994,14 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         || !empty($prog['stop_requested']) || !empty($prog['stopped']);
     $shownProgress = !empty($fix['running']) ? $fix
         : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running'])) ? $fix : $prog));
+    /* v10.339: status هر ثانیه poll می‌شود. فرستادن progress اصلاح قدیمی با
+       صدها detail/live و تکرار log ساخت، UI را ظاهراً منجمد می‌کرد. */
+    $buildView=$prog;unset($buildView['log']);
+    $fixView=$fix;
+    if(empty($fix['running'])){
+        $keep=['running','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
+        $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
+    }
     echo json_encode([
         'ok' => true,
         'running' => $anyRun,
@@ -31001,8 +31009,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'fix_running' => !empty($fix['running']),
         'done' => !empty($prog['done']) || !empty($fix['done']),
         'progress' => $shownProgress,
-        'build_progress' => $prog,
-        'fix_progress' => $fix,
+        'build_progress' => $buildView,
+        'fix_progress' => $fixView,
         'has_result' => $has,
         'result_age_sec' => $age,
         'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
@@ -42664,6 +42672,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.339', 'status ساخت، progress اصلاح قدیمی و log تکراری را حمل نمی‌کند',
+         strpos($selfSrc, "\$buildView=\$prog;unset(\$buildView['log'])") !== false
+      && strpos($selfSrc, "if(empty(\$fix['running']))") !== false);
+    $add('10.339', 'UI صفحه و شمار محصول مقصد را زنده نشان می‌دهد',
+         strpos($selfSrc, "Math.floor(wp/10)") !== false
+      && strpos($selfSrc, "ووکامرس صفحه '+smFa(wp)") !== false
+      && strpos($selfSrc, "p.yielded?('↻ ادامهٔ خودکار") !== false);
+    $add('10.339', 'ورودی 10.339 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "339'") !== false
+      && version_compare(APP_VERSION, '10.' . '339', '>='));
     $add('10.338', 'checkpoint حجیم از progress/API و stdout child جدا شده است',
          strpos($selfSrc, 'function matrixCheckpointSave') !== false
       && strpos($selfSrc, 'SYNC_MATRIX_CHECKPOINT_FILE') !== false
@@ -74130,6 +74148,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.339', t:'📈 نمایش واقعی حرکت واکشی مقصد + status سبک', items:[
+    'واکشی در سرور در حال حرکت بود اما درصد کل فاز Woo روی ۳۲٪ ثابت می‌ماند؛ اکنون شماره صفحه و شمار محصول زنده در عنوان و درصد مرحله‌ای دیده می‌شود.',
+    'sync_matrix_status دیگر log ساخت را دوبار و جزئیات حجیم اصلاح قبلی را هنگام build برنمی‌گرداند؛ polling رابط سریع و پاسخ‌گو می‌ماند.',
+    'حالت کوتاه yielded به‌جای خط تیره، «ادامهٔ خودکار» و آخرین صفحهٔ واکشی را نشان می‌دهد.'
+  ]},
   {v:'10.338', t:'🚑 رفع توقف واقعی واکشی مقصد در checkpoint عظیم', items:[
     'علت توقف مشخص شد: profile_rows حدود ۱۵هزار ردیفی داخل هر progress، پاسخ status و خروجی stdout هر child تکرار می‌شد و حجم بین‌پردازه‌ای به صدها مگابایت می‌رسید.',
     'checkpoint کامل اکنون اتمیک و فشرده در فایل gzip مستقل است؛ progress/API فقط metadata کوچک و شمار صفحات را نگه می‌دارد.',
@@ -83078,12 +83101,17 @@ function smShowJob(on){
 function smPaintProgress(p){
   p=p||{};
   smShowJob(true);
-  const pct=Math.max(0,Math.min(100,parseInt(p.pct)||0));
+  const ph=String(p.phase||''),wp=parseInt(p.woo_page||0)||0,wf=parseInt(p.woo_fetched||0)||0,bp=parseInt(p.page||0)||0;
+  let pct=Math.max(0,Math.min(100,parseInt(p.pct)||0));
+  /* v10.339: phaseهای destination عمداً pct ثابت داشتند و با وجود صد صفحه
+     پیشرفت، UI روی ۳۲٪ به‌نظر یخ‌زده می‌ماند. */
+  if((ph==='woo_fetch'||ph==='yielded')&&wp>0)pct=Math.max(pct,Math.min(47,32+Math.floor(wp/10)));
+  if(ph.indexOf('bsl')>=0&&bp>0)pct=Math.max(pct,Math.min(80,50+Math.floor(bp/5)));
   if($('smJobPct')) $('smJobPct').textContent=smFa(pct)+'٪';
   if($('smJobFill')) $('smJobFill').style.width=pct+'%';
   if($('smJobLabel')){
-    const ph=p.phase||'';
-    $('smJobLabel').textContent = p.running ? ('⏳ '+(ph||'در حال ساخت')+'…') : (p.done ? (p.error?'❌ خطا':'✅ تمام') : '—');
+    let detail='';if(wp>0&&(ph==='woo_fetch'||ph==='yielded'))detail=' · ووکامرس صفحه '+smFa(wp)+(wf?' · '+smFa(wf)+' محصول':'');else if(bp>0&&ph.indexOf('bsl')>=0)detail=' · باسلام صفحه '+smFa(bp);
+    $('smJobLabel').textContent = p.running ? ('⏳ '+(ph||'در حال ساخت')+detail+'…') : (p.yielded?('↻ ادامهٔ خودکار'+detail+'…'):(p.done ? (p.error?'❌ خطا':'✅ تمام') : '—'));
   }
   if($('smJobLog') && Array.isArray(p.log)){
     const lines=p.log.slice(-80).map(x=> (x&&x.m)?x.m:String(x));
