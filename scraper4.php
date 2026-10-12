@@ -339,7 +339,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.335';
+const APP_VERSION = '10.336';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1199,8 +1199,9 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         'coded_only' => false,
         'slice_seconds' => max(2, min(20, (int)($opts['slice_seconds'] ?? 8))),
         'resume' => $resume, 'requested_at' => microtime(true),
-        /* فقط یک ساخت ماتریس می‌تواند pending/running باشد. */
-        'dedup_key' => 'matrix_build',
+        /* periodic chain may require its own guaranteed fresh build behind an
+           already-running manual build; callers can provide a chain key. */
+        'dedup_key' => (string)($opts['dedup_key'] ?? 'matrix_build'),
     ];
     $enq = s4WorkerEnqueue('matrix_build', $payload, 'ساخت جدول مغایرت');
     if (!empty($enq['ok']) && empty($enq['duplicate'])) {
@@ -1227,7 +1228,7 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         /* اگر fix پشت build اجباری صف شده، نتیجه باید واقعاً متعلق به همان build باشد؛
            شکست build نباید باعث اجرای fix روی فایل قدیمی و پیام «کاری نیست» شود. */
         'min_matrix_generated_at'=>max(0,(int)($opts['min_matrix_generated_at']??0)),
-        'resume'=>$resume,'dedup_key'=>((string)($opts['source']??'')==='manual_selected'?'matrix_fix_selected|'.substr(sha1(json_encode([$opts['view_filters']??[],$opts['selected_destinations']??[]],JSON_UNESCAPED_UNICODE)),0,16):'matrix_fix'),'requested_at'=>microtime(true)];
+        'resume'=>$resume,'dedup_key'=>(string)($opts['dedup_key']??((string)($opts['source']??'')==='manual_selected'?'matrix_fix_selected|'.substr(sha1(json_encode([$opts['view_filters']??[],$opts['selected_destinations']??[]],JSON_UNESCAPED_UNICODE)),0,16):'matrix_fix')),'requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
         $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
@@ -12274,6 +12275,17 @@ exit;
 }
 $key = profileKey($url);
 $profiles = loadProfiles();
+$existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : [];
+/* v10.336: autosave یک تب قدیمی یا فرمی که هنوز profile را نگرفته است
+   نباید نسخهٔ تازه‌تر روی سرور را با نام host و مقادیر پیش‌فرض بپوشاند. */
+$isAutosave = !empty($_POST['autosave']);
+$loadedUpdatedAt = max(0, (int)($_POST['loaded_updated_at'] ?? 0));
+$serverUpdatedAt = max(0, (int)($existingProfile['updatedAt'] ?? 0));
+if ($isAutosave && $existingProfile && ($loadedUpdatedAt <= 0 || $serverUpdatedAt > $loadedUpdatedAt)) {
+    http_response_code(409);
+    echo json_encode(['ok'=>false,'error'=>'stale_profile','message'=>'پروفایل روی سرور تازه‌تر است؛ آن را دوباره بارگذاری کنید.','key'=>$key,'updated_at'=>$serverUpdatedAt], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 $oldMxPriceSig = matrixPricingFingerprint($profiles, loadConnections());
 $detailSelectors = json_decode($_POST['detailSelectors'] ?? '{}', true) ?: [];
 $productsData = json_decode($_POST['products'] ?? '[]', true) ?: [];
@@ -12376,9 +12388,13 @@ $galleryFinal = ($formIsBlank && !$galleryIn['enabled'] && $galleryOld['enabled'
 $syncConfig = array_key_exists('syncConfig', $_POST)
     ? (json_decode((string)$_POST['syncConfig'], true) ?: [])
     : (array)($profiles[$key]['syncConfig'] ?? []);
-$profiles[$key] = [
+$profilePatch = [
 'url' => $url,
-'name' => trim($_POST['name'] ?? '') ?: parse_url($url, PHP_URL_HOST),
+/* نام خالی هرگز نام معتبر قبلی را به host تبدیل نکند. host فقط برای
+   ساخت نخستین پروفایلِ واقعاً بی‌نام fallback است. */
+'name' => trim((string)($_POST['name'] ?? '')) !== ''
+    ? trim((string)$_POST['name'])
+    : (trim((string)($existingProfile['name'] ?? '')) ?: parse_url($url, PHP_URL_HOST)),
 'pages' => array_key_exists('pages', $_POST)
     ? max(1, min(100, (int)$_POST['pages']))
     : (int)($profiles[$key]['pages'] ?? 10),
@@ -12399,17 +12415,18 @@ $profiles[$key] = [
 'detailSelectors' => $detailSelectors,
 // v8.64: تنظیمات گالری چندعکسی — اگر در درخواست نباشد مقدار قبلی می‌ماند
 'gallery' => $galleryFinal,
-'titleSuffix' => $_POST['titleSuffix'] ?? '',
-'priceMode' => $_POST['priceMode'] ?? 'none',
-'priceVal' => (float)($_POST['priceVal'] ?? 0),
-'roundPrice' => $_POST['roundPrice'] ?? '0',
-'minPrice' => (int)($_POST['minPrice'] ?? 10000),
-'useCustomCol' => !empty($_POST['useCustomCol']),
-'fullMode' => !empty($_POST['fullMode']),
-'customColName' => $_POST['customColName'] ?? '',
-'customColVal' => $_POST['customColVal'] ?? '',
-'products' => $productsData,
-'productsOrder' => $productsOrder,
+'titleSuffix' => array_key_exists('titleSuffix', $_POST) ? (string)$_POST['titleSuffix'] : (string)($existingProfile['titleSuffix'] ?? ''),
+'priceMode' => array_key_exists('priceMode', $_POST) ? (string)$_POST['priceMode'] : (string)($existingProfile['priceMode'] ?? 'none'),
+'priceVal' => array_key_exists('priceVal', $_POST) ? (float)$_POST['priceVal'] : (float)($existingProfile['priceVal'] ?? 0),
+'roundPrice' => array_key_exists('roundPrice', $_POST) ? (string)$_POST['roundPrice'] : (string)($existingProfile['roundPrice'] ?? '0'),
+'minPrice' => array_key_exists('minPrice', $_POST) ? (int)$_POST['minPrice'] : (int)($existingProfile['minPrice'] ?? 10000),
+'useCustomCol' => array_key_exists('useCustomCol', $_POST) ? !empty($_POST['useCustomCol']) : !empty($existingProfile['useCustomCol']),
+'fullMode' => array_key_exists('fullMode', $_POST) ? !empty($_POST['fullMode']) : !empty($existingProfile['fullMode']),
+'customColName' => array_key_exists('customColName', $_POST) ? (string)$_POST['customColName'] : (string)($existingProfile['customColName'] ?? ''),
+'customColVal' => array_key_exists('customColVal', $_POST) ? (string)$_POST['customColVal'] : (string)($existingProfile['customColVal'] ?? ''),
+'iframeHeight' => array_key_exists('iframeHeight', $_POST) ? max(200, (int)$_POST['iframeHeight']) : (int)($existingProfile['iframeHeight'] ?? 600),
+'products' => array_key_exists('products', $_POST) ? $productsData : (array)($existingProfile['products'] ?? []),
+'productsOrder' => array_key_exists('productsOrder', $_POST) ? $productsOrder : (array)($existingProfile['productsOrder'] ?? []),
 'syncConfig' => $syncConfig,
 // v8.43: اگر این فیلدها در درخواست نباشند، مقدار قبلی حفظ شود.
 // قبلاً هر ذخیره‌ای که آن‌ها را نمی‌فرستاد، دستهٔ پروفایل را صفر می‌کرد.
@@ -12434,11 +12451,13 @@ $profiles[$key] = [
     : (array)($profiles[$key]['productSource'] ?? ['mode'=>'direct']),
 'updatedAt' => time()
 ];
+/* metadataهای lifecycle/extraction که save_profile مالکشان نیست حفظ شوند. */
+$profiles[$key] = array_merge($existingProfile, $profilePatch);
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($_saved['ok']) {
 $newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
 $mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
-echo json_encode(['ok' => true, 'key' => $key, 'message' => 'پروفایل ذخیره شد', 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
+echo json_encode(['ok' => true, 'key' => $key, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
@@ -28192,7 +28211,13 @@ function matrixCompactCheckpoint(array &$cp): array {
         if($clean){$r['woo_extra']=$clean;$r['woo_dup']=true;}else{unset($r['woo_extra'],$r['woo_dup']);}
     }unset($r);$droppedWoo=0;$droppedShops=0;
     if(!empty($cp['woo_done'])&&$mappedWoo>0){$droppedWoo=count((array)($cp['woo_rows']??[]));$cp['woo_rows']=[];if((string)($cp['phase']??'')==='woo_fetch')$cp['phase']='bsl_fetch';}
-    foreach((array)($cp['shop_done']??[])as$vid=>$done)if($done&&!empty($cp['shop_rows'][(string)$vid])){$droppedShops+=count((array)$cp['shop_rows'][(string)$vid]);$cp['shop_rows'][(string)$vid]=[];}
+    /* raw کاملِ غرفه فقط وقتی حذف شود که واقعاً داخل profile_rows map شده.
+       حذف صرفاً بر اساس shop_done در resume، مقصد را خالی نشان می‌داد. */
+    foreach((array)($cp['shop_done']??[])as$vid=>$done){
+        if(!$done||empty($cp['shop_rows'][(string)$vid]))continue;$mappedShop=false;
+        foreach($rows as $mappedRow)if(!empty($mappedRow['shops'][(int)$vid])){$mappedShop=true;break;}
+        if($mappedShop){$droppedShops+=count((array)$cp['shop_rows'][(string)$vid]);$cp['shop_rows'][(string)$vid]=[];}
+    }
     return ['mapped_woo'=>$mappedWoo,'removed_extra'=>$removedExtra,'dropped_woo_raw'=>$droppedWoo,'dropped_shop_raw'=>$droppedShops];
 }
 
@@ -28500,10 +28525,13 @@ function matrixBuild(array $opts = []): array {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
     $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone, &$selectedDestinations): array {
+        /* raw destination rows already live in append-only cursors. Repeating a
+           growing 10k+ catalog inside every JSON checkpoint caused OOM/worker death. */
+        $cpShops=[];foreach($shops as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
-            'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $woo,
+            'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $wooDone ? $woo : [],
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
-            'shop_rows' => $shops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
+            'shop_rows' => $cpShops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
             'started_at' => $at, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
     };
 
@@ -28526,11 +28554,12 @@ function matrixBuild(array $opts = []): array {
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds, &$selectedDestinations): array {
+        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
-            'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
+            'woo_rows' => $matrixWooDone ? $matrixWooCp : [], 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
-            'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
+            'shop_rows' => $cpShops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
             'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
         matrixProgress(['running' => false, 'done' => true, 'stopped' => true, 'partial' => true,
             'stale' => true, 'phase' => 'stopped', 'checkpoint' => $cp,
@@ -28541,11 +28570,12 @@ function matrixBuild(array $opts = []): array {
     $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
+        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
-            'woo_rows' => $matrixWooCp, 'woo_done' => $matrixWooDone,
+            'woo_rows' => $matrixWooDone ? $matrixWooCp : [], 'woo_done' => $matrixWooDone,
             'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
-            'shop_rows' => $matrixShopCp, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
+            'shop_rows' => $cpShops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
             'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
         if($liveFill) matrixLiveSnapshot($cp,$cn,$source);
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
@@ -42537,6 +42567,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.336', 'autosave قدیمی نمی‌تواند نام و تنظیمات پروفایل تازه‌تر را بازنویسی کند',
+         strpos($selfSrc, "'stale_" . "profile'") !== false
+      && strpos($selfSrc, "fd.append('auto" . "save','1')") !== false
+      && strpos($selfSrc, 'LAST_PROFILE_ID_' . 'KEY') !== false
+      && strpos($selfSrc, 'seq!==profile' . 'LoadSeq') !== false);
+    $add('10.336', 'checkpoint مقصد ناتمام raw catalog را تکرار نمی‌کند و غرفه پیش از map حذف نمی‌شود',
+         strpos($selfSrc, "'woo_rows' => \$wooDone ? \$woo : []") !== false
+      && strpos($selfSrc, "if(\$mappedShop){\$droppedShops") !== false);
+    $add('10.336', 'دوره‌ای همیشه build تازه را پیش از fix و با مقصدهای تنظیم‌شده صف می‌کند',
+         strpos($selfSrc, "\$periodicDest=[]") !== false
+      && strpos($selfSrc, "'min_matrix_generated_at'=>\$requested") !== false
+      && strpos($selfSrc, "'source'=>'recon_auto'") !== false);
+    $add('10.336', 'ورودی 10.336 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "336'") !== false
+      && version_compare(APP_VERSION, '10.' . '336', '>='));
     $add('10.335', 'نام تکراری باسلام به worker موازی سپرده و حلقهٔ اصلی آزاد می‌شود',
          strpos($selfSrc, 'function matrixQueueBslDuplicateRecovery') !== false
       && strpos($selfSrc, 'bsl_duplicate_worker') !== false
@@ -51318,12 +51363,18 @@ function reconAutoTick(array $cn, int $now = 0): array {
         $matrixPath=!empty($cfg['build_matrix'])||!empty($cfg['matrix_fix']);
         if($matrixPath){
             $scope='all';if(!empty($cfg['woo'])&&empty($cfg['bsl']))$scope='woo';elseif(!empty($cfg['bsl'])&&empty($cfg['woo']))$scope='bsl';
+            $allDest=matrixNormalizeDestinations(null,$cn);$periodicDest=[];
+            foreach($allDest as $dest){if($dest==='woo'&&!empty($cfg['woo']))$periodicDest[]=$dest;elseif(strpos($dest,'bsl:')===0&&!empty($cfg['bsl']))$periodicDest[]=$dest;}
             $requested=time();$workerReady=s4WorkerIsActive();if(!$workerReady){s4SpawnPersistentWorker();usleep(350000);$workerReady=s4WorkerIsActive();}
-            $build=!empty($cfg['build_matrix'])?s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,'selected_destinations'=>null,'slice_seconds'=>8],false):['ok'=>true,'skipped'=>true];
+            /* v10.336: correction is never a sibling of build. A fresh build is
+               always queued first, then fix requires that build's timestamp. */
+            $chainKey='recon_auto|'.$requested;
+            $build=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,'selected_destinations'=>$periodicDest,'slice_seconds'=>8,'source'=>'recon_auto','dedup_key'=>'matrix_build|'.$chainKey],false);
             $fix=['ok'=>true,'skipped'=>true];
-            if(!empty($cfg['matrix_fix'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
-                $fix=s4WorkerEnqueueMatrixFix(['scope'=>$scope,'source'=>'recon_auto','delay_ms'=>120,'duplicate_keep'=>$keep,'view_filters'=>[],'selected_destinations'=>matrixNormalizeDestinations(null,$cn),'min_matrix_generated_at'=>!empty($cfg['build_matrix'])?$requested:0],false);
-            }
+            if(!empty($cfg['matrix_fix'])&&!empty($build['ok'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
+                $fix=s4WorkerEnqueueMatrixFix(['scope'=>$scope,'source'=>'recon_auto','delay_ms'=>120,'duplicate_keep'=>$keep,'view_filters'=>[],'selected_destinations'=>$periodicDest,'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chainKey],false);
+            }elseif(!empty($cfg['matrix_fix'])){$fix=['ok'=>false,'skipped'=>true,'error'=>'matrix_build_queue_failed'];}
+
             $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'build'=>$build,'fix'=>$fix];
             $out['ran']=true;$out['queued']=true;$out['jobs']=$queued;$out['ok']=$workerReady&&!empty($build['ok'])&&!empty($fix['ok']);$out['skipped']='';
             $st['last_finish']=time();$st['last_results']=['queued'=>$queued];reconAutoStateSave($st);
@@ -68494,6 +68545,11 @@ let ghSourceState = {files:[], branches:[], loaded:false};
 let comprehensiveReport = null;
 let selectorFsState = {kind:'list', src:'', inline:false};
 let currentProfileKey = null;
+/* v10.336: هویت/نسخهٔ فرم لودشده؛ autosave فقط برای همین snapshot مجاز است. */
+let currentProfileUrl = '';
+let currentProfileUpdatedAt = 0;
+let profileFormReady = false;
+let profileLoadSeq = 0;
 let isDirty = false;
 let saveTimer = null;
 let urlChangeTimer = null;
@@ -69846,6 +69902,7 @@ function renderEngineBenchmark(rep){
 }
 
 function onUrlChange() {
+    profileLoadSeq++;profileFormReady=false;clearTimeout(saveTimer);
     clearTimeout(urlChangeTimer);
     urlChangeTimer = setTimeout(() => {
         const url = $('url').value.trim();
@@ -69910,6 +69967,7 @@ renderProfileDropdown();
  *  و موقع باز شدن دوباره بارگذاری می‌شود.
  * ===================================================================== */
 const LAST_PROFILE_KEY = 'scraper_last_profile_url';
+const LAST_PROFILE_ID_KEY = 'scraper_last_profile_key';
 const EXTRACTION_ENGINE_DEFAULT = 'selectors';
 function s4EngineValue(){
     return ($('extractionEngine')&&$('extractionEngine').value) || ($('extractionEngine2')&&$('extractionEngine2').value) || EXTRACTION_ENGINE_DEFAULT;
@@ -69921,22 +69979,28 @@ function syncExtractionEngine(v, src){
     ['extractionEngine','extractionEngine2'].forEach(id=>{ const el=$(id); if(el) el.value=v; });
 }
 
-function rememberProfile(url) {
-    try { if (url) localStorage.setItem(LAST_PROFILE_KEY, url); } catch (e) {}
+function rememberProfile(url, key) {
+    try {
+        if (url) localStorage.setItem(LAST_PROFILE_KEY, url);
+        const found=key || ((profiles.find(p=>p.url===url)||{}).key) || '';
+        if(found)localStorage.setItem(LAST_PROFILE_ID_KEY, found);
+    } catch (e) {}
 }
 function forgetProfile() {
-    try { localStorage.removeItem(LAST_PROFILE_KEY); } catch (e) {}
+    try { localStorage.removeItem(LAST_PROFILE_KEY); localStorage.removeItem(LAST_PROFILE_ID_KEY); } catch (e) {}
 }
 function lastProfileUrl() {
     try { return localStorage.getItem(LAST_PROFILE_KEY) || ''; } catch (e) { return ''; }
 }
 
-/** موقع باز شدن صفحه، آخرین پروفایل را برگردان */
+/** موقع باز شدن صفحه، آخرین پروفایل را با key پایدار (و سپس URL) برگردان */
 function restoreLastProfile() {
-    const url = lastProfileUrl();
-    if (!url) return;
-    // فقط اگر هنوز در فهرست پروفایل‌ها هست (ممکن است حذف شده باشد)
-    if (!profiles.some(p => p.url === url)) { forgetProfile(); return; }
+    let url = lastProfileUrl();
+    let key='';try{key=localStorage.getItem(LAST_PROFILE_ID_KEY)||'';}catch(e){}
+    const found=(key&&profiles.find(p=>p.key===key)) || (url&&profiles.find(p=>p.url===url));
+    if (!found) { if(url||key)forgetProfile(); return; }
+    url=found.url||url;if(!url)return;
+    rememberProfile(url,found.key||key);
     setProfileSelectValue(url);
     $('url').value = url;
     loadProfileFromServer(url, true);
@@ -69944,6 +70008,7 @@ function restoreLastProfile() {
 
 function selectProfile(url) {
     if (!url) return;
+    clearTimeout(saveTimer); profileFormReady=false; profileLoadSeq++;
     setProfileSelectValue(url);
     $('url').value = url;
     rememberProfile(url);
@@ -70078,15 +70143,23 @@ function ghImportProducts(){
 }
 
 function loadProfileFromServer(url, silent) {
+    const seq=++profileLoadSeq;
+    clearTimeout(saveTimer); profileFormReady=false;
     fetch('?load_profile=' + encodeURIComponent(url))
         .then(r => r.json())
         .then(d => {
+            /* پاسخ دیررس پروفایل قبلی نباید انتخاب تازه‌تر را برگرداند. */
+            if(seq!==profileLoadSeq || $('url').value.trim()!==url)return;
             if (d.ok && d.profile) {
                 /* v9.91: در بازیابیِ خودکارِ بعد از رفرش (silent) نباید تبِ کاربر
                    عوض شود. قبلاً applyProfile در پایانش به «نتایج» می‌پرید و
                    همان علتِ اصلیِ «هر رفرش، تبِ من عوض می‌شود» بود. */
                 applyProfile(d.profile, !!silent);
-                rememberProfile(url);            // v8.68
+                currentProfileKey=d.key||currentProfileKey;
+                currentProfileUrl=d.profile.url||url;
+                currentProfileUpdatedAt=parseInt(d.profile.updatedAt||0)||0;
+                profileFormReady=true;
+                rememberProfile(currentProfileUrl,currentProfileKey);
                 if (silent) showToast('↩ آخرین پروفایل بازیابی شد: ' + (d.profile.name || url));
             } else if (!silent) {
                 showToast('پروفایل یافت نشد', true);
@@ -70094,7 +70167,7 @@ function loadProfileFromServer(url, silent) {
                 forgetProfile();                 // پروفایل دیگر نیست
             }
         })
-        .catch(() => { if (!silent) showToast('خطا در بارگذاری', true); });
+        .catch(() => { if(seq===profileLoadSeq&&!silent) showToast('خطا در بارگذاری', true); });
 }
 
 function applyProfile(p, keepTab) {
@@ -70301,16 +70374,19 @@ function collectProfileData() {
 
 function saveProfileSilent() {
     const data = collectProfileData();
-    if (!data.url) return;
+    /* فرمِ بین دو profile، پاسخ دیررس، یا snapshot بی‌نسخه هرگز autosave نشود. */
+    if (!data.url || !profileFormReady || data.url!==currentProfileUrl || currentProfileUpdatedAt<=0) return;
 
     const fd = new FormData();
     fd.append('action', 'save_profile');
+    fd.append('autosave','1');
+    fd.append('loaded_updated_at',String(currentProfileUpdatedAt));
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
-            fd.append(k, data[k]);
+            fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
         }
     }
 
@@ -70319,9 +70395,12 @@ function saveProfileSilent() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
+                currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
+                currentProfileUrl=data.url;profileFormReady=true;
                 if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p.url === data.url);
-                const entry = {key: d.key, name: data.name || parseUrlHost(data.url), url: data.url, updatedAt: Math.floor(Date.now()/1000)};
+                const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
+                const entry = {key: d.key, name: data.name || oldEntry.name || parseUrlHost(data.url), url: data.url, updatedAt: currentProfileUpdatedAt};
                 if (existingIdx >= 0) {
                     profiles[existingIdx] = entry;
                 } else {
@@ -70329,6 +70408,10 @@ function saveProfileSilent() {
                 }
                 renderProfileDropdown();
                 setProfileSelectValue(data.url);
+            } else if(d.error==='stale_profile') {
+                profileFormReady=false;
+                clearTimeout(saveTimer);
+                showToast('پروفایل در سرور تغییر کرده؛ برای جلوگیری از بازنویسی، ذخیرهٔ خودکار متوقف شد.',true);
             }
         })
         .catch(() => {});
@@ -70357,7 +70440,7 @@ function saveProfile() {
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
-            fd.append(k, data[k]);
+            fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
         }
     }
 
@@ -70366,9 +70449,12 @@ function saveProfile() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
+                currentProfileUrl=data.url;
+                currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
+                profileFormReady=true;rememberProfile(data.url,d.key);
                 if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p.url === data.url);
-                const entry = {key: d.key, name: data.name, url: data.url, updatedAt: Math.floor(Date.now()/1000)};
+                const entry = {key: d.key, name: data.name, url: data.url, updatedAt: currentProfileUpdatedAt};
                 if (existingIdx >= 0) {
                     profiles[existingIdx] = entry;
                 } else {
@@ -73903,6 +73989,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.336', t:'🛡️ پروفایل پایدار + واکشی مقصد کم‌حافظه + ترتیب قطعی دوره‌ای', items:[
+    'پاسخ دیررس انتخاب قبلی و autosave فرم بارگذاری‌نشده دیگر پروفایل فعال را برنمی‌گرداند؛ revision قدیمی رد می‌شود و نام خالی نام قبلی را به host تبدیل نمی‌کند.',
+    'شناسهٔ پایدار آخرین پروفایل کنار URL ذخیره می‌شود و فیلدهای ناشناخته/lifecycle در save_profile حفظ می‌شوند.',
+    'ردیف‌های خام مقصد ناتمام فقط در cursor صفحه‌ای می‌مانند و در هر checkpoint عظیم تکرار نمی‌شوند؛ raw غرفه نیز پیش از map واقعی حذف نمی‌شود.',
+    'اجرای دوره‌ای همیشه build تازه را با مقصدهای فعال صف می‌کند و فقط پس از آن fix با شرط generated_at تازه اجرا می‌شود.'
+  ]},
   {v:'10.335', t:'🧵 بازیابی موازی نام تکراری باسلام', items:[
     'HTTP 422 نام تکراری دیگر پیمایش همهٔ محصولات را داخل حلقهٔ اصلی اصلاح اجرا نمی‌کند؛ task فوراً به پردازهٔ CLI موازی سپرده می‌شود.',
     'پردازهٔ جدا همهٔ وضعیت‌های فعال و غیرفعال را می‌گردد، محصول موجود را فعال و PATCH می‌کند و همان ردیف جدول را مستقل به‌روز می‌کند.',
