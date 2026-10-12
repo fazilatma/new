@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.340';
+const APP_VERSION = '10.341';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1262,8 +1262,10 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
     $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
     $segments=0;$last=['ok'=>false,'error'=>'matrix_fix_not_started'];$tails=[];
     do{
-        $segments++;$driver=matrixExecutionDecision();$defaultItems=!empty($driver['accelerated'])?50:20;
-        $payload['max_items']=max(1,min(100,(int)($payload['max_items']??$defaultItems)));
+        $segments++;$driver=matrixExecutionDecision();
+        /* Cron-driving is one continuous child. Worker modes retain small,
+           checkpointed segments. Recompute this every segment after a live switch. */
+        $payload['max_items']=!empty($driver['accelerated'])?0:20;
         $payload['resume']=$segments>1||!empty($payload['resume']);
         $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
@@ -1339,9 +1341,8 @@ function s4WorkerRunMatrixBuild(array $payload): array {
             /* yielded برای fallback مرورگر یعنی «درخواست بعدی بساز»، اما در worker
                همان job مالک ادامه است؛ وضعیت را running نگه دار تا UI درخواست موازی نسازد. */
             matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'queued'=>false,'worker'=>true,
-                'phase'=>'وقفهٔ کوتاه worker','checkpoint'=>$opts['checkpoint']]);
-            /* وقفه همچنان وجود دارد، اما ادامه را خود worker انجام می‌دهد نه JavaScript. */
-            usleep(250000);
+                'phase'=>'تحویل checkpoint به worker','checkpoint'=>$opts['checkpoint']]);
+            $pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
         } while ($segments < $maxSegments && !matrixStopRequested());
         $res['worker_segments'] = $segments;
         if ($maxSegments>=10000&&$segments >= $maxSegments && !empty($res['yielded'])) return ['ok'=>false,'error'=>'matrix_worker_segment_limit','worker_segments'=>$segments];
@@ -1520,22 +1521,52 @@ function matrixCronPulseFresh(?array $cfg=null): bool {
 function matrixExecutionDecision(?array $cfg=null): array {
     $cfg=$cfg??matrixExecutionCfg();$fresh=matrixCronPulseFresh($cfg);$m=(string)$cfg['mode'];
     return $cfg+['cron_fresh'=>$fresh,'can_run'=>$m!=='cron_only'||$fresh,
+        /* cron-driving is continuous: no artificial time slice or handoff pause. */
         'accelerated'=>$fresh&&in_array($m,['cron_only','cron_first'],true)];
 }
 function matrixExecutionPauseUs(int $legacyUs=250000): int {
     $d=matrixExecutionDecision();if(!empty($d['accelerated']))return 0;
     return max(0,(int)$d['pause_ms'])*1000;
 }
-function matrixCronPulse(string $source='external'): array {
-    $state=['at'=>time(),'source'=>$source,'pid'=>(int)@getmypid(),'version'=>APP_VERSION];
-    @file_put_contents(MATRIX_CRON_PULSE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+/** A cron tick may recycle only a genuinely stale matrix child. The daemon and
+ * queue ownership remain intact, so exec() returns and resumes its checkpoint. */
+function matrixCronWatchdog(?array $cfg=null): array {
+    $cfg=$cfg??matrixExecutionCfg();$mode=(string)($cfg['mode']??'cron_first');
+    if(!in_array($mode,['cron_only','cron_first'],true))return ['checked'=>false,'reason'=>'worker_mode'];
+    $limit=max(120,(int)($cfg['lease_sec']??180));$now=time();
+    $targets=[['kind'=>'build','file'=>SYNC_MATRIX_PROGRESS_FILE,'state'=>matrixProgressRead(false)],
+        ['kind'=>'fix','file'=>SYNC_MATRIX_FIX_PROGRESS_FILE,'state'=>function_exists('matrixFixProgressRead')?matrixFixProgressRead():[]]];
+    foreach($targets as $t){$s=$t['state'];if(empty($s['running'])||!empty($s['queued']))continue;
+        $beat=(int)($s['ts']??$s['started_at']??0);$age=$beat>0?$now-$beat:0;$pid=(int)($s['runner_pid']??0);
+        if($age<$limit||$pid<=1||$pid===(int)@getmypid()||!function_exists('posix_kill')||!@posix_kill($pid,0))continue;
+        $sent=@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);
+        if($t['kind']==='build')matrixProgress(['log_add'=>['🛡 نگهبان کران: child بدون پیشرفت متوقف شد؛ ادامه از آخرین checkpoint به worker سپرده شد']]);
+        else matrixFixProgress(['log_add'=>['🛡 نگهبان کران: child اصلاح بدون پیشرفت متوقف شد؛ ادامه از checkpoint']]);
+        return ['checked'=>true,'stale'=>true,'kind'=>$t['kind'],'pid'=>$pid,'age'=>$age,'signalled'=>$sent];
+    }
+    return ['checked'=>true,'stale'=>false,'limit'=>$limit];
+}
+function matrixWakePausedJobs(): int {
     $resumed=0;
     if(function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q)use(&$resumed){
         foreach($q['entries'] as &$e){if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='paused')continue;
             $e['status']='pending';$e['updated_at']=time();$e['worker_pid']=0;$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['error']='';$resumed++;
         }unset($e);return ['ok'=>true];
     });
-    return $state+['resumed'=>$resumed];
+    return $resumed;
+}
+function matrixCronPulse(string $source='external'): array {
+    $cfg=matrixExecutionCfg();$state=['at'=>time(),'source'=>$source,'pid'=>(int)@getmypid(),'version'=>APP_VERSION];
+    @file_put_contents(MATRIX_CRON_PULSE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    $watchdog=matrixCronWatchdog($cfg);$resumed=matrixWakePausedJobs();
+    return $state+['resumed'=>$resumed,'watchdog'=>$watchdog];
+}
+/** Apply a saved mode immediately, including jobs parked by the previous mode. */
+function matrixExecutionApplyMode(string $mode): array {
+    if(in_array($mode,['cron_only','cron_first'],true))$out=matrixCronPulse('mode_switch');
+    else $out=['at'=>time(),'source'=>'mode_switch','resumed'=>matrixWakePausedJobs()];
+    if(function_exists('s4WorkerIsActive')&&!s4WorkerIsActive()&&function_exists('s4SpawnPersistentWorker'))$out['worker']=s4SpawnPersistentWorker();
+    return $out+['mode'=>$mode,'decision'=>matrixExecutionDecision()];
 }
 
 /** v10.263: روی نصب Apache/LiteSpeed که server.sh اجرا نیست، اندپوینت سلامت
@@ -17284,6 +17315,7 @@ ob_clean();
 header('Content-Type: application/json; charset=UTF-8');
 $conn = loadConnections();
 $oldMxShopSig = function_exists('shopPricingSignature') ? shopPricingSignature($conn) : '';
+$oldMatrixExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
 if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true) ?: [];
     $_wMode = strtolower(trim((string)($w['sync_mode'] ?? 'api')));
     if (!in_array($_wMode, ['api', 'direct'], true)) $_wMode = 'api';
@@ -17496,7 +17528,18 @@ $_savedC = writeJsonFile(CONNECTIONS_FILE, $conn);
 if ($_savedC['ok']) {
     $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
     $mxRefresh=$oldMxShopSig!==$newMxShopSig?matrixRefreshExpectedPrices('destination_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
-    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh], JSON_UNESCAPED_UNICODE);
+    $modeTransition=null;
+    if(isset($_POST['recon_auto'])){
+        $newExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
+        /* Apply even when the name did not change: Save acts as an immediate
+           control pulse and wakes a job paused under an expired lease. */
+        $modeTransition=matrixExecutionApplyMode($newExecMode);
+        if($oldMatrixExecMode!==$newExecMode){
+            matrixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
+            matrixFixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
+        }
+    }
+    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition], JSON_UNESCAPED_UNICODE);
 } else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -28264,8 +28307,12 @@ function matrixStopRequested(): bool {
     /* signal قدیمی برای worker یتیم است؛ اجرای تازه آن را مصرف نمی‌کند. */
     return $stopAt <= 0 || $stopAt > $runAt;
 }
-/** v10.239: پایان برش کوتاه اجرای ماتریس؛ فرصت می‌دهد سرور تک‌پردازه درخواست توقف را بخواند. */
+/** The driver is read on every loop. Cron-driving removes the deadline; a
+ * live switch back to worker mode makes the already-expired deadline yield. */
 function matrixSliceExpired(): bool {
+    $driver=matrixExecutionDecision();
+    if(empty($driver['can_run']))return true;
+    if(!empty($driver['accelerated']))return false;
     $d = (float)($GLOBALS['_matrixSliceDeadline'] ?? 0);
     return $d > 0 && microtime(true) >= $d;
 }
@@ -28677,10 +28724,14 @@ function matrixBuild(array $opts = []): array {
             'shop_rows' => $cpShops, 'shop_pages' => $matrixShopPages, 'shop_done' => $matrixShopDone,
             'started_at' => $startedAt, 'fetch_mode' => $parallelDest ? 'parallel' : 'serial', 'live_fill' => $liveFill, 'coded_only' => $codedOnly, 'slice_seconds' => $sliceSeconds];
         if($liveFill) matrixLiveSnapshot($cp,$cn,$source);
+        $driver=matrixExecutionDecision();$waitCron=empty($driver['can_run']);
+        $handoffLog=$waitCron
+            ? '⏳ ضربان کران منقضی شد؛ checkpoint محفوظ است و تیک بعدی ادامه می‌دهد'
+            : '↻ تحویل checkpoint به worker؛ ادامه با روش تازهٔ انتخاب‌شده';
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
-            'phase' => 'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
-            'log_add' => ['↻ پایان برش '.$sliceSeconds.' ثانیه‌ای؛ وقفهٔ کوتاه و ادامهٔ خودکار از checkpoint']]);
-        return ['ok' => true, 'yielded' => true, 'partial' => true, 'checkpoint' => $cp];
+            'phase' => $waitCron?'waiting_cron':'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
+            'log_add' => [$handoffLog]]);
+        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron, 'checkpoint' => $cp];
     };
     $profiles = loadProfiles();
     $pN = 0; $pTot = max(1, count($profiles));
@@ -30125,6 +30176,7 @@ function matrixFixRun(array $opts = []): array {
     $details = [];
     $rateLimited=false;$rateRetryAfter=0;
     $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
+    $continuousCronRun = $maxItems === 0 && !empty(matrixExecutionDecision()['accelerated']);
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
@@ -30488,11 +30540,18 @@ function matrixFixRun(array $opts = []): array {
         $effectiveDelayMs=str_ends_with($kind,'_bsl')?max(1000,$delayMs):$delayMs;
         usleep($effectiveDelayMs * 1000);
         $segmentItems++;
-        if ($maxItems > 0 && $segmentItems >= $maxItems && $n < $total) {
-            matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,'phase'=>'وقفهٔ کوتاه worker',
+        /* Re-read the mode after every corrected row. Entering cron mode removes
+           the old item cap now; leaving cron mode checkpoints now. */
+        $liveDriver=matrixExecutionDecision();
+        if($maxItems>0&&$segmentItems>=$maxItems&&!empty($liveDriver['accelerated'])){$maxItems=0;$continuousCronRun=true;}
+        $driverHandoff=$continuousCronRun&&empty($liveDriver['accelerated']);
+        if (($driverHandoff || ($maxItems > 0 && $segmentItems >= $maxItems)) && $n < $total) {
+            $waitCron=empty($liveDriver['can_run']);
+            matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,
+                'phase'=>$waitCron?'در انتظار ضربان کران':'تحویل checkpoint به worker',
                 'processed_n'=>count($doneJobSet)+count($attemptedJobSet),'checkpoint'=>['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'row_order','done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,
                     'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'skip_n'=>$skipN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
-            return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
+            return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'scheduler_wait'=>$waitCron,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
         }
     }
 
@@ -42677,6 +42736,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.341', 'درایور کران deadline ساخت و سقف آیتم اصلاح را حین اجرا حذف می‌کند',
+         strpos($selfSrc, "if(!empty(\$driver['accel" . "erated']))return false") !== false
+      && strpos($selfSrc, "\$payload['max_items']=!empty(\$driver['accel" . "erated'])?0:20") !== false
+      && strpos($selfSrc, "\$maxItems=0;\$continuousCronRun=true") !== false);
+    $add('10.341', 'تغییر روش ذخیره‌شده همان لحظه کار paused را بیدار می‌کند',
+         strpos($selfSrc, "function matrixExecutionApply" . "Mode") !== false
+      && strpos($selfSrc, "matrixExecutionApplyMode(\$newExecMode)") !== false
+      && strpos($selfSrc, "matrixWakePaused" . "Jobs()") !== false);
+    $add('10.341', 'نگهبان کران فقط child ماتریس stale را برای resume از checkpoint متوقف می‌کند',
+         strpos($selfSrc, "function matrixCronWatch" . "dog") !== false
+      && strpos($selfSrc, "@posix_kill(\$pid,defined('SIGTERM')?SIGTERM:15)") !== false
+      && strpos($selfSrc, "'watchdog'=>\$watchdog") !== false);
+    $add('10.341', 'ورودی 10.341 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "341'") !== false
+      && version_compare(APP_VERSION, '10.' . '341', '>='));
     $add('10.340', 'fix صف‌شده runner شمرده نمی‌شود و progress build را نمی‌پوشاند',
          strpos($selfSrc, "\$actualFixRunning=!empty(\$fix['running'])&&empty(\$fix['queued'])") !== false
       && strpos($selfSrc, "'fix_queued' => !empty(\$fix['queued'])") !== false
@@ -74163,6 +74237,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.341', t:'⚡ اجرای پیوستهٔ کران و تغییر زندهٔ روش مغایرت‌گیری', items:[
+    'در cron-only و cron-primary، ساخت و اصلاح دیگر برش زمانی یا وقفهٔ کوتاه handoff ندارند و تا پایان، توقف، 429 یا انقضای lease پیوسته جلو می‌روند.',
+    'حلقه‌های build و fix روش ذخیره‌شده را حین اجرا دوباره می‌خوانند؛ تغییر cron/worker بدون توقف عملیات و از همان checkpoint اعمال می‌شود.',
+    'ذخیرهٔ روش کران یک control pulse فوری می‌زند و کار paused را بیدار می‌کند؛ تغییر به worker نیز کار منتظر را همان لحظه pending می‌کند.',
+    'هر تیک کران نگهبان child ماتریس بدون پیشرفت را بررسی می‌کند و فقط همان child را برای ادامهٔ امن از checkpoint متوقف می‌کند.',
+    'مکث ایمنی باسلام و Retry-After دست‌نخورده‌اند؛ فقط برش و مکث مصنوعی scheduler حذف شده است.'
+  ]},
   {v:'10.340', t:'🧭 جداسازی «اصلاح در صف» از عملیات فعال build', items:[
     'اصلاحی که طبق ترتیب build→fix منتظر بود، به‌اشتباه running ثبت می‌شد و UI به‌جای واکشی فعال، کارت و شمارنده‌های اصلاح قبلی را نشان می‌داد.',
     'queued اکنون state مستقل است؛ build فعال همیشه در progress اصلی دیده می‌شود و fix فقط پس از claim واقعی worker به running تبدیل می‌شود.',
@@ -78887,9 +78968,9 @@ function reconAutoSave(){
   fd.append('recon_auto', JSON.stringify(reconAutoCollect()));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     const st=$('reconAutoStatus');
-    if(st) st.textContent = (d&&d.ok) ? '✓ ذخیره شد — از کران بعدی اعمال می‌شود' : ('✗ '+(d&&d.error||'خطا'));
+    if(st) st.textContent = (d&&d.ok) ? '✓ ذخیره و همان لحظه روی عملیات فعال اعمال شد' : ('✗ '+(d&&d.error||'خطا'));
     reconAutoBadge();
-    if(d&&d.ok) showToast('تنظیمات مغایرت دوره‌ای ذخیره شد');
+    if(d&&d.ok) showToast('روش اجرا فوراً ذخیره و اعمال شد');
   }).catch(()=>{const st=$('reconAutoStatus'); if(st) st.textContent='✗ شبکه';});
 }
 function reconAutoApplyCfg(c){
@@ -78915,7 +78996,7 @@ function reconAutoApplyCfg(c){
 function reconExecUi(){
   const m=(($('reconExecMode')||{}).value)||'cron_first',p=$('reconExecPause');
   if(p)p.disabled=(m==='cron_only');
-  const h=$('reconExecHint');if(h){const labels={cron_only:'فقط ضربان بیرونی کار را آزاد می‌کند؛ اگر کران قطع شود job در checkpoint منتظر می‌ماند.',delay_only:'worker مستقل از کران و با وقفهٔ تنظیمی ادامه می‌دهد.',cron_first:'ضربان تازه با مسیر سریع و بدون pause؛ اگر کران قطع شد worker با وقفه ادامه می‌دهد.',delay_first:'worker مسیر اصلی است و کران بیرونی فقط worker مرده/کار paused را نجات می‌دهد.'};h.innerHTML=esc(labels[m]||labels.cron_first)+' کران بیرونی: <code>?cron_run=1</code>. تأخیر ایمنی API باسلام برای جلوگیری از 429 حذف نمی‌شود.';}
+  const h=$('reconExecHint');if(h){const labels={cron_only:'با ضربان کران، عملیات پیوسته و بدون برش زمانی/وقفهٔ handoff جلو می‌رود؛ اگر گیر کند نگهبان کران child را از checkpoint بازیابی می‌کند.',delay_only:'worker مستقل از کران و با برش checkpointدار و وقفهٔ تنظیمی ادامه می‌دهد.',cron_first:'کران مسیر پیوسته و بدون برش است؛ با قطع ضربان، worker از checkpoint با روش fallback ادامه می‌دهد.',delay_first:'worker مسیر اصلی است و کران بیرونی worker مرده یا کار paused را نجات می‌دهد.'};h.innerHTML=esc(labels[m]||labels.cron_first)+' تغییر روش با ذخیره، همان لحظه روی عملیات فعال اعمال می‌شود. کران بیرونی: <code>?cron_run=1</code>. تأخیر ایمنی API باسلام و Retry-After حذف نمی‌شود.';}
 }
 function reconExecStatus(){
   const o=$('reconExecStatus');if(o)o.textContent='در حال بررسی…';
