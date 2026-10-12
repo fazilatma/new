@@ -334,7 +334,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.333';
+const APP_VERSION = '10.334';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -30405,6 +30405,8 @@ function matrixRowMatchesViewFilters(array $r, array $data, array $opts): bool {
     if($q!==''&&mb_strpos((string)($r['bare']??''),$q)===false
         &&mb_strpos(matrixBareTitle((string)($r['title']??''),[]),$q)===false)return false;
     $flags=(array)($r['flags']??[]);$st=(string)($r['status']??'');
+    $hasAnyProblem=$st!=='ok'||!empty($r['fix_error'])||(bool)preg_grep('/^dup_/',$flags)||!empty($r['woo_dup'])||matrixProfileDuplicateCount($r)>0;
+    if(!empty($opts['only_problem'])&&!$hasAnyProblem)return false;
     if(!empty($opts['only_dup'])&&!preg_grep('/^dup_/',$flags)&&empty($r['woo_dup'])&&matrixProfileDuplicateCount($r)<1)return false;
     if(!empty($opts['only_mismatch'])&&$st!=='mismatch'&&!in_array('price_mismatch',$flags,true))return false;
     if(!empty($opts['only_missing'])&&$st!=='missing'&&$st!=='only_profile'
@@ -30933,6 +30935,7 @@ if (isset($_GET['sync_matrix']) || (($_POST['action'] ?? '') === 'sync_matrix'))
         'page' => (int)($_GET['page'] ?? $_POST['page'] ?? 1),
         'per_page' => (int)($_GET['per_page'] ?? $_POST['per_page'] ?? 50),
         'q' => (string)($_GET['q'] ?? $_POST['q'] ?? ''),
+        'only_problem' => !empty($_GET['only_problem']) || !empty($_POST['only_problem']),
         'only_dup' => !empty($_GET['only_dup']) || !empty($_POST['only_dup']),
         'only_mismatch' => !empty($_GET['only_mismatch']) || !empty($_POST['only_mismatch']),
         'only_missing' => !empty($_GET['only_missing']) || !empty($_POST['only_missing']),
@@ -31072,6 +31075,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'selected_destinations' => matrixNormalizeDestinations($_GET['selected_destinations'] ?? $_POST['selected_destinations'] ?? null),
         'view_filters' => [
             'q'=>(string)($_GET['q']??$_POST['q']??''),
+            'only_problem'=>!empty($_GET['only_problem']??$_POST['only_problem']??null),
             'only_dup'=>!empty($_GET['only_dup']??$_POST['only_dup']??null),
             'only_mismatch'=>!empty($_GET['only_mismatch']??$_POST['only_mismatch']??null),
             'only_missing'=>!empty($_GET['only_missing']??$_POST['only_missing']??null),
@@ -42425,6 +42429,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.334', 'تیک فقط ردیف‌های مشکل‌دار از رابط تا query و اصلاح منتقل می‌شود',
+         strpos($selfSrc, 'id="' . 'smOnlyProblem"') !== false
+      && strpos($selfSrc, "'only_problem' =>") !== false
+      && strpos($selfSrc, "'only_problem'=>") !== false
+      && strpos($selfSrc, "fd.append('only_problem','1')") !== false
+      && strpos($selfSrc, '$hasAnyProblem') !== false);
+    $add('10.334', 'ورودی 10.334 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "334'") !== false
+      && version_compare(APP_VERSION, '10.' . '334', '>='));
     $add('10.333', 'اصلاح به ترتیب ردیف است و خطای ردیف برای عبور بعد نگه داشته می‌شود',
          strpos($selfSrc, "'job_order'=>'row_order'") !== false
       && strpos($selfSrc, 'function matrixFixRecordRowError') !== false
@@ -66332,6 +66345,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <option value="100">۱۰۰ / صفحه</option>
 <option value="200">۲۰۰ / صفحه</option>
 </select>
+<label style="font-size:11px;color:#86efac;font-weight:900;display:flex;gap:5px;align-items:center;cursor:pointer;background:#14532d55;border:1px solid #16a34a;border-radius:7px;padding:4px 7px"><input type="checkbox" id="smOnlyProblem" onchange="syncMatrixLoad(1)"> فقط ردیف‌های مشکل‌دار</label>
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMis" onchange="syncMatrixLoad(1)"> فقط مغایرت قیمت</label>
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyMiss" onchange="syncMatrixLoad(1)"> فقط ناقص</label>
 <label style="font-size:11px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="smOnlyDup" onchange="syncMatrixLoad(1)"> فقط تکراری</label>
@@ -73766,6 +73780,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.334', t:'⚠️ تیک یک‌کلیکی ردیف‌های مشکل‌دار', items:[
+    'تیک «فقط ردیف‌های مشکل‌دار» ردیف‌های یکسان و سالم را پنهان می‌کند و مغایرت، کمبود، فقط مقصد، نیمه‌کامل، تکراری و خطادار را نگه می‌دارد.',
+    'همان فیلتر به اصلاح همه و اصلاح انتخاب‌شده‌ها نیز منتقل می‌شود تا عملیات دقیقاً روی مجموعهٔ دیده‌شده انجام شود.'
+  ]},
   {v:'10.333', t:'📋 اصلاح دقیقاً ردیف‌به‌ردیف + خطای ماندگار', items:[
     'عملیات دیگر بر اساس نوع گروه‌بندی نمی‌شوند؛ همهٔ کارهای هر ردیف پیش از رفتن به ردیف بعد تکمیل می‌شوند.',
     'جدول هنگام اصلاح هر ثانیه تازه می‌شود؛ خطای کوتاه در ستون وضعیت می‌ماند و آن ردیف در عبور جمعی بعدی موقتاً رد می‌شود.',
@@ -82622,7 +82640,7 @@ function smRemoveFilterRule(i){window._smFilterRules.splice(i,1);smSaveFilterRul
 function smFilterJoinChanged(){smSaveFilterRules();smRenderFilterRules();syncMatrixLoad(1);}
 function smResetFilters(){
   window._smFilterRules=[];if($('smFilterType'))$('smFilterType').value='';smRenderFilterValues('');smRenderFilterRules();
-  ['smOnlyMis','smOnlyMiss','smOnlyDup'].forEach(id=>{if($(id))$(id).checked=false;});if($('smQ'))$('smQ').value='';
+  ['smOnlyProblem','smOnlyMis','smOnlyMiss','smOnlyDup'].forEach(id=>{if($(id))$(id).checked=false;});if($('smQ'))$('smQ').value='';
   try{localStorage.removeItem('s4_matrix_filters')}catch(e){}syncMatrixLoad(1);
 }
 smRenderFilterValues('');smRenderFilterRules();
@@ -82642,7 +82660,7 @@ function syncMatrixFixSelected(){
   const total=smSelectionCount();if(total<1){showToast('حداقل یک ردیف را انتخاب کنید',1);return;}const selectedDestinations=smSelectedDestinations();if(!selectedDestinations.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
   if(!confirm('اصلاح واقعی '+smFa(total)+' ردیف انتخاب‌شده انجام شود؟'))return;
   const fd=new FormData();fd.append('action','sync_matrix_fix_start');fd.append('source','manual_selected');fd.append('scope','all');fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));fd.append('selected_destinations',JSON.stringify(selectedDestinations));
-  fd.append('q',($('smQ')||{}).value||'');if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
+  fd.append('q',($('smQ')||{}).value||'');if(($('smOnlyProblem')||{}).checked)fd.append('only_problem','1');if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
   if(window._smSelectAllFiltered)fd.append('excluded_bares_json',JSON.stringify(Array.from(window._smExcludedBares)));else fd.append('selected_bares_json',JSON.stringify(Array.from(window._smSelectedBares)));
   const btn=$('smFixSelectedBtn');if(btn){btn.disabled=true;btn.textContent='⏳ ثبت در worker…';}
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{if(!d||!d.ok){showToast((d&&d.error)||'شروع اصلاح انتخاب‌شده‌ها ناموفق بود',1);return;}showToast('اصلاح '+smFa(total)+' ردیف انتخاب‌شده به worker سپرده شد');syncMatrixPoll();}).catch(e=>showToast('خطا: '+e,1)).finally(()=>{if(btn){btn.disabled=smSelectionCount()<1;btn.textContent='🔧 اصلاح انتخاب‌شده‌ها';}});
@@ -82866,6 +82884,7 @@ function syncMatrixFixStart(scope){
   const selectedDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
   fd.append('selected_destinations',JSON.stringify(selectedDestinations));
   fd.append('q',($('smQ')||{}).value||'');
+  if(($('smOnlyProblem')||{}).checked)fd.append('only_problem','1');
   if(($('smOnlyMis')||{}).checked)fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked)fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked)fd.append('only_dup','1');
@@ -83028,6 +83047,7 @@ function syncMatrixLoad(page, silent){
   fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
   if(window._smSort){fd.append('sort',window._smSort);fd.append('sort_dir',window._smSortDir||'asc');}
   if(($('smLiveFill')||{}).checked) fd.append('live_fill','1');
+  if(($('smOnlyProblem')||{}).checked) fd.append('only_problem','1');
   if(($('smOnlyMis')||{}).checked) fd.append('only_mismatch','1');
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked) fd.append('only_dup','1');
@@ -83083,7 +83103,7 @@ function syncMatrixLoad(page, silent){
     try{ smPaintReports(d); }catch(e){}
     const rows = d.rows||[];
     window._smCurrentRows=rows;
-    const selSig=JSON.stringify({q:($('smQ')||{}).value||'',rules:window._smFilterRules||[],join:($('smFilterJoin')||{}).value||'and',mis:!!(($('smOnlyMis')||{}).checked),miss:!!(($('smOnlyMiss')||{}).checked),dup:!!(($('smOnlyDup')||{}).checked)});if(window._smSelectionFilterSig&&window._smSelectionFilterSig!==selSig)smClearSelection();window._smSelectionFilterSig=selSig;
+    const selSig=JSON.stringify({q:($('smQ')||{}).value||'',rules:window._smFilterRules||[],join:($('smFilterJoin')||{}).value||'and',problem:!!(($('smOnlyProblem')||{}).checked),mis:!!(($('smOnlyMis')||{}).checked),miss:!!(($('smOnlyMiss')||{}).checked),dup:!!(($('smOnlyDup')||{}).checked)});if(window._smSelectionFilterSig&&window._smSelectionFilterSig!==selSig)smClearSelection();window._smSelectionFilterSig=selSig;
     window._smVisibleRows=rows;
     window._smVisibleShops=shops;
     window._smVisibleIncludeWoo=includeWoo;
