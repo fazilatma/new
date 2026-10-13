@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.355';
+const APP_VERSION = '10.356';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1476,6 +1476,11 @@ function s4WorkerRunMatrixChild(array $payload): array {
         if(!empty($decoded['scheduler_wait'])||empty($driver['can_run'])){
             $decoded['ok']=true;$decoded['resume_needed']=true;$decoded['scheduler_wait']=true;
             $decoded['execution_mode']=$driver['mode'];return $decoded;
+        }
+        $retryAfter=max(0,min(120,(int)($decoded['retry_after']??0)));
+        if($retryAfter>0){
+            s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_build','job_segment'=>$segments,
+                'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);
         }
         /* pulse خارجی تازه: بدون وقفه و با child بعدی؛ در fallback فقط pause تنظیمی. */
         unset($decoded,$out,$part,$raw);$pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
@@ -28893,7 +28898,7 @@ function matrixBuild(array $opts = []): array {
         matrixStopClear();
         return ['ok' => true, 'stopped' => true, 'partial' => true, 'checkpoint' => $cp];
     };
-    $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
+    $yieldMatrix = static function (string $phase, int $retryAfter=0) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
         $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
@@ -28910,8 +28915,9 @@ function matrixBuild(array $opts = []): array {
             : '↻ تحویل checkpoint به worker؛ ادامه با روش تازهٔ انتخاب‌شده';
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => $waitCron?'waiting_cron':'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
-            'log_add' => [$handoffLog]]);
-        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron, 'checkpoint' => $cp];
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'log_add' => [$handoffLog]]);
+        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron,
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'checkpoint' => $cp];
     };
     $profiles = loadProfiles();
     $pN = 0; $pTot = max(1, count($profiles));
@@ -29055,12 +29061,20 @@ function matrixBuild(array $opts = []): array {
            failed Woo extraction. Preserve the dedicated cursor/checkpoint and let
            the worker (or next cron pulse) continue from the following page. */
         $wooBoundaryReason=(string)($wooMeta['reason']??'');
+        if($wooBoundaryReason==='http'&&!empty($wooMeta['transient'])){
+            $retryAfter=max(5,min(120,(int)($wooMeta['retry_after']??10)));
+            matrixProgress(['retryable'=>true,'retry_after'=>$retryAfter,
+                'log_add'=>['⏳ خطای موقت ووکامرس؛ ادامهٔ صفحهٔ '.max(1,(int)($wooMeta['page']??1)).' پس از '.$retryAfter.' ثانیه']]);
+            return $yieldMatrix('woo_fetch',$retryAfter);
+        }
         if ((!empty($wooMeta['stopped']) && !matrixStopRequested())
             || in_array($wooBoundaryReason,['max_pages','run_limit'],true)) {
             return $yieldMatrix('woo_fetch');
         }
         if (!$matrixWooDone) {
-            $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
+            $httpDetail=$wooBoundaryReason==='http'?(' · HTTP '.(int)($wooMeta['http_code']??0)
+                .((string)($wooMeta['http_error']??'')!==''?' · '.(string)$wooMeta['http_error']:'')):'';
+            $why = ($wooErr ?: 'برداشت ووکامرس کامل نشد').$httpDetail;
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
                 'error' => $why, 'phase' => 'stopped',
                 'checkpoint' => $matrixCp('woo_fetch', $rowsByKey, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, false),
@@ -31134,11 +31148,11 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     if ($lf) { $lockHeld = !@flock($lf, LOCK_EX | LOCK_NB); if (!$lockHeld) @flock($lf, LOCK_UN); @fclose($lf); }
     $probe = null;
     if (!empty($_GET['probe'] ?? $_POST['probe'] ?? null)) {
-        $w = loadConnections()['woocommerce'] ?? [];
+        $w = loadConnections()['woocommerce'] ?? [];$probePage=max(1,min(10000,(int)($_GET['probe_page']??$_POST['probe_page']??1)));
         $t0 = microtime(true);
         $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''),
-            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page=1');
-        $probe = ['ok' => !empty($r['ok']), 'code' => (int)($r['code'] ?? 0),
+            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page='.$probePage);
+        $probe = ['ok' => !empty($r['ok']), 'page'=>$probePage,'code' => (int)($r['code'] ?? 0),
             'ms' => (int)round((microtime(true) - $t0) * 1000),
             'rows' => is_array($r['body'] ?? null) ? count($r['body']) : 0,
             'error' => mb_substr((string)($r['error'] ?? ''), 0, 180)];
@@ -43027,6 +43041,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.356', 'خطاهای موقت Woo با code و error تشخیص و checkpointed yield می‌شوند',
+         strpos($selfSrc, "\$transient=\$httpCode===0||\$httpCode===408") !== false
+      && strpos($selfSrc, "\$wooBoundaryReason==='http'&&!empty(\$wooMeta['transient'])") !== false
+      && strpos($selfSrc, "return \$yieldMatrix('woo_fetch',\$retryAfter)") !== false);
+    $add('10.356', 'worker ساخت retry_after شبکه را بدون hot-loop رعایت می‌کند',
+         strpos($selfSrc, "\$retryAfter=max(0,min(120,(int)(\$decoded['retry_after']") !== false
+      && strpos($selfSrc, "'job_type'=>'matrix_build'") !== false
+      && strpos($selfSrc, "sleep(\$retryAfter)") !== false);
+    $add('10.356', 'خطای قطعی Woo جزئیات HTTP می‌دهد و probe صفحهٔ انتخابی دارد',
+         strpos($selfSrc, "\$httpDetail=\$wooBoundaryReason==='http'") !== false
+      && strpos($selfSrc, "\$probePage=max(1,min(10000") !== false
+      && strpos($selfSrc, "'page'=>\$probePage,'code'") !== false);
+    $add('10.356', 'ورودی 10.356 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "356'") !== false
+      && version_compare(APP_VERSION, '10.' . '356', '>='));
     $add('10.355', 'چراغ runtime به‌جای whoami سنگین endpoint سبک JSON را می‌خواند',
          strpos($selfSrc, "isset(\$_GET['runtime_" . "health'])") !== false
       && strpos($selfSrc, "?runtime_health=1&_health=") !== false
@@ -50981,8 +51010,12 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
         $r = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET',
             'products?per_page=100&status=any&page=' . $page);
         if (empty($r['ok']) || !is_array($r['body'])) {
-            $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page;
-            reconProgress(['log_add' => ['⚠️ صفحهٔ ' . $page . ' نیامد — checkpoint حفظ شد']]); break;
+            $httpCode=(int)($r['code']??0);$httpError=mb_substr(trim((string)($r['error']??'')),0,180);
+            $transient=$httpCode===0||$httpCode===408||$httpCode===425||$httpCode===429||$httpCode>=500;
+            $meta['partial']=true;$meta['reason']='http';$meta['page']=$page;$meta['http_code']=$httpCode;
+            $meta['http_error']=$httpError;$meta['transient']=$transient;$meta['retry_after']=$httpCode===429?30:10;
+            reconProgress(['log_add'=>['⚠️ ووکامرس صفحهٔ '.$page.' نیامد · HTTP '.($httpCode?:'0')
+                .($httpError!==''?' · '.$httpError:'').' · checkpoint حفظ شد'.($transient?'؛ retry با backoff':'؛ خطای قطعی')]]);break;
         }
         $batch = $r['body'];
         if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
@@ -74710,6 +74743,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.356', t:'⏳ ادامهٔ Woo پس از خطای موقت REST با backoff', items:[
+    'timeout، HTTP 0، 408، 425، 429 و 5xx دیگر build را fatal نمی‌کنند؛ checkpoint حفظ و همان صفحه پس از backoff ادامه داده می‌شود.',
+    'worker زمان retry را رعایت می‌کند و به‌جای سه child فوری و ظاهراً گیرکرده، شبکه/هاست را hot-loop نمی‌کند.',
+    '401، 403 و سایر خطاهای قطعی همچنان متوقف می‌شوند و اکنون code و متن خطای واقعی در گزارش دیده می‌شود.',
+    'فیدبک تشخیصی می‌تواند شماره صفحهٔ Woo موردنظر را probe کند.'
+  ]},
   {v:'10.355', t:'🟢 تشخیص واقعی اتصال چراغ بالای صفحه', items:[
     'probe سنگین whoami و محاسبهٔ hash فایل چندمگابایتی با endpoint بسیار سبک JSON جایگزین شد.',
     'یک timeout یا شلوغی موقت هاست چراغ را کهربایی می‌کند؛ قرمز فقط پس از سه شکست پیوسته یا offline واقعی مرورگر نمایش داده می‌شود.',
