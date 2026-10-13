@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.342';
+const APP_VERSION = '10.343';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1043,20 +1043,21 @@ function s4WorkerExtractBeatForRow(string $rowId, string $profileKey = ''): arra
 
 function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
-    $hb = (int)($st['heartbeat'] ?? 0);
-    if (!empty($st['running']) && $hb > 0 && time() - $hb <= $staleSec) return true;
-    /* هنگام اجرای job طولانی، خودِ worker ممکن است در runBackendExtract یا child
-       منتظر بماند و heartbeat ننویسد؛ زنده‌بودن PID هنوز نشانهٔ معتبر است. */
-    $pid = (int)($st['pid'] ?? 0);
-    if (!empty($st['running']) && s4WorkerPidAlive($pid)) return true;
-    $fp = @fopen(WORKER_LOCK_FILE, 'c');
+    $hb = (int)($st['heartbeat'] ?? 0);$running=!empty($st['running']);
+    if ($running && $hb > 0 && time() - $hb <= $staleSec) return true;
+    /* A PID can remain visible as a zombie after the daemon has exited. The
+       worker lock is authoritative for a long-running/blocking daemon. */
+    $fp = @fopen(WORKER_LOCK_FILE, 'c');$lockHeld=false;
     if ($fp) {
-        $free = @flock($fp, LOCK_EX | LOCK_NB);
+        $free = @flock($fp, LOCK_EX | LOCK_NB);$lockHeld=!$free;
         if ($free) @flock($fp, LOCK_UN);
         @fclose($fp);
-        if (!$free) return true;
     }
-    return false;
+    if($lockHeld)return true;
+    /* Without lock ownership, accept a living PID only for a short handoff
+       window; never let a zombie suppress cron watchdog recovery forever. */
+    $pid=(int)($st['pid']??0);$age=$hb>0?time()-$hb:PHP_INT_MAX;
+    return $running&&$age<=max(120,$staleSec*2)&&s4WorkerPidAlive($pid);
 }
 
 function s4WorkerEnqueue(string $type, array $payload, string $label = ''): array {
@@ -42766,6 +42767,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.343', 'PID زامبی بدون worker lock پس از heartbeat کهنه active نمی‌ماند',
+         strpos($selfSrc, "\$lockHeld=!\$free") !== false
+      && strpos($selfSrc, "if(\$lockHeld)return true") !== false
+      && strpos($selfSrc, "\$age<=max(120,\$staleSec*2)&&s4WorkerPidAlive(\$pid)") !== false);
+    $add('10.343', 'ورودی 10.343 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "343'") !== false
+      && version_compare(APP_VERSION, '10.' . '343', '>='));
     $add('10.342', 'runner مستقل در cron-only منقضی یک‌بار checkpoint می‌گذارد و خارج می‌شود',
          strpos($selfSrc, "Detached/full fallback must obey cron_" . "only too") !== false
       && strpos($selfSrc, "'phase'=>'waiting_" . "cron','checkpoint'=>\$opts['checkpoint']") !== false
@@ -74281,6 +74289,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.343', t:'🫀 تشخیص daemon مرده با lock و heartbeat', items:[
+    'PID زامبی دیگر worker فعال شمرده نمی‌شود؛ مالکیت lock معیار قطعی daemon طولانی است.',
+    'PID بدون lock فقط در پنجرهٔ کوتاه handoff معتبر است و پس از heartbeat کهنه جلوی بازیابی کران را نمی‌گیرد.',
+    'job ماتریس pending پس از مرگ daemon با worker تازه claim می‌شود و همان checkpoint ادامه پیدا می‌کند.'
+  ]},
   {v:'10.342', t:'🛑 حذف حلقهٔ بی‌کار cron-only در runner مستقل', items:[
     'runner کامل/مستقل پس از انقضای lease اکنون can_run را بررسی می‌کند، یک checkpoint انتظار ثبت می‌کند و به‌جای ساخت childهای بی‌کار پیاپی خارج می‌شود.',
     'parent queue نیز scheduler_wait برگشتی child را با assignment قطعی حفظ می‌کند و دیگر به‌علت array-union امکان پوشاندن تصمیم توقف ندارد.',
