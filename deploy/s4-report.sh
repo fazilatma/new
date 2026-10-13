@@ -60,7 +60,7 @@
 set -u
 export LC_ALL=C.UTF-8 2>/dev/null || true
 
-VERSION="1.0.3"
+VERSION="1.0.4"
 API="https://api.github.com"
 REPO="fazilatma/new"
 BRANCH="device-reports"
@@ -165,12 +165,18 @@ redact() {
     -e 's/("?(api_token|token|secret|password|passwd|consumer_secret|consumer_key|auth)"?[[:space:]]*[:=][[:space:]]*"?)[^",}[:space:]]{6,}/\1[REDACTED]/g'
 }
 
-gh_api() { # gh_api METHOD URL [JSON]
+gh_api() { # gh_api METHOD URL [JSON | @payload-file]
   local m="$1" u="$2" d="${3:-}"
   if [ -n "$d" ]; then
-    curl -sS --max-time 120 -X "$m" \
-      -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-      -H 'User-Agent: s4-report/1.0' -H 'Content-Type: application/json' -d "$d" "$u" 2>&1
+    case "$d" in
+      @*) curl -sS --max-time 180 -X "$m" \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: s4-report/1.0' -H 'Content-Type: application/json' \
+            --data-binary "$d" "$u" 2>&1 ;;
+      *)  curl -sS --max-time 120 -X "$m" \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: s4-report/1.0' -H 'Content-Type: application/json' -d "$d" "$u" 2>&1 ;;
+    esac
   else
     curl -sS --max-time 60 -X "$m" \
       -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
@@ -642,9 +648,15 @@ BASETREE=$(gh_api GET "$API/repos/$REPO/git/commits/$PARENT" | tr -d ' \n' \
   | grep -o '"tree":{"sha":"[0-9a-f]\{40\}"' | head -1 | sed 's/.*"sha":"//; s/"$//')
 [ -z "$BASETREE" ] && { echo "❌ cannot read base tree of $PARENT"; exit 1; }
 
-B64=$(base64 < "$CLEAN" | tr -d '\n')
-BLOBSHA=$(gh_api POST "$API/repos/$REPO/git/blobs" \
-  "$(printf '{"content":"%s","encoding":"base64"}' "$B64")" | jstr sha)
+blob_post() { # blob_post <localfile> -> blob sha   (payload via file: no arg limit)
+  local pf="$TMPDIR_R/blob.json"
+  { printf '{"content":"'
+    base64 < "$1" | tr -d '\n'
+    printf '","encoding":"base64"}'
+  } > "$pf"
+  gh_api POST "$API/repos/$REPO/git/blobs" "@$pf" | jstr sha
+}
+BLOBSHA=$(blob_post "$CLEAN")
 [ -z "$BLOBSHA" ] && { echo "❌ blob upload failed (token needs Contents: write)"; exit 1; }
 
 TREE_ENTRIES=$(printf '{"path":"%s","mode":"100644","type":"blob","sha":"%s"}' "$RPATH" "$BLOBSHA")
@@ -657,9 +669,7 @@ if [ "$WITH_SRC" = 1 ] && [ -n "${PANEL:-}" ] && [ -f "${PANEL:-}" ]; then
   { printf '### uploaded by s4-report.sh v%s ###\n### source of %s (secrets redacted) ###\n\n' "$VERSION" "$PANEL"
     redact_src < "$PANEL" | head -c "$SRCMAX"
   } > "$SRCF" 2>/dev/null
-  SB64=$(base64 < "$SRCF" | tr -d '\n')
-  SBLOB=$(gh_api POST "$API/repos/$REPO/git/blobs" \
-    "$(printf '{"content":"%s","encoding":"base64"}' "$SB64")" | jstr sha)
+  SBLOB=$(blob_post "$SRCF")
   if [ -n "$SBLOB" ]; then
     SRCPATH="reports/${SLUG}/$(basename "$PANEL").txt"
     TREE_ENTRIES="$TREE_ENTRIES,$(printf '{"path":"%s","mode":"100644","type":"blob","sha":"%s"}' "$SRCPATH" "$SBLOB")"
