@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.359';
+const APP_VERSION = '10.360';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -43041,6 +43041,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.360', 'bootstrap مستقیم با SHORTINIT از hookهای کند افزونه‌ها عبور می‌کند',
+         strpos($selfSrc, "define('SHORTINIT',true)") !== false
+      && strpos($selfSrc, "is_object(\$GLOBALS['wpdb']??null)") !== false
+      && strpos($selfSrc, 'Full WordPress bootstrap may execute slow third-party plugin hooks') !== false);
+    $add('10.360', 'واکشی Woo با wpdb و cursor صدتایی مستقیم انجام می‌شود',
+         strpos($selfSrc, '⚡ مستقیم Woo DB: ') !== false
+      && strpos($selfSrc, "p.post_type=%s AND p.post_status IN") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo',0,\$page,\$pageRows)") !== false);
+    $add('10.360', 'ورودی 10.360 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "360'") !== false
+      && version_compare(APP_VERSION, '10.' . '360', '>='));
     $add('10.359', 'worker CLI وردپرس هم‌مکان را lazy و بدون web double-bootstrap بارگذاری می‌کند',
          strpos($selfSrc, 'function s4BootstrapWooForCli(): array') !== false
       && strpos($selfSrc, "if(!isCliRun())return \$result=['ok'=>false") !== false
@@ -50943,8 +50954,11 @@ function s4BootstrapWooForCli(): array {
     if(!is_file($rootLoader))return $result=['ok'=>false,'loaded'=>false,'reason'=>'wp_load_missing'];
     try{
         if(!defined('WP_USE_THEMES'))define('WP_USE_THEMES',false);
+        /* Full WordPress bootstrap may execute slow third-party plugin hooks.
+           SHORTINIT initializes config + wpdb only, which is all this reader needs. */
+        if(!defined('SHORTINIT'))define('SHORTINIT',true);
         require_once $rootLoader;
-        $ok=wooDirectAvailable()||function_exists('get_posts');
+        $ok=wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null);
         return $result=['ok'=>$ok,'loaded'=>true,'reason'=>$ok?'':'woo_unavailable_after_bootstrap'];
     }catch(Throwable $e){
         return $result=['ok'=>false,'loaded'=>false,'reason'=>'bootstrap_exception','error'=>mb_substr($e->getMessage(),0,180)];
@@ -50962,7 +50976,8 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
     $rows = array_values(array_filter((array)($cur['rows'] ?? []), 'is_array'));
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     $limit = $max > 0 ? $max : 50000;
-    if (!function_exists('wc_get_products') && !function_exists('get_posts')) {
+    $directWpdb=is_object($GLOBALS['wpdb']??null)&&isset($GLOBALS['wpdb']->posts,$GLOBALS['wpdb']->postmeta);
+    if (!function_exists('wc_get_products') && !function_exists('get_posts') && !$directWpdb) {
         $meta['partial'] = true; $meta['reason'] = 'unavailable';
         return $rows;
     }
@@ -51014,6 +51029,37 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
         }
         return $rows;
     }
+    if($directWpdb){
+        $wpdb=$GLOBALS['wpdb'];$per=100;$page=$startPage;$got=0;
+        $offset=max(count($rows),($startPage-1)*100);
+        while($got<$limit){
+            if(reconStopRequested()){$meta['partial']=true;$meta['stopped']=true;$meta['reason']='stopped';$meta['page']=max(0,$page-1);break;}
+            $sql=$wpdb->prepare("SELECT p.ID,p.post_title,p.post_status,
+                (SELECT pmr.meta_value FROM {$wpdb->postmeta} pmr WHERE pmr.post_id=p.ID AND pmr.meta_key='_regular_price' LIMIT 1) regular_price,
+                (SELECT pmp.meta_value FROM {$wpdb->postmeta} pmp WHERE pmp.post_id=p.ID AND pmp.meta_key='_price' LIMIT 1) current_price
+                FROM {$wpdb->posts} p WHERE p.post_type=%s AND p.post_status IN (%s,%s,%s,%s)
+                ORDER BY p.ID ASC LIMIT %d OFFSET %d",
+                'product','publish','draft','pending','private',$per,$offset);
+            $raw=$wpdb->get_results($sql,'ARRAY_A');
+            if(!is_array($raw)){$meta['partial']=true;$meta['reason']='db';$meta['page']=$page;$meta['db_error']=mb_substr((string)$wpdb->last_error,0,180);break;}
+            if(!$raw){$meta['complete']=true;$meta['page']=max(0,$page-1);break;}
+            $pageRows=[];
+            foreach($raw as $post){
+                $name=trim((string)($post['post_title']??''));if($name==='')continue;
+                $reg=(string)($post['regular_price']??'');if($reg==='')$reg=(string)($post['current_price']??'');
+                $pageRows[]=['id'=>(int)($post['ID']??0),'title'=>$name,'price'=>(int)preg_replace('~\D~','',$reg),
+                    'status'=>(string)($post['post_status']??''),'via'=>'direct_db'];$got++;
+                if($got>=$limit)break;
+            }
+            if($pageRows){$rows=array_merge($rows,$pageRows);reconFetchCursorAppend('woo',0,$page,$pageRows);}
+            $meta['page']=$page;reconProgress(['phase'=>'fetch','fetched'=>count($rows),'page'=>$page,
+                'log_add'=>['⚡ مستقیم Woo DB: '.count($rows).' محصول (صفحه '.$page.')']]);
+            if(count($raw)<$per){$meta['complete']=true;break;}
+            $offset+=count($raw);$page++;
+        }
+        if(!$meta['complete']&&!$meta['partial']){$meta['partial']=true;$meta['reason']='run_limit';$meta['page']=$page;}
+        return $rows;
+    }
     /* fallback get_posts: absolute row offset and the same NDJSON cursor */
     $per = 100; $page = $startPage; $got = 0; $offset=max(count($rows),($startPage-1)*100);
     while ($got < $limit) {
@@ -51054,7 +51100,7 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
        reader. Ordinary web/plugin requests never enter this CLI-only branch. */
     $boot=function_exists('s4BootstrapWooForCli')?s4BootstrapWooForCli():['ok'=>false,'loaded'=>false];
     if (!empty($boot['loaded'])) reconProgress(['log_add'=>[!empty($boot['ok'])?'⚡ وردپرس در worker بارگذاری شد؛ ادامهٔ Woo از دیتابیس محلی':'⚠️ bootstrap مستقیم Woo در دسترس نشد: '.(string)($boot['reason']??'unknown')]]);
-    if (function_exists('wooDirectAvailable') && (wooDirectAvailable()||function_exists('get_posts'))) {
+    if (function_exists('wooDirectAvailable') && (wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null))) {
         return reconFetchWooDirect($maxPages > 0 ? $maxPages * 100 : 0, $meta);
     }
     if ($maxPages <= 0) $maxPages = (int)RECON_FETCH_MAX_PAGES;
@@ -74830,6 +74876,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.360', t:'⚡ خواندن مستقیم Woo با WordPress SHORTINIT', items:[
+    'به‌جای bootstrap کامل و اجرای hookهای کند افزونه‌ها، worker فقط تنظیمات و wpdb وردپرس را با SHORTINIT بارگذاری می‌کند.',
+    'محصول، وضعیت و قیمت مستقیماً از posts/postmeta در بسته‌های ۱۰۰تایی خوانده و در همان cursor پایدار ثبت می‌شوند.',
+    'این مسیر self-call REST را حذف می‌کند و از offset معتبر ۳۰۰ ادامه می‌دهد.'
+  ]},
   {v:'10.359', t:'⚡ ادامهٔ Woo از دیتابیس محلی در worker', items:[
     'پردازهٔ CLI ساخت matrix وردپرس هم‌مکان را فقط هنگام نیاز و با require_once بارگذاری می‌کند؛ درخواست‌های وب دوباره bootstrap نمی‌شوند.',
     'پس از بارگذاری، مسیر مستقیم موجود wc_get_products/get_posts جای self-call کند REST را می‌گیرد.',
