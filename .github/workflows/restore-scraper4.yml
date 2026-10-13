@@ -1,0 +1,43 @@
+name: Restore scraper4.php full file
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/restore-scraper4.yml'
+      - 'patches/fullwidth-btn.patch'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arena/01a0ebf7-new
+          fetch-depth: 0
+
+      - name: Restore full scraper4.php and apply fullwidth patch
+        run: |
+          set -e
+          git show 2510741c7f23951fbad0daa0d84617ccea3c00a2:scraper4.php > scraper4.php
+          test -s scraper4.php
+          SIZE=$(wc -c < scraper4.php)
+          echo "Restored size: $SIZE"
+          test "$SIZE" -gt 5000000
+          if [ -f patches/fullwidth-btn.patch ]; then
+            patch -p1 < patches/fullwidth-btn.patch
+          fi
+          grep -q 'hdrFullBtn' scraper4.php
+          echo "Patch OK, final size: $(wc -c < scraper4.php)"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scraper4.php
+          git status
+          git commit -m "fix: restore full scraper4.php (~6MB) and full-width button next to hamburger" || echo "No changes"
+          git push origin HEAD:arena/01a0ebf7-new
