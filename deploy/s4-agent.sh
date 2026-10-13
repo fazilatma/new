@@ -314,7 +314,7 @@ round_once() {
   if ! fetch "$OPS_DIR/$ROUND_FILE" "$STATE/round.txt"; then
     note "- ❌ cannot fetch \`$OPS_DIR/$ROUND_FILE\` from $REPO@$SRC_BRANCH"
     say "❌ cannot fetch $OPS_DIR/$ROUND_FILE (network? branch? path?)"
-    finish_report "fetch-failed" 1 "" ; return 1
+    finish_report "fetch-failed" 1 "" ; return 3
   fi
   RID="$(head -1 "$STATE/round.txt" | tr -d '\r' | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
   [ -z "$RID" ] && RID="unknown"
@@ -330,7 +330,7 @@ round_once() {
   if ! fetch "$OPS_DIR/$TASK_FILE" "$TASKF"; then
     note "- ❌ cannot fetch \`$OPS_DIR/$TASK_FILE\`"
     say "❌ cannot fetch $OPS_DIR/$TASK_FILE"
-    finish_report "fetch-failed" 1 "$RID"; return 1
+    finish_report "fetch-failed" 1 "$RID"; return 3
   fi
   TSIZE=$(wc -c < "$TASKF" | tr -d ' '); TSHA=$(sha "$TASKF")
   note "- instructions: \`$OPS_DIR/$TASK_FILE\` · ${TSIZE} bytes · sha256:16=$TSHA"
@@ -347,13 +347,13 @@ round_once() {
   if grep -qE 'rm[[:space:]]+-[rf]{1,2}[[:space:]]+(/|/\*|~|\$HOME)([[:space:]]|$)|mkfs|dd[[:space:]].*of=/dev/[sh]d|:\(\)\{.*\};:|chmod[[:space:]]+-R[[:space:]]+000[[:space:]]+/' "$TASKF"; then
     note "- 🚨 REFUSED: the round script contains a destructive pattern; not executed."
     say "🚨 refused to run: destructive pattern in $OPS_DIR/$TASK_FILE"
-    finish_report "refused" 1 "$RID"; return 1
+    finish_report "refused" 1 "$RID"; return 3
   fi
   if ! bash -n "$TASKF" 2>"$STATE/syntax.err"; then
     note "- 🚨 round script has a bash syntax error; not executed:"
     sed 's/^/      /' "$STATE/syntax.err" >> "$REPORT"
     say "🚨 round script syntax error — see report"
-    finish_report "syntax-error" 1 "$RID"; return 1
+    finish_report "syntax-error" 1 "$RID"; return 3
   fi
 
   if [ "$DRY" = 1 ]; then
@@ -452,7 +452,11 @@ round_once() {
 
   finish_report "$STATUS" "$RC" "$RID"
   echo "$RID" > "$STATE/last-round" 2>/dev/null
-  case "$STATUS" in success) return 0;; *) return 1;; esac
+  case "$STATUS" in
+    success) return 0 ;;
+    failed)  return 2 ;;
+    *)       return 1 ;;
+  esac
 }
 
 # ---------------------------------------------------------------------
@@ -485,6 +489,7 @@ s4_php() { php $S4_PHP_OPTS "$@"; }
 
 s4_lint() { # s4_lint <file>
   [ -f "$1" ] || { s4_say "lint: $1 MISSING"; return 1; }
+  s4_have php || { s4_say "lint: php not installed — cannot lint $1"; return 1; }
   if php -l "$1" > "$S4_STATE/lint.out" 2>&1; then
     s4_say "lint OK: $(basename "$1") ($(s4_size "$1") bytes, md5 $(s4_md5 "$1"))"
     return 0
@@ -523,8 +528,12 @@ s4_write() { # s4_write <file>  (stdin → file, atomic; verifies writability)
   rm -f "$t" 2>/dev/null; s4_say "🚨 CANNOT WRITE $f"; return 1
 }
 
+s4_need_php() { s4_have php && return 0; s4_say "⚠️  php not installed — skipping"; return 1; }
+
 s4_try_server() { # s4_try_server "<extra php -d opts>" <port> <docroot> <label>
-  local opts="$1" p="$2" root="$3" lab="${4:-test}" log="$S4_STATE/srv-$p.log" pid
+  local opts="$1" p="$2" root="$3" lab="${4:-test}" pid log
+  log="$S4_STATE/srv-$p.log"
+  s4_need_php || return 1
   ( cd "$root" 2>/dev/null && php $opts -d memory_limit=512M -S "127.0.0.1:$p" -t "$root" > "$log" 2>&1 ) &
   pid=$!
   sleep 3
@@ -541,6 +550,7 @@ s4_try_server() { # s4_try_server "<extra php -d opts>" <port> <docroot> <label>
 
 s4_serve() { # s4_serve "<extra opts>" <port> <docroot> → leaves it running
   local opts="$1" p="$2" root="$3" log="$S4_STATE/server.log"
+  s4_need_php || return 1
   mkdir -p "$root" 2>/dev/null
   ( cd "$root" 2>/dev/null && php $opts -d memory_limit=512M -S "127.0.0.1:$p" -t "$root" > "$log" 2>&1 ) &
   echo $! > "$S4_STATE/server.pid"
@@ -589,7 +599,7 @@ s4_head() { # s4_head <file> [lines]
 
 s4_grep() { # s4_grep <pattern> <file>
   local c
-  c=$(grep -c -- "$1" "$2" 2>/dev/null || echo 0)
+  c=$(grep -c -- "$1" "$2" 2>/dev/null | head -1); c=${c:-0}
   s4_say "grep '$1' in $(basename "$2"): ${c} hit(s)"
   s4_note "grep -n '$1' $2:"
   grep -n -- "$1" "$2" 2>/dev/null | head -12 | sed 's/^/    /' >> "$S4_REPORT"
@@ -604,8 +614,12 @@ s4_probe_dir() { # s4_probe_dir <dir> <label>
   if printf 'x' > "$pf" 2>/dev/null; then
     s4_say "  write: OK"
     chmod 0600 "$pf" 2>/dev/null && s4_say "  chmod: OK" || s4_say "  chmod: FAILED"
-    r=$(php -r '$f=@fopen($argv[1],"c+"); if(!$f){echo "open-FAILED";exit;} echo flock($f,LOCK_EX|LOCK_NB)?"OK":"FAILED"; flock($f,LOCK_UN); fclose($f);' "$pf" 2>&1)
-    s4_say "  flock: $r"
+    if s4_have php; then
+      r=$(php -r '$f=@fopen($argv[1],"c+"); if(!$f){echo "open-FAILED";exit;} echo flock($f,LOCK_EX|LOCK_NB)?"OK":"FAILED"; flock($f,LOCK_UN); fclose($f);' "$pf" 2>&1)
+      s4_say "  flock: $r"
+    else
+      s4_say "  flock: n/a (php not installed)"
+    fi
     mv "$pf" "$pf.2" 2>/dev/null && s4_say "  rename: OK" || s4_say "  rename: FAILED"
     rm -f "$pf" "$pf.2" 2>/dev/null
   else
@@ -749,17 +763,30 @@ upload() { # upload <status> <rid> <rc>
 # =====================================================================
 if [ "$MODE" = loop ]; then
   say "🔁 loop mode: polling $REPO@$SRC_BRANCH:$OPS_DIR/$ROUND_FILE every ${POLL}s (Ctrl+C stops)"
-  N=0
+  N=0; HARD=0
   while :; do
     N=$((N+1))
     round_once; RC=$?
-    if [ "$RC" = 0 ]; then say "🏁 success — loop finished after $N round(s)"; exit 0; fi
+    case "$RC" in
+      0) say "🏁 success — loop finished after $N round(s)"; exit 0 ;;
+      3) HARD=$((HARD+1))
+         if [ "$HARD" -ge 5 ]; then
+           say "❌ 5 hard failures in a row (network? branch? ops/ path?) — stopping the loop"
+           exit 3
+         fi
+         say "⚠️  hard failure ($HARD/5) — backing off 120 s"
+         sleep 120; continue ;;
+      *) HARD=0 ;;
+    esac
     if [ "$MAX_ROUNDS" -gt 0 ] && [ "$N" -ge "$MAX_ROUNDS" ]; then
       say "🛑 --max-rounds $MAX_ROUNDS reached"; exit 0
     fi
     sleep "$POLL" 2>/dev/null || sleep 30
   done
 else
-  round_once
-  exit $?
+  round_once; RC=$?
+  case "$RC" in
+    0|1|10) exit 0 ;;     # success, ran-and-waiting, nothing-new are all "fine"
+    *)      exit "$RC" ;;
+  esac
 fi

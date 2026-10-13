@@ -10,7 +10,6 @@
 #  Read-only with respect to YOUR folder: everything is mirrored into
 #  $S4_RUNDIR first, and only probe files are created (and removed).
 # =====================================================================
-set -u
 # shellcheck disable=SC1090
 . "$S4_HELPERS"
 
