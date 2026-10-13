@@ -1,1 +1,1 @@
-@/tmp/scraper4.php
+file:///tmp/scraper4.php
