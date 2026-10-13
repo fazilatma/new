@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.352';
+const APP_VERSION = '10.353';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31230,14 +31230,19 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     }
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     $actualFixRunning=!empty($fix['running'])&&empty($fix['queued']);
-    $has = is_file(SYNC_MATRIX_RESULT_FILE);
-    $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
+    $has = is_file(SYNC_MATRIX_RESULT_FILE);$resultAt=$has?(int)@filemtime(SYNC_MATRIX_RESULT_FILE):0;
+    $age = $has ? (time() - $resultAt) : -1;
     $statusResult=$has?matrixResultLoad():[];
     $anyRun = !empty($prog['running']) || $actualFixRunning || !empty($fix['queued']);
+    /* A completed correction may be useful after refresh, but only while it is
+       newer than the latest matrix build/result. Previously an old build_failed
+       correction from hours earlier masked a later successful build forever. */
+    $buildAt=max($resultAt,(int)($prog['finished_at']??0),(int)($prog['ts']??0),(int)($prog['started_at']??0));
+    $fixAt=max((int)($fix['finished_at']??0),(int)($fix['ts']??0),(int)($fix['started_at']??0));
+    $preferFinishedFix=!$actualFixRunning&&empty($fix['queued'])&&!empty($fix['done'])&&$fixAt>=$buildAt;
     $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
-        || !empty($prog['stop_requested']) || !empty($prog['stopped']);
-    $shownProgress = $actualFixRunning ? $fix
-        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running']) && empty($fix['queued'])) ? $fix : $prog));
+        || !empty($prog['stop_requested']) || !empty($prog['stopped'])
+        || (!empty($prog['done'])&&!$preferFinishedFix);
     /* v10.339: status هر ثانیه poll می‌شود. فرستادن progress اصلاح قدیمی با
        صدها detail/live و تکرار log ساخت، UI را ظاهراً منجمد می‌کرد. */
     $buildView=$prog;unset($buildView['log']);
@@ -31246,6 +31251,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         $keep=['running','queued','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
         $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
     }
+    $shownProgress=$actualFixRunning?$fix:($buildOwnState?$prog:($preferFinishedFix?$fixView:$prog));
+    $shownJob=$actualFixRunning||!empty($fix['queued'])||$preferFinishedFix?'fix':'build';
     echo json_encode([
         'ok' => true,
         'running' => $anyRun,
@@ -31261,7 +31268,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
         'result_destinations'=>array_values((array)($statusResult['selected_destinations']??[])),
         'result_pricing_stale'=>$has&&((string)($statusResult['pricing_signature']??'')!==matrixPricingFingerprint()),
-        'job' => $actualFixRunning ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
+        'job'=>$shownJob,
+        'state_order'=>['build_at'=>$buildAt,'fix_at'=>$fixAt,'preferred'=>$shownJob],
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -42996,6 +43004,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.353', 'status نتیجهٔ build و fix را بر اساس زمان واقعی مرتب می‌کند',
+         strpos($selfSrc, "\$buildAt=max(\$resultAt") !== false
+      && strpos($selfSrc, "\$fixAt=max((int)(\$fix['finished_at']") !== false
+      && strpos($selfSrc, "\$preferFinishedFix=") !== false);
+    $add('10.353', 'build موفق جدید دیگر پشت build_failed قدیمی اصلاح پنهان نمی‌شود',
+         strpos($selfSrc, 'old build_failed') !== false
+      && strpos($selfSrc, "(!empty(\$prog['done'])&&!\$preferFinishedFix)") !== false
+      && strpos($selfSrc, "'state_order'=>['build_at'=>\$buildAt") !== false);
+    $add('10.353', 'progress اصلاح قدیمی در پاسخ status به payload سبک محدود می‌شود',
+         strpos($selfSrc, "\$shownProgress=\$actualFixRunning?\$fix") !== false
+      && strpos($selfSrc, "\$preferFinishedFix?\$fixView:\$prog") !== false);
+    $add('10.353', 'ورودی 10.353 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "353'") !== false
+      && version_compare(APP_VERSION, '10.' . '353', '>='));
     $add('10.352', 'polling ساخت و اصلاح پس از refresh/wake با lifecycleها فوراً bootstrap می‌شود',
          strpos($selfSrc, "window.addEventListener('pageshow',()=>syncMatrixPollingWake") !== false
       && strpos($selfSrc, "window.addEventListener('focus',()=>syncMatrixPollingWake") !== false
@@ -74629,6 +74651,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.353', t:'🧭 نمایش وضعیت جدیدتر میان build و correction', items:[
+    'status زمان نتیجه و progress ساخت را با زمان اجرای اصلاح مقایسه می‌کند و همیشه عملیات جدیدتر را نمایش می‌دهد.',
+    'build_failed قدیمیِ اصلاح دیگر پس از تکمیل موفق جدول، وضعیت فعلی ساخت معرفی نمی‌شود.',
+    'جزئیات حجیم correction قدیمی در polling ارسال نمی‌شوند؛ progress فعال همچنان کامل و زنده است.',
+    'فیلد state_order زمان‌های تشخیصی و وضعیت ترجیح‌داده‌شده را برای بررسی endpoint گزارش می‌کند.'
+  ]},
   {v:'10.352', t:'🔄 polling پایدار ساخت و اصلاح پس از refresh و wake', items:[
     'در DOMContentLoaded، pageshow، focus، online و بازگشت visibility، وضعیت هر دو عملیات فوراً از سرور خوانده می‌شود.',
     'پاسخ دیررس interval پیش از خواب با generation token دیگر نمی‌تواند polling تازه را متوقف یا UI را عقب ببرد.',
