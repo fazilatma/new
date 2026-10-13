@@ -74,6 +74,7 @@ const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
 const MATRIX_CRON_PULSE_FILE = __DIR__ . '/matrix_cron_pulse.json'; // v10.337
 const SYNC_MATRIX_CHECKPOINT_FILE = __DIR__ . '/sync_matrix_checkpoint.json.gz'; // v10.338
+const SYNC_MATRIX_FETCH_CURSOR_FILE = __DIR__ . '/sync_matrix_fetch_cache.ndjson'; // v10.347: never shared with legacy recon
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
 const SYNC_MATRIX_RESULT_FILE   = __DIR__ . '/sync_matrix_result.json';   // v10.113
 const SYNC_MATRIX_LIVE_FILE     = __DIR__ . '/sync_matrix_live.json';     // v10.247
@@ -341,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.346';
+const APP_VERSION = '10.347';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1197,6 +1198,32 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
     return $enq;
 }
 
+/** Keep one periodic build→fix chain. v10.336 intentionally gave every tick a
+ * timestamped dedup key; when a stale legacy checkpoint bypassed the interval,
+ * this accumulated endless fresh builds. Preserve the running/oldest chain and
+ * cancel only redundant periodic chains, never manual matrix work. */
+function s4WorkerCoalescePeriodicMatrixChains(): array {
+    $report=['keeper'=>'','cancelled'=>0];
+    s4WorkerQueueMutate(function(&$q)use(&$report){
+        $active=['pending'=>true,'running'=>true,'paused'=>true,'waiting'=>true];$candidates=[];
+        foreach((array)($q['entries']??[])as$i=>$e){if(!is_array($e)||!isset($active[(string)($e['status']??'')]))continue;
+            $dedup=(string)($e['dedup_key']??($e['payload']['dedup_key']??''));
+            if(!preg_match('~^matrix_(?:build|fix)\\|(recon_auto(?:\\|[^|]+)?)$~',$dedup,$m))continue;
+            $status=(string)($e['status']??'');$rank=$status==='running'?0:($status==='paused'?1:2);
+            $candidates[]=['i'=>$i,'chain'=>$m[1],'rank'=>$rank,'at'=>(int)($e['created_at']??0)];
+        }
+        if(!$candidates)return['ok'=>true];
+        usort($candidates,static function($a,$b){return($a['rank']<=>$b['rank'])?:($a['at']<=>$b['at'])?:($a['i']<=>$b['i']);});
+        $keeper=(string)$candidates[0]['chain'];$report['keeper']=$keeper;$now=time();
+        foreach($candidates as$c){if((string)$c['chain']===$keeper)continue;$i=(int)$c['i'];
+            $q['entries'][$i]['status']='cancelled';$q['entries'][$i]['updated_at']=$now;$q['entries'][$i]['done_at']=$now;
+            $q['entries'][$i]['error']='superseded_periodic_matrix_chain';$q['entries'][$i]['worker_pid']=0;$report['cancelled']++;
+        }
+        return['ok'=>true];
+    });
+    return $report;
+}
+
 function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
     $execDriver=function_exists('matrixExecutionDecision')?matrixExecutionDecision():['accelerated'=>false];
     $requestedSlice=max(2,min(20,(int)($opts['slice_seconds']??8)));
@@ -1320,7 +1347,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
     $fp = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
     if (!$fp || !@flock($fp, LOCK_EX)) { if ($fp) @fclose($fp); return ['ok'=>false,'error'=>'matrix_lock_failed']; }
     try {
-        if ($opts['checkpoint'] === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
+        if ($opts['checkpoint'] === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());
         if ($opts['checkpoint'] === null) @unlink(SYNC_MATRIX_CHECKPOINT_FILE);
         if ($opts['checkpoint'] === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
         /* stop قدیمی را matrixStopRequested با run_started_at نادیده می‌گیرد؛ حذفش
@@ -1779,10 +1806,14 @@ function s4WorkerRunJob(array $job): array {
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
     $n=0;s4WorkerQueueMutate(function(&$q)use($newPid,&$n){$now=time();foreach($q['entries'] as &$e){
         if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
-        $attempts=(int)($e['attempts']??0);$isCheckpointFix=(string)($e['type']??'')==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
+        $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
+        $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
+        $isCheckpointBuild=$type==='matrix_build';
         $recover=$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
         $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
-        if($recover&&$isCheckpointFix){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['attempts']=0;}$n++;
+        /* A fresh build becomes a resume after its first claim. Keeping resume=false
+           on orphan recovery deleted its cursor and restarted Woo at page one. */
+        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointFix)$e['attempts']=0;}$n++;
     }unset($e);return['ok'=>true];});return$n;
 }
 
@@ -1804,9 +1835,10 @@ function s4WorkerLoopFromCli(): void {
         return;
     }
     $pid = (int)@getmypid();$GLOBALS['_s4WorkerDaemon']=true;
-    $recovered=s4WorkerRecoverOrphanJobs($pid);
+    $recovered=s4WorkerRecoverOrphanJobs($pid);$periodicCoalesce=s4WorkerCoalescePeriodicMatrixChains();
     s4WorkerStateWrite(['running' => true, 'pid' => $pid, 'phase' => 'starting',
-        'started_at' => time(), 'cron_tick' => $tick, 'last_error' => '', 'recovered_orphans'=>$recovered]);
+        'started_at' => time(), 'cron_tick' => $tick, 'last_error' => '', 'recovered_orphans'=>$recovered,
+        'periodic_matrix_cancelled'=>(int)($periodicCoalesce['cancelled']??0)]);
     register_shutdown_function(function () use ($lockFp) {
         s4WorkerStateWrite(['running' => false, 'phase' => 'stopped', 'stopped_at' => time()]);
         if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
@@ -28734,6 +28766,10 @@ function matrixBuild(array $opts = []): array {
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
     $GLOBALS['_matrixSliceDeadline'] = in_array($source, ['manual','worker'], true) ? microtime(true) + $sliceSeconds : 0;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
+    /* v10.347: matrix pages have a private append-only cursor. Legacy recon,
+       suffix reports, and a fresh periodic run may clear their own cursor but
+       can no longer send an active matrix build back to Woo page one. */
+    matrixActivateFetchCursor($resumeCp);
     if(array_key_exists('selected_destinations',$resumeCp)){$selectedDestinations=matrixNormalizeDestinations($resumeCp['selected_destinations'],$cn);$selectedSet=array_fill_keys($selectedDestinations,true);$includeWoo=isset($selectedSet['woo']);}
     $compactStats=$resumeCp?matrixCompactCheckpoint($resumeCp):[];
     $startedAt = (int)($resumeCp['started_at'] ?? time());
@@ -31021,6 +31057,7 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     header('Content-Type: application/json; charset=UTF-8');
     $p = matrixProgressRead();
     $cp = is_array($p['checkpoint'] ?? null) ? $p['checkpoint'] : [];
+    if(function_exists('matrixActivateFetchCursor'))matrixActivateFetchCursor($cp);
     $wooCur = function_exists('reconFetchCursorLoad') ? reconFetchCursorLoad('woo', 0) : ['rows' => [], 'page' => 0];
     $lockHeld = false; $lf = @fopen(SYNC_MATRIX_LOCK_FILE, 'c');
     if ($lf) { $lockHeld = !@flock($lf, LOCK_EX | LOCK_NB); if (!$lockHeld) @flock($lf, LOCK_UN); @fclose($lf); }
@@ -31273,7 +31310,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $lockRecovered = true;
         $opts['run_started_at'] = microtime(true);
     }
-    if ($matrixCp === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());
+    if ($matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());
     if ($matrixCp === null || empty($opts['live_fill'])) @unlink(SYNC_MATRIX_LIVE_FILE);
     if (!$lockRecovered) matrixStopClear();
     matrixProgress([
@@ -40650,7 +40687,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "function queueStallCheck(string \$which, int \$staleAfter = 300, bool \$includePaused = false): array {") !== false
          && strpos($selfSrc, "function queueStallRecover(string \$which, int \$staleAfter = 300, bool \$dryRun = false, int \$waitMs = 1500, bool \$includePaused = false): array {") !== false
          && strpos($selfSrc, "queueStallRecover(\$which, max(120, (int)(loadConnections()['stall_after'] ?? 300)), false, 2500, true);") !== false
-         && strpos($selfSrc, "if (\$matrixCp === null && function_exists('reconFetchCursorFile')) @unlink(reconFetchCursorFile());") !== false);
+         && strpos($selfSrc, "if (\$matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());") !== false);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -42844,6 +42881,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.346', 'ورودی 10.346 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "346'") !== false
       && version_compare(APP_VERSION, '10.' . '346', '>='));
+    $add('10.347', 'cursor ساخت ماتریس از recon عمومی جدا و روی resume فعال می‌شود',
+         strpos($selfSrc, 'SYNC_MATRIX_FETCH_' . 'CURSOR_FILE') !== false
+      && strpos($selfSrc, 'function matrixActivate' . 'FetchCursor') !== false
+      && strpos($selfSrc, 'matrixActivateFetchCursor($resume' . 'Cp)') !== false);
+    $add('10.347', 'بازیابی worker ساخت تازه را اجباری به resume تبدیل می‌کند',
+         strpos($selfSrc, "\$isCheckpointBuild=\$type==='matrix_" . "build'") !== false
+      && strpos($selfSrc, "\$e['payload']['resume']=true") !== false);
+    $add('10.347', 'اجرای دوره‌ای فعال زنجیره‌های تکراری را coalesce و کلید پایدار دارد',
+         strpos($selfSrc, 'function s4WorkerCoalescePeriodic' . 'MatrixChains') !== false
+      && strpos($selfSrc, "superseded_periodic_matrix_" . "chain") !== false
+      && strpos($selfSrc, "\$chainKey='recon_" . "auto';") !== false);
+    $add('10.347', 'checkpoint کهنهٔ legacy فاصله زمانی matrix را دور نمی‌زند',
+         strpos($selfSrc, "if ((\$matrixPath || !\$resume" . "Recon) && \$last > 0") !== false);
+    $add('10.347', 'ورودی 10.347 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "347'") !== false
+      && version_compare(APP_VERSION, '10.' . '347', '>='));
     $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
          strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
       && strpos($selfSrc, '.ral-card{') !== false
@@ -50767,7 +50820,28 @@ function reconFetchBsl(string $tk, int $vid, int $maxPages = 0, bool $customerVi
     return $rows;
 }
 
-function reconFetchCursorFile(): string { return __DIR__ . '/recon_fetch_cache.ndjson'; }
+function matrixFetchCursorFile(): string { return SYNC_MATRIX_FETCH_CURSOR_FILE; }
+/** Select the matrix-private cursor for this request. On the first v10.347
+ * resume only, migrate the legacy shared cursor when it covers every page
+ * promised by the matrix checkpoint; otherwise a mismatched catalog is never
+ * trusted merely because the file exists. */
+function matrixActivateFetchCursor(array $cp = []): void {
+    $dedicated=matrixFetchCursorFile();$legacy=__DIR__.'/recon_fetch_cache.ndjson';
+    if($cp&&!is_file($dedicated)&&is_file($legacy)){
+        $valid=true;$expectedWoo=(int)($cp['woo_page']??0);
+        if($expectedWoo>0){$legacyWoo=reconFetchCursorLoad('woo',0);$valid=(int)($legacyWoo['page']??0)>=$expectedWoo;}
+        if($valid)foreach((array)($cp['shop_pages']??[])as$vid=>$page){
+            $page=(int)$page;if($page<=0)continue;$legacyShop=reconFetchCursorLoad('bsl_active',(int)$vid);
+            if((int)($legacyShop['page']??0)<$page){$valid=false;break;}
+        }
+        if($valid)@copy($legacy,$dedicated);
+    }
+    $GLOBALS['_reconFetchCursorFileOverride']=$dedicated;
+}
+function reconFetchCursorFile(): string {
+    $override=(string)($GLOBALS['_reconFetchCursorFileOverride']??'');
+    return $override!==''?$override:(__DIR__.'/recon_fetch_cache.ndjson');
+}
 
 /** خواندنِ صفحاتِ واکشی‌شدهٔ یک مقصد/غرفه از کشِ NDJSON.
  *  v10.126: کش به ازای هر غرفه (vid) جداست تا مغایرت‌گیریِ چندغرفه‌ای پس از
@@ -51705,6 +51779,7 @@ function reconAutoTick(array $cn, int $now = 0): array {
     $cfg = reconAutoCfg($cn);
     $out = ['ok' => true, 'ran' => false, 'skipped' => ''];
     if (empty($cfg['enabled'])) { $out['skipped'] = 'disabled'; return $out; }
+    $matrixPath=!empty($cfg['build_matrix'])||!empty($cfg['matrix_fix']);
 
     $st = reconAutoStateLoad();
     /* v10.130: یک اجرای دوره‌ای که وسط کار مرده، نباید به‌خاطر فاصلهٔ
@@ -51717,7 +51792,10 @@ function reconAutoTick(array $cn, int $now = 0): array {
         && (empty($oldRecon['done']) || !empty($oldRecon['stale']));
     $last = (int)($st['last_run'] ?? 0);
     $ivSec = max(3600, (int)$cfg['interval_h'] * 3600);
-    if (!$resumeRecon && $last > 0 && ($now - $last) < $ivSec) {
+    /* Legacy recon checkpoints do not belong to the matrix queue. Previously a
+       stale legacy checkpoint bypassed the interval forever and enqueued a new
+       fresh matrix build on nearly every cron tick. */
+    if (($matrixPath || !$resumeRecon) && $last > 0 && ($now - $last) < $ivSec) {
         $out['skipped'] = 'not_due';
         $out['next_in'] = $ivSec - ($now - $last);
         return $out;
@@ -51742,15 +51820,20 @@ function reconAutoTick(array $cn, int $now = 0): array {
         /* v10.327: مسیر دوره‌ای جدول را داخل cron اجرا نکن. cron فقط build/fix را
            در صف daemon می‌گذارد و فوراً تمام می‌شود؛ worker از checkpoint و مستقل
            از مرورگر ادامه می‌دهد. legacy recon فقط وقتی هر دو گزینهٔ جدول خاموش‌اند. */
-        $matrixPath=!empty($cfg['build_matrix'])||!empty($cfg['matrix_fix']);
         if($matrixPath){
+            $coalesced=s4WorkerCoalescePeriodicMatrixChains();
+            if((string)($coalesced['keeper']??'')!==''){
+                $out['skipped']='matrix_chain_active';$out['active_chain']=$coalesced['keeper'];$out['cancelled_duplicates']=(int)($coalesced['cancelled']??0);
+                $st['last_finish']=time();$st['last_results']=$out;reconAutoStateSave($st);
+                reconAutoLog('matrix_chain_active',$out);return $out;
+            }
             $scope='all';if(!empty($cfg['woo'])&&empty($cfg['bsl']))$scope='woo';elseif(!empty($cfg['bsl'])&&empty($cfg['woo']))$scope='bsl';
             $allDest=matrixNormalizeDestinations(null,$cn);$periodicDest=[];
             foreach($allDest as $dest){if($dest==='woo'&&!empty($cfg['woo']))$periodicDest[]=$dest;elseif(strpos($dest,'bsl:')===0&&!empty($cfg['bsl']))$periodicDest[]=$dest;}
             $requested=time();$workerReady=s4WorkerIsActive();if(!$workerReady){s4SpawnPersistentWorker();usleep(350000);$workerReady=s4WorkerIsActive();}
             /* v10.336: correction is never a sibling of build. A fresh build is
                always queued first, then fix requires that build's timestamp. */
-            $chainKey='recon_auto|'.$requested;
+            $chainKey='recon_auto';
             $build=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,'selected_destinations'=>$periodicDest,'slice_seconds'=>8,'source'=>'recon_auto','dedup_key'=>'matrix_build|'.$chainKey],false);
             $fix=['ok'=>true,'skipped'=>true];
             if(!empty($cfg['matrix_fix'])&&!empty($build['ok'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
@@ -74387,6 +74470,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.347', t:'🔁 پایان حلقهٔ شروع دوبارهٔ Woo در ساخت جدول مغایرت', items:[
+    'علت واقعی تأیید شد: بازیابی worker همان build دوره‌ای تازه را با resume=false دوباره claim می‌کرد، cursor را پاک می‌کرد و ووکامرس از صفحهٔ ۱ آغاز می‌شد.',
+    'هر build ماتریس اکنون cursor صفحه‌ای اختصاصی دارد؛ گزارش legacy، suffix و اجرای دیگر دیگر نمی‌توانند cursor فعال ماتریس را حذف کنند.',
+    'بازیابی build پس از مرگ یا نوسازی worker همیشه resume=true می‌شود و از همان cursor و checkpoint ادامه می‌دهد.',
+    'checkpoint کهنهٔ مغایرت‌گیری legacy دیگر فاصلهٔ زمانی اجرای دوره‌ای matrix را دور نمی‌زند و در هر cron زنجیرهٔ تازه نمی‌سازد.',
+    'زنجیره‌های build→fix دوره‌ای کلید پایدار دارند؛ زنجیره‌های تکراری pending به‌صورت خودکار لغو و فقط زنجیرهٔ فعال/قدیمی‌تر حفظ می‌شود.'
+  ]},
   {v:'10.346', t:'🧭 حذف پرش‌های شدید صفحهٔ مغایرت با viewport پایدار', items:[
     'ارتفاع viewport جدول و لاگ زنده پایدار شد و browser scroll anchoring در ناحیه‌های پویای ماتریس کنترل می‌شود.',
     'polling اگر دادهٔ جدول و شمارنده‌ها تغییر نکرده باشد دیگر header، body، summary و کارت‌ها را از نو نمی‌سازد.',
