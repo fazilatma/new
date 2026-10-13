@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.353';
+const APP_VERSION = '10.354';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31588,6 +31588,9 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     if (!$opts['selected_destinations']) {
         echo json_encode(['ok'=>false,'error'=>'حداقل یک مقصد مشمول برای اصلاح انتخاب کنید'],JSON_UNESCAPED_UNICODE); exit;
     }
+    $workflow=(string)($_GET['workflow']??$_POST['workflow']??'fix_only');
+    if(!in_array($workflow,['fix_only','build_and_fix'],true))$workflow='fix_only';
+    $combinedWorkflow=$workflow==='build_and_fix';
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
         $oldFix = json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PROGRESS_FILE), true);
@@ -31604,7 +31607,11 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     /* An unfinished build wins over correction's freshness request. Queue/resume
        that exact checkpoint and put fix behind it; never clear its cursor. */
     $mxBeforeFix=matrixProgressRead();$mxCp=is_array($mxBeforeFix['checkpoint']??null)?$mxBeforeFix['checkpoint']:null;
-    if($mxCp){
+    if($mxCp&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'ساخت جدول ناتمام است؛ برای ادامهٔ ساخت و سپس اصلاح از دکمهٔ «ساخت جدول + اصلاح کلی» استفاده کنید',
+            'code'=>'matrix_build_incomplete','checkpoint_preserved'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($mxCp&&$combinedWorkflow){
         $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
         if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای ادامهٔ checkpoint آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
         $resumeRequestedAt=time();
@@ -31614,21 +31621,29 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($buildEnq['ok'])){echo json_encode(['ok'=>false,'error'=>'ادامهٔ checkpoint در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;}
         $opts['min_matrix_generated_at']=$resumeRequestedAt;$fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
         echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
-            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح اجرا می‌شود',
+            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح کلی اجرا می‌شود',
             'matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
-    /* A matrix that just completed is already the fresh snapshot the user is
-       looking at. Do not immediately rebuild it from Woo page one. */
-    $fixMatrixAge=$fixMatrix?max(0,time()-(int)($fixMatrix['generated_at']??0)):PHP_INT_MAX;
-    $forceFresh=(string)$opts['source']==='manual'&&$fixMatrixAge>300;
-    $fixNeedsBuild=$forceFresh||!$fixMatrix||$fixHave!==$fixWant
+    /* Correction-only means exactly the matrix currently visible: age alone must
+       never trigger a surprise rebuild. The explicit combined workflow is the
+       only manual action allowed to create a fresh build before correction. */
+    $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
         ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
-    if($fixNeedsBuild){
+    if($fixNeedsBuild&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'جدول فعلی برای این مقصدها آماده/سازگار نیست؛ ابتدا جدول را بسازید یا دکمهٔ «ساخت جدول + اصلاح کلی» را بزنید',
+            'code'=>'matrix_not_ready_for_fix','needs_build'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($combinedWorkflow){
+        /* This named action intentionally builds even when a recent result exists. */
+        $opts['view_filters']=[];$opts['scope']='all';
         $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
-        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای بازسازی خودکار جدول آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای زنجیرهٔ ساخت و اصلاح آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
         $freshRequestedAt=time();
-        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
-            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],false);
+        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all',
+            'parallel_destinations'=>!empty($_GET['parallel_destinations']??$_POST['parallel_destinations']??null),
+            'live_fill'=>!array_key_exists('live_fill',$_POST)||!empty($_POST['live_fill']),
+            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,
+            'slice_seconds'=>max(2,min(20,(int)($_GET['slice_seconds']??$_POST['slice_seconds']??8)))],false);
         if(empty($buildEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'بازسازی تازهٔ جدول در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;
         }
@@ -31637,8 +31652,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($fixEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'ساخت جدول صف شد اما اصلاح در صف قرار نگرفت','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
         }
-        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,
-            'message'=>'جدول تازه ساخته می‌شود و اصلاح بلافاصله فقط روی همان نتیجه اجرا خواهد شد','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,'combined_workflow'=>true,
+            'message'=>'زنجیرهٔ صریح آغاز شد: ابتدا ساخت کامل جدول، سپس اصلاح کلی همان نتیجه','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
     /* don't run while matrix build is running */
     $mxProg = matrixProgressRead();
@@ -43004,6 +43019,26 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.354', 'اصلاح جدول فعلی با workflow صریح هرگز rebuild پنهان آغاز نمی‌کند',
+         strpos($selfSrc, "fd.append('workflow','fix_" . "only')") !== false
+      && strpos($selfSrc, "\$workflow=(string)(\$_GET['workflow']") !== false
+      && strpos($selfSrc, "if(\$fixNeedsBuild&&!\$combinedWorkflow)") !== false);
+    $add('10.354', 'دکمهٔ ترکیبی build و اصلاح کلی را به ترتیب در یک صف سرور می‌گذارد',
+         strpos($selfSrc, 'function syncMatrixBuildAnd' . 'Fix()') !== false
+      && strpos($selfSrc, "fd.append('workflow','build_" . "and_fix')") !== false
+      && strpos($selfSrc, "'combined_workflow'=>true") !== false
+      && strpos($selfSrc, "\$opts['view_filters']=[];\$opts['scope']='all'") !== false);
+    $add('10.354', 'checkpoint ناتمام فقط توسط workflow ترکیبی ادامه و سپس اصلاح می‌شود',
+         strpos($selfSrc, "if(\$mxCp&&!\$combinedWorkflow)") !== false
+      && strpos($selfSrc, "'code'=>'matrix_build_incomplete'") !== false
+      && strpos($selfSrc, "if(\$mxCp&&\$combinedWorkflow)") !== false);
+    $add('10.354', 'رابط سه عمل فقط ساخت، اصلاح فعلی و ساخت‌به‌علاوه‌اصلاح را شفاف جدا می‌کند',
+         strpos($selfSrc, '🚀 فقط ساخت جدول') !== false
+      && strpos($selfSrc, '🔧 اصلاح جدول فعلی') !== false
+      && strpos($selfSrc, '🔄 ساخت جدول + اصلاح کلی') !== false);
+    $add('10.354', 'ورودی 10.354 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "354'") !== false
+      && version_compare(APP_VERSION, '10.' . '354', '>='));
     $add('10.353', 'status نتیجهٔ build و fix را بر اساس زمان واقعی مرتب می‌کند',
          strpos($selfSrc, "\$buildAt=max(\$resultAt") !== false
       && strpos($selfSrc, "\$fixAt=max((int)(\$fix['finished_at']") !== false
@@ -67097,11 +67132,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
 <label style="font-size:10px;color:#c4b5fd">نگه‌داری تکراری: <select id="smDuplicateKeep" style="font-size:10px;padding:4px 6px"><option value="newest">جدیدترین</option><option value="expensive">گران‌ترین</option></select></label>
-<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
+<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 فقط ساخت جدول</button>
+<button class="btn" onclick="syncMatrixBuildAndFix()" id="smBuildFixBtn" style="font-size:11px;padding:7px 12px;background:linear-gradient(135deg,#0e7490,#7c3aed);color:#fff;border:1px solid #67e8f9;font-weight:900;box-shadow:0 3px 12px #0891b255" title="ابتدا جدول تازه را کامل می‌سازد و سپس اصلاح کلی همهٔ ردیف‌ها را اجرا می‌کند">🔄 ساخت جدول + اصلاح کلی</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
-<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
+<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="بدون ساخت مجدد؛ اصلاح قیمت + ارسال missing + حذف extra روی جدول فعلی">🔧 اصلاح جدول فعلی</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('bsl')" style="font-size:10px;padding:5px 10px">فقط غرفه‌ها</button>
 <button class="btn btn-red" onclick="syncMatrixFixStop()" id="smFixStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف اصلاح</button>
@@ -67129,7 +67165,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف تکراری‌ها</b> با نگه‌داری جدیدترین یا گران‌ترین + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» فقط یک معیار فیلتر است و چند معیار با AND یا OR ترکیب می‌شوند. «🔧 اصلاح جدول فعلی» بدون ساخت مجدد فقط ردیف‌های منطبق با فیلترهای فعلی را اصلاح می‌کند. «🔄 ساخت جدول + اصلاح کلی» ابتدا snapshot تازه را کامل می‌سازد و سپس همهٔ مغایرت‌ها را بدون محدودیت فیلتر اصلاح می‌کند. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. اصلاح شامل <b>قیمت</b> + <b>ارسال missing</b> + <b>حذف تکراری‌ها</b> + <b>حذف/بایگانی فقط‌مقصد</b> است و کاملاً سرورساید ادامه می‌یابد.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -74651,6 +74687,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.354', t:'🔄 دکمهٔ صریح ساخت جدول و سپس اصلاح کلی', items:[
+    'سه عمل مستقل و روشن در رابط وجود دارد: فقط ساخت جدول، اصلاح جدول فعلی، و ساخت جدول + اصلاح کلی.',
+    'اصلاح جدول فعلی دیگر به‌دلیل سن snapshot مخفیانه rebuild نمی‌کند و دقیقاً روی مجموعهٔ فیلترشدهٔ فعلی اجرا می‌شود.',
+    'دکمهٔ ترکیبی ابتدا build تازه را در worker صف می‌کند و correction کلی و بدون فیلتر را با الزام نتیجهٔ همان build پشت آن می‌گذارد.',
+    'اگر checkpoint ساخت ناتمام باشد، اصلاح تنها پیام روشن می‌دهد؛ workflow ترکیبی همان checkpoint را ادامه می‌دهد و سپس اصلاح می‌کند.'
+  ]},
   {v:'10.353', t:'🧭 نمایش وضعیت جدیدتر میان build و correction', items:[
     'status زمان نتیجه و progress ساخت را با زمان اجرای اصلاح مقایسه می‌کند و همیشه عملیات جدیدتر را نمایش می‌دهد.',
     'build_failed قدیمیِ اصلاح دیگر پس از تکمیل موفق جدول، وضعیت فعلی ساخت معرفی نمی‌شود.',
@@ -83930,7 +83972,26 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 window._smPollWatchdog=setInterval(()=>{
   if(document.visibilityState==='visible'&&(!window._smPoll||Date.now()-(window._smPollLastResponseAt||0)>15000))syncMatrixPollingWake('watchdog');
 },15000);
-/* v10.117: اصلاح مغایرت از روی جدول */
+/* Explicit full chain: unlike correction-only, this intentionally creates a
+   fresh matrix and then runs an unfiltered general correction behind it. */
+function syncMatrixBuildAndFix(){
+  const selected=smSelectedDestinations();if(!selected.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
+  if(!confirm('زنجیرهٔ کامل اجرا شود؟\n۱) ساخت تازه و کامل جدول\n۲) اصلاح کلی همهٔ مغایرت‌ها برای مقصدهای انتخاب‌شده\n\nاین عملیات به فیلترهای فعلی محدود نیست.'))return;
+  smShowJob(true);if($('smJobLabel'))$('smJobLabel').textContent='🔄 صف ساخت جدول + اصلاح کلی…';
+  const btn=$('smBuildFixBtn');if(btn){btn.disabled=true;btn.textContent='⏳ ثبت زنجیره…';}
+  const fd=new FormData();fd.append('action','sync_matrix_fix_start');fd.append('workflow','build_and_fix');
+  fd.append('source','manual_combined');fd.append('scope','all');fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
+  fd.append('selected_destinations',JSON.stringify(selected));
+  fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
+  fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
+  fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){showToast((d&&d.error)||'ثبت زنجیره ناموفق بود',1);return;}
+    showToast(d.message||'ساخت جدول و اصلاح کلی در صف سرور قرار گرفت');window._smFixTick=0;syncMatrixPoll('build-and-fix');
+  }).catch(e=>{showToast('خطا در ثبت زنجیره: '+e,1);syncMatrixPoll('build-and-fix-error');})
+    .finally(()=>{if(btn){btn.disabled=false;btn.textContent='🔄 ساخت جدول + اصلاح کلی';}});
+}
+/* v10.117: اصلاح مغایرت از روی جدول فعلی، بدون rebuild پنهان */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
   if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\n⚠ ردیف‌های «فقط مقصد» در فیلتر فعلی: '+smFa(window._smFilteredOnlyDest||0)+'؛ این موارد در پروفایل نیستند و حذف/بایگانی می‌شوند.\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
@@ -83940,6 +84001,7 @@ function syncMatrixFixStart(scope){
   if($('smJobLog')){$('smJobLog').innerHTML='';delete $('smJobLog').dataset.logSig;}
   const fd=new FormData();
   fd.append('action','sync_matrix_fix_start');
+  fd.append('workflow','fix_only');
   fd.append('scope', scope);
   fd.append('source','manual');
   fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
