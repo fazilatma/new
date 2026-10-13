@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.345';
+const APP_VERSION = '10.346';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -355,7 +355,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/20';
+const APP_VERSION_DATE = '1405/07/21';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -42829,6 +42829,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.345', 'ورودی 10.345 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "345'") !== false
       && version_compare(APP_VERSION, '10.' . '345', '>='));
+    $add('10.346', 'ناحیه‌های زندهٔ لاگ و جدول ابعاد پایدار و anchoring کنترل‌شده دارند',
+         strpos($selfSrc, 'height:180px;min-' . 'height:180px;max-height:180px') !== false
+      && strpos($selfSrc, 'id="smTableWrap" style="overflow:auto;height:min(70vh,640px)') !== false
+      && strpos($selfSrc, 'function smCapture' . 'Viewport()') !== false);
+    $add('10.346', 'polling پاسخ یکسان را دوباره render نمی‌کند و viewport واقعی را نگه می‌دارد',
+         strpos($selfSrc, 'window._smRender' . 'Sig===renderSig') !== false
+      && strpos($selfSrc, 'if(silent)smRestore' . 'Viewport(viewport)') !== false
+      && strpos($selfSrc, 'window._smUser' . 'MoveEpoch') !== false);
+    $add('10.346', 'خطای silent جدول سالم را جمع نمی‌کند و لاگ فقط هنگام تغییر بازسازی می‌شود',
+         strpos($selfSrc, 'if(silent)return;') !== false
+      && strpos($selfSrc, 'if(!silent && body) body.innerHTML') !== false
+      && strpos($selfSrc, 'el.dataset.log' . 'Sig!==sig') !== false);
+    $add('10.346', 'ورودی 10.346 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "346'") !== false
+      && version_compare(APP_VERSION, '10.' . '346', '>='));
     $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
          strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
       && strpos($selfSrc, '.ral-card{') !== false
@@ -66840,16 +66855,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div id="smDestinationList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
 <div style="display:flex;gap:6px;margin-top:6px"><button type="button" class="btn btn-gray" onclick="smDestinationToggleAll(true)" style="font-size:9px;padding:3px 7px">انتخاب همه</button><button type="button" class="btn btn-gray" onclick="smDestinationToggleAll(false)" style="font-size:9px;padding:3px 7px">حذف همه</button></div>
 </details>
-<div id="smJobBar" style="display:none;margin-bottom:8px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px">
+<div id="smJobBar" style="display:none;margin-bottom:8px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px;overflow-anchor:none;contain:layout paint">
 <div style="display:flex;justify-content:space-between;font-size:11px;color:#e2e8f0;margin-bottom:4px">
-<span id="smJobLabel">در حال ساخت…</span><span id="smJobPct">0٪</span>
+<span id="smJobLabel" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">در حال ساخت…</span><span id="smJobPct" style="flex:0 0 auto">0٪</span>
 </div>
 <div style="height:8px;background:#1e293b;border-radius:99px;overflow:hidden">
 <div id="smJobFill" style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#2563eb);transition:width .3s"></div>
 </div>
 <!-- شمارنده‌های اصلاح باید بالای لاگ و همیشه در دید باشند؛ قبلاً زیر لاگ بلند گم می‌شدند. -->
-<div id="smFixLive" style="display:none;margin:10px 0 8px;position:relative;z-index:2"></div>
-<div id="smJobLog" style="margin-top:6px;max-height:220px;overflow:auto;font-size:10.5px;color:#e2e8f0;line-height:1.7;font-family:ui-monospace,Tahoma,sans-serif;direction:rtl"></div>
+<div id="smFixLive" style="display:none;margin:10px 0 8px;position:relative;z-index:2;overflow-anchor:none;contain:layout paint"></div>
+<div id="smJobLog" style="margin-top:6px;height:180px;min-height:180px;max-height:180px;overflow:auto;overflow-anchor:none;font-size:10.5px;color:#e2e8f0;line-height:1.7;font-family:ui-monospace,Tahoma,sans-serif;direction:rtl"></div>
 </div>
 <div id="smFixBanner" style="display:none;margin-bottom:8px;padding:8px 10px;background:linear-gradient(90deg,#14532d33,#1e3a8a33);border:1px solid #22c55e55;border-radius:8px;font-size:11px;color:#bbf7d0"></div>
 <details id="smHelpDetails" style="margin-bottom:8px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 9px">
@@ -66902,7 +66917,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button type="button" class="btn btn-gray" onclick="smClearSelection()" style="font-size:10px;padding:6px 9px">پاک‌کردن انتخاب</button>
 </div>
 <div id="smMeta" style="font-size:10.5px;color:#94a3b8;margin-bottom:6px"></div>
-<div id="smTableWrap" style="overflow:auto;max-height:min(70vh,640px);border:1px solid #475569;border-radius:8px;background:#020617">
+<div id="smTableWrap" style="overflow:auto;height:min(70vh,640px);min-height:320px;max-height:640px;overflow-anchor:none;contain:layout paint;border:1px solid #475569;border-radius:8px;background:#020617">
 <button type="button" id="smTableFsExit" class="btn btn-red" onclick="syncMatrixFullscreen()">✕ خروج از تمام‌صفحه</button>
 <table id="smTable" style="width:100%;min-width:720px;table-layout:fixed;border-collapse:collapse;font-size:12px">
 <colgroup id="smCols"></colgroup>
@@ -74372,6 +74387,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.346', t:'🧭 حذف پرش‌های شدید صفحهٔ مغایرت با viewport پایدار', items:[
+    'ارتفاع viewport جدول و لاگ زنده پایدار شد و browser scroll anchoring در ناحیه‌های پویای ماتریس کنترل می‌شود.',
+    'polling اگر دادهٔ جدول و شمارنده‌ها تغییر نکرده باشد دیگر header، body، summary و کارت‌ها را از نو نمی‌سازد.',
+    'به‌روزرسانی واقعی و فوری ردیف‌ها باقی مانده است؛ جای دید کاربر و scroll داخلی جدول فقط وقتی کاربر در فاصلهٔ درخواست حرکت نکرده باشد بازیابی می‌شود.',
+    'خطای گذرای refresh خاموش دیگر جدول موجود را با یک ردیف خطا جایگزین و ارتفاع آن را جمع نمی‌کند.',
+    'لاگ فقط با محتوای تازه بازسازی می‌شود و اگر کاربر برای خواندن بالا رفته باشد، polling او را به انتهای لاگ پرتاب نمی‌کند.'
+  ]},
   {v:'10.345', t:'🫀 ثبت هر ورود کران در لاگ build/fix و حذف ownerهای تکراری', items:[
     'در حالت cron-only هر ضربان واقعی external HTTP/CLI با زمان، منبع، lease، نتیجهٔ نگهبان و تعداد jobهای بیدارشده در لاگ عملیات فعال ثبت می‌شود.',
     'اگر اصلاح پشت build در صف باشد، همان ورود کران در لاگ اصلاح نیز مستقل ثبت می‌شود؛ mode_switch به‌اشتباه کران شمرده نمی‌شود.',
@@ -83270,6 +83292,20 @@ function destPricePreview(pre){
 /* v10.113: جدول مقایسه — سرورساید + progress + فقط خواندن صفحه */
 window._smPage = 1;
 window._smPoll = null;
+window._smUserMoveEpoch=0;window._smRestoringViewport=false;
+['wheel','touchstart','pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,()=>{if(!window._smRestoringViewport)window._smUserMoveEpoch++;},{passive:true}));
+function smCaptureViewport(){
+  const el=$('smTableWrap');if(!el)return null;const r=el.getBoundingClientRect(),vh=window.innerHeight||document.documentElement.clientHeight||0;
+  if(r.bottom<=0||r.top>=vh)return null;
+  return {el:el,top:r.top,y:window.scrollY||window.pageYOffset||0,epoch:window._smUserMoveEpoch,left:el.scrollLeft,innerTop:el.scrollTop};
+}
+function smRestoreViewport(g){
+  if(!g||!g.el||!g.el.isConnected)return;
+  requestAnimationFrame(()=>{if(g.epoch!==window._smUserMoveEpoch)return;const now=g.el.getBoundingClientRect().top,dy=now-g.top;
+    window._smRestoringViewport=true;if(Math.abs(dy)>.5)window.scrollBy(0,dy);g.el.scrollLeft=g.left;g.el.scrollTop=g.innerTop;
+    requestAnimationFrame(()=>{window._smRestoringViewport=false;});
+  });
+}
 function smFa(n){ try{ return toFa(String(n)); }catch(e){ return String(n); } }
 function smMoney(n){
   n=parseInt(n)||0; if(n<=0) return '—';
@@ -83373,7 +83409,8 @@ function smSort(key){
   syncMatrixLoad(1);
 }
 function smShowJob(on){
-  const bar=$('smJobBar'); if(bar) bar.style.display=on?'block':'none';
+  const bar=$('smJobBar');if(!bar)return;const next=on?'block':'none';if(bar.style.display===next)return;
+  const viewport=smCaptureViewport();bar.style.display=next;smRestoreViewport(viewport);
 }
 function smPaintProgress(p){
   p=p||{};
@@ -83391,10 +83428,12 @@ function smPaintProgress(p){
     $('smJobLabel').textContent = p.running ? ('⏳ '+(ph||'در حال ساخت')+detail+'…') : (p.yielded?('↻ ادامهٔ خودکار'+detail+'…'):(p.done ? (p.error?'❌ خطا':'✅ تمام') : '—'));
   }
   if($('smJobLog') && Array.isArray(p.log)){
-    const lines=p.log.slice(-80).map(x=> (x&&x.m)?x.m:String(x));
-    const el=$('smJobLog');
-    el.innerHTML=lines.map(l=>'<div style="border-bottom:1px solid #1e293b;padding:2px 0">'+esc(l)+'</div>').join('');
-    try{ el.scrollTop = el.scrollHeight; }catch(e){}
+    const lines=p.log.slice(-80).map(x=> (x&&x.m)?x.m:String(x)),el=$('smJobLog'),sig=JSON.stringify(lines);
+    if(el.dataset.logSig!==sig){
+      const nearBottom=(el.scrollHeight-el.scrollTop-el.clientHeight)<28,oldTop=el.scrollTop;
+      el.innerHTML=lines.map(l=>'<div style="border-bottom:1px solid #1e293b;padding:2px 0">'+esc(l)+'</div>').join('');el.dataset.logSig=sig;
+      try{el.scrollTop=nearBottom?el.scrollHeight:oldTop;}catch(e){}
+    }
   }
   const buildStop=$('smBuildStopBtn'), buildResume=$('smBuildResumeBtn'), buildStart=$('smBuildStartBtn');
   const isFix=(p.job==='fix'||String(p.phase||'').indexOf('fix')>=0||p.ok_n!=null);
@@ -83565,7 +83604,7 @@ function syncMatrixFixStart(scope){
   smShowJob(true);
   if($('smJobLabel')) $('smJobLabel').textContent='🔧 شروع اصلاح…';
   if($('smFixStopBtn')) $('smFixStopBtn').style.display='';
-  if($('smJobLog')) $('smJobLog').innerHTML='';
+  if($('smJobLog')){$('smJobLog').innerHTML='';delete $('smJobLog').dataset.logSig;}
   const fd=new FormData();
   fd.append('action','sync_matrix_fix_start');
   fd.append('scope', scope);
@@ -83623,7 +83662,8 @@ function smPaintFixCounterCards(p){
     ['price','اصلاح قیمت',p.price_n||0,'#854d0e','💰'],['send','ارسال‌شده',p.sent_n||0,'#0369a1','📤'],
     ['delete','حذف / بایگانی',p.del_n||0,'#9f1239','🗑️']
   ];
-  box.style.display='block';
+  const cardSig=JSON.stringify(cards.map(c=>c[2]));box.style.display='block';
+  if(box.dataset.cardSig===cardSig)return;box.dataset.cardSig=cardSig;
   box.innerHTML='<div style="font-size:11px;color:#c4b5fd;font-weight:900;margin-bottom:7px">برای مشاهدهٔ محصولات هر شمارنده روی کارت کلیک کنید · <span id="smFixCardsFresh" style="color:#67e8f9">به‌روزرسانی '+new Date().toLocaleTimeString('fa-IR')+'</span></div>'
     +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,108px));gap:8px;align-items:start">'
     +cards.map(c=>'<button id="smFixCard-'+c[0]+'" data-value="'+String(c[2])+'" type="button" onclick="smOpenFixCounter(\''+c[0]+'\')" style="aspect-ratio:1/1;width:100%;border:1px solid #ffffff33;border-radius:12px;background:'+c[3]+';color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;box-shadow:0 5px 15px #0004;padding:7px;transition:transform .18s,filter .18s"><span style="font-size:19px">'+c[4]+'</span><b style="font-size:20px;line-height:1">'+smFa(c[2])+'</b><span style="font-size:9.5px;line-height:1.25">'+c[1]+'</span></button>').join('')+'</div>';
@@ -83727,6 +83767,7 @@ function syncMatrixLoad(page, silent){
   page = page || 1; window._smPage = page;
   silent = !!silent;
   const body = $('smBody'), sum=$('smSummary'), meta=$('smMeta'), pager=$('smPager'), head=$('smHead');
+  const viewport=silent?smCaptureViewport():null,requestId=(window._smLoadIssued=(window._smLoadIssued||0)+1);
   if(body && !silent) body.innerHTML='<tr><td style="padding:16px;text-align:center;color:#67e8f9">📖 خواندن صفحه از فایل سرور…</td></tr>';
   const fd = new FormData();
   fd.append('action','sync_matrix');
@@ -83742,9 +83783,12 @@ function syncMatrixLoad(page, silent){
   if(($('smOnlyMiss')||{}).checked) fd.append('only_missing','1');
   if(($('smOnlyDup')||{}).checked) fd.append('only_dup','1');
   return fetch('', {method:'POST', body:fd}).then(r=>r.json()).then(d=>{
+    if(requestId<(window._smLoadIssued||0))return;
     if(d && d.progress) smPaintProgress(d.progress);
     if(d && d.running && !silent){ syncMatrixPoll(); }
     if(!d || !d.ok){
+      /* A background poll must never collapse a healthy table into one error row. */
+      if(silent)return;
       if(d && d.need_build){
         if(body) body.innerHTML='<tr><td style="padding:16px;text-align:center;color:#fbbf24">هنوز جدولی روی سرور نیست. «🚀 ساخت روی سرور» را بزنید'
           +(d.running?' (در حال ساخت…)':'')+'</td></tr>';
@@ -83754,6 +83798,9 @@ function syncMatrixLoad(page, silent){
       if(body) body.innerHTML='<tr><td style="padding:12px;color:#f87171">خطا: '+(d&&d.error?d.error:'ناموفق')+'</td></tr>';
       return;
     }
+    const renderSig=JSON.stringify([d.page,d.pages,d.per_page,d.total,d.row_count_all,d.generated_at,d.source,d.live_partial,d.selected_destinations,d.shops,d.summary,d.filtered_status_counts,d.filter_options,d.rows,d.woo_count,d.woo_error,d.bsl_error,d.sort,d.sort_dir]);
+    if(silent&&window._smRenderSig===renderSig)return;
+    window._smRenderSig=renderSig;window._smLoadApplied=requestId;
     if(d.done || (d.progress&&d.progress.done)) smShowJob(!!(d.progress&&d.progress.running));
     window._smFilteredTotal=parseInt(d.actionable_total!=null?d.actionable_total:d.total)||0;
     window._smFilteredOnlyDest=parseInt((d.filtered_status_counts||{}).only_dest)||0;
@@ -83862,8 +83909,10 @@ function syncMatrixLoad(page, silent){
       pg += mk('»', Math.min(d.pages,d.page+1), d.page>=d.pages);
       pager.innerHTML = pg;
     }
+    if(silent)smRestoreViewport(viewport);
   }).catch(e=>{
-    if(body) body.innerHTML='<tr><td style="padding:12px;color:#f87171">خطای شبکه: '+esc(String(e))+'</td></tr>';
+    /* Keep the previous matrix intact when an automatic refresh transiently fails. */
+    if(!silent && body) body.innerHTML='<tr><td style="padding:12px;color:#f87171">خطای شبکه: '+esc(String(e))+'</td></tr>';
   });
 }
 /* مرحلهٔ پایانی بارگذاری: نتیجهٔ کش‌شده فوراً و سبک خوانده می‌شود و فقط
