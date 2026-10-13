@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.358';
+const APP_VERSION = '10.359';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -43041,6 +43041,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.359', 'worker CLI وردپرس هم‌مکان را lazy و بدون web double-bootstrap بارگذاری می‌کند',
+         strpos($selfSrc, 'function s4BootstrapWooForCli(): array') !== false
+      && strpos($selfSrc, "if(!isCliRun())return \$result=['ok'=>false") !== false
+      && strpos($selfSrc, "require_once \$rootLoader") !== false);
+    $add('10.359', 'resume مستقیم از offset تعداد ردیف‌های cursor ادامه می‌یابد',
+         substr_count($selfSrc, '$offset=max(count($rows),($startPage-1)*100)') >= 2
+      && strpos($selfSrc, "'limit' => \$per, 'offset' => \$offset") !== false
+      && strpos($selfSrc, "'posts_per_page' => \$per, 'offset' => \$offset") !== false
+      && substr_count($selfSrc, '$offset+=count(') >= 2);
+    $add('10.359', 'ورودی 10.359 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "359'") !== false
+      && version_compare(APP_VERSION, '10.' . '359', '>='));
     $add('10.358', 'Woo matrix فقط fieldهای واقعاً موردنیاز را از REST می‌خواهد',
          strpos($selfSrc, "\$matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created'") !== false
       && substr_count($selfSrc, '.\$matrixWooFields,null,') >= 2
@@ -50917,8 +50929,30 @@ function reconExpected(string $target, bool $allProfiles = false, ?array &$stats
 }
 
 /** همهٔ محصولات ووکامرس */
+/** Bootstrap the colocated WordPress only inside detached CLI workers.
+ * Web/plugin requests already have WordPress when appropriate and must never
+ * include wp-load.php for a second time. require_once also prevents recursion
+ * when WordPress loads this active plugin during its own bootstrap.
+ */
+function s4BootstrapWooForCli(): array {
+    static $result=null;
+    if(wooDirectAvailable())return ['ok'=>true,'loaded'=>false,'reason'=>'already_available'];
+    if($result!==null)return $result;
+    if(!isCliRun())return $result=['ok'=>false,'loaded'=>false,'reason'=>'not_cli'];
+    $rootLoader=dirname(dirname(dirname(__DIR__))).'/wp-load.php';
+    if(!is_file($rootLoader))return $result=['ok'=>false,'loaded'=>false,'reason'=>'wp_load_missing'];
+    try{
+        if(!defined('WP_USE_THEMES'))define('WP_USE_THEMES',false);
+        require_once $rootLoader;
+        $ok=wooDirectAvailable()||function_exists('get_posts');
+        return $result=['ok'=>$ok,'loaded'=>true,'reason'=>$ok?'':'woo_unavailable_after_bootstrap'];
+    }catch(Throwable $e){
+        return $result=['ok'=>false,'loaded'=>false,'reason'=>'bootstrap_exception','error'=>mb_substr($e->getMessage(),0,180)];
+    }
+}
+
 /**
- * v10.115: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
+ * v10.115/v10.359: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
  * وقتی اسکرپر داخل همان وردپرس/ووکامرس لود شود، به‌جای REST API صدها برابر سریع‌تر است.
  * @return list<array{id:int,title:string,price:int,status:string}>
  */
@@ -50933,14 +50967,16 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
         return $rows;
     }
     if (function_exists('wc_get_products')) {
-        $per = 200; $got = 0; $page = $startPage;
+        /* Offset follows durable row count, not an old page-size assumption. This
+           makes a REST(100) -> direct resume start at row 300 with no gap. */
+        $per = 100; $got = 0; $page = $startPage; $offset=max(count($rows),($startPage-1)*100);
         while ($got < $limit) {
             if (reconStopRequested()) {
                 $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped';
                 $meta['page'] = max(0, $page - 1); break;
             }
             $batch = wc_get_products([
-                'limit' => $per, 'page' => $page,
+                'limit' => $per, 'offset' => $offset,
                 'status' => ['publish', 'draft', 'pending', 'private'],
                 'orderby' => 'ID', 'order' => 'ASC', 'return' => 'objects']);
             if (!is_array($batch)) {
@@ -50971,22 +51007,22 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
             reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
                 'log_add' => ['⚡ مستقیم WC: ' . count($rows) . ' محصول (صفحه ' . $page . ')']]);
             if (count($batch) < $per) { $meta['complete'] = true; break; }
-            $page++;
+            $offset+=count($batch);$page++;
         }
         if (!$meta['complete'] && !$meta['partial']) {
             $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page;
         }
         return $rows;
     }
-    /* fallback get_posts: page with offset and the same NDJSON cursor */
-    $per = 200; $page = $startPage; $got = 0;
+    /* fallback get_posts: absolute row offset and the same NDJSON cursor */
+    $per = 100; $page = $startPage; $got = 0; $offset=max(count($rows),($startPage-1)*100);
     while ($got < $limit) {
         if (reconStopRequested()) {
             $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = max(0, $page - 1); break;
         }
         $raw = get_posts(['post_type' => 'product',
             'post_status' => ['publish', 'draft', 'pending', 'private'],
-            'posts_per_page' => $per, 'paged' => $page, 'orderby' => 'ID', 'order' => 'ASC']);
+            'posts_per_page' => $per, 'offset' => $offset, 'orderby' => 'ID', 'order' => 'ASC']);
         if (!$raw) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
         $pageRows = [];
         foreach ((array)$raw as $post) {
@@ -51005,7 +51041,7 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
         reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
             'log_add' => ['⚡ مستقیم WC (posts): ' . count($rows) . ' محصول']]);
         if (count($raw) < $per) { $meta['complete'] = true; break; }
-        $page++;
+        $offset+=count($raw);$page++;
     }
     if (!$meta['complete'] && !$meta['partial']) { $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page; }
     return $rows;
@@ -51013,8 +51049,12 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
 
 function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
-    /* v10.132: مسیر مستقیم هم با همان cursor صفحه‌ای ادامه‌پذیر است. */
-    if (function_exists('wooDirectAvailable') && wooDirectAvailable()) {
+    /* Detached matrix children normally execute this file outside WordPress.
+       Bootstrap the colocated installation lazily, then use the existing direct
+       reader. Ordinary web/plugin requests never enter this CLI-only branch. */
+    $boot=function_exists('s4BootstrapWooForCli')?s4BootstrapWooForCli():['ok'=>false,'loaded'=>false];
+    if (!empty($boot['loaded'])) reconProgress(['log_add'=>[!empty($boot['ok'])?'⚡ وردپرس در worker بارگذاری شد؛ ادامهٔ Woo از دیتابیس محلی':'⚠️ bootstrap مستقیم Woo در دسترس نشد: '.(string)($boot['reason']??'unknown')]]);
+    if (function_exists('wooDirectAvailable') && (wooDirectAvailable()||function_exists('get_posts'))) {
         return reconFetchWooDirect($maxPages > 0 ? $maxPages * 100 : 0, $meta);
     }
     if ($maxPages <= 0) $maxPages = (int)RECON_FETCH_MAX_PAGES;
@@ -74790,6 +74830,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.359', t:'⚡ ادامهٔ Woo از دیتابیس محلی در worker', items:[
+    'پردازهٔ CLI ساخت matrix وردپرس هم‌مکان را فقط هنگام نیاز و با require_once بارگذاری می‌کند؛ درخواست‌های وب دوباره bootstrap نمی‌شوند.',
+    'پس از بارگذاری، مسیر مستقیم موجود wc_get_products/get_posts جای self-call کند REST را می‌گیرد.',
+    'ادامهٔ مستقیم از offset واقعی ۳۰۰ ردیف cursor آغاز می‌شود؛ تغییر اندازهٔ صفحه باعث پرش یا تکرار محصول نمی‌شود.'
+  ]},
   {v:'10.358', t:'⚡ پاسخ کم‌حجم Woo برای عبور از صفحهٔ سنگین', items:[
     'واکشی matrix اکنون با پارامتر _fields فقط شناسه، نام، قیمت عادی، وضعیت و تاریخ ایجاد را می‌خواهد.',
     'توضیحات، تصاویر، ویژگی‌ها و metadata حجیم که در تطبیق استفاده نمی‌شوند دیگر توسط Woo serialize و منتقل نمی‌شوند.',
