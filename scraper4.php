@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.351';
+const APP_VERSION = '10.352';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31243,7 +31243,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     $buildView=$prog;unset($buildView['log']);
     $fixView=$fix;
     if(!$actualFixRunning){
-        $keep=['running','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
+        $keep=['running','queued','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
         $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
     }
     echo json_encode([
@@ -42996,6 +42996,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.352', 'polling ساخت و اصلاح پس از refresh/wake با lifecycleها فوراً bootstrap می‌شود',
+         strpos($selfSrc, "window.addEventListener('pageshow',()=>syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "window.addEventListener('focus',()=>syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "window.addEventListener('online',()=>syncMatrixPollingWake") !== false);
+    $add('10.352', 'نسل پاسخ polling قدیمی پس از خواب نمی‌تواند poll تازه را متوقف کند',
+         strpos($selfSrc, 'generation!==window._smPollGeneration') !== false
+      && strpos($selfSrc, 'response from the interval that existed before sleep') !== false
+      && strpos($selfSrc, "window._smPollGeneration=0") !== false);
+    $add('10.352', 'watchdog صفحهٔ visible handoff موقت و interval گم‌شده را دوباره می‌خواند',
+         strpos($selfSrc, "window._smPollWatchdog=setInterval") !== false
+      && strpos($selfSrc, "Date.now()-(window._smPollLastResponseAt||0)>15000") !== false
+      && strpos($selfSrc, "syncMatrixPollingBootstrap") !== false
+      && strpos($selfSrc, "generation!==window._smPollGeneration||requestBusy") !== false);
+    $add('10.352', 'اصلاح queued در status و UI به‌عنوان اصلاح فعال نمایش داده می‌شود',
+         strpos($selfSrc, "'running','queued','done'") !== false
+      && strpos($selfSrc, "if((d.fix_running||d.fix_queued) && d.fix_progress)") !== false
+      && strpos($selfSrc, "Object.assign({},d.fix_progress,{job:'fix'})") !== false);
+    $add('10.352', 'ورودی 10.352 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "352'") !== false
+      && version_compare(APP_VERSION, '10.' . '352', '>='));
     $add('10.351', 'build دارای checkpoint دیگر با سقف عمومی چهار تلاش permanently failed نمی‌شود',
          strpos($selfSrc, "\$recover=\$isCheckpoint" . "Build||\$attempts<4||\$isCheckpointFix") !== false
       && strpos($selfSrc, "\$e['recycles']=(int)(\$e['recycles']??0)+1;\$e['attempts']=0") !== false);
@@ -74608,6 +74629,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.352', t:'🔄 polling پایدار ساخت و اصلاح پس از refresh و wake', items:[
+    'در DOMContentLoaded، pageshow، focus، online و بازگشت visibility، وضعیت هر دو عملیات فوراً از سرور خوانده می‌شود.',
+    'پاسخ دیررس interval پیش از خواب با generation token دیگر نمی‌تواند polling تازه را متوقف یا UI را عقب ببرد.',
+    'watchdog سبک صفحهٔ visible هر handoff موقت یا interval گم‌شده را بازیابی می‌کند؛ در حالت فعال همچنان refresh یک‌ثانیه‌ای حفظ شده است.',
+    'اصلاح queued پس از refresh به‌عنوان عملیات اصلاح نمایش داده می‌شود، نه progress قدیمی ساخت جدول.'
+  ]},
   {v:'10.351', t:'🫀 ادامهٔ قطعی build پس از قطع‌های مکرر هاست', items:[
     'ساخت ماتریس دارای checkpoint دیگر پس از چهار بار قطع process برای همیشه failed نمی‌شود؛ هر daemon تازه همان checkpoint را resume می‌کند.',
     'اگر progress هنوز running باشد اما هیچ lock و owner فعال صف وجود نداشته باشد، ضربان واقعی کران دقیقاً یک owner ادامه می‌سازد.',
@@ -83543,6 +83570,7 @@ function destPricePreview(pre){
 /* v10.113: جدول مقایسه — سرورساید + progress + فقط خواندن صفحه */
 window._smPage = 1;
 window._smPoll = null;
+window._smPollGeneration=0;window._smPollLastResponseAt=0;window._smPollWakeTimer=null;
 window._smUserMoveEpoch=0;window._smRestoringViewport=false;
 ['wheel','touchstart','pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,()=>{if(!window._smRestoringViewport)window._smUserMoveEpoch++;},{passive:true}));
 function smCaptureViewport(){
@@ -83800,27 +83828,34 @@ function syncMatrixStop(){
     syncMatrixPoll();
   }).catch(e=>{if($('smBuildStopBtn'))$('smBuildStopBtn').disabled=false;showToast('خطا: '+e,1);});
 }
-function syncMatrixPoll(){
+function syncMatrixPoll(reason){
   if(window._smPoll) clearInterval(window._smPoll);
+  const generation=++window._smPollGeneration;let requestBusy=false;
   const tick=()=>{
+    if(generation!==window._smPollGeneration||requestBusy)return;
+    requestBusy=true;
     const fd=new FormData(); fd.append('action','sync_matrix_status');
     const visibleDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
     fd.append('selected_destinations',JSON.stringify(visibleDestinations));
     fetch('?sm_live_status=1&_='+Date.now(),{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{
-      if(!d||!d.ok)return;
+      /* A response from the interval that existed before sleep/focus must not
+         stop or repaint the newer generation started by the wake handler. */
+      if(generation!==window._smPollGeneration||!d||!d.ok)return;
+      window._smPollLastResponseAt=Date.now();
       const p = d.progress || {};
-      if(d.fix_running && d.fix_progress) smPaintProgress(d.fix_progress);
-      else smPaintProgress(p);
+      if((d.fix_running||d.fix_queued) && d.fix_progress){
+        const fp=Object.assign({},d.fix_progress,{job:'fix'});
+        if(d.fix_queued){fp.running=true;fp.queued=true;fp.phase=fp.phase||'در صف worker';}
+        smPaintProgress(fp);
+      } else smPaintProgress(p);
       if(($('smLiveFill')||{}).checked && (d.build_running || p.yielded)){
         window._smLiveTick=(window._smLiveTick||0)+1;
         if(window._smLiveTick%2===0)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
       }
-      if(d.running || d.fix_running || d.build_running){
-        /* while fixing, refresh table every few ticks so cells update live */
+      if(d.running || d.fix_running || d.fix_queued || d.build_running){
+        /* while fixing, refresh table every status tick so cells update live */
         if(d.fix_running){
           window._smFixTick = (window._smFixTick||0)+1;
-          /* Every status tick: the affected row/status becomes visible immediately,
-             without overlapping multi-megabyte matrix requests. */
           if(!window._smTableRefreshBusy){
             window._smTableRefreshBusy=true;
             try{Promise.resolve(syncMatrixLoad(window._smPage||1,true)).finally(()=>{window._smTableRefreshBusy=false;});}
@@ -83829,25 +83864,44 @@ function syncMatrixPoll(){
         }
       } else {
         if(p.yielded && !window._smMatrixStopWanted){
-          if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
-          setTimeout(()=>syncMatrixStart(true,true),250);
+          if(generation===window._smPollGeneration&&window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
+          setTimeout(()=>{if(generation===window._smPollGeneration)syncMatrixStart(true,true);},250);
           return;
         }
-        if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
+        if(generation===window._smPollGeneration&&window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
         if(d.has_result){
-          /* بعد از اصلاح: برو آخرین صفحه تا ردیف گزارش دیده شود + باکس گزارش */
           setTimeout(()=>{
+            if(generation!==window._smPollGeneration)return;
             const last = window._smLastPages || 1;
             const go = (d.job==='fix' || (d.fix_progress&&d.fix_progress.done)) ? last : 1;
             syncMatrixLoad(go);
           }, 500);
         }
       }
-    }).catch(()=>{});
+    }).catch(()=>{/* watchdog/lifecycle wake retries; keep the current interval alive */})
+      .finally(()=>{requestBusy=false;});
   };
   tick();
   window._smPoll=setInterval(tick, 1000);
 }
+function syncMatrixPollingWake(reason){
+  clearTimeout(window._smPollWakeTimer);
+  window._smPollWakeTimer=setTimeout(()=>{
+    if(document.visibilityState==='hidden'&&reason!=='pageshow')return;
+    syncMatrixPoll(reason||'wake');
+  },80);
+}
+/* Page refresh/version reload creates a fresh bootstrap. Browser sleep may
+   throttle an interval indefinitely, so every lifecycle wake performs an
+   immediate server-state read. The visible watchdog also bridges transient
+   idle handoffs where the fast interval intentionally stopped. */
+window.addEventListener('pageshow',()=>syncMatrixPollingWake('pageshow'));
+window.addEventListener('focus',()=>syncMatrixPollingWake('focus'));
+window.addEventListener('online',()=>syncMatrixPollingWake('online'));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncMatrixPollingWake('visible');});
+window._smPollWatchdog=setInterval(()=>{
+  if(document.visibilityState==='visible'&&(!window._smPoll||Date.now()-(window._smPollLastResponseAt||0)>15000))syncMatrixPollingWake('watchdog');
+},15000);
 /* v10.117: اصلاح مغایرت از روی جدول */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
@@ -84183,6 +84237,14 @@ function syncMatrixAutoLate(){
     }).catch(()=>{});
   }catch(e){}
 }
+function syncMatrixPollingBootstrap(){
+  syncMatrixPollingWake('bootstrap');
+  /* Destinations/settings may finish hydrating just after DOMContentLoaded. */
+  setTimeout(syncMatrixAutoLate,900);
+  setTimeout(()=>syncMatrixPollingWake('bootstrap-settled'),2500);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncMatrixPollingBootstrap,{once:true});
+else syncMatrixPollingBootstrap();
 window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
