@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.354';
+const APP_VERSION = '10.355';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -21559,6 +21559,14 @@ if (isset($_GET['backup_peek'])) {
     exit;
 }
 
+if (isset($_GET['runtime_health'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'at'=>time(),'sapi'=>PHP_SAPI],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if (isset($_GET['whoami'])) {
     header('Content-Type: text/plain; charset=UTF-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -42341,7 +42349,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '@keyframes runtime' . 'Pulse') !== false);
     $add('10.273', 'سلامت هاست/سرور دوره‌ای، timeoutدار و با کلیک قابل بررسی فوری است',
          strpos($selfSrc, 'async function s4RuntimeHealth' . 'Check') !== false
-      && strpos($selfSrc, "?whoami=1&_health=") !== false
+      && (strpos($selfSrc, "?runtime_health=1&_health=") !== false || strpos($selfSrc, "?whoami=1&_health=") !== false)
       && strpos($selfSrc, "setInterval(()=>s4RuntimeHealthCheck(false),15000)") !== false
       && strpos($selfSrc, "/\\/sc(?:\\/|$)/i.test(location.pathname)") !== false);
     $add('10.273', 'ورودی 10.273 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
@@ -43019,6 +43027,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.355', 'چراغ runtime به‌جای whoami سنگین endpoint سبک JSON را می‌خواند',
+         strpos($selfSrc, "isset(\$_GET['runtime_" . "health'])") !== false
+      && strpos($selfSrc, "?runtime_health=1&_health=") !== false
+      && strpos($selfSrc, "'version'=>APP_VERSION,'at'=>time()") !== false);
+    $add('10.355', 'یک timeout موقت قرمز نیست و قرمز به سه شکست پایدار محدود است',
+         strpos($selfSrc, "s4RuntimeHealthFailures<3||recentOk") !== false
+      && strpos($selfSrc, "s4RuntimeHealthLastOk)<90000") !== false
+      && strpos($selfSrc, "tag.textContent='~'") !== false);
+    $add('10.355', 'probe قبلی در focus/wake لغو و پاسخ stale با generation رد می‌شود',
+         strpos($selfSrc, "request!==s4RuntimeHealthRequest") !== false
+      && strpos($selfSrc, "if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort()") !== false
+      && strpos($selfSrc, "document.addEventListener('visibilitychange'") !== false);
+    $add('10.355', 'ورودی 10.355 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "355'") !== false
+      && version_compare(APP_VERSION, '10.' . '355', '>='));
     $add('10.354', 'اصلاح جدول فعلی با workflow صریح هرگز rebuild پنهان آغاز نمی‌کند',
          strpos($selfSrc, "fd.append('workflow','fix_" . "only')") !== false
       && strpos($selfSrc, "\$workflow=(string)(\$_GET['workflow']") !== false
@@ -74687,6 +74710,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.355', t:'🟢 تشخیص واقعی اتصال چراغ بالای صفحه', items:[
+    'probe سنگین whoami و محاسبهٔ hash فایل چندمگابایتی با endpoint بسیار سبک JSON جایگزین شد.',
+    'یک timeout یا شلوغی موقت هاست چراغ را کهربایی می‌کند؛ قرمز فقط پس از سه شکست پیوسته یا offline واقعی مرورگر نمایش داده می‌شود.',
+    'مهلت probe به ۱۲ ثانیه افزایش یافت و موفقیت ۹۰ ثانیهٔ اخیر از قرمز کاذب جلوگیری می‌کند.',
+    'در focus و بازگشت از خواب/تب مخفی بررسی فوری انجام می‌شود و پاسخ درخواست قدیمی دیگر وضعیت تازه را بازنویسی نمی‌کند.'
+  ]},
   {v:'10.354', t:'🔄 دکمهٔ صریح ساخت جدول و سپس اصلاح کلی', items:[
     'سه عمل مستقل و روشن در رابط وجود دارد: فقط ساخت جدول، اصلاح جدول فعلی، و ساخت جدول + اصلاح کلی.',
     'اصلاح جدول فعلی دیگر به‌دلیل سن snapshot مخفیانه rebuild نمی‌کند و دقیقاً روی مجموعهٔ فیلترشدهٔ فعلی اجرا می‌شود.',
@@ -93885,24 +93914,39 @@ function renderSendCard(d){
 /* v10.273: چراغ زندهٔ نوار بالا. /sc محیط سروری و مسیر افزونه محیط هاست
    نام‌گذاری می‌شود؛ معیار «زنده» پاسخ معتبر خود همین runtime است، نه آنلاین
    بودن مرورگر. کلیک روی چراغ یک بررسی فوری انجام می‌دهد. */
-let s4RuntimeHealthBusy=false;
+let s4RuntimeHealthBusy=false,s4RuntimeHealthFailures=0,s4RuntimeHealthLastOk=0,s4RuntimeHealthRequest=0,s4RuntimeHealthAbort=null;
 async function s4RuntimeHealthCheck(force=false){
-  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;
-  const serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
+  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el)return;
+  if(s4RuntimeHealthBusy){if(!force)return;try{if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort();}catch(_e){}}
+  const request=++s4RuntimeHealthRequest,serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
   s4RuntimeHealthBusy=true;
   if(force||!el.dataset.checked){el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='…';el.title='در حال بررسی '+kind+'…';}
-  const ac=typeof AbortController!=='undefined'?new AbortController():null,timer=ac?setTimeout(()=>ac.abort(),7000):null;
+  const ac=typeof AbortController!=='undefined'?new AbortController():null;s4RuntimeHealthAbort=ac;
+  const timer=ac?setTimeout(()=>ac.abort(),12000):null;
   try{
-    const r=await fetch('?whoami=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
-    if(!r.ok)throw new Error('HTTP '+r.status);const text=await r.text();if(!text||text.indexOf('PHP:')<0)throw new Error('invalid response');
-    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(Date.now());if(tag)tag.textContent=short;
-    el.title='● '+kind+' زنده است · PHP پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
+    const r=await fetch('?runtime_health=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
+    if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();if(!d||d.ok!==true||!d.version)throw new Error('invalid response');
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures=0;s4RuntimeHealthLastOk=Date.now();
+    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(s4RuntimeHealthLastOk);if(tag)tag.textContent=short;
+    el.title='● '+kind+' زنده است · PHP v'+String(d.version)+' پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
   }catch(e){
-    el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
-    el.title='● '+kind+' پاسخ نمی‌دهد — برای بررسی دوباره کلیک کنید';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
-  }finally{if(timer)clearTimeout(timer);s4RuntimeHealthBusy=false;}
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures++;
+    const browserOffline=navigator.onLine===false,recentOk=s4RuntimeHealthLastOk>0&&(Date.now()-s4RuntimeHealthLastOk)<90000;
+    if(!browserOffline&&(s4RuntimeHealthFailures<3||recentOk)){
+      /* A loaded PHP host can miss one probe while normal requests still work.
+         Keep this amber/degraded; red is reserved for sustained failure. */
+      el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='~';
+      el.title='● پاسخ '+kind+' کند یا موقتاً مشغول است · تلاش '+String(s4RuntimeHealthFailures)+' از ۳';
+      el.setAttribute('aria-label',kind+' موقتاً کند است');
+    }else{
+      el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
+      el.title=browserOffline?'● اتصال مرورگر قطع است':'● '+kind+' پس از ۳ بررسی پاسخ نداده است';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
+    }
+  }finally{if(timer)clearTimeout(timer);if(request===s4RuntimeHealthRequest){s4RuntimeHealthBusy=false;s4RuntimeHealthAbort=null;}}
 }
-(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('offline',()=>{const e=document.getElementById('runtimePulse');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';}});})();
+(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('focus',()=>s4RuntimeHealthCheck(true));document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4RuntimeHealthCheck(true);});window.addEventListener('offline',()=>{s4RuntimeHealthFailures=3;const e=document.getElementById('runtimePulse'),t=document.getElementById('runtimePulseTag');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';if(t)t.textContent='!';}});})();
 /* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
    daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
 (function opsFeedbackPulse(){
