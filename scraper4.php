@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.343';
+const APP_VERSION = '10.344';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -28148,7 +28148,26 @@ if (isset($_GET['queues_overview'])) {
 if(isset($_GET['recon_auto_log'])){
     header('Content-Type: application/json; charset=UTF-8');$rows=[];
     if(is_file(RECON_AUTO_LOG_FILE)){$d=json_decode((string)@file_get_contents(RECON_AUTO_LOG_FILE),true);if(is_array($d))$rows=$d;}
-    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'config'=>reconAutoCfg(),'state'=>reconAutoStateLoad(),'entries'=>array_slice($rows,-80)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    /* v10.344: log هنگام enqueue نوشته می‌شود، اما کارت گزارش باید نتیجهٔ
+       بعدی همان job را هم نشان دهد. queue را فقط موقع خواندن join می‌کنیم تا
+       گزارش تاریخی immutable بماند و polling تازه‌ترین status را بدهد. */
+    $slice=array_slice($rows,-80);$wanted=[];
+    foreach($slice as $r){$z=is_array($r['data']??null)?$r['data']:[];foreach(['build','fix']as$stage){$id=(string)($z[$stage]['job_id']??'');if($id!=='')$wanted[$id]=true;}}
+    $runtime=[];
+    if($wanted&&function_exists('s4WorkerLoadQueue')){
+        $q=s4WorkerLoadQueue();foreach((array)($q['entries']??[])as$e){if(!is_array($e))continue;$id=(string)($e['id']??'');if($id===''||!isset($wanted[$id]))continue;
+            $payload=is_array($e['payload']??null)?$e['payload']:[];$result=is_array($e['result']??null)?$e['result']:[];
+            $runtime[$id]=['status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0),
+                'created_at'=>(int)($e['created_at']??0),'started_at'=>(int)($e['started_at']??0),'updated_at'=>(int)($e['updated_at']??0),'done_at'=>(int)($e['done_at']??0),
+                'error'=>mb_substr((string)($e['error']??''),0,500),'worker_pid'=>(int)($e['worker_pid']??0),
+                'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),
+                'scope'=>(string)($payload['scope']??''),'resume'=>!empty($payload['resume']),
+                'result'=>array_intersect_key($result,array_fill_keys(['ok','worker_segments','resume_needed','child_exit_code','extracted','queue_id','tail'],true))];
+            if(isset($runtime[$id]['result']['tail']))$runtime[$id]['result']['tail']=mb_substr((string)$runtime[$id]['result']['tail'],-1000);
+        }
+    }
+    foreach($slice as&$r){if(!is_array($r))continue;$z=is_array($r['data']??null)?$r['data']:[];foreach(['build','fix']as$stage){$id=(string)($z[$stage]['job_id']??'');if($id!==''&&isset($runtime[$id]))$r['data'][$stage]['runtime']=$runtime[$id];}}unset($r);
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'config'=>reconAutoCfg(),'state'=>reconAutoStateLoad(),'entries'=>$slice],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 /** v8.49: وضعیت زندهٔ مغایرت‌گیری */
@@ -42767,6 +42786,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
+         strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
+      && strpos($selfSrc, '.ral-card{') !== false
+      && strpos($selfSrc, '.ral-stages{') !== false
+      && strpos($selfSrc, '@media(max-width:640px)') !== false);
+    $add('10.344', 'کارت هر اجرا build و fix و جزئیات فنی مستقل نشان می‌دهد',
+         strpos($selfSrc, "stageCard('ساخت جدول','📊'") !== false
+      && strpos($selfSrc, "stageCard('اصلاح جدول','🔧'") !== false
+      && strpos($selfSrc, 'دادهٔ فنی و پاسخ کامل این اجرا') !== false
+      && strpos($selfSrc, "JSON.stringify(x,null,2)") !== false);
+    $add('10.344', 'endpoint گزارش رویداد تاریخی را با runtime صف همان job غنی می‌کند',
+         strpos($selfSrc, "'selected_destinations'=>array_values") !== false
+      && strpos($selfSrc, "['build','fix']as\$stage") !== false
+      && strpos($selfSrc, "['runtime']=\$runtime[\$id]") !== false);
+    $add('10.344', 'ورودی 10.344 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "344'") !== false
+      && version_compare(APP_VERSION, '10.' . '344', '>='));
     $add('10.343', 'PID زامبی بدون worker lock پس از heartbeat کهنه active نمی‌ماند',
          strpos($selfSrc, "\$lockHeld=!\$free") !== false
       && strpos($selfSrc, "if(\$lockHeld)return true") !== false
@@ -66891,11 +66927,15 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button type="button" class="btn btn-gray" onclick="reconExecStatus()" style="font-size:10px;margin-top:5px">🫀 وضعیت آخرین ضربان</button><span id="reconExecStatus" style="font-size:10px;color:#67e8f9;margin-right:6px"></span>
 </div>
 <div id="reconAutoStatus" style="font-size:10.5px;color:#67e8f9;margin-top:6px"></div>
-<details style="margin-top:8px" ontoggle="if(this.open)reconAutoLoadLog()">
-<summary style="cursor:pointer;color:#fcd34d;font-size:11px;font-weight:800">📋 گزارش مغایرت‌گیری دوره‌ای</summary>
-<button type="button" class="btn btn-gray" onclick="reconAutoLoadLog()" style="margin-top:6px;font-size:10px">↻ تازه‌سازی گزارش</button>
-<pre id="reconAutoLog" style="white-space:pre-wrap;max-height:220px;overflow:auto;background:#020617;border:1px solid #334155;border-radius:8px;padding:8px;font-size:10px;color:#cbd5e1">برای مشاهده، گزارش را باز کنید.</pre>
+<details class="ral-shell" style="margin-top:8px" ontoggle="if(this.open)reconAutoLoadLog()">
+<summary style="cursor:pointer;color:#fcd34d;font-size:11px;font-weight:800">📋 گزارش‌های تفصیلی مغایرت‌گیری دوره‌ای</summary>
+<div class="ral-toolbar"><button type="button" class="btn btn-gray" onclick="reconAutoLoadLog()" style="font-size:10px">↻ تازه‌سازی گزارش</button><span id="reconAutoLogMeta">هر اجرا یک کارت مستقل</span></div>
+<div id="reconAutoLog" class="ral-list"><div class="ral-empty">برای مشاهده، گزارش را باز کنید.</div></div>
 </details>
+<style>
+.ral-shell{background:#02061788;border:1px solid #334155;border-radius:12px;padding:8px}.ral-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 0}.ral-toolbar span{font-size:9.5px;color:#64748b}.ral-list{display:grid;gap:10px;max-height:620px;overflow:auto;padding:2px}.ral-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.ral-stat{padding:8px;background:linear-gradient(145deg,#111827,#172554);border:1px solid #334155;border-radius:10px;min-width:0}.ral-stat b{display:block;color:#f8fafc;font-size:11px;overflow:hidden;text-overflow:ellipsis}.ral-stat small{display:block;color:#94a3b8;font-size:9px;margin-top:3px}.ral-card{position:relative;overflow:hidden;background:linear-gradient(145deg,#0f172a,#111827);border:1px solid #334155;border-radius:13px;padding:10px;box-shadow:0 8px 24px #02061755}.ral-card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:#38bdf8}.ral-card.ok:before{background:#22c55e}.ral-card.bad:before{background:#ef4444}.ral-card.wait:before{background:#f59e0b}.ral-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}.ral-title{font-size:11.5px;font-weight:900;color:#e2e8f0}.ral-sub{font-size:9.5px;color:#94a3b8;margin-top:3px}.ral-badge{white-space:nowrap;padding:3px 8px;border-radius:99px;font-size:9px;font-weight:900;background:#1e3a8a;color:#bfdbfe}.ral-badge.ok{background:#14532d;color:#bbf7d0}.ral-badge.bad{background:#7f1d1d;color:#fecaca}.ral-badge.wait{background:#78350f;color:#fde68a}.ral-tags{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.ral-tag{font-size:9px;color:#cbd5e1;background:#1e293b;border:1px solid #475569;border-radius:6px;padding:3px 6px}.ral-stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.ral-stage{background:#020617aa;border:1px solid #334155;border-radius:10px;padding:8px;min-width:0}.ral-stage-h{display:flex;align-items:center;justify-content:space-between;gap:5px;color:#e2e8f0;font-size:10px;font-weight:900}.ral-stage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:6px}.ral-kv{background:#0f172a;border-radius:6px;padding:5px;min-width:0}.ral-kv small{display:block;color:#64748b;font-size:8px}.ral-kv b{display:block;color:#cbd5e1;font-size:9px;margin-top:2px;overflow:hidden;text-overflow:ellipsis}.ral-err{margin-top:6px;padding:6px;background:#450a0a88;border:1px solid #991b1b;border-radius:7px;color:#fecaca;font-size:9px;line-height:1.6}.ral-tech{margin-top:7px;border-top:1px dashed #334155;padding-top:6px}.ral-tech summary{font-size:9px;color:#7dd3fc;cursor:pointer}.ral-tech pre{direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;font-size:8px;color:#94a3b8;background:#020617;padding:7px;border-radius:7px}.ral-empty{padding:18px;text-align:center;color:#64748b;background:#020617;border:1px dashed #334155;border-radius:10px;font-size:10px}
+@media(max-width:640px){.ral-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.ral-stages{grid-template-columns:1fr}.ral-list{max-height:72vh}.ral-head{align-items:center}}
+</style>
 </div>
 <!-- v8.65: دفترچهٔ شناسه‌ها -->
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #334155">
@@ -74289,6 +74329,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.344', t:'🎴 گزارش‌های کارتی تفصیلی مغایرت‌گیری دوره‌ای', items:[
+    'گزارش متنی ساده با کارت‌های واکنش‌گرا و جذاب برای هر اجرای دوره‌ای جایگزین شد.',
+    'هر کارت وضعیت کلی، زمان، نسخه، worker، موتور اجرا، تازگی کران و lease را نشان می‌دهد.',
+    'ساخت جدول و اصلاح در پنل‌های مستقل با وضعیت زندهٔ صف، شناسه job، تلاش‌ها، زمان، مدت، segment، مقصدها و خطا نمایش داده می‌شوند.',
+    'endpoint گزارش هنگام خواندن، رویداد تاریخی را با نتیجهٔ فعلی همان job در worker queue پیوند می‌دهد؛ log اصلی immutable می‌ماند.',
+    'دادهٔ فنی کامل هر اجرا در بخش بازشونده و چیدمان موبایل در دسترس است.'
+  ]},
   {v:'10.343', t:'🫀 تشخیص daemon مرده با lock و heartbeat', items:[
     'PID زامبی دیگر worker فعال شمرده نمی‌شود؛ مالکیت lock معیار قطعی daemon طولانی است.',
     'PID بدون lock فقط در پنجرهٔ کوتاه handoff معتبر است و پس از heartbeat کهنه جلوی بازیابی کران را نمی‌گیرد.',
@@ -79066,13 +79113,30 @@ function reconExecStatus(){
   fetch('?matrix_execution_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{if(!o)return;const p=d.pulse||{},age=p.at?Math.max(0,Math.floor(Date.now()/1000-p.at)):null;o.textContent=(d.execution&&d.execution.cron_fresh?'🟢':'🟠')+' '+(age===null?'هنوز ضربانی نیست':('آخرین ضربان '+toFa(age)+' ثانیه پیش'))+' · '+((d.execution||{}).mode||'');}).catch(()=>{if(o)o.textContent='خطای خواندن وضعیت';});
 }
 function reconAutoLoadLog(){
-  const box=$('reconAutoLog');if(box)box.textContent='در حال خواندن گزارش…';
-  fetch('?recon_auto_log=1&_=' + Date.now()).then(r=>r.json()).then(d=>{
-    if(!box)return;const rows=(d.entries||[]).slice().reverse();const st=d.state||{};
-    let lines=['نسخه '+(d.version||'')+' · آخرین شروع: '+(st.last_start?new Date(st.last_start*1000).toLocaleString('fa-IR'):'—')];
-    rows.forEach(x=>{const dt=new Date((x.t||0)*1000).toLocaleString('fa-IR');const z=x.data||{};lines.push(dt+' · '+(x.event||'')+' · worker='+(z.worker_ready===false?'خاموش':'فعال')+' · build='+((z.build||{}).job_id||((z.build||{}).skipped?'رد شد':'—'))+' · fix='+((z.fix||{}).job_id||((z.fix||{}).skipped?'رد شد':'—')));});
-    box.textContent=lines.join('\n');
-  }).catch(e=>{if(box)box.textContent='خطا در خواندن گزارش: '+e.message;});
+  const box=$('reconAutoLog'),meta=$('reconAutoLogMeta');if(box)box.innerHTML='<div class="ral-empty">⏳ در حال خواندن گزارش‌های تفصیلی…</div>';
+  const dt=v=>v?new Date(v*1000).toLocaleString('fa-IR'):'—';
+  const dur=(a,b)=>{if(!a)return'—';const n=Math.max(0,(b||Math.floor(Date.now()/1000))-a);return n<60?toFa(n)+' ثانیه':(n<3600?toFa(Math.floor(n/60))+' دقیقه':toFa(Math.floor(n/3600))+' ساعت و '+toFa(Math.floor((n%3600)/60))+' دقیقه');};
+  const modeLabel=m=>({cron_only:'فقط کران',delay_only:'فقط worker',cron_first:'کران ← worker',delay_first:'worker ← کران'}[m]||m||'—');
+  const statusInfo=(stage,event)=>{const r=(stage||{}).runtime||{},s=r.status||((stage||{}).skipped?'skipped':((stage||{}).status||''));
+    if(event==='queue_failed'||s==='failed'||s==='cancelled'||r.error)return{key:'bad',txt:s==='cancelled'?'لغوشده':'ناموفق'};
+    if(s==='done')return{key:'ok',txt:'تکمیل‌شده'};if(s==='running')return{key:'wait',txt:'در حال اجرا'};if(s==='pending')return{key:'wait',txt:'در صف'};if(s==='paused')return{key:'wait',txt:'منتظر ادامه'};if(s==='skipped')return{key:'',txt:'انجام نمی‌شود'};return{key:'wait',txt:'صف‌شده'};};
+  const stageCard=(name,icon,stage,event)=>{stage=stage||{};const r=stage.runtime||{},si=statusInfo(stage,event),res=r.result||{},dest=(r.selected_destinations||[]).map(x=>x==='woo'?'ووکامرس':(String(x).startsWith('bsl:')?'غرفه '+String(x).slice(4):x));
+    const err=r.error||stage.error||(!res.ok&&res.tail?res.tail:'');
+    return '<div class="ral-stage"><div class="ral-stage-h"><span>'+icon+' '+name+'</span><span class="ral-badge '+si.key+'">'+esc(si.txt)+'</span></div>'+
+      '<div class="ral-stage-grid"><div class="ral-kv"><small>شناسه job</small><b title="'+esc(stage.job_id||'')+'">'+esc(stage.job_id||'—')+'</b></div><div class="ral-kv"><small>تلاش‌ها</small><b>'+toFa(r.attempts||0)+'</b></div><div class="ral-kv"><small>شروع</small><b>'+esc(dt(r.started_at))+'</b></div><div class="ral-kv"><small>مدت</small><b>'+esc(dur(r.started_at,r.done_at))+'</b></div><div class="ral-kv"><small>segmentها</small><b>'+toFa(res.worker_segments||0)+'</b></div><div class="ral-kv"><small>مقصدها</small><b title="'+esc(dest.join('، '))+'">'+esc(dest.length?dest.join('، '):'—')+'</b></div></div>'+
+      (err?'<div class="ral-err">⚠ '+esc(String(err).slice(0,700))+'</div>':'')+'</div>';};
+  fetch('?recon_auto_log=1&_=' + Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    if(!box)return;const rows=(d.entries||[]).slice().reverse(),st=d.state||{},cfg=d.config||{};
+    if(meta)meta.textContent=toFa(rows.length)+' اجرای ثبت‌شده · نسخه '+(d.version||'');
+    let html='<div class="ral-overview"><div class="ral-stat"><b>'+(cfg.enabled?'🟢 فعال':'⚪ خاموش')+'</b><small>وضعیت اجرای دوره‌ای</small></div><div class="ral-stat"><b>هر '+toFa(cfg.interval_h||0)+' ساعت</b><small>فاصلهٔ اجرا</small></div><div class="ral-stat"><b>'+esc(modeLabel(cfg.execution_mode))+'</b><small>موتور اجرا</small></div><div class="ral-stat"><b>'+esc(dt(st.last_finish||st.last_start))+'</b><small>آخرین فعالیت</small></div></div>';
+    if(!rows.length){box.innerHTML=html+'<div class="ral-empty">هنوز اجرای دوره‌ای ثبت نشده است.</div>';return;}
+    rows.forEach((x,i)=>{const z=x.data||{},bs=statusInfo(z.build,x.event),fs=statusInfo(z.fix,x.event),bad=bs.key==='bad'||fs.key==='bad'||x.event==='queue_failed',done=bs.key==='ok'&&(fs.key==='ok'||(z.fix||{}).skipped),cls=bad?'bad':(done?'ok':'wait'),overall=bad?'دارای خطا':(done?'کامل':'در حال پیگیری'),ex=z.execution||{};
+      html+='<article class="ral-card '+cls+'"><div class="ral-head"><div><div class="ral-title">اجرای دوره‌ای #'+toFa(rows.length-i)+'</div><div class="ral-sub">'+esc(dt(x.t))+' · نسخه '+esc(x.version||'—')+'</div></div><span class="ral-badge '+cls+'">'+overall+'</span></div>'+
+        '<div class="ral-tags"><span class="ral-tag">'+(z.worker_ready===false?'🔴 worker خاموش':'🟢 worker آماده')+'</span><span class="ral-tag">دامنه: '+esc(z.scope||'all')+'</span><span class="ral-tag">روش: '+esc(modeLabel(ex.mode))+'</span><span class="ral-tag">'+(ex.cron_fresh?'⚡ کران تازه':'◷ کران غیرفعال')+'</span><span class="ral-tag">lease: '+toFa(ex.lease_sec||0)+' ثانیه</span></div>'+
+        '<div class="ral-stages">'+stageCard('ساخت جدول','📊',z.build,x.event)+stageCard('اصلاح جدول','🔧',z.fix,x.event)+'</div>'+
+        '<details class="ral-tech"><summary>دادهٔ فنی و پاسخ کامل این اجرا</summary><pre>'+esc(JSON.stringify(x,null,2))+'</pre></details></article>';
+    });box.innerHTML=html;
+  }).catch(e=>{if(box)box.innerHTML='<div class="ral-empty" style="color:#fca5a5">✗ خطا در خواندن گزارش: '+esc(e.message)+'</div>';});
 }
 function reconAutoBadge(){
   const b=$('reconAutoBadge'); if(!b) return;
