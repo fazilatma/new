@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.349';
+const APP_VERSION = '10.350';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -29031,7 +29031,14 @@ function matrixBuild(array $opts = []): array {
         matrixProgress(['checkpoint' => $matrixCp('woo_' . ($matrixWooDone ? 'map' : 'fetch'), $rowsByKey,
             $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
         if (matrixStopRequested()) return $stopMatrix('woo_fetch');
-        if (!empty($wooMeta['stopped']) && !matrixStopRequested()) return $yieldMatrix('woo_fetch');
+        /* Reaching the per-process page cap is a normal handoff boundary, not a
+           failed Woo extraction. Preserve the dedicated cursor/checkpoint and let
+           the worker (or next cron pulse) continue from the following page. */
+        $wooBoundaryReason=(string)($wooMeta['reason']??'');
+        if ((!empty($wooMeta['stopped']) && !matrixStopRequested())
+            || in_array($wooBoundaryReason,['max_pages','run_limit'],true)) {
+            return $yieldMatrix('woo_fetch');
+        }
         if (!$matrixWooDone) {
             $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
@@ -42977,6 +42984,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.350', 'سقف صفحهٔ هر پردازش Woo به‌عنوان handoff قابل‌ادامه شناخته می‌شود',
+         strpos($selfSrc, "in_array(\$wooBoundaryReason,['max_" . "pages','run_limit'],true)") !== false
+      && strpos($selfSrc, "return \$yieldMatrix('woo_" . "fetch')") !== false);
+    $add('10.350', 'مرز صفحه cursor و checkpoint را حفظ می‌کند و وارد شاخهٔ خطا نمی‌شود',
+         strpos($selfSrc, 'Reaching the per-process page cap is a normal handoff boundary') !== false
+      && strpos($selfSrc, "\$wooBoundaryReason=(string)(\$wooMeta['reason']??'')") !== false);
+    $add('10.350', 'ورودی 10.350 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "350'") !== false
+      && version_compare(APP_VERSION, '10.' . '350', '>='));
     $add('10.349', 'قفل به‌ارث‌رسیدهٔ worker مرده با اثبات PID و heartbeat بازیابی می‌شود',
          strpos($selfSrc, 'function s4WorkerRecoverStale' . 'LockPath') !== false
       && strpos($selfSrc, 'dead_worker_inherited_' . 'lock') !== false
@@ -74567,6 +74583,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.350', t:'📄 ادامهٔ خودکار Woo پس از سقف صفحهٔ هر پردازش', items:[
+    'رسیدن سالم به سقف صفحات هر child دیگر خطای «برداشت ووکامرس کامل نشد» نیست و به‌عنوان handoff عادی ثبت می‌شود.',
+    'cursor و checkpoint اختصاصی حفظ می‌شوند و worker یا ضربان بعدی کران از صفحهٔ بعد ادامه می‌دهد.',
+    'خطاهای واقعی HTTP همچنان متوقف و گزارش می‌شوند؛ فقط مرزهای max_pages و run_limit قابل‌ادامه هستند.'
+  ]},
   {v:'10.349', t:'🔓 بازیابی قفل worker مرده و ادامهٔ فوری checkpoint', items:[
     'اگر daemon مرده باشد ولی child قدیمی flock را به ارث برده باشد، PID مرده و heartbeat کهنه پیش از هر تغییری اثبات می‌شوند.',
     'مسیر lock یتیم اتمیک کنار گذاشته می‌شود تا worker تازه بتواند job ادامهٔ ماتریس را claim کند؛ child قدیمی فقط inode قبلی را نگه می‌دارد.',
