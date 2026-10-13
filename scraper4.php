@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.347';
+const APP_VERSION = '10.348';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1198,6 +1198,21 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
     return $enq;
 }
 
+/** An unfinished matrix checkpoint always owns continuation. A fresh request
+ * may not erase it; same-scope requests are promoted to resume, while a scope
+ * change is rejected until the current checkpoint finishes or is explicitly
+ * discarded by a future dedicated action. */
+function matrixBuildCheckpointGuard(array $opts): array {
+    $old=matrixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;
+    if(!$cp)return ['exists'=>false,'compatible'=>false,'checkpoint'=>null,'state'=>$old];
+    $wantProfile=(string)($opts['profile']??'all');if($wantProfile==='')$wantProfile='all';
+    $haveProfile=(string)($cp['profile_filter']??'all');if($haveProfile==='')$haveProfile='all';
+    $cn=loadConnections();$want=matrixNormalizeDestinations(array_key_exists('selected_destinations',$opts)?$opts['selected_destinations']:null,$cn);
+    $have=matrixNormalizeDestinations($cp['selected_destinations']??null,$cn);sort($want);sort($have);
+    return ['exists'=>true,'compatible'=>$wantProfile===$haveProfile&&$want===$have,'checkpoint'=>$cp,'state'=>$old,
+        'have_profile'=>$haveProfile,'want_profile'=>$wantProfile,'have_destinations'=>$have,'want_destinations'=>$want];
+}
+
 /** Keep one periodic build→fix chain. v10.336 intentionally gave every tick a
  * timestamped dedup key; when a stale legacy checkpoint bypassed the interval,
  * this accumulated endless fresh builds. Preserve the running/oldest chain and
@@ -1225,6 +1240,13 @@ function s4WorkerCoalescePeriodicMatrixChains(): array {
 }
 
 function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
+    $checkpointGuard=matrixBuildCheckpointGuard($opts);
+    if(!empty($checkpointGuard['exists'])){
+        if(empty($checkpointGuard['compatible']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
+            'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
+            'want_destinations'=>$checkpointGuard['want_destinations']??[]];
+        $resume=true;$opts['_resume_promoted']=true;
+    }
     $execDriver=function_exists('matrixExecutionDecision')?matrixExecutionDecision():['accelerated'=>false];
     $requestedSlice=max(2,min(20,(int)($opts['slice_seconds']??8)));
     if(!empty($execDriver['accelerated']))$requestedSlice=20;
@@ -1235,7 +1257,7 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         'selected_destinations' => array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):null,
         'coded_only' => false,
         'slice_seconds' => $requestedSlice,
-        'resume' => $resume, 'requested_at' => microtime(true),
+        'resume' => $resume, 'resume_promoted' => !empty($opts['_resume_promoted']), 'requested_at' => microtime(true),
         /* periodic chain may require its own guaranteed fresh build behind an
            already-running manual build; callers can provide a chain key. */
         'dedup_key' => (string)($opts['dedup_key'] ?? 'matrix_build'),
@@ -1251,7 +1273,9 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
             'coded_only' => $payload['coded_only'], 'slice_seconds' => $payload['slice_seconds'], 'checkpoint' => $cp,
             'job_id' => (string)($enq['job_id'] ?? ''),
             'started_at' => (int)($cp['started_at'] ?? time()),
-            'log_add' => ['🧵 ساخت جدول به worker دائمی سپرده شد — بستن مرورگر یا خواب گوشی اثری ندارد'],
+            'log_add' => [!empty($payload['resume_promoted'])
+                ? '↻ درخواست ساخت تازه به ادامهٔ checkpoint ناتمام تبدیل شد؛ هیچ صفحه‌ای از اول شروع نمی‌شود'
+                : '🧵 ساخت جدول به worker دائمی سپرده شد — بستن مرورگر یا خواب گوشی اثری ندارد'],
         ]);
     }
     return $enq;
@@ -1332,6 +1356,11 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         'slice_seconds' => max(2, min(20, (int)($payload['slice_seconds'] ?? 8))),
         'checkpoint' => null,
     ];
+    $checkpointGuard=matrixBuildCheckpointGuard($opts);
+    if(!empty($checkpointGuard['exists'])){
+        if(empty($checkpointGuard['compatible']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict','checkpoint_preserved'=>true];
+        $resume=true;
+    }
     if ($resume) {
         $old = matrixProgressRead();
         $cp = is_array($old['checkpoint'] ?? null) ? $old['checkpoint'] : null;
@@ -31524,13 +31553,31 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
-    /* اصلاح دستی همیشه روی snapshot تازه اجرا می‌شود. صرفاً برابر بودن تیک‌ها و
-       pricing_signature کافی نیست: پروفایل یا کاتالوگ مقصد ممکن است پس از ساخت
-       قبلی عوض شده باشد و همان فایل قدیمی پیام کاذب «کاری نیست» تولید کند. */
+    /* اصلاح دستی روی snapshot تازه اجرا می‌شود، اما snapshot همین چند دقیقهٔ
+       اخیر تازه است و checkpoint ناتمام همیشه باید قبل از هر rebuild ادامه یابد. */
     $fixMatrix=is_file(SYNC_MATRIX_RESULT_FILE)?matrixResultLoad():[];
     $fixHave=array_values((array)($fixMatrix['selected_destinations']??[]));sort($fixHave);
     $fixWant=array_values($opts['selected_destinations']);sort($fixWant);
-    $forceFresh=(string)$opts['source']==='manual';
+    /* An unfinished build wins over correction's freshness request. Queue/resume
+       that exact checkpoint and put fix behind it; never clear its cursor. */
+    $mxBeforeFix=matrixProgressRead();$mxCp=is_array($mxBeforeFix['checkpoint']??null)?$mxBeforeFix['checkpoint']:null;
+    if($mxCp){
+        $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
+        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای ادامهٔ checkpoint آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+        $resumeRequestedAt=time();
+        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>(string)($mxCp['profile_filter']??'all'),
+            'parallel_destinations'=>(string)($mxCp['fetch_mode']??'serial')==='parallel','live_fill'=>!empty($mxCp['live_fill']),
+            'selected_destinations'=>$opts['selected_destinations'],'slice_seconds'=>(int)($mxCp['slice_seconds']??8)],true);
+        if(empty($buildEnq['ok'])){echo json_encode(['ok'=>false,'error'=>'ادامهٔ checkpoint در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;}
+        $opts['min_matrix_generated_at']=$resumeRequestedAt;$fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
+        echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
+            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح اجرا می‌شود',
+            'matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+    }
+    /* A matrix that just completed is already the fresh snapshot the user is
+       looking at. Do not immediately rebuild it from Woo page one. */
+    $fixMatrixAge=$fixMatrix?max(0,time()-(int)($fixMatrix['generated_at']??0)):PHP_INT_MAX;
+    $forceFresh=(string)$opts['source']==='manual'&&$fixMatrixAge>300;
     $fixNeedsBuild=$forceFresh||!$fixMatrix||$fixHave!==$fixWant
         ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
     if($fixNeedsBuild){
@@ -42897,6 +42944,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.347', 'ورودی 10.347 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "347'") !== false
       && version_compare(APP_VERSION, '10.' . '347', '>='));
+    $add('10.348', 'هر درخواست fresh در حضور checkpoint هم‌دامنه به resume ارتقا می‌یابد',
+         strpos($selfSrc, 'function matrixBuildCheckpoint' . 'Guard') !== false
+      && strpos($selfSrc, "\$resume=true;\$opts['_resume_" . "promoted']=true") !== false
+      && strpos($selfSrc, 'unfinished_matrix_checkpoint_' . 'scope_conflict') !== false);
+    $add('10.348', 'runner نیز job قدیمی fresh را پیش از پاک‌کردن cursor به resume تبدیل می‌کند',
+         substr_count($selfSrc, 'matrixBuildCheckpoint' . 'Guard($opts)') >= 2
+      && strpos($selfSrc, "if(!empty(\$checkpointGuard['exists']))") !== false);
+    $add('10.348', 'اصلاح پشت checkpoint موجود صف می‌شود و آن را rebuild نمی‌کند',
+         strpos($selfSrc, "if(\$mx" . "Cp){") !== false
+      && strpos($selfSrc, "'resuming_matrix'=>true") !== false
+      && strpos($selfSrc, 'ابتدا همان checkpoint ناتمام ادامه می‌یابد') !== false);
+    $add('10.348', 'snapshot تازهٔ پنج دقیقهٔ اخیر برای اصلاح دوباره ساخته نمی‌شود',
+         strpos($selfSrc, "\$fixMatrixAge>" . "300") !== false
+      && strpos($selfSrc, 'A matrix that just completed is already the fresh snapshot') !== false);
+    $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "348'") !== false
+      && version_compare(APP_VERSION, '10.' . '348', '>='));
     $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
          strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
       && strpos($selfSrc, '.ral-card{') !== false
@@ -74470,6 +74534,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.348', t:'⏯ اولویت قطعی checkpoint بر هر ساخت تازهٔ جدول', items:[
+    'تا وقتی checkpoint ناتمام وجود دارد، هر درخواست ساخت تازهٔ هم‌دامنه خودکار به resume تبدیل می‌شود و اجازهٔ پاک‌کردن cursor را ندارد.',
+    'اگر مقصدهای درخواست تازه با checkpoint ناتمام فرق داشته باشند، درخواست با خطای روشن رد می‌شود و checkpoint موجود دست‌نخورده می‌ماند.',
+    'درخواست اصلاح هنگام وجود build ناتمام، همان build را ادامه می‌دهد و correction را پشت آن صف می‌کند؛ rebuild موازی یا شروع از صفحهٔ ۱ ساخته نمی‌شود.',
+    'جدولی که در پنج دقیقهٔ اخیر کامل شده برای اصلاح دستی دوباره ساخته نمی‌شود؛ همان snapshot تازه مستقیماً اصلاح می‌شود.',
+    'runner نیز jobهای قدیمیِ resume=false را پیش از اجرا با checkpoint جاری تطبیق می‌دهد تا job از قبل صف‌شده نتواند cursor را پاک کند.'
+  ]},
   {v:'10.347', t:'🔁 پایان حلقهٔ شروع دوبارهٔ Woo در ساخت جدول مغایرت', items:[
     'علت واقعی تأیید شد: بازیابی worker همان build دوره‌ای تازه را با resume=false دوباره claim می‌کرد، cursor را پاک می‌کرد و ووکامرس از صفحهٔ ۱ آغاز می‌شد.',
     'هر build ماتریس اکنون cursor صفحه‌ای اختصاصی دارد؛ گزارش legacy، suffix و اجرای دیگر دیگر نمی‌توانند cursor فعال ماتریس را حذف کنند.',
