@@ -81,7 +81,23 @@ say "─────────────────────────
 say "🌐  http://$HOST:$PORT/$PANEL"
 say "    (در مرورگرِ همان گوشی باز کنید؛ ترموکس را باز نگه دارید)"
 say "    توقف: Ctrl+C"
+say "    خطاها: $DIR/php-error.log   (با DEBUG=1 روی صفحه هم نمایش داده می‌شوند)"
 say "──────────────────────────────────────────────────────────"
-exec php -d display_errors=1 -d error_reporting=E_ALL -d memory_limit=512M \
+
+# ۶) تنظیماتِ حیاتیِ PHP برای اجرای پنل
+#    • opcache.enable=0 → بدونِ آن، php -S روی ترموکس با
+#      «Error Cannot create lock - Permission denied (13)» فوراً می‌میرد
+#      (قفلِ fcntl روی حافظهٔ مشترک/اندروید ساخته نمی‌شود) ⇒ پنل «وارد نمی‌شود».
+#    • display_errors پیش‌فرض خاموش: هر Deprecated/Notice قبل از JSON چاپ شود،
+#      پاسخِ api() خراب می‌شود و دکمه‌های پنل بی‌اثر می‌مانند (PHP 8.5 پر از
+#      Deprecated جدید است، مثل $http_response_header).
+ERRLOG="$DIR/php-error.log"
+PHPDBG="Off"; [ "${DEBUG:-0}" = 1 ] && PHPDBG="1"
+exec php -d opcache.enable=0 -d opcache.enable_cli=0 \
+     -d opcache.lockfile_path="${PREFIX:-/tmp}/tmp" \
+     -d display_errors="$PHPDBG" -d display_startup_errors=0 \
+     -d log_errors=1 -d error_log="$ERRLOG" \
+     -d error_reporting="E_ALL & ~E_DEPRECATED & ~E_STRICT" \
+     -d memory_limit=512M \
      -d upload_max_filesize=64M -d post_max_size=64M -d max_execution_time=0 \
      -S "$HOST:$PORT" -t "$DIR"
