@@ -341,7 +341,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.344';
+const APP_VERSION = '10.345';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1068,7 +1068,11 @@ function s4WorkerEnqueue(string $type, array $payload, string $label = ''): arra
         $now = time();
         foreach ($q['entries'] as $e) {
             if (!is_array($e)) continue;
-            if (!in_array((string)($e['status'] ?? ''), ['pending','running'], true)) continue;
+            $activeStates=['pending','running'];
+            /* In cron_only a paused matrix job still owns the checkpoint and is
+               waiting for the next pulse; enqueueing another owner creates a herd. */
+            if(in_array($type,['matrix_build','matrix_fix'],true))$activeStates[]='paused';
+            if (!in_array((string)($e['status'] ?? ''), $activeStates, true)) continue;
             if ($dedup !== '' && (string)($e['dedup_key'] ?? '') === $dedup) {
                 return ['ok' => true, 'queued' => true, 'duplicate' => true,
                     'job_id' => (string)($e['id'] ?? ''), 'status' => (string)($e['status'] ?? '')];
@@ -1565,8 +1569,17 @@ function matrixCronWatchdog(?array $cfg=null): array {
 function matrixWakePausedJobs(): int {
     $resumed=0;
     if(function_exists('s4WorkerQueueMutate'))s4WorkerQueueMutate(function(&$q)use(&$resumed){
-        foreach($q['entries'] as &$e){if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='paused')continue;
-            $e['status']='pending';$e['updated_at']=time();$e['worker_pid']=0;$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['error']='';$resumed++;
+        $now=time();$keepers=[];
+        /* Keep only the newest paused owner for each matrix dedup chain. Older
+           copies were created by legacy orphan recovery and must not all wake. */
+        foreach($q['entries']as$i=>$e){if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='paused')continue;
+            $key=(string)($e['type']??'').'|'.(string)($e['dedup_key']??'');$rank=(int)($e['updated_at']??$e['created_at']??0);
+            if(!isset($keepers[$key])||$rank>=$keepers[$key]['rank'])$keepers[$key]=['i'=>$i,'rank'=>$rank];
+        }
+        foreach($q['entries']as$i=>&$e){if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='paused')continue;
+            $key=(string)($e['type']??'').'|'.(string)($e['dedup_key']??'');
+            if((int)($keepers[$key]['i']??-1)!==$i){$e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['worker_pid']=0;$e['error']='superseded_paused_matrix_owner';continue;}
+            $e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['error']='';$resumed++;
         }unset($e);return ['ok'=>true];
     });
     return $resumed;
@@ -1586,10 +1599,27 @@ function matrixWakeWaitingBuild(): array {
     $r=s4WorkerIsActive()?s4WorkerEnqueueMatrixBuild($opts,true):s4SpawnMatrixBuildChild($opts,true);
     return ['woken'=>!empty($r['ok']),'result'=>$r];
 }
+function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $resumed,array $waiting): void {
+    /* Only a real hosting/HTTP/CLI cron tick belongs in operation logs. Saving
+       the mode emits mode_switch, which is a control pulse rather than cron. */
+    if((string)($cfg['mode']??'')!=='cron_only'||!str_starts_with($source,'external'))return;
+    $parts=['🫀 کران رسید',date('Y/m/d H:i:s'),'منبع: '.$source,'lease: '.(int)($cfg['lease_sec']??0).' ثانیه'];
+    if($resumed>0)$parts[]='بیدارسازی '.(int)$resumed.' job';
+    if(!empty($waiting['woken']))$parts[]='ادامهٔ checkpoint مستقل';
+    if(!empty($watchdog['stale']))$parts[]='نگهبان: بازیابی '.$watchdog['kind'].' PID '.(int)($watchdog['pid']??0);
+    else $parts[]='نگهبان: سالم';
+    $line=implode(' · ',$parts);
+    $build=matrixProgressRead(false);$fix=function_exists('matrixFixProgressRead')?matrixFixProgressRead():[];
+    $buildRelevant=!empty($build['running'])||!empty($build['yielded'])||!empty($build['queued'])||in_array((string)($build['phase']??''),['waiting_cron','در صف worker'],true);
+    $fixRelevant=!empty($fix['running'])||!empty($fix['queued'])||in_array((string)($fix['phase']??''),['waiting_cron','در انتظار ضربان کران','در صف worker'],true);
+    if($buildRelevant)matrixProgress(['cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
+    if($fixRelevant)matrixFixProgress(['cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
+}
 function matrixCronPulse(string $source='external'): array {
     $cfg=matrixExecutionCfg();$state=['at'=>time(),'source'=>$source,'pid'=>(int)@getmypid(),'version'=>APP_VERSION];
     @file_put_contents(MATRIX_CRON_PULSE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
     $watchdog=matrixCronWatchdog($cfg);$resumed=matrixWakePausedJobs();$waiting=matrixWakeWaitingBuild();
+    matrixCronLogArrival($source,$cfg,$watchdog,$resumed,$waiting);
     return $state+['resumed'=>$resumed,'waiting_build'=>$waiting,'watchdog'=>$watchdog];
 }
 /** Apply a saved mode immediately, including jobs parked by the previous mode. */
@@ -42786,6 +42816,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.325', 'ورودی 10.325 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "325'") !== false
       && version_compare(APP_VERSION, '10.' . '325', '>='));
+    $add('10.345', 'هر کران واقعی cron-only در لاگ build و fix ثبت می‌شود',
+         strpos($selfSrc, 'function matrixCronLog' . 'Arrival') !== false
+      && strpos($selfSrc, "str_starts_with(\$source,'external')") !== false
+      && strpos($selfSrc, "'🫀 کران رسید'") !== false
+      && strpos($selfSrc, "matrixFixProgress(['cron_arrived_at'") !== false);
+    $add('10.345', 'paused ماتریس owner معتبر dedup است و نسخهٔ تازه نمی‌سازد',
+         strpos($selfSrc, "if(in_array(\$type,['matrix_build','matrix_fix'],true))\$activeStates[]='paused'") !== false);
+    $add('10.345', 'ورود کران pausedهای تکراری را coalesce و فقط newest را بیدار می‌کند',
+         strpos($selfSrc, "'superseded_paused_matrix_owner'") !== false
+      && strpos($selfSrc, "\$keepers[\$key]=['i'=>\$i,'rank'=>\$rank]") !== false);
+    $add('10.345', 'ورودی 10.345 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "345'") !== false
+      && version_compare(APP_VERSION, '10.' . '345', '>='));
     $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
          strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
       && strpos($selfSrc, '.ral-card{') !== false
@@ -74329,6 +74372,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.345', t:'🫀 ثبت هر ورود کران در لاگ build/fix و حذف ownerهای تکراری', items:[
+    'در حالت cron-only هر ضربان واقعی external HTTP/CLI با زمان، منبع، lease، نتیجهٔ نگهبان و تعداد jobهای بیدارشده در لاگ عملیات فعال ثبت می‌شود.',
+    'اگر اصلاح پشت build در صف باشد، همان ورود کران در لاگ اصلاح نیز مستقل ثبت می‌شود؛ mode_switch به‌اشتباه کران شمرده نمی‌شود.',
+    'job ماتریس paused اکنون owner معتبر checkpoint است و recovery دیگر نسخهٔ تکراری از همان dedup نمی‌سازد.',
+    'هنگام ضربان، pausedهای تکراری قدیمی coalesce می‌شوند و فقط جدیدترین owner هر زنجیره بیدار می‌شود.'
+  ]},
   {v:'10.344', t:'🎴 گزارش‌های کارتی تفصیلی مغایرت‌گیری دوره‌ای', items:[
     'گزارش متنی ساده با کارت‌های واکنش‌گرا و جذاب برای هر اجرای دوره‌ای جایگزین شد.',
     'هر کارت وضعیت کلی، زمان، نسخه، worker، موتور اجرا، تازگی کران و lease را نشان می‌دهد.',
