@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.356';
+const APP_VERSION = '10.357';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -3410,11 +3410,11 @@ $idx = $idx * 26 + (ord($col[$i]) - ord('A') + 1);
 }
 return $idx - 1;
 }
-function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null): array {
-$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');
+function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null, int $timeout=60): array {
+$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');$timeout=max(5,min(120,$timeout));
 $traceReq=['layer'=>'http_actual','request'=>['destination'=>'woocommerce','method'=>$m,'endpoint'=>'wc/v3/'.ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d]];
 $ch=curl_init($url);
-curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>60,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
+curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
 if($d!==null)curl_setopt($ch,CURLOPT_POSTFIELDS,json_encode($d,JSON_UNESCAPED_UNICODE));
 $b=curl_exec($ch);$e=curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
 $out=['ok'=>$code>=200&&$code<300,'code'=>$code,'error'=>$e,'body'=>@json_decode($b,true),'raw'=>$b];
@@ -43041,6 +43041,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.357', 'صفحهٔ 100تایی Woo پس از timeout به دو offset پنجاه‌تایی شکسته می‌شود',
+         strpos($selfSrc, "foreach([0,50]as\$chunkOffset)") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='") !== false
+      && strpos($selfSrc, "\$parts=array_merge(\$parts,\$pr['body'])") !== false);
+    $add('10.357', 'fallback موفق همان صفحهٔ منطقی را یک‌بار در cursor ثبت می‌کند',
+         strpos($selfSrc, "\$r=['ok'=>true,'code'=>200") !== false
+      && strpos($selfSrc, 'fallback دو بستهٔ ۵۰تایی') !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.357', 'timeout درخواست Woo قابل تنظیم و برای matrix محدودتر شده است',
+         strpos($selfSrc, "int \$timeout=60") !== false
+      && strpos($selfSrc, "CURLOPT_TIMEOUT=>\$timeout") !== false
+      && strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page,null,35") !== false);
+    $add('10.357', 'ورودی 10.357 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "357'") !== false
+      && version_compare(APP_VERSION, '10.' . '357', '>='));
     $add('10.356', 'خطاهای موقت Woo با code و error تشخیص و checkpointed yield می‌شوند',
          strpos($selfSrc, "\$transient=\$httpCode===0||\$httpCode===408") !== false
       && strpos($selfSrc, "\$wooBoundaryReason==='http'&&!empty(\$wooMeta['transient'])") !== false
@@ -51008,7 +51023,24 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
     for ($page = $startPage; $page < $limit; $page++) {
         if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         $r = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET',
-            'products?per_page=100&status=any&page=' . $page);
+            'products?per_page=100&status=any&page=' . $page,null,35);
+        /* Some shared Woo hosts time out while serializing/counting 100 rows even
+           though smaller offset requests work. Preserve the logical 100-row page
+           by merging two ordered 50-row chunks at the same absolute offset. */
+        $firstCode=(int)($r['code']??0);$firstTransient=$firstCode===0||$firstCode===408||$firstCode===425||$firstCode===429||$firstCode>=500;
+        if((empty($r['ok'])||!is_array($r['body']))&&$firstTransient){
+            $offset=max(0,($page-1)*100);$parts=[];$partFailure=null;
+            foreach([0,50]as$chunkOffset){
+                $pr=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'GET',
+                    'products?per_page=50&status=any&offset='.($offset+$chunkOffset),null,30);
+                if(empty($pr['ok'])||!is_array($pr['body'])){$partFailure=$pr;break;}
+                $parts=array_merge($parts,$pr['body']);if(count($pr['body'])<50)break;
+            }
+            if($partFailure===null){
+                $r=['ok'=>true,'code'=>200,'error'=>'','body'=>$parts,'raw'=>''];
+                reconProgress(['log_add'=>['🧩 ووکامرس صفحهٔ '.$page.' با fallback دو بستهٔ ۵۰تایی دریافت شد ('.count($parts).' محصول)']]);
+            }else{$r=$partFailure;}
+        }
         if (empty($r['ok']) || !is_array($r['body'])) {
             $httpCode=(int)($r['code']??0);$httpError=mb_substr(trim((string)($r['error']??'')),0,180);
             $transient=$httpCode===0||$httpCode===408||$httpCode===425||$httpCode===429||$httpCode>=500;
@@ -74743,6 +74775,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.357', t:'🧩 fallback کوچک‌تر برای صفحهٔ سنگین Woo', items:[
+    'اگر درخواست ۱۰۰محصولی Woo timeout شود، همان بازه با دو درخواست ۵۰محصولی و offset ثابت دریافت می‌شود.',
+    'دو پاسخ فقط پس از موفقیت کامل ادغام و به‌عنوان همان یک صفحه در cursor ثبت می‌شوند؛ صفحه یا محصولی از قلم نمی‌افتد.',
+    'timeout درخواست اصلی matrix به ۳۵ ثانیه و هر chunk جایگزین به ۳۰ ثانیه محدود شده تا PHP slot برای یک دقیقه بی‌دلیل اشغال نشود.',
+    'اگر fallback هم شکست بخورد، رفتار امن v10.356 یعنی checkpoint + backoff ادامه دارد.'
+  ]},
   {v:'10.356', t:'⏳ ادامهٔ Woo پس از خطای موقت REST با backoff', items:[
     'timeout، HTTP 0، 408، 425، 429 و 5xx دیگر build را fatal نمی‌کنند؛ checkpoint حفظ و همان صفحه پس از backoff ادامه داده می‌شود.',
     'worker زمان retry را رعایت می‌کند و به‌جای سه child فوری و ظاهراً گیرکرده، شبکه/هاست را hot-loop نمی‌کند.',
