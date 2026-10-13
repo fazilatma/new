@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.348';
+const APP_VERSION = '10.349';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1042,6 +1042,20 @@ function s4WorkerExtractBeatForRow(string $rowId, string $profileKey = ''): arra
     return ['beat' => time(), 'why' => 'worker_pid_alive', 'pid' => $pid];
 }
 
+function s4WorkerRecoverStaleLockPath(int $staleSec = 180): array {
+    $st=s4WorkerStateLoad();$hb=(int)($st['heartbeat']??0);$pid=(int)($st['pid']??0);
+    $age=$hb>0?time()-$hb:PHP_INT_MAX;
+    if(empty($st['running'])||$age<max(120,$staleSec)||s4WorkerPidAlive($pid))return ['recovered'=>false,'reason'=>'state_not_stale'];
+    $fp=@fopen(WORKER_LOCK_FILE,'c');if(!$fp)return ['recovered'=>false,'reason'=>'lock_open_failed'];
+    $free=@flock($fp,LOCK_EX|LOCK_NB);if($free){@flock($fp,LOCK_UN);@fclose($fp);return ['recovered'=>false,'reason'=>'lock_already_free'];}@fclose($fp);
+    /* A dead daemon's exec child may inherit the old flock. Rotate only the
+       path after dead PID + stale heartbeat proof; the child keeps its old
+       inode while the replacement daemon owns the canonical new lock. */
+    $orphan=WORKER_LOCK_FILE.'.orphan.'.date('Ymd_His').'.'.substr(md5(uniqid('',true)),0,6);
+    if(!@rename(WORKER_LOCK_FILE,$orphan))return ['recovered'=>false,'reason'=>'rename_failed'];
+    return ['recovered'=>true,'reason'=>'dead_worker_inherited_lock','old_pid'=>$pid,'heartbeat_age'=>$age,'orphan'=>basename($orphan)];
+}
+
 function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
     $hb = (int)($st['heartbeat'] ?? 0);$running=!empty($st['running']);
@@ -1689,7 +1703,8 @@ function matrixExecutionApplyMode(string $mode): array {
 /** v10.263: روی نصب Apache/LiteSpeed که server.sh اجرا نیست، اندپوینت سلامت
  * می‌تواند daemon CLI را دوباره زنده کند. flock از daemon تکراری جلوگیری می‌کند. */
 function s4SpawnPersistentWorker(): array {
-    if(s4WorkerIsActive())return ['ok'=>true,'already_active'=>true,'state'=>s4WorkerStateLoad()];
+    $lockRecovery=s4WorkerRecoverStaleLockPath();
+    if(s4WorkerIsActive())return ['ok'=>true,'already_active'=>true,'state'=>s4WorkerStateLoad(),'lock_recovery'=>$lockRecovery];
     if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
     if(strtoupper(substr(PHP_OS,0,3))==='WIN')return ['ok'=>false,'error'=>'windows_detach_unsupported'];
     if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
@@ -31125,13 +31140,14 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
    ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
 if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     header('Content-Type: application/json; charset=UTF-8');$now=time();$repair=!empty($_GET['repair']??$_POST['repair']??null);
+    $staleWorkerLock=$repair?s4WorkerRecoverStaleLockPath():['recovered'=>false];
     $wst=s4WorkerStateLoad();$wq=s4WorkerLoadQueue();$whb=(int)($wst['heartbeat']??0);$workerActive=s4WorkerIsActive();
     $mx=matrixProgressRead();$mxBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
     $mxFp=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$mxLocked=false;if($mxFp){$free=@flock($mxFp,LOCK_EX|LOCK_NB);$mxLocked=!$free;if($free)@flock($mxFp,LOCK_UN);@fclose($mxFp);}
     $cronFile=__DIR__.'/cron_last_run.json';$cronAt=is_file($cronFile)?(int)@filemtime($cronFile):0;$cronAge=$cronAt>0?max(0,$now-$cronAt):null;
     $active=[];foreach((array)($wq['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['status']??''),['pending','running'],true))$active[]=['id'=>(string)($e['id']??''),'type'=>(string)($e['type']??''),'status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0)];
     $tailLog=static function(string $name):array{$f=__DIR__.'/logs/'.$name;if(!is_file($f))return[];$sz=(int)@filesize($f);$raw=(string)@file_get_contents($f,false,null,max(0,$sz-16000));$ls=preg_split('/\R/',$raw);return array_slice(array_values(array_filter($ls,static fn($x)=>trim((string)$x)!=='')),-15);};
-    $actions=[];
+    $actions=[];if(!empty($staleWorkerLock['recovered']))$actions['stale_worker_lock']=$staleWorkerLock;
     /* daemon قدیمی پس از deploy همان کد قبلی را تا ابد در RAM دارد. در repair
        فقط با PID و version ثبت‌شدهٔ خودش پایانش می‌دهیم تا worker تازه بالا آید. */
     if($repair&&$workerActive&&(string)($wst['version']??'')!==APP_VERSION&&function_exists('posix_kill')){
@@ -42961,6 +42977,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.349', 'قفل به‌ارث‌رسیدهٔ worker مرده با اثبات PID و heartbeat بازیابی می‌شود',
+         strpos($selfSrc, 'function s4WorkerRecoverStale' . 'LockPath') !== false
+      && strpos($selfSrc, 'dead_worker_inherited_' . 'lock') !== false
+      && strpos($selfSrc, "@rename(WORKER_" . "LOCK_FILE,\$orphan)") !== false);
+    $add('10.349', 'spawn و ops repair هر دو recovery قفل stale را اجرا می‌کنند',
+         substr_count($selfSrc, 's4WorkerRecoverStale' . 'LockPath()') >= 2
+      && strpos($selfSrc, "\$actions['stale_worker_" . "lock']") !== false);
+    $add('10.349', 'ورودی 10.349 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "349'") !== false
+      && version_compare(APP_VERSION, '10.' . '349', '>='));
     $add('10.344', 'گزارش دوره‌ای به‌جای pre متنی کارت واکنش‌گرا دارد',
          strpos($selfSrc, 'id="reconAutoLog" class="ral-list"') !== false
       && strpos($selfSrc, '.ral-card{') !== false
@@ -74534,6 +74560,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.349', t:'🔓 بازیابی قفل worker مرده و ادامهٔ فوری checkpoint', items:[
+    'اگر daemon مرده باشد ولی child قدیمی flock را به ارث برده باشد، PID مرده و heartbeat کهنه پیش از هر تغییری اثبات می‌شوند.',
+    'مسیر lock یتیم اتمیک کنار گذاشته می‌شود تا worker تازه بتواند job ادامهٔ ماتریس را claim کند؛ child قدیمی فقط inode قبلی را نگه می‌دارد.',
+    'این recovery هم در spawn عادی worker و هم در ops_feedback repair اجرا و گزارش می‌شود.'
+  ]},
   {v:'10.348', t:'⏯ اولویت قطعی checkpoint بر هر ساخت تازهٔ جدول', items:[
     'تا وقتی checkpoint ناتمام وجود دارد، هر درخواست ساخت تازهٔ هم‌دامنه خودکار به resume تبدیل می‌شود و اجازهٔ پاک‌کردن cursor را ندارد.',
     'اگر مقصدهای درخواست تازه با checkpoint ناتمام فرق داشته باشند، درخواست با خطای روشن رد می‌شود و checkpoint موجود دست‌نخورده می‌ماند.',
