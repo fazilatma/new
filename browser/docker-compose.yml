@@ -1,0 +1,56 @@
+# راه‌اندازیِ اختیاری با داکر — دو سناریو: Playwright (پیش‌فرض) یا Selenium (پشتیبان)
+#   Playwright:  docker compose up -d render
+#   Selenium:    docker compose --profile selenium up -d
+services:
+  render:
+    image: mcr.microsoft.com/playwright:v1.49.1-jammy
+    container_name: scraper4-render
+    working_dir: /app
+    volumes:
+      - ./:/app:ro
+    environment:
+      RENDER_HOST: 0.0.0.0
+      RENDER_PORT: "3100"
+      RENDER_TOKEN: ${RENDER_TOKEN:-change-me-long-secret}
+      RENDER_DRIVER: playwright
+      RENDER_MAX_CONCURRENCY: ${RENDER_MAX_CONCURRENCY:-3}
+    ports:
+      - "3100:3100"
+    restart: always
+    # کرومیوم به /dev/shm بزرگ نیاز دارد — بدون این تب‌ها کرش می‌کنند
+    shm_size: "1g"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # حالت پشتیبان: Selenium standalone + متصل شدنِ سرویسِ رندر به آن
+  selenium:
+    profiles: ["selenium"]
+    image: selenium/standalone-chromium:latest
+    container_name: scraper4-selenium
+    shm_size: "1g"
+    ports:
+      - "4444:4444"
+    restart: always
+
+  render-via-selenium:
+    profiles: ["selenium"]
+    image: node:20-bookworm-slim
+    container_name: scraper4-render-selenium
+    working_dir: /app
+    volumes:
+      - ./:/app:ro
+    environment:
+      RENDER_HOST: 0.0.0.0
+      RENDER_PORT: "3100"
+      RENDER_TOKEN: ${RENDER_TOKEN:-change-me-long-secret}
+      RENDER_DRIVER: selenium
+      SELENIUM_URL: http://selenium:4444
+    ports:
+      - "3100:3100"
+    depends_on:
+      - selenium
+    restart: always

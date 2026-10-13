@@ -1,0 +1,103 @@
+name: Restore scraper4.php full file
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/restore-scraper4.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arena/01a0ebf7-new
+          fetch-depth: 0
+
+      - name: Restore full scraper4.php and inject fullwidth button
+        run: |
+          set -euo pipefail
+          git show 2510741c7f23951fbad0daa0d84617ccea3c00a2:scraper4.php > scraper4.php
+          SIZE=$(wc -c < scraper4.php)
+          echo "Restored size: $SIZE"
+          test "$SIZE" -gt 5000000
+
+          python3 << 'PY'
+          from pathlib import Path
+          p = Path('scraper4.php')
+          c = p.read_text(encoding='utf-8')
+
+          old_hdr = '''<div class="hdr-tools" id="hdrTools">
+          <button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>
+          <button class="runtime-pulse checking" id="runtimePulse"'''.replace('          ', '')
+
+          # exact match without accidental indent
+          old_hdr = (
+              '<div class="hdr-tools" id="hdrTools">\n'
+              '<button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>\n'
+              '<button class="runtime-pulse checking" id="runtimePulse"'
+          )
+          new_hdr = (
+              '<div class="hdr-tools" id="hdrTools">\n'
+              '<button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>\n'
+              '<button class="fullwidth-btn" id="hdrFullBtn" type="button" onclick="toggleFullSettings()" '
+              'title="تمام عرض کردن منوی تنظیمات" aria-label="تمام عرض کردن منوی تنظیمات">⛶</button>\n'
+              '<button class="runtime-pulse checking" id="runtimePulse"'
+          )
+          if old_hdr not in c:
+              raise SystemExit('hdr-tools block not found')
+          c = c.replace(old_hdr, new_hdr, 1)
+
+          reps = [
+              (
+                  "const fb=document.getElementById('fullBtn');\n  if(!p)return;\n  if(p.classList.contains('open')){",
+                  "const fb=document.getElementById('fullBtn');\n  const hfb=document.getElementById('hdrFullBtn');\n  if(!p)return;\n  if(p.classList.contains('open')){",
+              ),
+              (
+                  "if(fb)fb.classList.add('active');\n      }\n    }catch(e){}\n    syncSmenuStickyOffsets();",
+                  "if(fb)fb.classList.add('active');\n        if(hfb)hfb.classList.add('active');\n      }\n    }catch(e){}\n    syncSmenuStickyOffsets();",
+              ),
+              (
+                  "function toggleFullSettings(){\n  const p=document.getElementById('settingsPanel');\n  const b=document.getElementById('fullBtn');\n  if(!p)return;",
+                  "function toggleFullSettings(){\n  const p=document.getElementById('settingsPanel');\n  const b=document.getElementById('fullBtn');\n  const hfb=document.getElementById('hdrFullBtn');\n  if(!p)return;",
+              ),
+              (
+                  "if(b)b.classList.toggle('active', full);\n  document.body.classList.toggle('spanel-full', full && p.classList.contains('open'));",
+                  "if(b)b.classList.toggle('active', full);\n  if(hfb)hfb.classList.toggle('active', full);\n  document.body.classList.toggle('spanel-full', full && p.classList.contains('open'));",
+              ),
+              (
+                  "const b=document.getElementById('fullBtn');\n      if(p)p.classList.add('full');\n      if(b)b.classList.add('active');",
+                  "const b=document.getElementById('fullBtn');\n      const hfb=document.getElementById('hdrFullBtn');\n      if(p)p.classList.add('full');\n      if(b)b.classList.add('active');\n      if(hfb)hfb.classList.add('active');",
+              ),
+              (
+                  '.settings-panel-actions{display:flex;align-items:center;gap:7px;margin-right:auto}',
+                  '.settings-panel-actions{display:flex;align-items:center;gap:7px;flex:0 0 auto;margin-inline-start:auto}',
+              ),
+              (
+                  '.settings-panel-head{position:sticky;top:0;z-index:6;background:#1e293b;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #334155}.settings-panel-head h2{margin:0;font-size:16px;color:#e2e8f0}',
+                  '.settings-panel-head{position:sticky;top:0;z-index:6;background:#1e293b;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #334155;flex-wrap:nowrap}.settings-panel-head h2{margin:0;font-size:16px;color:#e2e8f0;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+              ),
+          ]
+          for a, b in reps:
+              if a not in c:
+                  raise SystemExit('missing fragment: ' + a[:60])
+              c = c.replace(a, b, 1)
+
+          if 'hdrFullBtn' not in c:
+              raise SystemExit('hdrFullBtn missing after patch')
+          p.write_text(c, encoding='utf-8')
+          print('final size', p.stat().st_size)
+          PY
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scraper4.php
+          git status
+          git commit -m "fix: restore full scraper4.php (~6MB) and full-width button next to hamburger"
+          git push origin HEAD:arena/01a0ebf7-new
