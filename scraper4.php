@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.357';
+const APP_VERSION = '10.358';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -43041,6 +43041,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.358', 'Woo matrix فقط fieldهای واقعاً موردنیاز را از REST می‌خواهد',
+         strpos($selfSrc, "\$matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created'") !== false
+      && substr_count($selfSrc, '.\$matrixWooFields,null,') >= 2
+      && strpos($selfSrc, 'Restricting REST output avoids costly serialization') !== false);
+    $add('10.358', 'field projection در درخواست اصلی و fallback بدون تغییر cursor اعمال می‌شود',
+         strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='.(\$offset+\$chunkOffset).\$matrixWooFields") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.358', 'ورودی 10.358 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "358'") !== false
+      && version_compare(APP_VERSION, '10.' . '358', '>='));
     $add('10.357', 'صفحهٔ 100تایی Woo پس از timeout به دو offset پنجاه‌تایی شکسته می‌شود',
          strpos($selfSrc, "foreach([0,50]as\$chunkOffset)") !== false
       && strpos($selfSrc, "'products?per_page=50&status=any&offset='") !== false
@@ -43052,7 +43063,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.357', 'timeout درخواست Woo قابل تنظیم و برای matrix محدودتر شده است',
          strpos($selfSrc, "int \$timeout=60") !== false
       && strpos($selfSrc, "CURLOPT_TIMEOUT=>\$timeout") !== false
-      && strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page,null,35") !== false);
+      && strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields,null,35") !== false);
     $add('10.357', 'ورودی 10.357 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "357'") !== false
       && version_compare(APP_VERSION, '10.' . '357', '>='));
@@ -51020,10 +51031,14 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     reconProgress(['log_add' => ['🌐 واکشی ووکامرس از REST API (کندتر از مستقیم)…']]);
     $limit = $startPage + max(1, $maxPages);
+    /* Matrix matching never reads descriptions, images, attributes or metadata.
+       Restricting REST output avoids costly serialization and oversized responses
+       while preserving the exact page/offset cursor semantics. */
+    $matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created';
     for ($page = $startPage; $page < $limit; $page++) {
         if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         $r = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET',
-            'products?per_page=100&status=any&page=' . $page,null,35);
+            'products?per_page=100&status=any&page=' . $page.$matrixWooFields,null,35);
         /* Some shared Woo hosts time out while serializing/counting 100 rows even
            though smaller offset requests work. Preserve the logical 100-row page
            by merging two ordered 50-row chunks at the same absolute offset. */
@@ -51032,7 +51047,7 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
             $offset=max(0,($page-1)*100);$parts=[];$partFailure=null;
             foreach([0,50]as$chunkOffset){
                 $pr=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'GET',
-                    'products?per_page=50&status=any&offset='.($offset+$chunkOffset),null,30);
+                    'products?per_page=50&status=any&offset='.($offset+$chunkOffset).$matrixWooFields,null,30);
                 if(empty($pr['ok'])||!is_array($pr['body'])){$partFailure=$pr;break;}
                 $parts=array_merge($parts,$pr['body']);if(count($pr['body'])<50)break;
             }
@@ -74775,6 +74790,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.358', t:'⚡ پاسخ کم‌حجم Woo برای عبور از صفحهٔ سنگین', items:[
+    'واکشی matrix اکنون با پارامتر _fields فقط شناسه، نام، قیمت عادی، وضعیت و تاریخ ایجاد را می‌خواهد.',
+    'توضیحات، تصاویر، ویژگی‌ها و metadata حجیم که در تطبیق استفاده نمی‌شوند دیگر توسط Woo serialize و منتقل نمی‌شوند.',
+    'این projection هم روی درخواست ۱۰۰تایی و هم fallback پنجاه‌تایی اعمال می‌شود و cursor معتبر صفحهٔ ۳ بدون بازنشانی ادامه می‌یابد.'
+  ]},
   {v:'10.357', t:'🧩 fallback کوچک‌تر برای صفحهٔ سنگین Woo', items:[
     'اگر درخواست ۱۰۰محصولی Woo timeout شود، همان بازه با دو درخواست ۵۰محصولی و offset ثابت دریافت می‌شود.',
     'دو پاسخ فقط پس از موفقیت کامل ادغام و به‌عنوان همان یک صفحه در cursor ثبت می‌شوند؛ صفحه یا محصولی از قلم نمی‌افتد.',
