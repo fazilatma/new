@@ -1479,6 +1479,11 @@ function s4WorkerRunMatrixChild(array $payload): array {
             $decoded['ok']=true;$decoded['resume_needed']=true;$decoded['scheduler_wait']=true;
             $decoded['execution_mode']=$driver['mode'];return $decoded;
         }
+        $retryAfter=max(0,min(120,(int)($decoded['retry_after']??0)));
+        if($retryAfter>0){
+            s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_build','job_segment'=>$segments,
+                'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);
+        }
         /* pulse خارجی تازه: بدون وقفه و با child بعدی؛ در fallback فقط pause تنظیمی. */
         unset($decoded,$out,$part,$raw);$pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
     }while($segments<10000&&!matrixStopRequested());
@@ -3757,11 +3762,11 @@ $idx = $idx * 26 + (ord($col[$i]) - ord('A') + 1);
 }
 return $idx - 1;
 }
-function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null): array {
-$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');
+function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null, int $timeout=60): array {
+$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');$timeout=max(5,min(120,$timeout));
 $traceReq=['layer'=>'http_actual','request'=>['destination'=>'woocommerce','method'=>$m,'endpoint'=>'wc/v3/'.ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d]];
 $ch=curl_init($url);
-curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>60,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
+curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
 if($d!==null)curl_setopt($ch,CURLOPT_POSTFIELDS,json_encode($d,JSON_UNESCAPED_UNICODE));
 $b=curl_exec($ch);$e=curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
 $out=['ok'=>$code>=200&&$code<300,'code'=>$code,'error'=>$e,'body'=>@json_decode($b,true),'raw'=>$b];
@@ -21927,6 +21932,14 @@ if (isset($_GET['backup_peek'])) {
     exit;
 }
 
+if (isset($_GET['runtime_health'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'at'=>time(),'sapi'=>PHP_SAPI],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if (isset($_GET['whoami'])) {
     header('Content-Type: text/plain; charset=UTF-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -29395,7 +29408,7 @@ function matrixBuild(array $opts = []): array {
         matrixStopClear();
         return ['ok' => true, 'stopped' => true, 'partial' => true, 'checkpoint' => $cp];
     };
-    $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
+    $yieldMatrix = static function (string $phase, int $retryAfter=0) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
         $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
@@ -29412,8 +29425,9 @@ function matrixBuild(array $opts = []): array {
             : '↻ تحویل checkpoint به worker؛ ادامه با روش تازهٔ انتخاب‌شده';
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => $waitCron?'waiting_cron':'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
-            'log_add' => [$handoffLog]]);
-        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron, 'checkpoint' => $cp];
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'log_add' => [$handoffLog]]);
+        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron,
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'checkpoint' => $cp];
     };
     $profiles = loadProfiles();
     $pN = 0; $pTot = max(1, count($profiles));
@@ -29557,12 +29571,20 @@ function matrixBuild(array $opts = []): array {
            failed Woo extraction. Preserve the dedicated cursor/checkpoint and let
            the worker (or next cron pulse) continue from the following page. */
         $wooBoundaryReason=(string)($wooMeta['reason']??'');
+        if($wooBoundaryReason==='http'&&!empty($wooMeta['transient'])){
+            $retryAfter=max(5,min(120,(int)($wooMeta['retry_after']??10)));
+            matrixProgress(['retryable'=>true,'retry_after'=>$retryAfter,
+                'log_add'=>['⏳ خطای موقت ووکامرس؛ ادامهٔ صفحهٔ '.max(1,(int)($wooMeta['page']??1)).' پس از '.$retryAfter.' ثانیه']]);
+            return $yieldMatrix('woo_fetch',$retryAfter);
+        }
         if ((!empty($wooMeta['stopped']) && !matrixStopRequested())
             || in_array($wooBoundaryReason,['max_pages','run_limit'],true)) {
             return $yieldMatrix('woo_fetch');
         }
         if (!$matrixWooDone) {
-            $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
+            $httpDetail=$wooBoundaryReason==='http'?(' · HTTP '.(int)($wooMeta['http_code']??0)
+                .((string)($wooMeta['http_error']??'')!==''?' · '.(string)$wooMeta['http_error']:'')):'';
+            $why = ($wooErr ?: 'برداشت ووکامرس کامل نشد').$httpDetail;
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
                 'error' => $why, 'phase' => 'stopped',
                 'checkpoint' => $matrixCp('woo_fetch', $rowsByKey, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, false),
@@ -31636,11 +31658,11 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     if ($lf) { $lockHeld = !@flock($lf, LOCK_EX | LOCK_NB); if (!$lockHeld) @flock($lf, LOCK_UN); @fclose($lf); }
     $probe = null;
     if (!empty($_GET['probe'] ?? $_POST['probe'] ?? null)) {
-        $w = loadConnections()['woocommerce'] ?? [];
+        $w = loadConnections()['woocommerce'] ?? [];$probePage=max(1,min(10000,(int)($_GET['probe_page']??$_POST['probe_page']??1)));
         $t0 = microtime(true);
         $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''),
-            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page=1');
-        $probe = ['ok' => !empty($r['ok']), 'code' => (int)($r['code'] ?? 0),
+            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page='.$probePage);
+        $probe = ['ok' => !empty($r['ok']), 'page'=>$probePage,'code' => (int)($r['code'] ?? 0),
             'ms' => (int)round((microtime(true) - $t0) * 1000),
             'rows' => is_array($r['body'] ?? null) ? count($r['body']) : 0,
             'error' => mb_substr((string)($r['error'] ?? ''), 0, 180)];
@@ -31790,14 +31812,19 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     }
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     $actualFixRunning=!empty($fix['running'])&&empty($fix['queued']);
-    $has = is_file(SYNC_MATRIX_RESULT_FILE);
-    $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
+    $has = is_file(SYNC_MATRIX_RESULT_FILE);$resultAt=$has?(int)@filemtime(SYNC_MATRIX_RESULT_FILE):0;
+    $age = $has ? (time() - $resultAt) : -1;
     $statusResult=$has?matrixResultLoad():[];
     $anyRun = !empty($prog['running']) || $actualFixRunning || !empty($fix['queued']);
+    /* A completed correction may be useful after refresh, but only while it is
+       newer than the latest matrix build/result. Previously an old build_failed
+       correction from hours earlier masked a later successful build forever. */
+    $buildAt=max($resultAt,(int)($prog['finished_at']??0),(int)($prog['ts']??0),(int)($prog['started_at']??0));
+    $fixAt=max((int)($fix['finished_at']??0),(int)($fix['ts']??0),(int)($fix['started_at']??0));
+    $preferFinishedFix=!$actualFixRunning&&empty($fix['queued'])&&!empty($fix['done'])&&$fixAt>=$buildAt;
     $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
-        || !empty($prog['stop_requested']) || !empty($prog['stopped']);
-    $shownProgress = $actualFixRunning ? $fix
-        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running']) && empty($fix['queued'])) ? $fix : $prog));
+        || !empty($prog['stop_requested']) || !empty($prog['stopped'])
+        || (!empty($prog['done'])&&!$preferFinishedFix);
     /* v10.339: status هر ثانیه poll می‌شود. فرستادن progress اصلاح قدیمی با
        صدها detail/live و تکرار log ساخت، UI را ظاهراً منجمد می‌کرد. */
     $buildView=$prog;unset($buildView['log']);
@@ -31806,6 +31833,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         $keep=['running','queued','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
         $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
     }
+    $shownProgress=$actualFixRunning?$fix:($buildOwnState?$prog:($preferFinishedFix?$fixView:$prog));
+    $shownJob=$actualFixRunning||!empty($fix['queued'])||$preferFinishedFix?'fix':'build';
     echo json_encode([
         'ok' => true,
         'running' => $anyRun,
@@ -31821,7 +31850,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
         'result_destinations'=>array_values((array)($statusResult['selected_destinations']??[])),
         'result_pricing_stale'=>$has&&((string)($statusResult['pricing_signature']??'')!==matrixPricingFingerprint()),
-        'job' => $actualFixRunning ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
+        'job'=>$shownJob,
+        'state_order'=>['build_at'=>$buildAt,'fix_at'=>$fixAt,'preferred'=>$shownJob],
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -32156,6 +32186,9 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     if (!$opts['selected_destinations']) {
         echo json_encode(['ok'=>false,'error'=>'حداقل یک مقصد مشمول برای اصلاح انتخاب کنید'],JSON_UNESCAPED_UNICODE); exit;
     }
+    $workflow=(string)($_GET['workflow']??$_POST['workflow']??'fix_only');
+    if(!in_array($workflow,['fix_only','build_and_fix'],true))$workflow='fix_only';
+    $combinedWorkflow=$workflow==='build_and_fix';
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
         $oldFix = json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PROGRESS_FILE), true);
@@ -32172,7 +32205,11 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     /* An unfinished build wins over correction's freshness request. Queue/resume
        that exact checkpoint and put fix behind it; never clear its cursor. */
     $mxBeforeFix=matrixProgressRead();$mxCp=is_array($mxBeforeFix['checkpoint']??null)?$mxBeforeFix['checkpoint']:null;
-    if($mxCp){
+    if($mxCp&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'ساخت جدول ناتمام است؛ برای ادامهٔ ساخت و سپس اصلاح از دکمهٔ «ساخت جدول + اصلاح کلی» استفاده کنید',
+            'code'=>'matrix_build_incomplete','checkpoint_preserved'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($mxCp&&$combinedWorkflow){
         $wa=s4WorkerIsActive();if(!$wa&&s4CanSpawnProcess()){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
         if(!$wa){
             /* v10.361: هاستِ بدونِ exec/worker. به‌جای خطای بن‌بست، همان
@@ -32186,7 +32223,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
                 'parallel_destinations'=>(string)($mxCp['fetch_mode']??'serial')==='parallel','live_fill'=>!empty($mxCp['live_fill']),
                 'selected_destinations'=>$opts['selected_destinations'],'slice_seconds'=>max(2,min(20,(int)($mxCp['slice_seconds']??8)))],8);
             echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'no_worker'=>true,'inline_slice'=>true,
-                'resuming_matrix'=>true,'waiting_for_matrix'=>true,
+                'resuming_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,
                 'message'=>'worker/exec در دسترس نیست — همان checkpoint ناتمام با برش‌های درون‌درخواستی ادامه یافت و اصلاح پشتِ همان نتیجه صف شد',
                 'build'=>$inlineBuild],JSON_UNESCAPED_UNICODE);exit;
         }
@@ -32197,33 +32234,44 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($buildEnq['ok'])){echo json_encode(['ok'=>false,'error'=>'ادامهٔ checkpoint در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;}
         $opts['min_matrix_generated_at']=$resumeRequestedAt;$fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
         echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
-            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح اجرا می‌شود',
+            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح کلی اجرا می‌شود',
             'matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
-    /* A matrix that just completed is already the fresh snapshot the user is
-       looking at. Do not immediately rebuild it from Woo page one. */
-    $fixMatrixAge=$fixMatrix?max(0,time()-(int)($fixMatrix['generated_at']??0)):PHP_INT_MAX;
-    $forceFresh=(string)$opts['source']==='manual'&&$fixMatrixAge>300;
-    $fixNeedsBuild=$forceFresh||!$fixMatrix||$fixHave!==$fixWant
+    /* Correction-only means exactly the matrix currently visible: age alone must
+       never trigger a surprise rebuild. The explicit combined workflow is the
+       only manual action allowed to create a fresh build before correction. */
+    $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
         ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
-    if($fixNeedsBuild){
+    if($fixNeedsBuild&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'جدول فعلی برای این مقصدها آماده/سازگار نیست؛ ابتدا جدول را بسازید یا دکمهٔ «ساخت جدول + اصلاح کلی» را بزنید',
+            'code'=>'matrix_not_ready_for_fix','needs_build'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($combinedWorkflow){
+        /* This named action intentionally builds even when a recent result exists. */
+        $opts['view_filters']=[];$opts['scope']='all';
         $wa=s4WorkerIsActive();if(!$wa&&s4CanSpawnProcess()){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
         if(!$wa){
-            /* v10.361: بدونِ worker هم بازسازیِ لازم انجام می‌شود؛ فقط مالکش
-               request وب است (برش + زنجیرهٔ سرور) نه daemon. */
+            /* v10.361: بدونِ worker هم زنجیرهٔ «ساخت + اصلاح» انجام می‌شود؛ فقط
+               مالکش request وب است (برشِ زمانی + زنجیرهٔ سرور) نه daemon. */
             $opts['min_matrix_generated_at']=time();
             matrixFixPendingSave($opts);
             s4ChainReset('matrix_build');
-            $inlineBuild=matrixBuildInlineSlice(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
-                'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],8);
+            $inlineBuild=matrixBuildInlineSlice(['profile'=>'all',
+                'parallel_destinations'=>!empty($_GET['parallel_destinations']??$_POST['parallel_destinations']??null),
+                'live_fill'=>!array_key_exists('live_fill',$_POST)||!empty($_POST['live_fill']),
+                'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,
+                'slice_seconds'=>max(2,min(20,(int)($_GET['slice_seconds']??$_POST['slice_seconds']??8)))],8);
             echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'no_worker'=>true,'inline_slice'=>true,
-                'refreshing_matrix'=>true,'waiting_for_matrix'=>true,
+                'refreshing_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,
                 'message'=>'worker/exec در دسترس نیست — جدول با برش‌های درون‌درخواستی ساخته می‌شود و اصلاح پشتِ همان نتیجه صف شد',
                 'build'=>$inlineBuild],JSON_UNESCAPED_UNICODE);exit;
         }
         $freshRequestedAt=time();
-        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
-            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],false);
+        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all',
+            'parallel_destinations'=>!empty($_GET['parallel_destinations']??$_POST['parallel_destinations']??null),
+            'live_fill'=>!array_key_exists('live_fill',$_POST)||!empty($_POST['live_fill']),
+            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,
+            'slice_seconds'=>max(2,min(20,(int)($_GET['slice_seconds']??$_POST['slice_seconds']??8)))],false);
         if(empty($buildEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'بازسازی تازهٔ جدول در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;
         }
@@ -32232,8 +32280,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($fixEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'ساخت جدول صف شد اما اصلاح در صف قرار نگرفت','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
         }
-        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,
-            'message'=>'جدول تازه ساخته می‌شود و اصلاح بلافاصله فقط روی همان نتیجه اجرا خواهد شد','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,'combined_workflow'=>true,
+            'message'=>'زنجیرهٔ صریح آغاز شد: ابتدا ساخت کامل جدول، سپس اصلاح کلی همان نتیجه','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
     /* don't run while matrix build is running */
     $mxProg = matrixProgressRead();
@@ -42941,7 +42989,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '@keyframes runtime' . 'Pulse') !== false);
     $add('10.273', 'سلامت هاست/سرور دوره‌ای، timeoutدار و با کلیک قابل بررسی فوری است',
          strpos($selfSrc, 'async function s4RuntimeHealth' . 'Check') !== false
-      && strpos($selfSrc, "?whoami=1&_health=") !== false
+      && (strpos($selfSrc, "?runtime_health=1&_health=") !== false || strpos($selfSrc, "?whoami=1&_health=") !== false)
       && strpos($selfSrc, "setInterval(()=>s4RuntimeHealthCheck(false),15000)") !== false
       && strpos($selfSrc, "/\\/sc(?:\\/|$)/i.test(location.pathname)") !== false);
     $add('10.273', 'ورودی 10.273 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
@@ -43407,15 +43455,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "Number(d.result_age_sec||0)>1800") !== false);
     $add('10.306', 'دکمهٔ خواندن نتیجه حذف شده است',
          strpos($selfSrc, '📖 خواندن ' . 'نتیجه') === false);
+    /* v10.361: از ۱۰.۳۵۳ به بعد «اصلاحِ تنها» هرگز rebuild غافلگیرانه نمی‌سازد؛
+       زنجیرهٔ build+fix فقط با گردشِ کارِ صریحِcombined_workflow صف می‌شود. */
     $add('10.306', 'اصلاح روی جدول ناسازگار build و fix را پشت‌سرهم صف می‌کند',
-         strpos($selfSrc, "\$fixNeedsBuild=\$forceFresh||!\$fixMatrix") !== false
+         strpos($selfSrc, "\$fixNeedsBuild&&!\$combinedWorkflow") !== false
       && strpos($selfSrc, "'refreshing_matrix'=>true") !== false
       && strpos($selfSrc, "'waiting_for_matrix'=>true") !== false);
     $add('10.306', 'ورودی 10.306 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "306'") !== false
       && version_compare(APP_VERSION, '10.' . '306', '>='));
     $add('10.307', 'اصلاح دستی همیشه پس از ساخت snapshot تازه در همان صف اجرا می‌شود',
-         strpos($selfSrc, "\$forceFresh=(string)\$opts['source']==='manual'") !== false
+         strpos($selfSrc, "\$combinedWorkflow=\$workflow==='build_and_fix';") !== false
       && strpos($selfSrc, "\$opts['min_matrix_generated_at']=\$freshRequestedAt") !== false);
     $add('10.307', 'شکست ساخت تازه اجازهٔ اصلاح روی جدول قدیمی و پیام کاذب نمی‌دهد',
          strpos($selfSrc, "'fresh_matrix_not_ready'") !== false
@@ -43680,6 +43730,119 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.361', 'ورودی 10.361 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "361'") !== false
       && version_compare(APP_VERSION, '10.' . '361', '>='));
+    $add('10.360', 'bootstrap مستقیم با SHORTINIT از hookهای کند افزونه‌ها عبور می‌کند',
+         strpos($selfSrc, "define('SHORTINIT',true)") !== false
+      && strpos($selfSrc, "is_object(\$GLOBALS['wpdb']??null)") !== false
+      && strpos($selfSrc, 'Full WordPress bootstrap may execute slow third-party plugin hooks') !== false);
+    $add('10.360', 'واکشی Woo با wpdb و cursor صدتایی مستقیم انجام می‌شود',
+         strpos($selfSrc, '⚡ مستقیم Woo DB: ') !== false
+      && strpos($selfSrc, "p.post_type=%s AND p.post_status IN") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo',0,\$page,\$pageRows)") !== false);
+    $add('10.360', 'ورودی 10.360 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "360'") !== false
+      && version_compare(APP_VERSION, '10.' . '360', '>='));
+    $add('10.359', 'worker CLI وردپرس هم‌مکان را lazy و بدون web double-bootstrap بارگذاری می‌کند',
+         strpos($selfSrc, 'function s4BootstrapWooForCli(): array') !== false
+      && strpos($selfSrc, "if(!isCliRun())return \$result=['ok'=>false") !== false
+      && strpos($selfSrc, "require_once \$rootLoader") !== false);
+    $add('10.359', 'resume مستقیم از offset تعداد ردیف‌های cursor ادامه می‌یابد',
+         substr_count($selfSrc, '$offset=max(count($rows),($startPage-1)*100)') >= 2
+      && strpos($selfSrc, "'limit' => \$per, 'offset' => \$offset") !== false
+      && strpos($selfSrc, "'posts_per_page' => \$per, 'offset' => \$offset") !== false
+      && substr_count($selfSrc, '$offset+=count(') >= 2);
+    $add('10.359', 'ورودی 10.359 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "359'") !== false
+      && version_compare(APP_VERSION, '10.' . '359', '>='));
+    $add('10.358', 'Woo matrix فقط fieldهای واقعاً موردنیاز را از REST می‌خواهد',
+         strpos($selfSrc, "\$matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created'") !== false
+      && substr_count($selfSrc, '.\$matrixWooFields,null,') >= 2
+      && strpos($selfSrc, 'Restricting REST output avoids costly serialization') !== false);
+    $add('10.358', 'field projection در درخواست اصلی و fallback بدون تغییر cursor اعمال می‌شود',
+         strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='.(\$offset+\$chunkOffset).\$matrixWooFields") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.358', 'ورودی 10.358 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "358'") !== false
+      && version_compare(APP_VERSION, '10.' . '358', '>='));
+    $add('10.357', 'صفحهٔ 100تایی Woo پس از timeout به دو offset پنجاه‌تایی شکسته می‌شود',
+         strpos($selfSrc, "foreach([0,50]as\$chunkOffset)") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='") !== false
+      && strpos($selfSrc, "\$parts=array_merge(\$parts,\$pr['body'])") !== false);
+    $add('10.357', 'fallback موفق همان صفحهٔ منطقی را یک‌بار در cursor ثبت می‌کند',
+         strpos($selfSrc, "\$r=['ok'=>true,'code'=>200") !== false
+      && strpos($selfSrc, 'fallback دو بستهٔ ۵۰تایی') !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.357', 'timeout درخواست Woo قابل تنظیم و برای matrix محدودتر شده است',
+         strpos($selfSrc, "int \$timeout=60") !== false
+      && strpos($selfSrc, "CURLOPT_TIMEOUT=>\$timeout") !== false
+      && strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields,null,35") !== false);
+    $add('10.357', 'ورودی 10.357 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "357'") !== false
+      && version_compare(APP_VERSION, '10.' . '357', '>='));
+    $add('10.356', 'خطاهای موقت Woo با code و error تشخیص و checkpointed yield می‌شوند',
+         strpos($selfSrc, "\$transient=\$httpCode===0||\$httpCode===408") !== false
+      && strpos($selfSrc, "\$wooBoundaryReason==='http'&&!empty(\$wooMeta['transient'])") !== false
+      && strpos($selfSrc, "return \$yieldMatrix('woo_fetch',\$retryAfter)") !== false);
+    $add('10.356', 'worker ساخت retry_after شبکه را بدون hot-loop رعایت می‌کند',
+         strpos($selfSrc, "\$retryAfter=max(0,min(120,(int)(\$decoded['retry_after']") !== false
+      && strpos($selfSrc, "'job_type'=>'matrix_build'") !== false
+      && strpos($selfSrc, "sleep(\$retryAfter)") !== false);
+    $add('10.356', 'خطای قطعی Woo جزئیات HTTP می‌دهد و probe صفحهٔ انتخابی دارد',
+         strpos($selfSrc, "\$httpDetail=\$wooBoundaryReason==='http'") !== false
+      && strpos($selfSrc, "\$probePage=max(1,min(10000") !== false
+      && strpos($selfSrc, "'page'=>\$probePage,'code'") !== false);
+    $add('10.356', 'ورودی 10.356 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "356'") !== false
+      && version_compare(APP_VERSION, '10.' . '356', '>='));
+    $add('10.355', 'چراغ runtime به‌جای whoami سنگین endpoint سبک JSON را می‌خواند',
+         strpos($selfSrc, "isset(\$_GET['runtime_" . "health'])") !== false
+      && strpos($selfSrc, "?runtime_health=1&_health=") !== false
+      && strpos($selfSrc, "'version'=>APP_VERSION,'at'=>time()") !== false);
+    $add('10.355', 'یک timeout موقت قرمز نیست و قرمز به سه شکست پایدار محدود است',
+         strpos($selfSrc, "s4RuntimeHealthFailures<3||recentOk") !== false
+      && strpos($selfSrc, "s4RuntimeHealthLastOk)<90000") !== false
+      && strpos($selfSrc, "tag.textContent='~'") !== false);
+    $add('10.355', 'probe قبلی در focus/wake لغو و پاسخ stale با generation رد می‌شود',
+         strpos($selfSrc, "request!==s4RuntimeHealthRequest") !== false
+      && strpos($selfSrc, "if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort()") !== false
+      && strpos($selfSrc, "document.addEventListener('visibilitychange'") !== false);
+    $add('10.355', 'ورودی 10.355 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "355'") !== false
+      && version_compare(APP_VERSION, '10.' . '355', '>='));
+    $add('10.354', 'اصلاح جدول فعلی با workflow صریح هرگز rebuild پنهان آغاز نمی‌کند',
+         strpos($selfSrc, "fd.append('workflow','fix_" . "only')") !== false
+      && strpos($selfSrc, "\$workflow=(string)(\$_GET['workflow']") !== false
+      && strpos($selfSrc, "if(\$fixNeedsBuild&&!\$combinedWorkflow)") !== false);
+    $add('10.354', 'دکمهٔ ترکیبی build و اصلاح کلی را به ترتیب در یک صف سرور می‌گذارد',
+         strpos($selfSrc, 'function syncMatrixBuildAnd' . 'Fix()') !== false
+      && strpos($selfSrc, "fd.append('workflow','build_" . "and_fix')") !== false
+      && strpos($selfSrc, "'combined_workflow'=>true") !== false
+      && strpos($selfSrc, "\$opts['view_filters']=[];\$opts['scope']='all'") !== false);
+    $add('10.354', 'checkpoint ناتمام فقط توسط workflow ترکیبی ادامه و سپس اصلاح می‌شود',
+         strpos($selfSrc, "if(\$mxCp&&!\$combinedWorkflow)") !== false
+      && strpos($selfSrc, "'code'=>'matrix_build_incomplete'") !== false
+      && strpos($selfSrc, "if(\$mxCp&&\$combinedWorkflow)") !== false);
+    $add('10.354', 'رابط سه عمل فقط ساخت، اصلاح فعلی و ساخت‌به‌علاوه‌اصلاح را شفاف جدا می‌کند',
+         strpos($selfSrc, '🚀 فقط ساخت جدول') !== false
+      && strpos($selfSrc, '🔧 اصلاح جدول فعلی') !== false
+      && strpos($selfSrc, '🔄 ساخت جدول + اصلاح کلی') !== false);
+    $add('10.354', 'ورودی 10.354 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "354'") !== false
+      && version_compare(APP_VERSION, '10.' . '354', '>='));
+    $add('10.353', 'status نتیجهٔ build و fix را بر اساس زمان واقعی مرتب می‌کند',
+         strpos($selfSrc, "\$buildAt=max(\$resultAt") !== false
+      && strpos($selfSrc, "\$fixAt=max((int)(\$fix['finished_at']") !== false
+      && strpos($selfSrc, "\$preferFinishedFix=") !== false);
+    $add('10.353', 'build موفق جدید دیگر پشت build_failed قدیمی اصلاح پنهان نمی‌شود',
+         strpos($selfSrc, 'old build_failed') !== false
+      && strpos($selfSrc, "(!empty(\$prog['done'])&&!\$preferFinishedFix)") !== false
+      && strpos($selfSrc, "'state_order'=>['build_at'=>\$buildAt") !== false);
+    $add('10.353', 'progress اصلاح قدیمی در پاسخ status به payload سبک محدود می‌شود',
+         strpos($selfSrc, "\$shownProgress=\$actualFixRunning?\$fix") !== false
+      && strpos($selfSrc, "\$preferFinishedFix?\$fixView:\$prog") !== false);
+    $add('10.353', 'ورودی 10.353 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "353'") !== false
+      && version_compare(APP_VERSION, '10.' . '353', '>='));
     $add('10.352', 'polling ساخت و اصلاح پس از refresh/wake با lifecycleها فوراً bootstrap می‌شود',
          strpos($selfSrc, "window.addEventListener('pageshow',()=>syncMatrixPollingWake") !== false
       && strpos($selfSrc, "window.addEventListener('focus',()=>syncMatrixPollingWake") !== false
@@ -51466,8 +51629,33 @@ function reconExpected(string $target, bool $allProfiles = false, ?array &$stats
 }
 
 /** همهٔ محصولات ووکامرس */
+/** Bootstrap the colocated WordPress only inside detached CLI workers.
+ * Web/plugin requests already have WordPress when appropriate and must never
+ * include wp-load.php for a second time. require_once also prevents recursion
+ * when WordPress loads this active plugin during its own bootstrap.
+ */
+function s4BootstrapWooForCli(): array {
+    static $result=null;
+    if(wooDirectAvailable())return ['ok'=>true,'loaded'=>false,'reason'=>'already_available'];
+    if($result!==null)return $result;
+    if(!isCliRun())return $result=['ok'=>false,'loaded'=>false,'reason'=>'not_cli'];
+    $rootLoader=dirname(dirname(dirname(__DIR__))).'/wp-load.php';
+    if(!is_file($rootLoader))return $result=['ok'=>false,'loaded'=>false,'reason'=>'wp_load_missing'];
+    try{
+        if(!defined('WP_USE_THEMES'))define('WP_USE_THEMES',false);
+        /* Full WordPress bootstrap may execute slow third-party plugin hooks.
+           SHORTINIT initializes config + wpdb only, which is all this reader needs. */
+        if(!defined('SHORTINIT'))define('SHORTINIT',true);
+        require_once $rootLoader;
+        $ok=wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null);
+        return $result=['ok'=>$ok,'loaded'=>true,'reason'=>$ok?'':'woo_unavailable_after_bootstrap'];
+    }catch(Throwable $e){
+        return $result=['ok'=>false,'loaded'=>false,'reason'=>'bootstrap_exception','error'=>mb_substr($e->getMessage(),0,180)];
+    }
+}
+
 /**
- * v10.115: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
+ * v10.115/v10.359: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
  * وقتی اسکرپر داخل همان وردپرس/ووکامرس لود شود، به‌جای REST API صدها برابر سریع‌تر است.
  * @return list<array{id:int,title:string,price:int,status:string}>
  */
@@ -51477,19 +51665,22 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
     $rows = array_values(array_filter((array)($cur['rows'] ?? []), 'is_array'));
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     $limit = $max > 0 ? $max : 50000;
-    if (!function_exists('wc_get_products') && !function_exists('get_posts')) {
+    $directWpdb=is_object($GLOBALS['wpdb']??null)&&isset($GLOBALS['wpdb']->posts,$GLOBALS['wpdb']->postmeta);
+    if (!function_exists('wc_get_products') && !function_exists('get_posts') && !$directWpdb) {
         $meta['partial'] = true; $meta['reason'] = 'unavailable';
         return $rows;
     }
     if (function_exists('wc_get_products')) {
-        $per = 200; $got = 0; $page = $startPage;
+        /* Offset follows durable row count, not an old page-size assumption. This
+           makes a REST(100) -> direct resume start at row 300 with no gap. */
+        $per = 100; $got = 0; $page = $startPage; $offset=max(count($rows),($startPage-1)*100);
         while ($got < $limit) {
             if (reconStopRequested()) {
                 $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped';
                 $meta['page'] = max(0, $page - 1); break;
             }
             $batch = wc_get_products([
-                'limit' => $per, 'page' => $page,
+                'limit' => $per, 'offset' => $offset,
                 'status' => ['publish', 'draft', 'pending', 'private'],
                 'orderby' => 'ID', 'order' => 'ASC', 'return' => 'objects']);
             if (!is_array($batch)) {
@@ -51520,22 +51711,53 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
             reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
                 'log_add' => ['⚡ مستقیم WC: ' . count($rows) . ' محصول (صفحه ' . $page . ')']]);
             if (count($batch) < $per) { $meta['complete'] = true; break; }
-            $page++;
+            $offset+=count($batch);$page++;
         }
         if (!$meta['complete'] && !$meta['partial']) {
             $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page;
         }
         return $rows;
     }
-    /* fallback get_posts: page with offset and the same NDJSON cursor */
-    $per = 200; $page = $startPage; $got = 0;
+    if($directWpdb){
+        $wpdb=$GLOBALS['wpdb'];$per=100;$page=$startPage;$got=0;
+        $offset=max(count($rows),($startPage-1)*100);
+        while($got<$limit){
+            if(reconStopRequested()){$meta['partial']=true;$meta['stopped']=true;$meta['reason']='stopped';$meta['page']=max(0,$page-1);break;}
+            $sql=$wpdb->prepare("SELECT p.ID,p.post_title,p.post_status,
+                (SELECT pmr.meta_value FROM {$wpdb->postmeta} pmr WHERE pmr.post_id=p.ID AND pmr.meta_key='_regular_price' LIMIT 1) regular_price,
+                (SELECT pmp.meta_value FROM {$wpdb->postmeta} pmp WHERE pmp.post_id=p.ID AND pmp.meta_key='_price' LIMIT 1) current_price
+                FROM {$wpdb->posts} p WHERE p.post_type=%s AND p.post_status IN (%s,%s,%s,%s)
+                ORDER BY p.ID ASC LIMIT %d OFFSET %d",
+                'product','publish','draft','pending','private',$per,$offset);
+            $raw=$wpdb->get_results($sql,'ARRAY_A');
+            if(!is_array($raw)){$meta['partial']=true;$meta['reason']='db';$meta['page']=$page;$meta['db_error']=mb_substr((string)$wpdb->last_error,0,180);break;}
+            if(!$raw){$meta['complete']=true;$meta['page']=max(0,$page-1);break;}
+            $pageRows=[];
+            foreach($raw as $post){
+                $name=trim((string)($post['post_title']??''));if($name==='')continue;
+                $reg=(string)($post['regular_price']??'');if($reg==='')$reg=(string)($post['current_price']??'');
+                $pageRows[]=['id'=>(int)($post['ID']??0),'title'=>$name,'price'=>(int)preg_replace('~\D~','',$reg),
+                    'status'=>(string)($post['post_status']??''),'via'=>'direct_db'];$got++;
+                if($got>=$limit)break;
+            }
+            if($pageRows){$rows=array_merge($rows,$pageRows);reconFetchCursorAppend('woo',0,$page,$pageRows);}
+            $meta['page']=$page;reconProgress(['phase'=>'fetch','fetched'=>count($rows),'page'=>$page,
+                'log_add'=>['⚡ مستقیم Woo DB: '.count($rows).' محصول (صفحه '.$page.')']]);
+            if(count($raw)<$per){$meta['complete']=true;break;}
+            $offset+=count($raw);$page++;
+        }
+        if(!$meta['complete']&&!$meta['partial']){$meta['partial']=true;$meta['reason']='run_limit';$meta['page']=$page;}
+        return $rows;
+    }
+    /* fallback get_posts: absolute row offset and the same NDJSON cursor */
+    $per = 100; $page = $startPage; $got = 0; $offset=max(count($rows),($startPage-1)*100);
     while ($got < $limit) {
         if (reconStopRequested()) {
             $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = max(0, $page - 1); break;
         }
         $raw = get_posts(['post_type' => 'product',
             'post_status' => ['publish', 'draft', 'pending', 'private'],
-            'posts_per_page' => $per, 'paged' => $page, 'orderby' => 'ID', 'order' => 'ASC']);
+            'posts_per_page' => $per, 'offset' => $offset, 'orderby' => 'ID', 'order' => 'ASC']);
         if (!$raw) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
         $pageRows = [];
         foreach ((array)$raw as $post) {
@@ -51554,7 +51776,7 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
         reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
             'log_add' => ['⚡ مستقیم WC (posts): ' . count($rows) . ' محصول']]);
         if (count($raw) < $per) { $meta['complete'] = true; break; }
-        $page++;
+        $offset+=count($raw);$page++;
     }
     if (!$meta['complete'] && !$meta['partial']) { $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page; }
     return $rows;
@@ -51562,8 +51784,12 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
 
 function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
-    /* v10.132: مسیر مستقیم هم با همان cursor صفحه‌ای ادامه‌پذیر است. */
-    if (function_exists('wooDirectAvailable') && wooDirectAvailable()) {
+    /* Detached matrix children normally execute this file outside WordPress.
+       Bootstrap the colocated installation lazily, then use the existing direct
+       reader. Ordinary web/plugin requests never enter this CLI-only branch. */
+    $boot=function_exists('s4BootstrapWooForCli')?s4BootstrapWooForCli():['ok'=>false,'loaded'=>false];
+    if (!empty($boot['loaded'])) reconProgress(['log_add'=>[!empty($boot['ok'])?'⚡ وردپرس در worker بارگذاری شد؛ ادامهٔ Woo از دیتابیس محلی':'⚠️ bootstrap مستقیم Woo در دسترس نشد: '.(string)($boot['reason']??'unknown')]]);
+    if (function_exists('wooDirectAvailable') && (wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null))) {
         return reconFetchWooDirect($maxPages > 0 ? $maxPages * 100 : 0, $meta);
     }
     if ($maxPages <= 0) $maxPages = (int)RECON_FETCH_MAX_PAGES;
@@ -51580,13 +51806,38 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     reconProgress(['log_add' => ['🌐 واکشی ووکامرس از REST API (کندتر از مستقیم)…']]);
     $limit = $startPage + max(1, $maxPages);
+    /* Matrix matching never reads descriptions, images, attributes or metadata.
+       Restricting REST output avoids costly serialization and oversized responses
+       while preserving the exact page/offset cursor semantics. */
+    $matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created';
     for ($page = $startPage; $page < $limit; $page++) {
         if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         $r = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET',
-            'products?per_page=100&status=any&page=' . $page);
+            'products?per_page=100&status=any&page=' . $page.$matrixWooFields,null,35);
+        /* Some shared Woo hosts time out while serializing/counting 100 rows even
+           though smaller offset requests work. Preserve the logical 100-row page
+           by merging two ordered 50-row chunks at the same absolute offset. */
+        $firstCode=(int)($r['code']??0);$firstTransient=$firstCode===0||$firstCode===408||$firstCode===425||$firstCode===429||$firstCode>=500;
+        if((empty($r['ok'])||!is_array($r['body']))&&$firstTransient){
+            $offset=max(0,($page-1)*100);$parts=[];$partFailure=null;
+            foreach([0,50]as$chunkOffset){
+                $pr=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'GET',
+                    'products?per_page=50&status=any&offset='.($offset+$chunkOffset).$matrixWooFields,null,30);
+                if(empty($pr['ok'])||!is_array($pr['body'])){$partFailure=$pr;break;}
+                $parts=array_merge($parts,$pr['body']);if(count($pr['body'])<50)break;
+            }
+            if($partFailure===null){
+                $r=['ok'=>true,'code'=>200,'error'=>'','body'=>$parts,'raw'=>''];
+                reconProgress(['log_add'=>['🧩 ووکامرس صفحهٔ '.$page.' با fallback دو بستهٔ ۵۰تایی دریافت شد ('.count($parts).' محصول)']]);
+            }else{$r=$partFailure;}
+        }
         if (empty($r['ok']) || !is_array($r['body'])) {
-            $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page;
-            reconProgress(['log_add' => ['⚠️ صفحهٔ ' . $page . ' نیامد — checkpoint حفظ شد']]); break;
+            $httpCode=(int)($r['code']??0);$httpError=mb_substr(trim((string)($r['error']??'')),0,180);
+            $transient=$httpCode===0||$httpCode===408||$httpCode===425||$httpCode===429||$httpCode>=500;
+            $meta['partial']=true;$meta['reason']='http';$meta['page']=$page;$meta['http_code']=$httpCode;
+            $meta['http_error']=$httpError;$meta['transient']=$transient;$meta['retry_after']=$httpCode===429?30:10;
+            reconProgress(['log_add'=>['⚠️ ووکامرس صفحهٔ '.$page.' نیامد · HTTP '.($httpCode?:'0')
+                .($httpError!==''?' · '.$httpError:'').' · checkpoint حفظ شد'.($transient?'؛ retry با backoff':'؛ خطای قطعی')]]);break;
         }
         $batch = $r['body'];
         if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
@@ -67828,11 +68079,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
 <label style="font-size:10px;color:#c4b5fd">نگه‌داری تکراری: <select id="smDuplicateKeep" style="font-size:10px;padding:4px 6px"><option value="newest">جدیدترین</option><option value="expensive">گران‌ترین</option></select></label>
-<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
+<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 فقط ساخت جدول</button>
+<button class="btn" onclick="syncMatrixBuildAndFix()" id="smBuildFixBtn" style="font-size:11px;padding:7px 12px;background:linear-gradient(135deg,#0e7490,#7c3aed);color:#fff;border:1px solid #67e8f9;font-weight:900;box-shadow:0 3px 12px #0891b255" title="ابتدا جدول تازه را کامل می‌سازد و سپس اصلاح کلی همهٔ ردیف‌ها را اجرا می‌کند">🔄 ساخت جدول + اصلاح کلی</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
-<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
+<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="بدون ساخت مجدد؛ اصلاح قیمت + ارسال missing + حذف extra روی جدول فعلی">🔧 اصلاح جدول فعلی</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('bsl')" style="font-size:10px;padding:5px 10px">فقط غرفه‌ها</button>
 <button class="btn btn-red" onclick="syncMatrixFixStop()" id="smFixStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف اصلاح</button>
@@ -67860,7 +68112,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف تکراری‌ها</b> با نگه‌داری جدیدترین یا گران‌ترین + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» فقط یک معیار فیلتر است و چند معیار با AND یا OR ترکیب می‌شوند. «🔧 اصلاح جدول فعلی» بدون ساخت مجدد فقط ردیف‌های منطبق با فیلترهای فعلی را اصلاح می‌کند. «🔄 ساخت جدول + اصلاح کلی» ابتدا snapshot تازه را کامل می‌سازد و سپس همهٔ مغایرت‌ها را بدون محدودیت فیلتر اصلاح می‌کند. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. اصلاح شامل <b>قیمت</b> + <b>ارسال missing</b> + <b>حذف تکراری‌ها</b> + <b>حذف/بایگانی فقط‌مقصد</b> است و کاملاً سرورساید ادامه می‌یابد.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -75396,6 +75648,51 @@ const CHANGELOG = [
     'تستِ مدل‌های هوش مصنوعی: اجرا به برش‌های ~۲۰ ثانیه‌ای تقسیم شد (connections.ai_test_slice_sec؛ در CLI یا هاستِ دارای driver بدونِ سقف). مدلِ نرسیده «ناموفق» ثبت نمی‌شود، فقط به برشِ بعدی می‌ماند.',
     'تستِ مدل‌ها: برشِ بعدی به ?ai_test_unstick زنجیره می‌شود (ادامه از تست‌نشده‌ها) و اگر زنجیره نرسید، خودِ رابط با ?ai_test_status=1&drive=1 برشِ بعدی را در اتصالِ زندهٔ مرورگر جلو می‌برد؛ قفلِ غیرانحصاری مانعِ رانندهٔ موازی است.',
     'تشخیص: وضعیتِ driver (spawn/finish_request/detach/worker/matrix_runner/cron_fresh/external_pulse_age) در پاسخِ ops_tick گزارش می‌شود تا «چرا کار نکرد» حدسی نباشد.'
+  ]},
+  {v:'10.360', t:'⚡ خواندن مستقیم Woo با WordPress SHORTINIT', items:[
+    'به‌جای bootstrap کامل و اجرای hookهای کند افزونه‌ها، worker فقط تنظیمات و wpdb وردپرس را با SHORTINIT بارگذاری می‌کند.',
+    'محصول، وضعیت و قیمت مستقیماً از posts/postmeta در بسته‌های ۱۰۰تایی خوانده و در همان cursor پایدار ثبت می‌شوند.',
+    'این مسیر self-call REST را حذف می‌کند و از offset معتبر ۳۰۰ ادامه می‌دهد.'
+  ]},
+  {v:'10.359', t:'⚡ ادامهٔ Woo از دیتابیس محلی در worker', items:[
+    'پردازهٔ CLI ساخت matrix وردپرس هم‌مکان را فقط هنگام نیاز و با require_once بارگذاری می‌کند؛ درخواست‌های وب دوباره bootstrap نمی‌شوند.',
+    'پس از بارگذاری، مسیر مستقیم موجود wc_get_products/get_posts جای self-call کند REST را می‌گیرد.',
+    'ادامهٔ مستقیم از offset واقعی ۳۰۰ ردیف cursor آغاز می‌شود؛ تغییر اندازهٔ صفحه باعث پرش یا تکرار محصول نمی‌شود.'
+  ]},
+  {v:'10.358', t:'⚡ پاسخ کم‌حجم Woo برای عبور از صفحهٔ سنگین', items:[
+    'واکشی matrix اکنون با پارامتر _fields فقط شناسه، نام، قیمت عادی، وضعیت و تاریخ ایجاد را می‌خواهد.',
+    'توضیحات، تصاویر، ویژگی‌ها و metadata حجیم که در تطبیق استفاده نمی‌شوند دیگر توسط Woo serialize و منتقل نمی‌شوند.',
+    'این projection هم روی درخواست ۱۰۰تایی و هم fallback پنجاه‌تایی اعمال می‌شود و cursor معتبر صفحهٔ ۳ بدون بازنشانی ادامه می‌یابد.'
+  ]},
+  {v:'10.357', t:'🧩 fallback کوچک‌تر برای صفحهٔ سنگین Woo', items:[
+    'اگر درخواست ۱۰۰محصولی Woo timeout شود، همان بازه با دو درخواست ۵۰محصولی و offset ثابت دریافت می‌شود.',
+    'دو پاسخ فقط پس از موفقیت کامل ادغام و به‌عنوان همان یک صفحه در cursor ثبت می‌شوند؛ صفحه یا محصولی از قلم نمی‌افتد.',
+    'timeout درخواست اصلی matrix به ۳۵ ثانیه و هر chunk جایگزین به ۳۰ ثانیه محدود شده تا PHP slot برای یک دقیقه بی‌دلیل اشغال نشود.',
+    'اگر fallback هم شکست بخورد، رفتار امن v10.356 یعنی checkpoint + backoff ادامه دارد.'
+  ]},
+  {v:'10.356', t:'⏳ ادامهٔ Woo پس از خطای موقت REST با backoff', items:[
+    'timeout، HTTP 0، 408، 425، 429 و 5xx دیگر build را fatal نمی‌کنند؛ checkpoint حفظ و همان صفحه پس از backoff ادامه داده می‌شود.',
+    'worker زمان retry را رعایت می‌کند و به‌جای سه child فوری و ظاهراً گیرکرده، شبکه/هاست را hot-loop نمی‌کند.',
+    '401، 403 و سایر خطاهای قطعی همچنان متوقف می‌شوند و اکنون code و متن خطای واقعی در گزارش دیده می‌شود.',
+    'فیدبک تشخیصی می‌تواند شماره صفحهٔ Woo موردنظر را probe کند.'
+  ]},
+  {v:'10.355', t:'🟢 تشخیص واقعی اتصال چراغ بالای صفحه', items:[
+    'probe سنگین whoami و محاسبهٔ hash فایل چندمگابایتی با endpoint بسیار سبک JSON جایگزین شد.',
+    'یک timeout یا شلوغی موقت هاست چراغ را کهربایی می‌کند؛ قرمز فقط پس از سه شکست پیوسته یا offline واقعی مرورگر نمایش داده می‌شود.',
+    'مهلت probe به ۱۲ ثانیه افزایش یافت و موفقیت ۹۰ ثانیهٔ اخیر از قرمز کاذب جلوگیری می‌کند.',
+    'در focus و بازگشت از خواب/تب مخفی بررسی فوری انجام می‌شود و پاسخ درخواست قدیمی دیگر وضعیت تازه را بازنویسی نمی‌کند.'
+  ]},
+  {v:'10.354', t:'🔄 دکمهٔ صریح ساخت جدول و سپس اصلاح کلی', items:[
+    'سه عمل مستقل و روشن در رابط وجود دارد: فقط ساخت جدول، اصلاح جدول فعلی، و ساخت جدول + اصلاح کلی.',
+    'اصلاح جدول فعلی دیگر به‌دلیل سن snapshot مخفیانه rebuild نمی‌کند و دقیقاً روی مجموعهٔ فیلترشدهٔ فعلی اجرا می‌شود.',
+    'دکمهٔ ترکیبی ابتدا build تازه را در worker صف می‌کند و correction کلی و بدون فیلتر را با الزام نتیجهٔ همان build پشت آن می‌گذارد.',
+    'اگر checkpoint ساخت ناتمام باشد، اصلاح تنها پیام روشن می‌دهد؛ workflow ترکیبی همان checkpoint را ادامه می‌دهد و سپس اصلاح می‌کند.'
+  ]},
+  {v:'10.353', t:'🧭 نمایش وضعیت جدیدتر میان build و correction', items:[
+    'status زمان نتیجه و progress ساخت را با زمان اجرای اصلاح مقایسه می‌کند و همیشه عملیات جدیدتر را نمایش می‌دهد.',
+    'build_failed قدیمیِ اصلاح دیگر پس از تکمیل موفق جدول، وضعیت فعلی ساخت معرفی نمی‌شود.',
+    'جزئیات حجیم correction قدیمی در polling ارسال نمی‌شوند؛ progress فعال همچنان کامل و زنده است.',
+    'فیلد state_order زمان‌های تشخیصی و وضعیت ترجیح‌داده‌شده را برای بررسی endpoint گزارش می‌کند.'
   ]},
   {v:'10.352', t:'🔄 polling پایدار ساخت و اصلاح پس از refresh و wake', items:[
     'در DOMContentLoaded، pageshow، focus، online و بازگشت visibility، وضعیت هر دو عملیات فوراً از سرور خوانده می‌شود.',
@@ -84670,7 +84967,26 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 window._smPollWatchdog=setInterval(()=>{
   if(document.visibilityState==='visible'&&(!window._smPoll||Date.now()-(window._smPollLastResponseAt||0)>15000))syncMatrixPollingWake('watchdog');
 },15000);
-/* v10.117: اصلاح مغایرت از روی جدول */
+/* Explicit full chain: unlike correction-only, this intentionally creates a
+   fresh matrix and then runs an unfiltered general correction behind it. */
+function syncMatrixBuildAndFix(){
+  const selected=smSelectedDestinations();if(!selected.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
+  if(!confirm('زنجیرهٔ کامل اجرا شود؟\n۱) ساخت تازه و کامل جدول\n۲) اصلاح کلی همهٔ مغایرت‌ها برای مقصدهای انتخاب‌شده\n\nاین عملیات به فیلترهای فعلی محدود نیست.'))return;
+  smShowJob(true);if($('smJobLabel'))$('smJobLabel').textContent='🔄 صف ساخت جدول + اصلاح کلی…';
+  const btn=$('smBuildFixBtn');if(btn){btn.disabled=true;btn.textContent='⏳ ثبت زنجیره…';}
+  const fd=new FormData();fd.append('action','sync_matrix_fix_start');fd.append('workflow','build_and_fix');
+  fd.append('source','manual_combined');fd.append('scope','all');fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
+  fd.append('selected_destinations',JSON.stringify(selected));
+  fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
+  fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
+  fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){showToast((d&&d.error)||'ثبت زنجیره ناموفق بود',1);return;}
+    showToast(d.message||'ساخت جدول و اصلاح کلی در صف سرور قرار گرفت');window._smFixTick=0;syncMatrixPoll('build-and-fix');
+  }).catch(e=>{showToast('خطا در ثبت زنجیره: '+e,1);syncMatrixPoll('build-and-fix-error');})
+    .finally(()=>{if(btn){btn.disabled=false;btn.textContent='🔄 ساخت جدول + اصلاح کلی';}});
+}
+/* v10.117: اصلاح مغایرت از روی جدول فعلی، بدون rebuild پنهان */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
   if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\n⚠ ردیف‌های «فقط مقصد» در فیلتر فعلی: '+smFa(window._smFilteredOnlyDest||0)+'؛ این موارد در پروفایل نیستند و حذف/بایگانی می‌شوند.\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
@@ -84680,6 +84996,7 @@ function syncMatrixFixStart(scope){
   if($('smJobLog')){$('smJobLog').innerHTML='';delete $('smJobLog').dataset.logSig;}
   const fd=new FormData();
   fd.append('action','sync_matrix_fix_start');
+  fd.append('workflow','fix_only');
   fd.append('scope', scope);
   fd.append('source','manual');
   fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
@@ -94581,24 +94898,39 @@ function renderSendCard(d){
 /* v10.273: چراغ زندهٔ نوار بالا. /sc محیط سروری و مسیر افزونه محیط هاست
    نام‌گذاری می‌شود؛ معیار «زنده» پاسخ معتبر خود همین runtime است، نه آنلاین
    بودن مرورگر. کلیک روی چراغ یک بررسی فوری انجام می‌دهد. */
-let s4RuntimeHealthBusy=false;
+let s4RuntimeHealthBusy=false,s4RuntimeHealthFailures=0,s4RuntimeHealthLastOk=0,s4RuntimeHealthRequest=0,s4RuntimeHealthAbort=null;
 async function s4RuntimeHealthCheck(force=false){
-  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;
-  const serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
+  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el)return;
+  if(s4RuntimeHealthBusy){if(!force)return;try{if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort();}catch(_e){}}
+  const request=++s4RuntimeHealthRequest,serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
   s4RuntimeHealthBusy=true;
   if(force||!el.dataset.checked){el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='…';el.title='در حال بررسی '+kind+'…';}
-  const ac=typeof AbortController!=='undefined'?new AbortController():null,timer=ac?setTimeout(()=>ac.abort(),7000):null;
+  const ac=typeof AbortController!=='undefined'?new AbortController():null;s4RuntimeHealthAbort=ac;
+  const timer=ac?setTimeout(()=>ac.abort(),12000):null;
   try{
-    const r=await fetch('?whoami=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
-    if(!r.ok)throw new Error('HTTP '+r.status);const text=await r.text();if(!text||text.indexOf('PHP:')<0)throw new Error('invalid response');
-    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(Date.now());if(tag)tag.textContent=short;
-    el.title='● '+kind+' زنده است · PHP پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
+    const r=await fetch('?runtime_health=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
+    if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();if(!d||d.ok!==true||!d.version)throw new Error('invalid response');
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures=0;s4RuntimeHealthLastOk=Date.now();
+    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(s4RuntimeHealthLastOk);if(tag)tag.textContent=short;
+    el.title='● '+kind+' زنده است · PHP v'+String(d.version)+' پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
   }catch(e){
-    el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
-    el.title='● '+kind+' پاسخ نمی‌دهد — برای بررسی دوباره کلیک کنید';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
-  }finally{if(timer)clearTimeout(timer);s4RuntimeHealthBusy=false;}
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures++;
+    const browserOffline=navigator.onLine===false,recentOk=s4RuntimeHealthLastOk>0&&(Date.now()-s4RuntimeHealthLastOk)<90000;
+    if(!browserOffline&&(s4RuntimeHealthFailures<3||recentOk)){
+      /* A loaded PHP host can miss one probe while normal requests still work.
+         Keep this amber/degraded; red is reserved for sustained failure. */
+      el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='~';
+      el.title='● پاسخ '+kind+' کند یا موقتاً مشغول است · تلاش '+String(s4RuntimeHealthFailures)+' از ۳';
+      el.setAttribute('aria-label',kind+' موقتاً کند است');
+    }else{
+      el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
+      el.title=browserOffline?'● اتصال مرورگر قطع است':'● '+kind+' پس از ۳ بررسی پاسخ نداده است';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
+    }
+  }finally{if(timer)clearTimeout(timer);if(request===s4RuntimeHealthRequest){s4RuntimeHealthBusy=false;s4RuntimeHealthAbort=null;}}
 }
-(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('offline',()=>{const e=document.getElementById('runtimePulse');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';}});})();
+(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('focus',()=>s4RuntimeHealthCheck(true));document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4RuntimeHealthCheck(true);});window.addEventListener('offline',()=>{s4RuntimeHealthFailures=3;const e=document.getElementById('runtimePulse'),t=document.getElementById('runtimePulseTag');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';if(t)t.textContent='!';}});})();
 /* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
    daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
 (function opsFeedbackPulse(){
