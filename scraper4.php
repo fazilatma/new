@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.350';
+const APP_VERSION = '10.351';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1655,10 +1655,18 @@ function matrixWakePausedJobs(): int {
     return $resumed;
 }
 function matrixWakeWaitingBuild(): array {
-    $p=matrixProgressRead(false);
-    if(!empty($p['running'])||empty($p['yielded'])||(string)($p['phase']??'')!=='waiting_cron')return ['woken'=>false,'reason'=>'not_waiting'];
-    $q=s4WorkerLoadQueue();
+    $p=matrixProgressRead(false);$q=s4WorkerLoadQueue();
+    /* An active queue owner is authoritative, including the tiny unlocked gap
+       between checkpointed child slices. Never create a parallel owner there. */
     foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['type']??'')==='matrix_build'&&in_array((string)($e['status']??''),['pending','running','paused'],true))return ['woken'=>false,'reason'=>'queue_owner_exists'];
+    $waiting=empty($p['running'])&&!empty($p['yielded'])&&(string)($p['phase']??'')==='waiting_cron';
+    /* Hosting may kill the child/daemon after several hours. Its progress file
+       can still say running while the queue owner is failed and the matrix lock
+       is free. A real cron pulse must recreate exactly one resume owner. */
+    $lockHeld=false;$lf=@fopen(SYNC_MATRIX_LOCK_FILE,'c');
+    if($lf){$free=@flock($lf,LOCK_EX|LOCK_NB);$lockHeld=!$free;if($free)@flock($lf,LOCK_UN);@fclose($lf);}
+    $orphaned=!empty($p['running'])&&!$lockHeld;
+    if(!$waiting&&!$orphaned)return ['woken'=>false,'reason'=>'not_waiting'];
     $full=matrixProgressRead(true);$cp=is_array($full['checkpoint']??null)?$full['checkpoint']:[];
     if(!$cp)return ['woken'=>false,'reason'=>'checkpoint_missing'];
     $opts=['profile'=>(string)($p['profile']??$cp['profile_filter']??'all'),
@@ -1667,7 +1675,8 @@ function matrixWakeWaitingBuild(): array {
         'selected_destinations'=>array_key_exists('selected_destinations',$cp)?array_values((array)$cp['selected_destinations']):null,
         'slice_seconds'=>max(2,min(20,(int)($p['slice_seconds']??$cp['slice_seconds']??8)))];
     $r=s4WorkerIsActive()?s4WorkerEnqueueMatrixBuild($opts,true):s4SpawnMatrixBuildChild($opts,true);
-    return ['woken'=>!empty($r['ok']),'result'=>$r];
+    if($orphaned&&!empty($r['ok']))matrixProgress(['log_add'=>['♻️ کران owner ازدست‌رفتهٔ build را بازیابی کرد؛ ادامه از checkpoint بدون شروع دوباره']]);
+    return ['woken'=>!empty($r['ok']),'orphaned'=>$orphaned,'result'=>$r];
 }
 function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $resumed,array $waiting): void {
     /* Only a real hosting/HTTP/CLI cron tick belongs in operation logs. Saving
@@ -1853,11 +1862,14 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
         $isCheckpointBuild=$type==='matrix_build';
-        $recover=$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
+        /* A checkpoint-backed matrix build may span many hosting process lives.
+           The generic four-attempt cap is appropriate for non-resumable jobs, but
+           must never permanently fail a durable matrix continuation. */
+        $recover=$isCheckpointBuild||$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
         $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
         /* A fresh build becomes a resume after its first claim. Keeping resume=false
            on orphan recovery deleted its cursor and restarted Woo at page one. */
-        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointFix)$e['attempts']=0;}$n++;
+        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
     }unset($e);return['ok'=>true];});return$n;
 }
 
@@ -42984,6 +42996,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.351', 'build دارای checkpoint دیگر با سقف عمومی چهار تلاش permanently failed نمی‌شود',
+         strpos($selfSrc, "\$recover=\$isCheckpoint" . "Build||\$attempts<4||\$isCheckpointFix") !== false
+      && strpos($selfSrc, "\$e['recycles']=(int)(\$e['recycles']??0)+1;\$e['attempts']=0") !== false);
+    $add('10.351', 'کران running یتیم بدون lock و owner را دقیقاً از checkpoint دوباره مالک‌دار می‌کند',
+         strpos($selfSrc, "\$orphaned=!empty(\$p['running'])&&!\$lockHeld") !== false
+      && strpos($selfSrc, "if(\$orphaned&&!empty(\$r['ok']))matrixProgress") !== false
+      && strpos($selfSrc, "'orphaned'=>\$orphaned") !== false);
+    $add('10.351', 'بررسی owner فعال قبل از lock از ساخت runner موازی در فاصلهٔ childها جلوگیری می‌کند',
+         strpos($selfSrc, 'tiny unlocked gap') !== false
+      && strpos($selfSrc, "['pending','running','paused']") !== false);
+    $add('10.351', 'ورودی 10.351 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "351'") !== false
+      && version_compare(APP_VERSION, '10.' . '351', '>='));
     $add('10.350', 'سقف صفحهٔ هر پردازش Woo به‌عنوان handoff قابل‌ادامه شناخته می‌شود',
          strpos($selfSrc, "in_array(\$wooBoundaryReason,['max_" . "pages','run_limit'],true)") !== false
       && strpos($selfSrc, "return \$yieldMatrix('woo_" . "fetch')") !== false);
@@ -74583,6 +74608,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.351', t:'🫀 ادامهٔ قطعی build پس از قطع‌های مکرر هاست', items:[
+    'ساخت ماتریس دارای checkpoint دیگر پس از چهار بار قطع process برای همیشه failed نمی‌شود؛ هر daemon تازه همان checkpoint را resume می‌کند.',
+    'اگر progress هنوز running باشد اما هیچ lock و owner فعال صف وجود نداشته باشد، ضربان واقعی کران دقیقاً یک owner ادامه می‌سازد.',
+    'owner فعال پیش از بررسی lock کنترل می‌شود تا فاصلهٔ کوتاه بین childها هیچ اجرای موازی ایجاد نکند.',
+    'شمار تلاش هنگام بازیابی checkpoint reset و شمار recycle جداگانه ثبت می‌شود؛ خطاهای واقعی API همچنان failed می‌مانند.'
+  ]},
   {v:'10.350', t:'📄 ادامهٔ خودکار Woo پس از سقف صفحهٔ هر پردازش', items:[
     'رسیدن سالم به سقف صفحات هر child دیگر خطای «برداشت ووکامرس کامل نشد» نیست و به‌عنوان handoff عادی ثبت می‌شود.',
     'cursor و checkpoint اختصاصی حفظ می‌شوند و worker یا ضربان بعدی کران از صفحهٔ بعد ادامه می‌دهد.',
