@@ -293,6 +293,13 @@
     close:   { label: 'Close tab', ico: '\u2715', ids: [], titles: ['View: Close Editor'], keys: [{ key: 'W', code: 'KeyW', keyCode: 87, ctrl: true }] },
     zen:     { label: 'Zen', ico: '\u26F6', ids: [], titles: ['View: Toggle Zen Mode'], keys: [] },
     reload:  { label: 'Reload', ico: '\u27F3', ids: [], titles: ['Developer: Reload Window'], keys: [] },
+    ai_test: { label: 'Test AI Models', ico: '\uD83E\uDDEA', ids: [], titles: [], run: function() {
+      fetch('http://127.0.0.1:8080/?ai_test_start=1&only_untested=0', {mode: 'no-cors'}).then(function() {
+        toast('🧪 AI Models Test triggered');
+      }).catch(function() {
+        toast('🧪 AI Models Test requested');
+      });
+    } },
     undo:    { label: 'Undo', ico: '\u21B6', ids: [], titles: [], keys: [{ key: 'z', code: 'KeyZ', keyCode: 90, ctrl: true }] },
     redo:    { label: 'Redo', ico: '\u21B7', ids: [], titles: [], keys: [{ key: 'z', code: 'KeyZ', keyCode: 90, ctrl: true, shift: true }] },
     find:    { label: 'Find', ico: '\u2315', ids: [], titles: [], keys: [{ key: 'f', code: 'KeyF', keyCode: 70, ctrl: true }] }
@@ -580,7 +587,8 @@
     { k: 'redo', ico: '\u21B7', label: 'Redo' },
     { k: 'ext', ico: '\u29C9', label: 'Extensions' },
     { k: 'zen', ico: '\u26F6', label: 'Zen' },
-    { k: 'reload', ico: '\u27F3', label: 'Reload' }
+    { k: 'reload', ico: '\u27F3', label: 'Reload' },
+    { k: 'ai_test', ico: '\uD83E\uDDEA', label: 'Test AI Models' }
   ];
 
   function buildSheet() {

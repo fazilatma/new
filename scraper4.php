@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.361';
+const APP_VERSION = '10.362';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -67349,7 +67349,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <textarea id="chInput" rows="2" onkeydown="chKey(event)" style="flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:8px;font-size:11.5px;font-family:inherit;line-height:1.8" placeholder="پیامتان را بنویسید… (Ctrl+Enter برای ارسال)"></textarea>
 <button class="btn btn-purple" id="chSendBtn" onclick="chSend()" style="flex:0;font-size:11px;white-space:nowrap">📨 ارسال</button>
 </div>
-<div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
+<button class="btn btn-green" id="chTestAllBtn" onclick="chTestAll()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="شروع و پایش تست زنده همه مدل‌های فعال هوش مصنوعی">🧪 تست همه مدل‌ها</button>
 <span id="chStatus" style="flex:1;font-size:10px;color:#64748b">—</span>
 <button class="btn btn-gray" onclick="chClear()" style="flex:0;font-size:10px;padding:3px 8px">🗑 پاک‌کردنِ گفت‌وگو</button>
 </div>
@@ -75634,6 +75635,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.362', t:'🧪 دکمه تست همه مدل‌ها در محیط چت', items:[
+    'افزودن دکمه «تست همه مدل‌ها» مستقیم به محیط چت (تب چت با مدل‌ها) جهت بررسی و فعال‌سازی یک‌کلیکی آزمون مدل‌ها.',
+    'یکپارچه‌سازی با محیط موبایل code-server (اکشن Test AI Models در منوی More).'
+  ]},
   {v:'10.361', t:'🫀 کارِ واقعی روی هاستِ بدونِ worker: برشِ زمانی + زنجیرهٔ ادامه', items:[
     'ریشهٔ سه شکایت با شواهدِ اندپوینت‌های زنده ثابت شد: exec بسته است (actions.worker.error=exec_disabled)، fastcgi_finish_request وجود ندارد و کرانِ بیرونی هم کهنه است (cron.stale=true) — پس نه worker دائمی ساخته می‌شود، نه کارِ جداشده از کلاینت زنده می‌ماند.',
     'مغایرت‌گیری: در حالت cron_only بدونِ هیچ driver واقعی، تصمیمِ اجرا دیگر can_run=false نمی‌دهد؛ همان request وب یک برشِ واقعی می‌زند (degraded=browser_slice) و checkpoint جلو می‌رود. تازگیِ cron_last_run.json دیگر شاهدِ driver حساب نمی‌شود چون تیکِ رابط هم آن را می‌نویسد.',
@@ -91918,6 +91923,26 @@ function chClear() {
     var st = $('chStatus');
     if (st) st.textContent = '—';
     showToast('گفت‌وگو پاک شد');
+}
+
+/** تست همه مدل‌ها مستقیم از محیط چت */
+function chTestAll() {
+    var b = $('chTestAllBtn');
+    if (b) { b.disabled = true; b.textContent = '⏳ ...'; }
+    var st = $('chStatus');
+    if (st) st.textContent = '🔄 در حال فراخوانی تست همه مدل‌ها...';
+    if (typeof aiTestStartContinue === 'function') {
+        try { aiTestStartContinue(); } catch(e){}
+    } else if (typeof aiTestAll === 'function') {
+        try { aiTestAll(); } catch(e){}
+    } else {
+        fetch('?ai_test_start=1&only_untested=0').catch(function(){});
+    }
+    setTimeout(function() {
+        if (b) { b.disabled = false; b.textContent = '🧪 تست همه مدل‌ها'; }
+        if (st) st.textContent = '✅ تست مدل‌ها آغاز شد و در پس‌زمینه در حال اجراست';
+        showToast('تست همه مدل‌های هوش مصنوعی فعال شد');
+    }, 1500);
 }
 
 /** بازگشت به مدلِ پیش‌فرضِ اتصالات */
