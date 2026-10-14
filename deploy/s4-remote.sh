@@ -138,6 +138,66 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+fetch_file() {  # fetch_file <name>
+  local name="$1" dst="$BASE/$1" src local_src
+  local_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$name"
+  if [ -f "$local_src" ]; then
+    cp -f "$local_src" "$dst" && { say "  $name: copied from $local_src"; return 0; }
+  fi
+  if curl -fsSL --connect-timeout 12 --max-time 60 -o "$dst.tmp" "$RAWBASE/deploy/$name" 2>/dev/null && [ -s "$dst.tmp" ]; then
+    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (raw.githubusercontent.com)"; return 0
+  fi
+  if curl -fsSL --connect-timeout 12 --max-time 60 -H 'Accept: application/vnd.github.raw' \
+       -o "$dst.tmp" "$API/repos/$REPO/contents/deploy/$name?ref=$SRC_BRANCH" 2>/dev/null && [ -s "$dst.tmp" ]; then
+    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (api.github.com)"; return 0
+  fi
+  rm -f "$dst.tmp" 2>/dev/null
+  if [ -f "$dst" ]; then warn "$name: download failed, keeping the existing copy"; return 0; fi
+  warn "$name: unavailable"; return 1
+}
+
+
+# ======================================================== auto-update logic
+update_deploy_files() {
+  say "Checking and updating mobile code-server deploy files from $REPO@$SRC_BRANCH..."
+  local updated=0
+  for f in "$PROXY_JS" "$SHELL_CSS" "$SHELL_JS" "$TERMFIX_SH" "s4-remote.sh"; do
+    local dst="$BASE/$f"
+    if [ "$f" = "s4-remote.sh" ]; then dst="$0"; fi
+    if fetch_file "$f"; then
+      updated=$((updated + 1))
+    fi
+  done
+  say "Update complete ($updated files checked). Restarting services if running..."
+  if pgrep -f "$PROXY_JS" >/dev/null 2>&1; then
+    local ppid; ppid="$(cat "$BASE/csproxy.pid" 2>/dev/null || true)"
+    [ -n "$ppid" ] && kill "$ppid" 2>/dev/null || true
+    sleep 1
+    ( cd "$BASE" && S4_CS_HOST="$CODE_HOST" S4_CS_PORT="$CODE_PORT" S4_CS_UPSTREAM="$CS_UPSTREAM"         S4_CS_ZOOM="$ZOOM" S4_CS_STATE="$BASE"         S4_CS_CSS="${CUSTOM_CSS:+$BASE/mobile.css}" S4_CS_NO_SHELL="$([ "$NO_SHELL" = 1 ] && echo 1 || echo '')"         nohup node "$BASE/$PROXY_JS" > "$BASE/csproxy.log" 2>&1 &
+      echo $! > "$BASE/csproxy.pid" ) 2>/dev/null
+    say "  reloaded mobile proxy with newest files"
+  fi
+}
+
+start_auto_update_daemon() {
+  say "Starting background auto-update listener (syncs with branch $SRC_BRANCH)..."
+  local up_pidf="$BASE/autoupdate.pid"
+  if [ -f "$up_pidf" ] && kill -0 "$(cat "$up_pidf" 2>/dev/null)" 2>/dev/null; then
+    say "  auto-update daemon already running (pid $(cat "$up_pidf"))"
+    return 0
+  fi
+  (
+    while true; do
+      sleep 180
+      # check GitHub tip commit
+      sh -c "bash "$0" --update-now" >/dev/null 2>&1 || true
+    done
+  ) >/dev/null 2>&1 &
+  echo $! > "$up_pidf"
+  say "  auto-update daemon started (pid $(cat "$up_pidf"), checks every 3m)"
+}
+
+
 if [ "$UPDATE_NOW" = 1 ]; then
   update_deploy_files
   exit 0
@@ -466,65 +526,7 @@ PY
 }
 
 
-# ======================================================== auto-update logic
-update_deploy_files() {
-  say "Checking and updating mobile code-server deploy files from $REPO@$SRC_BRANCH..."
-  local updated=0
-  for f in "$PROXY_JS" "$SHELL_CSS" "$SHELL_JS" "$TERMFIX_SH" "s4-remote.sh"; do
-    local dst="$BASE/$f"
-    if [ "$f" = "s4-remote.sh" ]; then dst="$0"; fi
-    if fetch_file "$f"; then
-      updated=$((updated + 1))
-    fi
-  done
-  say "Update complete ($updated files checked). Restarting services if running..."
-  if pgrep -f "$PROXY_JS" >/dev/null 2>&1; then
-    local ppid; ppid="$(cat "$BASE/csproxy.pid" 2>/dev/null || true)"
-    [ -n "$ppid" ] && kill "$ppid" 2>/dev/null || true
-    sleep 1
-    ( cd "$BASE" && S4_CS_HOST="$CODE_HOST" S4_CS_PORT="$CODE_PORT" S4_CS_UPSTREAM="$CS_UPSTREAM"         S4_CS_ZOOM="$ZOOM" S4_CS_STATE="$BASE"         S4_CS_CSS="${CUSTOM_CSS:+$BASE/mobile.css}" S4_CS_NO_SHELL="$([ "$NO_SHELL" = 1 ] && echo 1 || echo '')"         nohup node "$BASE/$PROXY_JS" > "$BASE/csproxy.log" 2>&1 &
-      echo $! > "$BASE/csproxy.pid" ) 2>/dev/null
-    say "  reloaded mobile proxy with newest files"
-  fi
-}
-
-start_auto_update_daemon() {
-  say "Starting background auto-update listener (syncs with branch $SRC_BRANCH)..."
-  local up_pidf="$BASE/autoupdate.pid"
-  if [ -f "$up_pidf" ] && kill -0 "$(cat "$up_pidf" 2>/dev/null)" 2>/dev/null; then
-    say "  auto-update daemon already running (pid $(cat "$up_pidf"))"
-    return 0
-  fi
-  (
-    while true; do
-      sleep 180
-      # check GitHub tip commit
-      sh -c "bash "$0" --update-now" >/dev/null 2>&1 || true
-    done
-  ) >/dev/null 2>&1 &
-  echo $! > "$up_pidf"
-  say "  auto-update daemon started (pid $(cat "$up_pidf"), checks every 3m)"
-}
-
 # ================================================== download shell + proxy
-fetch_file() {  # fetch_file <name>
-  local name="$1" dst="$BASE/$1" src local_src
-  local_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$name"
-  if [ -f "$local_src" ]; then
-    cp -f "$local_src" "$dst" && { say "  $name: copied from $local_src"; return 0; }
-  fi
-  if curl -fsSL --connect-timeout 12 --max-time 60 -o "$dst.tmp" "$RAWBASE/deploy/$name" 2>/dev/null && [ -s "$dst.tmp" ]; then
-    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (raw.githubusercontent.com)"; return 0
-  fi
-  if curl -fsSL --connect-timeout 12 --max-time 60 -H 'Accept: application/vnd.github.raw' \
-       -o "$dst.tmp" "$API/repos/$REPO/contents/deploy/$name?ref=$SRC_BRANCH" 2>/dev/null && [ -s "$dst.tmp" ]; then
-    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (api.github.com)"; return 0
-  fi
-  rm -f "$dst.tmp" 2>/dev/null
-  if [ -f "$dst" ]; then warn "$name: download failed, keeping the existing copy"; return 0; fi
-  warn "$name: unavailable"; return 1
-}
-
 # ======================================================== evidence / checks
 verify_injection() {  # prints S4_VERIFY=pass|fail
   local body="$BASE/probe.html" code marks zoomcss pinch blocked nonce src
