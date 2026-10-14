@@ -31,6 +31,8 @@ test('package contributes the model and self-repair Copilot Chat toolbar command
   assert.equal(settings['copilotModels.githubRepository'].default, 'fazilatma/new');
   assert.equal(settings['copilotModels.githubBranch'].default, 'arena/f1997f2f-new');
   assert.equal(settings['copilotModels.autoUpdate'].default, false);
+  assert.equal(settings['copilotModels.pinSuccessfulModels'].default, true);
+  assert.equal(settings['copilotModels.testConcurrency'].default, 1);
 });
 
 test('GitHub updater downloads runtime directly instead of spawning Bash', () => {
@@ -230,6 +232,18 @@ test('collectConfiguredModels separates custom OpenAI and Ollama models', () => 
   assert.deepEqual(value.ollamaGroups, [
     { provider: 'Local Ollama', url: 'http://127.0.0.1:11434' },
   ]);
+});
+
+test('chatModelIdentifier matches Copilot Chat vendor/group/model storage ids', () => {
+  assert.equal(
+    core.chatModelIdentifier({ vendor: 'customoai', provider: 'Mistral', id: 'codestral' }),
+    'customoai/Mistral/codestral'
+  );
+  assert.equal(
+    core.chatModelIdentifier({ kind: 'ollama', provider: 'Local Ollama', id: 'qwen:7b' }),
+    'ollama/Local Ollama/qwen:7b'
+  );
+  assert.equal(core.chatModelIdentifier({ provider: 'Broken', id: 'model' }), '');
 });
 
 test('collectConfiguredModels never sends a Chat secret reference as an API key', () => {

@@ -539,6 +539,56 @@ async function runHelper(context, extraArgs, token) {
   return runProcess(pythonCommand(environment), args, token, environment);
 }
 
+async function persistPinnedModels(context, successfulModels) {
+  const identifiers = [...new Set(successfulModels.map(core.chatModelIdentifier).filter(Boolean))];
+  if (!identifiers.length) {
+    return { requested: 0, added: 0, total: 0, unhidden: 0, changed: false };
+  }
+  const runtime = runtimePaths(context);
+  if (!(await readable(runtime.helper))) {
+    throw new Error(`Toolbox runtime file is missing: ${runtime.helper}`);
+  }
+  const pinDirectory = path.join(context.globalStorageUri.fsPath, 'pin-models');
+  await fsp.mkdir(pinDirectory, { recursive: true, mode: 0o700 });
+  await fsp.chmod(pinDirectory, 0o700);
+  const pinFile = path.join(pinDirectory, `successful-${Date.now()}.json`);
+  await fsp.writeFile(pinFile, JSON.stringify(identifiers) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  try {
+    const paths = configuredPaths(context);
+    const retention = Math.max(
+      1,
+      Math.min(30, Number(toolboxConfiguration().get('backupRetention', 8)))
+    );
+    const environment = termuxRuntimeEnvironment();
+    const result = await runProcess(
+      pythonCommand(environment),
+      [
+        runtime.helper,
+        '--pin-models-file',
+        pinFile,
+        '--settings-file',
+        paths.settingsFile,
+        '--pin-backup-dir',
+        path.join(context.globalStorageUri.fsPath, 'pin-storage-backups'),
+        '--pin-backup-retention',
+        String(retention),
+      ],
+      undefined,
+      environment
+    );
+    const line = result.stdout
+      .split(/\r?\n/)
+      .find((value) => value.startsWith('PIN_RESULT '));
+    if (!line) throw new Error('Pin helper returned no result');
+    return JSON.parse(line.slice('PIN_RESULT '.length));
+  } finally {
+    await fsp.rm(pinFile, { force: true });
+  }
+}
+
 async function copyRestartCommand(message) {
   const choice = await vscode.window.showInformationMessage(
     `${message} Restart code-server from a separate Termux session to apply every change.`,
@@ -962,6 +1012,38 @@ async function diagnoseCodeServer(context) {
   output.show(true);
 }
 
+async function captureTypeScriptDiagnostics() {
+  const configuration = vscode.workspace.getConfiguration();
+  const current = configuration.get(
+    'js/ts.tsserver.log',
+    configuration.get('typescript.tsserver.log', 'off')
+  );
+  if (current === 'off') {
+    const confirmed = await vscode.window.showWarningMessage(
+      'Temporarily enable normal TypeScript server logging? Logs stay on this device but can contain project paths and code-related protocol data. Reproduce the EPIPE once, then run this action again to open the log.',
+      { modal: true },
+      'Enable Local Log'
+    );
+    if (confirmed !== 'Enable Local Log') return;
+    await configuration.update(
+      'js/ts.tsserver.log',
+      'normal',
+      vscode.ConfigurationTarget.Global
+    );
+    await configuration.update(
+      'typescript.tsserver.log',
+      'normal',
+      vscode.ConfigurationTarget.Global
+    );
+    await vscode.commands.executeCommand('typescript.restartTsServer');
+    vscode.window.showInformationMessage(
+      'TypeScript logging is enabled locally. Reproduce EPIPE, then choose Capture/open TypeScript crash log again.'
+    );
+    return;
+  }
+  await vscode.commands.executeCommand('typescript.openTsServerLog');
+}
+
 async function repairCodeServer(context) {
   const action = await vscode.window.showQuickPick(
     [
@@ -979,6 +1061,11 @@ async function repairCodeServer(context) {
         label: '$(debug-restart) Restart TypeScript language server',
         description: 'Recover immediately from a write EPIPE tsserver exit',
         id: 'typescript',
+      },
+      {
+        label: '$(output) Capture/open TypeScript crash log',
+        description: 'Enable a local tsserver log, reproduce EPIPE, then open the log',
+        id: 'typescript-log',
       },
       {
         label: '$(history) Restore a previous backup',
@@ -1005,6 +1092,10 @@ async function repairCodeServer(context) {
   if (action.id === 'typescript') {
     await vscode.commands.executeCommand('typescript.restartTsServer');
     vscode.window.showInformationMessage('TypeScript language server restart requested.');
+    return;
+  }
+  if (action.id === 'typescript-log') {
+    await captureTypeScriptDiagnostics();
     return;
   }
   if (action.id === 'remote') {
@@ -1076,7 +1167,13 @@ async function discoverOllama(group, timeoutMs, signal) {
   return value.models
     .map((model) => String((model && (model.name || model.model)) || '').trim())
     .filter(Boolean)
-    .map((id) => ({ kind: 'ollama', provider: group.provider, id, url: group.url }));
+    .map((id) => ({
+      kind: 'ollama',
+      vendor: 'ollama',
+      provider: group.provider,
+      id,
+      url: group.url,
+    }));
 }
 
 async function testOneModel(model, timeoutMs, signal) {
@@ -1493,9 +1590,31 @@ function openTestDashboard(context, models, warnings, options) {
       const passed = selectedResults.filter((result) => result.state === 'pass').length;
       const failed = selectedResults.filter((result) => result.state === 'fail').length;
       const cancelled = selectedResults.filter((result) => result.state === 'cancelled').length;
-      const summary = `${passed} passed · ${failed} failed · ${cancelled} cancelled`;
+      let summary = `${passed} passed · ${failed} failed · ${cancelled} cancelled`;
+      let pinResult;
+      if (passed && toolboxConfiguration().get('pinSuccessfulModels', true)) {
+        const successful = selected.filter(
+          (model) => results.get(model.testKey)?.state === 'pass'
+        );
+        try {
+          pinResult = await persistPinnedModels(context, successful);
+          summary += ` · ${pinResult.added} newly pinned (${pinResult.total} total)`;
+          output.appendLine(
+            `[PIN] requested=${pinResult.requested} added=${pinResult.added} ` +
+              `total=${pinResult.total} unhidden=${pinResult.unhidden}`
+          );
+        } catch (error) {
+          summary += ' · pinning failed (see output)';
+          output.appendLine(`[PIN ERROR] ${error.stack || error.message || error}`);
+        }
+      }
       panel.webview.postMessage({ type: 'runDone', summary });
       output.appendLine(`Summary: ${summary}`);
+      if (pinResult?.restartRequired) {
+        await copyRestartCommand(
+          `${pinResult.added} successful model(s) were saved to Copilot Chat's pinned list.`
+        );
+      }
     }
   };
 

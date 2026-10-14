@@ -193,6 +193,15 @@ function collectConfiguredModels(groups) {
   return { models, ollamaGroups, warnings };
 }
 
+function chatModelIdentifier(model) {
+  if (!model || typeof model !== 'object') return '';
+  const vendor = String(model.vendor || (model.kind === 'ollama' ? 'ollama' : '')).trim();
+  const group = String(model.provider || '').trim();
+  const id = String(model.id || '').trim();
+  if (!vendor || !group || !id || id === 'auto') return '';
+  return `${vendor}/${group}/${id}`;
+}
+
 function validateCatalog(value) {
   if (!value || typeof value !== 'object' || !Array.isArray(value.providers)) {
     throw new Error('Downloaded catalog has no providers array');
@@ -223,6 +232,7 @@ function compactError(text, apiKey = '', maxLength = 8000) {
 
 module.exports = {
   chatCompletionsUrl,
+  chatModelIdentifier,
   collectConfiguredModels,
   compactError,
   httpRequest,

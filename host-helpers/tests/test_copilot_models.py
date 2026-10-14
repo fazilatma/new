@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -206,6 +207,105 @@ class NormalizeTests(unittest.TestCase):
         close.assert_called_once_with(42)
 
 
+class PinnedModelStorageTests(unittest.TestCase):
+    def test_successful_models_are_pinned_unhidden_and_backed_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            storage = root / "globalStorage" / "state.vscdb"
+            storage.parent.mkdir(parents=True)
+            with sqlite3.connect(storage) as connection:
+                connection.execute(
+                    "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)"
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    ("chatModelPinned", json.dumps(["copilot/existing"])),
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    (
+                        "chatModelVisibility",
+                        json.dumps(
+                            {
+                                "hiddenModels": [
+                                    "customoai/Mistral/model-a",
+                                    "customoai/Other/model-b",
+                                ]
+                            }
+                        ),
+                    ),
+                )
+            backups = root / "backups"
+            result = copilot_models.pin_chat_models(
+                storage,
+                ["customoai/Mistral/model-a", "customoai/Mistral/model-a"],
+                backups,
+            )
+            self.assertEqual(result["requested"], 1)
+            self.assertEqual(result["added"], 1)
+            self.assertEqual(result["total"], 2)
+            self.assertEqual(result["unhidden"], 1)
+            self.assertTrue(result["restartRequired"])
+            backup = Path(result["backup"])
+            self.assertTrue(backup.is_file())
+            self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+            with sqlite3.connect(storage) as connection:
+                pinned = json.loads(
+                    connection.execute(
+                        "SELECT value FROM ItemTable WHERE key = 'chatModelPinned'"
+                    ).fetchone()[0]
+                )
+                visibility = json.loads(
+                    connection.execute(
+                        "SELECT value FROM ItemTable WHERE key = 'chatModelVisibility'"
+                    ).fetchone()[0]
+                )
+            self.assertEqual(
+                pinned, ["copilot/existing", "customoai/Mistral/model-a"]
+            )
+            self.assertEqual(
+                visibility["hiddenModels"], ["customoai/Other/model-b"]
+            )
+            repeated = copilot_models.pin_chat_models(
+                storage, ["customoai/Mistral/model-a"], backups
+            )
+            self.assertFalse(repeated["changed"])
+            self.assertEqual(repeated["backup"], "")
+
+    def test_pin_models_cli_runs_without_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "User"
+            settings = profile / "settings.json"
+            storage = profile / "globalStorage" / "state.vscdb"
+            storage.parent.mkdir(parents=True)
+            settings.write_text("{}\n", encoding="utf-8")
+            with sqlite3.connect(storage) as connection:
+                connection.execute(
+                    "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)"
+                )
+            pin_file = Path(temporary) / "pins.json"
+            pin_file.write_text(
+                json.dumps(["customoai/Mistral/model-a"]), encoding="utf-8"
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(HELPER_PATH),
+                    "--pin-models-file",
+                    str(pin_file),
+                    "--settings-file",
+                    str(settings),
+                    "--pin-backup-dir",
+                    str(Path(temporary) / "backups"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn('PIN_RESULT {"requested":1,"added":1', completed.stdout)
+
+
 class TerminalSettingsTests(unittest.TestCase):
     def test_jsonc_settings_are_loaded_without_corrupting_comment_like_strings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -271,13 +371,20 @@ class TerminalSettingsTests(unittest.TestCase):
         self.assertFalse(merged["terminal.integrated.enablePersistentSessions"])
         self.assertEqual(merged["terminal.integrated.detectLocale"], "off")
         self.assertFalse(merged["chat.tools.terminal.sandbox.enabled"])
-        self.assertEqual(merged["js/ts.tsserver.maxMemory"], 768)
-        self.assertEqual(merged["typescript.tsserver.maxTsServerMemory"], 768)
+        self.assertEqual(merged["js/ts.tsserver.maxMemory"], 256)
+        self.assertEqual(merged["typescript.tsserver.maxTsServerMemory"], 256)
         self.assertEqual(merged["js/ts.tsserver.useSyntaxServer"], "never")
         self.assertEqual(merged["typescript.tsserver.useSyntaxServer"], "never")
         self.assertFalse(merged["typescript.tsserver.useSeparateSyntaxServer"])
         self.assertFalse(merged["js/ts.tsserver.automaticTypeAcquisition.enabled"])
         self.assertTrue(merged["typescript.disableAutomaticTypeAcquisition"])
+        self.assertFalse(merged["js/ts.validate.enabled"])
+        self.assertFalse(merged["typescript.validate.enable"])
+        self.assertFalse(merged["javascript.validate.enable"])
+        self.assertEqual(merged["js/ts.tsserver.watchOptions"], "vscode")
+        self.assertEqual(
+            merged["js/ts.preferences.includePackageJsonAutoImports"], "off"
+        )
         self.assertTrue(merged["files.watcherExclude"]["**/node_modules/**"])
         self.assertEqual(
             merged["terminal.integrated.env.linux"]["PREFIX"], termux_prefix

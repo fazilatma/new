@@ -18,11 +18,13 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
 import termios
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,7 +36,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.9"
+HELPER_VERSION = "0.1.10"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1339,8 +1341,8 @@ def terminal_enabled_settings(
         # 3072 MB per server), after which VS Code only reports write EPIPE.
         # Keep a single bounded server and avoid background acquisition/watch
         # pressure. Both current unified and older compatibility keys are set.
-        settings["js/ts.tsserver.maxMemory"] = 768
-        settings["typescript.tsserver.maxTsServerMemory"] = 768
+        settings["js/ts.tsserver.maxMemory"] = 256
+        settings["typescript.tsserver.maxTsServerMemory"] = 256
         settings["js/ts.tsserver.useSyntaxServer"] = "never"
         settings["typescript.tsserver.useSyntaxServer"] = "never"
         # Very old VS Code builds used the boolean compatibility key.
@@ -1349,6 +1351,20 @@ def terminal_enabled_settings(
         settings["typescript.disableAutomaticTypeAcquisition"] = True
         settings["js/ts.tsserver.experimental.enableProjectDiagnostics"] = False
         settings["typescript.tsserver.experimental.enableProjectDiagnostics"] = False
+        # Chat and the model provider need more of Android's limited memory than
+        # background JS/TS validation. IntelliSense remains available on demand.
+        settings["js/ts.validate.enabled"] = False
+        settings["typescript.validate.enable"] = False
+        settings["javascript.validate.enable"] = False
+        settings["js/ts.tsserver.watchOptions"] = "vscode"
+        settings["typescript.tsserver.watchOptions"] = "vscode"
+        settings["js/ts.tsserver.tracing.enabled"] = False
+        settings["typescript.tsserver.enableTracing"] = False
+        settings["js/ts.tsserver.log"] = "off"
+        settings["typescript.tsserver.log"] = "off"
+        settings["js/ts.preferences.includePackageJsonAutoImports"] = "off"
+        settings["typescript.preferences.includePackageJsonAutoImports"] = "off"
+        settings["javascript.preferences.includePackageJsonAutoImports"] = "off"
         watcher_exclude = settings.get("files.watcherExclude")
         if not isinstance(watcher_exclude, dict):
             watcher_exclude = {}
@@ -1425,6 +1441,130 @@ def atomic_write_json(path: Path, value: Any, mode: int = 0o600) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def profile_storage_path(settings_path: Path) -> Path:
+    return settings_path.parent / "globalStorage" / "state.vscdb"
+
+
+def _storage_json(
+    connection: sqlite3.Connection, key: str, default: Any
+) -> Any:
+    row = connection.execute(
+        "SELECT value FROM ItemTable WHERE key = ?", (key,)
+    ).fetchone()
+    if not row:
+        return copy.deepcopy(default)
+    raw = row[0]
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    try:
+        return json.loads(str(raw))
+    except (TypeError, ValueError):
+        return copy.deepcopy(default)
+
+
+def _store_json(connection: sqlite3.Connection, key: str, value: Any) -> None:
+    serialized = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    updated = connection.execute(
+        "UPDATE ItemTable SET value = ? WHERE key = ?", (serialized, key)
+    )
+    if updated.rowcount == 0:
+        connection.execute(
+            "INSERT INTO ItemTable(key, value) VALUES(?, ?)", (key, serialized)
+        )
+
+
+def pin_chat_models(
+    storage_path: Path,
+    identifiers: Iterable[str],
+    backup_directory: Path,
+    dry_run: bool = False,
+    retention: int = 8,
+) -> dict[str, Any]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in identifiers:
+        identifier = str(value).strip()
+        if (
+            not identifier
+            or identifier == "copilot/auto"
+            or "/" not in identifier
+            or len(identifier) > 1000
+            or any(ord(character) < 32 for character in identifier)
+            or identifier in seen
+        ):
+            continue
+        seen.add(identifier)
+        normalized.append(identifier)
+    if not normalized:
+        raise ValueError("the successful-model list contains no valid Chat identifiers")
+    if not storage_path.is_file():
+        raise FileNotFoundError(f"code-server profile storage was not found: {storage_path}")
+
+    connection = sqlite3.connect(storage_path, timeout=30)
+    backup_path: Path | None = None
+    try:
+        connection.execute("PRAGMA busy_timeout = 30000")
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ItemTable'"
+        ).fetchone()
+        if not table:
+            raise RuntimeError(f"ItemTable is missing from code-server storage: {storage_path}")
+        pinned = _storage_json(connection, "chatModelPinned", [])
+        if not isinstance(pinned, list):
+            pinned = []
+        pinned = [str(item) for item in pinned if isinstance(item, str)]
+        additions = [identifier for identifier in normalized if identifier not in pinned]
+        merged = [*pinned, *additions]
+
+        visibility = _storage_json(connection, "chatModelVisibility", {})
+        if not isinstance(visibility, dict):
+            visibility = {}
+        hidden = visibility.get("hiddenModels")
+        if not isinstance(hidden, list):
+            hidden = []
+        successful = set(normalized)
+        visible_hidden = [
+            str(identifier)
+            for identifier in hidden
+            if isinstance(identifier, str) and identifier not in successful
+        ]
+        unhidden = len(hidden) - len(visible_hidden)
+        changed = bool(additions or unhidden)
+
+        if changed and not dry_run:
+            backup_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(backup_directory, 0o700)
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            stamp += f"-{time.time_ns() % 1_000_000_000:09d}"
+            backup_path = backup_directory / f"state.vscdb.pin-{stamp}.bak"
+            with sqlite3.connect(backup_path) as backup:
+                connection.backup(backup)
+            os.chmod(backup_path, 0o600)
+            _store_json(connection, "chatModelPinned", merged)
+            if unhidden:
+                visibility["hiddenModels"] = visible_hidden
+                _store_json(connection, "chatModelVisibility", visibility)
+            connection.commit()
+            backups = sorted(
+                backup_directory.glob("state.vscdb.pin-*.bak"),
+                key=lambda item: item.name,
+                reverse=True,
+            )
+            for obsolete in backups[max(1, min(30, retention)) :]:
+                obsolete.unlink(missing_ok=True)
+        return {
+            "requested": len(normalized),
+            "added": len(additions),
+            "total": len(merged),
+            "unhidden": unhidden,
+            "changed": changed,
+            "backup": str(backup_path) if backup_path else "",
+            "restartRequired": changed,
+        }
+    finally:
+        connection.close()
 
 
 def restore_file(path: Path) -> bool:
@@ -2016,6 +2156,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-file", help="exact chatLanguageModels.json path")
     parser.add_argument("--settings-file", help="exact code-server settings.json path")
     parser.add_argument(
+        "--pin-models-file",
+        help="standalone mode: JSON array of successful Chat model identifiers to pin",
+    )
+    parser.add_argument(
+        "--storage-file",
+        help="exact code-server profile state.vscdb path for --pin-models-file",
+    )
+    parser.add_argument(
+        "--pin-backup-dir",
+        help="private SQLite backup directory used before pinning models",
+    )
+    parser.add_argument(
+        "--pin-backup-retention",
+        type=int,
+        default=8,
+        help="number of pin-storage backups to retain (default: 8)",
+    )
+    parser.add_argument(
         "--toolbox-dir",
         help="source directory for the Copilot Chat toolbar companion extension",
     )
@@ -2056,6 +2214,34 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.restore:
         return restore(args)
+
+    if args.pin_models_file:
+        pin_file = Path(args.pin_models_file).expanduser()
+        value = json.loads(pin_file.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            value = value.get("modelIdentifiers")
+        if not isinstance(value, list):
+            raise ValueError("--pin-models-file must contain a JSON array")
+        settings_path = settings_file_path(args)
+        storage_path = (
+            Path(args.storage_file).expanduser()
+            if args.storage_file
+            else profile_storage_path(settings_path)
+        )
+        backup_directory = (
+            Path(args.pin_backup_dir).expanduser()
+            if args.pin_backup_dir
+            else storage_path.parent / "copilot-models-pin-backups"
+        )
+        result = pin_chat_models(
+            storage_path,
+            value,
+            backup_directory,
+            dry_run=args.dry_run,
+            retention=args.pin_backup_retention,
+        )
+        print("PIN_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return 0
 
     providers = read_catalog(args.catalog, args.include_non_chat)
     if args.source:

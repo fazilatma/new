@@ -2,7 +2,7 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -99,6 +99,11 @@
           "maximum": 1440,
           "description": "Minutes between automatic GitHub branch update checks."
         },
+        "copilotModels.pinSuccessfulModels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically add models that pass Test All to Copilot Chat's pinned model list. A code-server restart may be required to refresh the picker."
+        },
         "copilotModels.backupRetention": {
           "type": "integer",
           "default": 8,
@@ -108,7 +113,7 @@
         },
         "copilotModels.testConcurrency": {
           "type": "integer",
-          "default": 2,
+          "default": 1,
           "minimum": 1,
           "maximum": 8,
           "description": "Maximum number of real model inference tests running at once."

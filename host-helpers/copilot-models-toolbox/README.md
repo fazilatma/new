@@ -7,7 +7,11 @@ four commands to the GitHub Copilot Chat view title toolbar:
   table, status counters, credential fingerprints, HTTP/latency columns,
   expandable and copyable error details, cancellation, retry-failed, bulk copy,
   and JSON export. It sends real, non-streaming inference requests only after
-  the user presses Start in the cost/quota warning panel.
+  the user presses Start in the cost/quota warning panel. Passing models are
+  automatically persisted in Copilot Chat's pinned list; existing pins are
+  preserved, hidden successes are made visible, and profile storage is privately
+  backed up before the change. Restart code-server when prompted to refresh the
+  workbench's in-memory picker cache.
 - **📥 Import AI JSON** — opens a remote file picker, imports providers, models,
   and embedded keys through the bundled Python helper, reports non-secret key
   diagnostics, and transfers staged mode-`0600` plaintext values into
@@ -21,8 +25,9 @@ four commands to the GitHub Copilot Chat view title toolbar:
   `bash` or `curl` from code-server. It never uploads model configuration or
   credentials.
 - **🛠 Repair code-server** — diagnoses or repairs the managed model, credential,
-  Copilot manifest, Android terminal, and memory-bounded TypeScript settings;
-  restarts tsserver after an `EPIPE`; can reinstall from the configured GitHub
+  Copilot manifest, Android terminal, and 256 MB TypeScript stability settings;
+  restarts tsserver after an `EPIPE`, and can locally capture/open its crash log;
+  it can reinstall from the configured GitHub
   branch; and restores private timestamped snapshots of previous versions.
   Import, full update, local repair, and restore all protect the previous state
   first. Snapshot retention is configurable.
@@ -35,6 +40,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.9**.
+The helper, launcher, and companion extension currently ship as **0.1.10**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.
