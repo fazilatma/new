@@ -33,7 +33,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.4"
+HELPER_VERSION = "0.1.5"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -2050,7 +2050,18 @@ def main(argv: list[str] | None = None) -> int:
             "Note: only upstream models that truly implement OpenAI tool "
             "calling can run terminal tools."
         )
-    print("Security: API keys in chatLanguageModels.json are plaintext; file mode was set to 0600.")
+    if toolbox_result:
+        print(
+            "Security: API keys were staged with file mode 0600. On the next "
+            "code-server startup Toolbox moves them into Chat SecretStorage and "
+            "replaces plaintext values with secret references."
+        )
+    else:
+        print(
+            "Security: without Toolbox, API keys remain plaintext in "
+            "chatLanguageModels.json (mode 0600) and current Chat builds may not "
+            "resolve them; install Toolbox for automatic secret migration."
+        )
     print("Run again after an extension update if OpenAI Compatible disappears.")
     print_code_server_restart_command()
     return 0

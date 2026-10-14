@@ -10,7 +10,9 @@ three commands to the GitHub Copilot Chat view title toolbar:
   the user presses Start in the cost/quota warning panel.
 - **📥 Import AI JSON** — opens a remote file picker, imports providers, models,
   and embedded keys through the bundled Python helper, reports non-secret key
-  diagnostics, and retains the helper's backup and mode-`0600` protections.
+  diagnostics, and transfers staged mode-`0600` plaintext values into
+  code-server Chat SecretStorage. Only `${input:chat.lm.secret.…}` references
+  remain in the model configuration; a protected Toolbox copy powers Test All.
 - **🔄 Sync GitHub** — opens a full-update panel for repository, branch, manual
   update, automatic-update opt-in, and interval. It installs the branch helper,
   catalog, terminal settings, and toolbox while preserving local API keys. It
@@ -22,6 +24,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.4**.
+The helper, launcher, and companion extension currently ship as **0.1.5**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

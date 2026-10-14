@@ -75,10 +75,14 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
-> **Plaintext warning:** the current VS Code profile format serializes provider
-> configuration, including `apiKey`, into `chatLanguageModels.json`. The helper
-> sets the file to mode `0600`, but the key is still plaintext for the Termux
-> account. Do not use this on an account shared with untrusted users.
+> **Credential storage:** the Bash helper briefly stages imported `apiKey` values
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.5 activates at
+> code-server startup, passes each key through VS Code's
+> `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
+> `${input:chat.lm.secret.…}` reference. This is required by current code-server:
+> a raw value in a schema field marked `secret` is interpreted as a secret
+> reference, resolves to an empty key, and causes misleading HTTP 401
+> `token expired or invalid` errors even when a direct endpoint test succeeds.
 
 ## Import a provider/model JSON export
 
@@ -123,10 +127,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.4** through
+The launcher also installs **Copilot Models Toolbox 0.1.5** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.4`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.5`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -144,8 +148,10 @@ remain available in the Command Palette:
   nested/plural key records and top-level provider-key maps, rejects masked or
   placeholder values, reports a non-secret key fingerprint and length, and
   warns when an entry has no usable key. Explicit imported keys replace stale
-  inherited environment keys. The picker starts in a recognized Android
-  download directory when available.
+  inherited environment keys. Plaintext staging values are then migrated into
+  code-server Chat SecretStorage; Test All retains a separate protected Toolbox
+  copy so its HTTP check and Chat use the same credential. The picker starts in
+  a recognized Android download directory when available.
 - **🔄 Sync GitHub** opens a full-update panel where `owner/repository`, branch,
   automatic-update checkbox, and check interval can be edited. **Update now**
   installs the branch's helper, catalog, terminal integration, and toolbox via
@@ -154,12 +160,14 @@ remain available in the Command Palette:
   It is download-only: configuration and credentials are never uploaded. A full
   code-server restart is requested after installation.
 
-Use `--no-toolbox` only when the companion toolbar extension is not wanted.
-To verify the installed version from Termux:
+Use `--no-toolbox` only when the companion toolbar extension and automatic
+credential migration are not wanted. On current code-server builds, direct
+`apiKey` values do not satisfy the Chat secret-reference schema, so automatic
+key import requires Toolbox. To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.4$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.5$'
 ```
 
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values

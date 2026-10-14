@@ -134,6 +134,10 @@ function requestJson(rawUrl, payload, options = {}) {
   });
 }
 
+function isChatSecretReference(value) {
+  return /^\$\{input:chat\.lm\.secret\.[^}]+\}$/.test(String(value || '').trim());
+}
+
 function collectConfiguredModels(groups) {
   if (!Array.isArray(groups)) {
     throw new Error('chatLanguageModels.json must contain a JSON array');
@@ -173,12 +177,16 @@ function collectConfiguredModels(groups) {
         warnings.push(`${provider}: skipped a model with no id or URL`);
         continue;
       }
+      const configuredKey = typeof group.apiKey === 'string' ? group.apiKey.trim() : '';
+      const credentialReference = isChatSecretReference(configuredKey) ? configuredKey : '';
       models.push({
         kind: 'openai',
+        vendor,
         provider,
         id,
         url,
-        apiKey: typeof group.apiKey === 'string' ? group.apiKey : '',
+        apiKey: credentialReference ? '' : configuredKey,
+        credentialReference,
       });
     }
   }
@@ -218,6 +226,7 @@ module.exports = {
   collectConfiguredModels,
   compactError,
   httpRequest,
+  isChatSecretReference,
   ollamaUrl,
   requestJson,
   validateCatalog,

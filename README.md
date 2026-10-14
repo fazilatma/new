@@ -32,13 +32,14 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 and Copilot Agent's run-in-terminal tool without adding an unrestricted command
 approval rule. The Termux profile uses a clean, non-login Bash startup and the
 private `$PREFIX/tmp` directory to avoid code-server startup `Permission denied`
-failures. It also installs Copilot Models Toolbox **v0.1.4** with
+failures. It also installs Copilot Models Toolbox **v0.1.5** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, and **🔄 Sync GitHub** in the
 Copilot Chat title toolbar. At the end it prints
 the Termux commands needed to restart code-server. API keys are entered without
-echo, but Copilot's profile format
-stores them in `chatLanguageModels.json`; the helper protects the file with mode
-`0600`. A complete credential-file example, JSON import support, custom-profile
+echo and staged in `chatLanguageModels.json` with mode `0600`. At code-server
+startup Toolbox transfers plaintext keys into Chat SecretStorage and leaves only
+`${input:chat.lm.secret.…}` references in that file. A complete credential-file
+example, JSON import support, custom-profile
 options, backups, restore instructions, and compatibility notes are in
 [the Termux Copilot models guide](docs/copilot-models-termux.md).
 

@@ -2,7 +2,7 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, and synchronize BYOK models from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -17,6 +17,7 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:copilotModels.testAll",
     "onCommand:copilotModels.importJson",
     "onCommand:copilotModels.syncGitHub"

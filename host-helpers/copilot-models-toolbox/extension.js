@@ -24,6 +24,7 @@ let autoUpdateTimer;
 let autoUpdateInitialTimer;
 let updateInProgress = false;
 let lastInstalledVersion;
+let credentialMigrationPromise;
 
 function toolboxConfiguration() {
   return vscode.workspace.getConfiguration('copilotModels');
@@ -44,6 +45,146 @@ function configuredPaths(context) {
       String(configuration.get('settingsFile', '') || '').trim() ||
       path.join(root, 'settings.json'),
   };
+}
+
+function toolboxCredentialKey(vendor, name) {
+  const identity = `${String(vendor || '').toLowerCase()}\0${String(name || '')}`;
+  return `provider-credential-${crypto.createHash('sha256').update(identity).digest('hex')}`;
+}
+
+async function writeJsonPrivate(filename, value) {
+  await fsp.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  await fsp.chmod(temporary, 0o600);
+  await fsp.rename(temporary, filename);
+  await fsp.chmod(filename, 0o600);
+}
+
+async function migratePlaintextCredentialsNow(context) {
+  if (!context.secrets || typeof vscode.commands.getCommands !== 'function') {
+    return { migrated: 0, pending: 0, supported: false };
+  }
+  const configFile = configuredPaths(context).configFile;
+  let groups;
+  try {
+    groups = JSON.parse(await fsp.readFile(configFile, 'utf8'));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { migrated: 0, pending: 0, supported: true };
+    }
+    throw new Error(`Cannot inspect Chat credentials: ${error.message || error}`);
+  }
+  if (!Array.isArray(groups)) {
+    throw new Error(`${configFile} must contain a JSON array`);
+  }
+  const targets = groups.filter(
+    (group) =>
+      group &&
+      String(group.vendor || '').toLowerCase() === 'customoai' &&
+      typeof group.name === 'string' &&
+      typeof group.apiKey === 'string' &&
+      group.apiKey.trim() &&
+      !core.isChatSecretReference(group.apiKey)
+  );
+  if (!targets.length) {
+    return { migrated: 0, pending: 0, supported: true };
+  }
+
+  const commands = await vscode.commands.getCommands(true);
+  const addCommand = 'lm.addLanguageModelsProviderGroup';
+  if (!commands.includes(addCommand)) {
+    output.appendLine(
+      `[CREDENTIAL WARNING] ${targets.length} plaintext provider key(s) cannot be used by this code-server Chat build because ${addCommand} is unavailable.`
+    );
+    return { migrated: 0, pending: targets.length, supported: false };
+  }
+
+  const staged = [];
+  for (const group of targets) {
+    const apiKey = group.apiKey.trim();
+    const stageName = `${group.name} [Toolbox secure staging ${crypto.randomBytes(6).toString('hex')}]`;
+    try {
+      // Keep a second protected copy in this extension's SecretStorage so the
+      // direct HTTP test center can test the same credential without reading
+      // VS Code's private Chat secret namespace.
+      await context.secrets.store(
+        toolboxCredentialKey(group.vendor, group.name),
+        apiKey
+      );
+      await vscode.commands.executeCommand(addCommand, {
+        ...group,
+        name: stageName,
+        apiKey,
+      });
+      staged.push({
+        vendor: group.vendor,
+        originalName: group.name,
+        stageName,
+      });
+    } catch (error) {
+      output.appendLine(
+        `[CREDENTIAL ERROR] Could not protect ${group.name}: ${error.message || error}`
+      );
+    }
+  }
+
+  if (staged.length) {
+    const latest = JSON.parse(await fsp.readFile(configFile, 'utf8'));
+    if (!Array.isArray(latest)) {
+      throw new Error(`${configFile} changed to a non-array during credential migration`);
+    }
+    let migrated = 0;
+    for (const item of staged) {
+      const stageIndex = latest.findIndex(
+        (group) =>
+          group &&
+          group.vendor === item.vendor &&
+          group.name === item.stageName &&
+          core.isChatSecretReference(group.apiKey)
+      );
+      if (stageIndex < 0) {
+        output.appendLine(
+          `[CREDENTIAL ERROR] Protected staging group for ${item.originalName} was not written by code-server.`
+        );
+        continue;
+      }
+      const secureGroup = { ...latest[stageIndex], name: item.originalName };
+      const originalIndex = latest.findIndex(
+        (group, index) =>
+          index !== stageIndex &&
+          group &&
+          group.vendor === item.vendor &&
+          group.name === item.originalName &&
+          !core.isChatSecretReference(group.apiKey)
+      );
+      if (originalIndex >= 0) {
+        latest[originalIndex] = secureGroup;
+        latest.splice(stageIndex, 1);
+      } else {
+        latest[stageIndex] = secureGroup;
+      }
+      migrated += 1;
+    }
+    await writeJsonPrivate(configFile, latest);
+    output.appendLine(
+      `[CREDENTIALS] Migrated ${migrated} provider key(s) into code-server Chat SecretStorage; plaintext keys were removed from chatLanguageModels.json.`
+    );
+    return { migrated, pending: targets.length - migrated, supported: true };
+  }
+  return { migrated: 0, pending: targets.length, supported: true };
+}
+
+function migratePlaintextCredentials(context) {
+  if (!credentialMigrationPromise) {
+    credentialMigrationPromise = migratePlaintextCredentialsNow(context).finally(() => {
+      credentialMigrationPromise = undefined;
+    });
+  }
+  return credentialMigrationPromise;
 }
 
 function runtimePaths(context) {
@@ -203,7 +344,7 @@ async function importJson(context) {
   const source = selected[0].fsPath;
   const confirmed = await vscode.window.showWarningMessage(
     `Import providers, models, and embedded API keys from ${path.basename(source)}? ` +
-      'Keys will be stored as plaintext in chatLanguageModels.json with file mode 0600.',
+      'Keys are staged in a mode-0600 file, then transferred into code-server Chat SecretStorage.',
     { modal: true },
     'Import'
   );
@@ -226,6 +367,10 @@ async function importJson(context) {
       );
     }
   );
+  // Let code-server's file watcher observe the helper write before asking its
+  // language-model command to replace plaintext values with secret references.
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const secured = await migratePlaintextCredentials(context);
   const lines = helperResult.stdout.split(/\r?\n/);
   const credentialLine = lines.find((line) => line.startsWith('Credential import:'));
   const missingKeys = lines.filter((line) => /^\s+no-key\s/.test(line));
@@ -237,8 +382,16 @@ async function importJson(context) {
       'Continue'
     );
   }
+  if (secured.pending) {
+    output.show(true);
+    await vscode.window.showWarningMessage(
+      `${secured.pending} provider credential(s) are still awaiting secure Chat migration. Restart code-server; Toolbox will retry automatically at startup.`,
+      { modal: true },
+      'Continue'
+    );
+  }
   await copyRestartCommand(
-    `AI providers were imported. ${credentialLine || 'Credential diagnostics are in the output panel.'}`
+    `AI providers were imported; ${secured.migrated} credential group(s) were transferred to Chat SecretStorage. ${credentialLine || 'Credential diagnostics are in the output panel.'}`
   );
 }
 
@@ -527,6 +680,15 @@ async function discoverOllama(group, timeoutMs, signal) {
 
 async function testOneModel(model, timeoutMs, signal) {
   const started = Date.now();
+  if (model.kind !== 'ollama' && model.credentialReference && !model.apiKey) {
+    return {
+      ok: false,
+      status: 0,
+      elapsedMs: 0,
+      error:
+        'Credential is protected by code-server Chat SecretStorage, but the Toolbox test copy is unavailable. Re-import the JSON with Toolbox to refresh its protected test credential.',
+    };
+  }
   let response;
   if (model.kind === 'ollama') {
     response = await core.requestJson(
@@ -578,13 +740,33 @@ async function testOneModel(model, timeoutMs, signal) {
 
 function credentialSummary(model) {
   if (model.kind === 'ollama') return 'Local · no key';
-  if (!model.apiKey) return 'Missing';
+  if (!model.apiKey) {
+    return model.credentialReference ? 'Chat SecretStorage · test copy missing' : 'Missing';
+  }
   const fingerprint = crypto
     .createHash('sha256')
     .update(model.apiKey)
     .digest('hex')
     .slice(0, 10);
-  return `Present · ${model.apiKey.length} chars · ${fingerprint}`;
+  const location = model.credentialReference ? 'Secure' : 'Plaintext pending migration';
+  return `${location} · ${model.apiKey.length} chars · ${fingerprint}`;
+}
+
+async function hydrateToolboxCredentials(context, models, warnings) {
+  if (!context.secrets) return;
+  for (const model of models) {
+    if (!model.credentialReference || model.kind === 'ollama') continue;
+    const stored = await context.secrets.get(
+      toolboxCredentialKey(model.vendor, model.provider)
+    );
+    if (stored && stored.trim()) {
+      model.apiKey = stored.trim();
+    } else {
+      warnings.push(
+        `${model.provider}: Chat has a protected credential, but Toolbox cannot directly test it until the provider JSON is re-imported.`
+      );
+    }
+  }
 }
 
 function nonce() {
@@ -940,9 +1122,16 @@ async function testAllModels(context) {
   const concurrency = Math.max(1, Math.min(8, Number(configuration.get('testConcurrency', 2))));
   const timeoutMs =
     Math.max(5, Math.min(180, Number(configuration.get('testTimeoutSeconds', 30)))) * 1000;
+  const credentialMigration = await migratePlaintextCredentials(context);
   const groups = await readConfiguredGroups(context);
   const configured = core.collectConfiguredModels(groups);
   const discoveryWarnings = [];
+  if (credentialMigration.pending) {
+    discoveryWarnings.push(
+      `${credentialMigration.pending} credential group(s) remain plaintext and are not Chat-compatible on this code-server build, even if a direct HTTP test passes.`
+    );
+  }
+  await hydrateToolboxCredentials(context, configured.models, discoveryWarnings);
   for (const group of configured.ollamaGroups) {
     try {
       const found = await discoverOllama(
@@ -994,6 +1183,18 @@ function activate(context) {
   registerCommand(context, 'copilotModels.importJson', importJson);
   registerCommand(context, 'copilotModels.syncGitHub', syncGitHub);
   restartAutoUpdater(context);
+  void migratePlaintextCredentials(context)
+    .then((result) => {
+      if (result.migrated) {
+        vscode.window.showInformationMessage(
+          `Copilot Models Toolbox moved ${result.migrated} provider credential(s) into code-server Chat SecretStorage. Reselect the model before using it.`
+        );
+      }
+    })
+    .catch((error) => {
+      output.appendLine(`[CREDENTIAL MIGRATION ERROR] ${error.stack || error.message || error}`);
+      output.show(true);
+    });
 }
 
 function deactivate() {
@@ -1008,5 +1209,11 @@ function deactivate() {
 module.exports = {
   activate,
   deactivate,
-  __test: { credentialSummary, githubSyncHtml, testDashboardHtml },
+  __test: {
+    credentialSummary,
+    githubSyncHtml,
+    migratePlaintextCredentials,
+    testDashboardHtml,
+    toolboxCredentialKey,
+  },
 };

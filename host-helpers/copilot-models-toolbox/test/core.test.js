@@ -1,14 +1,18 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('node:http');
 const Module = require('node:module');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const core = require('../core');
 const extensionPackage = require('../package.json');
 
 test('package contributes the three requested Copilot Chat toolbar commands', () => {
+  assert.ok(extensionPackage.activationEvents.includes('onStartupFinished'));
   const commands = extensionPackage.contributes.commands;
   assert.deepEqual(
     commands.map((command) => command.title),
@@ -29,20 +33,47 @@ test('package contributes the three requested Copilot Chat toolbar commands', ()
   assert.equal(settings['copilotModels.autoUpdate'].default, false);
 });
 
-test('extension activates and registers all toolbar commands', (t) => {
+test('extension activates, registers commands, and secures plaintext Chat keys', async (t) => {
   const registered = [];
+  const storedSecrets = new Map();
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-models-toolbox-'));
+  const profileRoot = path.join(temporary, 'User');
+  const globalStorage = path.join(profileRoot, 'globalStorage', 'fazilatma.copilot-models-toolbox');
+  const configFile = path.join(profileRoot, 'chatLanguageModels.json');
+  fs.mkdirSync(globalStorage, { recursive: true });
+  fs.writeFileSync(
+    configFile,
+    JSON.stringify([
+      {
+        vendor: 'customoai',
+        name: 'Mistral',
+        apiKey: 'mistral-private-key',
+        models: [{ id: 'mistral-small', name: 'Mistral Small', url: 'https://api.mistral.ai/v1' }],
+      },
+    ])
+  );
   const disposable = { dispose() {} };
   const vscodeMock = {
     window: {
       createOutputChannel() {
         return { appendLine() {}, clear() {}, show() {}, dispose() {} };
       },
+      async showInformationMessage() {},
     },
     workspace: { getConfiguration() { return { get(_key, fallback) { return fallback; } }; } },
     commands: {
       registerCommand(command) {
         registered.push(command);
         return disposable;
+      },
+      async getCommands() {
+        return ['lm.addLanguageModelsProviderGroup'];
+      },
+      async executeCommand(command, group) {
+        assert.equal(command, 'lm.addLanguageModelsProviderGroup');
+        const groups = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+        groups.push({ ...group, apiKey: '${input:chat.lm.secret.test-ref}' });
+        fs.writeFileSync(configFile, JSON.stringify(groups, null, 2));
       },
     },
   };
@@ -54,14 +85,31 @@ test('extension activates and registers all toolbar commands', (t) => {
   t.after(() => {
     Module._load = originalLoad;
     delete require.cache[require.resolve('../extension')];
+    fs.rmSync(temporary, { recursive: true, force: true });
   });
   const extension = require('../extension');
-  extension.activate({ subscriptions: [], globalStorageUri: { fsPath: '/tmp/toolbox' } });
+  const context = {
+    subscriptions: [],
+    extensionPath: '/tmp/toolbox-extension',
+    globalStorageUri: { fsPath: globalStorage },
+    secrets: {
+      async store(key, value) { storedSecrets.set(key, value); },
+      async get(key) { return storedSecrets.get(key); },
+    },
+  };
+  extension.activate(context);
+  await extension.__test.migratePlaintextCredentials(context);
   assert.deepEqual(registered, [
     'copilotModels.testAll',
     'copilotModels.importJson',
     'copilotModels.syncGitHub',
   ]);
+  const securedGroups = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(securedGroups.length, 1);
+  assert.equal(securedGroups[0].name, 'Mistral');
+  assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
+  assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
+  assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
   const dashboard = extension.__test.testDashboardHtml(
     {},
     [
@@ -78,7 +126,7 @@ test('extension activates and registers all toolbar commands', (t) => {
   );
   assert.match(dashboard, /AI Model Test Center/);
   assert.match(dashboard, /Copy all errors/);
-  assert.match(dashboard, /Present · 25 chars/);
+  assert.match(dashboard, /Plaintext pending migration · 25 chars/);
   assert.doesNotMatch(dashboard, /must-never-appear-in-html/);
   const embeddedScript = dashboard.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
   assert.doesNotThrow(() => new vm.Script(embeddedScript));
@@ -119,14 +167,32 @@ test('collectConfiguredModels separates custom OpenAI and Ollama models', () => 
   assert.equal(value.models.length, 1);
   assert.deepEqual(value.models[0], {
     kind: 'openai',
+    vendor: 'customoai',
     provider: 'Example',
     id: 'chat-a',
     url: 'https://example.test/v1',
     apiKey: 'secret',
+    credentialReference: '',
   });
   assert.deepEqual(value.ollamaGroups, [
     { provider: 'Local Ollama', url: 'http://127.0.0.1:11434' },
   ]);
+});
+
+test('collectConfiguredModels never sends a Chat secret reference as an API key', () => {
+  const reference = '${input:chat.lm.secret.abc123}';
+  const value = core.collectConfiguredModels([
+    {
+      vendor: 'customoai',
+      name: 'Mistral',
+      apiKey: reference,
+      models: [{ id: 'mistral-small', url: 'https://api.mistral.ai/v1' }],
+    },
+  ]);
+  assert.equal(core.isChatSecretReference(reference), true);
+  assert.equal(value.models[0].apiKey, '');
+  assert.equal(value.models[0].credentialReference, reference);
+  assert.equal(value.models[0].provider, 'Mistral');
 });
 
 test('requestJson makes a real JSON inference-style request', async (t) => {
