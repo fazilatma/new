@@ -265,13 +265,16 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
       },
     ],
     ['warning'],
-    { concurrency: 2, timeoutMs: 30000, roundRobinDelayMs: 750 }
+    { concurrency: 2, timeoutMs: 30000, roundRobinDelayMs: 750, maxOutputTokens: 768 }
   );
   assert.match(dashboard, /AI Model Test Center/);
   assert.match(dashboard, /Import Models \/ JSON/);
   assert.match(dashboard, /Tested \/ resolved model/);
   assert.match(dashboard, /Model specifications/);
-  assert.match(dashboard, /Power \(metadata\)/);
+  assert.match(dashboard, /Coding power test prompt/);
+  assert.match(dashboard, /Power \(answer test\)/);
+  assert.match(dashboard, /Response \/ error details/);
+  assert.match(dashboard, /metadata baseline/i);
   assert.match(dashboard, /not a benchmark/);
   assert.match(dashboard, /Reasoning/);
   assert.match(dashboard, /Tool calls/);
@@ -355,6 +358,43 @@ test('modelPower reports a transparent declared-capability score', () => {
     core.modelPower({ maxInputTokens: 128000, maxOutputTokens: 16000, reasoningKnown: true, reasoning: false, toolCalling: true, vision: false, streaming: false }).label,
     'Medium'
   );
+});
+
+test('coding response extraction and deterministic power scoring use the actual answer', () => {
+  const answer = [
+    '```typescript',
+    'interface Failure { index: number; error: Error }',
+    'async function scheduleByProvider<T, R>(jobs: readonly T[], maxConcurrency: number, minIntervalMs: number, signal: AbortSignal): Promise<R[]> {',
+    '  const providerQueues = new Map<string, T[]>(); let activeCount = 0; const results: R[] = [];',
+    '  signal.addEventListener("abort", () => { clearTimeout(0); signal.removeEventListener("abort", () => {}); throw new DOMException("cancel", "AbortError"); });',
+    '  // round-robin, per-provider nextAllowed using Date.now and setTimeout, plus semaphore concurrency',
+    '  // retry HTTP 429 and 503 with exponential backoff plus jitter using Math.random',
+    '  return results; // preserve original order with results[index]',
+    '}',
+    'class ScheduleAggregateError extends AggregateError {}',
+    '```',
+    'Invariant: at most one job per provider is active. Big-O complexity is O(n).',
+    'import test from "node:test";',
+    'test("fair round-robin", () => {}); test("ordering", () => {}); test("max concurrency", () => {});',
+    'test("rate 429 retry", () => {}); test("503 backoff", () => {}); test("abort cancellation", () => {});',
+    'The implementation uses provider queues and enforces fairness, cancellation, and rate limits.',
+    'x'.repeat(900),
+  ].join('\n');
+  assert.equal(
+    core.extractAssistantText({ choices: [{ message: { content: answer } }] }),
+    answer
+  );
+  assert.equal(core.extractAssistantText({ message: { content: 'ollama answer' } }), 'ollama answer');
+  assert.equal(
+    core.extractAssistantText({ choices: [{ message: { content: [{ type: 'text', text: 'part one' }, { type: 'text', text: 'part two' }] } }] }),
+    'part one\npart two'
+  );
+  const scored = core.scoreCodingResponse(answer);
+  assert.ok(scored.score >= 85, JSON.stringify(scored));
+  assert.equal(scored.label, 'Exceptional');
+  const promptEcho = 'scheduleByProvider<T, R> round-robin maxConcurrency minIntervalMs AbortSignal cleanup retry 429 503 backoff jitter preserve original order typed aggregate failures node:test invariant Big-O '.repeat(6);
+  assert.ok(core.scoreCodingResponse(promptEcho).score <= 10);
+  assert.equal(core.scoreCodingResponse('').label, 'No answer');
 });
 
 test('round-robin ordering completes one model wave across providers before the next', () => {
@@ -497,4 +537,9 @@ test('compactError and diagnostic sanitizer redact private values', () => {
   );
   assert.doesNotMatch(sanitized, /private-token-123|ghp_|accounts\/private|\/data\/data|private user request/);
   assert.match(sanitized, /https:\/\/api\.example\.test\/\[PATH\]/);
+  const modelError = core.sanitizedModelTestError(
+    'Requested model rejected: HTTP 429: {"error":"raw response repeats private coding prompt"}'
+  );
+  assert.match(modelError, /HTTP 429 · provider response body omitted/);
+  assert.doesNotMatch(modelError, /raw response|private coding prompt/);
 });

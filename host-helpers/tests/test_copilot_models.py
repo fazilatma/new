@@ -739,6 +739,33 @@ class ToolboxPackagingTests(unittest.TestCase):
             f'HELPER_VERSION="{copilot_models.HELPER_VERSION}"', launcher
         )
 
+    def test_coding_prompt_and_answer_power_are_wired_without_diagnostic_leaks(self) -> None:
+        extension = (TOOLBOX_DIR / "extension.js").read_text(encoding="utf-8")
+        package = json.loads((TOOLBOX_DIR / "package.json").read_text(encoding="utf-8"))
+        self.assertIn('id="testPrompt"', extension)
+        self.assertIn("DEFAULT_CODING_TEST_PROMPT", extension)
+        self.assertIn("prompt: currentPrompt()", extension)
+        self.assertIn("messages: [{ role: 'user', content: prompt }]", extension)
+        self.assertIn("max_tokens: maxOutputTokens", extension)
+        self.assertIn("core.scoreCodingResponse(assistantResponse)", extension)
+        self.assertIn("responsePower: tested.responsePower", extension)
+        self.assertIn("response: tested.response || ''", extension)
+        self.assertIn("result: results.get(model.testKey)", extension)
+        self.assertEqual(
+            package["contributes"]["configuration"]["properties"][
+                "copilotModels.codingTestMaxOutputTokens"
+            ]["default"],
+            768,
+        )
+        sanitized = extension[
+            extension.index("async function saveSanitizedDiagnostics") : extension.index(
+                "async function exportTestReport"
+            )
+        ]
+        self.assertNotIn("testPrompt", sanitized)
+        self.assertNotIn("response: result.response", sanitized)
+        self.assertIn("sanitizedModelTestError", sanitized)
+
     def test_generated_vsix_contains_runtime_and_manifest(self) -> None:
         package = json.loads((TOOLBOX_DIR / "package.json").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as temporary:

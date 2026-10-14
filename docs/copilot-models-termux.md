@@ -76,7 +76,7 @@ Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
 > **Credential storage:** the Bash helper briefly stages imported `apiKey` values
-> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.16 activates at
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.17 activates at
 > code-server startup, passes each key through VS Code's
 > `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
 > `${input:chat.lm.secret.…}` reference. This is required by current code-server:
@@ -127,10 +127,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.16** through
+The launcher also installs **Copilot Models Toolbox 0.1.17** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.16`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.17`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -138,7 +138,7 @@ remain available in the Command Palette:
 - **🧪 Test All AI Models** opens a live test-center panel with a mobile-safe,
   always-visible searchable/filterable table, credential-presence fingerprints,
   configured and resolved model-ID columns, progress counters, HTTP status,
-  latency, expandable errors, per-error and bulk copy buttons, retry-failed,
+  latency, expandable answers/errors, per-row and bulk-error copy buttons, retry-failed,
   cancellation, JSON report export, and an inline **📥 Import Models / JSON**
   button. Starting a run first queries each compatible provider's `/models`
   endpoint and safely repairs only unique case/display-name mismatches; ambiguous
@@ -147,15 +147,23 @@ remain available in the Command Palette:
   so on—with a configurable inter-wave delay (750 ms by default) to reduce
   provider rate-limit bursts. The table includes display name, context/input/output
   token limits, vision and streaming support, explicit reasoning/tool-calling
-  badges, and a **Power (metadata)** column. Power is a transparent 0–100
-  declared-capability index derived from token limits, reasoning, tool calling,
-  vision, and streaming; its tooltip explicitly states that it is not a quality
-  benchmark. A **Use in Chat** button appears on every row. The button becomes active
-  after a successful real request, pins/unhides the exact resolved identifier,
-  requests live Chat switching, and backup-first persists it as the profile's
-  selected panel model. It then sends one real, non-streaming inference request
-  with at most eight output tokens to each model, so provider charges and rate
-  limits can still apply. After each completed
+  badges, an editable **Coding power test prompt**, a **Power (answer test)**
+  column, and full expandable/copyable model responses or errors. Before a run,
+  Power shows a transparent metadata baseline derived from declared token limits
+  and capabilities. Start sends the displayed prompt as one real non-streaming
+  request per model (768 output tokens by default, configurable from 64–2048),
+  then replaces the baseline with a deterministic 0–100 score of the actual
+  response. The default strict TypeScript scheduler challenge and rubric cover
+  implementation completeness, typing, provider fairness, global concurrency,
+  per-provider pacing, cancellation cleanup, 429/503 retry with backoff/jitter,
+  stable ordering, typed aggregate failures, six executable tests, and
+  invariants/complexity. It is a transparent task-specific score, not an external
+  benchmark. Raw prompts and answers are available in the user-requested local
+  JSON export but are excluded from sanitized GitHub diagnostics. A **Use in
+  Chat** button appears on every row. The button becomes active after a successful
+  real request, pins/unhides the exact resolved identifier, requests live Chat
+  switching, and backup-first persists it as the profile's selected panel model,
+  so provider charges and rate limits can still apply. After each completed
   run, passing models are automatically merged into Copilot Chat's persisted
   `Pinned` list and removed from its hidden-model list. A successfully resolved
   ID also replaces the incorrect configured name after a private configuration
@@ -174,7 +182,7 @@ remain available in the Command Palette:
   warns when an entry has no usable key. Explicit imported keys replace stale
   inherited environment keys. Plaintext staging values are then migrated into
   code-server Chat SecretStorage; Test All retains a separate protected Toolbox
-  copy so its HTTP check and Chat use the same credential. Version 0.1.16 also
+  copy so its HTTP check and Chat use the same credential. Version 0.1.17 also
   canonicalizes known provider names and removes alias collisions such as a
   credentialed `Mistral AI` group beside a keyless `Mistral` group; otherwise
   Chat can select the colliding keyless model even while the direct test passes.
@@ -185,7 +193,7 @@ remain available in the Command Palette:
   installs the branch's helper, catalog, terminal integration, and toolbox via
   the official code-server VSIX path while preserving local API keys. Automatic
   mode watches the branch's semantic version and installs newer pushed builds.
-  Version 0.1.16 downloads and validates the helper/catalog/Toolbox assets inside
+  Version 0.1.17 downloads and validates the helper/catalog/Toolbox assets inside
   the extension, reconstructs an absolute Termux `PATH`, and launches Python
   directly; it no longer tries to `spawn bash` or `curl` from the stripped
   code-server extension-host environment. If Android returns `EACCES` for the
@@ -230,7 +238,7 @@ key import requires Toolbox. To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.11$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.17$'
 ```
 
 `--enable-terminal` detects the Termux prefix and executable shells, then merges
@@ -256,7 +264,7 @@ The managed **Termux Android Shell** profile launches `/system/bin/sh` with no
 `args` while keeping Termux first on `PATH`. This is intentional: a standalone
 Termux `forkpty` diagnostic succeeds, while this Android code-server build exits
 with status 1 for both `$PREFIX/bin/bash` and `$PREFIX/bin/sh`, isolating the
-failure to its PTY launch path. Version 0.1.16 also starts in `HOME`, disables
+failure to its PTY launch path. Version 0.1.17 also starts in `HOME`, disables
 persistent-terminal revival and locale probing, uses empty `ENV`/`BASH_ENV`, and
 disables unsupported Agent terminal sandboxing and shell injection. Termux
 commands, storage, and Agent fallback remain available. Bash can still be

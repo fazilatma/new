@@ -2,7 +2,7 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -131,6 +131,13 @@
           "minimum": 0,
           "maximum": 10000,
           "description": "Pause between provider round-robin waves to reduce rate-limit bursts."
+        },
+        "copilotModels.codingTestMaxOutputTokens": {
+          "type": "integer",
+          "default": 768,
+          "minimum": 64,
+          "maximum": 2048,
+          "description": "Maximum output tokens requested from each model for the coding power challenge. Higher values improve scoring coverage but can cost more."
         },
         "copilotModels.configFile": {
           "type": "string",

@@ -283,6 +283,110 @@ function collectConfiguredModels(groups) {
   return { models, ollamaGroups, warnings };
 }
 
+function powerLabel(score) {
+  return score >= 85
+    ? 'Exceptional'
+    : score >= 70
+      ? 'Very high'
+      : score >= 50
+        ? 'High'
+        : score >= 25
+          ? 'Medium'
+          : 'Basic';
+}
+
+function scoreCodingResponse(text) {
+  const response = String(text || '').trim();
+  if (!response) {
+    return { score: 0, label: 'No answer', evidence: [], basis: 'Deterministic coding-response rubric' };
+  }
+  const evidence = [];
+  let score = 0;
+  const award = (points, label, condition) => {
+    if (!condition) return;
+    score += points;
+    evidence.push(label);
+  };
+  const hasSubstantialCode = /```(?:typescript|ts)?[\s\S]{300,}```/i.test(response);
+  const hasImplementation = hasSubstantialCode && /scheduleByProvider\s*</.test(response);
+  award(10, 'substantive answer', response.length >= 1200);
+  if (response.length >= 600 && response.length < 1200) award(6, 'substantive answer', true);
+  award(
+    8,
+    'complete code block',
+    hasImplementation && !/\b(?:TODO|placeholder|implementation omitted)\b/i.test(response)
+  );
+  award(
+    7,
+    'strict TypeScript types',
+    hasImplementation &&
+      /(?:interface|type)\s+\w+|<\s*[A-Z](?:\s*,\s*[A-Z])?\s*>/.test(response) &&
+      !/(?:\:\s*any\b|<\s*any\s*>|\bas\s+any\b)/i.test(response)
+  );
+  award(9, 'round-robin fairness', hasImplementation && /round[- ]?robin/i.test(response) && /providerQueues?|queues?\s*=\s*new Map/i.test(response));
+  award(9, 'bounded concurrency', hasImplementation && /maxConcurrency/i.test(response) && /semaphore|active(?:Count|Workers?)/i.test(response));
+  award(7, 'per-provider pacing', hasImplementation && /minInterval|nextAllowed|lastRun/i.test(response) && /setTimeout|Date\.now/i.test(response));
+  award(
+    9,
+    'abort cleanup',
+    hasImplementation &&
+      /AbortSignal|AbortError|addEventListener\(\s*['"]abort|signal\.aborted/i.test(response) &&
+      /removeEventListener|clearTimeout|cleanup/i.test(response)
+  );
+  award(8, '429/503 retry policy', hasImplementation && /429/.test(response) && /503/.test(response) && /retr(?:y|ies)/i.test(response));
+  award(7, 'backoff and jitter', hasImplementation && /backoff/i.test(response) && /jitter|Math\.random/i.test(response));
+  award(5, 'stable output ordering', hasImplementation && /preserv(?:e|es|ing).*order|results?\s*\[\s*(?:job\.)?index\s*\]/i.test(response));
+  award(4, 'typed aggregate failures', hasImplementation && /AggregateError|failures?\s*:\s*(?:readonly\s*)?\w+\[\]|class\s+\w*Error/i.test(response));
+  const testMatches = response.match(/\b(?:test|it)\s*\(/gi) || [];
+  award(9, 'six executable tests', hasImplementation && /node:test|describe\s*\(|\btest\s*\(/i.test(response) && testMatches.length >= 6);
+  award(4, 'edge-case tests', hasImplementation && /cancel|abort/i.test(response) && /fair|round[- ]?robin/i.test(response) && /rate|429|503/i.test(response));
+  award(4, 'invariants and complexity', hasImplementation && /invariant/i.test(response) && /(?:big[- ]?o|complexity|O\([^)]+\))/i.test(response));
+  const bounded = Math.max(0, Math.min(100, score));
+  return {
+    score: bounded,
+    label: powerLabel(bounded),
+    evidence,
+    basis: 'Deterministic rubric for the default advanced TypeScript scheduling challenge; not an external benchmark',
+  };
+}
+
+function extractAssistantText(body) {
+  if (!body || typeof body !== 'object') return '';
+  const contentText = (content) => {
+    if (typeof content === 'string') return content.trim();
+    if (!Array.isArray(content)) return '';
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (typeof part.text === 'string') return part.text;
+        if (part.text && typeof part.text.value === 'string') return part.text.value;
+        return typeof part.content === 'string' ? part.content : '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  };
+  const candidates = [
+    body.response,
+    body.message && body.message.content,
+    body.output_text,
+    body.choices && body.choices[0] && body.choices[0].message
+      ? body.choices[0].message.content
+      : undefined,
+  ];
+  for (const candidate of candidates) {
+    const extracted = contentText(candidate);
+    if (extracted) return extracted;
+  }
+  if (Array.isArray(body.output)) {
+    return contentText(
+      body.output.flatMap((item) => Array.isArray(item && item.content) ? item.content : [])
+    );
+  }
+  return '';
+}
+
 function modelPower(model) {
   if (!model || typeof model !== 'object') {
     return { score: null, label: 'Unknown', basis: 'No capability metadata' };
@@ -311,18 +415,9 @@ function modelPower(model) {
   }
   if (!known) return { score: null, label: 'Unknown', basis: 'No capability metadata' };
   const bounded = Math.max(0, Math.min(100, score));
-  const label = bounded >= 85
-    ? 'Exceptional'
-    : bounded >= 70
-      ? 'Very high'
-      : bounded >= 50
-        ? 'High'
-        : bounded >= 25
-          ? 'Medium'
-          : 'Basic';
   return {
     score: bounded,
-    label,
+    label: powerLabel(bounded),
     basis: 'Declared capability index: token limits, reasoning, tool calling, vision, and streaming; not a benchmark',
   };
 }
@@ -409,11 +504,18 @@ function compactError(text, apiKey = '', maxLength = 8000) {
   return output.slice(0, Math.max(0, maxLength - 3)) + '...';
 }
 
+function sanitizedModelTestError(error, secrets = []) {
+  return sanitizeDiagnosticText(error, secrets)
+    .replace(/(HTTP\s+\d{3})\s*:[\s\S]*/i, '$1 · provider response body omitted')
+    .slice(0, 500);
+}
+
 module.exports = {
   chatCompletionsUrl,
   chatModelIdentifier,
   collectConfiguredModels,
   compactError,
+  extractAssistantText,
   httpRequest,
   modelsUrl,
   modelNameVariants,
@@ -425,5 +527,7 @@ module.exports = {
   requestJson,
   roundRobinModelRounds,
   roundRobinModels,
+  sanitizedModelTestError,
+  scoreCodingResponse,
   validateCatalog,
 };

@@ -6,10 +6,16 @@ four commands to the GitHub Copilot Chat view title toolbar:
 - **🧪 Test All AI Models** — opens a live test-center panel with a mobile-safe
   always-visible searchable table, an inline Import Models button, configured
   versus resolved model IDs, status counters, credential fingerprints,
-  HTTP/latency columns, expandable/copyable errors, cancellation, retry-failed,
-  bulk copy, and JSON export. It displays token/context limits, vision/streaming,
-  reasoning, tool-calling capability, and a transparent 0–100 metadata power
-  index (declared capabilities only, not a quality benchmark). Tests run in complete provider
+  HTTP/latency columns, expandable/copyable answers/errors, cancellation,
+  retry-failed, bulk copy, and JSON export. It displays token/context limits,
+  vision/streaming, reasoning, and tool-calling capability. Its editable
+  **Coding power test prompt** defaults to a strict TypeScript multi-provider
+  scheduler challenge. Power starts as a transparent metadata baseline, then is
+  replaced by a deterministic 0–100 rubric score of the actual answer, including
+  completeness, typing, fairness, concurrency, pacing, cancellation cleanup,
+  429/503 retry with backoff/jitter, ordering, typed failures, tests, and
+  complexity. Raw prompts/answers stay out of sanitized GitHub diagnostics.
+  Tests run in complete provider
   round-robin waves with a configurable pause between waves. Each passing row's
   **Use in Chat** button pins/unhides the resolved ID, requests a live switch,
   and backup-first persists the exact selected panel model. It resolves unique
@@ -60,6 +66,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.16**.
+The helper, launcher, and companion extension currently ship as **0.1.17**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

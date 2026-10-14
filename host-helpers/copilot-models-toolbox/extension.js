@@ -18,6 +18,12 @@ const RESTART_COMMAND = [
   'nohup code-server >>"$HOME/.local/share/code-server/code-server.log" 2>&1 </dev/null &',
 ].join('\n');
 
+const DEFAULT_CODING_TEST_PROMPT = [
+  'Act as a principal TypeScript systems engineer. Produce a self-contained strict TypeScript implementation of an async generic function scheduleByProvider<T, R>.',
+  'Input jobs contain provider and value fields plus an async worker. Requirements: stable provider round-robin waves; bounded global maxConcurrency; never run two jobs from the same provider simultaneously; enforce minIntervalMs per provider; immediate AbortSignal cancellation with timer/listener cleanup; retry only HTTP 429 and 503 using capped exponential backoff with jitter; preserve original output order; and return typed aggregate failures without losing successful results.',
+  'Use no dependencies. Explain the scheduling invariants and Big-O complexity. Include at least six executable node:test tests covering fairness, ordering, max concurrency, provider serialization, rate-limit retry, and cancellation. Do not omit implementation code or replace sections with placeholders.',
+].join(' ');
+
 let output;
 const activePanels = new Set();
 let autoUpdateTimer;
@@ -1922,7 +1928,7 @@ async function discoverOllama(group, timeoutMs, signal) {
     }));
 }
 
-async function testOneModel(model, timeoutMs, signal) {
+async function testOneModel(model, timeoutMs, signal, prompt, maxOutputTokens) {
   const started = Date.now();
   if (model.kind !== 'ollama' && model.credentialReference && !model.apiKey) {
     return {
@@ -1940,9 +1946,9 @@ async function testOneModel(model, timeoutMs, signal) {
       core.ollamaUrl(model.url, '/api/chat'),
       {
         model: requestModelId,
-        messages: [{ role: 'user', content: 'Reply only with OK.' }],
+        messages: [{ role: 'user', content: prompt }],
         stream: false,
-        options: { num_predict: 8 },
+        options: { num_predict: maxOutputTokens },
       },
       { timeoutMs, signal }
     );
@@ -1954,8 +1960,8 @@ async function testOneModel(model, timeoutMs, signal) {
       core.chatCompletionsUrl(model.url),
       {
         model: requestModelId,
-        messages: [{ role: 'user', content: 'Reply only with OK.' }],
-        max_tokens: 8,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: maxOutputTokens,
         stream: false,
       },
       { headers, timeoutMs, signal }
@@ -1972,7 +1978,14 @@ async function testOneModel(model, timeoutMs, signal) {
   const successfulStatus = response.status >= 200 && response.status < 300;
   const apiError = body && body.error;
   if (successfulStatus && !apiError) {
-    return { ok: true, status: response.status, elapsedMs };
+    const assistantResponse = core.extractAssistantText(body);
+    return {
+      ok: true,
+      status: response.status,
+      elapsedMs,
+      response: assistantResponse,
+      responsePower: core.scoreCodingResponse(assistantResponse),
+    };
   }
   const detail = apiError ? JSON.stringify(apiError) : response.text;
   const nameHint =
@@ -2071,6 +2084,8 @@ function testDashboardHtml(webview, models, warnings, options) {
     concurrency: options.concurrency,
     timeoutSeconds: options.timeoutMs / 1000,
     roundRobinDelayMs: Number(options.roundRobinDelayMs) || 0,
+    maxOutputTokens: Number(options.maxOutputTokens) || 768,
+    defaultPrompt: DEFAULT_CODING_TEST_PROMPT,
     version: extensionPackage.version,
   });
   return `<!doctype html>
@@ -2097,6 +2112,10 @@ function testDashboardHtml(webview, models, warnings, options) {
     button:disabled { opacity: .5; cursor: not-allowed; }
     input, select { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border-color: var(--vscode-input-border); }
     input { min-width: 260px; flex: 1; }
+    .prompt-panel { margin: 12px 0; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-sideBar-background); }
+    .prompt-panel label { display: block; font-weight: 600; margin-bottom: 6px; }
+    textarea { width: 100%; min-height: 150px; resize: vertical; padding: 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 3px; font: 13px/1.45 var(--vscode-editor-font-family, monospace); }
+    .prompt-help { color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 5px; }
     progress { width: 100%; height: 10px; accent-color: var(--vscode-progressBar-background); }
     .table-wrap { border: 1px solid var(--vscode-panel-border); overflow: auto; height: 62vh; min-height: 280px; max-height: 720px; }
     table { width: 100%; border-collapse: collapse; min-width: 1900px; }
@@ -2129,7 +2148,12 @@ function testDashboardHtml(webview, models, warnings, options) {
 <body>
   <h1>🧪 AI Model Test Center <small>v${extensionPackage.version}</small></h1>
   <div class="subtitle">Live inference diagnostics for every configured Copilot Chat model</div>
-  <div class="notice"><b>Cost and quota warning:</b> Start sends one real, non-streaming inference request to each listed model with up to 8 output tokens. Tests run in provider round-robin waves: model 1 from every provider, then model 2, and so on, with an inter-wave pause to reduce rate-limit bursts. Provider charges and rate limits may still apply. No API key is displayed.</div>
+  <div class="notice"><b>Cost and quota warning:</b> Start sends the coding prompt below as one real, non-streaming inference request to every listed model. Tests run in provider round-robin waves: model 1 from every provider, then model 2, and so on, with an inter-wave pause to reduce rate-limit bursts. Up to <b>${Number(options.maxOutputTokens) || 768} output tokens per model</b> may be generated, so provider charges and rate limits can be significant. No API key is displayed.</div>
+  <div class="prompt-panel">
+    <label for="testPrompt">Coding power test prompt</label>
+    <textarea id="testPrompt" maxlength="12000" spellcheck="false"></textarea>
+    <div class="prompt-help">Edit this before Start. The default challenge is scored with a deterministic rubric covering implementation completeness, strict typing, fairness, concurrency, cancellation, retry/backoff, tests, and complexity. Custom prompts still run, but the built-in rubric is optimized for the default challenge.</div>
+  </div>
   <div id="warnings" class="warnings"></div>
   <div class="cards">
     <div class="card"><b id="total">0</b><span>Total</span></div>
@@ -2150,7 +2174,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     <span id="runInfo"></span>
   </div>
   <div class="filters">
-    <input id="search" type="search" placeholder="Search provider, model, key status, or error...">
+    <input id="search" type="search" placeholder="Search provider, model, score, response, or error...">
     <select id="provider"><option value="">All providers</option></select>
     <select id="status">
       <option value="">All statuses</option><option>pending</option><option>queued</option><option>running</option><option>pass</option><option>fail</option><option>cancelled</option>
@@ -2158,7 +2182,7 @@ function testDashboardHtml(webview, models, warnings, options) {
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Model specifications</th><th>Power (metadata)</th><th>Reasoning (declared)</th><th>Tool calls (declared)</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Use in Chat</th><th>Error details</th></tr></thead>
+      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Model specifications</th><th>Power (answer test)</th><th>Reasoning (declared)</th><th>Tool calls (declared)</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Use in Chat</th><th>Response / error details</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -2172,6 +2196,8 @@ function testDashboardHtml(webview, models, warnings, options) {
     const statusFilter = document.getElementById('status');
     const search = document.getElementById('search');
     const start = document.getElementById('start');
+    const testPrompt = document.getElementById('testPrompt');
+    testPrompt.value = initial.defaultPrompt;
     const importModels = document.getElementById('importModels');
     const cancel = document.getElementById('cancel');
     const retry = document.getElementById('retry');
@@ -2181,7 +2207,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       const option = document.createElement('option'); option.value = provider; option.textContent = provider; providerFilter.appendChild(option);
     }
     document.getElementById('warnings').textContent = initial.warnings.join('\\n');
-    document.getElementById('runInfo').textContent = 'Provider round-robin · concurrency ' + initial.concurrency + ' · inter-wave delay ' + initial.roundRobinDelayMs + 'ms · timeout ' + initial.timeoutSeconds + 's';
+    document.getElementById('runInfo').textContent = 'Provider round-robin · concurrency ' + initial.concurrency + ' · inter-wave delay ' + initial.roundRobinDelayMs + 'ms · max output ' + initial.maxOutputTokens + ' tokens · timeout ' + initial.timeoutSeconds + 's';
 
     function cell(text) { const td = document.createElement('td'); td.textContent = text; return td; }
     function formatTokens(value) {
@@ -2195,27 +2221,38 @@ function testDashboardHtml(webview, models, warnings, options) {
       badge.className = 'capability ' + (value === true ? 'cap-yes' : value === false ? 'cap-no' : 'cap-unknown');
       badge.textContent = value === true ? yesText : value === false ? noText : 'Unknown'; td.appendChild(badge); return td;
     }
-    function powerCell(power) {
-      const td = document.createElement('td'); td.className = 'power';
-      td.title = power && power.basis ? power.basis : 'No capability metadata';
-      if (!power || power.score === null) { td.textContent = 'Unknown'; return td; }
-      const score = document.createElement('span'); score.textContent = power.score + '/100';
-      const label = document.createElement('small'); label.textContent = power.label;
-      td.append(score, label); return td;
+    function renderPower(td, answerPower, metadataPower) {
+      td.replaceChildren(); td.className = 'power';
+      if (!answerPower) {
+        const pending = document.createElement('span'); pending.textContent = 'Pending';
+        const baseline = document.createElement('small'); baseline.textContent = metadataPower && metadataPower.score !== null ? 'metadata ' + metadataPower.score + '/100' : 'metadata unknown';
+        td.title = 'Answer-based power is calculated after the coding test. ' + (metadataPower && metadataPower.basis ? metadataPower.basis : '');
+        td.append(pending, baseline); return;
+      }
+      td.title = answerPower.basis + (answerPower.evidence && answerPower.evidence.length ? '\\nEvidence: ' + answerPower.evidence.join(', ') : '');
+      const score = document.createElement('span'); score.textContent = answerPower.score + '/100';
+      const label = document.createElement('small'); label.textContent = answerPower.label;
+      const baseline = document.createElement('small'); baseline.textContent = metadataPower && metadataPower.score !== null ? 'metadata baseline ' + metadataPower.score : 'metadata baseline unknown';
+      td.append(score, label, baseline);
+    }
+    function powerCell(metadataPower) {
+      const td = document.createElement('td'); renderPower(td, null, metadataPower); return td;
     }
     function modelSpecs(item) {
       const context = item.contextWindow || null;
       const efforts = Array.isArray(item.reasoningEfforts) && item.reasoningEfforts.length ? '\\nReasoning levels ' + item.reasoningEfforts.join(', ') : '';
       return item.displayName + '\\nContext ' + formatTokens(context) + ' · Input ' + formatTokens(item.maxInputTokens) + ' · Output ' + formatTokens(item.maxOutputTokens) + '\\nVision ' + (item.vision === true ? 'Yes' : item.vision === false ? 'No' : 'Unknown') + ' · Streaming ' + (item.streaming === true ? 'Yes' : item.streaming === false ? 'No' : 'Unknown') + efforts;
     }
-    function renderError(td, result) {
+    function renderDetails(td, result) {
       td.replaceChildren();
-      if (!result || !result.error) { const span = document.createElement('span'); span.className = 'empty'; span.textContent = '—'; td.appendChild(span); return; }
+      const text = result && (result.error || result.response) || '';
+      if (!text) { const span = document.createElement('span'); span.className = 'empty'; span.textContent = '—'; td.appendChild(span); return; }
+      const isError = Boolean(result.error);
       const details = document.createElement('details');
-      const summary = document.createElement('summary'); summary.textContent = result.error.slice(0, 120) + (result.error.length > 120 ? '…' : '');
-      const pre = document.createElement('pre'); pre.textContent = result.error;
-      const button = document.createElement('button'); button.className = 'copy'; button.textContent = 'Copy error';
-      button.addEventListener('click', () => vscode.postMessage({ type: 'copy', text: result.error }));
+      const summary = document.createElement('summary'); summary.textContent = (isError ? 'Error: ' : 'Answer: ') + text.slice(0, 120) + (text.length > 120 ? '…' : '');
+      const pre = document.createElement('pre'); pre.textContent = text;
+      const button = document.createElement('button'); button.className = 'copy'; button.textContent = isError ? 'Copy error' : 'Copy answer';
+      button.addEventListener('click', () => vscode.postMessage({ type: 'copy', text }));
       details.append(summary, pre, button); td.appendChild(details);
     }
     function addRow(item, index) {
@@ -2223,7 +2260,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       tr.append(cell(String(index + 1)), cell(item.provider), cell(item.model));
       const testedModel = cell(item.testedModel); tr.appendChild(testedModel);
       const specs = cell(modelSpecs(item)); specs.className = 'specs'; tr.appendChild(specs);
-      tr.appendChild(powerCell(item.power));
+      const power = powerCell(item.power); tr.appendChild(power);
       tr.appendChild(capabilityCell(item.reasoning, 'Yes', 'No'));
       tr.appendChild(capabilityCell(item.toolCalling, 'Yes', 'No'));
       const credential = cell(item.credential); if (item.credential === 'Missing') credential.className = 'credential-missing'; tr.appendChild(credential);
@@ -2234,8 +2271,8 @@ function testDashboardHtml(webview, models, warnings, options) {
       selectButton.title = 'The model must pass its real test before selection';
       selectButton.addEventListener('click', () => { selectButton.disabled = true; selectButton.textContent = 'Selecting…'; vscode.postMessage({ type: 'selectModel', key: item.key }); });
       selectCell.appendChild(selectButton); tr.appendChild(selectCell);
-      const error = cell(''); renderError(error, null); tr.appendChild(error);
-      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, testedModel, http, latency, selectButton, error, item });
+      const error = cell(''); renderDetails(error, null); tr.appendChild(error);
+      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, testedModel, power, http, latency, selectButton, error, item });
     }
     initial.models.forEach(addRow);
 
@@ -2247,7 +2284,8 @@ function testDashboardHtml(webview, models, warnings, options) {
       row.latency.textContent = message.elapsedMs ? message.elapsedMs + ' ms' : '—';
       row.selectButton.disabled = message.state !== 'pass' || row.selected === true;
       row.selectButton.title = message.state === 'pass' ? 'Persist this passing model as the selected Chat model' : 'The model must pass its real test before selection';
-      renderError(row.error, message);
+      renderPower(row.power, message.responsePower || (['fail', 'cancelled'].includes(message.state) ? { score: 0, label: 'No answer', evidence: [], basis: 'Request ended before a scoreable coding answer was returned' } : null), row.item.power);
+      renderDetails(row.error, message);
       results.set(message.key, message);
       updateSummary(); applyFilters();
     }
@@ -2268,15 +2306,16 @@ function testDashboardHtml(webview, models, warnings, options) {
     function applyFilters() {
       const query = search.value.trim().toLowerCase(); const provider = providerFilter.value; const status = statusFilter.value;
       for (const row of rowElements.values()) {
-        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.testedModel, row.item.displayName, modelSpecs(row.item), row.item.power && row.item.power.score, row.item.power && row.item.power.label, row.item.reasoning === true ? 'reasoning' : '', row.item.toolCalling === true ? 'tools tool calling' : '', row.item.credential, result && result.error].join(' ').toLowerCase();
+        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.testedModel, row.item.displayName, modelSpecs(row.item), row.item.power && row.item.power.score, row.item.power && row.item.power.label, result && result.responsePower && result.responsePower.score, result && result.responsePower && result.responsePower.label, row.item.reasoning === true ? 'reasoning' : '', row.item.toolCalling === true ? 'tools tool calling' : '', row.item.credential, result && result.error, result && result.response].join(' ').toLowerCase();
         row.tr.hidden = Boolean((provider && row.item.provider !== provider) || (status && row.tr.dataset.status !== status) || (query && !haystack.includes(query)));
       }
     }
-    function setRunning(value) { start.disabled = value; importModels.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
-    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Resolving provider model names, then testing…'; vscode.postMessage({ type: 'start' }); });
+    function setRunning(value) { start.disabled = value; testPrompt.disabled = value; importModels.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
+    function currentPrompt() { return testPrompt.value.trim() || initial.defaultPrompt; }
+    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Resolving provider model names, then running the coding challenge…'; vscode.postMessage({ type: 'start', prompt: currentPrompt() }); });
     importModels.addEventListener('click', () => vscode.postMessage({ type: 'importModels' }));
     cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
-    retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed' }));
+    retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed', prompt: currentPrompt() }));
     copyAll.addEventListener('click', () => {
       const errors = [...rowElements.values()].filter((row) => row.tr.dataset.status === 'fail').map((row) => { const result = results.get(row.item.key); return row.item.provider + ' :: ' + row.item.model + '\\n' + (result.error || 'Unknown error'); }).join('\\n\\n');
       vscode.postMessage({ type: 'copy', text: errors });
@@ -2376,7 +2415,14 @@ async function saveSanitizedDiagnostics(context, models, results, summary) {
         state: result.state,
         httpStatus: result.status || 0,
         elapsedMs: result.elapsedMs || 0,
-        error: core.sanitizeDiagnosticText(result.error || '', [model.apiKey]),
+        responsePower: result.responsePower
+          ? {
+              score: result.responsePower.score,
+              label: result.responsePower.label,
+              evidence: result.responsePower.evidence,
+            }
+          : null,
+        error: core.sanitizedModelTestError(result.error || '', [model.apiKey]),
       };
     }),
   };
@@ -2391,7 +2437,7 @@ async function saveSanitizedDiagnostics(context, models, results, summary) {
   return destination;
 }
 
-async function exportTestReport(context, models, results) {
+async function exportTestReport(context, models, results, prompt, maxOutputTokens) {
   const target = await vscode.window.showSaveDialog({
     title: 'Export AI model test report',
     saveLabel: 'Export JSON report',
@@ -2402,6 +2448,8 @@ async function exportTestReport(context, models, results) {
   const report = {
     version: extensionPackage.version,
     generatedAt: new Date().toISOString(),
+    testPrompt: prompt,
+    maxOutputTokens,
     models: models.map((model) => ({
       provider: model.provider,
       model: model.id,
@@ -2438,11 +2486,14 @@ function openTestDashboard(context, models, warnings, options) {
   const results = new Map();
   let activeController;
   let running = false;
+  let currentTestPrompt = DEFAULT_CODING_TEST_PROMPT;
 
-  const run = async (selectedKeys) => {
+  const run = async (selectedKeys, requestedPrompt) => {
     if (running) return;
     const selected = models.filter((model) => selectedKeys.includes(model.testKey));
     if (selected.length === 0) return;
+    const normalizedPrompt = String(requestedPrompt || '').trim();
+    currentTestPrompt = (normalizedPrompt || DEFAULT_CODING_TEST_PROMPT).slice(0, 12000);
     running = true;
     activeController = new AbortController();
     const attempted = new Set();
@@ -2473,7 +2524,13 @@ function openTestDashboard(context, models, warnings, options) {
       panel.webview.postMessage({ type: 'row', key: model.testKey, state: 'running', status: 0, elapsedMs: 0, error: '' });
       let tested;
       try {
-        tested = await testOneModel(model, options.timeoutMs, activeController.signal);
+        tested = await testOneModel(
+          model,
+          options.timeoutMs,
+          activeController.signal,
+          currentTestPrompt,
+          options.maxOutputTokens
+        );
       } catch (error) {
         tested = {
           ok: false,
@@ -2489,13 +2546,20 @@ function openTestDashboard(context, models, warnings, options) {
       } else if (!tested.ok && !model.apiKey && model.kind !== 'ollama') {
         tested.error = `No API key is configured for this provider. ${tested.error || ''}`;
       }
-      const result = { state, status: tested.status, elapsedMs: tested.elapsedMs, error: tested.error || '' };
+      const result = {
+        state,
+        status: tested.status,
+        elapsedMs: tested.elapsedMs,
+        error: tested.error || '',
+        response: tested.response || '',
+        responsePower: tested.responsePower || null,
+      };
       results.set(model.testKey, result);
       panel.webview.postMessage({ type: 'row', key: model.testKey, ...result });
       const label = `${model.provider} :: ${model.id}`;
       output.appendLine(
         `[${state.toUpperCase()}] ${label} (${tested.status ? `HTTP ${tested.status}` : 'network'}, ${tested.elapsedMs}ms)` +
-          (tested.error ? ` ${core.compactError(tested.error, '', 500)}` : '')
+          (tested.error ? ` ${core.sanitizedModelTestError(tested.error, [model.apiKey])}` : '')
       );
     };
     const rounds = core.roundRobinModelRounds(selected);
@@ -2580,20 +2644,21 @@ function openTestDashboard(context, models, warnings, options) {
   panel.webview.onDidReceiveMessage(async (message) => {
     try {
       if (message.type === 'start') {
-        await run(models.map((model) => model.testKey));
+        await run(models.map((model) => model.testKey), message.prompt);
       } else if (message.type === 'importModels') {
         await vscode.commands.executeCommand('copilotModels.importJson');
       } else if (message.type === 'retryFailed') {
         await run(
           models
             .filter((model) => results.get(model.testKey)?.state === 'fail')
-            .map((model) => model.testKey)
+            .map((model) => model.testKey),
+          message.prompt
         );
       } else if (message.type === 'cancel' && activeController) {
         activeController.abort();
       } else if (message.type === 'copy') {
         await vscode.env.clipboard.writeText(String(message.text || ''));
-        vscode.window.showInformationMessage('Error text copied.');
+        vscode.window.showInformationMessage('Dashboard text copied.');
       } else if (message.type === 'selectModel') {
         const model = models.find((candidate) => candidate.testKey === message.key);
         if (!model) throw new Error('Selected dashboard model was not found');
@@ -2628,7 +2693,13 @@ function openTestDashboard(context, models, warnings, options) {
           output.appendLine(`[SELECT MODEL ERROR] ${error.stack || error.message || error}`);
         }
       } else if (message.type === 'export') {
-        await exportTestReport(context, models, results);
+        await exportTestReport(
+          context,
+          models,
+          results,
+          currentTestPrompt,
+          options.maxOutputTokens
+        );
       }
     } catch (error) {
       output.appendLine(`[ERROR] ${error.stack || error.message || String(error)}`);
@@ -2653,6 +2724,10 @@ async function testAllModels(context) {
   const roundRobinDelayMs = Math.max(
     0,
     Math.min(10000, Number(configuration.get('roundRobinDelayMs', 750)))
+  );
+  const maxOutputTokens = Math.max(
+    64,
+    Math.min(2048, Number(configuration.get('codingTestMaxOutputTokens', 768)))
   );
   const credentialMigration = await migratePlaintextCredentials(context);
   const groups = await readConfiguredGroups(context);
@@ -2687,7 +2762,7 @@ async function testAllModels(context) {
     context,
     models,
     [...configured.warnings, ...discoveryWarnings],
-    { concurrency, timeoutMs, roundRobinDelayMs }
+    { concurrency, timeoutMs, roundRobinDelayMs, maxOutputTokens }
   );
 }
 
