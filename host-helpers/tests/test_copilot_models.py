@@ -236,7 +236,13 @@ class TerminalSettingsTests(unittest.TestCase):
         profiles = merged["terminal.integrated.profiles.linux"]
         self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
         self.assertEqual(profiles["Termux Bash"]["path"], termux_bash)
+        self.assertEqual(
+            profiles["Termux Bash"]["args"], ["--noprofile", "--norc"]
+        )
         self.assertEqual(profiles["Termux Bash"]["env"]["PREFIX"], termux_prefix)
+        self.assertEqual(
+            profiles["Termux Bash"]["env"]["TMPDIR"], termux_prefix + "/tmp"
+        )
         self.assertTrue(
             profiles["Termux Bash"]["env"]["PATH"].startswith(termux_prefix + "/bin:")
         )
@@ -244,7 +250,7 @@ class TerminalSettingsTests(unittest.TestCase):
             merged["terminal.integrated.defaultProfile.linux"], "Termux Bash"
         )
         self.assertTrue(merged["terminal.integrated.inheritEnv"])
-        self.assertTrue(merged["terminal.integrated.shellIntegration.enabled"])
+        self.assertFalse(merged["terminal.integrated.shellIntegration.enabled"])
         self.assertEqual(
             merged["terminal.integrated.env.linux"]["PREFIX"], termux_prefix
         )
@@ -256,6 +262,10 @@ class TerminalSettingsTests(unittest.TestCase):
             merged["chat.tools.terminal.terminalProfile.linux"]["env"]["PREFIX"],
             termux_prefix,
         )
+        self.assertEqual(
+            merged["chat.tools.terminal.terminalProfile.linux"]["args"],
+            ["--noprofile", "--norc"],
+        )
         self.assertTrue(merged["chat.tools.terminal.enableAutoApprove"])
         self.assertEqual(merged["chat.tools.terminal.autoApprove"], {"rm": False})
         self.assertNotIn(".*", merged["chat.tools.terminal.autoApprove"])
@@ -266,6 +276,41 @@ class TerminalSettingsTests(unittest.TestCase):
                 "Termux Bash": {"path": termux_bash, "args": ["-l"]},
             },
         )
+
+    def test_termux_safe_profile_bypasses_failing_bashrc(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "com.termux" / "files" / "usr"
+            shell = prefix / "bin" / "bash"
+            shell.parent.mkdir(parents=True)
+            shell.symlink_to("/bin/bash")
+            home = root / "home"
+            home.mkdir()
+            (home / ".bashrc").write_text("exit 77\n", encoding="utf-8")
+            environment = {
+                **os.environ,
+                "PREFIX": str(prefix),
+                "HOME": str(home),
+                "PATH": str(prefix / "bin") + os.pathsep + os.environ.get("PATH", ""),
+            }
+            with mock.patch.dict(os.environ, environment, clear=True):
+                settings = copilot_models.terminal_enabled_settings({}, str(shell))
+            profile = settings["terminal.integrated.profiles.linux"]["Termux Bash"]
+            unsafe = subprocess.run(
+                [str(shell), "-i", "-c", "printf ready"],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            safe = subprocess.run(
+                [profile["path"], *profile["args"], "-i", "-c", "printf ready"],
+                env={**environment, **profile["env"]},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(unsafe.returncode, 77)
+            self.assertEqual(safe.returncode, 0, safe.stderr)
+            self.assertEqual(safe.stdout, "ready")
 
 
 class MergeTests(unittest.TestCase):
@@ -567,6 +612,10 @@ elif "--locate-extension" in args and root:
                 settings["chat.tools.terminal.terminalProfile.linux"]["path"],
                 "/bin/bash",
             )
+            self.assertNotIn(
+                "args", settings["chat.tools.terminal.terminalProfile.linux"]
+            )
+            self.assertTrue(settings["terminal.integrated.shellIntegration.enabled"])
             self.assertTrue(settings["chat.tools.terminal.enableAutoApprove"])
             self.assertNotIn("chat.tools.terminal.autoApprove", settings)
             self.assertEqual(settings["copilotModels.configFile"], str(config_path))

@@ -123,10 +123,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.3** through
+The launcher also installs **Copilot Models Toolbox 0.1.4** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.3`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.4`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -136,9 +136,9 @@ remain available in the Command Palette:
   HTTP status, latency, expandable errors, per-error and bulk copy buttons,
   retry-failed, cancellation, and JSON report export. Starting a run sends one
   real, non-streaming inference request with at most eight output tokens to each
-  model, so provider charges and rate limits can apply. Version 0.1.3 fixes the
-  embedded dashboard-script escaping bug that previously made the Start button
-  appear unresponsive and now keeps active panels retained by the extension.
+  model, so provider charges and rate limits can apply. The embedded dashboard
+  script is compile-tested so the Start button remains active, and open panels
+  are retained by the extension until the user closes them.
 - **📥 Import AI JSON** opens the Termux filesystem picker and imports providers,
   models, and embedded API keys through the same protected helper. It recognizes
   nested/plural key records and top-level provider-key maps, rejects masked or
@@ -159,7 +159,7 @@ To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.3$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.4$'
 ```
 
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
@@ -175,21 +175,26 @@ into the active profile's `settings.json`:
 - `chat.tools.terminal.enableAutoApprove`
 
 On Termux the integrated and Agent profiles explicitly inherit `PREFIX`,
-`HOME`, `PATH`, `TMPDIR`, `SHELL`, locale values, and the Termux applet path.
-This lets code-server terminals execute the same installed Termux commands and
-access the same home/storage environment as a normal Termux session.
+`HOME`, `PATH`, `SHELL`, locale values, and the Termux applet path. `TMPDIR` is
+always reset to the private, writable `$PREFIX/tmp` instead of trusting an
+Android/shared-storage value inherited by code-server. This lets terminals run
+the same installed Termux commands and access the same home/storage environment
+as a normal Termux session.
 
-The Bash profile deliberately has no `-l` argument. A forced Termux login shell
-runs `$PREFIX/etc/profile` and user login files; if any startup command fails, code-server
-immediately reports that `bash '-l'` terminated with exit code 1. Rerunning the
-current helper replaces the older login-shell profile with a normal interactive
-Bash profile.
+The managed Termux Bash profile uses `--noprofile --norc`, never `-l`, and turns
+off automatic VS Code shell-script injection. This safe startup bypasses an
+inaccessible `.profile`/`.bashrc` or shell-integration file that can print
+`Permission denied` and terminate before a prompt appears. The Agent terminal
+tool can use its no-shell-integration execution fallback; only shell decorations
+and enhanced command detection are unavailable. After the prompt works, a user
+who needs their aliases may explicitly run `source ~/.bashrc` and fix any error
+reported by that file before removing the safe arguments manually.
 
-Existing terminal profiles and approval rules are preserved. The helper does
-not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so commands
-outside VS Code's guarded defaults still require approval. Existing JSONC
-comments and trailing commas are accepted; because settings are rewritten as
-strict JSON, the untouched original is retained in the helper's first-run
+Unrelated terminal profiles and all approval rules are preserved. The helper
+does not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so
+commands outside VS Code's guarded defaults still require approval. Existing
+JSONC comments and trailing commas are accepted; because settings are rewritten
+as strict JSON, the untouched original is retained in the helper's first-run
 backup.
 
 The option also advertises `toolCalling: true` for installed models so Agent

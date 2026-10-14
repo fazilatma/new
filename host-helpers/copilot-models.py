@@ -33,7 +33,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.3"
+HELPER_VERSION = "0.1.4"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1185,13 +1185,16 @@ def terminal_enabled_settings(
     settings = copy.deepcopy(existing)
     is_termux = bool(os.environ.get("PREFIX")) and "/com.termux/" in shell_path
     profile_name = "Termux Bash" if is_termux else "Bash"
-    # Do not force a login shell. On Termux, `bash -l` executes user and system
-    # login startup files; one failing command there makes code-server report
-    # that the terminal exited with status 1. A normal interactive Bash still
-    # loads the expected interactive environment without that fragile path.
+    # Termux code-server can inherit a broken or inaccessible Bash startup file,
+    # and VS Code's injected shell-integration script is not reliable on every
+    # Android/code-server build.  The managed Termux profile therefore starts a
+    # clean interactive shell.  All required Termux values are supplied below,
+    # so commands do not depend on .profile/.bashrc. Users can still source a
+    # startup file manually after the prompt appears.
     profile: dict[str, Any] = {"path": shell_path}
     terminal_env: dict[str, str] = {}
     if is_termux:
+        profile["args"] = ["--noprofile", "--norc"]
         prefix = os.environ.get("PREFIX") or str(Path(shell_path).parent.parent)
         inherited_path = os.environ.get("PATH", "")
         path_parts = [str(Path(prefix) / "bin"), str(Path(prefix) / "bin" / "applets")]
@@ -1201,7 +1204,10 @@ def terminal_enabled_settings(
             "PREFIX": prefix,
             "HOME": os.environ.get("HOME", str(Path.home())),
             "PATH": deduplicated_path,
-            "TMPDIR": os.environ.get("TMPDIR", str(Path(prefix) / "tmp")),
+            # Always use Termux's private executable/writable temporary area.
+            # An inherited Android/shared-storage TMPDIR can cause EACCES when
+            # code-server or a command creates helper scripts.
+            "TMPDIR": str(Path(prefix) / "tmp"),
             "SHELL": shell_path,
             "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
         }
@@ -1220,7 +1226,10 @@ def terminal_enabled_settings(
     settings["terminal.integrated.defaultProfile.linux"] = profile_name
     settings["terminal.integrated.automationProfile.linux"] = profile
     settings["terminal.integrated.inheritEnv"] = True
-    settings["terminal.integrated.shellIntegration.enabled"] = True
+    # The terminal tool has a no-shell-integration execution strategy. On
+    # Termux, reliability is more important than command-decoration support:
+    # disabling injection avoids startup-time EACCES before a prompt appears.
+    settings["terminal.integrated.shellIntegration.enabled"] = not is_termux
     if terminal_env:
         integrated_env = settings.get("terminal.integrated.env.linux")
         if not isinstance(integrated_env, dict):
@@ -2032,8 +2041,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.enable_terminal:
         print(
-            "Terminal: integrated and agent profiles now inherit the Termux "
-            "PREFIX, HOME, PATH, TMPDIR, locale, and shell integration; trust "
+            "Terminal: integrated and agent profiles inherit the Termux PREFIX, "
+            "HOME, PATH, and private TMPDIR. Termux Bash starts in safe mode "
+            "without login/user startup files or shell-script injection; trust "
             "the workspace before using Agent mode."
         )
         print(
