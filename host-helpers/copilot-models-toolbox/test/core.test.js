@@ -154,6 +154,35 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   const diagnosticText = JSON.stringify(codeServerDiagnostics);
   assert.doesNotMatch(diagnosticText, /mistral-private-key|\/v1\/private|workspace\/private/);
   assert.match(diagnosticText, /\[REDACTED\]|\[PATH\]|\[LOCAL_PATH\]/);
+  let apiRequest;
+  const apiServer = http.createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      apiRequest = {
+        method: request.method,
+        authorization: request.headers.authorization,
+        userAgent: request.headers['user-agent'],
+        body: JSON.parse(body),
+      };
+      response.writeHead(201, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ number: 7, html_url: 'https://github.test/issues/7' }));
+    });
+  });
+  await new Promise((resolve) => apiServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => apiServer.close());
+  const apiAddress = apiServer.address();
+  const apiResult = await extension.__test.githubApiJson(
+    'oauth-secret',
+    'POST',
+    `http://127.0.0.1:${apiAddress.port}/repos/owner/repository/issues`,
+    { title: 'Diagnostic', body: 'Sanitized' }
+  );
+  assert.equal(apiResult.number, 7);
+  assert.equal(apiRequest.method, 'POST');
+  assert.equal(apiRequest.authorization, 'Bearer oauth-secret');
+  assert.match(apiRequest.userAgent, /copilot-models-toolbox/);
+  assert.deepEqual(apiRequest.body, { title: 'Diagnostic', body: 'Sanitized' });
   const termuxFiles = path.join(temporary, 'com.termux', 'files');
   const termuxHome = path.join(termuxFiles, 'home');
   const termuxPrefix = path.join(termuxFiles, 'usr');

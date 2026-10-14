@@ -30,8 +30,11 @@ four commands to the GitHub Copilot Chat view title toolbar:
   detected sanitized error to a GitHub issue tied to the selected branch, using
   numbered comments when needed. The latest model-test failures are included but
   are no longer required. Credentials, prompts, source, full URLs, and local paths
-  are excluded. A separate button copies the complete visible update log. Upload
-  also opts into auto-update so a pushed fix can install itself.
+  are excluded. A separate button copies the complete visible update log. If
+  Android returns `EACCES` while spawning Termux `gh`, upload retries through the
+  system ELF linker and then VS Code's secure in-memory GitHub session; Toolbox
+  never stores the token. Upload also opts into auto-update so a pushed fix can
+  install itself.
 - **🛠 Repair code-server** — diagnoses or repairs the managed model, credential,
   Copilot manifest, Android terminal, and 256 MB TypeScript stability settings;
   restarts tsserver after an `EPIPE`, and can locally capture/open its crash log;
@@ -48,6 +51,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.12**.
+The helper, launcher, and companion extension currently ship as **0.1.13**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

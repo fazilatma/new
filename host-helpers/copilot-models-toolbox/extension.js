@@ -862,6 +862,88 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
   }
 }
 
+function systemLinkerForExecutable(filename) {
+  let header;
+  try {
+    const descriptor = fs.openSync(filename, 'r');
+    try {
+      header = Buffer.alloc(5);
+      if (fs.readSync(descriptor, header, 0, header.length, 0) !== header.length) return undefined;
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch (_) {
+    return undefined;
+  }
+  if (header[0] !== 0x7f || header.toString('ascii', 1, 4) !== 'ELF') return undefined;
+  const candidates = header[4] === 2
+    ? ['/system/bin/linker64', '/system/bin/linker']
+    : ['/system/bin/linker', '/system/bin/linker64'];
+  return candidates.find(executableFile);
+}
+
+async function runGitHubCli(command, args, environment) {
+  try {
+    return await runProcess(command, args, undefined, environment);
+  } catch (error) {
+    if (!/\bEACCES\b/i.test(String(error && (error.message || error)))) throw error;
+    const linker = systemLinkerForExecutable(command);
+    if (!linker) throw error;
+    output.appendLine(
+      `[GitHub] Direct execution was denied; retrying the Termux gh ELF through ${linker}.`
+    );
+    try {
+      return await runProcess(linker, [command, ...args], undefined, environment);
+    } catch (linkerError) {
+      throw new Error(
+        `Direct gh execution failed (${error.message || error}); Android linker fallback failed (${linkerError.message || linkerError})`
+      );
+    }
+  }
+}
+
+async function githubApiJson(accessToken, method, url, payload) {
+  const response = await core.requestJson(url, payload, {
+    method,
+    timeoutMs: 60000,
+    maxBytes: 8 * 1024 * 1024,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': `copilot-models-toolbox/${extensionPackage.version}`,
+    },
+  });
+  let parsed;
+  try {
+    parsed = response.text ? JSON.parse(response.text) : {};
+  } catch (_) {
+    parsed = {};
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const detail = core.sanitizeDiagnosticText(
+      parsed.message || response.text || `HTTP ${response.status}`,
+      [accessToken],
+      800
+    );
+    throw new Error(`GitHub API returned HTTP ${response.status}: ${detail}`);
+  }
+  return parsed;
+}
+
+async function githubApiSession() {
+  if (!vscode.authentication || typeof vscode.authentication.getSession !== 'function') {
+    throw new Error('This code-server build has no VS Code GitHub authentication provider');
+  }
+  const session = await vscode.authentication.getSession('github', ['repo'], {
+    createIfNone: true,
+  });
+  if (!session || !session.accessToken) {
+    throw new Error('VS Code GitHub authentication did not return a session');
+  }
+  return session;
+}
+
 async function diagnosticSecrets(context) {
   const secrets = [];
   let groups = [];
@@ -1142,18 +1224,65 @@ async function uploadSanitizedDiagnostics(
   ].join('\n');
   await fsp.writeFile(bodyFile, body, { encoding: 'utf8', mode: 0o600 });
   const environment = termuxRuntimeEnvironment();
-  const gh = resolveExecutable('gh', environment);
   const title = `[Code-server Diagnostic] v${extensionPackage.version} ${compactReport.reportId.slice(0, 8)}`;
   let issueUrl = '';
+  let postIssueComment;
   try {
-    const created = await runProcess(
-      gh,
-      ['issue', 'create', '--repo', repository, '--title', title, '--body-file', bodyFile],
-      undefined,
-      environment
-    );
-    issueUrl = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\//.test(line)) || '';
-    if (!issueUrl) throw new Error('GitHub created the issue but did not return its URL');
+    let cliError;
+    try {
+      const gh = resolveExecutable('gh', environment);
+      const created = await runGitHubCli(
+        gh,
+        ['issue', 'create', '--repo', repository, '--title', title, '--body-file', bodyFile],
+        environment
+      );
+      issueUrl = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\//.test(line)) || '';
+      if (!issueUrl) throw new Error('GitHub created the issue but did not return its URL');
+      postIssueComment = async (comment) => {
+        await fsp.writeFile(bodyFile, comment, { encoding: 'utf8', mode: 0o600 });
+        await runGitHubCli(
+          gh,
+          ['issue', 'comment', issueUrl, '--repo', repository, '--body-file', bodyFile],
+          environment
+        );
+      };
+      if (reportStatus) reportStatus('GitHub upload is using the authenticated Termux gh CLI.');
+    } catch (error) {
+      cliError = error;
+      if (reportStatus) {
+        reportStatus(
+          'Termux gh could not run from the extension host; switching to VS Code GitHub authentication…'
+        );
+      }
+      try {
+        const session = await githubApiSession();
+        const created = await githubApiJson(
+          session.accessToken,
+          'POST',
+          `https://api.github.com/repos/${repository}/issues`,
+          { title, body }
+        );
+        issueUrl = String(created.html_url || '');
+        const issueNumber = Number(created.number);
+        if (!issueUrl || !Number.isSafeInteger(issueNumber)) {
+          throw new Error('GitHub API created an invalid issue response');
+        }
+        postIssueComment = async (comment) => {
+          await githubApiJson(
+            session.accessToken,
+            'POST',
+            `https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`,
+            { body: comment }
+          );
+        };
+        if (reportStatus) reportStatus('GitHub upload is using the secure VS Code authentication session.');
+      } catch (apiError) {
+        throw new Error(
+          `Termux gh transport failed: ${cliError.message || cliError}. ` +
+          `VS Code GitHub API fallback failed: ${apiError.message || apiError}`
+        );
+      }
+    }
     for (let index = 0; index < errorChunks.length; index += 1) {
       if (reportStatus) {
         reportStatus(`Uploading sanitized code-server error part ${index + 1}/${errorChunks.length}…`);
@@ -1166,13 +1295,7 @@ async function uploadSanitizedDiagnostics(
         '```',
         '',
       ].join('\n');
-      await fsp.writeFile(bodyFile, comment, { encoding: 'utf8', mode: 0o600 });
-      await runProcess(
-        gh,
-        ['issue', 'comment', issueUrl, '--repo', repository, '--body-file', bodyFile],
-        undefined,
-        environment
-      );
+      await postIssueComment(comment);
     }
     for (let index = 0; index < modelChunks.length; index += 1) {
       if (reportStatus) {
@@ -1186,13 +1309,7 @@ async function uploadSanitizedDiagnostics(
         '```',
         '',
       ].join('\n');
-      await fsp.writeFile(bodyFile, comment, { encoding: 'utf8', mode: 0o600 });
-      await runProcess(
-        gh,
-        ['issue', 'comment', issueUrl, '--repo', repository, '--body-file', bodyFile],
-        undefined,
-        environment
-      );
+      await postIssueComment(comment);
     }
     output.appendLine(
       `[DIAGNOSTICS UPLOAD] ${issueUrl}; code-server errors=${codeServer.errorCount}; error comments=${errorChunks.length}; model comments=${modelChunks.length}`
@@ -2353,6 +2470,7 @@ module.exports = {
     createRepairSnapshot,
     credentialSummary,
     diagnosticCommentChunks,
+    githubApiJson,
     githubSyncHtml,
     migratePlaintextCredentials,
     providerCredentialAliases,
