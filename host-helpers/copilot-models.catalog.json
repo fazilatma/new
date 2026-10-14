@@ -1,0 +1,5538 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-14",
+  "sources": [
+    "https://github.com/anomalyco/models.dev",
+    "https://github.com/tashfeenahmed/freellmapi"
+  ],
+  "providers": [
+    {
+      "slug": "openrouter",
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": [
+        "OPENROUTER_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "anthropic/claude-opus-4.7-fast",
+          "name": "Anthropic: Claude Opus 4.7 (Fast)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "perceptron/perceptron-mk1",
+          "name": "Perceptron: Perceptron Mk1",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "inclusionai/ring-2.6-1t:free",
+          "name": "inclusionAI: Ring-2.6-1T (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-3.1-flash-lite",
+          "name": "Google: Gemini 3.1 Flash Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "baidu/cobuddy:free",
+          "name": "Baidu Qianfan: CoBuddy (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-chat-latest",
+          "name": "OpenAI: GPT Chat Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "x-ai/grok-4.3",
+          "name": "xAI: Grok 4.3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "ibm-granite/granite-4.1-8b",
+          "name": "IBM: Granite 4.1 8B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "mistralai/mistral-medium-3-5",
+          "name": "Mistral: Mistral Medium 3.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openrouter/owl-alpha",
+          "name": "Owl Alpha",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048756,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "poolside/laguna-xs.2:free",
+          "name": "Poolside: Laguna XS.2 (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "poolside/laguna-m.1:free",
+          "name": "Poolside: Laguna M.1 (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "~anthropic/claude-haiku-latest",
+          "name": "Anthropic Claude Haiku Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "~openai/gpt-mini-latest",
+          "name": "OpenAI GPT Mini Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "~google/gemini-pro-latest",
+          "name": "Google Gemini Pro Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "~moonshotai/kimi-latest",
+          "name": "MoonshotAI Kimi Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262142,
+          "maxOutputTokens": 262142,
+          "thinking": true
+        },
+        {
+          "id": "~google/gemini-flash-latest",
+          "name": "Google Gemini Flash Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "~anthropic/claude-sonnet-latest",
+          "name": "Anthropic Claude Sonnet Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "~openai/gpt-latest",
+          "name": "OpenAI GPT Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-plus-20260420",
+          "name": "Qwen: Qwen3.5 Plus 2026-04-20",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.6-flash",
+          "name": "Qwen: Qwen3.6 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.6-35b-a3b",
+          "name": "Qwen: Qwen3.6 35B A3B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.6-max-preview",
+          "name": "Qwen: Qwen3.6 Max Preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.6-27b",
+          "name": "Qwen: Qwen3.6 27B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 81920,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.5-pro",
+          "name": "OpenAI: GPT-5.5 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.5",
+          "name": "OpenAI: GPT-5.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v4-pro",
+          "name": "DeepSeek: DeepSeek V4 Pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 384000,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash:free",
+          "name": "DeepSeek: DeepSeek V4 Flash (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 384000,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash",
+          "name": "DeepSeek: DeepSeek V4 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "inclusionai/ling-2.6-1t",
+          "name": "inclusionAI: Ling-2.6-1T",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "tencent/hy3-preview",
+          "name": "Tencent: Hy3 preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "xiaomi/mimo-v2.5-pro",
+          "name": "Xiaomi: MiMo-V2.5-Pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "xiaomi/mimo-v2.5",
+          "name": "Xiaomi: MiMo-V2.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.4-image-2",
+          "name": "OpenAI: GPT-5.4 Image 2",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "inclusionai/ling-2.6-flash",
+          "name": "inclusionAI: Ling-2.6-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "~anthropic/claude-opus-latest",
+          "name": "Anthropic: Claude Opus Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openrouter/pareto-code",
+          "name": "Pareto Code Router",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "baidu/qianfan-ocr-fast",
+          "name": "Baidu: Qianfan-OCR-Fast",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 28672,
+          "thinking": true
+        },
+        {
+          "id": "moonshotai/kimi-k2.6",
+          "name": "MoonshotAI: Kimi K2.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262142,
+          "maxOutputTokens": 262142,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4.7",
+          "name": "Anthropic: Claude Opus 4.7",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4.6-fast",
+          "name": "Anthropic: Claude Opus 4.6 (Fast)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-5.1",
+          "name": "Z.ai: GLM 5.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-4-26b-a4b-it:free",
+          "name": "Google: Gemma 4 26B A4B  (free)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-4-26b-a4b-it",
+          "name": "Google: Gemma 4 26B A4B ",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-4-31b-it:free",
+          "name": "Google: Gemma 4 31B (free)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-4-31b-it",
+          "name": "Google: Gemma 4 31B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.6-plus",
+          "name": "Qwen: Qwen3.6 Plus",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-5v-turbo",
+          "name": "Z.ai: GLM 5V Turbo",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "arcee-ai/trinity-large-thinking:free",
+          "name": "Arcee AI: Trinity Large Thinking (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 80000,
+          "thinking": true
+        },
+        {
+          "id": "arcee-ai/trinity-large-thinking",
+          "name": "Arcee AI: Trinity Large Thinking",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-4.20-multi-agent",
+          "name": "xAI: Grok 4.20 Multi-Agent",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-4.20",
+          "name": "xAI: Grok 4.20",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "google/lyria-3-pro-preview",
+          "name": "Google: Lyria 3 Pro Preview",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "google/lyria-3-clip-preview",
+          "name": "Google: Lyria 3 Clip Preview",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "kwaipilot/kat-coder-pro-v2",
+          "name": "Kwaipilot: KAT-Coder-Pro V2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 80000
+        },
+        {
+          "id": "rekaai/reka-edge",
+          "name": "Reka Edge",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 16384,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "xiaomi/mimo-v2-omni",
+          "name": "Xiaomi: MiMo-V2-Omni",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "xiaomi/mimo-v2-pro",
+          "name": "Xiaomi: MiMo-V2-Pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2.7",
+          "name": "MiniMax: MiniMax M2.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.4-nano",
+          "name": "OpenAI: GPT-5.4 Nano",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.4-mini",
+          "name": "OpenAI: GPT-5.4 Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/mistral-small-2603",
+          "name": "Mistral: Mistral Small 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-5-turbo",
+          "name": "Z.ai: GLM 5 Turbo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b:free",
+          "name": "NVIDIA: Nemotron 3 Super (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "name": "NVIDIA: Nemotron 3 Super",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "bytedance-seed/seed-2.0-lite",
+          "name": "ByteDance Seed: Seed-2.0-Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-9b",
+          "name": "Qwen: Qwen3.5-9B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 81920,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.4-pro",
+          "name": "OpenAI: GPT-5.4 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.4",
+          "name": "OpenAI: GPT-5.4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1050000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "inception/mercury-2",
+          "name": "Inception: Mercury 2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 50000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.3-chat",
+          "name": "OpenAI: GPT-5.3 Chat",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemini-3.1-flash-lite-preview",
+          "name": "Google: Gemini 3.1 Flash Lite Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "bytedance-seed/seed-2.0-mini",
+          "name": "ByteDance Seed: Seed-2.0-Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-3.1-flash-image-preview",
+          "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-35b-a3b",
+          "name": "Qwen: Qwen3.5-35B-A3B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 81920,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-27b",
+          "name": "Qwen: Qwen3.5-27B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-122b-a10b",
+          "name": "Qwen: Qwen3.5-122B-A10B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-flash-02-23",
+          "name": "Qwen: Qwen3.5-Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "liquid/lfm-2-24b-a2b",
+          "name": "LiquidAI: LFM2-24B-A2B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemini-3.1-pro-preview-customtools",
+          "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.3-codex",
+          "name": "OpenAI: GPT-5.3-Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "aion-labs/aion-2.0",
+          "name": "AionLabs: Aion-2.0",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-3.1-pro-preview",
+          "name": "Google: Gemini 3.1 Pro Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-sonnet-4.6",
+          "name": "Anthropic: Claude Sonnet 4.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-plus-02-15",
+          "name": "Qwen: Qwen3.5 Plus 2026-02-15",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3.5-397b-a17b",
+          "name": "Qwen: Qwen3.5 397B A17B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2.5:free",
+          "name": "MiniMax: MiniMax M2.5 (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2.5",
+          "name": "MiniMax: MiniMax M2.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 196608,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-5",
+          "name": "Z.ai: GLM 5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-max-thinking",
+          "name": "Qwen: Qwen3 Max Thinking",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4.6",
+          "name": "Anthropic: Claude Opus 4.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-coder-next",
+          "name": "Qwen: Qwen3 Coder Next",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "openrouter/free",
+          "name": "Free Models Router",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "stepfun/step-3.5-flash",
+          "name": "StepFun: Step 3.5 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "arcee-ai/trinity-large-preview",
+          "name": "Arcee AI: Trinity Large Preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "moonshotai/kimi-k2.5",
+          "name": "MoonshotAI: Kimi K2.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "upstage/solar-pro-3",
+          "name": "Upstage: Solar Pro 3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2-her",
+          "name": "MiniMax: MiniMax M2-her",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 2048
+        },
+        {
+          "id": "writer/palmyra-x5",
+          "name": "Writer: Palmyra X5",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 1040000,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "liquid/lfm-2.5-1.2b-thinking:free",
+          "name": "LiquidAI: LFM2.5-1.2B-Thinking (free)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "liquid/lfm-2.5-1.2b-instruct:free",
+          "name": "LiquidAI: LFM2.5-1.2B-Instruct (free)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-audio",
+          "name": "OpenAI: GPT Audio",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-audio-mini",
+          "name": "OpenAI: GPT Audio Mini",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "z-ai/glm-4.7-flash",
+          "name": "Z.ai: GLM 4.7 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.2-codex",
+          "name": "OpenAI: GPT-5.2-Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "bytedance-seed/seed-1.6-flash",
+          "name": "ByteDance Seed: Seed 1.6 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "bytedance-seed/seed-1.6",
+          "name": "ByteDance Seed: Seed 1.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2.1",
+          "name": "MiniMax: MiniMax M2.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 196608,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4.7",
+          "name": "Z.ai: GLM 4.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-3-flash-preview",
+          "name": "Google: Gemini 3 Flash Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "xiaomi/mimo-v2-flash",
+          "name": "Xiaomi: MiMo-V2-Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+          "name": "NVIDIA: Nemotron 3 Nano 30B A3B (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-30b-a3b",
+          "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 228000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.2-chat",
+          "name": "OpenAI: GPT-5.2 Chat",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "openai/gpt-5.2-pro",
+          "name": "OpenAI: GPT-5.2 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.2",
+          "name": "OpenAI: GPT-5.2",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/devstral-2512",
+          "name": "Mistral: Devstral 2 2512",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "relace/relace-search",
+          "name": "Relace: Relace Search",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "z-ai/glm-4.6v",
+          "name": "Z.ai: GLM 4.6V",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 24000,
+          "thinking": true
+        },
+        {
+          "id": "nex-agi/deepseek-v3.1-nex-n1",
+          "name": "Nex AGI: DeepSeek V3.1 Nex N1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 163840
+        },
+        {
+          "id": "essentialai/rnj-1-instruct",
+          "name": "EssentialAI: Rnj 1 Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openrouter/bodybuilder",
+          "name": "Body Builder (beta)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-5.1-codex-max",
+          "name": "OpenAI: GPT-5.1-Codex-Max",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "amazon/nova-2-lite-v1",
+          "name": "Amazon: Nova 2 Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65535,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/ministral-14b-2512",
+          "name": "Mistral: Ministral 3 14B 2512",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/ministral-8b-2512",
+          "name": "Mistral: Ministral 3 8B 2512",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/ministral-3b-2512",
+          "name": "Mistral: Ministral 3 3B 2512",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-large-2512",
+          "name": "Mistral: Mistral Large 3 2512",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "arcee-ai/trinity-mini",
+          "name": "Arcee AI: Trinity Mini",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v3.2-speciale",
+          "name": "DeepSeek: DeepSeek V3.2 Speciale",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 163840,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v3.2",
+          "name": "DeepSeek: DeepSeek V3.2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "prime-intellect/intellect-3",
+          "name": "Prime Intellect: INTELLECT-3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4.5",
+          "name": "Anthropic: Claude Opus 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "allenai/olmo-3-32b-think",
+          "name": "AllenAI: Olmo 3 32B Think",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-3-pro-image-preview",
+          "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-4.1-fast",
+          "name": "xAI: Grok 4.1 Fast",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 30000,
+          "thinking": true
+        },
+        {
+          "id": "deepcogito/cogito-v2.1-671b",
+          "name": "Deep Cogito: Cogito v2.1 671B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.1",
+          "name": "OpenAI: GPT-5.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.1-chat",
+          "name": "OpenAI: GPT-5.1 Chat",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-5.1-codex",
+          "name": "OpenAI: GPT-5.1-Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5.1-codex-mini",
+          "name": "OpenAI: GPT-5.1-Codex-Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "moonshotai/kimi-k2-thinking",
+          "name": "MoonshotAI: Kimi K2 Thinking",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "amazon/nova-premier-v1",
+          "name": "Amazon: Nova Premier 1.0",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "perplexity/sonar-pro-search",
+          "name": "Perplexity: Sonar Pro Search",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 8000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/voxtral-small-24b-2507",
+          "name": "Mistral: Voxtral Small 24B 2507",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-oss-safeguard-20b",
+          "name": "OpenAI: gpt-oss-safeguard-20b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+          "name": "NVIDIA: Nemotron Nano 12B 2 VL (free)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-m2",
+          "name": "MiniMax: MiniMax M2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 196608,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-32b-instruct",
+          "name": "Qwen: Qwen3 VL 32B Instruct",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "ibm-granite/granite-4.0-h-micro",
+          "name": "IBM: Granite 4.0 Micro",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "microsoft/phi-4-mini-instruct",
+          "name": "Microsoft: Phi 4 Mini Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "openai/gpt-5-image-mini",
+          "name": "OpenAI: GPT-5 Image Mini",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-haiku-4.5",
+          "name": "Anthropic: Claude Haiku 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-8b-thinking",
+          "name": "Qwen: Qwen3 VL 8B Thinking",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-8b-instruct",
+          "name": "Qwen: Qwen3 VL 8B Instruct",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "openai/gpt-5-image",
+          "name": "OpenAI: GPT-5 Image",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/o3-deep-research",
+          "name": "OpenAI: o3 Deep Research",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "openai/o4-mini-deep-research",
+          "name": "OpenAI: o4 Mini Deep Research",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "name": "NVIDIA: Llama 3.3 Nemotron Super 49B V1.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "baidu/ernie-4.5-21b-a3b-thinking",
+          "name": "Baidu: ERNIE 4.5 21B A3B Thinking",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-2.5-flash-image",
+          "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "qwen/qwen3-vl-30b-a3b-thinking",
+          "name": "Qwen: Qwen3 VL 30B A3B Thinking",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-30b-a3b-instruct",
+          "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "openai/gpt-5-pro",
+          "name": "OpenAI: GPT-5 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4.6",
+          "name": "Z.ai: GLM 4.6",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-sonnet-4.5",
+          "name": "Anthropic: Claude Sonnet 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v3.2-exp",
+          "name": "DeepSeek: DeepSeek V3.2 Exp",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "thedrummer/cydonia-24b-v4.1",
+          "name": "TheDrummer: Cydonia 24B V4.1",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "relace/relace-apply-3",
+          "name": "Relace: Relace Apply 3",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "google/gemini-2.5-flash-lite-preview-09-2025",
+          "name": "Google: Gemini 2.5 Flash Lite Preview 09-2025",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65535,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-235b-a22b-thinking",
+          "name": "Qwen: Qwen3 VL 235B A22B Thinking",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-vl-235b-a22b-instruct",
+          "name": "Qwen: Qwen3 VL 235B A22B Instruct",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen3-max",
+          "name": "Qwen: Qwen3 Max",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "qwen/qwen3-coder-plus",
+          "name": "Qwen: Qwen3 Coder Plus",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "openai/gpt-5-codex",
+          "name": "OpenAI: GPT-5 Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-v3.1-terminus",
+          "name": "DeepSeek: DeepSeek V3.1 Terminus",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-4-fast",
+          "name": "xAI: Grok 4 Fast",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 30000,
+          "thinking": true
+        },
+        {
+          "id": "alibaba/tongyi-deepresearch-30b-a3b",
+          "name": "Tongyi DeepResearch 30B A3B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-coder-flash",
+          "name": "Qwen: Qwen3 Coder Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-thinking",
+          "name": "Qwen: Qwen3 Next 80B A3B Thinking",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+          "name": "Qwen: Qwen3 Next 80B A3B Instruct (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen3-next-80b-a3b-instruct",
+          "name": "Qwen: Qwen3 Next 80B A3B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen-plus-2025-07-28:thinking",
+          "name": "Qwen: Qwen Plus 0728 (thinking)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen-plus-2025-07-28",
+          "name": "Qwen: Qwen Plus 0728",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "nvidia/nemotron-nano-9b-v2:free",
+          "name": "NVIDIA: Nemotron Nano 9B V2 (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "nvidia/nemotron-nano-9b-v2",
+          "name": "NVIDIA: Nemotron Nano 9B V2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "moonshotai/kimi-k2-0905",
+          "name": "MoonshotAI: Kimi K2 0905",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "qwen/qwen3-30b-a3b-thinking-2507",
+          "name": "Qwen: Qwen3 30B A3B Thinking 2507",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-code-fast-1",
+          "name": "xAI: Grok Code Fast 1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 10000,
+          "thinking": true
+        },
+        {
+          "id": "nousresearch/hermes-4-70b",
+          "name": "Nous: Hermes 4 70B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "nousresearch/hermes-4-405b",
+          "name": "Nous: Hermes 4 405B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-chat-v3.1",
+          "name": "DeepSeek: DeepSeek V3.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-4o-audio-preview",
+          "name": "OpenAI: GPT-4o Audio",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-medium-3.1",
+          "name": "Mistral: Mistral Medium 3.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "baidu/ernie-4.5-21b-a3b",
+          "name": "Baidu: ERNIE 4.5 21B A3B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 120000,
+          "maxOutputTokens": 8000
+        },
+        {
+          "id": "baidu/ernie-4.5-vl-28b-a3b",
+          "name": "Baidu: ERNIE 4.5 VL 28B A3B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 30000,
+          "maxOutputTokens": 8000,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4.5v",
+          "name": "Z.ai: GLM 4.5V",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "ai21/jamba-large-1.7",
+          "name": "AI21: Jamba Large 1.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-5-chat",
+          "name": "OpenAI: GPT-5 Chat",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-5",
+          "name": "OpenAI: GPT-5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5-mini",
+          "name": "OpenAI: GPT-5 Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-5-nano",
+          "name": "OpenAI: GPT-5 Nano",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 400000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-oss-120b:free",
+          "name": "OpenAI: gpt-oss-120b (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "name": "OpenAI: gpt-oss-120b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-oss-20b:free",
+          "name": "OpenAI: gpt-oss-20b (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "name": "OpenAI: gpt-oss-20b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4.1",
+          "name": "Anthropic: Claude Opus 4.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/codestral-2508",
+          "name": "Mistral: Codestral 2508",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen3-coder-30b-a3b-instruct",
+          "name": "Qwen: Qwen3 Coder 30B A3B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 160000,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "qwen/qwen3-30b-a3b-instruct-2507",
+          "name": "Qwen: Qwen3 30B A3B Instruct 2507",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "z-ai/glm-4.5",
+          "name": "Z.ai: GLM 4.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 98304,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4.5-air:free",
+          "name": "Z.ai: GLM 4.5 Air (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 96000,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4.5-air",
+          "name": "Z.ai: GLM 4.5 Air",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 98304,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-235b-a22b-thinking-2507",
+          "name": "Qwen: Qwen3 235B A22B Thinking 2507",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "z-ai/glm-4-32b",
+          "name": "Z.ai: GLM 4 32B ",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen3-coder:free",
+          "name": "Qwen: Qwen3 Coder 480B A35B (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262000,
+          "maxOutputTokens": 262000
+        },
+        {
+          "id": "qwen/qwen3-coder",
+          "name": "Qwen: Qwen3 Coder 480B A35B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "bytedance/ui-tars-1.5-7b",
+          "name": "ByteDance: UI-TARS 7B ",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 2048
+        },
+        {
+          "id": "google/gemini-2.5-flash-lite",
+          "name": "Google: Gemini 2.5 Flash Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65535,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-235b-a22b-2507",
+          "name": "Qwen: Qwen3 235B A22B Instruct 2507",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "switchpoint/router",
+          "name": "Switchpoint Router",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "moonshotai/kimi-k2",
+          "name": "MoonshotAI: Kimi K2 0711",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "mistralai/devstral-medium",
+          "name": "Mistral: Devstral Medium",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/devstral-small",
+          "name": "Mistral: Devstral Small 1.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+          "name": "Venice: Uncensored (free)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "x-ai/grok-4",
+          "name": "xAI: Grok 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "tencent/hunyuan-a13b-instruct",
+          "name": "Tencent: Hunyuan A13B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "morph/morph-v3-large",
+          "name": "Morph: Morph V3 Large",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "morph/morph-v3-fast",
+          "name": "Morph: Morph V3 Fast",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 81920,
+          "maxOutputTokens": 38000
+        },
+        {
+          "id": "baidu/ernie-4.5-vl-424b-a47b",
+          "name": "Baidu: ERNIE 4.5 VL 424B A47B ",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 123000,
+          "maxOutputTokens": 16000,
+          "thinking": true
+        },
+        {
+          "id": "baidu/ernie-4.5-300b-a47b",
+          "name": "Baidu: ERNIE 4.5 300B A47B ",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 123000,
+          "maxOutputTokens": 12000
+        },
+        {
+          "id": "mistralai/mistral-small-3.2-24b-instruct",
+          "name": "Mistral: Mistral Small 3.2 24B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "minimax/minimax-m1",
+          "name": "MiniMax: MiniMax M1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 40000,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-2.5-flash",
+          "name": "Google: Gemini 2.5 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65535,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "name": "Google: Gemini 2.5 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "openai/o3-pro",
+          "name": "OpenAI: o3 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-3-mini",
+          "name": "xAI: Grok 3 Mini",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-3",
+          "name": "xAI: Grok 3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemini-2.5-pro-preview",
+          "name": "Google: Gemini 2.5 Pro Preview 06-05",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-r1-0528",
+          "name": "DeepSeek: R1 0528",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-opus-4",
+          "name": "Anthropic: Claude Opus 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "anthropic/claude-sonnet-4",
+          "name": "Anthropic: Claude Sonnet 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-3n-e4b-it",
+          "name": "Google: Gemma 3n 4B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-medium-3",
+          "name": "Mistral: Mistral Medium 3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemini-2.5-pro-preview-05-06",
+          "name": "Google: Gemini 2.5 Pro Preview 05-06",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65535,
+          "thinking": true
+        },
+        {
+          "id": "arcee-ai/spotlight",
+          "name": "Arcee AI: Spotlight",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65537
+        },
+        {
+          "id": "arcee-ai/maestro-reasoning",
+          "name": "Arcee AI: Maestro Reasoning",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "arcee-ai/virtuoso-large",
+          "name": "Arcee AI: Virtuoso Large",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 64000
+        },
+        {
+          "id": "arcee-ai/coder-large",
+          "name": "Arcee AI: Coder Large",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-guard-4-12b",
+          "name": "Meta: Llama Guard 4 12B",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen3-30b-a3b",
+          "name": "Qwen: Qwen3 30B A3B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 40960,
+          "maxOutputTokens": 20000,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-8b",
+          "name": "Qwen: Qwen3 8B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 40960,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-14b",
+          "name": "Qwen: Qwen3 14B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 40960,
+          "maxOutputTokens": 40960,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-32b",
+          "name": "Qwen: Qwen3 32B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 40960,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "qwen/qwen3-235b-a22b",
+          "name": "Qwen: Qwen3 235B A22B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 8192,
+          "thinking": true
+        },
+        {
+          "id": "openai/o4-mini-high",
+          "name": "OpenAI: o4 Mini High",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "openai/o3",
+          "name": "OpenAI: o3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "openai/o4-mini",
+          "name": "OpenAI: o4 Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-4.1",
+          "name": "OpenAI: GPT-4.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1047576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4.1-mini",
+          "name": "OpenAI: GPT-4.1 Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1047576,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "openai/gpt-4.1-nano",
+          "name": "OpenAI: GPT-4.1 Nano",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1047576,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "alfredpros/codellama-7b-instruct-solidity",
+          "name": "AlfredPros: CodeLLaMa 7B Instruct Solidity",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 4096,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "x-ai/grok-3-mini-beta",
+          "name": "xAI: Grok 3 Mini Beta",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "x-ai/grok-3-beta",
+          "name": "xAI: Grok 3 Beta",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-4-maverick",
+          "name": "Meta: Llama 4 Maverick",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-4-scout",
+          "name": "Meta: Llama 4 Scout",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 327680,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek/deepseek-chat-v3-0324",
+          "name": "DeepSeek: DeepSeek V3 0324",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/o1-pro",
+          "name": "OpenAI: o1-pro",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/mistral-small-3.1-24b-instruct",
+          "name": "Mistral: Mistral Small 3.1 24B",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemma-3-4b-it",
+          "name": "Google: Gemma 3 4B",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemma-3-12b-it",
+          "name": "Google: Gemma 3 12B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "cohere/command-a",
+          "name": "Cohere: Command A",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "openai/gpt-4o-mini-search-preview",
+          "name": "OpenAI: GPT-4o-mini Search Preview",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4o-search-preview",
+          "name": "OpenAI: GPT-4o Search Preview",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "rekaai/reka-flash-3",
+          "name": "Reka Flash 3",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "google/gemma-3-27b-it",
+          "name": "Google: Gemma 3 27B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "thedrummer/skyfall-36b-v2",
+          "name": "TheDrummer: Skyfall 36B V2",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "perplexity/sonar-reasoning-pro",
+          "name": "Perplexity: Sonar Reasoning Pro",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "perplexity/sonar-pro",
+          "name": "Perplexity: Sonar Pro",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 8000
+        },
+        {
+          "id": "perplexity/sonar-deep-research",
+          "name": "Perplexity: Sonar Deep Research",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-2.0-flash-lite-001",
+          "name": "Google: Gemini 2.0 Flash Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "mistralai/mistral-saba",
+          "name": "Mistral: Saba",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-guard-3-8b",
+          "name": "Llama Guard 3 8B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/o3-mini-high",
+          "name": "OpenAI: o3 Mini High",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "google/gemini-2.0-flash-001",
+          "name": "Google: Gemini 2.0 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "aion-labs/aion-1.0",
+          "name": "AionLabs: Aion-1.0",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "aion-labs/aion-1.0-mini",
+          "name": "AionLabs: Aion-1.0-Mini",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "aion-labs/aion-rp-llama-3.1-8b",
+          "name": "AionLabs: Aion-RP 1.0 (8B)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "qwen/qwen2.5-vl-72b-instruct",
+          "name": "Qwen: Qwen2.5 VL 72B Instruct",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 32000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen-plus",
+          "name": "Qwen: Qwen-Plus",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "openai/o3-mini",
+          "name": "OpenAI: o3 Mini",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "mistralai/mistral-small-24b-instruct-2501",
+          "name": "Mistral: Mistral Small 3",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek/deepseek-r1-distill-qwen-32b",
+          "name": "DeepSeek: R1 Distill Qwen 32B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "perplexity/sonar",
+          "name": "Perplexity: Sonar",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 127072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek/deepseek-r1-distill-llama-70b",
+          "name": "DeepSeek: R1 Distill Llama 70B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "deepseek/deepseek-r1",
+          "name": "DeepSeek: R1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 64000,
+          "maxOutputTokens": 16000,
+          "thinking": true
+        },
+        {
+          "id": "minimax/minimax-01",
+          "name": "MiniMax: MiniMax-01",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 1000192,
+          "maxOutputTokens": 1000192
+        },
+        {
+          "id": "microsoft/phi-4",
+          "name": "Microsoft: Phi 4",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 16384,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "sao10k/l3.1-70b-hanami-x1",
+          "name": "Sao10K: Llama 3.1 70B Hanami x1",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 16000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek/deepseek-chat",
+          "name": "DeepSeek: DeepSeek V3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 163840,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "sao10k/l3.3-euryale-70b",
+          "name": "Sao10K: Llama 3.3 Euryale 70B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/o1",
+          "name": "OpenAI: o1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 100000,
+          "thinking": true
+        },
+        {
+          "id": "cohere/command-r7b-12-2024",
+          "name": "Cohere: Command R7B (12-2024)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4000
+        },
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct:free",
+          "name": "Meta: Llama 3.3 70B Instruct (free)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.3-70b-instruct",
+          "name": "Meta: Llama 3.3 70B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "amazon/nova-lite-v1",
+          "name": "Amazon: Nova Lite 1.0",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 300000,
+          "maxOutputTokens": 5120
+        },
+        {
+          "id": "amazon/nova-micro-v1",
+          "name": "Amazon: Nova Micro 1.0",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 5120
+        },
+        {
+          "id": "amazon/nova-pro-v1",
+          "name": "Amazon: Nova Pro 1.0",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 300000,
+          "maxOutputTokens": 5120
+        },
+        {
+          "id": "openai/gpt-4o-2024-11-20",
+          "name": "OpenAI: GPT-4o (2024-11-20)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-large-2411",
+          "name": "Mistral Large 2411",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-large-2407",
+          "name": "Mistral Large 2407",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/pixtral-large-2411",
+          "name": "Mistral: Pixtral Large 2411",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen-2.5-coder-32b-instruct",
+          "name": "Qwen2.5 Coder 32B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "thedrummer/unslopnemo-12b",
+          "name": "TheDrummer: UnslopNemo 12B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "anthropic/claude-3.5-haiku",
+          "name": "Anthropic: Claude 3.5 Haiku",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "anthracite-org/magnum-v4-72b",
+          "name": "Magnum v4 72B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 16384,
+          "maxOutputTokens": 2048
+        },
+        {
+          "id": "qwen/qwen-2.5-7b-instruct",
+          "name": "Qwen: Qwen2.5 7B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "inflection/inflection-3-productivity",
+          "name": "Inflection: Inflection 3 Productivity",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8000,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "inflection/inflection-3-pi",
+          "name": "Inflection: Inflection 3 Pi",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8000,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "thedrummer/rocinante-12b",
+          "name": "TheDrummer: Rocinante 12B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "meta-llama/llama-3.2-1b-instruct",
+          "name": "Meta: Llama 3.2 1B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 60000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.2-3b-instruct:free",
+          "name": "Meta: Llama 3.2 3B Instruct (free)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.2-3b-instruct",
+          "name": "Meta: Llama 3.2 3B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 80000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.2-11b-vision-instruct",
+          "name": "Meta: Llama 3.2 11B Vision Instruct",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen/qwen-2.5-72b-instruct",
+          "name": "Qwen2.5 72B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "cohere/command-r-plus-08-2024",
+          "name": "Cohere: Command R+ (08-2024)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4000
+        },
+        {
+          "id": "cohere/command-r-08-2024",
+          "name": "Cohere: Command R (08-2024)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4000
+        },
+        {
+          "id": "sao10k/l3.1-euryale-70b",
+          "name": "Sao10K: Llama 3.1 Euryale 70B v2.2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "nousresearch/hermes-3-llama-3.1-70b",
+          "name": "Nous: Hermes 3 70B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+          "name": "Nous: Hermes 3 405B Instruct (free)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "nousresearch/hermes-3-llama-3.1-405b",
+          "name": "Nous: Hermes 3 405B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "sao10k/l3-lunaris-8b",
+          "name": "Sao10K: Llama 3 8B Lunaris",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4o-2024-08-06",
+          "name": "OpenAI: GPT-4o (2024-08-06)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.1-70b-instruct",
+          "name": "Meta: Llama 3.1 70B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "meta-llama/llama-3.1-8b-instruct",
+          "name": "Meta: Llama 3.1 8B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 16384,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistralai/mistral-nemo",
+          "name": "Mistral: Mistral Nemo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4o-mini-2024-07-18",
+          "name": "OpenAI: GPT-4o-mini (2024-07-18)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4o-mini",
+          "name": "OpenAI: GPT-4o-mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "google/gemma-2-27b-it",
+          "name": "Google: Gemma 2 27B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 2048
+        },
+        {
+          "id": "sao10k/l3-euryale-70b",
+          "name": "Sao10k: Llama 3 Euryale 70B v2.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "nousresearch/hermes-2-pro-llama-3-8b",
+          "name": "NousResearch: Hermes 2 Pro - Llama-3 8B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "openai/gpt-4o",
+          "name": "OpenAI: GPT-4o",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4o-2024-05-13",
+          "name": "OpenAI: GPT-4o (2024-05-13)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "meta-llama/llama-3-8b-instruct",
+          "name": "Meta: Llama 3 8B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "meta-llama/llama-3-70b-instruct",
+          "name": "Meta: Llama 3 70B Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8192,
+          "maxOutputTokens": 8000
+        },
+        {
+          "id": "mistralai/mixtral-8x22b-instruct",
+          "name": "Mistral: Mixtral 8x22B Instruct",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "microsoft/wizardlm-2-8x22b",
+          "name": "WizardLM-2 8x22B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 65535,
+          "maxOutputTokens": 8000
+        },
+        {
+          "id": "openai/gpt-4-turbo",
+          "name": "OpenAI: GPT-4 Turbo",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "anthropic/claude-3-haiku",
+          "name": "Anthropic: Claude 3 Haiku",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "mistralai/mistral-large",
+          "name": "Mistral Large",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-3.5-turbo-0613",
+          "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 4095,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-4-turbo-preview",
+          "name": "OpenAI: GPT-4 Turbo Preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openrouter/auto",
+          "name": "Auto Router",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 2000000,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "openai/gpt-4-1106-preview",
+          "name": "OpenAI: GPT-4 Turbo (older v1106)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "mistralai/mistral-7b-instruct-v0.1",
+          "name": "Mistral: Mistral 7B Instruct v0.1",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 2824,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "openai/gpt-3.5-turbo-instruct",
+          "name": "OpenAI: GPT-3.5 Turbo Instruct",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 4095,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-3.5-turbo-16k",
+          "name": "OpenAI: GPT-3.5 Turbo 16k",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 16385,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "mancer/weaver",
+          "name": "Mancer: Weaver (alpha)",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 8000,
+          "maxOutputTokens": 2000
+        },
+        {
+          "id": "undi95/remm-slerp-l2-13b",
+          "name": "ReMM SLERP 13B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 6144,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "gryphe/mythomax-l2-13b",
+          "name": "MythoMax 13B",
+          "toolCalling": false,
+          "vision": false,
+          "maxInputTokens": 4096,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-4-0314",
+          "name": "OpenAI: GPT-4 (older v0314)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 8191,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-4",
+          "name": "OpenAI: GPT-4",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 8191,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "openai/gpt-3.5-turbo",
+          "name": "OpenAI: GPT-3.5 Turbo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 16385,
+          "maxOutputTokens": 4096
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "together",
+      "name": "Together AI",
+      "baseUrl": "https://api.together.xyz/v1",
+      "apiKeyEnv": [
+        "TOGETHER_API_KEY"
+      ],
+      "models": [],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "groq",
+      "name": "Groq",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "apiKeyEnv": [
+        "GROQ_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "allam-2-7b",
+          "name": "allam-2-7b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "llama-3.1-8b-instant",
+          "name": "Llama 3.1 8B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "llama-3.3-70b-versatile",
+          "name": "Llama 3.3 70B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "huggingface",
+      "name": "Hugging Face",
+      "baseUrl": "https://router.huggingface.co/v1",
+      "apiKeyEnv": [
+        "HUGGINGFACE_API_KEY",
+        "HF_TOKEN"
+      ],
+      "models": [
+        {
+          "id": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+          "name": "Llama 3.3 70B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek-ai/DeepSeek-V4-Flash",
+          "name": "DeepSeek V4 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "moonshotai/Kimi-K2.6",
+          "name": "Kimi K2.6",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "Qwen/Qwen3-Coder-Next",
+          "name": "Qwen3-Coder Next",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "cloudflare",
+      "name": "Cloudflare Workers AI",
+      "baseUrl": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+      "apiKeyEnv": [
+        "CLOUDFLARE_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "@cf/meta/llama-3.1-70b-instruct",
+          "name": "Llama 3.1 70B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "@cf/openai/gpt-oss-120b",
+          "name": "GPT-OSS 120B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/zai-org/glm-4.7-flash",
+          "name": "GLM-4.7 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/meta/llama-4-scout-17b-16e-instruct",
+          "name": "Llama 4 Scout",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "@cf/moonshotai/kimi-k2.5",
+          "name": "Kimi K2.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/qwen/qwen3-30b-a3b-fp8",
+          "name": "Qwen3 30B-A3B FP8",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+          "name": "DeepSeek R1 Distill Qwen 32B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/moonshotai/kimi-k2.6",
+          "name": "Kimi K2.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/ibm-granite/granite-4.0-h-micro",
+          "name": "Granite 4.0 H Micro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "@cf/nvidia/nemotron-3-120b-a12b",
+          "name": "Nemotron 3 120B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "@cf/google/gemma-4-26b-a4b-it",
+          "name": "Gemma 4 26B-A4B IT",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        }
+      ],
+      "requiredEnv": [
+        "CLOUDFLARE_ACCOUNT_ID"
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "gemini",
+      "name": "Google Gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKeyEnv": [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "deep-research-max-preview-04-2026",
+          "name": "Deep Research Max Preview (Apr-21-2026)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deep-research-preview-04-2026",
+          "name": "Deep Research Preview (Apr-21-2026)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-2.5-computer-use-preview-10-2025",
+          "name": "Gemini 2.5 Computer Use Preview 10-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-2.5-flash-image",
+          "name": "gemini-2.5-flash-image",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-2.5-flash-lite",
+          "name": "Gemini 2.5 Flash-Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "gemini-2.5-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "gemini-2.5-pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3-flash-preview",
+          "name": "Gemini 3 Flash Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3-pro-image-preview",
+          "name": "Nano Banana Pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3-pro-image",
+          "name": "gemini-3-pro-image",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.1-flash-image-preview",
+          "name": "Nano Banana 2",
+          "toolCalling": false,
+          "vision": true,
+          "maxInputTokens": 65536,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.1-flash-image",
+          "name": "gemini-3.1-flash-image",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.1-flash-lite-image",
+          "name": "gemini-3.1-flash-lite-image",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.1-flash-lite-preview",
+          "name": "Gemini 3.1 Flash Lite Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.1-flash-lite",
+          "name": "Gemini 3.1 Flash Lite",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.1-flash-live-preview",
+          "name": "gemini-3.1-flash-live-preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.1-pro-preview-customtools",
+          "name": "Gemini 3.1 Pro Preview Custom Tools",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.5-flash-lite",
+          "name": "gemini-3.5-flash-lite",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.5-live-translate-preview",
+          "name": "gemini-3.5-live-translate-preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 16384,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "name": "gemini-3.6-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.7-flash",
+          "name": "gemini-3.7-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.8-flash",
+          "name": "gemini-3.8-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-4-argon",
+          "name": "gemini-4-argon",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768
+        },
+        {
+          "id": "gemini-flash-latest",
+          "name": "Gemini Flash Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-flash-lite-latest",
+          "name": "Gemini Flash-Lite Latest",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-omni-flash-preview",
+          "name": "gemini-omni-flash-preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "gemma-4-26b-a4b-it",
+          "name": "Gemma 4 26B A4B IT",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "gemma-4-31b-it",
+          "name": "Gemma 4 31B IT",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "lyria-3-clip-preview",
+          "name": "lyria-3-clip-preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "lyria-3-pro-preview",
+          "name": "lyria-3-pro-preview",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "veo-3.1-fast-generate-preview",
+          "name": "Veo 3.1 fast",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 480,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "veo-3.1-generate-preview",
+          "name": "Veo 3.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 480,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "veo-3.1-lite-generate-preview",
+          "name": "Veo 3.1 lite",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 480,
+          "maxOutputTokens": 8192
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "cerebras",
+      "name": "Cerebras",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "apiKeyEnv": [
+        "CEREBRAS_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "gpt-oss-120b",
+          "name": "gpt-oss-120b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 40960
+        },
+        {
+          "id": "qwen-3.8-27b",
+          "name": "qwen-3.8-27b",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 40960
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "mistral",
+      "name": "Mistral",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "apiKeyEnv": [
+        "MISTRAL_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "codestral-2508",
+          "name": "codestral-2508",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "codestral-latest",
+          "name": "Codestral (latest)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 4096
+        },
+        {
+          "id": "devstral-2512",
+          "name": "Devstral 2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "devstral-latest",
+          "name": "Devstral 2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "devstral-medium-2507",
+          "name": "Devstral Medium",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "devstral-medium-latest",
+          "name": "Devstral 2 (latest)",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "devstral-small-2505",
+          "name": "Devstral Small 2505",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "devstral-small-2507",
+          "name": "Devstral Small",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "glm-5-2",
+          "name": "glm-5-2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "labs-devstral-small-2512",
+          "name": "Devstral Small 2",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 256000
+        },
+        {
+          "id": "labs-leanstral-1-5-1",
+          "name": "Leanstral 1.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "magistral-medium-latest",
+          "name": "Magistral Medium (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "ministral-14b-2512",
+          "name": "ministral-14b-2512",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "ministral-3b-2512",
+          "name": "ministral-3b-2512",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "ministral-3b-latest",
+          "name": "Ministral 3B (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "ministral-8b-2512",
+          "name": "ministral-8b-2512",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "ministral-8b-latest",
+          "name": "Ministral 8B (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "mistral-large-2411",
+          "name": "mistral-large-2411",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistral-large-2512",
+          "name": "Mistral Large 3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "mistral-large-4",
+          "name": "mistral-large-4",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistral-large-latest",
+          "name": "Mistral Large (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "mistral-medium-2505",
+          "name": "Mistral Medium 3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "mistral-medium-2508",
+          "name": "Mistral Medium 3.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "mistral-medium-2604",
+          "name": "Mistral Medium 3.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "mistral-medium-latest",
+          "name": "mistral-medium-latest",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistral-nemo",
+          "name": "Mistral Nemo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "mistral-small-2506",
+          "name": "Mistral Small 3.2",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mistral-small-2603",
+          "name": "Mistral Small 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 256000,
+          "thinking": true
+        },
+        {
+          "id": "mistral-small-latest",
+          "name": "Mistral Small (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 256000,
+          "thinking": true
+        },
+        {
+          "id": "open-mistral-7b",
+          "name": "Mistral 7B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 8000,
+          "maxOutputTokens": 8000
+        },
+        {
+          "id": "open-mistral-nemo",
+          "name": "Open Mistral Nemo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "open-mixtral-8x22b",
+          "name": "Mixtral 8x22B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 64000,
+          "maxOutputTokens": 64000
+        },
+        {
+          "id": "open-mixtral-8x7b",
+          "name": "Mixtral 8x7B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32000,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "pixtral-12b",
+          "name": "Pixtral 12B",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "pixtral-large-latest",
+          "name": "Pixtral Large (latest)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "zai-glm-5-2",
+          "name": "zai-glm-5-2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "zai-glm-5-3",
+          "name": "zai-glm-5-3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "cohere",
+      "name": "Cohere",
+      "baseUrl": "https://api.cohere.ai/compatibility/v1",
+      "apiKeyEnv": [
+        "COHERE_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "c4ai-aya-expanse-32b",
+          "name": "c4ai-aya-expanse-32b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "c4ai-aya-vision-32b",
+          "name": "c4ai-aya-vision-32b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-a-03-2025",
+          "name": "command-a-03-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-a-plus-05-2026",
+          "name": "command-a-plus-05-2026",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-a-reasoning-08-2025",
+          "name": "command-a-reasoning-08-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-a-translate-08-2025",
+          "name": "command-a-translate-08-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-a-vision-07-2025",
+          "name": "command-a-vision-07-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-r-08-2024",
+          "name": "command-r-08-2024",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-r-plus-08-2024",
+          "name": "command-r-plus-08-2024",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-r7b-12-2024",
+          "name": "command-r7b-12-2024",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "command-r7b-arabic-02-2025",
+          "name": "command-r7b-arabic-02-2025",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "north-mini-code-1-0",
+          "name": "north-mini-code-1-0",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "north-small-translate-09-2026",
+          "name": "north-small-translate-09-2026",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32768,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "tiny-aya-earth",
+          "name": "tiny-aya-earth",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "tiny-aya-fire",
+          "name": "tiny-aya-fire",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "tiny-aya-global",
+          "name": "tiny-aya-global",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "tiny-aya-water",
+          "name": "tiny-aya-water",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "llm7",
+      "name": "LLM7",
+      "baseUrl": "https://api.llm7.io/v1",
+      "apiKeyEnv": [
+        "LLM7_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "gpt-oss-20b",
+          "name": "GPT-OSS 20B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384,
+          "thinking": true
+        },
+        {
+          "id": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+          "name": "Llama 3.1 8B Turbo",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "codestral-latest",
+          "name": "Codestral",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 32000,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "ministral-8b-2512",
+          "name": "Ministral 8B",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "GLM-4.6V-Flash",
+          "name": "GLM-4.6V Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "opencode-zen",
+      "name": "OpenCode Zen",
+      "baseUrl": "https://opencode.ai/inference/v1",
+      "apiKeyEnv": [
+        "OPENCODE_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "big-pickle",
+          "name": "Big Pickle",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 160000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "cat-jam-free",
+          "name": "Cat Jam Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "claude-3-5-haiku",
+          "name": "Claude Haiku 3.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 8192
+        },
+        {
+          "id": "claude-fable-5-1",
+          "name": "claude-fable-5-1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-fable-5",
+          "name": "claude-fable-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "name": "claude-haiku-5-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-opus-4-1",
+          "name": "Claude Opus 4.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "claude-opus-4-5",
+          "name": "Claude Opus 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "claude-opus-4-6",
+          "name": "claude-opus-4-6",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-opus-4-7",
+          "name": "Claude Opus 4.7",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "claude-opus-4-8",
+          "name": "claude-opus-4-8",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-opus-5-5",
+          "name": "claude-opus-5-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "claude-opus-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "claude-sonnet-4",
+          "name": "Claude Sonnet 4",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "claude-sonnet-5-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "claude-sonnet-5",
+          "name": "claude-sonnet-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek-v4-flash-free",
+          "name": "DeepSeek V4 Flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "deepseek-v4-flash-vision-exp",
+          "name": "deepseek-v4-flash-vision-exp",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "deepseek-v4-pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "exo-free",
+          "name": "Exo Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "fledge-alpha-free",
+          "name": "Fledge Alpha Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3-flash",
+          "name": "Gemini 3 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3-pro",
+          "name": "Gemini 3 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.1-pro",
+          "name": "Gemini 3.1 Pro Preview",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.5-flash-lite",
+          "name": "gemini-3.5-flash-lite",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "name": "gemini-3.6-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.7-flash",
+          "name": "gemini-3.7-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-3.8-flash",
+          "name": "gemini-3.8-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemini-4-argon",
+          "name": "gemini-4-argon",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-4.6",
+          "name": "GLM-4.6",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-4.7-free",
+          "name": "GLM-4.7 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-4.7",
+          "name": "GLM-4.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-5-free",
+          "name": "GLM-5 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-5.1",
+          "name": "GLM-5.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-5.2",
+          "name": "glm-5.2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-5.3-flash",
+          "name": "glm-5.3-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-5.3",
+          "name": "glm-5.3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-5",
+          "name": "GLM-5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5-codex",
+          "name": "GPT-5 Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5-nano",
+          "name": "GPT-5 Nano",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.1-codex-max",
+          "name": "GPT-5.1 Codex Max",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.1-codex-mini",
+          "name": "GPT-5.1 Codex Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.1-codex",
+          "name": "GPT-5.1 Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.1",
+          "name": "GPT-5.1",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.2-codex",
+          "name": "GPT-5.2 Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.2",
+          "name": "GPT-5.2",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.3-codex-spark",
+          "name": "GPT-5.3 Codex Spark",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 128000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3 Codex",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "name": "GPT-5.4 Mini",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.4-nano",
+          "name": "GPT-5.4 Nano",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.4-pro",
+          "name": "GPT-5.4 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 922000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.4",
+          "name": "gpt-5.4",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-5.5-pro",
+          "name": "GPT-5.5 Pro",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 922000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-5.5",
+          "name": "gpt-5.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "name": "gpt-5.6-luna",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "name": "gpt-5.6-terra",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-5",
+          "name": "GPT-5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 272000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "gpt-6-astra",
+          "name": "gpt-6-astra",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-6-luna",
+          "name": "gpt-6-luna",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-6-sol",
+          "name": "gpt-6-sol",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-6.1-sol",
+          "name": "gpt-6.1-sol",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "grok-4.5",
+          "name": "grok-4.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "grok-4.6",
+          "name": "grok-4.6",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "grok-4.7",
+          "name": "grok-4.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "grok-build-0.1",
+          "name": "grok-build-0.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 256000
+        },
+        {
+          "id": "grok-code",
+          "name": "Grok Code Fast 1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 256000,
+          "thinking": true
+        },
+        {
+          "id": "hy3-free",
+          "name": "Hy3 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 190000,
+          "maxOutputTokens": 64000
+        },
+        {
+          "id": "hy3-preview-free",
+          "name": "Hy3 preview Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "jev-1.13-free",
+          "name": "Jev 1.13 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "jev-1.13",
+          "name": "Jev 1.13",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "kimi-k2-thinking",
+          "name": "Kimi K2 Thinking",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.5-free",
+          "name": "Kimi K2.5 Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.5",
+          "name": "Kimi K2.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "Kimi K2.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "name": "kimi-k2.7-code",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "kimi-k2",
+          "name": "Kimi K2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "kimi-k3",
+          "name": "Kimi K3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "laguna-s-2.1-free",
+          "name": "Laguna S 2.1 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 256000,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "ling-2.6-flash-free",
+          "name": "Ling 2.6 Flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262100,
+          "maxOutputTokens": 32800
+        },
+        {
+          "id": "ling-3.0-flash-fin-free",
+          "name": "Ling 3.0 Flash Fin Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "ling-3.0-flash-free",
+          "name": "Ling-3.0-flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "ling-3.0-tiny-free",
+          "name": "Ling-3.0-tiny Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "ling-3.1-flash-free",
+          "name": "Ling 3.1 Flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "longcat-2.0-free",
+          "name": "LongCat-2.0 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "longcat-2.5-preview-free",
+          "name": "LongCat 2.5 Preview Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "mimo-v2-flash-free",
+          "name": "MiMo V2 Flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "mimo-v2-omni-free",
+          "name": "MiMo V2 Omni Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "mimo-v2-pro-free",
+          "name": "MiMo V2 Pro Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 64000,
+          "thinking": true
+        },
+        {
+          "id": "mimo-v2.5-free",
+          "name": "MiMo V2.5 Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "mimo-v2.6-flash-free",
+          "name": "MiMo-V2.6-Flash Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000
+        },
+        {
+          "id": "minimax-m2.1-free",
+          "name": "MiniMax-M2.1 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m2.1",
+          "name": "MiniMax-M2.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m2.5-free",
+          "name": "MiniMax-M2.5 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m2.5",
+          "name": "MiniMax-M2.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m2.7",
+          "name": "MiniMax-M2.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m3-free",
+          "name": "MiniMax-M3 Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 200000,
+          "maxOutputTokens": 32000,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m3",
+          "name": "minimax-m3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 512000,
+          "maxOutputTokens": 128000
+        },
+        {
+          "id": "mistral-large-4",
+          "name": "mistral-large-4",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 524288,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "muse-spark-1.2-contributor-free",
+          "name": "Muse Spark 1.2 Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "muse-spark-1.2",
+          "name": "muse-spark-1.2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "muse-spark-1.3-contributor-free",
+          "name": "Muse Spark 1.3 Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "muse-spark-1.3",
+          "name": "muse-spark-1.3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "nemotron-3-super-free",
+          "name": "Nemotron 3 Super Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "nemotron-3-ultra-free",
+          "name": "Nemotron 3 Ultra Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 128000,
+          "thinking": true
+        },
+        {
+          "id": "nemotron-3.5-lightning-free",
+          "name": "Nemotron 3.5 Lightning Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "north-mini-code-free",
+          "name": "North Mini Code Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen3-coder",
+          "name": "Qwen3 Coder",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "qwen3.5-plus",
+          "name": "Qwen3.5 Plus",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen3.6-plus-free",
+          "name": "Qwen3.6 Plus Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen3.6-plus",
+          "name": "Qwen3.6 Plus",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "qwen3.8-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen3.8-max",
+          "name": "qwen3.8-max",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "ring-2.6-1t-free",
+          "name": "Ring 2.6 1T Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262000,
+          "maxOutputTokens": 66000,
+          "thinking": true
+        },
+        {
+          "id": "space-bunny-free",
+          "name": "Space Bunny Free",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 524288,
+          "maxOutputTokens": 524288,
+          "thinking": true
+        },
+        {
+          "id": "step-5-preview-free",
+          "name": "Step 5 Preview Free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 65536
+        },
+        {
+          "id": "trinity-large-preview-free",
+          "name": "trinity-large-preview-free",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 131072
+        },
+        {
+          "id": "x-preview-f-free",
+          "name": "Ox Alpha Free (Unlimited)",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 1000000,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "ollama-cloud",
+      "name": "Ollama Cloud",
+      "baseUrl": "https://ollama.com/v1",
+      "apiKeyEnv": [
+        "OLLAMA_CLOUD_API_KEY",
+        "OLLAMA_API_KEY"
+      ],
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "deepseek-v4-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 1048576,
+          "thinking": true
+        },
+        {
+          "id": "deepseek-v4-flash:0731",
+          "name": "deepseek-v4-flash:0731",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 1048576
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "deepseek-v4-pro",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 1048576,
+          "thinking": true
+        },
+        {
+          "id": "deepseek-v4-pro:0813",
+          "name": "deepseek-v4-pro:0813",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 1048576
+        },
+        {
+          "id": "deepseek-v4.1-flash",
+          "name": "deepseek-v4.1-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gemma4:31b",
+          "name": "gemma4:31b",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "glm-5.1",
+          "name": "glm-5.1",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 202752,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "glm-5.2",
+          "name": "glm-5.2",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 976000,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-5.3-flash",
+          "name": "glm-5.3-flash",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "glm-5.3",
+          "name": "glm-5.3",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "gpt-oss:120b",
+          "name": "gpt-oss:120b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "gpt-oss:20b",
+          "name": "gpt-oss:20b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 32768,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.5",
+          "name": "kimi-k2.5",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "kimi-k2.6",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144,
+          "thinking": true
+        },
+        {
+          "id": "kimi-k2.7-code",
+          "name": "kimi-k2.7-code",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "kimi-k3",
+          "name": "kimi-k3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "minimax-m2.5",
+          "name": "minimax-m2.5",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 204800,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m2.7",
+          "name": "minimax-m2.7",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 196608,
+          "maxOutputTokens": 196608,
+          "thinking": true
+        },
+        {
+          "id": "minimax-m3",
+          "name": "minimax-m3",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 512000,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "mistral-large-3:675b",
+          "name": "mistral-large-3:675b",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 262144
+        },
+        {
+          "id": "mistral-large-4",
+          "name": "mistral-large-4",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 131072,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "nemotron-3-nano:30b",
+          "name": "nemotron-3-nano:30b",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 1048576,
+          "maxOutputTokens": 131072,
+          "thinking": true
+        },
+        {
+          "id": "nemotron-3-super",
+          "name": "nemotron-3-super",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        },
+        {
+          "id": "nemotron-3-ultra",
+          "name": "nemotron-3-ultra",
+          "toolCalling": true,
+          "vision": false,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 16384
+        },
+        {
+          "id": "qwen3.5:397b",
+          "name": "qwen3.5:397b",
+          "toolCalling": true,
+          "vision": true,
+          "maxInputTokens": 262144,
+          "maxOutputTokens": 65536,
+          "thinking": true
+        }
+      ],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    },
+    {
+      "slug": "ollama",
+      "name": "Ollama",
+      "baseUrl": "http://127.0.0.1:11434",
+      "apiKeyEnv": [],
+      "models": [],
+      "modelDefaults": {
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 131072,
+        "maxOutputTokens": 16384
+      }
+    }
+  ]
+}

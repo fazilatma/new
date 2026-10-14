@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Add OpenAI-compatible provider models to GitHub Copilot Chat in code-server.
+# Designed for Android Termux; also works on ordinary Linux installations.
+set -Eeuo pipefail
+
+RAW_BASE_DEFAULT="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers"
+RAW_BASE="${COPILOT_MODELS_RAW_BASE:-$RAW_BASE_DEFAULT}"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != /dev/fd/* ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+fi
+
+log() { printf '%s\n' "$*" >&2; }
+die() { log "error: $*"; exit 1; }
+
+find_python() {
+  if command -v python3 >/dev/null 2>&1 \
+    && python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' 2>/dev/null; then
+    command -v python3
+  elif command -v python >/dev/null 2>&1 \
+    && python -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' 2>/dev/null; then
+    command -v python
+  else
+    return 1
+  fi
+}
+
+PYTHON_BIN="$(find_python || true)"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if command -v pkg >/dev/null 2>&1; then
+    log "==> Python is required; installing the Termux python package..."
+    pkg install -y python
+    PYTHON_BIN="$(find_python || true)"
+  fi
+fi
+[[ -n "$PYTHON_BIN" ]] || die "Python 3.9+ is required (in Termux run: pkg install python)"
+
+TEMP_DIR=""
+cleanup() {
+  if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
+    rm -rf -- "$TEMP_DIR"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/copilot-models.py" && -f "$SCRIPT_DIR/copilot-models.catalog.json" ]]; then
+  HELPER="$SCRIPT_DIR/copilot-models.py"
+  CATALOG="$SCRIPT_DIR/copilot-models.catalog.json"
+else
+  command -v curl >/dev/null 2>&1 || die "curl is required"
+  TMP_BASE="${TMPDIR:-}"
+  if [[ -z "$TMP_BASE" ]]; then
+    TMP_BASE="${PREFIX:+$PREFIX/tmp}"
+  fi
+  TMP_BASE="${TMP_BASE:-/tmp}"
+  mkdir -p -- "$TMP_BASE"
+  TEMP_DIR="$(mktemp -d "$TMP_BASE/copilot-models.XXXXXX" 2>/dev/null || mktemp -d)"
+  HELPER="$TEMP_DIR/copilot-models.py"
+  CATALOG="$TEMP_DIR/copilot-models.catalog.json"
+  log "==> Downloading the Copilot models helper..."
+  curl -fsSL --retry 3 "$RAW_BASE/copilot-models.py" -o "$HELPER"
+  curl -fsSL --retry 3 "$RAW_BASE/copilot-models.catalog.json" -o "$CATALOG"
+fi
+
+set +e
+"$PYTHON_BIN" "$HELPER" --catalog "$CATALOG" "$@"
+status=$?
+set -e
+exit "$status"

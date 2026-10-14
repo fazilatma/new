@@ -17,6 +17,23 @@ curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | sudo
 curl -sSL https://raw.githubusercontent.com/fazilatma/new/main/install.sh | bash
 ```
 
+### 🤖 GitHub Copilot Chat BYOK models in code-server (Termux)
+
+Add the maintained OpenRouter, Together, Groq, Hugging Face, Cloudflare Workers
+AI, Gemini, Cerebras, Mistral, Cohere, LLM7, OpenCode Zen, Ollama Cloud, and
+local Ollama catalog directly to Copilot Chat's model picker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers/install-copilot-models-termux.sh \
+  | bash -s -- --prompt
+```
+
+API keys are entered without echo, but Copilot's profile format stores them in
+`chatLanguageModels.json`; the helper protects the file with mode `0600`. A
+complete credential-file example, JSON import support, custom-profile options,
+backups, restore instructions, and compatibility notes are in
+[the Termux Copilot models guide](docs/copilot-models-termux.md).
+
 ---
 
 ## 🎯 3-Option Interactive Startup Menu
