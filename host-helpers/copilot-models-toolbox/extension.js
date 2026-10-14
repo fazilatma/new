@@ -752,15 +752,29 @@ function credentialSummary(model) {
   return `${location} · ${model.apiKey.length} chars · ${fingerprint}`;
 }
 
+function providerCredentialAliases(name) {
+  const clean = String(name || '').trim();
+  const aliases = new Set([clean]);
+  if (/\s+AI$/i.test(clean)) aliases.add(clean.replace(/\s+AI$/i, '').trim());
+  else aliases.add(`${clean} AI`);
+  return [...aliases].filter(Boolean);
+}
+
 async function hydrateToolboxCredentials(context, models, warnings) {
   if (!context.secrets) return;
   for (const model of models) {
     if (!model.credentialReference || model.kind === 'ollama') continue;
-    const stored = await context.secrets.get(
-      toolboxCredentialKey(model.vendor, model.provider)
-    );
+    let stored;
+    for (const alias of providerCredentialAliases(model.provider)) {
+      stored = await context.secrets.get(toolboxCredentialKey(model.vendor, alias));
+      if (stored && stored.trim()) break;
+    }
     if (stored && stored.trim()) {
       model.apiKey = stored.trim();
+      await context.secrets.store(
+        toolboxCredentialKey(model.vendor, model.provider),
+        model.apiKey
+      );
     } else {
       warnings.push(
         `${model.provider}: Chat has a protected credential, but Toolbox cannot directly test it until the provider JSON is re-imported.`
@@ -1213,6 +1227,7 @@ module.exports = {
     credentialSummary,
     githubSyncHtml,
     migratePlaintextCredentials,
+    providerCredentialAliases,
     testDashboardHtml,
     toolboxCredentialKey,
   },

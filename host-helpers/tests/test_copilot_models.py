@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -153,6 +154,7 @@ class NormalizeTests(unittest.TestCase):
             }
         ]
         merged = copilot_models.overlay_providers(defaults, imported)
+        self.assertEqual(merged[0]["name"], defaults[0]["name"])
         self.assertEqual(merged[0]["baseUrl"], defaults[0]["baseUrl"])
         self.assertEqual(merged[0]["models"][0]["url"], defaults[0]["baseUrl"])
 
@@ -232,14 +234,20 @@ class TerminalSettingsTests(unittest.TestCase):
             "editor.fontSize": 15,
         }
         with (
-            mock.patch.dict(os.environ, {"PREFIX": termux_prefix}),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "PREFIX": termux_prefix,
+                    "HOME": "/data/data/com.termux/files/home",
+                },
+            ),
             mock.patch.object(Path, "is_file", return_value=True),
             mock.patch("os.access", return_value=True),
         ):
             merged = copilot_models.terminal_enabled_settings(existing, termux_bash)
         profiles = merged["terminal.integrated.profiles.linux"]
-        safe_name = "Termux Safe Shell"
-        termux_sh = termux_prefix + "/bin/sh"
+        safe_name = "Termux Android Shell"
+        termux_sh = "/system/bin/sh"
         self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
         self.assertNotIn("Termux Bash", profiles)
         self.assertEqual(profiles[safe_name]["path"], termux_sh)
@@ -247,8 +255,8 @@ class TerminalSettingsTests(unittest.TestCase):
         self.assertEqual(profiles[safe_name]["env"]["PREFIX"], termux_prefix)
         self.assertEqual(profiles[safe_name]["env"]["TMPDIR"], termux_prefix + "/tmp")
         self.assertEqual(profiles[safe_name]["env"]["SHELL"], termux_sh)
-        self.assertIsNone(profiles[safe_name]["env"]["ENV"])
-        self.assertIsNone(profiles[safe_name]["env"]["BASH_ENV"])
+        self.assertEqual(profiles[safe_name]["env"]["ENV"], "")
+        self.assertEqual(profiles[safe_name]["env"]["BASH_ENV"], "")
         self.assertTrue(
             profiles[safe_name]["env"]["PATH"].startswith(termux_prefix + "/bin:")
         )
@@ -257,6 +265,12 @@ class TerminalSettingsTests(unittest.TestCase):
         )
         self.assertTrue(merged["terminal.integrated.inheritEnv"])
         self.assertFalse(merged["terminal.integrated.shellIntegration.enabled"])
+        self.assertEqual(
+            merged["terminal.integrated.cwd"], "/data/data/com.termux/files/home"
+        )
+        self.assertFalse(merged["terminal.integrated.enablePersistentSessions"])
+        self.assertEqual(merged["terminal.integrated.detectLocale"], "off")
+        self.assertFalse(merged["chat.tools.terminal.sandbox.enabled"])
         self.assertEqual(
             merged["terminal.integrated.env.linux"]["PREFIX"], termux_prefix
         )
@@ -299,6 +313,7 @@ class TerminalSettingsTests(unittest.TestCase):
                 "PREFIX": str(prefix),
                 "HOME": str(home),
                 "PATH": str(prefix / "bin") + os.pathsep + os.environ.get("PATH", ""),
+                "COPILOT_TERMINAL_SAFE_SHELL": str(safe_shell),
             }
             with mock.patch.dict(os.environ, environment, clear=True):
                 settings = copilot_models.terminal_enabled_settings({}, str(shell))
@@ -367,6 +382,39 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(merged[1]["models"][0]["id"], "model-a")
         self.assertEqual(summary, [("Example", 1, True)])
         self.assertEqual(merged_again, merged)
+
+    def test_alias_duplicate_uses_credentialed_group_and_removes_keyless_collision(self) -> None:
+        provider = copy.deepcopy(self.provider)
+        provider.update({"slug": "mistral", "name": "Mistral"})
+        provider["models"][0].update(
+            {"id": "mistral-small", "url": "https://api.mistral.ai/v1"}
+        )
+        provider["baseUrl"] = "https://api.mistral.ai/v1"
+        existing = [
+            {
+                "vendor": "customoai",
+                "name": "Mistral AI",
+                "apiKey": "${input:chat.lm.secret.working}",
+                "models": [
+                    {"id": "mistral-small", "url": "https://api.mistral.ai/v1"}
+                ],
+            },
+            {
+                "vendor": "customoai",
+                "name": "Mistral",
+                "models": [
+                    {"id": "mistral-small", "url": "https://api.mistral.ai/v1"}
+                ],
+            },
+        ]
+        with mock.patch.dict(os.environ, {}, clear=True):
+            merged, summary = copilot_models.merge_groups(
+                existing, [provider], False, preserve_existing_keys=True
+            )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["name"], "Mistral")
+        self.assertEqual(merged[0]["apiKey"], "${input:chat.lm.secret.working}")
+        self.assertEqual(summary, [("Mistral", 1, True)])
 
     def test_environment_key_replaces_existing_key(self) -> None:
         existing = [

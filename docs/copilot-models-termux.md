@@ -76,7 +76,7 @@ Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
 > **Credential storage:** the Bash helper briefly stages imported `apiKey` values
-> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.6 activates at
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.7 activates at
 > code-server startup, passes each key through VS Code's
 > `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
 > `${input:chat.lm.secret.…}` reference. This is required by current code-server:
@@ -127,10 +127,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.6** through
+The launcher also installs **Copilot Models Toolbox 0.1.7** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.6`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.7`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -150,7 +150,11 @@ remain available in the Command Palette:
   warns when an entry has no usable key. Explicit imported keys replace stale
   inherited environment keys. Plaintext staging values are then migrated into
   code-server Chat SecretStorage; Test All retains a separate protected Toolbox
-  copy so its HTTP check and Chat use the same credential. The picker starts in
+  copy so its HTTP check and Chat use the same credential. Version 0.1.7 also
+  canonicalizes known provider names and removes alias collisions such as a
+  credentialed `Mistral AI` group beside a keyless `Mistral` group; otherwise
+  Chat can select the colliding keyless model even while the direct test passes.
+  The picker starts in
   a recognized Android download directory when available.
 - **🔄 Sync GitHub** opens a full-update panel where `owner/repository`, branch,
   automatic-update checkbox, and check interval can be edited. **Update now**
@@ -167,7 +171,7 @@ key import requires Toolbox. To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.6$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.7$'
 ```
 
 `--enable-terminal` detects the Termux prefix and executable shells, then merges
@@ -189,17 +193,15 @@ Android/shared-storage value inherited by code-server. This lets terminals run
 the same installed Termux commands and access the same home/storage environment
 as a normal Termux session.
 
-The managed **Termux Safe Shell** profile directly launches
-`$PREFIX/bin/sh` with no `args` property. Version 0.1.6 replaces the earlier
-`bash --noprofile --norc` profile because some code-server/Android PTY builds
-terminated that otherwise valid argument list with exit code 1. `ENV` and
-`BASH_ENV` are removed, automatic VS Code shell-script injection stays off, and
-the old helper-managed `Termux Bash` profile is removed. This avoids startup
-files entirely while retaining Termux commands, paths, storage access, and a
-working Agent terminal fallback. Shell decorations and enhanced command
-detection are unavailable; Bash remains available from the safe prompt with
-`bash --noprofile --norc -i` (the arguments are then handled by `sh`, not the PTY
-profile launcher).
+The managed **Termux Android Shell** profile launches `/system/bin/sh` with no
+`args` while keeping Termux first on `PATH`. This is intentional: a standalone
+Termux `forkpty` diagnostic succeeds, while this Android code-server build exits
+with status 1 for both `$PREFIX/bin/bash` and `$PREFIX/bin/sh`, isolating the
+failure to its PTY launch path. Version 0.1.7 also starts in `HOME`, disables
+persistent-terminal revival and locale probing, uses empty `ENV`/`BASH_ENV`, and
+disables unsupported Agent terminal sandboxing and shell injection. Termux
+commands, storage, and Agent fallback remain available. Bash can still be
+started from the working Android-shell prompt with `bash --noprofile --norc -i`.
 
 Unrelated terminal profiles and all approval rules are preserved. The helper
 does not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so

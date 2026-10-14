@@ -110,6 +110,14 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
   assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
+  assert.deepEqual(
+    extension.__test.providerCredentialAliases('Mistral'),
+    ['Mistral', 'Mistral AI']
+  );
+  assert.deepEqual(
+    extension.__test.providerCredentialAliases('Mistral AI'),
+    ['Mistral AI', 'Mistral']
+  );
   const dashboard = extension.__test.testDashboardHtml(
     {},
     [

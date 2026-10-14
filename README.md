@@ -30,10 +30,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 `--enable-terminal` configures a safe Termux shell for code-server's integrated
 terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted command
-approval rule. The Termux profile launches the argument-free `$PREFIX/bin/sh`
-and uses private `$PREFIX/tmp`, avoiding both Bash-argument exit-code-1 and
-startup `Permission denied` failures. It also installs Copilot Models Toolbox
-**v0.1.6** with
+approval rule. The profile launches argument-free Android `/system/bin/sh` with
+Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
+for both Termux Bash and sh. It also installs Copilot Models Toolbox
+**v0.1.7** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, and **🔄 Sync GitHub** in the
 Copilot Chat title toolbar. At the end it prints
 the Termux commands needed to restart code-server. API keys are entered without

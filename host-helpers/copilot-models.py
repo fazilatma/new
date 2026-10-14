@@ -24,6 +24,7 @@ import sys
 import tempfile
 import termios
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -33,7 +34,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.6"
+HELPER_VERSION = "0.1.7"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -759,6 +760,12 @@ def overlay_providers(
         # the maintained OpenAI-compatible endpoint. Custom/unknown providers
         # keep their exported URLs unchanged.
         if slug in KNOWN_PROVIDER_SLUGS:
+            # Keep the maintained provider name stable across imports (for
+            # example `Mistral`, not alternating `Mistral AI`). Group identity
+            # in chatLanguageModels.json is vendor+name, so name drift otherwise
+            # leaves a second keyless group whose colliding model IDs can win in
+            # Chat even though Toolbox tests the credentialed group.
+            merged["name"] = old["name"]
             canonical_url = canonical_provider_url(
                 slug,
                 str(old.get("baseUrl") or ""),
@@ -980,23 +987,77 @@ def group_key(group: dict[str, Any]) -> tuple[str, str]:
     return str(group.get("vendor", "")), str(group.get("name", ""))
 
 
+def provider_name_identity(value: Any) -> str:
+    ignored = {"ai", "api", "cloud", "models", "provider", "official"}
+    return "-".join(
+        part for part in slugify(value).split("-") if part and part not in ignored
+    )
+
+
+def model_group_fingerprints(value: dict[str, Any]) -> set[tuple[str, str, str]]:
+    fingerprints: set[tuple[str, str, str]] = set()
+    models = value.get("models")
+    if not isinstance(models, list):
+        return fingerprints
+    for model in models:
+        if not isinstance(model, dict) or not model.get("id"):
+            continue
+        raw_url = str(model.get("url") or "").strip()
+        parsed = urllib.parse.urlsplit(raw_url)
+        operation_free_path = re.sub(
+            r"/(?:chat/completions|responses|models)$", "", parsed.path.rstrip("/"),
+            flags=re.IGNORECASE,
+        )
+        fingerprints.add(
+            (str(model["id"]), parsed.netloc.lower(), operation_free_path.lower())
+        )
+    return fingerprints
+
+
+def equivalent_existing_group(
+    provider: dict[str, Any], vendor: str, group: Any
+) -> bool:
+    if not isinstance(group, dict) or str(group.get("vendor")) != vendor:
+        return False
+    if str(group.get("name")) == str(provider.get("name")):
+        return True
+    if vendor != CUSTOM_VENDOR:
+        return False
+    if provider_name_identity(group.get("name")) != provider_name_identity(
+        provider.get("name")
+    ):
+        return False
+    return bool(
+        model_group_fingerprints(group)
+        & model_group_fingerprints({"models": provider.get("models", [])})
+    )
+
+
 def merge_groups(
     existing: list[Any],
     providers: list[dict[str, Any]],
     skip_missing_keys: bool,
     preserve_existing_keys: bool = False,
 ) -> tuple[list[Any], list[tuple[str, int, bool]]]:
-    output = copy.deepcopy(existing)
-    positions: dict[tuple[str, str], int] = {}
-    for index, item in enumerate(output):
-        if isinstance(item, dict):
-            positions[group_key(item)] = index
-
+    output: list[Any | None] = copy.deepcopy(existing)
     summary: list[tuple[str, int, bool]] = []
     for provider in providers:
         vendor = "ollama" if provider["slug"] == "ollama" else CUSTOM_VENDOR
-        key = (vendor, str(provider["name"]))
-        old = output[positions[key]] if key in positions and isinstance(output[positions[key]], dict) else None
+        candidate_indices = [
+            index
+            for index, item in enumerate(output)
+            if item is not None and equivalent_existing_group(provider, vendor, item)
+        ]
+        candidates = [output[index] for index in candidate_indices]
+        old = max(
+            (item for item in candidates if isinstance(item, dict)),
+            key=lambda item: (
+                bool(item.get("apiKey")),
+                str(item.get("name")) == str(provider["name"]),
+                len(item.get("models", [])) if isinstance(item.get("models"), list) else 0,
+            ),
+            default=None,
+        )
         if skip_missing_keys and provider["slug"] != "ollama" and not (
             provider_api_key(provider) or (old and old.get("apiKey"))
         ):
@@ -1007,14 +1068,17 @@ def merge_groups(
         )
         if group is None:
             continue
-        existed = key in positions
+        existed = bool(candidate_indices)
         if existed:
-            output[positions[key]] = group
+            target_index = min(candidate_indices)
+            output[target_index] = group
+            for duplicate_index in candidate_indices:
+                if duplicate_index != target_index:
+                    output[duplicate_index] = None
         else:
-            positions[key] = len(output)
             output.append(group)
         summary.append((provider["name"], len(group.get("models", [])), existed))
-    return output, summary
+    return [item for item in output if item is not None], summary
 
 
 def parse_code_server_config_path(key: str) -> Path | None:
@@ -1184,21 +1248,38 @@ def terminal_enabled_settings(
 ) -> dict[str, Any]:
     settings = copy.deepcopy(existing)
     is_termux = bool(os.environ.get("PREFIX")) and "/com.termux/" in shell_path
-    profile_name = "Termux Safe Shell" if is_termux else "Bash"
-    # Some code-server/Android PTY builds exit immediately when a terminal
-    # profile passes Bash long options, even though the same invocation works in
-    # the Termux app. Use Termux's POSIX `sh` directly with no profile arguments
-    # and remove startup-file variables. This avoids both that argv launch bug
-    # and inaccessible Bash startup files while preserving the Termux runtime.
+    profile_name = "Termux Android Shell" if is_termux else "Bash"
+    # The user's standalone forkpty test succeeds while code-server exits for
+    # both Termux Bash and Termux sh. This isolates the failure to code-server's
+    # Android PTY launch path, not the shell itself. Prefer Android's native
+    # /system/bin/sh as the PTY entry point and inject the complete Termux
+    # environment; Termux executables remain first on PATH. No argv is passed.
     profile: dict[str, Any] = {"path": shell_path}
     terminal_env: dict[str, Any] = {}
     if is_termux:
         prefix = os.environ.get("PREFIX") or str(Path(shell_path).parent.parent)
-        safe_shell = Path(prefix) / "bin" / "sh"
-        if not safe_shell.is_file() or not os.access(safe_shell, os.X_OK):
+        explicit_safe_shell = os.environ.get("COPILOT_TERMINAL_SAFE_SHELL")
+        safe_shell_candidates = [
+            Path(explicit_safe_shell).expanduser() if explicit_safe_shell else None,
+            Path("/system/bin/sh"),
+            Path(prefix) / "bin" / "sh",
+        ]
+        safe_shell = next(
+            (
+                candidate
+                for candidate in safe_shell_candidates
+                if candidate is not None
+                and candidate.is_file()
+                and os.access(candidate, os.X_OK)
+            ),
+            None,
+        )
+        if safe_shell is None:
             raise FileNotFoundError(
-                f"Termux safe shell is missing or not executable: {safe_shell}"
+                "no executable Android/Termux safe shell found"
             )
+        if str(safe_shell) != "/system/bin/sh":
+            profile_name = "Termux Safe Shell"
         profile["path"] = str(safe_shell)
         inherited_path = os.environ.get("PATH", "")
         path_parts = [str(Path(prefix) / "bin"), str(Path(prefix) / "bin" / "applets")]
@@ -1214,10 +1295,10 @@ def terminal_enabled_settings(
             "TMPDIR": str(Path(prefix) / "tmp"),
             "SHELL": str(safe_shell),
             "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
-            # VS Code terminal-profile env values may be null to remove an
-            # inherited variable. Neither shell should load an ENV/BASH_ENV file.
-            "ENV": None,
-            "BASH_ENV": None,
+            # Empty values avoid startup files without relying on null-valued
+            # profile variables, which older code-server PTY hosts mishandle.
+            "ENV": "",
+            "BASH_ENV": "",
         }
         for name in ("LANG", "LC_ALL", "TERMUX_VERSION"):
             value = os.environ.get(name)
@@ -1230,20 +1311,30 @@ def terminal_enabled_settings(
         profiles = {}
     profiles = copy.deepcopy(profiles)
     if is_termux:
-        previous = profiles.get("Termux Bash")
-        if (
-            isinstance(previous, dict)
-            and previous.get("path") == shell_path
-            and previous.get("args")
-            in (None, ["-l"], ["--noprofile", "--norc"])
-        ):
-            # Remove only the profile shape managed by older helper releases.
-            profiles.pop("Termux Bash", None)
+        managed_paths = {shell_path, str(Path(prefix) / "bin" / "sh"), "/system/bin/sh"}
+        for previous_name in ("Termux Bash", "Termux Safe Shell", "Termux Android Shell"):
+            previous = profiles.get(previous_name)
+            if (
+                isinstance(previous, dict)
+                and previous.get("path") in managed_paths
+                and previous.get("args")
+                in (None, ["-l"], ["--noprofile", "--norc"])
+            ):
+                # Remove only profile shapes managed by helper releases.
+                profiles.pop(previous_name, None)
     profiles[profile_name] = profile
     settings["terminal.integrated.profiles.linux"] = profiles
     settings["terminal.integrated.defaultProfile.linux"] = profile_name
     settings["terminal.integrated.automationProfile.linux"] = profile
     settings["terminal.integrated.inheritEnv"] = True
+    if is_termux:
+        # Avoid a workspace/shared-storage cwd and stale terminal revival before
+        # the shell starts; both happen inside the code-server PTY host.
+        settings["terminal.integrated.cwd"] = terminal_env["HOME"]
+        settings["terminal.integrated.enablePersistentSessions"] = False
+        settings["terminal.integrated.detectLocale"] = "off"
+        # VS Code's terminal sandbox is not supported by Android/Termux.
+        settings["chat.tools.terminal.sandbox.enabled"] = False
     # The terminal tool has a no-shell-integration execution strategy. On
     # Termux, reliability is more important than command-decoration support:
     # disabling injection avoids startup-time EACCES before a prompt appears.
@@ -2070,8 +2161,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.enable_terminal:
         print(
             "Terminal: integrated and agent profiles inherit the Termux PREFIX, "
-            "HOME, PATH, and private TMPDIR. Termux Safe Shell launches "
-            "without Bash argv/startup files or shell-script injection; trust "
+            "HOME, PATH, and private TMPDIR. Android sh launches with no argv, "
+            "a HOME cwd, no persisted PTY, and no terminal sandbox/injection; trust "
             "the workspace before using Agent mode."
         )
         print(
