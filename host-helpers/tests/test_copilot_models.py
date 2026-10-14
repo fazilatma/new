@@ -83,6 +83,23 @@ class NormalizeTests(unittest.TestCase):
                 self.assertEqual(os.environ["EXAMPLE_API_KEY"], "key with spaces")
                 self.assertEqual(os.environ["EMPTY"], "")
 
+    def test_secret_prompt_reads_controlling_tty_without_using_stdin(self) -> None:
+        characters = [bytes([value]) for value in b"secret-key\n"]
+        attributes = [0, 0, 0, copilot_models.termios.ECHO, 0, 0, []]
+        with (
+            mock.patch.object(copilot_models.os, "open", return_value=42),
+            mock.patch.object(copilot_models.os, "read", side_effect=characters),
+            mock.patch.object(copilot_models.os, "write") as write,
+            mock.patch.object(copilot_models.os, "close") as close,
+            mock.patch.object(copilot_models.termios, "tcgetattr", return_value=attributes),
+            mock.patch.object(copilot_models.termios, "tcsetattr") as set_attributes,
+        ):
+            value = copilot_models.read_from_tty("Key: ", secret=True)
+        self.assertEqual(value, "secret-key")
+        self.assertGreaterEqual(set_attributes.call_count, 2)
+        write.assert_any_call(42, b"Key: ")
+        close.assert_called_once_with(42)
+
 
 class MergeTests(unittest.TestCase):
     def setUp(self) -> None:

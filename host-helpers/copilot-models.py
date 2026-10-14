@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import getpass
 import json
 import os
 import re
@@ -22,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import termios
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -567,41 +567,62 @@ def provider_api_key(provider: dict[str, Any]) -> str | None:
     return source_key if isinstance(source_key, str) and source_key else None
 
 
-def prompt_for_values(providers: list[dict[str, Any]]) -> None:
-    tty_path = Path("/dev/tty")
-    if not sys.stdin.isatty() and not tty_path.exists():
-        raise RuntimeError("--prompt needs a terminal; pass keys through environment variables")
+def read_from_tty(prompt: str, *, secret: bool) -> str:
+    """Read one line from the controlling terminal, independently of stdin.
 
-    tty = None
-    if not sys.stdin.isatty():
-        tty = tty_path.open("r+", encoding="utf-8", buffering=1)
+    The installer is normally executed as ``curl ... | bash``. In that form
+    stdin is the script pipe, so input()/getpass() can read EOF or try to seek a
+    non-seekable stream on some Termux Python builds. Reading /dev/tty directly
+    keeps prompts interactive while leaving the pipe alone.
+    """
     try:
-        seen: set[str] = set()
-        for provider in providers:
-            required_names = env_names(provider.get("requiredEnv"))
-            key_names = env_names(provider.get("apiKeyEnv"))
-            names: list[tuple[str, bool]] = [(name, False) for name in required_names]
-            if key_names and not any(os.environ.get(name) for name in key_names):
-                # apiKeyEnv may list aliases. Ask once, using the preferred first name.
-                names.append((key_names[0], True))
-            for env_name, is_secret in names:
-                if env_name in seen or os.environ.get(env_name):
-                    continue
-                seen.add(env_name)
-                label = provider.get("name", provider["slug"])
-                prompt = f"{label} - {env_name} (Enter to skip): "
-                if is_secret:
-                    value = getpass.getpass(prompt, stream=tty)
-                elif tty:
-                    tty.write(prompt)
-                    value = tty.readline().rstrip("\r\n")
-                else:
-                    value = input(prompt)
-                if value:
-                    os.environ[env_name] = value
+        descriptor = os.open("/dev/tty", os.O_RDWR)
+    except OSError as error:
+        raise RuntimeError(
+            "--prompt needs a controlling terminal; use --env-file when running non-interactively"
+        ) from error
+
+    original_attributes: list[Any] | None = None
+    try:
+        os.write(descriptor, prompt.encode("utf-8", errors="replace"))
+        if secret:
+            original_attributes = termios.tcgetattr(descriptor)
+            hidden_attributes = original_attributes.copy()
+            hidden_attributes[3] &= ~termios.ECHO
+            termios.tcsetattr(descriptor, termios.TCSADRAIN, hidden_attributes)
+
+        data = bytearray()
+        while True:
+            chunk = os.read(descriptor, 1)
+            if not chunk or chunk in {b"\n", b"\r"}:
+                break
+            data.extend(chunk)
+        return data.decode("utf-8").strip()
     finally:
-        if tty:
-            tty.close()
+        if original_attributes is not None:
+            termios.tcsetattr(descriptor, termios.TCSADRAIN, original_attributes)
+            os.write(descriptor, b"\n")
+        os.close(descriptor)
+
+
+def prompt_for_values(providers: list[dict[str, Any]]) -> None:
+    seen: set[str] = set()
+    for provider in providers:
+        required_names = env_names(provider.get("requiredEnv"))
+        key_names = env_names(provider.get("apiKeyEnv"))
+        names: list[tuple[str, bool]] = [(name, False) for name in required_names]
+        if key_names and not any(os.environ.get(name) for name in key_names):
+            # apiKeyEnv may list aliases. Ask once, using the preferred first name.
+            names.append((key_names[0], True))
+        for env_name, is_secret in names:
+            if env_name in seen or os.environ.get(env_name):
+                continue
+            seen.add(env_name)
+            label = provider.get("name", provider["slug"])
+            prompt = f"{label} - {env_name} (Enter to skip): "
+            value = read_from_tty(prompt, secret=is_secret)
+            if value:
+                os.environ[env_name] = value
 
 
 def discovery_models(provider: dict[str, Any], timeout: int) -> list[dict[str, Any]]:
