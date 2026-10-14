@@ -123,22 +123,27 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.1** through
+The launcher also installs **Copilot Models Toolbox 0.1.2** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.1`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.2`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
 
-- **🧪 Test All AI Models** asks for confirmation, then sends one real,
-  non-streaming inference request with at most eight output tokens to every
-  configured model. This can consume provider quota or incur charges. The run
-  is cancellable and pass/fail details appear in the **Copilot Models Toolbox**
-  output channel.
+- **🧪 Test All AI Models** opens a live test-center panel with a searchable and
+  filterable model table, credential-presence fingerprints, progress counters,
+  HTTP status, latency, expandable errors, per-error and bulk copy buttons,
+  retry-failed, cancellation, and JSON report export. Starting a run sends one
+  real, non-streaming inference request with at most eight output tokens to each
+  model, so provider charges and rate limits can apply.
 - **📥 Import AI JSON** opens the Termux filesystem picker and imports providers,
-  models, and embedded API keys through the same protected helper. The picker
-  starts in a recognized Android download directory when available.
+  models, and embedded API keys through the same protected helper. It recognizes
+  nested/plural key records and top-level provider-key maps, rejects masked or
+  placeholder values, reports a non-secret key fingerprint and length, and
+  warns when an entry has no usable key. Explicit imported keys replace stale
+  inherited environment keys. The picker starts in a recognized Android
+  download directory when available.
 - **🔄 Sync GitHub** downloads and validates the latest maintained catalog from
   this agent branch, then merges it while preserving local API keys. It is a
   download-only operation: configuration and credentials are never uploaded to
@@ -149,7 +154,7 @@ To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.1$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.2$'
 ```
 
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values

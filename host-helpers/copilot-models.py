@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -32,7 +33,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.1"
+HELPER_VERSION = "0.1.2"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -91,7 +92,6 @@ NON_CHAT_HINTS = (
 )
 
 URL_FIELDS = ("baseUrl", "baseURL", "apiBase", "api_base", "endpoint", "url")
-KEY_FIELDS = ("apiKey", "api_key", "key", "token", "accessToken")
 
 
 def eprint(*values: object) -> None:
@@ -146,6 +146,162 @@ def nested_value(mapping: dict[str, Any], paths: Iterable[tuple[str, ...]]) -> A
         if current is not None:
             return current
     return None
+
+
+SOURCE_KEY_NAMES = {
+    "apikey",
+    "apikeys",
+    "key",
+    "keys",
+    "token",
+    "tokens",
+    "accesstoken",
+    "authtoken",
+    "bearertoken",
+    "secret",
+    "secretkey",
+    "credential",
+    "credentials",
+    "authorization",
+    "auth",
+}
+SOURCE_KEY_SKIP_CONTAINERS = {"models", "model", "capabilities", "limits", "metadata"}
+
+
+def normalized_field_name(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def usable_source_key(value: Any) -> tuple[str | None, str | None]:
+    if isinstance(value, str):
+        key = value.strip()
+        if key.lower().startswith("bearer "):
+            key = key[7:].strip()
+        lowered = key.lower()
+        if not key:
+            return None, "empty"
+        placeholder = (
+            re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", key)
+            or lowered in {"none", "null", "undefined", "replace-me", "changeme"}
+            or ("your" in lowered and "key" in lowered)
+            or re.fullmatch(r"[*.•xX_-]{4,}", key)
+            or (key.startswith("<") and key.endswith(">"))
+        )
+        if placeholder:
+            return None, "placeholder-or-masked"
+        return key, None
+    if isinstance(value, list):
+        issue: str | None = None
+        # Prefer entries explicitly marked active/enabled before trying the rest.
+        ordered = sorted(
+            value,
+            key=lambda item: not (
+                isinstance(item, dict)
+                and (as_bool(item.get("active")) or as_bool(item.get("enabled")))
+            ),
+        )
+        for item in ordered:
+            key, item_issue = usable_source_key(item)
+            if key:
+                return key, None
+            issue = issue or item_issue
+        return None, issue or "empty-list"
+    if isinstance(value, dict):
+        issue: str | None = None
+        for field, nested in value.items():
+            if normalized_field_name(field) not in SOURCE_KEY_NAMES:
+                continue
+            key, nested_issue = usable_source_key(nested)
+            if key:
+                return key, None
+            issue = issue or nested_issue
+        # Some exports store key records as {"value": "...", "active": true}.
+        for field in ("value", "raw", "secretValue"):
+            if field in value:
+                key, nested_issue = usable_source_key(value[field])
+                if key:
+                    return key, None
+                issue = issue or nested_issue
+        return None, issue or "key-object-has-no-value"
+    return None, "unsupported-key-type"
+
+
+def extract_source_api_key(raw: dict[str, Any]) -> tuple[str | None, str]:
+    queue: list[tuple[dict[str, Any], int]] = [(raw, 0)]
+    seen: set[int] = set()
+    issue: str | None = None
+    while queue:
+        current, depth = queue.pop(0)
+        if id(current) in seen or depth > 5:
+            continue
+        seen.add(id(current))
+        for field, value in current.items():
+            if normalized_field_name(field) not in SOURCE_KEY_NAMES:
+                continue
+            key, value_issue = usable_source_key(value)
+            if key:
+                return key, "imported"
+            issue = issue or value_issue
+        for field, value in current.items():
+            if normalized_field_name(field) in SOURCE_KEY_SKIP_CONTAINERS:
+                continue
+            if isinstance(value, dict):
+                queue.append((value, depth + 1))
+            elif isinstance(value, list):
+                queue.extend(
+                    (item, depth + 1) for item in value if isinstance(item, dict)
+                )
+    return None, issue or "not-found"
+
+
+def source_credential_map(root: Any) -> dict[str, tuple[str | None, str]]:
+    if not isinstance(root, dict):
+        return {}
+    container_names = {
+        "apikeys",
+        "providerkeys",
+        "providercredentials",
+        "credentials",
+        "secrets",
+        "tokens",
+    }
+    containers: list[Any] = []
+    for field, value in root.items():
+        if normalized_field_name(field) in container_names:
+            containers.append(value)
+    for parent in ("settings", "config", "configuration", "data"):
+        value = root.get(parent)
+        if not isinstance(value, dict):
+            continue
+        for field, nested in value.items():
+            if normalized_field_name(field) in container_names:
+                containers.append(nested)
+
+    output: dict[str, tuple[str | None, str]] = {}
+    for container in containers:
+        if isinstance(container, dict):
+            for identity, value in container.items():
+                slug = slugify(identity)
+                if not slug or normalized_field_name(identity) in SOURCE_KEY_NAMES:
+                    continue
+                source_key, key_status = usable_source_key(value)
+                output[slug] = (
+                    source_key,
+                    "imported" if source_key else (key_status or "not-found"),
+                )
+        elif isinstance(container, list):
+            for record in container:
+                if not isinstance(record, dict):
+                    continue
+                identity = first_value(
+                    record,
+                    ("provider", "providerId", "provider_id", "slug", "id", "name"),
+                )
+                slug = slugify(identity)
+                if not slug:
+                    continue
+                output[slug] = extract_source_api_key(record)
+    return output
 
 
 def has_non_chat_endpoint(model: dict[str, Any]) -> bool:
@@ -493,18 +649,13 @@ def normalize_provider(
             provider[field] = copy.deepcopy(raw[field])
     provider["enabled"] = raw.get("enabled", True)
     if import_source_keys:
-        source_key = first_value(raw, KEY_FIELDS)
-        if not source_key:
-            source_key = nested_value(
-                raw,
-                tuple(
-                    (parent, field)
-                    for parent in ("config", "configuration", "settings", "credentials")
-                    for field in KEY_FIELDS
-                ),
-            )
-        if isinstance(source_key, str) and source_key:
+        source_key, key_status = extract_source_api_key(raw)
+        provider["sourceKeyStatus"] = key_status
+        if source_key:
             provider["sourceApiKey"] = source_key
+            provider["sourceKeyFingerprint"] = hashlib.sha256(
+                source_key.encode("utf-8")
+            ).hexdigest()[:10]
     return provider
 
 
@@ -515,6 +666,7 @@ def normalize_catalog(
     import_source_keys: bool = False,
 ) -> list[dict[str, Any]]:
     providers: list[dict[str, Any]] = []
+    shared_credentials = source_credential_map(root) if import_source_keys else {}
     for raw in provider_objects(root):
         provider = normalize_provider(
             raw,
@@ -522,6 +674,28 @@ def normalize_catalog(
             import_source_keys=import_source_keys,
         )
         if provider:
+            if import_source_keys and not provider.get("sourceApiKey"):
+                identities = {
+                    provider["slug"],
+                    slugify(provider.get("name")),
+                    slugify(
+                        first_value(
+                            raw,
+                            ("slug", "id", "providerId", "provider_id", "name"),
+                        )
+                    ),
+                }
+                for identity in identities:
+                    if identity not in shared_credentials:
+                        continue
+                    source_key, key_status = shared_credentials[identity]
+                    provider["sourceKeyStatus"] = key_status
+                    if source_key:
+                        provider["sourceApiKey"] = source_key
+                        provider["sourceKeyFingerprint"] = hashlib.sha256(
+                            source_key.encode("utf-8")
+                        ).hexdigest()[:10]
+                    break
             providers.append(provider)
     return providers
 
@@ -621,12 +795,17 @@ def env_names(value: Any) -> list[str]:
 
 
 def provider_api_key(provider: dict[str, Any]) -> str | None:
+    # An explicit --import-source-keys operation must replace stale exported or
+    # inherited environment credentials. Environment values remain the normal
+    # source when no usable key was embedded in the imported provider entry.
+    source_key = provider.get("sourceApiKey")
+    if isinstance(source_key, str) and source_key:
+        return source_key
     for name in env_names(provider.get("apiKeyEnv")):
         value = os.environ.get(name)
         if value:
             return value
-    source_key = provider.get("sourceApiKey")
-    return source_key if isinstance(source_key, str) and source_key else None
+    return None
 
 
 def read_from_tty(prompt: str, *, secret: bool) -> str:
@@ -1644,6 +1823,24 @@ def main(argv: list[str] | None = None) -> int:
         if not imported:
             raise ValueError("--source contains no recognizable provider/model entries")
         providers = overlay_providers(providers, imported)
+        if args.import_source_keys:
+            usable = [provider for provider in imported if provider.get("sourceApiKey")]
+            print(
+                f"Credential import: {len(usable)}/{len(imported)} provider "
+                "entries contained a usable embedded key."
+            )
+            for provider in imported:
+                key = provider.get("sourceApiKey")
+                if isinstance(key, str) and key:
+                    print(
+                        f"  key     {provider['name']}: imported "
+                        f"(length {len(key)}, sha256 {provider['sourceKeyFingerprint']})"
+                    )
+                else:
+                    print(
+                        f"  no-key  {provider['name']}: "
+                        f"{provider.get('sourceKeyStatus', 'not-found')}"
+                    )
 
     selected = provider_selection(args.providers)
     providers = filter_providers(providers, selected, args.respect_disabled)

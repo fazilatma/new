@@ -204,12 +204,13 @@ function validateCatalog(value) {
   return { providerCount: value.providers.length, modelCount };
 }
 
-function compactError(text, apiKey = '') {
+function compactError(text, apiKey = '', maxLength = 8000) {
   let output = String(text || '').replace(/[\r\n\t]+/g, ' ').trim();
   if (apiKey) {
     output = output.split(apiKey).join('[REDACTED]');
   }
-  return output.length > 300 ? output.slice(0, 297) + '...' : output;
+  if (output.length <= maxLength) return output;
+  return output.slice(0, Math.max(0, maxLength - 3)) + '...';
 }
 
 module.exports = {

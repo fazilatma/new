@@ -71,6 +71,55 @@ class NormalizeTests(unittest.TestCase):
         with_key = copilot_models.normalize_catalog(source, import_source_keys=True)
         self.assertNotIn("sourceApiKey", without_key[0])
         self.assertEqual(with_key[0]["sourceApiKey"], "secret")
+        self.assertEqual(with_key[0]["sourceKeyStatus"], "imported")
+
+    def test_nested_plural_and_active_source_keys_are_imported(self) -> None:
+        key, status = copilot_models.extract_source_api_key(
+            {
+                "credentials": {
+                    "apiKeys": [
+                        {"value": "old-key", "active": False},
+                        {"value": "Bearer active-key", "active": True},
+                    ]
+                },
+                "models": [{"token": "must-not-be-used"}],
+            }
+        )
+        self.assertEqual(key, "active-key")
+        self.assertEqual(status, "imported")
+
+    def test_masked_or_environment_source_keys_are_rejected(self) -> None:
+        for value in ("${OPENROUTER_API_KEY}", "********", "<your-api-key>"):
+            key, status = copilot_models.extract_source_api_key({"api_key": value})
+            self.assertIsNone(key)
+            self.assertEqual(status, "placeholder-or-masked")
+
+    def test_top_level_provider_key_map_is_joined_to_provider(self) -> None:
+        source = {
+            "providers": [
+                {
+                    "id": "openrouter",
+                    "url": "https://openrouter.ai/api/v1",
+                    "models": ["openai/gpt-test"],
+                }
+            ],
+            "apiKeys": {"open-router": {"value": "mapped-key", "active": True}},
+        }
+        providers = copilot_models.normalize_catalog(source, import_source_keys=True)
+        self.assertEqual(providers[0]["sourceApiKey"], "mapped-key")
+        self.assertEqual(providers[0]["sourceKeyStatus"], "imported")
+
+    def test_explicit_source_key_wins_over_stale_environment_key(self) -> None:
+        provider = {
+            "apiKeyEnv": ["EXAMPLE_API_KEY"],
+            "sourceApiKey": "fresh-source-key",
+        }
+        with mock.patch.dict(
+            os.environ, {"EXAMPLE_API_KEY": "stale-environment-key"}, clear=True
+        ):
+            self.assertEqual(
+                copilot_models.provider_api_key(provider), "fresh-source-key"
+            )
 
     def test_actual_model_id_wins_over_internal_database_id(self) -> None:
         model = copilot_models.normalize_model(
@@ -501,7 +550,7 @@ elif "--locate-extension" in args and root:
             toolbox_target = (
                 user_data
                 / "extensions"
-                / "fazilatma.copilot-models-toolbox-0.1.1"
+                / f"fazilatma.copilot-models-toolbox-{copilot_models.HELPER_VERSION}"
             )
             self.assertTrue((toolbox_target / "package.json").is_file())
             self.assertTrue((toolbox_target / "extension.js").is_file())

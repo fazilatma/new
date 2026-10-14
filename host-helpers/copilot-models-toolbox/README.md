@@ -3,13 +3,14 @@
 Companion extension installed by `install-copilot-models-termux.sh`. It adds
 three commands to the GitHub Copilot Chat view title toolbar:
 
-- **🧪 Test All AI Models** — after a cost/quota confirmation, sends one real,
-  non-streaming inference request to every configured Custom OpenAI model and
-  every model discovered from local Ollama. Results are written to the
-  **Copilot Models Toolbox** output channel. Tests are cancellable.
+- **🧪 Test All AI Models** — opens a live test-center panel with a searchable
+  table, status counters, credential fingerprints, HTTP/latency columns,
+  expandable and copyable error details, cancellation, retry-failed, bulk copy,
+  and JSON export. It sends real, non-streaming inference requests only after
+  the user presses Start in the cost/quota warning panel.
 - **📥 Import AI JSON** — opens a remote file picker, imports providers, models,
-  and embedded keys through the bundled Python helper, and retains the helper's
-  backup and mode-`0600` protections.
+  and embedded keys through the bundled Python helper, reports non-secret key
+  diagnostics, and retains the helper's backup and mode-`0600` protections.
 - **🔄 Sync GitHub** — downloads and validates the maintained catalog from the
   configured GitHub URL, then merges it while preserving local API keys. It
   never uploads model configuration or credentials.
@@ -20,6 +21,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.1**.
+The helper, launcher, and companion extension currently ship as **0.1.2**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

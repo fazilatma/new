@@ -57,6 +57,24 @@ test('extension activates and registers all toolbar commands', (t) => {
     'copilotModels.importJson',
     'copilotModels.syncGitHub',
   ]);
+  const dashboard = extension.__test.testDashboardHtml(
+    {},
+    [
+      {
+        testKey: 'model-0',
+        provider: 'Example',
+        id: 'chat-a',
+        kind: 'openai',
+        apiKey: 'must-never-appear-in-html',
+      },
+    ],
+    ['warning'],
+    { concurrency: 2, timeoutMs: 30000 }
+  );
+  assert.match(dashboard, /AI Model Test Center/);
+  assert.match(dashboard, /Copy all errors/);
+  assert.match(dashboard, /Present · 25 chars/);
+  assert.doesNotMatch(dashboard, /must-never-appear-in-html/);
 });
 
 test('chatCompletionsUrl preserves provider paths and appends operation', () => {
@@ -132,6 +150,7 @@ test('catalog validation rejects malformed downloads', () => {
   assert.throws(() => core.validateCatalog({}), /providers array/);
 });
 
-test('compactError redacts API keys', () => {
+test('compactError redacts API keys and preserves copyable details', () => {
   assert.equal(core.compactError('bad secret-key\nrequest', 'secret-key'), 'bad [REDACTED] request');
+  assert.equal(core.compactError('abcdefghij', '', 7), 'abcd...');
 });
