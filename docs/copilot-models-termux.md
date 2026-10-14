@@ -130,6 +130,12 @@ into the active profile's `settings.json`:
 - `chat.tools.terminal.terminalProfile.linux`
 - `chat.tools.terminal.enableAutoApprove`
 
+The Bash profile deliberately has no `-l` argument. A forced Termux login shell
+runs `$PREFIX/etc/profile` and user login files; if any startup command fails, code-server
+immediately reports that `bash '-l'` terminated with exit code 1. Rerunning the
+current helper replaces the older login-shell profile with a normal interactive
+Bash profile.
+
 Existing terminal profiles and approval rules are preserved. The helper does
 not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so commands
 outside VS Code's guarded defaults still require approval. Existing JSONC

@@ -170,35 +170,37 @@ class TerminalSettingsTests(unittest.TestCase):
         self.assertEqual(settings["nested"], {"enabled": True})
 
     def test_terminal_settings_preserve_profiles_and_do_not_approve_all_commands(self) -> None:
+        termux_prefix = "/data/data/com.termux/files/usr"
+        termux_bash = termux_prefix + "/bin/bash"
         existing = {
             "terminal.integrated.profiles.linux": {
-                "Fish": {"path": "/usr/bin/fish"}
+                "Fish": {"path": "/usr/bin/fish"},
+                "Termux Bash": {"path": termux_bash, "args": ["-l"]},
             },
             "chat.tools.terminal.autoApprove": {"rm": False},
             "editor.fontSize": 15,
         }
-        termux_prefix = "/data/data/com.termux/files/usr"
-        termux_bash = termux_prefix + "/bin/bash"
         with mock.patch.dict(os.environ, {"PREFIX": termux_prefix}):
             merged = copilot_models.terminal_enabled_settings(existing, termux_bash)
         profiles = merged["terminal.integrated.profiles.linux"]
         self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
-        self.assertEqual(
-            profiles["Termux Bash"], {"path": termux_bash, "args": ["-l"]}
-        )
+        self.assertEqual(profiles["Termux Bash"], {"path": termux_bash})
         self.assertEqual(
             merged["terminal.integrated.defaultProfile.linux"], "Termux Bash"
         )
         self.assertEqual(
             merged["chat.tools.terminal.terminalProfile.linux"],
-            {"path": termux_bash, "args": ["-l"]},
+            {"path": termux_bash},
         )
         self.assertTrue(merged["chat.tools.terminal.enableAutoApprove"])
         self.assertEqual(merged["chat.tools.terminal.autoApprove"], {"rm": False})
         self.assertNotIn(".*", merged["chat.tools.terminal.autoApprove"])
         self.assertEqual(
             existing["terminal.integrated.profiles.linux"],
-            {"Fish": {"path": "/usr/bin/fish"}},
+            {
+                "Fish": {"path": "/usr/bin/fish"},
+                "Termux Bash": {"path": termux_bash, "args": ["-l"]},
+            },
         )
 
 

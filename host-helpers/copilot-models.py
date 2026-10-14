@@ -985,7 +985,11 @@ def terminal_enabled_settings(
     settings = copy.deepcopy(existing)
     is_termux = bool(os.environ.get("PREFIX")) and "/com.termux/" in shell_path
     profile_name = "Termux Bash" if is_termux else "Bash"
-    profile = {"path": shell_path, "args": ["-l"]}
+    # Do not force a login shell. On Termux, `bash -l` executes user and system
+    # login startup files; one failing command there makes code-server report
+    # that the terminal exited with status 1. A normal interactive Bash still
+    # loads the expected interactive environment without that fragile path.
+    profile = {"path": shell_path}
 
     profiles = settings.get("terminal.integrated.profiles.linux")
     if not isinstance(profiles, dict):
