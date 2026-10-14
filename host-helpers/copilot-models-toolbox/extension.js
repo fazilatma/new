@@ -352,28 +352,119 @@ async function currentCatalogPath(context) {
     : runtime.bundledCatalog;
 }
 
-function pythonCommand() {
-  const candidates = [
-    process.env.COPILOT_MODELS_PYTHON,
-    process.env.PREFIX && path.join(process.env.PREFIX, 'bin', 'python'),
-    'python3',
-    'python',
+function executableFile(filename) {
+  if (!filename || !path.isAbsolute(filename)) return false;
+  try {
+    fs.accessSync(filename, fs.constants.X_OK);
+    return fs.statSync(filename).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function termuxRuntimeEnvironment(baseEnvironment = process.env) {
+  const home = baseEnvironment.HOME || os.homedir();
+  const executablePrefix = (() => {
+    const marker = `${path.sep}usr${path.sep}`;
+    const index = process.execPath.indexOf(marker);
+    return index >= 0 ? process.execPath.slice(0, index + marker.length - 1) : '';
+  })();
+  const prefixes = [
+    baseEnvironment.PREFIX,
+    baseEnvironment.TERMUX_PREFIX,
+    home && path.resolve(home, '..', 'usr'),
+    executablePrefix,
+    '/data/data/com.termux/files/usr',
+    '/data/user/0/com.termux/files/usr',
   ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (!path.isAbsolute(candidate) || fs.existsSync(candidate)) {
-      return candidate;
+  const prefix =
+    prefixes.find((candidate) => {
+      try {
+        return fs.statSync(path.join(candidate, 'bin')).isDirectory();
+      } catch {
+        return false;
+      }
+    }) || baseEnvironment.PREFIX || '';
+  const pathParts = [
+    prefix && path.join(prefix, 'bin'),
+    prefix && path.join(prefix, 'bin', 'applets'),
+    baseEnvironment.PATH,
+    '/system/bin',
+    '/system/xbin',
+    '/usr/bin',
+    '/bin',
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(path.delimiter))
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+  const environment = {
+    ...baseEnvironment,
+    HOME: home,
+    PATH: pathParts.join(path.delimiter),
+    ENV: '',
+    BASH_ENV: '',
+  };
+  const isTermuxPrefix = prefix.includes(`${path.sep}com.termux${path.sep}`);
+  if (baseEnvironment.PREFIX || isTermuxPrefix) environment.PREFIX = prefix;
+  if (isTermuxPrefix) {
+    environment.TERMUX_PREFIX = prefix;
+    environment.TMPDIR = path.join(prefix, 'tmp');
+    try {
+      fs.mkdirSync(environment.TMPDIR, { recursive: true, mode: 0o700 });
+    } catch {
+      // The child will report a precise filesystem error if TMPDIR is unusable.
     }
   }
-  return 'python3';
+  return environment;
+}
+
+function resolveExecutable(names, environment, explicitCandidates = []) {
+  const requested = Array.isArray(names) ? names : [names];
+  const candidates = [...explicitCandidates.filter(Boolean)];
+  for (const name of requested) {
+    if (path.isAbsolute(name)) candidates.push(name);
+  }
+  for (const directory of String(environment.PATH || '').split(path.delimiter)) {
+    if (!directory) continue;
+    for (const name of requested) {
+      if (!path.isAbsolute(name)) candidates.push(path.join(directory, name));
+    }
+  }
+  const executable = candidates.find(executableFile);
+  if (executable) return executable;
+  throw new Error(
+    `Cannot find executable ${requested.join(' or ')}. ` +
+      `Checked the Termux prefix and PATH=${environment.PATH || '(empty)'}`
+  );
+}
+
+function pythonCommand(environment = termuxRuntimeEnvironment()) {
+  return resolveExecutable(
+    ['python3', 'python'],
+    environment,
+    [
+      environment.COPILOT_MODELS_PYTHON,
+      environment.PREFIX && path.join(environment.PREFIX, 'bin', 'python3'),
+      environment.PREFIX && path.join(environment.PREFIX, 'bin', 'python'),
+    ]
+  );
 }
 
 function runProcess(command, args, token, environment = process.env) {
   return new Promise((resolve, reject) => {
     output.appendLine(`$ ${command} ${args.map((value) => JSON.stringify(value)).join(' ')}`);
-    const child = cp.spawn(command, args, {
-      env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    let settled = false;
+    let child;
+    try {
+      child = cp.spawn(command, args, {
+        env: environment,
+        cwd: environment.HOME || os.homedir(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      reject(new Error(`Unable to start ${command}: ${error.message || error}`));
+      return;
+    }
     let stdout = '';
     let stderr = '';
     const cancellation = token
@@ -386,10 +477,20 @@ function runProcess(command, args, token, environment = process.env) {
       stderr += chunk.toString('utf8');
     });
     child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
       if (cancellation) cancellation.dispose();
-      reject(error);
+      const code = error && error.code ? ` ${error.code}` : '';
+      reject(
+        new Error(
+          `Unable to start ${command}:${code} ${error.message || error}. ` +
+            'The Toolbox rebuilt the Termux environment before spawning it.'
+        )
+      );
     });
     child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
       if (cancellation) cancellation.dispose();
       if (stdout.trim()) output.appendLine(stdout.trimEnd());
       if (stderr.trim()) output.appendLine(stderr.trimEnd());
@@ -434,7 +535,8 @@ async function runHelper(context, extraArgs, token) {
   if (copilot) {
     args.push('--extension-dir', copilot.extensionPath);
   }
-  return runProcess(pythonCommand(), args, token);
+  const environment = termuxRuntimeEnvironment();
+  return runProcess(pythonCommand(environment), args, token, environment);
 }
 
 async function copyRestartCommand(message) {
@@ -622,38 +724,82 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
     report(`Backup created: ${snapshot}`);
     const remote = await remoteToolboxVersion(repository, branch);
     report(`Remote toolbox v${remote.version}; installed v${extensionPackage.version}.`);
-    report('Downloading the branch installer…');
-    const installerResponse = await core.httpRequest(
-      `${remote.rawBase}/install-copilot-models-termux.sh`,
-      { timeoutMs: 30000, maxBytes: 2 * 1024 * 1024 }
-    );
-    if (installerResponse.status < 200 || installerResponse.status >= 300) {
-      throw new Error(`GitHub returned HTTP ${installerResponse.status} for installer`);
-    }
+    report('Downloading the branch runtime without spawning Bash or curl…');
     const updateDirectory = path.join(context.globalStorageUri.fsPath, 'github-update');
-    await fsp.mkdir(updateDirectory, { recursive: true, mode: 0o700 });
-    const installer = path.join(updateDirectory, 'install-copilot-models-termux.sh');
-    await fsp.writeFile(installer, installerResponse.text, { encoding: 'utf8', mode: 0o700 });
-    await fsp.chmod(installer, 0o700);
-    const paths = configuredPaths(context);
-    const bash =
-      (process.env.PREFIX && path.join(process.env.PREFIX, 'bin', 'bash')) || 'bash';
-    report('Installing helper, catalog, terminal settings, and toolbar through code-server…');
-    await runProcess(
-      bash,
-      [
-        installer,
-        '--no-discover',
-        '--enable-terminal',
-        '--preserve-existing-keys',
-        '--config-file',
-        paths.configFile,
-        '--settings-file',
-        paths.settingsFile,
-      ],
-      undefined,
-      { ...process.env, COPILOT_MODELS_RAW_BASE: remote.rawBase }
+    const toolboxDirectory = path.join(updateDirectory, 'copilot-models-toolbox');
+    await fsp.rm(updateDirectory, { recursive: true, force: true });
+    await fsp.mkdir(toolboxDirectory, { recursive: true, mode: 0o700 });
+    const assets = [
+      ['copilot-models.py', path.join(updateDirectory, 'copilot-models.py'), 4 * 1024 * 1024],
+      ['copilot-models.catalog.json', path.join(updateDirectory, 'copilot-models.catalog.json'), 16 * 1024 * 1024],
+      ['copilot-models-toolbox/package.json', path.join(toolboxDirectory, 'package.json'), 1024 * 1024],
+      ['copilot-models-toolbox/extension.js', path.join(toolboxDirectory, 'extension.js'), 4 * 1024 * 1024],
+      ['copilot-models-toolbox/core.js', path.join(toolboxDirectory, 'core.js'), 2 * 1024 * 1024],
+    ];
+    const downloaded = await Promise.all(
+      assets.map(async ([relative, destination, maxBytes]) => {
+        const response = await core.httpRequest(`${remote.rawBase}/${relative}`, {
+          timeoutMs: 60000,
+          maxBytes,
+        });
+        if (response.status < 200 || response.status >= 300) {
+          throw new Error(`GitHub returned HTTP ${response.status} for ${relative}`);
+        }
+        return { relative, destination, text: response.text };
+      })
     );
+    const packageDownload = downloaded.find((asset) => asset.relative.endsWith('/package.json'));
+    const catalogDownload = downloaded.find((asset) => asset.relative.endsWith('.catalog.json'));
+    const packageValue = JSON.parse(packageDownload.text);
+    if (
+      packageValue.publisher !== 'fazilatma' ||
+      packageValue.name !== 'copilot-models-toolbox' ||
+      String(packageValue.version) !== remote.version
+    ) {
+      throw new Error('Downloaded Toolbox package identity/version does not match the checked branch');
+    }
+    core.validateCatalog(JSON.parse(catalogDownload.text));
+    const downloadedText = Object.fromEntries(
+      downloaded.map((asset) => [asset.relative, asset.text])
+    );
+    if (!downloadedText['copilot-models.py'].includes(`HELPER_VERSION = "${remote.version}"`)) {
+      throw new Error('Downloaded helper version does not match the checked Toolbox version');
+    }
+    if (
+      !downloadedText['copilot-models-toolbox/extension.js'].includes('function activate(') ||
+      !downloadedText['copilot-models-toolbox/core.js'].includes('module.exports')
+    ) {
+      throw new Error('Downloaded Toolbox JavaScript is incomplete');
+    }
+    for (const asset of downloaded) {
+      await fsp.writeFile(asset.destination, asset.text, { encoding: 'utf8', mode: 0o600 });
+    }
+    const helper = path.join(updateDirectory, 'copilot-models.py');
+    await fsp.chmod(helper, 0o700);
+    const paths = configuredPaths(context);
+    const args = [
+      helper,
+      '--catalog',
+      path.join(updateDirectory, 'copilot-models.catalog.json'),
+      '--toolbox-dir',
+      toolboxDirectory,
+      '--no-discover',
+      '--enable-terminal',
+      '--preserve-existing-keys',
+      '--config-file',
+      paths.configFile,
+      '--settings-file',
+      paths.settingsFile,
+    ];
+    const copilot = vscode.extensions.getExtension('github.copilot-chat');
+    if (copilot) args.push('--extension-dir', copilot.extensionPath);
+    const environment = termuxRuntimeEnvironment({
+      ...process.env,
+      COPILOT_MODELS_RAW_BASE: remote.rawBase,
+    });
+    const python = pythonCommand(environment);
+    report(`Installing through ${python}; no shell process is required…`);
+    await runProcess(python, args, undefined, environment);
     await fsp.rm(runtimePaths(context).syncedCatalog, { force: true });
     lastInstalledVersion = remote.version;
     report(`Full branch update to v${remote.version} completed. A code-server restart is required.`, 'success');
@@ -1486,6 +1632,9 @@ module.exports = {
     migratePlaintextCredentials,
     providerCredentialAliases,
     testDashboardHtml,
+    termuxRuntimeEnvironment,
+    resolveExecutable,
+    pythonCommand,
     toolboxCredentialKey,
   },
 };

@@ -15,8 +15,11 @@ four commands to the GitHub Copilot Chat view title toolbar:
   remain in the model configuration; a protected Toolbox copy powers Test All.
 - **🔄 Sync GitHub** — opens a full-update panel for repository, branch, manual
   update, automatic-update opt-in, and interval. It installs the branch helper,
-  catalog, terminal settings, and toolbox while preserving local API keys. It
-  never uploads model configuration or credentials.
+  catalog, terminal settings, and toolbox while preserving local API keys. The
+  extension downloads these assets itself and launches Python through a rebuilt
+  absolute Termux environment, so automatic updates do not depend on spawning
+  `bash` or `curl` from code-server. It never uploads model configuration or
+  credentials.
 - **🛠 Repair code-server** — diagnoses or repairs the managed model, credential,
   Copilot manifest, Android terminal, and memory-bounded TypeScript settings;
   restarts tsserver after an `EPIPE`; can reinstall from the configured GitHub
@@ -32,6 +35,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.8**.
+The helper, launcher, and companion extension currently ship as **0.1.9**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

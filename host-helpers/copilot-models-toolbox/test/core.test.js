@@ -33,6 +33,13 @@ test('package contributes the model and self-repair Copilot Chat toolbar command
   assert.equal(settings['copilotModels.autoUpdate'].default, false);
 });
 
+test('GitHub updater downloads runtime directly instead of spawning Bash', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+  assert.match(source, /Downloading the branch runtime without spawning Bash or curl/);
+  assert.doesNotMatch(source, /const bash\s*=/);
+  assert.doesNotMatch(source, /runProcess\(\s*bash/);
+});
+
 test('extension activates, registers commands, and secures plaintext Chat keys', async (t) => {
   const registered = [];
   const storedSecrets = new Map();
@@ -115,6 +122,26 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
   assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
+  const termuxFiles = path.join(temporary, 'com.termux', 'files');
+  const termuxHome = path.join(termuxFiles, 'home');
+  const termuxPrefix = path.join(termuxFiles, 'usr');
+  const fakePython = path.join(termuxPrefix, 'bin', 'python3');
+  fs.mkdirSync(path.dirname(fakePython), { recursive: true });
+  fs.mkdirSync(termuxHome, { recursive: true });
+  fs.writeFileSync(fakePython, '#!/system/bin/sh\n');
+  fs.chmodSync(fakePython, 0o700);
+  const runtimeEnvironment = extension.__test.termuxRuntimeEnvironment({
+    HOME: termuxHome,
+    PATH: '/system/bin',
+  });
+  assert.equal(runtimeEnvironment.PREFIX, termuxPrefix);
+  assert.equal(runtimeEnvironment.TMPDIR, path.join(termuxPrefix, 'tmp'));
+  assert.ok(runtimeEnvironment.PATH.startsWith(path.join(termuxPrefix, 'bin')));
+  assert.equal(extension.__test.pythonCommand(runtimeEnvironment), fakePython);
+  assert.equal(
+    extension.__test.resolveExecutable('python3', runtimeEnvironment),
+    fakePython
+  );
   const snapshot = await extension.__test.createRepairSnapshot(context, 'unit test');
   const snapshotManifest = JSON.parse(
     fs.readFileSync(path.join(snapshot, 'manifest.json'), 'utf8')
