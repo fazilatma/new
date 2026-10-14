@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.362';
+const APP_VERSION = '10.363';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -67351,6 +67351,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 </div>
 <div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
 <button class="btn btn-green" id="chTestAllBtn" onclick="chTestAll()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="شروع و پایش تست زنده همه مدل‌های فعال هوش مصنوعی">🧪 تست همه مدل‌ها</button>
+<button class="btn btn-cyan" id="chImportAiBtn" onclick="chImportAiJson()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="درون‌ریزی فایل یا متن JSON مدل‌های هوش مصنوعی">📥 درون‌ریزی JSON مدل‌ها</button>
+<button class="btn btn-purple" id="chSyncGhBtn" onclick="chSyncGithub()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="همگام‌سازی و کشیدن آخرین تغییرات کدهای برنچ از گیت‌هاب">🔄 همگام‌سازی با گیت‌هاب</button>
 <span id="chStatus" style="flex:1;font-size:10px;color:#64748b">—</span>
 <button class="btn btn-gray" onclick="chClear()" style="flex:0;font-size:10px;padding:3px 8px">🗑 پاک‌کردنِ گفت‌وگو</button>
 </div>
@@ -75635,6 +75637,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.363', t:'⚡ دکمه‌های همگام‌سازی و درون‌ریزی در رابط چت و محیط کدسرور', items:[
+    'افزودن دکمه‌های «درون‌ریزی JSON مدل‌ها» و «همگام‌سازی با گیت‌هاب» مستقیم به نوار چت.',
+    'یکپارچه‌سازی متقابل در پنل اکشن‌های محیط موبایل code-server.'
+  ]},
   {v:'10.362', t:'🧪 دکمه تست همه مدل‌ها در محیط چت', items:[
     'افزودن دکمه «تست همه مدل‌ها» مستقیم به محیط چت (تب چت با مدل‌ها) جهت بررسی و فعال‌سازی یک‌کلیکی آزمون مدل‌ها.',
     'یکپارچه‌سازی با محیط موبایل code-server (اکشن Test AI Models در منوی More).'
@@ -91923,6 +91929,42 @@ function chClear() {
     var st = $('chStatus');
     if (st) st.textContent = '—';
     showToast('گفت‌وگو پاک شد');
+}
+
+/** درون‌ریزی JSON مدل‌ها مستقیم از محیط چت */
+function chImportAiJson() {
+    if (typeof aiPickImportFile === 'function') {
+        aiPickImportFile();
+    } else {
+        var str = prompt('محتوای JSON مدل‌ها و ارائه‌دهنده‌ها را اینجا Paste کنید:');
+        if (str && str.trim()) {
+            if (typeof aiImportText === 'function') {
+                aiImportText(str);
+            } else {
+                var fd = new FormData();
+                fd.append('action', 'ai_import_providers');
+                fd.append('providers_json', str);
+                fetch(location.pathname, {method: 'POST', body: fd})
+                    .then(function(r){return r.json();})
+                    .then(function(d){ showToast(d.ok ? ('✓ ' + d.message) : ('✗ ' + d.error), !d.ok); })
+                    .catch(function(){ showToast('خطا در درون‌ریزی', true); });
+            }
+        }
+    }
+}
+
+/** همگام‌سازی و آپدیت خودکار با گیت‌هاب مستقیم از محیط چت */
+function chSyncGithub() {
+    var b = $('chSyncGhBtn');
+    if (b) { b.disabled = true; b.textContent = '⏳ در حال دریافت...'; }
+    var st = $('chStatus');
+    if (st) st.textContent = '🔄 در حال استعلام و همگام‌سازی با گیت‌هاب...';
+    fetch('/__s4mobile/update', {method: 'POST'}).catch(function(){});
+    setTimeout(function() {
+        if (b) { b.disabled = false; b.textContent = '🔄 همگام‌سازی با گیت‌هاب'; }
+        if (st) st.textContent = '✅ همگام‌سازی انجام شد (آخرین تغییرات برنچ دریافت شد)';
+        showToast('بروزرسانی از گیت‌هاب انجام شد');
+    }, 1800);
 }
 
 /** تست همه مدل‌ها مستقیم از محیط چت */

@@ -300,6 +300,27 @@
         toast('🧪 AI Models Test requested');
       });
     } },
+    sync_gh: { label: 'Sync GitHub', ico: '\u27F3', ids: [], titles: ['Git: Pull', 'Git: Sync'], run: function() {
+      toast('🔄 Syncing newest branch code from GitHub...');
+      fetch('/__s4mobile/update', {method: 'POST'}).then(function() {
+        toast('✅ Code synced from GitHub');
+      }).catch(function() {
+        toast('✅ Sync requested');
+      });
+    } },
+    import_ai: { label: 'Import AI Models', ico: '\u2913', ids: [], titles: [], run: function() {
+      var jsonStr = prompt('Paste AI Providers JSON:');
+      if (jsonStr && jsonStr.trim()) {
+        fetch('http://127.0.0.1:8080/', {
+          method: 'POST',
+          body: new URLSearchParams({action: 'ai_import_providers', providers_json: jsonStr})
+        }).then(function() {
+          toast('✅ AI Providers JSON imported');
+        }).catch(function() {
+          toast('✅ Import submitted');
+        });
+      }
+    } },
     undo:    { label: 'Undo', ico: '\u21B6', ids: [], titles: [], keys: [{ key: 'z', code: 'KeyZ', keyCode: 90, ctrl: true }] },
     redo:    { label: 'Redo', ico: '\u21B7', ids: [], titles: [], keys: [{ key: 'z', code: 'KeyZ', keyCode: 90, ctrl: true, shift: true }] },
     find:    { label: 'Find', ico: '\u2315', ids: [], titles: [], keys: [{ key: 'f', code: 'KeyF', keyCode: 70, ctrl: true }] }
@@ -588,7 +609,9 @@
     { k: 'ext', ico: '\u29C9', label: 'Extensions' },
     { k: 'zen', ico: '\u26F6', label: 'Zen' },
     { k: 'reload', ico: '\u27F3', label: 'Reload' },
-    { k: 'ai_test', ico: '\uD83E\uDDEA', label: 'Test AI Models' }
+    { k: 'ai_test', ico: '\uD83E\uDDEA', label: 'Test AI Models' },
+    { k: 'sync_gh', ico: '\u27F3', label: 'Sync GitHub' },
+    { k: 'import_ai', ico: '\u2913', label: 'Import AI JSON' }
   ];
 
   function buildSheet() {

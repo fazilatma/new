@@ -373,6 +373,17 @@ function probeUpstream(cb) {
 
 function handleS4(req, res, url) {
   const route = url.pathname.replace(/\/+$/, '') || BASE;
+  if (route === BASE + '/update') {
+    const { spawn } = require('child_process');
+    try {
+      const p = spawn('bash', [path.join(process.env.HOME || '', 's4-remote.sh'), '--update-now'], { detached: true, stdio: 'ignore' });
+      p.unref();
+      json(res, 200, { ok: true, status: 'updating' });
+    } catch(e) {
+      json(res, 500, { ok: false, error: String(e.message) });
+    }
+    return;
+  }
   if (route === BASE + '/report') {
     const chunks = [];
     let size = 0;
