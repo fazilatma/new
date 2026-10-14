@@ -39,12 +39,28 @@
 #     profile, and then runs a real node-pty self-test that prints PTY_OK or
 #     the exact error text.
 #
+#  Terminal "exited with code 1" fix (deploy/s4-termfix.sh, run by --termfix)
+#     A different failure looks like this popup:
+#        The terminal process ".../bin/bash" terminated with exit code: 1.
+#     There the shell itself died, so the spawn-helper is not the problem.
+#     The usual causes are a startup file that ends the shell (~/.bashrc,
+#     ~/.profile, $PREFIX/etc/profile.d/*), a stripped environment (no
+#     PREFIX/PATH/TMPDIR because code-server was started from a boot script
+#     or a service) and a terminal cwd that no longer exists (a workspace on
+#     ~/storage/shared after the storage permission was revoked).
+#     s4-termfix.sh tests each layer, names the culprit, repairs it and adds
+#     a "Termux bash (safe)" profile that ignores every startup file, so you
+#     always get a terminal back.  It is fetched and run automatically at the
+#     end of --fix-terminal; use --no-termfix to skip it.
+#
 #  Usage:
 #     bash s4-remote.sh                     # ssh + mobile code-server
 #     bash s4-remote.sh --code              # code-server only
 #     bash s4-remote.sh --code --zoom 1.6   # forced zoom 160%
 #     bash s4-remote.sh --code --open       # also open it in the browser
 #     bash s4-remote.sh --fix-terminal      # only repair the terminal
+#     bash s4-remote.sh --termfix           # why does the terminal exit 1?
+#     bash s4-remote.sh --termfix --safe-profile  # ignore all rc files
 #     bash s4-remote.sh --selftest          # only check + report evidence
 #     bash s4-remote.sh --status            # what is running right now
 #     bash s4-remote.sh --stop              # stop proxy/code-server/sshd
@@ -56,7 +72,7 @@
 # =====================================================================
 set -u
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 MARKER="s4-cs-mobile-v2"
 SSH_PORT="${SSH_PORT:-8022}"
 CODE_PORT="${CODE_PORT:-8081}"        # what you open in the browser
@@ -71,12 +87,14 @@ API="https://api.github.com"
 PROXY_JS="s4-csproxy.js"
 SHELL_CSS="s4-csmobile.css"
 SHELL_JS="s4-csmobile.js"
-HELP_LAST_LINE=56
+HELP_LAST_LINE=72
 
 ZOOM="$(cat "$BASE/zoom" 2>/dev/null || echo 1.3)"
 USE_PROXY=1; OPEN_BROWSER=0; CUSTOM_CSS=""
 DO_SSH=0; DO_CODE=0; STOP=0; STATUS=0; SET_PW=0; BIND_LAN=0; NO_SETTINGS=0
 FIX_TERMINAL=0; SELFTEST=0; NO_SHELL=0
+TERMFIX=0; NO_TERMFIX=0; TERMFIX_SAFE=0
+TERMFIX_SH="s4-termfix.sh"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'WARN  %s\n' "$*" >&2; }
@@ -92,6 +110,9 @@ while [ $# -gt 0 ]; do
     --status)        STATUS=1; shift ;;
     --set-password)  SET_PW=1; shift ;;
     --fix-terminal)  FIX_TERMINAL=1; shift ;;
+    --termfix)       TERMFIX=1; FIX_TERMINAL=1; shift ;;
+    --no-termfix)    NO_TERMFIX=1; shift ;;
+    --safe-profile)  TERMFIX_SAFE=1; TERMFIX=1; FIX_TERMINAL=1; shift ;;
     --selftest)      SELFTEST=1; shift ;;
     --ssh-port)      SSH_PORT="${2:-8022}"; shift 2 ;;
     --code-port)     CODE_PORT="${2:-8081}"; shift 2 ;;
@@ -107,6 +128,7 @@ while [ $# -gt 0 ]; do
     --bind-lan)      BIND_LAN=1; CODE_HOST="0.0.0.0"; shift ;;
     --no-settings)   NO_SETTINGS=1; shift ;;
     -h|--help)       sed -n "2,${HELP_LAST_LINE}p" "$0"; exit 0 ;;
+    -V|--version)    echo "s4-remote $VERSION"; exit 0 ;;
     *)               die "unknown flag: $1  (try --help)" ;;
   esac
 done
@@ -305,6 +327,34 @@ EOF2
     warn "node is missing: pkg install node (the proxy and this self-test need it)"
   fi
   say "  done. If it still fails, the PTY_FAIL line above is the exact cause."
+
+  # 5) the shell itself dying (exit code 1) needs a different investigation:
+  #    startup files, environment, cwd.  s4-termfix.sh does that.
+  if [ "$NO_TERMFIX" = 0 ]; then run_termfix; fi
+}
+
+run_termfix() {
+  local dst local_src extra
+  dst="$BASE/$TERMFIX_SH"
+  local_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$TERMFIX_SH"
+  if [ ! -f "$dst" ]; then
+    if [ -f "$local_src" ]; then
+      cp -f "$local_src" "$dst" 2>/dev/null || true
+    else
+      fetch_file "$TERMFIX_SH"
+    fi
+  fi
+  if [ ! -f "$dst" ]; then
+    warn "$TERMFIX_SH is not available: skipping the deep terminal diagnosis"
+    warn "(download it from $RAWBASE/deploy/$TERMFIX_SH and run: bash $TERMFIX_SH)"
+    return 0
+  fi
+  extra=""
+  [ "$TERMFIX_SAFE" = 1 ] && extra="--safe-profile"
+  say ""
+  say "== Deep terminal diagnosis ($TERMFIX_SH) =="
+  # shellcheck disable=SC2086
+  bash "$dst" $extra 2>&1 | sed 's/^/  /'
 }
 
 # ======================================================= settings.json merge
@@ -318,16 +368,21 @@ apply_settings() {
     return 0
   fi
   [ -f "$SETTINGS" ] && cp -p "$SETTINGS" "$SETTINGS.bak.$(date +%s)" 2>/dev/null
-  SETTINGS="$SETTINGS" S4_BASH="$pfx/bin/bash" python3 - <<'PY' 2>&1 | sed 's/^/  /'
+  SETTINGS="$SETTINGS" S4_BASH="$pfx/bin/bash" S4_PFX="$pfx" S4_HOME="$HOME" python3 - <<'PY' 2>&1 | sed 's/^/  /'
 import json, os
 p = os.environ["SETTINGS"]
 bash = os.environ.get("S4_BASH", "/data/data/com.termux/files/usr/bin/bash")
+pfx = os.environ.get("S4_PFX", "/data/data/com.termux/files/usr")
+home = os.environ.get("S4_HOME") or os.path.expanduser("~")
 try:
     cur = json.load(open(p, encoding="utf-8")) if os.path.isfile(p) else {}
     if not isinstance(cur, dict):
         cur = {}
 except Exception:
     cur = {}
+cwd = cur.get("terminal.integrated.cwd") or home
+if not os.path.isdir(cwd):
+    cwd = home
 mobile = {
     # --- readable on a phone -------------------------------------------
     "editor.fontSize": 18,
@@ -354,14 +409,39 @@ mobile = {
     # keeps #workbench.view.* clickable (use "hidden" for maximum room)
     "workbench.activityBar.location": "top",
     # --- terminal: never guess a shell that does not exist on Android ----
-    "terminal.integrated.defaultProfile.linux": "Termux bash",
     "terminal.integrated.profiles.linux": {
         "Termux bash": {"path": bash, "args": ["-l"], "icon": "terminal-bash"},
+        # a shell that reads no startup file at all: it opens even when
+        # ~/.bashrc or $PREFIX/etc/profile.d/* kills every other shell
+        "Termux bash (safe)": {"path": bash, "args": ["--norc", "--noprofile", "-i"],
+                               "icon": "terminal-bash"},
         "Termux sh": {"path": os.path.join(os.path.dirname(bash), "sh"), "args": ["-l"]}
     },
-    "terminal.integrated.automationProfile.linux": {"path": bash, "args": ["-l"]},
+    # tasks/automation must not depend on the user's rc files either
+    "terminal.integrated.automationProfile.linux":
+        {"path": bash, "args": ["--norc", "--noprofile", "-l"]},
+    # a cwd that always exists: a workspace on revoked shared storage is a
+    # dangling symlink and the shell then exits 1 before printing anything
+    "terminal.integrated.cwd": cwd,
+    # rebuild the environment inside the terminal even when code-server was
+    # started with a stripped one (boot script, runit service, bare nohup)
+    "terminal.integrated.env.linux": {
+        "PREFIX": pfx,
+        "HOME": home,
+        "TMPDIR": os.path.join(pfx, "tmp"),
+        "SHELL": bash,
+        "TERM": "xterm-256color",
+        "PATH": "%s/bin:%s/bin/applets:/system/bin:/system/xbin:/vendor/bin" % (pfx, pfx),
+        "LD_LIBRARY_PATH": os.path.join(pfx, "lib"),
+    },
     "terminal.integrated.copyOnSelection": True,
 }
+# keep a default profile that s4-termfix.sh already chose (it switches to the
+# safe one when it finds a startup file that kills the shell)
+default_profile = cur.get("terminal.integrated.defaultProfile.linux")
+if default_profile not in mobile["terminal.integrated.profiles.linux"]:
+    default_profile = "Termux bash"
+mobile["terminal.integrated.defaultProfile.linux"] = default_profile
 changed = sorted(k for k, v in mobile.items() if cur.get(k) != v)
 cur.update(mobile)
 json.dump(cur, open(p, "w", encoding="utf-8"), indent=2, ensure_ascii=False)

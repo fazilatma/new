@@ -121,6 +121,12 @@ a_grep "supervisor loop splits its locals" "$TARGET" 'name="${pair%%:*}"; script
 a_grep "tick.sh guards interval 0" "$TARGET" 'disabled (tick-interval 0)'
 a_grep "update.sh guards interval 0" "$TARGET" 'disabled (update-interval 0)'
 a_grep "unreachable server does NOT roll back" "$TARGET" 'RESULT=updated-unverified'
+a_grep "a failure leaves a greppable marker" "$TARGET" 'S4_INSTALL=fail reason='
+a_grep "every line is written to an install log" "$TARGET" 'logs/install.log'
+a_grep "an unknown flag dies with the marker" "$TARGET" 'die "unknown flag'
+BOGUS="$(bash "$TARGET" --bogus-flag 2>&1)"; BRC=$?
+a_eq "an unknown flag exits 1" "$BRC" "1"
+a_has "an unknown flag prints S4_INSTALL=fail" "$BOGUS" 'S4_INSTALL=fail reason=unknown flag' 
 a_grep "PHP_CLI_SERVER_WORKERS is exported" "$TARGET" 'PHP_CLI_SERVER_WORKERS="$S4_WORKERS"'
 a_grep "opcache file_cache_only mode exists" "$TARGET" 'opcache.file_cache_only = 1'
 a_grep "opcache validate_timestamps stays on" "$TARGET" 'opcache.validate_timestamps = 1'
@@ -128,7 +134,7 @@ a_grep "mirrors instead of editing shared storage" "$TARGET" 'never edited'
 HELP_OUT="$(bash "$TARGET" --help 2>&1)"
 a_lacks "--help prints only the header" "$HELP_OUT" 'set -u'
 a_has "--help documents --update-now" "$HELP_OUT" '--update-now'
-a_eq "--version" "$(bash "$TARGET" --version 2>&1)" "s4-install 1.0.0"
+a_eq "--version" "$(bash "$TARGET" --version 2>&1)" "s4-install 1.0.1"
 
 # --------------------------------------------------- 2. version compare
 sec "2  version compare (a downgrade must never install)"
@@ -208,6 +214,14 @@ a_grep "tick.sh drives ?ops_tick=1" "$FH/.s4-install/tick.sh" 'ops_tick=1'
 a_grep "tick.sh drives ?cron_run=1" "$FH/.s4-install/tick.sh" 'cron_run=1'
 a_grep "tick.sh drives the AI test" "$FH/.s4-install/tick.sh" 'ai_test_status=1&drive=1'
 a_grep "update.sh calls the installer" "$FH/.s4-install/update.sh" '--update-only'
+a_file "the run was written to the install log" "$FH/.s4-install/logs/install.log"
+a_grep "the log holds the success marker" "$FH/.s4-install/logs/install.log" 'S4_INSTALL=done'
+a_grep "the log holds a session header" "$FH/.s4-install/logs/install.log" '==== s4-install 1.0.1'
+a_lacks "no prompt when stdin is not a terminal" "$OUT" 'Proceed?'
+LT="$(run_inst --log-tail 20 2>&1)"; LRC=$?
+a_rc "--log-tail exits 0" "$LRC"
+a_has "--log-tail reports done" "$LT" 'S4_LOGTAIL=done'
+a_has "--log-tail shows the last outcome" "$LT" 'S4_INSTALL=done'
 
 # ------------------------------------------------------- 5. lifecycle
 sec "5  lifecycle: status / logs / stop"

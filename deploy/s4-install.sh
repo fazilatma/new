@@ -58,6 +58,7 @@
 #    bash s4-install.sh --doctor        # the app's own health endpoints
 #    bash s4-install.sh --update-now    # one verified update, then exit
 #    bash s4-install.sh --logs          # tail the service logs
+#    bash s4-install.sh --log-tail 200  # tail the installer's own log
 #    bash s4-install.sh --stop|--start|--restart
 #    bash s4-install.sh --uninstall
 #
@@ -87,11 +88,21 @@
 #
 #  Everything this script prints is in English.  It is idempotent: run it
 #  again any time to repair, re-configure or update.
+#
+#  A run always ends with exactly one greppable line, so a failure can be
+#  identified even when the terminal that started it is already gone:
+#      S4_INSTALL=done version=... mode=... port=...     (success)
+#      S4_INSTALL=fail reason=...                        (it gave up)
+#  Every line is also appended to ~/.s4-install/logs/install.log, which
+#  --log-tail prints.  If a terminal popup said
+#      The terminal process ".../bash" terminated with exit code: 1
+#  then either this installer died (reason in the log) or the shell itself
+#  died - deploy/s4-termfix.sh tells those apart and repairs the second.
 # =====================================================================
 set -u
 
-VERSION="1.0.0"
-HELP_LAST_LINE=90
+VERSION="1.0.1"
+HELP_LAST_LINE=101
 
 # ------------------------------------------------------------- defaults
 PFX="${PREFIX:-/data/data/com.termux/files/usr}"
@@ -115,13 +126,69 @@ MIN_SIZE=1000000
 
 DO_SERVICES=1; DO_PHP_INI=1; DO_PACKAGES=1; DO_BOOT=1
 DRY=0; ASSUME_YES=0; QUIET=0
-ACT=""            # install|status|doctor|update-now|logs|stop|start|restart|uninstall|verify
-UPDATE_ONLY=0; SELF_UPDATE=0; VERIFY_FILE=""
+ACT=""            # install|status|doctor|update-now|logs|logtail|stop|start|restart|uninstall|verify
+UPDATE_ONLY=0; SELF_UPDATE=0; VERIFY_FILE=""; LOG_TAIL_N=60
 
-say()  { [ "$QUIET" = 1 ] && return 0; printf '%s\n' "$*"; }
-info() { printf '[s4-install] %s\n' "$*"; }
-warn() { printf '[s4-install] WARN  %s\n' "$*" >&2; }
-die()  { printf '[s4-install] ERROR %s\n' "$*" >&2; exit 1; }
+# Everything printed is also appended to ~/.s4-install/logs/install.log so a
+# run that ends in "exit code 1" inside a one-shot terminal leaves its reason
+# behind.  --dry-run logs nothing (it must not create files).
+S4_LOG_FILE="$TOOL_DIR/logs/install.log"
+LOG_TO_FILE=1
+[ "$DRY" = 1 ] && LOG_TO_FILE=0
+
+logline() {
+  [ "$LOG_TO_FILE" = 1 ] || return 0
+  mkdir -p "$TOOL_DIR/logs" 2>/dev/null || return 0
+  # keep the log from growing without bound on a phone with little free space
+  if [ -f "$S4_LOG_FILE" ]; then
+    local sz
+    sz="$(wc -c < "$S4_LOG_FILE" 2>/dev/null || echo 0)"
+    if [ "${sz:-0}" -gt 524288 ]; then
+      tail -n 400 "$S4_LOG_FILE" > "$S4_LOG_FILE.trim" 2>/dev/null \
+        && mv -f "$S4_LOG_FILE.trim" "$S4_LOG_FILE" 2>/dev/null
+    fi
+  fi
+  printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '-')" "$*" \
+    >> "$S4_LOG_FILE" 2>/dev/null || true
+}
+
+log_header() {
+  [ "$LOG_TO_FILE" = 1 ] || return 0
+  mkdir -p "$TOOL_DIR/logs" 2>/dev/null || return 0
+  printf '%s ==== s4-install %s act=%s argv=%s ====\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '-')" "$VERSION" "$ACT" "$*" \
+    >> "$S4_LOG_FILE" 2>/dev/null || true
+}
+
+log_tail() {
+  local n="${LOG_TAIL_N:-60}" keep="$LOG_TO_FILE"
+  LOG_TO_FILE=0        # do not append the log to itself
+  hr; say "== Installer log =="
+  say "  file: $S4_LOG_FILE"
+  if [ -f "$S4_LOG_FILE" ]; then
+    tail -n "$n" "$S4_LOG_FILE" 2>/dev/null | sed 's/^/  /'
+    say ""
+    say "  last recorded outcomes:"
+    grep -h -E 'S4_INSTALL=(done|fail)' "$S4_LOG_FILE" 2>/dev/null | tail -5 | sed 's/^/    /'
+    say "  (no line above means no run ever finished)"
+  else
+    say "  no log yet - the installer has not written one on this device"
+  fi
+  say "  S4_LOGTAIL=done file=$S4_LOG_FILE lines=$n"
+  LOG_TO_FILE="$keep"
+}
+
+say()  { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; logline "$*"; }
+info() { printf '[s4-install] %s\n' "$*"; logline "INFO $*"; }
+warn() { printf '[s4-install] WARN  %s\n' "$*" >&2; logline "WARN $*"; }
+# one greppable line, then exit 1: "S4_INSTALL=fail reason=..."
+die()  {
+  printf '[s4-install] ERROR %s\n' "$*" >&2
+  printf 'S4_INSTALL=fail reason=%s\n' "$*" >&2
+  logline "ERROR $*"
+  logline "S4_INSTALL=fail reason=$*"
+  exit 1
+}
 hr()   { say "------------------------------------------------------------"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -152,6 +219,9 @@ while [ $# -gt 0 ]; do
     --restart)          ACT="restart"; shift ;;
     --uninstall)        ACT="uninstall"; shift ;;
     --verify-file)      VERIFY_FILE="${2:-}"; ACT="verify"; shift 2 ;;
+    --log-tail)         ACT="logtail"
+                        case "${2:-}" in ''|-*) LOG_TAIL_N=60 ;; *) LOG_TAIL_N="$2"; shift ;; esac
+                        shift ;;
     --self-update)      SELF_UPDATE=1; shift ;;
     --port)             PORT="${2:-8080}"; shift 2 ;;
     --bind)             BIND="${2:-127.0.0.1}"; shift 2 ;;
@@ -1072,6 +1142,7 @@ fi
 
 case "$ACT" in
   status)   status_stack; exit 0 ;;
+  logtail)  log_tail; exit 0 ;;
   doctor)   health; exit 0 ;;
   logs)     show_logs; exit 0 ;;
   stop)     stop_stack; exit 0 ;;
@@ -1087,6 +1158,7 @@ case "$ACT" in
 esac
 
 # ------------------------------------------------------------ full install
+log_header "$@"
 say "s4-install $VERSION - scraper4 on Termux, VPS-like, with auto-update"
 say "target: $INSTALL_DIR  port: $PORT  workers: $WORKERS  channel: $REPO@$CHANNEL"
 [ "$DRY" = 1 ] && say "*** DRY RUN: nothing will be changed ***"

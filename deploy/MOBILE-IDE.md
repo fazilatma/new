@@ -130,6 +130,28 @@ Then it runs a **real node-pty self-test** (`~/.s4-remote/pty-selftest.js`) that
 does exactly what the VS Code terminal does, and prints `PTY_OK` or the precise
 `PTY_FAIL ...` reason (`posix_spawnp failed`, `EACCES`, missing module, ...).
 
+## Terminal process terminated with exit code: 1
+
+When VS Code pops up:
+```
+The terminal process "/data/data/com.termux/files/usr/bin/bash" terminated with exit code: 1.
+```
+the shell itself was spawned successfully, but exited immediately. The causes are:
+
+1. **A startup file (`~/.bashrc`, `~/.bash_profile`, `~/.profile`, `$PREFIX/etc/profile.d/*`) exits or fails under `set -e`**.
+2. **A stripped environment** (`PREFIX`, `PATH`, `TMPDIR` missing if code-server was started from a service/boot script).
+3. **An invalid terminal cwd** (e.g. shared storage path when permissions expired).
+
+Run the automated diagnostic and repair tool:
+```bash
+curl -fsSL -o ~/s4-termfix.sh https://raw.githubusercontent.com/fazilatma/new/arena/f5a628bb-new/deploy/s4-termfix.sh && bash ~/s4-termfix.sh
+```
+Or via `s4-remote.sh`:
+```bash
+bash ~/s4-remote.sh --termfix
+```
+It tests every startup layer, isolates the failing file, injects a fallback "safe profile" (`bash --norc --noprofile -i`), restores `PREFIX`/`TMPDIR`/`PATH` into `terminal.integrated.env.linux`, and ensures `cwd` falls back to `$HOME`.
+
 ## Self-test
 
 ```sh
