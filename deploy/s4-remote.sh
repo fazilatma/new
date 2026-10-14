@@ -61,6 +61,8 @@
 #     bash s4-remote.sh --fix-terminal      # only repair the terminal
 #     bash s4-remote.sh --termfix           # why does the terminal exit 1?
 #     bash s4-remote.sh --termfix --safe-profile  # ignore all rc files
+#     bash s4-remote.sh --update-now        # pull newest deploy files from GitHub
+#     bash s4-remote.sh --auto-update       # start daemon to auto-pull on push
 #     bash s4-remote.sh --selftest          # only check + report evidence
 #     bash s4-remote.sh --status            # what is running right now
 #     bash s4-remote.sh --stop              # stop proxy/code-server/sshd
@@ -72,7 +74,7 @@
 # =====================================================================
 set -u
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 MARKER="s4-cs-mobile-v2"
 SSH_PORT="${SSH_PORT:-8022}"
 CODE_PORT="${CODE_PORT:-8081}"        # what you open in the browser
@@ -87,7 +89,7 @@ API="https://api.github.com"
 PROXY_JS="s4-csproxy.js"
 SHELL_CSS="s4-csmobile.css"
 SHELL_JS="s4-csmobile.js"
-HELP_LAST_LINE=72
+HELP_LAST_LINE=74
 
 ZOOM="$(cat "$BASE/zoom" 2>/dev/null || echo 1.3)"
 USE_PROXY=1; OPEN_BROWSER=0; CUSTOM_CSS=""
@@ -95,6 +97,7 @@ DO_SSH=0; DO_CODE=0; STOP=0; STATUS=0; SET_PW=0; BIND_LAN=0; NO_SETTINGS=0
 FIX_TERMINAL=0; SELFTEST=0; NO_SHELL=0
 TERMFIX=0; NO_TERMFIX=0; TERMFIX_SAFE=0
 TERMFIX_SH="s4-termfix.sh"
+UPDATE_NOW=0; AUTO_UPDATE=0
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'WARN  %s\n' "$*" >&2; }
@@ -113,6 +116,8 @@ while [ $# -gt 0 ]; do
     --termfix)       TERMFIX=1; FIX_TERMINAL=1; shift ;;
     --no-termfix)    NO_TERMFIX=1; shift ;;
     --safe-profile)  TERMFIX_SAFE=1; TERMFIX=1; FIX_TERMINAL=1; shift ;;
+    --update-now)    UPDATE_NOW=1; shift ;;
+    --auto-update)   AUTO_UPDATE=1; shift ;;
     --selftest)      SELFTEST=1; shift ;;
     --ssh-port)      SSH_PORT="${2:-8022}"; shift 2 ;;
     --code-port)     CODE_PORT="${2:-8081}"; shift 2 ;;
@@ -132,6 +137,16 @@ while [ $# -gt 0 ]; do
     *)               die "unknown flag: $1  (try --help)" ;;
   esac
 done
+
+if [ "$UPDATE_NOW" = 1 ]; then
+  update_deploy_files
+  exit 0
+fi
+
+if [ "$AUTO_UPDATE" = 1 ]; then
+  start_auto_update_daemon
+  exit 0
+fi
 
 if [ "$SELFTEST" = 0 ] && [ "$FIX_TERMINAL" = 0 ] && [ "$DO_SSH" = 0 ] && [ "$DO_CODE" = 0 ]; then
   DO_SSH=1; DO_CODE=1
@@ -448,6 +463,47 @@ json.dump(cur, open(p, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 print("settings:", p)
 print("changed:", ", ".join(changed) or "none")
 PY
+}
+
+
+# ======================================================== auto-update logic
+update_deploy_files() {
+  say "Checking and updating mobile code-server deploy files from $REPO@$SRC_BRANCH..."
+  local updated=0
+  for f in "$PROXY_JS" "$SHELL_CSS" "$SHELL_JS" "$TERMFIX_SH" "s4-remote.sh"; do
+    local dst="$BASE/$f"
+    if [ "$f" = "s4-remote.sh" ]; then dst="$0"; fi
+    if fetch_file "$f"; then
+      updated=$((updated + 1))
+    fi
+  done
+  say "Update complete ($updated files checked). Restarting services if running..."
+  if pgrep -f "$PROXY_JS" >/dev/null 2>&1; then
+    local ppid; ppid="$(cat "$BASE/csproxy.pid" 2>/dev/null || true)"
+    [ -n "$ppid" ] && kill "$ppid" 2>/dev/null || true
+    sleep 1
+    ( cd "$BASE" && S4_CS_HOST="$CODE_HOST" S4_CS_PORT="$CODE_PORT" S4_CS_UPSTREAM="$CS_UPSTREAM"         S4_CS_ZOOM="$ZOOM" S4_CS_STATE="$BASE"         S4_CS_CSS="${CUSTOM_CSS:+$BASE/mobile.css}" S4_CS_NO_SHELL="$([ "$NO_SHELL" = 1 ] && echo 1 || echo '')"         nohup node "$BASE/$PROXY_JS" > "$BASE/csproxy.log" 2>&1 &
+      echo $! > "$BASE/csproxy.pid" ) 2>/dev/null
+    say "  reloaded mobile proxy with newest files"
+  fi
+}
+
+start_auto_update_daemon() {
+  say "Starting background auto-update listener (syncs with branch $SRC_BRANCH)..."
+  local up_pidf="$BASE/autoupdate.pid"
+  if [ -f "$up_pidf" ] && kill -0 "$(cat "$up_pidf" 2>/dev/null)" 2>/dev/null; then
+    say "  auto-update daemon already running (pid $(cat "$up_pidf"))"
+    return 0
+  fi
+  (
+    while true; do
+      sleep 180
+      # check GitHub tip commit
+      sh -c "bash "$0" --update-now" >/dev/null 2>&1 || true
+    done
+  ) >/dev/null 2>&1 &
+  echo $! > "$up_pidf"
+  say "  auto-update daemon started (pid $(cat "$up_pidf"), checks every 3m)"
 }
 
 # ================================================== download shell + proxy

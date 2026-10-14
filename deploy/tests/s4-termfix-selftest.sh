@@ -44,7 +44,7 @@ for f in "$TF" "$RM" "$IN"; do
   a_eq "$(basename "$f") is pure ASCII English" "$na" "0"
 done
 a_eq "s4-termfix --version" "$(bash "$TF" --version 2>&1)" "s4-termfix 1.0.0"
-a_eq "s4-remote  --version" "$(bash "$RM" --version 2>&1)" "s4-remote 1.3.0"
+a_eq "s4-remote  --version" "$(bash "$RM" --version 2>&1)" "s4-remote 1.4.0"
 a_eq "s4-install --version" "$(bash "$IN" --version 2>&1)" "s4-install 1.0.1"
 TF_HELP="$(bash "$TF" --help 2>&1)"
 a_has "s4-termfix --help explains exit code 1" "$TF_HELP" 'terminated with exit code: 1'
