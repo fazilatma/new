@@ -8,10 +8,13 @@ four commands to the GitHub Copilot Chat view title toolbar:
   versus resolved model IDs, status counters, credential fingerprints,
   HTTP/latency columns, expandable/copyable answers/errors, cancellation,
   retry-failed, bulk copy, and JSON export. It displays token/context limits,
-  vision/streaming, reasoning, and tool-calling capability. Its editable
-  **Coding power test prompt** defaults to a strict TypeScript multi-provider
-  scheduler challenge. Power starts as a transparent metadata baseline, then is
-  replaced by a deterministic 0–100 rubric score of the actual answer, including
+  vision/streaming, reasoning, and tool-calling capability. Every header is a
+  button that toggles ascending/descending live sorting, including status,
+  latency, answer score, and response/error columns. Its **Test level** selector
+  offers a low-cost Simple Hello/responsiveness check (64 output tokens) and the
+  Professional strict-TypeScript scheduler challenge; both prompts remain
+  editable. Power starts as a transparent metadata baseline, then is replaced by
+  the selected profile's deterministic 0–100 score of the actual answer, including
   completeness, typing, fairness, concurrency, pacing, cancellation cleanup,
   429/503 retry with backoff/jitter, ordering, typed failures, tests, and
   complexity. Raw prompts/answers stay out of sanitized GitHub diagnostics.
@@ -66,6 +69,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.17**.
+The helper, launcher, and companion extension currently ship as **0.1.18**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

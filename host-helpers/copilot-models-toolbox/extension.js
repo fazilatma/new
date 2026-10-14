@@ -18,6 +18,8 @@ const RESTART_COMMAND = [
   'nohup code-server >>"$HOME/.local/share/code-server/code-server.log" 2>&1 </dev/null &',
 ].join('\n');
 
+const SIMPLE_TEST_PROMPT = 'Reply with exactly one short, friendly greeting that contains the word Hello. Do not include code or an explanation.';
+
 const DEFAULT_CODING_TEST_PROMPT = [
   'Act as a principal TypeScript systems engineer. Produce a self-contained strict TypeScript implementation of an async generic function scheduleByProvider<T, R>.',
   'Input jobs contain provider and value fields plus an async worker. Requirements: stable provider round-robin waves; bounded global maxConcurrency; never run two jobs from the same provider simultaneously; enforce minIntervalMs per provider; immediate AbortSignal cancellation with timer/listener cleanup; retry only HTTP 429 and 503 using capped exponential backoff with jitter; preserve original output order; and return typed aggregate failures without losing successful results.',
@@ -1928,7 +1930,7 @@ async function discoverOllama(group, timeoutMs, signal) {
     }));
 }
 
-async function testOneModel(model, timeoutMs, signal, prompt, maxOutputTokens) {
+async function testOneModel(model, timeoutMs, signal, prompt, maxOutputTokens, testProfile) {
   const started = Date.now();
   if (model.kind !== 'ollama' && model.credentialReference && !model.apiKey) {
     return {
@@ -1984,7 +1986,9 @@ async function testOneModel(model, timeoutMs, signal, prompt, maxOutputTokens) {
       status: response.status,
       elapsedMs,
       response: assistantResponse,
-      responsePower: core.scoreCodingResponse(assistantResponse),
+      responsePower: testProfile === 'simple'
+        ? core.scoreSimpleResponse(assistantResponse)
+        : core.scoreCodingResponse(assistantResponse),
     };
   }
   const detail = apiError ? JSON.stringify(apiError) : response.text;
@@ -2085,7 +2089,11 @@ function testDashboardHtml(webview, models, warnings, options) {
     timeoutSeconds: options.timeoutMs / 1000,
     roundRobinDelayMs: Number(options.roundRobinDelayMs) || 0,
     maxOutputTokens: Number(options.maxOutputTokens) || 768,
-    defaultPrompt: DEFAULT_CODING_TEST_PROMPT,
+    defaultProfile: 'professional',
+    prompts: {
+      simple: SIMPLE_TEST_PROMPT,
+      professional: DEFAULT_CODING_TEST_PROMPT,
+    },
     version: extensionPackage.version,
   });
   return `<!doctype html>
@@ -2114,6 +2122,9 @@ function testDashboardHtml(webview, models, warnings, options) {
     input { min-width: 260px; flex: 1; }
     .prompt-panel { margin: 12px 0; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-sideBar-background); }
     .prompt-panel label { display: block; font-weight: 600; margin-bottom: 6px; }
+    .profile-row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 10px; }
+    .profile-row > div { min-width: 220px; }
+    .profile-row select { width: 100%; }
     textarea { width: 100%; min-height: 150px; resize: vertical; padding: 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 3px; font: 13px/1.45 var(--vscode-editor-font-family, monospace); }
     .prompt-help { color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 5px; }
     progress { width: 100%; height: 10px; accent-color: var(--vscode-progressBar-background); }
@@ -2121,6 +2132,10 @@ function testDashboardHtml(webview, models, warnings, options) {
     table { width: 100%; border-collapse: collapse; min-width: 1900px; }
     th { position: sticky; top: 0; z-index: 2; text-align: left; background: var(--vscode-editorGroupHeader-tabsBackground); }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--vscode-panel-border); vertical-align: top; }
+    th.sortable { padding: 0; }
+    .sort-header { width: 100%; min-height: 38px; padding: 7px 8px; border: 0; border-radius: 0; color: var(--vscode-foreground); background: transparent; font: inherit; font-weight: 600; text-align: left; white-space: nowrap; }
+    .sort-header:hover, .sort-header:focus-visible { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-hoverBackground); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+    .sort-indicator { margin-left: 5px; color: var(--vscode-descriptionForeground); }
     tr:hover { background: var(--vscode-list-hoverBackground); }
     .status { display: inline-block; min-width: 74px; text-align: center; border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
     .pending, .queued { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
@@ -2148,11 +2163,15 @@ function testDashboardHtml(webview, models, warnings, options) {
 <body>
   <h1>🧪 AI Model Test Center <small>v${extensionPackage.version}</small></h1>
   <div class="subtitle">Live inference diagnostics for every configured Copilot Chat model</div>
-  <div class="notice"><b>Cost and quota warning:</b> Start sends the coding prompt below as one real, non-streaming inference request to every listed model. Tests run in provider round-robin waves: model 1 from every provider, then model 2, and so on, with an inter-wave pause to reduce rate-limit bursts. Up to <b>${Number(options.maxOutputTokens) || 768} output tokens per model</b> may be generated, so provider charges and rate limits can be significant. No API key is displayed.</div>
+  <div class="notice"><b>Cost and quota warning:</b> Start sends the selected prompt below as one real, non-streaming inference request to every listed model. Tests run in provider round-robin waves: model 1 from every provider, then model 2, and so on, with an inter-wave pause to reduce rate-limit bursts. The Simple profile requests at most <b>64 output tokens</b>; Professional requests up to <b>${Number(options.maxOutputTokens) || 768} tokens per model</b>. Provider charges and rate limits can be significant. No API key is displayed.</div>
   <div class="prompt-panel">
-    <label for="testPrompt">Coding power test prompt</label>
+    <div class="profile-row"><div>
+      <label for="testProfile">Test level</label>
+      <select id="testProfile"><option value="simple">Simple — Hello response</option><option value="professional" selected>Professional — TypeScript scheduler</option></select>
+    </div></div>
+    <label for="testPrompt">Editable test prompt</label>
     <textarea id="testPrompt" maxlength="12000" spellcheck="false"></textarea>
-    <div class="prompt-help">Edit this before Start. The default challenge is scored with a deterministic rubric covering implementation completeness, strict typing, fairness, concurrency, cancellation, retry/backoff, tests, and complexity. Custom prompts still run, but the built-in rubric is optimized for the default challenge.</div>
+    <div id="promptHelp" class="prompt-help">Professional scoring covers implementation completeness, strict typing, fairness, concurrency, pacing, cancellation, retry/backoff, tests, and complexity. Choose Simple for a low-cost greeting/responsiveness check. The prompt remains editable in either level.</div>
   </div>
   <div id="warnings" class="warnings"></div>
   <div class="cards">
@@ -2182,7 +2201,22 @@ function testDashboardHtml(webview, models, warnings, options) {
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Model specifications</th><th>Power (answer test)</th><th>Reasoning (declared)</th><th>Tool calls (declared)</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Use in Chat</th><th>Response / error details</th></tr></thead>
+      <thead><tr>
+        <th class="sortable" data-sort="index"><button class="sort-header" type="button">#<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="provider"><button class="sort-header" type="button">Provider<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="model"><button class="sort-header" type="button">Configured model<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="testedModel"><button class="sort-header" type="button">Tested / resolved model<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="specifications"><button class="sort-header" type="button">Model specifications<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="power"><button class="sort-header" type="button">Power / test score<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="reasoning"><button class="sort-header" type="button">Reasoning (declared)<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="tools"><button class="sort-header" type="button">Tool calls (declared)<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="credential"><button class="sort-header" type="button">Credential<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="status"><button class="sort-header" type="button">Status<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="http"><button class="sort-header" type="button">HTTP<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="latency"><button class="sort-header" type="button">Latency<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="selection"><button class="sort-header" type="button">Use in Chat<span class="sort-indicator"></span></button></th>
+        <th class="sortable" data-sort="details"><button class="sort-header" type="button">Response / error details<span class="sort-indicator"></span></button></th>
+      </tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -2196,8 +2230,11 @@ function testDashboardHtml(webview, models, warnings, options) {
     const statusFilter = document.getElementById('status');
     const search = document.getElementById('search');
     const start = document.getElementById('start');
+    const testProfile = document.getElementById('testProfile');
     const testPrompt = document.getElementById('testPrompt');
-    testPrompt.value = initial.defaultPrompt;
+    const promptHelp = document.getElementById('promptHelp');
+    testProfile.value = initial.defaultProfile;
+    testPrompt.value = initial.prompts[testProfile.value];
     const importModels = document.getElementById('importModels');
     const cancel = document.getElementById('cancel');
     const retry = document.getElementById('retry');
@@ -2226,7 +2263,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       if (!answerPower) {
         const pending = document.createElement('span'); pending.textContent = 'Pending';
         const baseline = document.createElement('small'); baseline.textContent = metadataPower && metadataPower.score !== null ? 'metadata ' + metadataPower.score + '/100' : 'metadata unknown';
-        td.title = 'Answer-based power is calculated after the coding test. ' + (metadataPower && metadataPower.basis ? metadataPower.basis : '');
+        td.title = 'Answer-based score is calculated after the selected test. ' + (metadataPower && metadataPower.basis ? metadataPower.basis : '');
         td.append(pending, baseline); return;
       }
       td.title = answerPower.basis + (answerPower.evidence && answerPower.evidence.length ? '\\nEvidence: ' + answerPower.evidence.join(', ') : '');
@@ -2255,6 +2292,55 @@ function testDashboardHtml(webview, models, warnings, options) {
       button.addEventListener('click', () => vscode.postMessage({ type: 'copy', text }));
       details.append(summary, pre, button); td.appendChild(details);
     }
+    let activeSortKey = '';
+    let sortDirection = 1;
+    const statusOrder = { pending: 0, queued: 1, running: 2, pass: 3, fail: 4, cancelled: 5 };
+    function sortValue(row, key) {
+      const result = results.get(row.item.key) || {};
+      if (key === 'index') return row.index;
+      if (key === 'provider') return row.item.provider;
+      if (key === 'model') return row.item.model;
+      if (key === 'testedModel') return row.item.testedModel;
+      if (key === 'specifications') return modelSpecs(row.item);
+      if (key === 'power') return result.responsePower && Number.isFinite(result.responsePower.score) ? result.responsePower.score : row.item.power && Number.isFinite(row.item.power.score) ? row.item.power.score : -1;
+      if (key === 'reasoning') return row.item.reasoning === true ? 2 : row.item.reasoning === false ? 0 : 1;
+      if (key === 'tools') return row.item.toolCalling === true ? 2 : row.item.toolCalling === false ? 0 : 1;
+      if (key === 'credential') return row.item.credential;
+      if (key === 'status') return statusOrder[row.tr.dataset.status] ?? -1;
+      if (key === 'http') return Number(result.status) || -1;
+      if (key === 'latency') return Number(result.elapsedMs) || -1;
+      if (key === 'selection') return row.selected ? 2 : row.tr.dataset.status === 'pass' ? 1 : 0;
+      if (key === 'details') return result.error || result.response || '';
+      return '';
+    }
+    function compareSortValues(left, right) {
+      if (typeof left === 'number' && typeof right === 'number') return left - right;
+      return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' });
+    }
+    function sortRows() {
+      if (!activeSortKey) return;
+      const ordered = [...rowElements.values()].sort((left, right) => {
+        const compared = compareSortValues(sortValue(left, activeSortKey), sortValue(right, activeSortKey));
+        return (compared || left.index - right.index) * sortDirection;
+      });
+      const fragment = document.createDocumentFragment();
+      for (const row of ordered) fragment.appendChild(row.tr);
+      rows.appendChild(fragment);
+      for (const header of document.querySelectorAll('th[data-sort]')) {
+        const selected = header.dataset.sort === activeSortKey;
+        header.setAttribute('aria-sort', selected ? (sortDirection === 1 ? 'ascending' : 'descending') : 'none');
+        header.querySelector('.sort-indicator').textContent = selected ? (sortDirection === 1 ? '▲' : '▼') : '';
+      }
+    }
+    for (const header of document.querySelectorAll('th[data-sort]')) {
+      header.setAttribute('aria-sort', 'none');
+      header.querySelector('button').addEventListener('click', () => {
+        const key = header.dataset.sort;
+        if (activeSortKey === key) sortDirection *= -1;
+        else { activeSortKey = key; sortDirection = 1; }
+        sortRows();
+      });
+    }
     function addRow(item, index) {
       const tr = document.createElement('tr'); tr.dataset.key = item.key; tr.dataset.provider = item.provider; tr.dataset.status = 'pending';
       tr.append(cell(String(index + 1)), cell(item.provider), cell(item.model));
@@ -2272,7 +2358,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       selectButton.addEventListener('click', () => { selectButton.disabled = true; selectButton.textContent = 'Selecting…'; vscode.postMessage({ type: 'selectModel', key: item.key }); });
       selectCell.appendChild(selectButton); tr.appendChild(selectCell);
       const error = cell(''); renderDetails(error, null); tr.appendChild(error);
-      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, testedModel, power, http, latency, selectButton, error, item });
+      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, testedModel, power, http, latency, selectButton, error, item, index });
     }
     initial.models.forEach(addRow);
 
@@ -2287,7 +2373,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       renderPower(row.power, message.responsePower || (['fail', 'cancelled'].includes(message.state) ? { score: 0, label: 'No answer', evidence: [], basis: 'Request ended before a scoreable coding answer was returned' } : null), row.item.power);
       renderDetails(row.error, message);
       results.set(message.key, message);
-      updateSummary(); applyFilters();
+      updateSummary(); applyFilters(); sortRows();
     }
     function updateSummary() {
       const counts = { pending: 0, queued: 0, running: 0, pass: 0, fail: 0, cancelled: 0 };
@@ -2310,12 +2396,23 @@ function testDashboardHtml(webview, models, warnings, options) {
         row.tr.hidden = Boolean((provider && row.item.provider !== provider) || (status && row.tr.dataset.status !== status) || (query && !haystack.includes(query)));
       }
     }
-    function setRunning(value) { start.disabled = value; testPrompt.disabled = value; importModels.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
-    function currentPrompt() { return testPrompt.value.trim() || initial.defaultPrompt; }
-    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Resolving provider model names, then running the coding challenge…'; vscode.postMessage({ type: 'start', prompt: currentPrompt() }); });
+    function setRunning(value) { start.disabled = value; testProfile.disabled = value; testPrompt.disabled = value; importModels.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
+    function currentProfile() { return testProfile.value === 'simple' ? 'simple' : 'professional'; }
+    function currentPrompt() { return testPrompt.value.trim() || initial.prompts[currentProfile()]; }
+    testProfile.addEventListener('change', () => {
+      const profile = currentProfile();
+      testPrompt.value = initial.prompts[profile];
+      promptHelp.textContent = profile === 'simple'
+        ? 'Simple uses a low-cost greeting/responsiveness rubric and requests at most 64 output tokens. The prompt remains editable.'
+        : 'Professional uses the advanced TypeScript coding rubric and the configured output-token limit. The prompt remains editable.';
+      document.getElementById('runInfo').textContent = profile === 'simple'
+        ? 'Simple greeting test · max 64 output tokens · ready'
+        : 'Professional coding test · max ' + initial.maxOutputTokens + ' output tokens · ready';
+    });
+    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Resolving provider model names, then running the selected ' + currentProfile() + ' test…'; vscode.postMessage({ type: 'start', prompt: currentPrompt(), profile: currentProfile() }); });
     importModels.addEventListener('click', () => vscode.postMessage({ type: 'importModels' }));
     cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
-    retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed', prompt: currentPrompt() }));
+    retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed', prompt: currentPrompt(), profile: currentProfile() }));
     copyAll.addEventListener('click', () => {
       const errors = [...rowElements.values()].filter((row) => row.tr.dataset.status === 'fail').map((row) => { const result = results.get(row.item.key); return row.item.provider + ' :: ' + row.item.model + '\\n' + (result.error || 'Unknown error'); }).join('\\n\\n');
       vscode.postMessage({ type: 'copy', text: errors });
@@ -2326,10 +2423,10 @@ function testDashboardHtml(webview, models, warnings, options) {
       const message = event.data;
       if (message.type === 'runStarted') {
         for (const key of message.keys) updateRow({ key, state: 'queued', status: 0, elapsedMs: 0, error: '' });
-        setRunning(true); document.getElementById('runInfo').textContent = 'Running ' + message.keys.length + ' model tests…';
+        setRunning(true); document.getElementById('runInfo').textContent = 'Running ' + message.keys.length + ' ' + message.profile + ' model tests · max ' + message.maxOutputTokens + ' output tokens…';
       } else if (message.type === 'resolved') {
         const row = rowElements.get(message.key);
-        if (row) { row.item.testedModel = message.model; row.testedModel.textContent = message.model; row.testedModel.title = message.reason; }
+        if (row) { row.item.testedModel = message.model; row.testedModel.textContent = message.model; row.testedModel.title = message.reason; sortRows(); }
       } else if (message.type === 'row') updateRow(message);
       else if (message.type === 'selectedModel') {
         for (const row of rowElements.values()) {
@@ -2338,6 +2435,7 @@ function testDashboardHtml(webview, models, warnings, options) {
           row.selectButton.textContent = row.selected ? '✓ Selected' : 'Use in Chat';
           row.selectButton.disabled = row.selected || row.tr.dataset.status !== 'pass';
         }
+        sortRows();
         document.getElementById('runInfo').textContent = message.message;
       } else if (message.type === 'selectionError') {
         const row = rowElements.get(message.key);
@@ -2415,6 +2513,7 @@ async function saveSanitizedDiagnostics(context, models, results, summary) {
         state: result.state,
         httpStatus: result.status || 0,
         elapsedMs: result.elapsedMs || 0,
+        testProfile: result.testProfile || '',
         responsePower: result.responsePower
           ? {
               score: result.responsePower.score,
@@ -2437,7 +2536,7 @@ async function saveSanitizedDiagnostics(context, models, results, summary) {
   return destination;
 }
 
-async function exportTestReport(context, models, results, prompt, maxOutputTokens) {
+async function exportTestReport(context, models, results, prompt, testProfile, maxOutputTokens) {
   const target = await vscode.window.showSaveDialog({
     title: 'Export AI model test report',
     saveLabel: 'Export JSON report',
@@ -2449,6 +2548,7 @@ async function exportTestReport(context, models, results, prompt, maxOutputToken
     version: extensionPackage.version,
     generatedAt: new Date().toISOString(),
     testPrompt: prompt,
+    testProfile,
     maxOutputTokens,
     models: models.map((model) => ({
       provider: model.provider,
@@ -2486,19 +2586,31 @@ function openTestDashboard(context, models, warnings, options) {
   const results = new Map();
   let activeController;
   let running = false;
+  let currentTestProfile = 'professional';
   let currentTestPrompt = DEFAULT_CODING_TEST_PROMPT;
+  let currentMaxOutputTokens = options.maxOutputTokens;
 
-  const run = async (selectedKeys, requestedPrompt) => {
+  const run = async (selectedKeys, requestedPrompt, requestedProfile) => {
     if (running) return;
     const selected = models.filter((model) => selectedKeys.includes(model.testKey));
     if (selected.length === 0) return;
+    currentTestProfile = requestedProfile === 'simple' ? 'simple' : 'professional';
     const normalizedPrompt = String(requestedPrompt || '').trim();
-    currentTestPrompt = (normalizedPrompt || DEFAULT_CODING_TEST_PROMPT).slice(0, 12000);
+    const profilePrompt = currentTestProfile === 'simple' ? SIMPLE_TEST_PROMPT : DEFAULT_CODING_TEST_PROMPT;
+    currentTestPrompt = (normalizedPrompt || profilePrompt).slice(0, 12000);
+    currentMaxOutputTokens = currentTestProfile === 'simple'
+      ? Math.min(64, options.maxOutputTokens)
+      : options.maxOutputTokens;
     running = true;
     activeController = new AbortController();
     const attempted = new Set();
     for (const model of selected) results.delete(model.testKey);
-    panel.webview.postMessage({ type: 'runStarted', keys: selected.map((model) => model.testKey) });
+    panel.webview.postMessage({
+      type: 'runStarted',
+      keys: selected.map((model) => model.testKey),
+      profile: currentTestProfile,
+      maxOutputTokens: currentMaxOutputTokens,
+    });
     output.clear();
     output.appendLine(`AI model dashboard run started: ${new Date().toISOString()}`);
     await resolveConfiguredModelNames(
@@ -2529,7 +2641,8 @@ function openTestDashboard(context, models, warnings, options) {
           options.timeoutMs,
           activeController.signal,
           currentTestPrompt,
-          options.maxOutputTokens
+          currentMaxOutputTokens,
+          currentTestProfile
         );
       } catch (error) {
         tested = {
@@ -2553,6 +2666,7 @@ function openTestDashboard(context, models, warnings, options) {
         error: tested.error || '',
         response: tested.response || '',
         responsePower: tested.responsePower || null,
+        testProfile: currentTestProfile,
       };
       results.set(model.testKey, result);
       panel.webview.postMessage({ type: 'row', key: model.testKey, ...result });
@@ -2644,7 +2758,7 @@ function openTestDashboard(context, models, warnings, options) {
   panel.webview.onDidReceiveMessage(async (message) => {
     try {
       if (message.type === 'start') {
-        await run(models.map((model) => model.testKey), message.prompt);
+        await run(models.map((model) => model.testKey), message.prompt, message.profile);
       } else if (message.type === 'importModels') {
         await vscode.commands.executeCommand('copilotModels.importJson');
       } else if (message.type === 'retryFailed') {
@@ -2652,7 +2766,8 @@ function openTestDashboard(context, models, warnings, options) {
           models
             .filter((model) => results.get(model.testKey)?.state === 'fail')
             .map((model) => model.testKey),
-          message.prompt
+          message.prompt,
+          message.profile
         );
       } else if (message.type === 'cancel' && activeController) {
         activeController.abort();
@@ -2698,7 +2813,8 @@ function openTestDashboard(context, models, warnings, options) {
           models,
           results,
           currentTestPrompt,
-          options.maxOutputTokens
+          currentTestProfile,
+          currentMaxOutputTokens
         );
       }
     } catch (error) {

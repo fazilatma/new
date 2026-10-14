@@ -295,6 +295,31 @@ function powerLabel(score) {
           : 'Basic';
 }
 
+function scoreSimpleResponse(text) {
+  const response = String(text || '').trim();
+  if (!response) {
+    return { score: 0, label: 'No answer', evidence: [], basis: 'Deterministic simple greeting-response rubric' };
+  }
+  const evidence = ['returned an answer'];
+  let score = 25;
+  const hasGreeting = /\b(?:hello|hi|hey)\b|سلام|درود/i.test(response);
+  if (hasGreeting) {
+    score += 50;
+    evidence.push('returned a greeting');
+  }
+  if (hasGreeting && response.length <= 200 && !/```/.test(response)) {
+    score += 25;
+    evidence.push('followed the short no-code format');
+  }
+  const bounded = Math.max(0, Math.min(100, score));
+  return {
+    score: bounded,
+    label: powerLabel(bounded),
+    evidence,
+    basis: 'Deterministic rubric for the simple greeting test; checks responsiveness, greeting relevance, and concise format',
+  };
+}
+
 function scoreCodingResponse(text) {
   const response = String(text || '').trim();
   if (!response) {
@@ -529,5 +554,6 @@ module.exports = {
   roundRobinModels,
   sanitizedModelTestError,
   scoreCodingResponse,
+  scoreSimpleResponse,
   validateCatalog,
 };

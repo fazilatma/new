@@ -271,8 +271,12 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.match(dashboard, /Import Models \/ JSON/);
   assert.match(dashboard, /Tested \/ resolved model/);
   assert.match(dashboard, /Model specifications/);
-  assert.match(dashboard, /Coding power test prompt/);
-  assert.match(dashboard, /Power \(answer test\)/);
+  assert.match(dashboard, /Editable test prompt/);
+  assert.match(dashboard, /Simple — Hello response/);
+  assert.match(dashboard, /Professional — TypeScript scheduler/);
+  assert.match(dashboard, /Power \/ test score/);
+  assert.equal((dashboard.match(/data-sort=/g) || []).length, 14);
+  assert.match(dashboard, /function sortRows\(\)/);
   assert.match(dashboard, /Response \/ error details/);
   assert.match(dashboard, /metadata baseline/i);
   assert.match(dashboard, /not a benchmark/);
@@ -358,6 +362,14 @@ test('modelPower reports a transparent declared-capability score', () => {
     core.modelPower({ maxInputTokens: 128000, maxOutputTokens: 16000, reasoningKnown: true, reasoning: false, toolCalling: true, vision: false, streaming: false }).label,
     'Medium'
   );
+});
+
+test('simple greeting scoring rewards a concise relevant response', () => {
+  const excellent = core.scoreSimpleResponse('Hello!');
+  assert.equal(excellent.score, 100);
+  assert.equal(excellent.label, 'Exceptional');
+  assert.equal(core.scoreSimpleResponse('').score, 0);
+  assert.ok(core.scoreSimpleResponse('This is not a greeting.').score < excellent.score);
 });
 
 test('coding response extraction and deterministic power scoring use the actual answer', () => {
