@@ -13,6 +13,7 @@ from unittest import mock
 
 HELPERS_DIR = Path(__file__).resolve().parents[1]
 HELPER_PATH = HELPERS_DIR / "copilot-models.py"
+TOOLBOX_DIR = HELPERS_DIR / "copilot-models-toolbox"
 SPEC = importlib.util.spec_from_file_location("copilot_models", HELPER_PATH)
 assert SPEC and SPEC.loader
 copilot_models = importlib.util.module_from_spec(SPEC)
@@ -376,6 +377,8 @@ class CommandIntegrationTests(unittest.TestCase):
                 str(user_data),
                 "--extension-dir",
                 str(extension),
+                "--toolbox-dir",
+                str(TOOLBOX_DIR),
                 "--enable-terminal",
             ]
             environment = {
@@ -412,7 +415,22 @@ class CommandIntegrationTests(unittest.TestCase):
             )
             self.assertTrue(settings["chat.tools.terminal.enableAutoApprove"])
             self.assertNotIn("chat.tools.terminal.autoApprove", settings)
+            self.assertEqual(settings["copilotModels.configFile"], str(config_path))
+            self.assertEqual(settings["copilotModels.settingsFile"], str(settings_path))
             self.assertEqual(settings_path.stat().st_mode & 0o777, 0o600)
+
+            toolbox_target = (
+                user_data
+                / "extensions"
+                / "fazilatma.copilot-models-toolbox-0.1.0"
+            )
+            self.assertTrue((toolbox_target / "package.json").is_file())
+            self.assertTrue((toolbox_target / "extension.js").is_file())
+            self.assertTrue((toolbox_target / "core.js").is_file())
+            self.assertTrue((toolbox_target / "runtime" / "copilot-models.py").is_file())
+            self.assertTrue(
+                (toolbox_target / "runtime" / "copilot-models.catalog.json").is_file()
+            )
 
             package = json.loads(package_path.read_text(encoding="utf-8"))
             custom = package["contributes"]["languageModelChatProviders"][0]
@@ -426,6 +444,7 @@ class CommandIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(restored.returncode, 0, restored.stderr)
             self.assertFalse(config_path.exists())
+            self.assertFalse(toolbox_target.exists())
             self.assertTrue(settings_path.exists())
             self.assertEqual(settings_path.read_text(encoding="utf-8"), original_settings)
             restored_package = json.loads(package_path.read_text(encoding="utf-8"))

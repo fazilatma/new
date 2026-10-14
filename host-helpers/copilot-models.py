@@ -30,6 +30,8 @@ from typing import Any, Iterable
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
+TOOLBOX_PUBLISHER = "fazilatma"
+TOOLBOX_NAME = "copilot-models-toolbox"
 
 PROVIDER_ALIASES = {
     "open-router": "openrouter",
@@ -817,14 +819,14 @@ def merge_groups(
     return output, summary
 
 
-def parse_code_server_config() -> Path | None:
+def parse_code_server_config_path(key: str) -> Path | None:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     config = config_home / "code-server" / "config.yaml"
     if not config.is_file():
         return None
     try:
         for line in config.read_text(encoding="utf-8").splitlines():
-            match = re.match(r"^\s*user-data-dir\s*:\s*(.*?)\s*$", line)
+            match = re.match(rf"^\s*{re.escape(key)}\s*:\s*(.*?)\s*$", line)
             if match:
                 value = match.group(1).strip().strip("'\"")
                 if value:
@@ -840,7 +842,7 @@ def user_data_directory(explicit: str | None) -> Path:
     env_value = os.environ.get("CODE_SERVER_USER_DATA_DIR")
     if env_value:
         return Path(env_value).expanduser()
-    configured = parse_code_server_config()
+    configured = parse_code_server_config_path("user-data-dir")
     if configured:
         return configured
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
@@ -1243,6 +1245,117 @@ def filter_providers(
     return output
 
 
+def toolbox_source_package(source: str) -> tuple[Path, dict[str, Any]]:
+    directory = Path(source).expanduser().resolve()
+    package_path = directory / "package.json"
+    if not package_path.is_file():
+        raise FileNotFoundError(f"toolbox package not found: {package_path}")
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    if not isinstance(package, dict):
+        raise ValueError(f"{package_path} must contain a JSON object")
+    if package.get("publisher") != TOOLBOX_PUBLISHER or package.get("name") != TOOLBOX_NAME:
+        raise ValueError(f"unexpected toolbox identity in {package_path}")
+    version = str(package.get("version", ""))
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", version):
+        raise ValueError(f"invalid toolbox version in {package_path}: {version!r}")
+    for filename in ("extension.js", "core.js"):
+        if not (directory / filename).is_file():
+            raise FileNotFoundError(f"toolbox file not found: {directory / filename}")
+    return directory, package
+
+
+def toolbox_target_path(args: argparse.Namespace, package: dict[str, Any]) -> Path:
+    extension_root = os.environ.get("CODE_SERVER_EXTENSIONS_DIR")
+    configured_root = parse_code_server_config_path("extensions-dir")
+    if extension_root:
+        root = Path(extension_root).expanduser()
+    elif configured_root:
+        root = configured_root
+    else:
+        root = user_data_directory(args.user_data_dir) / "extensions"
+    dirname = f"{package['publisher']}.{package['name']}-{package['version']}"
+    return root / dirname
+
+
+def install_toolbox(
+    args: argparse.Namespace, catalog_source: str | None, dry_run: bool
+) -> tuple[Path, str] | None:
+    if args.no_toolbox or not args.toolbox_dir:
+        return None
+    source, package = toolbox_source_package(args.toolbox_dir)
+    target = toolbox_target_path(args, package)
+    result = "would-install" if dry_run else ("updated" if target.exists() else "installed")
+    if dry_run:
+        return target, result
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f".{TOOLBOX_NAME}.", dir=target.parent)
+    )
+    try:
+        for filename in ("package.json", "extension.js", "core.js"):
+            shutil.copy2(source / filename, temporary / filename)
+        runtime = temporary / "runtime"
+        runtime.mkdir(mode=0o700)
+        helper_target = runtime / "copilot-models.py"
+        shutil.copy2(Path(__file__).resolve(), helper_target)
+        os.chmod(helper_target, 0o700)
+
+        catalog_target = runtime / "copilot-models.catalog.json"
+        if catalog_source and Path(catalog_source).expanduser().is_file():
+            shutil.copy2(Path(catalog_source).expanduser(), catalog_target)
+            os.chmod(catalog_target, 0o600)
+        else:
+            catalog_value = load_json_source(catalog_source) if catalog_source else None
+            if catalog_value is None:
+                raise FileNotFoundError("toolbox installation requires a catalog")
+            atomic_write_json(catalog_target, catalog_value, 0o600)
+
+        if target.exists():
+            shutil.rmtree(target)
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+    # Remove only older copies of this helper-owned extension after the new
+    # version is safely in place. Unrelated extensions are never touched.
+    pattern = f"{TOOLBOX_PUBLISHER}.{TOOLBOX_NAME}-*"
+    for old in target.parent.glob(pattern):
+        if old != target and old.is_dir():
+            try:
+                old_package = json.loads((old / "package.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(old_package, dict)
+                and old_package.get("publisher") == TOOLBOX_PUBLISHER
+                and old_package.get("name") == TOOLBOX_NAME
+            ):
+                shutil.rmtree(old)
+    return target, result
+
+
+def uninstall_toolbox(args: argparse.Namespace) -> Path | None:
+    if args.no_toolbox or not args.toolbox_dir:
+        return None
+    _, package = toolbox_source_package(args.toolbox_dir)
+    target = toolbox_target_path(args, package)
+    if not target.is_dir():
+        return None
+    installed_package = target / "package.json"
+    try:
+        value = json.loads(installed_package.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or (
+        value.get("publisher"), value.get("name")
+    ) != (TOOLBOX_PUBLISHER, TOOLBOX_NAME):
+        return None
+    shutil.rmtree(target)
+    return target
+
+
 def print_code_server_restart_command() -> None:
     print("\nRestart code-server from a separate Termux session:")
     print("  pkill -f '[c]ode-server' || true")
@@ -1265,6 +1378,9 @@ def restore(args: argparse.Namespace) -> int:
     for package in extension_manifests(args):
         if restore_file(package):
             restored.append(str(package))
+    removed_toolbox = uninstall_toolbox(args)
+    if removed_toolbox:
+        restored.append(str(removed_toolbox))
     if restored:
         print("Restored original file(s):")
         for path in restored:
@@ -1331,6 +1447,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config-file", help="exact chatLanguageModels.json path")
     parser.add_argument("--settings-file", help="exact code-server settings.json path")
+    parser.add_argument(
+        "--toolbox-dir",
+        help="source directory for the Copilot Chat toolbar companion extension",
+    )
+    parser.add_argument(
+        "--no-toolbox",
+        action="store_true",
+        help="do not install the Copilot Models Toolbox companion extension",
+    )
     parser.add_argument(
         "--enable-terminal",
         action="store_true",
@@ -1408,9 +1533,11 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
             eprint(f"warning: model discovery failed for {provider['name']}: {error}")
 
+    config_path = config_file_path(args)
     settings_path: Path | None = None
     merged_settings: dict[str, Any] | None = None
     shell_path: str | None = None
+    toolbox_requested = bool(args.toolbox_dir) and not args.no_toolbox
     if args.enable_terminal:
         # Agent mode only exposes run-in-terminal to models advertising tool
         # support. This cannot make a model implement tools, but it lets models
@@ -1419,12 +1546,18 @@ def main(argv: list[str] | None = None) -> int:
             for model in provider.get("models", []):
                 model["toolCalling"] = True
         shell_path = terminal_shell_path()
-        settings_path = settings_file_path(args)
-        merged_settings = terminal_enabled_settings(
-            load_settings(settings_path), shell_path
-        )
 
-    config_path = config_file_path(args)
+    if args.enable_terminal or toolbox_requested:
+        settings_path = settings_file_path(args)
+        merged_settings = load_settings(settings_path)
+        if shell_path:
+            merged_settings = terminal_enabled_settings(merged_settings, shell_path)
+        if toolbox_requested:
+            # Exact paths keep toolbar commands on the same profile the helper
+            # modified, including non-default code-server profiles.
+            merged_settings["copilotModels.configFile"] = str(config_path)
+            merged_settings["copilotModels.settingsFile"] = str(settings_path)
+
     existing = load_existing_groups(config_path)
     merged, summary = merge_groups(existing, providers, args.skip_missing_keys)
     if not summary:
@@ -1449,14 +1582,23 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             eprint("warning: " + error)
 
+    catalog_source = args.catalog or str(
+        Path(__file__).with_name("copilot-models.catalog.json")
+    )
+    toolbox_result = install_toolbox(args, catalog_source, args.dry_run)
+
     print("\nProvider groups:")
     for name, count, existed in summary:
         action = "update" if existed else "add"
         print(f"  {action:<6} {name}: {count} model(s)")
     print(f"\nConfiguration: {config_path}")
-    if settings_path and shell_path:
-        print(f"Terminal settings: {settings_path}")
+    if settings_path:
+        print(f"Settings: {settings_path}")
+    if shell_path:
         print(f"Terminal shell: {shell_path}")
+    if toolbox_result:
+        target, result = toolbox_result
+        print(f"Copilot Models Toolbox ({result}): {target}")
     for manifest, result in patch_results:
         print(f"Manifest ({result}): {manifest}")
 
@@ -1479,6 +1621,11 @@ def main(argv: list[str] | None = None) -> int:
     if missing_keys:
         print("Providers without a key (models are listed but requests may fail):")
         print("  " + ", ".join(missing_keys))
+    if toolbox_result:
+        print(
+            "Toolbar: Test All AI Models, Import AI JSON, and Sync GitHub "
+            "were installed in the Copilot Chat title bar."
+        )
     if args.enable_terminal:
         print(
             "Terminal: integrated and agent terminal profiles are enabled; "

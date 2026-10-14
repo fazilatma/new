@@ -1,0 +1,103 @@
+{
+  "name": "copilot-models-toolbox",
+  "displayName": "Copilot Models Toolbox",
+  "description": "Test, import, and synchronize BYOK models from the GitHub Copilot Chat toolbar.",
+  "version": "0.1.0",
+  "publisher": "fazilatma",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onCommand:copilotModels.testAll",
+    "onCommand:copilotModels.importJson",
+    "onCommand:copilotModels.syncGitHub"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotModels.testAll",
+        "title": "🧪 Test All AI Models",
+        "category": "Copilot Models",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "copilotModels.importJson",
+        "title": "📥 Import AI JSON",
+        "category": "Copilot Models",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "copilotModels.syncGitHub",
+        "title": "🔄 Sync GitHub",
+        "category": "Copilot Models",
+        "icon": "$(sync)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "copilotModels.testAll",
+          "when": "view == workbench.panel.chat.view.copilot",
+          "group": "navigation@91"
+        },
+        {
+          "command": "copilotModels.importJson",
+          "when": "view == workbench.panel.chat.view.copilot",
+          "group": "navigation@92"
+        },
+        {
+          "command": "copilotModels.syncGitHub",
+          "when": "view == workbench.panel.chat.view.copilot",
+          "group": "navigation@93"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Copilot Models Toolbox",
+      "properties": {
+        "copilotModels.catalogUrl": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers/copilot-models.catalog.json",
+          "description": "GitHub catalog downloaded by Sync GitHub. API keys are never uploaded."
+        },
+        "copilotModels.testConcurrency": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Maximum number of real model inference tests running at once."
+        },
+        "copilotModels.testTimeoutSeconds": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 180,
+          "description": "Timeout for each real model inference test."
+        },
+        "copilotModels.configFile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional exact chatLanguageModels.json path. Empty uses the active profile."
+        },
+        "copilotModels.settingsFile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional exact settings.json path. Empty uses the active profile."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/core.test.js"
+  }
+}

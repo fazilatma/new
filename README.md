@@ -30,8 +30,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 `--enable-terminal` configures Termux Bash for code-server's integrated terminal
 and Copilot Agent's run-in-terminal tool without adding an unrestricted command
-approval rule. At the end it prints the Termux commands needed to restart
-code-server. API keys are entered without echo, but Copilot's profile format
+approval rule. It also installs **🧪 Test All AI Models**, **📥 Import AI JSON**,
+and **🔄 Sync GitHub** in the Copilot Chat title toolbar. At the end it prints
+the Termux commands needed to restart code-server. API keys are entered without
+echo, but Copilot's profile format
 stores them in `chatLanguageModels.json`; the helper protects the file with mode
 `0600`. A complete credential-file example, JSON import support, custom-profile
 options, backups, restore instructions, and compatibility notes are in

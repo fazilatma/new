@@ -43,9 +43,15 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/copilot-models.py" && -f "$SCRIPT_DIR/copilot-models.catalog.json" ]]; then
+if [[ -n "$SCRIPT_DIR" \
+  && -f "$SCRIPT_DIR/copilot-models.py" \
+  && -f "$SCRIPT_DIR/copilot-models.catalog.json" \
+  && -f "$SCRIPT_DIR/copilot-models-toolbox/package.json" \
+  && -f "$SCRIPT_DIR/copilot-models-toolbox/extension.js" \
+  && -f "$SCRIPT_DIR/copilot-models-toolbox/core.js" ]]; then
   HELPER="$SCRIPT_DIR/copilot-models.py"
   CATALOG="$SCRIPT_DIR/copilot-models.catalog.json"
+  TOOLBOX_DIR="$SCRIPT_DIR/copilot-models-toolbox"
 else
   command -v curl >/dev/null 2>&1 || die "curl is required"
   TMP_BASE="${TMPDIR:-}"
@@ -57,13 +63,21 @@ else
   TEMP_DIR="$(mktemp -d "$TMP_BASE/copilot-models.XXXXXX" 2>/dev/null || mktemp -d)"
   HELPER="$TEMP_DIR/copilot-models.py"
   CATALOG="$TEMP_DIR/copilot-models.catalog.json"
-  log "==> Downloading the Copilot models helper..."
+  TOOLBOX_DIR="$TEMP_DIR/copilot-models-toolbox"
+  mkdir -p -- "$TOOLBOX_DIR"
+  log "==> Downloading the Copilot models helper and Chat toolbar..."
   curl -fsSL --retry 3 "$RAW_BASE/copilot-models.py" -o "$HELPER"
   curl -fsSL --retry 3 "$RAW_BASE/copilot-models.catalog.json" -o "$CATALOG"
+  curl -fsSL --retry 3 "$RAW_BASE/copilot-models-toolbox/package.json" \
+    -o "$TOOLBOX_DIR/package.json"
+  curl -fsSL --retry 3 "$RAW_BASE/copilot-models-toolbox/extension.js" \
+    -o "$TOOLBOX_DIR/extension.js"
+  curl -fsSL --retry 3 "$RAW_BASE/copilot-models-toolbox/core.js" \
+    -o "$TOOLBOX_DIR/core.js"
 fi
 
 set +e
-"$PYTHON_BIN" "$HELPER" --catalog "$CATALOG" "$@"
+"$PYTHON_BIN" "$HELPER" --catalog "$CATALOG" --toolbox-dir "$TOOLBOX_DIR" "$@"
 status=$?
 set -e
 exit "$status"

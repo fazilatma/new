@@ -121,6 +121,27 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
   | bash -s -- --source "$PRIVATE_JSON" --import-source-keys --no-discover --enable-terminal
 ```
 
+### Copilot Chat toolbar
+
+The launcher also installs the **Copilot Models Toolbox** companion extension.
+After restarting code-server, these buttons appear in the GitHub Copilot Chat
+title toolbar and remain available in the Command Palette:
+
+- **🧪 Test All AI Models** asks for confirmation, then sends one real,
+  non-streaming inference request with at most eight output tokens to every
+  configured model. This can consume provider quota or incur charges. The run
+  is cancellable and pass/fail details appear in the **Copilot Models Toolbox**
+  output channel.
+- **📥 Import AI JSON** opens the Termux filesystem picker and imports providers,
+  models, and embedded API keys through the same protected helper. The picker
+  starts in a recognized Android download directory when available.
+- **🔄 Sync GitHub** downloads and validates the latest maintained catalog from
+  this agent branch, then merges it while preserving local API keys. It is a
+  download-only operation: configuration and credentials are never uploaded to
+  GitHub.
+
+Use `--no-toolbox` only when the companion toolbar extension is not wanted.
+
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
 into the active profile's `settings.json`:
 
@@ -186,6 +207,7 @@ restart command instead, for example `sv restart code-server`.
 | `--config-file PATH` | Target an exact `chatLanguageModels.json` file. |
 | `--settings-file PATH` | Target an exact code-server `settings.json` file. |
 | `--enable-terminal` | Configure integrated/Agent terminals and advertise tool calling. |
+| `--no-toolbox` | Skip installing the three-button Copilot Chat companion extension. |
 | `--extension-dir PATH` | Supply the Copilot extension directory if auto-detection fails. |
 | `--no-patch` | Do not change the Copilot extension manifest. |
 | `--restore` | Restore the files saved before the helper's first change. |
@@ -211,7 +233,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 4. With `--enable-terminal`, it safely merges the Termux shell profiles into
    `settings.json`, enables tool calling metadata, and leaves explicit command
    approval rules intact.
-5. It writes JSON atomically and makes both model and settings configuration
+5. Unless `--no-toolbox` is supplied, it installs the companion extension and a
+   private runtime copy of the helper/catalog under code-server's extension
+   directory. `--restore` removes this helper-owned extension.
+6. It writes JSON atomically and makes both model and settings configuration
    readable only by its owner.
 
 An extension update can replace the manifest patch. Rerun the helper after an
