@@ -1,0 +1,193 @@
+/* ===========================================================================
+ * s4-csmobile.css  v2.0   --  forced zoom + mobile skin for code-server
+ * ---------------------------------------------------------------------------
+ * Injected by deploy/s4-csproxy.js into every text/html page code-server
+ * serves (login page and VS Code workbench).  It also works on its own:
+ * code-server sends  style-src 'self' 'unsafe-inline'  so this <style> block
+ * is allowed even when our <script> is blocked by the CSP nonce.
+ *
+ * Forced zoom engine
+ * ------------------
+ * window.zoomLevel does nothing in a browser (it is only read by
+ * src/vs/workbench/electron-browser/window.ts), so the only way to force a
+ * default magnification is CSS  zoom.  We zoom .monaco-workbench instead of
+ * <html>/<body> and compensate its box, because:
+ *   - dom.getClientArea() uses element.clientWidth for anything that is not
+ *     document.body, so the workbench measures itself in its own (local)
+ *     coordinate space and stays consistent with mouse/touch coordinates;
+ *   - body-level zoom would make VS Code mix window.innerWidth (viewport px)
+ *     with clientWidth (local px) and clip the right/bottom edge;
+ *   - our own dock stays outside the zoom, so touch targets keep their real
+ *     size at every zoom level.
+ * The compensation is a multiplication by --s4-inv (= 1 / --s4-zoom, computed
+ * by the proxy) because calc() division by a var() is not portable.
+ * If the engine does not support  zoom  at all, nothing breaks: the injected
+ * viewport meta unlocks real pinch-zoom as the fallback layer.
+ * =========================================================================== */
+
+:root {
+  --s4-zoom: 1.3;
+  --s4-inv: 0.7692308;
+  --s4-top-h: 0px;      /* raised by the shell JS once its bars exist */
+  --s4-dock-h: 0px;
+  --s4-keys-h: 0px;
+  --s4-bg: rgba(22, 24, 29, 0.97);
+  --s4-bg2: rgba(34, 37, 44, 0.97);
+  --s4-fg: #eceff4;
+  --s4-dim: #a6adba;
+  --s4-accent: #2f81f7;
+  --s4-border: rgba(255, 255, 255, 0.16);
+  --s4-safe-t: env(safe-area-inset-top, 0px);
+  --s4-safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-top: calc(var(--s4-top-h) + var(--s4-safe-t));
+  padding-bottom: calc(var(--s4-dock-h) + var(--s4-keys-h) + var(--s4-safe-b));
+}
+
+/* ---- forced zoom (workbench only) ------------------------------------ */
+.monaco-workbench {
+  zoom: var(--s4-zoom) !important;
+  width: calc(100% * var(--s4-inv)) !important;
+  height: calc(100% * var(--s4-inv)) !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/* login / error pages have no workbench: zoom the whole body instead */
+body:not(:has(.monaco-workbench)) { zoom: var(--s4-zoom); }
+
+/* ---- touch friendliness inside VS Code -------------------------------- */
+/* Scrollbars: fat enough to drag with a finger. */
+.monaco-scrollable-element > .scrollbar > .slider { min-width: 14px !important; min-height: 14px !important; }
+.monaco-scrollable-element > .scrollbar.vertical > .slider { width: 14px !important; }
+.monaco-scrollable-element > .scrollbar.horizontal > .slider { height: 14px !important; }
+.monaco-scrollable-element > .scrollbar { opacity: 0.85; }
+
+/* Menus and context menus are not virtualised -> safe to enlarge. */
+.monaco-menu .action-item > .action-label { padding-top: 9px !important; padding-bottom: 9px !important; min-height: 40px !important; }
+.monaco-menu .action-item { margin: 1px 0 !important; }
+.monaco-menu .action-menu-item > .action-label { line-height: 20px !important; }
+
+/* Dialogs / notifications: bigger buttons, easier to hit. */
+.monaco-dialog-box .dialog-button-bar .monaco-button { padding: 8px 14px !important; min-height: 40px !important; }
+.notification-toast-container .notification-list-item { padding: 6px !important; }
+
+/* Quick input (command palette): 17px stops mobile browsers from auto-zooming
+   on focus and makes typed text readable. */
+.quick-input-widget .input { font-size: 17px !important; }
+.quick-input-widget .monaco-inputbox { padding: 4px !important; }
+.quick-input-widget .quick-input-header { padding: 8px !important; }
+
+/* Monaco's hidden input textarea: same reason (IME / on-screen keyboard). */
+.monaco-editor textarea.inputarea, .monaco-editor .inputarea { font-size: 16px !important; }
+.xterm-helper-textarea { font-size: 16px !important; }
+
+/* Activity bar / status bar icons a little larger (icon glyphs only, the
+   row boxes keep their JS-computed heights so virtual lists stay aligned). */
+.monaco-action-bar.vertical .action-item .action-label { background-size: 22px !important; }
+.codicon[class*='codicon-'] { font-size: 17px; }
+.action-bar .codicon, .composite.title .codicon { font-size: 19px; }
+
+/* Free vertical room on phones: the breadcrumb strip costs 22px and is hard
+   to read at that size anyway.  The title bar is deliberately KEPT: it holds
+   the hamburger menu and the command center, which are the click-based way to
+   reach the command palette when a synthetic keybinding is ignored. */
+@media (max-width: 900px) {
+  .breadcrumbs-control { display: none !important; }
+  .monaco-workbench .part.titlebar { height: 30px !important; }
+  .monaco-workbench .part.titlebar > .window-appicon,
+  .monaco-workbench .part.titlebar .window-controls-container { display: none !important; }
+}
+
+/* =========================================================================
+ * The mobile shell (Replit-like): top bar, extra-keys row, bottom tab dock.
+ * Built by s4-csmobile.js.  Everything lives in #s4mob, a direct child of
+ * <body>, so it is outside the zoomed workbench and keeps a fixed size.
+ * ======================================================================= */
+#s4mob { font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--s4-fg); }
+#s4mob * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+#s4mob-top, #s4mob-dock, #s4mob-keys {
+  position: fixed; left: 0; right: 0; z-index: 2147483000;
+  background: var(--s4-bg); border: 0 solid var(--s4-border);
+  display: flex; align-items: center; gap: 4px;
+  user-select: none; -webkit-user-select: none;
+}
+#s4mob-top  { top: 0; height: var(--s4-top-h); padding-top: var(--s4-safe-t); border-bottom-width: 1px; }
+#s4mob-keys { bottom: calc(var(--s4-dock-h) + var(--s4-safe-b)); height: var(--s4-keys-h);
+              overflow-x: auto; overflow-y: hidden; background: var(--s4-bg2);
+              border-top-width: 1px; scrollbar-width: none; }
+#s4mob-keys::-webkit-scrollbar { display: none; }
+#s4mob-dock { bottom: 0; height: calc(var(--s4-dock-h) + var(--s4-safe-b));
+              padding-bottom: var(--s4-safe-b); border-top-width: 1px; }
+
+#s4mob-top.s4-hidden, #s4mob-keys.s4-hidden, #s4mob-dock.s4-hidden { display: none; }
+
+.s4-btn {
+  flex: 0 0 auto; min-width: 38px; height: 32px; padding: 0 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--s4-fg); border: 1px solid transparent;
+  border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.s4-btn:active { background: rgba(255, 255, 255, 0.16); }
+.s4-btn.s4-on { background: var(--s4-accent); color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.s4-btn.s4-wide { min-width: 44px; }
+.s4-spacer { flex: 1 1 auto; }
+.s4-title { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font-size: 13px; color: var(--s4-dim); padding: 0 4px; }
+
+#s4mob-keys .s4-key {
+  flex: 0 0 auto; min-width: 38px; height: 34px; margin: 4px 3px; padding: 0 8px;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--s4-border);
+  border-radius: 7px; color: var(--s4-fg); font-size: 14px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+#s4mob-keys .s4-key:active { background: var(--s4-accent); color: #fff; }
+#s4mob-keys .s4-key.s4-on { background: var(--s4-accent); color: #fff; border-color: #fff; }
+
+.s4-tab {
+  flex: 1 1 0; height: var(--s4-dock-h); min-width: 0; padding: 4px 2px 3px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; background: transparent; border: 0; border-top: 2px solid transparent;
+  color: var(--s4-dim); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.s4-tab .s4-ico { font-size: 19px; line-height: 1; }
+.s4-tab.s4-on { color: #fff; border-top-color: var(--s4-accent); background: rgba(47, 129, 247, 0.16); }
+.s4-tab:active { background: rgba(255, 255, 255, 0.1); }
+
+#s4mob-sheet {
+  position: fixed; inset: 0; z-index: 2147483001; display: none;
+  background: rgba(0, 0, 0, 0.5); align-items: flex-end;
+}
+#s4mob-sheet.s4-open { display: flex; }
+#s4mob-sheet .s4-panel {
+  width: 100%; max-height: 76vh; overflow-y: auto; background: var(--s4-bg);
+  border-top: 1px solid var(--s4-border); border-radius: 14px 14px 0 0;
+  padding: 8px 8px calc(10px + var(--s4-safe-b));
+}
+#s4mob-sheet .s4-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#s4mob-sheet .s4-cell {
+  min-height: 60px; padding: 8px 6px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px; text-align: center;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--s4-border);
+  border-radius: 10px; color: var(--s4-fg); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+#s4mob-sheet .s4-cell .s4-ico { font-size: 20px; }
+#s4mob-sheet .s4-cell:active { background: var(--s4-accent); color: #fff; }
+#s4mob-sheet .s4-h { padding: 6px 4px; font-size: 12px; color: var(--s4-dim); text-transform: uppercase; letter-spacing: .06em; }
+
+#s4mob-toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--s4-dock-h) + var(--s4-keys-h) + var(--s4-safe-b) + 12px);
+  z-index: 2147483002; max-width: 88vw; padding: 8px 12px; border-radius: 10px;
+  background: rgba(0, 0, 0, 0.86); color: #fff; font-size: 13px; text-align: center;
+  border: 1px solid var(--s4-border); opacity: 0; transition: opacity .18s; pointer-events: none;
+}
+#s4mob-toast.s4-show { opacity: 1; }

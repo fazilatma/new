@@ -1,59 +1,87 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =====================================================================
-#  s4-remote.sh v1.1 — دسترسی به فایل‌هایِ ترموکس + code-serverِ موبایل‌پسند
+#  s4-remote.sh v1.2 -- Termux private files + mobile-friendly code-server
+# ---------------------------------------------------------------------
+#  All output of this script is in English (per request).
 #
-#  ۲) SFTP با sshd رویِ پورتِ ۸۰۲۲
-#     → هر فایل‌منیجری که SFTP دارد (Solid Explorer, MiXplorer, X-plore,
-#       Cx, Material Files) کلِ /data/data/com.termux/files/home را می‌بیند.
+#  Route 2: SFTP over sshd on port 8022
+#     Any file manager with SFTP (Solid Explorer, MiX Explorer, X-plore,
+#     Cx, Material Files) can then browse the whole of
+#     /data/data/com.termux/files/home, which no Android file manager can
+#     read directly (it is app-private; Shizuku only unlocks /sdcard/Android/data).
 #
-#  ۳) code-serverِ **اجباراً زوم‌شدنی** و موبایل‌پسند
-#     تنظیماتِ window.zoomLevel در مرورگر اثر ندارند (ویژگیِ Electron است) و
-#     خودِ صفحه viewport را قفل می‌کند، پس زومِ دو‌انگشتی کار نمی‌کند.
-#     راهِ حل: یک پروکسیِ سبکِ Node (deploy/s4-csproxy.js) جلوی code-server
-#     می‌نشیند و داخلِ هر پاسخِ HTML:
-#        • meta viewport را با user-scalable=yes / maximum-scale=10 جایگزین می‌کند
-#        • CSSِ زومِ اجباری (body{zoom:var(--s4-zoom)}) و کنترل‌های لمسی را
-#          تزریق می‌کند
-#        • نوارِ شناورِ A− / A+ / ⟳ / ⛶ / ✕ را اضافه می‌کند (زوم با لمس،
-#          بدونِ کیبورد) + زومِ دو‌انگشتی + ?z=1.8 در نشانی
-#        • اتصال‌های WebSocket (ترمینال، extension host) را تونلِ خام می‌زند
-#     و هیچ فایلی از نصبِ code-server را دستکاری نمی‌کند ⇒ با آپگرید نمی‌شکند.
+#  Route 3: code-server, forced zoom + a Replit-like mobile shell
+#     window.zoomLevel does nothing in a browser (only
+#     src/vs/workbench/electron-browser/window.ts reads it), and the VS Code
+#     web workbench ships
+#        <meta name="viewport" ... user-scalable=no>   <!-- Disable pinch zooming -->
+#     plus a nonce-locked Content-Security-Policy.  So a lightweight Node
+#     proxy (deploy/s4-csproxy.js) sits in front of code-server and, in every
+#     HTML response:
+#        - drops the pinched viewport meta and injects an unlocked one
+#        - injects CSS that zooms .monaco-workbench and compensates its box
+#        - injects the mobile shell JS with the page's own CSP nonce
+#          (without the nonce the browser silently discards the script)
+#        - tunnels WebSocket upgrades as raw TCP (terminal, extension host)
+#        - answers GET /__s4mobile with hard evidence for the agent rounds
+#     It never touches the code-server install, so upgrades cannot break it.
 #
-#     code-server رویِ 127.0.0.1:18081 و پروکسی رویِ 127.0.0.1:8081.
+#     code-server listens on 127.0.0.1:18081, the proxy on 127.0.0.1:8081.
+#     Open the PROXY port in the browser.
 #
-#  کاربرد:
-#     bash s4-remote.sh                  # هر دو (ssh + code-serverِ موبایل)
-#     bash s4-remote.sh --code           # فقط code-server
-#     bash s4-remote.sh --code --zoom 1.8
-#     bash s4-remote.sh --code --open    # در مرورگر هم بازش کن
-#     bash s4-remote.sh --code --no-proxy# مثلِ قبل، بدونِ پروکسی
-#     bash s4-remote.sh --code --css my.css   # CSSِ دلخواهِ خودت
-#     bash s4-remote.sh --ssh --set-password
-#     bash s4-remote.sh --status
-#     bash s4-remote.sh --stop
+#  Terminal "permission denied" fix (built in, see fix_terminal)
+#     node-pty launches a shell through a small helper binary
+#     (spawn-helper).  On Termux that fails when the helper lost its exec
+#     bit, when the install sits on a noexec mount (shared storage), or when
+#     VS Code picks a shell that does not exist (/bin/sh, /bin/bash).
+#     This script chmods every spawn-helper, warns about noexec installs,
+#     exports SHELL/TMPDIR/TERM, writes an explicit Termux bash terminal
+#     profile, and then runs a real node-pty self-test that prints PTY_OK or
+#     the exact error text.
 #
-#  نکتهٔ امنیتی: همه‌چیز فقط به 127.0.0.1 بسته می‌شود مگر --bind-lan.
+#  Usage:
+#     bash s4-remote.sh                     # ssh + mobile code-server
+#     bash s4-remote.sh --code              # code-server only
+#     bash s4-remote.sh --code --zoom 1.6   # forced zoom 160%
+#     bash s4-remote.sh --code --open       # also open it in the browser
+#     bash s4-remote.sh --fix-terminal      # only repair the terminal
+#     bash s4-remote.sh --selftest          # only check + report evidence
+#     bash s4-remote.sh --status            # what is running right now
+#     bash s4-remote.sh --stop              # stop proxy/code-server/sshd
+#     bash s4-remote.sh --code --no-proxy   # plain code-server, no injection
+#     bash s4-remote.sh --code --css my.css # your own mobile CSS override
+#
+#  Security: everything binds to 127.0.0.1 unless you pass --bind-lan, and
+#  --bind-lan exposes only the proxy (code-server itself stays on loopback).
 # =====================================================================
 set -u
 
-VERSION="1.1.0"
+VERSION="1.2.0"
+MARKER="s4-cs-mobile-v2"
 SSH_PORT="${SSH_PORT:-8022}"
-CODE_PORT="${CODE_PORT:-8081}"       # what you open in the browser
-CS_UPSTREAM="${CS_UPSTREAM:-18081}"  # code-server itself (loopback)
+CODE_PORT="${CODE_PORT:-8081}"        # what you open in the browser
+CS_UPSTREAM="${CS_UPSTREAM:-18081}"   # code-server itself (loopback only)
 CODE_HOST="127.0.0.1"
 BASE="$HOME/.s4-remote"
-REPO="fazilatma/new"
-SRC_BRANCH="arena/f5a628bb-new"
-RAWBASE="https://raw.githubusercontent.com/$REPO/$SRC_BRANCH"
+PFX="${PREFIX:-/data/data/com.termux/files/usr}"   # Termux prefix (never unset)
+REPO="${S4_REPO:-fazilatma/new}"
+SRC_BRANCH="${S4_SRC_BRANCH:-arena/f5a628bb-new}"
+RAWBASE="${S4_RAWBASE:-https://raw.githubusercontent.com/$REPO/$SRC_BRANCH}"
 API="https://api.github.com"
 PROXY_JS="s4-csproxy.js"
+SHELL_CSS="s4-csmobile.css"
+SHELL_JS="s4-csmobile.js"
+HELP_LAST_LINE=56
 
-ZOOM="$(cat "$BASE/zoom" 2>/dev/null || echo 1.4)"
+ZOOM="$(cat "$BASE/zoom" 2>/dev/null || echo 1.3)"
 USE_PROXY=1; OPEN_BROWSER=0; CUSTOM_CSS=""
 DO_SSH=0; DO_CODE=0; STOP=0; STATUS=0; SET_PW=0; BIND_LAN=0; NO_SETTINGS=0
+FIX_TERMINAL=0; SELFTEST=0; NO_SHELL=0
 
-say() { printf '%s\n' "$*"; }
-die() { printf '❌ %s\n' "$*" >&2; exit 1; }
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'WARN  %s\n' "$*" >&2; }
+die()  { printf 'ERROR %s\n' "$*" >&2; exit 1; }
+hr()   { say "------------------------------------------------------------"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,119 +91,237 @@ while [ $# -gt 0 ]; do
     --stop)          STOP=1; shift ;;
     --status)        STATUS=1; shift ;;
     --set-password)  SET_PW=1; shift ;;
+    --fix-terminal)  FIX_TERMINAL=1; shift ;;
+    --selftest)      SELFTEST=1; shift ;;
     --ssh-port)      SSH_PORT="${2:-8022}"; shift 2 ;;
     --code-port)     CODE_PORT="${2:-8081}"; shift 2 ;;
     --upstream-port) CS_UPSTREAM="${2:-18081}"; shift 2 ;;
-    --zoom)          ZOOM="${2:-1.4}"; shift 2 ;;
+    --zoom)          ZOOM="${2:-1.3}"; shift 2 ;;
     --zoom=*)        ZOOM="${1#*=}"; shift ;;
     --no-proxy)      USE_PROXY=0; shift ;;
     --proxy)         USE_PROXY=1; shift ;;
+    --no-shell)      NO_SHELL=1; shift ;;
     --open)          OPEN_BROWSER=1; shift ;;
     --css)           CUSTOM_CSS="${2:-}"; shift 2 ;;
     --css=*)         CUSTOM_CSS="${1#*=}"; shift ;;
     --bind-lan)      BIND_LAN=1; CODE_HOST="0.0.0.0"; shift ;;
     --no-settings)   NO_SETTINGS=1; shift ;;
-    -h|--help)       sed -n '2,44p' "$0"; exit 0 ;;
-    *)               die "flag ناشناخته: $1 (--help)" ;;
+    -h|--help)       sed -n "2,${HELP_LAST_LINE}p" "$0"; exit 0 ;;
+    *)               die "unknown flag: $1  (try --help)" ;;
   esac
 done
-[ "$DO_SSH" = 0 ] && [ "$DO_CODE" = 0 ] && { DO_SSH=1; DO_CODE=1; }
+
+if [ "$SELFTEST" = 0 ] && [ "$FIX_TERMINAL" = 0 ] && [ "$DO_SSH" = 0 ] && [ "$DO_CODE" = 0 ]; then
+  DO_SSH=1; DO_CODE=1
+fi
 
 mkdir -p "$BASE" 2>/dev/null || true
 printf '%s' "$ZOOM" > "$BASE/zoom" 2>/dev/null || true
 
 listening() { command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ":$1 "; }
+have() { command -v "$1" >/dev/null 2>&1; }
 
-# ------------------------------------------------------------------ status
-if [ "$STATUS" = 1 ]; then
-  say "📡 s4-remote $VERSION"
-  say "   sshd:        $(command -v sshd >/dev/null 2>&1 && echo "نصب ($(command -v sshd))" || echo 'نصب نیست')"
-  say "   code-server: $(command -v code-server >/dev/null 2>&1 && code-server --version 2>/dev/null | head -1 || echo 'نصب نیست')"
-  say "   node:        $(command -v node >/dev/null 2>&1 && node -v 2>/dev/null || echo 'نصب نیست')"
-  say "   پروکسی:      $([ -f "$BASE/$PROXY_JS" ] && echo "موجود ($(wc -c < "$BASE/$PROXY_JS" | tr -d ' ') بایت)" || echo 'دریافت نشده')"
-  say "   زومِ ذخیره‌شده: $ZOOM"
-  say "   پورت‌ها:      مرورگر→$CODE_PORT  code-server→$CS_UPSTREAM  ssh→$SSH_PORT"
-  for p in "$CODE_PORT" "$CS_UPSTREAM" "$SSH_PORT"; do
-    listening "$p" && say "      :$p گوش می‌دهد ✅" || say "      :$p خاموش"
-  done
-  if listening "$CODE_PORT"; then
-    M=$(curl -sS --max-time 20 "http://127.0.0.1:$CODE_PORT/" 2>/dev/null | grep -c 's4-cs-mobile-v1')
-    say "   تزریقِ CSS/JSِ موبایل: $([ "${M:-0}" -gt 0 ] && echo 'فعال ✅' || echo 'یافت نشد ❌')"
+# ------------------------------------------------- code-server install root
+CS_BIN=""; CS_ROOT=""
+locate_code_server() {
+  [ -n "$CS_ROOT" ] && return 0
+  CS_BIN="$(command -v code-server 2>/dev/null || true)"
+  [ -z "$CS_BIN" ] && return 1
+  local real; real="$(readlink -f "$CS_BIN" 2>/dev/null || printf '%s' "$CS_BIN")"
+  # Termux package: $PREFIX/bin/code-server -> $PREFIX/lib/code-server/...
+  # npm -g       : $PREFIX/lib/node_modules/code-server/out/node/entry.js
+  CS_ROOT="$(printf '%s' "$real" | sed -e 's#/out/node/.*##' -e 's#/bin/code-server$##')"
+  [ -d "$CS_ROOT" ] || CS_ROOT="$(dirname "$real")"
+  return 0
+}
+
+# ================================================ terminal repair (English)
+fix_terminal() {
+  say ""
+  say "== Terminal repair =="
+  local pfx="${PREFIX:-/data/data/com.termux/files/usr}"
+  local bash_bin="$pfx/bin/bash"
+
+  # 1) a shell that actually exists
+  if [ -x "$bash_bin" ]; then
+    export SHELL="$bash_bin"
+    say "  SHELL=$SHELL"
+  else
+    warn "no bash at $bash_bin  (pkg install bash)"
+    export SHELL="${SHELL:-$pfx/bin/sh}"
   fi
-  exit 0
-fi
+  export TMPDIR="${TMPDIR:-$pfx/tmp}"
+  export TERM="${TERM:-xterm-256color}"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  say "  TMPDIR=$TMPDIR  TERM=$TERM"
 
-if [ "$STOP" = 1 ]; then
-  for f in csproxy.pid code.pid sshd.pid; do
-    if [ -f "$BASE/$f" ] && kill -0 "$(cat "$BASE/$f")" 2>/dev/null; then
-      kill "$(cat "$BASE/$f")" 2>/dev/null && say "✅ $(cat "$BASE/$f") متوقف شد ($f)"
-      rm -f "$BASE/$f"
+  # 2) node-pty spawn-helper must be executable
+  if locate_code_server; then
+    say "  code-server install: $CS_ROOT"
+    case "$CS_ROOT" in
+      /storage/*|"$HOME"/storage/*)
+        warn "code-server is installed on shared storage, which is mounted"
+        warn "noexec: the pty helper cannot run there. Reinstall it inside"
+        warn "Termux home:  pkg install code-server"
+        ;;
+    esac
+    local helpers found=0 fixed=0
+    helpers="$(find "$CS_ROOT" -name 'spawn-helper' -type f 2>/dev/null | head -20)"
+    if [ -z "$helpers" ]; then
+      helpers="$(find "$pfx/lib" -name 'spawn-helper' -type f 2>/dev/null | head -20)"
     fi
-  done
-  pkill -f "$PROXY_JS" 2>/dev/null && say "✅ پروکسی کشته شد"
-  pkill -f "code-server" 2>/dev/null && say "✅ code-server کشته شد"
-  pkill -f "sshd" 2>/dev/null && say "✅ sshd کشته شد"
-  exit 0
-fi
+    if [ -n "$helpers" ]; then
+      while IFS= read -r h; do
+        [ -z "$h" ] && continue
+        found=$((found + 1))
+        local before after
+        before="$(ls -l "$h" 2>/dev/null | awk '{print $1}')"
+        if [ -x "$h" ]; then
+          say "  helper ok       $before  $h"
+        else
+          chmod 755 "$h" 2>/dev/null || chmod +x "$h" 2>/dev/null || true
+          after="$(ls -l "$h" 2>/dev/null | awk '{print $1}')"
+          if [ -x "$h" ]; then
+            fixed=$((fixed + 1))
+            say "  helper FIXED    $before -> $after  $h"
+          else
+            say "  helper FAILED   $before  $h  (chmod refused: noexec mount?)"
+          fi
+        fi
+      done <<EOF2
+$helpers
+EOF2
+      say "  spawn-helper: found=$found fixed=$fixed"
+      [ "$found" = 0 ] && warn "no spawn-helper found; node-pty may be missing"
+    else
+      warn "no spawn-helper found under $CS_ROOT or $pfx/lib"
+    fi
 
-# ------------------------------------------------------- ssh password
-if [ "$SET_PW" = 1 ]; then
-  command -v passwd >/dev/null 2>&1 || die "passwd پیدا نشد"
-  say "🔑 گذاشتنِ رمزِ کاربرِ $(whoami) برایِ ssh (دو بار وارد کنید):"
-  passwd || die "تغییرِ رمز ناموفق بود"
-  say "✅ رمز تنظیم شد"
-fi
-
-# ============================================================== route 2: ssh
-if [ "$DO_SSH" = 1 ]; then
-  say ""
-  say "══════════ ۲) SFTP ══════════"
-  if ! command -v sshd >/dev/null 2>&1; then
-    say "📦 نصبِ openssh …"
-    command -v pkg >/dev/null 2>&1 || die "pkg پیدا نشد"
-    yes | pkg install -y openssh 2>&1 | tail -8 | sed 's/^/   /'
-  fi
-  command -v sshd >/dev/null 2>&1 || die "sshd نصب نشد"
-  ls "$PREFIX/etc/ssh"/ssh_host_* >/dev/null 2>&1 || { say "🔐 ساختِ کلیدهایِ میزبان …"; ssh-keygen -A 2>&1 | tail -6 | sed 's/^/   /'; }
-  LAN_IP="$( { ip -4 addr show wlan0 2>/dev/null || ifconfig wlan0 2>/dev/null; } | grep -o 'inet [0-9.]*' | head -1 | cut -d' ' -f2 )"
-  if pgrep -f sshd >/dev/null 2>&1; then
-    say "ℹ️ sshd از قبل در حالِ اجراست"
+    # 3) is the install on a noexec mount?
+    if have mount; then
+      local mnt
+      mnt="$(df "$CS_ROOT" 2>/dev/null | awk 'NR==2{print $NF}')"
+      if [ -n "${mnt:-}" ] && mount 2>/dev/null | grep -F " $mnt " | grep -q noexec; then
+        warn "mount $mnt is noexec: binaries there cannot be executed"
+      else
+        say "  mount for $CS_ROOT: ${mnt:-unknown} (exec allowed)"
+      fi
+    fi
   else
-    sshd -p "$SSH_PORT" 2>"$BASE/sshd.err" && say "✅ sshd رویِ پورتِ $SSH_PORT" \
-      || { say "❌ sshd بالا نیامد:"; sed 's/^/      /' "$BASE/sshd.err"; }
+    warn "code-server not found on PATH (pkg install code-server)"
   fi
-  sleep 1
-  listening "$SSH_PORT" && say "   گوش می‌دهد ✅" || say "   ⚠️ رویِ $SSH_PORT چیزی گوش نمی‌دهد"
-  say ""
-  say "   در فایل‌منیجر یک اتصالِ SFTP بسازید:"
-  say "      host: 127.0.0.1   port: $SSH_PORT   path: ~"
-  if [ -t 1 ]; then
-    say "      username: $(whoami)"
-    say "      password: رمزی که با passwd گذاشتید (نگذاشته‌اید؟ bash $0 --set-password)"
+
+  # 4) real node-pty self-test: this is what VS Code does when it opens a
+  #    terminal, so its output is the definitive answer.
+  if have node; then
+    cat > "$BASE/pty-selftest.js" <<'EOF2'
+/* Spawn a shell through node-pty exactly like the code-server terminal does. */
+const fs = require('fs');
+const path = require('path');
+const roots = (process.argv[2] || '').split(':').filter(Boolean);
+const shell = process.env.SHELL || '/data/data/com.termux/files/usr/bin/bash';
+
+function candidates() {
+  const out = [];
+  for (const root of roots) {
+    for (const rel of [
+      'lib/node_modules/@coder/node-pty-prebuilt-multiarch',
+      'node_modules/@coder/node-pty-prebuilt-multiarch',
+      'lib/node_modules/node-pty',
+      'node_modules/node-pty',
+      'lib/node_modules/code-server/node_modules/node-pty'
+    ]) {
+      const p = path.join(root, rel);
+      if (fs.existsSync(p)) out.push(p);
+    }
+  }
+  return out;
+}
+
+function findHelper(dir, depth) {
+  if (depth > 6) return null;
+  let ents;
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
+  for (const e of ents) {
+    const p = path.join(dir, e.name);
+    if (e.isFile() && e.name === 'spawn-helper') return p;
+    if (e.isDirectory() && e.name !== '.git') {
+      const hit = findHelper(p, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+const cands = candidates();
+if (!cands.length) { console.log('PTY_FAIL no node-pty module under: ' + roots.join(', ')); process.exit(0); }
+console.log('pty module: ' + cands[0]);
+const helper = findHelper(cands[0], 0);
+if (helper) {
+  let mode = 'unknown', exec = false;
+  try { const st = fs.statSync(helper); mode = (st.mode & 0o7777).toString(8); exec = !!(st.mode & 0o111); } catch (e) {}
+  console.log('spawn-helper: ' + helper + ' mode=' + mode + ' executable=' + exec);
+  if (!exec) { try { fs.chmodSync(helper, 0o755); console.log('spawn-helper: chmod 755 applied'); } catch (e) { console.log('spawn-helper: chmod failed: ' + e.message); } }
+} else { console.log('spawn-helper: NOT FOUND'); }
+console.log('shell: ' + shell + ' exists=' + fs.existsSync(shell));
+
+let pty;
+try { pty = require(cands[0]); }
+catch (e) { console.log('PTY_FAIL require: ' + (e.message || e).split('\n')[0]); process.exit(0); }
+
+let out = '';
+let done = false;
+try {
+  const p = pty.spawn(shell, ['-lc', 'echo PTY_CHILD_OK; id -un; pwd'], {
+    name: process.env.TERM || 'xterm-256color',
+    cols: 80, rows: 24,
+    cwd: process.env.HOME || '/data/data/com.termux/files/home',
+    env: Object.assign({}, process.env)
+  });
+  p.onData((d) => { out += d; if (out.indexOf('PTY_CHILD_OK') >= 0 && !done) { done = true; } });
+  p.onExit(({ exitCode, signal }) => {
+    console.log('PTY_EXIT=' + exitCode + ' signal=' + (signal || 0));
+    console.log('PTY_OUTPUT=' + JSON.stringify(out.replace(/\r/g, '').slice(0, 300)));
+    console.log(out.indexOf('PTY_CHILD_OK') >= 0 ? 'PTY_OK' : 'PTY_FAIL child did not answer');
+    process.exit(0);
+  });
+} catch (e) {
+  console.log('PTY_FAIL spawn: ' + (e && (e.message || e.name) || e));
+  console.log('PTY_STACK=' + String((e && e.stack) || '').split('\n').slice(0, 3).join(' | '));
+  process.exit(0);
+}
+setTimeout(() => {
+  console.log('PTY_OUTPUT=' + JSON.stringify(out.replace(/\r/g, '').slice(0, 300)));
+  console.log(out.indexOf('PTY_CHILD_OK') >= 0 ? 'PTY_OK (timeout waiting for exit)' : 'PTY_TIMEOUT');
+  process.exit(0);
+}, 12000);
+EOF2
+    local roots_arg="$CS_ROOT:$PFX/lib/node_modules/code-server:$PFX"
+    say "  running node-pty self-test (this is what the terminal does) ..."
+    ( cd "$BASE" && SHELL="$SHELL" TMPDIR="$TMPDIR" TERM="$TERM" \
+        timeout 25 node "$BASE/pty-selftest.js" "$roots_arg" 2>&1 | sed 's/^/    /' ) \
+      || say "    self-test could not run (timeout or node error)"
   else
-    say "      username: (خروجیِ whoami)   password: (با --set-password؛ اینجا چاپ نمی‌شود)"
+    warn "node is missing: pkg install node (the proxy and this self-test need it)"
   fi
-  [ -n "${LAN_IP:-}" ] && say "   از کامپیوترِ رویِ همان وای‌فای: $LAN_IP:$SSH_PORT"
-  say "   شروعِ خودکار: pkg install termux-services && sv-enable sshd"
-fi
+  say "  done. If it still fails, the PTY_FAIL line above is the exact cause."
+}
 
-# ==================================================== route 3: code-server
-if [ "$DO_CODE" = 1 ]; then
-  say ""
-  say "══════════ ۳) code-serverِ موبایل‌پسند (زومِ اجباری) ══════════"
-  command -v code-server >/dev/null 2>&1 || { say "⚠️ code-server نصب نیست: pkg install code-server"; DO_CODE=0; }
-fi
-
-if [ "$DO_CODE" = 1 ]; then
+# ======================================================= settings.json merge
+apply_settings() {
+  local pfx="$PFX"
   SETTINGS_DIR="$HOME/.local/share/code-server/User"
   SETTINGS="$SETTINGS_DIR/settings.json"
-  if [ "$NO_SETTINGS" = 0 ]; then
-    mkdir -p "$SETTINGS_DIR" 2>/dev/null
-    if command -v python3 >/dev/null 2>&1; then
-      [ -f "$SETTINGS" ] && cp -p "$SETTINGS" "$SETTINGS.bak.$(date +%s)" 2>/dev/null
-      SETTINGS="$SETTINGS" python3 - <<'PY' 2>&1 | sed 's/^/   /'
+  mkdir -p "$SETTINGS_DIR" 2>/dev/null
+  if ! have python3; then
+    warn "python3 missing: settings not merged (forced zoom comes from the proxy anyway)"
+    return 0
+  fi
+  [ -f "$SETTINGS" ] && cp -p "$SETTINGS" "$SETTINGS.bak.$(date +%s)" 2>/dev/null
+  SETTINGS="$SETTINGS" S4_BASH="$pfx/bin/bash" python3 - <<'PY' 2>&1 | sed 's/^/  /'
 import json, os
 p = os.environ["SETTINGS"]
+bash = os.environ.get("S4_BASH", "/data/data/com.termux/files/usr/bin/bash")
 try:
     cur = json.load(open(p, encoding="utf-8")) if os.path.isfile(p) else {}
     if not isinstance(cur, dict):
@@ -183,6 +329,7 @@ try:
 except Exception:
     cur = {}
 mobile = {
+    # --- readable on a phone -------------------------------------------
     "editor.fontSize": 18,
     "editor.lineHeight": 30,
     "editor.wordWrap": "on",
@@ -203,52 +350,221 @@ mobile = {
     "telemetry.telemetryLevel": "off",
     "workbench.editor.limit.enabled": True,
     "workbench.editor.limit.value": 6,
+    # the mobile shell replaces the left rail with a bottom tab dock; "top"
+    # keeps #workbench.view.* clickable (use "hidden" for maximum room)
+    "workbench.activityBar.location": "top",
+    # --- terminal: never guess a shell that does not exist on Android ----
+    "terminal.integrated.defaultProfile.linux": "Termux bash",
+    "terminal.integrated.profiles.linux": {
+        "Termux bash": {"path": bash, "args": ["-l"], "icon": "terminal-bash"},
+        "Termux sh": {"path": os.path.join(os.path.dirname(bash), "sh"), "args": ["-l"]}
+    },
+    "terminal.integrated.automationProfile.linux": {"path": bash, "args": ["-l"]},
+    "terminal.integrated.copyOnSelection": True,
 }
-changed = {k: v for k, v in mobile.items() if cur.get(k) != v}
+changed = sorted(k for k, v in mobile.items() if cur.get(k) != v)
 cur.update(mobile)
 json.dump(cur, open(p, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 print("settings:", p)
-print("changed:", ", ".join(sorted(changed)) or "none")
+print("changed:", ", ".join(changed) or "none")
 PY
-    else
-      say "   ⚠️ python3 نیست ⇒ تنظیمات ادغام نشد (زوم را همان پروکسی اجبار می‌کند)"
-    fi
+}
+
+# ================================================== download shell + proxy
+fetch_file() {  # fetch_file <name>
+  local name="$1" dst="$BASE/$1" src local_src
+  local_src="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$name"
+  if [ -f "$local_src" ]; then
+    cp -f "$local_src" "$dst" && { say "  $name: copied from $local_src"; return 0; }
+  fi
+  if curl -fsSL --connect-timeout 12 --max-time 60 -o "$dst.tmp" "$RAWBASE/deploy/$name" 2>/dev/null && [ -s "$dst.tmp" ]; then
+    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (raw.githubusercontent.com)"; return 0
+  fi
+  if curl -fsSL --connect-timeout 12 --max-time 60 -H 'Accept: application/vnd.github.raw' \
+       -o "$dst.tmp" "$API/repos/$REPO/contents/deploy/$name?ref=$SRC_BRANCH" 2>/dev/null && [ -s "$dst.tmp" ]; then
+    mv -f "$dst.tmp" "$dst"; say "  $name: downloaded (api.github.com)"; return 0
+  fi
+  rm -f "$dst.tmp" 2>/dev/null
+  if [ -f "$dst" ]; then warn "$name: download failed, keeping the existing copy"; return 0; fi
+  warn "$name: unavailable"; return 1
+}
+
+# ======================================================== evidence / checks
+verify_injection() {  # prints S4_VERIFY=pass|fail
+  local body="$BASE/probe.html" code marks zoomcss pinch blocked nonce src
+  code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 25 "http://127.0.0.1:$CODE_PORT/" 2>/dev/null || echo 000)"
+  marks="$(grep -c "$MARKER" "$body" 2>/dev/null | head -1)";      marks="${marks:-0}"
+  zoomcss="$(grep -c -- '--s4-zoom' "$body" 2>/dev/null | head -1)"; zoomcss="${zoomcss:-0}"
+  pinch="$(grep -c 'user-scalable=yes' "$body" 2>/dev/null | head -1)"; pinch="${pinch:-0}"
+  blocked="$(grep -c 'user-scalable=no' "$body" 2>/dev/null | head -1)"; blocked="${blocked:-0}"
+  nonce="$(grep -c 'data-s4="mob" nonce="' "$body" 2>/dev/null | head -1)"; nonce="${nonce:-0}"
+  say "  page probe: http=$code marker=$marks forced-zoom-css=$zoomcss pinch-unlocked=$pinch pinch-blocked=$blocked"
+  say "  shell script nonce attribute: $nonce (0 is correct when the page has no CSP)"
+
+  if [ -f "$BASE/mobile.css" ]; then
+    say "  note: $BASE/mobile.css overrides the shipped shell CSS (replace it with --css <file>)"
+  fi
+  if [ -f "$BASE/mobile.js" ]; then
+    say "  note: $BASE/mobile.js overrides the shipped shell JS"
+  fi
+  local st="$BASE/probe-status.json"
+  curl -sS --max-time 20 -o "$st" "http://127.0.0.1:$CODE_PORT/__s4mobile?probe=1" 2>/dev/null || true
+  if [ -s "$st" ] && have python3; then
+    python3 - "$st" <<'PY' 2>/dev/null | sed 's/^/  /'
+import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding='utf-8'))
+except Exception as e:
+    print('status endpoint: unreadable (%s)'%e); sys.exit(0)
+print('proxy status: v%s marker=%s zoom=%s uptime=%ss'%(d.get('version'),d.get('marker'),d.get('zoom'),d.get('uptimeSec')))
+print('  shell css=%s (%sB)  js=%s (%sB)'%(d.get('shell',{}).get('css',{}).get('source'),d.get('shell',{}).get('css',{}).get('bytes'),d.get('shell',{}).get('js',{}).get('source'),d.get('shell',{}).get('js',{}).get('bytes')))
+print('  nonce: last=%s counts=%s cspRewritten=%s'%(d.get('nonce',{}).get('lastSource'),d.get('nonce',{}).get('counts'),d.get('nonce',{}).get('cspRewritten')))
+c=d.get('counters',{})
+print('  counters: htmlSeen=%s htmlInjected=%s viewportStripped=%s ws=%s upstreamErr=%s browserReports=%s'%(c.get('htmlSeen'),c.get('htmlInjected'),c.get('viewportStripped'),c.get('ws'),c.get('upstreamErr'),c.get('browserReports')))
+print('  upstreamProbe: %s'%d.get('upstreamProbe'))
+r=d.get('lastBrowserReport')
+if r:
+    print('  last browser report: v=%s zoom=%s supported=%s tabs=%s extraKeys=%s acts=%s errs=%s'%(r.get('v'),r.get('zoom'),r.get('zoomSupported'),r.get('tabs'),r.get('extraKeys'),r.get('acts'),r.get('errs')))
+    print('    (this is what YOUR browser told the proxy - open the page, then re-run --selftest)')
+else:
+    print('  last browser report: none yet (open the page in the browser once)')
+if d.get('lastError'): print('  lastError: %s'%d.get('lastError'))
+PY
+  else
+    warn "no answer from http://127.0.0.1:$CODE_PORT/__s4mobile (is the proxy running?)"
   fi
 
-  # ---------------------------------------------------- the mobile proxy
-  if [ "$USE_PROXY" = 1 ]; then
-    if ! command -v node >/dev/null 2>&1; then
-      say "⚠️ node نیست ⇒ پروکسی ممکن نیست (pkg install node). بدونِ پروکسی ادامه می‌دهم."
-      USE_PROXY=0
+  if [ "${marks:-0}" -gt 0 ] && [ "${zoomcss:-0}" -gt 0 ] && [ "${pinch:-0}" -gt 0 ] && [ "${blocked:-0}" -eq 0 ]; then
+    say "  S4_VERIFY=pass  (forced zoom + pinch unlock + mobile shell are being served)"
+    rm -f "$body" "$st" 2>/dev/null
+    return 0
+  fi
+  say "  S4_VERIFY=fail"
+  say "  proxy log:"; tail -20 "$BASE/csproxy.log" 2>/dev/null | sed 's/^/    /'
+  rm -f "$body" "$st" 2>/dev/null
+  return 1
+}
+
+# ------------------------------------------------------------------ status
+if [ "$STATUS" = 1 ]; then
+  say "s4-remote $VERSION"
+  say "  sshd:        $(have sshd && echo "installed ($(command -v sshd))" || echo 'not installed')"
+  say "  code-server: $(have code-server && code-server --version 2>/dev/null | head -1 || echo 'not installed')"
+  say "  node:        $(have node && node -v 2>/dev/null || echo 'not installed')"
+  say "  proxy file:  $([ -f "$BASE/$PROXY_JS" ] && echo "present ($(wc -c < "$BASE/$PROXY_JS" | tr -d ' ') bytes)" || echo 'not fetched')"
+  say "  shell files: $([ -f "$BASE/$SHELL_CSS" ] && echo "css ok" || echo 'css missing') / $([ -f "$BASE/$SHELL_JS" ] && echo "js ok" || echo 'js missing')"
+  say "  saved zoom:  $ZOOM"
+  say "  ports:       browser->$CODE_PORT  code-server->$CS_UPSTREAM  ssh->$SSH_PORT"
+  for p in "$CODE_PORT" "$CS_UPSTREAM" "$SSH_PORT"; do
+    if listening "$p"; then say "    :$p LISTENING"; else say "    :$p closed"; fi
+  done
+  if listening "$CODE_PORT"; then verify_injection; fi
+  exit 0
+fi
+
+if [ "$STOP" = 1 ]; then
+  for f in csproxy.pid code.pid sshd.pid; do
+    if [ -f "$BASE/$f" ] && kill -0 "$(cat "$BASE/$f")" 2>/dev/null; then
+      kill "$(cat "$BASE/$f")" 2>/dev/null && say "stopped pid $(cat "$BASE/$f") ($f)"
+      rm -f "$BASE/$f"
     fi
+  done
+  pkill -f "$PROXY_JS" 2>/dev/null && say "proxy killed"
+  pkill -f "code-server" 2>/dev/null && say "code-server killed"
+  pkill -f "sshd" 2>/dev/null && say "sshd killed"
+  say "S4_STOP=done"
+  exit 0
+fi
+
+# ---------------------------------------------------------- ssh password
+if [ "$SET_PW" = 1 ]; then
+  have passwd || die "passwd not found"
+  say "Setting the ssh password for user $(whoami) (type it twice):"
+  passwd || die "passwd failed"
+  say "password set"
+fi
+
+# ------------------------------------------------------- terminal repair
+if [ "$FIX_TERMINAL" = 1 ]; then
+  fix_terminal
+  [ "$DO_CODE" = 0 ] && [ "$DO_SSH" = 0 ] && [ "$SELFTEST" = 0 ] && exit 0
+fi
+
+# ============================================================== route 2: ssh
+if [ "$DO_SSH" = 1 ]; then
+  say ""
+  hr
+  say "== Route 2: SFTP (Termux private files from any file manager) =="
+  if ! have sshd; then
+    say "  installing openssh ..."
+    have pkg || die "pkg not found"
+    yes | pkg install -y openssh 2>&1 | tail -8 | sed 's/^/    /'
+  fi
+  have sshd || die "sshd did not install"
+  ls "$PFX/etc/ssh"/ssh_host_* >/dev/null 2>&1 \
+    || { say "  generating host keys ..."; ssh-keygen -A 2>&1 | tail -6 | sed 's/^/    /'; }
+  LAN_IP="$( { ip -4 addr show wlan0 2>/dev/null || ifconfig wlan0 2>/dev/null; } | grep -o 'inet [0-9.]*' | head -1 | cut -d' ' -f2 )"
+  if pgrep -f sshd >/dev/null 2>&1; then
+    say "  sshd is already running"
+  else
+    sshd -p "$SSH_PORT" 2>"$BASE/sshd.err" && say "  sshd started on port $SSH_PORT" \
+      || { say "  sshd failed to start:"; sed 's/^/      /' "$BASE/sshd.err"; }
+  fi
+  sleep 1
+  if listening "$SSH_PORT"; then say "  port $SSH_PORT LISTENING"; else warn "nothing listening on $SSH_PORT"; fi
+  say ""
+  say "  In your file manager create an SFTP connection:"
+  say "     host: 127.0.0.1   port: $SSH_PORT   path: ~"
+  if [ -t 1 ]; then
+    say "     username: $(whoami)"
+    say "     password: the one you set with passwd (none yet? bash $0 --set-password)"
+  else
+    say "     username: (output of whoami)   password: (set with --set-password; not printed here)"
+  fi
+  [ -n "${LAN_IP:-}" ] && say "  From a computer on the same wifi: $LAN_IP:$SSH_PORT"
+  say "  Autostart: pkg install termux-services && sv-enable sshd"
+fi
+
+# ==================================================== route 3: code-server
+if [ "$DO_CODE" = 1 ] && ! have code-server; then
+  warn "code-server is not installed: pkg install code-server"
+  DO_CODE=0
+fi
+
+if [ "$DO_CODE" = 1 ]; then
+  say ""
+  hr
+  say "== Route 3: mobile code-server (forced zoom + tabbed shell) =="
+  [ "$NO_SETTINGS" = 0 ] && apply_settings
+  fix_terminal
+
+  # ---------------------------------------------------- fetch the proxy
+  if [ "$USE_PROXY" = 1 ] && ! have node; then
+    warn "node is missing (pkg install node) - continuing without the proxy"
+    USE_PROXY=0
   fi
   if [ "$USE_PROXY" = 1 ]; then
-    SRC_LOCAL="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$PROXY_JS"
-    if [ -f "$SRC_LOCAL" ]; then
-      cp -f "$SRC_LOCAL" "$BASE/$PROXY_JS" && say "📦 پروکسی از فایلِ محلی: $SRC_LOCAL"
-    else
-      say "⬇️  دریافتِ $PROXY_JS از $REPO@$SRC_BRANCH …"
-      if curl -fsSL --connect-timeout 12 --max-time 60 -o "$BASE/$PROXY_JS.tmp" "$RAWBASE/deploy/$PROXY_JS" 2>/dev/null \
-         && [ -s "$BASE/$PROXY_JS.tmp" ]; then
-        mv -f "$BASE/$PROXY_JS.tmp" "$BASE/$PROXY_JS"; say "   ✅ از raw.githubusercontent"
-      elif curl -fsSL --connect-timeout 12 --max-time 60 -H 'Accept: application/vnd.github.raw' \
-           -o "$BASE/$PROXY_JS.tmp" "$API/repos/$REPO/contents/deploy/$PROXY_JS?ref=$SRC_BRANCH" 2>/dev/null \
-           && [ -s "$BASE/$PROXY_JS.tmp" ]; then
-        mv -f "$BASE/$PROXY_JS.tmp" "$BASE/$PROXY_JS"; say "   ✅ از api.github.com"
+    say "  files:"
+    fetch_file "$PROXY_JS"  || USE_PROXY=0
+    fetch_file "$SHELL_CSS" || true
+    fetch_file "$SHELL_JS"  || true
+  fi
+  if [ "$USE_PROXY" = 1 ] && [ -f "$BASE/$PROXY_JS" ]; then
+    node --check "$BASE/$PROXY_JS" >/dev/null 2>&1 \
+      && say "  syntax: $PROXY_JS ok" \
+      || { warn "$PROXY_JS has a syntax error - continuing without the proxy"; USE_PROXY=0; }
+    for f in "$SHELL_CSS" "$SHELL_JS"; do
+      if [ -f "$BASE/$f" ]; then
+        say "  present: $f ($(wc -c < "$BASE/$f" | tr -d ' ') bytes)"
       else
-        rm -f "$BASE/$PROXY_JS.tmp" 2>/dev/null
-        [ -f "$BASE/$PROXY_JS" ] && say "   ⚠️ دانلود ناموفق؛ نسخهٔ موجود نگه داشته شد" \
-          || { say "   ⚠️ پروکسی در دسترس نیست؛ بدونِ آن ادامه می‌دهم"; USE_PROXY=0; }
+        warn "$f missing - the proxy will use its builtin fallback shell"
       fi
-    fi
-    if [ "$USE_PROXY" = 1 ]; then
-      node --check "$BASE/$PROXY_JS" 2>&1 | sed 's/^/   /' || { say "❌ پروکسی خطایِ نحوی دارد؛ بدونِ آن ادامه می‌دهم"; USE_PROXY=0; }
-    fi
-    if [ "$USE_PROXY" = 1 ] && [ -n "$CUSTOM_CSS" ]; then
+    done
+    if [ -n "$CUSTOM_CSS" ]; then
       if [ -f "$CUSTOM_CSS" ]; then
-        cp -f "$CUSTOM_CSS" "$BASE/mobile.css" && say "🎨 CSSِ دلخواه: $CUSTOM_CSS → $BASE/mobile.css"
+        cp -f "$CUSTOM_CSS" "$BASE/mobile.css" && say "  custom CSS: $CUSTOM_CSS -> $BASE/mobile.css"
       else
-        say "⚠️ فایلِ CSS پیدا نشد: $CUSTOM_CSS"
+        warn "custom CSS not found: $CUSTOM_CSS"
       fi
     fi
   fi
@@ -256,84 +572,96 @@ PY
   # ------------------------------------------------ start code-server
   SERVE_PORT="$CODE_PORT"
   [ "$USE_PROXY" = 1 ] && SERVE_PORT="$CS_UPSTREAM"
-  # code-server itself always stays on loopback; with --bind-lan it is the
-  # proxy that listens on all interfaces (and still needs the login password).
+  # code-server always stays on loopback; --bind-lan exposes only the proxy.
 
   if pgrep -f "code-server.*$SERVE_PORT" >/dev/null 2>&1; then
-    say "ℹ️ code-server از قبل رویِ $SERVE_PORT در حالِ اجراست"
+    say "  code-server already running on $SERVE_PORT"
   else
-    say "🚀 code-server رویِ 127.0.0.1:$SERVE_PORT …"
-    ( cd "$HOME" && nohup code-server \
+    say "  starting code-server on 127.0.0.1:$SERVE_PORT ..."
+    ( cd "$HOME" && SHELL="${SHELL:-$PFX/bin/bash}" TMPDIR="${TMPDIR:-$PFX/tmp}" TERM="${TERM:-xterm-256color}" \
+        nohup code-server \
         --bind-addr "127.0.0.1:$SERVE_PORT" \
         --auth password --disable-telemetry --disable-update-check \
         "$HOME" > "$BASE/code-server.log" 2>&1 &
       echo $! > "$BASE/code.pid" ) 2>/dev/null
-    for i in $(seq 1 30); do
+    for _ in $(seq 1 30); do
       listening "$SERVE_PORT" && break
       sleep 1
     done
     if listening "$SERVE_PORT"; then
-      say "✅ code-server بالا آمد (pid $(cat "$BASE/code.pid" 2>/dev/null))"
+      say "  code-server up (pid $(cat "$BASE/code.pid" 2>/dev/null))"
     else
-      say "❌ code-server بالا نیامد؛ گزارش:"; tail -20 "$BASE/code-server.log" 2>/dev/null | sed 's/^/      /'
+      say "  code-server failed to start; log:"; tail -20 "$BASE/code-server.log" 2>/dev/null | sed 's/^/      /'
     fi
   fi
 
   # ------------------------------------------------------- start proxy
   if [ "$USE_PROXY" = 1 ]; then
     if pgrep -f "$PROXY_JS" >/dev/null 2>&1; then
-      say "ℹ️ پروکسی از قبل در حالِ اجراست (برایِ زومِ جدید: bash $0 --stop و دوباره اجرا)"
+      say "  proxy already running (to apply a new zoom: bash $0 --stop, then run again)"
     else
       ( cd "$BASE" && S4_CS_HOST="$CODE_HOST" S4_CS_PORT="$CODE_PORT" S4_CS_UPSTREAM="$CS_UPSTREAM" \
-          S4_CS_ZOOM="$ZOOM" S4_CS_CSS="$BASE/mobile.css" \
+          S4_CS_ZOOM="$ZOOM" S4_CS_STATE="$BASE" \
+          S4_CS_CSS="${CUSTOM_CSS:+$BASE/mobile.css}" S4_CS_NO_SHELL="$([ "$NO_SHELL" = 1 ] && echo 1 || echo '')" \
           nohup node "$BASE/$PROXY_JS" > "$BASE/csproxy.log" 2>&1 &
         echo $! > "$BASE/csproxy.pid" ) 2>/dev/null
       sleep 2
       if kill -0 "$(cat "$BASE/csproxy.pid" 2>/dev/null)" 2>/dev/null; then
-        say "✅ پروکسیِ موبایل بالا آمد (pid $(cat "$BASE/csproxy.pid")) · زومِ پیش‌فرض $ZOOM"
+        say "  mobile proxy up (pid $(cat "$BASE/csproxy.pid")) - default zoom $ZOOM"
       else
-        say "❌ پروکسی بالا نیامد؛ گزارش:"; tail -15 "$BASE/csproxy.log" 2>/dev/null | sed 's/^/      /'
+        say "  proxy failed to start; log:"; tail -15 "$BASE/csproxy.log" 2>/dev/null | sed 's/^/      /'
       fi
     fi
-    # verify the injection actually reaches the browser
     sleep 1
-    BODY="$BASE/probe.html"
-    CODE=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 25 "http://127.0.0.1:$CODE_PORT/" 2>/dev/null)
-    MARKS=$(grep -c 's4-cs-mobile-v1' "$BODY" 2>/dev/null || echo 0)
-    ZOOMCSS=$(grep -c -- '--s4-zoom' "$BODY" 2>/dev/null || echo 0)
-    PINCH=$(grep -c 'user-scalable=yes' "$BODY" 2>/dev/null || echo 0)
-    say "   بررسیِ صفحه: http=$CODE · marker=$MARKS · forced-zoom-css=$ZOOMCSS · pinch-zoom=$PINCH"
-    if [ "${MARKS:-0}" -gt 0 ] && [ "${ZOOMCSS:-0}" -gt 0 ] && [ "${PINCH:-0}" -gt 0 ]; then
-      say "   ✅ زومِ اجباری و pinch-zoom فعال است"
-    else
-      say "   ❌ تزریق دیده نشد؛ گزارشِ پروکسی:"; tail -15 "$BASE/csproxy.log" 2>/dev/null | sed 's/^/      /'
-    fi
-    rm -f "$BODY" 2>/dev/null
+    say "  verification:"
+    verify_injection
   fi
 
   CFG="$HOME/.config/code-server/config.yaml"
   say ""
+  say "  OPEN THIS:   http://$CODE_HOST:$CODE_PORT/"
   if [ "$USE_PROXY" = 1 ]; then
-    say "   🌐 باز کنید:  http://$CODE_HOST:$CODE_PORT/"
-    say "      زومِ لحظه‌ای: دکمه‌هایِ شناورِ A− / A+ / ⟳ / ⛶ پایینِ صفحه،"
-    say "                  یا زومِ دو‌انگشتی، یا  http://$CODE_HOST:$CODE_PORT/?z=1.8"
-    say "      زومِ ثابت:  bash $0 --code --zoom 1.8   (در $BASE/zoom ذخیره می‌شود)"
-    say "      CSSِ خودت:  bash $0 --code --css ~/mobile.css"
-  else
-    say "   🌐 باز کنید:  http://$CODE_HOST:$CODE_PORT/"
+    say "  evidence:    curl -s http://127.0.0.1:$CODE_PORT/__s4mobile?probe=1"
+    say "  zoom now:    A- / A+ in the top bar, pinch with two fingers, or ?z=1.8 in the URL"
+    say "  zoom saved:  bash $0 --code --zoom 1.6   (stored in $BASE/zoom)"
+    say "  your own CSS: bash $0 --code --css ~/mobile.css"
+    say "  mobile dock: Files / Search / Git / Terminal / Output / Editor / More"
+    say "  extra keys:  Esc Tab Ctrl Alt arrows and the symbols a phone keyboard hides"
   fi
   if [ -t 1 ] && [ -f "$CFG" ]; then
-    say "   🔑 رمزِ ورود: $(grep -m1 'password:' "$CFG" | cut -d' ' -f2-)"
+    say "  login password: $(grep -m1 'password:' "$CFG" | cut -d' ' -f2-)"
   else
-    say "   🔑 رمزِ ورود: در $CFG"
+    say "  login password: see $CFG"
   fi
-  if [ "$OPEN_BROWSER" = 1 ] && command -v termux-open-url >/dev/null 2>&1; then
-    termux-open-url "http://127.0.0.1:$CODE_PORT/" 2>/dev/null && say "   📱 در مرورگر باز شد"
+  if [ "$OPEN_BROWSER" = 1 ] && have termux-open-url; then
+    termux-open-url "http://127.0.0.1:$CODE_PORT/" 2>/dev/null && say "  opened in the browser"
   fi
 fi
 
+# ------------------------------------------------------------- selftest
+if [ "$SELFTEST" = 1 ]; then
+  say ""
+  hr
+  say "== Self-test =="
+  say "  files:"
+  for f in "$PROXY_JS" "$SHELL_CSS" "$SHELL_JS"; do
+    if [ -f "$BASE/$f" ]; then say "    $f $(wc -c < "$BASE/$f" | tr -d ' ') bytes"; else say "    $f MISSING"; fi
+  done
+  if have node && [ -f "$BASE/$PROXY_JS" ]; then
+    node --check "$BASE/$PROXY_JS" >/dev/null 2>&1 && say "    node --check $PROXY_JS: ok" || say "    node --check $PROXY_JS: SYNTAX ERROR"
+    [ -f "$BASE/$SHELL_JS" ] && { node --check "$BASE/$SHELL_JS" >/dev/null 2>&1 && say "    node --check $SHELL_JS: ok" || say "    node --check $SHELL_JS: SYNTAX ERROR"; }
+  fi
+  if [ "$DO_CODE" = 0 ] && listening "$CODE_PORT"; then
+    say "  injection:"; verify_injection
+  fi
+  say "  terminal:"; fix_terminal
+  say "S4_SELFTEST=done"
+fi
+
 say ""
-say "──────────────────────────────────────────────────────────"
-say "✅ تمام. وضعیت: bash $0 --status   ·   توقف: bash $0 --stop"
-say "   مرورگرِ پیشنهادی: Chrome / Samsung Internet / Edge (زومِ CSS را رعایت می‌کنند)"
-say "──────────────────────────────────────────────────────────"
+hr
+say "Done.  status: bash $0 --status    stop: bash $0 --stop"
+say "Recommended browser: Chrome / Samsung Internet / Edge (they honour CSS zoom)."
+say "If a page looks unzoomed, open  http://127.0.0.1:$CODE_PORT/__s4mobile  -"
+say "it reports exactly what the proxy served and what your browser did with it."
+hr
