@@ -17,7 +17,9 @@ test('package contributes the three requested Copilot Chat toolbar commands', ()
   assert.equal(toolbar.length, 3);
   assert.ok(
     toolbar.every(
-      (entry) => entry.when === 'view == workbench.panel.chat.view.copilot'
+      (entry) =>
+        entry.when.includes('view == workbench.panel.chat.view.copilot') &&
+        entry.when.includes('|| view == workbench.panel.chat.view')
     )
   );
 });

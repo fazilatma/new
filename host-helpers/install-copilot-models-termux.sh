@@ -5,6 +5,7 @@ set -Eeuo pipefail
 
 RAW_BASE_DEFAULT="https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers"
 RAW_BASE="${COPILOT_MODELS_RAW_BASE:-$RAW_BASE_DEFAULT}"
+HELPER_VERSION="0.1.1"
 SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != /dev/fd/* ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
@@ -42,6 +43,8 @@ cleanup() {
   fi
 }
 trap cleanup EXIT HUP INT TERM
+
+log "==> Copilot models helper v$HELPER_VERSION"
 
 if [[ -n "$SCRIPT_DIR" \
   && -f "$SCRIPT_DIR/copilot-models.py" \

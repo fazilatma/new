@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -305,6 +306,43 @@ class ManifestTests(unittest.TestCase):
             )
 
 
+class ToolboxPackagingTests(unittest.TestCase):
+    def test_helper_extension_and_launcher_versions_match(self) -> None:
+        package = json.loads((TOOLBOX_DIR / "package.json").read_text(encoding="utf-8"))
+        launcher = (HELPERS_DIR / "install-copilot-models-termux.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(package["version"], copilot_models.HELPER_VERSION)
+        self.assertIn(
+            f'HELPER_VERSION="{copilot_models.HELPER_VERSION}"', launcher
+        )
+
+    def test_generated_vsix_contains_runtime_and_manifest(self) -> None:
+        package = json.loads((TOOLBOX_DIR / "package.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staging = root / "extension"
+            staging.mkdir()
+            for filename in ("package.json", "extension.js", "core.js"):
+                (staging / filename).write_bytes((TOOLBOX_DIR / filename).read_bytes())
+            runtime = staging / "runtime"
+            runtime.mkdir()
+            (runtime / "copilot-models.py").write_text("print('ok')\n", encoding="utf-8")
+            (runtime / "copilot-models.catalog.json").write_text(
+                '{"providers": []}\n', encoding="utf-8"
+            )
+            vsix = root / "toolbox.vsix"
+            copilot_models.build_toolbox_vsix(staging, package, vsix)
+            with zipfile.ZipFile(vsix) as archive:
+                names = set(archive.namelist())
+                manifest = archive.read("extension.vsixmanifest").decode("utf-8")
+            self.assertIn("extension/package.json", names)
+            self.assertIn("extension/extension.js", names)
+            self.assertIn("extension/runtime/copilot-models.py", names)
+            self.assertIn("extension/runtime/copilot-models.catalog.json", names)
+            self.assertIn(f'Version="{copilot_models.HELPER_VERSION}"', manifest)
+
+
 class CommandIntegrationTests(unittest.TestCase):
     def test_cli_writes_config_patches_manifest_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -367,6 +405,44 @@ class CommandIntegrationTests(unittest.TestCase):
                 },
             }'''
             settings_path.write_text(original_settings, encoding="utf-8")
+
+            # Emulate code-server's local VSIX installer so this integration
+            # test exercises packaging, CLI installation, and discovery.
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake_code_server = bin_dir / "code-server"
+            fake_code_server.write_text(
+                '''#!/usr/bin/env python3
+import json
+import sys
+import zipfile
+from pathlib import Path
+
+args = sys.argv[1:]
+root = Path(args[args.index("--extensions-dir") + 1]) if "--extensions-dir" in args else None
+if "--install-extension" in args:
+    vsix = Path(args[args.index("--install-extension") + 1])
+    with zipfile.ZipFile(vsix) as archive:
+        package = json.loads(archive.read("extension/package.json"))
+        target = root / f"{package['publisher']}.{package['name']}-{package['version']}"
+        target.mkdir(parents=True, exist_ok=True)
+        for member in archive.namelist():
+            if member.startswith("extension/") and not member.endswith("/"):
+                relative = member.removeprefix("extension/")
+                destination = target / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(archive.read(member))
+    print(f"Installed {package['publisher']}.{package['name']}")
+elif "--locate-extension" in args and root:
+    extension_id = args[args.index("--locate-extension") + 1]
+    matches = sorted(root.glob(extension_id + "-*"))
+    if matches:
+        print(matches[-1])
+''',
+                encoding="utf-8",
+            )
+            fake_code_server.chmod(0o700)
+
             command = [
                 sys.executable,
                 str(HELPER_PATH),
@@ -383,6 +459,7 @@ class CommandIntegrationTests(unittest.TestCase):
             ]
             environment = {
                 **os.environ,
+                "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                 "EXAMPLE_API_KEY": "runtime-secret",
                 "COPILOT_TERMINAL_SHELL": "/bin/bash",
             }
@@ -392,6 +469,8 @@ class CommandIntegrationTests(unittest.TestCase):
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertIn("pkill -f '[c]ode-server' || true", first.stdout)
             self.assertIn("nohup code-server", first.stdout)
+            self.assertIn("installed-via-code-server", first.stdout)
+            self.assertIn("updated-via-code-server", second.stdout)
 
             config_path = user_data / "User" / "chatLanguageModels.json"
             groups = json.loads(config_path.read_text(encoding="utf-8"))
@@ -422,7 +501,7 @@ class CommandIntegrationTests(unittest.TestCase):
             toolbox_target = (
                 user_data
                 / "extensions"
-                / "fazilatma.copilot-models-toolbox-0.1.0"
+                / "fazilatma.copilot-models-toolbox-0.1.1"
             )
             self.assertTrue((toolbox_target / "package.json").is_file())
             self.assertTrue((toolbox_target / "extension.js").is_file())

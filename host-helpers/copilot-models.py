@@ -24,12 +24,15 @@ import tempfile
 import termios
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable
+from xml.sax.saxutils import escape as xml_escape
 
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
+HELPER_VERSION = "0.1.1"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1258,6 +1261,10 @@ def toolbox_source_package(source: str) -> tuple[Path, dict[str, Any]]:
     version = str(package.get("version", ""))
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", version):
         raise ValueError(f"invalid toolbox version in {package_path}: {version!r}")
+    if version != HELPER_VERSION:
+        raise ValueError(
+            f"toolbox version {version} does not match helper version {HELPER_VERSION}"
+        )
     for filename in ("extension.js", "core.js"):
         if not (directory / filename).is_file():
             raise FileNotFoundError(f"toolbox file not found: {directory / filename}")
@@ -1277,52 +1284,186 @@ def toolbox_target_path(args: argparse.Namespace, package: dict[str, Any]) -> Pa
     return root / dirname
 
 
+def populate_toolbox_staging(
+    source: Path, staging: Path, catalog_source: str | None
+) -> None:
+    staging.mkdir(mode=0o700)
+    for filename in ("package.json", "extension.js", "core.js"):
+        shutil.copy2(source / filename, staging / filename)
+    runtime = staging / "runtime"
+    runtime.mkdir(mode=0o700)
+    helper_target = runtime / "copilot-models.py"
+    shutil.copy2(Path(__file__).resolve(), helper_target)
+    os.chmod(helper_target, 0o700)
+
+    catalog_target = runtime / "copilot-models.catalog.json"
+    if catalog_source and Path(catalog_source).expanduser().is_file():
+        shutil.copy2(Path(catalog_source).expanduser(), catalog_target)
+        os.chmod(catalog_target, 0o600)
+    else:
+        catalog_value = load_json_source(catalog_source) if catalog_source else None
+        if catalog_value is None:
+            raise FileNotFoundError("toolbox installation requires a catalog")
+        atomic_write_json(catalog_target, catalog_value, 0o600)
+
+
+def build_toolbox_vsix(
+    staging: Path, package: dict[str, Any], destination: Path
+) -> None:
+    description = xml_escape(str(package.get("description", "")))
+    display_name = xml_escape(str(package.get("displayName", TOOLBOX_NAME)))
+    categories = xml_escape(",".join(str(item) for item in package.get("categories", [])))
+    engine = xml_escape(str(package.get("engines", {}).get("vscode", "*")))
+    extension_kind = package.get("extensionKind", [])
+    if isinstance(extension_kind, list):
+        extension_kind_value = ",".join(str(item) for item in extension_kind)
+    else:
+        extension_kind_value = str(extension_kind)
+    manifest = f'''<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="{TOOLBOX_NAME}" Version="{package['version']}" Publisher="{TOOLBOX_PUBLISHER}" />
+    <DisplayName>{display_name}</DisplayName>
+    <Description xml:space="preserve">{description}</Description>
+    <Tags></Tags>
+    <Categories>{categories}</Categories>
+    <GalleryFlags>Public</GalleryFlags>
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="{engine}" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionPack" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="{xml_escape(extension_kind_value)}" />
+      <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.EnabledApiProposals" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />
+      <Property Id="Microsoft.VisualStudio.Services.Content.Pricing" Value="Free" />
+    </Properties>
+  </Metadata>
+  <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code" /></Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>
+'''
+    content_types = '''<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="js" ContentType="application/javascript" />
+  <Default Extension="json" ContentType="application/json" />
+  <Default Extension="py" ContentType="text/x-python" />
+  <Default Extension="vsixmanifest" ContentType="text/xml" />
+</Types>
+'''
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("extension.vsixmanifest", manifest)
+        archive.writestr("[Content_Types].xml", content_types)
+        for file_path in staging.rglob("*"):
+            if file_path.is_file():
+                archive.write(file_path, "extension/" + file_path.relative_to(staging).as_posix())
+
+
+def located_toolbox_path(
+    code_server: str, extension_root: Path, package: dict[str, Any]
+) -> Path | None:
+    extension_id = f"{TOOLBOX_PUBLISHER}.{TOOLBOX_NAME}"
+    try:
+        located = subprocess.run(
+            [
+                code_server,
+                "--extensions-dir",
+                str(extension_root),
+                "--locate-extension",
+                extension_id,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        candidates = [Path(line.strip()) for line in located.stdout.splitlines()]
+    except (OSError, subprocess.SubprocessError):
+        candidates = []
+    candidates.extend(extension_root.glob(f"{extension_id}-*"))
+    for candidate in candidates:
+        package_path = candidate / "package.json"
+        if not package_path.is_file():
+            continue
+        try:
+            value = json.loads(package_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("publisher") == TOOLBOX_PUBLISHER
+            and value.get("name") == TOOLBOX_NAME
+            and str(value.get("version")) == str(package["version"])
+        ):
+            return candidate
+    return None
+
+
 def install_toolbox(
     args: argparse.Namespace, catalog_source: str | None, dry_run: bool
 ) -> tuple[Path, str] | None:
     if args.no_toolbox or not args.toolbox_dir:
         return None
     source, package = toolbox_source_package(args.toolbox_dir)
-    target = toolbox_target_path(args, package)
-    result = "would-install" if dry_run else ("updated" if target.exists() else "installed")
+    expected_target = toolbox_target_path(args, package)
+    was_installed = expected_target.exists()
     if dry_run:
-        return target, result
+        return expected_target, "would-install"
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(
-        tempfile.mkdtemp(prefix=f".{TOOLBOX_NAME}.", dir=target.parent)
-    )
+    extension_root = expected_target.parent
+    extension_root.mkdir(parents=True, exist_ok=True)
+    working = Path(tempfile.mkdtemp(prefix=f".{TOOLBOX_NAME}.", dir=extension_root))
+    installed_target = expected_target
     try:
-        for filename in ("package.json", "extension.js", "core.js"):
-            shutil.copy2(source / filename, temporary / filename)
-        runtime = temporary / "runtime"
-        runtime.mkdir(mode=0o700)
-        helper_target = runtime / "copilot-models.py"
-        shutil.copy2(Path(__file__).resolve(), helper_target)
-        os.chmod(helper_target, 0o700)
-
-        catalog_target = runtime / "copilot-models.catalog.json"
-        if catalog_source and Path(catalog_source).expanduser().is_file():
-            shutil.copy2(Path(catalog_source).expanduser(), catalog_target)
-            os.chmod(catalog_target, 0o600)
+        staging = working / "extension"
+        populate_toolbox_staging(source, staging, catalog_source)
+        code_server = shutil.which("code-server")
+        if code_server:
+            vsix = working / f"{TOOLBOX_NAME}-{package['version']}.vsix"
+            build_toolbox_vsix(staging, package, vsix)
+            installed = subprocess.run(
+                [
+                    code_server,
+                    "--extensions-dir",
+                    str(extension_root),
+                    "--install-extension",
+                    str(vsix),
+                    "--force",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if installed.returncode != 0:
+                detail = installed.stderr.strip() or installed.stdout.strip()
+                raise RuntimeError(f"code-server could not install the toolbox VSIX: {detail}")
+            located = located_toolbox_path(code_server, extension_root, package)
+            if located is None:
+                raise RuntimeError(
+                    "code-server reported a successful toolbox install, but the extension "
+                    "was not discoverable afterward"
+                )
+            installed_target = located
+            result = "updated-via-code-server" if was_installed else "installed-via-code-server"
         else:
-            catalog_value = load_json_source(catalog_source) if catalog_source else None
-            if catalog_value is None:
-                raise FileNotFoundError("toolbox installation requires a catalog")
-            atomic_write_json(catalog_target, catalog_value, 0o600)
-
-        if target.exists():
-            shutil.rmtree(target)
-        os.replace(temporary, target)
+            if expected_target.exists():
+                shutil.rmtree(expected_target)
+            os.replace(staging, expected_target)
+            result = "updated-directly" if was_installed else "installed-directly"
     finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
+        if working.exists():
+            shutil.rmtree(working)
 
     # Remove only older copies of this helper-owned extension after the new
-    # version is safely in place. Unrelated extensions are never touched.
+    # version is safely installed and verified. Unrelated extensions are never
+    # touched.
     pattern = f"{TOOLBOX_PUBLISHER}.{TOOLBOX_NAME}-*"
-    for old in target.parent.glob(pattern):
-        if old != target and old.is_dir():
+    for old in extension_root.glob(pattern):
+        if old != installed_target and old.is_dir():
             try:
                 old_package = json.loads((old / "package.json").read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -1333,7 +1474,7 @@ def install_toolbox(
                 and old_package.get("name") == TOOLBOX_NAME
             ):
                 shutil.rmtree(old)
-    return target, result
+    return installed_target, result
 
 
 def uninstall_toolbox(args: argparse.Namespace) -> Path | None:
@@ -1397,6 +1538,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Add OpenAI-compatible models and optional terminal tools to "
             "Copilot Chat in code-server."
         )
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"copilot-models {HELPER_VERSION}"
     )
     parser.add_argument("--catalog", help="maintained provider catalog JSON")
     parser.add_argument("--source", help="additional provider export JSON (file, URL, or -)")
@@ -1617,14 +1761,21 @@ def main(argv: list[str] | None = None) -> int:
         for provider in providers
         if provider["slug"] != "ollama" and not provider_api_key(provider)
     ]
-    print("\nDone. After restarting code-server, open Chat and use Manage Models.")
+    print(
+        f"\nDone (v{HELPER_VERSION}). After restarting code-server, "
+        "open Chat and use Manage Models."
+    )
     if missing_keys:
         print("Providers without a key (models are listed but requests may fail):")
         print("  " + ", ".join(missing_keys))
     if toolbox_result:
         print(
-            "Toolbar: Test All AI Models, Import AI JSON, and Sync GitHub "
-            "were installed in the Copilot Chat title bar."
+            f"Toolbar v{HELPER_VERSION}: Test All AI Models, Import AI JSON, "
+            "and Sync GitHub were installed in the Copilot Chat title bar."
+        )
+        print(
+            "Verify: code-server --list-extensions --show-versions | "
+            f"grep '^{TOOLBOX_PUBLISHER}\\.{TOOLBOX_NAME}@{HELPER_VERSION}$'"
         )
     if args.enable_terminal:
         print(

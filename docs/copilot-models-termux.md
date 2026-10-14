@@ -123,9 +123,13 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs the **Copilot Models Toolbox** companion extension.
-After restarting code-server, these buttons appear in the GitHub Copilot Chat
-title toolbar and remain available in the Command Palette:
+The launcher also installs **Copilot Models Toolbox 0.1.1** through
+code-server's own VSIX installer and verifies that code-server can discover it.
+It normally appears under
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.1`;
+a custom `extensions-dir` is detected and used automatically. After restarting
+code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
+remain available in the Command Palette:
 
 - **🧪 Test All AI Models** asks for confirmation, then sends one real,
   non-streaming inference request with at most eight output tokens to every
@@ -141,6 +145,12 @@ title toolbar and remain available in the Command Palette:
   GitHub.
 
 Use `--no-toolbox` only when the companion toolbar extension is not wanted.
+To verify the installed version from Termux:
+
+```bash
+code-server --list-extensions --show-versions \
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.1$'
+```
 
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
 into the active profile's `settings.json`:

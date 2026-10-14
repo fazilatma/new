@@ -2,11 +2,11 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, and synchronize BYOK models from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Machine Learning",
@@ -46,17 +46,17 @@
       "view/title": [
         {
           "command": "copilotModels.testAll",
-          "when": "view == workbench.panel.chat.view.copilot",
+          "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
           "group": "navigation@91"
         },
         {
           "command": "copilotModels.importJson",
-          "when": "view == workbench.panel.chat.view.copilot",
+          "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
           "group": "navigation@92"
         },
         {
           "command": "copilotModels.syncGitHub",
-          "when": "view == workbench.panel.chat.view.copilot",
+          "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
           "group": "navigation@93"
         }
       ]

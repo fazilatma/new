@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const vscode = require('vscode');
 const core = require('./core');
+const extensionPackage = require('./package.json');
 
 const OUTPUT_NAME = 'Copilot Models Toolbox';
 const RESTART_COMMAND = [
@@ -493,6 +494,9 @@ function registerCommand(context, command, callback) {
 
 function activate(context) {
   output = vscode.window.createOutputChannel(OUTPUT_NAME);
+  output.appendLine(
+    `Copilot Models Toolbox v${extensionPackage.version} activated from ${context.extensionPath}`
+  );
   context.subscriptions.push(output);
   registerCommand(context, 'copilotModels.testAll', testAllModels);
   registerCommand(context, 'copilotModels.importJson', importJson);

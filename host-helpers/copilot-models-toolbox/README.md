@@ -17,3 +17,9 @@ three commands to the GitHub Copilot Chat view title toolbar:
 The commands also remain available from the Command Palette. The source is
 plain CommonJS with no runtime npm dependencies so it works in code-server on
 Termux.
+
+## Versioning
+
+The helper, launcher, and companion extension currently ship as **0.1.1**.
+Every shipped code change must increment the semantic version in all three
+places. The Python test suite enforces that the versions stay synchronized.
