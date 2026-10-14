@@ -862,18 +862,209 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
   }
 }
 
-async function uploadSanitizedDiagnostics(context, repository, branch) {
+async function diagnosticSecrets(context) {
+  const secrets = [];
+  let groups = [];
+  try {
+    groups = await readConfiguredGroups(context);
+  } catch (_) {
+    // A broken model configuration should not prevent code-server diagnostics.
+  }
+  for (const group of groups) {
+    if (!group || typeof group !== 'object') continue;
+    if (
+      typeof group.apiKey === 'string' &&
+      group.apiKey.trim() &&
+      !core.isChatSecretReference(group.apiKey)
+    ) {
+      secrets.push(group.apiKey.trim());
+    }
+    if (!context.secrets || typeof context.secrets.get !== 'function') continue;
+    for (const alias of providerCredentialAliases(group.name)) {
+      try {
+        const stored = await context.secrets.get(toolboxCredentialKey(group.vendor, alias));
+        if (stored) secrets.push(stored);
+      } catch (_) {
+        // Continue with pattern-based redaction if SecretStorage is unavailable.
+      }
+    }
+  }
+  return [...new Set(secrets.filter(Boolean))];
+}
+
+async function walkLogFiles(root, depth, found) {
+  if (depth > 7 || found.length >= 1000) return;
+  let stat;
+  try {
+    stat = await fsp.lstat(root);
+  } catch (_) {
+    return;
+  }
+  if (stat.isSymbolicLink()) return;
+  if (stat.isFile()) {
+    if (/\.log(?:\.\d+)?$|\.txt$/i.test(path.basename(root))) {
+      found.push({ filename: root, size: stat.size, mtimeMs: stat.mtimeMs });
+    }
+    return;
+  }
+  if (!stat.isDirectory()) return;
+  let entries;
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  for (const entry of entries) {
+    if (found.length >= 1000) break;
+    if (entry.isSymbolicLink()) continue;
+    await walkLogFiles(path.join(root, entry.name), depth + 1, found);
+  }
+}
+
+async function collectCodeServerDiagnostics(context) {
+  const profileRoot = activeProfileRoot(context);
+  const home = os.homedir();
+  const roots = [
+    path.resolve(profileRoot, '..', 'logs'),
+    path.join(home, '.local', 'share', 'code-server', 'logs'),
+    path.join(home, '.local', 'share', 'code-server', 'coder-logs'),
+    path.join(home, '.local', 'share', 'code-server', 'code-server.log'),
+    process.env.XDG_DATA_HOME
+      ? path.join(process.env.XDG_DATA_HOME, 'code-server', 'logs')
+      : '',
+    process.env.VSCODE_LOGS || '',
+    context.logUri && context.logUri.fsPath ? context.logUri.fsPath : '',
+  ].filter(Boolean);
+  const candidates = [];
+  for (const root of [...new Set(roots.map((item) => path.resolve(item)))]) {
+    await walkLogFiles(root, 0, candidates);
+  }
+  const unique = [...new Map(candidates.map((item) => [path.resolve(item.filename), item])).values()]
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, 120);
+  const secrets = await diagnosticSecrets(context);
+  const errorPattern = /(?:\b(?:error|fatal|exception|unhandled|rejection|failed|failure|crash(?:ed)?|epipe|enomem|enospc|enoent|econn(?:refused|reset)|etimedout|sig(?:term|kill|segv|abrt)|cannot|could not|permission denied|out of memory)\b|\[err(?:or)?\]|\berr!?\b|\bexited with (?:code|status)\s*[1-9]\d*|\bterminated unexpectedly\b)/i;
+  const harmlessPattern = /\b(?:0 errors?|no errors?|without errors?|error count[:=]\s*0)\b/i;
+  const stackPattern = /^\s*(?:at\s+|caused by:|\w*(?:Error|Exception):|code:|errno:|syscall:)/i;
+  const records = [];
+  let scannedBytes = 0;
+  let truncatedFiles = 0;
+  const maxTotalBytes = 32 * 1024 * 1024;
+  const maxFileBytes = 1024 * 1024;
+  for (const item of unique) {
+    if (scannedBytes >= maxTotalBytes) break;
+    const length = Math.min(item.size, maxFileBytes, maxTotalBytes - scannedBytes);
+    if (length <= 0) continue;
+    let handle;
+    let text;
+    try {
+      handle = await fsp.open(item.filename, 'r');
+      const buffer = Buffer.alloc(length);
+      const position = Math.max(0, item.size - length);
+      const read = await handle.read(buffer, 0, length, position);
+      text = buffer.subarray(0, read.bytesRead).toString('utf8');
+      scannedBytes += read.bytesRead;
+      if (position > 0) truncatedFiles += 1;
+    } catch (error) {
+      output.appendLine(`[DIAGNOSTICS] Skipped unreadable log: ${error.code || error.message || error}`);
+      continue;
+    } finally {
+      if (handle) {
+        try {
+          await handle.close();
+        } catch (_) {
+          // Ignore close races after a best-effort diagnostic read.
+        }
+      }
+    }
+    const lines = text.split(/\r?\n/);
+    const source = core.sanitizeDiagnosticText(path.basename(item.filename), secrets, 120);
+    const sourceId = crypto.createHash('sha256').update(path.resolve(item.filename)).digest('hex').slice(0, 12);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!errorPattern.test(line) || harmlessPattern.test(line)) continue;
+      const block = [line];
+      for (let following = index + 1; following < Math.min(lines.length, index + 9); following += 1) {
+        if (!stackPattern.test(lines[following])) break;
+        block.push(lines[following]);
+      }
+      const sanitized = core.sanitizeDiagnosticText(block.join(' | '), secrets, 1800);
+      if (!sanitized) continue;
+      records.push({
+        source,
+        sourceId,
+        logModifiedAt: new Date(item.mtimeMs).toISOString(),
+        error: sanitized,
+      });
+    }
+  }
+  return {
+    scannedAt: new Date().toISOString(),
+    discoveredLogFiles: candidates.length,
+    scannedLogFiles: unique.length,
+    scannedBytes,
+    filesReadFromTail: truncatedFiles,
+    errorCount: records.length,
+    errors: records,
+    scope:
+      'Errors from up to 120 most-recent retained code-server/VS Code text logs; at most the newest 1 MiB per file and 32 MiB total are scanned for Android stability.',
+  };
+}
+
+function diagnosticCommentChunks(records, maxCharacters = 45000) {
+  const chunks = [];
+  let current = [];
+  let size = 0;
+  for (const record of records) {
+    const rendered = JSON.stringify(record, null, 2);
+    if (current.length && size + rendered.length + 2 > maxCharacters) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(record);
+    size += rendered.length + 2;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+async function uploadSanitizedDiagnostics(
+  context,
+  repository,
+  branch,
+  reportStatus,
+  updateErrors = []
+) {
   const reportPath = path.join(
     context.globalStorageUri.fsPath,
     'latest-sanitized-diagnostics.json'
   );
-  if (!(await readable(reportPath))) {
-    throw new Error('No sanitized test report exists yet. Run Test All AI Models first.');
+  let report = {};
+  if (await readable(reportPath)) {
+    try {
+      report = JSON.parse(await fsp.readFile(reportPath, 'utf8'));
+    } catch (error) {
+      output.appendLine(`[DIAGNOSTICS] Ignoring unreadable model report: ${error.message || error}`);
+    }
   }
-  const report = JSON.parse(await fsp.readFile(reportPath, 'utf8'));
-  const failures = (Array.isArray(report.models) ? report.models : [])
+  if (reportStatus) reportStatus('Scanning retained code-server and VS Code logs for errors…');
+  const codeServer = await collectCodeServerDiagnostics(context);
+  const secrets = await diagnosticSecrets(context);
+  for (const panelError of Array.isArray(updateErrors) ? updateErrors.slice(-500) : []) {
+    const sanitized = core.sanitizeDiagnosticText(panelError, secrets, 1800);
+    if (!sanitized) continue;
+    codeServer.errors.push({
+      source: 'GitHub Sync update panel',
+      sourceId: 'github-sync-panel',
+      logModifiedAt: new Date().toISOString(),
+      error: sanitized,
+    });
+  }
+  codeServer.errorCount = codeServer.errors.length;
+  const models = Array.isArray(report.models) ? report.models : [];
+  const failures = models
     .filter((model) => model.state === 'fail')
-    .slice(0, 60)
     .map((model) => ({
       provider: model.provider,
       configuredModel: model.configuredModel,
@@ -882,11 +1073,10 @@ async function uploadSanitizedDiagnostics(context, repository, branch) {
       endpointHost: model.endpointHost,
       httpStatus: model.httpStatus,
       elapsedMs: model.elapsedMs,
-      error: core.sanitizeDiagnosticText(model.error, [], 500),
+      error: core.sanitizeDiagnosticText(model.error, [], 350),
     }));
-  const mappings = (Array.isArray(report.models) ? report.models : [])
+  const mappings = models
     .filter((model) => model.configuredModel !== model.resolvedModel)
-    .slice(0, 120)
     .map((model) => ({
       provider: model.provider,
       configuredModel: model.configuredModel,
@@ -894,37 +1084,56 @@ async function uploadSanitizedDiagnostics(context, repository, branch) {
       resolution: model.resolution,
       state: model.state,
     }));
+  const errorChunks = diagnosticCommentChunks(codeServer.errors);
+  const modelChunks = diagnosticCommentChunks([
+    ...failures.map((failure) => ({ kind: 'model-failure', ...failure })),
+    ...mappings.map((mapping) => ({ kind: 'resolved-model-mapping', ...mapping })),
+  ]);
   const compactReport = {
-    schema: report.schema,
+    schema: 'copilot-models-toolbox-complete-diagnostic-v2',
     reportId: crypto.randomUUID(),
-    generatedAt: report.generatedAt,
+    generatedAt: new Date().toISOString(),
     repository,
     branch,
-    toolboxVersion: report.toolboxVersion,
-    vscodeVersion: report.vscodeVersion,
-    appName: report.appName,
-    platform: report.platform,
-    summary: report.summary,
-    stability: report.stability,
-    modelCount: Array.isArray(report.models) ? report.models.length : 0,
-    failureCount: (Array.isArray(report.models) ? report.models : []).filter(
-      (model) => model.state === 'fail'
-    ).length,
-    uploadedFailures: failures,
-    resolvedMappings: mappings,
+    toolboxVersion: extensionPackage.version,
+    vscodeVersion: vscode.version,
+    appName: vscode.env.appName,
+    platform: `${process.platform}/${process.arch}`,
+    modelTest: {
+      available: models.length > 0,
+      generatedAt: report.generatedAt || null,
+      summary: report.summary || null,
+      stability: report.stability || null,
+      modelCount: models.length,
+      failureCount: models.filter((model) => model.state === 'fail').length,
+      uploadedFailureCount: failures.length,
+      resolvedMappingCount: mappings.length,
+      detailCommentCount: modelChunks.length,
+    },
+    codeServer: {
+      scannedAt: codeServer.scannedAt,
+      discoveredLogFiles: codeServer.discoveredLogFiles,
+      scannedLogFiles: codeServer.scannedLogFiles,
+      scannedBytes: codeServer.scannedBytes,
+      filesReadFromTail: codeServer.filesReadFromTail,
+      errorCount: codeServer.errorCount,
+      errorCommentCount: errorChunks.length,
+      scope: codeServer.scope,
+    },
     privacy:
-      'Sanitized opt-in report: no API keys, secret references, full endpoint paths, source code, prompts, or local file paths.',
+      'Sanitized opt-in report: no API keys, secret references, full endpoint paths, source code, prompts, or local file paths. Error records are posted as numbered comments on this issue.',
   };
   const uploadDirectory = path.join(context.globalStorageUri.fsPath, 'github-diagnostics');
   await fsp.mkdir(uploadDirectory, { recursive: true, mode: 0o700 });
   const bodyFile = path.join(uploadDirectory, `${compactReport.reportId}.md`);
   const body = [
-    '## Copilot Models Toolbox diagnostic',
+    '## Complete sanitized code-server diagnostic',
     '',
     `Target branch: \`${branch}\``,
     '',
     'This report was explicitly uploaded from the Toolbox GitHub Sync panel.',
-    'It is sanitized and intentionally excludes credentials, full URLs, prompts, source code, and local paths.',
+    'It includes sanitized errors found in retained code-server and VS Code logs, plus the latest model-test failures when available.',
+    'It intentionally excludes credentials, full URLs, prompts, source code, and local paths.',
     '',
     '```json',
     JSON.stringify(compactReport, null, 2),
@@ -934,7 +1143,8 @@ async function uploadSanitizedDiagnostics(context, repository, branch) {
   await fsp.writeFile(bodyFile, body, { encoding: 'utf8', mode: 0o600 });
   const environment = termuxRuntimeEnvironment();
   const gh = resolveExecutable('gh', environment);
-  const title = `[Toolbox Diagnostic] v${extensionPackage.version} ${compactReport.reportId.slice(0, 8)}`;
+  const title = `[Code-server Diagnostic] v${extensionPackage.version} ${compactReport.reportId.slice(0, 8)}`;
+  let issueUrl = '';
   try {
     const created = await runProcess(
       gh,
@@ -942,9 +1152,64 @@ async function uploadSanitizedDiagnostics(context, repository, branch) {
       undefined,
       environment
     );
-    const issueUrl = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\//.test(line));
-    output.appendLine(`[DIAGNOSTICS UPLOAD] ${issueUrl || created.stdout.trim()}`);
-    return issueUrl || 'GitHub issue created';
+    issueUrl = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\//.test(line)) || '';
+    if (!issueUrl) throw new Error('GitHub created the issue but did not return its URL');
+    for (let index = 0; index < errorChunks.length; index += 1) {
+      if (reportStatus) {
+        reportStatus(`Uploading sanitized code-server error part ${index + 1}/${errorChunks.length}…`);
+      }
+      const comment = [
+        `## Sanitized code-server errors ${index + 1}/${errorChunks.length}`,
+        '',
+        '```json',
+        JSON.stringify(errorChunks[index], null, 2),
+        '```',
+        '',
+      ].join('\n');
+      await fsp.writeFile(bodyFile, comment, { encoding: 'utf8', mode: 0o600 });
+      await runProcess(
+        gh,
+        ['issue', 'comment', issueUrl, '--repo', repository, '--body-file', bodyFile],
+        undefined,
+        environment
+      );
+    }
+    for (let index = 0; index < modelChunks.length; index += 1) {
+      if (reportStatus) {
+        reportStatus(`Uploading sanitized model diagnostic part ${index + 1}/${modelChunks.length}…`);
+      }
+      const comment = [
+        `## Sanitized model diagnostics ${index + 1}/${modelChunks.length}`,
+        '',
+        '```json',
+        JSON.stringify(modelChunks[index], null, 2),
+        '```',
+        '',
+      ].join('\n');
+      await fsp.writeFile(bodyFile, comment, { encoding: 'utf8', mode: 0o600 });
+      await runProcess(
+        gh,
+        ['issue', 'comment', issueUrl, '--repo', repository, '--body-file', bodyFile],
+        undefined,
+        environment
+      );
+    }
+    output.appendLine(
+      `[DIAGNOSTICS UPLOAD] ${issueUrl}; code-server errors=${codeServer.errorCount}; error comments=${errorChunks.length}; model comments=${modelChunks.length}`
+    );
+    return {
+      issueUrl,
+      codeServerErrorCount: codeServer.errorCount,
+      errorCommentCount: errorChunks.length,
+      modelCommentCount: modelChunks.length,
+      modelFailureCount: compactReport.modelTest.failureCount,
+      uploadedModelFailureCount: failures.length,
+    };
+  } catch (error) {
+    if (issueUrl) {
+      throw new Error(`${error.message || error}. Diagnostic issue already exists at ${issueUrl}`);
+    }
+    throw error;
   } finally {
     await fsp.rm(bodyFile, { force: true });
   }
@@ -963,24 +1228,25 @@ h1{margin-top:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{
 @media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><div class="panel">
 <h1>🔄 GitHub Full Update <small>v${extensionPackage.version}</small></h1>
-<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Nothing is uploaded automatically. The diagnostic button below creates a sanitized GitHub issue only after explicit confirmation; API keys, secret references, prompts, source code, full URLs, and local paths are excluded.</p>
+<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Nothing is uploaded automatically. After explicit confirmation, the diagnostic button scans retained code-server and VS Code logs and sends every detected sanitized error to a GitHub issue tied to the selected branch, together with the latest model-test failures when available. API keys, secret references, prompts, source code, full URLs, and local paths are excluded.</p>
 <div class="grid"><div><label for="repository">Repository (owner/name)</label><input id="repository" type="text"></div><div><label for="branch">Branch</label><input id="branch" type="text"></div></div>
 <div class="row"><label><input id="auto" type="checkbox"> Enable automatic update checks</label></div>
 <div class="row"><label for="interval">Check interval (minutes)</label><input id="interval" type="number" min="5" max="1440"></div>
-<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="upload">Upload sanitized diagnostics</button><button id="restart">Copy restart command</button></div>
-<h3>Live update log</h3><pre id="log"></pre>
+<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="upload">Upload all sanitized errors</button><button id="restart">Copy restart command</button></div>
+<h3>Live update log</h3><div class="actions"><button id="copyLog">Copy update log</button></div><pre id="log"></pre>
 </div><script nonce="${scriptNonce}">
 const vscode=acquireVsCodeApi();const initial=${initial};
-const repository=document.getElementById('repository'),branch=document.getElementById('branch'),auto=document.getElementById('auto'),interval=document.getElementById('interval'),log=document.getElementById('log');
+const repository=document.getElementById('repository'),branch=document.getElementById('branch'),auto=document.getElementById('auto'),interval=document.getElementById('interval'),log=document.getElementById('log'),updateErrors=[];
 repository.value=initial.repository;branch.value=initial.branch;auto.checked=initial.autoUpdate;interval.value=initial.intervalMinutes;
-function payload(type){return{type,repository:repository.value,branch:branch.value,autoUpdate:auto.checked,intervalMinutes:Number(interval.value)}}
+function payload(type){return{type,repository:repository.value,branch:branch.value,autoUpdate:auto.checked,intervalMinutes:Number(interval.value),updateErrors:[...updateErrors]}}
 function busy(value){document.getElementById('update').disabled=value;document.getElementById('check').disabled=value;document.getElementById('upload').disabled=value}
 document.getElementById('save').onclick=()=>vscode.postMessage(payload('save'));
 document.getElementById('check').onclick=()=>{busy(true);vscode.postMessage(payload('check'))};
 document.getElementById('update').onclick=()=>{busy(true);vscode.postMessage(payload('update'))};
 document.getElementById('upload').onclick=()=>{auto.checked=true;busy(true);vscode.postMessage(payload('uploadDiagnostics'))};
 document.getElementById('restart').onclick=()=>vscode.postMessage({type:'copyRestart'});
-window.addEventListener('message',event=>{const message=event.data;if(message.type==='status'){const line=document.createElement('div');line.className=message.level||'';line.textContent=new Date().toLocaleTimeString()+'  '+message.message;log.appendChild(line);log.scrollTop=log.scrollHeight;if(message.done)busy(false)}});
+document.getElementById('copyLog').onclick=()=>vscode.postMessage({type:'copyUpdateLog',text:log.innerText||log.textContent||''});
+window.addEventListener('message',event=>{const message=event.data;if(message.type==='status'){if(message.level==='error')updateErrors.push(String(message.message||''));const line=document.createElement('div');line.className=message.level||'';line.textContent=new Date().toLocaleTimeString()+'  '+message.message;log.appendChild(line);log.scrollTop=log.scrollHeight;if(message.done)busy(false)}});
 </script></body></html>`;
 }
 
@@ -1063,21 +1329,23 @@ async function syncGitHub(context) {
           postStatus(`v${installed} installed. Restart code-server to load all changes.`, 'success', true);
         } else if (message.type === 'uploadDiagnostics') {
           const confirmed = await vscode.window.showWarningMessage(
-            'Upload the latest sanitized Test All report as a GitHub issue? It includes model names, provider hostnames, HTTP status, redacted errors, versions, branch, and TypeScript stability values. It excludes API keys, secret references, prompts, source code, full URLs, and local paths.',
+            'Scan retained code-server and VS Code logs and upload every detected sanitized error as a GitHub issue and numbered comments? The latest model-test failures are included when available. API keys, secret references, prompts, source code, full URLs, and local paths are excluded.',
             { modal: true },
-            'Upload Sanitized Report'
+            'Upload Sanitized Errors'
           );
-          if (confirmed !== 'Upload Sanitized Report') {
+          if (confirmed !== 'Upload Sanitized Errors') {
             postStatus('Diagnostic upload cancelled.', 'info', true);
           } else {
-            postStatus('Creating sanitized GitHub diagnostic issue…');
-            const issue = await uploadSanitizedDiagnostics(
+            postStatus('Creating complete sanitized GitHub diagnostic issue…');
+            const result = await uploadSanitizedDiagnostics(
               context,
               saved.repository,
-              saved.branch
+              saved.branch,
+              (text) => postStatus(text),
+              message.updateErrors
             );
             postStatus(
-              `Diagnostic uploaded: ${issue}. Keep automatic updates enabled so the branch fix installs itself.`,
+              `Diagnostic uploaded: ${result.issueUrl}. Sent ${result.codeServerErrorCount} code-server/VS Code error record(s) in ${result.errorCommentCount} part(s), plus details for ${result.uploadedModelFailureCount}/${result.modelFailureCount} model failure(s) in ${result.modelCommentCount} part(s). Keep automatic updates enabled so the branch fix installs itself.`,
               'success',
               true
             );
@@ -1086,6 +1354,10 @@ async function syncGitHub(context) {
       } else if (message.type === 'copyRestart') {
         await vscode.env.clipboard.writeText(RESTART_COMMAND);
         postStatus('Restart command copied.', 'success', true);
+      } else if (message.type === 'copyUpdateLog') {
+        const logText = String(message.text || '');
+        await vscode.env.clipboard.writeText(logText);
+        postStatus(`Update log copied (${logText.length} characters).`, 'success');
       }
     } catch (error) {
       postStatus(error.message || String(error), 'error', true);
@@ -2077,8 +2349,10 @@ module.exports = {
   activate,
   deactivate,
   __test: {
+    collectCodeServerDiagnostics,
     createRepairSnapshot,
     credentialSummary,
+    diagnosticCommentChunks,
     githubSyncHtml,
     migratePlaintextCredentials,
     providerCredentialAliases,

@@ -298,13 +298,19 @@ function sanitizeDiagnosticText(text, secrets = [], maxLength = 4000) {
     if (secret) output = output.split(String(secret)).join('[REDACTED]');
   }
   output = output
-    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [REDACTED]')
+    .replace(/(?:Bearer|Basic)\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Authorization [REDACTED]')
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gi, '[REDACTED_TOKEN]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_JWT]')
     .replace(/\b(?:sk|key|token|api)[-_][A-Za-z0-9._~+\/-]{8,}\b/gi, '[REDACTED]')
     .replace(/([?&](?:api_?key|key|token|access_token)=)[^&#\s]+/gi, '$1[REDACTED]')
+    .replace(/(["']?(?:api_?key|token|access_?token|password|secret|authorization|cookie|set-cookie)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/gi, '$1[REDACTED]')
     .replace(/\$\{input:chat\.lm\.secret\.[^}]+\}/g, '[SECRET_REFERENCE]')
+    .replace(/(["']?(?:prompt|messages?|content|requestBody|sourceText|documentText)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\]]*\])/gi, '$1[PRIVATE_TEXT]')
     .replace(/(https?:\/\/[^/\s"']+)\/[^\s"']+/gi, '$1/[PATH]')
-    .replace(/\/data\/(?:data|user\/0)\/com\.termux\/files\/home\/[\w./-]+/g, '$HOME/[PATH]')
-    .replace(/\/(?:home|Users)\/[\w.-]+\/[\w./-]+/g, '$HOME/[PATH]')
+    .replace(/file:\/\/{2,}[^\s"']+/gi, 'file:///[LOCAL_PATH]')
+    .replace(/\/data\/(?:data|user\/0)\/com\.termux\/files\/home\/[\w./@+-]+/g, '$HOME/[PATH]')
+    .replace(/\/(?:home|Users)\/[\w.@+-]+\/[\w./@+-]+/g, '$HOME/[PATH]')
+    .replace(/(^|[\s"'(=:])\/(?:[\w.@+-]+\/)+[\w.@+:-]+/g, '$1/[LOCAL_PATH]')
     .replace(/[\r\n\t]+/g, ' ')
     .trim();
   return output.length <= maxLength ? output : output.slice(0, maxLength - 3) + '...';

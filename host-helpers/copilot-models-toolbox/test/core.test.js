@@ -138,6 +138,22 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     fs.readdirSync(path.join(globalStorage, 'model-id-backups')).length,
     1
   );
+  const logDirectory = path.join(temporary, 'logs', 'session', 'window1');
+  fs.mkdirSync(logDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(logDirectory, 'exthost.log'),
+    [
+      'No errors found during startup',
+      `ERROR request failed with mistral-private-key at https://api.example.test/v1/private and ${temporary}/workspace/private.js`,
+      'write EPIPE while talking to tsserver',
+    ].join('\n')
+  );
+  const codeServerDiagnostics = await extension.__test.collectCodeServerDiagnostics(context);
+  assert.equal(codeServerDiagnostics.errorCount, 2);
+  assert.equal(extension.__test.diagnosticCommentChunks(codeServerDiagnostics.errors, 200).length, 2);
+  const diagnosticText = JSON.stringify(codeServerDiagnostics);
+  assert.doesNotMatch(diagnosticText, /mistral-private-key|\/v1\/private|workspace\/private/);
+  assert.match(diagnosticText, /\[REDACTED\]|\[PATH\]|\[LOCAL_PATH\]/);
   const termuxFiles = path.join(temporary, 'com.termux', 'files');
   const termuxHome = path.join(termuxFiles, 'home');
   const termuxPrefix = path.join(termuxFiles, 'usr');
@@ -210,8 +226,10 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   });
   assert.match(githubSync, /GitHub Full Update/);
   assert.match(githubSync, /Enable automatic update checks/);
-  assert.match(githubSync, /Upload sanitized diagnostics/);
+  assert.match(githubSync, /Upload all sanitized errors/);
+  assert.match(githubSync, /Copy update log/);
   assert.match(githubSync, /Nothing is uploaded automatically/);
+  assert.match(githubSync, /every detected sanitized error/);
   const githubScript = githubSync.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
   assert.doesNotThrow(() => new vm.Script(githubScript));
 });
@@ -344,9 +362,9 @@ test('compactError and diagnostic sanitizer redact private values', () => {
   assert.equal(core.compactError('bad secret-key\nrequest', 'secret-key'), 'bad [REDACTED] request');
   assert.equal(core.compactError('abcdefghij', '', 7), 'abcd...');
   const sanitized = core.sanitizeDiagnosticText(
-    'Bearer private-token-123 https://api.example.test/v1/accounts/private /data/data/com.termux/files/home/me/project',
+    'Bearer private-token-123 ghp_abcdefghijklmnopqrstuvwxyz123456 https://api.example.test/v1/accounts/private /data/data/com.termux/files/home/me/project prompt="private user request"',
     ['private-token-123']
   );
-  assert.doesNotMatch(sanitized, /private-token-123|accounts\/private|\/data\/data/);
+  assert.doesNotMatch(sanitized, /private-token-123|ghp_|accounts\/private|\/data\/data|private user request/);
   assert.match(sanitized, /https:\/\/api\.example\.test\/\[PATH\]/);
 });
