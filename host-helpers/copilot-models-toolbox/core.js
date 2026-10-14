@@ -19,6 +19,68 @@ function chatCompletionsUrl(rawUrl) {
   return parsed.toString();
 }
 
+function modelsUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`Unsupported endpoint protocol: ${parsed.protocol}`);
+  }
+  let pathname = parsed.pathname.replace(/\/+$/, '');
+  pathname = pathname.replace(/\/(?:chat\/completions|responses)$/i, '');
+  if (!pathname.endsWith('/models')) pathname += '/models';
+  parsed.pathname = pathname;
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+function modelNameVariants(...values) {
+  const variants = new Set();
+  for (const input of values) {
+    const value = String(input || '').trim().toLowerCase();
+    if (!value) continue;
+    const candidates = [value, value.replace(/^models\//, '')];
+    const basename = value.split('/').filter(Boolean).pop();
+    if (basename) candidates.push(basename);
+    for (const candidate of candidates) {
+      variants.add(candidate);
+      variants.add(candidate.replace(/[\s_.]+/g, '-'));
+      variants.add(candidate.replace(/[^a-z0-9]+/g, ''));
+    }
+  }
+  variants.delete('');
+  return variants;
+}
+
+function resolveRemoteModel(model, remoteModels) {
+  const available = (Array.isArray(remoteModels) ? remoteModels : [])
+    .map((entry) =>
+      typeof entry === 'string'
+        ? { id: entry, name: '' }
+        : {
+            id: String((entry && (entry.id || entry.model || entry.modelId || entry.name)) || '').trim(),
+            name: String((entry && (entry.display_name || entry.displayName || entry.name)) || '').trim(),
+          }
+    )
+    .filter((entry) => entry.id);
+  const configuredId = String(model && model.id || '').trim();
+  const exact = available.filter((entry) => entry.id === configuredId);
+  if (exact.length === 1) return { id: exact[0].id, reason: 'exact' };
+  const caseInsensitive = available.filter(
+    (entry) => entry.id.toLowerCase() === configuredId.toLowerCase()
+  );
+  if (caseInsensitive.length === 1) {
+    return { id: caseInsensitive[0].id, reason: 'case-corrected' };
+  }
+  const wanted = modelNameVariants(configuredId, model && model.configuredName);
+  const matches = available.filter((entry) => {
+    const candidate = modelNameVariants(entry.id, entry.name);
+    return [...wanted].some((value) => candidate.has(value));
+  });
+  return matches.length === 1
+    ? { id: matches[0].id, reason: 'name-resolved' }
+    : undefined;
+}
+
 function ollamaUrl(rawUrl, suffix) {
   const parsed = new URL(rawUrl);
   if (!['http:', 'https:'].includes(parsed.protocol)) {
@@ -65,12 +127,20 @@ function httpRequest(rawUrl, options = {}) {
       const location = response.headers.location;
       if ([301, 302, 303, 307, 308].includes(status) && location && redirects > 0) {
         response.resume();
-        const redirected = new URL(location, parsed).toString();
+        const redirectedUrl = new URL(location, parsed);
+        const redirected = redirectedUrl.toString();
+        const redirectedHeaders = { ...headers };
+        if (redirectedUrl.origin !== parsed.origin) {
+          for (const key of Object.keys(redirectedHeaders)) {
+            if (key.toLowerCase() === 'authorization') delete redirectedHeaders[key];
+          }
+        }
         cleanupAbort();
         httpRequest(redirected, {
           ...options,
           method: status === 303 ? 'GET' : method,
           body: status === 303 ? undefined : body,
+          headers: redirectedHeaders,
           redirects: redirects - 1,
         }).then(resolve, reject);
         return;
@@ -184,6 +254,7 @@ function collectConfiguredModels(groups) {
         vendor,
         provider,
         id,
+        configuredName: String(model.name || '').trim(),
         url,
         apiKey: credentialReference ? '' : configuredKey,
         credentialReference,
@@ -197,7 +268,7 @@ function chatModelIdentifier(model) {
   if (!model || typeof model !== 'object') return '';
   const vendor = String(model.vendor || (model.kind === 'ollama' ? 'ollama' : '')).trim();
   const group = String(model.provider || '').trim();
-  const id = String(model.id || '').trim();
+  const id = String(model.resolvedId || model.id || '').trim();
   if (!vendor || !group || !id || id === 'auto') return '';
   return `${vendor}/${group}/${id}`;
 }
@@ -221,6 +292,24 @@ function validateCatalog(value) {
   return { providerCount: value.providers.length, modelCount };
 }
 
+function sanitizeDiagnosticText(text, secrets = [], maxLength = 4000) {
+  let output = String(text || '');
+  for (const secret of secrets) {
+    if (secret) output = output.split(String(secret)).join('[REDACTED]');
+  }
+  output = output
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk|key|token|api)[-_][A-Za-z0-9._~+\/-]{8,}\b/gi, '[REDACTED]')
+    .replace(/([?&](?:api_?key|key|token|access_token)=)[^&#\s]+/gi, '$1[REDACTED]')
+    .replace(/\$\{input:chat\.lm\.secret\.[^}]+\}/g, '[SECRET_REFERENCE]')
+    .replace(/(https?:\/\/[^/\s"']+)\/[^\s"']+/gi, '$1/[PATH]')
+    .replace(/\/data\/(?:data|user\/0)\/com\.termux\/files\/home\/[\w./-]+/g, '$HOME/[PATH]')
+    .replace(/\/(?:home|Users)\/[\w.-]+\/[\w./-]+/g, '$HOME/[PATH]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+  return output.length <= maxLength ? output : output.slice(0, maxLength - 3) + '...';
+}
+
 function compactError(text, apiKey = '', maxLength = 8000) {
   let output = String(text || '').replace(/[\r\n\t]+/g, ' ').trim();
   if (apiKey) {
@@ -236,6 +325,10 @@ module.exports = {
   collectConfiguredModels,
   compactError,
   httpRequest,
+  modelsUrl,
+  modelNameVariants,
+  resolveRemoteModel,
+  sanitizeDiagnosticText,
   isChatSecretReference,
   ollamaUrl,
   requestJson,

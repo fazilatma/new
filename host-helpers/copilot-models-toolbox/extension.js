@@ -862,6 +862,94 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
   }
 }
 
+async function uploadSanitizedDiagnostics(context, repository, branch) {
+  const reportPath = path.join(
+    context.globalStorageUri.fsPath,
+    'latest-sanitized-diagnostics.json'
+  );
+  if (!(await readable(reportPath))) {
+    throw new Error('No sanitized test report exists yet. Run Test All AI Models first.');
+  }
+  const report = JSON.parse(await fsp.readFile(reportPath, 'utf8'));
+  const failures = (Array.isArray(report.models) ? report.models : [])
+    .filter((model) => model.state === 'fail')
+    .slice(0, 60)
+    .map((model) => ({
+      provider: model.provider,
+      configuredModel: model.configuredModel,
+      resolvedModel: model.resolvedModel,
+      resolution: model.resolution,
+      endpointHost: model.endpointHost,
+      httpStatus: model.httpStatus,
+      elapsedMs: model.elapsedMs,
+      error: core.sanitizeDiagnosticText(model.error, [], 500),
+    }));
+  const mappings = (Array.isArray(report.models) ? report.models : [])
+    .filter((model) => model.configuredModel !== model.resolvedModel)
+    .slice(0, 120)
+    .map((model) => ({
+      provider: model.provider,
+      configuredModel: model.configuredModel,
+      resolvedModel: model.resolvedModel,
+      resolution: model.resolution,
+      state: model.state,
+    }));
+  const compactReport = {
+    schema: report.schema,
+    reportId: crypto.randomUUID(),
+    generatedAt: report.generatedAt,
+    repository,
+    branch,
+    toolboxVersion: report.toolboxVersion,
+    vscodeVersion: report.vscodeVersion,
+    appName: report.appName,
+    platform: report.platform,
+    summary: report.summary,
+    stability: report.stability,
+    modelCount: Array.isArray(report.models) ? report.models.length : 0,
+    failureCount: (Array.isArray(report.models) ? report.models : []).filter(
+      (model) => model.state === 'fail'
+    ).length,
+    uploadedFailures: failures,
+    resolvedMappings: mappings,
+    privacy:
+      'Sanitized opt-in report: no API keys, secret references, full endpoint paths, source code, prompts, or local file paths.',
+  };
+  const uploadDirectory = path.join(context.globalStorageUri.fsPath, 'github-diagnostics');
+  await fsp.mkdir(uploadDirectory, { recursive: true, mode: 0o700 });
+  const bodyFile = path.join(uploadDirectory, `${compactReport.reportId}.md`);
+  const body = [
+    '## Copilot Models Toolbox diagnostic',
+    '',
+    `Target branch: \`${branch}\``,
+    '',
+    'This report was explicitly uploaded from the Toolbox GitHub Sync panel.',
+    'It is sanitized and intentionally excludes credentials, full URLs, prompts, source code, and local paths.',
+    '',
+    '```json',
+    JSON.stringify(compactReport, null, 2),
+    '```',
+    '',
+  ].join('\n');
+  await fsp.writeFile(bodyFile, body, { encoding: 'utf8', mode: 0o600 });
+  const environment = termuxRuntimeEnvironment();
+  const gh = resolveExecutable('gh', environment);
+  const title = `[Toolbox Diagnostic] v${extensionPackage.version} ${compactReport.reportId.slice(0, 8)}`;
+  try {
+    const created = await runProcess(
+      gh,
+      ['issue', 'create', '--repo', repository, '--title', title, '--body-file', bodyFile],
+      undefined,
+      environment
+    );
+    const issueUrl = created.stdout.trim().split(/\r?\n/).find((line) => /^https:\/\//.test(line));
+    output.appendLine(`[DIAGNOSTICS UPLOAD] ${issueUrl || created.stdout.trim()}`);
+    return issueUrl || 'GitHub issue created';
+  } finally {
+    await fsp.rm(bodyFile, { force: true });
+  }
+}
+
 function githubSyncHtml(settings) {
   const scriptNonce = nonce();
   const initial = webviewJson(settings);
@@ -875,21 +963,22 @@ h1{margin-top:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{
 @media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><div class="panel">
 <h1>🔄 GitHub Full Update <small>v${extensionPackage.version}</small></h1>
-<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Local API keys are preserved and nothing is uploaded.</p>
+<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Nothing is uploaded automatically. The diagnostic button below creates a sanitized GitHub issue only after explicit confirmation; API keys, secret references, prompts, source code, full URLs, and local paths are excluded.</p>
 <div class="grid"><div><label for="repository">Repository (owner/name)</label><input id="repository" type="text"></div><div><label for="branch">Branch</label><input id="branch" type="text"></div></div>
 <div class="row"><label><input id="auto" type="checkbox"> Enable automatic update checks</label></div>
 <div class="row"><label for="interval">Check interval (minutes)</label><input id="interval" type="number" min="5" max="1440"></div>
-<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="restart">Copy restart command</button></div>
+<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="upload">Upload sanitized diagnostics</button><button id="restart">Copy restart command</button></div>
 <h3>Live update log</h3><pre id="log"></pre>
 </div><script nonce="${scriptNonce}">
 const vscode=acquireVsCodeApi();const initial=${initial};
 const repository=document.getElementById('repository'),branch=document.getElementById('branch'),auto=document.getElementById('auto'),interval=document.getElementById('interval'),log=document.getElementById('log');
 repository.value=initial.repository;branch.value=initial.branch;auto.checked=initial.autoUpdate;interval.value=initial.intervalMinutes;
 function payload(type){return{type,repository:repository.value,branch:branch.value,autoUpdate:auto.checked,intervalMinutes:Number(interval.value)}}
-function busy(value){document.getElementById('update').disabled=value;document.getElementById('check').disabled=value}
+function busy(value){document.getElementById('update').disabled=value;document.getElementById('check').disabled=value;document.getElementById('upload').disabled=value}
 document.getElementById('save').onclick=()=>vscode.postMessage(payload('save'));
 document.getElementById('check').onclick=()=>{busy(true);vscode.postMessage(payload('check'))};
 document.getElementById('update').onclick=()=>{busy(true);vscode.postMessage(payload('update'))};
+document.getElementById('upload').onclick=()=>{auto.checked=true;busy(true);vscode.postMessage(payload('uploadDiagnostics'))};
 document.getElementById('restart').onclick=()=>vscode.postMessage({type:'copyRestart'});
 window.addEventListener('message',event=>{const message=event.data;if(message.type==='status'){const line=document.createElement('div');line.className=message.level||'';line.textContent=new Date().toLocaleTimeString()+'  '+message.message;log.appendChild(line);log.scrollTop=log.scrollHeight;if(message.done)busy(false)}});
 </script></body></html>`;
@@ -952,7 +1041,7 @@ async function syncGitHub(context) {
     panel.webview.postMessage({ type: 'status', message, level, done });
   panel.webview.onDidReceiveMessage(async (message) => {
     try {
-      if (['save', 'check', 'update'].includes(message.type)) {
+      if (['save', 'check', 'update', 'uploadDiagnostics'].includes(message.type)) {
         const saved = await saveGitHubSettings(
           message.repository,
           message.branch,
@@ -972,6 +1061,27 @@ async function syncGitHub(context) {
             (text, level) => postStatus(text, level)
           );
           postStatus(`v${installed} installed. Restart code-server to load all changes.`, 'success', true);
+        } else if (message.type === 'uploadDiagnostics') {
+          const confirmed = await vscode.window.showWarningMessage(
+            'Upload the latest sanitized Test All report as a GitHub issue? It includes model names, provider hostnames, HTTP status, redacted errors, versions, branch, and TypeScript stability values. It excludes API keys, secret references, prompts, source code, full URLs, and local paths.',
+            { modal: true },
+            'Upload Sanitized Report'
+          );
+          if (confirmed !== 'Upload Sanitized Report') {
+            postStatus('Diagnostic upload cancelled.', 'info', true);
+          } else {
+            postStatus('Creating sanitized GitHub diagnostic issue…');
+            const issue = await uploadSanitizedDiagnostics(
+              context,
+              saved.repository,
+              saved.branch
+            );
+            postStatus(
+              `Diagnostic uploaded: ${issue}. Keep automatic updates enabled so the branch fix installs itself.`,
+              'success',
+              true
+            );
+          }
         }
       } else if (message.type === 'copyRestart') {
         await vscode.env.clipboard.writeText(RESTART_COMMAND);
@@ -1152,6 +1262,128 @@ async function readConfiguredGroups(context) {
   }
 }
 
+async function resolveConfiguredModelNames(models, timeoutMs, signal, onResolved) {
+  const groups = new Map();
+  for (const model of models) {
+    if (model.kind !== 'openai' || model.modelDiscoveryAttempted) continue;
+    const key = `${model.provider}\u0000${model.url}\u0000${model.apiKey || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(model);
+  }
+  const entries = [...groups.values()];
+  let next = 0;
+  const worker = async () => {
+    while (!signal.aborted) {
+      const index = next++;
+      if (index >= entries.length) return;
+      const providerModels = entries[index];
+      const sample = providerModels[0];
+      for (const model of providerModels) model.modelDiscoveryAttempted = true;
+      if (!sample.apiKey) continue;
+      try {
+        const response = await core.httpRequest(core.modelsUrl(sample.url), {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${sample.apiKey}`,
+          },
+          timeoutMs: Math.min(timeoutMs, 15000),
+          signal,
+          maxBytes: 8 * 1024 * 1024,
+        });
+        if (response.status < 200 || response.status >= 300) continue;
+        const value = JSON.parse(response.text);
+        const remoteModels = Array.isArray(value)
+          ? value
+          : Array.isArray(value.data)
+            ? value.data
+            : Array.isArray(value.models)
+              ? value.models
+              : [];
+        if (!remoteModels.length) continue;
+        for (const model of providerModels) {
+          model.remoteModelCount = remoteModels.length;
+          const resolved = core.resolveRemoteModel(model, remoteModels);
+          if (resolved) {
+            model.resolvedId = resolved.id;
+            model.resolutionReason = resolved.reason;
+            if (onResolved) onResolved(model);
+          } else {
+            model.nameResolutionError =
+              `Provider returned ${remoteModels.length} model IDs, but configured name/id "${model.id}" had no unique match.`;
+          }
+        }
+      } catch (error) {
+        if (error.message !== 'Cancelled') {
+          output.appendLine(`[MODEL DISCOVERY] ${sample.provider}: ${core.sanitizeDiagnosticText(error.message, [sample.apiKey])}`);
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, entries.length) }, () => worker()));
+}
+
+async function repairResolvedModelIds(context, successfulModels) {
+  const replacements = new Map();
+  for (const model of successfulModels) {
+    if (!model.resolvedId || model.resolvedId === model.id) continue;
+    replacements.set(`${model.provider}\u0000${model.id}`, model.resolvedId);
+  }
+  if (!replacements.size) return 0;
+  const filename = configuredPaths(context).configFile;
+  const groups = JSON.parse(await fsp.readFile(filename, 'utf8'));
+  let changed = 0;
+  for (const group of groups) {
+    if (!group || !Array.isArray(group.models)) continue;
+    const provider = String(group.name || group.vendor || '');
+    const deduplicated = [];
+    const seen = new Set();
+    for (const original of group.models) {
+      if (!original || typeof original !== 'object') continue;
+      const replacement = replacements.get(`${provider}\u0000${String(original.id || '')}`);
+      const model = replacement ? { ...original, id: replacement } : original;
+      if (replacement) changed += 1;
+      const key = `${String(model.id || '')}\u0000${String(model.url || '')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduplicated.push(model);
+    }
+    group.models = deduplicated;
+  }
+  if (!changed) return 0;
+  const backupDirectory = path.join(context.globalStorageUri.fsPath, 'model-id-backups');
+  await fsp.mkdir(backupDirectory, { recursive: true, mode: 0o700 });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backup = path.join(backupDirectory, `chatLanguageModels-${stamp}.json`);
+  await fsp.copyFile(filename, backup);
+  await fsp.chmod(backup, 0o600);
+  const retention = Math.max(
+    1,
+    Math.min(30, Number(toolboxConfiguration().get('backupRetention', 8)))
+  );
+  const oldBackups = (await fsp.readdir(backupDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.startsWith('chatLanguageModels-'))
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  await Promise.all(
+    oldBackups.slice(retention).map((name) =>
+      fsp.rm(path.join(backupDirectory, name), { force: true })
+    )
+  );
+  const temporary = `${filename}.${process.pid}.model-repair.tmp`;
+  try {
+    await fsp.writeFile(temporary, JSON.stringify(groups, null, 2) + '\n', {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    await fsp.rename(temporary, filename);
+  } finally {
+    await fsp.rm(temporary, { force: true });
+  }
+  output.appendLine(`[MODEL IDS] Repaired ${changed} configured model name/id value(s); backup=${backup}`);
+  return changed;
+}
+
 async function discoverOllama(group, timeoutMs, signal) {
   const response = await core.httpRequest(core.ollamaUrl(group.url, '/api/tags'), {
     timeoutMs,
@@ -1188,11 +1420,12 @@ async function testOneModel(model, timeoutMs, signal) {
     };
   }
   let response;
+  const requestModelId = model.resolvedId || model.id;
   if (model.kind === 'ollama') {
     response = await core.requestJson(
       core.ollamaUrl(model.url, '/api/chat'),
       {
-        model: model.id,
+        model: requestModelId,
         messages: [{ role: 'user', content: 'Reply only with OK.' }],
         stream: false,
         options: { num_predict: 8 },
@@ -1206,7 +1439,7 @@ async function testOneModel(model, timeoutMs, signal) {
     response = await core.requestJson(
       core.chatCompletionsUrl(model.url),
       {
-        model: model.id,
+        model: requestModelId,
         messages: [{ role: 'user', content: 'Reply only with OK.' }],
         max_tokens: 8,
         stream: false,
@@ -1228,11 +1461,15 @@ async function testOneModel(model, timeoutMs, signal) {
     return { ok: true, status: response.status, elapsedMs };
   }
   const detail = apiError ? JSON.stringify(apiError) : response.text;
+  const nameHint =
+    model.nameResolutionError && [400, 404, 422].includes(response.status)
+      ? `${model.nameResolutionError} `
+      : '';
   return {
     ok: false,
     status: response.status,
     elapsedMs,
-    error: core.compactError(detail, model.apiKey),
+    error: nameHint + core.compactError(detail, model.apiKey),
   };
 }
 
@@ -1300,6 +1537,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     key: model.testKey,
     provider: model.provider,
     model: model.id,
+    testedModel: model.resolvedId || model.id,
     kind: model.kind,
     credential: credentialSummary(model),
   }));
@@ -1335,8 +1573,8 @@ function testDashboardHtml(webview, models, warnings, options) {
     input, select { color: var(--vscode-input-foreground); background: var(--vscode-input-background); border-color: var(--vscode-input-border); }
     input { min-width: 260px; flex: 1; }
     progress { width: 100%; height: 10px; accent-color: var(--vscode-progressBar-background); }
-    .table-wrap { border: 1px solid var(--vscode-panel-border); overflow: auto; max-height: calc(100vh - 330px); }
-    table { width: 100%; border-collapse: collapse; min-width: 1050px; }
+    .table-wrap { border: 1px solid var(--vscode-panel-border); overflow: auto; height: 62vh; min-height: 280px; max-height: 720px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1180px; }
     th { position: sticky; top: 0; z-index: 2; text-align: left; background: var(--vscode-editorGroupHeader-tabsBackground); }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--vscode-panel-border); vertical-align: top; }
     tr:hover { background: var(--vscode-list-hoverBackground); }
@@ -1370,6 +1608,7 @@ function testDashboardHtml(webview, models, warnings, options) {
   <progress id="progress" value="0" max="100"></progress>
   <div class="toolbar">
     <button id="start">▶ Start all real tests</button>
+    <button id="importModels">📥 Import Models / JSON</button>
     <button id="cancel" disabled>■ Cancel</button>
     <button id="retry" disabled>↻ Retry failed</button>
     <button id="copyAll" disabled>⧉ Copy all errors</button>
@@ -1385,7 +1624,7 @@ function testDashboardHtml(webview, models, warnings, options) {
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Provider</th><th>Model</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Error details</th></tr></thead>
+      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Error details</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -1399,6 +1638,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     const statusFilter = document.getElementById('status');
     const search = document.getElementById('search');
     const start = document.getElementById('start');
+    const importModels = document.getElementById('importModels');
     const cancel = document.getElementById('cancel');
     const retry = document.getElementById('retry');
     const copyAll = document.getElementById('copyAll');
@@ -1423,11 +1663,12 @@ function testDashboardHtml(webview, models, warnings, options) {
     function addRow(item, index) {
       const tr = document.createElement('tr'); tr.dataset.key = item.key; tr.dataset.provider = item.provider; tr.dataset.status = 'pending';
       tr.append(cell(String(index + 1)), cell(item.provider), cell(item.model));
+      const testedModel = cell(item.testedModel); tr.appendChild(testedModel);
       const credential = cell(item.credential); if (item.credential === 'Missing') credential.className = 'credential-missing'; tr.appendChild(credential);
       const status = cell('pending'); const badge = document.createElement('span'); badge.className = 'status pending'; badge.textContent = 'pending'; status.replaceChildren(badge); tr.appendChild(status);
       tr.append(cell('—'), cell('—'));
       const error = cell(''); renderError(error, null); tr.appendChild(error);
-      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, http: tr.children[5], latency: tr.children[6], error, item });
+      rows.appendChild(tr); rowElements.set(item.key, { tr, badge, testedModel, http: tr.children[6], latency: tr.children[7], error, item });
     }
     initial.models.forEach(addRow);
 
@@ -1458,12 +1699,13 @@ function testDashboardHtml(webview, models, warnings, options) {
     function applyFilters() {
       const query = search.value.trim().toLowerCase(); const provider = providerFilter.value; const status = statusFilter.value;
       for (const row of rowElements.values()) {
-        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.credential, result && result.error].join(' ').toLowerCase();
+        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.testedModel, row.item.credential, result && result.error].join(' ').toLowerCase();
         row.tr.hidden = Boolean((provider && row.item.provider !== provider) || (status && row.tr.dataset.status !== status) || (query && !haystack.includes(query)));
       }
     }
-    function setRunning(value) { start.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
-    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Contacting the code-server extension host…'; vscode.postMessage({ type: 'start' }); });
+    function setRunning(value) { start.disabled = value; importModels.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
+    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Resolving provider model names, then testing…'; vscode.postMessage({ type: 'start' }); });
+    importModels.addEventListener('click', () => vscode.postMessage({ type: 'importModels' }));
     cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed' }));
     copyAll.addEventListener('click', () => {
@@ -1477,6 +1719,9 @@ function testDashboardHtml(webview, models, warnings, options) {
       if (message.type === 'runStarted') {
         for (const key of message.keys) updateRow({ key, state: 'queued', status: 0, elapsedMs: 0, error: '' });
         setRunning(true); document.getElementById('runInfo').textContent = 'Running ' + message.keys.length + ' model tests…';
+      } else if (message.type === 'resolved') {
+        const row = rowElements.get(message.key);
+        if (row) { row.item.testedModel = message.model; row.testedModel.textContent = message.model; row.testedModel.title = message.reason; }
       } else if (message.type === 'row') updateRow(message);
       else if (message.type === 'runDone') {
         setRunning(false); start.textContent = '▶ Run all again';
@@ -1487,6 +1732,59 @@ function testDashboardHtml(webview, models, warnings, options) {
   </script>
 </body>
 </html>`;
+}
+
+function endpointHost(rawUrl) {
+  try {
+    return new URL(rawUrl).host;
+  } catch {
+    return 'invalid-endpoint';
+  }
+}
+
+async function saveSanitizedDiagnostics(context, models, results, summary) {
+  const settings = vscode.workspace.getConfiguration();
+  const report = {
+    schema: 1,
+    generatedAt: new Date().toISOString(),
+    toolboxVersion: extensionPackage.version,
+    vscodeVersion: vscode.version,
+    appName: vscode.env.appName,
+    platform: `${os.platform()}-${os.arch()}`,
+    summary,
+    stability: {
+      tsserverMemoryMb: settings.get(
+        'js/ts.tsserver.maxMemory',
+        settings.get('typescript.tsserver.maxTsServerMemory', 'default')
+      ),
+      syntaxServer: settings.get('js/ts.tsserver.useSyntaxServer', 'default'),
+      validation: settings.get('js/ts.validate.enabled', 'default'),
+    },
+    models: models.map((model) => {
+      const result = results.get(model.testKey) || { state: 'pending' };
+      return {
+        provider: core.sanitizeDiagnosticText(model.provider, [model.apiKey], 200),
+        vendor: core.sanitizeDiagnosticText(model.vendor, [model.apiKey], 100),
+        configuredModel: core.sanitizeDiagnosticText(model.id, [model.apiKey], 300),
+        resolvedModel: core.sanitizeDiagnosticText(model.resolvedId || model.id, [model.apiKey], 300),
+        resolution: core.sanitizeDiagnosticText(model.resolutionReason || '', [], 100),
+        endpointHost: endpointHost(model.url),
+        state: result.state,
+        httpStatus: result.status || 0,
+        elapsedMs: result.elapsedMs || 0,
+        error: core.sanitizeDiagnosticText(result.error || '', [model.apiKey]),
+      };
+    }),
+  };
+  await fsp.mkdir(context.globalStorageUri.fsPath, { recursive: true, mode: 0o700 });
+  const destination = path.join(context.globalStorageUri.fsPath, 'latest-sanitized-diagnostics.json');
+  await fsp.writeFile(destination, JSON.stringify(report, null, 2) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  await fsp.chmod(destination, 0o600);
+  output.appendLine(`[DIAGNOSTICS] Sanitized report saved locally: ${destination}`);
+  return destination;
 }
 
 async function exportTestReport(context, models, results) {
@@ -1536,6 +1834,24 @@ function openTestDashboard(context, models, warnings, options) {
     panel.webview.postMessage({ type: 'runStarted', keys: selected.map((model) => model.testKey) });
     output.clear();
     output.appendLine(`AI model dashboard run started: ${new Date().toISOString()}`);
+    await resolveConfiguredModelNames(
+      selected,
+      options.timeoutMs,
+      activeController.signal,
+      (model) => {
+        panel.webview.postMessage({
+          type: 'resolved',
+          key: model.testKey,
+          model: model.resolvedId,
+          reason: model.resolutionReason,
+        });
+        if (model.resolvedId !== model.id) {
+          output.appendLine(
+            `[MODEL ID] ${model.provider}: ${model.id} -> ${model.resolvedId} (${model.resolutionReason})`
+          );
+        }
+      }
+    );
     let nextIndex = 0;
     const worker = async () => {
       while (!activeController.signal.aborted) {
@@ -1591,11 +1907,20 @@ function openTestDashboard(context, models, warnings, options) {
       const failed = selectedResults.filter((result) => result.state === 'fail').length;
       const cancelled = selectedResults.filter((result) => result.state === 'cancelled').length;
       let summary = `${passed} passed · ${failed} failed · ${cancelled} cancelled`;
+      const successful = selected.filter(
+        (model) => results.get(model.testKey)?.state === 'pass'
+      );
+      if (successful.length) {
+        try {
+          const repaired = await repairResolvedModelIds(context, successful);
+          if (repaired) summary += ` · ${repaired} model ID(s) repaired`;
+        } catch (error) {
+          summary += ' · model ID repair failed (see output)';
+          output.appendLine(`[MODEL ID REPAIR ERROR] ${error.stack || error.message || error}`);
+        }
+      }
       let pinResult;
-      if (passed && toolboxConfiguration().get('pinSuccessfulModels', true)) {
-        const successful = selected.filter(
-          (model) => results.get(model.testKey)?.state === 'pass'
-        );
+      if (successful.length && toolboxConfiguration().get('pinSuccessfulModels', true)) {
         try {
           pinResult = await persistPinnedModels(context, successful);
           summary += ` · ${pinResult.added} newly pinned (${pinResult.total} total)`;
@@ -1607,6 +1932,11 @@ function openTestDashboard(context, models, warnings, options) {
           summary += ' · pinning failed (see output)';
           output.appendLine(`[PIN ERROR] ${error.stack || error.message || error}`);
         }
+      }
+      try {
+        await saveSanitizedDiagnostics(context, models, results, summary);
+      } catch (error) {
+        output.appendLine(`[DIAGNOSTICS ERROR] ${error.stack || error.message || error}`);
       }
       panel.webview.postMessage({ type: 'runDone', summary });
       output.appendLine(`Summary: ${summary}`);
@@ -1622,6 +1952,8 @@ function openTestDashboard(context, models, warnings, options) {
     try {
       if (message.type === 'start') {
         await run(models.map((model) => model.testKey));
+      } else if (message.type === 'importModels') {
+        await vscode.commands.executeCommand('copilotModels.importJson');
       } else if (message.type === 'retryFailed') {
         await run(
           models
@@ -1750,6 +2082,7 @@ module.exports = {
     githubSyncHtml,
     migratePlaintextCredentials,
     providerCredentialAliases,
+    repairResolvedModelIds,
     testDashboardHtml,
     termuxRuntimeEnvironment,
     resolveExecutable,

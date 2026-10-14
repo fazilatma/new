@@ -124,6 +124,20 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
   assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
+  const repairedIds = await extension.__test.repairResolvedModelIds(context, [
+    {
+      provider: 'Mistral',
+      id: 'mistral-small',
+      resolvedId: 'mistral-small-latest',
+    },
+  ]);
+  assert.equal(repairedIds, 1);
+  const repairedGroups = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(repairedGroups[0].models[0].id, 'mistral-small-latest');
+  assert.equal(
+    fs.readdirSync(path.join(globalStorage, 'model-id-backups')).length,
+    1
+  );
   const termuxFiles = path.join(temporary, 'com.termux', 'files');
   const termuxHome = path.join(termuxFiles, 'home');
   const termuxPrefix = path.join(termuxFiles, 'usr');
@@ -180,6 +194,9 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     { concurrency: 2, timeoutMs: 30000 }
   );
   assert.match(dashboard, /AI Model Test Center/);
+  assert.match(dashboard, /Import Models \/ JSON/);
+  assert.match(dashboard, /Tested \/ resolved model/);
+  assert.match(dashboard, /height: 62vh; min-height: 280px/);
   assert.match(dashboard, /Copy all errors/);
   assert.match(dashboard, /Plaintext pending migration · 25 chars/);
   assert.doesNotMatch(dashboard, /must-never-appear-in-html/);
@@ -193,6 +210,8 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   });
   assert.match(githubSync, /GitHub Full Update/);
   assert.match(githubSync, /Enable automatic update checks/);
+  assert.match(githubSync, /Upload sanitized diagnostics/);
+  assert.match(githubSync, /Nothing is uploaded automatically/);
   const githubScript = githubSync.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
   assert.doesNotThrow(() => new vm.Script(githubScript));
 });
@@ -206,6 +225,26 @@ test('chatCompletionsUrl preserves provider paths and appends operation', () => 
     core.chatCompletionsUrl('https://api.example.test/v1/chat/completions'),
     'https://api.example.test/v1/chat/completions'
   );
+  assert.equal(
+    core.modelsUrl('https://api.example.test/v1/chat/completions'),
+    'https://api.example.test/v1/models'
+  );
+});
+
+test('resolveRemoteModel safely repairs unique display-name and case mismatches', () => {
+  const remote = [
+    { id: 'mistral-small-latest', name: 'Mistral Small Latest' },
+    { id: 'codestral-latest', name: 'Codestral Latest' },
+  ];
+  assert.deepEqual(
+    core.resolveRemoteModel({ id: 'MISTRAL-SMALL-LATEST' }, remote),
+    { id: 'mistral-small-latest', reason: 'case-corrected' }
+  );
+  assert.deepEqual(
+    core.resolveRemoteModel({ id: 'Codestral Latest' }, remote),
+    { id: 'codestral-latest', reason: 'name-resolved' }
+  );
+  assert.equal(core.resolveRemoteModel({ id: 'unknown model' }, remote), undefined);
 });
 
 test('collectConfiguredModels separates custom OpenAI and Ollama models', () => {
@@ -225,6 +264,7 @@ test('collectConfiguredModels separates custom OpenAI and Ollama models', () => 
     vendor: 'customoai',
     provider: 'Example',
     id: 'chat-a',
+    configuredName: '',
     url: 'https://example.test/v1',
     apiKey: 'secret',
     credentialReference: '',
@@ -300,7 +340,13 @@ test('catalog validation rejects malformed downloads', () => {
   assert.throws(() => core.validateCatalog({}), /providers array/);
 });
 
-test('compactError redacts API keys and preserves copyable details', () => {
+test('compactError and diagnostic sanitizer redact private values', () => {
   assert.equal(core.compactError('bad secret-key\nrequest', 'secret-key'), 'bad [REDACTED] request');
   assert.equal(core.compactError('abcdefghij', '', 7), 'abcd...');
+  const sanitized = core.sanitizeDiagnosticText(
+    'Bearer private-token-123 https://api.example.test/v1/accounts/private /data/data/com.termux/files/home/me/project',
+    ['private-token-123']
+  );
+  assert.doesNotMatch(sanitized, /private-token-123|accounts\/private|\/data\/data/);
+  assert.match(sanitized, /https:\/\/api\.example\.test\/\[PATH\]/);
 });

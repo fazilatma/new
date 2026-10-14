@@ -2,7 +2,7 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {

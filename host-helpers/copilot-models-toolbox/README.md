@@ -3,10 +3,13 @@
 Companion extension installed by `install-copilot-models-termux.sh`. It adds
 four commands to the GitHub Copilot Chat view title toolbar:
 
-- **🧪 Test All AI Models** — opens a live test-center panel with a searchable
-  table, status counters, credential fingerprints, HTTP/latency columns,
-  expandable and copyable error details, cancellation, retry-failed, bulk copy,
-  and JSON export. It sends real, non-streaming inference requests only after
+- **🧪 Test All AI Models** — opens a live test-center panel with a mobile-safe
+  always-visible searchable table, an inline Import Models button, configured
+  versus resolved model IDs, status counters, credential fingerprints,
+  HTTP/latency columns, expandable/copyable errors, cancellation, retry-failed,
+  bulk copy, and JSON export. It resolves unique name/case mismatches against
+  the provider `/models` response and backup-first repairs IDs that then pass a
+  real inference request. It sends real, non-streaming inference requests only after
   the user presses Start in the cost/quota warning panel. Passing models are
   automatically persisted in Copilot Chat's pinned list; existing pins are
   preserved, hidden successes are made visible, and profile storage is privately
@@ -22,8 +25,11 @@ four commands to the GitHub Copilot Chat view title toolbar:
   catalog, terminal settings, and toolbox while preserving local API keys. The
   extension downloads these assets itself and launches Python through a rebuilt
   absolute Termux environment, so automatic updates do not depend on spawning
-  `bash` or `curl` from code-server. It never uploads model configuration or
-  credentials.
+  `bash` or `curl` from code-server. Nothing uploads automatically. An explicitly
+  confirmed button can create a sanitized GitHub diagnostic issue containing
+  model IDs/statuses and redacted errors for the selected branch; credentials,
+  prompts, source, full URLs, and local paths are excluded. It also opts into
+  auto-update so a pushed fix can install itself.
 - **🛠 Repair code-server** — diagnoses or repairs the managed model, credential,
   Copilot manifest, Android terminal, and 256 MB TypeScript stability settings;
   restarts tsserver after an `EPIPE`, and can locally capture/open its crash log;
@@ -40,6 +46,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.10**.
+The helper, launcher, and companion extension currently ship as **0.1.11**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.
