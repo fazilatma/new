@@ -33,9 +33,12 @@ terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted
 approval rule. The profile launches argument-free Android `/system/bin/sh` with
 Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
 for both Termux Bash and sh. It also installs Copilot Models Toolbox
-**v0.1.7** with
-**🧪 Test All AI Models**, **📥 Import AI JSON**, and **🔄 Sync GitHub** in the
-Copilot Chat title toolbar. At the end it prints
+**v0.1.8** with
+**🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**, and
+**🛠 Repair code-server** in the Copilot Chat title toolbar. The repair center
+creates private timestamped snapshots before changing managed files, can restore
+an earlier snapshot, and applies a bounded single-process TypeScript server
+profile to recover from Android `write EPIPE` exits. At the end it prints
 the Termux commands needed to restart code-server. API keys are entered without
 echo and staged in `chatLanguageModels.json` with mode `0600`. At code-server
 startup Toolbox transfers plaintext keys into Chat SecretStorage and leaves only

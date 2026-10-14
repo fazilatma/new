@@ -1,7 +1,7 @@
 # Copilot Models Toolbox
 
 Companion extension installed by `install-copilot-models-termux.sh`. It adds
-three commands to the GitHub Copilot Chat view title toolbar:
+four commands to the GitHub Copilot Chat view title toolbar:
 
 - **🧪 Test All AI Models** — opens a live test-center panel with a searchable
   table, status counters, credential fingerprints, HTTP/latency columns,
@@ -17,13 +17,21 @@ three commands to the GitHub Copilot Chat view title toolbar:
   update, automatic-update opt-in, and interval. It installs the branch helper,
   catalog, terminal settings, and toolbox while preserving local API keys. It
   never uploads model configuration or credentials.
+- **🛠 Repair code-server** — diagnoses or repairs the managed model, credential,
+  Copilot manifest, Android terminal, and memory-bounded TypeScript settings;
+  restarts tsserver after an `EPIPE`; can reinstall from the configured GitHub
+  branch; and restores private timestamped snapshots of previous versions.
+  Import, full update, local repair, and restore all protect the previous state
+  first. Snapshot retention is configurable.
 
-The commands also remain available from the Command Palette. The source is
+The helper also installs `copilot-models-repair` in Termux so Copilot Agent can
+request the same backup-first branch repair through its terminal tool. The
+commands remain available from the Command Palette. The source is
 plain CommonJS with no runtime npm dependencies so it works in code-server on
 Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.7**.
+The helper, launcher, and companion extension currently ship as **0.1.8**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

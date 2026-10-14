@@ -11,15 +11,15 @@ const vm = require('node:vm');
 const core = require('../core');
 const extensionPackage = require('../package.json');
 
-test('package contributes the three requested Copilot Chat toolbar commands', () => {
+test('package contributes the model and self-repair Copilot Chat toolbar commands', () => {
   assert.ok(extensionPackage.activationEvents.includes('onStartupFinished'));
   const commands = extensionPackage.contributes.commands;
   assert.deepEqual(
     commands.map((command) => command.title),
-    ['🧪 Test All AI Models', '📥 Import AI JSON', '🔄 Sync GitHub']
+    ['🧪 Test All AI Models', '📥 Import AI JSON', '🔄 Sync GitHub', '🛠 Repair code-server']
   );
   const toolbar = extensionPackage.contributes.menus['view/title'];
-  assert.equal(toolbar.length, 3);
+  assert.equal(toolbar.length, 4);
   assert.ok(
     toolbar.every(
       (entry) =>
@@ -40,7 +40,10 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   const profileRoot = path.join(temporary, 'User');
   const globalStorage = path.join(profileRoot, 'globalStorage', 'fazilatma.copilot-models-toolbox');
   const configFile = path.join(profileRoot, 'chatLanguageModels.json');
+  const extensionPath = path.join(temporary, 'toolbox-extension');
   fs.mkdirSync(globalStorage, { recursive: true });
+  fs.mkdirSync(extensionPath, { recursive: true });
+  fs.writeFileSync(path.join(extensionPath, 'package.json'), JSON.stringify({ version: 'test' }));
   fs.writeFileSync(
     configFile,
     JSON.stringify([
@@ -61,6 +64,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
       async showInformationMessage() {},
     },
     workspace: { getConfiguration() { return { get(_key, fallback) { return fallback; } }; } },
+    extensions: { getExtension() { return undefined; } },
     commands: {
       registerCommand(command) {
         registered.push(command);
@@ -90,7 +94,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   const extension = require('../extension');
   const context = {
     subscriptions: [],
-    extensionPath: '/tmp/toolbox-extension',
+    extensionPath,
     globalStorageUri: { fsPath: globalStorage },
     secrets: {
       async store(key, value) { storedSecrets.set(key, value); },
@@ -103,6 +107,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     'copilotModels.testAll',
     'copilotModels.importJson',
     'copilotModels.syncGitHub',
+    'copilotModels.repair',
   ]);
   const securedGroups = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.equal(securedGroups.length, 1);
@@ -110,6 +115,19 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
   assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
+  const snapshot = await extension.__test.createRepairSnapshot(context, 'unit test');
+  const snapshotManifest = JSON.parse(
+    fs.readFileSync(path.join(snapshot, 'manifest.json'), 'utf8')
+  );
+  assert.equal(snapshotManifest.reason, 'unit test');
+  assert.equal(snapshotManifest.toolboxVersion, extensionPackage.version);
+  assert.ok(fs.existsSync(path.join(snapshot, 'chatLanguageModels.json')));
+  assert.ok(fs.existsSync(path.join(snapshot, 'toolbox-extension', 'package.json')));
+  assert.equal(fs.statSync(snapshot).mode & 0o777, 0o700);
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(snapshot, 'chatLanguageModels.json'), 'utf8'),
+    /mistral-private-key/
+  );
   assert.deepEqual(
     extension.__test.providerCredentialAliases('Mistral'),
     ['Mistral', 'Mistral AI']

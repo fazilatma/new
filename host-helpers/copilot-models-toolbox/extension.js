@@ -199,6 +199,143 @@ function runtimePaths(context) {
   };
 }
 
+function backupRoot(context) {
+  return path.join(context.globalStorageUri.fsPath, 'backups');
+}
+
+async function createRepairSnapshot(context, reason, preserveRoot) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const destination = path.join(
+    backupRoot(context),
+    `${stamp}-v${extensionPackage.version}`
+  );
+  await fsp.mkdir(destination, { recursive: true, mode: 0o700 });
+  await fsp.chmod(destination, 0o700);
+  const entries = [];
+  const paths = configuredPaths(context);
+  const candidates = [
+    ['chatLanguageModels', paths.configFile],
+    ['settings', paths.settingsFile],
+  ];
+  const copilot = vscode.extensions.getExtension('github.copilot-chat');
+  if (copilot) candidates.push(['copilotPackage', path.join(copilot.extensionPath, 'package.json')]);
+  for (const [label, original] of candidates) {
+    try {
+      const stat = await fsp.stat(original);
+      if (!stat.isFile()) continue;
+      const stored = path.join(destination, `${label}.json`);
+      await fsp.copyFile(original, stored);
+      await fsp.chmod(stored, 0o600);
+      entries.push({ label, original, stored: path.basename(stored), mode: stat.mode & 0o777 });
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+  }
+  const toolboxStored = path.join(destination, 'toolbox-extension');
+  await fsp.cp(context.extensionPath, toolboxStored, { recursive: true, force: true });
+  entries.push({
+    label: 'toolboxExtension',
+    original: context.extensionPath,
+    stored: 'toolbox-extension',
+    directory: true,
+  });
+  const manifest = {
+    createdAt: new Date().toISOString(),
+    reason,
+    toolboxVersion: extensionPackage.version,
+    entries,
+  };
+  await fsp.writeFile(
+    path.join(destination, 'manifest.json'),
+    JSON.stringify(manifest, null, 2) + '\n',
+    { encoding: 'utf8', mode: 0o600 }
+  );
+
+  const retention = Math.max(
+    1,
+    Math.min(30, Number(toolboxConfiguration().get('backupRetention', 8)))
+  );
+  const directories = (await fsp.readdir(backupRoot(context), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  const removable = directories
+    .slice(retention)
+    .filter((name) => path.join(backupRoot(context), name) !== preserveRoot);
+  await Promise.all(
+    removable.map((name) =>
+      fsp.rm(path.join(backupRoot(context), name), { recursive: true, force: true })
+    )
+  );
+  output.appendLine(`[BACKUP] ${destination}`);
+  return destination;
+}
+
+async function listRepairSnapshots(context) {
+  try {
+    const names = (await fsp.readdir(backupRoot(context), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+    const snapshots = [];
+    for (const name of names) {
+      try {
+        const root = path.join(backupRoot(context), name);
+        const manifest = JSON.parse(
+          await fsp.readFile(path.join(root, 'manifest.json'), 'utf8')
+        );
+        snapshots.push({ root, name, manifest });
+      } catch {
+        // Ignore incomplete snapshots.
+      }
+    }
+    return snapshots;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function restoreRepairSnapshot(context) {
+  const snapshots = await listRepairSnapshots(context);
+  if (!snapshots.length) throw new Error('No self-repair backups are available');
+  const selected = await vscode.window.showQuickPick(
+    snapshots.map((snapshot) => ({
+      label: snapshot.name,
+      description: snapshot.manifest.reason || 'repair snapshot',
+      snapshot,
+    })),
+    { title: 'Restore a code-server repair backup', placeHolder: 'Choose a timestamped snapshot' }
+  );
+  if (!selected) return;
+  const confirmed = await vscode.window.showWarningMessage(
+    `Restore ${selected.label}? The current state will be backed up first.`,
+    { modal: true },
+    'Restore Backup'
+  );
+  if (confirmed !== 'Restore Backup') return;
+  await createRepairSnapshot(
+    context,
+    `before restoring ${selected.label}`,
+    selected.snapshot.root
+  );
+  for (const entry of selected.snapshot.manifest.entries || []) {
+    const stored = path.join(selected.snapshot.root, entry.stored);
+    if (entry.directory && entry.label === 'toolboxExtension') {
+      await fsp.cp(stored, context.extensionPath, { recursive: true, force: true });
+      continue;
+    }
+    if (!entry.directory) {
+      await fsp.mkdir(path.dirname(entry.original), { recursive: true, mode: 0o700 });
+      await fsp.copyFile(stored, entry.original);
+      await fsp.chmod(entry.original, entry.mode || 0o600);
+    }
+  }
+  await copyRestartCommand(`Backup ${selected.label} was restored.`);
+}
+
 async function readable(filename) {
   try {
     await fsp.access(filename, fs.constants.R_OK);
@@ -352,6 +489,7 @@ async function importJson(context) {
 
   output.clear();
   output.appendLine(`Importing ${source}`);
+  await createRepairSnapshot(context, `before importing ${path.basename(source)}`);
   let helperResult;
   await vscode.window.withProgress(
     {
@@ -477,6 +615,11 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
     if (reportStatus) reportStatus(message, level);
   };
   try {
+    const snapshot = await createRepairSnapshot(
+      context,
+      `before GitHub update from ${repository}@${branch}`
+    );
+    report(`Backup created: ${snapshot}`);
     const remote = await remoteToolboxVersion(repository, branch);
     report(`Remote toolbox v${remote.version}; installed v${extensionPackage.version}.`);
     report('Downloading the branch installer…');
@@ -643,6 +786,118 @@ async function syncGitHub(context) {
     }
   });
   panel.onDidDispose(() => activePanels.delete(panel));
+}
+
+async function diagnoseCodeServer(context) {
+  output.clear();
+  output.appendLine(`Self-diagnosis ${new Date().toISOString()}`);
+  output.appendLine(`Toolbox: v${extensionPackage.version} at ${context.extensionPath}`);
+  const paths = configuredPaths(context);
+  output.appendLine(`Models: ${paths.configFile}`);
+  output.appendLine(`Settings: ${paths.settingsFile}`);
+  const groups = await readConfiguredGroups(context);
+  const configured = core.collectConfiguredModels(groups);
+  const missing = configured.models.filter(
+    (model) => !model.apiKey && !model.credentialReference && model.kind !== 'ollama'
+  );
+  output.appendLine(`Configured testable models: ${configured.models.length}`);
+  output.appendLine(`Groups/models without a credential: ${missing.length}`);
+  const settings = vscode.workspace.getConfiguration();
+  output.appendLine(
+    `Terminal profile: ${settings.get('terminal.integrated.defaultProfile.linux', 'default')}`
+  );
+  output.appendLine(
+    `TypeScript memory: ${settings.get('js/ts.tsserver.maxMemory', settings.get('typescript.tsserver.maxTsServerMemory', 'default'))} MB`
+  );
+  output.appendLine(
+    `TypeScript syntax server: ${settings.get('js/ts.tsserver.useSyntaxServer', 'default')}`
+  );
+  output.appendLine(`Backups retained: ${(await listRepairSnapshots(context)).length}`);
+  output.show(true);
+}
+
+async function repairCodeServer(context) {
+  const action = await vscode.window.showQuickPick(
+    [
+      {
+        label: '$(wrench) Backup and repair locally',
+        description: 'Repair models, secrets, Copilot manifest, terminal, and mobile TypeScript settings',
+        id: 'local',
+      },
+      {
+        label: '$(cloud-download) Backup and reinstall from GitHub branch',
+        description: 'Run the full branch update after a timestamped backup',
+        id: 'remote',
+      },
+      {
+        label: '$(debug-restart) Restart TypeScript language server',
+        description: 'Recover immediately from a write EPIPE tsserver exit',
+        id: 'typescript',
+      },
+      {
+        label: '$(history) Restore a previous backup',
+        description: 'Restore configuration, Copilot manifest, and Toolbox code',
+        id: 'restore',
+      },
+      {
+        label: '$(pulse) Diagnose current installation',
+        description: 'Show non-secret model, terminal, TypeScript, and backup status',
+        id: 'diagnose',
+      },
+    ],
+    { title: `🛠 code-server Self Repair v${extensionPackage.version}` }
+  );
+  if (!action) return;
+  if (action.id === 'restore') {
+    await restoreRepairSnapshot(context);
+    return;
+  }
+  if (action.id === 'diagnose') {
+    await diagnoseCodeServer(context);
+    return;
+  }
+  if (action.id === 'typescript') {
+    await vscode.commands.executeCommand('typescript.restartTsServer');
+    vscode.window.showInformationMessage('TypeScript language server restart requested.');
+    return;
+  }
+  if (action.id === 'remote') {
+    const configuration = toolboxConfiguration();
+    await performFullGitHubUpdate(
+      context,
+      configuration.get('githubRepository', 'fazilatma/new'),
+      configuration.get('githubBranch', 'arena/f1997f2f-new')
+    );
+    await copyRestartCommand('Full GitHub self-repair completed from a protected backup.');
+    return;
+  }
+
+  const confirmed = await vscode.window.showWarningMessage(
+    'Create a timestamped backup, repair code-server integration, and restart the TypeScript server?',
+    { modal: true },
+    'Backup and Repair'
+  );
+  if (confirmed !== 'Backup and Repair') return;
+  const snapshot = await createRepairSnapshot(context, 'before local self-repair');
+  output.clear();
+  output.appendLine(`Repair backup: ${snapshot}`);
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Repairing code-server and Copilot model integration',
+      cancellable: true,
+    },
+    async (_progress, token) => {
+      await runHelper(context, ['--preserve-existing-keys'], token);
+    }
+  );
+  await migratePlaintextCredentials(context);
+  try {
+    await vscode.commands.executeCommand('typescript.restartTsServer');
+  } catch (error) {
+    output.appendLine(`[TYPESCRIPT] Restart command unavailable: ${error.message || error}`);
+  }
+  await copyRestartCommand(`Local self-repair completed. Backup: ${snapshot}`);
 }
 
 async function readConfiguredGroups(context) {
@@ -1196,6 +1451,7 @@ function activate(context) {
   registerCommand(context, 'copilotModels.testAll', testAllModels);
   registerCommand(context, 'copilotModels.importJson', importJson);
   registerCommand(context, 'copilotModels.syncGitHub', syncGitHub);
+  registerCommand(context, 'copilotModels.repair', repairCodeServer);
   restartAutoUpdater(context);
   void migratePlaintextCredentials(context)
     .then((result) => {
@@ -1224,6 +1480,7 @@ module.exports = {
   activate,
   deactivate,
   __test: {
+    createRepairSnapshot,
     credentialSummary,
     githubSyncHtml,
     migratePlaintextCredentials,

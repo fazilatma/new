@@ -76,7 +76,7 @@ Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
 > **Credential storage:** the Bash helper briefly stages imported `apiKey` values
-> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.7 activates at
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.8 activates at
 > code-server startup, passes each key through VS Code's
 > `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
 > `${input:chat.lm.secret.…}` reference. This is required by current code-server:
@@ -127,10 +127,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.7** through
+The launcher also installs **Copilot Models Toolbox 0.1.8** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.7`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.8`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -150,7 +150,7 @@ remain available in the Command Palette:
   warns when an entry has no usable key. Explicit imported keys replace stale
   inherited environment keys. Plaintext staging values are then migrated into
   code-server Chat SecretStorage; Test All retains a separate protected Toolbox
-  copy so its HTTP check and Chat use the same credential. Version 0.1.7 also
+  copy so its HTTP check and Chat use the same credential. Version 0.1.8 also
   canonicalizes known provider names and removes alias collisions such as a
   credentialed `Mistral AI` group beside a keyless `Mistral` group; otherwise
   Chat can select the colliding keyless model even while the direct test passes.
@@ -162,7 +162,15 @@ remain available in the Command Palette:
   the official code-server VSIX path while preserving local API keys. Automatic
   mode watches the branch's semantic version and installs newer pushed builds.
   It is download-only: configuration and credentials are never uploaded. A full
-  code-server restart is requested after installation.
+  code-server restart is requested after installation. A private timestamped
+  snapshot is created before every manual or automatic full update.
+- **🛠 Repair code-server** opens the backup-first self-repair center. It can
+  diagnose the managed installation without printing secrets, locally repair
+  model/credential/manifest/terminal/TypeScript integration, reinstall the
+  configured GitHub branch, restart only the TypeScript server after an
+  `EPIPE`, or restore a previous versioned snapshot. Snapshots include model
+  configuration, user settings, the patched Copilot manifest, and Toolbox code;
+  private files use restrictive permissions and retention defaults to eight.
 
 Use `--no-toolbox` only when the companion toolbar extension and automatic
 credential migration are not wanted. On current code-server builds, direct
@@ -197,11 +205,29 @@ The managed **Termux Android Shell** profile launches `/system/bin/sh` with no
 `args` while keeping Termux first on `PATH`. This is intentional: a standalone
 Termux `forkpty` diagnostic succeeds, while this Android code-server build exits
 with status 1 for both `$PREFIX/bin/bash` and `$PREFIX/bin/sh`, isolating the
-failure to its PTY launch path. Version 0.1.7 also starts in `HOME`, disables
+failure to its PTY launch path. Version 0.1.8 also starts in `HOME`, disables
 persistent-terminal revival and locale probing, uses empty `ENV`/`BASH_ENV`, and
 disables unsupported Agent terminal sandboxing and shell injection. Termux
 commands, storage, and Agent fallback remain available. Bash can still be
 started from the working Android-shell prompt with `bash --noprofile --norc -i`.
+
+On Android, the same option limits `js/ts.tsserver.maxMemory` to 768 MB, disables
+the separate syntax server, project-wide background diagnostics, and automatic
+type acquisition, and excludes dependency/Git-object trees from file watching.
+The normal desktop defaults can start multiple Node processes with a 3072 MB
+limit each; Android may kill one and leave VS Code reporting only the secondary
+`write EPIPE` error. Use **🛠 Repair code-server → Restart TypeScript language
+server** for immediate recovery, or **Backup and repair locally** to reapply all
+bounded settings. These changes do not modify workspace source files.
+
+The installer also creates `$PREFIX/bin/copilot-models-repair`. Running that
+command from Termux or through an approved Agent terminal action first takes a
+private timestamped snapshot and then downloads and reapplies the configured
+branch while preserving existing keys:
+
+```bash
+copilot-models-repair
+```
 
 Unrelated terminal profiles and all approval rules are preserved. The helper
 does not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so

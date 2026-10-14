@@ -1,8 +1,8 @@
 {
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
-  "description": "Test, import, and synchronize BYOK models from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.7",
+  "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
+  "version": "0.1.8",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -20,7 +20,8 @@
     "onStartupFinished",
     "onCommand:copilotModels.testAll",
     "onCommand:copilotModels.importJson",
-    "onCommand:copilotModels.syncGitHub"
+    "onCommand:copilotModels.syncGitHub",
+    "onCommand:copilotModels.repair"
   ],
   "contributes": {
     "commands": [
@@ -41,6 +42,12 @@
         "title": "🔄 Sync GitHub",
         "category": "Copilot Models",
         "icon": "$(sync)"
+      },
+      {
+        "command": "copilotModels.repair",
+        "title": "🛠 Repair code-server",
+        "category": "Copilot Models",
+        "icon": "$(tools)"
       }
     ],
     "menus": {
@@ -59,6 +66,11 @@
           "command": "copilotModels.syncGitHub",
           "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
           "group": "navigation@93"
+        },
+        {
+          "command": "copilotModels.repair",
+          "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
+          "group": "navigation@94"
         }
       ]
     },
@@ -86,6 +98,13 @@
           "minimum": 5,
           "maximum": 1440,
           "description": "Minutes between automatic GitHub branch update checks."
+        },
+        "copilotModels.backupRetention": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Number of timestamped self-repair/update snapshots to retain."
         },
         "copilotModels.testConcurrency": {
           "type": "integer",

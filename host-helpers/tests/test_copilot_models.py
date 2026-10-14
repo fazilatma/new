@@ -271,6 +271,14 @@ class TerminalSettingsTests(unittest.TestCase):
         self.assertFalse(merged["terminal.integrated.enablePersistentSessions"])
         self.assertEqual(merged["terminal.integrated.detectLocale"], "off")
         self.assertFalse(merged["chat.tools.terminal.sandbox.enabled"])
+        self.assertEqual(merged["js/ts.tsserver.maxMemory"], 768)
+        self.assertEqual(merged["typescript.tsserver.maxTsServerMemory"], 768)
+        self.assertEqual(merged["js/ts.tsserver.useSyntaxServer"], "never")
+        self.assertEqual(merged["typescript.tsserver.useSyntaxServer"], "never")
+        self.assertFalse(merged["typescript.tsserver.useSeparateSyntaxServer"])
+        self.assertFalse(merged["js/ts.tsserver.automaticTypeAcquisition.enabled"])
+        self.assertTrue(merged["typescript.disableAutomaticTypeAcquisition"])
+        self.assertTrue(merged["files.watcherExclude"]["**/node_modules/**"])
         self.assertEqual(
             merged["terminal.integrated.env.linux"]["PREFIX"], termux_prefix
         )
@@ -295,6 +303,20 @@ class TerminalSettingsTests(unittest.TestCase):
                 "Termux Bash": {"path": termux_bash, "args": ["-l"]},
             },
         )
+
+    def test_self_repair_command_creates_backup_before_branch_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary) / "com.termux" / "files" / "usr"
+            prefix.mkdir(parents=True)
+            with mock.patch.dict(os.environ, {"PREFIX": str(prefix)}, clear=True):
+                command = copilot_models.install_self_repair_command()
+            assert command
+            text = command.read_text(encoding="utf-8")
+            self.assertIn("BACKUP_ROOT=", text)
+            self.assertIn("install-copilot-models-termux.sh", text)
+            self.assertIn('cp -a "$extension_dir"', text)
+            self.assertIn("--preserve-existing-keys", text)
+            self.assertEqual(command.stat().st_mode & 0o777, 0o700)
 
     def test_termux_safe_profile_uses_argument_free_sh_and_bypasses_bashrc(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

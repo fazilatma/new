@@ -34,7 +34,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.7"
+HELPER_VERSION = "0.1.8"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1335,6 +1335,29 @@ def terminal_enabled_settings(
         settings["terminal.integrated.detectLocale"] = "off"
         # VS Code's terminal sandbox is not supported by Android/Termux.
         settings["chat.tools.terminal.sandbox.enabled"] = False
+        # A mobile OS can kill the default multi-process tsserver setup (up to
+        # 3072 MB per server), after which VS Code only reports write EPIPE.
+        # Keep a single bounded server and avoid background acquisition/watch
+        # pressure. Both current unified and older compatibility keys are set.
+        settings["js/ts.tsserver.maxMemory"] = 768
+        settings["typescript.tsserver.maxTsServerMemory"] = 768
+        settings["js/ts.tsserver.useSyntaxServer"] = "never"
+        settings["typescript.tsserver.useSyntaxServer"] = "never"
+        # Very old VS Code builds used the boolean compatibility key.
+        settings["typescript.tsserver.useSeparateSyntaxServer"] = False
+        settings["js/ts.tsserver.automaticTypeAcquisition.enabled"] = False
+        settings["typescript.disableAutomaticTypeAcquisition"] = True
+        settings["js/ts.tsserver.experimental.enableProjectDiagnostics"] = False
+        settings["typescript.tsserver.experimental.enableProjectDiagnostics"] = False
+        watcher_exclude = settings.get("files.watcherExclude")
+        if not isinstance(watcher_exclude, dict):
+            watcher_exclude = {}
+        settings["files.watcherExclude"] = {
+            **copy.deepcopy(watcher_exclude),
+            "**/node_modules/**": True,
+            "**/.git/objects/**": True,
+            "**/.git/subtree-cache/**": True,
+        }
     # The terminal tool has a no-shell-integration execution strategy. On
     # Termux, reliability is more important than command-decoration support:
     # disabling injection avoids startup-time EACCES before a prompt appears.
@@ -1840,6 +1863,59 @@ def uninstall_toolbox(args: argparse.Namespace) -> Path | None:
     return target
 
 
+def install_self_repair_command(dry_run: bool = False) -> Path | None:
+    prefix = os.environ.get("PREFIX")
+    if not prefix or "/com.termux/" not in prefix:
+        return None
+    destination = Path(prefix) / "bin" / "copilot-models-repair"
+    if dry_run:
+        return destination
+    raw_base = (
+        "https://raw.githubusercontent.com/fazilatma/new/refs/heads/"
+        "arena/f1997f2f-new/host-helpers"
+    )
+    script = f'''#!{prefix}/bin/bash
+set -Eeuo pipefail
+umask 077
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_ROOT="$HOME/.local/share/copilot-models/backups/${{STAMP}}-cli"
+mkdir -p "$BACKUP_ROOT/files"
+printf 'created=%s\\nsource=cli-self-repair\\n' "$STAMP" >"$BACKUP_ROOT/manifest.txt"
+for file in \\
+  "$HOME/.local/share/code-server/User/settings.json" \\
+  "$HOME/.local/share/code-server/User/chatLanguageModels.json"; do
+  if [[ -f "$file" ]]; then
+    name="$(basename "$file")"
+    cp -p "$file" "$BACKUP_ROOT/files/$name"
+    printf 'file=%s\\n' "$file" >>"$BACKUP_ROOT/manifest.txt"
+  fi
+done
+for package in "$HOME"/.local/share/code-server/extensions/{{github.copilot-chat,fazilatma.copilot-models-toolbox}}-*/package.json; do
+  [[ -f "$package" ]] || continue
+  extension_dir="$(dirname "$package")"
+  parent="$(basename "$extension_dir")"
+  if [[ "$parent" == fazilatma.copilot-models-toolbox-* ]]; then
+    cp -a "$extension_dir" "$BACKUP_ROOT/files/$parent"
+  else
+    mkdir -p "$BACKUP_ROOT/files/$parent"
+    cp -p "$package" "$BACKUP_ROOT/files/$parent/package.json"
+  fi
+  printf 'extension=%s\\n' "$extension_dir" >>"$BACKUP_ROOT/manifest.txt"
+done
+echo "Backup: $BACKUP_ROOT"
+RAW_BASE="${{COPILOT_MODELS_RAW_BASE:-{raw_base}}}"
+curl -fsSL "$RAW_BASE/install-copilot-models-termux.sh" \\
+  | COPILOT_MODELS_RAW_BASE="$RAW_BASE" bash -s -- \\
+      --no-discover --enable-terminal --preserve-existing-keys "$@"
+'''
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + f".{os.getpid()}.tmp")
+    temporary.write_text(script, encoding="utf-8")
+    os.chmod(temporary, 0o700)
+    os.replace(temporary, destination)
+    return destination
+
+
 def print_code_server_restart_command() -> None:
     print("\nRestart code-server from a separate Termux session:")
     print("  pkill -f '[c]ode-server' || true")
@@ -2101,6 +2177,11 @@ def main(argv: list[str] | None = None) -> int:
         Path(__file__).with_name("copilot-models.catalog.json")
     )
     toolbox_result = install_toolbox(args, catalog_source, args.dry_run)
+    self_repair_command = (
+        install_self_repair_command(args.dry_run)
+        if args.enable_terminal and toolbox_requested
+        else None
+    )
 
     print("\nProvider groups:")
     for name, count, existed in summary:
@@ -2124,6 +2205,9 @@ def main(argv: list[str] | None = None) -> int:
     if toolbox_result:
         target, result = toolbox_result
         print(f"Copilot Models Toolbox ({result}): {target}")
+    if self_repair_command:
+        action = "would-install" if args.dry_run else "installed"
+        print(f"Self-repair command ({action}): {self_repair_command}")
     for manifest, result in patch_results:
         print(f"Manifest ({result}): {manifest}")
 
