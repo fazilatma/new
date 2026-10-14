@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const Module = require('node:module');
 const test = require('node:test');
+const vm = require('node:vm');
 const core = require('../core');
 const extensionPackage = require('../package.json');
 
@@ -22,6 +23,10 @@ test('package contributes the three requested Copilot Chat toolbar commands', ()
         entry.when.includes('|| view == workbench.panel.chat.view')
     )
   );
+  const settings = extensionPackage.contributes.configuration.properties;
+  assert.equal(settings['copilotModels.githubRepository'].default, 'fazilatma/new');
+  assert.equal(settings['copilotModels.githubBranch'].default, 'arena/f1997f2f-new');
+  assert.equal(settings['copilotModels.autoUpdate'].default, false);
 });
 
 test('extension activates and registers all toolbar commands', (t) => {
@@ -75,6 +80,18 @@ test('extension activates and registers all toolbar commands', (t) => {
   assert.match(dashboard, /Copy all errors/);
   assert.match(dashboard, /Present · 25 chars/);
   assert.doesNotMatch(dashboard, /must-never-appear-in-html/);
+  const embeddedScript = dashboard.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
+  assert.doesNotThrow(() => new vm.Script(embeddedScript));
+  const githubSync = extension.__test.githubSyncHtml({
+    repository: 'owner/repository',
+    branch: 'feature/test',
+    autoUpdate: true,
+    intervalMinutes: 15,
+  });
+  assert.match(githubSync, /GitHub Full Update/);
+  assert.match(githubSync, /Enable automatic update checks/);
+  const githubScript = githubSync.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
+  assert.doesNotThrow(() => new vm.Script(githubScript));
 });
 
 test('chatCompletionsUrl preserves provider paths and appends operation', () => {

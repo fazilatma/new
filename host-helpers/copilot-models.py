@@ -33,7 +33,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.2"
+HELPER_VERSION = "0.1.3"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -918,6 +918,7 @@ def merge_model_lists(
 def provider_group(
     provider: dict[str, Any],
     existing: dict[str, Any] | None,
+    preserve_existing_key: bool = False,
 ) -> dict[str, Any] | None:
     configured_url = str(provider["baseUrl"])
     if provider["slug"] == "ollama" and os.environ.get("OLLAMA_URL"):
@@ -956,12 +957,22 @@ def provider_group(
         "vendor": CUSTOM_VENDOR,
         "models": models,
     }
-    key = provider_api_key(provider)
-    if key:
-        group["apiKey"] = key
-    elif existing and isinstance(existing.get("apiKey"), str) and existing["apiKey"]:
-        # A catalog-only rerun must not erase a key installed on an earlier run.
-        group["apiKey"] = existing["apiKey"]
+    source_key = provider.get("sourceApiKey")
+    existing_key = existing.get("apiKey") if isinstance(existing, dict) else None
+    if isinstance(source_key, str) and source_key:
+        # Explicit source imports always replace old credentials.
+        group["apiKey"] = source_key
+    elif preserve_existing_key and isinstance(existing_key, str) and existing_key:
+        # GitHub code/catalog updates must never replace a working local key
+        # with a stale environment variable inherited by code-server.
+        group["apiKey"] = existing_key
+    else:
+        key = provider_api_key(provider)
+        if key:
+            group["apiKey"] = key
+        elif isinstance(existing_key, str) and existing_key:
+            # A catalog-only rerun must not erase a key installed earlier.
+            group["apiKey"] = existing_key
     return group
 
 
@@ -970,7 +981,10 @@ def group_key(group: dict[str, Any]) -> tuple[str, str]:
 
 
 def merge_groups(
-    existing: list[Any], providers: list[dict[str, Any]], skip_missing_keys: bool
+    existing: list[Any],
+    providers: list[dict[str, Any]],
+    skip_missing_keys: bool,
+    preserve_existing_keys: bool = False,
 ) -> tuple[list[Any], list[tuple[str, int, bool]]]:
     output = copy.deepcopy(existing)
     positions: dict[tuple[str, str], int] = {}
@@ -988,7 +1002,9 @@ def merge_groups(
         ):
             eprint(f"warning: skipping {provider['name']}: no API key")
             continue
-        group = provider_group(provider, old)
+        group = provider_group(
+            provider, old, preserve_existing_key=preserve_existing_keys
+        )
         if group is None:
             continue
         existed = key in positions
@@ -1173,7 +1189,27 @@ def terminal_enabled_settings(
     # login startup files; one failing command there makes code-server report
     # that the terminal exited with status 1. A normal interactive Bash still
     # loads the expected interactive environment without that fragile path.
-    profile = {"path": shell_path}
+    profile: dict[str, Any] = {"path": shell_path}
+    terminal_env: dict[str, str] = {}
+    if is_termux:
+        prefix = os.environ.get("PREFIX") or str(Path(shell_path).parent.parent)
+        inherited_path = os.environ.get("PATH", "")
+        path_parts = [str(Path(prefix) / "bin"), str(Path(prefix) / "bin" / "applets")]
+        path_parts.extend(part for part in inherited_path.split(":") if part)
+        deduplicated_path = ":".join(dict.fromkeys(path_parts))
+        terminal_env = {
+            "PREFIX": prefix,
+            "HOME": os.environ.get("HOME", str(Path.home())),
+            "PATH": deduplicated_path,
+            "TMPDIR": os.environ.get("TMPDIR", str(Path(prefix) / "tmp")),
+            "SHELL": shell_path,
+            "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
+        }
+        for name in ("LANG", "LC_ALL", "TERMUX_VERSION"):
+            value = os.environ.get(name)
+            if value:
+                terminal_env[name] = value
+        profile["env"] = terminal_env
 
     profiles = settings.get("terminal.integrated.profiles.linux")
     if not isinstance(profiles, dict):
@@ -1183,6 +1219,16 @@ def terminal_enabled_settings(
     settings["terminal.integrated.profiles.linux"] = profiles
     settings["terminal.integrated.defaultProfile.linux"] = profile_name
     settings["terminal.integrated.automationProfile.linux"] = profile
+    settings["terminal.integrated.inheritEnv"] = True
+    settings["terminal.integrated.shellIntegration.enabled"] = True
+    if terminal_env:
+        integrated_env = settings.get("terminal.integrated.env.linux")
+        if not isinstance(integrated_env, dict):
+            integrated_env = {}
+        settings["terminal.integrated.env.linux"] = {
+            **copy.deepcopy(integrated_env),
+            **terminal_env,
+        }
 
     # This profile is used specifically by Copilot Chat's run-in-terminal tool.
     settings["chat.tools.terminal.terminalProfile.linux"] = profile
@@ -1742,6 +1788,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not add providers that have no key",
     )
     parser.add_argument(
+        "--preserve-existing-keys",
+        action="store_true",
+        help="never replace configured keys during a code/catalog-only update",
+    )
+    parser.add_argument(
         "--include-non-chat",
         action="store_true",
         help="include models marked as non-chat (normally unsafe for Copilot Chat)",
@@ -1900,7 +1951,12 @@ def main(argv: list[str] | None = None) -> int:
             merged_settings["copilotModels.settingsFile"] = str(settings_path)
 
     existing = load_existing_groups(config_path)
-    merged, summary = merge_groups(existing, providers, args.skip_missing_keys)
+    merged, summary = merge_groups(
+        existing,
+        providers,
+        args.skip_missing_keys,
+        preserve_existing_keys=args.preserve_existing_keys,
+    )
     if not summary:
         raise RuntimeError("no provider groups were generated")
 
@@ -1976,8 +2032,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.enable_terminal:
         print(
-            "Terminal: integrated and agent terminal profiles are enabled; "
-            "trust the workspace before using Agent mode."
+            "Terminal: integrated and agent profiles now inherit the Termux "
+            "PREFIX, HOME, PATH, TMPDIR, locale, and shell integration; trust "
+            "the workspace before using Agent mode."
         )
         print(
             "Note: only upstream models that truly implement OpenAI tool "

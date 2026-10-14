@@ -123,10 +123,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.2** through
+The launcher also installs **Copilot Models Toolbox 0.1.3** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.2`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.3`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -136,7 +136,9 @@ remain available in the Command Palette:
   HTTP status, latency, expandable errors, per-error and bulk copy buttons,
   retry-failed, cancellation, and JSON report export. Starting a run sends one
   real, non-streaming inference request with at most eight output tokens to each
-  model, so provider charges and rate limits can apply.
+  model, so provider charges and rate limits can apply. Version 0.1.3 fixes the
+  embedded dashboard-script escaping bug that previously made the Start button
+  appear unresponsive and now keeps active panels retained by the extension.
 - **📥 Import AI JSON** opens the Termux filesystem picker and imports providers,
   models, and embedded API keys through the same protected helper. It recognizes
   nested/plural key records and top-level provider-key maps, rejects masked or
@@ -144,17 +146,20 @@ remain available in the Command Palette:
   warns when an entry has no usable key. Explicit imported keys replace stale
   inherited environment keys. The picker starts in a recognized Android
   download directory when available.
-- **🔄 Sync GitHub** downloads and validates the latest maintained catalog from
-  this agent branch, then merges it while preserving local API keys. It is a
-  download-only operation: configuration and credentials are never uploaded to
-  GitHub.
+- **🔄 Sync GitHub** opens a full-update panel where `owner/repository`, branch,
+  automatic-update checkbox, and check interval can be edited. **Update now**
+  installs the branch's helper, catalog, terminal integration, and toolbox via
+  the official code-server VSIX path while preserving local API keys. Automatic
+  mode watches the branch's semantic version and installs newer pushed builds.
+  It is download-only: configuration and credentials are never uploaded. A full
+  code-server restart is requested after installation.
 
 Use `--no-toolbox` only when the companion toolbar extension is not wanted.
 To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.2$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.3$'
 ```
 
 `--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
@@ -163,8 +168,16 @@ into the active profile's `settings.json`:
 - `terminal.integrated.profiles.linux`
 - `terminal.integrated.defaultProfile.linux`
 - `terminal.integrated.automationProfile.linux`
+- `terminal.integrated.env.linux`
+- `terminal.integrated.inheritEnv`
+- `terminal.integrated.shellIntegration.enabled`
 - `chat.tools.terminal.terminalProfile.linux`
 - `chat.tools.terminal.enableAutoApprove`
+
+On Termux the integrated and Agent profiles explicitly inherit `PREFIX`,
+`HOME`, `PATH`, `TMPDIR`, `SHELL`, locale values, and the Termux applet path.
+This lets code-server terminals execute the same installed Termux commands and
+access the same home/storage environment as a normal Termux session.
 
 The Bash profile deliberately has no `-l` argument. A forced Termux login shell
 runs `$PREFIX/etc/profile` and user login files; if any startup command fails, code-server
@@ -214,6 +227,7 @@ restart command instead, for example `sv restart code-server`.
 | `--source PATH` | Merge a provider/model export over the maintained catalog. |
 | `--import-source-keys` | Explicitly import credentials embedded in `--source`. |
 | `--skip-missing-keys` | Do not list providers until they have a key. |
+| `--preserve-existing-keys` | Keep configured keys during code/catalog-only updates. |
 | `--discover-all` | Merge every provider's current `/models` response. |
 | `--no-discover` | Never contact `/models`; use only catalog/import entries. |
 | `--dry-run` | Validate paths, data, and manifest compatibility without writing. |

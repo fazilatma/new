@@ -19,6 +19,11 @@ const RESTART_COMMAND = [
 ].join('\n');
 
 let output;
+const activePanels = new Set();
+let autoUpdateTimer;
+let autoUpdateInitialTimer;
+let updateInProgress = false;
+let lastInstalledVersion;
 
 function toolboxConfiguration() {
   return vscode.workspace.getConfiguration('copilotModels');
@@ -84,11 +89,11 @@ function pythonCommand() {
   return 'python3';
 }
 
-function runProcess(command, args, token) {
+function runProcess(command, args, token, environment = process.env) {
   return new Promise((resolve, reject) => {
     output.appendLine(`$ ${command} ${args.map((value) => JSON.stringify(value)).join(' ')}`);
     const child = cp.spawn(command, args, {
-      env: process.env,
+      env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -237,70 +242,254 @@ async function importJson(context) {
   );
 }
 
-async function writeSyncedCatalog(context, text) {
+function validateGitHubTarget(repository, branch) {
+  const cleanRepository = String(repository || '').trim();
+  const cleanBranch = String(branch || '').trim();
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(cleanRepository)) {
+    throw new Error('Repository must use owner/name format');
+  }
+  if (
+    !cleanBranch ||
+    cleanBranch.startsWith('/') ||
+    cleanBranch.endsWith('/') ||
+    cleanBranch.includes('..') ||
+    !/^[A-Za-z0-9._/-]+$/.test(cleanBranch)
+  ) {
+    throw new Error('Branch contains unsupported characters');
+  }
+  return { repository: cleanRepository, branch: cleanBranch };
+}
+
+function githubRawBase(repository, branch) {
+  const target = validateGitHubTarget(repository, branch);
+  const encodedRepository = target.repository
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/');
+  const encodedBranch = target.branch.split('/').map(encodeURIComponent).join('/');
+  return `https://raw.githubusercontent.com/${encodedRepository}/refs/heads/${encodedBranch}/host-helpers`;
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => String(value).split(/[+-]/, 1)[0].split('.').map((item) => Number(item) || 0);
+  const a = parse(left); const b = parse(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+
+async function remoteToolboxVersion(repository, branch, signal) {
+  const rawBase = githubRawBase(repository, branch);
+  const response = await core.httpRequest(`${rawBase}/copilot-models-toolbox/package.json`, {
+    timeoutMs: 30000,
+    signal,
+    maxBytes: 512 * 1024,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`GitHub returned HTTP ${response.status} for toolbox package.json`);
+  }
   let value;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(response.text);
   } catch (error) {
-    throw new Error(`GitHub catalog is not valid JSON: ${error.message}`);
+    throw new Error(`Remote package.json is invalid: ${error.message}`);
   }
-  const summary = core.validateCatalog(value);
-  const target = runtimePaths(context).syncedCatalog;
-  await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await fsp.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
-  await fsp.rename(temporary, target);
-  return summary;
+  if (
+    !value.version ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(String(value.version))
+  ) {
+    throw new Error('Remote package.json has no valid semantic version');
+  }
+  return { version: String(value.version), rawBase };
+}
+
+async function saveGitHubSettings(repository, branch, autoUpdate, intervalMinutes) {
+  const target = validateGitHubTarget(repository, branch);
+  const interval = Math.max(5, Math.min(1440, Number(intervalMinutes) || 15));
+  const configuration = toolboxConfiguration();
+  await configuration.update('githubRepository', target.repository, vscode.ConfigurationTarget.Global);
+  await configuration.update('githubBranch', target.branch, vscode.ConfigurationTarget.Global);
+  await configuration.update('autoUpdate', Boolean(autoUpdate), vscode.ConfigurationTarget.Global);
+  await configuration.update('autoUpdateIntervalMinutes', interval, vscode.ConfigurationTarget.Global);
+  return { ...target, autoUpdate: Boolean(autoUpdate), intervalMinutes: interval };
+}
+
+async function performFullGitHubUpdate(context, repository, branch, reportStatus) {
+  if (updateInProgress) throw new Error('Another GitHub update is already running');
+  updateInProgress = true;
+  const report = (message, level = 'info') => {
+    output.appendLine(`[GitHub ${level.toUpperCase()}] ${message}`);
+    if (reportStatus) reportStatus(message, level);
+  };
+  try {
+    const remote = await remoteToolboxVersion(repository, branch);
+    report(`Remote toolbox v${remote.version}; installed v${extensionPackage.version}.`);
+    report('Downloading the branch installer…');
+    const installerResponse = await core.httpRequest(
+      `${remote.rawBase}/install-copilot-models-termux.sh`,
+      { timeoutMs: 30000, maxBytes: 2 * 1024 * 1024 }
+    );
+    if (installerResponse.status < 200 || installerResponse.status >= 300) {
+      throw new Error(`GitHub returned HTTP ${installerResponse.status} for installer`);
+    }
+    const updateDirectory = path.join(context.globalStorageUri.fsPath, 'github-update');
+    await fsp.mkdir(updateDirectory, { recursive: true, mode: 0o700 });
+    const installer = path.join(updateDirectory, 'install-copilot-models-termux.sh');
+    await fsp.writeFile(installer, installerResponse.text, { encoding: 'utf8', mode: 0o700 });
+    await fsp.chmod(installer, 0o700);
+    const paths = configuredPaths(context);
+    const bash =
+      (process.env.PREFIX && path.join(process.env.PREFIX, 'bin', 'bash')) || 'bash';
+    report('Installing helper, catalog, terminal settings, and toolbar through code-server…');
+    await runProcess(
+      bash,
+      [
+        installer,
+        '--no-discover',
+        '--enable-terminal',
+        '--preserve-existing-keys',
+        '--config-file',
+        paths.configFile,
+        '--settings-file',
+        paths.settingsFile,
+      ],
+      undefined,
+      { ...process.env, COPILOT_MODELS_RAW_BASE: remote.rawBase }
+    );
+    await fsp.rm(runtimePaths(context).syncedCatalog, { force: true });
+    lastInstalledVersion = remote.version;
+    report(`Full branch update to v${remote.version} completed. A code-server restart is required.`, 'success');
+    return remote.version;
+  } catch (error) {
+    report(error.message || String(error), 'error');
+    throw error;
+  } finally {
+    updateInProgress = false;
+  }
+}
+
+function githubSyncHtml(settings) {
+  const scriptNonce = nonce();
+  const initial = webviewJson(settings);
+  return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${scriptNonce}'; script-src 'nonce-${scriptNonce}';">
+<style nonce="${scriptNonce}">
+body{padding:22px;color:var(--vscode-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}
+.panel{max-width:760px;margin:auto;border:1px solid var(--vscode-panel-border);border-radius:8px;padding:18px;background:var(--vscode-sideBar-background)}
+h1{margin-top:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:block;font-weight:600;margin-bottom:5px}input[type=text],input[type=number]{width:100%;padding:8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background);border:1px solid var(--vscode-input-border)}
+.row{margin:14px 0}.actions{display:flex;gap:8px;flex-wrap:wrap}button{padding:8px 12px;color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;border-radius:3px}button:disabled{opacity:.5}pre{min-height:170px;max-height:360px;overflow:auto;white-space:pre-wrap;padding:10px;background:var(--vscode-textCodeBlock-background);user-select:text}.note{color:var(--vscode-descriptionForeground)}.success{color:var(--vscode-testing-iconPassed,#2ea043)}.error{color:var(--vscode-testing-iconFailed,#f85149)}
+@media(max-width:650px){.grid{grid-template-columns:1fr}}
+</style></head><body><div class="panel">
+<h1>🔄 GitHub Full Update <small>v${extensionPackage.version}</small></h1>
+<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Local API keys are preserved and nothing is uploaded.</p>
+<div class="grid"><div><label for="repository">Repository (owner/name)</label><input id="repository" type="text"></div><div><label for="branch">Branch</label><input id="branch" type="text"></div></div>
+<div class="row"><label><input id="auto" type="checkbox"> Enable automatic update checks</label></div>
+<div class="row"><label for="interval">Check interval (minutes)</label><input id="interval" type="number" min="5" max="1440"></div>
+<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="restart">Copy restart command</button></div>
+<h3>Live update log</h3><pre id="log"></pre>
+</div><script nonce="${scriptNonce}">
+const vscode=acquireVsCodeApi();const initial=${initial};
+const repository=document.getElementById('repository'),branch=document.getElementById('branch'),auto=document.getElementById('auto'),interval=document.getElementById('interval'),log=document.getElementById('log');
+repository.value=initial.repository;branch.value=initial.branch;auto.checked=initial.autoUpdate;interval.value=initial.intervalMinutes;
+function payload(type){return{type,repository:repository.value,branch:branch.value,autoUpdate:auto.checked,intervalMinutes:Number(interval.value)}}
+function busy(value){document.getElementById('update').disabled=value;document.getElementById('check').disabled=value}
+document.getElementById('save').onclick=()=>vscode.postMessage(payload('save'));
+document.getElementById('check').onclick=()=>{busy(true);vscode.postMessage(payload('check'))};
+document.getElementById('update').onclick=()=>{busy(true);vscode.postMessage(payload('update'))};
+document.getElementById('restart').onclick=()=>vscode.postMessage({type:'copyRestart'});
+window.addEventListener('message',event=>{const message=event.data;if(message.type==='status'){const line=document.createElement('div');line.className=message.level||'';line.textContent=new Date().toLocaleTimeString()+'  '+message.message;log.appendChild(line);log.scrollTop=log.scrollHeight;if(message.done)busy(false)}});
+</script></body></html>`;
+}
+
+function restartAutoUpdater(context) {
+  if (autoUpdateTimer) clearInterval(autoUpdateTimer);
+  if (autoUpdateInitialTimer) clearTimeout(autoUpdateInitialTimer);
+  autoUpdateTimer = undefined;
+  autoUpdateInitialTimer = undefined;
+  const configuration = toolboxConfiguration();
+  if (!configuration.get('autoUpdate', false)) return;
+  const intervalMinutes = Math.max(
+    5,
+    Math.min(1440, Number(configuration.get('autoUpdateIntervalMinutes', 15)))
+  );
+  const check = async () => {
+    if (updateInProgress) return;
+    const repository = configuration.get('githubRepository', 'fazilatma/new');
+    const branch = configuration.get('githubBranch', 'arena/f1997f2f-new');
+    try {
+      const remote = await remoteToolboxVersion(repository, branch);
+      if (
+        compareVersions(remote.version, extensionPackage.version) > 0 &&
+        remote.version !== lastInstalledVersion
+      ) {
+        const installed = await performFullGitHubUpdate(context, repository, branch);
+        vscode.window.showInformationMessage(
+          `Copilot Models Toolbox v${installed} installed automatically. Restart code-server to activate it.`,
+          'Copy Restart Command'
+        ).then((choice) => {
+          if (choice === 'Copy Restart Command') vscode.env.clipboard.writeText(RESTART_COMMAND);
+        });
+      }
+    } catch (error) {
+      output.appendLine(`[AUTO UPDATE ERROR] ${error.message || error}`);
+    }
+  };
+  autoUpdateInitialTimer = setTimeout(check, 10000);
+  autoUpdateTimer = setInterval(check, intervalMinutes * 60 * 1000);
 }
 
 async function syncGitHub(context) {
-  const url = String(toolboxConfiguration().get('catalogUrl', '') || '').trim();
-  if (!url) throw new Error('copilotModels.catalogUrl is empty');
-  const confirmed = await vscode.window.showInformationMessage(
-    'Download the latest provider/model catalog from GitHub and merge it into Copilot Chat? ' +
-      'Local API keys are preserved and are never uploaded.',
-    { modal: true },
-    'Sync GitHub'
+  const configuration = toolboxConfiguration();
+  const settings = {
+    repository: configuration.get('githubRepository', 'fazilatma/new'),
+    branch: configuration.get('githubBranch', 'arena/f1997f2f-new'),
+    autoUpdate: configuration.get('autoUpdate', false),
+    intervalMinutes: configuration.get('autoUpdateIntervalMinutes', 15),
+  };
+  const panel = vscode.window.createWebviewPanel(
+    'copilotModels.githubSync',
+    `GitHub Full Update v${extensionPackage.version}`,
+    vscode.ViewColumn.Active,
+    { enableScripts: true, retainContextWhenHidden: true }
   );
-  if (confirmed !== 'Sync GitHub') return;
-
-  output.clear();
-  output.appendLine(`Downloading catalog: ${url}`);
-  let summary;
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: '🔄 Syncing the AI model catalog from GitHub',
-      cancellable: true,
-    },
-    async (_progress, token) => {
-      const controller = new AbortController();
-      const cancellation = token.onCancellationRequested(() => controller.abort());
-      try {
-        const response = await core.httpRequest(url, {
-          timeoutMs: 30000,
-          signal: controller.signal,
-          maxBytes: 8 * 1024 * 1024,
-        });
-        if (response.status < 200 || response.status >= 300) {
-          throw new Error(`GitHub returned HTTP ${response.status}`);
-        }
-        summary = await writeSyncedCatalog(context, response.text);
-        output.appendLine(
-          `Validated ${summary.providerCount} providers and ${summary.modelCount} models.`
+  activePanels.add(panel);
+  panel.webview.html = githubSyncHtml(settings);
+  const postStatus = (message, level = 'info', done = false) =>
+    panel.webview.postMessage({ type: 'status', message, level, done });
+  panel.webview.onDidReceiveMessage(async (message) => {
+    try {
+      if (['save', 'check', 'update'].includes(message.type)) {
+        const saved = await saveGitHubSettings(
+          message.repository,
+          message.branch,
+          message.autoUpdate,
+          message.intervalMinutes
         );
-        await runHelper(context, [], token);
-      } finally {
-        cancellation.dispose();
+        restartAutoUpdater(context);
+        postStatus(`Saved ${saved.repository} @ ${saved.branch}; auto-update ${saved.autoUpdate ? 'enabled' : 'disabled'}.`, 'success', message.type === 'save');
+        if (message.type === 'check') {
+          const remote = await remoteToolboxVersion(saved.repository, saved.branch);
+          postStatus(`Installed v${extensionPackage.version}; branch has v${remote.version}.`, compareVersions(remote.version, extensionPackage.version) > 0 ? 'success' : 'info', true);
+        } else if (message.type === 'update') {
+          const installed = await performFullGitHubUpdate(
+            context,
+            saved.repository,
+            saved.branch,
+            (text, level) => postStatus(text, level)
+          );
+          postStatus(`v${installed} installed. Restart code-server to load all changes.`, 'success', true);
+        }
+      } else if (message.type === 'copyRestart') {
+        await vscode.env.clipboard.writeText(RESTART_COMMAND);
+        postStatus('Restart command copied.', 'success', true);
       }
+    } catch (error) {
+      postStatus(error.message || String(error), 'error', true);
     }
-  );
-  await copyRestartCommand(
-    `GitHub catalog synchronized (${summary.providerCount} providers, ${summary.modelCount} models).`
-  );
+  });
+  panel.onDidDispose(() => activePanels.delete(panel));
 }
 
 async function readConfiguredGroups(context) {
@@ -523,7 +712,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     for (const provider of providers) {
       const option = document.createElement('option'); option.value = provider; option.textContent = provider; providerFilter.appendChild(option);
     }
-    document.getElementById('warnings').textContent = initial.warnings.join('\n');
+    document.getElementById('warnings').textContent = initial.warnings.join('\\n');
     document.getElementById('runInfo').textContent = 'Concurrency ' + initial.concurrency + ' · timeout ' + initial.timeoutSeconds + 's';
 
     function cell(text) { const td = document.createElement('td'); td.textContent = text; return td; }
@@ -580,11 +769,11 @@ function testDashboardHtml(webview, models, warnings, options) {
       }
     }
     function setRunning(value) { start.disabled = value; cancel.disabled = !value; retry.disabled = value || ![...rowElements.values()].some((row) => row.tr.dataset.status === 'fail'); }
-    start.addEventListener('click', () => vscode.postMessage({ type: 'start' }));
+    start.addEventListener('click', () => { setRunning(true); document.getElementById('runInfo').textContent = 'Contacting the code-server extension host…'; vscode.postMessage({ type: 'start' }); });
     cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     retry.addEventListener('click', () => vscode.postMessage({ type: 'retryFailed' }));
     copyAll.addEventListener('click', () => {
-      const errors = [...rowElements.values()].filter((row) => row.tr.dataset.status === 'fail').map((row) => { const result = results.get(row.item.key); return row.item.provider + ' :: ' + row.item.model + '\n' + (result.error || 'Unknown error'); }).join('\n\n');
+      const errors = [...rowElements.values()].filter((row) => row.tr.dataset.status === 'fail').map((row) => { const result = results.get(row.item.key); return row.item.provider + ' :: ' + row.item.model + '\\n' + (result.error || 'Unknown error'); }).join('\\n\\n');
       vscode.postMessage({ type: 'copy', text: errors });
     });
     document.getElementById('export').addEventListener('click', () => vscode.postMessage({ type: 'export' }));
@@ -636,6 +825,7 @@ function openTestDashboard(context, models, warnings, options) {
     vscode.ViewColumn.Active,
     { enableScripts: true, retainContextWhenHidden: true }
   );
+  activePanels.add(panel);
   panel.webview.html = testDashboardHtml(panel.webview, models, warnings, options);
   const results = new Map();
   let activeController;
@@ -732,10 +922,15 @@ function openTestDashboard(context, models, warnings, options) {
       }
     } catch (error) {
       output.appendLine(`[ERROR] ${error.stack || error.message || String(error)}`);
+      panel.webview.postMessage({
+        type: 'runDone',
+        summary: `Dashboard error: ${error.message || error}`,
+      });
       vscode.window.showErrorMessage(`Model test dashboard: ${error.message || error}`);
     }
   });
   panel.onDidDispose(() => {
+    activePanels.delete(panel);
     if (activeController) activeController.abort();
   });
 }
@@ -798,12 +993,20 @@ function activate(context) {
   registerCommand(context, 'copilotModels.testAll', testAllModels);
   registerCommand(context, 'copilotModels.importJson', importJson);
   registerCommand(context, 'copilotModels.syncGitHub', syncGitHub);
+  restartAutoUpdater(context);
 }
 
-function deactivate() {}
+function deactivate() {
+  if (autoUpdateTimer) clearInterval(autoUpdateTimer);
+  if (autoUpdateInitialTimer) clearTimeout(autoUpdateInitialTimer);
+  autoUpdateTimer = undefined;
+  autoUpdateInitialTimer = undefined;
+  for (const panel of activePanels) panel.dispose();
+  activePanels.clear();
+}
 
 module.exports = {
   activate,
   deactivate,
-  __test: { credentialSummary, testDashboardHtml },
+  __test: { credentialSummary, githubSyncHtml, testDashboardHtml },
 };

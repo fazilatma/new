@@ -235,13 +235,26 @@ class TerminalSettingsTests(unittest.TestCase):
             merged = copilot_models.terminal_enabled_settings(existing, termux_bash)
         profiles = merged["terminal.integrated.profiles.linux"]
         self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
-        self.assertEqual(profiles["Termux Bash"], {"path": termux_bash})
+        self.assertEqual(profiles["Termux Bash"]["path"], termux_bash)
+        self.assertEqual(profiles["Termux Bash"]["env"]["PREFIX"], termux_prefix)
+        self.assertTrue(
+            profiles["Termux Bash"]["env"]["PATH"].startswith(termux_prefix + "/bin:")
+        )
         self.assertEqual(
             merged["terminal.integrated.defaultProfile.linux"], "Termux Bash"
         )
+        self.assertTrue(merged["terminal.integrated.inheritEnv"])
+        self.assertTrue(merged["terminal.integrated.shellIntegration.enabled"])
         self.assertEqual(
-            merged["chat.tools.terminal.terminalProfile.linux"],
-            {"path": termux_bash},
+            merged["terminal.integrated.env.linux"]["PREFIX"], termux_prefix
+        )
+        self.assertEqual(
+            merged["chat.tools.terminal.terminalProfile.linux"]["path"],
+            termux_bash,
+        )
+        self.assertEqual(
+            merged["chat.tools.terminal.terminalProfile.linux"]["env"]["PREFIX"],
+            termux_prefix,
         )
         self.assertTrue(merged["chat.tools.terminal.enableAutoApprove"])
         self.assertEqual(merged["chat.tools.terminal.autoApprove"], {"rm": False})
@@ -301,6 +314,19 @@ class MergeTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"EXAMPLE_API_KEY": "new"}, clear=True):
             merged, _ = copilot_models.merge_groups(existing, [self.provider], False)
         self.assertEqual(merged[0]["apiKey"], "new")
+
+    def test_code_update_can_preserve_existing_key_over_environment(self) -> None:
+        existing = [
+            {"vendor": "customoai", "name": "Example", "apiKey": "working", "models": []}
+        ]
+        with mock.patch.dict(os.environ, {"EXAMPLE_API_KEY": "stale"}, clear=True):
+            merged, _ = copilot_models.merge_groups(
+                existing,
+                [self.provider],
+                False,
+                preserve_existing_keys=True,
+            )
+        self.assertEqual(merged[0]["apiKey"], "working")
 
 
 class ManifestTests(unittest.TestCase):
