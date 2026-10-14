@@ -143,6 +143,24 @@ model: select a model/provider that really implements OpenAI-compatible tool
 calling. Trust the workspace, restart the entire code-server process, select
 **Agent** mode in Chat, and approve terminal commands when prompted.
 
+### Restart code-server
+
+After every successful install or restore, the helper now prints the complete
+restart sequence below. Run it from a separate Termux session—not from the
+code-server integrated terminal, because stopping code-server also disconnects
+that terminal:
+
+```bash
+pkill -f '[c]ode-server' || true
+sleep 1
+mkdir -p "$HOME/.local/share/code-server"
+nohup code-server >>"$HOME/.local/share/code-server/code-server.log" 2>&1 </dev/null &
+```
+
+This starts code-server using its normal `config.yaml`. If code-server is
+managed by `termux-services` or another supervisor, use that supervisor's
+restart command instead, for example `sv restart code-server`.
+
 ## Useful options
 
 | Option | Purpose |

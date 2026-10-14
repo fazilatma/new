@@ -385,6 +385,8 @@ class CommandIntegrationTests(unittest.TestCase):
             second = subprocess.run(command, env=environment, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertIn("pkill -f '[c]ode-server' || true", first.stdout)
+            self.assertIn("nohup code-server", first.stdout)
 
             config_path = user_data / "User" / "chatLanguageModels.json"
             groups = json.loads(config_path.read_text(encoding="utf-8"))

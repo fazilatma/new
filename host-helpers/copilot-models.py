@@ -1239,6 +1239,17 @@ def filter_providers(
     return output
 
 
+def print_code_server_restart_command() -> None:
+    print("\nRestart code-server from a separate Termux session:")
+    print("  pkill -f '[c]ode-server' || true")
+    print("  sleep 1")
+    print('  mkdir -p "$HOME/.local/share/code-server"')
+    print(
+        '  nohup code-server >>"$HOME/.local/share/code-server/code-server.log" '
+        "2>&1 </dev/null &"
+    )
+
+
 def restore(args: argparse.Namespace) -> int:
     config_path = config_file_path(args)
     settings_path = settings_file_path(args)
@@ -1254,7 +1265,7 @@ def restore(args: argparse.Namespace) -> int:
         print("Restored original file(s):")
         for path in restored:
             print("  " + path)
-        print("Restart code-server completely.")
+        print_code_server_restart_command()
     else:
         print("Nothing to restore.")
     return 0
@@ -1460,7 +1471,7 @@ def main(argv: list[str] | None = None) -> int:
         for provider in providers
         if provider["slug"] != "ollama" and not provider_api_key(provider)
     ]
-    print("\nDone. Restart code-server completely, then open Chat and use Manage Models.")
+    print("\nDone. After restarting code-server, open Chat and use Manage Models.")
     if missing_keys:
         print("Providers without a key (models are listed but requests may fail):")
         print("  " + ", ".join(missing_keys))
@@ -1475,6 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     print("Security: API keys in chatLanguageModels.json are plaintext; file mode was set to 0600.")
     print("Run again after an extension update if OpenAI Compatible disappears.")
+    print_code_server_restart_command()
     return 0
 
 
