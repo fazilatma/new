@@ -31,10 +31,11 @@ The prompts do not echo API keys. Press Enter for providers you do not use.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers/install-copilot-models-termux.sh \
-  | bash -s -- --prompt
+  | bash -s -- --prompt --enable-terminal
 ```
 
-To prompt for only selected providers:
+Omit `--enable-terminal` if you only want to change the model picker. To prompt
+for only selected providers:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers/install-copilot-models-termux.sh \
@@ -106,6 +107,42 @@ prefers `modelId` over internal database `id` values, reduces a local Ollama URL
 to its server root, and defaults imported requests to non-streaming so providers
 that reject OpenAI's `stream_options` field remain usable.
 
+### Import the Android download directly and enable terminal tools
+
+This non-interactive command imports the keys already embedded in the named
+private export and configures both code-server's integrated terminal and
+Copilot Agent's run-in-terminal tool:
+
+```bash
+PRIVATE_JSON="$HOME/storage/shared/download/ai-providers-2026-08-23-160523-gemini-llm7-opencode-ollama-cloud-added.json"
+test -r "$PRIVATE_JSON" || { echo "Not readable: $PRIVATE_JSON" >&2; exit 1; }
+
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f1997f2f-new/host-helpers/install-copilot-models-termux.sh \
+  | bash -s -- --source "$PRIVATE_JSON" --import-source-keys --no-discover --enable-terminal
+```
+
+`--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
+into the active profile's `settings.json`:
+
+- `terminal.integrated.profiles.linux`
+- `terminal.integrated.defaultProfile.linux`
+- `terminal.integrated.automationProfile.linux`
+- `chat.tools.terminal.terminalProfile.linux`
+- `chat.tools.terminal.enableAutoApprove`
+
+Existing terminal profiles and approval rules are preserved. The helper does
+not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so commands
+outside VS Code's guarded defaults still require approval. Existing JSONC
+comments and trailing commas are accepted; because settings are rewritten as
+strict JSON, the untouched original is retained in the helper's first-run
+backup.
+
+The option also advertises `toolCalling: true` for installed models so Agent
+mode can expose tools. This does not manufacture tool support in an upstream
+model: select a model/provider that really implements OpenAI-compatible tool
+calling. Trust the workspace, restart the entire code-server process, select
+**Agent** mode in Chat, and approve terminal commands when prompted.
+
 ## Useful options
 
 | Option | Purpose |
@@ -115,6 +152,7 @@ that reject OpenAI's `stream_options` field remain usable.
 | `--prompt` | Securely prompt for missing credentials through `/dev/tty`. |
 | `--env-file PATH` | Read `NAME=value` credentials without evaluating shell code. |
 | `--source PATH` | Merge a provider/model export over the maintained catalog. |
+| `--import-source-keys` | Explicitly import credentials embedded in `--source`. |
 | `--skip-missing-keys` | Do not list providers until they have a key. |
 | `--discover-all` | Merge every provider's current `/models` response. |
 | `--no-discover` | Never contact `/models`; use only catalog/import entries. |
@@ -122,6 +160,8 @@ that reject OpenAI's `stream_options` field remain usable.
 | `--user-data-dir PATH` | Override code-server's user-data directory. |
 | `--profile-dir PATH` | Target a non-default profile directory. |
 | `--config-file PATH` | Target an exact `chatLanguageModels.json` file. |
+| `--settings-file PATH` | Target an exact code-server `settings.json` file. |
+| `--enable-terminal` | Configure integrated/Agent terminals and advertise tool calling. |
 | `--extension-dir PATH` | Supply the Copilot extension directory if auto-detection fails. |
 | `--no-patch` | Do not change the Copilot extension manifest. |
 | `--restore` | Restore the files saved before the helper's first change. |
@@ -144,8 +184,11 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
    manifest contribution behind `productQualityType != 'stable'`. The helper
    removes only that exact condition. It refuses to remove an unfamiliar
    condition or fabricate a provider schema.
-4. It writes JSON atomically and makes the model configuration readable only by
-   its owner.
+4. With `--enable-terminal`, it safely merges the Termux shell profiles into
+   `settings.json`, enables tool calling metadata, and leaves explicit command
+   approval rules intact.
+5. It writes JSON atomically and makes both model and settings configuration
+   readable only by its owner.
 
 An extension update can replace the manifest patch. Rerun the helper after an
 update if **OpenAI Compatible** disappears from Manage Models.

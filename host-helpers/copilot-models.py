@@ -855,6 +855,155 @@ def config_file_path(args: argparse.Namespace) -> Path:
     return user_data_directory(args.user_data_dir) / "User" / "chatLanguageModels.json"
 
 
+def settings_file_path(args: argparse.Namespace) -> Path:
+    if args.settings_file:
+        return Path(args.settings_file).expanduser()
+    if args.profile_dir:
+        return Path(args.profile_dir).expanduser() / "settings.json"
+    return user_data_directory(args.user_data_dir) / "User" / "settings.json"
+
+
+def strip_jsonc(text: str) -> str:
+    """Remove JSONC comments and trailing commas without touching strings."""
+    output: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    line_comment = False
+    block_comment = False
+    while index < len(text):
+        char = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if line_comment:
+            if char in "\r\n":
+                line_comment = False
+                output.append(char)
+            else:
+                output.append(" ")
+        elif block_comment:
+            if char == "*" and following == "/":
+                output.extend((" ", " "))
+                index += 1
+                block_comment = False
+            else:
+                output.append(char if char in "\r\n" else " ")
+        elif in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            output.append(char)
+        elif char == "/" and following == "/":
+            output.extend((" ", " "))
+            index += 1
+            line_comment = True
+        elif char == "/" and following == "*":
+            output.extend((" ", " "))
+            index += 1
+            block_comment = True
+        else:
+            output.append(char)
+        index += 1
+
+    uncommented = "".join(output)
+    output = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(uncommented):
+        char = uncommented[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < len(uncommented) and uncommented[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(uncommented) and uncommented[lookahead] in "}]":
+                index += 1
+                continue
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def load_settings(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return {}
+    value = json.loads(strip_jsonc(text))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
+
+
+def terminal_shell_path() -> str:
+    candidates: list[str] = []
+    explicit = os.environ.get("COPILOT_TERMINAL_SHELL")
+    if explicit:
+        candidates.append(explicit)
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        candidates.append(str(Path(prefix) / "bin" / "bash"))
+    bash = shutil.which("bash")
+    if bash:
+        candidates.append(bash)
+    shell = os.environ.get("SHELL")
+    if shell:
+        candidates.append(shell)
+    for candidate in candidates:
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    raise FileNotFoundError(
+        "no executable shell found; in Termux run: pkg install bash"
+    )
+
+
+def terminal_enabled_settings(
+    existing: dict[str, Any], shell_path: str
+) -> dict[str, Any]:
+    settings = copy.deepcopy(existing)
+    is_termux = bool(os.environ.get("PREFIX")) and "/com.termux/" in shell_path
+    profile_name = "Termux Bash" if is_termux else "Bash"
+    profile = {"path": shell_path, "args": ["-l"]}
+
+    profiles = settings.get("terminal.integrated.profiles.linux")
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profiles = copy.deepcopy(profiles)
+    profiles[profile_name] = profile
+    settings["terminal.integrated.profiles.linux"] = profiles
+    settings["terminal.integrated.defaultProfile.linux"] = profile_name
+    settings["terminal.integrated.automationProfile.linux"] = profile
+
+    # This profile is used specifically by Copilot Chat's run-in-terminal tool.
+    settings["chat.tools.terminal.terminalProfile.linux"] = profile
+    # Enable the feature while retaining VS Code's conservative default command
+    # approval rules. We intentionally do not auto-approve every command.
+    settings["chat.tools.terminal.enableAutoApprove"] = True
+    return settings
+
+
 def load_existing_groups(path: Path) -> list[Any]:
     if not path.exists():
         return []
@@ -1092,9 +1241,12 @@ def filter_providers(
 
 def restore(args: argparse.Namespace) -> int:
     config_path = config_file_path(args)
+    settings_path = settings_file_path(args)
     restored: list[str] = []
     if restore_file(config_path):
         restored.append(str(config_path))
+    if restore_file(settings_path):
+        restored.append(str(settings_path))
     for package in extension_manifests(args):
         if restore_file(package):
             restored.append(str(package))
@@ -1110,7 +1262,10 @@ def restore(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Add OpenAI-compatible models to Copilot Chat in code-server."
+        description=(
+            "Add OpenAI-compatible models and optional terminal tools to "
+            "Copilot Chat in code-server."
+        )
     )
     parser.add_argument("--catalog", help="maintained provider catalog JSON")
     parser.add_argument("--source", help="additional provider export JSON (file, URL, or -)")
@@ -1160,6 +1315,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="profile directory containing chatLanguageModels.json (for a non-default profile)",
     )
     parser.add_argument("--config-file", help="exact chatLanguageModels.json path")
+    parser.add_argument("--settings-file", help="exact code-server settings.json path")
+    parser.add_argument(
+        "--enable-terminal",
+        action="store_true",
+        help="configure the integrated/agent terminal and advertise tool calling",
+    )
     parser.add_argument(
         "--extension-dir",
         action="append",
@@ -1232,6 +1393,22 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
             eprint(f"warning: model discovery failed for {provider['name']}: {error}")
 
+    settings_path: Path | None = None
+    merged_settings: dict[str, Any] | None = None
+    shell_path: str | None = None
+    if args.enable_terminal:
+        # Agent mode only exposes run-in-terminal to models advertising tool
+        # support. This cannot make a model implement tools, but it lets models
+        # with OpenAI-compatible tool calling use the terminal.
+        for provider in providers:
+            for model in provider.get("models", []):
+                model["toolCalling"] = True
+        shell_path = terminal_shell_path()
+        settings_path = settings_file_path(args)
+        merged_settings = terminal_enabled_settings(
+            load_settings(settings_path), shell_path
+        )
+
     config_path = config_file_path(args)
     existing = load_existing_groups(config_path)
     merged, summary = merge_groups(existing, providers, args.skip_missing_keys)
@@ -1262,6 +1439,9 @@ def main(argv: list[str] | None = None) -> int:
         action = "update" if existed else "add"
         print(f"  {action:<6} {name}: {count} model(s)")
     print(f"\nConfiguration: {config_path}")
+    if settings_path and shell_path:
+        print(f"Terminal settings: {settings_path}")
+        print(f"Terminal shell: {shell_path}")
     for manifest, result in patch_results:
         print(f"Manifest ({result}): {manifest}")
 
@@ -1271,6 +1451,9 @@ def main(argv: list[str] | None = None) -> int:
 
     backup_once(config_path, 0o600)
     atomic_write_json(config_path, merged, 0o600)
+    if settings_path and merged_settings is not None:
+        backup_once(settings_path, 0o600)
+        atomic_write_json(settings_path, merged_settings, 0o600)
 
     missing_keys = [
         provider["name"]
@@ -1281,6 +1464,15 @@ def main(argv: list[str] | None = None) -> int:
     if missing_keys:
         print("Providers without a key (models are listed but requests may fail):")
         print("  " + ", ".join(missing_keys))
+    if args.enable_terminal:
+        print(
+            "Terminal: integrated and agent terminal profiles are enabled; "
+            "trust the workspace before using Agent mode."
+        )
+        print(
+            "Note: only upstream models that truly implement OpenAI tool "
+            "calling can run terminal tools."
+        )
     print("Security: API keys in chatLanguageModels.json are plaintext; file mode was set to 0600.")
     print("Run again after an extension update if OpenAI Compatible disappears.")
     return 0

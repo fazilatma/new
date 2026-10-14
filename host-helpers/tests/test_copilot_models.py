@@ -153,6 +153,55 @@ class NormalizeTests(unittest.TestCase):
         close.assert_called_once_with(42)
 
 
+class TerminalSettingsTests(unittest.TestCase):
+    def test_jsonc_settings_are_loaded_without_corrupting_comment_like_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_path = Path(temporary) / "settings.json"
+            settings_path.write_text(
+                '''{
+                    // Existing code-server settings may use JSONC.
+                    "example.url": "https://example.test/a//b",
+                    "nested": {"enabled": true,}, /* trailing comma */
+                }''',
+                encoding="utf-8",
+            )
+            settings = copilot_models.load_settings(settings_path)
+        self.assertEqual(settings["example.url"], "https://example.test/a//b")
+        self.assertEqual(settings["nested"], {"enabled": True})
+
+    def test_terminal_settings_preserve_profiles_and_do_not_approve_all_commands(self) -> None:
+        existing = {
+            "terminal.integrated.profiles.linux": {
+                "Fish": {"path": "/usr/bin/fish"}
+            },
+            "chat.tools.terminal.autoApprove": {"rm": False},
+            "editor.fontSize": 15,
+        }
+        termux_prefix = "/data/data/com.termux/files/usr"
+        termux_bash = termux_prefix + "/bin/bash"
+        with mock.patch.dict(os.environ, {"PREFIX": termux_prefix}):
+            merged = copilot_models.terminal_enabled_settings(existing, termux_bash)
+        profiles = merged["terminal.integrated.profiles.linux"]
+        self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
+        self.assertEqual(
+            profiles["Termux Bash"], {"path": termux_bash, "args": ["-l"]}
+        )
+        self.assertEqual(
+            merged["terminal.integrated.defaultProfile.linux"], "Termux Bash"
+        )
+        self.assertEqual(
+            merged["chat.tools.terminal.terminalProfile.linux"],
+            {"path": termux_bash, "args": ["-l"]},
+        )
+        self.assertTrue(merged["chat.tools.terminal.enableAutoApprove"])
+        self.assertEqual(merged["chat.tools.terminal.autoApprove"], {"rm": False})
+        self.assertNotIn(".*", merged["chat.tools.terminal.autoApprove"])
+        self.assertEqual(
+            existing["terminal.integrated.profiles.linux"],
+            {"Fish": {"path": "/usr/bin/fish"}},
+        )
+
+
 class MergeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.provider = {
@@ -292,7 +341,7 @@ class CommandIntegrationTests(unittest.TestCase):
                                     {
                                         "id": "chat-a",
                                         "name": "Chat A",
-                                        "toolCalling": True,
+                                        "toolCalling": False,
                                         "vision": False,
                                         "maxInputTokens": 64000,
                                         "maxOutputTokens": 8000,
@@ -305,6 +354,16 @@ class CommandIntegrationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             user_data = root / "user-data"
+            settings_path = user_data / "User" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            original_settings = '''{
+                // Preserve unrelated code-server settings and the original JSONC backup.
+                "editor.fontSize": 16,
+                "terminal.integrated.profiles.linux": {
+                    "Fish": {"path": "/usr/bin/fish"},
+                },
+            }'''
+            settings_path.write_text(original_settings, encoding="utf-8")
             command = [
                 sys.executable,
                 str(HELPER_PATH),
@@ -315,8 +374,13 @@ class CommandIntegrationTests(unittest.TestCase):
                 str(user_data),
                 "--extension-dir",
                 str(extension),
+                "--enable-terminal",
             ]
-            environment = {**os.environ, "EXAMPLE_API_KEY": "runtime-secret"}
+            environment = {
+                **os.environ,
+                "EXAMPLE_API_KEY": "runtime-secret",
+                "COPILOT_TERMINAL_SHELL": "/bin/bash",
+            }
             first = subprocess.run(command, env=environment, capture_output=True, text=True)
             second = subprocess.run(command, env=environment, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)
@@ -328,11 +392,41 @@ class CommandIntegrationTests(unittest.TestCase):
             self.assertEqual(groups[0]["vendor"], "customoai")
             self.assertEqual(groups[0]["apiKey"], "runtime-secret")
             self.assertEqual(groups[0]["models"][0]["id"], "chat-a")
+            self.assertTrue(groups[0]["models"][0]["toolCalling"])
             self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(settings["editor.fontSize"], 16)
+            self.assertEqual(
+                settings["terminal.integrated.profiles.linux"]["Fish"],
+                {"path": "/usr/bin/fish"},
+            )
+            self.assertEqual(settings["terminal.integrated.defaultProfile.linux"], "Bash")
+            self.assertEqual(
+                settings["chat.tools.terminal.terminalProfile.linux"]["path"],
+                "/bin/bash",
+            )
+            self.assertTrue(settings["chat.tools.terminal.enableAutoApprove"])
+            self.assertNotIn("chat.tools.terminal.autoApprove", settings)
+            self.assertEqual(settings_path.stat().st_mode & 0o777, 0o600)
 
             package = json.loads(package_path.read_text(encoding="utf-8"))
             custom = package["contributes"]["languageModelChatProviders"][0]
             self.assertNotIn("when", custom)
+
+            restored = subprocess.run(
+                [*command, "--restore"],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+            self.assertFalse(config_path.exists())
+            self.assertTrue(settings_path.exists())
+            self.assertEqual(settings_path.read_text(encoding="utf-8"), original_settings)
+            restored_package = json.loads(package_path.read_text(encoding="utf-8"))
+            restored_custom = restored_package["contributes"]["languageModelChatProviders"][0]
+            self.assertEqual(restored_custom["when"], "productQualityType != 'stable'")
 
 
 if __name__ == "__main__":

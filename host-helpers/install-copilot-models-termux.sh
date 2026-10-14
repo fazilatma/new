@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Add OpenAI-compatible provider models to GitHub Copilot Chat in code-server.
+# Add OpenAI-compatible models and optional terminal tools to Copilot Chat in code-server.
 # Designed for Android Termux; also works on ordinary Linux installations.
 set -Eeuo pipefail
 
