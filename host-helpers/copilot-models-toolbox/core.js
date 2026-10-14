@@ -283,6 +283,50 @@ function collectConfiguredModels(groups) {
   return { models, ollamaGroups, warnings };
 }
 
+function modelPower(model) {
+  if (!model || typeof model !== 'object') {
+    return { score: null, label: 'Unknown', basis: 'No capability metadata' };
+  }
+  let score = 0;
+  let known = false;
+  const input = Number(model.maxInputTokens);
+  if (Number.isFinite(input) && input > 0) {
+    known = true;
+    score += input >= 1000000 ? 20 : input >= 200000 ? 17 : input >= 128000 ? 14 : input >= 64000 ? 10 : input >= 32000 ? 6 : 3;
+  }
+  const output = Number(model.maxOutputTokens);
+  if (Number.isFinite(output) && output > 0) {
+    known = true;
+    score += output >= 64000 ? 15 : output >= 32000 ? 12 : output >= 16000 ? 9 : output >= 8000 ? 6 : 3;
+  }
+  if (model.reasoningKnown === true) {
+    known = true;
+    if (model.reasoning === true) score += 30;
+  }
+  for (const [property, points] of [['toolCalling', 20], ['vision', 10], ['streaming', 5]]) {
+    if (typeof model[property] === 'boolean') {
+      known = true;
+      if (model[property]) score += points;
+    }
+  }
+  if (!known) return { score: null, label: 'Unknown', basis: 'No capability metadata' };
+  const bounded = Math.max(0, Math.min(100, score));
+  const label = bounded >= 85
+    ? 'Exceptional'
+    : bounded >= 70
+      ? 'Very high'
+      : bounded >= 50
+        ? 'High'
+        : bounded >= 25
+          ? 'Medium'
+          : 'Basic';
+  return {
+    score: bounded,
+    label,
+    basis: 'Declared capability index: token limits, reasoning, tool calling, vision, and streaming; not a benchmark',
+  };
+}
+
 function roundRobinModelRounds(models) {
   const providers = new Map();
   for (const model of Array.isArray(models) ? models : []) {
@@ -373,6 +417,7 @@ module.exports = {
   httpRequest,
   modelsUrl,
   modelNameVariants,
+  modelPower,
   resolveRemoteModel,
   sanitizeDiagnosticText,
   isChatSecretReference,

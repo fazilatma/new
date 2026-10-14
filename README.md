@@ -33,7 +33,7 @@ terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted
 approval rule. The profile launches argument-free Android `/system/bin/sh` with
 Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
 for both Termux Bash and sh. It also installs Copilot Models Toolbox
-**v0.1.15** with
+**v0.1.16** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**, and
 **🛠 Repair code-server** in the Copilot Chat title toolbar. The repair center
 creates private timestamped snapshots before changing managed files, can restore
@@ -41,7 +41,7 @@ an earlier snapshot, and applies a bounded single-process TypeScript server
 profile to recover from Android `write EPIPE` exits. Test All keeps its live
 mobile table visible, imports JSON from inside the panel, resolves unique
 provider model-name mismatches, tests complete provider round-robin waves,
-shows reasoning/tool/token capabilities, and can backup-first select a passing
+shows reasoning/tool/token capabilities plus a transparent metadata power score, and can backup-first select a passing
 row as the active Chat model. Passing models are also merged into Copilot Chat's
 pinned list. GitHub Sync can explicitly scan retained code-server
 and VS Code logs, upload every detected sanitized error to an issue tied to the

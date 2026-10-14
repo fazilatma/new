@@ -8,7 +8,8 @@ four commands to the GitHub Copilot Chat view title toolbar:
   versus resolved model IDs, status counters, credential fingerprints,
   HTTP/latency columns, expandable/copyable errors, cancellation, retry-failed,
   bulk copy, and JSON export. It displays token/context limits, vision/streaming,
-  reasoning, and tool-calling capability. Tests run in complete provider
+  reasoning, tool-calling capability, and a transparent 0–100 metadata power
+  index (declared capabilities only, not a quality benchmark). Tests run in complete provider
   round-robin waves with a configurable pause between waves. Each passing row's
   **Use in Chat** button pins/unhides the resolved ID, requests a live switch,
   and backup-first persists the exact selected panel model. It resolves unique
@@ -59,6 +60,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.15**.
+The helper, launcher, and companion extension currently ship as **0.1.16**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

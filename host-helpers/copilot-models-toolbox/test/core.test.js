@@ -271,6 +271,8 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.match(dashboard, /Import Models \/ JSON/);
   assert.match(dashboard, /Tested \/ resolved model/);
   assert.match(dashboard, /Model specifications/);
+  assert.match(dashboard, /Power \(metadata\)/);
+  assert.match(dashboard, /not a benchmark/);
   assert.match(dashboard, /Reasoning/);
   assert.match(dashboard, /Tool calls/);
   assert.match(dashboard, /Use in Chat/);
@@ -326,6 +328,33 @@ test('resolveRemoteModel safely repairs unique display-name and case mismatches'
     { id: 'codestral-latest', reason: 'name-resolved' }
   );
   assert.equal(core.resolveRemoteModel({ id: 'unknown model' }, remote), undefined);
+});
+
+test('modelPower reports a transparent declared-capability score', () => {
+  assert.deepEqual(
+    core.modelPower({
+      maxInputTokens: 1000000,
+      maxOutputTokens: 128000,
+      reasoningKnown: true,
+      reasoning: true,
+      toolCalling: true,
+      vision: true,
+      streaming: true,
+    }),
+    {
+      score: 100,
+      label: 'Exceptional',
+      basis: 'Declared capability index: token limits, reasoning, tool calling, vision, and streaming; not a benchmark',
+    }
+  );
+  assert.deepEqual(
+    core.modelPower({}),
+    { score: null, label: 'Unknown', basis: 'No capability metadata' }
+  );
+  assert.equal(
+    core.modelPower({ maxInputTokens: 128000, maxOutputTokens: 16000, reasoningKnown: true, reasoning: false, toolCalling: true, vision: false, streaming: false }).label,
+    'Medium'
+  );
 });
 
 test('round-robin ordering completes one model wave across providers before the next', () => {

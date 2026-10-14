@@ -2062,6 +2062,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     reasoning: model.reasoningKnown ? Boolean(model.reasoning) : null,
     reasoningEfforts: model.reasoningEfforts || [],
     toolCalling: typeof model.toolCalling === 'boolean' ? model.toolCalling : null,
+    power: core.modelPower(model),
     credential: credentialSummary(model),
   }));
   const initial = webviewJson({
@@ -2098,7 +2099,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     input { min-width: 260px; flex: 1; }
     progress { width: 100%; height: 10px; accent-color: var(--vscode-progressBar-background); }
     .table-wrap { border: 1px solid var(--vscode-panel-border); overflow: auto; height: 62vh; min-height: 280px; max-height: 720px; }
-    table { width: 100%; border-collapse: collapse; min-width: 1780px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1900px; }
     th { position: sticky; top: 0; z-index: 2; text-align: left; background: var(--vscode-editorGroupHeader-tabsBackground); }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--vscode-panel-border); vertical-align: top; }
     tr:hover { background: var(--vscode-list-hoverBackground); }
@@ -2117,6 +2118,8 @@ function testDashboardHtml(webview, models, warnings, options) {
     .cap-yes { background: var(--vscode-testing-iconPassed, #2ea043); color: var(--vscode-editor-background); }
     .cap-no { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
     .cap-unknown { border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
+    .power { min-width: 105px; font-weight: 600; white-space: nowrap; }
+    .power small { display: block; color: var(--vscode-descriptionForeground); font-weight: 400; }
     .select-model { min-width: 105px; }
     .select-model.selected { background: var(--vscode-testing-iconPassed, #2ea043); color: var(--vscode-editor-background); }
     .empty { color: var(--vscode-descriptionForeground); }
@@ -2155,7 +2158,7 @@ function testDashboardHtml(webview, models, warnings, options) {
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Model specifications</th><th>Reasoning (declared)</th><th>Tool calls (declared)</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Use in Chat</th><th>Error details</th></tr></thead>
+      <thead><tr><th>#</th><th>Provider</th><th>Configured model</th><th>Tested / resolved model</th><th>Model specifications</th><th>Power (metadata)</th><th>Reasoning (declared)</th><th>Tool calls (declared)</th><th>Credential</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Use in Chat</th><th>Error details</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -2192,6 +2195,14 @@ function testDashboardHtml(webview, models, warnings, options) {
       badge.className = 'capability ' + (value === true ? 'cap-yes' : value === false ? 'cap-no' : 'cap-unknown');
       badge.textContent = value === true ? yesText : value === false ? noText : 'Unknown'; td.appendChild(badge); return td;
     }
+    function powerCell(power) {
+      const td = document.createElement('td'); td.className = 'power';
+      td.title = power && power.basis ? power.basis : 'No capability metadata';
+      if (!power || power.score === null) { td.textContent = 'Unknown'; return td; }
+      const score = document.createElement('span'); score.textContent = power.score + '/100';
+      const label = document.createElement('small'); label.textContent = power.label;
+      td.append(score, label); return td;
+    }
     function modelSpecs(item) {
       const context = item.contextWindow || null;
       const efforts = Array.isArray(item.reasoningEfforts) && item.reasoningEfforts.length ? '\\nReasoning levels ' + item.reasoningEfforts.join(', ') : '';
@@ -2212,6 +2223,7 @@ function testDashboardHtml(webview, models, warnings, options) {
       tr.append(cell(String(index + 1)), cell(item.provider), cell(item.model));
       const testedModel = cell(item.testedModel); tr.appendChild(testedModel);
       const specs = cell(modelSpecs(item)); specs.className = 'specs'; tr.appendChild(specs);
+      tr.appendChild(powerCell(item.power));
       tr.appendChild(capabilityCell(item.reasoning, 'Yes', 'No'));
       tr.appendChild(capabilityCell(item.toolCalling, 'Yes', 'No'));
       const credential = cell(item.credential); if (item.credential === 'Missing') credential.className = 'credential-missing'; tr.appendChild(credential);
@@ -2256,7 +2268,7 @@ function testDashboardHtml(webview, models, warnings, options) {
     function applyFilters() {
       const query = search.value.trim().toLowerCase(); const provider = providerFilter.value; const status = statusFilter.value;
       for (const row of rowElements.values()) {
-        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.testedModel, row.item.displayName, modelSpecs(row.item), row.item.reasoning === true ? 'reasoning' : '', row.item.toolCalling === true ? 'tools tool calling' : '', row.item.credential, result && result.error].join(' ').toLowerCase();
+        const result = results.get(row.item.key); const haystack = [row.item.provider, row.item.model, row.item.testedModel, row.item.displayName, modelSpecs(row.item), row.item.power && row.item.power.score, row.item.power && row.item.power.label, row.item.reasoning === true ? 'reasoning' : '', row.item.toolCalling === true ? 'tools tool calling' : '', row.item.credential, result && result.error].join(' ').toLowerCase();
         row.tr.hidden = Boolean((provider && row.item.provider !== provider) || (status && row.tr.dataset.status !== status) || (query && !haystack.includes(query)));
       }
     }
@@ -2358,6 +2370,7 @@ async function saveSanitizedDiagnostics(context, models, results, summary) {
           streaming: model.streaming,
           reasoning: model.reasoningKnown ? Boolean(model.reasoning) : null,
           toolCalling: model.toolCalling,
+          power: core.modelPower(model),
         },
         endpointHost: endpointHost(model.url),
         state: result.state,
@@ -2403,6 +2416,7 @@ async function exportTestReport(context, models, results) {
         reasoning: model.reasoningKnown ? Boolean(model.reasoning) : null,
         reasoningEfforts: model.reasoningEfforts || [],
         toolCalling: model.toolCalling,
+        power: core.modelPower(model),
       },
       credential: credentialSummary(model),
       result: results.get(model.testKey) || { state: 'pending' },
