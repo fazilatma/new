@@ -30,7 +30,10 @@ four commands to the GitHub Copilot Chat view title toolbar:
   catalog, terminal settings, and toolbox while preserving local API keys. The
   extension downloads these assets itself and launches Python through a rebuilt
   absolute Termux environment, so automatic updates do not depend on spawning
-  `bash` or `curl` from code-server. Nothing uploads automatically. An explicitly
+  `bash` or `curl` from code-server. Python helpers retry through Android's ELF
+  linker after `EACCES`; update additionally has a process-free, atomic Node
+  fallback for the already validated extension/helper/catalog runtime. Nothing
+  uploads automatically. An explicitly
   confirmed button scans retained code-server and VS Code logs and sends every
   detected sanitized error to a GitHub issue tied to the selected branch, using
   numbered comments when needed. The latest model-test failures are included but
@@ -56,6 +59,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.14**.
+The helper, launcher, and companion extension currently ship as **0.1.15**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

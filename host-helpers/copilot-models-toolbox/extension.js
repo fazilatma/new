@@ -536,7 +536,13 @@ async function runHelper(context, extraArgs, token) {
     args.push('--extension-dir', copilot.extensionPath);
   }
   const environment = termuxRuntimeEnvironment();
-  return runProcess(pythonCommand(environment), args, token, environment);
+  return runTermuxExecutable(
+    pythonCommand(environment),
+    args,
+    token,
+    environment,
+    'Python helper'
+  );
 }
 
 async function persistPinnedModels(context, successfulModels) {
@@ -563,7 +569,7 @@ async function persistPinnedModels(context, successfulModels) {
       Math.min(30, Number(toolboxConfiguration().get('backupRetention', 8)))
     );
     const environment = termuxRuntimeEnvironment();
-    const result = await runProcess(
+    const result = await runTermuxExecutable(
       pythonCommand(environment),
       [
         runtime.helper,
@@ -577,7 +583,8 @@ async function persistPinnedModels(context, successfulModels) {
         String(retention),
       ],
       undefined,
-      environment
+      environment,
+      'Python pin helper'
     );
     const line = result.stdout
       .split(/\r?\n/)
@@ -619,7 +626,7 @@ async function selectModelForChat(context, model) {
     Math.min(30, Number(toolboxConfiguration().get('backupRetention', 8)))
   );
   const environment = termuxRuntimeEnvironment();
-  const result = await runProcess(
+  const result = await runTermuxExecutable(
     pythonCommand(environment),
     [
       runtime.helper,
@@ -633,7 +640,8 @@ async function selectModelForChat(context, model) {
       String(retention),
     ],
     undefined,
-    environment
+    environment,
+    'Python model-selection helper'
   );
   const line = result.stdout
     .split(/\r?\n/)
@@ -815,6 +823,35 @@ async function saveGitHubSettings(repository, branch, autoUpdate, intervalMinute
   return { ...target, autoUpdate: Boolean(autoUpdate), intervalMinutes: interval };
 }
 
+async function atomicInstallText(filename, text, mode = 0o600) {
+  await fsp.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${process.pid}.${Date.now()}.update.tmp`;
+  try {
+    await fsp.writeFile(temporary, text, { encoding: 'utf8', mode });
+    await fsp.chmod(temporary, mode);
+    await fsp.rename(temporary, filename);
+    await fsp.chmod(filename, mode);
+  } finally {
+    await fsp.rm(temporary, { force: true });
+  }
+}
+
+async function installDownloadedRuntimeDirectly(context, downloadedText) {
+  const targets = [
+    ['copilot-models.py', path.join(context.extensionPath, 'runtime', 'copilot-models.py'), 0o700],
+    ['copilot-models.catalog.json', path.join(context.extensionPath, 'runtime', 'copilot-models.catalog.json'), 0o600],
+    ['copilot-models-toolbox/core.js', path.join(context.extensionPath, 'core.js'), 0o600],
+    ['copilot-models-toolbox/extension.js', path.join(context.extensionPath, 'extension.js'), 0o600],
+    // Write package.json last so the installed version only advances after all runtime assets.
+    ['copilot-models-toolbox/package.json', path.join(context.extensionPath, 'package.json'), 0o600],
+  ];
+  for (const [relative, destination, mode] of targets) {
+    const text = downloadedText[relative];
+    if (typeof text !== 'string') throw new Error(`Validated update is missing ${relative}`);
+    await atomicInstallText(destination, text, mode);
+  }
+}
+
 async function performFullGitHubUpdate(context, repository, branch, reportStatus) {
   if (updateInProgress) throw new Error('Another GitHub update is already running');
   updateInProgress = true;
@@ -905,7 +942,28 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
     });
     const python = pythonCommand(environment);
     report(`Installing through ${python}; no shell process is required…`);
-    await runProcess(python, args, undefined, environment);
+    try {
+      await runTermuxExecutable(
+        python,
+        args,
+        undefined,
+        environment,
+        'Python update helper'
+      );
+    } catch (error) {
+      if (!/\bEACCES\b|Android linker fallback failed/i.test(String(error.message || error))) {
+        throw error;
+      }
+      report(
+        'Android denied both direct Python execution and its linker path. Installing the already validated Toolbox/helper/catalog runtime directly with Node instead…',
+        'warning'
+      );
+      await installDownloadedRuntimeDirectly(context, downloadedText);
+      report(
+        'Direct runtime fallback completed. Existing model, key, and terminal settings were preserved; run Repair later if those integrations need reapplication.',
+        'warning'
+      );
+    }
     await fsp.rm(runtimePaths(context).syncedCatalog, { force: true });
     lastInstalledVersion = remote.version;
     report(`Full branch update to v${remote.version} completed. A code-server restart is required.`, 'success');
@@ -938,24 +996,35 @@ function systemLinkerForExecutable(filename) {
   return candidates.find(executableFile);
 }
 
-async function runGitHubCli(command, args, environment) {
+async function runTermuxExecutable(
+  command,
+  args,
+  token,
+  environment,
+  purpose = 'Termux executable'
+) {
   try {
-    return await runProcess(command, args, undefined, environment);
+    return await runProcess(command, args, token, environment);
   } catch (error) {
     if (!/\bEACCES\b/i.test(String(error && (error.message || error)))) throw error;
     const linker = systemLinkerForExecutable(command);
     if (!linker) throw error;
     output.appendLine(
-      `[GitHub] Direct execution was denied; retrying the Termux gh ELF through ${linker}.`
+      `[${purpose}] Direct execution was denied; retrying ${command} through ${linker}.`
     );
     try {
-      return await runProcess(linker, [command, ...args], undefined, environment);
+      return await runProcess(linker, [command, ...args], token, environment);
     } catch (linkerError) {
       throw new Error(
-        `Direct gh execution failed (${error.message || error}); Android linker fallback failed (${linkerError.message || linkerError})`
+        `Direct ${purpose} execution failed (${error.message || error}); ` +
+        `Android linker fallback failed (${linkerError.message || linkerError})`
       );
     }
   }
+}
+
+function runGitHubCli(command, args, environment) {
+  return runTermuxExecutable(command, args, undefined, environment, 'GitHub CLI');
 }
 
 async function githubApiJson(accessToken, method, url, payload) {
@@ -2666,6 +2735,7 @@ module.exports = {
     diagnosticCommentChunks,
     githubApiJson,
     githubSyncHtml,
+    installDownloadedRuntimeDirectly,
     migratePlaintextCredentials,
     providerCredentialAliases,
     repairResolvedModelIds,

@@ -217,6 +217,25 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     fs.readFileSync(path.join(snapshot, 'chatLanguageModels.json'), 'utf8'),
     /mistral-private-key/
   );
+  await extension.__test.installDownloadedRuntimeDirectly(context, {
+    'copilot-models.py': '#!/usr/bin/env python3\nHELPER_VERSION = "test"\n',
+    'copilot-models.catalog.json': '{"providers":[{"slug":"test","models":[{"id":"m"}]}]}\n',
+    'copilot-models-toolbox/core.js': 'module.exports = {};\n',
+    'copilot-models-toolbox/extension.js': 'function activate() {}\n',
+    'copilot-models-toolbox/package.json': '{"name":"copilot-models-toolbox","version":"test"}\n',
+  });
+  assert.equal(
+    fs.readFileSync(path.join(extensionPath, 'runtime', 'copilot-models.py'), 'utf8'),
+    '#!/usr/bin/env python3\nHELPER_VERSION = "test"\n'
+  );
+  assert.equal(
+    fs.statSync(path.join(extensionPath, 'runtime', 'copilot-models.py')).mode & 0o777,
+    0o700
+  );
+  assert.match(
+    fs.readFileSync(path.join(extensionPath, 'package.json'), 'utf8'),
+    /"version":"test"/
+  );
   assert.deepEqual(
     extension.__test.providerCredentialAliases('Mistral'),
     ['Mistral', 'Mistral AI']
