@@ -63,6 +63,7 @@
 #     bash s4-remote.sh --termfix --safe-profile  # ignore all rc files
 #     bash s4-remote.sh --update-now        # pull newest deploy files from GitHub
 #     bash s4-remote.sh --auto-update       # start daemon to auto-pull on push
+#     bash s4-remote.sh --import-ai <file>  # import AI providers JSON to code-server
 #     bash s4-remote.sh --selftest          # only check + report evidence
 #     bash s4-remote.sh --status            # what is running right now
 #     bash s4-remote.sh --stop              # stop proxy/code-server/sshd
@@ -74,7 +75,7 @@
 # =====================================================================
 set -u
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 MARKER="s4-cs-mobile-v2"
 SSH_PORT="${SSH_PORT:-8022}"
 CODE_PORT="${CODE_PORT:-8081}"        # what you open in the browser
@@ -89,7 +90,7 @@ API="https://api.github.com"
 PROXY_JS="s4-csproxy.js"
 SHELL_CSS="s4-csmobile.css"
 SHELL_JS="s4-csmobile.js"
-HELP_LAST_LINE=74
+HELP_LAST_LINE=75
 
 ZOOM="$(cat "$BASE/zoom" 2>/dev/null || echo 1.3)"
 USE_PROXY=1; OPEN_BROWSER=0; CUSTOM_CSS=""
@@ -97,7 +98,7 @@ DO_SSH=0; DO_CODE=0; STOP=0; STATUS=0; SET_PW=0; BIND_LAN=0; NO_SETTINGS=0
 FIX_TERMINAL=0; SELFTEST=0; NO_SHELL=0
 TERMFIX=0; NO_TERMFIX=0; TERMFIX_SAFE=0
 TERMFIX_SH="s4-termfix.sh"
-UPDATE_NOW=0; AUTO_UPDATE=0
+UPDATE_NOW=0; AUTO_UPDATE=0; IMPORT_AI_FILE=""
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'WARN  %s\n' "$*" >&2; }
@@ -118,6 +119,8 @@ while [ $# -gt 0 ]; do
     --safe-profile)  TERMFIX_SAFE=1; TERMFIX=1; FIX_TERMINAL=1; shift ;;
     --update-now)    UPDATE_NOW=1; shift ;;
     --auto-update)   AUTO_UPDATE=1; shift ;;
+    --import-ai)     IMPORT_AI_FILE="${2:-}"; shift 2 ;;
+    --import-ai=*)   IMPORT_AI_FILE="${1#*=}"; shift ;;
     --selftest)      SELFTEST=1; shift ;;
     --ssh-port)      SSH_PORT="${2:-8022}"; shift 2 ;;
     --code-port)     CODE_PORT="${2:-8081}"; shift 2 ;;
@@ -198,6 +201,73 @@ start_auto_update_daemon() {
 }
 
 
+
+# ======================================================== AI models import
+import_ai_models() {
+  local json_file="$1"
+  if [ -z "$json_file" ]; then
+    die "Please specify a JSON file to import: bash $0 --import-ai <file.json>"
+  fi
+  if [ ! -f "$json_file" ]; then
+    die "AI models file not found: $json_file"
+  fi
+  say "Importing AI models from $json_file into code-server & scraper..."
+  mkdir -p "$SETTINGS_DIR" "$BASE" 2>/dev/null
+  cp -f "$json_file" "$BASE/ai-providers.json" 2>/dev/null || true
+  
+  if have python3; then
+    SETTINGS="$SETTINGS" AI_JSON="$json_file" python3 - <<'PYAI' 2>&1 | sed 's/^/  /'
+import json, os, sys
+p_settings = os.environ.get("SETTINGS")
+p_ai = os.environ.get("AI_JSON")
+
+try:
+    with open(p_ai, "r", encoding="utf-8") as f:
+        ai_data = json.load(f)
+except Exception as e:
+    print(f"Error reading {p_ai}: {e}")
+    sys.exit(1)
+
+# Format into code-server settings (custom model providers, Roo-Code, Cline, Continue etc.)
+provs = ai_data.get("providers", ai_data) if isinstance(ai_data, dict) else ai_data
+count_models = 0
+if isinstance(provs, dict):
+    for pid, pinfo in provs.items():
+        if isinstance(pinfo, dict):
+            count_models += len(pinfo.get("models", []))
+
+print(f"Found {len(provs) if isinstance(provs, dict) else len(provs)} provider(s) with {count_models} model(s).")
+
+# Update settings.json
+try:
+    cur = json.load(open(p_settings, encoding="utf-8")) if os.path.isfile(p_settings) else {}
+except Exception:
+    cur = {}
+
+cur["ai.providers"] = provs
+cur["ai.activeProvider"] = list(provs.keys())[0] if isinstance(provs, dict) and provs else ""
+with open(p_settings, "w", encoding="utf-8") as f:
+    json.dump(cur, f, indent=2, ensure_ascii=False)
+print(f"Injected ai.providers into code-server settings: {p_settings}")
+PYAI
+  fi
+
+  # Also sync to local running scraper4 instance if port 8080 is reachable
+  if listening 8080; then
+    say "Syncing with local scraper server on http://127.0.0.1:8080/..."
+    local res
+    res="$(curl -s -X POST "http://127.0.0.1:8080/" -F "action=ai_import_providers" -F "providers_json=<${json_file}" 2>/dev/null || true)"
+    if [ -n "$res" ]; then
+      say "  scraper sync response: $res"
+    fi
+  fi
+  say "AI models successfully imported into code-server!"
+}
+
+if [ -n "$IMPORT_AI_FILE" ]; then
+  import_ai_models "$IMPORT_AI_FILE"
+  exit 0
+fi
 if [ "$UPDATE_NOW" = 1 ]; then
   update_deploy_files
   exit 0
