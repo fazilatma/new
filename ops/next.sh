@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # =====================================================================
-#  round r2-fileman-remote
+#  round r3-cs-mobile
 #
 #  Two jobs in one round:
 #    (1) the evidence r1 was meant to collect — why php -S dies, what the
 #        shared-storage folder refuses, where deploy.php/scraper4.php write;
-#    (2) install and verify the three access routes the user asked for:
+#    (2) install and verify the three access routes the user asked for,
+#        including the forced-zoom mobile wrapper around code-server:
 #          • s4-fileman.php  → big-touch-target file manager + editor
 #          • sshd            → SFTP for Android file managers
 #          • code-server     → with mobile-sized UI (zoom + font settings)
@@ -80,6 +81,7 @@ fi
 s4_hr; s4_say "F. Installing the access tools"
 s4_dl deploy/s4-fileman.sh "$HOME/s4-fileman.sh"
 s4_dl deploy/s4-remote.sh  "$HOME/s4-remote.sh"
+s4_dl deploy/s4-csproxy.js "$HOME/s4-csproxy.js"
 chmod +x "$HOME/s4-fileman.sh" "$HOME/s4-remote.sh" 2>/dev/null
 
 # ------------------------------------------------- F1. file manager (web UI)
@@ -138,15 +140,33 @@ else
 fi
 
 # --------------------------------------------------------------- F3. code-server
-s4_hr; s4_say "F3. code-server with a mobile-sized UI"
+s4_hr; s4_say "F3. code-server, mobile-friendly (forced zoom + pinch + touch controls)"
 if command -v code-server >/dev/null 2>&1; then
   s4_say "code-server: $(code-server --version 2>&1 | head -1)"
-  bash "$HOME/s4-remote.sh" --code --code-port 8081 --zoom 1.6 2>&1 | tail -25
+  s4_say "node: $(command -v node >/dev/null 2>&1 && node -v 2>&1 || echo MISSING)"
+  bash "$HOME/s4-remote.sh" --code --code-port 8081 --upstream-port 18081 --zoom 1.5 2>&1 | tail -30
   sleep 2
-  CSCODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "http://127.0.0.1:8081/" 2>&1)
-  s4_say "http://127.0.0.1:8081/ → http=$CSCODE (302/200 means it is up; the login password is in ~/.config/code-server/config.yaml)"
+  UP=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "http://127.0.0.1:18081/" 2>&1)
+  BODY="$S4_STATE/cs.html"
+  PX=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 30 "http://127.0.0.1:8081/" 2>&1)
+  MARK=$(grep -c 's4-cs-mobile-v1' "$BODY" 2>/dev/null | head -1); MARK=${MARK:-0}
+  ZCSS=$(grep -c -- '--s4-zoom' "$BODY" 2>/dev/null | head -1); ZCSS=${ZCSS:-0}
+  PINCH=$(grep -c 'user-scalable=yes' "$BODY" 2>/dev/null | head -1); PINCH=${PINCH:-0}
+  BLOCKED=$(grep -c 'user-scalable=no' "$BODY" 2>/dev/null | head -1); BLOCKED=${BLOCKED:-0}
+  BTNS=$(grep -c 'data-a="in"' "$BODY" 2>/dev/null | head -1); BTNS=${BTNS:-0}
+  s4_say "upstream code-server 127.0.0.1:18081 → http=$UP"
+  s4_say "mobile proxy        127.0.0.1:8081 → http=$PX · marker=$MARK · forced-zoom-css=$ZCSS · pinch-enabled=$PINCH · pinch-blocked-left=$BLOCKED · floating-buttons=$BTNS"
+  if [ "$MARK" -gt 0 ] && [ "$ZCSS" -gt 0 ] && [ "$PINCH" -gt 0 ] && [ "$BLOCKED" = 0 ] && [ "$BTNS" -gt 0 ]; then
+    s4_say "✅ forced zoom + pinch-zoom + floating A-/A+ controls are live"
+  else
+    s4_say "🚨 injection not visible in the served HTML — proxy log:"
+    s4_tail "$HOME/.s4-remote/csproxy.log" 25
+  fi
+  s4_note "head of the served HTML (shows the injected meta/style/script):"
+  head -c 1500 "$BODY" 2>/dev/null | sed 's/^/    /' >> "$S4_REPORT"
   s4_note "code-server settings now in effect:"
   sed 's/^/    /' "$HOME/.local/share/code-server/User/settings.json" 2>/dev/null | head -30 >> "$S4_REPORT"
+  rm -f "$BODY" 2>/dev/null
 else
   s4_say "⚠️ code-server not installed → pkg install code-server (or use the file manager, which is lighter)"
 fi
@@ -155,7 +175,8 @@ fi
 s4_hr; s4_say "SUMMARY — what to open on the phone"
 s4_say "  1. file manager : http://127.0.0.1:$FMP/s4-fileman.php?key=\$(cat ~/.s4-fileman/fileman.key)"
 s4_say "  2. SFTP         : 127.0.0.1:8022  user=$(whoami)  (password: bash ~/s4-remote.sh --set-password)"
-s4_say "  3. code-server  : http://127.0.0.1:8081/  (password in ~/.config/code-server/config.yaml)"
+s4_say "  3. code-server  : http://127.0.0.1:8081/  (زوم: دکمه‌هایِ شناورِ A−/A+، زومِ دو‌انگشتی، یا ?z=1.8)"
+s4_say "     password in ~/.config/code-server/config.yaml · upstream 18081 · zoom saved in ~/.s4-remote/zoom"
 s4_say "  restart later   : bash ~/s4-fileman.sh --bg   ·   bash ~/s4-remote.sh   ·   bash ~/s4-agent.sh --loop"
 
 s4_done needs-input
