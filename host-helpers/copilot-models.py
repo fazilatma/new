@@ -195,7 +195,9 @@ def normalize_model(
     if not isinstance(raw, dict):
         return None
 
-    model_id = first_value(raw, ("id", "modelId", "model_id", "model", "slug"))
+    # Exports often carry both an internal database `id` and the actual API
+    # model identifier. Prefer the latter or requests are sent with a UUID.
+    model_id = first_value(raw, ("modelId", "model_id", "model", "slug", "id"))
     if not isinstance(model_id, str) or not model_id.strip():
         return None
     model_id = model_id.strip()
@@ -246,6 +248,14 @@ def normalize_model(
             ("capabilities", "reasoning"),
         ),
     )
+    streaming_value = nested_value(
+        raw,
+        (
+            ("streaming",),
+            ("supportsStreaming",),
+            ("capabilities", "streaming"),
+        ),
+    )
 
     max_input = nested_value(
         raw,
@@ -282,7 +292,9 @@ def normalize_model(
         "id": model_id,
         "name": str(name or model_id),
         "url": normalize_api_url(model_url.strip()),
-        "toolCalling": as_bool(tool_value, as_bool(defaults.get("toolCalling"), True)),
+        # Sending tools to an unknown model commonly causes a 400 response.
+        # Opt in only when the export or maintained catalog says it supports them.
+        "toolCalling": as_bool(tool_value, as_bool(defaults.get("toolCalling"), False)),
         "vision": as_bool(
             vision_value,
             "image" in input_modalities or as_bool(defaults.get("vision"), False),
@@ -293,11 +305,15 @@ def normalize_model(
         "maxOutputTokens": as_positive_int(
             max_output, as_positive_int(defaults.get("maxOutputTokens"), 16384)
         ),
+        # Copilot adds `stream_options.include_usage` to streamed requests.
+        # Several otherwise OpenAI-compatible services reject that field, while
+        # all supported chat-completions surfaces accept non-streamed requests.
+        "streaming": as_bool(
+            streaming_value, as_bool(defaults.get("streaming"), False)
+        ),
     }
     if as_bool(thinking_value, as_bool(defaults.get("thinking"), False)):
         model["thinking"] = True
-    if "streaming" in raw:
-        model["streaming"] = as_bool(raw["streaming"], True)
     if isinstance(raw.get("editTools"), list):
         model["editTools"] = [str(item) for item in raw["editTools"]]
     if isinstance(raw.get("requestHeaders"), dict):
@@ -356,6 +372,31 @@ def normalize_api_url(url: str) -> str:
     if cloudflare:
         return cloudflare.group(1) + "/v1"
     return url
+
+
+def normalize_ollama_url(url: str) -> str:
+    """Convert an OpenAI/native Ollama operation URL to the server root."""
+    normalized = normalize_api_url(url)
+    return re.sub(
+        r"/(?:v1(?:/(?:chat/completions|models))?|api/(?:chat|generate|tags))$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    ).rstrip("/")
+
+
+def canonical_provider_url(
+    slug: str, maintained_url: str, imported_url: str
+) -> str:
+    """Use known OpenAI-compatible surfaces instead of native export URLs."""
+    if slug == "ollama":
+        return normalize_ollama_url(imported_url or maintained_url)
+    if slug == "cloudflare":
+        # Keep the account id from the export while replacing a native /run URL.
+        account = re.search(r"/accounts/([^/]+)/ai(?:/|$)", imported_url)
+        if account:
+            return maintained_url.replace("${CLOUDFLARE_ACCOUNT_ID}", account.group(1))
+    return maintained_url
 
 
 def provider_objects(root: Any) -> list[dict[str, Any]]:
@@ -532,6 +573,22 @@ def overlay_providers(
         # use the maintained default list.
         if not incoming.get("models") and old.get("models"):
             merged["models"] = old["models"]
+
+        # Known provider exports frequently contain native operation URLs
+        # (`generateContent`, `/v2/chat`, Cloudflare `/ai/run/...`) that are not
+        # OpenAI Chat Completions endpoints. Rebase every imported model onto
+        # the maintained OpenAI-compatible endpoint. Custom/unknown providers
+        # keep their exported URLs unchanged.
+        if slug in KNOWN_PROVIDER_SLUGS:
+            canonical_url = canonical_provider_url(
+                slug,
+                str(old.get("baseUrl") or ""),
+                str(incoming.get("baseUrl") or ""),
+            )
+            merged["baseUrl"] = canonical_url
+            if incoming.get("models"):
+                for model in merged["models"]:
+                    model["url"] = canonical_url
         output[positions[slug]] = merged
     return output
 
@@ -681,6 +738,8 @@ def provider_group(
     configured_url = str(provider["baseUrl"])
     if provider["slug"] == "ollama" and os.environ.get("OLLAMA_URL"):
         configured_url = os.environ["OLLAMA_URL"]
+    if provider["slug"] == "ollama":
+        configured_url = normalize_ollama_url(configured_url)
     base_url, missing = expand_env_url(configured_url)
     if missing:
         eprint(

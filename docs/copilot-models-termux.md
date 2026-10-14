@@ -100,6 +100,12 @@ marked `nonChat`) are excluded because Copilot Chat cannot use their endpoints.
 Use `--include-non-chat` only if the export classified a real chat model
 incorrectly.
 
+For known providers, imported native operation URLs are automatically replaced
+with their OpenAI-compatible Chat Completions base URL. The importer also
+prefers `modelId` over internal database `id` values, reduces a local Ollama URL
+to its server root, and defaults imported requests to non-streaming so providers
+that reject OpenAI's `stream_options` field remain usable.
+
 ## Useful options
 
 | Option | Purpose |

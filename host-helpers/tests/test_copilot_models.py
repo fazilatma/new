@@ -70,6 +70,58 @@ class NormalizeTests(unittest.TestCase):
         self.assertNotIn("sourceApiKey", without_key[0])
         self.assertEqual(with_key[0]["sourceApiKey"], "secret")
 
+    def test_actual_model_id_wins_over_internal_database_id(self) -> None:
+        model = copilot_models.normalize_model(
+            {
+                "id": "internal-row-uuid",
+                "modelId": "vendor/real-model",
+                "name": "Real model",
+            },
+            "https://example.test/v1",
+        )
+        assert model
+        self.assertEqual(model["id"], "vendor/real-model")
+        self.assertFalse(model["toolCalling"])
+        self.assertFalse(model["streaming"])
+
+    def test_known_provider_import_is_rebased_to_compatible_endpoint(self) -> None:
+        defaults = [
+            {
+                "slug": "cohere",
+                "name": "Cohere",
+                "baseUrl": "https://api.cohere.ai/compatibility/v1",
+                "models": [],
+            }
+        ]
+        imported = [
+            {
+                "slug": "cohere",
+                "name": "Cohere",
+                "baseUrl": "https://api.cohere.com/v2/chat",
+                "models": [{"id": "command-a", "url": "https://api.cohere.com/v2/chat"}],
+            }
+        ]
+        merged = copilot_models.overlay_providers(defaults, imported)
+        self.assertEqual(merged[0]["baseUrl"], defaults[0]["baseUrl"])
+        self.assertEqual(merged[0]["models"][0]["url"], defaults[0]["baseUrl"])
+
+    def test_cloudflare_account_and_ollama_root_are_preserved(self) -> None:
+        cloudflare = copilot_models.canonical_provider_url(
+            "cloudflare",
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+            "https://api.cloudflare.com/client/v4/accounts/account-123/ai/run/@cf/meta/llama",
+        )
+        self.assertEqual(
+            cloudflare,
+            "https://api.cloudflare.com/client/v4/accounts/account-123/ai/v1",
+        )
+        self.assertEqual(
+            copilot_models.normalize_ollama_url(
+                "http://127.0.0.1:11434/v1/chat/completions"
+            ),
+            "http://127.0.0.1:11434",
+        )
+
     def test_env_file_parses_values_without_executing_shell(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             env_file = Path(temporary) / "keys.env"
