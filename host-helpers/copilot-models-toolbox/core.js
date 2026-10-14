@@ -249,6 +249,9 @@ function collectConfiguredModels(groups) {
       }
       const configuredKey = typeof group.apiKey === 'string' ? group.apiKey.trim() : '';
       const credentialReference = isChatSecretReference(configuredKey) ? configuredKey : '';
+      const reasoningEfforts = Array.isArray(model.supportsReasoningEffort)
+        ? model.supportsReasoningEffort.map((value) => String(value))
+        : [];
       models.push({
         kind: 'openai',
         vendor,
@@ -258,10 +261,47 @@ function collectConfiguredModels(groups) {
         url,
         apiKey: credentialReference ? '' : configuredKey,
         credentialReference,
+        toolCalling: typeof model.toolCalling === 'boolean' ? model.toolCalling : null,
+        vision: typeof model.vision === 'boolean' ? model.vision : null,
+        streaming: typeof model.streaming === 'boolean' ? model.streaming : null,
+        maxInputTokens: Number.isSafeInteger(model.maxInputTokens) ? model.maxInputTokens : null,
+        maxOutputTokens: Number.isSafeInteger(model.maxOutputTokens) ? model.maxOutputTokens : null,
+        contextWindow: Number.isSafeInteger(model.contextWindow) ? model.contextWindow : null,
+        reasoning:
+          model.thinking === true ||
+          model.adaptiveThinking === true ||
+          reasoningEfforts.length > 0,
+        reasoningKnown:
+          Object.prototype.hasOwnProperty.call(model, 'thinking') ||
+          Object.prototype.hasOwnProperty.call(model, 'adaptiveThinking') ||
+          Object.prototype.hasOwnProperty.call(model, 'supportsReasoningEffort') ||
+          Object.prototype.hasOwnProperty.call(model, 'toolCalling'),
+        reasoningEfforts,
       });
     }
   }
   return { models, ollamaGroups, warnings };
+}
+
+function roundRobinModelRounds(models) {
+  const providers = new Map();
+  for (const model of Array.isArray(models) ? models : []) {
+    const key = `${String(model && model.vendor || '')}\u0000${String(model && model.provider || '')}`;
+    if (!providers.has(key)) providers.set(key, []);
+    providers.get(key).push(model);
+  }
+  const queues = [...providers.values()];
+  const rounds = [];
+  const maximum = queues.reduce((value, queue) => Math.max(value, queue.length), 0);
+  for (let index = 0; index < maximum; index += 1) {
+    const round = queues.map((queue) => queue[index]).filter(Boolean);
+    if (round.length) rounds.push(round);
+  }
+  return rounds;
+}
+
+function roundRobinModels(models) {
+  return roundRobinModelRounds(models).flat();
 }
 
 function chatModelIdentifier(model) {
@@ -338,5 +378,7 @@ module.exports = {
   isChatSecretReference,
   ollamaUrl,
   requestJson,
+  roundRobinModelRounds,
+  roundRobinModels,
   validateCatalog,
 };

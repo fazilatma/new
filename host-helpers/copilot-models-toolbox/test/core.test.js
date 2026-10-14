@@ -33,6 +33,7 @@ test('package contributes the model and self-repair Copilot Chat toolbar command
   assert.equal(settings['copilotModels.autoUpdate'].default, false);
   assert.equal(settings['copilotModels.pinSuccessfulModels'].default, true);
   assert.equal(settings['copilotModels.testConcurrency'].default, 1);
+  assert.equal(settings['copilotModels.roundRobinDelayMs'].default, 750);
 });
 
 test('GitHub updater downloads runtime directly instead of spawning Bash', () => {
@@ -232,15 +233,29 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
         provider: 'Example',
         id: 'chat-a',
         kind: 'openai',
+        configuredName: 'Chat A',
+        maxInputTokens: 128000,
+        maxOutputTokens: 16000,
+        vision: true,
+        streaming: false,
+        reasoning: true,
+        reasoningKnown: true,
+        reasoningEfforts: ['high'],
+        toolCalling: true,
         apiKey: 'must-never-appear-in-html',
       },
     ],
     ['warning'],
-    { concurrency: 2, timeoutMs: 30000 }
+    { concurrency: 2, timeoutMs: 30000, roundRobinDelayMs: 750 }
   );
   assert.match(dashboard, /AI Model Test Center/);
   assert.match(dashboard, /Import Models \/ JSON/);
   assert.match(dashboard, /Tested \/ resolved model/);
+  assert.match(dashboard, /Model specifications/);
+  assert.match(dashboard, /Reasoning/);
+  assert.match(dashboard, /Tool calls/);
+  assert.match(dashboard, /Use in Chat/);
+  assert.match(dashboard, /provider round-robin waves/i);
   assert.match(dashboard, /height: 62vh; min-height: 280px/);
   assert.match(dashboard, /Copy all errors/);
   assert.match(dashboard, /Plaintext pending migration · 25 chars/);
@@ -294,13 +309,42 @@ test('resolveRemoteModel safely repairs unique display-name and case mismatches'
   assert.equal(core.resolveRemoteModel({ id: 'unknown model' }, remote), undefined);
 });
 
+test('round-robin ordering completes one model wave across providers before the next', () => {
+  const input = [
+    { provider: 'A', vendor: 'customoai', id: 'a1' },
+    { provider: 'A', vendor: 'customoai', id: 'a2' },
+    { provider: 'B', vendor: 'customoai', id: 'b1' },
+    { provider: 'B', vendor: 'customoai', id: 'b2' },
+    { provider: 'B', vendor: 'customoai', id: 'b3' },
+    { provider: 'C', vendor: 'customoai', id: 'c1' },
+  ];
+  assert.deepEqual(
+    core.roundRobinModelRounds(input).map((round) => round.map((model) => model.id)),
+    [['a1', 'b1', 'c1'], ['a2', 'b2'], ['b3']]
+  );
+  assert.deepEqual(
+    core.roundRobinModels(input).map((model) => model.id),
+    ['a1', 'b1', 'c1', 'a2', 'b2', 'b3']
+  );
+});
+
 test('collectConfiguredModels separates custom OpenAI and Ollama models', () => {
   const value = core.collectConfiguredModels([
     {
       vendor: 'customoai',
       name: 'Example',
       apiKey: 'secret',
-      models: [{ id: 'chat-a', url: 'https://example.test/v1' }],
+      models: [{
+        id: 'chat-a',
+        name: 'Chat A',
+        url: 'https://example.test/v1',
+        toolCalling: true,
+        vision: false,
+        streaming: true,
+        thinking: true,
+        maxInputTokens: 128000,
+        maxOutputTokens: 16000,
+      }],
     },
     { vendor: 'ollama', name: 'Local Ollama', url: 'http://127.0.0.1:11434' },
     { vendor: 'other', models: [{ id: 'ignored' }] },
@@ -311,10 +355,19 @@ test('collectConfiguredModels separates custom OpenAI and Ollama models', () => 
     vendor: 'customoai',
     provider: 'Example',
     id: 'chat-a',
-    configuredName: '',
+    configuredName: 'Chat A',
     url: 'https://example.test/v1',
     apiKey: 'secret',
     credentialReference: '',
+    toolCalling: true,
+    vision: false,
+    streaming: true,
+    maxInputTokens: 128000,
+    maxOutputTokens: 16000,
+    contextWindow: null,
+    reasoning: true,
+    reasoningKnown: true,
+    reasoningEfforts: [],
   });
   assert.deepEqual(value.ollamaGroups, [
     { provider: 'Local Ollama', url: 'http://127.0.0.1:11434' },

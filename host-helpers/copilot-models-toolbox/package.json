@@ -2,7 +2,7 @@
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
   "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -124,6 +124,13 @@
           "minimum": 5,
           "maximum": 180,
           "description": "Timeout for each real model inference test."
+        },
+        "copilotModels.roundRobinDelayMs": {
+          "type": "integer",
+          "default": 750,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Pause between provider round-robin waves to reduce rate-limit bursts."
         },
         "copilotModels.configFile": {
           "type": "string",

@@ -7,9 +7,14 @@ four commands to the GitHub Copilot Chat view title toolbar:
   always-visible searchable table, an inline Import Models button, configured
   versus resolved model IDs, status counters, credential fingerprints,
   HTTP/latency columns, expandable/copyable errors, cancellation, retry-failed,
-  bulk copy, and JSON export. It resolves unique name/case mismatches against
-  the provider `/models` response and backup-first repairs IDs that then pass a
-  real inference request. It sends real, non-streaming inference requests only after
+  bulk copy, and JSON export. It displays token/context limits, vision/streaming,
+  reasoning, and tool-calling capability. Tests run in complete provider
+  round-robin waves with a configurable pause between waves. Each passing row's
+  **Use in Chat** button pins/unhides the resolved ID, requests a live switch,
+  and backup-first persists the exact selected panel model. It resolves unique
+  name/case mismatches against the provider `/models` response and backup-first
+  repairs IDs that then pass a real inference request. It sends real,
+  non-streaming inference requests only after
   the user presses Start in the cost/quota warning panel. Passing models are
   automatically persisted in Copilot Chat's pinned list; existing pins are
   preserved, hidden successes are made visible, and profile storage is privately
@@ -51,6 +56,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.13**.
+The helper, launcher, and companion extension currently ship as **0.1.14**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

@@ -272,6 +272,78 @@ class PinnedModelStorageTests(unittest.TestCase):
             self.assertFalse(repeated["changed"])
             self.assertEqual(repeated["backup"], "")
 
+    def test_selected_model_is_pinned_unhidden_persisted_and_backed_up(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            storage = root / "globalStorage" / "state.vscdb"
+            storage.parent.mkdir(parents=True)
+            identifier = "customoai/Mistral/model-a"
+            with sqlite3.connect(storage) as connection:
+                connection.execute(
+                    "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)"
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    ("chat.currentLanguageModel.panel", "copilot/old"),
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    ("chat.currentLanguageModel.panel.local", "copilot/old-local"),
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    ("chat.currentLanguageModel.panel.isDefault", "true"),
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    ("chatModelPinned", json.dumps(["copilot/existing"])),
+                )
+                connection.execute(
+                    "INSERT INTO ItemTable(key, value) VALUES(?, ?)",
+                    (
+                        "chatModelVisibility",
+                        json.dumps({"hiddenModels": [identifier, "copilot/hidden"]}),
+                    ),
+                )
+            result = copilot_models.select_chat_model(
+                storage, identifier, root / "backups"
+            )
+            self.assertTrue(result["changed"])
+            self.assertTrue(result["restartRequired"])
+            self.assertEqual(result["selectionKeys"], 2)
+            self.assertEqual(result["added"], 1)
+            self.assertEqual(result["unhidden"], 1)
+            self.assertTrue(Path(result["backup"]).is_file())
+            with sqlite3.connect(storage) as connection:
+                selected = dict(
+                    connection.execute(
+                        "SELECT key, value FROM ItemTable WHERE key LIKE 'chat.currentLanguageModel.panel%'"
+                    ).fetchall()
+                )
+                pinned = json.loads(
+                    connection.execute(
+                        "SELECT value FROM ItemTable WHERE key = 'chatModelPinned'"
+                    ).fetchone()[0]
+                )
+                visibility = json.loads(
+                    connection.execute(
+                        "SELECT value FROM ItemTable WHERE key = 'chatModelVisibility'"
+                    ).fetchone()[0]
+                )
+            self.assertEqual(
+                selected,
+                {
+                    "chat.currentLanguageModel.panel": identifier,
+                    "chat.currentLanguageModel.panel.local": identifier,
+                },
+            )
+            self.assertEqual(pinned, ["copilot/existing", identifier])
+            self.assertEqual(visibility["hiddenModels"], ["copilot/hidden"])
+            repeated = copilot_models.select_chat_model(
+                storage, identifier, root / "backups"
+            )
+            self.assertFalse(repeated["changed"])
+
     def test_pin_models_cli_runs_without_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             profile = Path(temporary) / "User"
@@ -304,6 +376,43 @@ class PinnedModelStorageTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn('PIN_RESULT {"requested":1,"added":1', completed.stdout)
+
+    def test_select_model_cli_runs_without_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "User"
+            settings = profile / "settings.json"
+            storage = profile / "globalStorage" / "state.vscdb"
+            storage.parent.mkdir(parents=True)
+            settings.write_text("{}\n", encoding="utf-8")
+            with sqlite3.connect(storage) as connection:
+                connection.execute(
+                    "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)"
+                )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(HELPER_PATH),
+                    "--select-model",
+                    "customoai/Mistral/model-a",
+                    "--settings-file",
+                    str(settings),
+                    "--pin-backup-dir",
+                    str(Path(temporary) / "backups"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(
+                'SELECT_RESULT {"identifier":"customoai/Mistral/model-a"',
+                completed.stdout,
+            )
+            with sqlite3.connect(storage) as connection:
+                selected = connection.execute(
+                    "SELECT value FROM ItemTable WHERE key = 'chat.currentLanguageModel.panel'"
+                ).fetchone()[0]
+            self.assertEqual(selected, "customoai/Mistral/model-a")
 
 
 class TerminalSettingsTests(unittest.TestCase):

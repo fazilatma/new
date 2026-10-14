@@ -36,7 +36,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.13"
+HELPER_VERSION = "0.1.14"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1475,6 +1475,29 @@ def _store_json(connection: sqlite3.Connection, key: str, value: Any) -> None:
         )
 
 
+def _store_text(connection: sqlite3.Connection, key: str, value: str) -> None:
+    updated = connection.execute(
+        "UPDATE ItemTable SET value = ? WHERE key = ?", (value, key)
+    )
+    if updated.rowcount == 0:
+        connection.execute(
+            "INSERT INTO ItemTable(key, value) VALUES(?, ?)", (key, value)
+        )
+
+
+def _valid_chat_identifier(value: Any) -> str:
+    identifier = str(value).strip()
+    if (
+        not identifier
+        or identifier == "copilot/auto"
+        or "/" not in identifier
+        or len(identifier) > 1000
+        or any(ord(character) < 32 for character in identifier)
+    ):
+        raise ValueError("invalid Chat model identifier")
+    return identifier
+
+
 def pin_chat_models(
     storage_path: Path,
     identifiers: Iterable[str],
@@ -1562,6 +1585,113 @@ def pin_chat_models(
             "changed": changed,
             "backup": str(backup_path) if backup_path else "",
             "restartRequired": changed,
+        }
+    finally:
+        connection.close()
+
+
+def select_chat_model(
+    storage_path: Path,
+    identifier: str,
+    backup_directory: Path,
+    dry_run: bool = False,
+    retention: int = 8,
+) -> dict[str, Any]:
+    selected = _valid_chat_identifier(identifier)
+    if not storage_path.is_file():
+        raise FileNotFoundError(f"code-server profile storage was not found: {storage_path}")
+
+    connection = sqlite3.connect(storage_path, timeout=30)
+    backup_path: Path | None = None
+    try:
+        connection.execute("PRAGMA busy_timeout = 30000")
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ItemTable'"
+        ).fetchone()
+        if not table:
+            raise RuntimeError(f"ItemTable is missing from code-server storage: {storage_path}")
+
+        base_key = "chat.currentLanguageModel.panel"
+        targeted_keys = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT key FROM ItemTable "
+                "WHERE key LIKE 'chat.currentLanguageModel.panel.%' "
+                "AND key NOT LIKE '%.isDefault'"
+            ).fetchall()
+        ]
+        selection_keys = [base_key, *targeted_keys]
+        current = {
+            str(row[0]): str(row[1].decode("utf-8") if isinstance(row[1], bytes) else row[1])
+            for row in connection.execute(
+                "SELECT key, value FROM ItemTable WHERE key = ? OR "
+                "(key LIKE 'chat.currentLanguageModel.panel.%' AND key NOT LIKE '%.isDefault')",
+                (base_key,),
+            ).fetchall()
+        }
+        default_keys = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT key FROM ItemTable WHERE key = ? OR key LIKE ?",
+                (f"{base_key}.isDefault", f"{base_key}.%.isDefault"),
+            ).fetchall()
+        ]
+
+        pinned = _storage_json(connection, "chatModelPinned", [])
+        if not isinstance(pinned, list):
+            pinned = []
+        pinned = [str(item) for item in pinned if isinstance(item, str)]
+        added = selected not in pinned
+
+        visibility = _storage_json(connection, "chatModelVisibility", {})
+        if not isinstance(visibility, dict):
+            visibility = {}
+        hidden = visibility.get("hiddenModels")
+        if not isinstance(hidden, list):
+            hidden = []
+        visible_hidden = [
+            str(item)
+            for item in hidden
+            if isinstance(item, str) and str(item) != selected
+        ]
+        unhidden = len(hidden) - len(visible_hidden)
+        selection_changed = any(current.get(key) != selected for key in selection_keys)
+        changed = selection_changed or bool(default_keys) or added or bool(unhidden)
+
+        if changed and not dry_run:
+            backup_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(backup_directory, 0o700)
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            stamp += f"-{time.time_ns() % 1_000_000_000:09d}"
+            backup_path = backup_directory / f"state.vscdb.select-{stamp}.bak"
+            with sqlite3.connect(backup_path) as backup:
+                connection.backup(backup)
+            os.chmod(backup_path, 0o600)
+            for key in selection_keys:
+                _store_text(connection, key, selected)
+            for key in default_keys:
+                connection.execute("DELETE FROM ItemTable WHERE key = ?", (key,))
+            if added:
+                _store_json(connection, "chatModelPinned", [*pinned, selected])
+            if unhidden:
+                visibility["hiddenModels"] = visible_hidden
+                _store_json(connection, "chatModelVisibility", visibility)
+            connection.commit()
+            backups = sorted(
+                backup_directory.glob("state.vscdb.select-*.bak"),
+                key=lambda item: item.name,
+                reverse=True,
+            )
+            for obsolete in backups[max(1, min(30, retention)) :]:
+                obsolete.unlink(missing_ok=True)
+        return {
+            "identifier": selected,
+            "selectionKeys": len(selection_keys),
+            "added": int(added),
+            "unhidden": unhidden,
+            "changed": changed,
+            "backup": str(backup_path) if backup_path else "",
+            "restartRequired": selection_changed,
         }
     finally:
         connection.close()
@@ -2160,8 +2290,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="standalone mode: JSON array of successful Chat model identifiers to pin",
     )
     parser.add_argument(
+        "--select-model",
+        help="standalone mode: persist one fully-qualified Chat model as selected",
+    )
+    parser.add_argument(
         "--storage-file",
-        help="exact code-server profile state.vscdb path for --pin-models-file",
+        help="exact code-server profile state.vscdb path for pin/select standalone modes",
     )
     parser.add_argument(
         "--pin-backup-dir",
@@ -2241,6 +2375,28 @@ def main(argv: list[str] | None = None) -> int:
             retention=args.pin_backup_retention,
         )
         print("PIN_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return 0
+
+    if args.select_model:
+        settings_path = settings_file_path(args)
+        storage_path = (
+            Path(args.storage_file).expanduser()
+            if args.storage_file
+            else profile_storage_path(settings_path)
+        )
+        backup_directory = (
+            Path(args.pin_backup_dir).expanduser()
+            if args.pin_backup_dir
+            else storage_path.parent / "copilot-models-pin-backups"
+        )
+        result = select_chat_model(
+            storage_path,
+            args.select_model,
+            backup_directory,
+            dry_run=args.dry_run,
+            retention=args.pin_backup_retention,
+        )
+        print("SELECT_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return 0
 
     providers = read_catalog(args.catalog, args.include_non_chat)
