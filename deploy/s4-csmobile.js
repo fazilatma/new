@@ -469,6 +469,122 @@
     return b;
   }
 
+  
+  var aiChatModal = null;
+  function toggleAiChatModal() {
+    if (!aiChatModal) { buildAiChatModal(); }
+    aiChatModal.classList.toggle('s4-open');
+    if (aiChatModal.classList.contains('s4-open')) {
+      var inp = byId('s4mob-ai-input');
+      if (inp) { setTimeout(function () { inp.focus(); }, 150); }
+    }
+  }
+
+  function buildAiChatModal() {
+    aiChatModal = el('div', '');
+    aiChatModal.id = 's4mob-ai-modal';
+    
+    var pane = el('div', 's4-ai-pane');
+    
+    // Header
+    var head = el('div', 's4-ai-head');
+    head.appendChild(el('span', 's4-ai-htitle', '\uD83E\uDD16 AI Assistant & Model Tester'));
+    var xbtn = el('button', 's4-ai-close', '\u2715');
+    xbtn.onclick = toggleAiChatModal;
+    head.appendChild(xbtn);
+    pane.appendChild(head);
+    
+    // Toolbar with 3 requested actions: Test all, Import JSON, Sync GitHub
+    var toolbar = el('div', 's4-ai-tools');
+    
+    var btnTest = el('button', 's4-ai-toolbtn s4-btn-green', '\uD83E\uDDEA Test All Models');
+    btnTest.onclick = function() {
+      toast('\uD83E\uDDEA Testing all models...');
+      fetch('http://127.0.0.1:8080/?ai_test_start=1&only_untested=0', {mode: 'no-cors'}).catch(function(){});
+      aiAddMsg('system', 'Started live testing across all models in background.');
+    };
+    toolbar.appendChild(btnTest);
+    
+    var btnImport = el('button', 's4-ai-toolbtn s4-btn-cyan', '\uD83D\uDCE5 Import AI JSON');
+    btnImport.onclick = function() {
+      var j = prompt('Paste your AI Providers JSON string:');
+      if (j && j.trim()) {
+        fetch('http://127.0.0.1:8080/', {
+          method: 'POST',
+          body: new URLSearchParams({action: 'ai_import_providers', providers_json: j})
+        }).then(function(r){return r.json();}).then(function(d){
+          aiAddMsg('system', 'Import result: ' + (d.message || (d.ok ? 'Success' : d.error)));
+        }).catch(function(e){
+          aiAddMsg('system', 'Import submitted to local scraper service.');
+        });
+      }
+    };
+    toolbar.appendChild(btnImport);
+
+    var btnSync = el('button', 's4-ai-toolbtn s4-btn-purple', '\u27F3 Sync GitHub');
+    btnSync.onclick = function() {
+      toast('\u27F3 Syncing latest repo changes...');
+      fetch('/__s4mobile/update', {method: 'POST'}).then(function(){
+        aiAddMsg('system', 'GitHub repo sync triggered.');
+      }).catch(function(){
+        aiAddMsg('system', 'Sync signal dispatched.');
+      });
+    };
+    toolbar.appendChild(btnSync);
+    pane.appendChild(toolbar);
+    
+    // Message log
+    var logBox = el('div', 's4-ai-log');
+    logBox.id = 's4mob-ai-log';
+    pane.appendChild(logBox);
+    
+    // Input row
+    var inRow = el('div', 's4-ai-inrow');
+    var inArea = el('textarea', 's4-ai-input');
+    inArea.id = 's4mob-ai-input';
+    inArea.placeholder = 'Message AI models...';
+    inArea.rows = 2;
+    inArea.onkeydown = function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMsg(); }
+    };
+    inRow.appendChild(inArea);
+    
+    var sendBtn = el('button', 's4-ai-send', '\u27A4');
+    sendBtn.onclick = sendAiMsg;
+    inRow.appendChild(sendBtn);
+    pane.appendChild(inRow);
+    
+    aiChatModal.appendChild(pane);
+    document.body.appendChild(aiChatModal);
+  }
+
+  function aiAddMsg(role, text) {
+    var b = byId('s4mob-ai-log');
+    if (!b) return;
+    var m = el('div', 's4-ai-msg s4-msg-' + role);
+    m.textContent = text;
+    b.appendChild(m);
+    b.scrollTop = b.scrollHeight;
+  }
+
+  function sendAiMsg() {
+    var inp = byId('s4mob-ai-input');
+    if (!inp) return;
+    var q = inp.value.trim();
+    if (!q) return;
+    inp.value = '';
+    aiAddMsg('user', q);
+    
+    fetch('http://127.0.0.1:8080/', {
+      method: 'POST',
+      body: new URLSearchParams({action: 'ai_chat_send', message: q, model: ''})
+    }).then(function(r){ return r.json(); }).then(function(d){
+      aiAddMsg('bot', d.reply || d.message || JSON.stringify(d));
+    }).catch(function(e){
+      aiAddMsg('bot', 'Connecting directly to local scraper AI: ' + (e.message || 'offline'));
+    });
+  }
+
   function buildTop() {
     topBar = el('div', '');
     topBar.id = 's4mob-top';
@@ -484,6 +600,7 @@
     t.id = 's4mob-title';
     t.textContent = 'code-server';
     topBar.appendChild(t);
+    topBar.appendChild(button('s4-btn', '\uD83D\uDCAC', 'AI Chat & Models', toggleAiChatModal));
     topBar.appendChild(el('span', 's4-spacer'));
     topBar.appendChild(button('s4-btn', state.keys ? '\u2328' : '\u2328\u0338', 'Extra keys row', function () {
       state.keys = !state.keys; savePref(); setBarVars(); toast(state.keys ? 'Extra keys shown' : 'Extra keys hidden');

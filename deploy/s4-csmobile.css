@@ -191,3 +191,49 @@ body:not(:has(.monaco-workbench)) { zoom: var(--s4-zoom); }
   border: 1px solid var(--s4-border); opacity: 0; transition: opacity .18s; pointer-events: none;
 }
 #s4mob-toast.s4-show { opacity: 1; }
+
+
+/* AI Chat & Models modal embedded inside code-server */
+#s4mob-ai-modal {
+  position: fixed; inset: 0; z-index: 2147483005; display: none;
+  background: rgba(0, 0, 0, 0.65); align-items: flex-end; justify-content: center;
+}
+#s4mob-ai-modal.s4-open { display: flex; }
+#s4mob-ai-modal .s4-ai-pane {
+  width: 100%; max-width: 600px; height: 80vh; max-height: 650px; background: #0f172a;
+  border-top: 1px solid var(--s4-border); border-radius: 16px 16px 0 0;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.s4-ai-head {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: #1e293b;
+}
+.s4-ai-htitle { font-weight: 700; font-size: 14px; color: #38bdf8; }
+.s4-ai-close { background: transparent; border: 0; color: #94a3b8; font-size: 16px; cursor: pointer; padding: 4px; }
+.s4-ai-tools {
+  display: flex; gap: 6px; padding: 8px 10px; background: #111c31; border-bottom: 1px solid rgba(255, 255, 255, 0.06); flex-wrap: wrap;
+}
+.s4-ai-toolbtn {
+  font-size: 11px; font-weight: 600; padding: 5px 9px; border-radius: 6px; border: 0; cursor: pointer; color: #fff;
+}
+.s4-btn-green { background: #15803d; }
+.s4-btn-cyan { background: #0891b2; }
+.s4-btn-purple { background: #7e22ce; }
+.s4-ai-log {
+  flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #0b1120;
+}
+.s4-ai-msg {
+  max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; word-break: break-word;
+}
+.s4-msg-user { align-self: flex-end; background: #2563eb; color: #fff; }
+.s4-msg-bot { align-self: flex-start; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
+.s4-msg-system { align-self: center; font-size: 11px; color: #94a3b8; background: rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 4px 8px; }
+.s4-ai-inrow {
+  display: flex; gap: 8px; padding: 10px; background: #1e293b; border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.s4-ai-input {
+  flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #fff; padding: 8px 10px; font-size: 13px; resize: none; font-family: inherit;
+}
+.s4-ai-send {
+  background: #38bdf8; border: 0; border-radius: 8px; color: #0f172a; font-weight: 800; font-size: 15px; width: 44px; cursor: pointer;
+}
