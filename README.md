@@ -28,11 +28,12 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
   | bash -s -- --prompt --enable-terminal
 ```
 
-`--enable-terminal` configures Termux Bash for code-server's integrated terminal
-and Copilot Agent's run-in-terminal tool without adding an unrestricted command
-approval rule. The Termux profile uses a clean, non-login Bash startup and the
-private `$PREFIX/tmp` directory to avoid code-server startup `Permission denied`
-failures. It also installs Copilot Models Toolbox **v0.1.5** with
+`--enable-terminal` configures a safe Termux shell for code-server's integrated
+terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted command
+approval rule. The Termux profile launches the argument-free `$PREFIX/bin/sh`
+and uses private `$PREFIX/tmp`, avoiding both Bash-argument exit-code-1 and
+startup `Permission denied` failures. It also installs Copilot Models Toolbox
+**v0.1.6** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, and **🔄 Sync GitHub** in the
 Copilot Chat title toolbar. At the end it prints
 the Termux commands needed to restart code-server. API keys are entered without

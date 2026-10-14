@@ -76,7 +76,7 @@ Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
 > **Credential storage:** the Bash helper briefly stages imported `apiKey` values
-> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.5 activates at
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.6 activates at
 > code-server startup, passes each key through VS Code's
 > `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
 > `${input:chat.lm.secret.…}` reference. This is required by current code-server:
@@ -127,10 +127,10 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.5** through
+The launcher also installs **Copilot Models Toolbox 0.1.6** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.5`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.6`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
 remain available in the Command Palette:
@@ -167,11 +167,11 @@ key import requires Toolbox. To verify the installed version from Termux:
 
 ```bash
 code-server --list-extensions --show-versions \
-  | grep '^fazilatma.copilot-models-toolbox@0\.1\.5$'
+  | grep '^fazilatma.copilot-models-toolbox@0\.1\.6$'
 ```
 
-`--enable-terminal` detects `$PREFIX/bin/bash` on Termux and merges these values
-into the active profile's `settings.json`:
+`--enable-terminal` detects the Termux prefix and executable shells, then merges
+these values into the active profile's `settings.json`:
 
 - `terminal.integrated.profiles.linux`
 - `terminal.integrated.defaultProfile.linux`
@@ -189,14 +189,17 @@ Android/shared-storage value inherited by code-server. This lets terminals run
 the same installed Termux commands and access the same home/storage environment
 as a normal Termux session.
 
-The managed Termux Bash profile uses `--noprofile --norc`, never `-l`, and turns
-off automatic VS Code shell-script injection. This safe startup bypasses an
-inaccessible `.profile`/`.bashrc` or shell-integration file that can print
-`Permission denied` and terminate before a prompt appears. The Agent terminal
-tool can use its no-shell-integration execution fallback; only shell decorations
-and enhanced command detection are unavailable. After the prompt works, a user
-who needs their aliases may explicitly run `source ~/.bashrc` and fix any error
-reported by that file before removing the safe arguments manually.
+The managed **Termux Safe Shell** profile directly launches
+`$PREFIX/bin/sh` with no `args` property. Version 0.1.6 replaces the earlier
+`bash --noprofile --norc` profile because some code-server/Android PTY builds
+terminated that otherwise valid argument list with exit code 1. `ENV` and
+`BASH_ENV` are removed, automatic VS Code shell-script injection stays off, and
+the old helper-managed `Termux Bash` profile is removed. This avoids startup
+files entirely while retaining Termux commands, paths, storage access, and a
+working Agent terminal fallback. Shell decorations and enhanced command
+detection are unavailable; Bash remains available from the safe prompt with
+`bash --noprofile --norc -i` (the arguments are then handled by `sh`, not the PTY
+profile launcher).
 
 Unrelated terminal profiles and all approval rules are preserved. The helper
 does not add an approve-all pattern to `chat.tools.terminal.autoApprove`, so

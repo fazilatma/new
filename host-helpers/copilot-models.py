@@ -33,7 +33,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.5"
+HELPER_VERSION = "0.1.6"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -1184,18 +1184,22 @@ def terminal_enabled_settings(
 ) -> dict[str, Any]:
     settings = copy.deepcopy(existing)
     is_termux = bool(os.environ.get("PREFIX")) and "/com.termux/" in shell_path
-    profile_name = "Termux Bash" if is_termux else "Bash"
-    # Termux code-server can inherit a broken or inaccessible Bash startup file,
-    # and VS Code's injected shell-integration script is not reliable on every
-    # Android/code-server build.  The managed Termux profile therefore starts a
-    # clean interactive shell.  All required Termux values are supplied below,
-    # so commands do not depend on .profile/.bashrc. Users can still source a
-    # startup file manually after the prompt appears.
+    profile_name = "Termux Safe Shell" if is_termux else "Bash"
+    # Some code-server/Android PTY builds exit immediately when a terminal
+    # profile passes Bash long options, even though the same invocation works in
+    # the Termux app. Use Termux's POSIX `sh` directly with no profile arguments
+    # and remove startup-file variables. This avoids both that argv launch bug
+    # and inaccessible Bash startup files while preserving the Termux runtime.
     profile: dict[str, Any] = {"path": shell_path}
-    terminal_env: dict[str, str] = {}
+    terminal_env: dict[str, Any] = {}
     if is_termux:
-        profile["args"] = ["--noprofile", "--norc"]
         prefix = os.environ.get("PREFIX") or str(Path(shell_path).parent.parent)
+        safe_shell = Path(prefix) / "bin" / "sh"
+        if not safe_shell.is_file() or not os.access(safe_shell, os.X_OK):
+            raise FileNotFoundError(
+                f"Termux safe shell is missing or not executable: {safe_shell}"
+            )
+        profile["path"] = str(safe_shell)
         inherited_path = os.environ.get("PATH", "")
         path_parts = [str(Path(prefix) / "bin"), str(Path(prefix) / "bin" / "applets")]
         path_parts.extend(part for part in inherited_path.split(":") if part)
@@ -1208,8 +1212,12 @@ def terminal_enabled_settings(
             # An inherited Android/shared-storage TMPDIR can cause EACCES when
             # code-server or a command creates helper scripts.
             "TMPDIR": str(Path(prefix) / "tmp"),
-            "SHELL": shell_path,
+            "SHELL": str(safe_shell),
             "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
+            # VS Code terminal-profile env values may be null to remove an
+            # inherited variable. Neither shell should load an ENV/BASH_ENV file.
+            "ENV": None,
+            "BASH_ENV": None,
         }
         for name in ("LANG", "LC_ALL", "TERMUX_VERSION"):
             value = os.environ.get(name)
@@ -1221,6 +1229,16 @@ def terminal_enabled_settings(
     if not isinstance(profiles, dict):
         profiles = {}
     profiles = copy.deepcopy(profiles)
+    if is_termux:
+        previous = profiles.get("Termux Bash")
+        if (
+            isinstance(previous, dict)
+            and previous.get("path") == shell_path
+            and previous.get("args")
+            in (None, ["-l"], ["--noprofile", "--norc"])
+        ):
+            # Remove only the profile shape managed by older helper releases.
+            profiles.pop("Termux Bash", None)
     profiles[profile_name] = profile
     settings["terminal.integrated.profiles.linux"] = profiles
     settings["terminal.integrated.defaultProfile.linux"] = profile_name
@@ -2001,7 +2019,17 @@ def main(argv: list[str] | None = None) -> int:
     if settings_path:
         print(f"Settings: {settings_path}")
     if shell_path:
-        print(f"Terminal shell: {shell_path}")
+        terminal_profile = (
+            merged_settings.get("chat.tools.terminal.terminalProfile.linux", {})
+            if isinstance(merged_settings, dict)
+            else {}
+        )
+        selected_shell = (
+            terminal_profile.get("path")
+            if isinstance(terminal_profile, dict)
+            else None
+        )
+        print(f"Terminal shell: {selected_shell or shell_path}")
     if toolbox_result:
         target, result = toolbox_result
         print(f"Copilot Models Toolbox ({result}): {target}")
@@ -2042,8 +2070,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.enable_terminal:
         print(
             "Terminal: integrated and agent profiles inherit the Termux PREFIX, "
-            "HOME, PATH, and private TMPDIR. Termux Bash starts in safe mode "
-            "without login/user startup files or shell-script injection; trust "
+            "HOME, PATH, and private TMPDIR. Termux Safe Shell launches "
+            "without Bash argv/startup files or shell-script injection; trust "
             "the workspace before using Agent mode."
         )
         print(

@@ -231,23 +231,29 @@ class TerminalSettingsTests(unittest.TestCase):
             "chat.tools.terminal.autoApprove": {"rm": False},
             "editor.fontSize": 15,
         }
-        with mock.patch.dict(os.environ, {"PREFIX": termux_prefix}):
+        with (
+            mock.patch.dict(os.environ, {"PREFIX": termux_prefix}),
+            mock.patch.object(Path, "is_file", return_value=True),
+            mock.patch("os.access", return_value=True),
+        ):
             merged = copilot_models.terminal_enabled_settings(existing, termux_bash)
         profiles = merged["terminal.integrated.profiles.linux"]
+        safe_name = "Termux Safe Shell"
+        termux_sh = termux_prefix + "/bin/sh"
         self.assertEqual(profiles["Fish"], {"path": "/usr/bin/fish"})
-        self.assertEqual(profiles["Termux Bash"]["path"], termux_bash)
-        self.assertEqual(
-            profiles["Termux Bash"]["args"], ["--noprofile", "--norc"]
-        )
-        self.assertEqual(profiles["Termux Bash"]["env"]["PREFIX"], termux_prefix)
-        self.assertEqual(
-            profiles["Termux Bash"]["env"]["TMPDIR"], termux_prefix + "/tmp"
-        )
+        self.assertNotIn("Termux Bash", profiles)
+        self.assertEqual(profiles[safe_name]["path"], termux_sh)
+        self.assertNotIn("args", profiles[safe_name])
+        self.assertEqual(profiles[safe_name]["env"]["PREFIX"], termux_prefix)
+        self.assertEqual(profiles[safe_name]["env"]["TMPDIR"], termux_prefix + "/tmp")
+        self.assertEqual(profiles[safe_name]["env"]["SHELL"], termux_sh)
+        self.assertIsNone(profiles[safe_name]["env"]["ENV"])
+        self.assertIsNone(profiles[safe_name]["env"]["BASH_ENV"])
         self.assertTrue(
-            profiles["Termux Bash"]["env"]["PATH"].startswith(termux_prefix + "/bin:")
+            profiles[safe_name]["env"]["PATH"].startswith(termux_prefix + "/bin:")
         )
         self.assertEqual(
-            merged["terminal.integrated.defaultProfile.linux"], "Termux Bash"
+            merged["terminal.integrated.defaultProfile.linux"], safe_name
         )
         self.assertTrue(merged["terminal.integrated.inheritEnv"])
         self.assertFalse(merged["terminal.integrated.shellIntegration.enabled"])
@@ -256,15 +262,14 @@ class TerminalSettingsTests(unittest.TestCase):
         )
         self.assertEqual(
             merged["chat.tools.terminal.terminalProfile.linux"]["path"],
-            termux_bash,
+            termux_sh,
         )
         self.assertEqual(
             merged["chat.tools.terminal.terminalProfile.linux"]["env"]["PREFIX"],
             termux_prefix,
         )
-        self.assertEqual(
-            merged["chat.tools.terminal.terminalProfile.linux"]["args"],
-            ["--noprofile", "--norc"],
+        self.assertNotIn(
+            "args", merged["chat.tools.terminal.terminalProfile.linux"]
         )
         self.assertTrue(merged["chat.tools.terminal.enableAutoApprove"])
         self.assertEqual(merged["chat.tools.terminal.autoApprove"], {"rm": False})
@@ -277,13 +282,15 @@ class TerminalSettingsTests(unittest.TestCase):
             },
         )
 
-    def test_termux_safe_profile_bypasses_failing_bashrc(self) -> None:
+    def test_termux_safe_profile_uses_argument_free_sh_and_bypasses_bashrc(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             prefix = root / "com.termux" / "files" / "usr"
             shell = prefix / "bin" / "bash"
+            safe_shell = prefix / "bin" / "sh"
             shell.parent.mkdir(parents=True)
             shell.symlink_to("/bin/bash")
+            safe_shell.symlink_to("/bin/sh")
             home = root / "home"
             home.mkdir()
             (home / ".bashrc").write_text("exit 77\n", encoding="utf-8")
@@ -295,16 +302,25 @@ class TerminalSettingsTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, environment, clear=True):
                 settings = copilot_models.terminal_enabled_settings({}, str(shell))
-            profile = settings["terminal.integrated.profiles.linux"]["Termux Bash"]
+            profile = settings["terminal.integrated.profiles.linux"][
+                "Termux Safe Shell"
+            ]
+            self.assertNotIn("args", profile)
             unsafe = subprocess.run(
                 [str(shell), "-i", "-c", "printf ready"],
                 env=environment,
                 capture_output=True,
                 text=True,
             )
+            safe_environment = {**environment}
+            for name, value in profile["env"].items():
+                if value is None:
+                    safe_environment.pop(name, None)
+                else:
+                    safe_environment[name] = value
             safe = subprocess.run(
-                [profile["path"], *profile["args"], "-i", "-c", "printf ready"],
-                env={**environment, **profile["env"]},
+                [profile["path"], "-i", "-c", "printf ready"],
+                env=safe_environment,
                 capture_output=True,
                 text=True,
             )
