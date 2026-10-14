@@ -73,6 +73,7 @@ const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
 const MATRIX_CRON_PULSE_FILE = __DIR__ . '/matrix_cron_pulse.json'; // v10.337
+const S4_CHAIN_STATE_FILE = __DIR__ . '/s4_server_chain.json'; // v10.361: hop/no-progress guard for server self-continuation
 const SYNC_MATRIX_CHECKPOINT_FILE = __DIR__ . '/sync_matrix_checkpoint.json.gz'; // v10.338
 const SYNC_MATRIX_FETCH_CURSOR_FILE = __DIR__ . '/sync_matrix_fetch_cache.ndjson'; // v10.347: never shared with legacy recon
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
@@ -82,6 +83,7 @@ const SYNC_MATRIX_LOCK_FILE     = __DIR__ . '/sync_matrix.lock';          // v10
 const SYNC_MATRIX_STOP_FILE     = __DIR__ . '/sync_matrix_stop.json';      // v10.131
 const SYNC_MATRIX_FIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_fix_progress.json'; // v10.118
 const SYNC_MATRIX_FIX_LOCK_FILE     = __DIR__ . '/sync_matrix_fix.lock';          // v10.117
+const SYNC_MATRIX_FIX_PENDING_FILE  = __DIR__ . '/sync_matrix_fix_pending.json';  // v10.361: fix parked behind a build on hosts without worker
 const SYNC_MATRIX_FIX_STOP_FILE     = __DIR__ . '/sync_matrix_fix_stop.json';     // v10.117
 const SYNC_MATRIX_FIX_ERRORS_FILE   = __DIR__ . '/sync_matrix_fix_errors.json';   // v10.333
 const SYNC_MATRIX_RESULT_PATCH_LOCK = __DIR__ . '/sync_matrix_result_patch.lock'; // v10.335
@@ -342,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.349';
+const APP_VERSION = '10.363';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1477,6 +1479,11 @@ function s4WorkerRunMatrixChild(array $payload): array {
             $decoded['ok']=true;$decoded['resume_needed']=true;$decoded['scheduler_wait']=true;
             $decoded['execution_mode']=$driver['mode'];return $decoded;
         }
+        $retryAfter=max(0,min(120,(int)($decoded['retry_after']??0)));
+        if($retryAfter>0){
+            s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_build','job_segment'=>$segments,
+                'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);
+        }
         /* pulse خارجی تازه: بدون وقفه و با child بعدی؛ در fallback فقط pause تنظیمی. */
         unset($decoded,$out,$part,$raw);$pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
     }while($segments<10000&&!matrixStopRequested());
@@ -1522,33 +1529,299 @@ function s4SpawnMatrixBuildChild(array $opts, bool $resume): array {
 
 /** آخرین fallback برای هاستِ بدون exec: هر برش، درخواست ادامهٔ بعدی را خودش
  * پس از آزادشدن lock صدا می‌زند؛ مرورگر هیچ نقشی در زنجیره ندارد. */
-function s4ScheduleMatrixServerContinuation(array $opts): bool {
-    if(!function_exists('curl_init'))return false;
+/** v10.361: آدرسِ خودِ همین اسکریپت از دیدِ همین درخواست (برای زنجیرهٔ ادامه). */
+function s4SelfRequestUrl(): string {
     $host=trim((string)($_SERVER['HTTP_HOST']??''));$uri=(string)($_SERVER['REQUEST_URI']??($_SERVER['SCRIPT_NAME']??''));
     $path=(string)(parse_url($uri,PHP_URL_PATH)??'');
-    if($host===''||$path===''||!preg_match('/^[A-Za-z0-9.\-:\[\]]+$/',$host))return false;
+    if($host===''||$path===''||!preg_match('/^[A-Za-z0-9.\-:\[\]]+$/',$host))return '';
     $https=!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off';
     if(!$https&&strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO']??''))==='https')$https=true;
-    $url=($https?'https':'http').'://'.$host.$path;
+    return ($https?'https':'http').'://'.$host.$path;
+}
+/** v10.361: وضعیتِ زنجیرهٔ «ادامهٔ خودکار سرور» برای هر کار (build/fix/cron).
+ * بدونِ این محافظ، یک برشِ بدونِ پیشرفت همان درخواست را چند بار در ثانیه
+ * صدا می‌زد (لاگِ زندهٔ پروداکشن: چهار تکرار در یک ثانیه، pct=2 ثابت) و
+ * سرور را پر از درخواستِ تکراری می‌کرد بدونِ اینکه جدول یک ردیف جلو برود. */
+function s4ChainStateRead(): array {
+    $d=json_decode((string)@file_get_contents(S4_CHAIN_STATE_FILE),true);
+    return is_array($d)?$d:[];
+}
+function s4ChainGuard(string $kind, string $runId, string $signature, int $maxHops=400, int $maxIdleHops=3, int $minGapMs=1200): array {
+    $all=s4ChainStateRead();$row=is_array($all[$kind]??null)?$all[$kind]:[];
+    if((string)($row['run']??'')!==$runId||$runId==='')$row=['run'=>$runId,'hops'=>0,'idle'=>0,'sig'=>'','at'=>0.0];
+    $prevAt=(float)($row['at']??0);$now=microtime(true);
+    $same=((string)($row['sig']??'')!==''&&(string)$row['sig']===$signature);
+    $row=['run'=>$runId,'hops'=>(int)($row['hops']??0)+1,'idle'=>$same?(int)($row['idle']??0)+1:0,
+        'sig'=>$signature,'at'=>$now,'prev_at'=>$prevAt,'kind'=>$kind];
+    $all[$kind]=$row;s4ChainStateWrite($all);
+    $hops=(int)$row['hops'];$idle=(int)$row['idle'];
+    $reason=$hops>$maxHops?'max_hops':($idle>=$maxIdleHops?'no_progress':'');
+    $waitMs=$prevAt>0?max(0,(int)round($minGapMs-($now-$prevAt)*1000)):0;
+    return ['allow'=>$reason==='','reason'=>$reason,'hops'=>$hops,'idle'=>$idle,'max_hops'=>$maxHops,
+        'wait_ms'=>$waitMs,'run'=>$runId,'sig'=>$signature];
+}
+function s4ChainStateWrite(array $st): void { writeJsonFile(S4_CHAIN_STATE_FILE, $st); }
+/** شروعِ تازهٔ کاربر همیشه زنجیره را صفر می‌کند تا «ادامه» بعد از توقفِ
+ * محافظ، از همان checkpoint با شمارندهٔ صفر راه بیفتد. */
+function s4ChainReset(string $kind): void {
+    $all=s4ChainStateRead();unset($all[$kind]);s4ChainStateWrite($all);
+}
+/** POST کوتاه به خودِ اسکریپت، پس از پایانِ پاسخِ همین درخواست.
+ * $holdMs عمداً بزرگ‌تر از برشِ مقصد است: روی هاستی که پردازهٔ بدونِ کلاینت
+ * را می‌کُشد، همین curl تنها «کلاینتِ زندهٔ» درخواستِ زنجیره‌شده است. */
+function s4SelfPostDeferred(string $url, string $post, int $waitMs=0, ?callable $onFailure=null, int $holdMs=25000): void {
+    if(!function_exists('curl_init')||$url==='')return;
+    $cookie=(string)($_SERVER['HTTP_COOKIE']??'');
+    $holdSec=max(5,min(180,(int)round($holdMs/1000)));
+    register_shutdown_function(static function()use($url,$post,$cookie,$waitMs,$onFailure,$holdSec){
+        if($waitMs>0)usleep(min(15000,max(0,$waitMs)*1000));
+        $ch=@curl_init($url);if(!$ch)return;
+        @curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$post,CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>$holdSec,CURLOPT_NOSIGNAL=>1,
+            CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>0,
+            CURLOPT_HTTPHEADER=>array_values(array_filter(['Content-Type: application/x-www-form-urlencoded',$cookie!==''?'Cookie: '.$cookie:'']))]);
+        @curl_exec($ch);$errno=(int)@curl_errno($ch);$err=(string)@curl_error($ch);@curl_close($ch);
+        if(in_array($errno,[5,6,7],true)&&$onFailure!==null)$onFailure($err);
+    });
+}
+function s4ScheduleMatrixServerContinuation(array $opts): bool {
+    if(!function_exists('curl_init'))return false;
+    $url=s4SelfRequestUrl();if($url==='')return false;
     $post=http_build_query([
-        'action'=>'sync_matrix_start','source'=>'manual','resume'=>'1',
+        'action'=>'sync_matrix_start','source'=>'manual','resume'=>'1','chain'=>'1',
         'parallel_destinations'=>!empty($opts['parallel_destinations'])?'1':'0',
         'live_fill'=>!empty($opts['live_fill'])?'1':'0',
         'selected_destinations'=>json_encode(array_key_exists('selected_destinations',$opts)?array_values((array)$opts['selected_destinations']):matrixNormalizeDestinations(null)),
         'slice_seconds'=>max(2,min(20,(int)($opts['slice_seconds']??8))),
     ]);
-    $cookie=(string)($_SERVER['HTTP_COOKIE']??'');
-    matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'server_chain'=>true,
-        'phase'=>'ادامهٔ خودکار سرور','log_add'=>['↻ سرور برش بعدی را مستقل از مرورگر فراخوانی می‌کند']]);
-    register_shutdown_function(static function()use($url,$post,$cookie){
-        $ch=@curl_init($url);if(!$ch)return;
-        @curl_setopt_array($ch,[CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$post,CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_CONNECTTIMEOUT=>3,CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>0,
-            CURLOPT_HTTPHEADER=>array_values(array_filter(['Content-Type: application/x-www-form-urlencoded',$cookie!==''?'Cookie: '.$cookie:'']))]);
-        @curl_exec($ch);$errno=(int)@curl_errno($ch);$err=(string)@curl_error($ch);@curl_close($ch);
-        if(in_array($errno,[5,6,7],true))matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,
+    /* v10.361: امضای پیشرفت از metadata کوچکِ checkpoint خوانده می‌شود (خودِ
+       checkpoint در فایلِ gzip جداست)، پس بدونِ hydrate کردنِ صدها مگابایت
+       می‌شود فهمید برشِ قبلی واقعاً کاری کرده یا نه. */
+    $p=matrixProgressRead(false);$cpm=is_array($p['checkpoint']??null)?$p['checkpoint']:[];
+    $sig='rows='.(int)($cpm['profile_rows']??0).';woo='.(int)($cpm['woo_page']??0)
+        .';shops='.count((array)($cpm['shop_pages']??[])).';pct='.(int)($p['pct']??0);
+    $guard=s4ChainGuard('matrix_build',(string)($p['started_at']??''),$sig);
+    if(empty($guard['allow'])){
+        $stuck=(string)$guard['reason']==='no_progress';
+        matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'server_chain'=>false,
+            'phase'=>$stuck?'chain_stuck':'chain_limit','chain_guard'=>$guard,
+            'log_add'=>[$stuck
+                ?'⛔ '.(int)$guard['idle'].' برش پیاپی بدونِ پیشرفت بود — زنجیرهٔ ادامه متوقف شد (checkpoint حفظ شد). با دکمهٔ «ادامه» یا تیکِ رابط از همان‌جا دنبال می‌شود'
+                :'⛔ زنجیرهٔ ادامه به سقف '.(int)$guard['max_hops'].' برش رسید — با «ادامه» از همان checkpoint دنبال می‌شود']]);
+        return false;
+    }
+    matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'server_chain'=>true,'chain_guard'=>$guard,
+        'phase'=>'ادامهٔ خودکار سرور','log_add'=>['↻ سرور برش بعدی را مستقل از مرورگر فراخوانی می‌کند (برش '.(int)$guard['hops'].')']]);
+    s4SelfPostDeferred($url,$post,(int)$guard['wait_ms'],static function(string $err){
+        matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,
             'phase'=>'yielded','log_add'=>['⚠️ ادامهٔ داخلی سرور وصل نشد: '.$err]]);
     });
+    return true;
+}
+/** v10.361: همان زنجیره برای «اصلاح مغایرت» — روی هاستِ بدونِ exec هیچ مسیر
+ * دیگری برای ادامهٔ اصلاح وجود ندارد. */
+function s4ScheduleMatrixFixServerContinuation(array $opts): bool {
+    if(!function_exists('curl_init'))return false;
+    $url=s4SelfRequestUrl();if($url==='')return false;
+    $post=http_build_query([
+        'action'=>'sync_matrix_fix_start','source'=>(string)($opts['source']??'manual'),'resume'=>'1','chain'=>'1',
+        'scope'=>(string)($opts['scope']??'all'),'delay_ms'=>(int)($opts['delay_ms']??180),
+        'duplicate_keep'=>(string)($opts['duplicate_keep']??'newest'),
+        'selected_destinations'=>json_encode(array_values((array)($opts['selected_destinations']??[]))),
+        'filters_json'=>json_encode(is_array($opts['view_filters']??null)?$opts['view_filters']:[],JSON_UNESCAPED_UNICODE),
+        'min_matrix_generated_at'=>(int)($opts['min_matrix_generated_at']??0),
+    ]);
+    $p=matrixFixProgressRead();$cp=is_array($p['checkpoint']??null)?$p['checkpoint']:[];
+    $sig='cur='.(int)($cp['cur']??$p['cur']??0).';done='.count((array)($cp['done_jobs']??[]))
+        .';att='.count((array)($cp['attempted_jobs']??[])).';pct='.(int)($p['pct']??0);
+    $guard=s4ChainGuard('matrix_fix',(string)($p['started_at']??''),$sig);
+    if(empty($guard['allow'])){
+        matrixFixProgress(['running'=>false,'done'=>false,'yielded'=>true,'partial'=>true,'server_chain'=>false,
+            'phase'=>(string)$guard['reason']==='no_progress'?'chain_stuck':'chain_limit','chain_guard'=>$guard,
+            'log_add'=>[(string)$guard['reason']==='no_progress'
+                ?'⛔ '.(int)$guard['idle'].' برش پیاپیِ اصلاح بدونِ پیشرفت بود — زنجیره متوقف شد (checkpoint حفظ شد)'
+                :'⛔ زنجیرهٔ اصلاح به سقف '.(int)$guard['max_hops'].' برش رسید — با «ادامه» از همان checkpoint دنبال می‌شود']]);
+        return false;
+    }
+    matrixFixProgress(['running'=>true,'done'=>false,'yielded'=>false,'server_chain'=>true,'chain_guard'=>$guard,
+        'phase'=>'ادامهٔ خودکار سرور','log_add'=>['↻ سرور برش بعدیِ اصلاح را مستقل از مرورگر فراخوانی می‌کند (برش '.(int)$guard['hops'].')']]);
+    s4SelfPostDeferred($url,$post,(int)$guard['wait_ms']);
+    return true;
+}
+/** v10.361: قفلِ غیرانحصاری — آیا همین لحظه پردازهٔ دیگری مالک این فایل است؟ */
+function s4LockHeld(string $file): bool {
+    $fp=@fopen($file,'c');if(!$fp)return false;
+    $free=@flock($fp,LOCK_EX|LOCK_NB);
+    if($free)@flock($fp,LOCK_UN);
+    @fclose($fp);
+    return !$free;
+}
+/* v10.361: درخواستِ اصلاحی که باید پشتِ یک build ناتمام/لازم اجرا شود و
+   worker/صف دائمی برای نگه‌داشتنش وجود ندارد. روی دیسک می‌ماند تا همان
+   زنجیرهٔ سرور یا تیکِ رابط، بلافاصله پس از آماده‌شدنِ نتیجه اجرایش کند. */
+function matrixFixPendingSave(array $opts): void {
+    $opts['saved_at']=time();
+    writeJsonFile(SYNC_MATRIX_FIX_PENDING_FILE,$opts);
+}
+function matrixFixPendingLoad(): array {
+    $d=json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PENDING_FILE),true);
+    return is_array($d)?$d:[];
+}
+function matrixFixPendingClear(): void { @unlink(SYNC_MATRIX_FIX_PENDING_FILE); }
+/** یک برشِ درون‌درخواستیِ ساختِ جدول؛ همان مسیری که worker/child می‌رفتند،
+ * فقط مالکش همان request وب است (هاستِ بدونِ exec). */
+function matrixBuildInlineSlice(array $opts, int $sliceSeconds = 8): array {
+    $slice=max(2,min(20,(int)($opts['slice_seconds']??$sliceSeconds)));
+    $run=$opts;
+    $run['source']='ops_tick';$run['background']=false;$run['slice_seconds']=$slice;
+    $run['run_started_at']=microtime(true);
+    $res=matrixJobRun($run);
+    if(is_array($res)&&!empty($res['yielded'])&&!matrixStopRequested())s4ScheduleMatrixServerContinuation($run);
+    return is_array($res)?$res:['ok'=>false,'error'=>'matrix_build_no_result'];
+}
+/** یک برشِ درون‌درخواستیِ «اصلاح مغایرت». lock شکست‌خورده یعنی اجرای فعالِ
+ * دیگری مالک است؛ هرگز اصلاحِ موازی ساخته نمی‌شود. */
+function matrixFixInlineSlice(array $opts, int $maxItems = 20): array {
+    $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');
+    if(!$fp||!@flock($fp,LOCK_EX|LOCK_NB)){if($fp)@fclose($fp);return ['ok'=>false,'running'=>true,'error'=>'matrix_fix_lock_held'];}
+    try{
+        $prev=matrixFixProgressRead();
+        $cp=is_array($prev['checkpoint']??null)?$prev['checkpoint']:(is_array($opts['checkpoint']??null)?$opts['checkpoint']:null);
+        if(!is_array($cp))$cp=['scope'=>(string)($opts['scope']??'all'),'duplicate_keep'=>(string)($opts['duplicate_keep']??'newest'),
+            'view_filters'=>is_array($opts['view_filters']??null)?$opts['view_filters']:[],'done_jobs'=>[],'attempted_jobs'=>[],'started_at'=>time()];
+        $run=$opts;$run['checkpoint']=$cp;
+        $run['source']=(string)($opts['source']??'ops_tick');
+        $run['max_items']=max(3,min(60,(int)($opts['max_items']??$maxItems)));
+        matrixFixStopClear();
+        matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'yielded'=>false,'server_chain'=>false,
+            'phase'=>'برش درون‌درخواستی','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_inline','job'=>'fix',
+            'scope'=>(string)($run['scope']??'all'),'delay_ms'=>(int)($run['delay_ms']??180),
+            'selected_destinations'=>array_values((array)($run['selected_destinations']??[])),
+            'started_at'=>(int)($cp['started_at']??$prev['started_at']??time()),'checkpoint'=>$cp]);
+        $res=matrixFixRun($run);
+        if(is_array($res)&&!empty($res['yielded'])&&!empty($res['resume_needed'])&&!matrixFixStopRequested())
+            s4ScheduleMatrixFixServerContinuation($run);
+        return is_array($res)?$res:['ok'=>false,'error'=>'matrix_fix_no_result'];
+    }catch(Throwable $e){
+        $st=matrixFixProgressRead();
+        matrixFixProgress(['running'=>false,'done'=>true,'stale'=>true,'error'=>$e->getMessage(),
+            'checkpoint'=>is_array($st['checkpoint']??null)?$st['checkpoint']:null,
+            'log_add'=>['❌ خطای برش اصلاح: '.$e->getMessage().' — checkpoint حفظ شد']]);
+        return ['ok'=>false,'error'=>$e->getMessage()];
+    }finally{@flock($fp,LOCK_UN);@fclose($fp);}
+}
+
+/* =====================================================================
+ *  v10.361: کرانِ قابلِ ادامه روی هاستی که driver ماندگار ندارد
+ *
+ *  شواهدِ زندهٔ پروداکشن (اندپوینت‌ها):
+ *    ?ops_feedback=1 → worker.active=false · actions.worker.error=exec_disabled · cron.stale=true
+ *  و خودِ کد (نگارِ v10.61) می‌گوید هاست پردازهٔ بدونِ کلاینت را در چند
+ *  ثانیه می‌کُشد. cron_run اما دقیقاً با finishRequestNow از کلاینت جدا
+ *  می‌شد و «بعد» سراغ استخراج/مغایرت‌گیری/ارسال می‌رفت ⇒ کرانِ داخلی به
+ *  هیچ‌کدام نمی‌رسید و کارها «بعد از مدت کوتاهی» متوقف می‌ماندند.
+ *
+ *  حالا: (۱) وقتی جداشدن امن نیست، اتصال باز می‌ماند و ndjson ضربان
+ *  می‌زند؛ (۲) هر تیکِ کران یک برشِ زمانیِ محدود است؛ (۳) برشِ بعدی با
+ *  یک POST کوتاه به خودِ اسکریپت زنجیره می‌شود، با همان محافظِ hop/
+ *  بی‌پیشرفتی که برای ماتریس اضافه شد.
+ * ===================================================================== */
+function s4CronSliceSeconds(?array $cn = null): int {
+    $cn = $cn ?? loadConnections();
+    return max(5, min(120, (int)($cn['cron_slice_sec'] ?? 25)));
+}
+function s4CronSliceExpired(): bool {
+    $d = (float)($GLOBALS['_cronSliceDeadline'] ?? 0);
+    return $d > 0 && microtime(true) >= $d;
+}
+/** امضای پیشرفتِ کران از مهرِ زمانیِ فایل‌های وضعیت — ارزان و بدونِ خواندنِ
+ * صدها مگابایت داده؛ اگر هیچ فایلی تکان نخورد یعنی برش بی‌پیشرفت بوده. */
+function s4CronProgressSignature(): string {
+    $parts = [];
+    foreach ([EXTRACT_PROGRESS_FILE, SYNC_MATRIX_PROGRESS_FILE, SYNC_MATRIX_FIX_PROGRESS_FILE,
+              BSL_PROGRESS_FILE, WOO_PROGRESS_FILE] as $f) {
+        $parts[] = is_file($f) ? (int)@filemtime($f) : 0;
+    }
+    $q = __DIR__ . '/extract_queue.json';
+    $parts[] = is_file($q) ? (int)@filemtime($q) : 0;
+    return implode(',', $parts);
+}
+function s4ScheduleCronContinuation(array $results = []): bool {
+    if (isCliRun() || !function_exists('curl_init')) return false;
+    if (!empty($GLOBALS['_cronChainDisabled'])) return false;
+    $url = s4SelfRequestUrl();
+    if ($url === '') return false;
+    $hop = max(0, (int)($_GET['chain_hop'] ?? $_POST['chain_hop'] ?? 0)) + 1;
+    $guard = s4ChainGuard('cron', (string)($_GET['chain_run'] ?? $_POST['chain_run'] ?? 'auto'), s4CronProgressSignature(), 600, 3, 4000);
+    if (empty($guard['allow'])) {
+        $results['chain_stopped'] = (string)$guard['reason'];
+        return false;
+    }
+    $results['chain_hop'] = $hop;
+    $post = http_build_query(['action' => 'cron_run', 'chain' => '1', 'chain_hop' => $hop,
+        'chain_run' => (string)($_GET['chain_run'] ?? $_POST['chain_run'] ?? 'auto'),
+        'only' => (string)($_GET['only'] ?? '')]);
+    s4SelfPostDeferred($url, $post, (int)$guard['wait_ms'], null, (s4CronSliceSeconds() + 20) * 1000);
+    return true;
+}
+/** v10.361: آیا بعد از این تیک هنوز کاری روی زمین مانده؟ فقط در این حالت
+ * پرشِ بعدی زنجیره می‌شود — وگرنه کرانِ مرورگر/بیرونی بی‌دلیل هر چند ثانیه
+ * یک request تازه می‌سازد. ارزان است: metadata فایل‌های پیشرفت. */
+function s4CronWorkPending(): array {
+    $why = [];
+    if (s4CronSliceExpired()) $why[] = 'slice';
+    try {
+        $mp = matrixProgressRead(false);
+        if (!empty($mp['running']) && s4LockHeld(SYNC_MATRIX_LOCK_FILE)) $why[] = 'matrix_build_active';
+        elseif (!empty($mp['running']) || !empty($mp['yielded'])) $why[] = 'matrix_build';
+    } catch (Throwable $e) {}
+    try {
+        if (function_exists('matrixFixPendingLoad') && matrixFixPendingLoad()) $why[] = 'matrix_fix_pending';
+        $fp = function_exists('matrixFixProgressRead') ? matrixFixProgressRead() : [];
+        if (!empty($fp['running']) || (!empty($fp['yielded']) && !empty($fp['resume_needed']))) $why[] = 'matrix_fix';
+    } catch (Throwable $e) {}
+    return array_values(array_unique($why));
+}
+/** v10.361: ادامهٔ زنجیره‌ایِ «تستِ مدل‌های هوش مصنوعی».
+ *
+ *  گزارشِ کاربر و اندپوینتِ زندهٔ پروداکشن (?ai_test_status=1):
+ *    running=false · done=true · stalled=true · tested=0 · idle_sec=339
+ *    summary=«گیر کرد (پردازهٔ پس‌زمینه ۳۳۹ ثانیه پاسخ نداد)»
+ *  یعنی تست با صفر مدلِ تست‌شده مرده بود: ai_test_start پاسخ را زود
+ *  می‌فرستاد و بعد کلِ ۳۵۵ مدل را در یک پردازهٔ بدونِ کلاینت اجرا می‌کرد؛
+ *  هاست همان را می‌کُشت و چون وضعیت فقط پایانِ هر «دور» ذخیره می‌شد،
+ *  حتی نتیجهٔ دورهای موفق هم روی دیسک نمی‌نشست.
+ *
+ *  حالا هر برشِ تست سقفِ زمانی دارد و پرشِ بعدی به اندپوینتِ «ادامه از
+ *  تست‌نشده‌ها» زنجیره می‌شود؛ محافظِ hop/بی‌پیشرفتی هم جلوی حلقهٔ داغ را
+ *  می‌گیرد. */
+function s4ScheduleAiTestContinuation(array $st): bool {
+    if (isCliRun() || !function_exists('curl_init')) return false;
+    if (!empty($GLOBALS['_aiTestChainDisabled'])) return false;
+    $base = s4SelfRequestUrl();
+    if ($base === '') return false;
+    $hop = max(0, (int)($_GET['chain_hop'] ?? $_POST['chain_hop'] ?? 0)) + 1;
+    $sig = 'tested=' . (int)($st['tested'] ?? 0) . ';avail=' . (int)($st['available'] ?? 0)
+         . ';fail=' . (int)($st['failed'] ?? 0) . ';round=' . (int)($st['round'] ?? 0);
+    $guard = s4ChainGuard('ai_test', (string)($st['started_at'] ?? ''), $sig, 400, 3, 2500);
+    if (empty($guard['allow'])) {
+        $st['running'] = false; $st['done'] = true; $st['sliced'] = false;
+        $st['resume_needed'] = true; $st['chain_stopped'] = (string)$guard['reason'];
+        $st['summary'] = ((string)$guard['reason'] === 'no_progress'
+                ? 'ادامهٔ خودکار متوقف شد — ' . (int)$guard['idle'] . ' برشِ پیاپی بدونِ پیشرفت بود'
+                : 'ادامهٔ خودکار به سقفِ ' . (int)$guard['max_hops'] . ' برش رسید')
+            . ' · ' . (int)($st['tested'] ?? 0) . ' مدل تست شد — با «ادامه» از همان‌جا دنبال می‌شود';
+        aiTestStateSave($st);
+        return false;
+    }
+    $st['chain_hop'] = $hop;
+    $st['chain_guard'] = ['hops' => (int)$guard['hops'], 'idle' => (int)$guard['idle'],
+        'max_hops' => (int)$guard['max_hops'], 'reason' => ''];
+    $st['summary'] = 'برشِ ' . (int)$guard['hops'] . ' تمام شد — ' . (int)($st['tested'] ?? 0)
+        . ' مدل تست شده؛ ادامهٔ خودکار از مدل‌های تست‌نشده در راه است';
+    aiTestStateSave($st);
+    $url = $base . '?ai_test_unstick=1&chain=1&resume=1&chain_hop=' . $hop;
+    s4SelfPostDeferred($url, http_build_query(['chain_hop' => (string)$hop]), (int)$guard['wait_ms'], null, 120000);
     return true;
 }
 
@@ -1608,15 +1881,99 @@ function matrixCronPulseRead(): array {
 function matrixCronPulseFresh(?array $cfg=null): bool {
     $cfg=$cfg??matrixExecutionCfg();$p=matrixCronPulseRead();return (int)($p['at']??0)>0&&(time()-(int)$p['at'])<=(int)$cfg['lease_sec'];
 }
+/* =====================================================================
+ *  v10.361: driver واقعی هاست — ریشهٔ «مغایرت‌گیری اصلاً حرکت نمی‌کند»
+ *
+ *  گزارشِ زندهٔ اندپوینت‌ها روی نصبِ پروداکشن:
+ *    ?ops_feedback=1        → worker.active=false · actions.worker.error=exec_disabled · cron.stale=true
+ *    ?matrix_execution_status=1 → mode=cron_only · cron_fresh=false · can_run=false
+ *    ?sync_matrix_feedback=1 → running=true · pct=2 · profile_rows=0 · لاگ‌ها هر ثانیه تکرار
+ *
+ *  یعنی روی این هاست exec بسته است (worker دائمی و child مستقل ساخته
+ *  نمی‌شود) و کرانِ بیرونی هم اجرا نمی‌شود، ولی execution_mode روی
+ *  cron_only ذخیره شده. در آن حالت matrixSliceExpired() در همان اولین
+ *  تکرار true می‌شد، matrixBuild بدون یک ردیف کار yield می‌کرد و
+ *  «ادامهٔ خودکار سرور» همان درخواست را بی‌پایان و بدون پیشرفت تکرار
+ *  می‌کرد — از بیرون دقیقاً «درصد روی ۲ یخ زده».
+ *
+ *  حالا اگر هیچ driver ماندگاری وجود نداشته باشد (worker زنده، exec باز،
+ *  یا کرانِ بیرونیِ تازه) همان request وب مالک برش می‌شود: can_run=true
+ *  و accelerated=false. به‌محض اینکه کران/worker واقعی برگردد، تصمیم به
+ *  حالتِ ذخیره‌شده برمی‌گردد و execution_mode کاربر هرگز بازنویسی نمی‌شود.
+ * ===================================================================== */
+/** آیا این هاست اصلاً می‌تواند پردازهٔ جدا بسازد (worker/child)؟ */
+function s4CanSpawnProcess(): bool {
+    return function_exists('exec') || function_exists('proc_open') || function_exists('shell_exec');
+}
+/** آیا پایانِ رسمیِ request (بدونِ کشتنِ پردازه) در دسترس است؟ */
+function s4CanFinishRequest(): bool {
+    return function_exists('fastcgi_finish_request') || function_exists('litespeed_finish_request');
+}
+/** کارِ جداشده (کلاینت رفته) روی این هاست زنده می‌ماند؟ تنها معیارِ امن برای
+ * انتخاب بین finishRequestNow و پُلِ مرورگر (ndjson). */
+function s4CanDetachWork(): bool {
+    return isCliRun() || s4CanSpawnProcess() || s4CanFinishRequest();
+}
+/** کرانِ بیرونیِ تازه: آخرین اجرای ثبت‌شدهٔ cron_run روی دیسک. */
+function s4CronFresh(int $maxAge = 900): bool {
+    $f = __DIR__ . '/cron_last_run.json';
+    if (!is_file($f)) return false;
+    $at = (int)@filemtime($f);
+    return $at > 0 && (time() - $at) <= $maxAge;
+}
+/** آخرین ضربانِ کرانِ *واقعی*. pulse با منبع mode_switch کارِ رابط است و
+ * هیچ‌وقت شاهدِ وجودِ کران بیرونی حساب نمی‌شود. */
+function s4ExternalCronPulseAge(): int {
+    $p = matrixCronPulseRead();
+    $at = (int)($p['at'] ?? 0);
+    if ($at <= 0) return PHP_INT_MAX;
+    $src = (string)($p['source'] ?? '');
+    if ($src !== '' && strncmp($src, 'external', 8) !== 0) return PHP_INT_MAX;
+    return max(0, time() - $at);
+}
+/** driver ماندگار برای build/fix ماتریس: worker زنده، exec باز، یا کرانِ
+ * *بیرونیِ* تازه. نکتهٔ v10.361: تازگیِ cron_last_run.json شاهدِ driver
+ * نیست — آن فایل را تیکِ مرورگر (ops_tick) و child داخلی هم می‌نویسند و
+ * هیچ‌کدام قرار نیست جایِ «اجرای مستقلِ ماتریس» را بگیرند؛ اگر آن را اینجا
+ * حساب کنیم، ماتریس دوباره به همان بن‌بستِ can_run=false برمی‌گردد. */
+function matrixRunnerAvailable(): bool {
+    if (function_exists('s4WorkerIsActive') && s4WorkerIsActive()) return true;
+    if (s4CanSpawnProcess()) return true;
+    /* کرانی که تا یک ساعت پیش واقعاً رسیده، lease کوتاه دارد ولی برمی‌گردد؛
+       در آن فاصله کار باید منتظر بماند، نه اینکه request وب موازی اجرا کند. */
+    return s4ExternalCronPulseAge() <= 3600;
+}
 function matrixExecutionDecision(?array $cfg=null): array {
+    static $cache=null;$cacheAt=0.0;
+    $now=microtime(true);
+    /* matrixSliceExpired روی هر ردیف صدا زده می‌شود؛ بدون این کشِ یک ثانیه‌ای
+       هر ردیف یک خواندنِ connections.json + pulse فایل می‌ساخت. */
+    if($cfg===null&&is_array($cache)&&($now-$cacheAt)<1.0)return $cache;
     $cfg=$cfg??matrixExecutionCfg();$fresh=matrixCronPulseFresh($cfg);$m=(string)$cfg['mode'];
-    return $cfg+['cron_fresh'=>$fresh,'can_run'=>$m!=='cron_only'||$fresh,
+    $runner=matrixRunnerAvailable();
+    /* cron_only بدونِ هیچ driver = بن‌بستِ کامل. همان request وب برش را اجرا
+       می‌کند تا checkpoint واقعاً جلو برود. */
+    $degraded=(!$fresh&&!$runner&&in_array($m,['cron_only','cron_first'],true));
+    $out=$cfg+['cron_fresh'=>$fresh,'runner_available'=>$runner,'degraded'=>$degraded?'browser_slice':'',
+        'mode_effective'=>$degraded?'delay_only':$m,
+        'can_run'=>$degraded?true:($m!=='cron_only'||$fresh),
         /* cron-driving is continuous: no artificial time slice or handoff pause. */
-        'accelerated'=>$fresh&&in_array($m,['cron_only','cron_first'],true)];
+        'accelerated'=>(!$degraded)&&$fresh&&in_array($m,['cron_only','cron_first'],true)];
+    if($cfg===null){$cache=$out;$cacheAt=$now;}
+    return $out;
 }
 function matrixExecutionPauseUs(int $legacyUs=250000): int {
     $d=matrixExecutionDecision();if(!empty($d['accelerated']))return 0;
     return max(0,(int)$d['pause_ms'])*1000;
+}
+/** یک پیامِ تشخیصی فقط یک بار در progress بنویس، نه در هر برش/هر hop. */
+function matrixNoticeOnce(string $key, string $line, bool $fix=false): void {
+    $p=$fix?matrixFixProgressRead():matrixProgressRead(false);
+    $notices=(array)($p['notices']??[]);
+    if((string)($notices[$key]??'')===$line)return;
+    $notices[$key]=$line;
+    $patch=['notices'=>$notices,'log_add'=>[$line]];
+    if($fix)matrixFixProgress($patch);else matrixProgress($patch);
 }
 /** A cron tick may recycle only a genuinely stale matrix child. The daemon and
  * queue ownership remain intact, so exec() returns and resumes its checkpoint. */
@@ -1655,10 +2012,18 @@ function matrixWakePausedJobs(): int {
     return $resumed;
 }
 function matrixWakeWaitingBuild(): array {
-    $p=matrixProgressRead(false);
-    if(!empty($p['running'])||empty($p['yielded'])||(string)($p['phase']??'')!=='waiting_cron')return ['woken'=>false,'reason'=>'not_waiting'];
-    $q=s4WorkerLoadQueue();
+    $p=matrixProgressRead(false);$q=s4WorkerLoadQueue();
+    /* An active queue owner is authoritative, including the tiny unlocked gap
+       between checkpointed child slices. Never create a parallel owner there. */
     foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['type']??'')==='matrix_build'&&in_array((string)($e['status']??''),['pending','running','paused'],true))return ['woken'=>false,'reason'=>'queue_owner_exists'];
+    $waiting=empty($p['running'])&&!empty($p['yielded'])&&(string)($p['phase']??'')==='waiting_cron';
+    /* Hosting may kill the child/daemon after several hours. Its progress file
+       can still say running while the queue owner is failed and the matrix lock
+       is free. A real cron pulse must recreate exactly one resume owner. */
+    $lockHeld=false;$lf=@fopen(SYNC_MATRIX_LOCK_FILE,'c');
+    if($lf){$free=@flock($lf,LOCK_EX|LOCK_NB);$lockHeld=!$free;if($free)@flock($lf,LOCK_UN);@fclose($lf);}
+    $orphaned=!empty($p['running'])&&!$lockHeld;
+    if(!$waiting&&!$orphaned)return ['woken'=>false,'reason'=>'not_waiting'];
     $full=matrixProgressRead(true);$cp=is_array($full['checkpoint']??null)?$full['checkpoint']:[];
     if(!$cp)return ['woken'=>false,'reason'=>'checkpoint_missing'];
     $opts=['profile'=>(string)($p['profile']??$cp['profile_filter']??'all'),
@@ -1667,7 +2032,8 @@ function matrixWakeWaitingBuild(): array {
         'selected_destinations'=>array_key_exists('selected_destinations',$cp)?array_values((array)$cp['selected_destinations']):null,
         'slice_seconds'=>max(2,min(20,(int)($p['slice_seconds']??$cp['slice_seconds']??8)))];
     $r=s4WorkerIsActive()?s4WorkerEnqueueMatrixBuild($opts,true):s4SpawnMatrixBuildChild($opts,true);
-    return ['woken'=>!empty($r['ok']),'result'=>$r];
+    if($orphaned&&!empty($r['ok']))matrixProgress(['log_add'=>['♻️ کران owner ازدست‌رفتهٔ build را بازیابی کرد؛ ادامه از checkpoint بدون شروع دوباره']]);
+    return ['woken'=>!empty($r['ok']),'orphaned'=>$orphaned,'result'=>$r];
 }
 function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $resumed,array $waiting): void {
     /* Only a real hosting/HTTP/CLI cron tick belongs in operation logs. Saving
@@ -1853,11 +2219,14 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
         $isCheckpointBuild=$type==='matrix_build';
-        $recover=$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
+        /* A checkpoint-backed matrix build may span many hosting process lives.
+           The generic four-attempt cap is appropriate for non-resumable jobs, but
+           must never permanently fail a durable matrix continuation. */
+        $recover=$isCheckpointBuild||$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
         $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
         /* A fresh build becomes a resume after its first claim. Keeping resume=false
            on orphan recovery deleted its cursor and restarted Woo at page one. */
-        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointFix)$e['attempts']=0;}$n++;
+        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
     }unset($e);return['ok'=>true];});return$n;
 }
 
@@ -3393,11 +3762,11 @@ $idx = $idx * 26 + (ord($col[$i]) - ord('A') + 1);
 }
 return $idx - 1;
 }
-function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null): array {
-$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');
+function wooReq(string $u, string $ck, string $cs, string $m, string $ep, $d=null, int $timeout=60): array {
+$url = rtrim($u,'/').'/wp-json/wc/v3/'.ltrim($ep,'/');$timeout=max(5,min(120,$timeout));
 $traceReq=['layer'=>'http_actual','request'=>['destination'=>'woocommerce','method'=>$m,'endpoint'=>'wc/v3/'.ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d]];
 $ch=curl_init($url);
-curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>60,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
+curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>8,CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_USERPWD=>"$ck:$cs",CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json'],CURLOPT_CUSTOMREQUEST=>$m]);
 if($d!==null)curl_setopt($ch,CURLOPT_POSTFIELDS,json_encode($d,JSON_UNESCAPED_UNICODE));
 $b=curl_exec($ch);$e=curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
 $out=['ok'=>$code>=200&&$code<300,'code'=>$code,'error'=>$e,'body'=>@json_decode($b,true),'raw'=>$b];
@@ -21106,9 +21475,20 @@ function cronWatchdogs(array $cn): array {
                پس صفِ بعدی و بقیهٔ کارها باید به کران بعدی واگذار شوند؛ فاصلهٔ
                زمانیِ ثابت هرگز جایِ انتظار/ترتیب را نمی‌گیرد. */
             if (!empty($w['resumed'])) {
-                $results['resume_blocking'] = ['kind' => 'queue', 'which' => $wq,
+                if (s4CanDetachWork()) {
+                    $results['resume_blocking'] = ['kind' => 'queue', 'which' => $wq,
+                        'queue_id' => (string)($w['queue_id'] ?? '')];
+                    break;
+                }
+                /* v10.361: روی هاستِ بدونِ exec/fastcgi_finish_request،
+                   fireAndForget یک پردازهٔ بدونِ کلاینت می‌سازد که عملاً
+                   به جایی نمی‌رسد؛ «قربانی کردنِ کلِ تیک» به‌خاطرِ آن یعنی
+                   کران هیچ‌وقت به استخراج و مغایرت‌گیری نمی‌رسد. پس علامت
+                   نرم ثبت می‌شود و تیک ادامه پیدا می‌کند؛ صفِ ارسال را
+                   پُلِ زندهٔ مرورگر (همان مدلِ bsl_queue_start_next)
+                   جلو می‌برد. */
+                $results['resume_soft'] = ['kind' => 'queue', 'which' => $wq,
                     'queue_id' => (string)($w['queue_id'] ?? '')];
-                break;
             }
         }
     }
@@ -21282,8 +21662,13 @@ function cronWatchdogs(array $cn): array {
                و ادامهٔ صف در کران بعدی، پس از آزادشدنِ کار، انجام گیرد. */
             if (!empty($arRes['ok']) || strpos((string)($arRes['error'] ?? ''), 'فعال') !== false
                 || strpos((string)($arRes['error'] ?? ''), 'پاسخ نداد') !== false) {
-                $results['resume_blocking'] = ['kind' => 'registry', 'key' => $arKey];
-                break;
+                if (s4CanDetachWork()) {
+                    $results['resume_blocking'] = ['kind' => 'registry', 'key' => $arKey];
+                    break;
+                }
+                /* v10.361: جداشدن امن نیست ⇒ تیک را برای کاری که در عمل
+                   جدا نشده قفل نکن (همان منطقِ صفِ ارسال). */
+                $results['resume_soft'] = ['kind' => 'registry', 'key' => $arKey];
             }
         }
         if ($arDone)     $results['auto_resume'] = $arDone;
@@ -21544,6 +21929,14 @@ if (isset($_GET['backup_peek'])) {
     }
     echo json_encode(['ok' => true, 'created_at_h' => (string)($b['created_at_h'] ?? ''),
         'version' => (string)($b['version'] ?? ''), 'files' => $files], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (isset($_GET['runtime_health'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'at'=>time(),'sapi'=>PHP_SAPI],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -22998,13 +23391,77 @@ if(isset($_GET['matrix_execution_status'])){
         'external_cron_url'=>selfBaseUrl().'?cron_run=1'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
+/* =====================================================================
+ *  v10.361: ?ops_tick=1 — «تیکِ رابط»: یک برشِ کران داخلِ درخواستِ متصل
+ *
+ *  چرا لازم است: روی هاستِ شما (بدونِ exec، بدونِ fastcgi_finish_request)
+ *  نه worker دائمی ممکن است نه کارِ جداشده از کلاینت. تنها چیزی که
+ *  پردازه را زنده نگه می‌دارد همان «پُلِ مرورگر» است که ارسال‌ها با آن
+ *  کار می‌کنند. پس خودِ رابط هر چند ثانیه یک تیک می‌زند و آن تیک، داخلِ
+ *  همان درخواستِ متصل، یک برشِ واقعی از کارهای زمین‌مانده را جلو می‌برد:
+ *    ۱) اصلاحِ مغایرتی که پشتِ build صف شده بود (driver ماندگار نداشت)
+ *    ۲) یک برشِ کاملِ کران: استخراج ← مغایرت‌گیری ← ارسال ← نگهبان‌ها
+ *  و اگر بودجهٔ زمانی تمام شود، پرشِ بعدی به خودِ اسکریپت زنجیره می‌شود.
+ *
+ *  این تیک، کرانِ *داخلی* است: pulse با منبع external ثبت نمی‌کند تا
+ *  ماتریس دوباره به بن‌بستِ can_run=false برنگردد.
+ * ===================================================================== */
+if (isset($_GET['ops_tick']) || (($_POST['action'] ?? '') === 'ops_tick')) {
+@set_time_limit(0);
+@ignore_user_abort(true);
+@putenv('S4_INTERNAL_CRON=1');
+$GLOBALS['_s4InternalCron'] = true;
+$_tickCn = loadConnections();
+$_tickBudget = max(3, min(90, (int)($_GET['slice'] ?? ($_tickCn['ops_slice_sec'] ?? 20))));
+$GLOBALS['_cronSliceDeadline'] = microtime(true) + $_tickBudget;
+$_tick = ['ok' => true, 'version' => APP_VERSION, 'ops_tick' => true, 'at' => time(),
+    'budget' => $_tickBudget, 'did' => [],
+    'runner' => ['spawn' => s4CanSpawnProcess(), 'finish_request' => s4CanFinishRequest(),
+        'detach' => s4CanDetachWork(),
+        'worker' => function_exists('s4WorkerIsActive') ? s4WorkerIsActive() : false,
+        'matrix_runner' => matrixRunnerAvailable(), 'cron_fresh' => s4CronFresh(),
+        'external_pulse_age' => s4ExternalCronPulseAge() === PHP_INT_MAX ? -1 : s4ExternalCronPulseAge()]];
+/* ۱) اصلاحِ در صف: همان درخواستی که «worker پایدار نشد» ردش کرده بود. */
+try {
+    $_tickPend = matrixFixPendingLoad();
+    if ($_tickPend) {
+        if (s4LockHeld(SYNC_MATRIX_LOCK_FILE)) {
+            $_tick['did'][] = ['kind' => 'matrix_fix_pending', 'wait' => 'build_running'];
+        } else {
+            matrixFixPendingClear();
+            $_tickFix = matrixFixInlineSlice($_tickPend, max(3, min(40, (int)($_tickPend['max_items'] ?? 20))));
+            $_tick['did'][] = ['kind' => 'matrix_fix_pending', 'ok' => !empty($_tickFix['ok']),
+                'processed' => (int)($_tickFix['processed'] ?? $_tickFix['done'] ?? 0),
+                'yielded' => !empty($_tickFix['yielded']), 'error' => (string)($_tickFix['error'] ?? '')];
+        }
+    }
+} catch (Throwable $e) {
+    $_tick['did'][] = ['kind' => 'matrix_fix_pending', 'error' => mb_substr($e->getMessage(), 0, 160)];
+}
+/* حالتِ سبک: فقط همین برش، با پاسخِ JSON (برای ضربانِ سریعِ رابط). */
+if (!empty($_GET['json']) || s4CronSliceExpired()) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store');
+    $_tick['work_pending'] = s4CronWorkPending();
+    if ($_tick['work_pending']) $_tick['chain_scheduled'] = s4ScheduleCronContinuation($_tick);
+    echo json_encode($_tick, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+/* ۲) بقیهٔ بودجه: یک برشِ کاملِ کران (همان مسیرِ ?cron_run=1). */
+$_GET['cron_run'] = '1';
+$GLOBALS['_opsTickSummary'] = $_tick;
+/* fall through ↓ */
+}
+
 if (isset($_GET['cron_run']) || (($_POST['action'] ?? '') === 'cron_run')) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(0);
 @ignore_user_abort(true);
 /* v10.337: فقط cron بیرونی lease سریع ماتریس را تازه می‌کند. cron داخلی
-   worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند. */
-if((string)getenv('S4_INTERNAL_CRON')!=='1'){
+   worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند.
+   v10.361: تیکِ رابط (ops_tick) هم داخلی است — مرورگر وصل است و کار در
+   همین request جلو می‌رود، پس حق ندارد خودش را کرانِ بیرونی جا بزند. */
+if((string)getenv('S4_INTERNAL_CRON')!=='1' && empty($GLOBALS['_s4InternalCron'])){
     $GLOBALS['_matrixExternalPulse']=matrixCronPulse(PHP_SAPI==='cli'?'external_cli':'external_http');
     if(!s4WorkerIsActive())s4SpawnPersistentWorker();
 }
@@ -23070,7 +23527,15 @@ $_cronBg = !empty($_POST['bg']) || !empty($_GET['bg']);
    می‌مُرد و هیچ کارتی به صفِ استخراج نمی‌نشست. حالا در حالتِ دستی
    اتصالِ مرورگر تا پایانِ کار باز می‌ماند (ndjson) و برای کران
    رفتارِ قبلی (پاسخِ فوری + پس‌زمینه) دست‌نخورده است. */
-if (!empty($GLOBALS['_msKeepConn']) && !isCliRun()) {
+/* v10.361: روی هاستی که نه exec دارد نه fastcgi_finish_request، «جدا شدن از
+   کلاینت و کار در پس‌زمینه» یعنی مرگِ پردازه در چند ثانیه — یعنی کران
+   هرگز به استخراج، مغایرت‌گیری و ارسال نمی‌رسد. در آن حالت پاسخ flush
+   می‌شود ولی اتصال باز می‌ماند (ndjson) و کار در برشِ زمانی جلو می‌رود و
+   بقیه‌اش به صورتِ زنجیره‌ای به خودِ اسکریپت سپرده می‌شود. */
+$_cronSliceSec = isCliRun() ? 0 : s4CronSliceSeconds();
+if (!isCliRun()) $GLOBALS['_cronSliceDeadline'] = $_cronSliceSec > 0 ? (microtime(true) + $_cronSliceSec) : 0.0;
+$_cronDetach = (!isCliRun() && s4CanDetachWork());
+if (!isCliRun() && (!empty($GLOBALS['_msKeepConn']) || !$_cronDetach)) {
     msKeepConnStart();
 } else {
     finishRequestNow(json_encode(['ok' => true, 'started' => true, 'bg' => $_cronBg,
@@ -23183,6 +23648,14 @@ $cn = loadConnections();
 try { if(!s4WorkerIsActive()) { $workerWake=s4SpawnPersistentWorker(); } } catch(Throwable $_workerWakeErr) { $workerWake=['ok'=>false,'error'=>$_workerWakeErr->getMessage()]; }
 // v8.37: ok صریح، تا ابزارهای بیرونی بتوانند موفقیت اجرا را تشخیص دهند
 $results = ['ok' => true, 'time' => $now, 'profiles' => []];
+/* v10.361: اگر این تیک را رابط زده (?ops_tick=1)، خلاصهٔ برشِ اول و وضعیتِ
+   driver همان‌جا در cron_last_run هم دیده می‌شود. */
+if (!empty($GLOBALS['_opsTickSummary']) && is_array($GLOBALS['_opsTickSummary'])) {
+    $results['ops_tick'] = $GLOBALS['_opsTickSummary'];
+    if (empty($GLOBALS['_cronSliceDeadline'])) {
+        $GLOBALS['_cronSliceDeadline'] = microtime(true) + (int)($GLOBALS['_opsTickSummary']['budget'] ?? 20);
+    }
+}
 if(isset($workerWake))$results['worker_wake']=$workerWake;
 // v10.21 (۳۴ج): نبضِ ابتدای اجرا در گزارش هم بماند
 if (!empty($results_heartbeat)) $results['heartbeat'] = $results_heartbeat;
@@ -23276,6 +23749,9 @@ foreach ($wdEarly as $k => $v) { if (!empty($v)) $results[$k] = $v; }
    رجیستری و checkpoint را دوباره می‌خواند و اولویت را ادامه می‌دهد. */
 if (!empty($wdEarly['resume_blocking'])) {
     $results['deferred_by_resume'] = true;
+    /* v10.361: تیکِ ناقص نباید تا کرانِ بیرونیِ بعدی (که روی این هاست
+       ساعت‌ها نمی‌رسد) رها شود — پرشِ بعدی زنجیره می‌شود. */
+    $results['chain_scheduled'] = s4ScheduleCronContinuation($results);
     cronEmit($results);
     exit;
 }
@@ -23439,6 +23915,19 @@ $_onlyKey  = trim((string)($_GET['only'] ?? ''));
 $_forceRun = !empty($_GET['force']);
 foreach ($profiles as $key => $profile) {
 if ($_onlyKey !== '' && $key !== $_onlyKey) continue;
+/* v10.361: برشِ زمانیِ کران. تیکِ کران دیگر «تا آخر» نمی‌دود: سرِ سقفِ
+   زمانی بسته می‌شود، بقیهٔ پروفایل‌ها را به پرشِ بعدی (POST کوتاه به
+   خودِ اسکریپت) می‌سپارد و نتیجهٔ همین برش را روی دیسک می‌گذارد.
+   بی‌این، هاست وسطِ حلقه پردازه را می‌کُشد و بخش‌های بعدی — مغایرت‌گیری
+   و ارسال — هرگز نوبت نمی‌گیرند. */
+if (s4CronSliceExpired()) {
+    $results['slice_expired'] = ['at' => (string)$key,
+        'hop' => (int)($_GET['chain_hop'] ?? $_POST['chain_hop'] ?? 0)];
+    msAlive('سقفِ زمانیِ برش — ادامه در پرشِ بعدی');
+    $results['chain_scheduled'] = s4ScheduleCronContinuation($results);
+    cronEmit($results);
+    exit;
+}
 /* v10.61 (۷۵): ضربانِ اتصالِ دستی — پردازندهٔ بی‌خروجی را هاست می‌کُشد؛
    هر پروفایل یک خطِ ndjson می‌زند تا اتصال «زنده» بماند. */
 msAlive('پروفایل: ' . (string)($profile['name'] ?? $key));
@@ -24093,6 +24582,17 @@ try {
    (و بعد هاست می‌کُشتش) و به حلقهٔ استخراج هرگز نمی‌رسید. داده‌ها همین حالا
    روی دیسک ذخیره می‌شوند، پس امن است بکاپ به انتهای صف برود — مهم،
    استخراج است. */
+/* v10.361: بکاپِ خودکار یک git push چنددقیقه‌ای است؛ اگر برشِ زمانیِ کران
+   تمام شده، همین‌جا بسته می‌شود تا بقیهٔ تیک (پمپِ ارسال و ایجنت‌ها) در
+   پرشِ بعدی انجام شود و هاست وسطِ push پردازه را نکُشد. */
+if (s4CronSliceExpired()) {
+    $results['slice_expired'] = ['at' => 'before_backup',
+        'hop' => (int)($_GET['chain_hop'] ?? $_POST['chain_hop'] ?? 0)];
+    msAlive('سقفِ زمانیِ برش — ادامه در پرشِ بعدی');
+    $results['chain_scheduled'] = s4ScheduleCronContinuation($results);
+    cronEmit($results);
+    exit;
+}
 $_bkCfg = backupCfg();
 if (!empty($_bkCfg['auto'])) {
     $_bkDue = ($now - (int)$_bkCfg['last_run']) >= (max(1, (int)$_bkCfg['auto_every_h']) * 3600);
@@ -24140,6 +24640,9 @@ if (!manualSyncActive()) {
     }
     if ($_pumpBlocking) {
         $results['deferred_by_resume'] = true;
+        /* v10.361: پرشِ بعدیِ کران زنجیره می‌شود تا صفِ دومِ ارسال و
+           کارهای پایانی منتظرِ کرانِ بیرونیِ (احتمالاً ساعت‌ها دور) نمانند. */
+        $results['chain_scheduled'] = s4ScheduleCronContinuation($results);
         cronEmit($results);
         exit;
     }
@@ -24152,8 +24655,12 @@ if (!manualSyncActive()) {
    ارسال و اعلان — که کارِ اصلیِ برنامه‌اند — قربانیِ یک کارِ هوش مصنوعی
    می‌شدند. پس آخر صف است: هرچه لازم است اول انجام شده، و اگر اینجا
    کشته شویم چیزی از دست نرفته و کارها در تیکِ بعدی سررسید می‌مانند. */
+/* v10.361: اگر بودجهٔ زمانیِ این تیک تمام شده، کارهای سنگینِ ایجنتی به
+   پرشِ بعدی زنجیره می‌شوند — استخراج و ارسال و مغایرت‌گیری اولویت دارند. */
+$_cronAgents = !s4CronSliceExpired();
+if (!$_cronAgents) $results['agents_deferred'] = 'slice_expired';
 /* v10.83: تولید خودکار توضیح/دسته برای محصولاتِ بدون محتوا (همهٔ پروفایل‌ها) */
-try {
+if ($_cronAgents) try {
     $_aiAuto = aiContentAutoCfg($cn);
     if (!empty($_aiAuto['enabled'])) {
         $results['ai_content_auto'] = aiAutoFillMissingAcrossProfiles($cn);
@@ -24162,7 +24669,7 @@ try {
     $results['ai_content_auto'] = ['error' => mb_substr($e->getMessage(), 0, 200)];
 }
 
-try {
+if ($_cronAgents) try {
     $autoRes = autoTick($cn, $now);
     if (!empty($autoRes['ran'])) {
         $results['auto_agent'] = ['ran' => (int)$autoRes['ran'],
@@ -24175,6 +24682,16 @@ try {
 }
 
 /* v10.107: مغایرت‌گیری دوره‌ای همهٔ غرفه‌ها/ووکامرس + اصلاح دسته با AI/یادگیری */
+/* v10.361: مغایرت‌گیری هرگز قربانیِ برشِ زمانیِ تیک نمی‌شود. اگر بودجه تمام
+   شده بود، همین‌جا یک پنجرهٔ کوتاهِ اختصاصی به ماتریس داده می‌شود تا هر تیک
+   حداقل یک برشِ واقعیِ build/fix جلو ببرد؛ بقیهٔ کارها با پرشِ بعدی
+   زنجیره می‌شوند. (گزارشِ کاربر: «کران هیچ‌وقت به مغایرت‌گیری نمی‌رسد».) */
+$_mxReserve = max(6, min(25, (int)($cn['matrix_slice_sec'] ?? 12)));
+if (s4CronSliceExpired()) {
+    $GLOBALS['_cronSliceDeadline'] = microtime(true) + $_mxReserve;
+    $results['matrix_reserve_sec'] = $_mxReserve;
+    msAlive('برشِ اختصاصیِ مغایرت‌گیری');
+}
 try {
     if (function_exists('reconAutoTick')) {
         $results['recon_auto'] = reconAutoTick($cn, $now);
@@ -24303,6 +24820,15 @@ if (manualSyncActive()) {
     writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msDone);
     @unlink(MANUAL_SYNC_STOP_FILE);
     $results['manual_sync'] = true;
+}
+/* v10.361: اگر کاری روی زمین مانده (برشِ زمانی تمام شد، ماتریس ناتمام است،
+   یا اصلاحِ در صف پشتِ build مانده)، پرشِ بعدیِ کران همین‌جا زنجیره می‌شود.
+   روی هاستی که کرانِ بیرونی‌اش ساعت‌ها نمی‌رسد، همین زنجیره است که
+   استخراج/مغایرت‌گیری/ارسال را «ادامه‌دار» نگه می‌دارد. */
+$_cronPending = s4CronWorkPending();
+if ($_cronPending) {
+    $results['work_pending'] = $_cronPending;
+    $results['chain_scheduled'] = s4ScheduleCronContinuation($results);
 }
 cronEmit($results);
 exit;
@@ -28808,7 +29334,16 @@ function matrixBuild(array $opts = []): array {
     /* PHP built-in/CLI server تا پایان درخواست، درخواست توقف دوم را نمی‌خواند.
        اجرای دستی به برش‌های کوتاه تقسیم می‌شود و UI بین برش‌ها خودکار resume می‌کند. */
     $GLOBALS['_matrixRunStartedAt'] = (float)($opts['run_started_at'] ?? microtime(true));
-    $GLOBALS['_matrixSliceDeadline'] = in_array($source, ['manual','worker'], true) ? microtime(true) + $sliceSeconds : 0;
+    /* v10.361: 'ops_tick' هم برشِ زمانی دارد؛ تیکِ رابط باید مثل برشِ دستی
+       کوتاه بماند تا مرورگر همان‌جا پاسخ بگیرد و برشِ بعدی زنجیره شود. */
+    $_sliceWanted = in_array($source, ['manual','worker','ops_tick'], true) ? microtime(true) + $sliceSeconds : 0;
+    /* v10.361: اگر همین request یک برشِ زمانیِ کران دارد (ops_tick یا کرانِ
+       keep-conn)، ماتریس هم باید داخلِ همان سقف ببندد و checkpoint بگذارد؛
+       وگرنه ساختِ جدول کلِ تیک را می‌بلعد و ارسال/ایجنت هرگز نوبت نمی‌گیرند.
+       کفِ ۳ ثانیه یعنی حتی تیکِ خسته هم یک برشِ واقعیِ ماتریس جلو می‌برد. */
+    $_cronD = (float)($GLOBALS['_cronSliceDeadline'] ?? 0);
+    if ($_cronD > 0) $_sliceWanted = max(microtime(true) + 3, $_sliceWanted > 0 ? min($_sliceWanted, $_cronD) : $_cronD);
+    $GLOBALS['_matrixSliceDeadline'] = $_sliceWanted;
     $resumeCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     /* v10.347: matrix pages have a private append-only cursor. Legacy recon,
        suffix reports, and a fresh periodic run may clear their own cursor but
@@ -28873,7 +29408,7 @@ function matrixBuild(array $opts = []): array {
         matrixStopClear();
         return ['ok' => true, 'stopped' => true, 'partial' => true, 'checkpoint' => $cp];
     };
-    $yieldMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
+    $yieldMatrix = static function (string $phase, int $retryAfter=0) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
         $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
@@ -28890,8 +29425,9 @@ function matrixBuild(array $opts = []): array {
             : '↻ تحویل checkpoint به worker؛ ادامه با روش تازهٔ انتخاب‌شده';
         matrixProgress(['running' => false, 'done' => false, 'yielded' => true, 'partial' => true,
             'phase' => $waitCron?'waiting_cron':'yielded', 'yield_phase' => $phase, 'checkpoint' => $cp,
-            'log_add' => [$handoffLog]]);
-        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron, 'checkpoint' => $cp];
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'log_add' => [$handoffLog]]);
+        return ['ok' => true, 'yielded' => true, 'partial' => true, 'scheduler_wait'=>$waitCron,
+            'retry_after'=>max(0,$retryAfter),'retryable'=>$retryAfter>0,'checkpoint' => $cp];
     };
     $profiles = loadProfiles();
     $pN = 0; $pTot = max(1, count($profiles));
@@ -29031,9 +29567,24 @@ function matrixBuild(array $opts = []): array {
         matrixProgress(['checkpoint' => $matrixCp('woo_' . ($matrixWooDone ? 'map' : 'fetch'), $rowsByKey,
             $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone)]);
         if (matrixStopRequested()) return $stopMatrix('woo_fetch');
-        if (!empty($wooMeta['stopped']) && !matrixStopRequested()) return $yieldMatrix('woo_fetch');
+        /* Reaching the per-process page cap is a normal handoff boundary, not a
+           failed Woo extraction. Preserve the dedicated cursor/checkpoint and let
+           the worker (or next cron pulse) continue from the following page. */
+        $wooBoundaryReason=(string)($wooMeta['reason']??'');
+        if($wooBoundaryReason==='http'&&!empty($wooMeta['transient'])){
+            $retryAfter=max(5,min(120,(int)($wooMeta['retry_after']??10)));
+            matrixProgress(['retryable'=>true,'retry_after'=>$retryAfter,
+                'log_add'=>['⏳ خطای موقت ووکامرس؛ ادامهٔ صفحهٔ '.max(1,(int)($wooMeta['page']??1)).' پس از '.$retryAfter.' ثانیه']]);
+            return $yieldMatrix('woo_fetch',$retryAfter);
+        }
+        if ((!empty($wooMeta['stopped']) && !matrixStopRequested())
+            || in_array($wooBoundaryReason,['max_pages','run_limit'],true)) {
+            return $yieldMatrix('woo_fetch');
+        }
         if (!$matrixWooDone) {
-            $why = $wooErr ?: 'برداشت ووکامرس کامل نشد';
+            $httpDetail=$wooBoundaryReason==='http'?(' · HTTP '.(int)($wooMeta['http_code']??0)
+                .((string)($wooMeta['http_error']??'')!==''?' · '.(string)$wooMeta['http_error']:'')):'';
+            $why = ($wooErr ?: 'برداشت ووکامرس کامل نشد').$httpDetail;
             matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
                 'error' => $why, 'phase' => 'stopped',
                 'checkpoint' => $matrixCp('woo_fetch', $rowsByKey, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, false),
@@ -31107,11 +31658,11 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     if ($lf) { $lockHeld = !@flock($lf, LOCK_EX | LOCK_NB); if (!$lockHeld) @flock($lf, LOCK_UN); @fclose($lf); }
     $probe = null;
     if (!empty($_GET['probe'] ?? $_POST['probe'] ?? null)) {
-        $w = loadConnections()['woocommerce'] ?? [];
+        $w = loadConnections()['woocommerce'] ?? [];$probePage=max(1,min(10000,(int)($_GET['probe_page']??$_POST['probe_page']??1)));
         $t0 = microtime(true);
         $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''),
-            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page=1');
-        $probe = ['ok' => !empty($r['ok']), 'code' => (int)($r['code'] ?? 0),
+            (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=1&status=any&page='.$probePage);
+        $probe = ['ok' => !empty($r['ok']), 'page'=>$probePage,'code' => (int)($r['code'] ?? 0),
             'ms' => (int)round((microtime(true) - $t0) * 1000),
             'rows' => is_array($r['body'] ?? null) ? count($r['body']) : 0,
             'error' => mb_substr((string)($r['error'] ?? ''), 0, 180)];
@@ -31132,6 +31683,26 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
         'woo_cursor_page' => (int)($wooCur['page'] ?? 0),
         'woo_fetched_live' => (int)($p['woo_fetched'] ?? 0),
         'woo_page_live' => (int)($p['woo_page'] ?? 0),
+        /* v10.361: «چرا حرکت نمی‌کند» باید از همین پاسخ خوانده شود، نه با
+           حدس زدن. driver واقعی (worker/exec/کران بیرونی)، حالتِ مؤثرِ اجرا و
+           وضعیتِ محافظِ زنجیرهٔ ادامه یکجا گزارش می‌شوند. */
+        'driver' => ['available' => matrixRunnerAvailable(), 'spawn' => s4CanSpawnProcess(),
+            'finish_request' => s4CanFinishRequest(), 'detach' => s4CanDetachWork(),
+            'worker' => function_exists('s4WorkerIsActive') ? s4WorkerIsActive() : false,
+            'cron_fresh' => s4CronFresh(),
+            'external_pulse_age' => s4ExternalCronPulseAge() === PHP_INT_MAX ? -1 : s4ExternalCronPulseAge()],
+        'execution' => (static function (): array {
+            $d = matrixExecutionDecision();
+            return ['mode' => (string)($d['mode'] ?? ''), 'mode_effective' => (string)($d['mode_effective'] ?? ''),
+                'can_run' => !empty($d['can_run']), 'degraded' => (string)($d['degraded'] ?? ''),
+                'cron_fresh' => !empty($d['cron_fresh']), 'runner_available' => !empty($d['runner_available'])];
+        })(),
+        'chain' => (static function () use ($p): array {
+            $g = is_array($p['chain_guard'] ?? null) ? $p['chain_guard'] : [];
+            return ['server_chain' => !empty($p['server_chain']), 'hops' => (int)($g['hops'] ?? 0),
+                'idle' => (int)($g['idle'] ?? 0), 'max_hops' => (int)($g['max_hops'] ?? 0),
+                'stopped' => (string)($p['chain_stopped'] ?? '')];
+        })(),
         'probe' => $probe, 'logs' => $logs], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -31159,17 +31730,47 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         $mxResumeCp=is_array($mx['checkpoint']??null)?$mx['checkpoint']:[];
         $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'selected_destinations'=>array_key_exists('selected_destinations',$mxResumeCp)?array_values((array)$mxResumeCp['selected_destinations']):(array_key_exists('selected_destinations',$mx)?array_values((array)$mx['selected_destinations']):null),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
         /* daemon زنده مالک recovery باشد تا child را wait و exit/OOM را ثبت کند؛
-           detached فقط fallback نصب‌هایی است که daemon واقعاً بالا نمی‌آید. */
-        $actions['matrix']=$workerActive?s4WorkerEnqueueMatrixBuild($mxResumeOpts,true):s4SpawnMatrixBuildChild($mxResumeOpts,true);
+           detached فقط fallback نصب‌هایی است که daemon واقعاً بالا نمی‌آید.
+           v10.361: روی هاستی که exec بسته است (گزارشِ واقعیِ پروداکشن:
+           actions.worker.error=exec_disabled) هیچ childی ساخته نمی‌شود؛ پس
+           همان request یک برشِ کوتاهِ درون‌درخواستی می‌زند و ادامه را زنجیره
+           می‌کند — وگرنه repair هر بار فقط «exec_disabled» برمی‌گرداند و
+           ماتریس تا ابد روی phase «بازیابی خودکار» می‌ماند. */
+        $actions['matrix']=$workerActive
+            ? s4WorkerEnqueueMatrixBuild($mxResumeOpts,true)
+            : (s4CanSpawnProcess()
+                ? s4SpawnMatrixBuildChild($mxResumeOpts,true)
+                : matrixBuildInlineSlice($mxResumeOpts+['resume'=>true,'checkpoint'=>$mxResumeCp,'source'=>'ops_tick'],6));
     }
-    $healthy=$workerActive&&($cronAge===null||$cronAge<900)&&!( !empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120));
+    /* v10.361: «سالم» یعنی driver واقعی وجود دارد یا همین هاست با برشِ
+       درون‌درخواستی کار را جلو می‌برد. شرطِ قبلی فقط worker را می‌پذیرفت و
+       روی هاستِ بدونِ exec برای همیشه healthy:false می‌داد — همان چیزی که
+       باعث شد کاربر فکر کند هیچ‌چیز کار نمی‌کند. */
+    $driverOk=$workerActive||s4CanSpawnProcess()||matrixRunnerAvailable()||!s4CanDetachWork();
+    $healthy=$driverOk&&($cronAge===null||$cronAge<900)&&!( !empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120));
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'now'=>$now,'healthy'=>$healthy,'repair'=>$repair,
         'worker'=>['active'=>$workerActive,'heartbeat_age'=>$whb>0?max(0,$now-$whb):null,'state'=>$wst,'active_jobs'=>$active],
         'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
         'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log')],
         'code_update'=>['status'=>'?code_update_status=1','endpoint'=>'?code_update=1','method'=>'POST','source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH],
-        'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        /* v10.361: توانایی‌های واقعیِ هاست + راهِ ادامهٔ کار. بدونِ این، پاسخِ
+           ops_feedback می‌گفت «worker داخلی فعال است؛ cron خارجی لازم نیست»
+           در حالی که همان پاسخ worker.active=false و error=exec_disabled
+           داشت — یعنی تشخیصِ کاربر از روی فیدبک ممکن نبود. */
+        'runner'=>['worker_active'=>$workerActive,'spawn'=>s4CanSpawnProcess(),
+            'finish_request'=>s4CanFinishRequest(),'detach'=>s4CanDetachWork(),
+            'matrix_runner'=>matrixRunnerAvailable(),'cron_fresh'=>s4CronFresh(),
+            'external_pulse_age'=>s4ExternalCronPulseAge()===PHP_INT_MAX?-1:s4ExternalCronPulseAge(),
+            'external_cron_url'=>selfBaseUrl().'?cron_run=1','ops_tick_url'=>selfBaseUrl().'?ops_tick=1',
+            'cron_slice_sec'=>s4CronSliceSeconds()],
+        'actions'=>$actions,
+        'next'=>($workerActive
+            ?'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'
+            :(s4CanSpawnProcess()
+                ?'worker بالا نیامد — repair را دوباره صدا بزنید و logs/worker.log را ببینید'
+                :'این هاست exec/fastcgi_finish_request ندارد: کار با برش‌های درون‌درخواستی و تیکِ رابط (?ops_tick=1) جلو می‌رود و پرشِ بعدی به خودِ اسکریپت زنجیره می‌شود. برای استقلال از تبِ باز، cron بیرونی را هر ۵ دقیقه روی external_cron_url تنظیم کنید'))
+        ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
@@ -31211,22 +31812,29 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     }
     if(function_exists('matrixFixVisibleProgress'))$fix=matrixFixVisibleProgress($fix,$visibleDestRaw);
     $actualFixRunning=!empty($fix['running'])&&empty($fix['queued']);
-    $has = is_file(SYNC_MATRIX_RESULT_FILE);
-    $age = $has ? (time() - (int)@filemtime(SYNC_MATRIX_RESULT_FILE)) : -1;
+    $has = is_file(SYNC_MATRIX_RESULT_FILE);$resultAt=$has?(int)@filemtime(SYNC_MATRIX_RESULT_FILE):0;
+    $age = $has ? (time() - $resultAt) : -1;
     $statusResult=$has?matrixResultLoad():[];
     $anyRun = !empty($prog['running']) || $actualFixRunning || !empty($fix['queued']);
+    /* A completed correction may be useful after refresh, but only while it is
+       newer than the latest matrix build/result. Previously an old build_failed
+       correction from hours earlier masked a later successful build forever. */
+    $buildAt=max($resultAt,(int)($prog['finished_at']??0),(int)($prog['ts']??0),(int)($prog['started_at']??0));
+    $fixAt=max((int)($fix['finished_at']??0),(int)($fix['ts']??0),(int)($fix['started_at']??0));
+    $preferFinishedFix=!$actualFixRunning&&empty($fix['queued'])&&!empty($fix['done'])&&$fixAt>=$buildAt;
     $buildOwnState = !empty($prog['running']) || !empty($prog['yielded'])
-        || !empty($prog['stop_requested']) || !empty($prog['stopped']);
-    $shownProgress = $actualFixRunning ? $fix
-        : ($buildOwnState ? $prog : ((!empty($fix['done']) && empty($prog['running']) && empty($fix['queued'])) ? $fix : $prog));
+        || !empty($prog['stop_requested']) || !empty($prog['stopped'])
+        || (!empty($prog['done'])&&!$preferFinishedFix);
     /* v10.339: status هر ثانیه poll می‌شود. فرستادن progress اصلاح قدیمی با
        صدها detail/live و تکرار log ساخت، UI را ظاهراً منجمد می‌کرد. */
     $buildView=$prog;unset($buildView['log']);
     $fixView=$fix;
     if(!$actualFixRunning){
-        $keep=['running','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
+        $keep=['running','queued','done','phase','pct','cur','total','ok_n','fail_n','skip_n','sent_n','del_n','price_n','processed_n','finished_at','error','stopped','stale','selected_destinations'];
         $fixView=array_intersect_key($fixView,array_fill_keys($keep,true));
     }
+    $shownProgress=$actualFixRunning?$fix:($buildOwnState?$prog:($preferFinishedFix?$fixView:$prog));
+    $shownJob=$actualFixRunning||!empty($fix['queued'])||$preferFinishedFix?'fix':'build';
     echo json_encode([
         'ok' => true,
         'running' => $anyRun,
@@ -31242,7 +31850,8 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
         'result_rows' => $has ? (int)($statusResult['row_count'] ?? count((array)($statusResult['rows']??[]))) : 0,
         'result_destinations'=>array_values((array)($statusResult['selected_destinations']??[])),
         'result_pricing_stale'=>$has&&((string)($statusResult['pricing_signature']??'')!==matrixPricingFingerprint()),
-        'job' => $actualFixRunning ? 'fix' : ($buildOwnState ? 'build' : ((string)($fix['phase'] ?? '') === 'done' || !empty($fix['done']) ? 'fix' : 'build')),
+        'job'=>$shownJob,
+        'state_order'=>['build_at'=>$buildAt,'fix_at'=>$fixAt,'preferred'=>$shownJob],
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -31300,18 +31909,28 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     }
     /* فقط روی هاست‌هایی که exec/PHP CLI را بسته‌اند fallback قدیمی اجرا می‌شود. */
     $opts['spawn_error']=(string)($spawn['error']??'unknown');
-    /* v10.129: مرحلهٔ خواندن پروفایل‌ها checkpoint دارد. دادهٔ محلیِ کامل
-       ذخیره می‌شود؛ اگر قطع در یکی از واکشی‌های مقصد رخ دهد، فقط آن واکشی
-       دوباره انجام می‌شود و پروفایل‌های مبدأ از ابتدا تکرار نمی‌شوند. */
+    /* v10.361: روی همین هاستِ بدونِ exec، این مسیرِ درون‌درخواستی تنها راهِ
+       جلو رفتنِ جدول است. تا اینجا checkpoint از فایلِ progress *خام* خوانده
+       می‌شد، در حالی که از v10.338 خودِ checkpoint در فایلِ gzipِ جدا
+       (SYNC_MATRIX_CHECKPOINT_FILE) ذخیره می‌شود و progress فقط metadata
+       کوچک دارد. نتیجه: $matrixCp همیشه null بود، هر برش cursor و
+       checkpoint را unlink می‌کرد و هر hop از صفر شروع می‌شد — از بیرون
+       «مغایرت‌گیری اصلاً حرکت نمی‌کند». حالا همان guard مشترکِ مسیرِ worker
+       استفاده می‌شود (matrixProgressRead checkpoint خارجی را hydrate می‌کند). */
+    $chainHop=!empty($_GET['chain']??$_POST['chain']??null);
+    $resumeRequested=!empty($_GET['resume']??$_POST['resume']??null)||$chainHop;
+    /* شروعِ صریحِ کاربر شمارندهٔ زنجیره را صفر می‌کند؛ hopها نه. */
+    if(!$chainHop)s4ChainReset('matrix_build');
+    $cpGuard=matrixBuildCheckpointGuard($opts);
     $matrixCp = null;
-    if (!empty($_GET['resume'] ?? $_POST['resume'] ?? null) && is_file(SYNC_MATRIX_PROGRESS_FILE)) {
-        $oldMatrix = json_decode((string)@file_get_contents(SYNC_MATRIX_PROGRESS_FILE), true);
-        $oldCp = is_array($oldMatrix['checkpoint'] ?? null) ? $oldMatrix['checkpoint'] : null;
-        if (is_array($oldCp) && empty($oldCp['coded_only'])
-            && (string)($oldCp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')
-            && is_array($oldCp['profile_rows'] ?? null)) {
-            $matrixCp = $oldCp;
+    if (!empty($cpGuard['exists'])) {
+        if (empty($cpGuard['compatible'])) {
+            echo json_encode(['ok'=>false,'error'=>'checkpoint ناتمام با مقصدهای درخواست‌شده سازگار نیست',
+                'checkpoint_preserved'=>true,'have_destinations'=>(array)($cpGuard['have_destinations']??[]),
+                'want_destinations'=>(array)($cpGuard['want_destinations']??[])],JSON_UNESCAPED_UNICODE);
+            exit;
         }
+        if (empty($cpGuard['state']['done'])) { $matrixCp = $cpGuard['checkpoint']; $resumeRequested = true; }
     }
     if ($matrixCp && isset($matrixCp['fetch_mode']))
         $opts['parallel_destinations'] = ((string)$matrixCp['fetch_mode'] === 'parallel');
@@ -31322,6 +31941,12 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     if ($matrixCp && isset($matrixCp['slice_seconds']))
         $opts['slice_seconds'] = max(2, min(20, (int)$matrixCp['slice_seconds']));
     $opts['checkpoint'] = $matrixCp;
+    $opts['resume'] = $resumeRequested;
+    /* v10.361: وقتی هیچ driver ماندگاری نیست، کاربر باید بداند چرا کار با
+       برش‌های همان درخواست جلو می‌رود — یک بار، نه در هر hop. */
+    $driverNow=matrixExecutionDecision();
+    if(!empty($driverNow['degraded']))
+        matrixNoticeOnce('driver', '⚙️ driver ماندگار (worker/CLI/کران) در دسترس نیست — ساخت جدول با برش‌های '.(int)$opts['slice_seconds'].' ثانیه‌ای در همان درخواستِ وب ادامه می‌یابد (حالت مؤثر: '.(string)$driverNow['mode_effective'].' · ذخیره‌شده: '.(string)$driverNow['mode'].')');
     // قفل زود — حذف cursor و مصرف stop فقط بعد از مالکیت واقعی انجام می‌شود.
     $lockFile = SYNC_MATRIX_LOCK_FILE;
     $fp = @fopen($lockFile, 'c');
@@ -31561,6 +32186,9 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     if (!$opts['selected_destinations']) {
         echo json_encode(['ok'=>false,'error'=>'حداقل یک مقصد مشمول برای اصلاح انتخاب کنید'],JSON_UNESCAPED_UNICODE); exit;
     }
+    $workflow=(string)($_GET['workflow']??$_POST['workflow']??'fix_only');
+    if(!in_array($workflow,['fix_only','build_and_fix'],true))$workflow='fix_only';
+    $combinedWorkflow=$workflow==='build_and_fix';
     $matrixFixCp = null;
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
         $oldFix = json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PROGRESS_FILE), true);
@@ -31577,9 +32205,28 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     /* An unfinished build wins over correction's freshness request. Queue/resume
        that exact checkpoint and put fix behind it; never clear its cursor. */
     $mxBeforeFix=matrixProgressRead();$mxCp=is_array($mxBeforeFix['checkpoint']??null)?$mxBeforeFix['checkpoint']:null;
-    if($mxCp){
-        $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
-        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای ادامهٔ checkpoint آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+    if($mxCp&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'ساخت جدول ناتمام است؛ برای ادامهٔ ساخت و سپس اصلاح از دکمهٔ «ساخت جدول + اصلاح کلی» استفاده کنید',
+            'code'=>'matrix_build_incomplete','checkpoint_preserved'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($mxCp&&$combinedWorkflow){
+        $wa=s4WorkerIsActive();if(!$wa&&s4CanSpawnProcess()){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
+        if(!$wa){
+            /* v10.361: هاستِ بدونِ exec/worker. به‌جای خطای بن‌بست، همان
+               checkpoint ناتمام با برشِ درون‌درخواستی جلو می‌رود و درخواستِ
+               اصلاح روی دیسک پارک می‌شود تا بلافاصله پس از آماده‌شدنِ نتیجه
+               (زنجیرهٔ سرور یا تیکِ رابط) اجرا شود. */
+            $opts['min_matrix_generated_at']=time();
+            matrixFixPendingSave($opts);
+            s4ChainReset('matrix_build');
+            $inlineBuild=matrixBuildInlineSlice(['profile'=>(string)($mxCp['profile_filter']??'all'),
+                'parallel_destinations'=>(string)($mxCp['fetch_mode']??'serial')==='parallel','live_fill'=>!empty($mxCp['live_fill']),
+                'selected_destinations'=>$opts['selected_destinations'],'slice_seconds'=>max(2,min(20,(int)($mxCp['slice_seconds']??8)))],8);
+            echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'no_worker'=>true,'inline_slice'=>true,
+                'resuming_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,
+                'message'=>'worker/exec در دسترس نیست — همان checkpoint ناتمام با برش‌های درون‌درخواستی ادامه یافت و اصلاح پشتِ همان نتیجه صف شد',
+                'build'=>$inlineBuild],JSON_UNESCAPED_UNICODE);exit;
+        }
         $resumeRequestedAt=time();
         $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>(string)($mxCp['profile_filter']??'all'),
             'parallel_destinations'=>(string)($mxCp['fetch_mode']??'serial')==='parallel','live_fill'=>!empty($mxCp['live_fill']),
@@ -31587,21 +32234,44 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($buildEnq['ok'])){echo json_encode(['ok'=>false,'error'=>'ادامهٔ checkpoint در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;}
         $opts['min_matrix_generated_at']=$resumeRequestedAt;$fixEnq=s4WorkerEnqueueMatrixFix($opts,false);
         echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
-            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح اجرا می‌شود',
+            'resuming_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,'message'=>'ابتدا همان checkpoint ناتمام ادامه می‌یابد؛ سپس اصلاح کلی اجرا می‌شود',
             'matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
-    /* A matrix that just completed is already the fresh snapshot the user is
-       looking at. Do not immediately rebuild it from Woo page one. */
-    $fixMatrixAge=$fixMatrix?max(0,time()-(int)($fixMatrix['generated_at']??0)):PHP_INT_MAX;
-    $forceFresh=(string)$opts['source']==='manual'&&$fixMatrixAge>300;
-    $fixNeedsBuild=$forceFresh||!$fixMatrix||$fixHave!==$fixWant
+    /* Correction-only means exactly the matrix currently visible: age alone must
+       never trigger a surprise rebuild. The explicit combined workflow is the
+       only manual action allowed to create a fresh build before correction. */
+    $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
         ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
-    if($fixNeedsBuild){
-        $wa=s4WorkerIsActive();if(!$wa){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
-        if(!$wa){echo json_encode(['ok'=>false,'error'=>'worker پایدار برای بازسازی خودکار جدول آماده نشد'],JSON_UNESCAPED_UNICODE);exit;}
+    if($fixNeedsBuild&&!$combinedWorkflow){
+        echo json_encode(['ok'=>false,'error'=>'جدول فعلی برای این مقصدها آماده/سازگار نیست؛ ابتدا جدول را بسازید یا دکمهٔ «ساخت جدول + اصلاح کلی» را بزنید',
+            'code'=>'matrix_not_ready_for_fix','needs_build'=>true],JSON_UNESCAPED_UNICODE);exit;
+    }
+    if($combinedWorkflow){
+        /* This named action intentionally builds even when a recent result exists. */
+        $opts['view_filters']=[];$opts['scope']='all';
+        $wa=s4WorkerIsActive();if(!$wa&&s4CanSpawnProcess()){s4SpawnPersistentWorker();usleep(400000);$wa=s4WorkerIsActive();}
+        if(!$wa){
+            /* v10.361: بدونِ worker هم زنجیرهٔ «ساخت + اصلاح» انجام می‌شود؛ فقط
+               مالکش request وب است (برشِ زمانی + زنجیرهٔ سرور) نه daemon. */
+            $opts['min_matrix_generated_at']=time();
+            matrixFixPendingSave($opts);
+            s4ChainReset('matrix_build');
+            $inlineBuild=matrixBuildInlineSlice(['profile'=>'all',
+                'parallel_destinations'=>!empty($_GET['parallel_destinations']??$_POST['parallel_destinations']??null),
+                'live_fill'=>!array_key_exists('live_fill',$_POST)||!empty($_POST['live_fill']),
+                'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,
+                'slice_seconds'=>max(2,min(20,(int)($_GET['slice_seconds']??$_POST['slice_seconds']??8)))],8);
+            echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'no_worker'=>true,'inline_slice'=>true,
+                'refreshing_matrix'=>true,'waiting_for_matrix'=>true,'combined_workflow'=>true,
+                'message'=>'worker/exec در دسترس نیست — جدول با برش‌های درون‌درخواستی ساخته می‌شود و اصلاح پشتِ همان نتیجه صف شد',
+                'build'=>$inlineBuild],JSON_UNESCAPED_UNICODE);exit;
+        }
         $freshRequestedAt=time();
-        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,
-            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,'slice_seconds'=>8],false);
+        $buildEnq=s4WorkerEnqueueMatrixBuild(['profile'=>'all',
+            'parallel_destinations'=>!empty($_GET['parallel_destinations']??$_POST['parallel_destinations']??null),
+            'live_fill'=>!array_key_exists('live_fill',$_POST)||!empty($_POST['live_fill']),
+            'selected_destinations'=>$opts['selected_destinations'],'coded_only'=>false,
+            'slice_seconds'=>max(2,min(20,(int)($_GET['slice_seconds']??$_POST['slice_seconds']??8)))],false);
         if(empty($buildEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'بازسازی تازهٔ جدول در صف قرار نگرفت','matrix_job'=>$buildEnq],JSON_UNESCAPED_UNICODE);exit;
         }
@@ -31610,8 +32280,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         if(empty($fixEnq['ok'])){
             echo json_encode(['ok'=>false,'error'=>'ساخت جدول صف شد اما اصلاح در صف قرار نگرفت','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
         }
-        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,
-            'message'=>'جدول تازه ساخته می‌شود و اصلاح بلافاصله فقط روی همان نتیجه اجرا خواهد شد','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
+        echo json_encode(['ok'=>true,'started'=>true,'running'=>true,'refreshing_matrix'=>true,'combined_workflow'=>true,
+            'message'=>'زنجیرهٔ صریح آغاز شد: ابتدا ساخت کامل جدول، سپس اصلاح کلی همان نتیجه','matrix_job'=>$buildEnq,'fix_job'=>$fixEnq],JSON_UNESCAPED_UNICODE);exit;
     }
     /* don't run while matrix build is running */
     $mxProg = matrixProgressRead();
@@ -31621,15 +32291,31 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             echo json_encode(['ok'=>!empty($fixEnq['ok']),'started'=>!empty($fixEnq['ok']),'running'=>true,
                 'waiting_for_matrix'=>true,'message'=>'اصلاح در صف است و خودکار پس از پایان ساخت جدول آغاز می‌شود']+$fixEnq,JSON_UNESCAPED_UNICODE);exit;
         }
-        echo json_encode(['ok' => false, 'error' => 'ساخت جدول در حال اجراست ولی worker پایدار در دسترس نیست', 'running' => true], JSON_UNESCAPED_UNICODE);
+        /* v10.361: بدونِ worker هم اصلاح گم نمی‌شود؛ پارک می‌شود تا همان
+           زنجیره/تیک، بلافاصله بعد از پایانِ ساخت اجرایش کند. */
+        matrixFixPendingSave($opts+['min_matrix_generated_at'=>max(0,(int)($mxProg['started_at']??0))]);
+        echo json_encode(['ok' => true, 'started' => false, 'running' => true, 'no_worker' => true, 'parked' => true,
+            'waiting_for_matrix' => true,
+            'message' => 'ساخت جدول در حال اجراست (بدونِ worker) — اصلاح پارک شد و خودکار پس از پایانِ ساخت اجرا می‌شود'], JSON_UNESCAPED_UNICODE);
         exit;
     }
     $lockFile = SYNC_MATRIX_FIX_LOCK_FILE;
     /* endpoint شروع خودش worker را تضمین می‌کند؛ برگشتن به PHP-FPM همان علت
        اصلی قطع‌شدن وسط راه بود. اگر worker بالا نیاید، صریح خطا بده. */
     $fixWorkerActive=s4WorkerIsActive();
-    if(!$fixWorkerActive){$spawnFixWorker=s4SpawnPersistentWorker();usleep(400000);$fixWorkerActive=s4WorkerIsActive();}
-    if(!$fixWorkerActive){echo json_encode(['ok'=>false,'error'=>'worker پایدار سرور راه‌اندازی نشد؛ اصلاح برای جلوگیری از قطع‌شدن شروع نشد','worker_start'=>$spawnFixWorker??null],JSON_UNESCAPED_UNICODE);exit;}
+    if(!$fixWorkerActive&&s4CanSpawnProcess()){$spawnFixWorker=s4SpawnPersistentWorker();usleep(400000);$fixWorkerActive=s4WorkerIsActive();}
+    if(!$fixWorkerActive){
+        /* v10.361: روی هاستِ فعلی exec بسته است، پس worker هرگز بالا نمی‌آید و
+           این خطا یعنی «اصلاح مغایرت هرگز شروع نمی‌شود». حالا همان اصلاح با
+           برش‌های کوتاهِ درون‌درخواستی اجرا می‌شود و هر برش، برشِ بعدی را
+           زنجیره می‌کند (با محافظِ hop/بی‌پیشرفتی). */
+        $inlineFix=matrixFixInlineSlice($opts,max(3,min(60,(int)($_GET['max_items']??$_POST['max_items']??20))));
+        $inlineOk=!empty($inlineFix['ok'])||!empty($inlineFix['yielded']);
+        echo json_encode(['ok'=>$inlineOk,'started'=>$inlineOk,'running'=>true,'no_worker'=>true,'inline_slice'=>true,
+            'message'=>$inlineOk?'بدونِ worker: اصلاح با برش‌های درون‌درخواستی شروع شد و خودکار ادامه می‌یابد'
+                :'اصلاح شروع نشد: '.(string)($inlineFix['error']??'unknown'),
+            'slice'=>$inlineFix],JSON_UNESCAPED_UNICODE);exit;
+    }
     /* کار بلند اصلاح را به child مستقل worker بسپار. ابتدا lock را probe
        می‌کنیم تا اجرای worker دیگر دوباره‌کاری نسازد. */
     if ($fixWorkerActive) {
@@ -37482,7 +38168,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          (strpos($selfSrc, 'function msKeepConnStart(): void {') !== false
           && strpos($selfSrc, "function msAlive(string \$phase = ''): void {") !== false
           && strpos($selfSrc, "\$GLOBALS['_msKeepConn'] = true;") !== false
-          && strpos($selfSrc, "if (!empty(\$GLOBALS['_msKeepConn']) && !isCliRun()) {") !== false
+          /* v10.361: همان شرطِ keep-conn حالا کمی broad‌تر است — روی هاستی که
+             جداشدن از کلاینت یعنی مرگِ پردازه، کران هم با پُلِ مرورگر کار
+             می‌کند؛ پس علاوه بر پرچمِ همگام‌سازیِ دستی، !s4CanDetachWork() هم
+             اتصال را باز نگه می‌دارد. */
+          && strpos($selfSrc, "if (!isCliRun() && (!empty(\$GLOBALS['_msKeepConn']) || !\$_cronDetach)) {") !== false
           && strpos($selfSrc, "msAlive('صفحه ' . \$page . ' — '") !== false
           && strpos($selfSrc, "msAlive('ارسال ' . \$label . ' — '") !== false));
     $add('10.61', 'رابطِ دستی پاسخِ ndjson را می‌خواند و تشخیص آدرسِ کران را نشان می‌دهد',
@@ -42299,7 +42989,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '@keyframes runtime' . 'Pulse') !== false);
     $add('10.273', 'سلامت هاست/سرور دوره‌ای، timeoutدار و با کلیک قابل بررسی فوری است',
          strpos($selfSrc, 'async function s4RuntimeHealth' . 'Check') !== false
-      && strpos($selfSrc, "?whoami=1&_health=") !== false
+      && (strpos($selfSrc, "?runtime_health=1&_health=") !== false || strpos($selfSrc, "?whoami=1&_health=") !== false)
       && strpos($selfSrc, "setInterval(()=>s4RuntimeHealthCheck(false),15000)") !== false
       && strpos($selfSrc, "/\\/sc(?:\\/|$)/i.test(location.pathname)") !== false);
     $add('10.273', 'ورودی 10.273 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
@@ -42765,15 +43455,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "Number(d.result_age_sec||0)>1800") !== false);
     $add('10.306', 'دکمهٔ خواندن نتیجه حذف شده است',
          strpos($selfSrc, '📖 خواندن ' . 'نتیجه') === false);
+    /* v10.361: از ۱۰.۳۵۳ به بعد «اصلاحِ تنها» هرگز rebuild غافلگیرانه نمی‌سازد؛
+       زنجیرهٔ build+fix فقط با گردشِ کارِ صریحِcombined_workflow صف می‌شود. */
     $add('10.306', 'اصلاح روی جدول ناسازگار build و fix را پشت‌سرهم صف می‌کند',
-         strpos($selfSrc, "\$fixNeedsBuild=\$forceFresh||!\$fixMatrix") !== false
+         strpos($selfSrc, "\$fixNeedsBuild&&!\$combinedWorkflow") !== false
       && strpos($selfSrc, "'refreshing_matrix'=>true") !== false
       && strpos($selfSrc, "'waiting_for_matrix'=>true") !== false);
     $add('10.306', 'ورودی 10.306 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "306'") !== false
       && version_compare(APP_VERSION, '10.' . '306', '>='));
     $add('10.307', 'اصلاح دستی همیشه پس از ساخت snapshot تازه در همان صف اجرا می‌شود',
-         strpos($selfSrc, "\$forceFresh=(string)\$opts['source']==='manual'") !== false
+         strpos($selfSrc, "\$combinedWorkflow=\$workflow==='build_and_fix';") !== false
       && strpos($selfSrc, "\$opts['min_matrix_generated_at']=\$freshRequestedAt") !== false);
     $add('10.307', 'شکست ساخت تازه اجازهٔ اصلاح روی جدول قدیمی و پیام کاذب نمی‌دهد',
          strpos($selfSrc, "'fresh_matrix_not_ready'") !== false
@@ -42977,6 +43669,223 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.361', 'ماتریس بدون driver ماندگار به برش همان request تنزل می‌کند، نه بن‌بست can_run=false',
+         strpos($selfSrc, "\$degraded=(!\$fresh&&!\$runner&&in_array(\$m,['cron_only','cron_first'],true))") !== false
+      && strpos($selfSrc, "'can_run'=>\$degraded?true:(\$m!=='cron_only'||\$fresh)") !== false
+      && strpos($selfSrc, "'mode_effective'=>\$degraded?'delay_only':\$m") !== false);
+    $add('10.361', 'تازگی cron_last_run.json شاهد driver نیست — فقط ضربان کران بیرونی یا exec',
+         strpos($selfSrc, "return s4ExternalCronPulseAge() <= " . "3600;") !== false
+      && strpos($selfSrc, "\$src !== '' && strncmp(\$src, 'external', " . "8) !== 0") !== false
+      && strpos($selfSrc, "'runner_available'=>\$runner") !== false);
+    $add('10.361', 'ادامهٔ build از checkpoint هیدریت می‌شود و هر hop آن را نابود نمی‌کند',
+         strpos($selfSrc, "\$cpGuard=matrixBuildCheckpointGuard(\$opts);") !== false
+      && strpos($selfSrc, "\$opts['resume'] = \$resumeRequested;") !== false
+      && substr_count($selfSrc, 'matrixBuildCheckpoint' . 'Guard($opts)') >= 3);
+    $add('10.361', 'حلقهٔ داغ «ادامهٔ خودکار سرور» با محافظ hop و بی‌پیشرفتی مهار شد',
+         strpos($selfSrc, "\$reason=\$hops>\$maxHops?'max_hops':(\$idle>=\$maxIdleHops?'no_progress':'')") !== false
+      && strpos($selfSrc, "\$waitMs=\$prevAt>0?max(0,(int)round(\$minGapMs-(\$now-\$prevAt)*1000)):0;") !== false
+      && strpos($selfSrc, "if(!\$chainHop)s4ChainReset('matrix_build');") !== false
+      && strpos($selfSrc, "'phase'=>'chain_stuck'") !== false);
+    $add('10.361', 'اصلاح مغایرت بدون worker هم جلو می‌رود: صف پشت build + برش درون‌درخواستی با قفل',
+         strpos($selfSrc, "\$fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c')") !== false
+      && strpos($selfSrc, "function matrixFixPendingSave(array \$opts): void") !== false
+      && strpos($selfSrc, "writeJsonFile(SYNC_MATRIX_FIX_PENDING_FILE,\$opts);") !== false
+      && strpos($selfSrc, "function s4ScheduleMatrixFixServerContinuation(array \$opts): bool") !== false);
+    $add('10.361', 'تیک کران برش زمانی دارد و پرش بعدی به خود اسکریپت زنجیره می‌شود',
+         strpos($selfSrc, "function s4CronSliceSeconds(?array \$cn = null): int") !== false
+      && strpos($selfSrc, "function s4ScheduleCronContinuation(array \$results = []): bool") !== false
+      && strpos($selfSrc, "\$results['chain_scheduled'] = s4ScheduleCronContinuation(\$results);") !== false
+      && strpos($selfSrc, "'chain_run' => (string)(\$_GET['chain_run'] ?? \$_POST['chain_run'] ?? 'auto')") !== false);
+    $add('10.361', 'وقتی جداشدن از کلاینت مرگ پردازه است، کران با پل مرورگر (ndjson) کار می‌کند',
+         strpos($selfSrc, "\$_cronDetach = (!isCliRun() && s4CanDetachWork());") !== false
+      && strpos($selfSrc, "if (!isCliRun() && (!empty(\$GLOBALS['_msKeepConn']) || !\$_cronDetach)) {") !== false
+      && strpos($selfSrc, "\$GLOBALS['_cronSliceDeadline'] = \$_cronSliceSec > 0 ? (microtime(true) + \$_cronSliceSec) : 0.0;") !== false);
+    $add('10.361', 'resume بدون detach واقعی کل تیک را قربانی نمی‌کند تا استخراج و مغایرت‌گیری برسند',
+         strpos($selfSrc, "\$results['resume_soft'] = ['kind' => 'queue', 'which' => \$wq,") !== false
+      && strpos($selfSrc, "\$results['resume_soft'] = ['kind' => 'registry', 'key' => \$arKey];") !== false);
+    $add('10.361', 'مغایرت‌گیری ته صف کران قربانی برش زمانی نمی‌شود و ایجنت‌ها به پرش بعدی می‌روند',
+         strpos($selfSrc, "\$results['matrix_reserve_sec'] = \$_mxReserve;") !== false
+      && strpos($selfSrc, "\$_cronAgents = !s4CronSliceExpired();") !== false
+      && strpos($selfSrc, "function s4CronWorkPending(): array") !== false
+      && strpos($selfSrc, "\$_cronPending = s4CronWorkPending();") !== false);
+    $add('10.361', 'برش ماتریس داخل سقف زمانی همان تیک کران بسته می‌شود',
+         strpos($selfSrc, "\$_cronD = (float)(\$GLOBALS['_cronSliceDeadline'] ?? 0);") !== false
+      && strpos($selfSrc, "\$GLOBALS['_matrixSliceDeadline'] = \$_sliceWanted;") !== false
+      && strpos($selfSrc, "in_array(\$source, ['manual','worker','ops_tick'], true)") !== false);
+    $add('10.361', 'تیک رابط (?ops_tick=1) برش واقعی کار را در اتصال زنده می‌راند و pulse بیرونی نمی‌سازد',
+         strpos($selfSrc, "\$GLOBALS['_s4InternalCron'] = true;") !== false
+      && strpos($selfSrc, "if((string)getenv('S4_INTERNAL_CRON')!=='1' && empty(\$GLOBALS['_s4InternalCron'])){") !== false
+      && strpos($selfSrc, "\$_tickFix = matrixFixInlineSlice(\$_tickPend, max(3, min(40, (int)(\$_tickPend['max_items'] ?? 20))));") !== false
+      && strpos($selfSrc, "(function opsTickPulse(){") !== false);
+    $add('10.361', 'تست مدل‌های AI برشی شد: سقف زمانی، بدون قرمزی بی‌دلیل، ادامه از تست‌نشده‌ها',
+         strpos($selfSrc, "function aiParallelCalls(array \$jobs, array \$net, int \$concurrency = 4, float \$deadline = 0.0): array") !== false
+      && strpos($selfSrc, "\$GLOBALS['_aiTestSliceDeadline'] = \$aiDeadline;") !== false
+      && strpos($selfSrc, "function s4ScheduleAiTestContinuation(array \$st): bool") !== false
+      && strpos($selfSrc, "ai_test_unstick=1&chain=1&resume=1&chain_hop=") !== false
+      && strpos($selfSrc, "if (\$deadline > 0 && microtime(true) >= \$deadline) break;") !== false);
+    $add('10.361', 'رابط برش بعدی تست را در اتصال زنده می‌راند و رانندهٔ موازی نمی‌سازد',
+         strpos($selfSrc, "!empty(\$_GET['drive']) && empty(\$st['running']) && empty(\$st['done'])") !== false
+      && strpos($selfSrc, "\$driveFp = aiTestLockOpen();") !== false
+      && strpos($selfSrc, "window._aiPollNeedDrive") !== false);
+    $add('10.361', 'ورودی 10.361 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "361'") !== false
+      && version_compare(APP_VERSION, '10.' . '361', '>='));
+    $add('10.360', 'bootstrap مستقیم با SHORTINIT از hookهای کند افزونه‌ها عبور می‌کند',
+         strpos($selfSrc, "define('SHORTINIT',true)") !== false
+      && strpos($selfSrc, "is_object(\$GLOBALS['wpdb']??null)") !== false
+      && strpos($selfSrc, 'Full WordPress bootstrap may execute slow third-party plugin hooks') !== false);
+    $add('10.360', 'واکشی Woo با wpdb و cursor صدتایی مستقیم انجام می‌شود',
+         strpos($selfSrc, '⚡ مستقیم Woo DB: ') !== false
+      && strpos($selfSrc, "p.post_type=%s AND p.post_status IN") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo',0,\$page,\$pageRows)") !== false);
+    $add('10.360', 'ورودی 10.360 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "360'") !== false
+      && version_compare(APP_VERSION, '10.' . '360', '>='));
+    $add('10.359', 'worker CLI وردپرس هم‌مکان را lazy و بدون web double-bootstrap بارگذاری می‌کند',
+         strpos($selfSrc, 'function s4BootstrapWooForCli(): array') !== false
+      && strpos($selfSrc, "if(!isCliRun())return \$result=['ok'=>false") !== false
+      && strpos($selfSrc, "require_once \$rootLoader") !== false);
+    $add('10.359', 'resume مستقیم از offset تعداد ردیف‌های cursor ادامه می‌یابد',
+         substr_count($selfSrc, '$offset=max(count($rows),($startPage-1)*100)') >= 2
+      && strpos($selfSrc, "'limit' => \$per, 'offset' => \$offset") !== false
+      && strpos($selfSrc, "'posts_per_page' => \$per, 'offset' => \$offset") !== false
+      && substr_count($selfSrc, '$offset+=count(') >= 2);
+    $add('10.359', 'ورودی 10.359 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "359'") !== false
+      && version_compare(APP_VERSION, '10.' . '359', '>='));
+    $add('10.358', 'Woo matrix فقط fieldهای واقعاً موردنیاز را از REST می‌خواهد',
+         strpos($selfSrc, "\$matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created'") !== false
+      && substr_count($selfSrc, '.\$matrixWooFields,null,') >= 2
+      && strpos($selfSrc, 'Restricting REST output avoids costly serialization') !== false);
+    $add('10.358', 'field projection در درخواست اصلی و fallback بدون تغییر cursor اعمال می‌شود',
+         strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='.(\$offset+\$chunkOffset).\$matrixWooFields") !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.358', 'ورودی 10.358 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "358'") !== false
+      && version_compare(APP_VERSION, '10.' . '358', '>='));
+    $add('10.357', 'صفحهٔ 100تایی Woo پس از timeout به دو offset پنجاه‌تایی شکسته می‌شود',
+         strpos($selfSrc, "foreach([0,50]as\$chunkOffset)") !== false
+      && strpos($selfSrc, "'products?per_page=50&status=any&offset='") !== false
+      && strpos($selfSrc, "\$parts=array_merge(\$parts,\$pr['body'])") !== false);
+    $add('10.357', 'fallback موفق همان صفحهٔ منطقی را یک‌بار در cursor ثبت می‌کند',
+         strpos($selfSrc, "\$r=['ok'=>true,'code'=>200") !== false
+      && strpos($selfSrc, 'fallback دو بستهٔ ۵۰تایی') !== false
+      && strpos($selfSrc, "reconFetchCursorAppend('woo', 0, \$page, \$pageRows)") !== false);
+    $add('10.357', 'timeout درخواست Woo قابل تنظیم و برای matrix محدودتر شده است',
+         strpos($selfSrc, "int \$timeout=60") !== false
+      && strpos($selfSrc, "CURLOPT_TIMEOUT=>\$timeout") !== false
+      && strpos($selfSrc, "'products?per_page=100&status=any&page=' . \$page.\$matrixWooFields,null,35") !== false);
+    $add('10.357', 'ورودی 10.357 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "357'") !== false
+      && version_compare(APP_VERSION, '10.' . '357', '>='));
+    $add('10.356', 'خطاهای موقت Woo با code و error تشخیص و checkpointed yield می‌شوند',
+         strpos($selfSrc, "\$transient=\$httpCode===0||\$httpCode===408") !== false
+      && strpos($selfSrc, "\$wooBoundaryReason==='http'&&!empty(\$wooMeta['transient'])") !== false
+      && strpos($selfSrc, "return \$yieldMatrix('woo_fetch',\$retryAfter)") !== false);
+    $add('10.356', 'worker ساخت retry_after شبکه را بدون hot-loop رعایت می‌کند',
+         strpos($selfSrc, "\$retryAfter=max(0,min(120,(int)(\$decoded['retry_after']") !== false
+      && strpos($selfSrc, "'job_type'=>'matrix_build'") !== false
+      && strpos($selfSrc, "sleep(\$retryAfter)") !== false);
+    $add('10.356', 'خطای قطعی Woo جزئیات HTTP می‌دهد و probe صفحهٔ انتخابی دارد',
+         strpos($selfSrc, "\$httpDetail=\$wooBoundaryReason==='http'") !== false
+      && strpos($selfSrc, "\$probePage=max(1,min(10000") !== false
+      && strpos($selfSrc, "'page'=>\$probePage,'code'") !== false);
+    $add('10.356', 'ورودی 10.356 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "356'") !== false
+      && version_compare(APP_VERSION, '10.' . '356', '>='));
+    $add('10.355', 'چراغ runtime به‌جای whoami سنگین endpoint سبک JSON را می‌خواند',
+         strpos($selfSrc, "isset(\$_GET['runtime_" . "health'])") !== false
+      && strpos($selfSrc, "?runtime_health=1&_health=") !== false
+      && strpos($selfSrc, "'version'=>APP_VERSION,'at'=>time()") !== false);
+    $add('10.355', 'یک timeout موقت قرمز نیست و قرمز به سه شکست پایدار محدود است',
+         strpos($selfSrc, "s4RuntimeHealthFailures<3||recentOk") !== false
+      && strpos($selfSrc, "s4RuntimeHealthLastOk)<90000") !== false
+      && strpos($selfSrc, "tag.textContent='~'") !== false);
+    $add('10.355', 'probe قبلی در focus/wake لغو و پاسخ stale با generation رد می‌شود',
+         strpos($selfSrc, "request!==s4RuntimeHealthRequest") !== false
+      && strpos($selfSrc, "if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort()") !== false
+      && strpos($selfSrc, "document.addEventListener('visibilitychange'") !== false);
+    $add('10.355', 'ورودی 10.355 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "355'") !== false
+      && version_compare(APP_VERSION, '10.' . '355', '>='));
+    $add('10.354', 'اصلاح جدول فعلی با workflow صریح هرگز rebuild پنهان آغاز نمی‌کند',
+         strpos($selfSrc, "fd.append('workflow','fix_" . "only')") !== false
+      && strpos($selfSrc, "\$workflow=(string)(\$_GET['workflow']") !== false
+      && strpos($selfSrc, "if(\$fixNeedsBuild&&!\$combinedWorkflow)") !== false);
+    $add('10.354', 'دکمهٔ ترکیبی build و اصلاح کلی را به ترتیب در یک صف سرور می‌گذارد',
+         strpos($selfSrc, 'function syncMatrixBuildAnd' . 'Fix()') !== false
+      && strpos($selfSrc, "fd.append('workflow','build_" . "and_fix')") !== false
+      && strpos($selfSrc, "'combined_workflow'=>true") !== false
+      && strpos($selfSrc, "\$opts['view_filters']=[];\$opts['scope']='all'") !== false);
+    $add('10.354', 'checkpoint ناتمام فقط توسط workflow ترکیبی ادامه و سپس اصلاح می‌شود',
+         strpos($selfSrc, "if(\$mxCp&&!\$combinedWorkflow)") !== false
+      && strpos($selfSrc, "'code'=>'matrix_build_incomplete'") !== false
+      && strpos($selfSrc, "if(\$mxCp&&\$combinedWorkflow)") !== false);
+    $add('10.354', 'رابط سه عمل فقط ساخت، اصلاح فعلی و ساخت‌به‌علاوه‌اصلاح را شفاف جدا می‌کند',
+         strpos($selfSrc, '🚀 فقط ساخت جدول') !== false
+      && strpos($selfSrc, '🔧 اصلاح جدول فعلی') !== false
+      && strpos($selfSrc, '🔄 ساخت جدول + اصلاح کلی') !== false);
+    $add('10.354', 'ورودی 10.354 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "354'") !== false
+      && version_compare(APP_VERSION, '10.' . '354', '>='));
+    $add('10.353', 'status نتیجهٔ build و fix را بر اساس زمان واقعی مرتب می‌کند',
+         strpos($selfSrc, "\$buildAt=max(\$resultAt") !== false
+      && strpos($selfSrc, "\$fixAt=max((int)(\$fix['finished_at']") !== false
+      && strpos($selfSrc, "\$preferFinishedFix=") !== false);
+    $add('10.353', 'build موفق جدید دیگر پشت build_failed قدیمی اصلاح پنهان نمی‌شود',
+         strpos($selfSrc, 'old build_failed') !== false
+      && strpos($selfSrc, "(!empty(\$prog['done'])&&!\$preferFinishedFix)") !== false
+      && strpos($selfSrc, "'state_order'=>['build_at'=>\$buildAt") !== false);
+    $add('10.353', 'progress اصلاح قدیمی در پاسخ status به payload سبک محدود می‌شود',
+         strpos($selfSrc, "\$shownProgress=\$actualFixRunning?\$fix") !== false
+      && strpos($selfSrc, "\$preferFinishedFix?\$fixView:\$prog") !== false);
+    $add('10.353', 'ورودی 10.353 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "353'") !== false
+      && version_compare(APP_VERSION, '10.' . '353', '>='));
+    $add('10.352', 'polling ساخت و اصلاح پس از refresh/wake با lifecycleها فوراً bootstrap می‌شود',
+         strpos($selfSrc, "window.addEventListener('pageshow',()=>syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "window.addEventListener('focus',()=>syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncMatrixPollingWake") !== false
+      && strpos($selfSrc, "window.addEventListener('online',()=>syncMatrixPollingWake") !== false);
+    $add('10.352', 'نسل پاسخ polling قدیمی پس از خواب نمی‌تواند poll تازه را متوقف کند',
+         strpos($selfSrc, 'generation!==window._smPollGeneration') !== false
+      && strpos($selfSrc, 'response from the interval that existed before sleep') !== false
+      && strpos($selfSrc, "window._smPollGeneration=0") !== false);
+    $add('10.352', 'watchdog صفحهٔ visible handoff موقت و interval گم‌شده را دوباره می‌خواند',
+         strpos($selfSrc, "window._smPollWatchdog=setInterval") !== false
+      && strpos($selfSrc, "Date.now()-(window._smPollLastResponseAt||0)>15000") !== false
+      && strpos($selfSrc, "syncMatrixPollingBootstrap") !== false
+      && strpos($selfSrc, "generation!==window._smPollGeneration||requestBusy") !== false);
+    $add('10.352', 'اصلاح queued در status و UI به‌عنوان اصلاح فعال نمایش داده می‌شود',
+         strpos($selfSrc, "'running','queued','done'") !== false
+      && strpos($selfSrc, "if((d.fix_running||d.fix_queued) && d.fix_progress)") !== false
+      && strpos($selfSrc, "Object.assign({},d.fix_progress,{job:'fix'})") !== false);
+    $add('10.352', 'ورودی 10.352 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "352'") !== false
+      && version_compare(APP_VERSION, '10.' . '352', '>='));
+    $add('10.351', 'build دارای checkpoint دیگر با سقف عمومی چهار تلاش permanently failed نمی‌شود',
+         strpos($selfSrc, "\$recover=\$isCheckpoint" . "Build||\$attempts<4||\$isCheckpointFix") !== false
+      && strpos($selfSrc, "\$e['recycles']=(int)(\$e['recycles']??0)+1;\$e['attempts']=0") !== false);
+    $add('10.351', 'کران running یتیم بدون lock و owner را دقیقاً از checkpoint دوباره مالک‌دار می‌کند',
+         strpos($selfSrc, "\$orphaned=!empty(\$p['running'])&&!\$lockHeld") !== false
+      && strpos($selfSrc, "if(\$orphaned&&!empty(\$r['ok']))matrixProgress") !== false
+      && strpos($selfSrc, "'orphaned'=>\$orphaned") !== false);
+    $add('10.351', 'بررسی owner فعال قبل از lock از ساخت runner موازی در فاصلهٔ childها جلوگیری می‌کند',
+         strpos($selfSrc, 'tiny unlocked gap') !== false
+      && strpos($selfSrc, "['pending','running','paused']") !== false);
+    $add('10.351', 'ورودی 10.351 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "351'") !== false
+      && version_compare(APP_VERSION, '10.' . '351', '>='));
+    $add('10.350', 'سقف صفحهٔ هر پردازش Woo به‌عنوان handoff قابل‌ادامه شناخته می‌شود',
+         strpos($selfSrc, "in_array(\$wooBoundaryReason,['max_" . "pages','run_limit'],true)") !== false
+      && strpos($selfSrc, "return \$yieldMatrix('woo_" . "fetch')") !== false);
+    $add('10.350', 'مرز صفحه cursor و checkpoint را حفظ می‌کند و وارد شاخهٔ خطا نمی‌شود',
+         strpos($selfSrc, 'Reaching the per-process page cap is a normal handoff boundary') !== false
+      && strpos($selfSrc, "\$wooBoundaryReason=(string)(\$wooMeta['reason']??'')") !== false);
+    $add('10.350', 'ورودی 10.350 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "350'") !== false
+      && version_compare(APP_VERSION, '10.' . '350', '>='));
     $add('10.349', 'قفل به‌ارث‌رسیدهٔ worker مرده با اثبات PID و heartbeat بازیابی می‌شود',
          strpos($selfSrc, 'function s4WorkerRecoverStale' . 'LockPath') !== false
       && strpos($selfSrc, 'dead_worker_inherited_' . 'lock') !== false
@@ -50720,8 +51629,33 @@ function reconExpected(string $target, bool $allProfiles = false, ?array &$stats
 }
 
 /** همهٔ محصولات ووکامرس */
+/** Bootstrap the colocated WordPress only inside detached CLI workers.
+ * Web/plugin requests already have WordPress when appropriate and must never
+ * include wp-load.php for a second time. require_once also prevents recursion
+ * when WordPress loads this active plugin during its own bootstrap.
+ */
+function s4BootstrapWooForCli(): array {
+    static $result=null;
+    if(wooDirectAvailable())return ['ok'=>true,'loaded'=>false,'reason'=>'already_available'];
+    if($result!==null)return $result;
+    if(!isCliRun())return $result=['ok'=>false,'loaded'=>false,'reason'=>'not_cli'];
+    $rootLoader=dirname(dirname(dirname(__DIR__))).'/wp-load.php';
+    if(!is_file($rootLoader))return $result=['ok'=>false,'loaded'=>false,'reason'=>'wp_load_missing'];
+    try{
+        if(!defined('WP_USE_THEMES'))define('WP_USE_THEMES',false);
+        /* Full WordPress bootstrap may execute slow third-party plugin hooks.
+           SHORTINIT initializes config + wpdb only, which is all this reader needs. */
+        if(!defined('SHORTINIT'))define('SHORTINIT',true);
+        require_once $rootLoader;
+        $ok=wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null);
+        return $result=['ok'=>$ok,'loaded'=>true,'reason'=>$ok?'':'woo_unavailable_after_bootstrap'];
+    }catch(Throwable $e){
+        return $result=['ok'=>false,'loaded'=>false,'reason'=>'bootstrap_exception','error'=>mb_substr($e->getMessage(),0,180)];
+    }
+}
+
 /**
- * v10.115: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
+ * v10.115/v10.359: واکشی محصولات ووکامرس از دیتابیس محلی (اتصال مستقیم).
  * وقتی اسکرپر داخل همان وردپرس/ووکامرس لود شود، به‌جای REST API صدها برابر سریع‌تر است.
  * @return list<array{id:int,title:string,price:int,status:string}>
  */
@@ -50731,19 +51665,22 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
     $rows = array_values(array_filter((array)($cur['rows'] ?? []), 'is_array'));
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     $limit = $max > 0 ? $max : 50000;
-    if (!function_exists('wc_get_products') && !function_exists('get_posts')) {
+    $directWpdb=is_object($GLOBALS['wpdb']??null)&&isset($GLOBALS['wpdb']->posts,$GLOBALS['wpdb']->postmeta);
+    if (!function_exists('wc_get_products') && !function_exists('get_posts') && !$directWpdb) {
         $meta['partial'] = true; $meta['reason'] = 'unavailable';
         return $rows;
     }
     if (function_exists('wc_get_products')) {
-        $per = 200; $got = 0; $page = $startPage;
+        /* Offset follows durable row count, not an old page-size assumption. This
+           makes a REST(100) -> direct resume start at row 300 with no gap. */
+        $per = 100; $got = 0; $page = $startPage; $offset=max(count($rows),($startPage-1)*100);
         while ($got < $limit) {
             if (reconStopRequested()) {
                 $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped';
                 $meta['page'] = max(0, $page - 1); break;
             }
             $batch = wc_get_products([
-                'limit' => $per, 'page' => $page,
+                'limit' => $per, 'offset' => $offset,
                 'status' => ['publish', 'draft', 'pending', 'private'],
                 'orderby' => 'ID', 'order' => 'ASC', 'return' => 'objects']);
             if (!is_array($batch)) {
@@ -50774,22 +51711,53 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
             reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
                 'log_add' => ['⚡ مستقیم WC: ' . count($rows) . ' محصول (صفحه ' . $page . ')']]);
             if (count($batch) < $per) { $meta['complete'] = true; break; }
-            $page++;
+            $offset+=count($batch);$page++;
         }
         if (!$meta['complete'] && !$meta['partial']) {
             $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page;
         }
         return $rows;
     }
-    /* fallback get_posts: page with offset and the same NDJSON cursor */
-    $per = 200; $page = $startPage; $got = 0;
+    if($directWpdb){
+        $wpdb=$GLOBALS['wpdb'];$per=100;$page=$startPage;$got=0;
+        $offset=max(count($rows),($startPage-1)*100);
+        while($got<$limit){
+            if(reconStopRequested()){$meta['partial']=true;$meta['stopped']=true;$meta['reason']='stopped';$meta['page']=max(0,$page-1);break;}
+            $sql=$wpdb->prepare("SELECT p.ID,p.post_title,p.post_status,
+                (SELECT pmr.meta_value FROM {$wpdb->postmeta} pmr WHERE pmr.post_id=p.ID AND pmr.meta_key='_regular_price' LIMIT 1) regular_price,
+                (SELECT pmp.meta_value FROM {$wpdb->postmeta} pmp WHERE pmp.post_id=p.ID AND pmp.meta_key='_price' LIMIT 1) current_price
+                FROM {$wpdb->posts} p WHERE p.post_type=%s AND p.post_status IN (%s,%s,%s,%s)
+                ORDER BY p.ID ASC LIMIT %d OFFSET %d",
+                'product','publish','draft','pending','private',$per,$offset);
+            $raw=$wpdb->get_results($sql,'ARRAY_A');
+            if(!is_array($raw)){$meta['partial']=true;$meta['reason']='db';$meta['page']=$page;$meta['db_error']=mb_substr((string)$wpdb->last_error,0,180);break;}
+            if(!$raw){$meta['complete']=true;$meta['page']=max(0,$page-1);break;}
+            $pageRows=[];
+            foreach($raw as $post){
+                $name=trim((string)($post['post_title']??''));if($name==='')continue;
+                $reg=(string)($post['regular_price']??'');if($reg==='')$reg=(string)($post['current_price']??'');
+                $pageRows[]=['id'=>(int)($post['ID']??0),'title'=>$name,'price'=>(int)preg_replace('~\D~','',$reg),
+                    'status'=>(string)($post['post_status']??''),'via'=>'direct_db'];$got++;
+                if($got>=$limit)break;
+            }
+            if($pageRows){$rows=array_merge($rows,$pageRows);reconFetchCursorAppend('woo',0,$page,$pageRows);}
+            $meta['page']=$page;reconProgress(['phase'=>'fetch','fetched'=>count($rows),'page'=>$page,
+                'log_add'=>['⚡ مستقیم Woo DB: '.count($rows).' محصول (صفحه '.$page.')']]);
+            if(count($raw)<$per){$meta['complete']=true;break;}
+            $offset+=count($raw);$page++;
+        }
+        if(!$meta['complete']&&!$meta['partial']){$meta['partial']=true;$meta['reason']='run_limit';$meta['page']=$page;}
+        return $rows;
+    }
+    /* fallback get_posts: absolute row offset and the same NDJSON cursor */
+    $per = 100; $page = $startPage; $got = 0; $offset=max(count($rows),($startPage-1)*100);
     while ($got < $limit) {
         if (reconStopRequested()) {
             $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = max(0, $page - 1); break;
         }
         $raw = get_posts(['post_type' => 'product',
             'post_status' => ['publish', 'draft', 'pending', 'private'],
-            'posts_per_page' => $per, 'paged' => $page, 'orderby' => 'ID', 'order' => 'ASC']);
+            'posts_per_page' => $per, 'offset' => $offset, 'orderby' => 'ID', 'order' => 'ASC']);
         if (!$raw) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
         $pageRows = [];
         foreach ((array)$raw as $post) {
@@ -50808,7 +51776,7 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
         reconProgress(['phase' => 'fetch', 'fetched' => count($rows), 'page' => $page,
             'log_add' => ['⚡ مستقیم WC (posts): ' . count($rows) . ' محصول']]);
         if (count($raw) < $per) { $meta['complete'] = true; break; }
-        $page++;
+        $offset+=count($raw);$page++;
     }
     if (!$meta['complete'] && !$meta['partial']) { $meta['partial'] = true; $meta['reason'] = 'run_limit'; $meta['page'] = $page; }
     return $rows;
@@ -50816,8 +51784,12 @@ function reconFetchWooDirect(int $max = 0, ?array &$meta = null): array {
 
 function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
-    /* v10.132: مسیر مستقیم هم با همان cursor صفحه‌ای ادامه‌پذیر است. */
-    if (function_exists('wooDirectAvailable') && wooDirectAvailable()) {
+    /* Detached matrix children normally execute this file outside WordPress.
+       Bootstrap the colocated installation lazily, then use the existing direct
+       reader. Ordinary web/plugin requests never enter this CLI-only branch. */
+    $boot=function_exists('s4BootstrapWooForCli')?s4BootstrapWooForCli():['ok'=>false,'loaded'=>false];
+    if (!empty($boot['loaded'])) reconProgress(['log_add'=>[!empty($boot['ok'])?'⚡ وردپرس در worker بارگذاری شد؛ ادامهٔ Woo از دیتابیس محلی':'⚠️ bootstrap مستقیم Woo در دسترس نشد: '.(string)($boot['reason']??'unknown')]]);
+    if (function_exists('wooDirectAvailable') && (wooDirectAvailable()||function_exists('get_posts')||is_object($GLOBALS['wpdb']??null))) {
         return reconFetchWooDirect($maxPages > 0 ? $maxPages * 100 : 0, $meta);
     }
     if ($maxPages <= 0) $maxPages = (int)RECON_FETCH_MAX_PAGES;
@@ -50834,13 +51806,38 @@ function reconFetchWoo(array $w, int $maxPages = 0, ?array &$meta = null): array
     $startPage = max(1, (int)($cur['page'] ?? 0) + 1);
     reconProgress(['log_add' => ['🌐 واکشی ووکامرس از REST API (کندتر از مستقیم)…']]);
     $limit = $startPage + max(1, $maxPages);
+    /* Matrix matching never reads descriptions, images, attributes or metadata.
+       Restricting REST output avoids costly serialization and oversized responses
+       while preserving the exact page/offset cursor semantics. */
+    $matrixWooFields='&_fields=id,name,regular_price,status,date_created_gmt,date_created';
     for ($page = $startPage; $page < $limit; $page++) {
         if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         $r = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET',
-            'products?per_page=100&status=any&page=' . $page);
+            'products?per_page=100&status=any&page=' . $page.$matrixWooFields,null,35);
+        /* Some shared Woo hosts time out while serializing/counting 100 rows even
+           though smaller offset requests work. Preserve the logical 100-row page
+           by merging two ordered 50-row chunks at the same absolute offset. */
+        $firstCode=(int)($r['code']??0);$firstTransient=$firstCode===0||$firstCode===408||$firstCode===425||$firstCode===429||$firstCode>=500;
+        if((empty($r['ok'])||!is_array($r['body']))&&$firstTransient){
+            $offset=max(0,($page-1)*100);$parts=[];$partFailure=null;
+            foreach([0,50]as$chunkOffset){
+                $pr=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'GET',
+                    'products?per_page=50&status=any&offset='.($offset+$chunkOffset).$matrixWooFields,null,30);
+                if(empty($pr['ok'])||!is_array($pr['body'])){$partFailure=$pr;break;}
+                $parts=array_merge($parts,$pr['body']);if(count($pr['body'])<50)break;
+            }
+            if($partFailure===null){
+                $r=['ok'=>true,'code'=>200,'error'=>'','body'=>$parts,'raw'=>''];
+                reconProgress(['log_add'=>['🧩 ووکامرس صفحهٔ '.$page.' با fallback دو بستهٔ ۵۰تایی دریافت شد ('.count($parts).' محصول)']]);
+            }else{$r=$partFailure;}
+        }
         if (empty($r['ok']) || !is_array($r['body'])) {
-            $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page;
-            reconProgress(['log_add' => ['⚠️ صفحهٔ ' . $page . ' نیامد — checkpoint حفظ شد']]); break;
+            $httpCode=(int)($r['code']??0);$httpError=mb_substr(trim((string)($r['error']??'')),0,180);
+            $transient=$httpCode===0||$httpCode===408||$httpCode===425||$httpCode===429||$httpCode>=500;
+            $meta['partial']=true;$meta['reason']='http';$meta['page']=$page;$meta['http_code']=$httpCode;
+            $meta['http_error']=$httpError;$meta['transient']=$transient;$meta['retry_after']=$httpCode===429?30:10;
+            reconProgress(['log_add'=>['⚠️ ووکامرس صفحهٔ '.$page.' نیامد · HTTP '.($httpCode?:'0')
+                .($httpError!==''?' · '.$httpError:'').' · checkpoint حفظ شد'.($transient?'؛ retry با backoff':'؛ خطای قطعی')]]);break;
         }
         $batch = $r['body'];
         if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
@@ -54150,6 +55147,29 @@ if (!empty($st['running']) && empty($st['done'])) {
         aiTestStateSave($st);
     }
 }
+/* v10.361: «رانندهٔ رابط» برای تستِ مدل‌ها. اگر برشِ قبلی بسته شده و کار
+   ناتمام مانده، همین درخواستِ متصل یک برشِ دیگر اجرا می‌کند — مرورگرِ وصل
+   یعنی پردازهٔ زنده، همان پُلی که ارسال‌ها و همگام‌سازیِ دستی با آن کار
+   می‌کنند. قفلِ غیرانحصاری تضمین می‌کند دو راننده هم‌زمان نسازیم؛ اگر
+   زنجیرهٔ داخلیِ سرور هم کار کند، این مسیر فقط پشتِ همان قفل می‌ماند. */
+if (!empty($_GET['drive']) && empty($st['running']) && empty($st['done'])
+    && (!empty($st['resume_needed']) || !empty($st['sliced'])) && !aiTestStopRequested()) {
+    $driveFp = aiTestLockOpen();
+    if (!$driveFp) {
+        $st['drive'] = 'lock_held';
+    } else {
+        register_shutdown_function(function () use ($driveFp) { aiTestLockClose($driveFp); });
+        $dArgs = (array)($st['args'] ?? []);
+        $dPer  = max(1, min(500, (int)($dArgs['per'] ?? 50)));
+        $dMsg  = trim((string)($dArgs['msg'] ?? 'سلام')); if ($dMsg === '') $dMsg = 'سلام';
+        $dCat  = trim((string)($dArgs['cat'] ?? 'ادو پرفیوم')); if ($dCat === '') $dCat = 'ادو پرفیوم';
+        $dDly  = max(0, min(60000, (int)($dArgs['delay'] ?? 120)));
+        $dCon  = max(1, min(16, (int)($dArgs['conc'] ?? 4)));
+        $dNon  = array_key_exists('nonchat', $dArgs) ? !empty($dArgs['nonchat']) : true;
+        @unlink(AI_TEST_STOP_FILE);
+        $st = aiRunTestBackground($dPer, true, $dMsg, $dCat, $dDly, $dCon, $dNon) + ['driven' => true];
+    }
+}
 echo json_encode($st, JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -54371,11 +55391,20 @@ function aiTestBuildQueue(array $providers, int $per, bool $onlyUntested, bool $
  * درخواستِ زنجیره‌ای دارد (نام‌های مختلفِ org و دو نوع بدنه) و منطقش
  * ترتیبی است؛ آن‌ها به مسیرِ تکی برمی‌گردند تا رفتار عوض نشود.
  */
-function aiParallelCalls(array $jobs, array $net, int $concurrency = 4): array {
+function aiParallelCalls(array $jobs, array $net, int $concurrency = 4, float $deadline = 0.0): array {
     $out = [];
+    /* v10.361: برشِ زمانیِ تستِ مدل‌ها. همهٔ فراخوان‌های تست (پیام، دسته،
+       دورهای جبرانی) از همین global سقف می‌گیرند تا هیچ‌کدام از یک برش
+       بیرون نزند؛ فراخوانیِ صریح با $deadline اولویت دارد. */
+    if ($deadline <= 0) $deadline = (float)($GLOBALS['_aiTestSliceDeadline'] ?? 0);
     $concurrency = max(1, min(16, $concurrency));
     $pending = [];
     foreach ($jobs as $k => $job) {
+        /* v10.361: سقفِ زمانیِ برش. ردیفی که نوبتش نمی‌شود «ناموفق» ثبت
+           نمی‌شود — فقط از خروجی جا می‌ماند تا برشِ بعدی (only_untested)
+           همان مدل را دوباره و سالم تست کند. بی‌این، تستِ مدل‌ها روی هاستِ
+           شما یا نیمه‌کاره می‌مُرد یا ده‌ها مدل را بی‌دلیل قرمز می‌کرد. */
+        if ($deadline > 0 && microtime(true) >= $deadline) break;
         $p = $job['p']; $mid = (string)$job['mid'];
         $payload = (array)$job['payload'];
         if (isset($payload['max_tokens'])) {
@@ -54401,12 +55430,14 @@ function aiParallelCalls(array $jobs, array $net, int $concurrency = 4): array {
     $idx = 0;
     while ($idx < $nk) {
         if (aiTestStopRequested()) break;
+        if ($deadline > 0 && microtime(true) >= $deadline) break;   /* v10.361: برشِ زمانی */
         $mh = curl_multi_init();
         $batch = [];
         /* یک دسته به اندازهٔ سقفِ هم‌زمانی بردار. کلیدِ $batch یک شمارندهٔ
            سادهٔ عددی است، نه خودِ هندل: در PHP 8 هندلِ curl یک شیء
            (CurlHandle) است و قابلِ تبدیل به int/کلیدِ آرایه نیست. */
         while (count($batch) < $concurrency && $idx < $nk) {
+            if ($deadline > 0 && microtime(true) >= $deadline) break;   /* v10.361 */
             $k = $keys[$idx++];
             $pd = $pending[$k];
             $h = aiHttpPrepare($pd['url'], $pd['headers'], $pd['body'], $net, $net['mode'] ?? 'direct');
@@ -54759,6 +55790,18 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
     $delayMs = max(0, min(60000, (int)$delayMs));   // v9.56: تاخیر بین هر دور (جلوگیری از ریت‌لیمیت)
     $concurrency = max(1, min(16, (int)$concurrency));
     $net = aiNetCfg();
+    /* v10.361: سقفِ زمانیِ هر برشِ تست.
+       پیش‌فرض روی هاستی که کارِ جداشده در آن زنده نمی‌ماند (بدونِ exec و
+       بدونِ fastcgi_finish_request) ۲۰ ثانیه است؛ در CLI یا هاستِ دارای
+       driver واقعی ۰ = بدونِ سقف (همان رفتارِ قبلی). با
+       connections.ai_test_slice_sec قابلِ تنظیم است. */
+    $cnAi = loadConnections();
+    $aiSliceSec = array_key_exists('ai_test_slice_sec', $cnAi)
+        ? (int)$cnAi['ai_test_slice_sec']
+        : ((isCliRun() || s4CanDetachWork()) ? 0 : 20);
+    $aiSliceSec = max(0, min(600, $aiSliceSec));
+    $aiDeadline = $aiSliceSec > 0 ? (microtime(true) + $aiSliceSec) : 0.0;
+    $GLOBALS['_aiTestSliceDeadline'] = $aiDeadline;
     $st = ['running'=>true,'done'=>false,'stopped'=>false,'started_at'=>time(),'updated_at'=>time(),
            'per_provider'=>$per,'only_untested'=>$onlyUntested,'delay_ms'=>$delayMs,
            'concurrency'=>$concurrency,'skip_nonchat'=>$skipNonChat,
@@ -54777,6 +55820,9 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
     $st['args'] = ['per'=>$per, 'msg'=>$testMsg, 'cat'=>$testCat, 'delay'=>$delayMs,
                    'conc'=>$concurrency, 'nonchat'=>$skipNonChat ? 1 : 0];
     $st['pid'] = function_exists('getmypid') ? (int)getmypid() : 0;
+    $st['slice_sec'] = $aiSliceSec;
+    $st['sliced'] = false;
+    $st['chain_hop'] = max(0, (int)($_GET['chain_hop'] ?? $_POST['chain_hop'] ?? 0));
     $st['skipped'] = (int)($qstats['skipped'] ?? 0);
     $st['nonchat'] = (int)($qstats['nonchat'] ?? 0);
     $st['rounds']  = (int)($qstats['rounds'] ?? 0);
@@ -54952,6 +55998,10 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
     foreach ($rounds as $rIdx => $items) {
         clearstatcache(true, AI_TEST_STOP_FILE);
         if (is_file(AI_TEST_STOP_FILE)) { $st['stopped'] = true; break; }
+        /* v10.361: پایانِ برشِ زمانی — بینِ دو دور بررسی می‌شود تا نتیجهٔ
+           دورِ جاری (که همین حالا در ai_providers.json نشسته) دور ریخته
+           نشود؛ بقیهٔ مدل‌ها به برشِ بعدی زنجیره می‌شوند. */
+        if ($aiDeadline > 0 && microtime(true) >= $aiDeadline) { $st['sliced'] = true; break; }
         $st['round'] = (int)$rIdx + 1;
         $st['current'] = ['provider'=>'دورِ ' . ($rIdx + 1), 'model'=>count($items) . ' مدل هم‌زمان'];
         aiTestStateSave($st);
@@ -55062,6 +56112,21 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
      *  keyTests و جزئیات دقیقاً مثل دورِ اصلی به‌روز می‌شوند؛ فقط تعدادِ
      *  «tested» را دستی برمی‌گردانیم تا یک ردیف چند بار شمرده نشود.
      * ================================================================= */
+    /* v10.361: برشِ زمانی تمام شد — وضعیت را «قابلِ ادامه» ببند و پرشِ بعدی
+       را زنجیره کن. نتیجهٔ هر دور از قبل در ai_providers.json نشسته، پس
+       ادامهٔ فقط-تست‌نشده‌ها دقیقاً از همان‌جا می‌رود و مدلِ تست‌شده دوباره
+       تست نمی‌شود. */
+    if (!empty($st['sliced'])) {
+        $GLOBALS['_aiTestSliceDeadline'] = 0.0;
+        aiProvidersSave($providers);
+        $st['running'] = false; $st['done'] = false; $st['stalled'] = false;
+        $st['resume_needed'] = true; $st['resumable'] = true;
+        $st['current'] = ['provider' => '', 'model' => ''];
+        $st['updated_at'] = time();
+        aiTestStateSave($st);
+        $st['chain_scheduled'] = aiTestStopRequested() ? false : s4ScheduleAiTestContinuation($st);
+        return $st + ['ok' => true, 'sliced' => true];
+    }
     $st['retry_passes'] = 0;
     $st['retry_fixed']  = 0;
     $st['retry_tried']  = 0;
@@ -55147,6 +56212,7 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
         if ($delayMs > 0 && !aiTestStopRequested()) usleep($delayMs * 1000);
     }
 
+    $GLOBALS['_aiTestSliceDeadline'] = 0.0;   /* v10.361: برش تمام شد */
     aiProvidersSave($providers);
     $st['running'] = false;
     $st['done'] = true;
@@ -66283,7 +67349,10 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <textarea id="chInput" rows="2" onkeydown="chKey(event)" style="flex:1;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:8px;font-size:11.5px;font-family:inherit;line-height:1.8" placeholder="پیامتان را بنویسید… (Ctrl+Enter برای ارسال)"></textarea>
 <button class="btn btn-purple" id="chSendBtn" onclick="chSend()" style="flex:0;font-size:11px;white-space:nowrap">📨 ارسال</button>
 </div>
-<div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">
+<button class="btn btn-green" id="chTestAllBtn" onclick="chTestAll()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="شروع و پایش تست زنده همه مدل‌های فعال هوش مصنوعی">🧪 تست همه مدل‌ها</button>
+<button class="btn btn-cyan" id="chImportAiBtn" onclick="chImportAiJson()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="درون‌ریزی فایل یا متن JSON مدل‌های هوش مصنوعی">📥 درون‌ریزی JSON مدل‌ها</button>
+<button class="btn btn-purple" id="chSyncGhBtn" onclick="chSyncGithub()" style="flex:0;font-size:10.5px;padding:3px 10px;font-weight:700" title="همگام‌سازی و کشیدن آخرین تغییرات کدهای برنچ از گیت‌هاب">🔄 همگام‌سازی با گیت‌هاب</button>
 <span id="chStatus" style="flex:1;font-size:10px;color:#64748b">—</span>
 <button class="btn btn-gray" onclick="chClear()" style="flex:0;font-size:10px;padding:3px 8px">🗑 پاک‌کردنِ گفت‌وگو</button>
 </div>
@@ -67013,11 +68082,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
 <label style="font-size:10px;color:#c4b5fd">نگه‌داری تکراری: <select id="smDuplicateKeep" style="font-size:10px;padding:4px 6px"><option value="newest">جدیدترین</option><option value="expensive">گران‌ترین</option></select></label>
-<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 ساخت روی سرور</button>
+<button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 فقط ساخت جدول</button>
+<button class="btn" onclick="syncMatrixBuildAndFix()" id="smBuildFixBtn" style="font-size:11px;padding:7px 12px;background:linear-gradient(135deg,#0e7490,#7c3aed);color:#fff;border:1px solid #67e8f9;font-weight:900;box-shadow:0 3px 12px #0891b255" title="ابتدا جدول تازه را کامل می‌سازد و سپس اصلاح کلی همهٔ ردیف‌ها را اجرا می‌کند">🔄 ساخت جدول + اصلاح کلی</button>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
-<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="قیمت + ارسال missing + حذف extra + گزارش">🔧 اصلاح مغایرت‌ها</button>
+<button class="btn btn-green" onclick="syncMatrixFixStart('all')" style="font-size:11px;padding:6px 12px" title="بدون ساخت مجدد؛ اصلاح قیمت + ارسال missing + حذف extra روی جدول فعلی">🔧 اصلاح جدول فعلی</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('woo')" style="font-size:10px;padding:5px 10px">فقط WC</button>
 <button class="btn btn-gray" onclick="syncMatrixFixStart('bsl')" style="font-size:10px;padding:5px 10px">فقط غرفه‌ها</button>
 <button class="btn btn-red" onclick="syncMatrixFixStop()" id="smFixStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف اصلاح</button>
@@ -67045,7 +68115,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <summary style="cursor:pointer;color:#a5b4fc;font-size:11px;font-weight:800">ℹ️ توضیحات و راهنمای رنگ‌ها</summary>
 <div style="font-size:10.5px;color:#a5b4fc;line-height:1.75;margin-top:7px">
 ساخت <b>کاملاً سرورساید</b> است (حتی ده‌ها هزار محصول). اگر اسکرپر داخل وردپرس باشد، WC از <b>دیتابیس مستقیم</b> خوانده می‌شود (سریع‌تر از API). نتیجه در فایل ذخیره می‌شود؛ این صفحه فقط صفحه‌بندی می‌خواند. همین جدول در <b>افزونه → تب فروشگاه</b> هم هست.
-پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» اکنون فقط یک معیار فیلتر است و چند معیار را می‌توان با AND یا OR ترکیب کرد. اصلاح نیز روی همهٔ ردیف‌های منطبق با همین فیلترها اجرا می‌شود، نه فقط صفحهٔ فعلی. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. با «🔧 اصلاح مغایرت‌ها»: <b>اصلاح قیمت</b> + <b>ارسال</b> (در پروفایل هست/در مقصد نیست) + <b>حذف تکراری‌ها</b> با نگه‌داری جدیدترین یا گران‌ترین + <b>حذف/بایگانی</b> (فقط مقصد) — سرورساید با لاگ زنده؛ دو ردیف گزارش به انتهای جدول اضافه می‌شود.
+پروفایل × ووکامرس × غرفه‌ها — همهٔ محصولات مشارکت می‌کنند و برای تطبیق، پسوند کد عنوان نادیده گرفته می‌شود. «دارای/بدون پسوند کد» فقط یک معیار فیلتر است و چند معیار با AND یا OR ترکیب می‌شوند. «🔧 اصلاح جدول فعلی» بدون ساخت مجدد فقط ردیف‌های منطبق با فیلترهای فعلی را اصلاح می‌کند. «🔄 ساخت جدول + اصلاح کلی» ابتدا snapshot تازه را کامل می‌سازد و سپس همهٔ مغایرت‌ها را بدون محدودیت فیلتر اصلاح می‌کند. از باسلام فقط محصولات <b>فعال و قابل‌مشاهده برای مشتری</b> (وضعیت ۲۹۷۶) می‌آید. اصلاح شامل <b>قیمت</b> + <b>ارسال missing</b> + <b>حذف تکراری‌ها</b> + <b>حذف/بایگانی فقط‌مقصد</b> است و کاملاً سرورساید ادامه می‌یابد.
 رنگ‌ها: <span style="background:#14532d;color:#bbf7d0;padding:1px 6px;border-radius:4px">یکسان</span>
 <span style="background:#713f12;color:#fde68a;padding:1px 6px;border-radius:4px">نزدیک/هشدار</span>
 <span style="background:#7f1d1d;color:#fecaca;padding:1px 6px;border-radius:4px">مغایرت</span>
@@ -74567,6 +75637,91 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.363', t:'⚡ دکمه‌های همگام‌سازی و درون‌ریزی در رابط چت و محیط کدسرور', items:[
+    'افزودن دکمه‌های «درون‌ریزی JSON مدل‌ها» و «همگام‌سازی با گیت‌هاب» مستقیم به نوار چت.',
+    'یکپارچه‌سازی متقابل در پنل اکشن‌های محیط موبایل code-server.'
+  ]},
+  {v:'10.362', t:'🧪 دکمه تست همه مدل‌ها در محیط چت', items:[
+    'افزودن دکمه «تست همه مدل‌ها» مستقیم به محیط چت (تب چت با مدل‌ها) جهت بررسی و فعال‌سازی یک‌کلیکی آزمون مدل‌ها.',
+    'یکپارچه‌سازی با محیط موبایل code-server (اکشن Test AI Models در منوی More).'
+  ]},
+  {v:'10.361', t:'🫀 کارِ واقعی روی هاستِ بدونِ worker: برشِ زمانی + زنجیرهٔ ادامه', items:[
+    'ریشهٔ سه شکایت با شواهدِ اندپوینت‌های زنده ثابت شد: exec بسته است (actions.worker.error=exec_disabled)، fastcgi_finish_request وجود ندارد و کرانِ بیرونی هم کهنه است (cron.stale=true) — پس نه worker دائمی ساخته می‌شود، نه کارِ جداشده از کلاینت زنده می‌ماند.',
+    'مغایرت‌گیری: در حالت cron_only بدونِ هیچ driver واقعی، تصمیمِ اجرا دیگر can_run=false نمی‌دهد؛ همان request وب یک برشِ واقعی می‌زند (degraded=browser_slice) و checkpoint جلو می‌رود. تازگیِ cron_last_run.json دیگر شاهدِ driver حساب نمی‌شود چون تیکِ رابط هم آن را می‌نویسد.',
+    'مغایرت‌گیری: checkpoint دیگر هر hop نابود نمی‌شود — مسیرِ ادامه با matrixBuildCheckpointGuard و resume=1 آب‌خورد می‌شود و شروعِ صریحِ کاربر زنجیره را صفر می‌کند.',
+    'مغایرت‌گیری: حلقهٔ داغِ «ادامهٔ خودکار سرور» (چهار فراخوانی در ثانیه با pct ثابت روی ۲) با محافظِ زنجیره مهار شد: امضای پیشرفت، حداقل فاصلهٔ ۱٫۲ ثانیه، حداکثر ۳ برشِ بی‌پیشرفت و سقفِ hop؛ دلیلِ توقف (chain_stuck/chain_limit) در progress ثبت می‌شود.',
+    'اصلاحِ مغایرت: هر چهار مسیرِ «worker پایدار نشد» برداشته شد. درخواستِ اصلاح پشتِ build روی دیسک صف می‌شود (sync_matrix_fix_pending.json) و به‌محضِ آماده شدنِ جدول، یک برشِ درون‌درخواستی با قفلِ غیرانحصاری اجرا و زنجیره می‌شود — هرگز اصلاحِ موازی ساخته نمی‌شود.',
+    'کرانِ داخلی: هر تیک حالا برشِ زمانی دارد (پیش‌فرض ۲۵ ثانیه، connections.cron_slice_sec) و سرِ سقف بسته می‌شود؛ پرشِ بعدی با POST کوتاه به خودِ اسکریپت زنجیره می‌شود تا استخراج/مغایرت‌گیری/ارسال منتظرِ کرانِ بیرونیِ ساعت‌ها دور نمانند.',
+    'کرانِ داخلی: روی هاستی که جداشدن از کلاینت یعنی مرگِ پردازه، پاسخ flush می‌شود ولی اتصال باز می‌ماند و ضربانِ ndjson می‌زند (همان پُلِ مرورگرِ همگام‌سازیِ دستی).',
+    'کرانِ داخلی: resume_blocking دیگر کلِ تیک را قربانی نمی‌کند وقتی resumeِ detached در عمل به جایی نمی‌رسد؛ علامتِ نرم ثبت می‌شود و تیک به استخراج و مغایرت‌گیری می‌رسد.',
+    'کرانِ داخلی: مغایرت‌گیری هرگز ته صف نمی‌میرد — اگر بودجهٔ تیک تمام شده باشد، یک پنجرهٔ اختصاصیِ کوتاه به ماتریس داده می‌شود و کارهای سنگینِ ایجنتی به پرشِ بعدی می‌روند.',
+    'رابط: تیکِ تازهٔ ?ops_tick=1 — مرورگرِ باز هر ۳۰ ثانیه یک تیکِ سبک (صفِ اصلاح + وضعیتِ driver) و هر ~۲ دقیقه یک برشِ کاملِ کران می‌زند؛ این تیک، کرانِ داخلی است و pulse با منبعِ external ثبت نمی‌کند.',
+    'تستِ مدل‌های هوش مصنوعی: اجرا به برش‌های ~۲۰ ثانیه‌ای تقسیم شد (connections.ai_test_slice_sec؛ در CLI یا هاستِ دارای driver بدونِ سقف). مدلِ نرسیده «ناموفق» ثبت نمی‌شود، فقط به برشِ بعدی می‌ماند.',
+    'تستِ مدل‌ها: برشِ بعدی به ?ai_test_unstick زنجیره می‌شود (ادامه از تست‌نشده‌ها) و اگر زنجیره نرسید، خودِ رابط با ?ai_test_status=1&drive=1 برشِ بعدی را در اتصالِ زندهٔ مرورگر جلو می‌برد؛ قفلِ غیرانحصاری مانعِ رانندهٔ موازی است.',
+    'تشخیص: وضعیتِ driver (spawn/finish_request/detach/worker/matrix_runner/cron_fresh/external_pulse_age) در پاسخِ ops_tick گزارش می‌شود تا «چرا کار نکرد» حدسی نباشد.'
+  ]},
+  {v:'10.360', t:'⚡ خواندن مستقیم Woo با WordPress SHORTINIT', items:[
+    'به‌جای bootstrap کامل و اجرای hookهای کند افزونه‌ها، worker فقط تنظیمات و wpdb وردپرس را با SHORTINIT بارگذاری می‌کند.',
+    'محصول، وضعیت و قیمت مستقیماً از posts/postmeta در بسته‌های ۱۰۰تایی خوانده و در همان cursor پایدار ثبت می‌شوند.',
+    'این مسیر self-call REST را حذف می‌کند و از offset معتبر ۳۰۰ ادامه می‌دهد.'
+  ]},
+  {v:'10.359', t:'⚡ ادامهٔ Woo از دیتابیس محلی در worker', items:[
+    'پردازهٔ CLI ساخت matrix وردپرس هم‌مکان را فقط هنگام نیاز و با require_once بارگذاری می‌کند؛ درخواست‌های وب دوباره bootstrap نمی‌شوند.',
+    'پس از بارگذاری، مسیر مستقیم موجود wc_get_products/get_posts جای self-call کند REST را می‌گیرد.',
+    'ادامهٔ مستقیم از offset واقعی ۳۰۰ ردیف cursor آغاز می‌شود؛ تغییر اندازهٔ صفحه باعث پرش یا تکرار محصول نمی‌شود.'
+  ]},
+  {v:'10.358', t:'⚡ پاسخ کم‌حجم Woo برای عبور از صفحهٔ سنگین', items:[
+    'واکشی matrix اکنون با پارامتر _fields فقط شناسه، نام، قیمت عادی، وضعیت و تاریخ ایجاد را می‌خواهد.',
+    'توضیحات، تصاویر، ویژگی‌ها و metadata حجیم که در تطبیق استفاده نمی‌شوند دیگر توسط Woo serialize و منتقل نمی‌شوند.',
+    'این projection هم روی درخواست ۱۰۰تایی و هم fallback پنجاه‌تایی اعمال می‌شود و cursor معتبر صفحهٔ ۳ بدون بازنشانی ادامه می‌یابد.'
+  ]},
+  {v:'10.357', t:'🧩 fallback کوچک‌تر برای صفحهٔ سنگین Woo', items:[
+    'اگر درخواست ۱۰۰محصولی Woo timeout شود، همان بازه با دو درخواست ۵۰محصولی و offset ثابت دریافت می‌شود.',
+    'دو پاسخ فقط پس از موفقیت کامل ادغام و به‌عنوان همان یک صفحه در cursor ثبت می‌شوند؛ صفحه یا محصولی از قلم نمی‌افتد.',
+    'timeout درخواست اصلی matrix به ۳۵ ثانیه و هر chunk جایگزین به ۳۰ ثانیه محدود شده تا PHP slot برای یک دقیقه بی‌دلیل اشغال نشود.',
+    'اگر fallback هم شکست بخورد، رفتار امن v10.356 یعنی checkpoint + backoff ادامه دارد.'
+  ]},
+  {v:'10.356', t:'⏳ ادامهٔ Woo پس از خطای موقت REST با backoff', items:[
+    'timeout، HTTP 0، 408، 425، 429 و 5xx دیگر build را fatal نمی‌کنند؛ checkpoint حفظ و همان صفحه پس از backoff ادامه داده می‌شود.',
+    'worker زمان retry را رعایت می‌کند و به‌جای سه child فوری و ظاهراً گیرکرده، شبکه/هاست را hot-loop نمی‌کند.',
+    '401، 403 و سایر خطاهای قطعی همچنان متوقف می‌شوند و اکنون code و متن خطای واقعی در گزارش دیده می‌شود.',
+    'فیدبک تشخیصی می‌تواند شماره صفحهٔ Woo موردنظر را probe کند.'
+  ]},
+  {v:'10.355', t:'🟢 تشخیص واقعی اتصال چراغ بالای صفحه', items:[
+    'probe سنگین whoami و محاسبهٔ hash فایل چندمگابایتی با endpoint بسیار سبک JSON جایگزین شد.',
+    'یک timeout یا شلوغی موقت هاست چراغ را کهربایی می‌کند؛ قرمز فقط پس از سه شکست پیوسته یا offline واقعی مرورگر نمایش داده می‌شود.',
+    'مهلت probe به ۱۲ ثانیه افزایش یافت و موفقیت ۹۰ ثانیهٔ اخیر از قرمز کاذب جلوگیری می‌کند.',
+    'در focus و بازگشت از خواب/تب مخفی بررسی فوری انجام می‌شود و پاسخ درخواست قدیمی دیگر وضعیت تازه را بازنویسی نمی‌کند.'
+  ]},
+  {v:'10.354', t:'🔄 دکمهٔ صریح ساخت جدول و سپس اصلاح کلی', items:[
+    'سه عمل مستقل و روشن در رابط وجود دارد: فقط ساخت جدول، اصلاح جدول فعلی، و ساخت جدول + اصلاح کلی.',
+    'اصلاح جدول فعلی دیگر به‌دلیل سن snapshot مخفیانه rebuild نمی‌کند و دقیقاً روی مجموعهٔ فیلترشدهٔ فعلی اجرا می‌شود.',
+    'دکمهٔ ترکیبی ابتدا build تازه را در worker صف می‌کند و correction کلی و بدون فیلتر را با الزام نتیجهٔ همان build پشت آن می‌گذارد.',
+    'اگر checkpoint ساخت ناتمام باشد، اصلاح تنها پیام روشن می‌دهد؛ workflow ترکیبی همان checkpoint را ادامه می‌دهد و سپس اصلاح می‌کند.'
+  ]},
+  {v:'10.353', t:'🧭 نمایش وضعیت جدیدتر میان build و correction', items:[
+    'status زمان نتیجه و progress ساخت را با زمان اجرای اصلاح مقایسه می‌کند و همیشه عملیات جدیدتر را نمایش می‌دهد.',
+    'build_failed قدیمیِ اصلاح دیگر پس از تکمیل موفق جدول، وضعیت فعلی ساخت معرفی نمی‌شود.',
+    'جزئیات حجیم correction قدیمی در polling ارسال نمی‌شوند؛ progress فعال همچنان کامل و زنده است.',
+    'فیلد state_order زمان‌های تشخیصی و وضعیت ترجیح‌داده‌شده را برای بررسی endpoint گزارش می‌کند.'
+  ]},
+  {v:'10.352', t:'🔄 polling پایدار ساخت و اصلاح پس از refresh و wake', items:[
+    'در DOMContentLoaded، pageshow، focus، online و بازگشت visibility، وضعیت هر دو عملیات فوراً از سرور خوانده می‌شود.',
+    'پاسخ دیررس interval پیش از خواب با generation token دیگر نمی‌تواند polling تازه را متوقف یا UI را عقب ببرد.',
+    'watchdog سبک صفحهٔ visible هر handoff موقت یا interval گم‌شده را بازیابی می‌کند؛ در حالت فعال همچنان refresh یک‌ثانیه‌ای حفظ شده است.',
+    'اصلاح queued پس از refresh به‌عنوان عملیات اصلاح نمایش داده می‌شود، نه progress قدیمی ساخت جدول.'
+  ]},
+  {v:'10.351', t:'🫀 ادامهٔ قطعی build پس از قطع‌های مکرر هاست', items:[
+    'ساخت ماتریس دارای checkpoint دیگر پس از چهار بار قطع process برای همیشه failed نمی‌شود؛ هر daemon تازه همان checkpoint را resume می‌کند.',
+    'اگر progress هنوز running باشد اما هیچ lock و owner فعال صف وجود نداشته باشد، ضربان واقعی کران دقیقاً یک owner ادامه می‌سازد.',
+    'owner فعال پیش از بررسی lock کنترل می‌شود تا فاصلهٔ کوتاه بین childها هیچ اجرای موازی ایجاد نکند.',
+    'شمار تلاش هنگام بازیابی checkpoint reset و شمار recycle جداگانه ثبت می‌شود؛ خطاهای واقعی API همچنان failed می‌مانند.'
+  ]},
+  {v:'10.350', t:'📄 ادامهٔ خودکار Woo پس از سقف صفحهٔ هر پردازش', items:[
+    'رسیدن سالم به سقف صفحات هر child دیگر خطای «برداشت ووکامرس کامل نشد» نیست و به‌عنوان handoff عادی ثبت می‌شود.',
+    'cursor و checkpoint اختصاصی حفظ می‌شوند و worker یا ضربان بعدی کران از صفحهٔ بعد ادامه می‌دهد.',
+    'خطاهای واقعی HTTP همچنان متوقف و گزارش می‌شوند؛ فقط مرزهای max_pages و run_limit قابل‌ادامه هستند.'
+  ]},
   {v:'10.349', t:'🔓 بازیابی قفل worker مرده و ادامهٔ فوری checkpoint', items:[
     'اگر daemon مرده باشد ولی child قدیمی flock را به ارث برده باشد، PID مرده و heartbeat کهنه پیش از هر تغییری اثبات می‌شوند.',
     'مسیر lock یتیم اتمیک کنار گذاشته می‌شود تا worker تازه بتواند job ادامهٔ ماتریس را claim کند؛ child قدیمی فقط inode قبلی را نگه می‌دارد.',
@@ -83491,6 +84646,7 @@ function destPricePreview(pre){
 /* v10.113: جدول مقایسه — سرورساید + progress + فقط خواندن صفحه */
 window._smPage = 1;
 window._smPoll = null;
+window._smPollGeneration=0;window._smPollLastResponseAt=0;window._smPollWakeTimer=null;
 window._smUserMoveEpoch=0;window._smRestoringViewport=false;
 ['wheel','touchstart','pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,()=>{if(!window._smRestoringViewport)window._smUserMoveEpoch++;},{passive:true}));
 function smCaptureViewport(){
@@ -83748,27 +84904,34 @@ function syncMatrixStop(){
     syncMatrixPoll();
   }).catch(e=>{if($('smBuildStopBtn'))$('smBuildStopBtn').disabled=false;showToast('خطا: '+e,1);});
 }
-function syncMatrixPoll(){
+function syncMatrixPoll(reason){
   if(window._smPoll) clearInterval(window._smPoll);
+  const generation=++window._smPollGeneration;let requestBusy=false;
   const tick=()=>{
+    if(generation!==window._smPollGeneration||requestBusy)return;
+    requestBusy=true;
     const fd=new FormData(); fd.append('action','sync_matrix_status');
     const visibleDestinations=Array.from(document.querySelectorAll('.sm-destination-check:checked')).map(x=>String(x.value||'')).filter(Boolean);
     fd.append('selected_destinations',JSON.stringify(visibleDestinations));
     fetch('?sm_live_status=1&_='+Date.now(),{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{
-      if(!d||!d.ok)return;
+      /* A response from the interval that existed before sleep/focus must not
+         stop or repaint the newer generation started by the wake handler. */
+      if(generation!==window._smPollGeneration||!d||!d.ok)return;
+      window._smPollLastResponseAt=Date.now();
       const p = d.progress || {};
-      if(d.fix_running && d.fix_progress) smPaintProgress(d.fix_progress);
-      else smPaintProgress(p);
+      if((d.fix_running||d.fix_queued) && d.fix_progress){
+        const fp=Object.assign({},d.fix_progress,{job:'fix'});
+        if(d.fix_queued){fp.running=true;fp.queued=true;fp.phase=fp.phase||'در صف worker';}
+        smPaintProgress(fp);
+      } else smPaintProgress(p);
       if(($('smLiveFill')||{}).checked && (d.build_running || p.yielded)){
         window._smLiveTick=(window._smLiveTick||0)+1;
         if(window._smLiveTick%2===0)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
       }
-      if(d.running || d.fix_running || d.build_running){
-        /* while fixing, refresh table every few ticks so cells update live */
+      if(d.running || d.fix_running || d.fix_queued || d.build_running){
+        /* while fixing, refresh table every status tick so cells update live */
         if(d.fix_running){
           window._smFixTick = (window._smFixTick||0)+1;
-          /* Every status tick: the affected row/status becomes visible immediately,
-             without overlapping multi-megabyte matrix requests. */
           if(!window._smTableRefreshBusy){
             window._smTableRefreshBusy=true;
             try{Promise.resolve(syncMatrixLoad(window._smPage||1,true)).finally(()=>{window._smTableRefreshBusy=false;});}
@@ -83777,26 +84940,64 @@ function syncMatrixPoll(){
         }
       } else {
         if(p.yielded && !window._smMatrixStopWanted){
-          if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
-          setTimeout(()=>syncMatrixStart(true,true),250);
+          if(generation===window._smPollGeneration&&window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
+          setTimeout(()=>{if(generation===window._smPollGeneration)syncMatrixStart(true,true);},250);
           return;
         }
-        if(window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
+        if(generation===window._smPollGeneration&&window._smPoll){ clearInterval(window._smPoll); window._smPoll=null; }
         if(d.has_result){
-          /* بعد از اصلاح: برو آخرین صفحه تا ردیف گزارش دیده شود + باکس گزارش */
           setTimeout(()=>{
+            if(generation!==window._smPollGeneration)return;
             const last = window._smLastPages || 1;
             const go = (d.job==='fix' || (d.fix_progress&&d.fix_progress.done)) ? last : 1;
             syncMatrixLoad(go);
           }, 500);
         }
       }
-    }).catch(()=>{});
+    }).catch(()=>{/* watchdog/lifecycle wake retries; keep the current interval alive */})
+      .finally(()=>{requestBusy=false;});
   };
   tick();
   window._smPoll=setInterval(tick, 1000);
 }
-/* v10.117: اصلاح مغایرت از روی جدول */
+function syncMatrixPollingWake(reason){
+  clearTimeout(window._smPollWakeTimer);
+  window._smPollWakeTimer=setTimeout(()=>{
+    if(document.visibilityState==='hidden'&&reason!=='pageshow')return;
+    syncMatrixPoll(reason||'wake');
+  },80);
+}
+/* Page refresh/version reload creates a fresh bootstrap. Browser sleep may
+   throttle an interval indefinitely, so every lifecycle wake performs an
+   immediate server-state read. The visible watchdog also bridges transient
+   idle handoffs where the fast interval intentionally stopped. */
+window.addEventListener('pageshow',()=>syncMatrixPollingWake('pageshow'));
+window.addEventListener('focus',()=>syncMatrixPollingWake('focus'));
+window.addEventListener('online',()=>syncMatrixPollingWake('online'));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncMatrixPollingWake('visible');});
+window._smPollWatchdog=setInterval(()=>{
+  if(document.visibilityState==='visible'&&(!window._smPoll||Date.now()-(window._smPollLastResponseAt||0)>15000))syncMatrixPollingWake('watchdog');
+},15000);
+/* Explicit full chain: unlike correction-only, this intentionally creates a
+   fresh matrix and then runs an unfiltered general correction behind it. */
+function syncMatrixBuildAndFix(){
+  const selected=smSelectedDestinations();if(!selected.length){showToast('حداقل یک مقصد را انتخاب کنید',1);return;}
+  if(!confirm('زنجیرهٔ کامل اجرا شود؟\n۱) ساخت تازه و کامل جدول\n۲) اصلاح کلی همهٔ مغایرت‌ها برای مقصدهای انتخاب‌شده\n\nاین عملیات به فیلترهای فعلی محدود نیست.'))return;
+  smShowJob(true);if($('smJobLabel'))$('smJobLabel').textContent='🔄 صف ساخت جدول + اصلاح کلی…';
+  const btn=$('smBuildFixBtn');if(btn){btn.disabled=true;btn.textContent='⏳ ثبت زنجیره…';}
+  const fd=new FormData();fd.append('action','sync_matrix_fix_start');fd.append('workflow','build_and_fix');
+  fd.append('source','manual_combined');fd.append('scope','all');fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
+  fd.append('selected_destinations',JSON.stringify(selected));
+  fd.append('parallel_destinations',($('smParallelDest')&&$('smParallelDest').checked)?'1':'0');
+  fd.append('live_fill',($('smLiveFill')&&$('smLiveFill').checked)?'1':'0');
+  fd.append('slice_seconds',String(Math.max(2,Math.min(20,parseInt(($('smSliceSeconds')||{}).value)||8))));
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){showToast((d&&d.error)||'ثبت زنجیره ناموفق بود',1);return;}
+    showToast(d.message||'ساخت جدول و اصلاح کلی در صف سرور قرار گرفت');window._smFixTick=0;syncMatrixPoll('build-and-fix');
+  }).catch(e=>{showToast('خطا در ثبت زنجیره: '+e,1);syncMatrixPoll('build-and-fix-error');})
+    .finally(()=>{if(btn){btn.disabled=false;btn.textContent='🔄 ساخت جدول + اصلاح کلی';}});
+}
+/* v10.117: اصلاح مغایرت از روی جدول فعلی، بدون rebuild پنهان */
 function syncMatrixFixStart(scope){
   scope = scope || 'all';
   if(!confirm('اصلاح فقط روی ردیف‌های فیلترشدهٔ فعلی انجام شود؟\nتعداد ردیف فیلترشده: '+smFa(window._smFilteredTotal||0)+'\n• اصلاح قیمت ناهماهنگ\n• ارسال موارد ناموجود\n• حذف موارد تکراری و نگه‌داری '+((($('smDuplicateKeep')||{}).value||'newest')==='expensive'?'گران‌ترین':'جدیدترین')+'\n• حذف/بایگانی موارد اضافی\n⚠ ردیف‌های «فقط مقصد» در فیلتر فعلی: '+smFa(window._smFilteredOnlyDest||0)+'؛ این موارد در پروفایل نیستند و حذف/بایگانی می‌شوند.\nمحدوده مقصد: '+(scope==='woo'?'فقط ووکامرس':(scope==='bsl'?'فقط غرفه‌های باسلام':'همه')))) return;
@@ -83806,6 +85007,7 @@ function syncMatrixFixStart(scope){
   if($('smJobLog')){$('smJobLog').innerHTML='';delete $('smJobLog').dataset.logSig;}
   const fd=new FormData();
   fd.append('action','sync_matrix_fix_start');
+  fd.append('workflow','fix_only');
   fd.append('scope', scope);
   fd.append('source','manual');
   fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
@@ -84131,6 +85333,14 @@ function syncMatrixAutoLate(){
     }).catch(()=>{});
   }catch(e){}
 }
+function syncMatrixPollingBootstrap(){
+  syncMatrixPollingWake('bootstrap');
+  /* Destinations/settings may finish hydrating just after DOMContentLoaded. */
+  setTimeout(syncMatrixAutoLate,900);
+  setTimeout(()=>syncMatrixPollingWake('bootstrap-settled'),2500);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',syncMatrixPollingBootstrap,{once:true});
+else syncMatrixPollingBootstrap();
 window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
@@ -87263,18 +88473,36 @@ function aiTestStop(){
 /* v9.24: وضعیت کارِ پس‌زمینه را poll می‌کند و جدول را به‌روز می‌کند */
 function aiPollTest(){
     if(window._aiPollTimer)return;
+    /* v10.361: تستِ مدل‌ها حالا «برشی» است: هر برش ~۲۰ ثانیه کار می‌کند و
+       بقیهٔ مدل‌ها به برشِ بعدی زنجیره می‌شوند. بینِ دو برش، وضعیت
+       running=false و done=false می‌ماند — پس poll نباید رها کند و اگر
+       زنجیرهٔ داخلیِ سرور نرسید، خودِ همین تب با drive=1 برشِ بعدی را
+       جلو می‌برد (مرورگرِ وصل = پردازهٔ زنده). */
+    window._aiPollN=0;window._aiPollBusy=false;
     window._aiPollTimer=setInterval(()=>{
-        fetch('?ai_test_status=1').then(r=>r.json()).then(st=>{
+        if(window._aiPollBusy)return;
+        window._aiPollN++;
+        /* هر ~۹ ثانیه یک بار رانندگی؛ بقیهٔ poll ها فقط وضعیتِ سبک می‌گیرند
+           تا درخواست‌ها روی هم انباشته نشوند. */
+        const drive=(window._aiPollNeedDrive&&window._aiPollN%8===0)?'&drive=1':'';
+        window._aiPollBusy=true;
+        fetch('?ai_test_status=1'+drive,{cache:'no-store'}).then(r=>r.json()).then(st=>{
+            window._aiPollNeedDrive=!st.running&&!st.done&&(!!st.resume_needed||!!st.sliced||!!st.resumable);
             aiRenderTestState(st);
             if(!st.running&&st.done){
+                window._aiPollNeedDrive=false;
                 if(window._aiPollTimer){clearInterval(window._aiPollTimer);window._aiPollTimer=null;}
                 aiLoadProviders();
                 /* v10.36 (۴۹د): تستِ تازه تمام شد ⇒ کارت‌های آمار هم باید
                    عددِ تازه نشان بدهند، وگرنه کاربر بعد از یک اجرای کامل
                    همان آمارِ قدیمی را می‌بیند و فکر می‌کند کار نکرده. */
                 try{ aiStatsLoad(); }catch(e){}
+            }else if(window._aiPollNeedDrive&&!st.running){
+                /* آمارِ کاتالوگ بینِ برش‌ها هم تازه بماند: کاربر باید ببیند
+                   که تعدادِ مدل‌های سبز با هر برش زیاد می‌شود. */
+                try{ aiStatsLoad(); }catch(e){}
             }
-        }).catch(()=>{});
+        }).catch(()=>{}).finally(()=>{window._aiPollBusy=false;});
     },1200);
 }
 let aiTestRows={},aiTestTotCount=0,aiTestOkCount=0,aiTestFailCount=0,aiTestWaitCount=0;
@@ -90703,6 +91931,62 @@ function chClear() {
     showToast('گفت‌وگو پاک شد');
 }
 
+/** درون‌ریزی JSON مدل‌ها مستقیم از محیط چت */
+function chImportAiJson() {
+    if (typeof aiPickImportFile === 'function') {
+        aiPickImportFile();
+    } else {
+        var str = prompt('محتوای JSON مدل‌ها و ارائه‌دهنده‌ها را اینجا Paste کنید:');
+        if (str && str.trim()) {
+            if (typeof aiImportText === 'function') {
+                aiImportText(str);
+            } else {
+                var fd = new FormData();
+                fd.append('action', 'ai_import_providers');
+                fd.append('providers_json', str);
+                fetch(location.pathname, {method: 'POST', body: fd})
+                    .then(function(r){return r.json();})
+                    .then(function(d){ showToast(d.ok ? ('✓ ' + d.message) : ('✗ ' + d.error), !d.ok); })
+                    .catch(function(){ showToast('خطا در درون‌ریزی', true); });
+            }
+        }
+    }
+}
+
+/** همگام‌سازی و آپدیت خودکار با گیت‌هاب مستقیم از محیط چت */
+function chSyncGithub() {
+    var b = $('chSyncGhBtn');
+    if (b) { b.disabled = true; b.textContent = '⏳ در حال دریافت...'; }
+    var st = $('chStatus');
+    if (st) st.textContent = '🔄 در حال استعلام و همگام‌سازی با گیت‌هاب...';
+    fetch('/__s4mobile/update', {method: 'POST'}).catch(function(){});
+    setTimeout(function() {
+        if (b) { b.disabled = false; b.textContent = '🔄 همگام‌سازی با گیت‌هاب'; }
+        if (st) st.textContent = '✅ همگام‌سازی انجام شد (آخرین تغییرات برنچ دریافت شد)';
+        showToast('بروزرسانی از گیت‌هاب انجام شد');
+    }, 1800);
+}
+
+/** تست همه مدل‌ها مستقیم از محیط چت */
+function chTestAll() {
+    var b = $('chTestAllBtn');
+    if (b) { b.disabled = true; b.textContent = '⏳ ...'; }
+    var st = $('chStatus');
+    if (st) st.textContent = '🔄 در حال فراخوانی تست همه مدل‌ها...';
+    if (typeof aiTestStartContinue === 'function') {
+        try { aiTestStartContinue(); } catch(e){}
+    } else if (typeof aiTestAll === 'function') {
+        try { aiTestAll(); } catch(e){}
+    } else {
+        fetch('?ai_test_start=1&only_untested=0').catch(function(){});
+    }
+    setTimeout(function() {
+        if (b) { b.disabled = false; b.textContent = '🧪 تست همه مدل‌ها'; }
+        if (st) st.textContent = '✅ تست مدل‌ها آغاز شد و در پس‌زمینه در حال اجراست';
+        showToast('تست همه مدل‌های هوش مصنوعی فعال شد');
+    }, 1500);
+}
+
 /** بازگشت به مدلِ پیش‌فرضِ اتصالات */
 function agModelReset() {
     var sel = $('agModelSel');
@@ -93681,30 +94965,79 @@ function renderSendCard(d){
 /* v10.273: چراغ زندهٔ نوار بالا. /sc محیط سروری و مسیر افزونه محیط هاست
    نام‌گذاری می‌شود؛ معیار «زنده» پاسخ معتبر خود همین runtime است، نه آنلاین
    بودن مرورگر. کلیک روی چراغ یک بررسی فوری انجام می‌دهد. */
-let s4RuntimeHealthBusy=false;
+let s4RuntimeHealthBusy=false,s4RuntimeHealthFailures=0,s4RuntimeHealthLastOk=0,s4RuntimeHealthRequest=0,s4RuntimeHealthAbort=null;
 async function s4RuntimeHealthCheck(force=false){
-  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;
-  const serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
+  const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el)return;
+  if(s4RuntimeHealthBusy){if(!force)return;try{if(s4RuntimeHealthAbort)s4RuntimeHealthAbort.abort();}catch(_e){}}
+  const request=++s4RuntimeHealthRequest,serverMode=/\/sc(?:\/|$)/i.test(location.pathname),kind=serverMode?'سرور':'هاست',short=serverMode?'S':'H';
   s4RuntimeHealthBusy=true;
   if(force||!el.dataset.checked){el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='…';el.title='در حال بررسی '+kind+'…';}
-  const ac=typeof AbortController!=='undefined'?new AbortController():null,timer=ac?setTimeout(()=>ac.abort(),7000):null;
+  const ac=typeof AbortController!=='undefined'?new AbortController():null;s4RuntimeHealthAbort=ac;
+  const timer=ac?setTimeout(()=>ac.abort(),12000):null;
   try{
-    const r=await fetch('?whoami=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
-    if(!r.ok)throw new Error('HTTP '+r.status);const text=await r.text();if(!text||text.indexOf('PHP:')<0)throw new Error('invalid response');
-    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(Date.now());if(tag)tag.textContent=short;
-    el.title='● '+kind+' زنده است · PHP پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
+    const r=await fetch('?runtime_health=1&_health='+Date.now(),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined});
+    if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();if(!d||d.ok!==true||!d.version)throw new Error('invalid response');
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures=0;s4RuntimeHealthLastOk=Date.now();
+    el.classList.remove('checking','offline');el.classList.add('online');el.dataset.checked=String(s4RuntimeHealthLastOk);if(tag)tag.textContent=short;
+    el.title='● '+kind+' زنده است · PHP v'+String(d.version)+' پاسخ می‌دهد';el.setAttribute('aria-label',kind+' زنده است');
   }catch(e){
-    el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
-    el.title='● '+kind+' پاسخ نمی‌دهد — برای بررسی دوباره کلیک کنید';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
-  }finally{if(timer)clearTimeout(timer);s4RuntimeHealthBusy=false;}
+    if(request!==s4RuntimeHealthRequest)return;
+    s4RuntimeHealthFailures++;
+    const browserOffline=navigator.onLine===false,recentOk=s4RuntimeHealthLastOk>0&&(Date.now()-s4RuntimeHealthLastOk)<90000;
+    if(!browserOffline&&(s4RuntimeHealthFailures<3||recentOk)){
+      /* A loaded PHP host can miss one probe while normal requests still work.
+         Keep this amber/degraded; red is reserved for sustained failure. */
+      el.classList.remove('online','offline');el.classList.add('checking');if(tag)tag.textContent='~';
+      el.title='● پاسخ '+kind+' کند یا موقتاً مشغول است · تلاش '+String(s4RuntimeHealthFailures)+' از ۳';
+      el.setAttribute('aria-label',kind+' موقتاً کند است');
+    }else{
+      el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';
+      el.title=browserOffline?'● اتصال مرورگر قطع است':'● '+kind+' پس از ۳ بررسی پاسخ نداده است';el.setAttribute('aria-label',kind+' پاسخ نمی‌دهد');
+    }
+  }finally{if(timer)clearTimeout(timer);if(request===s4RuntimeHealthRequest){s4RuntimeHealthBusy=false;s4RuntimeHealthAbort=null;}}
 }
-(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('offline',()=>{const e=document.getElementById('runtimePulse');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';}});})();
+(function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('focus',()=>s4RuntimeHealthCheck(true));document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4RuntimeHealthCheck(true);});window.addEventListener('offline',()=>{s4RuntimeHealthFailures=3;const e=document.getElementById('runtimePulse'),t=document.getElementById('runtimePulseTag');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';if(t)t.textContent='!';}});})();
 /* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
    daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
 (function opsFeedbackPulse(){
   if(window._s4OpsPulse)return;window._s4OpsPulse=true;
   const beat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store'}).catch(()=>{});
   setTimeout(beat,1500);setInterval(beat,300000);
+})();
+/* v10.361: «تیکِ رابط» — روی هاستی که نه exec دارد نه fastcgi_finish_request،
+   کارِ جداشده از کلاینت می‌میرد و worker دائمی هم ساخته نمی‌شود؛ تنها چیزی
+   که پردازه را زنده نگه می‌دارد همین مرورگرِ وصل است (همان پُلی که ارسال‌ها
+   با آن کار می‌کنند). پس رابطِ باز هر ۳۰ ثانیه یک تیکِ سبک می‌زند (صفِ
+   اصلاحِ ماتریس + وضعیتِ driver) و هر ۲ دقیقه یک تیکِ کامل که یک برشِ
+   واقعیِ کران را جلو می‌برد: استخراج ← مغایرت‌گیری ← ارسال.
+   بی‌این، «کرانِ داخلی» فقط وقتی کار می‌کرد که کرانِ بیرونیِ هاست سرِ وقت
+   می‌رسید — و گزارشِ کاربر دقیقاً همان بود: هیچ‌وقت نمی‌رسد. */
+(function opsTickPulse(){
+  if(window._s4OpsTick)return;window._s4OpsTick=true;
+  let busy=false,n=0,fullEvery=4;
+  const lastJson=(t)=>{try{return JSON.parse(t);}catch(e){}
+    const lines=String(t||'').split('\n').filter(x=>x.trim()!=='');
+    for(let i=lines.length-1;i>=0;i--){try{return JSON.parse(lines[i]);}catch(e){}}
+    return null;};
+  const tick=()=>{
+    if(busy||document.hidden)return;
+    n++;const full=(n%fullEvery===0);
+    busy=true;
+    const ac=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=ac?setTimeout(()=>ac.abort(),150000):null;
+    fetch('?ops_tick=1'+(full?'':'&json=1'),{cache:'no-store',credentials:'same-origin',signal:ac?ac.signal:undefined})
+      .then(r=>r.text()).then(t=>{
+        const d=lastJson(t);
+        if(d&&typeof d==='object'&&d.budget){
+          /* فاصلهٔ تیکِ کامل را با بودجهٔ برشِ سرور هم‌قدم کن تا دو تیک
+             همزمان روی هم نیفتند. */
+          fullEvery=Math.max(2,Math.min(8,Math.round(120/Math.max(5,Number(d.budget)||20))));
+        }
+      }).catch(()=>{}).finally(()=>{busy=false;if(timer)clearTimeout(timer);});
+  };
+  setTimeout(tick,5000);setInterval(tick,30000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(tick,800);});
 })();
 </script>
 </body>
