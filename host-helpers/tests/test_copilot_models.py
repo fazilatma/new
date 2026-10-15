@@ -696,9 +696,9 @@ class ChatBidiStyleTests(unittest.TestCase):
     def test_workbench_style_patch_is_idempotent_backed_up_and_restorable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             vscode_root = Path(temporary) / "vscode"
-            workbench = vscode_root / "out" / "vs" / "workbench"
+            workbench = vscode_root / "out" / "vs" / "code" / "browser" / "workbench"
             workbench.mkdir(parents=True)
-            stylesheet = workbench / "workbench.web.main.css"
+            stylesheet = workbench / "workbench.css"
             original = ".interactive-session{display:flex}\n"
             stylesheet.write_text(original, encoding="utf-8")
             stylesheet.chmod(0o644)

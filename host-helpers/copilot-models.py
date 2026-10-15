@@ -36,7 +36,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.21"
+HELPER_VERSION = "0.1.22"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 CHAT_BIDI_STYLE_BEGIN = "/* copilot-models-chat-bidi:start */"
@@ -1891,13 +1891,16 @@ def code_server_vscode_roots() -> list[Path]:
 
 def code_server_workbench_stylesheets() -> list[Path]:
     output: list[Path] = []
+    patterns = (
+        "out/vs/code/browser/workbench/workbench*.css",
+        "out/vs/code/electron-sandbox/workbench/workbench*.css",
+        "out/vs/workbench/workbench*.css",
+    )
     for root in code_server_vscode_roots():
-        directory = root / "out" / "vs" / "workbench"
-        if not directory.is_dir():
-            continue
-        for stylesheet in sorted(directory.glob("workbench*.css")):
-            if stylesheet.is_file() and stylesheet not in output:
-                output.append(stylesheet)
+        for pattern in patterns:
+            for stylesheet in sorted(root.glob(pattern)):
+                if stylesheet.is_file() and stylesheet not in output:
+                    output.append(stylesheet)
     return output
 
 

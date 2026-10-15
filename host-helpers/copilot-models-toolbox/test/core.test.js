@@ -230,8 +230,15 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     fakePython
   );
   const vscodeRoot = path.join(temporary, 'code-server-vscode');
-  const workbenchDirectory = path.join(vscodeRoot, 'out', 'vs', 'workbench');
-  const workbenchCss = path.join(workbenchDirectory, 'workbench.web.main.css');
+  const workbenchDirectory = path.join(
+    vscodeRoot,
+    'out',
+    'vs',
+    'code',
+    'browser',
+    'workbench'
+  );
+  const workbenchCss = path.join(workbenchDirectory, 'workbench.css');
   fs.mkdirSync(workbenchDirectory, { recursive: true });
   fs.writeFileSync(workbenchCss, '.interactive-session{}\n');
   process.env.CODE_SERVER_VSCODE_ROOT = vscodeRoot;

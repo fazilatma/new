@@ -69,8 +69,9 @@ five commands to the GitHub Copilot Chat view title toolbar:
   available from the Chat toolbar, Command Palette, and a global status-bar
   control, so it still works when mobile-browser pinch zoom is blocked.
 
-The installer also discovers code-server's active `workbench*.css` files and adds
-one marked, idempotent style block. Chat prose and prompt lines use RTL,
+The installer also discovers code-server's active `workbench*.css` files in both
+the current `out/vs/code/browser/workbench` and legacy `out/vs/workbench`
+layouts, then adds one marked, idempotent style block. Chat prose and prompt lines use RTL,
 right-aligned, `unicode-bidi: plaintext` rendering for readable Persian/English
 mixing; inline code, code blocks, and rendered code editors stay isolated LTR.
 The unmodified stylesheet is saved before the first patch, Python `--restore`
@@ -86,6 +87,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.21**.
+The helper, launcher, and companion extension currently ship as **0.1.22**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

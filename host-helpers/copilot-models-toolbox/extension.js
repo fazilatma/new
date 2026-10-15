@@ -274,17 +274,23 @@ function codeServerWorkbenchStylesheets() {
   }
   const output = [];
   for (const root of [...new Set(roots.map((value) => path.resolve(value)))]) {
-    const directory = path.join(root, 'out', 'vs', 'workbench');
-    let entries;
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isFile() || !/^workbench.*\.css$/i.test(entry.name)) continue;
-      const filename = path.join(directory, entry.name);
-      if (!output.includes(filename)) output.push(filename);
+    const directories = [
+      path.join(root, 'out', 'vs', 'code', 'browser', 'workbench'),
+      path.join(root, 'out', 'vs', 'code', 'electron-sandbox', 'workbench'),
+      path.join(root, 'out', 'vs', 'workbench'),
+    ];
+    for (const directory of directories) {
+      let entries;
+      try {
+        entries = fs.readdirSync(directory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !/^workbench.*\.css$/i.test(entry.name)) continue;
+        const filename = path.join(directory, entry.name);
+        if (!output.includes(filename)) output.push(filename);
+      }
     }
   }
   return output.sort();
