@@ -13,13 +13,14 @@ const extensionPackage = require('../package.json');
 
 test('package contributes the model and self-repair Copilot Chat toolbar commands', () => {
   assert.ok(extensionPackage.activationEvents.includes('onStartupFinished'));
+  assert.ok(extensionPackage.activationEvents.includes('onCommand:copilotModels.zoom'));
   const commands = extensionPackage.contributes.commands;
   assert.deepEqual(
     commands.map((command) => command.title),
-    ['🧪 Test All AI Models', '📥 Import AI JSON', '🔄 Sync GitHub', '🛠 Repair code-server']
+    ['🧪 Test All AI Models', '📥 Import AI JSON', '🔄 Sync GitHub', '🛠 Repair code-server', '🔎 Zoom code-server']
   );
   const toolbar = extensionPackage.contributes.menus['view/title'];
-  assert.equal(toolbar.length, 4);
+  assert.equal(toolbar.length, 5);
   assert.ok(
     toolbar.every(
       (entry) =>
@@ -67,6 +68,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   );
   const disposable = { dispose() {} };
   const vscodeMock = {
+    ConfigurationTarget: { Global: 'global' },
     window: {
       createOutputChannel() {
         return { appendLine() {}, clear() {}, show() {}, dispose() {} };
@@ -118,6 +120,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     'copilotModels.importJson',
     'copilotModels.syncGitHub',
     'copilotModels.repair',
+    'copilotModels.zoom',
   ]);
   const securedGroups = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.equal(securedGroups.length, 1);
@@ -125,6 +128,22 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.equal(securedGroups[0].apiKey, '${input:chat.lm.secret.test-ref}');
   assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
   assert.deepEqual([...storedSecrets.values()], ['mistral-private-key']);
+  let zoomCommand;
+  vscodeMock.window.showQuickPick = async () => ({ command: 'workbench.action.zoomIn' });
+  vscodeMock.commands.executeCommand = async (command) => { zoomCommand = command; };
+  await extension.__test.zoomCodeServer();
+  assert.equal(zoomCommand, 'workbench.action.zoomIn');
+  let forcedZoom;
+  vscodeMock.window.showQuickPick = async () => ({ command: 'exact' });
+  vscodeMock.window.showInputBox = async () => '-1.5';
+  vscodeMock.workspace.getConfiguration = (section) => ({
+    get(_key, fallback) { return section === 'window' ? 0 : fallback; },
+    async update(key, value, target) { forcedZoom = { section, key, value, target }; },
+  });
+  await extension.__test.zoomCodeServer();
+  assert.deepEqual(forcedZoom, {
+    section: 'window', key: 'zoomLevel', value: -1.5, target: 'global',
+  });
   const repairedIds = await extension.__test.repairResolvedModelIds(context, [
     {
       provider: 'Mistral',
@@ -274,6 +293,9 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.match(dashboard, /Editable test prompt/);
   assert.match(dashboard, /Simple — Hello response/);
   assert.match(dashboard, /Professional — TypeScript scheduler/);
+  assert.match(dashboard, /Provider JSON file/);
+  assert.match(dashboard, /ai-providers-2026-08-23-160523-gemini-llm7-opencode-ollama-cloud-added\.json/);
+  assert.match(dashboard, /Copy path/);
   assert.match(dashboard, /Power \/ test score/);
   assert.equal((dashboard.match(/data-sort=/g) || []).length, 14);
   assert.match(dashboard, /function sortRows\(\)/);

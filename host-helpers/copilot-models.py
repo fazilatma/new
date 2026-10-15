@@ -36,7 +36,7 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.18"
+HELPER_VERSION = "0.1.19"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
 
@@ -2578,7 +2578,8 @@ def main(argv: list[str] | None = None) -> int:
     if toolbox_result:
         print(
             f"Toolbar v{HELPER_VERSION}: Test All AI Models, Import AI JSON, "
-            "and Sync GitHub were installed in the Copilot Chat title bar."
+            "Sync GitHub, Repair code-server, and Zoom code-server were installed "
+            "in the Copilot Chat title bar."
         )
         print(
             "Verify: code-server --list-extensions --show-versions | "

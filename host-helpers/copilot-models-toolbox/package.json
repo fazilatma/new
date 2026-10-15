@@ -1,8 +1,8 @@
 {
   "name": "copilot-models-toolbox",
   "displayName": "Copilot Models Toolbox",
-  "description": "Test, import, synchronize, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
-  "version": "0.1.18",
+  "description": "Test, import, synchronize, zoom, back up, and repair BYOK model support from the GitHub Copilot Chat toolbar.",
+  "version": "0.1.19",
   "publisher": "fazilatma",
   "license": "MIT",
   "engines": {
@@ -21,7 +21,8 @@
     "onCommand:copilotModels.testAll",
     "onCommand:copilotModels.importJson",
     "onCommand:copilotModels.syncGitHub",
-    "onCommand:copilotModels.repair"
+    "onCommand:copilotModels.repair",
+    "onCommand:copilotModels.zoom"
   ],
   "contributes": {
     "commands": [
@@ -48,6 +49,12 @@
         "title": "🛠 Repair code-server",
         "category": "Copilot Models",
         "icon": "$(tools)"
+      },
+      {
+        "command": "copilotModels.zoom",
+        "title": "🔎 Zoom code-server",
+        "category": "Copilot Models",
+        "icon": "$(zoom-in)"
       }
     ],
     "menus": {
@@ -71,6 +78,11 @@
           "command": "copilotModels.repair",
           "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
           "group": "navigation@94"
+        },
+        {
+          "command": "copilotModels.zoom",
+          "when": "view == workbench.panel.chat.view.copilot || view == workbench.panel.chat.view",
+          "group": "navigation@95"
         }
       ]
     },

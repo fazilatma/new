@@ -18,6 +18,7 @@ const RESTART_COMMAND = [
   'nohup code-server >>"$HOME/.local/share/code-server/code-server.log" 2>&1 </dev/null &',
 ].join('\n');
 
+const DEFAULT_IMPORT_JSON_FILENAME = 'ai-providers-2026-08-23-160523-gemini-llm7-opencode-ollama-cloud-added.json';
 const SIMPLE_TEST_PROMPT = 'Reply with exactly one short, friendly greeting that contains the word Hello. Do not include code or an explanation.';
 
 const DEFAULT_CODING_TEST_PROMPT = [
@@ -670,6 +671,43 @@ async function copyRestartCommand(message) {
     await vscode.env.clipboard.writeText(RESTART_COMMAND);
     vscode.window.showInformationMessage('code-server restart command copied.');
   }
+}
+
+async function zoomCodeServer() {
+  const selection = await vscode.window.showQuickPick(
+    [
+      { label: '$(zoom-in) Zoom in', description: 'Increase the complete code-server workbench scale', command: 'workbench.action.zoomIn' },
+      { label: '$(zoom-out) Zoom out', description: 'Decrease the complete code-server workbench scale', command: 'workbench.action.zoomOut' },
+      { label: '$(discard) Reset zoom', description: 'Return code-server to its default scale', command: 'workbench.action.zoomReset' },
+      { label: '$(settings) Force an exact zoom level', description: 'Persist a global level from -8 to 8', command: 'exact' },
+    ],
+    {
+      title: 'Zoom code-server',
+      placeHolder: 'Choose a global zoom action; this works even when browser pinch zoom is unavailable',
+    }
+  );
+  if (!selection) return;
+  if (selection.command !== 'exact') {
+    await vscode.commands.executeCommand(selection.command);
+    return;
+  }
+  const configuration = vscode.workspace.getConfiguration('window');
+  const current = Number(configuration.get('zoomLevel', 0));
+  const value = await vscode.window.showInputBox({
+    title: 'Force code-server zoom level',
+    prompt: 'Use a positive value to zoom in, a negative value to zoom out, or 0 to reset.',
+    value: Number.isFinite(current) ? String(current) : '0',
+    validateInput(input) {
+      const number = Number(input);
+      return Number.isFinite(number) && number >= -8 && number <= 8
+        ? undefined
+        : 'Enter a number from -8 through 8.';
+    },
+  });
+  if (value === undefined) return;
+  const level = Number(value);
+  await configuration.update('zoomLevel', level, vscode.ConfigurationTarget.Global);
+  vscode.window.showInformationMessage(`code-server zoom level is now forced to ${level}.`);
 }
 
 async function firstExistingDirectory(candidates) {
@@ -2089,6 +2127,13 @@ function testDashboardHtml(webview, models, warnings, options) {
     timeoutSeconds: options.timeoutMs / 1000,
     roundRobinDelayMs: Number(options.roundRobinDelayMs) || 0,
     maxOutputTokens: Number(options.maxOutputTokens) || 768,
+    suggestedJsonPath: path.join(
+      os.homedir(),
+      'storage',
+      'shared',
+      'download',
+      DEFAULT_IMPORT_JSON_FILENAME
+    ),
     defaultProfile: 'professional',
     prompts: {
       simple: SIMPLE_TEST_PROMPT,
@@ -2100,7 +2145,7 @@ function testDashboardHtml(webview, models, warnings, options) {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${scriptNonce}'; script-src 'nonce-${scriptNonce}';">
   <style nonce="${scriptNonce}">
     :root { color-scheme: light dark; }
@@ -2127,6 +2172,8 @@ function testDashboardHtml(webview, models, warnings, options) {
     .profile-row select { width: 100%; }
     textarea { width: 100%; min-height: 150px; resize: vertical; padding: 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); border-radius: 3px; font: 13px/1.45 var(--vscode-editor-font-family, monospace); }
     .prompt-help { color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 5px; }
+    .json-source { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; padding: 9px 10px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
+    .json-source code { flex: 1 1 420px; min-width: 0; padding: 4px 6px; color: var(--vscode-textPreformat-foreground); background: var(--vscode-textCodeBlock-background); overflow-wrap: anywhere; user-select: text; }
     progress { width: 100%; height: 10px; accent-color: var(--vscode-progressBar-background); }
     .table-wrap { border: 1px solid var(--vscode-panel-border); overflow: auto; height: 62vh; min-height: 280px; max-height: 720px; }
     table { width: 100%; border-collapse: collapse; min-width: 1900px; }
@@ -2172,6 +2219,11 @@ function testDashboardHtml(webview, models, warnings, options) {
     <label for="testPrompt">Editable test prompt</label>
     <textarea id="testPrompt" maxlength="12000" spellcheck="false"></textarea>
     <div id="promptHelp" class="prompt-help">Professional scoring covers implementation completeness, strict typing, fairness, concurrency, pacing, cancellation, retry/backoff, tests, and complexity. Choose Simple for a low-cost greeting/responsiveness check. The prompt remains editable in either level.</div>
+  </div>
+  <div class="json-source">
+    <b>Provider JSON file:</b>
+    <code id="suggestedJsonPath"></code>
+    <button id="copyJsonPath" type="button">⧉ Copy path</button>
   </div>
   <div id="warnings" class="warnings"></div>
   <div class="cards">
@@ -2235,6 +2287,11 @@ function testDashboardHtml(webview, models, warnings, options) {
     const promptHelp = document.getElementById('promptHelp');
     testProfile.value = initial.defaultProfile;
     testPrompt.value = initial.prompts[testProfile.value];
+    const suggestedJsonPath = document.getElementById('suggestedJsonPath');
+    suggestedJsonPath.textContent = initial.suggestedJsonPath;
+    document.getElementById('copyJsonPath').addEventListener('click', () => {
+      vscode.postMessage({ type: 'copy', text: initial.suggestedJsonPath });
+    });
     const importModels = document.getElementById('importModels');
     const cancel = document.getElementById('cancel');
     const retry = document.getElementById('retry');
@@ -2906,6 +2963,18 @@ function activate(context) {
   registerCommand(context, 'copilotModels.importJson', importJson);
   registerCommand(context, 'copilotModels.syncGitHub', syncGitHub);
   registerCommand(context, 'copilotModels.repair', repairCodeServer);
+  registerCommand(context, 'copilotModels.zoom', zoomCodeServer);
+  if (
+    typeof vscode.window.createStatusBarItem === 'function' &&
+    vscode.StatusBarAlignment
+  ) {
+    const zoomStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
+    zoomStatus.text = '$(zoom-in) Zoom';
+    zoomStatus.tooltip = 'Force code-server zoom in, zoom out, reset, or an exact global level';
+    zoomStatus.command = 'copilotModels.zoom';
+    zoomStatus.show();
+    context.subscriptions.push(zoomStatus);
+  }
   restartAutoUpdater(context);
   void migratePlaintextCredentials(context)
     .then((result) => {
@@ -2949,5 +3018,6 @@ module.exports = {
     resolveExecutable,
     pythonCommand,
     toolboxCredentialKey,
+    zoomCodeServer,
   },
 };

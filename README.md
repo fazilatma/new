@@ -33,9 +33,11 @@ terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted
 approval rule. The profile launches argument-free Android `/system/bin/sh` with
 Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
 for both Termux Bash and sh. It also installs Copilot Models Toolbox
-**v0.1.18** with
-**🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**, and
-**🛠 Repair code-server** in the Copilot Chat title toolbar. The repair center
+**v0.1.19** with
+**🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**,
+**🛠 Repair code-server**, and **🔎 Zoom code-server** in the Copilot Chat title
+toolbar. Zoom controls work at the complete code-server workbench level and can
+force a persistent exact level when browser pinch zoom is unavailable. The repair center
 creates private timestamped snapshots before changing managed files, can restore
 an earlier snapshot, and applies a bounded single-process TypeScript server
 profile to recover from Android `write EPIPE` exits. Test All keeps its live
@@ -44,8 +46,9 @@ provider model-name mismatches, and tests complete provider round-robin waves.
 Its **Test level** selector switches between a low-cost Simple Hello check and
 an editable Professional strict-TypeScript scheduler challenge. The Power column
 starts with a transparent metadata baseline, then switches to a deterministic
-0–100 score from each model's actual answer. Every result-table header is
-clickable for ascending/descending live sorting. Full answers/errors are
+0–100 score from each model's actual answer. The Test Center visibly shows the
+expected Android provider-JSON path and offers a one-tap copy button. Every
+result-table header is clickable for ascending/descending live sorting. Full answers/errors are
 viewable and copyable, while raw
 prompts and answers are excluded from sanitized GitHub diagnostics. A passing
 row can be backup-first selected as the active Chat model. Passing models are

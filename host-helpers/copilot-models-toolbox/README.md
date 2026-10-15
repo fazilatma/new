@@ -1,7 +1,7 @@
 # Copilot Models Toolbox
 
 Companion extension installed by `install-copilot-models-termux.sh`. It adds
-four commands to the GitHub Copilot Chat view title toolbar:
+five commands to the GitHub Copilot Chat view title toolbar:
 
 - **🧪 Test All AI Models** — opens a live test-center panel with a mobile-safe
   always-visible searchable table, an inline Import Models button, configured
@@ -13,7 +13,8 @@ four commands to the GitHub Copilot Chat view title toolbar:
   latency, answer score, and response/error columns. Its **Test level** selector
   offers a low-cost Simple Hello/responsiveness check (64 output tokens) and the
   Professional strict-TypeScript scheduler challenge; both prompts remain
-  editable. Power starts as a transparent metadata baseline, then is replaced by
+  editable. The panel displays and can copy the exact expected Android provider
+  JSON path under `storage/shared/download`. Power starts as a transparent metadata baseline, then is replaced by
   the selected profile's deterministic 0–100 score of the actual answer, including
   completeness, typing, fairness, concurrency, pacing, cancellation cleanup,
   429/503 retry with backoff/jitter, ordering, typed failures, tests, and
@@ -60,6 +61,10 @@ four commands to the GitHub Copilot Chat view title toolbar:
   branch; and restores private timestamped snapshots of previous versions.
   Import, full update, local repair, and restore all protect the previous state
   first. Snapshot retention is configurable.
+- **🔎 Zoom code-server** — exposes workbench-level Zoom In, Zoom Out, and Reset
+  commands plus a persistent exact global zoom level from -8 through 8. It is
+  available from the Chat toolbar, Command Palette, and a global status-bar
+  control, so it still works when mobile-browser pinch zoom is blocked.
 
 The helper also installs `copilot-models-repair` in Termux so Copilot Agent can
 request the same backup-first branch repair through its terminal tool. The
@@ -69,6 +74,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.18**.
+The helper, launcher, and companion extension currently ship as **0.1.19**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.
