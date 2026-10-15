@@ -69,6 +69,15 @@ five commands to the GitHub Copilot Chat view title toolbar:
   available from the Chat toolbar, Command Palette, and a global status-bar
   control, so it still works when mobile-browser pinch zoom is blocked.
 
+The installer also discovers code-server's active `workbench*.css` files and adds
+one marked, idempotent style block. Chat prose and prompt lines use RTL,
+right-aligned, `unicode-bidi: plaintext` rendering for readable Persian/English
+mixing; inline code, code blocks, and rendered code editors stay isolated LTR.
+The unmodified stylesheet is saved before the first patch, Python `--restore`
+restores it, and versioned Repair snapshots retain the current stylesheet too.
+Activation repeats the check and reloads once only if a process-free update had
+to install the release without executing the Python patch.
+
 The helper also installs `copilot-models-repair` in Termux so Copilot Agent can
 request the same backup-first branch repair through its terminal tool. The
 commands remain available from the Command Palette. The source is
@@ -77,6 +86,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.20**.
+The helper, launcher, and companion extension currently ship as **0.1.21**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

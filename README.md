@@ -33,11 +33,15 @@ terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted
 approval rule. The profile launches argument-free Android `/system/bin/sh` with
 Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
 for both Termux Bash and sh. It also installs Copilot Models Toolbox
-**v0.1.20** with
+**v0.1.21** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**,
 **🛠 Repair code-server**, and **🔎 Zoom code-server** in the Copilot Chat title
 toolbar. Zoom controls work at the complete code-server workbench level and can
-force a persistent exact level when browser pinch zoom is unavailable. The repair center
+force a persistent exact level when browser pinch zoom is unavailable. Installation
+also applies a marked, idempotent code-server workbench style so Persian-first Chat
+responses and the prompt editor are RTL and right-aligned, while inline and block
+code remain isolated LTR. The original stylesheet is backed up for `--restore`.
+The repair center
 creates private timestamped snapshots before changing managed files, can restore
 an earlier snapshot, and applies a bounded single-process TypeScript server
 profile to recover from Android `write EPIPE` exits. Test All keeps its live

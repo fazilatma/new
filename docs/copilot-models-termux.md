@@ -76,7 +76,7 @@ Existing keys are preserved on a later catalog-only rerun. Environment values
 replace existing keys when supplied.
 
 > **Credential storage:** the Bash helper briefly stages imported `apiKey` values
-> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.20 activates at
+> in `chatLanguageModels.json` with mode `0600`. Toolbox 0.1.21 activates at
 > code-server startup, passes each key through VS Code's
 > `lm.addLanguageModelsProviderGroup` command, and rewrites the file with only a
 > `${input:chat.lm.secret.…}` reference. This is required by current code-server:
@@ -127,13 +127,27 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/refs/heads/arena/f199
 
 ### Copilot Chat toolbar
 
-The launcher also installs **Copilot Models Toolbox 0.1.20** through
+The launcher also installs **Copilot Models Toolbox 0.1.21** through
 code-server's own VSIX installer and verifies that code-server can discover it.
 It normally appears under
-`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.20`;
+`~/.local/share/code-server/extensions/fazilatma.copilot-models-toolbox-0.1.21`;
 a custom `extensions-dir` is detected and used automatically. After restarting
 code-server, these buttons appear in the GitHub Copilot Chat title toolbar and
-remain available in the Command Palette:
+remain available in the Command Palette.
+
+The same install discovers the active code-server `workbench*.css` file and
+appends one marked, idempotent Chat style block. Response/request prose and the
+prompt editor are RTL and right-aligned with `unicode-bidi: plaintext`, making
+Persian text with embedded English runs readable. Inline code, fenced code
+blocks, and result code editors are explicitly isolated LTR and left-aligned.
+The helper makes a first-install stylesheet backup, `--restore` restores that
+original, and Repair's timestamped snapshots include the current workbench
+stylesheet. If code-server itself is upgraded, running local Repair or a full
+branch update safely finds and patches the new stylesheet. Toolbox activation
+also performs the same idempotent check and reloads the workbench once when the
+process-free Node updater had to install the release without running Python.
+
+The toolbar commands are:
 
 - **🧪 Test All AI Models** opens a live test-center panel with a mobile-safe,
   always-visible searchable/filterable table, credential-presence fingerprints,
@@ -191,7 +205,7 @@ remain available in the Command Palette:
   warns when an entry has no usable key. Explicit imported keys replace stale
   inherited environment keys. Plaintext staging values are then migrated into
   code-server Chat SecretStorage; Test All retains a separate protected Toolbox
-  copy so its HTTP check and Chat use the same credential. Version 0.1.20 also
+  copy so its HTTP check and Chat use the same credential. Version 0.1.21 also
   canonicalizes known provider names and removes alias collisions such as a
   credentialed `Mistral AI` group beside a keyless `Mistral` group; otherwise
   Chat can select the colliding keyless model even while the direct test passes.
@@ -202,7 +216,7 @@ remain available in the Command Palette:
   installs the branch's helper, catalog, terminal integration, and toolbox via
   the official code-server VSIX path while preserving local API keys. Automatic
   mode watches the branch's semantic version and installs newer pushed builds.
-  Version 0.1.20 downloads and validates the helper/catalog/Toolbox assets inside
+  Version 0.1.21 downloads and validates the helper/catalog/Toolbox assets inside
   the extension, reconstructs an absolute Termux `PATH`, and launches Python
   directly; it no longer tries to `spawn bash` or `curl` from the stripped
   code-server extension-host environment. If Android returns `EACCES` for the
@@ -241,7 +255,8 @@ remain available in the Command Palette:
   they can contain project paths and code-related protocol data; only individual
   lines detected as errors can enter the separately confirmed sanitized GitHub report.
   Snapshots include model
-  configuration, user settings, the patched Copilot manifest, and Toolbox code;
+  configuration, user settings, the patched Copilot manifest, active code-server
+  workbench stylesheets, and Toolbox code;
   private files use restrictive permissions and retention defaults to eight.
 - **🔎 Zoom code-server** opens workbench-level Zoom In, Zoom Out, and Reset
   controls and can persist an exact global zoom level from -8 through 8. The
@@ -282,7 +297,7 @@ The managed **Termux Android Shell** profile launches `/system/bin/sh` with no
 `args` while keeping Termux first on `PATH`. This is intentional: a standalone
 Termux `forkpty` diagnostic succeeds, while this Android code-server build exits
 with status 1 for both `$PREFIX/bin/bash` and `$PREFIX/bin/sh`, isolating the
-failure to its PTY launch path. Version 0.1.20 also starts in `HOME`, disables
+failure to its PTY launch path. Version 0.1.21 also starts in `HOME`, disables
 persistent-terminal revival and locale probing, uses empty `ENV`/`BASH_ENV`, and
 disables unsupported Agent terminal sandboxing and shell injection. Termux
 commands, storage, and Agent fallback remain available. Bash can still be

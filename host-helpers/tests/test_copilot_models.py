@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -674,6 +675,66 @@ class MergeTests(unittest.TestCase):
                 preserve_existing_keys=True,
             )
         self.assertEqual(merged[0]["apiKey"], "working")
+
+
+class ChatBidiStyleTests(unittest.TestCase):
+    def test_python_and_activation_fallback_use_the_same_style(self) -> None:
+        extension_source = (TOOLBOX_DIR / "extension.js").read_text(encoding="utf-8")
+        match = re.search(
+            r"const CHAT_BIDI_STYLE = `(.+?)`;\nconst RESTART_COMMAND",
+            extension_source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        node_style = (
+            match.group(1)
+            .replace("${CHAT_BIDI_STYLE_BEGIN}", copilot_models.CHAT_BIDI_STYLE_BEGIN)
+            .replace("${CHAT_BIDI_STYLE_END}", copilot_models.CHAT_BIDI_STYLE_END)
+        )
+        self.assertEqual(node_style, copilot_models.CHAT_BIDI_STYLE)
+
+    def test_workbench_style_patch_is_idempotent_backed_up_and_restorable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            vscode_root = Path(temporary) / "vscode"
+            workbench = vscode_root / "out" / "vs" / "workbench"
+            workbench.mkdir(parents=True)
+            stylesheet = workbench / "workbench.web.main.css"
+            original = ".interactive-session{display:flex}\n"
+            stylesheet.write_text(original, encoding="utf-8")
+            stylesheet.chmod(0o644)
+            with mock.patch.dict(
+                os.environ,
+                {"CODE_SERVER_VSCODE_ROOT": str(vscode_root), "PATH": ""},
+                clear=True,
+            ):
+                self.assertIn(
+                    stylesheet.resolve(),
+                    copilot_models.code_server_workbench_stylesheets(),
+                )
+                result = copilot_models.patch_chat_bidi_stylesheet(stylesheet)
+                repeated = copilot_models.patch_chat_bidi_stylesheet(stylesheet)
+            self.assertEqual(result, "rtl-enabled")
+            self.assertEqual(repeated, "already-rtl")
+            patched = stylesheet.read_text(encoding="utf-8")
+            self.assertIn("unicode-bidi: plaintext", patched)
+            self.assertIn(".interactive-response", patched)
+            self.assertIn(".interactive-input-editor", patched)
+            self.assertIn("unicode-bidi: isolate", patched)
+            backup = Path(str(stylesheet) + copilot_models.BACKUP_SUFFIX)
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
+
+            upgraded = ".interactive-session{display:grid}\n"
+            stylesheet.write_text(upgraded, encoding="utf-8")
+            self.assertEqual(
+                copilot_models.patch_chat_bidi_stylesheet(stylesheet),
+                "rtl-enabled",
+            )
+            self.assertEqual(backup.read_text(encoding="utf-8"), upgraded)
+            archived = list(backup.parent.glob(backup.name + ".*"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].read_text(encoding="utf-8"), original)
+            self.assertTrue(copilot_models.restore_file(stylesheet))
+            self.assertEqual(stylesheet.read_text(encoding="utf-8"), upgraded)
 
 
 class ManifestTests(unittest.TestCase):

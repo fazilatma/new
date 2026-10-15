@@ -11,6 +11,34 @@ const core = require('./core');
 const extensionPackage = require('./package.json');
 
 const OUTPUT_NAME = 'Copilot Models Toolbox';
+const CHAT_BIDI_STYLE_BEGIN = '/* copilot-models-chat-bidi:start */';
+const CHAT_BIDI_STYLE_END = '/* copilot-models-chat-bidi:end */';
+const CHAT_BIDI_STYLE = `${CHAT_BIDI_STYLE_BEGIN}
+/* Persian-first chat prose with readable isolated English/code runs. */
+.monaco-workbench .interactive-session .interactive-item-container.interactive-response .value .rendered-markdown,
+.monaco-workbench .interactive-session .interactive-item-container.interactive-request .value .rendered-markdown,
+.monaco-workbench .interactive-session .interactive-item-container:is(.interactive-response, .interactive-request) .value .rendered-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th) {
+  direction: rtl !important;
+  text-align: right !important;
+  unicode-bidi: plaintext !important;
+}
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .view-lines,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .view-line,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .editor-placeholder,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor textarea.inputarea,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .native-edit-context {
+  direction: rtl !important;
+  text-align: right !important;
+  unicode-bidi: plaintext !important;
+}
+.monaco-workbench .interactive-session .interactive-item-container .rendered-markdown :is(code, kbd, samp),
+.monaco-workbench .interactive-session .interactive-item-container .monaco-editor,
+.monaco-workbench .interactive-session .interactive-item-container :is(pre, [data-code], .interactive-result-code-block) {
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: isolate !important;
+}
+${CHAT_BIDI_STYLE_END}`;
 const RESTART_COMMAND = [
   "pkill -f '[c]ode-server' || true",
   'sleep 1',
@@ -213,6 +241,106 @@ function backupRoot(context) {
   return path.join(context.globalStorageUri.fsPath, 'backups');
 }
 
+function codeServerWorkbenchStylesheets() {
+  const environment = termuxRuntimeEnvironment();
+  const roots = [];
+  if (process.env.CODE_SERVER_VSCODE_ROOT) roots.push(process.env.CODE_SERVER_VSCODE_ROOT);
+  for (const prefix of [
+    environment.PREFIX,
+    environment.TERMUX_PREFIX,
+    '/data/data/com.termux/files/usr',
+    '/data/user/0/com.termux/files/usr',
+  ].filter(Boolean)) {
+    roots.push(
+      path.join(prefix, 'lib', 'node_modules', 'code-server', 'lib', 'vscode'),
+      path.join(prefix, 'lib', 'code-server', 'lib', 'vscode')
+    );
+  }
+  try {
+    const executable = resolveExecutable('code-server', environment);
+    let current = path.dirname(fs.realpathSync(executable));
+    for (let index = 0; index < 6; index += 1) {
+      roots.push(
+        path.join(current, 'lib', 'vscode'),
+        path.join(current, 'lib', 'node_modules', 'code-server', 'lib', 'vscode'),
+        path.join(current, 'node_modules', 'code-server', 'lib', 'vscode')
+      );
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  } catch {
+    // The Python helper will retry discovery when code-server is not on this PATH.
+  }
+  const output = [];
+  for (const root of [...new Set(roots.map((value) => path.resolve(value)))]) {
+    const directory = path.join(root, 'out', 'vs', 'workbench');
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^workbench.*\.css$/i.test(entry.name)) continue;
+      const filename = path.join(directory, entry.name);
+      if (!output.includes(filename)) output.push(filename);
+    }
+  }
+  return output.sort();
+}
+
+function escapeRegularExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function backupChatBidiStylesheet(filename, pristine, mode) {
+  const backup = `${filename}.copilot-models-helper.bak`;
+  let previous;
+  try {
+    previous = await fsp.readFile(backup, 'utf8');
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+  if (previous === pristine) return backup;
+  if (typeof previous === 'string') {
+    const digest = crypto.createHash('sha256').update(previous).digest('hex').slice(0, 12);
+    const versioned = `${backup}.${digest}`;
+    if (!(await readable(versioned))) await atomicInstallText(versioned, previous, mode);
+  }
+  await atomicInstallText(backup, pristine, mode);
+  return backup;
+}
+
+async function ensureChatBidiStylesheets() {
+  const results = [];
+  const expression = new RegExp(
+    `${escapeRegularExpression(CHAT_BIDI_STYLE_BEGIN)}[\\s\\S]*?${escapeRegularExpression(CHAT_BIDI_STYLE_END)}`,
+    'g'
+  );
+  for (const filename of codeServerWorkbenchStylesheets()) {
+    const original = await fsp.readFile(filename, 'utf8');
+    const withoutPrevious = original.replace(expression, '').trimEnd();
+    const desired = `${withoutPrevious}\n\n${CHAT_BIDI_STYLE}\n`;
+    const mode = (await fsp.stat(filename)).mode & 0o777;
+    if (original === desired) {
+      const backup = `${filename}.copilot-models-helper.bak`;
+      if (!(await readable(backup))) {
+        await backupChatBidiStylesheet(filename, `${withoutPrevious}\n`, mode);
+      }
+      results.push({ filename, changed: false });
+      continue;
+    }
+    const pristine = original.includes(CHAT_BIDI_STYLE_BEGIN)
+      ? `${withoutPrevious}\n`
+      : original;
+    await backupChatBidiStylesheet(filename, pristine, mode);
+    await atomicInstallText(filename, desired, mode);
+    results.push({ filename, changed: true });
+  }
+  return results;
+}
+
 async function createRepairSnapshot(context, reason, preserveRoot) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const destination = path.join(
@@ -229,11 +357,14 @@ async function createRepairSnapshot(context, reason, preserveRoot) {
   ];
   const copilot = vscode.extensions.getExtension('github.copilot-chat');
   if (copilot) candidates.push(['copilotPackage', path.join(copilot.extensionPath, 'package.json')]);
+  codeServerWorkbenchStylesheets().forEach((stylesheet, index) => {
+    candidates.push([`workbenchChatBidi${index}`, stylesheet]);
+  });
   for (const [label, original] of candidates) {
     try {
       const stat = await fsp.stat(original);
       if (!stat.isFile()) continue;
-      const stored = path.join(destination, `${label}.json`);
+      const stored = path.join(destination, `${label}${path.extname(original) || '.bak'}`);
       await fsp.copyFile(original, stored);
       await fsp.chmod(stored, 0o600);
       entries.push({ label, original, stored: path.basename(stored), mode: stat.mode & 0o777 });
@@ -3033,6 +3164,26 @@ function activate(context) {
     `Copilot Models Toolbox v${extensionPackage.version} activated from ${context.extensionPath}`
   );
   context.subscriptions.push(output);
+  void ensureChatBidiStylesheets()
+    .then((results) => {
+      const changed = results.filter((result) => result.changed);
+      for (const result of results) {
+        output.appendLine(
+          `[CHAT RTL] ${result.changed ? 'Patched' : 'Ready'}: ${result.filename}`
+        );
+      }
+      if (changed.length) {
+        output.appendLine('[CHAT RTL] Reloading the workbench once to apply the stylesheet.');
+        setTimeout(() => {
+          void vscode.commands.executeCommand('workbench.action.reloadWindow').catch((error) => {
+            output.appendLine(`[CHAT RTL RELOAD ERROR] ${error.message || error}`);
+          });
+        }, 1500);
+      }
+    })
+    .catch((error) => {
+      output.appendLine(`[CHAT RTL ERROR] ${error.stack || error.message || error}`);
+    });
   registerCommand(context, 'copilotModels.testAll', testAllModels);
   registerCommand(context, 'copilotModels.importJson', importJson);
   registerCommand(context, 'copilotModels.syncGitHub', syncGitHub);
@@ -3077,7 +3228,9 @@ module.exports = {
   activate,
   deactivate,
   __test: {
+    codeServerWorkbenchStylesheets,
     collectCodeServerDiagnostics,
+    ensureChatBidiStylesheets,
     createRepairSnapshot,
     credentialSummary,
     diagnosticCommentChunks,

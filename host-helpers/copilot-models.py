@@ -36,9 +36,39 @@ from xml.sax.saxutils import escape as xml_escape
 BACKUP_SUFFIX = ".copilot-models-helper.bak"
 CREATED_SUFFIX = ".copilot-models-helper.created"
 CUSTOM_VENDOR = "customoai"
-HELPER_VERSION = "0.1.20"
+HELPER_VERSION = "0.1.21"
 TOOLBOX_PUBLISHER = "fazilatma"
 TOOLBOX_NAME = "copilot-models-toolbox"
+CHAT_BIDI_STYLE_BEGIN = "/* copilot-models-chat-bidi:start */"
+CHAT_BIDI_STYLE_END = "/* copilot-models-chat-bidi:end */"
+CHAT_BIDI_STYLE = f"""
+{CHAT_BIDI_STYLE_BEGIN}
+/* Persian-first chat prose with readable isolated English/code runs. */
+.monaco-workbench .interactive-session .interactive-item-container.interactive-response .value .rendered-markdown,
+.monaco-workbench .interactive-session .interactive-item-container.interactive-request .value .rendered-markdown,
+.monaco-workbench .interactive-session .interactive-item-container:is(.interactive-response, .interactive-request) .value .rendered-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th) {{
+  direction: rtl !important;
+  text-align: right !important;
+  unicode-bidi: plaintext !important;
+}}
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .view-lines,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .view-line,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .editor-placeholder,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor textarea.inputarea,
+.monaco-workbench .interactive-session .interactive-input-editor .monaco-editor .native-edit-context {{
+  direction: rtl !important;
+  text-align: right !important;
+  unicode-bidi: plaintext !important;
+}}
+.monaco-workbench .interactive-session .interactive-item-container .rendered-markdown :is(code, kbd, samp),
+.monaco-workbench .interactive-session .interactive-item-container .monaco-editor,
+.monaco-workbench .interactive-session .interactive-item-container :is(pre, [data-code], .interactive-result-code-block) {{
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: isolate !important;
+}}
+{CHAT_BIDI_STYLE_END}
+""".strip()
 
 PROVIDER_ALIASES = {
     "open-router": "openrouter",
@@ -1443,6 +1473,24 @@ def atomic_write_json(path: Path, value: Any, mode: int = 0o600) -> None:
             temporary.unlink()
 
 
+def atomic_write_text(path: Path, text: str, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def profile_storage_path(settings_path: Path) -> Path:
     return settings_path.parent / "globalStorage" / "state.vscdb"
 
@@ -1804,6 +1852,92 @@ def extension_manifests(args: argparse.Namespace) -> list[Path]:
     if custom:
         return custom
     return [path for path in candidates if package_looks_like_copilot(path)]
+
+
+def code_server_vscode_roots() -> list[Path]:
+    candidates: list[Path] = []
+    explicit = os.environ.get("CODE_SERVER_VSCODE_ROOT")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        candidates.extend(
+            [
+                Path(prefix) / "lib" / "node_modules" / "code-server" / "lib" / "vscode",
+                Path(prefix) / "lib" / "code-server" / "lib" / "vscode",
+            ]
+        )
+    code_server = shutil.which("code-server")
+    if code_server:
+        executable = Path(code_server).resolve()
+        for parent in list(executable.parents)[:6]:
+            candidates.extend(
+                [
+                    parent / "lib" / "vscode",
+                    parent / "lib" / "node_modules" / "code-server" / "lib" / "vscode",
+                    parent / "node_modules" / "code-server" / "lib" / "vscode",
+                ]
+            )
+    output: list[Path] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir() and resolved not in output:
+            output.append(resolved)
+    return output
+
+
+def code_server_workbench_stylesheets() -> list[Path]:
+    output: list[Path] = []
+    for root in code_server_vscode_roots():
+        directory = root / "out" / "vs" / "workbench"
+        if not directory.is_dir():
+            continue
+        for stylesheet in sorted(directory.glob("workbench*.css")):
+            if stylesheet.is_file() and stylesheet not in output:
+                output.append(stylesheet)
+    return output
+
+
+def backup_chat_bidi_stylesheet(path: Path, pristine: str, mode: int) -> None:
+    backup = Path(str(path) + BACKUP_SUFFIX)
+    if backup.exists():
+        previous = backup.read_text(encoding="utf-8")
+        if previous == pristine:
+            return
+        digest = hashlib.sha256(previous.encode("utf-8")).hexdigest()[:12]
+        versioned = Path(str(backup) + "." + digest)
+        if not versioned.exists():
+            shutil.copy2(backup, versioned)
+            os.chmod(versioned, mode)
+    atomic_write_text(backup, pristine, mode)
+
+
+def patch_chat_bidi_stylesheet(path: Path, dry_run: bool = False) -> str:
+    original = path.read_text(encoding="utf-8")
+    had_marker = CHAT_BIDI_STYLE_BEGIN in original
+    without_previous = re.sub(
+        re.escape(CHAT_BIDI_STYLE_BEGIN)
+        + r".*?"
+        + re.escape(CHAT_BIDI_STYLE_END),
+        "",
+        original,
+        flags=re.DOTALL,
+    ).rstrip()
+    desired = without_previous + "\n\n" + CHAT_BIDI_STYLE + "\n"
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+    if original == desired:
+        if not dry_run and not Path(str(path) + BACKUP_SUFFIX).exists():
+            backup_chat_bidi_stylesheet(path, without_previous + "\n", original_mode)
+        return "already-rtl"
+    if dry_run:
+        return "would-enable-rtl"
+    pristine = without_previous + "\n" if had_marker else original
+    backup_chat_bidi_stylesheet(path, pristine, original_mode)
+    atomic_write_text(path, desired, original_mode)
+    return "rtl-enabled"
 
 
 def patch_manifest(path: Path, dry_run: bool = False) -> str:
@@ -2205,6 +2339,9 @@ def restore(args: argparse.Namespace) -> int:
         restored.append(str(config_path))
     if restore_file(settings_path):
         restored.append(str(settings_path))
+    for stylesheet in code_server_workbench_stylesheets():
+        if restore_file(stylesheet):
+            restored.append(str(stylesheet))
     for package in extension_manifests(args):
         if restore_file(package):
             restored.append(str(package))
@@ -2515,6 +2652,27 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             eprint("warning: " + error)
 
+    chat_style_results: list[tuple[Path, str]] = []
+    if args.enable_terminal or toolbox_requested:
+        stylesheets = code_server_workbench_stylesheets()
+        style_errors: list[str] = []
+        for stylesheet in stylesheets:
+            try:
+                chat_style_results.append(
+                    (stylesheet, patch_chat_bidi_stylesheet(stylesheet, args.dry_run))
+                )
+            except OSError as error:
+                style_errors.append(f"{stylesheet}: {error}")
+        if style_errors and not chat_style_results:
+            raise RuntimeError("; ".join(style_errors))
+        for error in style_errors:
+            eprint("warning: " + error)
+        if not stylesheets:
+            eprint(
+                "warning: code-server workbench CSS was not found; Chat RTL alignment "
+                "will be retried by a later helper/update run"
+            )
+
     catalog_source = args.catalog or str(
         Path(__file__).with_name("copilot-models.catalog.json")
     )
@@ -2552,6 +2710,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Self-repair command ({action}): {self_repair_command}")
     for manifest, result in patch_results:
         print(f"Manifest ({result}): {manifest}")
+    for stylesheet, result in chat_style_results:
+        print(f"Chat mixed Persian/English alignment ({result}): {stylesheet}")
 
     if args.dry_run:
         print("\nDry run: no files were changed.")
@@ -2579,7 +2739,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Toolbar v{HELPER_VERSION}: Test All AI Models, Import AI JSON, "
             "Sync GitHub, Repair code-server, and Zoom code-server were installed "
-            "in the Copilot Chat title bar."
+            "in the Copilot Chat title bar; mixed Persian/English Chat prose and "
+            "the prompt editor are RTL/right-aligned when workbench CSS was found."
         )
         print(
             "Verify: code-server --list-extensions --show-versions | "

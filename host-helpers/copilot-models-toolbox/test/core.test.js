@@ -105,6 +105,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   };
   t.after(() => {
     Module._load = originalLoad;
+    delete process.env.CODE_SERVER_VSCODE_ROOT;
     delete require.cache[require.resolve('../extension')];
     fs.rmSync(temporary, { recursive: true, force: true });
   });
@@ -228,13 +229,31 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
     extension.__test.resolveExecutable('python3', runtimeEnvironment),
     fakePython
   );
+  const vscodeRoot = path.join(temporary, 'code-server-vscode');
+  const workbenchDirectory = path.join(vscodeRoot, 'out', 'vs', 'workbench');
+  const workbenchCss = path.join(workbenchDirectory, 'workbench.web.main.css');
+  fs.mkdirSync(workbenchDirectory, { recursive: true });
+  fs.writeFileSync(workbenchCss, '.interactive-session{}\n');
+  process.env.CODE_SERVER_VSCODE_ROOT = vscodeRoot;
+  assert.deepEqual(extension.__test.codeServerWorkbenchStylesheets(), [workbenchCss]);
+  const bidiPatched = await extension.__test.ensureChatBidiStylesheets();
+  const bidiRepeated = await extension.__test.ensureChatBidiStylesheets();
+  assert.deepEqual(bidiPatched, [{ filename: workbenchCss, changed: true }]);
+  assert.deepEqual(bidiRepeated, [{ filename: workbenchCss, changed: false }]);
+  assert.match(fs.readFileSync(workbenchCss, 'utf8'), /unicode-bidi: plaintext/);
+  assert.equal(
+    fs.readFileSync(`${workbenchCss}.copilot-models-helper.bak`, 'utf8'),
+    '.interactive-session{}\n'
+  );
   const snapshot = await extension.__test.createRepairSnapshot(context, 'unit test');
+  delete process.env.CODE_SERVER_VSCODE_ROOT;
   const snapshotManifest = JSON.parse(
     fs.readFileSync(path.join(snapshot, 'manifest.json'), 'utf8')
   );
   assert.equal(snapshotManifest.reason, 'unit test');
   assert.equal(snapshotManifest.toolboxVersion, extensionPackage.version);
   assert.ok(fs.existsSync(path.join(snapshot, 'chatLanguageModels.json')));
+  assert.ok(fs.existsSync(path.join(snapshot, 'workbenchChatBidi0.css')));
   assert.ok(fs.existsSync(path.join(snapshot, 'toolbox-extension', 'package.json')));
   assert.equal(fs.statSync(snapshot).mode & 0o777, 0o700);
   assert.doesNotMatch(
