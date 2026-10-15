@@ -33,7 +33,7 @@ terminal and Copilot Agent's run-in-terminal tool without adding an unrestricted
 approval rule. The profile launches argument-free Android `/system/bin/sh` with
 Termux `HOME/PREFIX/PATH/TMPDIR`, bypassing the code-server PTY failures observed
 for both Termux Bash and sh. It also installs Copilot Models Toolbox
-**v0.1.19** with
+**v0.1.20** with
 **🧪 Test All AI Models**, **📥 Import AI JSON**, **🔄 Sync GitHub**,
 **🛠 Repair code-server**, and **🔎 Zoom code-server** in the Copilot Chat title
 toolbar. Zoom controls work at the complete code-server workbench level and can
@@ -57,8 +57,9 @@ retained code-server and VS Code logs, upload every detected sanitized error to
 an issue tied to the configured branch, copy its visible update log, and enable auto-update.
 GitHub auto-update downloads its runtime directly and invokes Python with an absolute
 reconstructed Termux environment instead of trying to spawn Bash from code-server.
-At the end it prints
-the Termux commands needed to restart code-server. API keys are entered without
+After a successful manual or automatic branch update, Toolbox starts a detached
+replacement code-server process and triggers a workbench page reload; the
+installer still prints the fallback Termux restart command. API keys are entered without
 echo and staged in `chatLanguageModels.json` with mode `0600`. At code-server
 startup Toolbox transfers plaintext keys into Chat SecretStorage and leaves only
 `${input:chat.lm.secret.…}` references in that file. A complete credential-file

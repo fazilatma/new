@@ -43,8 +43,11 @@ five commands to the GitHub Copilot Chat view title toolbar:
   absolute Termux environment, so automatic updates do not depend on spawning
   `bash` or `curl` from code-server. Python helpers retry through Android's ELF
   linker after `EACCES`; update additionally has a process-free, atomic Node
-  fallback for the already validated extension/helper/catalog runtime. Nothing
-  uploads automatically. An explicitly
+  fallback for the already validated extension/helper/catalog runtime. After a
+  successful manual update, automatic update, or remote branch repair, Toolbox
+  starts a detached replacement code-server process, stops the old process, and
+  runs `workbench.action.reloadWindow` so the browser workbench refreshes without
+  requiring a copied terminal command. Nothing uploads automatically. An explicitly
   confirmed button scans retained code-server and VS Code logs and sends every
   detected sanitized error to a GitHub issue tied to the selected branch, using
   numbered comments when needed. The latest model-test failures are included but
@@ -74,6 +77,6 @@ Termux.
 
 ## Versioning
 
-The helper, launcher, and companion extension currently ship as **0.1.19**.
+The helper, launcher, and companion extension currently ship as **0.1.20**.
 Every shipped code change must increment the semantic version in all three
 places. The Python test suite enforces that the versions stay synchronized.

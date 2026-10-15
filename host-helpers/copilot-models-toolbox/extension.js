@@ -32,6 +32,7 @@ const activePanels = new Set();
 let autoUpdateTimer;
 let autoUpdateInitialTimer;
 let updateInProgress = false;
+let restartScheduled = false;
 let lastInstalledVersion;
 let credentialMigrationPromise;
 
@@ -673,6 +674,62 @@ async function copyRestartCommand(message) {
   }
 }
 
+async function scheduleCodeServerRestartAndRefresh(reason = 'code update') {
+  if (restartScheduled) {
+    output.appendLine(`[RESTART] Already scheduled; additional reason: ${reason}`);
+    return false;
+  }
+  const environment = termuxRuntimeEnvironment();
+  const codeServer = resolveExecutable(
+    'code-server',
+    environment,
+    [
+      environment.PREFIX && path.join(environment.PREFIX, 'bin', 'code-server'),
+      '/data/data/com.termux/files/usr/bin/code-server',
+      '/data/user/0/com.termux/files/usr/bin/code-server',
+    ]
+  );
+  const shell = resolveExecutable(
+    ['/system/bin/sh', 'sh'],
+    environment,
+    ['/system/bin/sh', '/bin/sh']
+  );
+  const stateDirectory = path.join(environment.HOME || os.homedir(), '.local', 'share', 'code-server');
+  const script = [
+    'sleep 3',
+    "pkill -f '[c]ode-server' || true",
+    'sleep 1',
+    'mkdir -p "$CODE_SERVER_STATE_DIR"',
+    'nohup "$CODE_SERVER_BIN" >>"$CODE_SERVER_LOG" 2>&1 </dev/null &',
+  ].join('\n');
+  const child = cp.spawn(shell, ['-c', script], {
+    cwd: environment.HOME || os.homedir(),
+    env: {
+      ...environment,
+      CODE_SERVER_BIN: codeServer,
+      CODE_SERVER_STATE_DIR: stateDirectory,
+      CODE_SERVER_LOG: path.join(stateDirectory, 'code-server.log'),
+    },
+    detached: true,
+    stdio: 'ignore',
+  });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  child.unref();
+  restartScheduled = true;
+  output.appendLine(
+    `[RESTART] Detached code-server restart scheduled for ${reason}; refreshing the workbench now.`
+  );
+  setTimeout(() => {
+    void vscode.commands.executeCommand('workbench.action.reloadWindow').catch((error) => {
+      output.appendLine(`[RELOAD ERROR] ${error.message || error}`);
+    });
+  }, 750);
+  return true;
+}
+
 async function zoomCodeServer() {
   const selection = await vscode.window.showQuickPick(
     [
@@ -1012,7 +1069,7 @@ async function performFullGitHubUpdate(context, repository, branch, reportStatus
     }
     await fsp.rm(runtimePaths(context).syncedCatalog, { force: true });
     lastInstalledVersion = remote.version;
-    report(`Full branch update to v${remote.version} completed. A code-server restart is required.`, 'success');
+    report(`Full branch update to v${remote.version} completed. Automatic code-server restart and page refresh will follow.`, 'success');
     return remote.version;
   } catch (error) {
     report(error.message || String(error), 'error');
@@ -1516,11 +1573,11 @@ h1{margin-top:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{
 @media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><div class="panel">
 <h1>🔄 GitHub Full Update <small>v${extensionPackage.version}</small></h1>
-<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. Nothing is uploaded automatically. After explicit confirmation, the diagnostic button scans retained code-server and VS Code logs and sends every detected sanitized error to a GitHub issue tied to the selected branch, together with the latest model-test failures when available. API keys, secret references, prompts, source code, full URLs, and local paths are excluded.</p>
+<p class="note">Pulls helper, model catalog, terminal integration, and this toolbox from the selected branch. After a successful manual or automatic update, Toolbox schedules a detached code-server restart and refreshes the workbench page. Nothing is uploaded automatically. After explicit confirmation, the diagnostic button scans retained code-server and VS Code logs and sends every detected sanitized error to a GitHub issue tied to the selected branch, together with the latest model-test failures when available. API keys, secret references, prompts, source code, full URLs, and local paths are excluded.</p>
 <div class="grid"><div><label for="repository">Repository (owner/name)</label><input id="repository" type="text"></div><div><label for="branch">Branch</label><input id="branch" type="text"></div></div>
 <div class="row"><label><input id="auto" type="checkbox"> Enable automatic update checks</label></div>
 <div class="row"><label for="interval">Check interval (minutes)</label><input id="interval" type="number" min="5" max="1440"></div>
-<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="upload">Upload all sanitized errors</button><button id="restart">Copy restart command</button></div>
+<div class="actions"><button id="save">Save settings</button><button id="check">Check version</button><button id="update">Update now</button><button id="upload">Upload all sanitized errors</button><button id="restart">Copy fallback restart command</button></div>
 <h3>Live update log</h3><div class="actions"><button id="copyLog">Copy update log</button></div><pre id="log"></pre>
 </div><script nonce="${scriptNonce}">
 const vscode=acquireVsCodeApi();const initial=${initial};
@@ -1560,12 +1617,21 @@ function restartAutoUpdater(context) {
         remote.version !== lastInstalledVersion
       ) {
         const installed = await performFullGitHubUpdate(context, repository, branch);
-        vscode.window.showInformationMessage(
-          `Copilot Models Toolbox v${installed} installed automatically. Restart code-server to activate it.`,
-          'Copy Restart Command'
-        ).then((choice) => {
-          if (choice === 'Copy Restart Command') vscode.env.clipboard.writeText(RESTART_COMMAND);
-        });
+        try {
+          await scheduleCodeServerRestartAndRefresh(`automatic update to v${installed}`);
+          void vscode.window.showInformationMessage(
+            `Copilot Models Toolbox v${installed} installed automatically. code-server is restarting and the page is refreshing.`
+          );
+        } catch (restartError) {
+          output.appendLine(`[AUTO RESTART ERROR] ${restartError.message || restartError}`);
+          void vscode.window.showWarningMessage(
+            `Toolbox v${installed} was installed, but automatic restart failed: ${restartError.message || restartError}`,
+            'Copy Restart Command'
+          ).then((choice) => {
+            if (choice === 'Copy Restart Command') return vscode.env.clipboard.writeText(RESTART_COMMAND);
+            return undefined;
+          });
+        }
       }
     } catch (error) {
       output.appendLine(`[AUTO UPDATE ERROR] ${error.message || error}`);
@@ -1614,7 +1680,12 @@ async function syncGitHub(context) {
             saved.branch,
             (text, level) => postStatus(text, level)
           );
-          postStatus(`v${installed} installed. Restart code-server to load all changes.`, 'success', true);
+          await scheduleCodeServerRestartAndRefresh(`manual GitHub update to v${installed}`);
+          postStatus(
+            `v${installed} installed. code-server will restart automatically and this page will refresh.`,
+            'success',
+            true
+          );
         } else if (message.type === 'uploadDiagnostics') {
           const confirmed = await vscode.window.showWarningMessage(
             'Scan retained code-server and VS Code logs and upload every detected sanitized error as a GitHub issue and numbered comments? The latest model-test failures are included when available. API keys, secret references, prompts, source code, full URLs, and local paths are excluded.',
@@ -1770,12 +1841,15 @@ async function repairCodeServer(context) {
   }
   if (action.id === 'remote') {
     const configuration = toolboxConfiguration();
-    await performFullGitHubUpdate(
+    const installed = await performFullGitHubUpdate(
       context,
       configuration.get('githubRepository', 'fazilatma/new'),
       configuration.get('githubBranch', 'arena/f1997f2f-new')
     );
-    await copyRestartCommand('Full GitHub self-repair completed from a protected backup.');
+    await scheduleCodeServerRestartAndRefresh(`remote self-repair to v${installed}`);
+    void vscode.window.showInformationMessage(
+      `Full GitHub self-repair installed v${installed}. code-server is restarting and the page is refreshing.`
+    );
     return;
   }
 

@@ -40,6 +40,11 @@ test('package contributes the model and self-repair Copilot Chat toolbar command
 test('GitHub updater downloads runtime directly instead of spawning Bash', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
   assert.match(source, /Downloading the branch runtime without spawning Bash or curl/);
+  assert.match(source, /async function scheduleCodeServerRestartAndRefresh/);
+  assert.match(source, /detached:\s*true/);
+  assert.match(source, /workbench\.action\.reloadWindow/);
+  assert.match(source, /automatic update to v\$\{installed\}/);
+  assert.match(source, /manual GitHub update to v\$\{installed\}/);
   assert.doesNotMatch(source, /const bash\s*=/);
   assert.doesNotMatch(source, /runProcess\(\s*bash/);
 });
@@ -323,6 +328,7 @@ test('extension activates, registers commands, and secures plaintext Chat keys',
   assert.match(githubSync, /Upload all sanitized errors/);
   assert.match(githubSync, /Copy update log/);
   assert.match(githubSync, /Nothing is uploaded automatically/);
+  assert.match(githubSync, /detached code-server restart/);
   assert.match(githubSync, /every detected sanitized error/);
   const githubScript = githubSync.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
   assert.doesNotThrow(() => new vm.Script(githubScript));
