@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.362';
+const APP_VERSION = '10.363';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32777,6 +32777,7 @@ function aiNetPublic(array $n): array {
 }
 
 function aiFeedbackSkipReason(array $m): string {
+    if (!empty($m['feedbackExcluded'])) return 'invalid';
     if (!empty($m['available'])) return 'available';
     $d = is_array($m['testDetails'] ?? null) ? (array)$m['testDetails'] : [];
     $code = (int)($d['status'] ?? 0);
@@ -32788,6 +32789,24 @@ function aiFeedbackSkipReason(array $m): string {
     if (!empty($m['rateLimited']) || $code === 429 || strpos($txt, 'rate limit') !== false || strpos($txt, 'too many requests') !== false) return 'ratelimit';
     if (empty($m['tested']) && !$d) return 'untested';
     return '';
+}
+
+function aiFeedbackPermanentInvalid(array $m): bool {
+    if(!empty($m['feedbackExcluded']))return true;
+    $d=is_array($m['testDetails']??null)?$m['testDetails']:[];
+    $kind=strtolower((string)($d['kind']??''));$code=(int)($d['status']??0);
+    $txt=strtolower((string)($d['error']??'').' '.(string)($d['note']??'').' '.(string)($d['raw']??''));
+    if($kind==='badmodel')return true;
+    if(in_array($code,[400,404],true)&&(strpos($txt,'model')!==false)&&(
+        strpos($txt,'not supported')!==false||strpos($txt,'no longer available')!==false
+        ||strpos($txt,'invalid model')!==false||strpos($txt,'model not found')!==false))return true;
+    return false;
+}
+
+function aiFeedbackExcludeInvalid(array &$m,string $reason=''): void {
+    $m['feedbackExcluded']=true;$m['feedbackExcludedAt']=time();
+    $m['feedbackExcludeReason']=$reason!==''?mb_substr($reason,0,300):'permanent_invalid_model';
+    $m['available']=false;$m['rateLimited']=false;
 }
 
 function aiFeedbackProbeModes(array $net, string $url, string $apiKey, string $model): array {
@@ -32912,8 +32931,19 @@ if (isset($_GET['ai_feedback_fix'])) {
         saveConnections($cn);
     }
 
+    $preExcluded=0;
+    if($apply){
+        foreach($providers as $px=>&$pp){
+            if(!is_array($pp['models']??null))continue;
+            foreach($pp['models'] as $mx=>&$mm){
+                if(!is_array($mm)||!empty($mm['feedbackExcluded'])||!aiFeedbackPermanentInvalid($mm))continue;
+                $dd=is_array($mm['testDetails']??null)?$mm['testDetails']:[];
+                aiFeedbackExcludeInvalid($mm,(string)($dd['error']??$dd['note']??'permanent_invalid_model'));$preExcluded++;
+            }unset($mm);
+        }unset($pp);
+    }
     $targets = [];$cursor=(string)($_GET['cursor']??'');$pastCursor=$cursor==='';$remaining=0;
-    $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0];
+    $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0,'invalid'=>0];
     foreach ($providers as $pid => $p) {
         if (($p['enabled'] ?? true) === false) continue;
         foreach ((array)($p['models'] ?? []) as $idx => $m) {
@@ -32931,7 +32961,7 @@ if (isset($_GET['ai_feedback_fix'])) {
     $nextCursor=$targets?(string)($targets[count($targets)-1]['cursor']??''):'';
 
     $results = [];
-    $fixed = 0; $stillFailed = 0; $nowExcluded = 0;
+    $fixed = 0; $stillFailed = 0; $nowExcluded = 0; $invalidExcluded=$preExcluded;
     foreach ($targets as $t) {
         $pid = (string)$t['pid']; $idx = (int)$t['idx']; $mid = (string)$t['mid'];
         if (!isset($providers[$pid])) continue;
@@ -32942,8 +32972,13 @@ if (isset($_GET['ai_feedback_fix'])) {
         $j = aiTestJudge($r, $mid, $pid);
         $code = (int)($j['code'] ?? 0);
         $excluded = ((string)($j['billing'] ?? '') !== '' || strpos((string)($j['kind'] ?? ''), 'billing') === 0 || $code === 429);
+        $permanentInvalid=(string)($j['kind']??'')==='badmodel';
         if ($excluded) {
             $nowExcluded++;
+        } elseif($permanentInvalid) {
+            if($apply){aiFeedbackStoreResult($providers,$pid,$idx,$mid,$r,$j,$lat,$testMsg);
+                aiFeedbackExcludeInvalid($providers[$pid]['models'][$idx],(string)($j['error']??'permanent_invalid_model'));}
+            $invalidExcluded++;
         } else {
             if ($apply) aiFeedbackStoreResult($providers, $pid, $idx, $mid, $r, $j, $lat, $testMsg);
             if (!empty($j['ok'])) $fixed++; else $stillFailed++;
@@ -32952,16 +32987,16 @@ if (isset($_GET['ai_feedback_fix'])) {
             'kind'=>(string)($j['kind'] ?? ''), 'billing'=>(string)($j['billing'] ?? ''),
             'diag'=>(string)($j['diag']['cat'] ?? ''), 'error'=>mb_substr((string)($j['error'] ?? ''), 0, 180),
             'via'=>(string)($r['via'] ?? ''), 'payloadRepair'=>(string)($r['payload_repair'] ?? ''),
-            'latencyMs'=>$lat, 'saved'=>$apply && !$excluded];
+            'latencyMs'=>$lat, 'invalid_excluded'=>$permanentInvalid, 'saved'=>$apply && !$excluded];
     }
-    if ($apply && $results) aiProvidersSave($providers);
+    if ($apply && ($results||$preExcluded>0)) aiProvidersSave($providers);
 
     echo json_encode(['ok'=>true, 'applied'=>$apply, 'probe_provider'=>$probeProvider,
         'probe'=>$probe, 'recommended'=>$best, 'net_before'=>aiNetPublic($net), 'net_after'=>aiNetPublic($fixNet),
         'changes'=>$changes, 'limit'=>$limit, 'cursor'=>$cursor, 'next_cursor'=>$nextCursor,
         'has_more'=>$remaining>0, 'remaining'=>$remaining, 'candidates'=>count($targets),
         'fixed'=>$fixed, 'still_failed'=>$stillFailed, 'excluded_after_retest'=>$nowExcluded,
-        'skipped'=>$skipped, 'results'=>$results,
+        'invalid_excluded'=>$invalidExcluded, 'invalid_preexcluded'=>$preExcluded, 'skipped'=>$skipped, 'results'=>$results,
         'summary'=>($apply ? 'حلقهٔ فیدبک اجرا و تغییرهای مجاز ذخیره شد' : 'حلقهٔ فیدبک در حالت گزارش اجرا شد')], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -43068,6 +43103,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.363', 'مدل قطعی نامعتبر از صف و آمار فعال AI کنار گذاشته می‌شود',
+         strpos($selfSrc, 'function aiFeedbackPermanentInvalid(array $m): bool') !== false
+      && strpos($selfSrc, "!empty(\$m['feedbackExcluded'])") !== false
+      && strpos($selfSrc, "'excluded_invalid'=>\$excludedInvalid") !== false);
+    $add('10.363', 'فیدبک مدل‌های badmodel را خودکار exclude و ذخیره می‌کند',
+         strpos($selfSrc, "\$permanentInvalid=(string)(\$j['kind']??'')==='badmodel'") !== false
+      && strpos($selfSrc, 'aiFeedbackExcludeInvalid($providers[$pid]') !== false
+      && strpos($selfSrc, "'invalid_excluded'=>\$invalidExcluded") !== false);
+    $add('10.363', 'ورودی 10.363 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "363'") !== false
+      && version_compare(APP_VERSION, '10.' . '363', '>='));
     $add('10.362', 'فیدبک AI سیگنال stop کهنه را پیش از retest پاک می‌کند',
          strpos($selfSrc, 'if(aiTestLockHeld())') !== false
       && strpos($selfSrc, '@unlink(AI_TEST_STOP_FILE);clearstatcache(true,AI_TEST_STOP_FILE)') !== false
@@ -54531,7 +54577,7 @@ if (isset($_GET['ai_stats'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $provs = aiProvidersLoad();
     $tot = 0; $tested = 0; $okN = 0; $failN = 0; $rate = 0;
-    $tool = 0; $reason = 0; $free = 0;
+    $tool = 0; $reason = 0; $free = 0; $excludedInvalid = 0;
     $latSum = 0; $latN = 0; $fastest = [];
     $byProv = []; $keyTotal = 0; $keyHealthy = 0;
 
@@ -54545,6 +54591,7 @@ if (isset($_GET['ai_stats'])) {
         foreach ((array)(aiTestKeySlots($p)) as $sl) { $keyTotal++; }
         foreach ($models as $m) {
             if (!is_array($m)) continue;
+            if(!empty($m['feedbackExcluded'])){$excludedInvalid++;continue;}
             $tot++; $pRow['total']++;
             if (!empty($m['toolCalling'])) $tool++;
             if (function_exists('aiIsReasoningModel') && aiIsReasoningModel($m)) $reason++;
@@ -54575,7 +54622,7 @@ if (isset($_GET['ai_stats'])) {
         'ok' => true,
         'total' => $tot, 'tested' => $tested, 'untested' => max(0, $tot - $tested),
         'available' => $okN, 'failed' => $failN, 'rate_limited' => $rate,
-        'tool_calling' => $tool, 'reasoning' => $reason, 'free' => $free,
+        'tool_calling' => $tool, 'reasoning' => $reason, 'free' => $free, 'excluded_invalid'=>$excludedInvalid,
         'providers' => count($byProv), 'key_slots' => $keyTotal,
         'avg_latency' => $latN > 0 ? (int)round($latSum / $latN) : 0,
         'health_pct' => $tested > 0 ? (int)round($okN * 100 / $tested) : 0,
@@ -54682,7 +54729,7 @@ function aiTestBuildQueue(array $providers, int $per, bool $onlyUntested, bool $
         $n = 0; $list = [];
         foreach ((array)($p['models'] ?? []) as $m) {
             $mid = (string)($m['id'] ?? '');
-            if ($mid === '') continue;
+            if ($mid === '' || !empty($m['feedbackExcluded'])) continue;
             /* v9.99: مدل‌های غیرچت (امبدینگ/تصویر/صوت/rerank) اصلاً وارد صف
                نمی‌شوند — تستِ چت روی آن‌ها همیشه شکست می‌خورد. */
             if ($skipNonChat) {
@@ -74944,6 +74991,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.363', t:'🧹 حذف مدل‌های قطعی نامعتبر از چرخهٔ AI', items:[
+    'مدل‌هایی که API صریحاً unsupported، retired یا invalid اعلام می‌کند با feedbackExcluded علامت می‌خورند و دیگر در تست یا آمار سلامت فعال شمرده نمی‌شوند.',
+    'فیدبک در شروع، خطاهای badmodel تأییدشدهٔ قبلی را بدون درخواست شبکهٔ تکراری کنار می‌گذارد و badmodel تازه را پس از retest ذخیره می‌کند.',
+    'خطاهای مسیر مانند HTTP 403 یا Worker خراب پنهان نمی‌شوند؛ چون مدل معتبر است و رفع آن نیازمند مسیر شبکهٔ سالم است.'
+  ]},
   {v:'10.362', t:'🧭 پوشش کامل فیدبک مدل‌های AI', items:[
     'فیدبک هم‌زمان با تست گروهی اجرا نمی‌شود و پس از پایان تست، سیگنال توقف کهنه را پاک می‌کند تا retest واقعاً شبکه را صدا بزند.',
     'cursor پایدار اضافه شد تا همهٔ خطاهای غیرِ اعتبار و غیرِ rate-limit در بسته‌های متوالی بررسی شوند، نه فقط اولین ۸۰ مدل.',
