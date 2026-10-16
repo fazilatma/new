@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.365';
+const APP_VERSION = '10.366';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -4925,7 +4925,7 @@ function aiNonChatModel(string $modelId, array $m = []): string {
          ['rerank', 'bge-reranker']],
         ['تولید تصویر — خروجی‌اش تصویر است نه متن',
          ['flux', 'stable-diffusion', 'sd-', 'sdxl', 'dreamshaper', 'lightning', 'phoenix-1', 'text-to-image']],
-        ['تبدیل گفتار به متن (ASR)', ['whisper', 'nova-3', 'speech-to-text']],
+        ['تبدیل گفتار به متن (ASR)', ['whisper', 'nova-3', 'speech-to-text', 'transcribe']],
         ['تبدیل متن به گفتار (TTS)', ['melotts', 'aura-1', 'text-to-speech', 'tts-']],
         ['طبقه‌بندی/بینایی — خروجی برچسب است نه متن',
          ['resnet', 'detr-', 'uform', 'clip-', 'image-classification']],
@@ -43105,6 +43105,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.366', 'provider غیرفعال در آمار سلامت فعال AI شمرده نمی‌شود',
+         strpos($selfSrc, "!is_array(\$p)||(\$p['enabled']??true)===false") !== false
+      && version_compare(APP_VERSION, '10.' . '366', '>='));
+    $add('10.366', 'مدل transcribe نیز غیرچت تشخیص داده می‌شود',
+         strpos($selfSrc, "'speech-to-text', 'transcribe'") !== false);
+    $add('10.366', 'ورودی 10.366 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "366'") !== false);
     $add('10.365', 'مدل غیرچت وارد feedback چت یا آمار خرابی فعال نمی‌شود',
          strpos($selfSrc, "return 'nonchat'") !== false
       && strpos($selfSrc, "'excluded_nonchat'=>\$excludedNonchat") !== false
@@ -54600,7 +54607,7 @@ if (isset($_GET['ai_stats'])) {
     $byProv = []; $keyTotal = 0; $keyHealthy = 0;
 
     foreach ($provs as $pid => $p) {
-        if (!is_array($p)) continue;
+        if (!is_array($p)||($p['enabled']??true)===false) continue;
         $pname = trim((string)($p['name'] ?? $pid));
         $models = is_array($p['models'] ?? null) ? $p['models'] : [];
         $pRow = ['id' => (string)$pid, 'name' => $pname !== '' ? $pname : (string)$pid,
@@ -75010,6 +75017,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.366', t:'📊 آمار فقط برای اتصال‌های فعال و مدل‌های چت', items:[
+    'ارائه‌دهندهٔ غیرفعال دیگر total/fail و درصد سلامت اتصال‌های فعال را خراب نمی‌کند.',
+    'مدل‌های transcribe نیز در خانوادهٔ ASR غیرچت قرار گرفتند و با payload چت آزموده نمی‌شوند.'
+  ]},
   {v:'10.365', t:'🧭 تفکیک مدل چت از endpointهای تخصصی', items:[
     'مدل‌های TTS، تصویر، embedding و سایر مدل‌های غیرچت دیگر وارد ai_feedback_fix چت یا آمار خرابی فعال نمی‌شوند.',
     'مدلی که API صریحاً فقط Interactions API را پشتیبانی می‌کند از اتصال chat فعلی کنار گذاشته می‌شود؛ خطای موقت high-demand همچنان قابل مشاهده و retest می‌ماند.'
