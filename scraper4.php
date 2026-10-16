@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.367';
+const APP_VERSION = '10.368';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32979,6 +32979,7 @@ if (isset($_GET['ai_feedback_fix'])) {
         $permanentInvalid=(string)($j['kind']??'')==='badmodel';
         if ($excluded) {
             $nowExcluded++;
+            if($apply)aiFeedbackStoreResult($providers,$pid,$idx,$mid,$r,$j,$lat,$testMsg);
         } elseif($permanentInvalid) {
             if($apply){aiFeedbackStoreResult($providers,$pid,$idx,$mid,$r,$j,$lat,$testMsg);
                 aiFeedbackExcludeInvalid($providers[$pid]['models'][$idx],(string)($j['error']??'permanent_invalid_model'));}
@@ -32991,7 +32992,7 @@ if (isset($_GET['ai_feedback_fix'])) {
             'kind'=>(string)($j['kind'] ?? ''), 'billing'=>(string)($j['billing'] ?? ''),
             'diag'=>(string)($j['diag']['cat'] ?? ''), 'error'=>mb_substr((string)($j['error'] ?? ''), 0, 180),
             'via'=>(string)($r['via'] ?? ''), 'payloadRepair'=>(string)($r['payload_repair'] ?? ''),
-            'latencyMs'=>$lat, 'invalid_excluded'=>$permanentInvalid, 'saved'=>$apply && !$excluded];
+            'latencyMs'=>$lat, 'invalid_excluded'=>$permanentInvalid, 'saved'=>$apply];
     }
     if ($apply && ($results||$preExcluded>0)) aiProvidersSave($providers);
 
@@ -43107,6 +43108,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.368', 'نتیجهٔ billing/tier تازه در feedback ذخیره و در اجرای بعدی skip می‌شود',
+         strpos($selfSrc, 'if($apply)aiFeedbackStoreResult($providers,$pid,$idx,$mid,$r,$j,$lat,$testMsg)') !== false
+      && strpos($selfSrc, "'saved'=>\$apply") !== false
+      && version_compare(APP_VERSION, '10.' . '368', '>='));
+    $add('10.368', 'ورودی 10.368 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "368'") !== false);
     $add('10.367', 'محدودیت free-tier اختصاصی OpenCode مانند billing کنار گذاشته می‌شود',
          strpos($selfSrc, "'free tier can only be used'") !== false
       && version_compare(APP_VERSION, '10.' . '367', '>='));
@@ -75027,6 +75034,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.368', t:'💾 ماندگاری نتیجهٔ billing در فیدبک AI', items:[
+    'وقتی retest برای نخستین بار credit، quota، plan یا tier را تشخیص می‌دهد، جزئیات همان نتیجه ذخیره می‌شود تا مدل در اجرای بعدی دوباره actionable نشود.',
+    'پرچم saved خروجی اکنون ذخیره‌شدن واقعی نتایج billing-excluded را نیز درست گزارش می‌کند.'
+  ]},
   {v:'10.367', t:'🧾 تکمیل تشخیص محدودیت tier و مدل ناسازگار', items:[
     'پیام OpenCode مبنی بر استفادهٔ free tier فقط داخل برنامه اکنون محدودیت tier است و ناموفقِ قابل‌تعمیر شمرده نمی‌شود.',
     'پاسخ صریح does not support chat endpoints یا Model is unavailable در HTTP 400 مدل را از کاتالوگ فعال chat کنار می‌گذارد.'
