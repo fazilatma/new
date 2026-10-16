@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.361';
+const APP_VERSION = '10.362';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32857,6 +32857,13 @@ function aiFeedbackStoreResult(array &$providers, string $pid, int $idx, string 
 if (isset($_GET['ai_feedback_fix'])) {
     header('Content-Type: application/json; charset=UTF-8');
     @set_time_limit(0);
+    /* A bulk test and feedback retest must not mutate the same provider rows.
+       Once no test owns the lock, remove its durable stop signal; otherwise all
+       feedback calls immediately return "stopped" without touching a model. */
+    if(aiTestLockHeld()){
+        http_response_code(409);echo json_encode(['ok'=>false,'running'=>true,'error'=>'تست گروهی هنوز فعال است؛ پس از توقف/پایان دوباره فیدبک را اجرا کنید'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    @unlink(AI_TEST_STOP_FILE);clearstatcache(true,AI_TEST_STOP_FILE);
     $apply = !empty($_GET['apply']) && $_GET['apply'] !== 'false';
     $limit = max(1, min(80, (int)($_GET['limit'] ?? 25)));
     $testMsg = trim((string)($_GET['msg'] ?? 'سلام'));
@@ -32905,7 +32912,7 @@ if (isset($_GET['ai_feedback_fix'])) {
         saveConnections($cn);
     }
 
-    $targets = [];
+    $targets = [];$cursor=(string)($_GET['cursor']??'');$pastCursor=$cursor==='';$remaining=0;
     $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0];
     foreach ($providers as $pid => $p) {
         if (($p['enabled'] ?? true) === false) continue;
@@ -32913,12 +32920,15 @@ if (isset($_GET['ai_feedback_fix'])) {
             if (!is_array($m)) continue;
             $mid = (string)($m['id'] ?? '');
             if ($mid === '') continue;
+            $rowCursor=(string)$pid.'|'.$mid;
+            if(!$pastCursor){if(hash_equals($cursor,$rowCursor))$pastCursor=true;continue;}
             $sr = aiFeedbackSkipReason($m);
             if ($sr !== '') { if (isset($skipped[$sr])) $skipped[$sr]++; continue; }
-            $targets[] = ['pid'=>(string)$pid, 'idx'=>(int)$idx, 'mid'=>$mid];
-            if (count($targets) >= $limit) break 2;
+            if(count($targets)<$limit)$targets[]=['pid'=>(string)$pid,'idx'=>(int)$idx,'mid'=>$mid,'cursor'=>$rowCursor];
+            else $remaining++;
         }
     }
+    $nextCursor=$targets?(string)($targets[count($targets)-1]['cursor']??''):'';
 
     $results = [];
     $fixed = 0; $stillFailed = 0; $nowExcluded = 0;
@@ -32948,7 +32958,8 @@ if (isset($_GET['ai_feedback_fix'])) {
 
     echo json_encode(['ok'=>true, 'applied'=>$apply, 'probe_provider'=>$probeProvider,
         'probe'=>$probe, 'recommended'=>$best, 'net_before'=>aiNetPublic($net), 'net_after'=>aiNetPublic($fixNet),
-        'changes'=>$changes, 'limit'=>$limit, 'candidates'=>count($targets),
+        'changes'=>$changes, 'limit'=>$limit, 'cursor'=>$cursor, 'next_cursor'=>$nextCursor,
+        'has_more'=>$remaining>0, 'remaining'=>$remaining, 'candidates'=>count($targets),
         'fixed'=>$fixed, 'still_failed'=>$stillFailed, 'excluded_after_retest'=>$nowExcluded,
         'skipped'=>$skipped, 'results'=>$results,
         'summary'=>($apply ? 'حلقهٔ فیدبک اجرا و تغییرهای مجاز ذخیره شد' : 'حلقهٔ فیدبک در حالت گزارش اجرا شد')], JSON_UNESCAPED_UNICODE);
@@ -43057,6 +43068,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.362', 'فیدبک AI سیگنال stop کهنه را پیش از retest پاک می‌کند',
+         strpos($selfSrc, 'if(aiTestLockHeld())') !== false
+      && strpos($selfSrc, '@unlink(AI_TEST_STOP_FILE);clearstatcache(true,AI_TEST_STOP_FILE)') !== false
+      && strpos($selfSrc, 'همهٔ feedback calls immediately return "stopped"') !== false);
+    $add('10.362', 'cursor پایدار همهٔ خطاهای غیراعتباری را batch به batch پوشش می‌دهد',
+         strpos($selfSrc, "\$cursor=(string)(\$_GET['cursor']??'')") !== false
+      && strpos($selfSrc, "'next_cursor'=>\$nextCursor") !== false
+      && strpos($selfSrc, "'has_more'=>\$remaining>0") !== false);
+    $add('10.362', 'ورودی 10.362 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "362'") !== false
+      && version_compare(APP_VERSION, '10.' . '362', '>='));
     $add('10.361', 'صف خالی فقط تست‌نشده‌ها به اجرای واقعی همهٔ مدل‌های واجد شرایط تبدیل می‌شود',
          strpos($selfSrc, 'if(!$queue&&$onlyUntested)') !== false
       && strpos($selfSrc, 'aiTestBuildQueue($providers,$per,false,$skipNonChat,$allStats)') !== false
@@ -74922,6 +74944,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.362', t:'🧭 پوشش کامل فیدبک مدل‌های AI', items:[
+    'فیدبک هم‌زمان با تست گروهی اجرا نمی‌شود و پس از پایان تست، سیگنال توقف کهنه را پاک می‌کند تا retest واقعاً شبکه را صدا بزند.',
+    'cursor پایدار اضافه شد تا همهٔ خطاهای غیرِ اعتبار و غیرِ rate-limit در بسته‌های متوالی بررسی شوند، نه فقط اولین ۸۰ مدل.',
+    'پاسخ endpoint تعداد باقی‌مانده، cursor بعدی و has_more را برای اجرای قابل پیگیری گزارش می‌کند.'
+  ]},
   {v:'10.361', t:'🧪 اجرای واقعی تست AI و اولویت تکراری کددار', items:[
     'اگر «فقط تست‌نشده» روشن باشد ولی همهٔ مدل‌های واجد شرایط قبلاً تست شده باشند، یک دور تازهٔ واقعی برای مدل‌ها اجرا می‌شود و کار با صفر تست تمام نمی‌شود.',
     'زیر انتخاب جدیدترین/گران‌ترین، تیک «نگه‌داری نسخهٔ کددار و حذف بدون کد» اضافه شد.',
