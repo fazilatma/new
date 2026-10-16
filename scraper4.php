@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.364';
+const APP_VERSION = '10.365';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32778,6 +32778,7 @@ function aiNetPublic(array $n): array {
 
 function aiFeedbackSkipReason(array $m): string {
     if (!empty($m['feedbackExcluded'])) return 'invalid';
+    if(aiNonChatModel((string)($m['id']??''),$m)!=='')return 'nonchat';
     if (!empty($m['available'])) return 'available';
     $d = is_array($m['testDetails'] ?? null) ? (array)$m['testDetails'] : [];
     $code = (int)($d['status'] ?? 0);
@@ -32796,7 +32797,7 @@ function aiFeedbackPermanentInvalid(array $m): bool {
     $d=is_array($m['testDetails']??null)?$m['testDetails']:[];
     $kind=strtolower((string)($d['kind']??''));$code=(int)($d['status']??0);
     $txt=strtolower((string)($d['error']??'').' '.(string)($d['note']??'').' '.(string)($d['raw']??''));
-    if($kind==='badmodel')return true;
+    if($kind==='badmodel'||strpos($txt,'only supports interactions api')!==false)return true;
     if(in_array($code,[400,404],true)&&(strpos($txt,'model')!==false)&&(
         strpos($txt,'not supported')!==false||strpos($txt,'no longer available')!==false
         ||strpos($txt,'invalid model')!==false||strpos($txt,'model not found')!==false))return true;
@@ -32944,7 +32945,7 @@ if (isset($_GET['ai_feedback_fix'])) {
         }unset($pp);
     }
     $targets = [];$cursor=(string)($_GET['cursor']??'');$pastCursor=$cursor==='';$remaining=0;
-    $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0,'invalid'=>0];
+    $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0,'invalid'=>0,'nonchat'=>0];
     foreach ($providers as $pid => $p) {
         if (($p['enabled'] ?? true) === false || ($providerFilter!==''&&!hash_equals($providerFilter,(string)$pid))) continue;
         foreach ((array)($p['models'] ?? []) as $idx => $m) {
@@ -43104,6 +43105,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.365', 'مدل غیرچت وارد feedback چت یا آمار خرابی فعال نمی‌شود',
+         strpos($selfSrc, "return 'nonchat'") !== false
+      && strpos($selfSrc, "'excluded_nonchat'=>\$excludedNonchat") !== false
+      && strpos($selfSrc, "'nonchat'=>0") !== false);
+    $add('10.365', 'مدل صریحاً محدود به Interactions API به‌عنوان ناسازگار کنار می‌رود',
+         strpos($selfSrc, "only supports interactions api") !== false
+      && version_compare(APP_VERSION, '10.' . '365', '>='));
+    $add('10.365', 'ورودی 10.365 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "365'") !== false);
     $add('10.364', 'فیدبک AI می‌تواند همهٔ خطاهای یک provider مشخص را مستقل اجرا کند',
          strpos($selfSrc, "\$providerFilter=trim((string)(\$_GET['provider']??''))") !== false
       && strpos($selfSrc, "!hash_equals(\$providerFilter,(string)\$pid)") !== false
@@ -54585,7 +54595,7 @@ if (isset($_GET['ai_stats'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $provs = aiProvidersLoad();
     $tot = 0; $tested = 0; $okN = 0; $failN = 0; $rate = 0;
-    $tool = 0; $reason = 0; $free = 0; $excludedInvalid = 0;
+    $tool = 0; $reason = 0; $free = 0; $excludedInvalid = 0; $excludedNonchat=0;
     $latSum = 0; $latN = 0; $fastest = [];
     $byProv = []; $keyTotal = 0; $keyHealthy = 0;
 
@@ -54600,6 +54610,7 @@ if (isset($_GET['ai_stats'])) {
         foreach ($models as $m) {
             if (!is_array($m)) continue;
             if(!empty($m['feedbackExcluded'])){$excludedInvalid++;continue;}
+            if(aiNonChatModel((string)($m['id']??''),$m)!==''){$excludedNonchat++;continue;}
             $tot++; $pRow['total']++;
             if (!empty($m['toolCalling'])) $tool++;
             if (function_exists('aiIsReasoningModel') && aiIsReasoningModel($m)) $reason++;
@@ -54630,7 +54641,7 @@ if (isset($_GET['ai_stats'])) {
         'ok' => true,
         'total' => $tot, 'tested' => $tested, 'untested' => max(0, $tot - $tested),
         'available' => $okN, 'failed' => $failN, 'rate_limited' => $rate,
-        'tool_calling' => $tool, 'reasoning' => $reason, 'free' => $free, 'excluded_invalid'=>$excludedInvalid,
+        'tool_calling' => $tool, 'reasoning' => $reason, 'free' => $free, 'excluded_invalid'=>$excludedInvalid, 'excluded_nonchat'=>$excludedNonchat,
         'providers' => count($byProv), 'key_slots' => $keyTotal,
         'avg_latency' => $latN > 0 ? (int)round($latSum / $latN) : 0,
         'health_pct' => $tested > 0 ? (int)round($okN * 100 / $tested) : 0,
@@ -74999,6 +75010,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.365', t:'🧭 تفکیک مدل چت از endpointهای تخصصی', items:[
+    'مدل‌های TTS، تصویر، embedding و سایر مدل‌های غیرچت دیگر وارد ai_feedback_fix چت یا آمار خرابی فعال نمی‌شوند.',
+    'مدلی که API صریحاً فقط Interactions API را پشتیبانی می‌کند از اتصال chat فعلی کنار گذاشته می‌شود؛ خطای موقت high-demand همچنان قابل مشاهده و retest می‌ماند.'
+  ]},
   {v:'10.364', t:'🎯 فیدبک مستقل هر ارائه‌دهندهٔ AI', items:[
     'پارامتر provider به ai_feedback_fix اضافه شد تا همهٔ خطاهای یک ارائه‌دهنده بدون تکرار مدل‌های providerهای قبلی retest شوند.',
     'خروجی provider_filter را برمی‌گرداند و همچنان خطاهای credit/rate-limit را دست‌نخورده رد می‌کند.'
