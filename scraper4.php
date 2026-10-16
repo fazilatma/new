@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.363';
+const APP_VERSION = '10.364';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -32931,6 +32931,7 @@ if (isset($_GET['ai_feedback_fix'])) {
         saveConnections($cn);
     }
 
+    $providerFilter=trim((string)($_GET['provider']??''));
     $preExcluded=0;
     if($apply){
         foreach($providers as $px=>&$pp){
@@ -32945,7 +32946,7 @@ if (isset($_GET['ai_feedback_fix'])) {
     $targets = [];$cursor=(string)($_GET['cursor']??'');$pastCursor=$cursor==='';$remaining=0;
     $skipped = ['available'=>0,'billing'=>0,'ratelimit'=>0,'untested'=>0,'invalid'=>0];
     foreach ($providers as $pid => $p) {
-        if (($p['enabled'] ?? true) === false) continue;
+        if (($p['enabled'] ?? true) === false || ($providerFilter!==''&&!hash_equals($providerFilter,(string)$pid))) continue;
         foreach ((array)($p['models'] ?? []) as $idx => $m) {
             if (!is_array($m)) continue;
             $mid = (string)($m['id'] ?? '');
@@ -32993,7 +32994,7 @@ if (isset($_GET['ai_feedback_fix'])) {
 
     echo json_encode(['ok'=>true, 'applied'=>$apply, 'probe_provider'=>$probeProvider,
         'probe'=>$probe, 'recommended'=>$best, 'net_before'=>aiNetPublic($net), 'net_after'=>aiNetPublic($fixNet),
-        'changes'=>$changes, 'limit'=>$limit, 'cursor'=>$cursor, 'next_cursor'=>$nextCursor,
+        'changes'=>$changes, 'limit'=>$limit, 'provider_filter'=>$providerFilter, 'cursor'=>$cursor, 'next_cursor'=>$nextCursor,
         'has_more'=>$remaining>0, 'remaining'=>$remaining, 'candidates'=>count($targets),
         'fixed'=>$fixed, 'still_failed'=>$stillFailed, 'excluded_after_retest'=>$nowExcluded,
         'invalid_excluded'=>$invalidExcluded, 'invalid_preexcluded'=>$preExcluded, 'skipped'=>$skipped, 'results'=>$results,
@@ -43103,6 +43104,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.364', 'فیدبک AI می‌تواند همهٔ خطاهای یک provider مشخص را مستقل اجرا کند',
+         strpos($selfSrc, "\$providerFilter=trim((string)(\$_GET['provider']??''))") !== false
+      && strpos($selfSrc, "!hash_equals(\$providerFilter,(string)\$pid)") !== false
+      && strpos($selfSrc, "'provider_filter'=>\$providerFilter") !== false);
+    $add('10.364', 'ورودی 10.364 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "364'") !== false
+      && version_compare(APP_VERSION, '10.' . '364', '>='));
     $add('10.363', 'مدل قطعی نامعتبر از صف و آمار فعال AI کنار گذاشته می‌شود',
          strpos($selfSrc, 'function aiFeedbackPermanentInvalid(array $m): bool') !== false
       && strpos($selfSrc, "!empty(\$m['feedbackExcluded'])") !== false
@@ -74991,6 +74999,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.364', t:'🎯 فیدبک مستقل هر ارائه‌دهندهٔ AI', items:[
+    'پارامتر provider به ai_feedback_fix اضافه شد تا همهٔ خطاهای یک ارائه‌دهنده بدون تکرار مدل‌های providerهای قبلی retest شوند.',
+    'خروجی provider_filter را برمی‌گرداند و همچنان خطاهای credit/rate-limit را دست‌نخورده رد می‌کند.'
+  ]},
   {v:'10.363', t:'🧹 حذف مدل‌های قطعی نامعتبر از چرخهٔ AI', items:[
     'مدل‌هایی که API صریحاً unsupported، retired یا invalid اعلام می‌کند با feedbackExcluded علامت می‌خورند و دیگر در تست یا آمار سلامت فعال شمرده نمی‌شوند.',
     'فیدبک در شروع، خطاهای badmodel تأییدشدهٔ قبلی را بدون درخواست شبکهٔ تکراری کنار می‌گذارد و badmodel تازه را پس از retest ذخیره می‌کند.',
