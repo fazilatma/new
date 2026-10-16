@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.366';
+const APP_VERSION = '10.367';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -4879,7 +4879,7 @@ function aiBillingFailure(array $r): array {
                      'upgrade your plan', 'requires a paid plan', 'paid plan'],
                     'پلن رایگان اجازه نمی‌دهد — نیاز به ارتقای پلن'],
         ['tier',    ['tier_not_allowed', 'not available in your subscription tier',
-                     'subscription tier', 'model_not_in_tier'],
+                     'subscription tier', 'model_not_in_tier', 'free tier can only be used'],
                     'مدل در سطحِ اشتراکِ شما نیست — نیاز به ارتقای اشتراک'],
         ['labs',    ['labs_not_enabled', 'admin must enable', 'admin to enable', 'labs model'],
                     'مدل Labs غیرفعال است — ادمینِ حساب باید فعالش کند'],
@@ -32797,9 +32797,11 @@ function aiFeedbackPermanentInvalid(array $m): bool {
     $d=is_array($m['testDetails']??null)?$m['testDetails']:[];
     $kind=strtolower((string)($d['kind']??''));$code=(int)($d['status']??0);
     $txt=strtolower((string)($d['error']??'').' '.(string)($d['note']??'').' '.(string)($d['raw']??''));
-    if($kind==='badmodel'||strpos($txt,'only supports interactions api')!==false)return true;
+    if($kind==='badmodel'||strpos($txt,'only supports interactions api')!==false
+        ||strpos($txt,'does not support chat endpoints')!==false)return true;
     if(in_array($code,[400,404],true)&&(strpos($txt,'model')!==false)&&(
         strpos($txt,'not supported')!==false||strpos($txt,'no longer available')!==false
+        ||strpos($txt,'model is unavailable')!==false||strpos($txt,'is currently unavailable')!==false
         ||strpos($txt,'invalid model')!==false||strpos($txt,'model not found')!==false))return true;
     return false;
 }
@@ -43105,6 +43107,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.367', 'محدودیت free-tier اختصاصی OpenCode مانند billing کنار گذاشته می‌شود',
+         strpos($selfSrc, "'free tier can only be used'") !== false
+      && version_compare(APP_VERSION, '10.' . '367', '>='));
+    $add('10.367', 'مدل ناسازگار با chat یا unavailable قطعی از کاتالوگ فعال کنار می‌رود',
+         strpos($selfSrc, 'does not support chat endpoints') !== false
+      && strpos($selfSrc, 'model is unavailable') !== false);
+    $add('10.367', 'ورودی 10.367 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "367'") !== false);
     $add('10.366', 'provider غیرفعال در آمار سلامت فعال AI شمرده نمی‌شود',
          strpos($selfSrc, "!is_array(\$p)||(\$p['enabled']??true)===false") !== false
       && version_compare(APP_VERSION, '10.' . '366', '>='));
@@ -75017,6 +75027,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.367', t:'🧾 تکمیل تشخیص محدودیت tier و مدل ناسازگار', items:[
+    'پیام OpenCode مبنی بر استفادهٔ free tier فقط داخل برنامه اکنون محدودیت tier است و ناموفقِ قابل‌تعمیر شمرده نمی‌شود.',
+    'پاسخ صریح does not support chat endpoints یا Model is unavailable در HTTP 400 مدل را از کاتالوگ فعال chat کنار می‌گذارد.'
+  ]},
   {v:'10.366', t:'📊 آمار فقط برای اتصال‌های فعال و مدل‌های چت', items:[
     'ارائه‌دهندهٔ غیرفعال دیگر total/fail و درصد سلامت اتصال‌های فعال را خراب نمی‌کند.',
     'مدل‌های transcribe نیز در خانوادهٔ ASR غیرچت قرار گرفتند و با payload چت آزموده نمی‌شوند.'
