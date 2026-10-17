@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.368';
+const APP_VERSION = '10.369';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1686,7 +1686,8 @@ function matrixWakeWaitingBuild(): array {
 function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $resumed,array $waiting): void {
     /* Only a real hosting/HTTP/CLI cron tick belongs in operation logs. Saving
        the mode emits mode_switch, which is a control pulse rather than cron. */
-    if((string)($cfg['mode']??'')!=='cron_only'||!str_starts_with($source,'external'))return;
+    if((string)($cfg['mode']??'')!=='cron_only'
+        ||(!str_starts_with($source,'external')&&$source!=='browser_internal'))return;
     $parts=['🫀 کران رسید',date('Y/m/d H:i:s'),'منبع: '.$source,'lease: '.(int)($cfg['lease_sec']??0).' ثانیه'];
     if($resumed>0)$parts[]='بیدارسازی '.(int)$resumed.' job';
     if(!empty($waiting['woken']))$parts[]='ادامهٔ checkpoint مستقل';
@@ -1761,6 +1762,23 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         'total_log_count' => 1,
     ]);
     return ['ok' => true, 'pid' => $pid, 'log' => $log];
+}
+
+function s4SpawnInternalCronDetached(string $source='browser_feedback'): array {
+    if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
+    if(strtoupper(substr(PHP_OS,0,3))==='WIN')return ['ok'=>false,'error'=>'windows_detach_unsupported'];
+    if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
+    $php=s4CliPhpBinary();$probe=[];$rc=0;@exec(escapeshellarg($php).' -v 2>&1',$probe,$rc);
+    if($rc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable'];
+    $mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $log=__DIR__.'/logs/internal-cron.log';
+    $cmd='S4_INTERNAL_CRON=1 S4_INTERNAL_CRON_SOURCE='.escapeshellarg($source).' nohup '
+        .s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' cron_run >> '
+        .escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
+    $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;
+    foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
+    return ($rc===0&&$pid>0)?['ok'=>true,'started'=>true,'pid'=>$pid,'source'=>$source,'log'=>$log]
+        :['ok'=>false,'error'=>'internal_cron_spawn_failed','exit_code'=>$rc,'log'=>$log];
 }
 
 function s4WorkerRunCronChild(): array {
@@ -31192,6 +31210,40 @@ if (isset($_GET['sync_matrix_feedback']) || (($_POST['action'] ?? '') === 'sync_
     exit;
 }
 
+/* v10.369: نبض مرورگر برای کران داخلی. مرجع ثابت در JS این endpoint را
+   صدا می‌زند؛ خود receiver تنظیم ذخیره‌شده و فاصله را اعمال می‌کند. */
+if(isset($_GET['internal_cron_feedback'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    header('Access-Control-Allow-Origin: *');
+    $cn=loadConnections();$enabled=!array_key_exists('internal_cron_enabled',$cn)||!empty($cn['internal_cron_enabled']);
+    $sec=max(5,min(86400,(int)($cn['internal_cron_sec']??60)));$now=time();
+    if(!$enabled){echo json_encode(['ok'=>true,'enabled'=>false,'version'=>APP_VERSION,'reference'=>'https://scraper4.42web.io/scraper4.php'],JSON_UNESCAPED_SLASHES);exit;}
+    $workerBefore=s4WorkerIsActive();$workerAction=[];
+    if(!$workerBefore){$workerAction=s4SpawnPersistentWorker();usleep(250000);}
+    $workerActive=s4WorkerIsActive();$stateFile=__DIR__.'/.internal_cron_feedback.json';
+    $lock=@fopen(__DIR__.'/.internal_cron_feedback.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){
+        if($lock)@fclose($lock);echo json_encode(['ok'=>true,'enabled'=>true,'busy'=>true,'worker_active'=>$workerActive,'interval'=>$sec]);exit;
+    }
+    $prev=json_decode((string)@file_get_contents($stateFile),true);if(!is_array($prev))$prev=[];
+    $last=(int)($prev['at']??0);$due=$last<=0||($now-$last)>=$sec;$pulse=[];$cron=[];
+    if($due){
+        /* Reserve before spawn: simultaneous tabs cannot create a process storm.
+           cron's own flock remains the final overlap guard. */
+        $next=['at'=>$now,'version'=>APP_VERSION,'source'=>'browser_internal','interval'=>$sec];
+        @file_put_contents($stateFile,json_encode($next,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+        $pulse=matrixCronPulse('browser_internal');
+        $cron=s4SpawnInternalCronDetached('browser_feedback');
+        /* Shared hosting may disable exec/nohup. Keep the browser-assisted mode
+           useful there by firing the same protected cron route over loopback HTTP. */
+        if(empty($cron['ok']))$cron['http_fallback']=fireAndForget('cron_run=1&internal_browser=1',1800);
+    }
+    @flock($lock,LOCK_UN);@fclose($lock);
+    echo json_encode(['ok'=>true,'enabled'=>true,'due'=>$due,'interval'=>$sec,'last_at'=>$due?$now:$last,
+        'worker_active'=>$workerActive,'worker_action'=>$workerAction,'matrix_pulse'=>$pulse,'cron'=>$cron,
+        'reference'=>'https://scraper4.42web.io/scraper4.php'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 /* v10.263: فیدبک یکپارچهٔ عملیات + ترمیم. برای loop مانیتورینگ خارجی:
    ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
 if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
@@ -43108,6 +43160,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.369', 'صفحهٔ باز مرجع ثابت feedback کران داخلی را pulse می‌کند',
+         strpos($selfSrc, "const cronReference='https://scraper4.42web.io/scraper4.php'") !== false
+      && strpos($selfSrc, "?internal_cron_feedback=1&_pulse=") !== false
+      && strpos($selfSrc, 'setInterval(cronBeat,15000)') !== false);
+    $add('10.369', 'receiver فقط هنگام فعال بودن کران و با فاصلهٔ ذخیره‌شده اجرا می‌شود',
+         strpos($selfSrc, "if(isset(\$_GET['internal_cron_feedback']))") !== false
+      && strpos($selfSrc, "'internal_cron_enabled'") !== false
+      && strpos($selfSrc, ".internal_cron_feedback.lock") !== false);
+    $add('10.369', 'نبض مرورگر worker و ماتریس را بازیابی و cron جدا راه‌اندازی می‌کند',
+         strpos($selfSrc, "matrixCronPulse('browser_internal')") !== false
+      && strpos($selfSrc, "s4SpawnInternalCronDetached('browser_feedback')") !== false
+      && strpos($selfSrc, "fireAndForget('cron_run=1&internal_browser=1',1800)") !== false
+      && strpos($selfSrc, "function s4SpawnInternalCronDetached") !== false);
+    $add('10.369', 'ورودی 10.369 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "369'") !== false
+      && version_compare(APP_VERSION, '10.' . '369', '>='));
     $add('10.368', 'نتیجهٔ billing/tier تازه در feedback ذخیره و در اجرای بعدی skip می‌شود',
          strpos($selfSrc, 'if($apply)aiFeedbackStoreResult($providers,$pid,$idx,$mid,$r,$j,$lat,$testMsg)') !== false
       && strpos($selfSrc, "'saved'=>\$apply") !== false
@@ -75034,6 +75102,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.369', t:'🫀 پشتیبان مرورگر برای کران داخلی', items:[
+    'وقتی صفحه روی گوشی یا مرورگر باز است، نبض سبک به مرجع ثابت https://scraper4.42web.io/scraper4.php ارسال می‌شود.',
+    'receiver فقط در صورت فعال بودن کران داخلی و بر اساس فاصلهٔ ذخیره‌شده عمل می‌کند؛ flock و رزرو زمانی از اجرای تکراری چند tab جلوگیری می‌کنند.',
+    'هر نوبت لازم worker دائمی را زنده می‌کند، lease و watchdog ساخت/اصلاح مغایرت را تازه می‌کند و cron CLI جدا برای صف ارسال و استخراج راه می‌اندازد.',
+    'بازگشت از sleep، focus، online و pageshow فوراً نبض جبرانی می‌فرستد؛ قفل‌های موجود مانع اجرای موازی واقعی می‌شوند.'
+  ]},
   {v:'10.368', t:'💾 ماندگاری نتیجهٔ billing در فیدبک AI', items:[
     'وقتی retest برای نخستین بار credit، quota، plan یا tier را تشخیص می‌دهد، جزئیات همان نتیجه ذخیره می‌شود تا مدل در اجرای بعدی دوباره actionable نشود.',
     'پرچم saved خروجی اکنون ذخیره‌شدن واقعی نتایج billing-excluded را نیز درست گزارش می‌کند.'
@@ -94336,12 +94410,21 @@ async function s4RuntimeHealthCheck(force=false){
   }finally{if(timer)clearTimeout(timer);if(request===s4RuntimeHealthRequest){s4RuntimeHealthBusy=false;s4RuntimeHealthAbort=null;}}
 }
 (function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('focus',()=>s4RuntimeHealthCheck(true));document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4RuntimeHealthCheck(true);});window.addEventListener('offline',()=>{s4RuntimeHealthFailures=3;const e=document.getElementById('runtimePulse'),t=document.getElementById('runtimePulseTag');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';if(t)t.textContent='!';}});})();
-/* v10.263: هر رابطِ باز فقط یک pulse سبک می‌زند؛ endpoint idempotent است و
-   daemon مرده را برمی‌گرداند. استقلال واقعی همچنان با worker CLI است. */
+/* v10.369: صفحهٔ باز، مرجع feedback کران داخلی را زنده نگه می‌دارد. receiver
+   فاصلهٔ ذخیره‌شده، lock و enabled را enforce می‌کند؛ چند tab امن هستند. */
 (function opsFeedbackPulse(){
   if(window._s4OpsPulse)return;window._s4OpsPulse=true;
-  const beat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store'}).catch(()=>{});
-  setTimeout(beat,1500);setInterval(beat,300000);
+  const cronReference='https://scraper4.42web.io/scraper4.php';
+  const localBeat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store',credentials:'same-origin',keepalive:true}).catch(()=>{});
+  const cronBeat=()=>{
+    const u=cronReference+'?internal_cron_feedback=1&_pulse='+Date.now();
+    return fetch(u,{method:'GET',mode:'no-cors',cache:'no-store',keepalive:true}).catch(()=>{});
+  };
+  const wake=()=>{localBeat();cronBeat();};
+  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(localBeat,120000);
+  window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
+  window.addEventListener('focus',wake);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
 })();
 </script>
 </body>
