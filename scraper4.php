@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.369';
+const APP_VERSION = '10.370';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -23045,6 +23045,19 @@ if (isset($_GET['cron_run']) || (($_POST['action'] ?? '') === 'cron_run')) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(0);
 @ignore_user_abort(true);
+$_cronBrowserKeep=!empty($_GET['internal_browser_keep']);
+if($_cronBrowserKeep){
+    $_keepCn=loadConnections();$_keepEnabled=!array_key_exists('internal_cron_enabled',$_keepCn)||!empty($_keepCn['internal_cron_enabled']);
+    if(!$_keepEnabled){echo json_encode(['ok'=>true,'skipped'=>'internal_cron_disabled','version'=>APP_VERSION]);exit;}
+    $_keepSec=max(5,min(86400,(int)($_keepCn['internal_cron_sec']??60)));$_keepNow=time();
+    $_keepLf=@fopen(__DIR__.'/.internal_cron_browser_run.lock','c');
+    if(!$_keepLf||!@flock($_keepLf,LOCK_EX|LOCK_NB)){if($_keepLf)@fclose($_keepLf);echo json_encode(['ok'=>true,'skipped'=>'browser_cron_busy']);exit;}
+    $_keepSf=__DIR__.'/.internal_cron_browser_run.json';$_keepPrev=json_decode((string)@file_get_contents($_keepSf),true);if(!is_array($_keepPrev))$_keepPrev=[];
+    if((int)($_keepPrev['at']??0)>0&&($_keepNow-(int)$_keepPrev['at'])<$_keepSec){@flock($_keepLf,LOCK_UN);@fclose($_keepLf);echo json_encode(['ok'=>true,'skipped'=>'browser_cron_interval','retry_after'=>$_keepSec-($_keepNow-(int)$_keepPrev['at'])]);exit;}
+    @file_put_contents($_keepSf,json_encode(['at'=>$_keepNow,'interval'=>$_keepSec,'version'=>APP_VERSION]),LOCK_EX);@flock($_keepLf,LOCK_UN);@fclose($_keepLf);
+    header('Cache-Control: no-store');header('Access-Control-Allow-Origin: *');header('X-Accel-Buffering: no');
+    @ini_set('zlib.output_compression','0');@ob_implicit_flush(true);
+}
 /* v10.337: فقط cron بیرونی lease سریع ماتریس را تازه می‌کند. cron داخلی
    worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند. */
 if((string)getenv('S4_INTERNAL_CRON')!=='1'){
@@ -23115,6 +23128,10 @@ $_cronBg = !empty($_POST['bg']) || !empty($_GET['bg']);
    رفتارِ قبلی (پاسخِ فوری + پس‌زمینه) دست‌نخورده است. */
 if (!empty($GLOBALS['_msKeepConn']) && !isCliRun()) {
     msKeepConnStart();
+} elseif($_cronBrowserKeep&&!isCliRun()) {
+    /* Do not finish the HTTP request: on exec-disabled shared hosting the open
+       browser is the process lifetime anchor. cronEmit writes the final JSON. */
+    $GLOBALS['_internalBrowserCronKeep']=true;
 } else {
     finishRequestNow(json_encode(['ok' => true, 'started' => true, 'bg' => $_cronBg,
         'detached' => true, 'note' => 'اجرا در پس‌زمینه ادامه دارد — نتیجه در cron_last_run.json'],
@@ -43160,6 +43177,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.370', 'در هاست exec-disabled مرورگر اتصال واقعی cron را باز نگه می‌دارد',
+         strpos($selfSrc, "?cron_run=1&internal_browser_keep=1&_pulse=") !== false
+      && strpos($selfSrc, "\$_cronBrowserKeep=!empty(\$_GET['internal_browser_keep'])") !== false
+      && strpos($selfSrc, "\$GLOBALS['_internalBrowserCronKeep']=true") !== false);
+    $add('10.370', 'کران نگه‌داشته‌شده enabled، interval و چند-tab را روی receiver enforce می‌کند',
+         strpos($selfSrc, '.internal_cron_browser_run.lock') !== false
+      && strpos($selfSrc, "'browser_cron_interval'") !== false
+      && strpos($selfSrc, "'internal_cron_disabled'") !== false);
+    $add('10.370', 'ورودی 10.370 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "370'") !== false
+      && version_compare(APP_VERSION, '10.' . '370', '>='));
     $add('10.369', 'صفحهٔ باز مرجع ثابت feedback کران داخلی را pulse می‌کند',
          strpos($selfSrc, "const cronReference='https://scraper4.42web.io/scraper4.php'") !== false
       && strpos($selfSrc, "?internal_cron_feedback=1&_pulse=") !== false
@@ -75102,6 +75130,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.370', t:'🔗 اتصال زندهٔ مرورگر برای هاست بدون exec', items:[
+    'اگر هاست مانند scraper4.42web.io اجرای exec/nohup را بسته باشد، مرورگر یک درخواست واقعی cron_run را تا پایان باز نگه می‌دارد تا PHP بعد از قطع client کشته نشود.',
+    'receiver قبل از اجرا فعال‌بودن کران داخلی و فاصلهٔ ذخیره‌شده را بررسی می‌کند و با lock/state مشترک چند tab را به یک اجرای واحد تبدیل می‌کند.',
+    'بعد از sleep یا بازگشت اینترنت درخواست فوراً تجدید می‌شود؛ قفل اصلی cron همچنان از هم‌پوشانی با cron بیرونی یا fallback جلوگیری می‌کند.'
+  ]},
   {v:'10.369', t:'🫀 پشتیبان مرورگر برای کران داخلی', items:[
     'وقتی صفحه روی گوشی یا مرورگر باز است، نبض سبک به مرجع ثابت https://scraper4.42web.io/scraper4.php ارسال می‌شود.',
     'receiver فقط در صورت فعال بودن کران داخلی و بر اساس فاصلهٔ ذخیره‌شده عمل می‌کند؛ flock و رزرو زمانی از اجرای تکراری چند tab جلوگیری می‌کنند.',
@@ -94420,8 +94453,13 @@ async function s4RuntimeHealthCheck(force=false){
     const u=cronReference+'?internal_cron_feedback=1&_pulse='+Date.now();
     return fetch(u,{method:'GET',mode:'no-cors',cache:'no-store',keepalive:true}).catch(()=>{});
   };
-  const wake=()=>{localBeat();cronBeat();};
-  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(localBeat,120000);
+  const cronRunBeat=()=>{
+    if(window._s4BrowserCronBusy)return;window._s4BrowserCronBusy=true;
+    const u=cronReference+'?cron_run=1&internal_browser_keep=1&_pulse='+Date.now();
+    fetch(u,{method:'GET',mode:'no-cors',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4BrowserCronBusy=false;});
+  };
+  const wake=()=>{localBeat();cronBeat();cronRunBeat();};
+  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
   window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
   window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
