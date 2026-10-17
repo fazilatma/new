@@ -342,7 +342,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.370';
+const APP_VERSION = '10.371';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31778,7 +31778,9 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
        اصلی قطع‌شدن وسط راه بود. اگر worker بالا نیاید، صریح خطا بده. */
     $fixWorkerActive=s4WorkerIsActive();
     if(!$fixWorkerActive){$spawnFixWorker=s4SpawnPersistentWorker();usleep(400000);$fixWorkerActive=s4WorkerIsActive();}
-    if(!$fixWorkerActive){echo json_encode(['ok'=>false,'error'=>'worker پایدار سرور راه‌اندازی نشد؛ اصلاح برای جلوگیری از قطع‌شدن شروع نشد','worker_start'=>$spawnFixWorker??null],JSON_UNESCAPED_UNICODE);exit;}
+    /* روی هاست exec-disabled، همان request مرورگر مالک fallback می‌شود. UI
+       هم‌زمان status را poll می‌کند و checkpoint برای wake بعدی می‌ماند. */
+    $fixBrowserKeep=!$fixWorkerActive&&!empty($_GET['browser_keep']??$_POST['browser_keep']??null);
     /* کار بلند اصلاح را به child مستقل worker بسپار. ابتدا lock را probe
        می‌کنیم تا اجرای worker دیگر دوباره‌کاری نسازد. */
     if ($fixWorkerActive) {
@@ -31818,22 +31820,20 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         'checkpoint' => $matrixFixCp ?: ['scope' => $opts['scope'], 'duplicate_keep' => $opts['duplicate_keep'], 'done_jobs' => [], 'started_at' => time()],
         'log_add' => ['🚀 ' . ($matrixFixCp ? 'ادامه اصلاح مغایرت از checkpoint' : 'جاب اصلاح مغایرت در صف سرور') . '…'],
     ]);
-    $early = json_encode(['ok' => true, 'started' => true, 'message' => 'اصلاح روی سرور شروع شد', 'running' => true], JSON_UNESCAPED_UNICODE);
-    header('Connection: close');
-    header('Content-Length: ' . strlen($early));
-    echo $early;
-    @ob_end_flush();
-    @ob_flush();
-    @flush();
-    if (function_exists('fastcgi_finish_request')) {
-        @fastcgi_finish_request();
+    if(!$fixBrowserKeep){
+        $early = json_encode(['ok' => true, 'started' => true, 'message' => 'اصلاح روی سرور شروع شد', 'running' => true], JSON_UNESCAPED_UNICODE);
+        header('Connection: close');header('Content-Length: ' . strlen($early));echo $early;
+        @ob_end_flush();@ob_flush();@flush();
+        if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
+    }else{
+        header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
     }
     register_shutdown_function(function () use ($fp, $lockFile) {
-        @flock($fp, LOCK_UN);
-        @fclose($fp);
+        @flock($fp, LOCK_UN);@fclose($fp);
     });
+    $fixWebResult=null;
     try {
-        matrixFixRun($opts);
+        $fixWebResult=matrixFixRun($opts);
     } catch (Throwable $e) {
         $fixErrState = matrixFixProgressRead();
         matrixFixProgress([
@@ -31841,7 +31841,10 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             'checkpoint' => is_array($fixErrState['checkpoint'] ?? null) ? $fixErrState['checkpoint'] : null,
             'log_add' => ['❌ ' . $e->getMessage() . ' — checkpoint حفظ شد'],
         ]);
+        $fixWebResult=['ok'=>false,'error'=>$e->getMessage()];
     }
+    if($fixBrowserKeep)echo json_encode(['ok'=>!empty($fixWebResult['ok']),'started'=>true,
+        'browser_held'=>true,'result'=>$fixWebResult],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -43177,6 +43180,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.371', 'اصلاح مغایرت روی هاست بدون exec با اتصال باز مرورگر اجرا می‌شود',
+         strpos($selfSrc, "\$fixBrowserKeep=!\$fixWorkerActive") !== false
+      && strpos($selfSrc, "fd.append('browser_keep','1')") !== false
+      && strpos($selfSrc, "syncMatrixPoll('fix-browser-anchor')") !== false);
+    $add('10.371', 'fallback اصلاح پاسخ نهایی و checkpoint خطا را بدون detach حفظ می‌کند',
+         strpos($selfSrc, "'browser_held'=>true") !== false
+      && strpos($selfSrc, "\$fixWebResult=matrixFixRun(\$opts)") !== false);
+    $add('10.371', 'ورودی 10.371 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "371'") !== false
+      && version_compare(APP_VERSION, '10.' . '371', '>='));
     $add('10.370', 'در هاست exec-disabled مرورگر اتصال واقعی cron را باز نگه می‌دارد',
          strpos($selfSrc, "?cron_run=1&internal_browser_keep=1&_pulse=") !== false
       && strpos($selfSrc, "\$_cronBrowserKeep=!empty(\$_GET['internal_browser_keep'])") !== false
@@ -75130,6 +75143,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.371', t:'🔧 اصلاح مغایرت با اتصال نگه‌دار مرورگر', items:[
+    'اصلاح جدول دیگر روی هاست exec-disabled صرفاً به‌علت نبود worker رد نمی‌شود؛ request همان صفحه مالک اجرای checkpointدار می‌شود.',
+    'polling پیش از پایان POST آغاز می‌شود تا شمارنده‌ها و ردیف‌ها حین اتصال نگه‌دار زنده بمانند و قطع شبکه وضعیت checkpoint را دوباره بررسی کند.',
+    'روی سرور دارای worker رفتار مستقل قبلی بدون تغییر حفظ شده است.'
+  ]},
   {v:'10.370', t:'🔗 اتصال زندهٔ مرورگر برای هاست بدون exec', items:[
     'اگر هاست مانند scraper4.42web.io اجرای exec/nohup را بسته باشد، مرورگر یک درخواست واقعی cron_run را تا پایان باز نگه می‌دارد تا PHP بعد از قطع client کشته نشود.',
     'receiver قبل از اجرا فعال‌بودن کران داخلی و فاصلهٔ ذخیره‌شده را بررسی می‌کند و با lock/state مشترک چند tab را به یک اجرای واحد تبدیل می‌کند.',
@@ -84525,7 +84543,7 @@ function syncMatrixFixStart(scope){
   if($('smJobLog')){$('smJobLog').innerHTML='';delete $('smJobLog').dataset.logSig;}
   const fd=new FormData();
   fd.append('action','sync_matrix_fix_start');
-  fd.append('workflow','fix_only');
+  fd.append('workflow','fix_only');fd.append('browser_keep','1');
   fd.append('scope', scope);
   fd.append('source','manual');
   fd.append('duplicate_keep',(($('smDuplicateKeep')||{}).value||'newest'));
@@ -84540,6 +84558,9 @@ function syncMatrixFixStart(scope){
   fd.append('filters_json',JSON.stringify(window._smFilterRules||[]));
   fd.append('filter_join',($('smFilterJoin')||{}).value||'and');
   fd.append('sort',window._smSort||'');fd.append('sort_dir',window._smSortDir||'asc');
+  /* On exec-disabled hosting this POST remains open as the process anchor;
+     polling must begin before its final JSON arrives. */
+  window._smFixTick=0;syncMatrixPoll('fix-browser-anchor');
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){
       showToast((d&&d.error)||'شروع اصلاح ناموفق',1);
@@ -84549,7 +84570,7 @@ function syncMatrixFixStart(scope){
     showToast('اصلاح مغایرت روی سرور آغاز شد');
     window._smFixTick=0;
     syncMatrixPoll();
-  }).catch(e=>showToast('خطا: '+e,1));
+  }).catch(e=>{showToast('اتصال نگه‌دار اصلاح قطع شد؛ وضعیت checkpoint دوباره بررسی می‌شود',1);syncMatrixPoll('fix-anchor-error');});
 }
 function syncMatrixFixStop(){
   const btn=$('smFixStopBtn');if(btn){btn.disabled=true;btn.textContent='⏳ توقف…';}
