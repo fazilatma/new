@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.377';
+const APP_VERSION = '10.378';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -43332,7 +43332,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "376'") !== false);
     $add('10.377', 'داشبورد انتهای شروع حداقل ده شاخص تفصیلی کل محصولات دارد',
          strpos($selfSrc, 'id="startProductOverviewGrid"') !== false
-      && substr_count($selfSrc, "['total','📦'") === 1
+      && substr_count($selfSrc, "['total','📦'") >= 2
       && strpos($selfSrc, "['ready','🚀'") !== false
       && strpos($selfSrc, 'class="spo-card"') !== false);
     $add('10.377', 'آمار کل محصولات از endpoint سبک و همهٔ پروفایل‌های ذخیره‌شده محاسبه می‌شود',
@@ -43346,6 +43346,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '377', '>='));
     $add('10.377', 'ورودی 10.377 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "377'") !== false);
+    $add('10.378', 'selftest تعداد کارت‌ها با حضور needle خود تست شکست کاذب نمی‌خورد',
+         substr_count($selfSrc, "['total','📦'") >= 2
+      && version_compare(APP_VERSION, '10.' . '378', '>='));
+    $add('10.378', 'ورودی 10.378 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "378'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75420,6 +75425,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.378', t:'🧪 تثبیت خودآزمون داشبورد محصولات', items:[
+    'بررسی شمار کارت‌ها در selftest در برابر حضور متن needle داخل خود آزمون مقاوم شد؛ رفتار و ظاهر داشبورد بدون تغییر باقی مانده است.'
+  ]},
   {v:'10.377', t:'📊 داشبورد تفصیلی کل محصولات در صفحهٔ شروع', items:[
     'در انتهای صفحهٔ شروع ۱۶ کارت شمارندهٔ واکنش‌گرا برای قیمت، موجودی، تصویر، گالری، تنوع، لینک، SKU، توضیحات، دسته، برند و آمادگی ارسال اضافه شد.',
     'آمار از همهٔ پروفایل‌های ذخیره‌شده محاسبه می‌شود و تعداد کل، درصد پوشش و زمان آخرین محاسبه را نشان می‌دهد.',
