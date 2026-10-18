@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.374';
+const APP_VERSION = '10.375';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31283,10 +31283,11 @@ if(isset($_GET['internal_cron_feedback'])){
     if(!$enabled){echo json_encode(['ok'=>true,'enabled'=>false,'version'=>APP_VERSION,'reference'=>'https://scraper4.42web.io/scraper4.php'],JSON_UNESCAPED_SLASHES);exit;}
     $workerBefore=s4WorkerIsActive();$workerAction=[];$workerState=s4WorkerStateLoad();
     if($workerBefore&&(string)($workerState['version']??'')!==APP_VERSION){
-        $oldPid=(int)($workerState['pid']??0);$signalled=false;
-        if($oldPid>1&&function_exists('posix_kill'))$signalled=@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15);
-        $workerAction['version_restart']=['pid'=>$oldPid,'from'=>(string)($workerState['version']??''),'to'=>APP_VERSION,'signalled'=>$signalled];
-        if($signalled){for($wi=0;$wi<10;$wi++){usleep(200000);if(!s4WorkerIsActive(1))break;}$workerBefore=s4WorkerIsActive(1);}
+        $oldPid=(int)($workerState['pid']??0);$pidAlive=$oldPid>1&&s4WorkerPidAlive($oldPid);$signalled=false;
+        if($pidAlive&&function_exists('posix_kill'))$signalled=@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15);
+        $workerAction['version_restart']=['pid'=>$oldPid,'pid_alive'=>$pidAlive,'from'=>(string)($workerState['version']??''),'to'=>APP_VERSION,'signalled'=>$signalled];
+        if(!$pidAlive)$workerBefore=false;
+        elseif($signalled){for($wi=0;$wi<10;$wi++){usleep(200000);if(!s4WorkerIsActive(1))break;}$workerBefore=s4WorkerIsActive(1);}
     }
     if(!$workerBefore){$workerAction['spawn']=s4SpawnPersistentWorker();usleep(350000);}
     $workerActive=s4WorkerIsActive();$stateFile=__DIR__.'/.internal_cron_feedback.json';
@@ -43252,6 +43253,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.375', 'PID مرده با lock به‌ارث‌رسیده فعال فرض نمی‌شود',
+         strpos($selfSrc, "\$pidAlive=\$oldPid>1&&s4WorkerPidAlive(\$oldPid)") !== false
+      && strpos($selfSrc, "if(!\$pidAlive)\$workerBefore=false") !== false
+      && version_compare(APP_VERSION, '10.' . '375', '>='));
+    $add('10.375', 'ورودی 10.375 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "375'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75246,6 +75253,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.375', t:'🔓 بازیابی lock به‌ارث‌رسیدهٔ worker قدیمی', items:[
+    'اگر PID ثبت‌شدهٔ daemon پس از deploy مرده باشد، وجود flock به‌ارث‌رسیده دیگر worker را فعال جلوه نمی‌دهد.',
+    'نبض داخلی مسیر بازیابی stale lock را اجرا و worker نسخهٔ تازه را بدون انتظار برای ops_feedback بالا می‌آورد.'
+  ]},
   {v:'10.374', t:'🧹 جلوگیری از اصلاح‌های تکراری تاریخی', items:[
     'اگر یک اصلاح pending/running/paused وجود داشته باشد همان owner حفظ و همهٔ failedهای تاریخی supersede می‌شوند.',
     'اگر owner فعالی نباشد فقط تازه‌ترین job شکست‌خورده از checkpoint احیا و نسخه‌های قدیمی‌تر لغو می‌شوند.'
