@@ -1,0 +1,19 @@
+{
+  "name": "scraper4-browser-render",
+  "version": "1.0.0",
+  "private": true,
+  "description": "سرویس رندرِ JS برای scraper4 — Playwright (پیش‌فرض) با پشتیبانِ Selenium (WebDriver خام، بدون وابستگی اضافه)",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "install:browsers": "playwright install chromium --with-deps",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

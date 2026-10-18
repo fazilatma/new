@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.0');
+define('WCP_VERSION', '2.9.4');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -851,7 +851,7 @@ function gh_inspect_branch(string $owner,string $repo,string $branch,string $tok
     foreach($byDir as$sub=>$files){$set=array_flip($files);$name=$sub===''?$repo:basename($sub);$app=['name'=>$name,'subfolder'=>$sub,'type'=>'other','lang_label'=>'Other','framework'=>'','version'=>'','description'=>'','install_cmd'=>'','build_cmd'=>'','start_cmd'=>'','port'=>'','is_daemon'=>true];
         if(isset($set['package.json'])){$pkg=json_decode((string)gh_raw_get($owner,$repo,$branch,($sub!==''?$sub.'/':'').'package.json',$token),true);if(!is_array($pkg))throw new RuntimeException('Cannot read valid package.json at '.($sub?:'/').'; version inspection incomplete.');$scripts=$pkg['scripts']??[];$deps=array_keys(array_merge($pkg['dependencies']??[],$pkg['devDependencies']??[]));$frameworks=[];foreach(['express'=>'Express','fastify'=>'Fastify','hono'=>'Hono','next'=>'Next.js','nuxt'=>'Nuxt','telegraf'=>'Telegram Bot','grammy'=>'Telegram Bot','crawlee'=>'Scraper','playwright'=>'Scraper','puppeteer'=>'Scraper','wrangler'=>'Cloudflare','socket.io'=>'Socket.io']as$key=>$label)if(in_array($key,$deps))$frameworks[]=$label;$app=array_merge($app,['name'=>$pkg['name']??$name,'type'=>'node','lang_label'=>'Node.js','framework'=>implode(' • ',array_unique($frameworks))?:'Node.js / JS','version'=>$pkg['version']??'','description'=>$pkg['description']??'','install_cmd'=>isset($set['pnpm-lock.yaml'])?'pnpm install':(isset($set['yarn.lock'])?'yarn install':'npm install --include=dev --no-audit --no-fund'),'build_cmd'=>isset($scripts['build'])?'npm run build':'','start_cmd'=>isset($scripts['start'])?'npm start':(isset($set['server.js'])?'node server.js':(isset($set['index.js'])?'node index.js':'node app.js')),'port'=>'3000']);$app=gh_apply_runtime_profile($app,$pkg,in_array('local-deployer-ui.mjs',$byDir[($sub!==''?$sub.'/':'').'scripts']??[],true));
         }elseif(isset($set['requirements.txt'])||isset($set['pyproject.toml'])||isset($set['Pipfile'])||isset($set['app.py'])||isset($set['main.py'])||isset($set['bot.py'])||isset($set['scraper4.py'])||isset($set['deployer4.py'])||isset($set['server.py'])){$req=strtolower((string)gh_raw_get($owner,$repo,$branch,($sub!==''?$sub.'/':'').'requirements.txt',$token));$f=[];foreach(['fastapi','flask','django','telethon','pyrogram','aiogram','streamlit','scrapy','beautifulsoup4']as$key)if(strpos($req,$key)!==false)$f[]=$key;$pyEntry='python3 main.py';if(isset($set['scraper4.py']))$pyEntry='python3 scraper4.py';elseif(isset($set['app.py']))$pyEntry=in_array('fastapi',$f)?'uvicorn app:app --host 0.0.0.0 --port 8000':'python3 app.py';elseif(isset($set['main.py']))$pyEntry='python3 main.py';elseif(isset($set['server.py']))$pyEntry='python3 server.py';elseif(isset($set['run.py']))$pyEntry='python3 run.py';elseif(isset($set['bot.py']))$pyEntry='python3 bot.py';elseif(isset($set['manage.py']))$pyEntry='python3 manage.py runserver 0.0.0.0:8000';elseif(isset($set['deployer4.py']))$pyEntry='python3 deployer4.py';else{foreach($files as$fn){if(substr($fn,-3)==='.py'&&$fn[0]!=='.'&&$fn!=='__init__.py'){$pyEntry='python3 '.$fn;break;}}}$app=array_merge($app,['type'=>'python','lang_label'=>'Python 3','framework'=>implode(' • ',$f)?:'Python','install_cmd'=>isset($set['requirements.txt'])?'pip3 install -r requirements.txt':'pip3 install .','start_cmd'=>$pyEntry,'port'=>'8000']);
-        }elseif(isset($set['composer.json'])||isset($set['index.php'])){$app=array_merge($app,['type'=>'php','lang_label'=>'PHP','framework'=>isset($set['artisan'])?'Laravel':'PHP','install_cmd'=>isset($set['composer.json'])?'composer install --no-dev -o':'','is_daemon'=>false]);
+        }elseif(isset($set['composer.json'])||isset($set['index.php'])){$isLaravel=isset($set['artisan']);$phpStart=$isLaravel?'php artisan serve --host=0.0.0.0 --port="${PORT:-8000}"':(isset($set['public'])?'php -S 0.0.0.0:${PORT:-8000} -t public':'php -S 0.0.0.0:${PORT:-8000}');$app=array_merge($app,['type'=>'php','lang_label'=>'PHP','framework'=>$isLaravel?'Laravel':'PHP','install_cmd'=>isset($set['composer.json'])?'composer install --no-dev -o':'','start_cmd'=>$phpStart,'port'=>'8000','is_daemon'=>true]);
         }elseif(isset($set['go.mod'])){$app=array_merge($app,['lang_label'=>'Go','framework'=>'Go','install_cmd'=>'go mod download','build_cmd'=>'go build -o app','start_cmd'=>'./app','port'=>'8080']);
         }elseif(isset($set['Cargo.toml'])){$app=array_merge($app,['lang_label'=>'Rust','framework'=>'Rust','install_cmd'=>'cargo fetch','build_cmd'=>'cargo build --release','start_cmd'=>'./target/release/'.$name,'port'=>'8080']);
         }elseif(isset($set['index.html'])&&$sub===''){$app=array_merge($app,['type'=>'static','lang_label'=>'HTML/Static','is_daemon'=>false]);}else continue;$apps[]=$app;
@@ -1202,6 +1202,12 @@ function proj_perform_deploy(array $p, ?string &$commitOut = null): array {
     ] : [
         '.git', '.git*', '.git-cache', 'node_modules', '.env.wcp'
     ];
+    /* Composer owns vendor just as npm owns node_modules. During preserved
+       deploys rsync --delete must not descend into the installed dependency
+       tree: files may belong to another runtime UID and produced noisy
+       "cannot delete non-empty directory" warnings. composer install below
+       remains the sole, deterministic owner of updates/removals in vendor. */
+    if ($shouldPreserve && is_file($src . '/composer.json')) $rsyncExcludes[] = 'vendor/';
     $excludeArgs = implode(' ', array_map(fn($x) => '--exclude=' . escapeshellarg($x), $rsyncExcludes));
 
     // Ensure destination directory exists and has permissive write rights
@@ -2492,6 +2498,19 @@ function cli_service(array $job): int {
                 cli_log("[service ERROR] Deployment directory does not exist: {$deployDir}. Please run 'دیپلوی و به‌روزرسانی' first.");
                 sleep(5);
                 continue;
+            }
+
+            /* A repository-discovered Laravel app used to receive no start
+               command. A mistyped bare value (for example a username) then
+               became line 34 of the runner and failed forever with exit 127.
+               Only for a positively identified Laravel directory, repair a
+               single unknown executable to the canonical Artisan server. A
+               real/custom shell command is never overridden. */
+            if (is_file($deployDir . '/artisan') && preg_match('/^[A-Za-z0-9._-]+$/', $startCmd)
+                && !is_file($deployDir . '/' . $startCmd) && !which($startCmd)) {
+                $badStart = $startCmd;
+                $startCmd = 'php artisan serve --host=0.0.0.0 --port="${PORT:-8000}"';
+                cli_log("[launcher] Laravel start command '{$badStart}' is not executable; auto-resolved to: {$startCmd}");
             }
 
             // 1. Auto-detect all potential ports used by the project
