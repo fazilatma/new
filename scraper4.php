@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.373';
+const APP_VERSION = '10.374';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1148,11 +1148,18 @@ function s4WorkerReviveFailedMatrixFix(): array {
     $p=matrixFixProgressRead();$cp=is_array($p['checkpoint']??null)?$p['checkpoint']:null;
     if(!$cp||!empty($p['cancelled'])||!empty($p['stop_requested']))return ['revived'=>false,'reason'=>'no_resumable_checkpoint'];
     $out=['revived'=>false];
-    s4WorkerQueueMutate(function(&$q)use(&$out){$now=time();
-        for($i=count($q['entries'])-1;$i>=0;$i--){$e=&$q['entries'][$i];
-            if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='failed')continue;
+    s4WorkerQueueMutate(function(&$q)use(&$out){$now=time();$best=-1;$bestAt=0;
+        $activeId='';foreach($q['entries'] as $i=>$e){
+            if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix')continue;
+            if(in_array((string)($e['status']??''),['pending','running','paused'],true))$activeId=(string)($e['id']??'');
+            if((string)($e['status']??'')==='failed'&&(int)($e['created_at']??0)>=$bestAt){$best=$i;$bestAt=(int)($e['created_at']??0);}
+        }
+        if($activeId!==''){foreach($q['entries'] as &$old){if(is_array($old)&&(string)($old['type']??'')==='matrix_fix'&&(string)($old['status']??'')==='failed'){$old['status']='cancelled';$old['updated_at']=$now;$old['done_at']=$now;$old['error']='superseded_by_active_matrix_fix';}}unset($old);$out=['revived'=>false,'reason'=>'active_fix_owner','job_id'=>$activeId];return['ok'=>true];}
+        if($best<0)return['ok'=>true];
+        foreach($q['entries'] as $i=>&$e){if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='failed')continue;
+            if($i!==$best){$e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['error']='superseded_failed_matrix_fix';continue;}
             $e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
-            $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$out=['revived'=>true,'job_id'=>(string)($e['id']??'')];break;
+            $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$out=['revived'=>true,'job_id'=>(string)($e['id']??'')];
         }unset($e);return['ok'=>true];
     });
     if(!empty($out['revived']))matrixFixProgress(['running'=>false,'done'=>false,'stopped'=>false,'stale'=>false,'queued'=>true,'phase'=>'بازیابی checkpoint در کران','log_add'=>['♻️ اصلاح شکست‌خورده از checkpoint دوباره در صف قرار گرفت']]);
@@ -43245,6 +43252,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
+         strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
+      && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
+      && strpos($selfSrc, 'superseded_failed_matrix_fix') !== false);
+    $add('10.374', 'در نبود owner فقط تازه‌ترین اصلاح failed انتخاب می‌شود',
+         strpos($selfSrc, "(int)(\$e['created_at']??0)>=\$bestAt") !== false
+      && version_compare(APP_VERSION, '10.' . '374', '>='));
+    $add('10.374', 'ورودی 10.374 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "374'") !== false);
     $add('10.373', 'نبض سبک کران worker قدیمی پس از deploy را بدون ops_feedback تعویض می‌کند',
          strpos($selfSrc, "\$workerAction['version_restart']") !== false
       && strpos($selfSrc, "(string)(\$workerState['version']??'')!==APP_VERSION") !== false
@@ -75230,6 +75246,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.374', t:'🧹 جلوگیری از اصلاح‌های تکراری تاریخی', items:[
+    'اگر یک اصلاح pending/running/paused وجود داشته باشد همان owner حفظ و همهٔ failedهای تاریخی supersede می‌شوند.',
+    'اگر owner فعالی نباشد فقط تازه‌ترین job شکست‌خورده از checkpoint احیا و نسخه‌های قدیمی‌تر لغو می‌شوند.'
+  ]},
   {v:'10.373', t:'♻️ تعویض مستقیم worker قدیمی از نبض داخلی', items:[
     'نبض internal_cron_feedback نسخهٔ daemon زنده را با APP_VERSION مقایسه می‌کند و worker قدیمی را پس از deploy مستقیماً متوقف و دوباره راه‌اندازی می‌کند.',
     'این مسیر سبک به ops_feedback وابسته نیست؛ بنابراین HTTP 500 همان endpoint دیگر مانع فعال‌شدن کد تازهٔ مغایرت‌گیری نمی‌شود.'
