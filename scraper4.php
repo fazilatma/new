@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.375';
+const APP_VERSION = '10.376';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1861,7 +1861,7 @@ function s4WorkerRunJob(array $job): array {
         $resumeNext = !empty($payload['resume']);
         $segments = 0;
         $transientResumes = 0;
-        $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 200)));
+        $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 8)));
         $maxTransientResumes = max(0, min(100, (int)(loadConnections()['worker_extract_retry_segments'] ?? 20)));
         $res = ['ok' => false, 'error' => 'worker did not start'];
         while (true) {
@@ -1890,6 +1890,9 @@ function s4WorkerRunJob(array $job): array {
             if ($segments >= $maxSegments) {
                 $res['worker_paused_after_segments'] = true;
                 $res['resume_needed'] = true;
+                /* Return ownership to the durable queue. The daemon immediately
+                   requeues this checkpoint instead of leaving a paused job behind. */
+                $res['daemon_recycle'] = true;
                 break;
             }
             /* v10.185: در سرویس دائمی، pauseهای بودجه/هاست پایان کار نیستند؛
@@ -1925,19 +1928,25 @@ function s4WorkerRunJob(array $job): array {
 }
 
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
-    $n=0;s4WorkerQueueMutate(function(&$q)use($newPid,&$n){$now=time();foreach($q['entries'] as &$e){
+    $n=0;$extractCheckpoint=[];try{$extractCheckpoint=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
+    s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint){$now=time();foreach($q['entries'] as &$e){
         if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
         $isCheckpointBuild=$type==='matrix_build';
+        $extractProfile=trim((string)($e['payload']['profile_key']??''));
+        $isCheckpointExtract=$type==='backend_extract'&&$extractProfile!==''
+            &&$extractProfile===(string)($extractCheckpoint['profile_key']??'')
+            &&empty($extractCheckpoint['done'])
+            &&(!empty($extractCheckpoint['queue_id'])||!empty($extractCheckpoint['stopped'])||!empty($extractCheckpoint['running']));
         /* A checkpoint-backed matrix build may span many hosting process lives.
            The generic four-attempt cap is appropriate for non-resumable jobs, but
            must never permanently fail a durable matrix continuation. */
-        $recover=$isCheckpointBuild||$attempts<4||$isCheckpointFix;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
+        $recover=$isCheckpointBuild||$attempts<4||$isCheckpointFix||$isCheckpointExtract;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
         $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
         /* A fresh build becomes a resume after its first claim. Keeping resume=false
            on orphan recovery deleted its cursor and restarted Woo at page one. */
-        if($recover&&($isCheckpointFix||$isCheckpointBuild)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
+        if($recover&&($isCheckpointFix||$isCheckpointBuild||$isCheckpointExtract)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointExtract)$e['payload']['phase']=(string)($extractCheckpoint['_extract_resume_phase']??$extractCheckpoint['_extract_stage']??'list');$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
     }unset($e);return['ok'=>true];});return$n;
 }
 
@@ -18466,23 +18475,20 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     }
     $meta = extractListResumeMeta(loadProfiles()[$pk] ?? $pr);
     $phase = (string)$prep['phase'];
-
-    $early = json_encode([
-        'ok' => true, 'started' => true, 'resuming' => true,
-        'profile_key' => $pk, 'phase' => $phase,
-        'start_page' => (int)$meta['start_page'],
-        'page_ok' => (int)$meta['page_ok'],
-        'page_try' => (int)$meta['page_try'],
-        'message' => 'ادامه از صفحه ' . (int)$meta['start_page'] . ' (یک صفحه قبل از گیر)',
-    ], JSON_UNESCAPED_UNICODE);
-    header('Connection: close');
-    header('Content-Length: ' . strlen($early));
-    echo $early;
-    @ob_end_flush(); @ob_flush(); @flush();
-    if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
-
+    if(s4WorkerIsActive()){
+        extractLockRelease((string)($prep['queue_id']??''));
+        $enq=s4WorkerEnqueueBackendExtract($pk,$phase,false,true);
+        echo json_encode(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),'resuming'=>true,'worker'=>true,
+            'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'page_ok'=>(int)$meta['page_ok'],
+            'page_try'=>(int)$meta['page_try'],'message'=>'ادامهٔ مرحلهٔ '.$phase.' از checkpoint به worker سپرده شد']+$enq,JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    /* exec-disabled hosting: keep this browser POST attached. Detaching here
+       caused Apache/LiteSpeed to kill the resume before its next page. */
+    header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
+    $resumeResult=null;
     try {
-        runBackendExtract($pk, 'manual_resume', false, $phase, false, (string)($prep['queue_id'] ?? ''));
+        $resumeResult=runBackendExtract($pk, 'manual_resume', false, $phase, false, (string)($prep['queue_id'] ?? ''));
     } catch (Throwable $e) {
         $failed = readProgress(EXTRACT_PROGRESS_FILE);
         if (!$failed) $failed = $pr;
@@ -18492,8 +18498,10 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
         $failed['last_progress_ts'] = time();
         $failed['recent_log'] = array_slice(array_merge((array)($failed['recent_log'] ?? []),
             ['❌ ادامه ناموفق؛ checkpoint حفظ شد: ' . $e->getMessage()]), -40);
-        writeProgress(EXTRACT_PROGRESS_FILE, $failed);
+        writeProgress(EXTRACT_PROGRESS_FILE, $failed);$resumeResult=['ok'=>false,'error'=>$e->getMessage()];
     }
+    echo json_encode(['ok'=>!empty($resumeResult['ok']),'started'=>true,'resuming'=>true,'browser_held'=>true,
+        'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'result'=>$resumeResult],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 
@@ -18545,11 +18553,15 @@ if(!empty($p['running'])&&empty($p['done'])){
             try {
                 $_ps = loadProfiles();
                 if (isset($_ps[$_pkSave]) && is_array($_ps[$_pkSave])) {
-                    $_ps[$_pkSave]['_extract_list_incomplete'] = true;
-                    $_ps[$_pkSave]['_extract_list_page_try'] = (int)($p['page'] ?? $_rp + 1);
-                    $_ps[$_pkSave]['_extract_list_page_ok'] = max(0, $_rp);
-                    $_ps[$_pkSave]['_extract_resume_from'] = $_rp;
-                    $_ps[$_pkSave]['_extract_stage'] = (string)($p['phase'] ?? 'list');
+                    $_stalePhase=(string)($p['phase']??'list');$_stalePhase=$_stalePhase==='detail'?'detail':'list';
+                    $_ps[$_pkSave]['_extract_resume_phase']=$_stalePhase;
+                    $_ps[$_pkSave]['_extract_list_incomplete'] = $_stalePhase==='list';
+                    if($_stalePhase==='list'){
+                        $_ps[$_pkSave]['_extract_list_page_try'] = (int)($p['page'] ?? $_rp + 1);
+                        $_ps[$_pkSave]['_extract_list_page_ok'] = max(0, $_rp);
+                        $_ps[$_pkSave]['_extract_resume_from'] = $_rp;
+                    }
+                    $_ps[$_pkSave]['_extract_stage'] = 'stopped';
                     $_ps[$_pkSave]['_extract_stage_at'] = time();
                     saveProfiles($_ps);
                 }
@@ -18690,10 +18702,13 @@ function extractResumePrepare(string $profileKey, array $cn): array {
     if (!in_array($savedPhase, ['list', 'detail'], true)) $savedPhase = '';
     if ($stage === 'stopped' && $savedPhase !== '') {
         $phase = $savedPhase;
-    } elseif (in_array($stage, ['detail', 'list_done'], true)) {
+    } elseif ($stage === 'detail' || ($stage === 'list_done' && empty($pr['_extract_list_incomplete']))) {
         $phase = 'detail';
+    } elseif ($stage === 'list' || !empty($pr['_extract_list_incomplete']) || (int)($pr['_extract_resume_from'] ?? 0)>0) {
+        /* List checkpoints must stay page-only. phase=all performs inline
+           per-product detail extraction and was the cause of resume changing mode. */
+        $phase = 'list';
     } else {
-        /* فهرستِ ناقص با phase=all از cursor صفحه‌ای ادامه می‌یابد. */
         $phase = 'all';
     }
     $pr['_extract_resume_req'] = time();
@@ -43259,6 +43274,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '375', '>='));
     $add('10.375', 'ورودی 10.375 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "375'") !== false);
+    $add('10.376', 'checkpoint فهرست فقط با phase=list و جزئیات فقط با phase=detail ادامه می‌یابد',
+         strpos($selfSrc, "\$phase = \$savedPhase;") !== false
+      && strpos($selfSrc, "\$phase = 'detail';") !== false
+      && strpos($selfSrc, "\$phase = 'list';") !== false);
+    $add('10.376', 'Continue روی worker صف می‌شود و روی هاست محدود request مرورگر را متصل نگه می‌دارد',
+         strpos($selfSrc, "if(s4WorkerIsActive())") !== false
+      && strpos($selfSrc, "'browser_held'=>true") !== false
+      && strpos($selfSrc, "setInterval(pollExtractProgress,1500)") !== false
+      && strpos($selfSrc, "d.result.resume_needed") !== false);
+    $add('10.376', 'استخراج checkpointدار پس از segment یا مرگ worker خودکار recycle می‌شود',
+         strpos($selfSrc, "\$res['daemon_recycle'] = true") !== false
+      && strpos($selfSrc, '$isCheckpointExtract') !== false
+      && version_compare(APP_VERSION, '10.' . '376', '>='));
+    $add('10.376', 'ورودی 10.376 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "376'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -74384,22 +74414,25 @@ function clearExtractQueueDone(){
     }).catch(()=>showToast('خطا شبکه',1));
 }
 
-function resumeExtractQueue(profileKey, qid, resumePage){
+function resumeExtractQueue(profileKey, qid, resumePage, autoResume){
     resumePage = resumePage||0;
     const msg = resumePage>0
       ? ('ادامهٔ استخراج از صفحه '+resumePage+'؟\n(یک صفحه قبل از جایی که گیر کرده — از اول شروع نمی‌شود)')
       : 'ادامهٔ استخراج این پروفایل از آخرین نقطه؟';
-    if(!confirm(msg))return;
-    showToast('▶️ در حال ادامه از '+(resumePage?('صفحه '+resumePage):'نقطهٔ ذخیره')+'…');
+    if(!autoResume&&!confirm(msg))return;
+    showToast((autoResume?'♻️ ادامهٔ خودکار از ':'▶️ در حال ادامه از ')+(resumePage?('صفحه '+resumePage):'نقطهٔ ذخیره')+'…');
     const fd=new FormData();
     fd.append('action','extract_resume');
     fd.append('profile_key', profileKey||'');
     if(qid) fd.append('queue_id', qid);
+    if(typeof extractPollTimer!=='undefined' && extractPollTimer) clearInterval(extractPollTimer);
+    if(typeof pollExtractProgress==='function'){extractPollTimer=setInterval(pollExtractProgress,1500);pollExtractProgress();}
     fetch('?extract_resume=1&profile_key='+encodeURIComponent(profileKey||'')
         +'&queue_id='+encodeURIComponent(qid||''), {method:'POST', body:fd})
       .then(r=>r.json()).then(d=>{
         if(!d||!d.ok){ showToast((d&&d.error)||'ادامه ناموفق',1); return; }
-        showToast('▶️ ادامه از صفحه '+(d.start_page||resumePage||'?')+' شروع شد');
+        const resumedPhase=d.phase||'list';
+        showToast(resumedPhase==='detail'?'▶️ ادامهٔ جزئیات از checkpoint شروع شد':('▶️ ادامهٔ صفحه‌ای از صفحه '+(d.start_page||resumePage||'?')+' شروع شد'));
         try{
           if($('extractProgress'))$('extractProgress').classList.remove('hidden');
           if($('extractStatusText'))$('extractStatusText').textContent='▶️ ادامه از صفحه '+(d.start_page||'…');
@@ -74411,7 +74444,15 @@ function resumeExtractQueue(profileKey, qid, resumePage){
         }
         refreshExtractQueue();
         setTimeout(refreshExtractQueue,2000);
-      }).catch(e=>showToast('خطا: '+e,1));
+        if(d.browser_held&&d.result&&d.result.resume_needed){
+          window._extractAutoResumeCount=(window._extractAutoResumeCount||0)+1;
+          if(window._extractAutoResumeCount<=20)setTimeout(()=>resumeExtractQueue(profileKey,(d.result.queue_id||qid),d.start_page||resumePage,true),2000);
+        }else window._extractAutoResumeCount=0;
+      }).catch(e=>{
+        showToast('اتصال ادامه قطع شد؛ تلاش خودکار دوباره…',1);
+        window._extractAutoResumeCount=(window._extractAutoResumeCount||0)+1;
+        if(window._extractAutoResumeCount<=20)setTimeout(()=>resumeExtractQueue(profileKey,qid,resumePage,true),5000);
+      });
 }
 function stopExtractQueue(qid){
     if(!confirm('استخراج در حال اجرا متوقف شود؟'))return;
@@ -75253,6 +75294,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.376', t:'▶️ ادامهٔ دقیق و خودکار استخراج صفحه‌ای', items:[
+    'Continue اکنون checkpoint فهرست را با همان phase=list ادامه می‌دهد و دیگر ناخواسته وارد استخراج تک‌محصولی جزئیات نمی‌شود.',
+    'مرحلهٔ توقف‌کرده (فهرست یا جزئیات) دقیق ذخیره می‌شود؛ worker فعال job را تحویل می‌گیرد و هاست بدون exec همان request مرورگر را تا checkpoint بعدی متصل نگه می‌دارد.',
+    'استخراج طولانی پس از سقف segment خودکار در صف recycle می‌شود و job یتیم نیز از checkpoint بازیابی می‌گردد؛ polling هم پیش از درخواست طولانی آغاز می‌شود.'
+  ]},
   {v:'10.375', t:'🔓 بازیابی lock به‌ارث‌رسیدهٔ worker قدیمی', items:[
     'اگر PID ثبت‌شدهٔ daemon پس از deploy مرده باشد، وجود flock به‌ارث‌رسیده دیگر worker را فعال جلوه نمی‌دهد.',
     'نبض داخلی مسیر بازیابی stale lock را اجرا و worker نسخهٔ تازه را بدون انتظار برای ops_feedback بالا می‌آورد.'
