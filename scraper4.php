@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.379';
+const APP_VERSION = '10.380';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -12775,8 +12775,8 @@ $profilePatch = [
         ? trim((string)$_POST['name'])
         : (trim((string)($existingProfile['name'] ?? '')) ?: parse_url($url, PHP_URL_HOST))),
 'pages' => array_key_exists('pages', $_POST)
-    ? max(1, min(100, (int)$_POST['pages']))
-    : (int)($profiles[$key]['pages'] ?? 10),
+    ? max(1, (int)$_POST['pages'])
+    : max(1, (int)($profiles[$key]['pages'] ?? 10)),
 // v10.177: تنظیم صفحه‌بندی هم مثل دسته‌ها (v8.43) در ذخیرهٔ جزئی حفظ شود —
 //   پیش‌تر هر ذخیره‌ای که این کلیدها را نمی‌فرستاد، الگو به حالت پیش‌فرض
 //   برمی‌گشت و کاربر «به صفحهٔ بعد نمی‌رود» می‌دید.
@@ -17331,7 +17331,7 @@ header('X-Accel-Buffering: no');
 while (@ob_get_level()) @ob_end_clean();
 
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? DEFAULT_URL));
-$maxPages = max(1, min(100, (int)($_GET['pages'] ?? 20)));
+$maxPages = max(1, (int)($_GET['pages'] ?? 20));
 $selectors = isset($_GET['selectors']) ? json_decode($_GET['selectors'], true) : null;
 $streamEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (($selectors && !empty($selectors['container'])) ? 'selectors' : 'heuristic')));
 $pagType = $_GET['pagType'] ?? 'query_page';
@@ -18936,7 +18936,7 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'پروفایل
 }
 
 $url=s4NormalizeInputUrl((string)($profile['url']??''));
-$maxPages=max(1,min(100,(int)($profile['pages']??10)));
+$maxPages=max(1,(int)($profile['pages']??10));
 $selectors=$profile['selectors']??[];
 $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
 $pagType=$profile['pagType']??'query_page';
@@ -43445,6 +43445,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '379', '>='));
     $add('10.379', 'ورودی 10.379 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "379'") !== false);
+    $add('10.380', 'تعداد صفحات ورودی عددی با numpad و انتخاب سریع دلخواه دارد',
+         strpos($selfSrc, 'type="number" id="pages"') !== false
+      && strpos($selfSrc, 'inputmode="numeric"') !== false
+      && strpos($selfSrc, 'id="pagesPreset"') !== false
+      && strpos($selfSrc, 'function pagesPresetChanged(value)') !== false);
+    $add('10.380', 'سقف ۱۰۰ از ذخیره و موتورهای استخراج برداشته شده است',
+         strpos($selfSrc, "? max(1, (int)\$_POST['pages'])") !== false
+      && strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
+      && strpos($selfSrc, "\$maxPages = max(1, (int)(\$_GET['pages'] ?? 20));") !== false
+      && strpos($selfSrc, 'min(100,(int)($profile[\'pages\']??10))') === false
+      && version_compare(APP_VERSION, '10.' . '380', '>='));
+    $add('10.380', 'ورودی 10.380 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "380'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -65398,7 +65411,7 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 <?= app_fx_boot() ?>
 <style>
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}html,body{overflow-x:hidden}body{font-family:var(--app-font,Tahoma,system-ui,sans-serif);background:#0f172a;color:#e2e8f0;min-height:100vh;padding:12px;padding-bottom:90px;padding-top:56px;direction:rtl}.container{max-width:1400px;margin:0 auto}h1{font-size:18px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;margin-bottom:14px}.row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}input,select{background:#0f172a;border:1px solid #475569;color:#fff;padding:10px 12px;border-radius:8px;font-size:13px;font-family:inherit;width:100%}input[type="checkbox"]{width:auto}select{min-width:90px;width:auto}
-.btn{padding:11px 14px;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s;white-space:nowrap}.btn:hover{opacity:.9}.btn:active{transform:scale(.97)}.btn:disabled{opacity:.5;cursor:not-allowed}.btn-blue{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#000}.btn-red{background:#ef4444;color:#fff}.btn-green{background:#22c55e;color:#000}.btn-purple{background:#a855f7;color:#fff}.btn-orange{background:#f97316;color:#000}.btn-gray{background:#475569;color:#fff}.btn-yellow{background:#eab308;color:#000}.btn-cyan{background:#06b6d4;color:#000}.btn-teal{background:#14b8a6;color:#000}.btn-pink{background:#ec4899;color:#fff}.btn-indigo{background:#6366f1;color:#fff}.hidden{display:none!important}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.btn{padding:11px 14px;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s;white-space:nowrap}.btn:hover{opacity:.9}.btn:active{transform:scale(.97)}.btn:disabled{opacity:.5;cursor:not-allowed}.btn-blue{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#000}.btn-red{background:#ef4444;color:#fff}.btn-green{background:#22c55e;color:#000}.btn-purple{background:#a855f7;color:#fff}.btn-orange{background:#f97316;color:#000}.btn-gray{background:#475569;color:#fff}.btn-yellow{background:#eab308;color:#000}.btn-cyan{background:#06b6d4;color:#000}.btn-teal{background:#14b8a6;color:#000}.btn-pink{background:#ec4899;color:#fff}.btn-indigo{background:#6366f1;color:#fff}.hidden{display:none!important}.pages-unlimited-control{display:flex;gap:5px;flex:0 0 205px;direction:ltr}.pages-unlimited-control #pages{width:112px;min-width:0;text-align:center;font-weight:800}.pages-unlimited-control #pagesPreset{width:88px;min-width:0;font-size:10px;direction:rtl}@media(max-width:480px){.pages-unlimited-control{flex:1 0 100%}.pages-unlimited-control #pages{flex:1}.pages-unlimited-control #pagesPreset{width:96px}}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
 .stat{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;text-align:center}.stat b{font-size:20px;display:block}.stat span{color:#64748b;font-size:10px}.progress{height:5px;background:#334155;border-radius:5px;margin:10px 0;overflow:hidden}.progress-bar{height:100%;background:linear-gradient(90deg,#3b82f6,#a855f7);width:0;transition:.3s}.progress-bar.pink{background:linear-gradient(90deg,#ec4899,#f59e0b)}.status{color:#94a3b8;font-size:12px;margin-bottom:8px}.logs{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;max-height:140px;overflow-y:auto;font-family:monospace;font-size:11px;margin-bottom:10px;direction:ltr;text-align:left}.log{padding:2px 0;border-bottom:1px solid #1e293b}.log-ok{color:#4ade80}.log-err{color:#f87171}.log-info{color:#60a5fa}.log-detail{color:#f0abfc}
 .main-tabs{position:fixed;bottom:0;left:0;right:0;background:#0f172a;border-top:1px solid #334155;display:flex;z-index:1000;box-shadow:0 -4px 20px rgba(0,0,0,.5);padding-bottom:env(safe-area-inset-bottom)}.main-tab{flex:1;padding:10px 4px 8px;border:none;background:transparent;color:#64748b;font-size:11px;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative;transition:color .2s}.main-tab .t-icon{font-size:22px}.main-tab .t-ico3d{display:none}.main-tab .t-label{font-weight:600}.main-tab.active{color:#3b82f6;background:#1e293b}.main-tab.active .t-icon{transform:translateY(-2px) scale(1.15);filter:drop-shadow(0 3px 8px rgba(59,130,246,.7));transition:transform .2s,filter .2s}.main-tab .badge{position:absolute;top:4px;right:calc(50% - 20px);background:#ef4444;color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center}.main-tab .badge.ok{background:#22c55e;color:#000}.tab-pane{display:none;animation:fadeIn .3s ease}.tab-pane.active{display:block}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.sub-tabs{display:flex;gap:3px;background:#0f172a;padding:3px;border-radius:10px;margin-bottom:12px}.sub-tab{flex:1;padding:9px;border:none;border-radius:8px;font-weight:600;cursor:pointer;background:transparent;color:#94a3b8;font-size:12px;font-family:inherit;text-align:center}.sub-tab.active{background:#3b82f6;color:#000}.mode-tabs{display:flex;gap:3px;background:#0f172a;padding:3px;border-radius:10px;margin-bottom:12px}.mode-tab{flex:1;padding:9px;border:none;border-radius:8px;font-weight:600;cursor:pointer;background:transparent;color:#94a3b8;font-size:12px;font-family:inherit;text-align:center}.mode-tab.active{background:#3b82f6;color:#000}
@@ -68671,7 +68684,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         <div class="section-title">🔗 آدرس و محدوده</div>
         <div class="row">
             <input type="url" id="url" value="<?=h(DEFAULT_URL)?>" placeholder="آدرس فروشگاه..." oninput="onUrlChange()">
-            <select id="pages" onchange="scheduleSave()" style="max-width:120px"><?php for($i=1;$i<=100;$i++): ?><option value="<?=$i?>"<?=$i==10?'selected':''?>><?=$i?> صفحه</option><?php endfor;?></select>
+            <div class="pages-unlimited-control" title="تعداد صفحه محدود به ۱۰۰ نیست">
+                <input type="number" id="pages" value="10" min="1" step="1" inputmode="numeric" enterkeyhint="done" pattern="[0-9]*" aria-label="تعداد صفحات استخراج" oninput="pagesInputChanged()" onchange="pagesInputChanged(true)">
+                <select id="pagesPreset" aria-label="انتخاب سریع تعداد صفحات" onchange="pagesPresetChanged(this.value)">
+                    <option value="custom">دلخواه</option><option value="1">۱</option><option value="5">۵</option><option value="10" selected>۱۰</option><option value="20">۲۰</option><option value="50">۵۰</option><option value="100">۱۰۰</option><option value="200">۲۰۰</option><option value="500">۵۰۰</option><option value="1000">۱۰۰۰</option>
+                </select>
+            </div>
         </div>
 
         <div class="row" style="align-items:center;margin-top:6px">
@@ -71538,6 +71556,20 @@ function selectHeaderProfile(url) {
     selectProfile(url);
 }
 
+function syncPagesPreset(){
+    const input=$('pages'),preset=$('pagesPreset');if(!input||!preset)return;
+    const n=Math.max(1,parseInt(input.value)||1),v=String(n);
+    preset.value=Array.from(preset.options).some(o=>o.value===v)?v:'custom';
+}
+function pagesInputChanged(commit){
+    const input=$('pages');if(!input)return;
+    if(commit&&(input.value===''||parseInt(input.value)<1))input.value='1';
+    syncPagesPreset();scheduleSave();
+}
+function pagesPresetChanged(value){
+    if(value==='custom'){const input=$('pages');if(input){input.focus();input.select();}return;}
+    const n=Math.max(1,parseInt(value)||1);$('pages').value=String(n);syncPagesPreset();scheduleSave();
+}
 
 function ghRepoValue(){
     const custom=$('ghRepoCustom');
@@ -71692,7 +71724,8 @@ function loadProfileFromServer(url, silent) {
 function applyProfile(p, keepTab) {
     $('url').value = p.url || '';
     $('profileName').value = p.name || '';
-    $('pages').value = p.pages || 10;
+    $('pages').value = Math.max(1, parseInt(p.pages)||10);
+    syncPagesPreset();
     syncExtractionEngine(p.extractionEngine || EXTRACTION_ENGINE_DEFAULT, 'load');
     $('pagType').value = p.pagType || 'query_page';
     $('pagVal').value = p.pagVal || '';
@@ -75519,6 +75552,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.380', t:'🔢 تعداد صفحهٔ نامحدود با صفحه‌کلید عددی', items:[
+    'سقف ۱۰۰ صفحه از ذخیرهٔ پروفایل، استخراج بک‌اند و استخراج زنده برداشته شد؛ مقدار واردشده تا پایان واقعی فهرست قابل استفاده است.',
+    'کنترل تعداد صفحه اکنون فیلد عددی قابل نوشتن با inputmode=numeric است تا روی موبایل numpad باز شود.',
+    'دراپ‌داون انتخاب سریع برای ۱، ۵، ۱۰، ۲۰، ۵۰، ۱۰۰، ۲۰۰، ۵۰۰ و ۱۰۰۰ صفحه کنار مقدار دلخواه حفظ شده است.'
+  ]},
   {v:'10.379', t:'🫀 هدایت استخراج با کران داخلی و بیرونی', items:[
     'هر ضربان کران checkpoint فهرست یا جزئیات را با همان مرحله پیدا می‌کند؛ ردیف stale سریع‌تر بازیابی می‌شود و توقف بی‌پیشرفت به‌جای قفل یک‌ساعته با backoff دوباره امتحان می‌شود.',
     'روی سرور دارای worker، job paused/failed همان پروفایل revive می‌شود و owner دوم ساخته نمی‌شود؛ روی هاست بدون exec، درخواست کران HTTP تا پایان یک segment کوتاه متصل می‌ماند.',
