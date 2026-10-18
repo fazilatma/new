@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.378';
+const APP_VERSION = '10.379';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1211,8 +1211,34 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
 
 function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    /* A paused extraction already owns the durable checkpoint. Cron/manual
+       resume revives that row instead of adding a second owner with a slightly
+       different phase-based dedup key. */
+    $enq = null;
+    if ($resume) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll) {
+            $now=time();$revive=-1;
+            foreach ($q['entries'] as $i=>&$e) {
+                if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
+                if((string)($e['payload']['profile_key']??'')!==$profileKey)continue;
+                $st=(string)($e['status']??'');
+                if(in_array($st,['pending','running'],true)){
+                    $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
+                    $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
+                }
+                if(in_array($st,['paused','failed'],true)&&$revive<0)$revive=$i;
+            }unset($e);
+            if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
+                $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;
+                $e['recycles']=(int)($e['recycles']??0)+1;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'revived'=>true,'job_id'=>$id,'status'=>'pending'];}
+            return ['ok'=>true,'missing'=>true];
+        });
+        if (empty($enq['missing'])) {
+            /* continue below so the shared progress card reflects the revived owner */
+        } else $enq=null;
+    }
     $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
-    $enq = s4WorkerEnqueue('backend_extract', [
+    if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
         'resume' => $resume, 'dedup_key' => $dedup,
     ], 'استخراج بک‌اند');
@@ -18753,10 +18779,12 @@ function extractResumePrepare(string $profileKey, array $cn): array {
         $phase = 'all';
     }
     $pr['_extract_resume_req'] = time();
-    if (empty($pr['_extract_resume_from'])) {
+    if ($phase === 'list' && empty($pr['_extract_resume_from'])) {
         $pr['_extract_resume_from'] = extractResumeStartPage($pr);
     }
-    $pr['_extract_list_incomplete'] = true;
+    /* A detail checkpoint must not be rewritten as an incomplete list. */
+    $pr['_extract_list_incomplete'] = $phase === 'list';
+    $pr['_extract_resume_phase'] = $phase === 'detail' ? 'detail' : 'list';
     $profiles[$profileKey] = $pr;
     try {
         saveProfiles($profiles);
@@ -19111,6 +19139,7 @@ if($phase!=='detail'){
         $_listBudget=$_ini>0?max(45,(int)($_ini*0.65)):900;
     }
     $_listBudget=max(40,min(3600,$_listBudget));
+    if(isset($GLOBALS['_extractCronSliceSec']))$_listBudget=max(20,min($_listBudget,(int)$GLOBALS['_extractCronSliceSec']));
     $_pagePauseMs=max(0,min(5000,(int)($cnList['extract_page_pause_ms']??80)));
     $_listDeadline=time()+$_listBudget;
 }
@@ -19698,6 +19727,7 @@ if($_budget<=0){
     $_budget=$_ini>0?max(30,(int)($_ini*0.7)):((isCliRun()||(string)$trigger==='worker')?900:90);
 }
 $_budget=max(20,min(3600,$_budget));
+if(isset($GLOBALS['_extractCronSliceSec']))$_budget=max(20,min($_budget,(int)$GLOBALS['_extractCronSliceSec']));
 /* v8.98: مهلت از «شروع فاز جزئیات» حساب می‌شود، نه از شروع کل اجرا.
 
    در ۸.۹۷ نوشته بودم $startedAt + $budget که $startedAt لحظهٔ شروع کل
@@ -21268,6 +21298,9 @@ function cronWatchdogs(array $cn): array {
         $exProg = readProgress(EXTRACT_PROGRESS_FILE);
         $exQ = extractReadQueue();
         $exNow = time();
+        /* Extraction heartbeats are precise, so recover sooner than generic send
+           queues while still allowing a slow source request to finish. */
+        $exStallCfg=max(60,min($stallCfg,(int)($cn['extract_stall_after']??120)));
         $exDirty = false; $exStuck = null; $exResumeKeys = [];
         foreach ($exQ['entries'] as $qi => $qe) {
             if (($qe['status'] ?? '') !== 'running') continue;
@@ -21288,7 +21321,7 @@ function cronWatchdogs(array $cn): array {
                 ? (int)($_lkW['at'] ?? 0) : 0;
             $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => $_lkWBeat]);
             $idle = (int)$_iwW['idle'];
-            if ($idle <= $stallCfg) continue;
+            if ($idle <= $exStallCfg) continue;
             /* v9.75: به‌جای «بستن و رها کردن»، ردیفِ گیرکرده را از صف برمی‌داریم
                (تا محافظِ تکراری، پروفایل را بلاک نکند) و همان پروفایل را برای
                «ادامهٔ» فازِ ۱/۲ استخراج علامت می‌زنیم. خودِ استخراج با نشانهٔ
@@ -21298,7 +21331,20 @@ function cronWatchdogs(array $cn): array {
             $exDirty = true;
             $exStuck = ['idle' => $idle, 'profile' => (string)($qe['profile_name'] ?? $exKey),
                         'key' => $exKey];
-            if ($exKey !== '') $exResumeKeys[] = $exKey;
+            if ($exKey !== '') {
+                $exResumeKeys[] = $exKey;
+                /* Persist the exact interrupted stage before removing the dead
+                   queue row; the next cron must not guess list vs detail. */
+                $exProfiles=loadProfiles();
+                if(isset($exProfiles[$exKey])&&is_array($exProfiles[$exKey])){
+                    $exPhase=((string)($exProg['phase']??$qe['resume_phase']??$qe['phase']??'list'))==='detail'?'detail':'list';
+                    $exProfiles[$exKey]['_extract_stage']='stopped';
+                    $exProfiles[$exKey]['_extract_resume_phase']=$exPhase;
+                    $exProfiles[$exKey]['_extract_list_incomplete']=$exPhase==='list';
+                    $exProfiles[$exKey]['_extract_stage_at']=$exNow;
+                    saveProfiles($exProfiles);
+                }
+            }
         }
         if ($exDirty) {
             $exQ['entries'] = array_values($exQ['entries']);
@@ -23229,14 +23275,17 @@ $_cronBg = !empty($_POST['bg']) || !empty($_GET['bg']);
    رفتارِ قبلی (پاسخِ فوری + پس‌زمینه) دست‌نخورده است. */
 if (!empty($GLOBALS['_msKeepConn']) && !isCliRun()) {
     msKeepConnStart();
-} elseif($_cronBrowserKeep&&!isCliRun()) {
-    /* Do not finish the HTTP request: on exec-disabled shared hosting the open
-       browser is the process lifetime anchor. cronEmit writes the final JSON. */
-    $GLOBALS['_internalBrowserCronKeep']=true;
+} elseif(!isCliRun()) {
+    /* Internal browser pulses and external HTTP cron are both execution
+       anchors on shared hosting. Detaching the response let LiteSpeed kill the
+       process before the next extraction page. Keep the request attached and
+       return after one checkpoint segment; persistent-worker hosts enqueue it. */
+    $GLOBALS[$_cronBrowserKeep?'_internalBrowserCronKeep':'_externalCronHttpKeep']=true;
+    $GLOBALS['_extractCronSliceSec']=$_cronBrowserKeep?75:25;
+    header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
 } else {
-    finishRequestNow(json_encode(['ok' => true, 'started' => true, 'bg' => $_cronBg,
-        'detached' => true, 'note' => 'اجرا در پس‌زمینه ادامه دارد — نتیجه در cron_last_run.json'],
-        JSON_UNESCAPED_UNICODE));
+    /* CLI cron has no browser request to detach and remains the strongest
+       continuous driver. */
 }
 /* v10.67 (81): شبکهٔ ایمنیِ کُرش. وقتی هاست پردژه را می‌کُشد یا PHP به
    خطای فیتال می‌خورد (حافظه و...)، رابطِ همگام‌سازیِ دستی نباید تا ابد روی
@@ -23535,8 +23584,13 @@ if ($_resumeCandidates) {
             $_rTries = 0;
         }
         if ($_rTries >= $_resumeBudget) {
-            $results['extract_resume_skipped'][] = ['key' => $_rk, 'reason' => 'no_progress', 'tries' => $_rTries];
-            continue;
+            /* Never disable a checkpoint for the whole AUTO_RESUME_WINDOW.
+               Back off progressively, then let the next cron try again. */
+            $_rBackoff=min(900,30*(2**min(5,max(0,$_rTries-$_resumeBudget))));
+            if(time()-$_rPrevAt<$_rBackoff){
+                $results['extract_resume_skipped'][]=['key'=>$_rk,'reason'=>'backoff','tries'=>$_rTries,'retry_after'=>$_rBackoff-(time()-$_rPrevAt)];
+                continue;
+            }
         }
         /* امضا و شمارنده را «پیش از» اجرا بنویس تا اگر هاست وسطِ کار کشت،
            تیکِ بعدی بداند این تلاش از کجا شروع شد و پیشرفتی کرده یا نه. */
@@ -23551,12 +23605,24 @@ if ($_resumeCandidates) {
         cronMarkRun($_rk, 'extract_resume');
         $syncState = loadSyncState();
         try {
-            $_rr = runBackendExtract($_rk, 'watchdog_resume', false, $_prep['phase'], false, (string)($_prep['queue_id'] ?? ''));
-            $results['extract_resumed'][] = ['key' => $_rk, 'phase' => $_prep['phase'], 'ok' => !empty($_rr['ok'])];
-            /* worker پاسخِ زودهنگام دارد؛ کارِ دیگری در همین تیک dispatch
-               نشود تا ترتیب و مرزِ قفل قابل اتکا بماند. */
+            if(s4WorkerIsActive()){
+                /* Reservation belongs to this cron process; release it before
+                   handing checkpoint ownership to the persistent worker. */
+                extractLockRelease((string)($_prep['queue_id']??''));
+                $_rr=s4WorkerEnqueueBackendExtract($_rk,(string)$_prep['phase'],false,true);
+                $results['extract_resumed'][]=['key'=>$_rk,'phase'=>$_prep['phase'],'ok'=>!empty($_rr['ok']),
+                    'driver'=>'persistent_worker','job_id'=>(string)($_rr['job_id']??''),'revived'=>!empty($_rr['revived'])];
+            }else{
+                /* On exec-disabled hosting this HTTP cron request remains
+                   attached and runs exactly one bounded checkpoint segment. */
+                $_rr=runBackendExtract($_rk,'cron_resume',false,$_prep['phase'],false,(string)($_prep['queue_id']??''));
+                $results['extract_resumed'][]=['key'=>$_rk,'phase'=>$_prep['phase'],'ok'=>!empty($_rr['ok']),
+                    'driver'=>isset($GLOBALS['_internalBrowserCronKeep'])?'internal_browser_cron':'external_http_cron',
+                    'resume_needed'=>!empty($_rr['resume_needed']),'extracted'=>(int)($_rr['extracted']??0)];
+            }
             $results['resume_blocking'] = true;
         } catch (Throwable $_rEx) {
+            extractLockRelease((string)($_prep['queue_id']??''));
             $results['extract_resumed'][] = ['key' => $_rk, 'phase' => $_prep['phase'], 'ok' => false,
                 'error' => mb_substr($_rEx->getMessage(), 0, 160)];
             $results['resume_blocking'] = true;
@@ -23567,6 +23633,12 @@ if ($_resumeCandidates) {
     // پروفایل‌ها و وضعیت را بعد از ادامه‌دادن دوباره بخوان تا حلقهٔ پایین نسخهٔ تازه ببیند
     $profiles  = loadProfiles();
     $syncState = loadSyncState();
+    if($_resumeRan>0){
+        /* One owner/segment per pulse keeps cron latency bounded and prevents
+           fresh scheduled work from overlapping the resumed checkpoint. */
+        $results['deferred_by_extract_resume']=true;
+        cronEmit($results);exit;
+    }
 }
 
 /* =====================================================================
@@ -23800,8 +23872,12 @@ if (!empty($exRes['ran_out']) || !empty($exRes['resume_needed'])) {
     $pResult['extract_resume'] = true;
     $pResult['detail_done'] = (int)($exRes['detail_done'] ?? 0);
     $pResult['detail_total'] = (int)($exRes['detail_total'] ?? 0);
-    $pResult['note'] = 'جزئیات نیمه‌تمام — نوبت بعد ادامه ('
-        . (int)($exRes['detail_done'] ?? 0) . '/' . (int)($exRes['detail_total'] ?? 0) . ')';
+    $pResult['note'] = 'استخراج در checkpoint امن متوقف شد — تیک کران بعدی از همان مرحله ادامه می‌دهد';
+    if(!manualSyncActive()){
+        $pResult['status']='extract_checkpoint';$results['profiles'][]=$pResult;
+        $results['deferred_by_extract_checkpoint']=true;
+        cronEmit($results);exit;
+    }
 }
 if (!empty($exRes['partial']) || !empty($exRes['cancelled'])) {
     $pResult['extract_partial'] = true;
@@ -43351,6 +43427,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '378', '>='));
     $add('10.378', 'ورودی 10.378 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "378'") !== false);
+    $add('10.379', 'کران HTTP داخلی و بیرونی تا پایان یک segment استخراج متصل می‌ماند',
+         strpos($selfSrc, "'_externalCronHttpKeep'") !== false
+      && strpos($selfSrc, "'_extractCronSliceSec'") !== false
+      && strpos($selfSrc, "'external_http_cron'") !== false);
+    $add('10.379', 'کران در حضور worker ادامه را revive/enqueue و بدون owner دوم تحویل می‌دهد',
+         strpos($selfSrc, 'different phase-based dedup key') !== false
+      && strpos($selfSrc, "in_array(\$st,['paused','failed'],true)") !== false
+      && strpos($selfSrc, "'driver'=>'persistent_worker'") !== false);
+    $add('10.379', 'مرحلهٔ list/detail در watchdog حفظ و توقف بی‌پیشرفت با backoff دوباره امتحان می‌شود',
+         strpos($selfSrc, "['_extract_resume_phase']=\$exPhase") !== false
+      && strpos($selfSrc, "'reason'=>'backoff'") !== false
+      && strpos($selfSrc, "\$pr['_extract_list_incomplete'] = \$phase === 'list'") !== false);
+    $add('10.379', 'هر pulse فقط یک checkpoint را می‌راند و ارسال روی استخراج ناقص آغاز نمی‌شود',
+         strpos($selfSrc, "'deferred_by_extract_resume'") !== false
+      && strpos($selfSrc, "'deferred_by_extract_checkpoint'") !== false
+      && version_compare(APP_VERSION, '10.' . '379', '>='));
+    $add('10.379', 'ورودی 10.379 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "379'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75425,6 +75519,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.379', t:'🫀 هدایت استخراج با کران داخلی و بیرونی', items:[
+    'هر ضربان کران checkpoint فهرست یا جزئیات را با همان مرحله پیدا می‌کند؛ ردیف stale سریع‌تر بازیابی می‌شود و توقف بی‌پیشرفت به‌جای قفل یک‌ساعته با backoff دوباره امتحان می‌شود.',
+    'روی سرور دارای worker، job paused/failed همان پروفایل revive می‌شود و owner دوم ساخته نمی‌شود؛ روی هاست بدون exec، درخواست کران HTTP تا پایان یک segment کوتاه متصل می‌ماند.',
+    'هر pulse فقط یک segment امن را اجرا می‌کند، بودجهٔ HTTP محدود است و تا تکمیل checkpoint هیچ ارسال یا کار تازهٔ هم‌پوشان آغاز نمی‌شود.'
+  ]},
   {v:'10.378', t:'🧪 تثبیت خودآزمون داشبورد محصولات', items:[
     'بررسی شمار کارت‌ها در selftest در برابر حضور متن needle داخل خود آزمون مقاوم شد؛ رفتار و ظاهر داشبورد بدون تغییر باقی مانده است.'
   ]},
