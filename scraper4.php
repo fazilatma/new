@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.380';
+const APP_VERSION = '10.381';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -358,7 +358,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/21';
+const APP_VERSION_DATE = '1405/07/26';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -19613,8 +19613,16 @@ if($_prevN>=8 && $_newN>0 && $_newN < (int)max(3, floor($_prevN * 0.45))){
    پردازه کشته می‌شود. تا ۸.۹۳ در آن حالت هیچ‌چیز ذخیره نشده بود — حتی
    خودِ محصولاتی که از صفحهٔ فهرست به دست آمده بودند. */
 $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
+/* A detail cycle is the durable cursor across process/cron segments. Products
+   already resolved in this cycle are skipped on resume, so a price selector
+   that is intentionally refreshed can no longer restart from product one. */
+$_oldDetailCycle=trim((string)($profile['_extract_detail_cycle']??''));
+$_oldStage=(string)($profile['_extract_stage']??'');
+$_detailCycle=($phase==='detail'&&in_array($_oldStage,['detail','stopped'],true)&&$_oldDetailCycle!=='')
+    ? $_oldDetailCycle : ('dc_'.time().'_'.substr(md5($queueId),0,8));
 extractCheckpoint($pkFinal,$allProducts,[
     '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
+    '_extract_detail_cycle'=>$_detailCycle,
     '_extract_list_incomplete'=>false,
     '_extract_list_page_ok'=>$totalPages,
     '_extract_list_page_try'=>$totalPages,
@@ -19650,6 +19658,7 @@ $needDetail=[];
 $_forceAll=($phase==='detail'&&$forceAll);
 foreach($allProducts as $key=>$p){
 if(empty($p['link'])){$_noLink++;continue;}
+if((string)($p['_detail_cycle']??'')===$_detailCycle){$_alreadyDone++;continue;}
 if($_forceAll){$needDetail[$key]=$p;continue;}
 /* v8.81: محصولی که گالری‌اش را قبلاً گرفته‌ایم دوباره باز نمی‌شود.
    پیش از این با روشن بودن گالری، هر بار همهٔ صفحات محصول از نو گرفته
@@ -19678,6 +19687,7 @@ $galleryFound=0;$galleryImgsTotal=0;
    «۵ از ۲۰». تا حالا اگر صفحه‌ای باز نمی‌شد یا سلکتوری چیزی پیدا نمی‌کرد،
    هیچ ردی در لاگ نمی‌ماند و کاربر فقط می‌دید کار کند است. */
 $detailOk=0;$detailFail=0;$detailFields=0;$detailNoField=0;$varFound=0;$imgMain=0;
+$_detailIncomplete=false;
 $failSamples=[];$emptySamples=[];
 // v10.21 (۳۴الف): شمارندهٔ تغییرِ موجودی که از روی قیمت تشخیص داده شد
 $_stockOut=0;$_stockBack=0;
@@ -19785,7 +19795,7 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'can
 }
 $detailDone++;
 $_pTitle=mb_substr(trim((string)($p['title']??$key)),0,42);
-$_gotFields=0;$_gotImgs=0;$_gotVars=0;
+$_gotFields=0;$_gotImgs=0;$_gotVars=0;$_detailResolved=false;$_isIn=null;
 /* v10.21 (۳۴الف): قیمتِ برداشته‌شده در همین دور، جدا از مقدارِ قبلی.
    وقتی سلکتور چیزی پیدا نکند مقدارِ قدیمی دست‌نخورده می‌ماند (عمدی، تا یک
    خطای موقتی داده را پاک نکند) — ولی برای تشخیصِ ناموجودی همان «پیدا نشد»
@@ -19895,7 +19905,17 @@ if(!empty($detailSelectors['price'])){
         elseif(!$_wasIn && $_isIn){ $_stockBack++; $pushLog('  ✅ '.$_pTitle.' — دوباره موجود شد'); }
     }
 }
-if($_gotFields===0&&$_gotImgs<=1){
+/* A page is resolved only when it yielded requested detail, a real gallery,
+   or a trustworthy out-of-stock result. Invalid selectors/empty proxy pages
+   remain retryable instead of being silently called complete. */
+$_detailResolved=($_gotFields>0||$_gotImgs>1||($_isIn===false&&!empty($detailSelectors['price'])));
+if($_detailResolved){
+    $allProducts[$key]['_detail_cycle']=$_detailCycle;
+    $allProducts[$key]['_detail_checked_at']=time();
+} else {
+    unset($allProducts[$key]['_detail_cycle']);
+}
+if(!$_detailResolved){
 $detailNoField++;
 if(count($emptySamples)<3)$emptySamples[]=$_pTitle;
 }
@@ -19956,14 +19976,17 @@ usleep(200000);
 /* v8.94: پایان فاز جزئیات — قبل از هر کار دیگری ذخیره کن.
    v8.97: اگر وقت تمام شده و کار ناتمام مانده، نشانه را «detail» بگذار
    نه «detail_done»، تا اجرای بعدی بداند باید ادامه بدهد. */
+$_detailIncomplete=($_ranOut||$detailDone<$detailTotal||$detailFail>0||$detailNoField>0);
 extractCheckpoint($pkFinal,$allProducts,
-    ['_extract_stage'=>$_ranOut?'detail':'detail_done','_extract_stage_at'=>time(),
+    ['_extract_stage'=>$_detailIncomplete?'detail':'detail_done','_extract_stage_at'=>time(),
+     '_extract_resume_needed'=>$_detailIncomplete?1:0,
+     '_extract_detail_cycle'=>$_detailCycle,
      '_extract_detail_done'=>$detailDone,'_extract_detail_total'=>$detailTotal]);
 /* v8.90: جمع‌بندی پایان فاز ۲ — یک نگاه و می‌فهمی چه شد. */
-$_sumLines=$_ranOut
-  ? ['⏸ فاز ۲ نیمه‌تمام ماند — '.$detailDone.' از '.$detailTotal.' محصول بررسی شد',
-     '   • ⏱ سقف زمانی این نوبت پر شد؛ بقیه در اجرای بعدی ادامه می‌یابد',
-     '   • هیچ‌چیز از دست نرفت — کار انجام‌شده ذخیره شد']
+$_sumLines=$_detailIncomplete
+  ? ['⏸ فاز ۲ هنوز کامل نیست — '.max(0,$detailDone-$detailFail-$detailNoField).' از '.$detailTotal.' محصول این نوبت حل شد',
+     '   • باقی‌مانده و خطاهای قابل‌تلاش در چک‌پوینت حفظ شدند',
+     '   • اجرای بعدی از اولین محصول حل‌نشده ادامه می‌دهد، نه از محصول اول']
   : ['✅ فاز ۲ تمام شد — '.$detailDone.' محصول بررسی شد'];
 $_sumLines[]='   • ✅ '.$detailOk.' صفحه باز شد'
   .($detailFail>0?(' · ❌ '.$detailFail.' باز نشد'):'')
@@ -19984,7 +20007,7 @@ $_sumLines[]='   • یعنی IP هاست بلاک یا محدود شده — س
 $_sumLines[]='   • تنظیمات ← «اتصال به سایت مبدأ»: فاصلهٔ بین درخواست‌ها را زیاد کنید یا پروکسی بگذارید';
 }
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailTotal,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
 }
 
 $newCount=0;$priceChanged=0;$unchanged=0;$removedCount=0;
@@ -20018,7 +20041,7 @@ $prevMap=$prevProducts;
    وارد removed_items می‌کند تا مقصدها هم بازنشسته شوند. روی اجرای ناقص یا
    فقط-list اعمال نمی‌شود تا خطای موقت استخراج باعث حذف کاذب نشود. */
 $_profilePrunedUnavailable = [];
-if ($phase !== 'list' && empty($_ranOut) && empty($_listRanOut)) {
+if ($phase !== 'list' && empty($_detailIncomplete) && empty($_listRanOut)) {
     foreach ($allProducts as $_apuKey => $_apuProduct) {
         if (is_array($_apuProduct) && array_key_exists('in_stock', $_apuProduct) && empty($_apuProduct['in_stock'])) {
             $_apuProduct['key'] = (string)$_apuKey;
@@ -20070,8 +20093,10 @@ $profileOnDisk['updatedAt']=time();
 /* v9.01: اجرای «فقط فهرست» تمام‌شده حساب نمی‌شود — هنوز مرحلهٔ جزئیات
    مانده. با نشانهٔ list_done، هم دروازهٔ ارسال بسته می‌ماند و هم اجرای
    بعدی می‌داند باید جزئیات را بگیرد. */
-$profileOnDisk['_extract_stage']=($phase==='list')?'list_done':((!empty($_ranOut)||!empty($_listRanOut))?'detail':'complete');
-if(empty($_ranOut)&&empty($_listRanOut)&&$phase!=='list'){
+$profileOnDisk['_extract_stage']=($phase==='list')?'list_done':((!empty($_detailIncomplete)||!empty($_listRanOut))?'detail':'complete');
+$profileOnDisk['_extract_detail_cycle']=$_detailCycle;
+$profileOnDisk['_extract_resume_needed']=(!empty($_detailIncomplete)||!empty($_listRanOut))?1:0;
+if(empty($_detailIncomplete)&&empty($_listRanOut)&&$phase!=='list'){
     $profileOnDisk['_extract_list_incomplete']=false;
     $profileOnDisk['_extract_resume_req']=0;
     $profileOnDisk['_extract_resume_from']=0;
@@ -20127,7 +20152,10 @@ try {
    قبلاً این نوشتن آخر، همهٔ لاگ و شمارنده‌های جزئیات را پاک می‌کرد و
    کاربر فقط یک خط «تکمیل شد» می‌دید — یعنی همان چیزی که می‌خواست بداند
    (چند صفحه باز شد، چند عکس آمد، چه چیزی نیامد) از بین می‌رفت. */
-$finalLog=['✅ استخراج تکمیل شد — '.count($allProducts).' محصول'];
+$_finalComplete=($phase==='list'||(empty($_detailIncomplete)&&empty($_listRanOut)));
+$finalLog=$_finalComplete
+    ? ['✅ استخراج تکمیل شد — '.count($allProducts).' محصول']
+    : ['⏸ استخراج جزئیات موقتاً متوقف شد — صفِ باقی‌مانده حفظ شده است'];
 if (!empty($GLOBALS['_aiContentFilled'])) {
     $finalLog[] = '   • 🤖 تولید خودکار توضیح/دسته: ' . (int)$GLOBALS['_aiContentFilled'] . ' محصول';
     unset($GLOBALS['_aiContentFilled']);
@@ -20156,7 +20184,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailTotal,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailTotal+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -20175,13 +20203,13 @@ extractSaveReport($queueId, [
     'avg_ppm'       => max(0, (int)round(count($allProducts) * 60 / max(1, time() - $startedAt))),
 ]);
 
-foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']='done';$qe['products_count']=count($allProducts);$qe['total']=count($allProducts);$qe['current']=count($allProducts);$qe['done_at']=time();$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']=$_finalComplete?'done':'paused';$qe['products_count']=count($allProducts);$qe['total']=$detailTotal;$qe['current']=$detailDone;$qe['resume_needed']=$_finalComplete?0:1;if($_finalComplete)$qe['done_at']=time();else unset($qe['done_at']);$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
 extractWriteQueue($queue);
 
 // v10.21 (۳۴الف): سینکِ «بدون استخراج» باید بداند چند صفحه واقعاً باز شد و
 // آیا بودجهٔ زمانی تمام شد (تا در نوبتِ بعدی از همان‌جا ادامه دهد)
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!empty($_ranOut),'extract_stage'=>(!empty($_ranOut)?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!$_finalComplete,'extract_stage'=>(!$_finalComplete?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
 }
 
 if(isset($_GET['worker_status'])){
@@ -43448,8 +43476,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.380', 'تعداد صفحات ورودی عددی با numpad و انتخاب سریع دلخواه دارد',
          strpos($selfSrc, 'type="number" id="pages"') !== false
       && strpos($selfSrc, 'inputmode="numeric"') !== false
-      && strpos($selfSrc, 'id="pagesPreset"') !== false
-      && strpos($selfSrc, 'function pagesPresetChanged(value)') !== false);
+      && strpos($selfSrc, 'list="pagesPresets"') !== false
+      && strpos($selfSrc, '<datalist id="pagesPresets"') !== false);
     $add('10.380', 'سقف ۱۰۰ از ذخیره و موتورهای استخراج برداشته شده است',
          strpos($selfSrc, "? max(1, (int)\$_POST['pages'])") !== false
       && strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
@@ -43458,6 +43486,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '380', '>='));
     $add('10.380', 'ورودی 10.380 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "380'") !== false);
+    $add('10.381', 'کنترل تعداد صفحه یک فیلد نوشتنی با پیشنهادهای داخلی است',
+         substr_count($selfSrc, 'id="pages"') >= 1
+      && strpos($selfSrc, 'list="pages' . 'Presets"') !== false
+      && strpos($selfSrc, 'id="pages' . 'Preset"') === false);
+    $add('10.381', 'چرخهٔ پایدار جزئیات محصول حل‌شده را در resume دوباره شروع نمی‌کند',
+         strpos($selfSrc, "['_detail_" . "cycle']??''") !== false
+      && strpos($selfSrc, "['_extract_detail_" . "cycle']") !== false
+      && strpos($selfSrc, "\$_alreadyDone++;cont" . "inue;") !== false);
+    $add('10.381', 'شکست و صفحهٔ بدون خروجی backlog قابل‌ادامه نگه می‌دارند',
+         strpos($selfSrc, "\$_detailIncomplete=(\$_ranOut||\$detailDone<\$detailTotal||\$detailFail>0||\$detailNoField>0);") !== false
+      && strpos($selfSrc, "'_extract_resume_needed'=>\$_detailIncomplete?1:0") !== false);
+    $add('10.381', 'پیشرفت و صف روی backlog ناقص هرگز تکمیل اعلام نمی‌کنند',
+         strpos($selfSrc, "'done'=>\$_final" . "Complete") !== false
+      && strpos($selfSrc, "\$qe['status']=\$_finalComplete?'done':'paused'") !== false
+      && strpos($selfSrc, "'resume_needed'=>!\$_finalComplete") !== false);
+    $add('10.381', 'ورودی 10.381 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "381'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -65411,7 +65456,7 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 <?= app_fx_boot() ?>
 <style>
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}html,body{overflow-x:hidden}body{font-family:var(--app-font,Tahoma,system-ui,sans-serif);background:#0f172a;color:#e2e8f0;min-height:100vh;padding:12px;padding-bottom:90px;padding-top:56px;direction:rtl}.container{max-width:1400px;margin:0 auto}h1{font-size:18px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;margin-bottom:14px}.row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}input,select{background:#0f172a;border:1px solid #475569;color:#fff;padding:10px 12px;border-radius:8px;font-size:13px;font-family:inherit;width:100%}input[type="checkbox"]{width:auto}select{min-width:90px;width:auto}
-.btn{padding:11px 14px;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s;white-space:nowrap}.btn:hover{opacity:.9}.btn:active{transform:scale(.97)}.btn:disabled{opacity:.5;cursor:not-allowed}.btn-blue{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#000}.btn-red{background:#ef4444;color:#fff}.btn-green{background:#22c55e;color:#000}.btn-purple{background:#a855f7;color:#fff}.btn-orange{background:#f97316;color:#000}.btn-gray{background:#475569;color:#fff}.btn-yellow{background:#eab308;color:#000}.btn-cyan{background:#06b6d4;color:#000}.btn-teal{background:#14b8a6;color:#000}.btn-pink{background:#ec4899;color:#fff}.btn-indigo{background:#6366f1;color:#fff}.hidden{display:none!important}.pages-unlimited-control{display:flex;gap:5px;flex:0 0 205px;direction:ltr}.pages-unlimited-control #pages{width:112px;min-width:0;text-align:center;font-weight:800}.pages-unlimited-control #pagesPreset{width:88px;min-width:0;font-size:10px;direction:rtl}@media(max-width:480px){.pages-unlimited-control{flex:1 0 100%}.pages-unlimited-control #pages{flex:1}.pages-unlimited-control #pagesPreset{width:96px}}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.btn{padding:11px 14px;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s;white-space:nowrap}.btn:hover{opacity:.9}.btn:active{transform:scale(.97)}.btn:disabled{opacity:.5;cursor:not-allowed}.btn-blue{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#000}.btn-red{background:#ef4444;color:#fff}.btn-green{background:#22c55e;color:#000}.btn-purple{background:#a855f7;color:#fff}.btn-orange{background:#f97316;color:#000}.btn-gray{background:#475569;color:#fff}.btn-yellow{background:#eab308;color:#000}.btn-cyan{background:#06b6d4;color:#000}.btn-teal{background:#14b8a6;color:#000}.btn-pink{background:#ec4899;color:#fff}.btn-indigo{background:#6366f1;color:#fff}.hidden{display:none!important}.pages-unlimited-control{flex:0 0 150px;direction:ltr}.pages-unlimited-control #pages{width:100%;min-width:0;text-align:center;font-weight:800}@media(max-width:480px){.pages-unlimited-control{flex:1 0 100%}}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
 .stat{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;text-align:center}.stat b{font-size:20px;display:block}.stat span{color:#64748b;font-size:10px}.progress{height:5px;background:#334155;border-radius:5px;margin:10px 0;overflow:hidden}.progress-bar{height:100%;background:linear-gradient(90deg,#3b82f6,#a855f7);width:0;transition:.3s}.progress-bar.pink{background:linear-gradient(90deg,#ec4899,#f59e0b)}.status{color:#94a3b8;font-size:12px;margin-bottom:8px}.logs{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px;max-height:140px;overflow-y:auto;font-family:monospace;font-size:11px;margin-bottom:10px;direction:ltr;text-align:left}.log{padding:2px 0;border-bottom:1px solid #1e293b}.log-ok{color:#4ade80}.log-err{color:#f87171}.log-info{color:#60a5fa}.log-detail{color:#f0abfc}
 .main-tabs{position:fixed;bottom:0;left:0;right:0;background:#0f172a;border-top:1px solid #334155;display:flex;z-index:1000;box-shadow:0 -4px 20px rgba(0,0,0,.5);padding-bottom:env(safe-area-inset-bottom)}.main-tab{flex:1;padding:10px 4px 8px;border:none;background:transparent;color:#64748b;font-size:11px;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative;transition:color .2s}.main-tab .t-icon{font-size:22px}.main-tab .t-ico3d{display:none}.main-tab .t-label{font-weight:600}.main-tab.active{color:#3b82f6;background:#1e293b}.main-tab.active .t-icon{transform:translateY(-2px) scale(1.15);filter:drop-shadow(0 3px 8px rgba(59,130,246,.7));transition:transform .2s,filter .2s}.main-tab .badge{position:absolute;top:4px;right:calc(50% - 20px);background:#ef4444;color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:10px;min-width:16px;text-align:center}.main-tab .badge.ok{background:#22c55e;color:#000}.tab-pane{display:none;animation:fadeIn .3s ease}.tab-pane.active{display:block}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.sub-tabs{display:flex;gap:3px;background:#0f172a;padding:3px;border-radius:10px;margin-bottom:12px}.sub-tab{flex:1;padding:9px;border:none;border-radius:8px;font-weight:600;cursor:pointer;background:transparent;color:#94a3b8;font-size:12px;font-family:inherit;text-align:center}.sub-tab.active{background:#3b82f6;color:#000}.mode-tabs{display:flex;gap:3px;background:#0f172a;padding:3px;border-radius:10px;margin-bottom:12px}.mode-tab{flex:1;padding:9px;border:none;border-radius:8px;font-weight:600;cursor:pointer;background:transparent;color:#94a3b8;font-size:12px;font-family:inherit;text-align:center}.mode-tab.active{background:#3b82f6;color:#000}
@@ -68684,11 +68729,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         <div class="section-title">🔗 آدرس و محدوده</div>
         <div class="row">
             <input type="url" id="url" value="<?=h(DEFAULT_URL)?>" placeholder="آدرس فروشگاه..." oninput="onUrlChange()">
-            <div class="pages-unlimited-control" title="تعداد صفحه محدود به ۱۰۰ نیست">
-                <input type="number" id="pages" value="10" min="1" step="1" inputmode="numeric" enterkeyhint="done" pattern="[0-9]*" aria-label="تعداد صفحات استخراج" oninput="pagesInputChanged()" onchange="pagesInputChanged(true)">
-                <select id="pagesPreset" aria-label="انتخاب سریع تعداد صفحات" onchange="pagesPresetChanged(this.value)">
-                    <option value="custom">دلخواه</option><option value="1">۱</option><option value="5">۵</option><option value="10" selected>۱۰</option><option value="20">۲۰</option><option value="50">۵۰</option><option value="100">۱۰۰</option><option value="200">۲۰۰</option><option value="500">۵۰۰</option><option value="1000">۱۰۰۰</option>
-                </select>
+            <div class="pages-unlimited-control" title="عدد دلخواه بنویسید یا از پیشنهادهای همین فیلد انتخاب کنید">
+                <input type="number" id="pages" value="10" min="1" step="1" list="pagesPresets" inputmode="numeric" enterkeyhint="done" pattern="[0-9]*" aria-label="تعداد صفحات استخراج" placeholder="تعداد صفحه" oninput="pagesInputChanged()" onchange="pagesInputChanged(true)">
+                <datalist id="pagesPresets"><option value="1"><option value="5"><option value="10"><option value="20"><option value="50"><option value="100"><option value="200"><option value="500"><option value="1000"></datalist>
             </div>
         </div>
 
@@ -71556,19 +71599,10 @@ function selectHeaderProfile(url) {
     selectProfile(url);
 }
 
-function syncPagesPreset(){
-    const input=$('pages'),preset=$('pagesPreset');if(!input||!preset)return;
-    const n=Math.max(1,parseInt(input.value)||1),v=String(n);
-    preset.value=Array.from(preset.options).some(o=>o.value===v)?v:'custom';
-}
 function pagesInputChanged(commit){
     const input=$('pages');if(!input)return;
     if(commit&&(input.value===''||parseInt(input.value)<1))input.value='1';
-    syncPagesPreset();scheduleSave();
-}
-function pagesPresetChanged(value){
-    if(value==='custom'){const input=$('pages');if(input){input.focus();input.select();}return;}
-    const n=Math.max(1,parseInt(value)||1);$('pages').value=String(n);syncPagesPreset();scheduleSave();
+    scheduleSave();
 }
 
 function ghRepoValue(){
@@ -71725,7 +71759,6 @@ function applyProfile(p, keepTab) {
     $('url').value = p.url || '';
     $('profileName').value = p.name || '';
     $('pages').value = Math.max(1, parseInt(p.pages)||10);
-    syncPagesPreset();
     syncExtractionEngine(p.extractionEngine || EXTRACTION_ENGINE_DEFAULT, 'load');
     $('pagType').value = p.pagType || 'query_page';
     $('pagVal').value = p.pagVal || '';
@@ -75552,6 +75585,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.381', t:'🔁 کنترل یکپارچهٔ صفحه و ادامهٔ واقعی جزئیات', items:[
+    'تعداد صفحه به یک فیلد عددی نوشتنی با پیشنهادهای داخلی ۱ تا ۱۰۰۰ تبدیل شد؛ سقف ندارد، numpad موبایل را حفظ می‌کند و dropdown جدا حذف شد.',
+    'هر دور جزئیات شناسهٔ پایدار دارد؛ محصول حل‌شده checkpoint می‌شود و بعد از timeout یا بازیابی worker دوباره از محصول اول آغاز نمی‌شود.',
+    'خطای دریافت یا صفحهٔ بدون خروجی در backlog می‌ماند؛ progress، پروفایل و صف تا باقی‌ماندن آن‌ها paused/resumable هستند و دیگر تکمیل کاذب اعلام نمی‌شود.',
+    'شمار پیشرفت نهایی از detailDone واقعی استفاده می‌کند و حذف محصولات ناموجود فقط پس از تکمیل واقعی مرحلهٔ جزئیات انجام می‌شود.'
+  ]},
   {v:'10.380', t:'🔢 تعداد صفحهٔ نامحدود با صفحه‌کلید عددی', items:[
     'سقف ۱۰۰ صفحه از ذخیرهٔ پروفایل، استخراج بک‌اند و استخراج زنده برداشته شد؛ مقدار واردشده تا پایان واقعی فهرست قابل استفاده است.',
     'کنترل تعداد صفحه اکنون فیلد عددی قابل نوشتن با inputmode=numeric است تا روی موبایل numpad باز شود.',
