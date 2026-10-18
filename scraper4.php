@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.376';
+const APP_VERSION = '10.377';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -12561,6 +12561,47 @@ if (isset($_GET['push_route_save'])) {
     if (!saveConnections($cnPr)) { echo json_encode(['ok' => false, 'error' => 'ذخیرهٔ تنظیماتِ مسیر ممکن نشد'], JSON_UNESCAPED_UNICODE); exit; }
     echo json_encode(['ok' => true, 'worker_token' => $cnPr['push_route']['worker_token']], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+if (isset($_GET['start_product_stats'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    $defs = ['total','priced','no_price','in_stock','out_stock','stock_unknown','with_image','no_image',
+        'gallery','variations','linked','sku','description','category','brand','ready'];
+    $totals = array_fill_keys($defs, 0); $byProfile = []; $samples = array_fill_keys($defs, []);
+    $profiles = loadProfiles();
+    foreach ($profiles as $pk => $profile) {
+        if (!is_array($profile)) continue;
+        $pn = trim((string)($profile['name'] ?? $pk)); $pm = array_fill_keys($defs, 0);
+        foreach (profileProductsMap($profile) as $productKey => $p) {
+            if (!is_array($p)) continue;
+            $priceOk = extractPriceNum($p['price'] ?? 0) > 0;
+            $images = productImageList($p); $imageOk = count($images) > 0;
+            $linkRaw = trim((string)($p['link'] ?? $p['url'] ?? ''));
+            $linkOk = $linkRaw !== '' && (bool)preg_match('#^https?://#i', $linkRaw);
+            $skuOk = trim((string)($p['sku'] ?? '')) !== '';
+            $descOk = trim((string)($p['shortDesc'] ?? $p['short_desc'] ?? $p['longDesc'] ?? $p['description'] ?? '')) !== '';
+            $cat = $p['category'] ?? $p['categories'] ?? ''; $catOk = is_array($cat) ? count($cat) > 0 : trim((string)$cat) !== '';
+            $brandOk = trim((string)($p['brand'] ?? '')) !== '';
+            $vars = $p['variations'] ?? []; $varOk = is_array($vars) ? count($vars) > 0 : trim((string)$vars) !== '';
+            $hasStock = array_key_exists('stock', $p) || array_key_exists('inventory', $p) || array_key_exists('stock_quantity', $p) || array_key_exists('stock_status', $p);
+            $stockRaw = $p['stock'] ?? $p['inventory'] ?? $p['stock_quantity'] ?? null;
+            $stockStatus = strtolower(trim((string)($p['stock_status'] ?? '')));
+            $stockIn = $hasStock && ($stockStatus === 'instock' || (is_numeric($stockRaw) && (int)$stockRaw > 0));
+            $stockOut = $hasStock && ($stockStatus === 'outofstock' || $stockStatus === 'out_of_stock' || (is_numeric($stockRaw) && (int)$stockRaw <= 0));
+            $flags = ['total'=>true,'priced'=>$priceOk,'no_price'=>!$priceOk,'in_stock'=>$stockIn,'out_stock'=>$stockOut,
+                'stock_unknown'=>!$stockIn&&!$stockOut,'with_image'=>$imageOk,'no_image'=>!$imageOk,'gallery'=>count($images)>1,
+                'variations'=>$varOk,'linked'=>$linkOk,'sku'=>$skuOk,'description'=>$descOk,'category'=>$catOk,'brand'=>$brandOk,
+                'ready'=>$priceOk&&$imageOk&&$linkOk];
+            $sample = ['title'=>mb_substr(trim((string)($p['title'] ?? $productKey)),0,100),'profile'=>$pn,
+                'price'=>extractPriceNum($p['price'] ?? 0),'images'=>count($images),'link'=>$linkOk ? $linkRaw : ''];
+            foreach ($flags as $metric => $yes) if ($yes) { $totals[$metric]++; $pm[$metric]++; if (count($samples[$metric]) < 8) $samples[$metric][] = $sample; }
+        }
+        $byProfile[] = ['key'=>(string)$pk,'name'=>$pn,'updated_at'=>(int)($profile['updatedAt'] ?? 0),'counts'=>$pm];
+    }
+    usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
+    echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE); exit;
 }
 
 if (!empty($_GET['load_profile'])) {
@@ -43289,6 +43330,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '376', '>='));
     $add('10.376', 'ورودی 10.376 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "376'") !== false);
+    $add('10.377', 'داشبورد انتهای شروع حداقل ده شاخص تفصیلی کل محصولات دارد',
+         strpos($selfSrc, 'id="startProductOverviewGrid"') !== false
+      && substr_count($selfSrc, "['total','📦'") === 1
+      && strpos($selfSrc, "['ready','🚀'") !== false
+      && strpos($selfSrc, 'class="spo-card"') !== false);
+    $add('10.377', 'آمار کل محصولات از endpoint سبک و همهٔ پروفایل‌های ذخیره‌شده محاسبه می‌شود',
+         strpos($selfSrc, "isset(\$_GET['start_product_stats'])") !== false
+      && strpos($selfSrc, 'foreach (profileProductsMap($profile) as $productKey => $p)') !== false
+      && strpos($selfSrc, "'by_profile'=>\$byProfile") !== false);
+    $add('10.377', 'کارت‌ها جزئیات تفکیکی پروفایل و نمونهٔ محصول را در مودال باز می‌کنند',
+         strpos($selfSrc, 'function openStartProductOverviewDetail(metric)') !== false
+      && strpos($selfSrc, 'spo-profile-row') !== false
+      && strpos($selfSrc, 'spo-samples') !== false
+      && version_compare(APP_VERSION, '10.' . '377', '>='));
+    $add('10.377', 'ورودی 10.377 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "377'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -68666,6 +68723,27 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <div class="stat"><b id="numD">۰</b><span>جزئیات</span></div>
             <div class="stat"><b id="numSpeed">۰</b><span>محصول/دقیقه</span></div>
         </div>
+
+        <section class="start-product-overview" id="startProductOverview" aria-labelledby="startProductOverviewTitle">
+            <div class="spo-head">
+                <div><h3 id="startProductOverviewTitle">📊 نمای تفصیلی کل محصولات</h3><p>جمع همهٔ پروفایل‌های ذخیره‌شده؛ برای جزئیات هر شاخص روی کارت بزنید.</p></div>
+                <button class="btn btn-gray" onclick="loadStartProductOverview(true)" title="محاسبهٔ دوباره">🔄</button>
+            </div>
+            <div class="spo-meta" id="startProductOverviewMeta">در حال محاسبهٔ آمار محصولات…</div>
+            <div class="spo-grid" id="startProductOverviewGrid"><div class="spo-skeleton"></div><div class="spo-skeleton"></div><div class="spo-skeleton"></div></div>
+        </section>
+        <div class="spo-modal" id="startProductOverviewModal" onclick="if(event.target===this)closeStartProductOverviewDetail()">
+            <section class="spo-sheet" role="dialog" aria-modal="true" aria-labelledby="spoDetailTitle">
+                <div class="spo-sheet-head"><div><b id="spoDetailTitle">جزئیات شاخص</b><small id="spoDetailSub"></small></div><button class="btn btn-gray" onclick="closeStartProductOverviewDetail()">✕</button></div>
+                <div id="spoDetailBody"></div>
+            </section>
+        </div>
+        <style>
+          .start-product-overview{margin-top:14px;padding-top:14px;border-top:1px solid #334155}.spo-head{display:flex;align-items:center;gap:10px;margin-bottom:9px}.spo-head>div{flex:1}.spo-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spo-head p,.spo-meta{font-size:9.5px;color:#64748b;margin:0;line-height:1.7}.spo-meta{margin-bottom:8px;color:#94a3b8}.spo-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.spo-card{position:relative;min-height:102px;padding:11px 10px;border:1px solid #334155;border-radius:13px;background:linear-gradient(150deg,#111827,#0b1220);text-align:right;overflow:hidden;cursor:pointer;color:#e2e8f0;font-family:inherit;transition:.18s}.spo-card:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--spo-color,#38bdf8)}.spo-card:hover,.spo-card:focus-visible{transform:translateY(-2px);border-color:var(--spo-color,#38bdf8);box-shadow:0 9px 24px #02061766;outline:none}.spo-icon{font-size:18px}.spo-value{display:block;font-size:22px;font-weight:900;color:#fff;margin:5px 0 2px;direction:ltr;text-align:right}.spo-label{display:block;font-size:10px;font-weight:800;color:#cbd5e1}.spo-foot{display:flex;justify-content:space-between;gap:5px;margin-top:7px;font-size:8.5px;color:#64748b}.spo-pct{color:var(--spo-color,#38bdf8)}.spo-skeleton{height:102px;border-radius:13px;background:linear-gradient(100deg,#111827 20%,#1e293b 40%,#111827 60%);background-size:200% 100%;animation:spoShimmer 1.2s infinite}@keyframes spoShimmer{to{background-position:-200% 0}}.spo-modal{position:fixed;inset:0;z-index:10120;background:#020617dc;display:none;align-items:center;justify-content:center;padding:12px}.spo-modal.open{display:flex}.spo-sheet{width:min(760px,100%);max-height:88vh;overflow:auto;background:#0f172a;border:1px solid #475569;border-radius:17px;padding:14px;box-shadow:0 28px 90px #000c}.spo-sheet-head{position:sticky;top:-14px;z-index:2;display:flex;align-items:center;gap:8px;background:#0f172af5;padding:10px 0}.spo-sheet-head>div{flex:1}.spo-sheet-head b{display:block;color:#f8fafc}.spo-sheet-head small{display:block;color:#64748b;margin-top:3px}.spo-profile-row{display:grid;grid-template-columns:minmax(0,1fr) auto 90px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #1e293b;font-size:10px;color:#cbd5e1}.spo-profile-bar{height:5px;border-radius:9px;background:#1e293b;overflow:hidden}.spo-profile-bar i{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#22d3ee)}.spo-samples{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:12px}.spo-sample{padding:9px;border:1px solid #273449;border-radius:10px;background:#111827;font-size:9.5px;color:#94a3b8;line-height:1.7}.spo-sample b{display:block;color:#e2e8f0}.spo-empty{padding:24px;text-align:center;color:#64748b}.spo-error{padding:12px;border:1px solid #7f1d1d;background:#3f1218;color:#fecaca;border-radius:10px;font-size:10px}
+          @media(max-width:760px){.spo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.spo-card{min-height:96px}.spo-value{font-size:20px}.spo-modal{align-items:flex-end;padding:0}.spo-sheet{width:100%;max-height:90vh;border-radius:18px 18px 0 0;padding:13px}.spo-sheet-head{top:-13px}.spo-samples{grid-template-columns:1fr}.spo-profile-row{grid-template-columns:minmax(0,1fr) auto 70px}}
+          @media(max-width:390px){.spo-grid{gap:6px}.spo-card{padding:9px 8px}.spo-label{font-size:9px}}
+          @media(prefers-reduced-motion:reduce){.spo-card{transition:none}.spo-skeleton{animation:none}}
+        </style>
     </div>
 </div>
 
@@ -69852,6 +69930,54 @@ function showToast(msg, isError=false) {
     t.className = 'toast show' + (isError ? ' error' : '');
     setTimeout(() => t.className = 'toast' + (isError ? ' error' : ''), 2500);
 }
+
+const START_PRODUCT_METRICS = [
+  ['total','📦','کل محصولات','#38bdf8','مجموع ردیف‌های محصول در همهٔ پروفایل‌ها'],
+  ['priced','💰','دارای قیمت','#22c55e','محصولاتی که قیمت عددی معتبر دارند'],
+  ['no_price','⚠️','بدون قیمت','#f97316','محصولاتی که برای ارسال نیازمند قیمت هستند'],
+  ['in_stock','✅','موجود صریح','#10b981','محصولات دارای موجودی مثبت یا وضعیت instock'],
+  ['out_stock','⛔','ناموجود صریح','#ef4444','محصولات با موجودی صفر یا وضعیت outofstock'],
+  ['stock_unknown','❔','موجودی نامشخص','#eab308','محصولاتی که فیلد موجودی صریح ندارند'],
+  ['with_image','🖼️','دارای تصویر','#8b5cf6','محصولات دارای حداقل یک تصویر'],
+  ['no_image','🌫️','بدون تصویر','#f43f5e','محصولاتی که تصویر قابل استفاده ندارند'],
+  ['gallery','🎞️','دارای گالری','#a855f7','محصولات دارای بیش از یک تصویر'],
+  ['variations','🎨','دارای تنوع','#ec4899','محصولات دارای رنگ، سایز یا گزینه‌های تنوع'],
+  ['linked','🔗','دارای لینک','#06b6d4','محصولات دارای لینک صفحهٔ جزئیات'],
+  ['sku','🏷️','دارای SKU','#6366f1','محصولات دارای شناسه یا SKU'],
+  ['description','📝','دارای توضیحات','#14b8a6','محصولات دارای توضیح کوتاه یا بلند'],
+  ['category','📂','دارای دسته','#84cc16','محصولات دارای دسته‌بندی استخراج‌شده'],
+  ['brand','🏭','دارای برند','#f59e0b','محصولات دارای نام برند'],
+  ['ready','🚀','آمادهٔ پایهٔ ارسال','#4ade80','محصولاتی که هم‌زمان قیمت، تصویر و لینک دارند']
+];
+let startProductOverviewData=null,startProductOverviewBusy=false;
+function spoNum(n){try{return Number(n||0).toLocaleString('fa-IR')}catch(e){return toFa(n||0)}}
+function loadStartProductOverview(force){
+  const grid=$('startProductOverviewGrid'),meta=$('startProductOverviewMeta');if(!grid||startProductOverviewBusy)return;
+  startProductOverviewBusy=true;if(force)meta.textContent='در حال محاسبهٔ دوباره…';
+  fetch('?start_product_stats=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ نامعتبر');startProductOverviewData=d;
+    const total=parseInt((d.totals||{}).total||0),prof=parseInt(d.profiles||0);
+    meta.textContent=spoNum(total)+' محصول در '+spoNum(prof)+' پروفایل · آخرین محاسبه: '+new Date((d.generated_at||0)*1000).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});
+    grid.innerHTML=START_PRODUCT_METRICS.map(m=>{const n=parseInt((d.totals||{})[m[0]]||0),pct=total?Math.round(n*100/total):0;
+      return '<button class="spo-card" style="--spo-color:'+m[3]+'" onclick="openStartProductOverviewDetail(\''+m[0]+'\')" title="'+esc(m[4])+'"><span class="spo-icon">'+m[1]+'</span><b class="spo-value">'+spoNum(n)+'</b><span class="spo-label">'+esc(m[2])+'</span><span class="spo-foot"><span>'+esc(m[4])+'</span><b class="spo-pct">'+spoNum(pct)+'٪</b></span></button>';
+    }).join('');
+  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';}).finally(()=>{startProductOverviewBusy=false;});
+}
+function openStartProductOverviewDetail(metric){
+  const d=startProductOverviewData;if(!d)return;const def=START_PRODUCT_METRICS.find(x=>x[0]===metric);if(!def)return;
+  const total=parseInt((d.totals||{}).total||0),value=parseInt((d.totals||{})[metric]||0),rows=(d.by_profile||[]).filter(x=>parseInt(((x.counts||{})[metric])||0)>0);
+  $('spoDetailTitle').textContent=def[1]+' '+def[2];$('spoDetailSub').textContent=spoNum(value)+' از '+spoNum(total)+' محصول · '+def[4];
+  const max=Math.max(1,...rows.map(x=>parseInt((x.counts||{})[metric]||0)));
+  let h=rows.length?'<div>': '<div class="spo-empty">موردی برای این شاخص وجود ندارد.</div>';
+  rows.forEach(x=>{const n=parseInt((x.counts||{})[metric]||0),all=parseInt((x.counts||{}).total||0),pct=all?Math.round(n*100/all):0;
+    h+='<div class="spo-profile-row"><span title="'+esc(x.name||x.key||'')+'">'+esc(x.name||x.key||'—')+'</span><b>'+spoNum(n)+' <small style="color:#64748b">('+spoNum(pct)+'٪)</small></b><span class="spo-profile-bar"><i style="width:'+Math.round(n*100/max)+'%"></i></span></div>';
+  });if(rows.length)h+='</div>';
+  const samples=((d.samples||{})[metric]||[]);if(samples.length){h+='<h4 style="font-size:11px;color:#cbd5e1;margin:15px 0 7px">نمونه محصولات</h4><div class="spo-samples">';samples.forEach(s=>{h+='<div class="spo-sample"><b>'+esc(s.title||'بدون عنوان')+'</b><span>'+esc(s.profile||'')+'</span><br><span>قیمت: '+(s.price?spoNum(s.price):'—')+' · تصاویر: '+spoNum(s.images||0)+'</span>'+(s.link?'<br><a href="'+esc(s.link)+'" target="_blank" rel="noopener" style="color:#7dd3fc">باز کردن محصول ↗</a>':'')+'</div>';});h+='</div>';}
+  $('spoDetailBody').innerHTML=h;$('startProductOverviewModal').classList.add('open');document.body.style.overflow='hidden';
+}
+function closeStartProductOverviewDetail(){const m=$('startProductOverviewModal');if(m)m.classList.remove('open');document.body.style.overflow='';}
+setTimeout(()=>loadStartProductOverview(false),700);
+setInterval(()=>{const pane=$('pane-start');if(document.visibilityState==='visible'&&pane&&pane.classList.contains('active'))loadStartProductOverview(false)},60000);
 
 function markDirty() {
     isDirty = true;
@@ -75294,6 +75420,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.377', t:'📊 داشبورد تفصیلی کل محصولات در صفحهٔ شروع', items:[
+    'در انتهای صفحهٔ شروع ۱۶ کارت شمارندهٔ واکنش‌گرا برای قیمت، موجودی، تصویر، گالری، تنوع، لینک، SKU، توضیحات، دسته، برند و آمادگی ارسال اضافه شد.',
+    'آمار از همهٔ پروفایل‌های ذخیره‌شده محاسبه می‌شود و تعداد کل، درصد پوشش و زمان آخرین محاسبه را نشان می‌دهد.',
+    'هر کارت قابل کلیک است و مودال تفکیک پروفایل‌ها، درصد همان پروفایل و نمونهٔ محصولات مرتبط را نمایش می‌دهد.'
+  ]},
   {v:'10.376', t:'▶️ ادامهٔ دقیق و خودکار استخراج صفحه‌ای', items:[
     'Continue اکنون checkpoint فهرست را با همان phase=list ادامه می‌دهد و دیگر ناخواسته وارد استخراج تک‌محصولی جزئیات نمی‌شود.',
     'مرحلهٔ توقف‌کرده (فهرست یا جزئیات) دقیق ذخیره می‌شود؛ worker فعال job را تحویل می‌گیرد و هاست بدون exec همان request مرورگر را تا checkpoint بعدی متصل نگه می‌دارد.',
