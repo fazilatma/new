@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.372';
+const APP_VERSION = '10.373';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -31274,8 +31274,14 @@ if(isset($_GET['internal_cron_feedback'])){
     $cn=loadConnections();$enabled=!array_key_exists('internal_cron_enabled',$cn)||!empty($cn['internal_cron_enabled']);
     $sec=max(5,min(86400,(int)($cn['internal_cron_sec']??60)));$now=time();
     if(!$enabled){echo json_encode(['ok'=>true,'enabled'=>false,'version'=>APP_VERSION,'reference'=>'https://scraper4.42web.io/scraper4.php'],JSON_UNESCAPED_SLASHES);exit;}
-    $workerBefore=s4WorkerIsActive();$workerAction=[];
-    if(!$workerBefore){$workerAction=s4SpawnPersistentWorker();usleep(250000);}
+    $workerBefore=s4WorkerIsActive();$workerAction=[];$workerState=s4WorkerStateLoad();
+    if($workerBefore&&(string)($workerState['version']??'')!==APP_VERSION){
+        $oldPid=(int)($workerState['pid']??0);$signalled=false;
+        if($oldPid>1&&function_exists('posix_kill'))$signalled=@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15);
+        $workerAction['version_restart']=['pid'=>$oldPid,'from'=>(string)($workerState['version']??''),'to'=>APP_VERSION,'signalled'=>$signalled];
+        if($signalled){for($wi=0;$wi<10;$wi++){usleep(200000);if(!s4WorkerIsActive(1))break;}$workerBefore=s4WorkerIsActive(1);}
+    }
+    if(!$workerBefore){$workerAction['spawn']=s4SpawnPersistentWorker();usleep(350000);}
     $workerActive=s4WorkerIsActive();$stateFile=__DIR__.'/.internal_cron_feedback.json';
     $lock=@fopen(__DIR__.'/.internal_cron_feedback.lock','c');
     if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){
@@ -43239,6 +43245,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.348', 'ورودی 10.348 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "348'") !== false
       && version_compare(APP_VERSION, '10.' . '348', '>='));
+    $add('10.373', 'نبض سبک کران worker قدیمی پس از deploy را بدون ops_feedback تعویض می‌کند',
+         strpos($selfSrc, "\$workerAction['version_restart']") !== false
+      && strpos($selfSrc, "(string)(\$workerState['version']??'')!==APP_VERSION") !== false
+      && strpos($selfSrc, "\$workerAction['spawn']=s4SpawnPersistentWorker()") !== false);
+    $add('10.373', 'ورودی 10.373 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "373'") !== false
+      && version_compare(APP_VERSION, '10.' . '373', '>='));
     $add('10.372', 'ثابت handoff پیش از endpointهای زودهنگام cron تعریف شده است',
          strpos($selfSrc, "const QUEUE_RESUME_HANDOFF_SEC = 120;") < strpos($selfSrc, "if (isset(\$_GET['cron_run'])")
       && version_compare(APP_VERSION, '10.' . '372', '>='));
@@ -75217,6 +75230,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.373', t:'♻️ تعویض مستقیم worker قدیمی از نبض داخلی', items:[
+    'نبض internal_cron_feedback نسخهٔ daemon زنده را با APP_VERSION مقایسه می‌کند و worker قدیمی را پس از deploy مستقیماً متوقف و دوباره راه‌اندازی می‌کند.',
+    'این مسیر سبک به ops_feedback وابسته نیست؛ بنابراین HTTP 500 همان endpoint دیگر مانع فعال‌شدن کد تازهٔ مغایرت‌گیری نمی‌شود.'
+  ]},
   {v:'10.372', t:'🚑 اجرای واقعی مغایرت‌گیری روی هر دو هاست', items:[
     'ثابت QUEUE_RESUME_HANDOFF_SEC پیش از مسیر زودهنگام cron تعریف شد؛ watchdog و پمپ ارسال دیگر با Undefined constant متوقف نمی‌شوند.',
     'اگر حتی یکی از توابع curl_multi روی 42web غیرفعال باشد، ساخت جدول خودکار به واکشی سری می‌رود و checkpoint قبلی را ادامه می‌دهد.',
