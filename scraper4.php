@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.381';
+const APP_VERSION = '10.382';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1954,17 +1954,28 @@ function s4WorkerRunJob(array $job): array {
 }
 
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
-    $n=0;$extractCheckpoint=[];try{$extractCheckpoint=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
-    s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint){$now=time();foreach($q['entries'] as &$e){
+    $n=0;$extractCheckpoint=[];$extractProfiles=[];
+    try{$extractCheckpoint=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
+    try{$extractProfiles=loadProfiles();}catch(Throwable $_e){}
+    s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint,$extractProfiles){$now=time();foreach($q['entries'] as &$e){
         if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
         $isCheckpointBuild=$type==='matrix_build';
         $extractProfile=trim((string)($e['payload']['profile_key']??''));
-        $isCheckpointExtract=$type==='backend_extract'&&$extractProfile!==''
+        $extractPr=is_array($extractProfiles[$extractProfile]??null)?$extractProfiles[$extractProfile]:[];
+        $extractStage=(string)($extractPr['_extract_stage']??'');
+        $extractProfileCheckpoint=$extractProfile!==''&&(
+            in_array($extractStage,['list','list_done','detail','stopped'],true)
+            ||!empty($extractPr['_extract_list_incomplete'])||!empty($extractPr['_extract_resume_needed'])
+        );
+        $extractProgressCheckpoint=$extractProfile!==''
             &&$extractProfile===(string)($extractCheckpoint['profile_key']??'')
             &&empty($extractCheckpoint['done'])
-            &&(!empty($extractCheckpoint['queue_id'])||!empty($extractCheckpoint['stopped'])||!empty($extractCheckpoint['running']));
+            &&(!empty($extractCheckpoint['queue_id'])||!empty($extractCheckpoint['stopped'])||!empty($extractCheckpoint['running'])||!empty($extractCheckpoint['resume_needed']));
+        /* The profile checkpoint is authoritative even if a hard kill happened
+           before the shared progress file acquired profile_key. */
+        $isCheckpointExtract=$type==='backend_extract'&&($extractProfileCheckpoint||$extractProgressCheckpoint);
         /* A checkpoint-backed matrix build may span many hosting process lives.
            The generic four-attempt cap is appropriate for non-resumable jobs, but
            must never permanently fail a durable matrix continuation. */
@@ -1972,7 +1983,7 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
         $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
         /* A fresh build becomes a resume after its first claim. Keeping resume=false
            on orphan recovery deleted its cursor and restarted Woo at page one. */
-        if($recover&&($isCheckpointFix||$isCheckpointBuild||$isCheckpointExtract)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointExtract)$e['payload']['phase']=(string)($extractCheckpoint['_extract_resume_phase']??$extractCheckpoint['_extract_stage']??'list');$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
+        if($recover&&($isCheckpointFix||$isCheckpointBuild||$isCheckpointExtract)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointExtract){$_saved=(string)($extractPr['_extract_resume_phase']??'');if(!in_array($_saved,['list','detail'],true))$_saved=in_array($extractStage,['detail','list_done'],true)?'detail':'list';$e['payload']['phase']=$_saved;}$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
     }unset($e);return['ok'=>true];});return$n;
 }
 
@@ -18684,6 +18695,40 @@ echo json_encode($p,JSON_UNESCAPED_UNICODE);exit;
  * فقط محصولات روی آن نوشته می‌شوند، تا تنظیماتی که کاربر حین اجرا عوض
  * کرده — و پروفایل‌های دیگر — به عقب برنگردند.
  */
+function extractInstallDetailFatalGuard(): void {
+    if(!empty($GLOBALS['_extractDetailFatalGuardInstalled']))return;
+    $GLOBALS['_extractDetailFatalGuardInstalled']=true;
+    register_shutdown_function(function(){
+        $ctx=is_array($GLOBALS['_extractDetailFatalCtx']??null)?$GLOBALS['_extractDetailFatalCtx']:[];
+        if(empty($ctx['active']))return;
+        $e=error_get_last();
+        if(!$e||!in_array((int)($e['type']??0),[E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR],true))return;
+        $pk=(string)($ctx['profile_key']??'');$qid=(string)($ctx['queue_id']??'');$now=time();
+        try{
+            $ps=loadProfiles();
+            if($pk!==''&&is_array($ps[$pk]??null)){
+                $ps[$pk]['_extract_stage']='detail';$ps[$pk]['_extract_stage_at']=$now;
+                $ps[$pk]['_extract_resume_phase']='detail';$ps[$pk]['_extract_resume_needed']=1;
+                if(!empty($ctx['detail_cycle']))$ps[$pk]['_extract_detail_cycle']=(string)$ctx['detail_cycle'];
+                saveProfiles($ps);
+            }
+            $q=extractReadQueue();
+            foreach($q['entries'] as &$qe){if((string)($qe['id']??'')!==$qid)continue;
+                $qe['status']='paused';$qe['resume_needed']=1;$qe['resume_phase']='detail';
+                $qe['updated_at']=$now;$qe['error']='detail_fatal: '.mb_substr((string)($e['message']??''),0,180);unset($qe['done_at']);break;
+            }unset($qe);extractWriteQueue($q);
+            $pg=readProgress(EXTRACT_PROGRESS_FILE);
+            if($qid===''||(string)($pg['queue_id']??'')===$qid){
+                $pg['running']=false;$pg['done']=false;$pg['paused']=true;$pg['resume_needed']=true;
+                $pg['phase']='detail';$pg['resume_phase']='detail';$pg['extract_stage']='detail';
+                $pg['last_progress_ts']=$now;$pg['recent_log']=array_slice(array_merge((array)($pg['recent_log']??[]),
+                    ['♻️ پردازهٔ جزئیات قطع شد؛ کران از آخرین checkpoint ادامه می‌دهد']),-12);
+                writeProgress(EXTRACT_PROGRESS_FILE,$pg);
+            }
+        }catch(Throwable $_fatalGuard){}
+    });
+}
+
 function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = []): void {
     if ($pkFinal === '') return;
     $productsData = [];
@@ -18813,7 +18858,17 @@ function extractResumeSig(array $profile): string {
     $pageTr = (int)($profile['_extract_list_page_try'] ?? 0);
     $det    = (int)($profile['_extract_detail_done'] ?? 0);
     $n      = count((array)($profile['products'] ?? []));
-    return $stage . '|' . $pageOk . '|' . $pageTr . '|' . $det . '|' . $n;
+    /* Segment-local detail_done commonly repeats (for example 27 products per
+       cron pulse). Count durable cycle markers as the real cursor, otherwise a
+       healthy detail crawl looks stuck and exponential backoff throttles it. */
+    $cycle=(string)($profile['_extract_detail_cycle']??'');$cycleDone=0;$cycleAt=0;
+    if($cycle!=='')foreach((array)($profile['products']??[])as $_ep){
+        $_p=(is_array($_ep)&&isset($_ep[0],$_ep[1])&&is_array($_ep[1]))?$_ep[1]:$_ep;
+        if(!is_array($_p)||(string)($_p['_detail_cycle']??'')!==$cycle)continue;
+        $cycleDone++;$cycleAt=max($cycleAt,(int)($_p['_detail_checked_at']??0));
+    }
+    return $stage . '|' . $pageOk . '|' . $pageTr . '|' . $det . '|' . $n
+        . '|' . $cycle . '|' . $cycleDone . '|' . $cycleAt;
 }
 
 
@@ -19708,6 +19763,9 @@ elseif($detailTotal===0&&$_alreadyDone>0)                $_skipWhy='already_done
 elseif($detailTotal===0)                                 $_skipWhy='nothing_selected';
 
 if($phase!=='list'&&$detailTotal>0&&(!empty($detailSelectors)||$galleryCfg['enabled'])){
+extractInstallDetailFatalGuard();
+$GLOBALS['_extractDetailFatalCtx']=['active'=>true,'profile_key'=>$pkFinal,'queue_id'=>$queueId,
+    'detail_cycle'=>$_detailCycle,'started_at'=>time()];
 $_wantFields=[];
 foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantFields[]=$_f; }
 
@@ -19755,7 +19813,10 @@ $_ranOut=false;
 /* محافظ: حداقل چند محصول در هر نوبت باید پردازش شود، وگرنه اگر بودجه
    کوچک و مبدأ کند باشد هر نوبت صفر محصول جلو می‌رویم و کار هرگز تمام
    نمی‌شود. */
-$_minPerRun=3;
+/* External cron providers often close HTTP requests near 30 seconds. One
+   checkpointed product is sufficient progress there; worker/internal-browser
+   drivers keep the larger batch for throughput. */
+$_minPerRun=isset($GLOBALS['_externalCronHttpKeep'])?1:3;
 
 $logs=['🔍 فاز ۲ — باز کردن صفحهٔ محصول‌ها: '.$detailTotal.' محصول'];
 $logs[]='   • فیلدها: '.($_wantFields?implode('، ',$_wantFields):'—')
@@ -19768,7 +19829,7 @@ $logs[]='   • ⏱ سقف زمانی این نوبت: '.$_budget.' ثانیه �
    false می‌شد، زمانِ بی‌حرکتی از started_at حساب می‌شد و ردیفِ کاملاً
    زنده «پردازش نیمه‌کاره رها شد» می‌خورد. دقیقاً همان چیزی که کاربر
    می‌دید: صف «خطا» ولی کار در جریان. */
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal]);
 
 foreach($needDetail as $key=>$p){
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
@@ -19953,7 +20014,7 @@ foreach($detailLog as $_dl)$logs[]=$_dl;
 // قیمت‌ها در این مرحله ممکن است تکمیل شوند، پس مقایسه دوباره محاسبه می‌شود
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 extractLockTouch($queueId);   // v10.32 (۴۵ب): ضربان، تا قفلِ اجرای سالم کهنه نشود
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
 }
 /* v8.94: هر ۵ محصول، کارِ انجام‌شده روی دیسک بنشیند.
 
@@ -20007,7 +20068,7 @@ $_sumLines[]='   • یعنی IP هاست بلاک یا محدود شده — س
 $_sumLines[]='   • تنظیمات ← «اتصال به سایت مبدأ»: فاصلهٔ بین درخواست‌ها را زیاد کنید یا پروکسی بگذارید';
 }
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
 }
 
 $newCount=0;$priceChanged=0;$unchanged=0;$removedCount=0;
@@ -20112,6 +20173,7 @@ $profileOnDisk['_extract_detail_total']=$detailTotal;
 $profilesNow[$pkFinal]=$profileOnDisk;
 saveProfiles($profilesNow);
 $profiles=$profilesNow;$profile=$profileOnDisk;
+if(isset($GLOBALS['_extractDetailFatalCtx']))$GLOBALS['_extractDetailFatalCtx']['active']=false;
 
 /* v10.83: اگر تیک «تولید خودکار توضیحات» روشن است، فقط روی محصولاتِ همین
    پروفایل که توضیح/دسته ندارند AI بزن — قبل از ارسال به باسلام. */
@@ -21379,7 +21441,10 @@ function cronWatchdogs(array $cn): array {
             extractWriteQueue($exQ);
             // فایل پیشرفت هم باز شود وگرنه رابط کاربری «در حال اجرا» نشان می‌دهد
             if (!empty($exProg['running'])) {
-                $exProg['running'] = false; $exProg['done'] = true; $exProg['stalled'] = true;
+                $exProg['running'] = false; $exProg['done'] = false; $exProg['paused'] = true;
+                $exProg['resume_needed'] = true; $exProg['stalled'] = true;
+                $exProg['recent_log'] = array_slice(array_merge((array)($exProg['recent_log']??[]),
+                    ['♻️ کران اجرای بی‌حرکت را تحویل گرفت؛ ادامه از checkpoint در نوبت بعد']),-12);
                 writeProgress(EXTRACT_PROGRESS_FILE, $exProg);
             }
             $results['extract_watchdog'] = $exStuck;
@@ -43503,6 +43568,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'resume_needed'=>!\$_finalComplete") !== false);
     $add('10.381', 'ورودی 10.381 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "381'") !== false);
+    $add('10.382', 'امضای پیشرفت کران cursor واقعی چرخهٔ جزئیات را می‌شمارد',
+         strpos($selfSrc, "\$cycleDone++;") !== false
+      && strpos($selfSrc, "['_detail_" . "checked_at']??0") !== false
+      && strpos($selfSrc, ". '|' . \$cycle . '|' . \$cycleDone") !== false);
+    $add('10.382', 'worker قطع‌شده checkpoint پروفایل را حتی بدون progress مشترک بازیابی می‌کند',
+         strpos($selfSrc, "\$extractProfileCheckpoint=\$extractProfile!==''") !== false
+      && strpos($selfSrc, "\$isCheckpointExtract=\$type==='backend_extract'&&(\$extractProfileCheckpoint||\$extractProgressCheckpoint)") !== false
+      && strpos($selfSrc, "in_array(\$extractStage,['detail','list_done'],true)?'detail':'list'") !== false);
+    $add('10.382', 'همهٔ heartbeatهای مرحلهٔ دو هویت پروفایل و فاز resume را دارند',
+         substr_count($selfSrc, "'profile_key'=>\$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail'") >= 3);
+    $add('10.382', 'خطای fatal مرحلهٔ دو صف و progress را resumable نگه می‌دارد',
+         strpos($selfSrc, 'function extractInstallDetailFatal' . 'Guard(): void') !== false
+      && strpos($selfSrc, "['status']='paused';\$qe['resume_needed']=1") !== false
+      && strpos($selfSrc, "\$pg['running']=false;\$pg['done']=false;\$pg['paused']=true") !== false);
+    $add('10.382', 'watchdog و هر دو کران داخلی و بیرونی تکمیل کاذب نمی‌سازند',
+         strpos($selfSrc, "\$exProg['running'] = false; \$exProg['done'] = false; \$exProg['paused'] = true;") !== false
+      && strpos($selfSrc, "'internal_browser_cron':'external_http_cron'") !== false
+      && strpos($selfSrc, "\$_cronBrowserKeep?75:25") !== false
+      && strpos($selfSrc, "\$_minPerRun=isset(\$GLOBALS['_externalCronHttpKeep'])?1:3;") !== false);
+    $add('10.382', 'ورودی 10.382 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "382'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75585,6 +75671,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.382', t:'🛡️ بازیابی کرانی مقاوم برای مرحلهٔ دوم جزئیات', items:[
+    'امضای پیشرفت کران اکنون تعداد markerهای واقعی چرخهٔ جزئیات را می‌سنجد؛ segmentهای هم‌اندازه دیگر اشتباهاً گیرکرده تشخیص داده و backoff نمی‌شوند.',
+    'worker قطع‌شده از checkpoint خود پروفایل بازیابی می‌شود، حتی اگر پردازه پیش از نوشتن profile_key در فایل progress کشته شده باشد؛ فاز detail نیز به list برنمی‌گردد.',
+    'تمام heartbeatهای مرحلهٔ دوم هویت پروفایل و resume_phase=detail دارند و watchdog وضعیت را paused/resumable می‌نویسد، نه done.',
+    'نگهبان fatal مرحلهٔ دوم صف، پروفایل و progress را برای ادامهٔ کران داخلی یا خارجی حفظ می‌کند؛ برش کران خارجی پس از حداقل یک محصول checkpoint می‌شود تا timeout سرویس کران هم کار را از بین نبرد.'
+  ]},
   {v:'10.381', t:'🔁 کنترل یکپارچهٔ صفحه و ادامهٔ واقعی جزئیات', items:[
     'تعداد صفحه به یک فیلد عددی نوشتنی با پیشنهادهای داخلی ۱ تا ۱۰۰۰ تبدیل شد؛ سقف ندارد، numpad موبایل را حفظ می‌کند و dropdown جدا حذف شد.',
     'هر دور جزئیات شناسهٔ پایدار دارد؛ محصول حل‌شده checkpoint می‌شود و بعد از timeout یا بازیابی worker دوباره از محصول اول آغاز نمی‌شود.',
