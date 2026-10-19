@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.384';
+const APP_VERSION = '10.385';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1220,8 +1220,9 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
     return !empty($ret['requeued']);
 }
 
-function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = 0): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    if($maxPages<=0){$pr0=loadProfiles();$maxPages=max(1,(int)($pr0[$profileKey]['pages']??10));}
     $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey):'';
     if($plannedQueueId==='')$plannedQueueId='exw_'.substr(md5($profileKey.microtime(true).random_int(1,PHP_INT_MAX)),0,20);
     /* A paused extraction already owns the durable checkpoint. Cron/manual
@@ -1229,7 +1230,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
        different phase-based dedup key. */
     $enq = null;
     if ($resume) {
-        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages) {
             $now=time();$revive=-1;
             foreach ($q['entries'] as $i=>&$e) {
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
@@ -1238,12 +1239,13 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 if(in_array($st,['pending','running'],true)){
                     $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
                     if(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
+                    $e['payload']['max_pages']=$maxPages;
                     $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
                 }
                 if(in_array($st,['paused','failed'],true)&&$revive<0)$revive=$i;
             }unset($e);
             if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
-                $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;
+                $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;$e['payload']['max_pages']=$maxPages;
                 $e['recycles']=(int)($e['recycles']??0)+1;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'revived'=>true,'job_id'=>$id,'status'=>'pending'];}
             return ['ok'=>true,'missing'=>true];
         });
@@ -1255,6 +1257,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
         'resume' => $resume, 'dedup_key' => $dedup, 'extract_queue_id'=>$plannedQueueId,
+        'max_pages'=>$maxPages,
     ], 'استخراج بک‌اند');
     if (!empty($enq['ok'])) {
         /* Create/reclaim the visible extraction row immediately, not only when
@@ -1275,18 +1278,18 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
         $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];
         $foundVisible=false;
         foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
-            $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['resumable']=true;
+            $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['max_pages']=$maxPages;$_xe['total']=$maxPages;$_xe['resumable']=true;
             $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at']);$foundVisible=true;break;
         }unset($_xe);
         if(!$foundVisible)$xq['entries'][]=['id'=>$visibleQueueId,'status'=>'waiting','profile_key'=>$profileKey,
             'profile_name'=>(string)($prNow['name']??$profileKey),'url'=>(string)($prNow['url']??''),
             'started_at'=>time(),'updated_at'=>time(),'products_count'=>count((array)($prNow['products']??[])),
-            'total'=>0,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
+            'total'=>$maxPages,'max_pages'=>$maxPages,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
             'trigger'=>$resume?'auto_resume':'worker','phase'=>$phase,'worker_job_id'=>$jobId,'resumable'=>$resume,'resume_needed'=>$resume?1:0];
         extractWriteQueue($xq);
-        if($jobId!=='')s4WorkerQueueMutate(function(&$wq)use($jobId,$visibleQueueId){foreach($wq['entries']as&$we){
+        if($jobId!=='')s4WorkerQueueMutate(function(&$wq)use($jobId,$visibleQueueId,$maxPages){foreach($wq['entries']as&$we){
             if(!is_array($we)||(string)($we['id']??'')!==$jobId)continue;$we['payload']=is_array($we['payload']??null)?$we['payload']:[];
-            $we['payload']['extract_queue_id']=$visibleQueueId;$we['updated_at']=time();break;
+            $we['payload']['extract_queue_id']=$visibleQueueId;$we['payload']['max_pages']=$maxPages;$we['updated_at']=time();break;
         }unset($we);return['ok'=>true];});
         $enq['queue_id']=$visibleQueueId;
         $logLine = !empty($enq['duplicate'])
@@ -1297,7 +1300,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             writeProgress(EXTRACT_PROGRESS_FILE, [
                 'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
                 'job_id' => (string)($enq['job_id'] ?? ''), 'queue_id'=>$visibleQueueId, 'profile_key' => $profileKey,
-                'worker_waiting'=>true,'phase'=>$phase,'total' => 0, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
+                'worker_waiting'=>true,'phase'=>$phase,'max_pages'=>$maxPages,'total' => $maxPages, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
                 'recent_log' => [$logLine], 'total_log_count' => 1,
                 'extracted' => 0, 'new' => 0, 'price_changed' => 0, 'removed' => 0, 'unchanged' => 0,
             ]);
@@ -1848,7 +1851,7 @@ function s4SpawnPersistentWorker(): array {
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
 }
 
-function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = 0): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
@@ -1865,6 +1868,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         . ' --phase=' . escapeshellarg($phase)
         . ($forceAll ? ' --force-all' : '')
         . ($resume ? ' --resume' : '')
+        . ($maxPages>0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
         . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -1931,6 +1935,7 @@ function s4WorkerRunJob(array $job): array {
         if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
         $forceAll = !empty($payload['force_all']);
         $extractQueueId=trim((string)($payload['extract_queue_id']??''));
+        $maxPagesOverride=max(0,(int)($payload['max_pages']??0));
         $resumeNext = !empty($payload['resume']);
         $segments = 0;
         $transientResumes = 0;
@@ -1952,8 +1957,8 @@ function s4WorkerRunJob(array $job): array {
                 $extractQueueId=$reserved;
             }
             s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
-                'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase]);
-            $res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved);
+                'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase, 'job_max_pages'=>$maxPagesOverride]);
+            $res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride);
             $res['worker_segments'] = $segments;
             $budgetResume = !empty($res['ran_out']);
             $transientResume = !empty($res['resume_needed']) && !$budgetResume;
@@ -12895,7 +12900,7 @@ $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($_saved['ok']) {
 $newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
 $mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
-echo json_encode(['ok' => true, 'key' => $key, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
+echo json_encode(['ok' => true, 'key' => $key, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
@@ -19062,7 +19067,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     return $out;
 }
 
-function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = ''): array {
+function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = 0): array {
 if (!in_array($phase, ['all', 'list', 'detail'], true)) $phase = 'all';
 @set_time_limit(0); @ignore_user_abort(true);
 /* v10.134: فایل‌های مشترکِ پیشرفت/توقف فقط بعد از گرفتنِ lock پاک می‌شوند؛
@@ -19088,7 +19093,8 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'پروفایل
 }
 
 $url=s4NormalizeInputUrl((string)($profile['url']??''));
-$maxPages=max(1,(int)($profile['pages']??10));
+$savedMaxPages=max(1,(int)($profile['pages']??10));
+$maxPages=$maxPagesOverride>0?max(1,$maxPagesOverride):$savedMaxPages;
 $selectors=$profile['selectors']??[];
 $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
 $pagType=$profile['pagType']??'query_page';
@@ -19249,9 +19255,10 @@ $livePrevMap=extractPrevMap($profile);
 $_rsmHint = !empty($profile['_extract_list_incomplete']) || !empty($profile['_extract_resume_req'])
     || in_array((string)$trigger, ['manual_resume','watchdog_resume','auto_resume'], true);
 $__startLine = $_rsmHint ? '⏯ ادامهٔ استخراج بک‌اند…' : '⏳ شروع استخراج بک‌اند...';
-$__startLogs = [$__startLine, '⚙ موتور استخراج: ' . extractionEngineLabel($extractEngine)];
+$__startLogs = [$__startLine, '⚙ موتور استخراج: ' . extractionEngineLabel($extractEngine),
+    '📄 هدف این اجرا: '.$maxPages.' صفحه'.($maxPagesOverride>0?' (snapshot صف)':' (پروفایل ذخیره‌شده)')];
 unset($_rsmHint);
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>$__startLogs,'total_log_count'=>count($__startLogs),'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$maxPages,'total'=>($phase==='detail'?0:$maxPages),'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>$__startLogs,'total_log_count'=>count($__startLogs),'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
 unset($__startLine, $__startLogs);
 
 // v8.27: پاسخ زودهنگام فقط برای درخواست مرورگر معنا دارد تا کاربر منتظر
@@ -20428,16 +20435,21 @@ if (!in_array($phaseIn, ['all','list','detail'], true)) $phaseIn = 'list';
 /* v9.11: دامنهٔ «همهٔ محصولات» از دکمهٔ اجرای فوریِ استخراج دوره‌ای */
 $forceAllIn = !empty($_GET['force_all']) || !empty($_POST['force_all']);
 $resumeRequested = !empty($_GET['resume']) || !empty($_POST['resume']);
+/* Freeze the page target at click/enqueue time. A large profile save may take
+   longer than an arbitrary browser delay, and a queued worker may start much
+   later; neither is allowed to fall back to an older 100-page value. */
+$requestedMaxPages=max(0,(int)($_GET['pages']??$_POST['pages']??0));
+if($requestedMaxPages<=0){$_pp=loadProfiles();$requestedMaxPages=max(1,(int)($_pp[$profileKey]['pages']??10));}
 
 /* v10.183: اگر worker دائمی سرور زنده است، درخواست وب فقط job می‌سازد.
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
    قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
 if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
-    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested);
+    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
         'queued'=>!empty($enq['queued']),'worker'=>true,'profile_key'=>$profileKey,
-        'phase'=>$phaseIn,'note'=>'operation queued for persistent worker'], $enq), JSON_UNESCAPED_UNICODE);
+        'phase'=>$phaseIn,'max_pages'=>$requestedMaxPages,'note'=>'operation queued for persistent worker'], $enq), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -20445,7 +20457,7 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
    همان request اجرا نمی‌کند؛ یک CLI child جدا بالا می‌آید تا timeout وب‌سرور
    بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
 if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
-    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested);
+    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages);
     if (!empty($spawn['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'started'=>true,'worker_child'=>true,'profile_key'=>$profileKey,
@@ -20469,7 +20481,7 @@ if ($resumeRequested) {
     $phaseIn = (string)$resumePrep['phase'];
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
-$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId);
+$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages);
 // v8.30: همان اعلان‌های تغییر مبدأ که کران‌جاب می‌فرستد
 if(!empty($res['ok'])){
 $cnNow=loadConnections();
@@ -22768,6 +22780,7 @@ if (isCliRun()) {
             if (preg_match('~^--phase=(all|list|detail)$~', $_a, $_m)) $_GET['phase'] = $_m[1];
             elseif ($_a === '--force-all' || $_a === 'force_all') $_GET['force_all'] = '1';
             elseif ($_a === '--resume' || $_a === 'resume') $_GET['resume'] = '1';
+            elseif (preg_match('~^--pages=(\d+)$~', $_a, $_pm)) $_GET['pages'] = $_pm[1];
         }
         $_GET['direct'] = '1';
     } elseif ($_cliCmd === 'whoami') {
@@ -22834,7 +22847,8 @@ if (isset($_GET['backend_extract_cli'])) {
         $phaseCli = (string)($prepCli['phase'] ?? $phaseCli);
         $reservedCli = (string)($prepCli['queue_id'] ?? '');
     }
-    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli);
+    $pagesCli=max(0,(int)($_GET['pages']??0));
+    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli);
     echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
     exit(!empty($resCli['ok']) ? 0 : 1);
 }
@@ -43757,6 +43771,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "&&!\$_pQueuedPending){") !== false);
     $add('10.384', 'ورودی 10.384 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "384'") !== false);
+    $add('10.385', 'شروع استخراج منتظر پاسخ واقعی ذخیره می‌ماند و به delay حدسی وابسته نیست',
+         strpos($selfSrc, "return fetch('', {method:'POST', body:fd})") !== false
+      && strpos($selfSrc, "saveProfileSilent().then(d=>{") !== false
+      && strpos($selfSrc, "تنظیمات ذخیره نشد؛ استخراج با مقدار قدیمی شروع نشد") !== false);
+    $add('10.385', 'تعداد صفحهٔ تأییدشده همراه درخواست و job worker snapshot می‌شود',
+         strpos($selfSrc, "'&pages='+encodeURIComponent(pageTarget)") !== false
+      && strpos($selfSrc, "'max_pages'=>\$maxPages") !== false
+      && strpos($selfSrc, "\$we['payload']['max_pages']=\$maxPages") !== false);
+    $add('10.385', 'runner مقدار snapshot را بدون سقف ۱۰۰ مصرف می‌کند',
+         strpos($selfSrc, "\$maxPages=\$maxPagesOverride>0?max(1,\$maxPagesOverride):\$savedMaxPages;") !== false
+      && strpos($selfSrc, "runBackendExtract(\$pk, 'worker', false, \$runPhase, \$forceAll, \$reserved, \$maxPagesOverride)") !== false);
+    $add('10.385', 'هدف صفحه در صف دیداری و progress قابل مشاهده است',
+         strpos($selfSrc, "\$_xe['max_pages']=\$maxPages;\$_xe['total']=\$maxPages;") !== false
+      && strpos($selfSrc, "'worker_waiting'=>true,'phase'=>\$phase,'max_pages'=>\$maxPages,'total' => \$maxPages") !== false);
+    $add('10.385', 'ورودی 10.385 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "385'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -72214,7 +72244,8 @@ function collectProfileData() {
 function saveProfileSilent() {
     const data = collectProfileData();
     /* فرمِ بین دو profile، پاسخ دیررس، یا snapshot بی‌نسخه هرگز autosave نشود. */
-    if (!data.url || !profileFormReady || data.url!==currentProfileUrl || currentProfileUpdatedAt<=0) return;
+    if (!data.url || !profileFormReady || data.url!==currentProfileUrl || currentProfileUpdatedAt<=0)
+        return Promise.resolve({ok:false,error:'profile_form_not_ready'});
 
     const fd = new FormData();
     fd.append('action', 'save_profile');
@@ -72229,7 +72260,7 @@ function saveProfileSilent() {
         }
     }
 
-    fetch('', {method:'POST', body:fd})
+    return fetch('', {method:'POST', body:fd})
         .then(r => r.json())
         .then(d => {
             if (d.ok) {
@@ -72252,8 +72283,9 @@ function saveProfileSilent() {
                 clearTimeout(saveTimer);
                 showToast('پروفایل در سرور تغییر کرده؛ برای جلوگیری از بازنویسی، ذخیرهٔ خودکار متوقف شد.',true);
             }
+            return d;
         })
-        .catch(() => {});
+        .catch(e => ({ok:false,error:(e&&e.message)||'network_error'}));
 }
 
 function parseUrlHost(url) {
@@ -74252,8 +74284,11 @@ function backendExtractFor(url,panelTitle,phase){
         }
         // Trigger backend extract endpoint (fire-and-forget)
         const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));
+        const pageTarget=Math.max(1,parseInt(prof.pages)||10);
+        showToast('📄 هدف تأییدشدهٔ این اجرا: '+toFa(pageTarget)+' صفحه');
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
-              +'&profile_key='+encodeURIComponent(serverProfileKey),{method:'GET'}).catch(()=>{});
+              +'&profile_key='+encodeURIComponent(serverProfileKey)
+              +'&pages='+encodeURIComponent(pageTarget),{method:'GET'}).catch(()=>{});
         watchExtractProgress();
     }).catch(()=>{showToast('خطا شبکه',1);});
 }
@@ -74291,9 +74326,12 @@ function startDetailExtractionServer(){
     const needSave=(typeof isDirty!=='undefined'&&isDirty)
                    ||(typeof products!=='undefined'&&products.size>0);
     if(needSave&&typeof saveProfileSilent==='function'){
-        saveProfileSilent();
-        showToast('💾 ذخیره روی سرور — شروع استخراج تفصیلی...');
-        setTimeout(go,900);
+        if(typeof saveTimer!=='undefined')clearTimeout(saveTimer);
+        showToast('💾 ذخیره روی سرور — پس از تأیید، استخراج تفصیلی شروع می‌شود…');
+        saveProfileSilent().then(d=>{
+            if(!d||!d.ok){showToast('⛔ ذخیره انجام نشد؛ استخراج تفصیلی شروع نشد',1);return;}
+            go();
+        });
         return;
     }
     go();
@@ -74314,10 +74352,15 @@ function startBackendSync(){
     /* موتور بک‌اند سلکتورها را از فایل پروفایل می‌خواند، نه از فرم باز.
        پس تغییر ذخیره‌نشده باید اول روی دیسک بنشیند وگرنه استخراج با
        سلکتورهای قدیمی اجرا می‌شود. */
-    if(typeof isDirty!=='undefined'&&isDirty){
-        saveProfileSilent();
-        showToast('💾 ذخیره شد — شروع استخراج...');
-        setTimeout(()=>backendExtractFor(url),900);
+    /* Never guess that 900ms was enough for a large profile JSON write.
+       Await the confirmed save, then enqueue with the exact saved page target. */
+    if(typeof saveProfileSilent==='function'){
+        if(typeof saveTimer!=='undefined')clearTimeout(saveTimer);
+        showToast('💾 ذخیرهٔ تنظیمات و تأیید تعداد صفحات…');
+        saveProfileSilent().then(d=>{
+            if(!d||!d.ok){showToast('⛔ تنظیمات ذخیره نشد؛ استخراج با مقدار قدیمی شروع نشد',1);return;}
+            backendExtractFor(url);
+        });
         return;
     }
     backendExtractFor(url);
@@ -75839,6 +75882,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.385', t:'📄 اجرای دقیق تعداد صفحات ذخیره‌شده', items:[
+    'شروع استخراج دیگر پس از تأخیر حدسی ۹۰۰ میلی‌ثانیه انجام نمی‌شود؛ ابتدا پاسخ موفق ذخیرهٔ کامل پروفایل دریافت می‌شود.',
+    'تعداد صفحهٔ تأییدشده در لحظهٔ کلیک همراه درخواست و job worker ذخیره می‌شود؛ انتظار در صف یا تغییر بعدی آن را به مقدار قدیمی برنمی‌گرداند.',
+    'worker، مسیر CLI و اجرای مستقیم همان snapshot بدون سقف ۱۰۰ صفحه را مصرف می‌کنند و هدف صفحه در صف و progress نیز دیده می‌شود.',
+    'اگر ذخیره شکست بخورد، استخراج با تنظیم قدیمی آغاز نمی‌شود و پیام روشن نمایش داده می‌شود.'
+  ]},
   {v:'10.384', t:'🚦 شروع واقعی استخراج بدون گرسنگی worker', items:[
     'استخراج تازه و همگام‌سازی دستی پیش از segment بعدی کارهای ماتریس نوبت می‌گیرند؛ FIFO داخل هر سطح اولویت حفظ می‌شود.',
     'job ماتریس پس از recycle به انتهای صف منتقل می‌شود و دیگر نمی‌تواند همان جای قدیمی را پیوسته دوباره تصاحب کند.',
