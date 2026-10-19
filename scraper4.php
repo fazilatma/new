@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.383';
+const APP_VERSION = '10.384';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -358,7 +358,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/26';
+const APP_VERSION_DATE = '1405/07/27';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1107,20 +1107,26 @@ function s4WorkerEnqueue(string $type, array $payload, string $label = ''): arra
 
 function s4WorkerClaimJob(): ?array {
     $ret = s4WorkerQueueMutate(function (&$q) {
-        $now = time();
-        foreach ($q['entries'] as &$e) {
-            if (!is_array($e) || (string)($e['status'] ?? '') !== 'pending') continue;
-            $e['status'] = 'running';
-            $e['started_at'] = $now;
-            $e['updated_at'] = $now;
-            $e['attempts'] = (int)($e['attempts'] ?? 0) + 1;
-            $e['worker_pid'] = (int)@getmypid();
-            $job = $e;
-            unset($e);
-            return ['ok' => true, 'job' => $job];
+        $now = time();$pick=-1;$pickRank=PHP_INT_MAX;
+        /* Long matrix checkpoints recycle many times. Give queued extraction
+           and manual synchronization one turn before another matrix segment,
+           otherwise “Start extraction” can remain pending for hours. FIFO is
+           preserved inside each rank. */
+        foreach($q['entries'] as $i=>$e){
+            if(!is_array($e)||(string)($e['status']??'')!=='pending')continue;
+            $type=(string)($e['type']??'');
+            $rank=$type==='manual_sync'?0:($type==='backend_extract'?(!empty($e['payload']['resume'])?1:0):2);
+            if($rank<$pickRank){$pick=$i;$pickRank=$rank;if($rank===0)break;}
         }
-        unset($e);
-        return ['ok' => true, 'job' => null];
+        if($pick<0)return ['ok'=>true,'job'=>null];
+        $e=&$q['entries'][$pick];
+        $e['status'] = 'running';
+        $e['started_at'] = $now;
+        $e['updated_at'] = $now;
+        $e['attempts'] = (int)($e['attempts'] ?? 0) + 1;
+        $e['worker_pid'] = (int)@getmypid();
+        $job = $e;unset($e);
+        return ['ok' => true, 'job' => $job];
     });
     return is_array($ret['job'] ?? null) ? $ret['job'] : null;
 }
@@ -1197,26 +1203,33 @@ function s4WorkerFinishJob(string $jobId, string $status, array $result = [], st
 
 /** v10.327: تحویل امن job بلند به daemon تازه، پیش از سقف عمر پردازهٔ هاست. */
 function s4WorkerRequeueForRecycle(string $jobId): bool {
-    $ret=s4WorkerQueueMutate(function(&$q)use($jobId){$now=time();foreach($q['entries'] as &$e){
-        if(!is_array($e)||(string)($e['id']??'')!==$jobId)continue;
-        if((string)($e['status']??'')==='cancelled')return ['ok'=>false,'cancelled'=>true];
-        $e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;
-        $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;
-        /* planned recycle شکست نیست و نباید سقف چهار تلاشِ orphan recovery را مصرف کند. */
-        $e['attempts']=max(0,(int)($e['attempts']??0)-1);
-        $e['recycles']=(int)($e['recycles']??0)+1;unset($e['done_at']);return ['ok'=>true,'requeued'=>true];
-    }unset($e);return ['ok'=>false,'error'=>'job_not_found'];});
+    $ret=s4WorkerQueueMutate(function(&$q)use($jobId){$now=time();
+        foreach($q['entries'] as $i=>$e){
+            if(!is_array($e)||(string)($e['id']??'')!==$jobId)continue;
+            if((string)($e['status']??'')==='cancelled')return ['ok'=>false,'cancelled'=>true];
+            $e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;
+            $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;
+            /* Planned recycle is not failure. Move it behind waiting work so
+               one durable matrix owner cannot immediately reclaim every turn. */
+            $e['attempts']=max(0,(int)($e['attempts']??0)-1);
+            $e['recycles']=(int)($e['recycles']??0)+1;unset($e['done_at']);
+            unset($q['entries'][$i]);$q['entries']=array_values($q['entries']);$q['entries'][]=$e;
+            return ['ok'=>true,'requeued'=>true];
+        }
+        return ['ok'=>false,'error'=>'job_not_found'];});
     return !empty($ret['requeued']);
 }
 
 function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey):'';
+    if($plannedQueueId==='')$plannedQueueId='exw_'.substr(md5($profileKey.microtime(true).random_int(1,PHP_INT_MAX)),0,20);
     /* A paused extraction already owns the durable checkpoint. Cron/manual
        resume revives that row instead of adding a second owner with a slightly
        different phase-based dedup key. */
     $enq = null;
     if ($resume) {
-        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId) {
             $now=time();$revive=-1;
             foreach ($q['entries'] as $i=>&$e) {
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
@@ -1224,12 +1237,13 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 $st=(string)($e['status']??'');
                 if(in_array($st,['pending','running'],true)){
                     $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
+                    if(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
                     $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
                 }
                 if(in_array($st,['paused','failed'],true)&&$revive<0)$revive=$i;
             }unset($e);
             if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
-                $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;
+                $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;
                 $e['recycles']=(int)($e['recycles']??0)+1;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'revived'=>true,'job_id'=>$id,'status'=>'pending'];}
             return ['ok'=>true,'missing'=>true];
         });
@@ -1240,9 +1254,41 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
     if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
-        'resume' => $resume, 'dedup_key' => $dedup,
+        'resume' => $resume, 'dedup_key' => $dedup, 'extract_queue_id'=>$plannedQueueId,
     ], 'استخراج بک‌اند');
     if (!empty($enq['ok'])) {
+        /* Create/reclaim the visible extraction row immediately, not only when
+           the daemon eventually claims the job. The worker payload carries this
+           exact id so start, execution and every resume remain one row. */
+        $jobId=(string)($enq['job_id']??'');$visibleQueueId=$plannedQueueId;
+        /* A deduplicated job may already have chosen its row in an earlier request. */
+        foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_wj0){
+            if(!is_array($_wj0)||(string)($_wj0['id']??'')!==$jobId)continue;
+            $_boundId=trim((string)($_wj0['payload']['extract_queue_id']??''));if($_boundId!=='')$visibleQueueId=$_boundId;break;
+        }
+        $xq=extractReadQueue();
+        if($visibleQueueId==='')foreach((array)($xq['entries']??[])as $_xe){
+            if(!is_array($_xe)||(string)($_xe['profile_key']??'')!==$profileKey)continue;
+            if((string)($_xe['worker_job_id']??'')===$jobId&&in_array((string)($_xe['status']??''),['waiting','paused','failed'],true)){$visibleQueueId=(string)($_xe['id']??'');break;}
+        }
+        if($visibleQueueId==='')$visibleQueueId='exw_'.($jobId!==''?$jobId:substr(md5($profileKey.microtime(true)),0,16));
+        $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];
+        $foundVisible=false;
+        foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
+            $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['resumable']=true;
+            $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at']);$foundVisible=true;break;
+        }unset($_xe);
+        if(!$foundVisible)$xq['entries'][]=['id'=>$visibleQueueId,'status'=>'waiting','profile_key'=>$profileKey,
+            'profile_name'=>(string)($prNow['name']??$profileKey),'url'=>(string)($prNow['url']??''),
+            'started_at'=>time(),'updated_at'=>time(),'products_count'=>count((array)($prNow['products']??[])),
+            'total'=>0,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
+            'trigger'=>$resume?'auto_resume':'worker','phase'=>$phase,'worker_job_id'=>$jobId,'resumable'=>$resume,'resume_needed'=>$resume?1:0];
+        extractWriteQueue($xq);
+        if($jobId!=='')s4WorkerQueueMutate(function(&$wq)use($jobId,$visibleQueueId){foreach($wq['entries']as&$we){
+            if(!is_array($we)||(string)($we['id']??'')!==$jobId)continue;$we['payload']=is_array($we['payload']??null)?$we['payload']:[];
+            $we['payload']['extract_queue_id']=$visibleQueueId;$we['updated_at']=time();break;
+        }unset($we);return['ok'=>true];});
+        $enq['queue_id']=$visibleQueueId;
         $logLine = !empty($enq['duplicate'])
             ? '🧵 این عملیات از قبل در صف worker دائمی است.'
             : '🧵 عملیات به worker دائمی سرور سپرده شد — حتی با بستن مرورگر ادامه می‌دهد.';
@@ -1250,8 +1296,8 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
         if (!extractLockIsHeld()) {
             writeProgress(EXTRACT_PROGRESS_FILE, [
                 'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
-                'job_id' => (string)($enq['job_id'] ?? ''), 'profile_key' => $profileKey,
-                'total' => 0, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
+                'job_id' => (string)($enq['job_id'] ?? ''), 'queue_id'=>$visibleQueueId, 'profile_key' => $profileKey,
+                'worker_waiting'=>true,'phase'=>$phase,'total' => 0, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
                 'recent_log' => [$logLine], 'total_log_count' => 1,
                 'extracted' => 0, 'new' => 0, 'price_changed' => 0, 'removed' => 0, 'unchanged' => 0,
             ]);
@@ -1884,6 +1930,7 @@ function s4WorkerRunJob(array $job): array {
         $phase = (string)($payload['phase'] ?? 'all');
         if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
         $forceAll = !empty($payload['force_all']);
+        $extractQueueId=trim((string)($payload['extract_queue_id']??''));
         $resumeNext = !empty($payload['resume']);
         $segments = 0;
         $transientResumes = 0;
@@ -1892,16 +1939,17 @@ function s4WorkerRunJob(array $job): array {
         $res = ['ok' => false, 'error' => 'worker did not start'];
         while (true) {
             $segments++;
-            $reserved = '';
+            $reserved = (!$resumeNext&&$extractQueueId!=='')?$extractQueueId:'';
             $runPhase = $phase;
             if ($resumeNext) {
-                $prep = extractResumePrepare($pk, loadConnections());
+                $prep = extractResumePrepare($pk, loadConnections(), $extractQueueId);
                 if (empty($prep['ok'])) {
                     $res = ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? ''), 'worker_segments' => $segments];
                     break;
                 }
                 $runPhase = (string)($prep['phase'] ?? $runPhase);
                 $reserved = (string)($prep['queue_id'] ?? '');
+                $extractQueueId=$reserved;
             }
             s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
                 'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase]);
@@ -18597,6 +18645,23 @@ if(isset($_GET['poll_extract'])){
 header('Content-Type: application/json; charset=UTF-8');
 clearstatcache(true,EXTRACT_PROGRESS_FILE);
 $p=readProgress(EXTRACT_PROGRESS_FILE);
+/* A queued worker job is alive even while another bounded job owns the daemon.
+   Do not convert that waiting state to a fake 121-second extraction stall. */
+$_pQueuedPending=false;
+if(!empty($p['worker'])&&!empty($p['job_id'])){
+    $_wqNow=s4WorkerLoadQueue();
+    foreach((array)($_wqNow['entries']??[])as $_wj){
+        if(!is_array($_wj)||(string)($_wj['id']??'')!==(string)$p['job_id'])continue;
+        $_wst=(string)($_wj['status']??'');
+        if(in_array($_wst,['pending','running'],true)){
+            $_pQueuedPending=$_wst==='pending';$p['running']=true;$p['done']=false;$p['stalled']=false;
+            $p['worker_waiting']=$_pQueuedPending;$p['worker_job_status']=$_wst;$p['error']='';
+            if($_pQueuedPending)$p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
+                ['⏳ استخراج در صف worker است و پیش از segment بعدی ماتریس اجرا می‌شود']),-12);
+        }
+        break;
+    }
+}
 /* v8.97: استخراج دستی هم نگهبان می‌خواهد.
 
    نگهبان فقط داخل کران بود، پس وقتی استخراجِ دستی وسط کار می‌مُرد
@@ -18604,7 +18669,7 @@ $p=readProgress(EXTRACT_PROGRESS_FILE);
    مرورگر تا ابد «در حال استخراج» نشان می‌داد و کاربر فکر می‌کرد
    نگهبانی در کار نیست. این اندپوینت همان چیزی است که مرورگر هر ۱.۵
    ثانیه صدا می‌زند، پس بهترین جا برای تشخیص است. */
-if(!empty($p['running'])&&empty($p['done'])){
+if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
     /* v10.36 (۴۹الف): قفلِ استخراج هم شاهد است. بدونِ آن، اجرایی که وسطِ
        یک صفحهٔ کندِ سایتِ مبدأ منتظر مانده (fetch با مهلتِ ۲۰ ثانیه، چند
        بار پشتِ‌هم) می‌توانست بی‌حرکت به نظر برسد و رابط کاربری وسطِ کار
@@ -18807,7 +18872,7 @@ function extractResumeQueueId(string $profileKey, string $preferredQueueId = '')
     if($preferredQueueId!=='')foreach($entries as $e){
         if(!is_array($e)||(string)($e['id']??'')!==$preferredQueueId)continue;
         if((string)($e['profile_key']??'')===$profileKey
-            &&in_array((string)($e['status']??''),['paused','failed'],true))return $preferredQueueId;
+            &&in_array((string)($e['status']??''),['waiting','paused','failed'],true))return $preferredQueueId;
         return '';
     }
     for($i=count($entries)-1;$i>=0;$i--){$e=$entries[$i]??null;
@@ -43675,6 +43740,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$_runRow['started_at']=(int)(\$_oldRow['started_at']??time());") !== false);
     $add('10.383', 'ورودی 10.383 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "383'") !== false);
+    $add('10.384', 'استخراج تازه پیش از segment بازیافتی ماتریس از worker نوبت می‌گیرد',
+         strpos($selfSrc, "\$rank=\$type==='manual_sync'?0:(\$type==='backend_extract'?(!empty(\$e['payload']['resume'])?1:0):2);") !== false
+      && strpos($selfSrc, "\$pickRank=PHP_INT_MAX") !== false);
+    $add('10.384', 'job بازیافتی به انتهای صف می‌رود و worker را انحصاری نمی‌کند',
+         strpos($selfSrc, "unset(\$q['entries'][\$i]);\$q['entries']=array_values(\$q['entries']);\$q['entries'][]=\$e;") !== false);
+    $add('10.384', 'enqueue استخراج ردیف waiting را فوری می‌سازد و queue_id را به worker می‌دهد',
+         strpos($selfSrc, "\$plannedQueueId='exw_'") !== false
+      && strpos($selfSrc, "['extract_queue_id']=\$visibleQueueId") !== false
+      && strpos($selfSrc, "'status'=>'waiting','profile_key'=>\$profileKey") !== false);
+    $add('10.384', 'worker همان ردیف waiting را در اجرای واقعی مصرف می‌کند',
+         strpos($selfSrc, "\$extractQueueId=trim((string)(\$payload['extract_queue_id']??''));") !== false
+      && strpos($selfSrc, "extractResumePrepare(\$pk, loadConnections(), \$extractQueueId)") !== false);
+    $add('10.384', 'poll کار pending را گیرکرده اعلام نمی‌کند',
+         strpos($selfSrc, "\$_pQueuedPending=\$_wst==='pending';") !== false
+      && strpos($selfSrc, "&&!\$_pQueuedPending){") !== false);
+    $add('10.384', 'ورودی 10.384 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "384'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75757,6 +75839,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.384', t:'🚦 شروع واقعی استخراج بدون گرسنگی worker', items:[
+    'استخراج تازه و همگام‌سازی دستی پیش از segment بعدی کارهای ماتریس نوبت می‌گیرند؛ FIFO داخل هر سطح اولویت حفظ می‌شود.',
+    'job ماتریس پس از recycle به انتهای صف منتقل می‌شود و دیگر نمی‌تواند همان جای قدیمی را پیوسته دوباره تصاحب کند.',
+    'ردیف waiting استخراج همان لحظهٔ enqueue در صف دیداری ساخته می‌شود و queue_id آن تا اجرای worker و ادامه‌های بعدی ثابت می‌ماند.',
+    'poll تا وقتی job worker واقعاً pending است آن را منتظر نشان می‌دهد و دیگر پس از ۱۲۱ ثانیه stalled/done کاذب ثبت نمی‌کند.'
+  ]},
   {v:'10.383', t:'⏯ ادامهٔ استخراج در همان ردیف صف', items:[
     'دکمهٔ ادامه queue_id همان ردیف paused/failed را رزرو می‌کند؛ شناسهٔ exresume یا ردیف استخراج تازه ساخته نمی‌شود.',
     'همان ردیف درجا به running برمی‌گردد، resume_count افزایش می‌یابد و started_at، شمارنده‌ها، تاریخچه و پیوند گزارش آن حفظ می‌شود.',
