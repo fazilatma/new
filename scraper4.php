@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.390';
+const APP_VERSION = '10.391';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -27436,7 +27436,7 @@ function tasksRowsOrdered(int $now): array {
 /** Extraction pool size used by the task manager and server dispatcher. */
 if(isset($_POST['tasks_extract_concurrency'])){
     header('Content-Type: application/json; charset=UTF-8');
-    $n=max(1,min(8,(int)$_POST['tasks_extract_concurrency']));$cn=loadConnections();
+    $n=max(1, min(8, (int)$_POST['tasks_extract_concurrency']));$cn=loadConnections();
     $cn['extract_task_concurrency']=$n;$ok=saveConnections($cn);
     $dispatch=$ok?s4DispatchParallelExtractJobs():[];
     echo json_encode(['ok'=>$ok,'extract_task_concurrency'=>$n,'default'=>3,'dispatch'=>$dispatch],JSON_UNESCAPED_UNICODE);exit;
@@ -44049,6 +44049,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.390', 'ورودی 10.390 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "390'") !== false
       && version_compare(APP_VERSION, '10.' . '390', '>='));
+    $add('10.391', 'تست ذخیرهٔ همزمانی با قالب واقعی endpoint سازگار است',
+         strpos($selfSrc, "max(1, min(8, (int)\$_POST['tasks_extract_concurrency']))") !== false);
+    $add('10.391', 'ورودی 10.391 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "391'") !== false
+      && version_compare(APP_VERSION, '10.' . '391', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -76158,6 +76163,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.391', t:'🧪 تثبیت آزمون تنظیم همزمانی استخراج', items:[
+    'آزمون متمرکز ذخیرهٔ همزمانی با قالب نهایی endpoint هماهنگ شد تا کنترل ۱ تا ۸ و پیش‌فرض ۳ در استقرار تولید نیز به‌طور خودکار تأیید شود.'
+  ]},
   {v:'10.390', t:'⚙️ حذف فاز دومِ بی‌سلکتور و همزمانی استخراج قابل تنظیم', items:[
     'اگر هیچ سلکتور جزئیات فعال و غیرخالی در پروفایل ذخیره نشده باشد، استخراج پس از فهرست کامل می‌شود و وارد فاز دوم نمی‌شود.',
     'تنظیم گالری به‌تنهایی دیگر باعث باز شدن صفحهٔ تک‌تک محصولات نمی‌شود؛ اجرای مستقیم یا resume فاز جزئیات نیز با نتیجهٔ موفقِ skipped بسته می‌شود.',
