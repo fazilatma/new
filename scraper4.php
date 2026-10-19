@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.385';
+const APP_VERSION = '10.386';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -43691,7 +43691,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '<datalist id="pagesPresets"') !== false);
     $add('10.380', 'سقف ۱۰۰ از ذخیره و موتورهای استخراج برداشته شده است',
          strpos($selfSrc, "? max(1, (int)\$_POST['pages'])") !== false
-      && strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
+      && (strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
+          || strpos($selfSrc, "\$savedMaxPages=max(1,(int)(\$profile['pages']??10));") !== false)
       && strpos($selfSrc, "\$maxPages = max(1, (int)(\$_GET['pages'] ?? 20));") !== false
       && strpos($selfSrc, 'min(100,(int)($profile[\'pages\']??10))') === false
       && version_compare(APP_VERSION, '10.' . '380', '>='));
@@ -43787,6 +43788,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'worker_waiting'=>true,'phase'=>\$phase,'max_pages'=>\$maxPages,'total' => \$maxPages") !== false);
     $add('10.385', 'ورودی 10.385 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "385'") !== false);
+    $add('10.386', 'تست حذف سقف ۱۰۰ با snapshot جدید هم سازگار است',
+         strpos($selfSrc, "\$savedMaxPages=max(1,(int)(\$profile['pages']??10));") !== false
+      && version_compare(APP_VERSION, '10.' . '386', '>='));
+    $add('10.386', 'ورودی 10.386 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "386'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75882,6 +75888,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.386', t:'🧪 سازگاری تست تعداد صفحه با snapshot صف', items:[
+    'تست قدیمی حذف سقف ۱۰۰ اکنون هم مسیر مستقیم پروفایل و هم مسیر snapshot تأییدشدهٔ worker را می‌پذیرد؛ رفتار اجرایی v10.385 بدون تغییر باقی مانده است.'
+  ]},
   {v:'10.385', t:'📄 اجرای دقیق تعداد صفحات ذخیره‌شده', items:[
     'شروع استخراج دیگر پس از تأخیر حدسی ۹۰۰ میلی‌ثانیه انجام نمی‌شود؛ ابتدا پاسخ موفق ذخیرهٔ کامل پروفایل دریافت می‌شود.',
     'تعداد صفحهٔ تأییدشده در لحظهٔ کلیک همراه درخواست و job worker ذخیره می‌شود؛ انتظار در صف یا تغییر بعدی آن را به مقدار قدیمی برنمی‌گرداند.',
