@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.387';
+const APP_VERSION = '10.388';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1220,9 +1220,11 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
     return !empty($ret['requeued']);
 }
 
-function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = 0): array {
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
-    if($maxPages<=0){$pr0=loadProfiles();$maxPages=max(1,(int)($pr0[$profileKey]['pages']??10));}
+    /* -1 means “not supplied”; zero is a real setting: discover the end. */
+    if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));}
+    $pageTotal=$maxPages===0?0:$maxPages;
     $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey):'';
     if($plannedQueueId==='')$plannedQueueId='exw_'.substr(md5($profileKey.microtime(true).random_int(1,PHP_INT_MAX)),0,20);
     /* A paused extraction already owns the durable checkpoint. Cron/manual
@@ -1278,13 +1280,13 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
         $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];
         $foundVisible=false;
         foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
-            $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['max_pages']=$maxPages;$_xe['total']=$maxPages;$_xe['resumable']=true;
+            $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['max_pages']=$maxPages;$_xe['page_mode']=$maxPages===0?'auto':'fixed';$_xe['total']=$pageTotal;$_xe['resumable']=true;
             $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at']);$foundVisible=true;break;
         }unset($_xe);
         if(!$foundVisible)$xq['entries'][]=['id'=>$visibleQueueId,'status'=>'waiting','profile_key'=>$profileKey,
             'profile_name'=>(string)($prNow['name']??$profileKey),'url'=>(string)($prNow['url']??''),
             'started_at'=>time(),'updated_at'=>time(),'products_count'=>count((array)($prNow['products']??[])),
-            'total'=>$maxPages,'max_pages'=>$maxPages,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
+            'total'=>$pageTotal,'max_pages'=>$maxPages,'page_mode'=>$maxPages===0?'auto':'fixed','current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
             'trigger'=>$resume?'auto_resume':'worker','phase'=>$phase,'worker_job_id'=>$jobId,'resumable'=>$resume,'resume_needed'=>$resume?1:0];
         extractWriteQueue($xq);
         if($jobId!=='')s4WorkerQueueMutate(function(&$wq)use($jobId,$visibleQueueId,$maxPages){foreach($wq['entries']as&$we){
@@ -1300,7 +1302,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             writeProgress(EXTRACT_PROGRESS_FILE, [
                 'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
                 'job_id' => (string)($enq['job_id'] ?? ''), 'queue_id'=>$visibleQueueId, 'profile_key' => $profileKey,
-                'worker_waiting'=>true,'phase'=>$phase,'max_pages'=>$maxPages,'total' => $maxPages, 'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
+                'worker_waiting'=>true,'phase'=>$phase,'max_pages'=>$maxPages,'page_mode'=>$maxPages===0?'auto':'fixed','total'=>$pageTotal,'current' => 0, 'started_at' => time(), 'last_progress_ts' => time(),
                 'recent_log' => [$logLine], 'total_log_count' => 1,
                 'extracted' => 0, 'new' => 0, 'price_changed' => 0, 'removed' => 0, 'unchanged' => 0,
             ]);
@@ -1851,7 +1853,7 @@ function s4SpawnPersistentWorker(): array {
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
 }
 
-function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = 0): array {
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
@@ -1868,7 +1870,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         . ' --phase=' . escapeshellarg($phase)
         . ($forceAll ? ' --force-all' : '')
         . ($resume ? ' --resume' : '')
-        . ($maxPages>0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
+        . ($maxPages>=0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
         . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -1935,7 +1937,7 @@ function s4WorkerRunJob(array $job): array {
         if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
         $forceAll = !empty($payload['force_all']);
         $extractQueueId=trim((string)($payload['extract_queue_id']??''));
-        $maxPagesOverride=max(0,(int)($payload['max_pages']??0));
+        $maxPagesOverride=array_key_exists('max_pages',$payload)?max(0,(int)$payload['max_pages']):-1;
         $resumeNext = !empty($payload['resume']);
         $segments = 0;
         $transientResumes = 0;
@@ -12839,8 +12841,8 @@ $profilePatch = [
         ? trim((string)$_POST['name'])
         : (trim((string)($existingProfile['name'] ?? '')) ?: parse_url($url, PHP_URL_HOST))),
 'pages' => array_key_exists('pages', $_POST)
-    ? max(1, (int)$_POST['pages'])
-    : max(1, (int)($profiles[$key]['pages'] ?? 10)),
+    ? max(0, (int)$_POST['pages'])
+    : max(0, (int)($profiles[$key]['pages'] ?? 10)),
 // v10.177: تنظیم صفحه‌بندی هم مثل دسته‌ها (v8.43) در ذخیرهٔ جزئی حفظ شود —
 //   پیش‌تر هر ذخیره‌ای که این کلیدها را نمی‌فرستاد، الگو به حالت پیش‌فرض
 //   برمی‌گشت و کاربر «به صفحهٔ بعد نمی‌رود» می‌دید.
@@ -19067,7 +19069,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     return $out;
 }
 
-function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = 0): array {
+function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1): array {
 if (!in_array($phase, ['all', 'list', 'detail'], true)) $phase = 'all';
 @set_time_limit(0); @ignore_user_abort(true);
 /* v10.134: فایل‌های مشترکِ پیشرفت/توقف فقط بعد از گرفتنِ lock پاک می‌شوند؛
@@ -19093,8 +19095,13 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>false,'error'=>'پروفایل
 }
 
 $url=s4NormalizeInputUrl((string)($profile['url']??''));
-$savedMaxPages=max(1,(int)($profile['pages']??10));
-$maxPages=$maxPagesOverride>0?max(1,$maxPagesOverride):$savedMaxPages;
+$savedMaxPages=max(0,(int)($profile['pages']??10));
+$pageSetting=$maxPagesOverride>=0?max(0,$maxPagesOverride):$savedMaxPages;
+$autoPageMode=$pageSetting===0;
+/* Auto mode needs a failsafe only for broken pagination that never ends.
+   It is not a user-facing page limit and normal end detection stops far sooner. */
+$maxPages=$autoPageMode?10000:max(1,$pageSetting);
+$progressPageTarget=$autoPageMode?0:$maxPages;
 $selectors=$profile['selectors']??[];
 $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
 $pagType=$profile['pagType']??'query_page';
@@ -19256,9 +19263,11 @@ $_rsmHint = !empty($profile['_extract_list_incomplete']) || !empty($profile['_ex
     || in_array((string)$trigger, ['manual_resume','watchdog_resume','auto_resume'], true);
 $__startLine = $_rsmHint ? '⏯ ادامهٔ استخراج بک‌اند…' : '⏳ شروع استخراج بک‌اند...';
 $__startLogs = [$__startLine, '⚙ موتور استخراج: ' . extractionEngineLabel($extractEngine),
-    '📄 هدف این اجرا: '.$maxPages.' صفحه'.($maxPagesOverride>0?' (snapshot صف)':' (پروفایل ذخیره‌شده)')];
+    $autoPageMode
+        ? '📄 هدف این اجرا: خودکار تا آخرین صفحهٔ واقعی'
+        : ('📄 هدف این اجرا: '.$maxPages.' صفحه'.($maxPagesOverride>=0?' (snapshot صف)':' (پروفایل ذخیره‌شده)'))];
 unset($_rsmHint);
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$maxPages,'total'=>($phase==='detail'?0:$maxPages),'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>$__startLogs,'total_log_count'=>count($__startLogs),'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$pageSetting,'page_mode'=>$autoPageMode?'auto':'fixed','total'=>($phase==='detail'?0:$progressPageTarget),'current'=>0,'started_at'=>$startedAt,'queue_id'=>$queueId,'recent_log'=>$__startLogs,'total_log_count'=>count($__startLogs),'extracted'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'price_up'=>0,'price_down'=>0,'url'=>$url,'profile_name'=>$profile['name']??$profileKey]);
 unset($__startLine, $__startLogs);
 
 // v8.27: پاسخ زودهنگام فقط برای درخواست مرورگر معنا دارد تا کاربر منتظر
@@ -19266,7 +19275,7 @@ unset($__startLine, $__startLogs);
 // صدا می‌زند نباید چیزی چاپ شود، وگرنه خروجی JSON دوتکه می‌شود.
 if($emitEarlyResponse){
 while(@ob_get_level())@ob_end_clean();
-$initResp=json_encode(['ok'=>true,'started'=>true,'profile_key'=>$profileKey,'url'=>$url,'max_pages'=>$maxPages],JSON_UNESCAPED_UNICODE);
+$initResp=json_encode(['ok'=>true,'started'=>true,'profile_key'=>$profileKey,'url'=>$url,'max_pages'=>$pageSetting,'page_mode'=>$autoPageMode?'auto':'fixed'],JSON_UNESCAPED_UNICODE);
 header('Content-Type: application/json; charset=UTF-8');
 header('Content-Length: '.strlen($initResp));
 header('Connection: close');
@@ -19364,7 +19373,7 @@ foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantKeys[]=$_f; }
 $_inlineDetailDone=0;   // شمارندهٔ جزئیاتِ درجایِ همین اجرا (برای چک‌پوینت)
 $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
 if($_listResume && $_startPage>1){
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$_startPage,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>[
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$_startPage,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>[
         '▶️ ادامهٔ استخراج از صفحه '.$_startPage.' (یک صفحه قبل از محل گیر)',
         '   • محصولات حفظ‌شده: '.count($allProducts),
         '   • سقف زمانی این نوبت فهرست: '.$_listBudget.' ثانیه',
@@ -19404,7 +19413,7 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
         '_extract_resume_from'=>max(1,$page-1),
     ]);
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'ran_out'=>true,'resumable'=>true,
-        'resume_page'=>max(1,$page-1),'total'=>$maxPages,'current'=>$page,'started_at'=>$startedAt,
+        'resume_page'=>max(1,$page-1),'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,
         'last_progress_ts'=>time(),'queue_id'=>$queueId,'extracted'=>count($allProducts),
         'recent_log'=>['⏸ سقف زمانی فهرست — ادامه از صفحه '.max(1,$page-1),
             '   • '.count($allProducts).' محصول تا اینجا ذخیره شد',
@@ -19470,7 +19479,7 @@ if($page>1 && count($allProducts)>0 && in_array($_httpCode,[404,410],true)){
     $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
         $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی: HTTP '.$_httpCode.' در صفحهٔ '.$page;
         $_qeEnd['pag_stop_url']=$pageUrl;$_qeEnd['resumable']=false;$_qeEnd['resume_page']=0;break;}unset($_qeEnd);extractWriteQueue($_qEnd);
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$totalPages,
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$totalPages,
         'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
         'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$totalPages,'page_ok'=>true,
         'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
@@ -19494,7 +19503,7 @@ if($page>1 && count($allProducts)>0){
 }
 if(!isset($_pageFailStreak))$_pageFailStreak=0;
 $_pageFailStreak++;
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>false,'resumable'=>$page>1,'resume_page'=>max(1,$page-1)]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>false,'resumable'=>$page>1,'resume_page'=>max(1,$page-1)]);
 if($page===1)break;
 if($_pageFailStreak>=2 && count($allProducts)>0){
     $_rpF=max(1,$page-1);
@@ -19621,7 +19630,7 @@ if (!($_galDoneNow && !$_fieldMissingNow)) {
     extractLockTouch($queueId);
     if ($_inlineDetailDone === 1 || $_inlineDetailDone % 3 === 0) {
         $_inlineLogs = array_slice(array_merge($logs, ['🔍 جزئیات درجای صفحه '.$page.' — محصول '.$_inlineDetailDone.': '.$_inlineTitle]), -12);
-        writeProgress(EXTRACT_PROGRESS_FILE, array_merge(['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$page,
+        writeProgress(EXTRACT_PROGRESS_FILE, array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,
             'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_inlineLogs,
             'total_log_count'=>$page+$_inlineDetailDone,'extracted'=>count($allProducts),'phase'=>'list_detail',
             'page'=>$page,'inline_detail_current'=>$_inlineDetailDone], extractLiveCompare($allProducts,$livePrevMap)));
@@ -19638,7 +19647,7 @@ $logs[]='✓ +'.($newCount).' محصول (کل: '.count($allProducts).')';
 // v8.22: مقایسهٔ زنده — شمارنده‌ها و لیست‌ها همان لحظه محاسبه می‌شوند
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 msAlive('صفحه ' . $page . ' — ' . count($allProducts) . ' محصول');   /* v10.61 (۷۵) */
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
 if($pagType==='next_selector'&&!empty($pagVal)){
 [$dom,$xp]=load_dom($res['html']);
 $xpath=cssToXpath($pagVal);
@@ -19666,7 +19675,7 @@ $_qLive=extractReadQueue();
 foreach($_qLive['entries'] as &$_qeL){
     if(($_qeL['id']??'')===$queueId){
         $_qeL['resume_page']=$page;$_qeL['resumable']=true;
-        $_qeL['products_count']=count($allProducts);$_qeL['current']=$page;$_qeL['total']=$maxPages;
+        $_qeL['products_count']=count($allProducts);$_qeL['current']=$page;$_qeL['total']=$progressPageTarget;
         break;
     }
 }unset($_qeL);
@@ -19679,7 +19688,7 @@ if($page>$_startPage&&$newCount===0){
     if($_noFreshStreak<$_noFreshLimit && $page<$maxPages){
         $logs[]='⚠️ صفحهٔ '.$page.' محصول تازه نداشت؛ پایان قطعی نیست — بررسی صفحهٔ بعد ('
             .$_noFreshStreak.'/'.$_noFreshLimit.')';
-        writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$maxPages,'total'=>$maxPages,
+        writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$pageSetting,'page_mode'=>$autoPageMode?'auto':'fixed','total'=>$progressPageTarget,
             'current'=>$page,'page'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,
             'recent_log'=>$logs,'total_log_count'=>count($logs),'extracted'=>count($allProducts),
             'empty_page_streak'=>$_noFreshStreak,'empty_page_limit'=>$_noFreshLimit,'profile_key'=>$pkFinal]);
@@ -19768,7 +19777,7 @@ $_guardLog[]='   • راه‌حل: آدرسِ API خودِ سایت را به�
 $_guardLog[]='     Network مرورگر، درخواستی که محصولات را JSON برمی‌گرداند)';
 }}
 $_guardLog[]='   • اگر سایت مبدأ واقعاً خالی شده، اجرای بعدی هم همین را می‌گوید';
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'total'=>$maxPages,'current'=>$totalPages,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_guardLog,'total_log_count'=>count($_guardLog),'extracted'=>0,'error'=>'استخراج بی‌نتیجه — '.$_why,'guard'=>'empty_result','kept'=>count($prevByKey),'products_saved'=>false]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'total'=>$progressPageTarget,'current'=>$totalPages,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_guardLog,'total_log_count'=>count($_guardLog),'extracted'=>0,'error'=>'استخراج بی‌نتیجه — '.$_why,'guard'=>'empty_result','kept'=>count($prevByKey),'products_saved'=>false]);
 $queue=extractReadQueue();
 foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='failed';$qe['error']='بی‌نتیجه — '.$_why.($_kept>0?(' · '.$_kept.' محصول قبلی حفظ شد'):'');$qe['done_at']=time();break;}}unset($qe);
 extractWriteQueue($queue);
@@ -19977,7 +19986,7 @@ $logs[]='   • ⏱ سقف زمانی این نوبت: '.$_budget.' ثانیه �
    false می‌شد، زمانِ بی‌حرکتی از started_at حساب می‌شد و ردیفِ کاملاً
    زنده «پردازش نیمه‌کاره رها شد» می‌خورد. دقیقاً همان چیزی که کاربر
    می‌دید: صف «خطا» ولی کار در جریان. */
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal]);
 
 foreach($needDetail as $key=>$p){
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
@@ -20162,7 +20171,7 @@ foreach($detailLog as $_dl)$logs[]=$_dl;
 // قیمت‌ها در این مرحله ممکن است تکمیل شوند، پس مقایسه دوباره محاسبه می‌شود
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 extractLockTouch($queueId);   // v10.32 (۴۵ب): ضربان، تا قفلِ اجرای سالم کهنه نشود
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
 }
 /* v8.94: هر ۵ محصول، کارِ انجام‌شده روی دیسک بنشیند.
 
@@ -20216,7 +20225,7 @@ $_sumLines[]='   • یعنی IP هاست بلاک یا محدود شده — س
 $_sumLines[]='   • تنظیمات ← «اتصال به سایت مبدأ»: فاصلهٔ بین درخواست‌ها را زیاد کنید یا پروکسی بگذارید';
 }
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
 }
 
 $newCount=0;$priceChanged=0;$unchanged=0;$removedCount=0;
@@ -20394,7 +20403,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>$maxPages+$detailTotal,'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -20455,8 +20464,9 @@ $resumeRequested = !empty($_GET['resume']) || !empty($_POST['resume']);
 /* Freeze the page target at click/enqueue time. A large profile save may take
    longer than an arbitrary browser delay, and a queued worker may start much
    later; neither is allowed to fall back to an older 100-page value. */
-$requestedMaxPages=max(0,(int)($_GET['pages']??$_POST['pages']??0));
-if($requestedMaxPages<=0){$_pp=loadProfiles();$requestedMaxPages=max(1,(int)($_pp[$profileKey]['pages']??10));}
+$_requestedPagesRaw=$_GET['pages']??$_POST['pages']??null;
+if($_requestedPagesRaw!==null)$requestedMaxPages=max(0,(int)$_requestedPagesRaw);
+else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages']??10));}
 
 /* v10.183: اگر worker دائمی سرور زنده است، درخواست وب فقط job می‌سازد.
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
@@ -22864,7 +22874,7 @@ if (isset($_GET['backend_extract_cli'])) {
         $phaseCli = (string)($prepCli['phase'] ?? $phaseCli);
         $reservedCli = (string)($prepCli['queue_id'] ?? '');
     }
-    $pagesCli=max(0,(int)($_GET['pages']??0));
+    $pagesCli=array_key_exists('pages',$_GET)?max(0,(int)$_GET['pages']):-1;
     $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli);
     echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
     exit(!empty($resCli['ok']) ? 0 : 1);
@@ -43707,9 +43717,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'list="pagesPresets"') !== false
       && strpos($selfSrc, '<datalist id="pagesPresets"') !== false);
     $add('10.380', 'سقف ۱۰۰ از ذخیره و موتورهای استخراج برداشته شده است',
-         strpos($selfSrc, "? max(1, (int)\$_POST['pages'])") !== false
+         (strpos($selfSrc, "? max(1, (int)\$_POST['pages'])") !== false
+          || strpos($selfSrc, "? max(0, (int)\$_POST['pages'])") !== false)
       && (strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
-          || strpos($selfSrc, "\$savedMaxPages=max(1,(int)(\$profile['pages']??10));") !== false)
+          || strpos($selfSrc, "\$savedMaxPages=max(0,(int)(\$profile['pages']??10));") !== false)
       && strpos($selfSrc, "\$maxPages = max(1, (int)(\$_GET['pages'] ?? 20));") !== false
       && strpos($selfSrc, 'min(100,(int)($profile[\'pages\']??10))') === false
       && version_compare(APP_VERSION, '10.' . '380', '>='));
@@ -43798,15 +43809,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'max_pages'=>\$maxPages") !== false
       && strpos($selfSrc, "\$we['payload']['max_pages']=\$maxPages") !== false);
     $add('10.385', 'runner مقدار snapshot را بدون سقف ۱۰۰ مصرف می‌کند',
-         strpos($selfSrc, "\$maxPages=\$maxPagesOverride>0?max(1,\$maxPagesOverride):\$savedMaxPages;") !== false
+         strpos($selfSrc, "\$pageSetting=\$maxPagesOverride>=0?max(0,\$maxPagesOverride):\$savedMaxPages;") !== false
       && strpos($selfSrc, "runBackendExtract(\$pk, 'worker', false, \$runPhase, \$forceAll, \$reserved, \$maxPagesOverride)") !== false);
     $add('10.385', 'هدف صفحه در صف دیداری و progress قابل مشاهده است',
-         strpos($selfSrc, "\$_xe['max_pages']=\$maxPages;\$_xe['total']=\$maxPages;") !== false
-      && strpos($selfSrc, "'worker_waiting'=>true,'phase'=>\$phase,'max_pages'=>\$maxPages,'total' => \$maxPages") !== false);
+         strpos($selfSrc, "\$_xe['max_pages']=\$maxPages;\$_xe['page_mode']=\$maxPages===0?'auto':'fixed';\$_xe['total']=\$pageTotal;") !== false
+      && strpos($selfSrc, "'worker_waiting'=>true,'phase'=>\$phase,'max_pages'=>\$maxPages,'page_mode'=>\$maxPages===0?'auto':'fixed','total'=>\$pageTotal") !== false);
     $add('10.385', 'ورودی 10.385 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "385'") !== false);
     $add('10.386', 'تست حذف سقف ۱۰۰ با snapshot جدید هم سازگار است',
-         strpos($selfSrc, "\$savedMaxPages=max(1,(int)(\$profile['pages']??10));") !== false
+         strpos($selfSrc, "\$savedMaxPages=max(0,(int)(\$profile['pages']??10));") !== false
       && version_compare(APP_VERSION, '10.' . '386', '>='));
     $add('10.386', 'ورودی 10.386 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "386'") !== false);
@@ -43820,6 +43831,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "صفحهٔ پیاپی تا صفحهٔ '.\$page.' محصول تازه‌ای نداشت") !== false);
     $add('10.387', 'ورودی 10.387 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "387'") !== false);
+    $add('10.388', 'صفر در UI و ذخیره به‌عنوان حالت خودکار حفظ می‌شود',
+         strpos($selfSrc, 'id="pages" value="10" min="0"') !== false
+      && strpos($selfSrc, "? max(0, (int)\$_POST['pages'])") !== false
+      && strpos($selfSrc, "pages: Math.max(0,parseInt(\$('pages').value)||0)") !== false);
+    $add('10.388', 'صفر با مقدار ارسال‌نشده اشتباه نمی‌شود',
+         strpos($selfSrc, "int \$maxPages = -1") !== false
+      && strpos($selfSrc, "array_key_exists('max_pages',\$payload)?max(0") !== false
+      && strpos($selfSrc, "\$_requestedPagesRaw!==null") !== false);
+    $add('10.388', 'حالت خودکار تا پایان طبیعی با سقف ایمنی داخلی ادامه دارد',
+         strpos($selfSrc, "\$autoPageMode=\$pageSetting===0;") !== false
+      && strpos($selfSrc, "\$maxPages=\$autoPageMode?10000:max(1,\$pageSetting);") !== false
+      && strpos($selfSrc, "هدف این اجرا: خودکار تا آخرین صفحهٔ واقعی") !== false);
+    $add('10.388', 'صف و progress حالت auto را بدون درصد ساختگی نشان می‌دهند',
+         strpos($selfSrc, "'page_mode'=>\$maxPages===0?'auto':'fixed'") !== false
+      && strpos($selfSrc, "\$progressPageTarget=\$autoPageMode?0:\$maxPages;") !== false);
+    $add('10.388', 'ورودی 10.388 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "388'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -69047,10 +69075,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         <div class="row">
             <input type="url" id="url" value="<?=h(DEFAULT_URL)?>" placeholder="آدرس فروشگاه..." oninput="onUrlChange()">
             <div class="pages-unlimited-control" title="عدد دلخواه بنویسید یا از پیشنهادهای همین فیلد انتخاب کنید">
-                <input type="number" id="pages" value="10" min="1" step="1" list="pagesPresets" inputmode="numeric" enterkeyhint="done" pattern="[0-9]*" aria-label="تعداد صفحات استخراج" placeholder="تعداد صفحه" oninput="pagesInputChanged()" onchange="pagesInputChanged(true)">
-                <datalist id="pagesPresets"><option value="1"><option value="5"><option value="10"><option value="20"><option value="50"><option value="100"><option value="200"><option value="500"><option value="1000"></datalist>
+                <input type="number" id="pages" value="10" min="0" step="1" list="pagesPresets" inputmode="numeric" enterkeyhint="done" pattern="[0-9]*" aria-label="تعداد صفحات استخراج؛ صفر یعنی تشخیص خودکار آخرین صفحه" title="۰ = ادامه تا آخرین صفحه به‌صورت خودکار" placeholder="۰ = خودکار" oninput="pagesInputChanged()" onchange="pagesInputChanged(true)">
+                <datalist id="pagesPresets"><option value="0" label="خودکار تا آخرین صفحه"><option value="1"><option value="5"><option value="10"><option value="20"><option value="50"><option value="100"><option value="200"><option value="500"><option value="1000"></datalist>
             </div>
         </div>
+        <div style="font-size:10px;color:#7dd3fc;margin:-4px 2px 8px">عدد ۰ = ادامهٔ خودکار تا تشخیص آخرین صفحه</div>
 
         <div class="row" style="align-items:center;margin-top:6px">
             <label>موتور استخراج:</label>
@@ -71918,7 +71947,7 @@ function selectHeaderProfile(url) {
 
 function pagesInputChanged(commit){
     const input=$('pages');if(!input)return;
-    if(commit&&(input.value===''||parseInt(input.value)<1))input.value='1';
+    if(commit&&(input.value===''||parseInt(input.value)<0))input.value='0';
     scheduleSave();
 }
 
@@ -72075,7 +72104,7 @@ function loadProfileFromServer(url, silent) {
 function applyProfile(p, keepTab) {
     $('url').value = p.url || '';
     $('profileName').value = p.name || '';
-    $('pages').value = Math.max(1, parseInt(p.pages)||10);
+    $('pages').value = (p.pages===0||p.pages==='0') ? 0 : Math.max(1,parseInt(p.pages)||10);
     syncExtractionEngine(p.extractionEngine || EXTRACTION_ENGINE_DEFAULT, 'load');
     $('pagType').value = p.pagType || 'query_page';
     $('pagVal').value = p.pagVal || '';
@@ -72234,7 +72263,7 @@ function collectProfileData() {
     return {
         url: $('url').value.trim(),
         name: $('profileName').value.trim(),
-        pages: parseInt($('pages').value) || 10,
+        pages: Math.max(0,parseInt($('pages').value)||0),
         extractionEngine: s4EngineValue(),
         pagType: $('pagType').value,
         pagVal: $('pagVal').value,
@@ -74317,8 +74346,8 @@ function backendExtractFor(url,panelTitle,phase){
         }
         // Trigger backend extract endpoint (fire-and-forget)
         const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));
-        const pageTarget=Math.max(1,parseInt(prof.pages)||10);
-        showToast('📄 هدف تأییدشدهٔ این اجرا: '+toFa(pageTarget)+' صفحه');
+        const pageTarget=(prof.pages===0||prof.pages==='0')?0:Math.max(1,parseInt(prof.pages)||10);
+        showToast(pageTarget===0?'📄 هدف تأییدشده: تشخیص خودکار آخرین صفحه':'📄 هدف تأییدشدهٔ این اجرا: '+toFa(pageTarget)+' صفحه');
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
               +'&profile_key='+encodeURIComponent(serverProfileKey)
               +'&pages='+encodeURIComponent(pageTarget),{method:'GET'}).catch(()=>{});
@@ -75915,6 +75944,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.388', t:'♾ تشخیص خودکار آخرین صفحه با مقدار صفر', items:[
+    'مقدار ۰ در تعداد صفحات اکنون یک حالت واقعی است: استخراج تا پایان طبیعی صفحه‌بندی ادامه می‌یابد.',
+    'پایان از 404/410، نبود لینک بعدی، یا چند صفحهٔ خالی/تکراری پیاپی تشخیص داده می‌شود؛ صفر دیگر به ۱ یا ۱۰ تبدیل نمی‌شود.',
+    'حالت auto همراه job worker ذخیره و در صف/progress نمایش داده می‌شود؛ یک سقف ایمنی داخلی ۱۰هزارصفحه‌ای فقط جلوی صفحه‌بندی معیوب و بی‌نهایت را می‌گیرد.',
+    'برای حالت خودکار درصد ساختگی نمایش داده نمی‌شود و شمارهٔ صفحه/تعداد محصول زنده باقی می‌ماند.'
+  ]},
   {v:'10.387', t:'🔭 عبور از صفحهٔ خالی/تکراری موقت', items:[
     'یک صفحهٔ بدون محصول تازه دیگر فوراً پایان استخراج نیست؛ موتور صفحات بعدی را نیز بررسی می‌کند.',
     'برای ایمالز تا پنج صفحهٔ پیاپی و برای سایر منابع تا سه صفحهٔ پیاپی بدون محصول تازه لازم است تا پایان طبیعی ثبت شود.',
