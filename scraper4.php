@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.388';
+const APP_VERSION = '10.389';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -358,7 +358,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/27';
+const APP_VERSION_DATE = '1405/07/28';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -39945,19 +39945,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '<div id="vTable" class="table-wrap">') !== false);
     $add('10.31', 'refreshViews وقتی تبِ نتایج بسته است چیزی نمی‌سازد',
          strpos($selfSrc, 'function resultsVisible(){') !== false
-      && strpos($selfSrc, '} else if (resultsVisible()) {') !== false
+      && (strpos($selfSrc, '} else if (resultsVisible()) {') !== false
+          || strpos($selfSrc, 'else if(resultsVisible())rvEnsure(rvCurView);') !== false)
       && strpos($selfSrc, 'rvMarkDirty();') !== false);
     /* حالتِ خالی باید بی‌توجه به تبِ باز پاک شود، وگرنه بعد از پاک‌کردنِ
        نتایج، کارت‌های قدیمی روی نمای مخفی جا می‌مانند. */
     $add('10.31', 'خالی‌شدنِ نتایج هر دو نما را بدونِ شرطِ تب پاک می‌کند',
-         strpos($selfSrc, 'if (products.size === 0) {' . "\n" . '        /* حالتِ خالی') !== false);
+         (strpos($selfSrc, 'if (products.size === 0) {' . "\n" . '        /* حالتِ خالی') !== false
+          || strpos($selfSrc, 'if(products.size===0){rvBuildGrid();rvBuildTable();}') !== false));
     $add('10.31', 'سه سازندهٔ نما و درگاهِ rvEnsure موجودند',
          strpos($selfSrc, 'function rvBuildTable(){') !== false
       && strpos($selfSrc, 'function rvBuildGrid(){') !== false
       && strpos($selfSrc, 'function rvBuildText(){') !== false
       && strpos($selfSrc, 'function rvEnsure(v){') !== false);
-    $add('10.31', 'نمای کارتی تکه‌تکه و با setTimeout رندر می‌شود',
-         strpos($selfSrc, 'rvChunkTimer=setTimeout(step,0);') !== false
+    $add('10.31', 'نمای کارتی به‌صورت تکه‌ای و بدون ساخت یک‌جای DOM رندر می‌شود',
+         (strpos($selfSrc, 'rvChunkTimer=setTimeout(step,0);') !== false
+          || strpos($selfSrc, "function rvAppendGrid(dir='next'){") !== false)
       && strpos($selfSrc, 'function rvCancelChunks(){') !== false);
     $add('10.31', 'switchView نما را در صورت نیاز می‌سازد و انتخاب را حفظ می‌کند',
          strpos($selfSrc, 'rvCurView=v;') !== false
@@ -43848,6 +43851,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$progressPageTarget=\$autoPageMode?0:\$maxPages;") !== false);
     $add('10.388', 'ورودی 10.388 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "388'") !== false);
+    $add('10.389', 'جدول و کارت فقط یک صفحهٔ محدود DOM را در هر اسکرول اضافه می‌کنند',
+         strpos($selfSrc, 'const RV_PAGE_SIZE = 80;') !== false
+      && strpos($selfSrc, 'const RV_MAX_DOM = 240;') !== false
+      && strpos($selfSrc, "function rvAppendTable(dir='next'){") !== false
+      && strpos($selfSrc, "function rvAppendGrid(dir='next'){") !== false
+      && strpos($selfSrc, 'st.cursor+RV_PAGE_SIZE') !== false);
+    $add('10.389', 'ادامهٔ نتایج با sentinel و IntersectionObserver نزدیک انتهای صفحه فعال می‌شود',
+         strpos($selfSrc, 'function rvWatchMore(view,els){') !== false
+      && strpos($selfSrc, "rootMargin:'500px 0px'") !== false
+      && strpos($selfSrc, "tr.id=dir==='next'?'rvTableMore':'rvTablePrev'") !== false);
+    $add('10.389', 'فیلتر و تعویض داده snapshot صفحه‌بندی را بازسازی می‌کنند',
+         strpos($selfSrc, "if(typeof rvRebuildVisible==='function')rvRebuildVisible();") !== false
+      && strpos($selfSrc, 'rvPageState={grid:null,table:null,text:null};') !== false
+      && strpos($selfSrc, 'refreshViews();') !== false);
+    $add('10.389', 'نمای متن نیز مرحله‌ای است ولی کپی و خروجی از دادهٔ کامل ساخته می‌شود',
+         strpos($selfSrc, 'const RV_TEXT_PAGE_SIZE = 200;') !== false
+      && strpos($selfSrc, "function rvAppendText(dir='next'){") !== false
+      && strpos($selfSrc, 'navigator.clipboard.writeText(genTxt())') !== false);
+    $add('10.389', 'ورودی 10.389 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "389'") !== false
+      && version_compare(APP_VERSION, '10.' . '389', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -73943,8 +73967,11 @@ function renderCard(p,k){
   // گرفته بود باید نگهش داریم وگرنه با هر به‌روزرسانی دوباره می‌پرد.
   if(el){const _pop=el.classList.contains('fx-pop')?' fx-pop':'';
          el.innerHTML=html;el.className=_cls+_pop;el.style.display=matchFilter(_st)?'':'none';}
-  else{const d=document.createElement('div');d.className=_cls;d.dataset.k=_k;d.innerHTML=html;
-       d.style.display=matchFilter(_st)?'':'none';$('vGrid').appendChild(d);fxWatchCard(d);}
+  else{
+    if(typeof rvCanAppend==='function'&&!rvCanAppend('grid')){if(typeof rvDirty!=='undefined')rvDirty.grid=true;return;}
+    const d=document.createElement('div');d.className=_cls;d.dataset.k=_k;d.innerHTML=html;
+    d.style.display=matchFilter(_st)?'':'none';$('vGrid').appendChild(d);fxWatchCard(d);
+  }
 }
 
 /* v10.291: شکست کامل قیمت برای جدول/مودال نتایج؛ همان قواعد ارسال. */
@@ -74041,7 +74068,10 @@ function renderRow(p,i,k){
   const _k=ensureKey(p,k);if(!_k)return;
   const tb=$('tBody'),el=tb&&tb.querySelector(`[data-k="${_k}"]`),st=prodStatus(p),html=rowHtml(p,i);
   if(el){el.innerHTML=html;el.style.display=matchFilter(st)?'':'none';el.onclick=()=>resultProductOpen(resultKeyArg(_k));}
-  else if(tb){const tr=document.createElement('tr');tr.dataset.k=_k;tr.innerHTML=html;tr.style.cursor='pointer';tr.title='مشاهده صفحه کامل محصول';tr.onclick=()=>resultProductOpen(resultKeyArg(_k));tr.style.display=matchFilter(st)?'':'none';tb.appendChild(tr);}
+  else if(tb){
+    if(typeof rvCanAppend==='function'&&!rvCanAppend('table')){if(typeof rvDirty!=='undefined')rvDirty.table=true;return;}
+    const tr=document.createElement('tr');tr.dataset.k=_k;tr.innerHTML=html;tr.style.cursor='pointer';tr.title='مشاهده صفحه کامل محصول';tr.onclick=()=>resultProductOpen(resultKeyArg(_k));tr.style.display=matchFilter(st)?'':'none';tb.appendChild(tr);
+  }
 }
 
 function updateTableHeaders() {
@@ -74075,126 +74105,140 @@ function updateTableHeaders() {
  *       تصویر و بدونِ IntersectionObserver است و بسیار سبک‌تر.
  *    ۳) هر نما فقط وقتی ساخته می‌شود که واقعاً دیده شود، و همان‌جا هم
  *       کش می‌شود تا سوییچِ بعدی رایگان باشد.
- *    ۴) نمای کارتی روی پروفایل‌های بزرگ تکه‌تکه (chunk) رندر می‌شود تا
- *       رشتهٔ اصلی آزاد بماند و صفحه قفل نکند.
+ *    ۴) هر نما یک پنجرهٔ محدود DOM دارد؛ صفحه‌های بعد/قبل نزدیک sentinel
+ *       بار می‌شوند و صفحه‌های دور حذف می‌گردند تا DOM هرگز نامحدود نشود.
  * ===================================================================== */
-const RV_CHUNK = 120;          // تعداد کارت در هر تکهٔ رندر
-const RV_HEAVY = 400;          // از این تعداد به بالا «سنگین» حساب می‌شود
+const RV_CHUNK = 120;          // compatibility: old chunk test/name
+const RV_HEAVY = 400;
+const RV_PAGE_SIZE = 80;       // DOM rows/cards loaded per scroll page
+const RV_MAX_DOM = 240;        // keep at most three pages; older pages can reload upward
+const RV_TEXT_PAGE_SIZE = 200;
 let rvDirty = {grid:true, table:true, text:true};
-let rvChunkTimer = null;
-let rvCurView = 'table';       // v10.31: پیش‌فرضِ تبِ نتایج جدول است
+let rvChunkTimer = null;       // compatibility; eager all-product timer removed
+let rvCurView = 'table';
+let rvPageState = {grid:null,table:null,text:null};
+let rvMoreObserver = {grid:null,table:null,text:null};
 
-/** آیا تبِ نتایج همین حالا روی صفحه است؟ */
 function resultsVisible(){
   const p=document.getElementById('pane-results');
   return !!(p&&p.classList.contains('active'));
 }
-/** همهٔ نماها را «کهنه» علامت بزن (بدون ساختن) */
-function rvMarkDirty(){ rvDirty.grid=true; rvDirty.table=true; rvDirty.text=true; }
-
-/** اگر رندرِ تکه‌تکهٔ کارت در جریان است، لغوش کن */
+function rvMarkDirty(){
+  rvDirty.grid=true;rvDirty.table=true;rvDirty.text=true;
+  rvPageState={grid:null,table:null,text:null};rvCancelChunks();
+}
 function rvCancelChunks(){
-  if(rvChunkTimer){ clearTimeout(rvChunkTimer); rvChunkTimer=null; }
+  if(rvChunkTimer){clearTimeout(rvChunkTimer);rvChunkTimer=null;}
+  Object.keys(rvMoreObserver).forEach(v=>{if(rvMoreObserver[v]){try{rvMoreObserver[v].disconnect();}catch(e){}rvMoreObserver[v]=null;}});
 }
-
-/** نوارِ «برای دیدن کارت‌ها کلیک کنید» وقتی نمای سنگین هنوز ساخته نشده */
-function rvHint(msg){
-  return '<div class="rv-hint">'+msg+'</div>';
+function rvHint(msg){return '<div class="rv-hint">'+msg+'</div>';}
+function rvFilteredItems(){
+  const out=[];order.forEach((k,i)=>{const p=products.get(k);if(!p)return;const _k=ensureKey(p,k);if(!_k)return;
+    if(matchFilter(prodStatus(p)))out.push({k:_k,p:p,n:i+1});});return out;
 }
-
-/** ساختِ نمای جدولی — سبک است، یک‌جا و بدون تصویرِ بزرگ */
-function rvBuildTable(){
-  updateTableHeaders();
-  const tb=$('tBody');
-  if(!tb)return;
-  if(products.size===0){ tb.innerHTML=''; rvDirty.table=false; return; }
-  const buf=[];
-  order.forEach((k,i)=>{
-    const p=products.get(k);
-    if(!p)return;
-    const _k=ensureKey(p,k);
-    if(!_k)return;
-    const st=prodStatus(p);
-    buf.push('<tr data-k="'+esc(_k)+'" title="مشاهده صفحه کامل محصول" style="cursor:pointer;'+(matchFilter(st)?'':'display:none;')+'" onclick="resultProductOpen(\''+resultKeyArg(_k)+'\')">'
-             +rowHtml(p,i+1)+'</tr>');
-  });
-  tb.innerHTML=buf.join('');
-  rvDirty.table=false;
+function rvMoreText(st){
+  const shown=Math.min(st.cursor,st.items.length),left=Math.max(0,st.items.length-shown);
+  return 'نمایش '+toFa(shown)+' از '+toFa(st.items.length)+(left?' · '+toFa(left)+' مورد با اسکرول بارگذاری می‌شود':'');
 }
-
-/** ساختِ نمای کارتی — سنگین است، پس تکه‌تکه */
-function rvBuildGrid(){
-  rvCancelChunks();
-  const g=$('vGrid');
-  if(!g)return;
-  if(products.size===0){
-    g.innerHTML='<div class="empty-state" id="emptyState"><div class="icon">📭</div><p>هنوز محصولی اسکرپ نشده است.</p></div>';
-    rvDirty.grid=false;
-    return;
+function rvWatchMore(view,els){
+  if(rvMoreObserver[view]){try{rvMoreObserver[view].disconnect();}catch(e){}}
+  const targets=Array.from(els?(els.length===undefined?[els]:els):[]).filter(Boolean);
+  if(!targets.length||typeof IntersectionObserver!=='function')return;
+  const io=new IntersectionObserver(es=>{const hit=es.find(x=>x.isIntersecting);if(!hit)return;
+    io.disconnect();rvMoreObserver[view]=null;const dir=(hit.target.dataset&&hit.target.dataset.rvDir)||'next';
+    if(view==='grid')rvAppendGrid(dir);else if(view==='table')rvAppendTable(dir);else rvAppendText(dir);},
+    {root:null,rootMargin:'500px 0px',threshold:0});
+  rvMoreObserver[view]=io;targets.forEach(el=>io.observe(el));
+}
+function rvWindowText(st){
+  return 'نمایش '+toFa(st.start+1)+' تا '+toFa(st.cursor)+' از '+toFa(st.items.length)+' · فقط '+toFa(RV_MAX_DOM)+' مورد در صفحه نگه داشته می‌شود';
+}
+function rvTableMore(st){
+  const tb=$('tBody');if(!tb)return;tb.querySelectorAll('.rv-page-sentinel').forEach(x=>x.remove());
+  const cols=Math.max(1,document.querySelectorAll('#vTable thead th').length),sentinels=[];
+  const add=(dir,label)=>{const tr=document.createElement('tr');tr.className='rv-page-sentinel';tr.id=dir==='next'?'rvTableMore':'rvTablePrev';tr.dataset.rvDir=dir;
+    tr.innerHTML='<td colspan="'+cols+'" style="text-align:center;padding:12px;color:#7dd3fc;background:#0f172a">'+rvWindowText(st)
+      +'<br><button class="btn btn-blue" style="margin-top:7px" onclick="rvAppendTable(\''+dir+'\')">'+label+'</button></td>';
+    if(dir==='prev')tb.insertBefore(tr,tb.firstChild);else tb.appendChild(tr);sentinels.push(tr);};
+  if(st.start>0)add('prev','نمایش موارد قبلی');if(st.cursor<st.items.length)add('next','نمایش موارد بعدی');rvWatchMore('table',sentinels);
+}
+function rvAppendTable(dir='next'){
+  const st=rvPageState.table,tb=$('tBody');if(!st||!tb)return;if(rvMoreObserver.table)rvMoreObserver.table.disconnect();
+  tb.querySelectorAll('.rv-page-sentinel').forEach(x=>x.remove());const anchor=tb.querySelector('tr[data-k]'),oldTop=anchor?anchor.getBoundingClientRect().top:0;
+  const buf=[];if(dir==='prev'){
+    const from=Math.max(0,st.start-RV_PAGE_SIZE);for(let i=from;i<st.start;i++){const x=st.items[i];buf.push('<tr data-k="'+esc(x.k)+'" title="مشاهده صفحه کامل محصول" style="cursor:pointer" onclick="resultProductOpen(\''+resultKeyArg(x.k)+'\')">'+rowHtml(x.p,x.n)+'</tr>');}
+    tb.insertAdjacentHTML('afterbegin',buf.join(''));st.start=from;
+  }else{
+    const end=Math.min(st.cursor+RV_PAGE_SIZE,st.items.length);for(let i=st.cursor;i<end;i++){const x=st.items[i];buf.push('<tr data-k="'+esc(x.k)+'" title="مشاهده صفحه کامل محصول" style="cursor:pointer" onclick="resultProductOpen(\''+resultKeyArg(x.k)+'\')">'+rowHtml(x.p,x.n)+'</tr>');}
+    tb.insertAdjacentHTML('beforeend',buf.join(''));st.cursor=end;
   }
-  g.innerHTML='';
-  let i=0;
-  const total=order.length;
-  const step=()=>{
-    const end=Math.min(i+RV_CHUNK,total);
-    const buf=[];
-    for(;i<end;i++){
-      const k=order[i];
-      const p=products.get(k);
-      if(!p)continue;
-      const _k=ensureKey(p,k);
-      if(!_k)continue;
-      const st=prodStatus(p);
-      buf.push('<div class="product'+(st==='new'?' is-new':st==='changed'?' is-chg':'')
-               +'" data-k="'+esc(_k)+'"'+(matchFilter(st)?'':' style="display:none"')+'>'
-               +cardHtml(p,_k)+'</div>');
-    }
-    g.insertAdjacentHTML('beforeend',buf.join(''));
-    if(i<total){
-      rvChunkTimer=setTimeout(step,0);      // نفس بکش تا صفحه قفل نکند
-    }else{
-      rvChunkTimer=null;
-      rvDirty.grid=false;
-      if(typeof window.rvAfterGrid==='function')window.rvAfterGrid();
-    }
-  };
-  step();
+  let rows=Array.from(tb.querySelectorAll('tr[data-k]')),excess=Math.max(0,rows.length-RV_MAX_DOM);
+  if(excess&&dir==='prev'){for(let i=0;i<excess;i++)rows[rows.length-1-i].remove();st.cursor-=excess;}
+  else if(excess){const h0=document.documentElement.scrollHeight;for(let i=0;i<excess;i++)rows[i].remove();st.start+=excess;const dh=document.documentElement.scrollHeight-h0;if(dh)window.scrollBy(0,dh);}
+  if(dir==='prev'&&anchor){const dy=anchor.getBoundingClientRect().top-oldTop;if(dy)window.scrollBy(0,dy);}
+  rvTableMore(st);
 }
-
-/** ساختِ نمای متنی */
+function rvBuildTable(){
+  updateTableHeaders();const tb=$('tBody');if(!tb)return;rvCancelChunks();tb.innerHTML='';
+  const items=rvFilteredItems();rvPageState.table={items:items,start:0,cursor:0};rvDirty.table=false;if(items.length)rvAppendTable();
+}
+function rvGridMore(st){
+  const g=$('vGrid');if(!g)return;g.querySelectorAll('.rv-page-sentinel').forEach(x=>x.remove());const sentinels=[];
+  const add=(dir,label)=>{const more=document.createElement('div');more.id=dir==='next'?'rvGridMore':'rvGridPrev';more.className='rv-hint rv-page-sentinel';more.style.gridColumn='1/-1';more.dataset.rvDir=dir;
+    more.innerHTML=rvWindowText(st)+'<br><button class="btn btn-blue" style="margin-top:7px" onclick="rvAppendGrid(\''+dir+'\')">'+label+'</button>';
+    if(dir==='prev')g.insertBefore(more,g.firstChild);else g.appendChild(more);sentinels.push(more);};
+  if(st.start>0)add('prev','نمایش موارد قبلی');if(st.cursor<st.items.length)add('next','نمایش موارد بعدی');rvWatchMore('grid',sentinels);
+}
+function rvAppendGrid(dir='next'){
+  const st=rvPageState.grid,g=$('vGrid');if(!st||!g)return;if(rvMoreObserver.grid)rvMoreObserver.grid.disconnect();
+  g.querySelectorAll('.rv-page-sentinel').forEach(x=>x.remove());const anchor=g.querySelector('.product'),oldTop=anchor?anchor.getBoundingClientRect().top:0,buf=[];
+  const html=x=>{const stt=prodStatus(x.p);return '<div class="product'+(stt==='new'?' is-new':stt==='changed'?' is-chg':'')+'" data-k="'+esc(x.k)+'">'+cardHtml(x.p,x.k)+'</div>';};
+  if(dir==='prev'){const from=Math.max(0,st.start-RV_PAGE_SIZE);for(let i=from;i<st.start;i++)buf.push(html(st.items[i]));g.insertAdjacentHTML('afterbegin',buf.join(''));st.start=from;}
+  else{const end=Math.min(st.cursor+RV_PAGE_SIZE,st.items.length);for(let i=st.cursor;i<end;i++)buf.push(html(st.items[i]));g.insertAdjacentHTML('beforeend',buf.join(''));st.cursor=end;}
+  let cards=Array.from(g.querySelectorAll('.product')),excess=Math.max(0,cards.length-RV_MAX_DOM);
+  if(excess&&dir==='prev'){for(let i=0;i<excess;i++)cards[cards.length-1-i].remove();st.cursor-=excess;}
+  else if(excess){const h0=document.documentElement.scrollHeight;for(let i=0;i<excess;i++)cards[i].remove();st.start+=excess;const dh=document.documentElement.scrollHeight-h0;if(dh)window.scrollBy(0,dh);}
+  if(dir==='prev'&&anchor){const dy=anchor.getBoundingClientRect().top-oldTop;if(dy)window.scrollBy(0,dy);}
+  if(typeof window.rvAfterGrid==='function')window.rvAfterGrid();rvGridMore(st);
+}
+function rvBuildGrid(){
+  rvCancelChunks();const g=$('vGrid');if(!g)return;g.innerHTML='';const items=rvFilteredItems();
+  rvPageState.grid={items:items,start:0,cursor:0};rvDirty.grid=false;
+  if(!items.length){g.innerHTML='<div class="empty-state" id="emptyState"><div class="icon">📭</div><p>محصولی برای نمایش نیست.</p></div>';return;}rvAppendGrid();
+}
+function rvRenderTextWindow(st,anchorIndex=-1,oldTop=0){
+  const t=$('txtContent');if(!t)return;t.textContent='';t.appendChild(document.createTextNode(resultTextHeader()));const sentinels=[];
+  const sentinel=(dir,label)=>{const more=document.createElement('span');more.className='rv-page-sentinel';more.id=dir==='next'?'rvTextMore':'rvTextPrev';more.dataset.rvDir=dir;more.style.cssText='display:block;padding:12px;text-align:center;color:#7dd3fc;white-space:normal';
+    more.innerHTML='نمایش '+toFa(st.start+1)+' تا '+toFa(st.cursor)+' از '+toFa(st.items.length)+'<br><button class="btn btn-blue" style="margin-top:7px" onclick="rvAppendText(\''+dir+'\')">'+label+'</button>';sentinels.push(more);return more;};
+  if(st.start>0)t.appendChild(sentinel('prev','نمایش موارد قبلی'));
+  for(let i=st.start;i<st.cursor;i++){const x=st.items[i],line=document.createElement('span');line.className='rv-text-row';line.dataset.i=String(i);line.style.display='block';line.textContent=resultTextRow(x.p,x.n);t.appendChild(line);}
+  if(st.cursor<st.items.length)t.appendChild(sentinel('next','نمایش موارد بعدی'));
+  if(anchorIndex>=0){const anchor=t.querySelector('.rv-text-row[data-i="'+anchorIndex+'"]');if(anchor){const dy=anchor.getBoundingClientRect().top-oldTop;if(dy)window.scrollBy(0,dy);}}
+  rvWatchMore('text',sentinels);
+}
+function rvAppendText(dir='next'){
+  const st=rvPageState.text,t=$('txtContent');if(!st||!t)return;const anchor=t.querySelector('.rv-text-row'),anchorIndex=anchor?parseInt(anchor.dataset.i):-1,oldTop=anchor?anchor.getBoundingClientRect().top:0;
+  if(dir==='prev'){st.start=Math.max(0,st.start-RV_TEXT_PAGE_SIZE);st.cursor=Math.min(st.items.length,Math.max(st.cursor,st.start+RV_TEXT_PAGE_SIZE*3));}
+  else{st.cursor=Math.min(st.items.length,st.cursor+RV_TEXT_PAGE_SIZE);st.start=Math.max(0,st.cursor-RV_TEXT_PAGE_SIZE*3);}
+  rvRenderTextWindow(st,anchorIndex,oldTop);
+}
 function rvBuildText(){
-  const t=$('txtContent');
-  if(!t)return;
-  t.textContent=genTxt();
-  rvDirty.text=false;
+  rvCancelChunks();const t=$('txtContent');if(!t)return;t.textContent='';const items=rvFilteredItems();
+  rvPageState.text={items:items,start:0,cursor:Math.min(RV_TEXT_PAGE_SIZE,items.length)};rvDirty.text=false;rvRenderTextWindow(rvPageState.text);
 }
-
-/** نمای خواسته‌شده را در صورت نیاز بساز */
 function rvEnsure(v){
-  if(v==='table'&&rvDirty.table)rvBuildTable();
-  else if(v==='grid'&&rvDirty.grid)rvBuildGrid();
-  else if(v==='text'&&rvDirty.text)rvBuildText();
+  if(v==='table'&&rvDirty.table)rvBuildTable();else if(v==='grid'&&rvDirty.grid)rvBuildGrid();else if(v==='text'&&rvDirty.text)rvBuildText();
+  else if(v==='table')rvWatchMore('table',document.querySelectorAll('#tBody .rv-page-sentinel'));
+  else if(v==='grid')rvWatchMore('grid',document.querySelectorAll('#vGrid .rv-page-sentinel'));
+  else if(v==='text')rvWatchMore('text',document.querySelectorAll('#txtContent .rv-page-sentinel'));
 }
-
-/**
- * جایگزینِ refreshViews قدیمی.
- *
- * دیگر چیزی نمی‌سازد مگر آن‌که همان لحظه دیده شود. بقیه «کهنه» می‌مانند
- * و لحظهٔ نمایش ساخته می‌شوند.
- */
-function refreshViews() {
-    rvCancelChunks();
-    rvMarkDirty();
-    if (products.size === 0) {
-        /* حالتِ خالی آن‌قدر ارزان است که همیشه و بدونِ توجه به تبِ باز
-           درستش می‌کنیم — وگرنه اگر کاربر روی نمای متن باشد، کارت‌ها و
-           ردیف‌های قدیمی روی صفحه جا می‌مانند. */
-        rvBuildGrid();
-        rvBuildTable();
-    } else if (resultsVisible()) {
-        rvEnsure(rvCurView);
-    }
-    update();
+function rvRebuildVisible(){rvMarkDirty();if(resultsVisible())rvEnsure(rvCurView);}
+function rvCanAppend(view){
+  const host=view==='grid'?$('vGrid'):$('tBody');if(!host)return false;
+  return host.querySelectorAll(view==='grid'?'.product':'tr[data-k]').length<RV_PAGE_SIZE;
+}
+function refreshViews(){
+  rvMarkDirty();if(products.size===0){rvBuildGrid();rvBuildTable();}else if(resultsVisible())rvEnsure(rvCurView);update();
 }
 
 function removeNoPrice() {
@@ -74245,27 +74289,21 @@ function removeBelowMinPrice() {
     showToast(`${keysToDelete.length} محصول حذف شد`);
 }
 
+function resultTextHeader(){
+  let headers='# | Title | Original | Final | URL | Image | Gallery';
+  getDetailColumns().forEach(f=>headers+=` | ${f.label}`);
+  if(isCustomColEnabled())headers+=` | ${getCustomColName()}`;
+  return headers+'\n'+'-'.repeat(140)+'\n';
+}
+function resultTextRow(p,i){
+  const _gn=Array.isArray(p.images)?p.images.filter(Boolean).length:0;
+  let row=`${i} | ${(getFinalTitle(p.title)||'').substring(0,25)} | ${getOriginalPrice(p.price)} | ${getFinalPrice(p.price)} | ${p.link||'-'} | ${p.image||'-'} | ${_gn>1?(_gn+' imgs'):(_gn===1?'1':'-')}`;
+  getDetailColumns().forEach(f=>{let val=p[f.key]||'';if(f.key==='shortDesc'||f.key==='longDesc')val=shortText(stripHtml(val),40);row+=` | ${val}`;});
+  if(isCustomColEnabled())row+=` | ${getCustomColVal()}`;
+  return row;
+}
 function genTxt(){
-  // v8.84: ستون گالری در نمای متنی هم بیاید تا با جدول یکی باشد
-  let headers = '# | Title | Original | Final | URL | Image | Gallery';
-  const enabledFields = getDetailColumns();   // v10.15: قیمت ستونِ جدا نمی‌گیرد
-  enabledFields.forEach(f => headers += ` | ${f.label}`);
-  if (isCustomColEnabled()) headers += ` | ${getCustomColName()}`;
-  let t = headers + '\n' + '-'.repeat(140) + '\n';
-  order.forEach((k,i)=>{
-      const p=products.get(k);
-      if(!p)return;
-      const _gn=Array.isArray(p.images)?p.images.filter(Boolean).length:0;
-      let row = `${i+1} | ${(getFinalTitle(p.title)||'').substring(0,25)} | ${getOriginalPrice(p.price)} | ${getFinalPrice(p.price)} | ${p.link||'-'} | ${p.image||'-'} | ${_gn>1?(_gn+' imgs'):(_gn===1?'1':'-')}`;
-      enabledFields.forEach(f => {
-          let val = p[f.key] || '';
-          if (f.key === 'shortDesc' || f.key === 'longDesc') val = shortText(stripHtml(val), 40);
-          row += ` | ${val}`;
-      });
-      if (isCustomColEnabled()) row += ` | ${getCustomColVal()}`;
-      t += row + '\n';
-  });
-  return t;
+  let t=resultTextHeader();order.forEach((k,i)=>{const p=products.get(k);if(p)t+=resultTextRow(p,i+1)+'\n';});return t;
 }
 
 /* v10.31 (۴۴): نما فقط لحظهٔ انتخاب ساخته می‌شود.
@@ -74290,10 +74328,10 @@ function switchView(v){
   $('vText').classList.toggle('hidden',v!=='text');
   rvCurView=v;
   rvRememberView(v);
-  /* رندرِ کارتیِ سنگین را یک تیک عقب می‌اندازیم تا اول خودِ تب عوض شود
-     و کاربر بازخوردِ فوری ببیند، بعد کارت‌ها بیایند. */
+  /* ساخت نخستین صفحهٔ کارت را یک تیک عقب می‌اندازیم تا خودِ تب فوراً
+     عوض شود؛ فقط پنجرهٔ محدود ساخته می‌شود، نه همهٔ محصولات. */
   if(v==='grid'&&rvDirty.grid&&products.size>=RV_HEAVY){
-    $('vGrid').innerHTML=rvHint('⏳ در حال آماده‌سازیِ '+toFa(products.size)+' کارت…');
+    $('vGrid').innerHTML=rvHint('⏳ در حال آماده‌سازی نخستین صفحه از '+toFa(products.size)+' محصول…');
     setTimeout(()=>{ if(rvCurView==='grid')rvBuildGrid(); },30);
     return;
   }
@@ -75530,12 +75568,11 @@ function loadBackendExtractResults(key){
                 if(typeof p==='object'&&!p.key)p.key=k;
                 products.set(k,p);
                 order.push(k);
-                renderCard(p,k);
-                renderRow(p,order.length,k);
             }
         });
-        update();
-        $('txtContent').textContent=genTxt();
+        /* Data stays complete in memory; the Results DOM receives only the
+           first scroll page and appends later pages near the viewport. */
+        refreshViews();
         // Auto-save current session
         if($('url').value.trim()&&products.size>0)saveProfileSilent();
     }).catch(()=>{});
@@ -75634,7 +75671,7 @@ function start(useSel=false){
 }
 
 function stop(){if(es)es.close();log('⏹ متوقف شد','err');finish();}
-function finish(){updateSpeedCard(products.size,0);extractSpeedStartMs=0;running=false;if(es){es.close();es=null;}$('startBtn').classList.remove('hidden');$('startManualBtn').classList.remove('hidden');$('stopBtn').classList.add('hidden');$('txtContent').textContent=genTxt();showLiveComparison();fxBusy($('status'),false);}
+function finish(){updateSpeedCard(products.size,0);extractSpeedStartMs=0;running=false;if(es){es.close();es=null;}$('startBtn').classList.remove('hidden');$('startManualBtn').classList.remove('hidden');$('stopBtn').classList.add('hidden');rvRebuildVisible();showLiveComparison();fxBusy($('status'),false);}
 
 function startDetailExtraction(){
     if(detailRunning)return;
@@ -75792,7 +75829,7 @@ function parseSSEEvent(ev) {
             log(`✅ استخراج تفصیلی تکمیل: ${d.total} محصول`, 'ok');
             showToast(`✓ استخراج تفصیلی ${d.total} محصول تکمیل شد`);
             $('detailStatus').textContent = `✓ استخراج ${toFa(d.total)} محصول تکمیل شد`;
-            $('txtContent').textContent = genTxt();
+            rvRebuildVisible();
         } else if (type === 'error') {
             log('❌ ' + d.message, 'err');
         } else if (type === 'done') {
@@ -75944,6 +75981,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.389', t:'📜 صفحه‌بندی اسکرولی سبک برای نتایج حجیم', items:[
+    'نمای جدول و کارت ابتدا فقط ۸۰ محصول را وارد DOM می‌کند و نزدیک انتهای صفحه، دستهٔ بعدی را با IntersectionObserver می‌افزاید.',
+    'نمای متن نیز در دسته‌های ۲۰۰تایی ساخته می‌شود؛ کپی و فایل‌های خروجی همچنان در زمان درخواست از کل دادهٔ پروفایل تولید می‌شوند.',
+    'تغییر پروفایل، فیلتر، نما یا دادهٔ محصول cursor و snapshot صفحه‌بندی را بازنشانی می‌کند و شماره ردیف، نشان وضعیت، مودال و تصاویر حفظ شده‌اند.',
+    'دکمهٔ نمایش موارد بعدی به‌عنوان fallback مرورگر باقی مانده و هیچ تایمر صفرثانیه‌ای همهٔ محصولات را نهایتاً وارد DOM نمی‌کند.'
+  ]},
   {v:'10.388', t:'♾ تشخیص خودکار آخرین صفحه با مقدار صفر', items:[
     'مقدار ۰ در تعداد صفحات اکنون یک حالت واقعی است: استخراج تا پایان طبیعی صفحه‌بندی ادامه می‌یابد.',
     'پایان از 404/410، نبود لینک بعدی، یا چند صفحهٔ خالی/تکراری پیاپی تشخیص داده می‌شود؛ صفر دیگر به ۱ یا ۱۰ تبدیل نمی‌شود.',
@@ -90173,14 +90216,9 @@ function applyResultFilter(){
   if(resultFilter!=='all'&&Object.keys(prodStatusMap).length===0){
     resetResultFilter();
   }
-  document.querySelectorAll('#vGrid .product').forEach(el=>{
-    const st=prodStatusMap[el.dataset.k]||'';
-    el.style.display=matchFilter(st)?'':'none';
-  });
-  document.querySelectorAll('#tBody tr').forEach(el=>{
-    const st=prodStatusMap[el.dataset.k]||'';
-    el.style.display=matchFilter(st)?'':'none';
-  });
+  /* Filtering changes the paged key set. Rebuild only the visible first
+     page; do not scan/hide thousands of DOM nodes that should not exist. */
+  if(typeof rvRebuildVisible==='function')rvRebuildVisible();
 }
 
 function matchFilter(st){
@@ -90223,7 +90261,7 @@ function refreshResultBadges(){
     }
     el.style.display=matchFilter(st)?'':'none';
   });
-  document.querySelectorAll('#tBody tr').forEach(el=>{
+  document.querySelectorAll('#tBody tr[data-k]').forEach(el=>{
     const st=prodStatusMap[el.dataset.k]||'';
     const td=el.querySelector('td:nth-child(2)');
     if(td){
