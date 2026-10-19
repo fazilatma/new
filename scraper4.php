@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.389';
+const APP_VERSION = '10.390';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -891,7 +891,20 @@ function queueCfgChanged(?array $oldCfg, array $newCfg): bool {
 }
 
 function extractWriteQueue(array $queue): void {
-@file_put_contents(EXTRACT_QUEUE_FILE, json_encode($queue, JSON_UNESCAPED_UNICODE), LOCK_EX);
+    /* Parallel extractors may have read different snapshots. Under an active
+       extraction owner only its own row is merged; unrelated rows from the
+       current disk snapshot are never overwritten by stale memory. */
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if($lf)@flock($lf,LOCK_EX);
+    $owner=(string)($GLOBALS['_extractLockQueueId']??'');
+    if($owner!==''&&is_file(EXTRACT_QUEUE_FILE)){
+        $cur=json_decode((string)@file_get_contents(EXTRACT_QUEUE_FILE),true);
+        if(is_array($cur)&&is_array($cur['entries']??null)){
+            $incoming=null;foreach((array)($queue['entries']??[])as $e)if(is_array($e)&&(string)($e['id']??'')===$owner){$incoming=$e;break;}
+            if($incoming!==null){$found=false;foreach($cur['entries']as&$e)if(is_array($e)&&(string)($e['id']??'')===$owner){$e=$incoming;$found=true;break;}unset($e);if(!$found)$cur['entries'][]=$incoming;$queue=$cur;}
+        }
+    }
+    @file_put_contents(EXTRACT_QUEUE_FILE,json_encode($queue,JSON_UNESCAPED_UNICODE),LOCK_EX);
+    if($lf){@flock($lf,LOCK_UN);@fclose($lf);}
 }
 
 /* v10.282: هر همگام‌سازی باید یک ردیف قابل‌ردیابی در «صف استخراج بک‌اند»
@@ -1105,9 +1118,81 @@ function s4WorkerEnqueue(string $type, array $payload, string $label = ''): arra
     });
 }
 
+function extractTaskConcurrency(?array $cn = null): int {
+    $cn = $cn ?? loadConnections();
+    return max(1, min(8, (int)($cn['extract_task_concurrency'] ?? 3)));
+}
+function s4ParallelExtractSupported(): bool {
+    return function_exists('exec') && strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN'
+        && empty($GLOBALS['_s4ParallelExtractDisabled']);
+}
+function s4WorkerParallelExtractRunning(): int {
+    $n=0;
+    foreach((array)(s4WorkerLoadQueue()['entries']??[]) as $e){
+        if(!is_array($e)||(string)($e['type']??'')!=='backend_extract'||(string)($e['status']??'')!=='running')continue;
+        $pid=(int)($e['worker_pid']??0);
+        if($pid<=0||s4WorkerPidAlive($pid))$n++;
+    }
+    return $n;
+}
+function s4SpawnParallelExtractJob(string $jobId): array {
+    if(!s4ParallelExtractSupported())return ['ok'=>false,'error'=>'parallel_extract_unsupported'];
+    $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
+    $log=__DIR__.'/logs/backend-extract.log';
+    $cmd='nohup '.s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' worker_extract_job '
+        .escapeshellarg($jobId).' >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
+    $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;
+    foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
+    return ($rc===0&&$pid>0)?['ok'=>true,'pid'=>$pid,'log'=>$log]
+        :['ok'=>false,'error'=>'parallel_extract_spawn_failed','exit_code'=>$rc,'log'=>$log];
+}
+/** Fill only extraction slots. Other heavy job types remain serialized by the
+ * main daemon; each extraction child owns one queue row and one extraction slot. */
+function s4DispatchParallelExtractJobs(): array {
+    $limit=extractTaskConcurrency();
+    if($limit<=1||!s4ParallelExtractSupported())return ['ok'=>false,'skipped'=>'unsupported_or_single','limit'=>$limit];
+    $running=0;$claimed=[];
+    s4WorkerQueueMutate(function(&$q)use($limit,&$running,&$claimed){$now=time();
+        foreach($q['entries']as $e)if(is_array($e)&&(string)($e['type']??'')==='backend_extract'&&(string)($e['status']??'')==='running'){
+            $pid=(int)($e['worker_pid']??0);if($pid<=0||s4WorkerPidAlive($pid))$running++;}
+        $room=max(0,$limit-$running);
+        foreach($q['entries'] as &$e){
+            if(count($claimed)>=$room)break;
+            if(!is_array($e)||(string)($e['type']??'')!=='backend_extract'||(string)($e['status']??'')!=='pending')continue;
+            $e['status']='running';$e['started_at']=$now;$e['updated_at']=$now;
+            $e['attempts']=(int)($e['attempts']??0)+1;$e['worker_pid']=0;$claimed[]=(string)($e['id']??'');
+        }unset($e);return['ok'=>true];});
+    $started=[];$failed=[];
+    foreach($claimed as $jid){$sp=s4SpawnParallelExtractJob($jid);
+        if(!empty($sp['ok'])){$pid=(int)$sp['pid'];$started[]=['job_id'=>$jid,'pid'=>$pid];
+            s4WorkerQueueMutate(function(&$q)use($jid,$pid){foreach($q['entries']as&$e){if((string)($e['id']??'')===$jid){$e['worker_pid']=$pid;$e['updated_at']=time();break;}}unset($e);return['ok'=>true];});
+        }else{$failed[]=['job_id'=>$jid,'error'=>(string)($sp['error']??'spawn_failed')];
+            s4WorkerQueueMutate(function(&$q)use($jid){foreach($q['entries']as&$e){if((string)($e['id']??'')===$jid&&(int)($e['worker_pid']??0)===0){$e['status']='pending';$e['updated_at']=time();}}unset($e);return['ok'=>true];});}
+    }
+    return ['ok'=>empty($failed),'limit'=>$limit,'running_before'=>$running,'started'=>$started,'failed'=>$failed];
+}
+function s4RunParallelExtractJob(string $jobId): array {
+    $job=null;
+    foreach((array)(s4WorkerLoadQueue()['entries']??[])as $e){if(is_array($e)&&(string)($e['id']??'')===$jobId&&(string)($e['type']??'')==='backend_extract'){$job=$e;break;}}
+    if(!$job)return ['ok'=>false,'error'=>'parallel_extract_job_not_found'];
+    $GLOBALS['_s4ParallelExtractChild']=true;
+    try{$res=s4WorkerRunJob($job);$ok=!empty($res['ok']);
+        if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jobId)){
+            $res['parallel_requeued']=true;
+        }else{
+            $summary=['ok'=>$ok,'extracted'=>(int)($res['extracted']??0),'queue_id'=>(string)($res['queue_id']??''),
+                'worker_segments'=>(int)($res['worker_segments']??0),'resume_needed'=>!empty($res['resume_needed'])];
+            s4WorkerFinishJob($jobId,($ok&&empty($res['resume_needed']))?'done':($ok?'paused':'failed'),$summary,$ok?'':(string)($res['error']??'job failed'));
+        }
+    }catch(Throwable $e){$res=['ok'=>false,'error'=>$e->getMessage()];s4WorkerFinishJob($jobId,'failed',[],$e->getMessage());}
+    s4DispatchParallelExtractJobs();return $res;
+}
+
 function s4WorkerClaimJob(): ?array {
     $ret = s4WorkerQueueMutate(function (&$q) {
         $now = time();$pick=-1;$pickRank=PHP_INT_MAX;
+        $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>1||s4WorkerParallelExtractRunning()>0);
         /* Long matrix checkpoints recycle many times. Give queued extraction
            and manual synchronization one turn before another matrix segment,
            otherwise “Start extraction” can remain pending for hours. FIFO is
@@ -1115,6 +1200,7 @@ function s4WorkerClaimJob(): ?array {
         foreach($q['entries'] as $i=>$e){
             if(!is_array($e)||(string)($e['status']??'')!=='pending')continue;
             $type=(string)($e['type']??'');
+            if($parallelExtract&&$type==='backend_extract')continue;
             $rank=$type==='manual_sync'?0:($type==='backend_extract'?(!empty($e['payload']['resume'])?1:0):2);
             if($rank<$pickRank){$pick=$i;$pickRank=$rank;if($rank===0)break;}
         }
@@ -1307,6 +1393,9 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 'extracted' => 0, 'new' => 0, 'price_changed' => 0, 'removed' => 0, 'unchanged' => 0,
             ]);
         }
+        /* Do not wait for the next daemon tick: fill newly available extraction
+           slots immediately. The setting defaults to three. */
+        $enq['dispatch']=s4DispatchParallelExtractJobs();
     }
     return $enq;
 }
@@ -1958,7 +2047,7 @@ function s4WorkerRunJob(array $job): array {
                 $reserved = (string)($prep['queue_id'] ?? '');
                 $extractQueueId=$reserved;
             }
-            s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
+            if(empty($GLOBALS['_s4ParallelExtractChild']))s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
                 'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase, 'job_max_pages'=>$maxPagesOverride]);
             $res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride);
             $res['worker_segments'] = $segments;
@@ -2073,6 +2162,10 @@ function s4WorkerLoopFromCli(): void {
     while (true) {
         if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
         if(function_exists('s4AutoCodeUpdateTick')){$au=s4AutoCodeUpdateTick(false);if(!empty($au['updated'])||!empty($au['restart_required'])){$restartAfterUpdate=true;echo '['.date('Y-m-d H:i:s')."] code updated; worker restart requested\n";break;}}
+        /* Extraction has its own configurable pool; matrix/manual jobs remain
+           serialized in this daemon. */
+        $px=s4DispatchParallelExtractJobs();
+        if(!empty($px['failed']))$GLOBALS['_s4ParallelExtractDisabled']=true;
         $job = s4WorkerClaimJob();
         if ($job) {
             $jid = (string)($job['id'] ?? '');
@@ -2163,19 +2256,19 @@ function extractLockAcquire(string $queueId, string $profileKey): array {
             'queue_id' => $ownedId, 'profile_key' => (string)($ownedMeta['profile_key'] ?? ''),
             'profile_name' => (string)($ownedMeta['profile_name'] ?? '')];
     }
-    $file = EXTRACT_LOCK_FILE;
-    $fp = @fopen($file, 'c');
-    if (!$fp) return ['ok' => false, 'busy' => true, 'reason' => 'lock_open'];
-    if (!@flock($fp, LOCK_EX | LOCK_NB)) {
-        /* خواندنِ metadata فقط برای پیام است؛ نتیجهٔ واقعیِ busy همان flock است. */
-        $cur = @json_decode((string)@file_get_contents($file), true);
-        @fclose($fp);
-        return ['ok' => false, 'busy' => true,
-            'age' => is_array($cur) ? max(0, $now - (int)($cur['at'] ?? $now)) : 0,
-            'queue_id' => (string)($cur['queue_id'] ?? ''),
-            'profile_key' => (string)($cur['profile_key'] ?? ''),
-            'profile_name' => (string)($cur['profile_name'] ?? '')];
+    $fp=null;$file='';$busyMeta=[];$slot=0;
+    foreach(extractLockSlotFiles() as $_slot=>$_file){
+        $_fp=@fopen($_file,'c');
+        if(!$_fp)continue;
+        if(@flock($_fp,LOCK_EX|LOCK_NB)){$fp=$_fp;$file=$_file;$slot=$_slot+1;break;}
+        $_cur=@json_decode((string)@file_get_contents($_file),true);
+        if(!$busyMeta&&is_array($_cur))$busyMeta=$_cur;
+        @fclose($_fp);
     }
+    if(!is_resource($fp))return ['ok'=>false,'busy'=>true,'reason'=>'all_extract_slots_busy',
+        'age'=>$busyMeta?max(0,$now-(int)($busyMeta['at']??$now)):0,
+        'queue_id'=>(string)($busyMeta['queue_id']??''),'profile_key'=>(string)($busyMeta['profile_key']??''),
+        'profile_name'=>(string)($busyMeta['profile_name']??''),'limit'=>extractTaskConcurrency()];
 
     $profileName = $profileKey;
     try {
@@ -2184,13 +2277,15 @@ function extractLockAcquire(string $queueId, string $profileKey): array {
             $profileName = (string)($profiles[$profileKey]['name'] ?? $profileKey);
     } catch (Throwable $e) { /* metadata is best-effort */ }
     $meta = ['queue_id' => $queueId, 'profile_key' => $profileKey,
-        'profile_name' => $profileName, 'pid' => (int)@getmypid(), 'at' => $now];
+        'profile_name' => $profileName, 'pid' => (int)@getmypid(), 'at' => $now,
+        'slot'=>$slot,'limit'=>extractTaskConcurrency()];
     if (!extractLockWriteMeta($fp, $meta)) {
         @flock($fp, LOCK_UN); @fclose($fp);
         return ['ok' => false, 'busy' => false, 'reason' => 'lock_write'];
     }
     /* این handle و metadata فقط در همین worker معتبرند. */
     $GLOBALS['_extractLockFp'] = $fp;
+    $GLOBALS['_extractLockFile'] = $file;
     $GLOBALS['_extractLockQueueId'] = $queueId;
     $GLOBALS['_extractLockMeta'] = $meta;
     return ['ok' => true, 'stale_cleared' => true];
@@ -2201,26 +2296,21 @@ function extractLockRelease(string $queueId): void {
     $fp = $GLOBALS['_extractLockFp'] ?? null;
     $owner = (string)($GLOBALS['_extractLockQueueId'] ?? '');
     if (is_resource($fp) && ($owner === '' || $owner === $queueId)) {
-        unset($GLOBALS['_extractLockFp'], $GLOBALS['_extractLockQueueId'], $GLOBALS['_extractLockMeta']);
+        unset($GLOBALS['_extractLockFp'], $GLOBALS['_extractLockFile'], $GLOBALS['_extractLockQueueId'], $GLOBALS['_extractLockMeta']);
         @flock($fp, LOCK_UN);
         @fclose($fp);
         return;
     }
     /* سازگاری با workerهای قدیمیِ بدون handle: فقط وقتی lock واقعاً آزاد است
        metadata خنثی می‌شود. هرگز مسیرِ lock را حذف نمی‌کنیم. */
-    $probe = @fopen(EXTRACT_LOCK_FILE, 'c');
-    if (!$probe) return;
-    if (@flock($probe, LOCK_EX | LOCK_NB)) {
-        $cur = @json_decode((string)@file_get_contents(EXTRACT_LOCK_FILE), true);
-        if (is_array($cur) && (string)($cur['queue_id'] ?? '') === $queueId) {
-            $cur['released_at'] = time();
-            $cur['queue_id'] = '';
-            $cur['at'] = 0;
-            extractLockWriteMeta($probe, $cur);
-        }
-        @flock($probe, LOCK_UN);
+    foreach(extractLockSlotFiles() as $file){
+        $probe=@fopen($file,'c');if(!$probe)continue;
+        if(@flock($probe,LOCK_EX|LOCK_NB)){
+            $cur=@json_decode((string)@file_get_contents($file),true);
+            if(is_array($cur)&&(string)($cur['queue_id']??'')===$queueId){$cur['released_at']=time();$cur['queue_id']='';$cur['at']=0;extractLockWriteMeta($probe,$cur);}
+            @flock($probe,LOCK_UN);
+        }@fclose($probe);
     }
-    @fclose($probe);
 }
 
 /** ضربانِ قفل — metadata مالک و profile را حفظ می‌کند. */
@@ -2239,18 +2329,13 @@ function extractLockTouch(string $queueId): void {
     }
     /* legacy fallback هم باید مالکیت را با flock ثابت کند؛ file_put_contents
        بدون probe می‌توانست metadata یک worker زنده را بازنویسی کند. */
-    $legacyFp = @fopen(EXTRACT_LOCK_FILE, 'c');
-    if (!$legacyFp || !@flock($legacyFp, LOCK_EX | LOCK_NB)) {
-        if ($legacyFp) @fclose($legacyFp);
-        return;
+    foreach(extractLockSlotFiles() as $file){
+        $legacyFp=@fopen($file,'c');if(!$legacyFp)continue;
+        if(!@flock($legacyFp,LOCK_EX|LOCK_NB)){@fclose($legacyFp);continue;}
+        $cur=@json_decode((string)@file_get_contents($file),true);
+        if(is_array($cur)&&(string)($cur['queue_id']??'')===$queueId){$cur['at']=time();extractLockWriteMeta($legacyFp,$cur);@flock($legacyFp,LOCK_UN);@fclose($legacyFp);return;}
+        @flock($legacyFp,LOCK_UN);@fclose($legacyFp);
     }
-    $cur = @json_decode((string)@file_get_contents(EXTRACT_LOCK_FILE), true);
-    if (is_array($cur) && (string)($cur['queue_id'] ?? '') === $queueId) {
-        $cur['at'] = time();
-        extractLockWriteMeta($legacyFp, $cur);
-    }
-    @flock($legacyFp, LOCK_UN);
-    @fclose($legacyFp);
 }
 
 /**
@@ -2289,6 +2374,9 @@ function extractClearStaleBlockers(string $profileKey = '', array $opts = []): i
             if (!in_array($st, ['running', 'waiting', 'paused'], true)) continue;
             $mine = ((string)($prog['queue_id'] ?? '')) === ((string)($e['id'] ?? ''));
             $ts = $mine ? (int)($prog['last_progress_ts'] ?? 0) : 0;
+            $slotBeat=extractLockBeatForQueue((string)($e['id']??''));if($slotBeat>$ts)$ts=$slotBeat;
+            $wj=(string)($e['worker_job_id']??'');if($wj!=='')foreach((array)(s4WorkerLoadQueue()['entries']??[])as $we){
+                if(is_array($we)&&(string)($we['id']??'')===$wj&&(string)($we['status']??'')==='running'&&s4WorkerPidAlive((int)($we['worker_pid']??0))){$ts=$now;break;}}
             if ($ts <= 0) $ts = (int)($e['started_at'] ?? 0);
             $idle = $ts > 0 ? ($now - $ts) : ($clearWaiting || $st !== 'running' ? PHP_INT_MAX : 0);
             $kill = $st === 'waiting' || $st === 'paused'
@@ -2614,6 +2702,13 @@ function extractNormalizeDetailSelectors($raw): array {
         }
     }
     return $out;
+}
+
+/** Stage two exists only when at least one enabled detail selector is saved.
+ * Gallery settings alone must never make an otherwise list-only profile open
+ * every product page. */
+function extractHasDetailSelectors(array $profile): bool {
+    return count(extractNormalizeDetailSelectors($profile['detailSelectors'] ?? [])) > 0;
 }
 
 /* =====================================================================
@@ -3029,6 +3124,13 @@ if (!$allowDelete && is_file(PROFILES_FILE)) {
     }
 }
 return writeJsonFile(PROFILES_FILE, $profiles)['ok'];
+}
+/** Update one profile against the latest disk snapshot. This prevents three
+ * concurrent extraction slots from restoring stale copies of other profiles. */
+function saveOneProfileAtomic(string $key, array $profile): bool {
+    if($key==='')return false;$lf=@fopen(PROFILES_FILE.'.extract.lock','c');if($lf&&!@flock($lf,LOCK_EX)){@fclose($lf);$lf=null;}
+    $all=loadProfiles();$all[$key]=$profile;$ok=saveProfiles($all);
+    if($lf){@flock($lf,LOCK_UN);@fclose($lf);}return $ok;
 }
 /* =====================================================================
  *  v9.24: نوشتن JSON به‌صورت مقاوم + گزارش دقیق علت خطا
@@ -18424,11 +18526,10 @@ foreach($queue['entries'] as &$qe){
        ضربان زده، این کار زنده است و نباید «خطا» بخورد.
        v10.36 (۴۹الف): حالا شاهدِ سومی هم هست — «حرکتِ شمارنده‌ها». همان
        چیزی که کاربر با چشم می‌دید و برنامه نمی‌دید. */
-    $_lkBeat=0;
-    $_lk=@json_decode((string)@file_get_contents(EXTRACT_LOCK_FILE),true);
-    if(is_array($_lk)&&((string)($_lk['queue_id']??''))===((string)($qe['id']??'')))
-        $_lkBeat=(int)($_lk['at']??0);
-    $_iw=queueRowIdle('extract',$qe,$progress,$now,['lock'=>$_lkBeat]);
+    $_lkBeat=extractLockBeatForQueue((string)($qe['id']??''));
+    $_wjBeat=0;$_wjId=(string)($qe['worker_job_id']??'');
+    if($_wjId!=='')foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_we){if(is_array($_we)&&(string)($_we['id']??'')===$_wjId&&(string)($_we['status']??'')==='running'&&s4WorkerPidAlive((int)($_we['worker_pid']??0))){$_wjBeat=$now;break;}}
+    $_iw=queueRowIdle('extract',$qe,$progress,$now,['lock'=>max($_lkBeat,$_wjBeat)]);
     $idle=(int)$_iw['idle'];
     if($idle>$exIdleMax){
         $qe['status']='failed';
@@ -18682,11 +18783,8 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
        بار پشتِ‌هم) می‌توانست بی‌حرکت به نظر برسد و رابط کاربری وسطِ کار
        «رها شد» اعلام کند. */
     $_pTs=tasksHeartbeat($p);
-    $_pLk=@json_decode((string)@file_get_contents(EXTRACT_LOCK_FILE),true);
-    if(is_array($_pLk)&&(string)($_pLk['queue_id']??'')===(string)($p['queue_id']??'')){
-        $_pLkAt=(int)($_pLk['at']??0);
-        if($_pLkAt>$_pTs)$_pTs=$_pLkAt;
-    }
+    $_pLkAt=extractLockBeatForQueue((string)($p['queue_id']??''));
+    if($_pLkAt>$_pTs)$_pTs=$_pLkAt;
     if(function_exists('s4WorkerExtractBeatForRow')){
         $_pW=s4WorkerExtractBeatForRow((string)($p['queue_id']??''),(string)($p['profile_key']??''));
         $_pWAt=(int)($_pW['beat']??0);
@@ -18817,11 +18915,10 @@ function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = [
     foreach ($allProducts as $k => $p) $productsData[] = [$k, $p];
     $profilesNow = loadProfiles();
     if (!isset($profilesNow[$pkFinal]) || !is_array($profilesNow[$pkFinal])) return;
-    $profilesNow[$pkFinal]['products']      = $productsData;
-    $profilesNow[$pkFinal]['productsOrder'] = array_keys($allProducts);
-    $profilesNow[$pkFinal]['updatedAt']     = time();
-    foreach ($extra as $k => $v) $profilesNow[$pkFinal][$k] = $v;
-    saveProfiles($profilesNow);
+    $one=$profilesNow[$pkFinal];
+    $one['products']=$productsData;$one['productsOrder']=array_keys($allProducts);$one['updatedAt']=time();
+    foreach($extra as $k=>$v)$one[$k]=$v;
+    saveOneProfileAtomic($pkFinal,$one);
 }
 
 /** v10.294: فقط استخراج واقعاً نیمه‌کاره باید از checkpoint صفحه ادامه یابد.
@@ -18854,14 +18951,26 @@ function extractListResumeMeta(array $profile): array {
     ];
 }
 
+/** Stable slot paths. Slot one keeps the legacy path for safe upgrades. */
+function extractLockSlotFiles(?int $limit = null): array {
+    $limit=$limit??extractTaskConcurrency();$out=[];
+    for($i=1;$i<=max(1,$limit);$i++)$out[]=$i===1?EXTRACT_LOCK_FILE:(EXTRACT_LOCK_FILE.'.slot'.$i);
+    return $out;
+}
+function extractLockBeatForQueue(string $queueId): int {
+    if($queueId==='')return 0;
+    foreach(extractLockSlotFiles()as$file){$m=@json_decode((string)@file_get_contents($file),true);
+        if(is_array($m)&&(string)($m['queue_id']??'')===$queueId)return(int)($m['at']??0);}
+    return 0;
+}
 /** فقط flock می‌گوید extraction واقعاً در حال اجراست. */
 function extractLockIsHeld(): bool {
-    $fp = @fopen(EXTRACT_LOCK_FILE, 'c');
-    if (!$fp) return true; // در ابهام، duplicate نساز
-    $held = !@flock($fp, LOCK_EX | LOCK_NB);
-    if (!$held) @flock($fp, LOCK_UN);
-    @fclose($fp);
-    return $held;
+    foreach(extractLockSlotFiles() as $file){
+        $fp=@fopen($file,'c');if(!$fp)return true;
+        $held=!@flock($fp,LOCK_EX|LOCK_NB);if(!$held)@flock($fp,LOCK_UN);@fclose($fp);
+        if($held)return true;
+    }
+    return false;
 }
 
 /**
@@ -18935,7 +19044,7 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
     $pr['_extract_resume_phase'] = $phase === 'detail' ? 'detail' : 'list';
     $profiles[$profileKey] = $pr;
     try {
-        saveProfiles($profiles);
+        saveOneProfileAtomic($profileKey,$pr);
     } catch (Throwable $e) {
         extractLockRelease($resumeQueueId);
         $out['reason'] = 'profile_save';
@@ -19107,6 +19216,28 @@ $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?
 $pagType=$profile['pagType']??'query_page';
 $pagVal=$profile['pagVal']??'';
 $detailSelectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+$detailConfigured=!empty($detailSelectors);
+$_detailSkippedNoSelectors=false;
+/* No enabled selector means there is no stage two. Gallery configuration by
+   itself is not permission to open every product page. */
+if(!$detailConfigured&&$phase==='all'){$phase='list';$_detailSkippedNoSelectors=true;}
+if(!$detailConfigured&&$phase==='detail'){
+    $_detailSkippedNoSelectors=true;
+    $profile['_extract_stage']='complete';$profile['_extract_stage_at']=time();
+    $profile['_extract_resume_needed']=0;$profile['_extract_resume_phase']='';
+    $profile['_extract_list_incomplete']=false;$profile['_extract_resume_req']=0;
+    saveOneProfileAtomic($profileKey,$profile);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'skipped'=>true,
+        'detail_skip_why'=>'no_detail_selectors','profile_key'=>$profileKey,'phase'=>'list',
+        'total'=>0,'current'=>0,'started_at'=>$startedAt,'finished_at'=>time(),
+        'recent_log'=>['⏭ مرحلهٔ دوم اجرا نشد — هیچ سلکتور جزئیات فعالی برای این پروفایل ذخیره نشده است'],'total_log_count'=>1]);
+    if($reservedLockQueueId!==''){$sq=extractReadQueue();foreach($sq['entries']as&$se){if((string)($se['id']??'')!==$reservedLockQueueId)continue;
+        $se['status']='done';$se['done_at']=time();$se['updated_at']=time();$se['detail_skip_why']='no_detail_selectors';
+        $se['detail_total']=0;$se['current']=0;$se['total']=0;$se['resumable']=false;$se['resume_needed']=0;break;}unset($se);extractWriteQueue($sq);}
+    $releaseResumeReservation();
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'skipped'=>true,'detail_skipped'=>true,
+        'detail_skip_why'=>'no_detail_selectors','phase'=>'list','extracted'=>count((array)($profile['products']??[]))];
+}
 $prevProducts=$profile['products']??[];
 $prevOrder=$profile['productsOrder']??[];
 
@@ -19913,8 +20044,9 @@ $pushLog=function(string $line) use (&$detailLog){
 /* v9.05: اگر فاز جزئیات اجرا نمی‌شود، دلیلش را ثبت کن. سکوت باعث شد
    کاربر پیام «همه از قبل کامل بودند» ببیند در حالی که گالری نیامده بود. */
 $_skipWhy='';
-if($phase==='list')                                   $_skipWhy='';           // عمدی
-elseif(empty($detailSelectors)&&!$galleryCfg['enabled']) $_skipWhy='no_config';
+if($phase==='list'&&!$detailConfigured)              $_skipWhy='no_detail_selectors';
+elseif($phase==='list')                               $_skipWhy='';           // عمدی
+elseif(empty($detailSelectors))                       $_skipWhy='no_config';
 elseif($detailTotal===0&&$_noLink>0&&$_alreadyDone===0)  $_skipWhy='no_link';
 elseif($detailTotal===0&&$_alreadyDone>0)                $_skipWhy='already_done';
 elseif($detailTotal===0)                                 $_skipWhy='nothing_selected';
@@ -20311,10 +20443,10 @@ $profileOnDisk['updatedAt']=time();
 /* v9.01: اجرای «فقط فهرست» تمام‌شده حساب نمی‌شود — هنوز مرحلهٔ جزئیات
    مانده. با نشانهٔ list_done، هم دروازهٔ ارسال بسته می‌ماند و هم اجرای
    بعدی می‌داند باید جزئیات را بگیرد. */
-$profileOnDisk['_extract_stage']=($phase==='list')?'list_done':((!empty($_detailIncomplete)||!empty($_listRanOut))?'detail':'complete');
+$profileOnDisk['_extract_stage']=($phase==='list'&&$detailConfigured)?'list_done':((!empty($_detailIncomplete)||!empty($_listRanOut))?'detail':'complete');
 $profileOnDisk['_extract_detail_cycle']=$_detailCycle;
 $profileOnDisk['_extract_resume_needed']=(!empty($_detailIncomplete)||!empty($_listRanOut))?1:0;
-if(empty($_detailIncomplete)&&empty($_listRanOut)&&$phase!=='list'){
+if(empty($_detailIncomplete)&&empty($_listRanOut)&&($phase!=='list'||!$detailConfigured)){
     $profileOnDisk['_extract_list_incomplete']=false;
     $profileOnDisk['_extract_resume_req']=0;
     $profileOnDisk['_extract_resume_from']=0;
@@ -20328,8 +20460,8 @@ $profileOnDisk['_extract_stage_at']=time();
 $profileOnDisk['_extract_detail_done']=$detailDone;
 $profileOnDisk['_extract_detail_total']=$detailTotal;
 $profilesNow[$pkFinal]=$profileOnDisk;
-saveProfiles($profilesNow);
-$profiles=$profilesNow;$profile=$profileOnDisk;
+saveOneProfileAtomic($pkFinal,$profileOnDisk);
+$profiles=loadProfiles();$profile=$profiles[$pkFinal]??$profileOnDisk;
 if(isset($GLOBALS['_extractDetailFatalCtx']))$GLOBALS['_extractDetailFatalCtx']['active']=false;
 
 /* v10.83: اگر تیک «تولید خودکار توضیحات» روشن است، فقط روی محصولاتِ همین
@@ -20359,8 +20491,8 @@ try {
             $profileOnDisk['products'] = $_aiProds;
             $profilesNow = loadProfiles();
             $profilesNow[$pkFinal] = $profileOnDisk;
-            saveProfiles($profilesNow);
-            $profiles = $profilesNow;
+            saveOneProfileAtomic($pkFinal,$profileOnDisk);
+            $profiles = loadProfiles();
             $profile = $profileOnDisk;
             $GLOBALS['_aiContentFilled'] = $_aiFilled;
         }
@@ -20403,7 +20535,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($detailTotal>0?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -20428,7 +20560,7 @@ extractWriteQueue($queue);
 // v10.21 (۳۴الف): سینکِ «بدون استخراج» باید بداند چند صفحه واقعاً باز شد و
 // آیا بودجهٔ زمانی تمام شد (تا در نوبتِ بعدی از همان‌جا ادامه دهد)
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!$_finalComplete,'extract_stage'=>(!$_finalComplete?'detail':(($phase==='list')?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!$_finalComplete,'extract_stage'=>(!$_finalComplete?'detail':(($phase==='list'&&$detailConfigured)?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
 }
 
 if(isset($_GET['worker_status'])){
@@ -21569,10 +21701,14 @@ function cronWatchdogs(array $cn): array {
                v10.36 (۴۹الف): و شاهدِ سوم — حرکتِ شمارنده‌ها. نگهبان دقیقاً
                همان چیزی بود که ردیفِ زنده را می‌بست و به پیام‌رسان خطای
                دروغ می‌فرستاد؛ حالا هر سه شاهد را با هم می‌سنجد. */
-            $_lkW = @json_decode((string)@file_get_contents(EXTRACT_LOCK_FILE), true);
-            $_lkWBeat = (is_array($_lkW) && ((string)($_lkW['queue_id'] ?? '')) === ((string)($qe['id'] ?? '')))
-                ? (int)($_lkW['at'] ?? 0) : 0;
-            $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => $_lkWBeat]);
+            $_lkWBeat=extractLockBeatForQueue((string)($qe['id']??''));
+            /* Parallel child PID is an additional authoritative heartbeat even
+               while another slot owns the shared compatibility progress file. */
+            $_childBeat=0;$_workerJobId=(string)($qe['worker_job_id']??'');
+            if($_workerJobId!=='')foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_we){
+                if(!is_array($_we)||(string)($_we['id']??'')!==$_workerJobId||(string)($_we['status']??'')!=='running')continue;
+                if(s4WorkerPidAlive((int)($_we['worker_pid']??0)))$_childBeat=$exNow;break;}
+            $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => max($_lkWBeat,$_childBeat)]);
             $idle = (int)$_iwW['idle'];
             if ($idle <= $exStallCfg) continue;
             /* v9.75: به‌جای «بستن و رها کردن»، ردیفِ گیرکرده را از صف برمی‌داریم
@@ -22784,6 +22920,9 @@ if (isCliRun()) {
         $_GET['worker_run'] = '1'; $_GET['worker_once'] = '1';
     } elseif ($_cliCmd === 'worker_status') {
         $_GET['worker_status'] = '1';
+    } elseif ($_cliCmd === 'worker_extract_job') {
+        $_GET['worker_extract_job'] = '1';
+        $_GET['worker_job_id'] = (string)($_cliArgs[1] ?? '');
     } elseif ($_cliCmd === 'manual_sync') {
         $_GET['manual_sync'] = '1';                 // php scraper4.php manual_sync <profile_key>
         $_GET['profile'] = (string)($_cliArgs[1] ?? '');
@@ -22835,6 +22974,12 @@ if (isset($_GET['worker_run'])) {
     }
     s4WorkerLoopFromCli();
     exit;
+}
+if(isset($_GET['worker_extract_job'])){
+    if(!isCliRun()){http_response_code(403);echo json_encode(['ok'=>false,'error'=>'CLI only']);exit;}
+    $resParallel=s4RunParallelExtractJob(trim((string)($_GET['worker_job_id']??'')));
+    echo json_encode($resParallel,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES).PHP_EOL;
+    exit(!empty($resParallel['ok'])?0:1);
 }
 if (isset($_GET['matrix_build_cli'])) {
     $enc=trim((string)($_GET['matrix_payload']??''));
@@ -23999,10 +24144,10 @@ if ($noExtract) {
        ================================================================= */
     $pResult['no_extract'] = true;
     $_neSel   = extractNormalizeDetailSelectors($profile['detailSelectors'] ?? []);
-    $_neGal   = galleryNormalizeCfg($profile['gallery'] ?? []);
     $_neHasCfg = false;
     foreach ($_neSel as $_nsv) { if (!empty($_nsv)) { $_neHasCfg = true; break; } }
-    if (!$_neHasCfg && !empty($_neGal['enabled'])) $_neHasCfg = true;
+    /* Gallery alone does not authorize stage two; at least one enabled detail
+       selector must be saved. */
     // چند محصولِ روی دیسک لینکِ صفحهٔ محصول دارند؟
     $_neLinked = noExtractLinkedCount($profile);
     $_neDue    = $_neHasCfg && $_neLinked > 0 && noExtractRefreshOn($syncCfg);
@@ -27288,6 +27433,15 @@ function tasksRowsOrdered(int $now): array {
     return $rows;
 }
 
+/** Extraction pool size used by the task manager and server dispatcher. */
+if(isset($_POST['tasks_extract_concurrency'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    $n=max(1,min(8,(int)$_POST['tasks_extract_concurrency']));$cn=loadConnections();
+    $cn['extract_task_concurrency']=$n;$ok=saveConnections($cn);
+    $dispatch=$ok?s4DispatchParallelExtractJobs():[];
+    echo json_encode(['ok'=>$ok,'extract_task_concurrency'=>$n,'default'=>3,'dispatch'=>$dispatch],JSON_UNESCAPED_UNICODE);exit;
+}
+
 /** فهرستِ زندهٔ همهٔ کارها + کارهای زمان‌بندی‌شده در یک پاسخ.
  *  مدیر وظیفه فقط همین یک اندپوینت را poll می‌کند تا با باز بودنِ
  *  پنجره ده‌تا درخواستِ موازی روی هاستِ اشتراکی نریزد. */
@@ -27310,6 +27464,8 @@ if (isset($_GET['tasks_list'])) {
     foreach ($rows as $r) { if ($r['state'] === 'running') $running++; if ($r['state'] === 'stale') $stale++; }
     echo json_encode(['ok' => true, 'now' => $now, 'tasks' => $rows, 'jobs' => $jobs,
         'running' => $running, 'stale' => $stale,
+        'extract_task_concurrency'=>extractTaskConcurrency(),
+        'extract_running'=>s4WorkerParallelExtractRunning(),
         'stale_after' => TASKS_STALE_SEC], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -43872,6 +44028,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.389', 'ورودی 10.389 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "389'") !== false
       && version_compare(APP_VERSION, '10.' . '389', '>='));
+    $add('10.390', 'پروفایل بدون سلکتور جزئیات هرگز فاز دوم را آغاز نمی‌کند',
+         strpos($selfSrc, 'function extractHasDetailSelectors(array $profile): bool') !== false
+      && strpos($selfSrc, "if(!\$detailConfigured&&\$phase==='all'){\$phase='list';") !== false
+      && strpos($selfSrc, "detail_skip_why'=>'no_detail_selectors'") !== false);
+    $add('10.390', 'تنظیم گالری به‌تنهایی اجازه ورود به جزئیات نمی‌دهد',
+         strpos($selfSrc, 'Gallery alone does not authorize stage two') !== false
+      && strpos($selfSrc, "if (!\$_neHasCfg && !empty(\$_ne" . "Gal['enabled']))") === false);
+    $add('10.390', 'همزمانی استخراج با پیش‌فرض سه و بازه امن یک تا هشت ذخیره می‌شود',
+         strpos($selfSrc, "\$cn['extract_task_concurrency'] ?? 3") !== false
+      && strpos($selfSrc, "max(1, min(8, (int)\$_POST['tasks_extract_concurrency']))") !== false
+      && strpos($selfSrc, 'id="tmExtractConcurrency" value="3" min="1" max="8"') !== false);
+    $add('10.390', 'dispatcher به تعداد slot، child مستقل استخراج می‌سازد',
+         strpos($selfSrc, 'function s4DispatchParallelExtractJobs(): array') !== false
+      && strpos($selfSrc, "worker_extract_job '") !== false
+      && strpos($selfSrc, 'function extractLockSlotFiles(?int $limit = null): array') !== false);
+    $add('10.390', 'نوشتن صف و پروفایل برای استخراج‌های موازی از داده کهنه محافظت می‌شود',
+         strpos($selfSrc, "EXTRACT_QUEUE_FILE.'.lock'") !== false
+      && strpos($selfSrc, 'function saveOneProfileAtomic(string $key, array $profile): bool') !== false);
+    $add('10.390', 'ورودی 10.390 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "390'") !== false
+      && version_compare(APP_VERSION, '10.' . '390', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75981,6 +76158,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.390', t:'⚙️ حذف فاز دومِ بی‌سلکتور و همزمانی استخراج قابل تنظیم', items:[
+    'اگر هیچ سلکتور جزئیات فعال و غیرخالی در پروفایل ذخیره نشده باشد، استخراج پس از فهرست کامل می‌شود و وارد فاز دوم نمی‌شود.',
+    'تنظیم گالری به‌تنهایی دیگر باعث باز شدن صفحهٔ تک‌تک محصولات نمی‌شود؛ اجرای مستقیم یا resume فاز جزئیات نیز با نتیجهٔ موفقِ skipped بسته می‌شود.',
+    'در سربرگ مدیر وظایف، تعداد وظایف استخراج همزمان از ۱ تا ۸ قابل تعیین است و مقدار پیش‌فرض ۳ است.',
+    'dispatcher سرور slotهای استخراج را با childهای CLI مستقل پر می‌کند؛ قفل‌های slot، ادغام امن صف و ذخیرهٔ اتمیک تک‌پروفایل از تداخل نتایج جلوگیری می‌کنند.'
+  ]},
   {v:'10.389', t:'📜 صفحه‌بندی اسکرولی سبک برای نتایج حجیم', items:[
     'نمای جدول و کارت ابتدا فقط ۸۰ محصول را وارد DOM می‌کند و نزدیک انتهای صفحه، دستهٔ بعدی را با IntersectionObserver می‌افزاید.',
     'نمای متن نیز در دسته‌های ۲۰۰تایی ساخته می‌شود؛ کپی و فایل‌های خروجی همچنان در زمان درخواست از کل دادهٔ پروفایل تولید می‌شوند.',
@@ -87448,6 +87631,8 @@ function tmPulse(){
     if(!d||!d.ok)return;
     tmData=d;
     tmPaintBtn(d);
+    const ec=document.getElementById('tmExtractConcurrency');
+    if(ec&&document.activeElement!==ec)ec.value=d.extract_task_concurrency||3;
     if(document.getElementById('tmModal')) tmRender();
   }).catch(()=>{});
 }
@@ -87477,7 +87662,9 @@ function tmOpen(){
   m=document.createElement('div'); m.id='tmModal'; m.className='bsl-modal-overlay';
   m.innerHTML='<div class="bsl-modal" style="width:900px;max-width:96vw">'
     +'<div class="bsl-modal-head"><h2>🗂 مدیر وظیفه</h2>'
-    +'<div style="display:flex;gap:6px;align-items:center">'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+    +'<label style="font-size:10px;color:#93c5fd;display:flex;gap:4px;align-items:center" title="تعداد پروفایل‌هایی که worker استخراج می‌تواند همزمان اجرا کند">استخراج همزمان:'
+    +'<input type="number" id="tmExtractConcurrency" value="3" min="1" max="8" step="1" onchange="tmSaveExtractConcurrency(this.value)" style="width:55px;padding:4px 6px"></label>'
     +'<label style="font-size:10px;color:#94a3b8;display:flex;gap:4px;align-items:center;cursor:pointer">'
     +'<input type="checkbox" id="tmOnlyActive" onchange="tmToggleFilter()"> فقط فعال‌ها</label>'
     +'<button class="btn btn-gray" onclick="tmClearAll()" style="font-size:10px;padding:4px 9px" title="پاک‌کردنِ ردِ همهٔ کارهای تمام‌شده">🧽 پاک‌سازی</button>'
@@ -87489,6 +87676,7 @@ function tmOpen(){
   document.body.classList.add('modal-open');
   const b=document.getElementById('tasksBtn'); if(b)b.classList.add('active');
   const c=document.getElementById('tmOnlyActive'); if(c)c.checked=tmOnlyActive;
+  const ec=document.getElementById('tmExtractConcurrency');if(ec&&tmData)ec.value=tmData.extract_task_concurrency||3;
   if(tmData)tmRender();
   tmPulse();
   if(tmTimer)clearInterval(tmTimer);
@@ -87506,6 +87694,15 @@ function tmToggleFilter(){
   const c=document.getElementById('tmOnlyActive');
   tmOnlyActive=!!(c&&c.checked);
   tmRender();
+}
+function tmSaveExtractConcurrency(value){
+  const n=Math.max(1,Math.min(8,parseInt(value)||3)),fd=new FormData();
+  fd.append('tasks_extract_concurrency',String(n));
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){showToast('ذخیرهٔ همزمانی استخراج ناموفق بود',true);return;}
+    if(tmData)tmData.extract_task_concurrency=n;
+    showToast('✓ همزمانی استخراج روی '+toFa(n)+' وظیفه تنظیم شد');tmPulse();
+  }).catch(()=>showToast('خطا در ذخیرهٔ همزمانی استخراج',true));
 }
 
 /* ═══════════════════════════════════════════════════════════════════
