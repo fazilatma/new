@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.382';
+const APP_VERSION = '10.383';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -18546,9 +18546,13 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     $pr = $profiles[$pk];
     /* v10.136: آماده‌سازی، بستن blocker و mutation پروفایل فقط زیرِ
        reservation انجام می‌شود؛ بعد worker همان handle را مصرف می‌کند. */
-    $prep = extractResumePrepare($pk, loadConnections());
+    $prep = extractResumePrepare($pk, loadConnections(), $qid);
     if (empty($prep['ok'])) {
-        echo json_encode(['ok' => false, 'error' => 'استخراجِ دیگری در حال اجراست — اجرای موازی ساخته نشد'], JSON_UNESCAPED_UNICODE);
+        $_prepReason=(string)($prep['reason']??'');
+        $_prepMsg=$_prepReason==='resume_row_not_found_or_not_resumable'
+            ? 'همان ردیف دیگر قابل ادامه نیست؛ ردیف تازه‌ای ساخته نشد'
+            : 'استخراجِ دیگری در حال اجراست — اجرای موازی ساخته نشد';
+        echo json_encode(['ok'=>false,'error'=>$_prepMsg,'reason'=>$_prepReason],JSON_UNESCAPED_UNICODE);
         exit;
     }
     $meta = extractListResumeMeta(loadProfiles()[$pk] ?? $pr);
@@ -18570,13 +18574,19 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     } catch (Throwable $e) {
         $failed = readProgress(EXTRACT_PROGRESS_FILE);
         if (!$failed) $failed = $pr;
-        $failed['running'] = false; $failed['done'] = true;
-        $failed['stale'] = true; $failed['partial'] = true; $failed['resumable'] = true;
+        $failed['running'] = false; $failed['done'] = false; $failed['paused'] = true;
+        $failed['resume_needed'] = true; $failed['stale'] = true; $failed['partial'] = true; $failed['resumable'] = true;
         $failed['error'] = 'ادامه ناموفق: ' . $e->getMessage();
         $failed['last_progress_ts'] = time();
         $failed['recent_log'] = array_slice(array_merge((array)($failed['recent_log'] ?? []),
             ['❌ ادامه ناموفق؛ checkpoint حفظ شد: ' . $e->getMessage()]), -40);
-        writeProgress(EXTRACT_PROGRESS_FILE, $failed);$resumeResult=['ok'=>false,'error'=>$e->getMessage()];
+        writeProgress(EXTRACT_PROGRESS_FILE, $failed);
+        $_rq=extractReadQueue();foreach($_rq['entries'] as &$_re){
+            if((string)($_re['id']??'')!==(string)($prep['queue_id']??''))continue;
+            $_re['status']='paused';$_re['resumable']=true;$_re['resume_needed']=1;
+            $_re['error']='ادامه ناموفق: '.mb_substr($e->getMessage(),0,180);unset($_re['done_at']);break;
+        }unset($_re);extractWriteQueue($_rq);
+        $resumeResult=['ok'=>false,'error'=>$e->getMessage()];
     }
     echo json_encode(['ok'=>!empty($resumeResult['ok']),'started'=>true,'resuming'=>true,'browser_held'=>true,
         'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'result'=>$resumeResult],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
@@ -18792,15 +18802,36 @@ function extractLockIsHeld(): bool {
  *
  *  @return ['ok'=>bool, 'phase'=>string, 'reason'=>string]
  */
-function extractResumePrepare(string $profileKey, array $cn): array {
-    $out = ['ok' => false, 'phase' => 'all', 'reason' => '', 'queue_id' => ''];
+function extractResumeQueueId(string $profileKey, string $preferredQueueId = ''): string {
+    $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];
+    if($preferredQueueId!=='')foreach($entries as $e){
+        if(!is_array($e)||(string)($e['id']??'')!==$preferredQueueId)continue;
+        if((string)($e['profile_key']??'')===$profileKey
+            &&in_array((string)($e['status']??''),['paused','failed'],true))return $preferredQueueId;
+        return '';
+    }
+    for($i=count($entries)-1;$i>=0;$i--){$e=$entries[$i]??null;
+        if(!is_array($e)||(string)($e['profile_key']??'')!==$profileKey)continue;
+        if(in_array((string)($e['status']??''),['paused','failed'],true))return(string)($e['id']??'');
+    }
+    return '';
+}
+
+function extractResumePrepare(string $profileKey, array $cn, string $preferredQueueId = ''): array {
+    $out = ['ok' => false, 'phase' => 'all', 'reason' => '', 'queue_id' => '', 'reused_row' => false];
     if ($profileKey === '') { $out['reason'] = 'no_key'; return $out; }
     $profiles = loadProfiles();
     $pr = is_array($profiles[$profileKey] ?? null) ? $profiles[$profileKey] : null;
     if ($pr === null) { $out['reason'] = 'no_profile'; return $out; }
     /* v10.136: probe و mutation پشتِ یک reservation واقعی.
        صرفاً probe کردن و بعداً flock گرفتن، بین دو resume پنجرهٔ race می‌ساخت. */
-    $resumeQueueId = 'exresume_' . $profileKey . '_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 6);
+    $resumeQueueId=extractResumeQueueId($profileKey,$preferredQueueId);
+    if($preferredQueueId!==''&&$resumeQueueId===''){
+        $out['reason']='resume_row_not_found_or_not_resumable';
+        return $out;
+    }
+    $reusedRow=$resumeQueueId!=='';
+    if($resumeQueueId==='')$resumeQueueId='exresume_'.$profileKey.'_'.time().'_'.substr(bin2hex(random_bytes(3)),0,6);
     $lk = extractLockAcquire($resumeQueueId, $profileKey);
     if (empty($lk['ok'])) {
         $out['reason'] = 'lock_held';
@@ -18843,6 +18874,7 @@ function extractResumePrepare(string $profileKey, array $cn): array {
     $out['ok'] = true;
     $out['phase'] = $phase;
     $out['queue_id'] = $resumeQueueId;
+    $out['reused_row'] = $reusedRow;
     return $out;
 }
 
@@ -19045,12 +19077,21 @@ if(empty($_lk['ok'])){
     'locked'=>true,'busy_queue_id'=>(string)($_lk['queue_id']??'')];
 }
 $queue=extractReadQueue();
+/* Resume owns the old visible queue row. Reusing its id keeps logs, report
+   links and UI history attached to one row instead of appending a clone. */
+$_resumeRowIndex=-1;
+if($reservedLockQueueId!=='')foreach((array)($queue['entries']??[])as $_ri=>$_re){
+    if(!is_array($_re)||(string)($_re['id']??'')!==$queueId)continue;
+    if((string)($_re['profile_key']??'')===$profileKey)$_resumeRowIndex=(int)$_ri;
+    break;
+}
+$_reuseQueueRow=$_resumeRowIndex>=0;
 /* v8.55: اگر همین پروفایل هنوز در صف استخراج است، دوباره اضافه نشود.
    v9.03: ولی گام جزئیات استثناست. کران عمداً بلافاصله بعد از گام فهرست
    آن را صدا می‌زند و ردیفِ همان گامِ فهرست هنوز در صف است؛ اگر محافظ
    اینجا جلویش را بگیرد، مرحلهٔ جزئیات هیچ‌وقت اجرا نمی‌شود. این دقیقاً
    همان چیزی بود که کاربر می‌دید. دو گامِ یک اجرا «تکراری» نیستند. */
-if(queueDedupOn() && $phase!=='detail'){
+if(queueDedupOn() && $phase!=='detail' && !$_reuseQueueRow){
 /* v9.03: ردیفی که پردازه‌اش دیگر زنده نیست نباید جلوی اجرای تازه را
    بگیرد. معیار همان معیار نگهبان است: اگر فایل پیشرفت مالِ آن ردیف
    نیست یا مدت‌هاست چیزی ننوشته، آن اجرا مرده و ردیفش بی‌اعتبار است.
@@ -19115,7 +19156,25 @@ return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
    انجام نشود؛ اکنون فقط workerِ صاحبِ lock فایلِ مشترک را آغاز می‌کند. */
 localTaskDbForget(EXTRACT_PROGRESS_FILE); @unlink(EXTRACT_PROGRESS_FILE);
 @unlink(EXTRACT_STOP_FILE);
-$queue['entries'][]=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,'profile_name'=>$profile['name']??$profileKey,'started_at'=>time(),'products_count'=>0,'total'=>0,'current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase,'sync_stage'=>in_array((string)$trigger,['manual_sync','periodic_sync'],true)];
+$_runRow=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,
+    'profile_name'=>$profile['name']??$profileKey,'products_count'=>0,'total'=>0,'current'=>0,
+    'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase,
+    'sync_stage'=>in_array((string)$trigger,['manual_sync','periodic_sync'],true),
+    'updated_at'=>time(),'segment_started_at'=>time()];
+if($_reuseQueueRow){
+    $_oldRow=is_array($queue['entries'][$_resumeRowIndex]??null)?$queue['entries'][$_resumeRowIndex]:[];
+    $_runRow=array_merge($_oldRow,$_runRow);
+    $_runRow['started_at']=(int)($_oldRow['started_at']??time());
+    $_runRow['resume_count']=(int)($_oldRow['resume_count']??0)+1;
+    foreach(['products_count','total','current','new','price_changed','removed','unchanged'] as $_keepCounter)
+        if(array_key_exists($_keepCounter,$_oldRow))$_runRow[$_keepCounter]=$_oldRow[$_keepCounter];
+    $_runRow['resuming']=true;$_runRow['resumable']=true;$_runRow['error']='';
+    unset($_runRow['done_at'],$_runRow['stopped_by_user']);
+    $queue['entries'][$_resumeRowIndex]=$_runRow;
+}else{
+    $_runRow['started_at']=time();
+    $queue['entries'][]=$_runRow;
+}
 extractWriteQueue($queue);
 
 // v8.22: نسخهٔ قبلی را همین ابتدا بخوان تا مقایسه بتواند زنده انجام شود
@@ -21417,13 +21476,21 @@ function cronWatchdogs(array $cn): array {
                «ادامهٔ» فازِ ۱/۲ استخراج علامت می‌زنیم. خودِ استخراج با نشانهٔ
                مرحله (_extract_stage) می‌داند از کجا ادامه دهد. */
             $exKey = (string)($qe['profile_key'] ?? '');
-            unset($exQ['entries'][$qi]);
+            /* Keep this exact row as the continuation owner. Cron/manual resume
+               changes it back to running in place; no replacement row is made. */
+            $exQ['entries'][$qi]['status']='paused';
+            $exQ['entries'][$qi]['resumable']=true;
+            $exQ['entries'][$qi]['resume_needed']=1;
+            $exQ['entries'][$qi]['resume_phase']=((string)($exProg['phase']??$qe['phase']??'list'))==='detail'?'detail':'list';
+            $exQ['entries'][$qi]['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
+            $exQ['entries'][$qi]['updated_at']=$exNow;
+            unset($exQ['entries'][$qi]['done_at']);
             $exDirty = true;
             $exStuck = ['idle' => $idle, 'profile' => (string)($qe['profile_name'] ?? $exKey),
                         'key' => $exKey];
             if ($exKey !== '') {
                 $exResumeKeys[] = $exKey;
-                /* Persist the exact interrupted stage before removing the dead
+                /* Persist the exact interrupted stage while retaining the same
                    queue row; the next cron must not guess list vs detail. */
                 $exProfiles=loadProfiles();
                 if(isset($exProfiles[$exKey])&&is_array($exProfiles[$exKey])){
@@ -21450,8 +21517,8 @@ function cronWatchdogs(array $cn): array {
             $results['extract_watchdog'] = $exStuck;
             $results['extract_resume'] = array_values(array_unique($exResumeKeys));
             notifRunFailure($cn, 'نگهبان استخراج', $exStuck['profile'] ?: 'استخراج',
-                'استخراج ' . (int)$exStuck['idle'] . ' ثانیه بی‌حرکت بود — ردیفش برداشته شد و '
-                . 'همان پروفایل در همین نوبت ادامه داده می‌شود (از همان مرحله‌ای که مانده بود).');
+                'استخراج ' . (int)$exStuck['idle'] . ' ثانیه بی‌حرکت بود — همان ردیف حفظ شد و '
+                . 'در همین نوبت از checkpoint ادامه داده می‌شود.');
         }
         @flock($exWatchFp, LOCK_UN); @fclose($exWatchFp); $exWatchFp = null;
         }
@@ -34557,7 +34624,7 @@ if (isset($_GET['selftest'])) {
          strpos($selfSrc, "\$exResumeKeys[] = \$exKey;") !== false
          && strpos($selfSrc, "runBackendExtract(\$_rk, 'watchdog_resume', false, \$_prep['phase'], false, (string)(\$_prep['queue_id'] ?? ''));") !== false);
     $add('10.136', 'آماده‌سازیِ resume قبل از mutation قفل واقعی می‌گیرد',
-         strpos($selfSrc, "function extractResumePrepare(string \$profileKey, array \$cn): array {") !== false
+         strpos($selfSrc, "function extractResumePrepare(string \$profileKey, array \$cn, string \$preferredQueueId") !== false
          && strpos($selfSrc, "extractLockAcquire(\$resumeQueueId, \$profileKey)") !== false
          && strpos($selfSrc, "\$pr['_extract_resume_req'] = time();") !== false);
     $add('9.75', 'بارگذاریِ صفحه در تبِ سلکتورها اتصالِش را مطابق «اتصال غیرمستقیم»ِ پروفایلِ فعلی می‌کند',
@@ -40953,7 +41020,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "cronMarkRun(\$key, 'runn" . "ing');") !== false);
     $add('10.123', 'ادامهٔ استخراج از گیتِ زمان‌بندیِ سینک جدا شده — هر تیک از چک‌پوینت ادامه می‌دهد',
          strpos($selfSrc, "\$_resumeCandidates = array_values(array_unique((array)(\$wdEarly['extract_resume'] ?? [])));") !== false
-      && strpos($selfSrc, "function extractResumePrepare(string \$profileKey, array \$cn): array {") !== false
+      && strpos($selfSrc, "function extractResumePrepare(string \$profileKey, array \$cn, string \$preferredQueueId") !== false
       && strpos($selfSrc, "function extractResumeSig(array \$profile): string {") !== false
       && strpos($selfSrc, "'reason' => 'no_prog" . "ress'") !== false
       && strpos($selfSrc, "'reason' => 'tick_" . "budget'") !== false);
@@ -43589,6 +43656,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$_minPerRun=isset(\$GLOBALS['_externalCronHttpKeep'])?1:3;") !== false);
     $add('10.382', 'ورودی 10.382 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "382'") !== false);
+    $add('10.383', 'دکمهٔ ادامه شناسهٔ همان ردیف را به reservation می‌دهد',
+         strpos($selfSrc, "extractResumePrepare(\$pk, loadConnections(), \$qid)") !== false
+      && strpos($selfSrc, "fd.append('queue_id', qid)") !== false);
+    $add('10.383', 'ردیف انتخاب‌شده باید موجود و resumable باشد و جایگزین تازه ساخته نمی‌شود',
+         strpos($selfSrc, 'function extractResumeQueue' . 'Id(string $profileKey') !== false
+      && strpos($selfSrc, "\$preferredQueueId!==''&&\$resumeQueueId===''" ) !== false
+      && strpos($selfSrc, "'resume_row_not_found_or_not_resumable'") !== false);
+    $add('10.383', 'runBackendExtract همان index صف را running و resume_count را افزایشی می‌کند',
+         strpos($selfSrc, "\$_reuseQueueRow=\$_resumeRowIndex>=0;") !== false
+      && strpos($selfSrc, "\$queue['entries'][\$_resumeRowIndex]=\$_runRow;") !== false
+      && strpos($selfSrc, "['resume_count']??0)+1") !== false);
+    $add('10.383', 'watchdog ردیف گیرکرده را paused نگه می‌دارد و حذف نمی‌کند',
+         strpos($selfSrc, "\$exQ['entries'][\$qi]['status']='paused';") !== false
+      && strpos($selfSrc, "ادامه در همین ردیف") !== false);
+    $add('10.383', 'گزارش و شمارنده‌های ردیف هنگام ادامه حفظ می‌شوند',
+         strpos($selfSrc, "foreach(['products_count','total','current','new','price_changed','removed','unchanged'] as \$_keepCounter)") !== false
+      && strpos($selfSrc, "\$_runRow['started_at']=(int)(\$_oldRow['started_at']??time());") !== false);
+    $add('10.383', 'ورودی 10.383 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "383'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75671,6 +75757,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.383', t:'⏯ ادامهٔ استخراج در همان ردیف صف', items:[
+    'دکمهٔ ادامه queue_id همان ردیف paused/failed را رزرو می‌کند؛ شناسهٔ exresume یا ردیف استخراج تازه ساخته نمی‌شود.',
+    'همان ردیف درجا به running برمی‌گردد، resume_count افزایش می‌یابد و started_at، شمارنده‌ها، تاریخچه و پیوند گزارش آن حفظ می‌شود.',
+    'اگر ردیف انتخاب‌شده دیگر موجود یا قابل ادامه نباشد درخواست با پیام روشن رد می‌شود و به‌هیچ‌وجه ردیف جایگزین نمی‌سازد.',
+    'watchdog کران نیز ردیف گیرکرده را حذف نمی‌کند؛ آن را paused/resumable نگه می‌دارد تا ادامهٔ دستی یا خودکار روی همان ردیف انجام شود.'
+  ]},
   {v:'10.382', t:'🛡️ بازیابی کرانی مقاوم برای مرحلهٔ دوم جزئیات', items:[
     'امضای پیشرفت کران اکنون تعداد markerهای واقعی چرخهٔ جزئیات را می‌سنجد؛ segmentهای هم‌اندازه دیگر اشتباهاً گیرکرده تشخیص داده و backoff نمی‌شوند.',
     'worker قطع‌شده از checkpoint خود پروفایل بازیابی می‌شود، حتی اگر پردازه پیش از نوشتن profile_key در فایل progress کشته شده باشد؛ فاز detail نیز به list برنمی‌گردد.',
