@@ -344,7 +344,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.386';
+const APP_VERSION = '10.387';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -19289,6 +19289,10 @@ foreach($prevProducts as $entry){if(is_array($entry)&&count($entry)>=2)$prevByKe
 }
 
 $allProducts=[];$seenKeys=[];$nextUrl=null;$totalPages=0;$fetchFail='';
+/* A single duplicate/empty page is not a trustworthy end marker on sources
+   such as eMalls: transient cache/anti-bot responses often repeat page 1.
+   Probe a short consecutive gap before declaring the catalogue finished. */
+$_noFreshStreak=0;$_noFreshLimit=(function_exists('isEmallsUrl')&&isEmallsUrl($url))?5:3;
 /* v10.122: ادامه از صفحه — اگر استخراج قبلی وسط فهرست مرده باشد */
 $_listResume=false;
 $_startPage=1;
@@ -19667,11 +19671,24 @@ foreach($_qLive['entries'] as &$_qeL){
     }
 }unset($_qeL);
 extractWriteQueue($_qLive);
+$_noFreshStreak=$newCount===0?($_noFreshStreak+1):0;
 /* v10.177: توقفِ صفحه‌بندی به‌خاطر «صفرِ تازه» دیگر خاموش نیست — علت و نشانی
    ثبت می‌شود تا معلوم شود سرور نشانه را نادیده گرفت/چالش داد/فهرست تمام شد.
    v10.178: اگر نهایی به نشانیِ پایه برگشته، مستقیم بگو الگو از نگاه سرور غلط است. */
 if($page>$_startPage&&$newCount===0){
-    $logs[]='⛳ صفحهٔ '.$page.' محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد.';
+    if($_noFreshStreak<$_noFreshLimit && $page<$maxPages){
+        $logs[]='⚠️ صفحهٔ '.$page.' محصول تازه نداشت؛ پایان قطعی نیست — بررسی صفحهٔ بعد ('
+            .$_noFreshStreak.'/'.$_noFreshLimit.')';
+        writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$maxPages,'total'=>$maxPages,
+            'current'=>$page,'page'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,
+            'recent_log'=>$logs,'total_log_count'=>count($logs),'extracted'=>count($allProducts),
+            'empty_page_streak'=>$_noFreshStreak,'empty_page_limit'=>$_noFreshLimit,'profile_key'=>$pkFinal]);
+        $_qProbe=extractReadQueue();foreach($_qProbe['entries']as&$_qeProbe){if(($_qeProbe['id']??'')!==$queueId)continue;
+            $_qeProbe['pag_probe_streak']=$_noFreshStreak;$_qeProbe['pag_probe_page']=$page;break;}unset($_qeProbe);extractWriteQueue($_qProbe);
+        if(isset($_pagePauseMs)&&$_pagePauseMs>0)usleep($_pagePauseMs*1000);
+        continue;
+    }
+    $logs[]='⛳ '.$_noFreshStreak.' صفحهٔ پیاپی محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد.';
     if($pagType!=='next_selector'){
         $logs[]='   • نشانیِ امتحان‌شده: '.$pageUrl;
         $_fin2=rtrim((string)($res['url']??''),'/');
@@ -19686,7 +19703,7 @@ if($page>$_startPage&&$newCount===0){
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
-            $qe['pag_stop_reason']='صفحهٔ '.$page.' محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد';
+            $qe['pag_stop_reason']=$_noFreshStreak.' صفحهٔ پیاپی تا صفحهٔ '.$page.' محصول تازه‌ای نداشت — پایان طبیعی';
             $qe['pag_stop_url']=$pageUrl;
             break;
         }
@@ -43793,6 +43810,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.' . '386', '>='));
     $add('10.386', 'ورودی 10.386 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "386'") !== false);
+    $add('10.387', 'یک صفحهٔ تکراری یا خالی پایان کاذب استخراج نیست',
+         strpos($selfSrc, "\$_noFreshLimit=(function_exists('isEmallsUrl')&&isEmallsUrl(\$url))?5:3;") !== false
+      && strpos($selfSrc, "\$_noFreshStreak<\$_noFreshLimit && \$page<\$maxPages") !== false);
+    $add('10.387', 'فاصلهٔ خالی در progress و صف قابل مشاهده و قابل ادامه است',
+         strpos($selfSrc, "'empty_page_streak'=>\$_noFreshStreak") !== false
+      && strpos($selfSrc, "\$_qeProbe['pag_probe_streak']=\$_noFreshStreak") !== false);
+    $add('10.387', 'توقف طبیعی فقط پس از چند صفحهٔ خالی پیاپی ثبت می‌شود',
+         strpos($selfSrc, "صفحهٔ پیاپی تا صفحهٔ '.\$page.' محصول تازه‌ای نداشت") !== false);
+    $add('10.387', 'ورودی 10.387 در CHANGELOG ثبت شده است',
+         strpos($selfSrc, "{v:'10." . "387'") !== false);
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -75888,6 +75915,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.387', t:'🔭 عبور از صفحهٔ خالی/تکراری موقت', items:[
+    'یک صفحهٔ بدون محصول تازه دیگر فوراً پایان استخراج نیست؛ موتور صفحات بعدی را نیز بررسی می‌کند.',
+    'برای ایمالز تا پنج صفحهٔ پیاپی و برای سایر منابع تا سه صفحهٔ پیاپی بدون محصول تازه لازم است تا پایان طبیعی ثبت شود.',
+    'شمار فاصلهٔ خالی و صفحهٔ در حال probe در progress و ردیف صف ثبت می‌شود؛ رسیدن به سقف تنظیم‌شده همچنان دقیق است.'
+  ]},
   {v:'10.386', t:'🧪 سازگاری تست تعداد صفحه با snapshot صف', items:[
     'تست قدیمی حذف سقف ۱۰۰ اکنون هم مسیر مستقیم پروفایل و هم مسیر snapshot تأییدشدهٔ worker را می‌پذیرد؛ رفتار اجرایی v10.385 بدون تغییر باقی مانده است.'
   ]},
