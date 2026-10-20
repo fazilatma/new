@@ -71958,8 +71958,7 @@ function renderBslVendors(){try{bslRenderShopsHint();}catch(e){}const list=$('bs
  +'<span id="bslVPEff_'+idx+'" style="font-size:10px;color:#94a3b8"></span></div>'
  +'<div style="margin-top:6px;text-align:left">'
  +'<button class="btn" style="font-size:10px;padding:2px 8px;background:#0369a1;color:#fff;border-radius:5px" onclick="bslResendShop('+idx+')">'
- +'🏪 اØ±Ø³Ø§Ù Ù
-Ø¬Ø¯Ø¯ اÛÙ ØºØ±ÙÙ'
+ +'🏪 ارسال مجدد این غرفه'
  +'</button></div>'
  +'</div>';
  if(pm!=='none'||pv!==0)bslVPriceChange(idx);
@@ -71995,19 +71994,13 @@ function bslFlushVendors(){
 
 // v10.87: ارسال مجدد همه محصولات با قیمت جدید به همه غرفه‌ها
 function bslResendAllShops(){
-    if(!confirm('آÛØ§ ÙÙ
-Ù Ù
-Ø­ØµÙÙØ§Øª Ø±Ø§ Ø¨Ù ÙÙ
-Ù ØºØ±ÙÙÙØ§ Ø¨Ø§ ÙÛÙ
-Øª Ø¬Ø¯ÛØ¯ Ù
-Ø¬Ø¯Ø¯Ø§Ù Ø¨ÙØ±Ø³ØªÛØ¯Ø'))return;
+    if(!confirm('آیا می‌خواهید همهٔ محصولات را با قیمت جدید دوباره به همهٔ غرفه‌ها بفرستید؟'))return;
     bslFlushVendors();
     saveConn();
     const fd=new FormData();
     fd.append('action','resend_all_bsl');
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(j=>{
-        const msg=j.queued?('✅ '+toFa(j.queued)+' Ù
-Ø­ØµÙÙ Ø¯Ø± ØµÙ Ø´Ø¯'):('⚠️ Ø®Ø·Ø§: '+(j.error||''));
+        const msg=j.queued?('✅ '+toFa(j.queued)+' محصول در صف شد'):('⚠️ خطا: '+(j.error||''));
         alert(msg);
         if(j.queued>0)openTab('tabSend');
     }).catch(e=>alert('⚠️ '+e));
@@ -72015,19 +72008,15 @@ function bslResendAllShops(){
 // v10.87: ارسال مجدد همه محصولات فقط به یک غرفه
 function bslResendShop(idx){
     const v=bslExtraVendors[idx]; if(!v)return;
-    const shopName=v.shop_name||v.name||('ØºØ±ÙÙ '+(idx+1));
-    if(!confirm('Ø§Ø±Ø³Ø§Ù Ù
-Ø¬Ø¯Ø¯ ÙÙ
-Ù Ù
-Ø­ØµÙÙØ§Øª Ø¨Ù ØºØ±ÙÙ '+shopName+'?'))return;
+    const shopName=v.shop_name||v.name||('غرفه '+(idx+1));
+    if(!confirm('آیا می‌خواهید همهٔ محصولات را دوباره به غرفه ' + shopName + ' ارسال کنید؟'))return;
     bslFlushVendors();
     saveConn();
     const fd=new FormData();
     fd.append('action','resend_shop_bsl');
     fd.append('vendor_idx',String(idx));
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(j=>{
-        const msg=j.queued?('✅ '+toFa(j.queued)+' Ù
-Ø­ØµÙÙ Ø¯Ø± ØµÙ Ø´Ø¯'):('⚠️ Ø®Ø·Ø§: '+(j.error||''));
+        const msg=j.queued?('✅ '+toFa(j.queued)+' محصول در صف شد'):('⚠️ خطا: '+(j.error||''));
         alert(msg);
         if(j.queued>0)openTab('tabSend');
     }).catch(e=>alert('⚠️ '+e));
@@ -77065,6 +77054,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.402', t:'🩹 رفع SyntaxError در رابط ارسال دوبارهٔ باسلام', items:[
+    'رشته‌های فارسیِ شکسته در اسکریپت داخلی بخش ارسال دوبارهٔ غرفه‌ها بازسازی شدند؛ پیش از این، یک SyntaxError می‌توانست کل اسکریپت رابط Scraper4 را از parse شدن بازدارد.',
+    'همهٔ بلوک‌های JavaScript داخلی پس از اصلاح بررسی نحوی شدند.'
+  ]},
   {v:'10.401', t:'🏷️ تشخیص مبدأ اعلان، عیب‌یابی صف و ادامهٔ کران CLI', items:[
     'همهٔ پیام‌های پیام‌رسان مبدأِ نصب را با میزبان/مسیر، شناسهٔ کوتاهِ همان نمونه و نسخه نشان می‌دهند؛ کپی‌های مختلفِ اسکریپر دیگر شبیه هم نیستند.',
     'دکمهٔ عیب‌یابی ارسال، مالکیت heartbeat، شناسه و مرحلهٔ صف، قفل worker، سیگنال توقف، تلاش‌های resume، وضعیت کران/worker و تیک‌های جداگانهٔ پینگ و خطای اجرا را نشان می‌دهد؛ داده‌های حساس پیش از نمایش پوشانده می‌شوند.',
