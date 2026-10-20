@@ -351,7 +351,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.394';
+const APP_VERSION = '10.395';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -10173,10 +10173,22 @@ function bslCatalogLookupRow(string $tk, int $vid, string $title, bool $build = 
         }
     }
     if ($id > 0) {
-        foreach ((array)($c['rows'] ?? []) as $r) {
-            if (is_array($r) && (int)($r['id'] ?? 0) === $id) {
-                return ['state' => 'hit', 'row' => bslCatalogRemoteRow($r, $title), 'source' => (string)($c['source'] ?? 'catalog')];
+        /* v10.395: existing-product preflight used to scan every catalog row for
+           every source product (O(source × catalog)); 4,000 × a large shop could
+           sit at current=0 for minutes. Build one in-process id index instead. */
+        $sig = (int)($c['at'] ?? 0) . ':' . count((array)($c['rows'] ?? []));
+        if (!isset($GLOBALS['_bslCatalogRowsById'][$vid])
+            || (string)($GLOBALS['_bslCatalogRowsByIdSig'][$vid] ?? '') !== $sig) {
+            $idx = [];
+            foreach ((array)($c['rows'] ?? []) as $r) {
+                if (is_array($r) && (int)($r['id'] ?? 0) > 0) $idx[(int)$r['id']] = $r;
             }
+            $GLOBALS['_bslCatalogRowsById'][$vid] = $idx;
+            $GLOBALS['_bslCatalogRowsByIdSig'][$vid] = $sig;
+        }
+        $r = $GLOBALS['_bslCatalogRowsById'][$vid][$id] ?? null;
+        if (is_array($r)) {
+            return ['state' => 'hit', 'row' => bslCatalogRemoteRow($r, $title), 'source' => (string)($c['source'] ?? 'catalog')];
         }
         return ['state' => 'hit', 'row' => bslCatalogRemoteRow(['id' => $id, 'name' => $title], $title),
             'source' => (string)($c['source'] ?? 'catalog_min')];
@@ -27031,7 +27043,7 @@ function tasksState(array $p, int $now): string {
        ai_test نیز برای آزادکردنِ state قدیمی از stalled استفاده می‌کند و
        همگام‌سازیِ دستی cancelled را ثبت می‌کند؛ هر دو همان کارِ ناقص‌اند. */
     if (!empty($p['stale']) || !empty($p['stalled']) || !empty($p['stopped']) || !empty($p['cancelled'])
-        || !empty($p['paused']) || !empty($p['partial']) || !empty($p['incomplete'])
+        || !empty($p['paused']) || !empty($p['partial']) || !empty($p['incomplete']) || !empty($p['failed_resume'])
         || (array_key_exists('result_ok', $p) && !$p['result_ok']) || !empty($p['error']))
         return 'stale';
     /* بعضی workerها هنگام خاتمهٔ ناگهانی running=false می‌نویسند ولی done
@@ -27125,7 +27137,7 @@ function tasksBuildRow(string $key, array $def, int $now): array {
     $raw = is_array($p['log'] ?? null) ? $p['log'] : (is_array($p['recent_log'] ?? null) ? $p['recent_log'] : []);
     foreach (array_slice($raw, -12) as $l) {
         if (is_array($l)) {
-            $msg = (string)($l['m'] ?? '');
+            $msg = isset($l['m']) ? (string)$l['m'] : implode(' · ',array_map('strval',array_filter($l,'is_scalar')));
             if (!empty($l['item_id'])) $msg .= ' · 🔎' . (string)$l['item_id'];
             $log[] = $msg;
         } else $log[] = (string)$l;
@@ -44116,6 +44128,28 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.394', 'ورودی 10.394 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "394'") !== false
       && version_compare(APP_VERSION, '10.' . '394', '>='));
+    $add('10.395', 'بررسی محصولات موجود باسلام O(n²) نیست و بودجهٔ زمانی دارد',
+         strpos($selfSrc, "_bslCatalogRowsById") !== false
+      && strpos($selfSrc, '$__fastBudget=20.0;') !== false
+      && strpos($selfSrc, "'phase'=>'existing_scan'") !== false);
+    $add('10.395', 'اسکن و batch باسلام heartbeat و پیشرفت مرحله‌ای زنده دارند',
+         strpos($selfSrc, 'function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null)') !== false
+      && strpos($selfSrc, "'phase'=>'batch_update'") !== false
+      && strpos($selfSrc, "'phase_current'") !== false);
+    $add('10.395', 'لاگ‌های آرایه‌ای باسلام در مدیر وظایف و تب ارسال خالی نمی‌شوند',
+         strpos($selfSrc, 'is_array($log)?$log:[$log]') !== false
+      && strpos($selfSrc, "raw.map(String).filter(Boolean).join(' · ')") !== false);
+    $add('10.395', 'شروع و ادامهٔ رابط queue_id و checkpoint را با POST واقعی می‌فرستد',
+         substr_count($selfSrc, "fetch('?action=bsl_backend',{method:'POST',body:fd") >= 4
+      && strpos($selfSrc, "fd2.append('resume','1')") !== false
+      && strpos($selfSrc, 'Do not fire an unparameterized GET here') !== false);
+    $add('10.395', 'توقف دستی را cron resume نمی‌کند و failed_resume در مدیر وظایف ناقص است',
+         strpos($selfSrc, "['paused_by']") !== false
+      && strpos($selfSrc, "!== 'user'") !== false
+      && strpos($selfSrc, "!empty(\$p['failed_resume'])") !== false);
+    $add('10.395', 'ورودی 10.395 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "395'") !== false
+      && version_compare(APP_VERSION, '10.' . '395', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -48300,7 +48334,7 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
     foreach ($entries as $e) {
         $st = $e['status'] ?? '';
         if ($st === 'running' && $running === null) $running = $e;
-        if (($st === 'waiting' || ($includePaused && $st === 'paused')) && $waiting === null) $waiting = $e;
+        if (($st === 'waiting' || ($includePaused && $st === 'paused' && (string)($e['paused_by'] ?? '') !== 'user')) && $waiting === null) $waiting = $e;
     }
     if ($running === null && $waiting === null) {
         return ['stalled' => false, 'reason' => 'صفی در جریان نیست'];
@@ -48344,7 +48378,7 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
                 $waiting = null;
                 foreach ($entries as $e) {
                     if (($e['status'] ?? '') === 'waiting'
-                        || ($includePaused && ($e['status'] ?? '') === 'paused')) { $waiting = $e; break; }
+                        || ($includePaused && ($e['status'] ?? '') === 'paused' && (string)($e['paused_by'] ?? '') !== 'user')) { $waiting = $e; break; }
                 }
                 if ($waiting === null) {
                     return ['stalled' => false, 'reason' => 'ردیف تمام‌شده بسته شد'];
@@ -49449,22 +49483,25 @@ function bslSendErrorInfo(array $r, string $step = '', string $endpoint = ''): a
  * هر آیتم باید id داشته باشد؛ بقیهٔ فیلدها اختیاری‌اند.
  * در دسته‌های ۵۰تایی فرستاده می‌شود تا درخواست خیلی بزرگ نشود.
  */
-function bslBatchUpdate(string $tk, int $vid, array $items): array {
+function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null): array {
     $items = array_values(array_filter($items, fn($i) => (int)($i['id'] ?? 0) > 0));
     if (empty($items) || $vid <= 0) return ['ok' => false, 'done' => 0, 'error' => 'ورودی خالی'];
-    $done = 0; $failed = 0; $errors = [];
-    foreach (array_chunk($items, 50) as $chunk) {
+    $done = 0; $failed = 0; $errors = []; $chunks=array_chunk($items,50); $chunkTotal=count($chunks);
+    foreach ($chunks as $chunkNo=>$chunk) {
+        if($heartbeat)$heartbeat($done,$failed,$chunkNo,$chunkTotal,'batch_start');
         $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/batch-updates', ['data' => $chunk]);
         if (!empty($r['ok'])) { $done += count($chunk); }
         else {
             // اگر گروهی نشد، تک‌تک امتحان کن تا یک محصول خراب کل دسته را نبرد
-            foreach ($chunk as $one) {
+            foreach ($chunk as $oneNo=>$one) {
                 $id = (int)$one['id']; unset($one['id']);
                 $r2 = bslEditProduct($tk, $vid, $id, $one);
                 if (!empty($r2['ok'])) $done++;
                 else { $failed++; if (count($errors) < 10) $errors[] = '#' . $id . ' → ' . (int)($r2['code'] ?? 0); }
+                if($heartbeat&&(($oneNo+1)%5===0||$oneNo===count($chunk)-1))$heartbeat($done,$failed,$chunkNo,$chunkTotal,'single_fallback');
             }
         }
+        if($heartbeat)$heartbeat($done,$failed,$chunkNo+1,$chunkTotal,'batch_done');
         usleep(200000);
     }
     return ['ok' => $failed === 0, 'done' => $done, 'failed' => $failed, 'errors' => $errors];
@@ -59397,6 +59434,7 @@ $e['failed']=$progress['failed']??0;
 $e['current']=$progress['current']??0;
 $e['total']=$progress['total']??$e['total']??0;
 $e['done']=$progress['done']??false;
+foreach(['phase','phase_label','phase_current','phase_total','phase_pct','batch_chunk','batch_chunks','batch_stage','last_progress_ts'] as $__pk){if(array_key_exists($__pk,$progress))$e[$__pk]=$progress[$__pk];}
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه‌ها زنده به صف می‌رسند */
 if(is_array($progress['shop_stats']??null))$e['shop_stats']=$progress['shop_stats'];
 
@@ -59677,11 +59715,14 @@ if(isset($_GET['bsl_queue_pause'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+/* Pause is cooperative: signal the active worker before changing UI state. */
+@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$queueId,'by'=>'user'],JSON_UNESCAPED_UNICODE),LOCK_EX);
 $queue=bslReadQueue();
 $found=false;
 foreach($queue['entries'] as &$e){
 if($e['id']===$queueId&&$e['status']==='running'){
 $e['status']='paused';
+$e['paused_by']='user';
 
 $progress=readProgress(BSL_PROGRESS_FILE);
 $e['sent']=$progress['sent']??0;
@@ -59724,7 +59765,7 @@ foreach($queue['entries'] as &$e){
 if($e['id']===$queueId&&in_array((string)$e['status'],['paused','failed'],true)&&!empty($e['products_file'])){
 $e['status']='running';
 $e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';
-unset($e['resume_exhausted']);
+unset($e['resume_exhausted'],$e['paused_by']);
 $found=true;
 
 @unlink(BSL_PRODUCTS_FILE);
@@ -59767,6 +59808,7 @@ $entry['skipped']=$progress['skipped']??0;
 $entry['failed']=$progress['failed']??0;
 $entry['current']=$progress['current']??0;
 $entry['done']=$progress['done']??false;
+foreach(['phase','phase_label','phase_current','phase_total','phase_pct','batch_chunk','batch_chunks','batch_stage','last_progress_ts'] as $__pk){if(array_key_exists($__pk,$progress))$entry[$__pk]=$progress[$__pk];}
 $entry['sent_details']=$progress['sent_details']??$entry['sent_details']??[];
 $entry['updated_details']=$progress['updated_details']??$entry['updated_details']??[];
 $entry['skipped_details']=$progress['skipped_details']??$entry['skipped_details']??[];
@@ -59834,6 +59876,7 @@ localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STO
 if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 @copy($entry['products_file'],BSL_PRODUCTS_FILE);
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
+unset($queue['entries'][$entryIdx]['paused_by']);
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
@@ -60011,7 +60054,9 @@ $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
 function bslBackendProgress($s,$u,$sk,$f,$t,$c,$lt,$log=null,$extra=[]){
 global $bslLog,$bslSentList,$bslUpdatedList,$bslSkippedList,$bslFailedList,$bslQueueId;
-if($log!==null){$bslLog[]=$log;}
+/* v10.395: callers may pass one message or a list. Nested arrays rendered as
+   blank task logs and caused JS string operations to fail. */
+if($log!==null){foreach((is_array($log)?$log:[$log]) as $__msg){if(is_scalar($__msg)&&trim((string)$__msg)!=='')$bslLog[]=(string)$__msg;}}
 $totalLog=count($bslLog);
 $recentSlice=$totalLog>200?array_slice($bslLog,-200):$bslLog;
 /* v10.104: چک‌پوینت را هرگز با ضربانِ bootstrap (current=0) پایین نیاور —
@@ -60032,7 +60077,14 @@ if($bslQueueId!='')$d['queue_id']=$bslQueueId;
    بتواند «زنده» نشانشان بدهد، نه فقط در پایانِ کار. */
 $__ss=bslShopStatRows((int)$s,(int)$u,(int)$sk,(int)$f);
 if($__ss)$d['shop_stats']=$__ss;
-if(!empty($extra))$d=array_merge($d,$extra);
+if(!empty($extra)){
+$d=array_merge($d,$extra);
+if(isset($extra['phase']))$GLOBALS['_bslPhaseState']=array_intersect_key($extra,array_flip(['phase','phase_label','phase_current','phase_total','phase_pct','batch_chunk','batch_chunks','batch_stage']));
+}elseif(!empty($GLOBALS['_bslPhaseState'])&&is_array($GLOBALS['_bslPhaseState'])){
+$__ph=$GLOBALS['_bslPhaseState'];
+if(($__ph['phase']??'')==='send'&&$cWrite>0){$__ph['phase_current']=$cWrite;$__ph['phase_total']=$t;$__ph['phase_pct']=(int)floor($cWrite*100/max(1,(int)$t));}
+$d=array_merge($d,$__ph);
+}
 writeProgress(BSL_PROGRESS_FILE,$d);
 clearstatcache();
 /* v10.56/v10.104: current ردیف صف فقط بالا می‌رود (هرگز رگرس به ۰).
@@ -60053,6 +60105,8 @@ if(is_array($bslSentList)&&count($bslSentList)>0){$__e['sent_details']=$bslSentL
 if(is_array($bslUpdatedList)&&count($bslUpdatedList)>0)$__e['updated_details']=$bslUpdatedList;
 if(is_array($bslSkippedList)&&count($bslSkippedList)>0)$__e['skipped_details']=$bslSkippedList;
 if(is_array($bslFailedList)&&count($bslFailedList)>0)$__e['failed_details']=$bslFailedList;
+/* Keep Send-tab queue cards synchronized with non-product phases too. */
+foreach(['phase','phase_label','phase_current','phase_total','phase_pct','last_progress_ts'] as $__pk){if(array_key_exists($__pk,$d)){$__e[$__pk]=$d[$__pk];$__chg=true;}}
 break;
 }
 }
@@ -60400,7 +60454,12 @@ $bslFastDoneIdx=[];
    پیچیده همچنان در حلقهٔ مطمئنِ قدیمی انجام می‌شود. */
 if(!$__scopeShop && $bslParallelN>1 && $total>=3 && $bslResumeStart<=1){
 $__fastItems=[];$__fastMeta=[];$__fastSkipped=[];$__defaultShop=['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName];
+$__fastStarted=microtime(true);$__fastScanned=0;$__fastBudget=20.0;
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['🔍 بررسی سریع محصولات موجود آغاز شد'],['phase'=>'existing_scan','phase_label'=>'بررسی محصولات موجود','phase_current'=>0,'phase_total'=>$total,'phase_pct'=>0]);
 foreach($pd as $__fi=>$__fp){
+$__fastScanned=$__fi+1;
+if($__fastScanned===1||$__fastScanned%25===0){$__pct=(int)floor($__fastScanned*100/max(1,$total));bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'existing_scan','phase_label'=>'بررسی محصولات موجود','phase_current'=>$__fastScanned,'phase_total'=>$total,'phase_pct'=>$__pct]);}
+if($__fastScanned>25&&(microtime(true)-$__fastStarted)>$__fastBudget){bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['⏱ بررسی سریع در '.$__fastScanned.' محصول checkpoint شد؛ باقی محصولات وارد مسیر عادی می‌شوند'],['phase'=>'existing_scan_done','phase_label'=>'پایان بررسی سریع','phase_current'=>$__fastScanned,'phase_total'=>$total,'phase_pct'=>(int)floor($__fastScanned*100/max(1,$total))]);break;}
 $__ft=trim($__fp['title']??$__fp['name']??'');$__fk=$__fp['key']??'';
 if($__ft==='')continue;$__tw=preg_split('/\s+/u',$__ft);if(mb_strlen($__ft)<6||count($__tw)<2)continue;
 $__pn=(int)preg_replace('/[^0-9]/','',(string)($__fp['final_price']??'0'));
@@ -60431,10 +60490,11 @@ $__bu=['id'=>$__id,'primary_price'=>$__pn,'stock'=>$__newStock,'preparation_days
 /* v10.392: category_id is creation-only; existing-product PATCH rejects it. */ bslApplyContent($__bu,$__fp);
 $__fastItems[]=$__bu;$__fastMeta[$__fi]=['title'=>$__ft,'key'=>$__fk,'id'=>$__id,'pn'=>$__pn,'stock'=>$__newStock,'old_price'=>$__exPrice,'old_stock'=>$__exStock,'old_status'=>$__st,'new_status'=>(int)$__bu['status'],'changes'=>$__changes,'card'=>$__card,'p'=>$__fp];
 }
+if($__fastScanned>=$total)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['✅ بررسی سریع محصولات موجود تمام شد: '.$__fastScanned.' محصول'],['phase'=>'existing_scan_done','phase_label'=>'بررسی محصولات موجود تمام شد','phase_current'=>$__fastScanned,'phase_total'=>$total,'phase_pct'=>100]);
 if($__fastSkipped){foreach($__fastSkipped as $__fi=>$__det){$skipped++;$bslSkippedList[]=$__det;$bslFastDoneIdx[$__fi]=true;}bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⏭ پرش سریع از کاتالوگ: '.count($__fastSkipped).' محصول بدون درخواست شبکه']);}
 if(count($__fastItems)>=2){
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚡ آپدیت گروهی باسلام: '.count($__fastItems).' محصول موجود (بدون آپلود تصویر)']);
-$__br=bslBatchUpdate($tk,$vid,$__fastItems);
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚡ آپدیت گروهی باسلام: '.count($__fastItems).' محصول موجود (بدون آپلود تصویر)'],['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>0,'phase_total'=>count($__fastItems),'phase_pct'=>0]);
+$__br=bslBatchUpdate($tk,$vid,$__fastItems,function($done,$failed,$chunk,$chunks,$stage)use(&$sent,&$updated,&$skipped,&$fail,$total,$bslResumeStart,$__fastItems){$pc=min(count($__fastItems),$done+$failed);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>$pc,'phase_total'=>count($__fastItems),'phase_pct'=>(int)floor($pc*100/max(1,count($__fastItems))),'batch_chunk'=>$chunk,'batch_chunks'=>$chunks,'batch_stage'=>$stage]);});
 if(!empty($__br['ok'])){
 foreach($__fastMeta as $__fi=>$__m){$updated++;$__chg=implode('، ',$__m['changes']);$bslUpdatedList[]=array_merge(['title'=>$__m['title'],'key'=>$__m['key'],'remote_id'=>$__m['id'],
 'changes'=>$__chg!==''?$__chg:'آپدیت گروهی','update_reason'=>$__chg!==''?$__chg:'آپدیت گروهی با batch-updates',
@@ -60448,6 +60508,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚠️ آپدیت
 }
 }
 }
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'send','phase_label'=>'ارسال محصولات','phase_current'=>$bslResumeStart,'phase_total'=>$total,'phase_pct'=>(int)floor($bslResumeStart*100/max(1,$total))]);
 // v8.22: Phase 1 removed — per-product search replaces bulk loading
 /* v10.73 (87): شروعِ بلوکِ «غرفهٔ پیش‌فرض» — حلقهٔ اصلی + تعدیلِ قیمتِ
    لایهٔ دوم برای ردیف‌های گره‌خورده به غرفهٔ غیرپیش‌فرض رد می‌شود (کارِ
@@ -60468,7 +60529,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف #
 taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)$bslQueueId, 'current'=>(int)$i, 'total'=>(int)$total,
      'sent'=>(int)$sent, 'updated'=>(int)$updated, 'skipped'=>(int)$skipped, 'failed'=>(int)$fail]);
-$queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='paused';$qe['paused_at']=time();$qe['current']=(int)$i;$qe['sent']=$sent;$qe['updated']=$updated;$qe['skipped']=$skipped;$qe['failed']=$fail;break;}}unset($qe);bslWriteQueue($queue);
+$queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='paused';$qe['paused_by']='user';$qe['paused_at']=time();$qe['current']=(int)$i;$qe['sent']=$sent;$qe['updated']=$updated;$qe['skipped']=$skipped;$qe['failed']=$fail;break;}}unset($qe);bslWriteQueue($queue);
 @unlink(BSL_PRODUCTS_FILE);exit;
 }
 $pTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
@@ -76271,6 +76332,15 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.395', t:'🚀 رفع توقف بررسی محصولات موجود و همگام‌سازی کامل تب ارسال', items:[
+    'جستجوی ردیف کاتالوگ باسلام از پیمایش دوبارهٔ کل کاتالوگ برای هر محصول به index یک‌بارهٔ شناسه تبدیل شد؛ گلوگاه O(n²) ارسال‌های چند‌هزارمحصولی حذف شد.',
+    'پیش‌بررسی محصولات موجود بودجهٔ ۲۰ ثانیه‌ای و heartbeat هر ۲۵ محصول دارد؛ باقی محصولات پس از بودجه وارد مسیر عادی می‌شوند و worker دیگر چند دقیقه روی صفرِ بدون ضربان نمی‌ماند.',
+    'آپدیت گروهی در هر batch و در fallback تک‌محصولی heartbeat می‌نویسد و مرحله، تعداد بررسی‌شده، درصد و شمارهٔ بسته در پنل زنده، کارت صف و مدیر وظایف نمایش داده می‌شود.',
+    'لاگ‌های nested قدیمی به متن واقعی تبدیل شدند؛ سطرهای خالی مدیر وظایف و خطای m.includes در تب ارسال برطرف شد.',
+    'شروع، ادامه و راه‌اندازی مجدد از رابط اکنون queue_id، start_index و resume را با POST واقعی می‌فرستند؛ FormData دیگر با GET دور ریخته نمی‌شود و ردیف اشتباه انتخاب نمی‌شود.',
+    'تشخیص بی‌حرکتی مرورگر به تغییر واقعی current/phase وابسته شد و بازیابی را فقط به watchdog مشترک کران/سرور می‌سپارد؛ توقف دستی نیز با paused_by=user از resume خودکار جدا شد.',
+    'failed_resume در مدیر وظایف دیگر تکمیل‌شدهٔ ۱۰۰٪ نمایش داده نمی‌شود و به‌عنوان کار ناقصِ قابل ادامه باقی می‌ماند.'
+  ]},
   {v:'10.394', t:'💓 رفع خطای اجرای زودهنگام نگهبان صف در کران', items:[
     'ثابت‌های سقف تلاش، cooldown و retry صف همراه ثابت handoff به ابتدای فایل منتقل شدند تا مسیر زودهنگام cron_run پیش از تعریف آن‌ها متوقف نشود.',
     'خطای Undefined constant QUEUE_RESUME_COOLDOWN که در گزارش واقعی کران تولید دیده شد برطرف شد؛ پمپ و watchdog اکنون می‌توانند ردیف‌های ناموفق باسلام و ووکامرس را از checkpoint دوباره تحویل دهند.'
@@ -89880,7 +89950,7 @@ document.body.appendChild(div);
 }
 function closeBslVendorModal(){const m=document.getElementById('bslVendorModalContainer');if(m)m.remove();}
 // v7.41: Stale progress detection + auto-resume
-let bslLastUpdateTime=0,bslResumeCount=0,bslMaxResumes=10,bslLastLogCount=0,bslSendStartedAt=0,bslLastDoneQueueId='';
+let bslLastUpdateTime=0,bslResumeCount=0,bslMaxResumes=10,bslLastLogCount=0,bslSendStartedAt=0,bslLastDoneQueueId='',bslLastCurrent=-1,bslLastPhaseSig='';
 // v7.82: Track how many product cards we've rendered to avoid duplicates
 let bslLastCardCount=0;
 // v8.06: WooCommerce polling state
@@ -89986,7 +90056,7 @@ function pollBslProgress() {
                 startInSlice=Math.max(0,200-newCount);
             }
             for(let i=startInSlice;i<logs.length;i++){
-                const m=logs[i];
+                const raw=logs[i];const m=Array.isArray(raw)?raw.map(String).filter(Boolean).join(' · '):String(raw??'');if(!m)continue;
                 // v8.06: Skip product-level logs that are now shown as cards — skip any message starting with [n]
                 if(/^\[\d+\]/.test(m))continue;
                 let cls='';
@@ -90009,17 +90079,22 @@ function pollBslProgress() {
         // v7.49: Improved progress display with elapsed + ETA + phase info
         if(running || !done) {
             let progText='';
-            if(running&&total>0&&current<=0){
-                progText='🔍 بررسی محصولات موجود ('+toFa(total)+' محصول)...';
+            const phaseCurrent=parseInt(d.phase_current)||0,phaseTotal=parseInt(d.phase_total)||0;
+            const phasePct=Math.max(0,Math.min(100,Number.isFinite(Number(d.phase_pct))?Number(d.phase_pct):(phaseTotal?phaseCurrent*100/phaseTotal:0)));
+            if(d.phase_label&&phaseTotal>0){
+                progText=String(d.phase_label)+' — '+toFa(phaseCurrent)+'/'+toFa(phaseTotal)+' ('+Math.round(phasePct)+'٪)';
+                if(d.batch_chunks)progText+=' · بسته '+toFa(d.batch_chunk||0)+'/'+toFa(d.batch_chunks);
+            }else if(running&&total>0&&current<=0){
+                progText='🔍 آماده‌سازی ارسال ('+toFa(total)+' محصول)...';
             }else if(current>0&&total>0){
                 progText=toFa(current)+'/'+toFa(total)+' ('+Math.round(current/total*100)+'٪)';
             }else{
                 progText='در حال پردازش...';
             }
             if(elapsedStr) progText+=' | '+elapsedStr;
-            if(etaStr) progText+=' | ~'+etaStr+' مانده';
+            if(etaStr&&(!d.phase||d.phase==='send')) progText+=' | ~'+etaStr+' مانده';
             $('bSS').textContent=progText;
-            $('bPB').style.width=(total>0?current/total*100:0)+'%';
+            $('bPB').style.width=((d.phase_label&&phaseTotal>0)?phasePct:(total>0?current/total*100:0))+'%';
             // v7.48: Show product title being processed
             if(d.last_title){
                 $('bSS').title='محصول فعلی: '+d.last_title;
@@ -90068,7 +90143,9 @@ function pollBslProgress() {
         if(progressTs>0&&progressTs>bslLastUpdateTime)bslLastUpdateTime=progressTs;
         if(bslLastUpdateTime===0)bslLastUpdateTime=now;
         if(totalLogCount>bslLastLogCount)bslLastUpdateTime=now;
-        if(current>0)bslLastUpdateTime=now;
+        if(current!==bslLastCurrent){bslLastCurrent=current;bslLastUpdateTime=now;}
+        const phaseSig=String(d.phase||'')+':'+String(d.phase_current||0)+':'+String(d.batch_chunk||0);
+        if(phaseSig!==bslLastPhaseSig){bslLastPhaseSig=phaseSig;bslLastUpdateTime=now;}
         const staleThreshold=120000; // v7.66: 120 seconds stale threshold (increased from 90)
         if(now-bslLastUpdateTime>staleThreshold&&running&&!done){
             // Stale! Server process probably died. Auto-resume with server-side mode.
@@ -90080,27 +90157,13 @@ function pollBslProgress() {
                 bslLastLogCount=totalLogCount;
                 // v7.66: Resume using restartBslServer (server-side mode) with queue_id
                 // Find the running queue entry and use restartBslServer for proper resume
+                /* poll_bsl already runs the same checkpoint-safe watchdog used by
+                   cron. Do not fire an unparameterized GET here: it ignored the
+                   FormData above and could select the wrong queue row. */
                 const runningQueueId=d.queue_id||window._currentBslQueueId||'';
-                if(runningQueueId){
-                    // Use restartBslServer for proper server-side resume
-                    const fd=new FormData();
-                    fd.append('from_file','1');
-                    fd.append('queue_id',runningQueueId);
-                    fd.append('start_index',String(current));
-                    setTimeout(pollBslProgress,500);
-                    // v7.81: Fire-and-forget stale resume
-                    fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
-                    bslLastUpdateTime=Date.now();
-                }else{
-                    // No queue_id — just re-trigger bsl_backend with start_index
-                    const fd=new FormData();
-                    fd.append('from_file','1');
-                    fd.append('start_index',String(current));
-                    setTimeout(pollBslProgress,500);
-                        // v7.81: Fire-and-forget stale resume (no queue_id)
-                    fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
-                    bslLastUpdateTime=Date.now();
-                }
+                $('bSS').textContent='⚠ بی‌حرکتی تشخیص داده شد — نگهبان سرور در حال بررسی checkpoint '+toFa(current)+(runningQueueId?' · '+runningQueueId.slice(-8):'');
+                setTimeout(pollBslProgress,1000);
+                bslLastUpdateTime=Date.now();
                 return;
             }else{
                 $('bR').innerHTML+='<div style="color:#f87171;padding:6px;font-size:12px">❌ فرآیند قطع شد — حداکثر تلاش‌های ادامه رسید</div>';
@@ -90782,11 +90845,12 @@ function queueBslSend(ps,catId){
                 $('bR').innerHTML='<div style="color:#67e8f9;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">\u2713 \u0627\u0631\u0633\u0627\u0644 '+toFa(totalSaved)+' \u0645\u062d\u0635\u0648\u0644 (\u0633\u0631\u0648\u0631\u0633\u0627\u06cc\u062f \u2014 \u0628\u0633\u062a\u0647 \u0645\u0631\u0648\u0631\u06af\u0632 \u0628\u0627 \u0627\u062f\u0627\u0645\u0647 \u0645\u06cc\u062f\u0647\u062f)</div>';
                 $('bSM').classList.remove('hidden');$('bO').textContent=toFa(0);$('bU').textContent=toFa(0);$('bK').textContent=toFa(0);$('bF').textContent=toFa(0);$('bX').textContent=toFa(0);$('bT').textContent=toFa(totalSaved);
                 $('bSS').textContent='\u2713 \u0634\u0631\u0648\u0631 \u0627\u0631\u0633\u0627\u0644...';
-                // v7.66: Track current queue ID for resume capability                window._currentBslQueueId=qid;                console.log("[v7.66 queueBslSend] Starting bsl_backend for queue_id="+qid+" with "+totalSaved+" products");                checkBslQueue();
-                // v7.66: Trigger bsl_backend (pure PHP processor)
+                // Track the exact queue row across polling/recovery.
+                window._currentBslQueueId=qid;
+                console.log('[BSL queue] starting '+qid+' with '+totalSaved+' products');
+                checkBslQueue();
                 const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);
-                // v7.81: Fire-and-forget — trigger bsl_backend, start polling immediately
-                fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
+                fetch('?action=bsl_backend',{method:'POST',body:fd3}).catch(()=>{});
                 $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع — پیشرفت زنده نمایش می‌شود</div>';
                 setTimeout(pollBslProgress,1000);
             }).catch(()=>{});
@@ -91020,7 +91084,7 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
             const logs=d.recent_log||[];
             const totalLogCount=d.total_log_count||0;
             for(let i=0;i<logs.length;i++){
-                const m=logs[i];let cls='';
+                const raw=logs[i];const m=Array.isArray(raw)?raw.map(String).filter(Boolean).join(' · '):String(raw??'');if(!m)continue;let cls='';
                 if(m.includes('\u2713'))cls='color:#22c55e;background:#14532d20;padding:3px 8px;font-size:12px;border-radius:4px';
                 else if(m.includes('\u2717'))cls='color:#ef4444;background:#7f1d1d20;padding:3px 8px;font-size:12px;border-radius:4px';
                 else if(m.includes('\u26a1'))cls='color:#facc15;background:#42200620;padding:3px 8px;font-size:12px;border-radius:4px';
@@ -91038,7 +91102,8 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
             if(d.retired_details)bslReportData.retired=d.retired_details;
             let elapsedStr='';
             if(d.started_at>0){const elapsedSec=Math.floor(Date.now()/1000-d.started_at);elapsedStr=elapsedSec>=60?(Math.floor(elapsedSec/60)+' \u062f\u0631\u06cc\u0642\u0647 '+elapsedSec%60+' \u062b\u0627\u0646\u06cc\u0647'):(elapsedSec+' \u062b\u0627\u0646\u06cc\u0647');}
-            $('bSS').textContent=toFa(current)+'/'+toFa(total)+' ('+Math.round(current/total*100)+'\u066a)'+(elapsedStr?' | '+elapsedStr:'');
+            const pc=parseInt(d.phase_current)||0,pt=parseInt(d.phase_total)||0;
+            $('bSS').textContent=(d.phase_label&&pt?(String(d.phase_label)+' — '+toFa(pc)+'/'+toFa(pt)+' ('+Math.round(Number(d.phase_pct??pc*100/pt))+'٪)'):(toFa(current)+'/'+toFa(total)+' ('+(total?Math.round(current/total*100):0)+'٪)'))+(elapsedStr?' | '+elapsedStr:'');
             if(d.last_title)$('bSS').title='\u0645\u062d\u0635\u0648\u0644 \u0641\u0639\u0644\u06cc: '+d.last_title;
             pollBslProgress();
         }else{
@@ -91176,7 +91241,8 @@ function sendQueueRetireAgg(entries){
 }
 function sendQueueVisualCard(e,opt){
     opt=opt||{};const total=parseInt(e.total)||0,cur=Math.min(total,parseInt(e.current)||0);
-    const done=e.status==='done',failed=e.status==='failed',pct=done?100:(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0);
+    const phTotal=parseInt(e.phase_total)||0,phCur=Math.min(phTotal,parseInt(e.phase_current)||0),hasPhase=e.status==='running'&&phTotal>0&&e.phase_label&&e.phase!=='send';
+    const done=e.status==='done',failed=e.status==='failed',pct=done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0));
     const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
     const processed=done?total:cur,remain=Math.max(0,total-processed),status=labels[e.status]||e.status;
@@ -91188,7 +91254,7 @@ function sendQueueVisualCard(e,opt){
     const reason=e.fail_reason||e.error||'';
     return '<article class="sendq-card is-'+esc(e.status||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
       +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name">'+esc(e.profile_name||'ارسال محصولات')+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[e.status]+';background:'+colors[e.status]+'18;border:1px solid '+colors[e.status]+'55">'+status+'</span></div>'
-      +'<div class="sendq-progress-head"><b>'+toFa(pct)+'٪ انجام شده</b><span>'+toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
+      +'<div class="sendq-progress-head"><b>'+(hasPhase?esc(e.phase_label):toFa(pct)+'٪ انجام شده')+'</b><span>'+(hasPhase?(toFa(phCur)+' از '+toFa(phTotal)+' · '+toFa(pct)+'٪'):(toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده'))+'</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
       +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
       +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
@@ -91338,7 +91404,8 @@ function resumeBslQueue(qid){
         bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
         $('bSB').classList.add('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
         $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
-        fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
+        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
+        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
     }).catch(()=>{showToast('خطا شبکه',1);});
@@ -91362,8 +91429,8 @@ function startBslServer(qid){
         $('bSS').textContent='\u2713 \u0634\u0631\u0648\u0631 \u0633\u0631\u0648\u0631...';
         // Now trigger bsl_backend with from_file=1 and queue_id
         const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);
-        // v7.81: Fire-and-forget — trigger bsl_backend, start polling
-        fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
+        // Start the exact selected queue row; GET previously discarded fd2.
+        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع — پیشرفت زنده نمایش می‌شود</div>';
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
@@ -91383,9 +91450,9 @@ function restartBslServer(qid){
         $('bT').textContent=toFa(d.total||0);
         $('bO').textContent=toFa(d.sent||0);$('bU').textContent=toFa(d.updated||0);$('bK').textContent=toFa(d.skipped||0);$('bF').textContent=toFa(d.failed||0);
         // Trigger bsl_backend with resume from current position
-        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));
-        // v7.81: Fire-and-forget — trigger bsl_backend, start polling
-        fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
+        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
+        // Resume the exact checkpoint; GET previously discarded all fields.
+        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ادامه ارسال — پیشرفت زنده نمایش می‌شود</div>';
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
@@ -91769,7 +91836,8 @@ if(e.shop_name)detailHtml+='<div style="color:#94a3b8">غرفهٔ هدف: <b sty
         if(e.recent_log&&e.recent_log.length>0){
             detailHtml+='<div style="font-weight:700;color:#e2e8f0;font-size:12px;margin:12px 0 8px">📝 لاگ:</div>';
             detailHtml+='<div style="max-height:200px;overflow-y:auto;border:1px solid #334155;border-radius:8px;padding:8px;background:#0f172a;font-size:10px">';
-            (e.recent_log||[]).forEach(m=>{
+            (e.recent_log||[]).forEach(raw=>{
+                const m=Array.isArray(raw)?raw.map(String).filter(Boolean).join(' · '):String(raw??'');if(!m)return;
                 let cls='color:#64748b';
                 if(m.includes('✅'))cls='color:#4ade80';
                 else if(m.includes('❌'))cls='color:#f87171';
@@ -91806,8 +91874,9 @@ function startNextBslQueueEntry(){
     // v7.66: Use server-side bsl_backend to process next waiting entry
     // instead of old client-driven approach
     // v7.81: Fire-and-forget — trigger bsl_backend, then poll
-    fetch('?action=bsl_backend',{method:'GET'}).catch(()=>{});
-    console.log('[v7.81] Triggered bsl_backend for next entry — polling starts');
+    const fd=new FormData();fd.append('from_file','1');
+    fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});
+    console.log('[BSL queue] triggered next waiting entry — polling starts');
     bSend=true;
     bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
     bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
