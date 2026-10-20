@@ -37684,7 +37684,8 @@ if (isset($_GET['selftest'])) {
       && strpos($selfSrc, 'بدون هیچ probe یا حذفِ path') !== false);
 
     $add('10.22', 'پینگ از غرفهٔ باسلام مستقل است و تیکِ کانال در مسیرِ ارسال مرکزی اعمال می‌شود',
-         strpos($selfSrc, "if (!\$_hasMsgr) return ['ok' => false, 'error' => 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)'];") !== false
+         strpos($selfSrc, "if (!\$_hasMsgr) { notifPingLog(['ok' => false") !== false
+      && strpos($selfSrc, "return ['ok' => false, 'error' => 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)'];") !== false
       && strpos($selfSrc, "\$_hasMsgr = notifMessengerConfigured(\$cn, 'baleh')") !== false
       && function_exists('notifMessengerReady')
       && notifMessengerReady(['baleh'=>['enabled'=>1,'token'=>'T','chat_id'=>'C']], 'baleh')
