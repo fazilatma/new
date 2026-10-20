@@ -66,6 +66,8 @@ const QUEUE_RESUME_HANDOFF_SEC = 120;
 const QUEUE_RESUME_MAX_TRIES = 3;
 const QUEUE_RESUME_COOLDOWN  = 90;
 const QUEUE_IDLE_RETRY_AFTER = 300;
+/* Task-priority queue ordering is called by early cron watchdog routes. */
+const TASKS_STALE_SEC = 300;
 const EXTRACT_PROGRESS_FILE = __DIR__ . '/extract_progress.json';
 const CATLEARN_FILE = __DIR__ . '/category_learning.json';   // v8.48
 // v8.60: سقف «چند کلمهٔ اول» برای یادگیری و تطبیق خودکار دسته‌بندی
@@ -351,7 +353,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.395';
+const APP_VERSION = '10.396';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -26644,7 +26646,8 @@ if (isset($_GET['auto_catalog'])) {
  *  اگر مدت‌ها خبری نشد یعنی پردازه وسطِ کار کشته شده (تایم‌اوتِ هاست،
  *  ری‌استارتِ PHP-FPM). چنین کاری تا ابد «در حال اجرا» می‌ماند و دکمهٔ
  *  شروعِ دوباره را قفل می‌کند. */
-const TASKS_STALE_SEC = 300;
+/* TASKS_STALE_SEC is declared with the early queue constants because cron
+   priority calculation can call tasksState() before execution reaches here. */
 
 /** رجیستریِ کارهای پس‌زمینه.
  *
@@ -44150,6 +44153,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.395', 'ورودی 10.395 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "395'") !== false
       && version_compare(APP_VERSION, '10.' . '395', '>='));
+    $add('10.396', 'ثابت stale مدیر وظایف پیش از watchdog زودهنگام cron تعریف است',
+         strpos($selfSrc, 'const TASKS_' . 'STALE_SEC = 300;') < strpos($selfSrc, "if (isset(\$_GET['cron_run'])")
+      && substr_count($selfSrc, 'const TASKS_' . 'STALE_SEC = 300;') === 1);
+    $add('10.396', 'ورودی 10.396 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "396'") !== false
+      && version_compare(APP_VERSION, '10.' . '396', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -76332,6 +76341,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.396', t:'💓 تکمیل مسیر زودهنگام watchdog تب ارسال', items:[
+    'ثابت TASKS_STALE_SEC به بخش ثابت‌های ابتدایی منتقل شد؛ ترتیب اولویت وظایف در cron دیگر پیش از رسیدن اجرا به تعریف ثابت با Undefined constant متوقف نمی‌شود.',
+    'این خطا در بررسی واقعی تولید پس از v10.395 دیده و همان‌جا رفع شد تا watchdog بتواند worker قدیمیِ گیرکردهٔ باسلام را تحویل بگیرد.'
+  ]},
   {v:'10.395', t:'🚀 رفع توقف بررسی محصولات موجود و همگام‌سازی کامل تب ارسال', items:[
     'جستجوی ردیف کاتالوگ باسلام از پیمایش دوبارهٔ کل کاتالوگ برای هر محصول به index یک‌بارهٔ شناسه تبدیل شد؛ گلوگاه O(n²) ارسال‌های چند‌هزارمحصولی حذف شد.',
     'پیش‌بررسی محصولات موجود بودجهٔ ۲۰ ثانیه‌ای و heartbeat هر ۲۵ محصول دارد؛ باقی محصولات پس از بودجه وارد مسیر عادی می‌شوند و worker دیگر چند دقیقه روی صفرِ بدون ضربان نمی‌ماند.',
