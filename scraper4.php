@@ -355,7 +355,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.402';
+const APP_VERSION = '10.403';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -25305,13 +25305,24 @@ if (isset($_GET['notif_health'])) {
         if (!$ok) $out['problems'][] = $msg;
     };
 
-    // ۱) پیام‌رسان تنظیم است؟
-    $hasBaleh  = trim((string)($cnH['baleh']['token'] ?? '')) !== '' && trim((string)($cnH['baleh']['chat_id'] ?? '')) !== '';
-    $hasRubika = trim((string)($cnH['rubika']['token'] ?? '')) !== '' && trim((string)($cnH['rubika']['chat_id'] ?? '')) !== '';
-    $hasTelegram = trim((string)($cnH['telegram']['token'] ?? '')) !== '' && trim((string)($cnH['telegram']['chat_id'] ?? '')) !== '';   // v10.78 (92)
-    $add('messenger', $hasBaleh || $hasRubika || $hasTelegram,
-         ($hasBaleh || $hasRubika || $hasTelegram) ? ('پیام‌رسان فعال: ' . trim(($hasBaleh ? 'بله ' : '') . ($hasRubika ? 'روبیکا ' : '') . ($hasTelegram ? 'تلگرام' : '')))
-                                   : 'هیچ پیام‌رسانی تنظیم نشده (توکن یا شناسهٔ چت خالی است)');
+    // ۱) فقط پیام‌رسان‌هایی که تیک فعال دارند و اعتبارنامه‌شان کامل است ارسال می‌کنند.
+    $hasBaleh  = notifMessengerReady($cnH, 'baleh');
+    $hasRubika = notifMessengerReady($cnH, 'rubika');
+    $hasTelegram = notifMessengerReady($cnH, 'telegram');
+    $messengerStates = [];
+    foreach (['baleh', 'rubika', 'telegram'] as $_msgrKey) {
+        $_msgrCfg = is_array($cnH[$_msgrKey] ?? null) ? $cnH[$_msgrKey] : [];
+        $messengerStates[$_msgrKey] = [
+            'enabled' => filter_var($_msgrCfg['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
+            'configured' => notifMessengerConfigured($cnH, $_msgrKey),
+            'ready' => notifMessengerReady($cnH, $_msgrKey),
+        ];
+    }
+    $hasAnyMessenger = $hasBaleh || $hasRubika || $hasTelegram;
+    $add('messenger', $hasAnyMessenger,
+         $hasAnyMessenger ? ('پیام‌رسان فعال: ' . trim(($hasBaleh ? 'بله ' : '') . ($hasRubika ? 'روبیکا ' : '') . ($hasTelegram ? 'تلگرام' : '')))
+                          : 'هیچ پیام‌رسان فعالی نیست؛ تیک، توکن و شناسهٔ چت را بررسی کنید',
+         $messengerStates);
 
     /* ۲) پیش‌نیازهای اعلانِ باسلام (سفارش/چت/محصول).
        v10.22 (۳۵الف): این‌ها فقط اعلان‌های باسلام را محدود می‌کنند؛
@@ -37672,14 +37683,37 @@ if (isset($_GET['selftest'])) {
       && strpos($selfSrc, 'cronEmit($lockOut);') !== false
       && strpos($selfSrc, 'بدون هیچ probe یا حذفِ path') !== false);
 
-    $add('10.22', 'پینگِ دوره‌ای به توکنِ باسلام وابسته نیست',
+    $add('10.22', 'پینگ از غرفهٔ باسلام مستقل است و تیکِ کانال در مسیرِ ارسال مرکزی اعمال می‌شود',
          strpos($selfSrc, "if (!\$_hasMsgr) return ['ok' => false, 'error' => 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)'];") !== false
-      && strpos($selfSrc, "\$_hasMsgr = (trim((string)(\$cn['baleh']['token'] ?? '')) !== ''") !== false);
+      && strpos($selfSrc, "\$_hasMsgr = notifMessengerConfigured(\$cn, 'baleh')") !== false
+      && function_exists('notifMessengerReady')
+      && notifMessengerReady(['baleh'=>['enabled'=>1,'token'=>'T','chat_id'=>'C']], 'baleh')
+      && !notifMessengerReady(['baleh'=>['enabled'=>0,'token'=>'T','chat_id'=>'C']], 'baleh')
+      && !notifMessengerReady(['baleh'=>['token'=>'T','chat_id'=>'C']], 'baleh'));
 
-    $add('10.22', 'پنجرهٔ throttle فقط با ارسالِ موفق مصرف می‌شود',
-         strpos($selfSrc, "\$anySent = in_array('sent', array_values(\$delivery), true);") !== false
+    $add('10.403', 'همهٔ کانال‌های پیام‌رسان تیکِ ذخیره‌شده را رعایت می‌کنند',
+         function_exists('notifMessengerReady') && function_exists('notifMessengerConfigured')
+      && notifMessengerReady(['baleh'=>['enabled'=>1,'token'=>'T','chat_id'=>'C']], 'baleh')
+      && !notifMessengerReady(['baleh'=>['enabled'=>0,'token'=>'T','chat_id'=>'C']], 'baleh')
+      && notifMessengerConfigured(['baleh'=>['enabled'=>0,'token'=>'T','chat_id'=>'C']], 'baleh')
+      && !notifMessengerReady(['baleh'=>['enabled'=>'false','token'=>'T','chat_id'=>'C']], 'baleh')
+      && notifMessengerReady(['rubika'=>['enabled'=>1,'token'=>'T','chat_id'=>'C']], 'rubika')
+      && !notifMessengerReady(['rubika'=>['enabled'=>0,'token'=>'T','chat_id'=>'C']], 'rubika')
+      && notifMessengerReady(['telegram'=>['enabled'=>1,'token'=>'T','chat_id'=>'C']], 'telegram')
+      && !notifMessengerReady(['telegram'=>['enabled'=>0,'token'=>'T','chat_id'=>'C']], 'telegram')
+      && notifEventOn([], 'order_new') && !notifEventOn(['order_new'=>0], 'order_new')
+      && strpos($selfSrc, 'if ($sendBaleh)') !== false
+      && strpos($selfSrc, 'if ($sendRubika)') !== false
+      && strpos($selfSrc, 'if ($sendTelegram)') !== false
+      && strpos($selfSrc, "\$hasMsgr = notifMessengerConfigured(\$cn, 'baleh')") !== false);
+
+    $add('10.22', 'پنجرهٔ throttle با ارسالِ موفقِ پیام‌رسان یا Web Push مصرف می‌شود',
+         strpos($selfSrc, "\$_pushSent = is_array(\$delivery['push'] ?? null)") !== false
+      && strpos($selfSrc, "\$anySent = in_array('sent', array_values(\$delivery), true) || \$_pushSent;") !== false
       && strpos($selfSrc, 'if (!$force && $anySent) {') !== false
-      && strpos($selfSrc, "'error' => 'ارسال به پیام‌رسان ناموفق بود',") !== false);
+      && strpos($selfSrc, "'error' => 'پینگ به هیچ پیام‌رسان یا مرورگری نرسید',") !== false
+      && strpos($selfSrc, "if (\$feed !== null) liveFeedPush(\$feed, \$msg);") !== false
+      && strpos($selfSrc, "\$out['push'] = webpushSend(") !== false);
 
     $add('10.22', 'نبض وقتی اجرای قبلی سالم تمام شده باشد فرستاده نمی‌شود',
          strpos($selfSrc, "return ['ok' => true, 'skipped' => 'heartbeat_not_needed'];") !== false
@@ -46297,6 +46331,21 @@ function notifEventOn(array $ne, string $key): bool {
     return !empty($ne[$key]);
 }
 
+/** A configured channel has credentials; readiness additionally requires its saved switch. */
+function notifMessengerConfigured(array $cn, string $channel): bool {
+    if (!in_array($channel, ['baleh', 'rubika', 'telegram'], true)) return false;
+    $cfg = $cn[$channel] ?? null;
+    return is_array($cfg)
+        && trim((string)($cfg['token'] ?? '')) !== ''
+        && trim((string)($cfg['chat_id'] ?? '')) !== '';
+}
+function notifMessengerReady(array $cn, string $channel): bool {
+    $cfg = $cn[$channel] ?? null;
+    return is_array($cfg)
+        && filter_var($cfg['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)
+        && notifMessengerConfigured($cn, $channel);
+}
+
 /** ارسال یک پیام به همهٔ پیام‌رسان‌های فعال */
 /* v10.66 (۸۰): فیدِ رویداد — هر رویدادی که به پیام‌رسان رفته، اینجا هم می‌نشیند
    تا مرورگر (کارتِ زنده + اعلانِ سیستم) آن را ببیند. چت استثناست: مرورگر
@@ -46653,25 +46702,28 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     $bt = $cn['baleh']['token'] ?? '';  $bc = $cn['baleh']['chat_id'] ?? '';
     $rt = $cn['rubika']['token'] ?? ''; $rc = $cn['rubika']['chat_id'] ?? '';
     $tt = $cn['telegram']['token'] ?? ''; $tc = $cn['telegram']['chat_id'] ?? '';   // v10.78 (92): تلگرام
+    $sendBaleh = notifMessengerReady($cn, 'baleh');
+    $sendRubika = notifMessengerReady($cn, 'rubika');
+    $sendTelegram = notifMessengerReady($cn, 'telegram');
     /* v10.109: لینک‌های داخل متن — پیش‌نمایش وب برای تلگرام/بله */
     $wantPreview = $media !== [] || (bool)preg_match('~https?://\S+~u', $msg);
-    if ($bt !== '' && $bc !== '')  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
-    if ($rt !== '' && $rc !== '')  { $rr = bslSendToRubika($rt, $rc, $msg); $out['rubika'] = $rr['ok'] ? 'sent' : 'fail'; if (!$rr['ok'] && $rr['error'] !== '') $out['rubika_err'] = $rr['error']; if ($rr['ok'] && ($rr['message_id'] ?? '') !== '') { $out['rubika_msg_id'] = $rr['message_id']; msgrSaveMsg('rubika', $rr['message_id'], 0, 0); } }
-    if ($tt !== '' && $tc !== '')  { $tr = bslSendToTelegram($tt, $tc, $msg, $wantPreview); $out['telegram'] = $tr['ok'] ? 'sent' : 'fail'; if (!$tr['ok'] && $tr['error'] !== '') $out['telegram_err'] = $tr['error']; if ($tr['ok'] && ($tr['message_id'] ?? '') !== '') { $out['telegram_msg_id'] = $tr['message_id']; msgrSaveMsg('telegram', $tr['message_id'], 0, 0); } }
+    if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
+    if ($sendRubika)  { $rr = bslSendToRubika($rt, $rc, $msg); $out['rubika'] = $rr['ok'] ? 'sent' : 'fail'; if (!$rr['ok'] && $rr['error'] !== '') $out['rubika_err'] = $rr['error']; if ($rr['ok'] && ($rr['message_id'] ?? '') !== '') { $out['rubika_msg_id'] = $rr['message_id']; msgrSaveMsg('rubika', $rr['message_id'], 0, 0); } }
+    if ($sendTelegram)  { $tr = bslSendToTelegram($tt, $tc, $msg, $wantPreview); $out['telegram'] = $tr['ok'] ? 'sent' : 'fail'; if (!$tr['ok'] && $tr['error'] !== '') $out['telegram_err'] = $tr['error']; if ($tr['ok'] && ($tr['message_id'] ?? '') !== '') { $out['telegram_msg_id'] = $tr['message_id']; msgrSaveMsg('telegram', $tr['message_id'], 0, 0); } }
     /* v10.109: فوروارد چندرسانه‌ای (عکس/ویدیو/گیف/فایل/لینک) بعد از متن */
     if ($media) {
         $mediaSent = 0; $mediaFail = 0;
         foreach (array_slice($media, 0, 8) as $it) {
             if (!is_array($it) || trim((string)($it['url'] ?? '')) === '') continue;
-            if ($bt !== '' && $bc !== '') {
+            if ($sendBaleh) {
                 $r = bslSendMediaToMessenger('baleh', $bt, $bc, $it);
                 if (!empty($r['ok'])) $mediaSent++; else $mediaFail++;
             }
-            if ($tt !== '' && $tc !== '') {
+            if ($sendTelegram) {
                 $r = bslSendMediaToMessenger('telegram', $tt, $tc, $it);
                 if (!empty($r['ok'])) $mediaSent++; else $mediaFail++;
             }
-            if ($rt !== '' && $rc !== '') {
+            if ($sendRubika) {
                 // روبیکا: API عمومی sendPhoto ندارد — لینک را متنی می‌فرستیم
                 $r = bslSendMediaToMessenger('rubika', $rt, $rc, $it);
                 if (!empty($r['ok'])) $mediaSent++; else $mediaFail++;
@@ -46717,9 +46769,9 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
        باسلامش منقضی/پاک شده بود یا فقط با غرفه‌های چندگانه کار می‌کرد
        (vendor_id اصلی صفر)، پیامِ دوره‌ای‌اش کاملاً قطع می‌شد — دقیقاً
        همان «اعلان‌ها نمی‌آیند»، بدون هیچ ردی در گزارش. */
-    $_hasMsgr = (trim((string)($cn['baleh']['token'] ?? '')) !== '' && trim((string)($cn['baleh']['chat_id'] ?? '')) !== '')
-             || (trim((string)($cn['rubika']['token'] ?? '')) !== '' && trim((string)($cn['rubika']['chat_id'] ?? '')) !== '')
-             || (trim((string)($cn['telegram']['token'] ?? '')) !== '' && trim((string)($cn['telegram']['chat_id'] ?? '')) !== '');   // v10.78 (92)
+    $_hasMsgr = notifMessengerConfigured($cn, 'baleh')
+             || notifMessengerConfigured($cn, 'rubika')
+             || notifMessengerConfigured($cn, 'telegram');
     if (!$_hasMsgr) { notifPingLog(['ok' => false, 'src' => notifPingSrc($results, $force), 'error' => 'هیچ پیام‌رسانی تنظیم نشده']); return ['ok' => false, 'error' => 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)']; }
 
     $everyMin = (int)($cn['ping_every'] ?? 360);   // دقیقه
@@ -46862,9 +46914,10 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
        می‌شد. یعنی پیام نرفته بود اما ساعتِ شمارش صفر شده بود و تا شش
        ساعتِ بعد هیچ تلاشِ دیگری نمی‌شد. یک اختلالِ چندثانیه‌ای، شش ساعت
        سکوت می‌ساخت؛ و اگر هر بار همان لحظه تکرار می‌شد، برای همیشه.
-       حالا اگر هیچ مقصدی 'sent' نگرفت، حالت دست‌نخورده می‌ماند تا تیکِ
-       بعدیِ کران دوباره تلاش کند. */
-    $anySent = in_array('sent', array_values($delivery), true);
+       ارسالِ موفقِ پیام‌رسان یا Web Push پنجره را مصرف می‌کند؛ اگر هیچ‌کدام
+       نرسند، حالت دست‌نخورده می‌ماند تا تیکِ بعدیِ کران دوباره تلاش کند. */
+    $_pushSent = is_array($delivery['push'] ?? null) && (int)($delivery['push']['sent'] ?? 0) > 0;
+    $anySent = in_array('sent', array_values($delivery), true) || $_pushSent;
     notifPingLog(['ok' => $anySent, 'src' => notifPingSrc($results, $force), 'delivery' => $delivery]);   // v10.79 (93)
     if (!$force && $anySent) {
         $st['last_cron_ping'] = $now;
@@ -46872,7 +46925,7 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
         notifSaveState($st);
     }
     if (!$anySent) {
-        return ['ok' => false, 'error' => 'ارسال به پیام‌رسان ناموفق بود',
+        return ['ok' => false, 'error' => 'پینگ به هیچ پیام‌رسان یا مرورگری نرسید',
                 'delivery' => $delivery, 'message' => $msg, 'retry' => true];
     }
     return ['ok' => true, 'sent' => true, 'delivery' => $delivery, 'message' => $msg];
@@ -46882,9 +46935,9 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
 function notifPrereq(array $cn): ?string {
     if (trim((string)($cn['basalam']['token'] ?? '')) === '') return 'توکن باسلام تنظیم نشده';
     if ((int)($cn['basalam']['vendor_id'] ?? 0) <= 0)         return 'شناسهٔ غرفه تنظیم نشده';
-    $hasMsgr = (!empty($cn['baleh']['token']) && !empty($cn['baleh']['chat_id']))
-            || (!empty($cn['rubika']['token']) && !empty($cn['rubika']['chat_id']))
-            || (!empty($cn['telegram']['token']) && !empty($cn['telegram']['chat_id']));   // v10.78 (92)
+    $hasMsgr = notifMessengerConfigured($cn, 'baleh')
+            || notifMessengerConfigured($cn, 'rubika')
+            || notifMessengerConfigured($cn, 'telegram');
     if (!$hasMsgr) return 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)';
     return null;
 }
@@ -54262,9 +54315,9 @@ function syncReportEmit(array $cn, array $rep): array {
     if (isset($ne['sync_report']) && empty($ne['sync_report'])) {
         $out['skipped'] = 'disabled'; return $out;
     }
-    $hasMsgr = (trim((string)($cn['baleh']['token'] ?? '')) !== '' && trim((string)($cn['baleh']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['rubika']['token'] ?? '')) !== '' && trim((string)($cn['rubika']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['telegram']['token'] ?? '')) !== '' && trim((string)($cn['telegram']['chat_id'] ?? '')) !== '');   // v10.78 (92)
+    $hasMsgr = notifMessengerConfigured($cn, 'baleh')
+            || notifMessengerConfigured($cn, 'rubika')
+            || notifMessengerConfigured($cn, 'telegram');
     if (!$hasMsgr) { $out['skipped'] = 'no_messenger'; return $out; }
     $out['delivery'] = notifSend($cn, syncReportText($rep), 'sync');
     return $out;
@@ -54275,9 +54328,9 @@ function notifRetire(array $cn, array $res, string $profileName = ''): array {
     /* v10.45 (۵۹): نبودِ کلید = روشن — همان چیزی که رابط نشان می‌دهد. */
     if (!notifEventOn($cn['notif_events'] ?? [], 'retire')) return ['ok' => true, 'skipped' => 'disabled'];
     /* v10.102: برای بایگانی فقط پیام‌رسان لازم است (توکن باسلام اجباری نیست). */
-    $hasMsgr = (trim((string)($cn['baleh']['token'] ?? '')) !== '' && trim((string)($cn['baleh']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['rubika']['token'] ?? '')) !== '' && trim((string)($cn['rubika']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['telegram']['token'] ?? '')) !== '' && trim((string)($cn['telegram']['chat_id'] ?? '')) !== '');
+    $hasMsgr = notifMessengerConfigured($cn, 'baleh')
+            || notifMessengerConfigured($cn, 'rubika')
+            || notifMessengerConfigured($cn, 'telegram');
     if (!$hasMsgr) return ['ok' => false, 'error' => 'no_messenger'];
 
     $modeLbl = retireModes()[$res['mode'] ?? ''] ?? (string)($res['mode'] ?? '');
@@ -54429,10 +54482,12 @@ function notifRunFailure(array $cn, string $stage, string $profileName, string $
  */
 function bslCheckNotifications(array $cn): array {
     $ne = $cn['notif_events'] ?? [];
-    $hasMsgr = (trim((string)($cn['baleh']['token'] ?? '')) !== '' && trim((string)($cn['baleh']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['rubika']['token'] ?? '')) !== '' && trim((string)($cn['rubika']['chat_id'] ?? '')) !== '')
-            || (trim((string)($cn['telegram']['token'] ?? '')) !== '' && trim((string)($cn['telegram']['chat_id'] ?? '')) !== '');   // v10.78 (92)
-    if (!$hasMsgr) return [];   // فرستنده‌ای نیست که رویداد به آن برود
+    /* Keep polling with valid credentials while channel switches are off.
+       This advances event state and avoids replaying downtime after re-enable. */
+    $hasMsgr = notifMessengerConfigured($cn, 'baleh')
+            || notifMessengerConfigured($cn, 'rubika')
+            || notifMessengerConfigured($cn, 'telegram');
+    if (!$hasMsgr) return [];   // هیچ پیام‌رسانی برای رهگیریِ رویدادها پیکربندی نشده
     $shops = array_values(array_filter(bslAllShops($cn),
         fn($s) => trim((string)($s['token'] ?? '')) !== ''));
     if (!$shops) return ['skipped' => 'no_basalam_shops'];
@@ -54527,9 +54582,9 @@ if (isset($_GET['notif_test'])) {
        (فقط پیام‌رسان لازم است — همان قاعدهٔ v10.22). بقیهٔ تست‌ها فقط
        به «حداقل یک غرفه با توکن» نیاز دارند، نه به کامل‌بودنِ
        غرفهٔ پیش‌فرض. */
-    $hasMsgrN = (trim((string)($cn['baleh']['token'] ?? '')) !== '' && trim((string)($cn['baleh']['chat_id'] ?? '')) !== '')
-             || (trim((string)($cn['rubika']['token'] ?? '')) !== '' && trim((string)($cn['rubika']['chat_id'] ?? '')) !== '')
-             || (trim((string)($cn['telegram']['token'] ?? '')) !== '' && trim((string)($cn['telegram']['chat_id'] ?? '')) !== '');   // v10.78 (92)
+    $hasMsgrN = notifMessengerConfigured($cn, 'baleh')
+             || notifMessengerConfigured($cn, 'rubika')
+             || notifMessengerConfigured($cn, 'telegram');
     $why = null;
     if (!$hasMsgrN) {
         $why = 'هیچ پیام‌رسانی تنظیم نشده (بله/روبیکا/تلگرام)';
@@ -77054,6 +77109,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.403', t:'🔕 احترام به کلید روشن/خاموش هر پیام‌رسان', items:[
+    'ریشهٔ اعلان‌های ادامه‌دار پیدا شد: مسیر مرکزی ارسال توکن و شناسهٔ چت را بررسی می‌کرد اما مقدارِ enabled ذخیره‌شده از تیک پیام‌رسان را نادیده می‌گرفت.',
+    'ارسال خودکارِ متن و رسانه به بله/روبیکا/تلگرام اکنون برای هر مقصد جداگانه به تیکِ فعال و اعتبارنامهٔ کامل نیاز دارد؛ خاموش‌کردن یک کانال، مقصدهای دیگر را دست نمی‌زند.',
+    'تیک‌های رویداد همچنان مستقل‌اند و فیدِ مرورگر/Web Push به‌عنوانِ مسیرِ جدا از پیام‌رسان حفظ شده است؛ آزمون دستیِ اتصالِ هر ربات نیز مستقل می‌ماند.'
+  ]},
   {v:'10.402', t:'🩹 رفع SyntaxError در رابط ارسال دوبارهٔ باسلام', items:[
     'رشته‌های فارسیِ شکسته در اسکریپت داخلی بخش ارسال دوبارهٔ غرفه‌ها بازسازی شدند؛ پیش از این، یک SyntaxError می‌توانست کل اسکریپت رابط Scraper4 را از parse شدن بازدارد.',
     'همهٔ بلوک‌های JavaScript داخلی پس از اصلاح بررسی نحوی شدند.'
