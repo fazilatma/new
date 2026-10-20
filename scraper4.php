@@ -345,7 +345,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.392';
+const APP_VERSION = '10.393';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -21651,12 +21651,16 @@ function cronWatchdogs(array $cn): array {
             $w = queueStallRecover($wq, $stallCfg, false, 1500, true);
             if (!empty($w['stalled'])) {
                 $results['watchdog'][] = $w;
-                notifRunFailure($cn, 'نگهبان صف',
-                    $wq === 'bsl' ? 'باسلام' : 'ووکامرس',
-                    'ارسال ' . ($w['kind'] === 'waiting' ? 'در صف مانده بود' : 'گیر کرده بود')
-                    . ' (' . (int)($w['idle'] ?? 0) . ' ثانیه بی‌حرکت، '
-                    . (int)($w['current'] ?? 0) . '/' . (int)($w['total'] ?? 0) . ') — '
-                    . (!empty($w['resumed']) ? 'خودکار ادامه داده شد ✅' : 'ادامه ناموفق ❌'));
+                /* A still-held stale lock is reported in cron/task logs, but do
+                   not send the same messenger alert every minute while waiting. */
+                if (empty($w['deferred']) || !empty($w['resumed']) || !empty($w['exhausted'])) {
+                    notifRunFailure($cn, 'نگهبان صف',
+                        $wq === 'bsl' ? 'باسلام' : 'ووکامرس',
+                        'ارسال ' . ($w['kind'] === 'waiting' ? 'در صف مانده بود' : 'گیر کرده بود')
+                        . ' (' . (int)($w['idle'] ?? 0) . ' ثانیه بی‌حرکت، '
+                        . (int)($w['current'] ?? 0) . '/' . (int)($w['total'] ?? 0) . ') — '
+                        . (!empty($w['resumed']) ? 'خودکار ادامه داده شد ✅' : 'ادامه ناموفق ❌'));
+                }
             }
             /* fireAndForget فقط درخواستِ worker را آغاز می‌کند، نه پایانش را.
                پس صفِ بعدی و بقیهٔ کارها باید به کران بعدی واگذار شوند؛ فاصلهٔ
@@ -44080,6 +44084,24 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.392', 'ورودی 10.392 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "392'") !== false
       && version_compare(APP_VERSION, '10.' . '392', '>='));
+    $add('10.393', 'دراپ‌داون دستهٔ باسلام از overflow و z-index پنل تنظیمات بیرون می‌آید',
+         strpos($selfSrc, 'function bslPlaceCategoryPopup(input,list)') !== false
+      && strpos($selfSrc, 'document.body.appendChild(list)') !== false
+      && strpos($selfSrc, "list.style.zIndex='2147483647'") !== false);
+    $add('10.393', 'دستهٔ اصلی تنظیمات پروفایل و تب ارسال دوطرفه همگام است',
+         strpos($selfSrc, 'function syncBslCategoryPair(catId,origin,persist)') !== false
+      && strpos($selfSrc, "syncBslCategoryPair(catId,'send',true)") !== false
+      && strpos($selfSrc, "syncBslCategoryPair(c.id,'profile',true)") !== false);
+    $add('10.393', 'دسته‌های جایگزین در تنظیمات و ارسال یک آرایهٔ مشترک دارند',
+         strpos($selfSrc, 'function syncBslFallbackPair(ids,persist)') !== false
+      && substr_count($selfSrc, 'syncBslFallbackPair(') >= 6);
+    $add('10.393', 'قفل زنده جای heartbeat واقعی صف ارسال را نمی‌گیرد',
+         strpos($selfSrc, '$_iwS = queueRowIdle($which, $running, $prog, $now, []);') !== false
+      && strpos($selfSrc, "'status'=>'awaiting_lock_release'") !== false
+      && strpos($selfSrc, "'cron_pending'] = true") !== false);
+    $add('10.393', 'ورودی 10.393 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "393'") !== false
+      && version_compare(APP_VERSION, '10.' . '393', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -48351,8 +48373,12 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
            جداگانه در فایلِ پیشرفت ندارند، پس هر وقت فایل مالِ ردیفِ دیگری
            بود مبنا می‌شد started_at، یعنی سنِ کار. ارسالِ ۵۰۰ محصولی که
            نیم ساعت طول می‌کشد، از دقیقهٔ پنجم «گیرکرده» اعلام می‌شد. */
-        $_iwS = queueRowIdle($which, $running, $prog, $now,
-            $lockFresh ? ['lock' => $now] : []);
+        /* v10.393: an acquired flock proves ownership, not progress. A PHP
+           request can remain hung inside network I/O while holding the lock.
+           Measure inactivity only from real queue/progress heartbeats; cron
+           then records a pending recovery and retries as soon as the old lock
+           is released. Previously ['lock'=>$now] reset idle to zero forever. */
+        $_iwS = queueRowIdle($which, $running, $prog, $now, []);
         $idle = (int)$_iwS['idle'];
         if ($lockFresh && $idle <= $staleAfter) {
             return ['stalled' => false, 'reason' => 'در حال اجرا', 'idle' => $idle];
@@ -48582,7 +48608,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     if (!empty($chk['lock_held'])) {
         $chk['resumed'] = false;
         $chk['deferred'] = true;
-        $chk['reason_defer'] = 'lock_held';
+        $chk['cron_pending'] = true;
+        $chk['reason_defer'] = 'lock_held_waiting_next_cron';
+        /* Do not consume a retry while the old process still owns the lock.
+           Every cron heartbeat rechecks it and dispatches from this checkpoint
+           immediately after ownership is released. */
+        $pendingBook=queueResumeBook($which,$qid);
+        queueResumeBook($which,$qid,['tries'=>(int)($pendingBook['tries']??0),'at'=>time(),
+            'from'=>max(0,(int)($chk['resume_from']??$chk['current']??0)),'status'=>'awaiting_lock_release']);
         return $chk;
     }
     /* v10.56 (۷۰): resume_from = چک‌پوینتِ واقعی */
@@ -48601,7 +48634,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     }
     /* کول‌داون بین تلاش‌ها */
     if ($lastAt > 0 && ($now - $lastAt) < QUEUE_RESUME_COOLDOWN && $tries > 0
-        && (string)($book['status'] ?? '') !== 'exhausted') {
+        && !in_array((string)($book['status'] ?? ''), ['exhausted','awaiting_lock_release'], true)) {
         $chk['resumed'] = false;
         $chk['deferred'] = true;
         $chk['attempt'] = $tries;
@@ -70918,20 +70951,21 @@ function toggleSmenu(hdr){
 // v8.17: Per-profile fallback categories
 let bslProfileFallbackCats=[];
 let bslProfileFallbackSelectedCatId=0;
-function addBslProfileFallbackCat(){const catId=bslProfileFallbackSelectedCatId;if(catId<=0||bslProfileFallbackCats.includes(catId)){showToast('ابتدا یک دسته انتخاب کنید',1);return;}bslProfileFallbackCats.push(catId);bslProfileFallbackSelectedCatId=0;$('bslProfileFallbackCatSearch').value='';renderBslProfileFallbackCats(bslProfileFallbackCats);scheduleSave();}
-function removeBslProfileFallbackCat(idx){bslProfileFallbackCats.splice(idx,1);renderBslProfileFallbackCats(bslProfileFallbackCats);scheduleSave();}
+function syncBslFallbackPair(ids,persist){ids=Array.from(new Set((Array.isArray(ids)?ids:[]).map(x=>parseInt(x)||0).filter(x=>x>0)));bslProfileFallbackCats=ids.slice();bslFallbackCatIds=ids.slice();renderBslProfileFallbackCats(ids);renderBslFallbackCats(ids);if(persist!==false&&typeof scheduleSave==='function')scheduleSave();}
+function addBslProfileFallbackCat(){const catId=bslProfileFallbackSelectedCatId;if(catId<=0||bslProfileFallbackCats.includes(catId)){showToast('ابتدا یک دسته انتخاب کنید',1);return;}bslProfileFallbackSelectedCatId=0;$('bslProfileFallbackCatSearch').value='';syncBslFallbackPair(bslProfileFallbackCats.concat([catId]),true);}
+function removeBslProfileFallbackCat(idx){const ids=bslProfileFallbackCats.slice();ids.splice(idx,1);syncBslFallbackPair(ids,true);}
 function renderBslProfileFallbackCats(ids){bslProfileFallbackCats=Array.isArray(ids)?ids:[];const list=$('bslProfileFallbackList');if(!list)return;/* v8.43: اگر دسته‌ها هنوز نرسیده‌اند، بعد از رسیدنشان دوباره رسم کن تا نام‌ها ظاهر شوند */if(bslProfileFallbackCats.length>0&&(!bslAllCats||bslAllCats.length===0)){if(!window.__fbRetry){window.__fbRetry=1;setTimeout(function(){window.__fbRetry=0;if(bslAllCats&&bslAllCats.length>0)renderBslProfileFallbackCats(bslProfileFallbackCats);},2500);}}ids=bslProfileFallbackCats;list.innerHTML='';ids.forEach((catId,idx)=>{const catName=bslCatNameByIdJS(catId);const row=document.createElement('div');row.style.cssText='display:flex;align-items:center;gap:6px;padding:6px 10px;background:#1e293b;border-radius:6px;border:1px solid #475569';row.innerHTML='<span style="flex:1;color:#e2e8f0;font-size:12px">'+esc(catName||'دسته')+' <span style="color:#94a3b8">(#'+catId+')</span></span><button class="btn btn-red" style="font-size:10px;padding:2px 6px" onclick="removeBslProfileFallbackCat('+idx+')">✕</button>';list.appendChild(row);});}
-function initBslProfileFallbackCatSearch(){const si=$('bslProfileFallbackCatSearch');const dl=$('bslProfileFallbackCatDropList');if(!si||!dl)return;si.onfocus=function(){if(bslAllCats.length>0){dl.style.display='block';renderBslProfileFallbackCatDropList(bslAllCats,'');}};si.onblur=function(){setTimeout(()=>{dl.style.display='none';},200);};si.oninput=function(){const q=si.value.toLowerCase().trim();renderBslProfileFallbackCatDropList(bslAllCats,q);};}
+function initBslProfileFallbackCatSearch(){const si=$('bslProfileFallbackCatSearch');const dl=$('bslProfileFallbackCatDropList');if(!si||!dl)return;si.onfocus=function(){if(bslAllCats.length>0){bslPlaceCategoryPopup(si,dl);dl.style.display='block';renderBslProfileFallbackCatDropList(bslAllCats,'');}};si.onblur=function(){setTimeout(()=>{dl.style.display='none';},200);};si.oninput=function(){bslPlaceCategoryPopup(si,dl);dl.style.display='block';const q=si.value.toLowerCase().trim();renderBslProfileFallbackCatDropList(bslAllCats,q);};}
 function renderBslProfileFallbackCatDropList(cats,q){const dl=$('bslProfileFallbackCatDropList');if(!dl)return;dl.innerHTML='';const filtered=cats.filter(c=>!q||c.name.toLowerCase().includes(q)).slice(0,100);if(filtered.length===0){dl.innerHTML='<div style="padding:8px;color:#64748b;font-size:11px;text-align:center">دسته‌ای یافت نشد</div>';return;}filtered.forEach(c=>{const d=document.createElement('div');d.style.cssText='padding:6px 10px;cursor:pointer;font-size:12px;color:#e2e8f0;border-bottom:1px solid #1e293b';d.textContent=c.name+' ('+c.id+')';d.onmousedown=function(){bslProfileFallbackSelectedCatId=c.id;$('bslProfileFallbackCatSearch').value=c.name;dl.style.display='none';};dl.appendChild(d);});}
 function bslCatNameByIdJS(catId){if(!bslAllCats||bslAllCats.length===0)return'';const cat=bslAllCats.find(c=>c.id===catId);return cat?cat.name:'';}
 // v8.17: Global fallback categories (in settings panel)
 let bslFallbackCatIds=[];
 let bslFallbackSelectedCatId=0;
-function addBslFallbackCat(){const catId=bslFallbackSelectedCatId;if(catId<=0||bslFallbackCatIds.includes(catId)){showToast('ابتدا یک دسته انتخاب کنید',1);return;}bslFallbackCatIds.push(catId);bslFallbackSelectedCatId=0;$('bslFallbackCatSearch').value='';renderBslFallbackCats(bslFallbackCatIds);}
-function removeBslFallbackCat(idx){bslFallbackCatIds.splice(idx,1);renderBslFallbackCats(bslFallbackCatIds);}
+function addBslFallbackCat(){const catId=bslFallbackSelectedCatId;if(catId<=0||bslFallbackCatIds.includes(catId)){showToast('ابتدا یک دسته انتخاب کنید',1);return;}bslFallbackSelectedCatId=0;$('bslFallbackCatSearch').value='';syncBslFallbackPair(bslFallbackCatIds.concat([catId]),true);}
+function removeBslFallbackCat(idx){const ids=bslFallbackCatIds.slice();ids.splice(idx,1);syncBslFallbackPair(ids,true);}
 function renderBslFallbackCats(ids){bslFallbackCatIds=ids;const list=$('bslFallbackCatsList');if(!list)return;list.innerHTML='';ids.forEach((catId,idx)=>{const catName=bslCatNameByIdJS(catId);const row=document.createElement('div');row.style.cssText='display:flex;align-items:center;gap:6px;padding:6px 10px;background:#1e293b;border-radius:6px;border:1px solid #475569';row.innerHTML='<span style="flex:1;color:#e2e8f0;font-size:12px">'+esc(catName||'دسته')+' <span style="color:#94a3b8">(#'+catId+')</span></span><button class="btn btn-red" style="font-size:10px;padding:2px 6px" onclick="removeBslFallbackCat('+idx+')">✕</button>';list.appendChild(row);});}
 function getBslFallbackCatIds(){return bslFallbackCatIds;}
-function initBslFallbackCatSearch(){const si=$('bslFallbackCatSearch');const dl=$('bslFallbackCatDropList');if(!si||!dl)return;si.onfocus=function(){if(bslAllCats.length>0){dl.style.display='block';renderBslFallbackCatDropList(bslAllCats,'');}};si.onblur=function(){setTimeout(()=>{dl.style.display='none';},200);};si.oninput=function(){const q=si.value.toLowerCase().trim();renderBslFallbackCatDropList(bslAllCats,q);};}
+function initBslFallbackCatSearch(){const si=$('bslFallbackCatSearch');const dl=$('bslFallbackCatDropList');if(!si||!dl)return;si.onfocus=function(){if(bslAllCats.length>0){bslPlaceCategoryPopup(si,dl);dl.style.display='block';renderBslFallbackCatDropList(bslAllCats,'');}};si.onblur=function(){setTimeout(()=>{dl.style.display='none';},200);};si.oninput=function(){bslPlaceCategoryPopup(si,dl);dl.style.display='block';const q=si.value.toLowerCase().trim();renderBslFallbackCatDropList(bslAllCats,q);};}
 function renderBslFallbackCatDropList(cats,q){const dl=$('bslFallbackCatDropList');if(!dl)return;dl.innerHTML='';const filtered=cats.filter(c=>!q||c.name.toLowerCase().includes(q)).slice(0,100);if(filtered.length===0){dl.innerHTML='<div style="padding:8px;color:#64748b;font-size:11px;text-align:center">دسته‌ای یافت نشد</div>';return;}filtered.forEach(c=>{const d=document.createElement('div');d.style.cssText='padding:6px 10px;cursor:pointer;font-size:12px;color:#e2e8f0;border-bottom:1px solid #1e293b';d.textContent=c.name+' ('+c.id+')';d.onmousedown=function(){bslFallbackSelectedCatId=c.id;$('bslFallbackCatSearch').value=c.name;dl.style.display='none';};dl.appendChild(d);});}
 /* v10.20 (۳۳الف): تیکِ «ارسال همزمان به همهٔ غرفه‌ها».
 
@@ -71255,9 +71289,13 @@ function bslCombinedPreview(base,profMode,profVal,shopMode,shopVal){
 }
 // v8.17: Per-profile BaSalam category dropdown
 let bslProfileSelectedCatId=0;
-function renderBslProfileCatDropdown(cats,selectedId){const si=$('bslProfileCatSearch');const list=$('bslProfileCatList');if(!si||!list)return;/* v8.43: اگر بدون شناسه صدا زده شود (مثلاً دکمهٔ 🔄)، انتخاب فعلی نباید پاک شود */if(selectedId===undefined||selectedId===null)selectedId=bslProfileSelectedCatId||parseInt($('bslProfileCatId').value)||0;bslProfileSelectedCatId=selectedId||0;$('bslProfileCatId').value=String(bslProfileSelectedCatId);if(selectedId>0){const c=cats.find(x=>x.id===selectedId);if(c)si.value=c.name;}si.onfocus=function(){list.style.display='block';};si.onblur=function(){setTimeout(()=>{list.style.display='none';},200);};si.oninput=function(){const q=si.value.toLowerCase().trim();renderBslProfileCatList(cats,q);};renderBslProfileCatList(cats,'');}
-function renderBslProfileCatList(cats,q){const list=$('bslProfileCatList');if(!list)return;list.innerHTML='';cats.filter(c=>!q||c.name.toLowerCase().includes(q)).slice(0,100).forEach(c=>{const d=document.createElement('div');d.style.cssText='padding:6px 10px;cursor:pointer;font-size:12px;color:#e2e8f0;border-bottom:1px solid #1e293b';d.textContent=c.name+' ('+c.id+')';d.onmousedown=function(){bslProfileSelectedCatId=c.id;$('bslProfileCatId').value=String(c.id);$('bslProfileCatSearch').value=c.name;list.style.display='none';scheduleSave();};list.appendChild(d);});}
-function bslSelectProfileCat(catId){bslProfileSelectedCatId=catId;$('bslProfileCatId').value=String(catId);if(bslAllCats.length>0){const c=bslAllCats.find(x=>x.id===catId);if(c)$('bslProfileCatSearch').value=c.name;}scheduleSave();}
+/* v10.393: fixed positioning escapes settings-card/smenu overflow and z-index contexts. */
+function bslPlaceCategoryPopup(input,list){if(!input||!list)return;/* portal to body also escapes transformed settings-panel ancestors */if(list.parentElement!==document.body)document.body.appendChild(list);const r=input.getBoundingClientRect();const below=Math.max(100,window.innerHeight-r.bottom-12),above=Math.max(100,r.top-12);const useAbove=below<170&&above>below;list.style.position='fixed';list.style.left=Math.max(8,r.left)+'px';list.style.width=Math.max(220,r.width)+'px';list.style.right='auto';list.style.top=useAbove?'auto':(r.bottom+2)+'px';list.style.bottom=useAbove?(window.innerHeight-r.top+2)+'px':'auto';list.style.maxHeight=Math.min(300,useAbove?above:below)+'px';list.style.zIndex='2147483647';}
+/* One source of truth in the browser: profile settings and Send always mirror. */
+function syncBslCategoryPair(catId,origin,persist){catId=parseInt(catId)||0;const c=(bslAllCats||[]).find(x=>x.id===catId);const name=c?c.name:'';bslProfileSelectedCatId=catId;if($('bslProfileCatId'))$('bslProfileCatId').value=String(catId);if($('bslProfileCatSearch'))$('bslProfileCatSearch').value=catId?(name||('#'+catId)):'';bslSelectedCatId=catId;bslSelectedCatName=name;if($('bsCat'))$('bsCat').value=String(catId);if($('bsCatSearch'))$('bsCatSearch').value=catId?(name?(name+' ('+catId+')'):('#'+catId)):'';if(persist!==false&&typeof scheduleSave==='function')scheduleSave();}
+function renderBslProfileCatDropdown(cats,selectedId){const si=$('bslProfileCatSearch');const list=$('bslProfileCatList');if(!si||!list)return;/* v8.43: اگر بدون شناسه صدا زده شود (مثلاً دکمهٔ 🔄)، انتخاب فعلی نباید پاک شود */if(selectedId===undefined||selectedId===null)selectedId=bslProfileSelectedCatId||parseInt($('bslProfileCatId').value)||0;syncBslCategoryPair(selectedId,'load',false);si.onfocus=function(){bslPlaceCategoryPopup(si,list);list.style.display='block';};si.onblur=function(){setTimeout(()=>{list.style.display='none';},200);};si.oninput=function(){bslPlaceCategoryPopup(si,list);list.style.display='block';const q=si.value.toLowerCase().trim();renderBslProfileCatList(cats,q);};renderBslProfileCatList(cats,'');}
+function renderBslProfileCatList(cats,q){const list=$('bslProfileCatList');if(!list)return;list.innerHTML='';cats.filter(c=>!q||c.name.toLowerCase().includes(q)).slice(0,100).forEach(c=>{const d=document.createElement('div');d.style.cssText='padding:6px 10px;cursor:pointer;font-size:12px;color:#e2e8f0;border-bottom:1px solid #334155;background:#1e293b';d.textContent=c.name+' ('+c.id+')';d.onmousedown=function(e){e.preventDefault();syncBslCategoryPair(c.id,'profile',true);list.style.display='none';};list.appendChild(d);});}
+function bslSelectProfileCat(catId){syncBslCategoryPair(catId,'profile',true);}
 
 (function(){
     /* v9.91: اول هشِ آدرس (اگر کاربر لینکِ مستقیم باز کرده)، وگرنه آخرین
@@ -76222,6 +76260,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.393', t:'📂 انتخاب دستهٔ باسلام و بازیابی کرانی صف‌های ارسال', items:[
+    'فهرست دسته‌بندی باسلام با portal ثابت روی body و بالاترین z-index باز می‌شود؛ overflow و لایه‌های پنل تنظیمات دیگر جلوی کلیک روی گزینه‌ها را نمی‌گیرند.',
+    'دستهٔ اصلی و دسته‌های جایگزین باسلام در تب تنظیمات و تب ارسال یک وضعیت مشترک دارند؛ انتخاب، افزودن یا حذف در هر طرف همان لحظه طرف دیگر را هم به‌روز و در پروفایل ذخیره می‌کند.',
+    'نگهبان صف باسلام و ووکامرس دیگر صرفِ در دست بودن lock را heartbeat پیشرفت حساب نمی‌کند؛ پس از مدت «گیرکردن بعد از»، کران بی‌حرکتی را ثبت می‌کند و به‌محض آزاد شدن مالک قدیمی از همان checkpoint ادامه می‌دهد.',
+    'تا زمان آزاد شدن lock، هر ضربان کران وضعیت awaiting_lock_release را نگه می‌دارد بدون مصرف تلاش بازیابی یا ارسال اعلان تکراری در هر دقیقه.'
+  ]},
   {v:'10.392', t:'🏪 پایداری ارسال باسلام و مهار اعلان‌های تکراری', items:[
     'صف‌های بزرگ باسلام مانند «ایمالز — لوازم آشپزخانه» بعد از مرگ یا محدودیت زمانی هاست از cursor مطلق همان محصول ادامه می‌یابند؛ پیشرفت بعد از هر محصول ثبت می‌شود و دیگر روی محصول پنجم تکرار نمی‌شود.',
     'آپدیت محصول موجود category_id را دوباره PATCH نمی‌کند؛ خطای 422 باسلام برای «فعلاً قادر به تغییر دسته‌بندی نیستید» حذف شد و تغییر دسته فقط در ابزار اختصاصی اصلاح دسته انجام می‌شود.',
@@ -86266,15 +86310,12 @@ function loadBslCats(){fetch('',{method:'POST',body:new URLSearchParams('action=
 const profCat=bslProfileSelectedCatId||parseInt(($('bslProfileCatId')||{}).value||'0')||0;
 const savedCatId=profCat>0?profCat:(parseInt($('bsCat').value)||0);
 renderBslCatDropdown(bslAllCats,savedCatId);initBslFallbackCatSearch();initBslProfileFallbackCatSearch();
-const profFb=Array.isArray(bslProfileFallbackCats)&&bslProfileFallbackCats.length>0?bslProfileFallbackCats:null;
-if(profFb)renderBslFallbackCats(profFb);
-if(Array.isArray(bslFallbackCatIds)&&bslFallbackCatIds.length>0)renderBslFallbackCats(bslFallbackCatIds);
+const linkedFb=(Array.isArray(bslProfileFallbackCats)&&bslProfileFallbackCats.length>0)?bslProfileFallbackCats:bslFallbackCatIds;
+syncBslFallbackPair(Array.isArray(linkedFb)?linkedFb:[],false);
 }}).catch(()=>{});}
 function renderBslCatDropdown(cats,selectedId){
-    bslSelectedCatId=selectedId||0;
-    $('bsCat').value=String(bslSelectedCatId);
-    if(bslSelectedCatId>0){const sc=cats.find(c=>c.id===bslSelectedCatId);if(sc){bslSelectedCatName=sc.name;$('bsCatSearch').value=sc.name+' ('+sc.id+')';}}
-    else{$('bsCatSearch').value='';$('bsCatSearch').placeholder='\u062c\u0633\u062a\u062c\u0648 \u06cc\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u062f\u0633\u062a\u0647\u200c\u0628\u0646\u062f\u06cc...';}
+    syncBslCategoryPair(selectedId||0,'load',false);
+    if(!bslSelectedCatId)$('bsCatSearch').placeholder='\u062c\u0633\u062a\u062c\u0648 \u06cc\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u062f\u0633\u062a\u0647\u200c\u0628\u0646\u062f\u06cc...';
     renderBslCatFilter('');
 }
 function renderBslCatFilter(query){
@@ -86293,11 +86334,7 @@ function renderBslCatFilter(query){
     list.innerHTML=html;
 }
 function bslSelectCat(catId){
-    bslSelectedCatId=catId;
-    $('bsCat').value=String(catId);
-    const sc=bslAllCats.find(c=>c.id===catId);
-    if(sc){bslSelectedCatName=sc.name;$('bsCatSearch').value=sc.name+' ('+sc.id+')';}
-    else{bslSelectedCatName=''; $('bsCatSearch').value=catId>0?('#'+catId):'';}
+    syncBslCategoryPair(catId,'send',true);
     $('bsCatList').style.display='none';
 }
 /* v8.59: دسته‌بندی‌های پروفایل را در کادر «ارسال باسلام» هم نشان بده.
@@ -86307,17 +86344,9 @@ function bslSelectCat(catId){
 function syncBslSendBoxCats(catId,fallbackIds){
     catId=parseInt(catId)||0;
     fallbackIds=Array.isArray(fallbackIds)?fallbackIds.map(x=>parseInt(x)||0).filter(x=>x>0):[];
-    if(catId>0){
-        bslSelectedCatId=catId;
-        if($('bsCat'))$('bsCat').value=String(catId);
-        if($('bsCatSearch')){
-            const c=(bslAllCats||[]).find(x=>x.id===catId);
-            bslSelectedCatName=c?c.name:'';
-            $('bsCatSearch').value=c?(c.name+' ('+c.id+')'):('#'+catId);
-        }
-    }
-    // دسته‌های جایگزین هم از پروفایل بیایند، نه فقط از تنظیمات عمومی
-    if(fallbackIds.length>0)renderBslFallbackCats(fallbackIds);
+    syncBslCategoryPair(catId,'profile-load',false);
+    // دسته‌های جایگزین هم در هر دو تب دقیقاً یک آرایهٔ مشترک دارند؛ خالی نیز همگام می‌شود.
+    syncBslFallbackPair(fallbackIds,false);
     // اگر درخت دسته‌ها هنوز نرسیده، بعد از رسیدن نام‌ها را جایگزین کن
     if((catId>0||fallbackIds.length>0)&&(!bslAllCats||bslAllCats.length===0)){
         if(!window.__bslSendBoxRetry){
@@ -86356,8 +86385,8 @@ document.addEventListener('DOMContentLoaded',function(){
     try{ agResume(); }catch(e){}             // v10.26 (۳۹ب): بازیابیِ ایجنتِ محصولات + گفتگوی زنده
     const si=$('bsCatSearch');
     if(si){
-        si.addEventListener('focus',function(){renderBslCatFilter(this.value);$('bsCatList').style.display='block';});
-        si.addEventListener('input',function(){renderBslCatFilter(this.value);$('bsCatList').style.display='block';});
+        si.addEventListener('focus',function(){const dl=$('bsCatList');bslPlaceCategoryPopup(this,dl);renderBslCatFilter(this.value);dl.style.display='block';});
+        si.addEventListener('input',function(){const dl=$('bsCatList');bslPlaceCategoryPopup(this,dl);renderBslCatFilter(this.value);dl.style.display='block';});
         si.addEventListener('blur',function(){setTimeout(function(){$('bsCatList').style.display='none';},200);});
         si.addEventListener('keydown',function(e){
             if(e.key==='Escape')$('bsCatList').style.display='none';
