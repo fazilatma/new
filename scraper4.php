@@ -353,7 +353,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.397';
+const APP_VERSION = '10.398';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -44143,7 +44143,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$__fastBudget=20.0;') !== false
       && strpos($selfSrc, "'phase'=>'existing_scan'") !== false);
     $add('10.395', 'اسکن و batch باسلام heartbeat و پیشرفت مرحله‌ای زنده دارند',
-         strpos($selfSrc, 'function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null)') !== false
+         strpos($selfSrc, 'function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null') !== false
       && strpos($selfSrc, "'phase'=>'batch_update'") !== false
       && strpos($selfSrc, "'phase_current'") !== false);
     $add('10.395', 'لاگ‌های آرایه‌ای باسلام در مدیر وظایف و تب ارسال خالی نمی‌شوند',
@@ -44173,6 +44173,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.397', 'ورودی 10.397 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "397'") !== false
       && version_compare(APP_VERSION, '10.' . '397', '>='));
+    $add('10.398', 'شکست batch پیش‌بررسی به ۵۰ درخواست مسدودکننده تبدیل نمی‌شود',
+         strpos($selfSrc, 'bool $fallbackSingles = true') !== false
+      && strpos($selfSrc, 'if(!$fallbackSingles)') !== false
+      && strpos($selfSrc, "'batch_deferred'") !== false
+      && strpos($selfSrc, '},false);') !== false);
+    $add('10.398', 'ورودی 10.398 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "398'") !== false
+      && version_compare(APP_VERSION, '10.' . '398', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -49506,7 +49514,7 @@ function bslSendErrorInfo(array $r, string $step = '', string $endpoint = ''): a
  * هر آیتم باید id داشته باشد؛ بقیهٔ فیلدها اختیاری‌اند.
  * در دسته‌های ۵۰تایی فرستاده می‌شود تا درخواست خیلی بزرگ نشود.
  */
-function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null): array {
+function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat = null, bool $fallbackSingles = true): array {
     $items = array_values(array_filter($items, fn($i) => (int)($i['id'] ?? 0) > 0));
     if (empty($items) || $vid <= 0) return ['ok' => false, 'done' => 0, 'error' => 'ورودی خالی'];
     $done = 0; $failed = 0; $errors = []; $chunks=array_chunk($items,50); $chunkTotal=count($chunks);
@@ -49515,6 +49523,10 @@ function bslBatchUpdate(string $tk, int $vid, array $items, ?callable $heartbeat
         $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/batch-updates', ['data' => $chunk]);
         if (!empty($r['ok'])) { $done += count($chunk); }
         else {
+            /* Send preflight must never turn one failed batch into 50 blocking
+               network calls before product checkpointing starts. Its caller can
+               leave these rows for the normal per-product loop. */
+            if(!$fallbackSingles){$failed+=count($chunk);if(count($errors)<10)$errors[]='batch '.($chunkNo+1).' → '.(int)($r['code']??0);if($heartbeat)$heartbeat($done,$failed,$chunkNo+1,$chunkTotal,'batch_deferred');continue;}
             // اگر گروهی نشد، تک‌تک امتحان کن تا یک محصول خراب کل دسته را نبرد
             foreach ($chunk as $oneNo=>$one) {
                 $id = (int)$one['id']; unset($one['id']);
@@ -60517,7 +60529,7 @@ if($__fastScanned>=$total)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
 if($__fastSkipped){foreach($__fastSkipped as $__fi=>$__det){$skipped++;$bslSkippedList[]=$__det;$bslFastDoneIdx[$__fi]=true;}bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⏭ پرش سریع از کاتالوگ: '.count($__fastSkipped).' محصول بدون درخواست شبکه']);}
 if(count($__fastItems)>=2){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚡ آپدیت گروهی باسلام: '.count($__fastItems).' محصول موجود (بدون آپلود تصویر)'],['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>0,'phase_total'=>count($__fastItems),'phase_pct'=>0]);
-$__br=bslBatchUpdate($tk,$vid,$__fastItems,function($done,$failed,$chunk,$chunks,$stage)use(&$sent,&$updated,&$skipped,&$fail,$total,$bslResumeStart,$__fastItems){$pc=min(count($__fastItems),$done+$failed);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>$pc,'phase_total'=>count($__fastItems),'phase_pct'=>(int)floor($pc*100/max(1,count($__fastItems))),'batch_chunk'=>$chunk,'batch_chunks'=>$chunks,'batch_stage'=>$stage]);});
+$__br=bslBatchUpdate($tk,$vid,$__fastItems,function($done,$failed,$chunk,$chunks,$stage)use(&$sent,&$updated,&$skipped,&$fail,$total,$bslResumeStart,$__fastItems){$pc=min(count($__fastItems),$done+$failed);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>$pc,'phase_total'=>count($__fastItems),'phase_pct'=>(int)floor($pc*100/max(1,count($__fastItems))),'batch_chunk'=>$chunk,'batch_chunks'=>$chunks,'batch_stage'=>$stage]);},false);
 if(!empty($__br['ok'])){
 foreach($__fastMeta as $__fi=>$__m){$updated++;$__chg=implode('، ',$__m['changes']);$bslUpdatedList[]=array_merge(['title'=>$__m['title'],'key'=>$__m['key'],'remote_id'=>$__m['id'],
 'changes'=>$__chg!==''?$__chg:'آپدیت گروهی','update_reason'=>$__chg!==''?$__chg:'آپدیت گروهی با batch-updates',
@@ -76355,6 +76367,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.398', t:'📦 جلوگیری از fallback مسدودکننده در batch اولیهٔ باسلام', items:[
+    'اگر endpoint گروهی باسلام یک بستهٔ ۵۰تایی را رد کند، پیش‌بررسی دیگر همان‌جا ۵۰ درخواست تکیِ طولانی اجرا نمی‌کند.',
+    'ردیف‌های آن بسته به حلقهٔ اصلی محصول واگذار می‌شوند؛ آن حلقه checkpoint، توقف، گزارش خطا و بازیابی کران را برای هر محصول دارد، بنابراین مرحلهٔ اولیه قابل مشاهده و کوتاه می‌ماند.'
+  ]},
   {v:'10.397', t:'⚡ حذف decode تکراری ماتریس در بررسی محصولات موجود', items:[
     'ریشهٔ دوم توقف current=0 پیدا شد: هر lookup محصول، فایل کامل و بزرگ ماتریس مغایرت را دوباره می‌خواند و JSON-decode می‌کرد.',
     'زمان تولید ماتریس اکنون بر اساس mtime فایل یک‌بار در هر worker cache می‌شود؛ همراه index شناسهٔ v10.395، پیش‌بررسی چند‌هزار محصول دیگر کار سنگین را هزاران بار تکرار نمی‌کند.'
