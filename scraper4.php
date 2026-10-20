@@ -60,6 +60,12 @@ const PRODUCT_HASH_FILE = __DIR__ . '/product_hash_cache.json'; /* v10.90 */
 const BSL_MAX_ENTRIES_PER_RUN = 10;
 /* Must be defined before early cron/worker endpoints can exit the file. */
 const QUEUE_RESUME_HANDOFF_SEC = 120;
+/* v10.394: all send-watchdog constants are needed by those same early cron
+   routes. Keeping only HANDOFF here left cron_run failing before declarations
+   near queueStallRecover were ever executed. */
+const QUEUE_RESUME_MAX_TRIES = 3;
+const QUEUE_RESUME_COOLDOWN  = 90;
+const QUEUE_IDLE_RETRY_AFTER = 300;
 const EXTRACT_PROGRESS_FILE = __DIR__ . '/extract_progress.json';
 const CATLEARN_FILE = __DIR__ . '/category_learning.json';   // v8.48
 // v8.60: سقف «چند کلمهٔ اول» برای یادگیری و تطبیق خودکار دسته‌بندی
@@ -345,7 +351,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.393';
+const APP_VERSION = '10.394';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -44102,6 +44108,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.393', 'ورودی 10.393 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "393'") !== false
       && version_compare(APP_VERSION, '10.' . '393', '>='));
+    $add('10.394', 'همهٔ ثابت‌های watchdog پیش از endpoint زودهنگام cron تعریف می‌شوند',
+         strpos($selfSrc, 'const QUEUE_RESUME_' . 'MAX_TRIES = 3;') < strpos($selfSrc, "if (isset(\$_GET['cron_run'])")
+      && strpos($selfSrc, 'const QUEUE_RESUME_' . 'COOLDOWN  = 90;') < strpos($selfSrc, "if (isset(\$_GET['cron_run'])")
+      && strpos($selfSrc, 'const QUEUE_IDLE_' . 'RETRY_AFTER = 300;') < strpos($selfSrc, "if (isset(\$_GET['cron_run'])")
+      && substr_count($selfSrc, 'const QUEUE_RESUME_' . 'COOLDOWN  = 90;') === 1);
+    $add('10.394', 'ورودی 10.394 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "394'") !== false
+      && version_compare(APP_VERSION, '10.' . '394', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -48430,13 +48444,10 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
  * بررسی می‌شدند و در بدترین حالت دوباره ارسال. حالا شمارهٔ محصول جاری،
  * شناسهٔ صف و پرچم from_file فرستاده می‌شوند.
  */
-/** v10.103: سقف تلاش ادامه برای هر ردیف صف (مثل «ادامه» در مدیر وظیفه) */
-const QUEUE_RESUME_MAX_TRIES = 3;
-/** فاصلهٔ حداقل بین تلاش‌های ادامهٔ یک ردیف (ثانیه) */
-const QUEUE_RESUME_COOLDOWN  = 90;
-/** فاصلهٔ بیکاری صف قبل از تلاش دوباره روی ردیف‌های failed_resume (ثانیه) */
-const QUEUE_IDLE_RETRY_AFTER = 300;
-/** مهلتِ رزرو dispatch در ثابت‌های ابتدای فایل تعریف شده تا cron زودهنگام هم آن را ببیند. */
+/**
+ * v10.394: سقف تلاش، cooldown، idle retry و مهلت handoff همگی بالای فایل
+ * تعریف شده‌اند؛ endpoint زودهنگام cron پیش از رسیدن اجرا به این بخش خارج می‌شود.
+ */
 
 /**
  * دفترچهٔ تلاش‌های ادامهٔ هر ردیف صف — کلید: which:queue_id
@@ -76260,6 +76271,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.394', t:'💓 رفع خطای اجرای زودهنگام نگهبان صف در کران', items:[
+    'ثابت‌های سقف تلاش، cooldown و retry صف همراه ثابت handoff به ابتدای فایل منتقل شدند تا مسیر زودهنگام cron_run پیش از تعریف آن‌ها متوقف نشود.',
+    'خطای Undefined constant QUEUE_RESUME_COOLDOWN که در گزارش واقعی کران تولید دیده شد برطرف شد؛ پمپ و watchdog اکنون می‌توانند ردیف‌های ناموفق باسلام و ووکامرس را از checkpoint دوباره تحویل دهند.'
+  ]},
   {v:'10.393', t:'📂 انتخاب دستهٔ باسلام و بازیابی کرانی صف‌های ارسال', items:[
     'فهرست دسته‌بندی باسلام با portal ثابت روی body و بالاترین z-index باز می‌شود؛ overflow و لایه‌های پنل تنظیمات دیگر جلوی کلیک روی گزینه‌ها را نمی‌گیرند.',
     'دستهٔ اصلی و دسته‌های جایگزین باسلام در تب تنظیمات و تب ارسال یک وضعیت مشترک دارند؛ انتخاب، افزودن یا حذف در هر طرف همان لحظه طرف دیگر را هم به‌روز و در پروفایل ذخیره می‌کند.',
