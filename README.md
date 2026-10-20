@@ -26,7 +26,7 @@ systemd: `scraper4-server.service`. راهنمای کامل: **[SERVER.md](SERVE
 
 ## ⚡ Quick One-Line Launch & Installation
 
-**WebConsole Pro 2.9.5:** removed HTML comment markers from the project-card JavaScript template to avoid browser parsing errors in the inline script.
+**WebConsole Pro 2.9.5:** removed HTML comment markers from the project-card JavaScript template; the inline script passes static syntax parsing.
 
 ### 💻 VPS Server / GitHub Codespaces
 ```bash
