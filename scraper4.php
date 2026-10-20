@@ -353,7 +353,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.396';
+const APP_VERSION = '10.397';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -9950,10 +9950,17 @@ function bslCatalogFromReconTable(array $c): bool {
 
 function bslMatrixGeneratedAt(): int {
     if (!function_exists('matrixResultLoad')) return 0;
+    /* v10.397: send preflight asks for the catalog once per source product.
+       Re-decoding the complete matrix JSON in every lookup was the remaining
+       multi-minute current=0 stall. Cache by matrix-file mtime per process. */
+    static $memoAt = null, $memoMtime = -1;
+    $mt = (defined('SYNC_MATRIX_RESULT_FILE') && is_file(SYNC_MATRIX_RESULT_FILE)) ? (int)@filemtime(SYNC_MATRIX_RESULT_FILE) : 0;
+    if ($memoAt !== null && $memoMtime === $mt) return (int)$memoAt;
     $mx = matrixResultLoad();
     $t = (int)($mx['generated_at'] ?? 0);
-    if ($t <= 0 && defined('SYNC_MATRIX_RESULT_FILE') && is_file(SYNC_MATRIX_RESULT_FILE)) $t = (int)@filemtime(SYNC_MATRIX_RESULT_FILE);
-    return max(0, $t);
+    if ($t <= 0) $t = $mt;
+    $memoMtime = $mt; $memoAt = max(0, $t);
+    return (int)$memoAt;
 }
 
 /**
@@ -44159,6 +44166,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.396', 'ورودی 10.396 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "396'") !== false
       && version_compare(APP_VERSION, '10.' . '396', '>='));
+    $add('10.397', 'زمان ماتریس در پیش‌بررسی هر محصول دوباره JSON-decode نمی‌شود',
+         strpos($selfSrc, 'static $memoAt = null, $memoMtime = -1;') !== false
+      && strpos($selfSrc, '$memoMtime === $mt') !== false
+      && strpos($selfSrc, '$memoMtime = $mt; $memoAt = max(0, $t);') !== false);
+    $add('10.397', 'ورودی 10.397 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "397'") !== false
+      && version_compare(APP_VERSION, '10.' . '397', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -76341,6 +76355,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.397', t:'⚡ حذف decode تکراری ماتریس در بررسی محصولات موجود', items:[
+    'ریشهٔ دوم توقف current=0 پیدا شد: هر lookup محصول، فایل کامل و بزرگ ماتریس مغایرت را دوباره می‌خواند و JSON-decode می‌کرد.',
+    'زمان تولید ماتریس اکنون بر اساس mtime فایل یک‌بار در هر worker cache می‌شود؛ همراه index شناسهٔ v10.395، پیش‌بررسی چند‌هزار محصول دیگر کار سنگین را هزاران بار تکرار نمی‌کند.'
+  ]},
   {v:'10.396', t:'💓 تکمیل مسیر زودهنگام watchdog تب ارسال', items:[
     'ثابت TASKS_STALE_SEC به بخش ثابت‌های ابتدایی منتقل شد؛ ترتیب اولویت وظایف در cron دیگر پیش از رسیدن اجرا به تعریف ثابت با Undefined constant متوقف نمی‌شود.',
     'این خطا در بررسی واقعی تولید پس از v10.395 دیده و همان‌جا رفع شد تا watchdog بتواند worker قدیمیِ گیرکردهٔ باسلام را تحویل بگیرد.'
