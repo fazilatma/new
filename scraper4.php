@@ -83,6 +83,8 @@ const RECON_STOP_FILE     = __DIR__ . '/recon_stop.json'; // v10.131
 const RECON_AUTO_STATE_FILE = __DIR__ . '/recon_auto_state.json'; // v10.107
 const RECON_AUTO_LOG_FILE   = __DIR__ . '/recon_auto_log.json'; // v10.327
 const MATRIX_CRON_PULSE_FILE = __DIR__ . '/matrix_cron_pulse.json'; // v10.337
+const CRON_VISUAL_PULSE_FILE = __DIR__ . '/.cron_visual_pulse.json'; // v10.400
+const CRON_VISUAL_PULSE_LOCK_FILE = __DIR__ . '/.cron_visual_pulse.lock'; // v10.400
 const SYNC_MATRIX_CHECKPOINT_FILE = __DIR__ . '/sync_matrix_checkpoint.json.gz'; // v10.338
 const SYNC_MATRIX_FETCH_CURSOR_FILE = __DIR__ . '/sync_matrix_fetch_cache.ndjson'; // v10.347: never shared with legacy recon
 const SYNC_MATRIX_PROGRESS_FILE = __DIR__ . '/sync_matrix_progress.json'; // v10.113
@@ -353,7 +355,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.399';
+const APP_VERSION = '10.400';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1825,6 +1827,47 @@ function matrixExecutionCfg(?array $cn=null): array {
     if(!in_array($mode,['cron_only','delay_only','cron_first','delay_first'],true))$mode='cron_first';
     return ['mode'=>$mode,'pause_ms'=>max(0,min(2000,(int)($r['execution_pause_ms']??250))),
         'lease_sec'=>max(30,min(900,(int)($r['cron_lease_sec']??180)))];
+}
+/* v10.400: record each accepted internal/external cron arrival for the
+   header pulse. A small locked ring-buffer lets every open page observe events
+   without making the task-list endpoint do extra work. */
+function cronVisualPulseKind(?string $environment=null, ?array $get=null, ?array $post=null): string {
+    $environment=$environment??(string)getenv('S4_INTERNAL_CRON');$get=$get??$_GET;$post=$post??$_POST;
+    return ($environment==='1'||!empty($get['internal_browser_keep'])||!empty($get['internal_browser'])
+        ||!empty($post['internal_browser_keep'])||!empty($post['internal_browser']))?'internal':'external';
+}
+function cronVisualPulseRead(): array {
+    $lock=@fopen(CRON_VISUAL_PULSE_LOCK_FILE,'c');if($lock)@flock($lock,LOCK_SH);
+    $raw=@file_get_contents(CRON_VISUAL_PULSE_FILE);
+    if($lock){@flock($lock,LOCK_UN);@fclose($lock);}
+    $state=json_decode((string)$raw,true);if(!is_array($state))return ['latest_id'=>0,'events'=>[]];
+    $events=[];$latest=max(0,(int)($state['latest_id']??0));
+    foreach((array)($state['events']??[]) as $event){
+        if(!is_array($event))continue;$id=(int)($event['id']??0);$kind=(string)($event['kind']??'');
+        if($id<1||!in_array($kind,['internal','external'],true))continue;
+        $events[]=['id'=>$id,'kind'=>$kind,'at_ms'=>max(0,(int)($event['at_ms']??0))];$latest=max($latest,$id);
+    }
+    usort($events,static function($a,$b){return $a['id']<=>$b['id'];});
+    if(count($events)>64)$events=array_slice($events,-64);
+    return ['latest_id'=>$latest,'events'=>$events];
+}
+function cronVisualPulseWrite(string $kind): array {
+    if(!in_array($kind,['internal','external'],true))return [];
+    $lock=@fopen(CRON_VISUAL_PULSE_LOCK_FILE,'c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return []; }
+    $state=json_decode((string)@file_get_contents(CRON_VISUAL_PULSE_FILE),true);if(!is_array($state))$state=[];
+    $events=[];$latest=max(0,(int)($state['latest_id']??0));
+    foreach((array)($state['events']??[]) as $event){
+        if(!is_array($event))continue;$id=(int)($event['id']??0);$eventKind=(string)($event['kind']??'');
+        if($id<1||!in_array($eventKind,['internal','external'],true))continue;
+        $events[]=['id'=>$id,'kind'=>$eventKind,'at_ms'=>max(0,(int)($event['at_ms']??0))];$latest=max($latest,$id);
+    }
+    $event=['id'=>$latest+1,'kind'=>$kind,'at_ms'=>(int)round(microtime(true)*1000)];$events[]=$event;
+    if(count($events)>64)$events=array_slice($events,-64);
+    $json=json_encode(['latest_id'=>$event['id'],'events'=>$events],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    $written=$json===false?false:@file_put_contents(CRON_VISUAL_PULSE_FILE,$json,LOCK_EX);
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return $written===false?[]:$event;
 }
 function matrixCronPulseRead(): array {
     if(!is_file(MATRIX_CRON_PULSE_FILE))return [];$d=json_decode((string)@file_get_contents(MATRIX_CRON_PULSE_FILE),true);return is_array($d)?$d:[];
@@ -23652,6 +23695,9 @@ if($_cronBrowserKeep){
     header('Cache-Control: no-store');header('Access-Control-Allow-Origin: *');header('X-Accel-Buffering: no');
     @ini_set('zlib.output_compression','0');@ob_implicit_flush(true);
 }
+/* v10.400: show the correct arrival color only after interval/enable guards
+   have accepted a browser-internal tick; CLI worker ticks use their env flag. */
+$_cronVisualKind=cronVisualPulseKind();cronVisualPulseWrite($_cronVisualKind);
 /* v10.337: فقط cron بیرونی lease سریع ماتریس را تازه می‌کند. cron داخلی
    worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند. */
 if((string)getenv('S4_INTERNAL_CRON')!=='1'){
@@ -27468,6 +27514,20 @@ function tasksRowsOrdered(int $now): array {
         $rows[] = $row;
     }
     return $rows;
+}
+
+/* v10.400: compact event feed for the animated header health pulser.
+   The page embeds the current cursor; later reads use it so closely spaced
+   cron arrivals are not lost or replayed from before the page was opened. */
+if(isset($_GET['cron_visual_pulse'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $state=cronVisualPulseRead();$hasCursor=array_key_exists('after',$_GET);
+    $after=max(0,(int)(is_scalar($_GET['after']??null)?$_GET['after']:0));
+    $since=max(0,(int)(is_scalar($_GET['since_ms']??null)?$_GET['since_ms']:0));$events=[];
+    foreach($state['events'] as $event){
+        if($hasCursor?(int)$event['id']>$after:($since>0&&(int)$event['at_ms']>=$since))$events[]=$event;
+    }
+    echo json_encode(['ok'=>true,'latest_id'=>(int)$state['latest_id'],'events'=>$events],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 /** Extraction pool size used by the task manager and server dispatcher. */
@@ -44429,6 +44489,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "fd.append('workflow','fix_" . "only')") !== false
       && strpos($selfSrc, "\$workflow=(string)(\$_GET['workflow']") !== false
       && strpos($selfSrc, "if(\$fixNeedsBuild&&!\$combinedWorkflow)") !== false);
+    $add('10.400', 'کران CLI و browser-internal از کران بیرونی جدا تشخیص داده می‌شود',
+         cronVisualPulseKind('1', [], []) === 'internal'
+      && cronVisualPulseKind('', ['internal_browser_keep' => '1'], []) === 'internal'
+      && cronVisualPulseKind('', ['internal_browser' => '1'], []) === 'internal'
+      && cronVisualPulseKind('', [], []) === 'external');
+    $add('10.400', 'رویداد رنگیِ کران از endpoint و صفِ پالسر عبور می‌کند',
+         strpos($selfSrc, "isset(\$_GET['cron_visual_" . "pulse'])") !== false
+      && strpos($selfSrc, 'function cronVisualPulseWrite(') !== false
+      && strpos($selfSrc, 'cronVisualPulseWrite(' . '$_cronVisualKind)') !== false);
+    $add('10.400', 'پالسرِ هدر برای مبدأ داخلی آبی و برای مبدأ بیرونی بنفش می‌شود',
+         strpos($selfSrc, '.runtime-pulse.cron-pulse-' . 'internal .runtime-pulse-core') !== false
+      && strpos($selfSrc, '.runtime-pulse.cron-pulse-' . 'external .runtime-pulse-core') !== false
+      && strpos($selfSrc, 'PULSE_MS=' . '2500') !== false
+      && strpos($selfSrc, "{v:'10." . "400',") !== false
+      && version_compare(APP_VERSION, '10.400', '>='));
+
     $add('10.354', 'دکمهٔ ترکیبی build و اصلاح کلی را به ترتیب در یک صف سرور می‌گذارد',
          strpos($selfSrc, 'function syncMatrixBuildAnd' . 'Fix()') !== false
       && strpos($selfSrc, "fd.append('workflow','build_" . "and_fix')") !== false
@@ -66365,6 +66441,15 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .settings-panel-actions{display:flex;align-items:center;gap:7px;flex:0 0 auto;margin-inline-start:auto}.panel-fullwidth-btn{height:31px;padding:0 10px;border-radius:8px;border:1px solid #6d28d9;background:#2e1065;color:#ddd6fe;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;transition:background .2s,border-color .2s,transform .2s}.panel-fullwidth-btn:hover{background:#4c1d95;border-color:#a78bfa;transform:translateY(-1px)}.panel-fullwidth-btn.active{background:#7c3aed;border-color:#c4b5fd;color:#fff;box-shadow:0 0 0 3px #7c3aed30}.settings-panel.full .panel-fullwidth-btn span:last-child::after{content:' را بستن'}
 /* چراغ وضعیت محیط اجرا: پاسخ endpoint=سبز، timeout/شبکه=قرمز، بررسی=کهربایی. */
 .runtime-pulse{position:static;flex:0 0 52px;width:52px;height:44px;margin:0;border-radius:0;border:1px solid #475569;border-right-width:0;background:#0b1220;color:#94a3b8;display:grid;grid-template-columns:16px 14px;align-items:center;justify-content:center;gap:2px;cursor:pointer;overflow:visible}.runtime-pulse-core{grid-area:1/1;width:11px;height:11px;justify-self:center;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px #f59e0b;position:relative;z-index:2;transition:background .25s,box-shadow .25s}.runtime-pulse-ring{grid-area:1/1;justify-self:center;width:11px;height:11px;border-radius:50%;background:#f59e0b80;animation:runtimePulse 1.7s ease-out infinite}.runtime-pulse-tag{grid-area:1/2;font-size:8px;font-weight:900;letter-spacing:.2px;color:#fcd34d;min-width:12px;text-align:center}.runtime-pulse.online .runtime-pulse-core{background:#22c55e;box-shadow:0 0 5px #22c55e,0 0 13px #22c55e}.runtime-pulse.online .runtime-pulse-ring{background:#22c55e99}.runtime-pulse.online .runtime-pulse-tag{color:#86efac}.runtime-pulse.offline .runtime-pulse-core{background:#ef4444;box-shadow:0 0 6px #ef4444,0 0 14px #ef4444}.runtime-pulse.offline .runtime-pulse-ring{background:#ef444499;animation-duration:1s}.runtime-pulse.offline .runtime-pulse-tag{color:#fca5a5}.runtime-pulse:hover{background:#162033}.runtime-pulse:focus-visible{outline:2px solid #67e8f9;outline-offset:-2px}@keyframes runtimePulse{0%{transform:scale(.8);opacity:.9}75%,100%{transform:scale(2.7);opacity:0}}@media(max-width:430px){.runtime-pulse{flex-basis:44px;width:44px}.runtime-pulse-tag{display:none}.panel-fullwidth-btn span:last-child{display:none}.panel-fullwidth-btn{width:34px;padding:0}}
+/* v10.400: cron arrivals briefly override the health color, then restore it. */
+.runtime-pulse.cron-pulse-internal{border-color:#38bdf8!important;background:#082f49!important}
+.runtime-pulse.cron-pulse-internal .runtime-pulse-core{background:#38bdf8!important;box-shadow:0 0 5px #38bdf8,0 0 14px #38bdf8!important}
+.runtime-pulse.cron-pulse-internal .runtime-pulse-ring{background:#38bdf880!important;animation-duration:.85s!important}
+.runtime-pulse.cron-pulse-internal .runtime-pulse-tag{color:#7dd3fc!important}
+.runtime-pulse.cron-pulse-external{border-color:#a78bfa!important;background:#2e1065!important}
+.runtime-pulse.cron-pulse-external .runtime-pulse-core{background:#a78bfa!important;box-shadow:0 0 5px #a78bfa,0 0 14px #a78bfa!important}
+.runtime-pulse.cron-pulse-external .runtime-pulse-ring{background:#a78bfa80!important;animation-duration:.85s!important}
+.runtime-pulse.cron-pulse-external .runtime-pulse-tag{color:#ddd6fe!important}
 /* v10.19 (۳۲): دکمهٔ مدیر وظیفه — سومین دکمهٔ شناورِ هدر، کنارِ ☰ و ⛶ */
 .tasks-btn{position:fixed;top:10px;left:110px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}
 /* v10.82 (96): دکمهٔ چت باسلام در نوارِ هدر — کنارِ مدیرِ وظیفه */
@@ -67040,7 +67125,7 @@ html[data-skin="gloss"] .progress-bar{
 <div class="hdr-tools" id="hdrTools">
 <button class="hamburger-btn" id="hamburgerBtn" onclick="toggleSettingsPanel()">☰</button>
 <button class="fullwidth-btn" id="hdrFullBtn" type="button" onclick="toggleFullSettings()" title="تمام عرض کردن منوی تنظیمات" aria-label="تمام عرض کردن منوی تنظیمات">⛶</button>
-<button class="runtime-pulse checking" id="runtimePulse" type="button" onclick="s4RuntimeHealthCheck(true)" title="در حال بررسی وضعیت محیط اجرا" aria-label="در حال بررسی وضعیت محیط اجرا"><span class="runtime-pulse-ring" aria-hidden="true"></span><span class="runtime-pulse-core" aria-hidden="true"></span><span class="runtime-pulse-tag" id="runtimePulseTag">…</span></button>
+<button class="runtime-pulse checking" id="runtimePulse" data-cron-pulse-cursor="<?= (int)cronVisualPulseRead()['latest_id'] ?>" type="button" onclick="s4RuntimeHealthCheck(true)" title="در حال بررسی وضعیت محیط اجرا" aria-label="در حال بررسی وضعیت محیط اجرا"><span class="runtime-pulse-ring" aria-hidden="true"></span><span class="runtime-pulse-core" aria-hidden="true"></span><span class="runtime-pulse-tag" id="runtimePulseTag">…</span></button>
 <!-- v10.229: انتخاب سریع پروفایل، همیشه در نوار چسبان بالای صفحه -->
 <select class="hdr-profile-select" id="hdrProfileSelect" onchange="selectHeaderProfile(this.value)" title="انتخاب سریع پروفایل" aria-label="انتخاب سریع پروفایل"><option value="">پروفایل...</option></select>
 <button class="tasks-btn" id="tasksBtn" onclick="tmOpen()" title="مدیر وظیفه — کارهای در حال اجرا"><span aria-hidden="true">📋</span><span class="tasks-lbl">مدیر وظیفه</span><span class="tasks-sub" id="tasksSub">کارهای پس‌زمینه</span><span class="tasks-badge" id="tasksBadge">0</span></button>
@@ -76404,6 +76489,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.400', t:'💙💜 رنگِ جداگانهٔ پالسر برای رسیدن کران', items:[
+    'با رسیدن هر کران داخلی، چراغِ پالسرِ نوار بالای صفحه ۲٫۵ ثانیه آبی می‌شود؛ با رسیدن هر کران بیرونی همان چراغ ۲٫۵ ثانیه بنفش می‌شود.',
+    'رویدادهای نزدیک به هم در صف نگه داشته می‌شوند تا هر اجرای داخلی و بیرونی رنگِ خودش را نشان دهد.'
+  ]},
   {v:'10.399', t:'👤 نمایش پروفایل‌های صف ارسال و ماندگاری انتخاب غرفه‌ها', items:[
     'سربرگ صف‌های ووکامرس و باسلام، نام پروفایل‌های فعال را همراه وضعیت در حال ارسال، در صف یا متوقف نشان می‌دهد؛ نام پروفایل در کارت هر وظیفه نیز صریح است. با ورود به تب ارسال، صف‌ها دوباره خوانده می‌شوند.',
     'تیک غرفه‌های انتخابی در تب ارسال اکنون در تنظیمات ذخیره و پس از رفرش بازیابی می‌شود؛ انتخاب هیچ غرفه‌ای نیز دیگر بی‌صدا به ارسال غرفهٔ پیش‌فرض تبدیل نمی‌شود.',
@@ -95907,6 +95996,33 @@ async function s4RuntimeHealthCheck(force=false){
   }finally{if(timer)clearTimeout(timer);if(request===s4RuntimeHealthRequest){s4RuntimeHealthBusy=false;s4RuntimeHealthAbort=null;}}
 }
 (function runtimeHealthPulse(){setTimeout(()=>s4RuntimeHealthCheck(true),700);setInterval(()=>s4RuntimeHealthCheck(false),15000);window.addEventListener('online',()=>s4RuntimeHealthCheck(true));window.addEventListener('focus',()=>s4RuntimeHealthCheck(true));document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')s4RuntimeHealthCheck(true);});window.addEventListener('offline',()=>{s4RuntimeHealthFailures=3;const e=document.getElementById('runtimePulse'),t=document.getElementById('runtimePulseTag');if(e){e.classList.remove('online','checking');e.classList.add('offline');e.title='اتصال مرورگر قطع است';if(t)t.textContent='!';}});})();
+/* v10.400: keep the top health pulser in sync with every internal/external cron arrival. */
+(function s4CronArrivalPulse(){
+  const FLASH_CLASS=['cron-pulse-internal','cron-pulse-external'],PULSE_MS=2500,PULSE_GAP_MS=120,POLL_MS=2200;
+  const pulseEl=document.getElementById('runtimePulse');
+  let cursor=Math.max(0,parseInt(pulseEl&&pulseEl.dataset.cronPulseCursor)||0),busy=false,active=false,ready=false,queue=[];
+  const runNext=()=>{
+    if(active||!queue.length)return;const el=document.getElementById('runtimePulse');
+    if(!el){setTimeout(runNext,300);return;}
+    const kind=queue.shift(),cls=kind==='internal'?FLASH_CLASS[0]:FLASH_CLASS[1];
+    el.classList.remove(...FLASH_CLASS);el.classList.add(cls);active=true;
+    setTimeout(()=>{el.classList.remove(cls);setTimeout(()=>{active=false;runNext();},PULSE_GAP_MS);},PULSE_MS);
+  };
+  const poll=(syncOnly=false)=>{
+    if(busy||document.visibilityState==='hidden')return;busy=true;
+    const u='?cron_visual_pulse=1&after='+encodeURIComponent(cursor);
+    fetch(u,{cache:'no-store',credentials:'same-origin'}).then(r=>r.ok?r.json():null).then(d=>{
+      if(!d||d.ok!==true)return;const latest=Math.max(0,parseInt(d.latest_id)||0);
+      if(latest<cursor){cursor=latest;ready=true;return;}
+      const events=Array.isArray(d.events)?d.events:[];
+      if(!ready||!syncOnly){events.slice().sort((a,b)=>(parseInt(a.id)||0)-(parseInt(b.id)||0)).forEach(e=>{if(e.kind==='internal'||e.kind==='external')queue.push(e.kind);});runNext();}
+      cursor=latest;ready=true;
+    }).catch(()=>{}).finally(()=>{busy=false;});
+  };
+  setTimeout(()=>poll(false),650);setInterval(()=>poll(false),POLL_MS);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')poll(true);});
+  window.addEventListener('focus',()=>poll(true));
+})();
 /* v10.369: صفحهٔ باز، مرجع feedback کران داخلی را زنده نگه می‌دارد. receiver
    فاصلهٔ ذخیره‌شده، lock و enabled را enforce می‌کند؛ چند tab امن هستند. */
 (function opsFeedbackPulse(){
