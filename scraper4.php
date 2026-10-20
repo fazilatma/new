@@ -254,6 +254,7 @@ const AI_KEY_RATE_COOLDOWN = 90;
 // v9.38: پایگاه رایِ «مدل کاندید» — کدام مدل در آزمون‌ها بهتر جواب داده
 const AI_VOTES_FILE = __DIR__ . '/ai_votes.json';
 const NOTIF_STATE_FILE = __DIR__ . '/last_notification_check.json';
+const NOTIF_SCAN_LOCK_FILE = __DIR__ . '/notification_scan.lock'; /* v10.392: prevent overlapping cron/browser scans */
 /* v10.66 (۸۰): فیدِ رویدادهایِ زنده — مرورگر رویدادهایِ تازه را می‌خواند */
 const LIVE_FEED_FILE = __DIR__ . '/live_events_feed.json';
 /* v10.72 (88): Web Push — کلیدهای VAPID بخشی از کد هستند:
@@ -344,7 +345,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.391';
+const APP_VERSION = '10.392';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -17820,6 +17821,8 @@ if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; 
 /* v10.78 (92): تلگرام — سومین پیام‌رسان، با همان ساختار بله/روبیکا */
 if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = ['enabled'=>!empty($tgm['enabled']),'token'=>trim($tgm['token']??''),'chat_id'=>trim($tgm['chat_id']??'')]; }
 if (isset($_POST['notif_events'])) { $ne = json_decode($_POST['notif_events'], true) ?: []; $conn['notif_events'] = ['order_new'=>!empty($ne['order_new']),'order_status'=>!empty($ne['order_status']),'chat_msg'=>!empty($ne['chat_msg']),'product_status'=>!empty($ne['product_status']),'product_new'=>!empty($ne['product_new']),'order_refund'=>!empty($ne['order_refund']),'src_price'=>!empty($ne['src_price']),'src_stock'=>!empty($ne['src_stock']),'run_fail'=>!empty($ne['run_fail']),'retire'=>!empty($ne['retire']),'cron_ping'=>!empty($ne['cron_ping']),/* v10.35 (۴۷د): گزارشِ همگام‌سازی — پیش‌فرض روشن، پس نبودِ کلید یعنی روشن */'sync_report'=>!isset($ne['sync_report'])||!empty($ne['sync_report'])]; }
+/* v10.392: a short, user-defined installation/host label is appended to every notification. */
+if (isset($_POST['notif_source_text'])) $conn['notif_source_text'] = mb_substr(trim((string)$_POST['notif_source_text']), 0, 160);
 /* v10.107: مغایرت‌گیری دوره‌ای + اصلاح دسته دوره‌ای */
 if (isset($_POST['recon_auto'])) {
     $ra = json_decode($_POST['recon_auto'], true) ?: [];
@@ -21137,7 +21140,8 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             }
             $bu = ['primary_price' => $prices[$vid], 'stock' => $stock, 'status' => 2976,
                    'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
-            if ($catId > 0) $bu['category_id'] = $catId;
+            /* v10.392: Basalam rejects category_id on existing products (HTTP 422).
+               Category is creation-only unless the dedicated category-fix workflow is used. */
             bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
             $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
                            'ep' => 'products/' . $exId, 'd' => $bu];
@@ -21286,7 +21290,8 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         }
         $bu = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => 2976,
                'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
-        if ($catId > 0) $bu['category_id'] = $catId;
+        /* Existing-product PATCH must not include category_id; Basalam returns 422
+           ("currently unable to change category") even when the ID is unchanged. */
         bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
         $r = bslReq($tk, 'PATCH', 'products/' . $exId, $bu);
         if ($r['code'] === 404) $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
@@ -44054,6 +44059,27 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.391', 'ورودی 10.391 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "391'") !== false
       && version_compare(APP_VERSION, '10.' . '391', '>='));
+    $add('10.392', 'متن شناسایی نصب ذخیره و به همهٔ اعلان‌ها افزوده می‌شود',
+         strpos($selfSrc, "notif_source_text") !== false
+      && strpos($selfSrc, 'id="notifSourceText"') !== false
+      && strpos($selfSrc, '🏷 " . mb_substr($_sourceText') !== false);
+    $add('10.392', 'اسکن‌های همزمان کران و مرورگر اعلان تکراری نمی‌سازند',
+         strpos($selfSrc, 'NOTIF_SCAN_LOCK_FILE') !== false
+      && strpos($selfSrc, "'skipped' => 'scan_already_running'") !== false
+      && substr_count($selfSrc, 'notifSaveState($st); $sentTo = notifSend') >= 2);
+    $add('10.392', 'صفر بودن یادآوری همچنان یادآوری مجدد را کاملاً خاموش می‌کند',
+         strpos($selfSrc, "if (\$cfg['after'] <= 0) return '';") !== false);
+    $add('10.392', 'ادامهٔ صف بزرگ باسلام cursor مطلق هر محصول را ثبت می‌کند',
+         strpos($selfSrc, '$sDone=$si+1;') !== false
+      && strpos($selfSrc, 'bslBackendProgress($sent,$updated,$skipped,$fail,$total,$sDone') !== false
+      && strpos($selfSrc, "['paused','failed']") !== false
+      && strpos($selfSrc, "'find_deep_scan'=>false") !== false);
+    $add('10.392', 'PATCH محصول موجود دسته‌بندی را دوباره ارسال نمی‌کند',
+         substr_count($selfSrc, 'category_id is creation-only') >= 2
+      && strpos($selfSrc, 'Existing-product PATCH must not include category_id') !== false);
+    $add('10.392', 'ورودی 10.392 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
+         strpos($selfSrc, "{v:'10." . "392'") !== false
+      && version_compare(APP_VERSION, '10.' . '392', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -46319,6 +46345,9 @@ function webpushSend(string $title, string $body, ?string $kind = null, ?array $
     return ['sent' => $sent, 'failed' => $failed, 'total' => count($subs), 'detail' => $detail];
 }
 function notifSend(array $cn, string $msg, ?string $feed = null, array $media = []): array {
+    /* v10.392: distinguish otherwise identical notifications from several domains/hosts. */
+    $_sourceText = trim((string)($cn['notif_source_text'] ?? ''));
+    if ($_sourceText !== '') $msg .= "\n\n🏷 " . mb_substr($_sourceText, 0, 160);
     $out = [];
     $bt = $cn['baleh']['token'] ?? '';  $bc = $cn['baleh']['chat_id'] ?? '';
     $rt = $cn['rubika']['token'] ?? ''; $rc = $cn['rubika']['chat_id'] ?? '';
@@ -47704,7 +47733,8 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
             $msg = bslParcelMsg($f['np'], notifHead($why, $base . $suffix, $n - 1));
             $samples[] = $msg;
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
-            if ($send) $sentTo = notifSend($cn, $msg, 'order');
+            /* Persist the decision before network I/O: a killed sender must not resend it next pulse. */
+            if ($send) { notifSaveState($st); $sentTo = notifSend($cn, $msg, 'order'); }
         }
         $st[$wmKey] = $now;
         $shopRows[] = ['vendor_id' => $vid, 'shop_name' => $name, 'ok' => true,
@@ -47881,6 +47911,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             $samples[] = $msg;
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
             if ($send) {
+                /* Commit this chat signature before slow messenger/media calls to prevent replay after timeout. */
+                notifSaveState($st);
                 $_media109 = bslChatCollectMedia($f['nc'], $body);
                 $sentTo = notifSend($cn, $msg, null, $_media109);
                 /* v10.85 (99): message_id با context چت برای webhook */
@@ -48010,7 +48042,7 @@ function notifCheckProducts(array $cn, bool $test = false, bool $send = true): a
                  : $f['text'];
             $samples[] = $msg;
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
-            if ($send) $sentTo = notifSend($cn, $msg, 'product');
+            if ($send) { notifSaveState($st); $sentTo = notifSend($cn, $msg, 'product'); }
         }
         $st[$wmKey] = $now;
         $shopRows[] = ['vendor_id' => $vid, 'shop_name' => $name, 'ok' => true,
@@ -54054,6 +54086,14 @@ function bslCheckNotifications(array $cn): array {
         fn($s) => trim((string)($s['token'] ?? '')) !== ''));
     if (!$shops) return ['skipped' => 'no_basalam_shops'];
 
+    /* v10.392: browser pulse, internal cron and external cron may arrive together.
+       Only one scan may decide/send events; the others leave immediately. */
+    $_notifLock = @fopen(NOTIF_SCAN_LOCK_FILE, 'c');
+    if (!$_notifLock || !@flock($_notifLock, LOCK_EX | LOCK_NB)) {
+        if ($_notifLock) @fclose($_notifLock);
+        return ['skipped' => 'scan_already_running'];
+    }
+
     $out = [];
     $errors = [];
     $seen = ['orders' => 0, 'chats' => 0, 'products' => 0];
@@ -54107,6 +54147,7 @@ function bslCheckNotifications(array $cn): array {
         $stN['last_notif_errors'] = $errors ?: [];
         notifSaveState($stN);
     } catch (Throwable $e) { /* خطای نوشتنِ وضعیت نباید خودِ اعلان را بکشد */ }
+    @flock($_notifLock, LOCK_UN); @fclose($_notifLock);
     return $out;
 }
 
@@ -59630,11 +59671,16 @@ header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $queue=bslReadQueue();
+foreach((array)($queue['entries']??[]) as $_activeResume){
+if((string)($_activeResume['id']??'')!==$queueId&&(string)($_activeResume['status']??'')==='running'){
+echo json_encode(['ok'=>false,'error'=>'یک ارسال دیگر در حال اجراست — پس از پایان آن ادامه دهید'],JSON_UNESCAPED_UNICODE);exit;
+}}
 $found=false;
 foreach($queue['entries'] as &$e){
-if($e['id']===$queueId&&$e['status']==='paused'){
+if($e['id']===$queueId&&in_array((string)$e['status'],['paused','failed'],true)&&!empty($e['products_file'])){
 $e['status']='running';
-$e['paused_at']=0;
+$e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';
+unset($e['resume_exhausted']);
 $found=true;
 
 @unlink(BSL_PRODUCTS_FILE);
@@ -60338,7 +60384,7 @@ $__card=['image'=>$__fp['image']??'','price'=>$__pn,'price_unit'=>$__unit,'link'
 'remote_id'=>$__id,'lookup_source'=>'catalog_batch','remote_status'=>$__st,'old_price'=>$__exPrice,'old_stock'=>$__exStock];
 if(!$__need){$__fastSkipped[$__fi]=array_merge(['title'=>$__ft,'key'=>$__fk,'remote_id'=>$__id,'reason'=>'تکرار سریع از کاتالوگ (قیمت+موجودی+محتوا یکسان)'],$__card);continue;}
 $__bu=['id'=>$__id,'primary_price'=>$__pn,'stock'=>$__newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'status'=>($__newStock<=0?3790:2976)];
-if($__catId>0)$__bu['category_id']=$__catId;bslApplyContent($__bu,$__fp);
+/* v10.392: category_id is creation-only; existing-product PATCH rejects it. */ bslApplyContent($__bu,$__fp);
 $__fastItems[]=$__bu;$__fastMeta[$__fi]=['title'=>$__ft,'key'=>$__fk,'id'=>$__id,'pn'=>$__pn,'stock'=>$__newStock,'old_price'=>$__exPrice,'old_stock'=>$__exStock,'old_status'=>$__st,'new_status'=>(int)$__bu['status'],'changes'=>$__changes,'card'=>$__card,'p'=>$__fp];
 }
 if($__fastSkipped){foreach($__fastSkipped as $__fi=>$__det){$skipped++;$bslSkippedList[]=$__det;$bslFastDoneIdx[$__fi]=true;}bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⏭ پرش سریع از کاتالوگ: '.count($__fastSkipped).' محصول بدون درخواست شبکه']);}
@@ -60428,7 +60474,7 @@ if($isArchived||$isBslArchived){
 $statusLabel=$exStatusVal===3790?'غیرفعال':($exStatusVal===4184?'بایگانی':($exStatusVal===3567?'تأیید نشده':'در انتظار'));
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🔄 بازفعال‌سازی از {$statusLabel} (status=$exStatusVal) → ID#$exId");
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'status'=>2976,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
-if($catId>0)$bu['category_id']=$catId;
+// v10.392: تغییر دسته فقط در گردش‌کار اختصاصی اصلاح دسته؛ PATCH عادی بدون category_id.
 // v10.234: برای بازفعال‌سازی هم فقط وقتی تصویر را دوباره آپلود کن که مقصد عکس نداشته باشد.
 $pid=null;$galU=[];$imgU=productImageList($p);$reactRemote=bslRemoteContent($exBsl);
 $needsReactImg=($imgU&&array_key_exists('images_count',$reactRemote)&&(int)$reactRemote['images_count']<=0);
@@ -60473,7 +60519,8 @@ if(!$needUpdate){$skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key
 
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت: ".implode(',',$updateChanges));
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
-if($newStock<=0)$bu['status']=3790;else $bu['status']=2976;if($catId>0)$bu['category_id']=$catId;
+if($newStock<=0)$bu['status']=3790;else $bu['status']=2976;
+// v10.392: دستهٔ محصول موجود را در PATCH عادی نفرست؛ باسلام آن را با 422 رد می‌کند.
 // v8.69: توضیحات و تنوع‌های تازه هم در همین آپدیت می‌روند
 bslApplyContent($bu,$p);
 // v10.234: آپلود عکس در آپدیت فقط وقتی اختلاف گالری گزارش شده باشد؛
@@ -60569,7 +60616,7 @@ if($dupName){
 
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ نام تکراری → آپدیت اجباری...");
 $bu2=['primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'status'=>2976];
-if($catId>0)$bu2['category_id']=$catId;
+/* v10.392: duplicate-name means an existing product; category_id must not be PATCHed. */
 if($pid){$bu2['photo']=$pid;$bu2['photos']=(!empty($galIdsB)?$galIdsB:[$pid]);}
 $okUpd=false;$updId=(int)($exId??0);
 if($exBsl&&$updId>0){
@@ -60785,8 +60832,13 @@ foreach($__liveShops as $__sh){
 if($__scopeShop){
 $sShopName=$__scopeName!==''?$__scopeName:(string)$__scopeShop['shop_name'];
 if($sShopName==='')$sShopName='غرفهٔ '.$__scopeVid;
-$sOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>((string)($nextEntry['profile_key']??''))!==''?(loadProfiles()[$nextEntry['profile_key']]??null):null,'stock'=>(int)($cn['basalam']['stock']??10),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'category_id'=>(int)($cn['basalam']['category_id']??0),'auto_category'=>$autoCat,'fallback_cat_ids'=>$bslFallbackCats,'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[])];
-$sStop=false;$sDone=0;
+$sOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>((string)($nextEntry['profile_key']??''))!==''?(loadProfiles()[$nextEntry['profile_key']]??null):null,'stock'=>(int)($cn['basalam']['stock']??10),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'category_id'=>(int)($cn['basalam']['category_id']??0),'auto_category'=>$autoCat,'fallback_cat_ids'=>$bslFallbackCats,'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[]),
+/* v10.392: never block a 4k-product send row with a 20-page catalog scan.
+   Targeted title/catalog/ledger lookup remains; deep duplicate recovery belongs to its worker. */
+'find_deep_scan'=>false];
+$sStop=false;$sDone=max(0,$bslResumeStart-1);
+/* v10.392: $sDone is an absolute product cursor, not a per-resume counter.
+   The old relative counter repeatedly returned large queues to item #5 after every worker timeout. */
 /* v10.104: ادامه از چک‌پوینت — غرفهٔ اختصاصی هم از صفر شروع نکند */
 $__scopeStartMsg=$bslResumeStart>0
   ?('🏪 [غرفهٔ '.$sShopName.'] ادامه از #'.$bslResumeStart.' — '.$total.' محصول')
@@ -60797,11 +60849,13 @@ foreach($pd as $si=>$p){
 if(($si+1)<$bslResumeStart)continue;
 clearstatcache(true,BSL_STOP_FILE);
 if(file_exists(BSL_STOP_FILE)){$sStop=true;break;}
-$srAll=bslUpsertManyShops($p,[$__scopeShop],$sOpts,1);
+$srAll=bslUpsertManyShops($p,[$__scopeShop],$sOpts,max(1,min(8,$bslParallelN)));
 if(isset($srAll[$__scopeVid])){
 $sr=$srAll[$__scopeVid];
 $srTitle=trim($p['title']??$p['name']??'');$srKey=$p['key']??'';
-$srCard=['image'=>$p['image']??'','price'=>0,'link'=>$p['link']??'','vendor_id'=>$__scopeVid,'shop_name'=>$sShopName];
+$srBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
+$srShopPrice=$srBasePrice>0?(int)(bslShopPriceFor($srBasePrice,$__scopeShop,(int)($cn['basalam']['price_round']??0))['price']??$srBasePrice):0;
+$srCard=['image'=>$p['image']??'','price'=>(($p['price_unit']??'')==='rial'?$srShopPrice:$srShopPrice*10),'link'=>$p['link']??'','vendor_id'=>$__scopeVid,'shop_name'=>$sShopName];
 if(!empty($sr['ok'])){
 if(($sr['action']??'')==='created'){$sent++;$bslSentList[]=array_merge(['title'=>$srTitle,'key'=>$srKey,'remote_id'=>(int)($sr['id']??0)],$srCard);bslShopStatBump($__scopeVid,$sShopName,'c');}
 elseif(!empty($sr['skipped'])){$skipped++;$bslSkippedList[]=array_merge(['title'=>$srTitle,'key'=>$srKey,'reason'=>'بدون تغییر','remote_id'=>(int)($sr['id']??0)],$srCard);bslShopStatBump($__scopeVid,$sShopName,'s');}
@@ -60817,10 +60871,10 @@ $bslFailedList[]=array_merge(['title'=>$srTitle,'key'=>$srKey,'error'=>mb_substr
 bslShopStatBump($__scopeVid,$sShopName,'f');
 }
 }
-$sDone++;
-if($sDone%5===0||$sDone===$total){
+$sDone=$si+1;
+/* Persist every completed product: image/search calls may consume most of a host slice,
+   and a five-item cadence loses the cursor before the next heartbeat. */
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$sDone,mb_substr(trim($p['title']??''),0,30),"🏪 [{$sShopName}] {$sDone}/{$total} محصول — {$sent}✅ {$updated}⚡ {$skipped}⏭ {$fail}❌");
-}
 usleep($bslDelayMs*1000);
 }
 if($sStop){
@@ -67962,6 +68016,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div style="margin-top:8px;padding-top:8px;border-top:1px solid #334155">
 <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:6px">📋 رویدادهای اعلان</div>
 <div id="notifHealthLine" style="font-size:10.5px;color:#64748b;margin-bottom:6px;line-height:1.6"></div>
+<!-- v10.392: identify which installation/domain emitted a shared-channel notification. -->
+<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;margin:6px 0 10px">
+<div class="crow" style="margin:0"><label style="min-width:120px">🏷 متن شناسایی این سایت:</label><input type="text" id="notifSourceText" maxlength="160" placeholder="مثلاً: صباشاپ — هاست ایران / sabashopping.ir" style="flex:1"></div>
+<div style="font-size:10px;color:#64748b;line-height:1.7;margin-top:5px">این متن به انتهای تمام اعلان‌های بله، تلگرام، روبیکا، Push و رویداد زنده افزوده می‌شود تا منبع پیام بین هاست‌ها و دامنه‌های مختلف مشخص باشد.</div>
+</div>
 <div style="font-size:10px;color:#64748b;margin-bottom:6px">انتخاب کنید کدام رویدادهای باسلام به پیام‌رسان ارسال شوند:</div>
 <div style="display:flex;flex-direction:column;gap:4px">
 <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;cursor:pointer"><input type="checkbox" id="notifOrderNew" checked style="width:15px;height:15px"><span>🛒 سفارش جدید</span></label>
@@ -76163,6 +76222,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.392', t:'🏪 پایداری ارسال باسلام و مهار اعلان‌های تکراری', items:[
+    'صف‌های بزرگ باسلام مانند «ایمالز — لوازم آشپزخانه» بعد از مرگ یا محدودیت زمانی هاست از cursor مطلق همان محصول ادامه می‌یابند؛ پیشرفت بعد از هر محصول ثبت می‌شود و دیگر روی محصول پنجم تکرار نمی‌شود.',
+    'آپدیت محصول موجود category_id را دوباره PATCH نمی‌کند؛ خطای 422 باسلام برای «فعلاً قادر به تغییر دسته‌بندی نیستید» حذف شد و تغییر دسته فقط در ابزار اختصاصی اصلاح دسته انجام می‌شود.',
+    'تب «رویدادها» فیلد متن شناسایی سایت/هاست دارد و آن متن به انتهای اعلان‌های بله، روبیکا، تلگرام، Push و فید زنده افزوده می‌شود.',
+    'اسکن اعلان با قفل تک‌اجرا و ثبت وضعیت پیش از تماس شبکه‌ای مقاوم شد؛ رسیدن همزمان کران خارجی، کران داخلی و مرورگر یا مرگ فرستنده دیگر پیام مشتری را چندبار پخش نمی‌کند و مقدار صفر همچنان یادآوری را کاملاً خاموش نگه می‌دارد.'
+  ]},
   {v:'10.391', t:'🧪 تثبیت آزمون تنظیم همزمانی استخراج', items:[
     'آزمون متمرکز ذخیرهٔ همزمانی با قالب نهایی endpoint هماهنگ شد تا کنترل ۱ تا ۸ و پیش‌فرض ۳ در استقرار تولید نیز به‌طور خودکار تأیید شود.'
   ]},
@@ -85238,7 +85303,7 @@ const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enable
 const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
-if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
+if($('notifSourceText'))$('notifSourceText').value=String(cn.notif_source_text||'');if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('bslCatAuto'))$('bslCatAuto').checked=cn.bsl_catalog_auto!==false;if($('bslCatTtl'))$('bslCatTtl').value=(cn.bsl_catalog_ttl_h!==undefined?cn.bsl_catalog_ttl_h:6);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();if(b.token&&bslAllCats.length===0){loadBslCats();}syncMatrixRenderDestinations(b);
 try{if(typeof rvDirty!=='undefined'){rvDirty.table=true;if(resultsVisible()&&rvCurView==='table')rvBuildTable();}}catch(e){}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
@@ -86012,7 +86077,7 @@ fd.append('ai_net',JSON.stringify(getAiNet()));
 fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
 fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
 fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
-fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
+fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_source_text',$('notifSourceText')?.value||'');fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('bsl_catalog_auto',$('bslCatAuto')?.checked?1:0);fd.append('bsl_catalog_ttl_h',$('bslCatTtl')?.value||6);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
   web_search:!!($('aiContentAutoWeb')&&$('aiContentAutoWeb').checked),
@@ -91124,6 +91189,7 @@ function renderBslQueue(q){
         if(e.status==='running')__acts='<button class="btn btn-blue" onclick="restartBslServer(\''+e.id+'\')">↻ راه‌اندازی مجدد</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         else if(e.status==='paused')__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         else if(e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startBslServer(\''+e.id+'\')">▶ شروع ارسال</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
+        else if(e.status==='failed'&&(parseInt(e.current)||0)>0)__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه از '+toFa(e.current)+'</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
         html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
