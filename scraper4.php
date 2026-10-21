@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.411';
+const APP_VERSION = '10.412';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -14137,7 +14137,9 @@ function __pauseUi(){
 }
 window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__post('picker_pause_state',{on:__pickPaused});};
 if(__selectorWaitMs>0){
+  __pauseUi();
   try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='⏳ انتظار برای بارگذاری JS سایت...';}catch(e){}
+  __post('picker_pause_state',{on:true,wait_ms:__selectorWaitMs});
   setTimeout(function(){__pickPaused=false;__pauseUi();try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='روی عنصر دلخواه کلیک کنید…';}catch(e){}__post('picker_pause_state',{on:false,wait_done:true});},__selectorWaitMs);
 }
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
@@ -15084,7 +15086,9 @@ function __pauseUi(){
 }
 window.__togglePickPause=function(force){__pickPaused=(typeof force==='boolean')?force:!__pickPaused;__pauseUi();__vpPost('vp_pause_state',{on:__pickPaused});};
 if(__selectorWaitMs>0){
+  __pauseUi();
   try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='⏳ انتظار برای بارگذاری JS سایت...';}catch(e){}
+  __vpPost('vp_pause_state',{on:true,wait_ms:__selectorWaitMs});
   setTimeout(function(){__pickPaused=false;__pauseUi();try{var __wsel=document.getElementById('__sel');if(__wsel)__wsel.textContent='کلیک کنید...';}catch(e){}__vpPost('vp_pause_state',{on:false,wait_done:true});},__selectorWaitMs);
 }
 /* v8.88: روی موبایل، صفحه را خودکار جابه‌جا نکن.
@@ -43047,8 +43051,38 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.411', 'نسخهٔ 10.411 و release notes ثبت شده‌اند',
          version_compare(APP_VERSION,'10.411','>=')
       && strpos($selfSrc,"{v:'10." . "411'")!==false);
+
+    $_s412BuildStart=strpos($selfSrc,'function selectorFsBuild' . 'Src(kind){');
+    $_s412BuildEnd=$_s412BuildStart!==false?strpos($selfSrc,'function selectorFs' . 'Open(kind){',$_s412BuildStart):false;
+    $_s412BuildBlock=$_s412BuildStart!==false&&$_s412BuildEnd!==false?substr($selfSrc,$_s412BuildStart,$_s412BuildEnd-$_s412BuildStart):'';
+    $_s412OpenStart=strpos($selfSrc,'function selectorFs' . 'Open(kind){');
+    $_s412OpenEnd=$_s412OpenStart!==false?strpos($selfSrc,'function selectorFs' . 'Close()',$_s412OpenStart):false;
+    $_s412OpenBlock=$_s412OpenStart!==false&&$_s412OpenEnd!==false?substr($selfSrc,$_s412OpenStart,$_s412OpenEnd-$_s412OpenStart):'';
+    $_s412ReloadStart=strpos($selfSrc,'function selectorFs' . 'Reload(){');
+    $_s412ReloadEnd=$_s412ReloadStart!==false?strpos($selfSrc,'function selectorFs' . 'UseInline()',$_s412ReloadStart):false;
+    $_s412ReloadBlock=$_s412ReloadStart!==false&&$_s412ReloadEnd!==false?substr($selfSrc,$_s412ReloadStart,$_s412ReloadEnd-$_s412ReloadStart):'';
+    $_s412WaitInit="if(__selectorWaitMs>0){\n  __pauseUi();";
+    $add('10.412', 'بازبارگذاری تمام‌صفحه آدرس فهرست و جزئیات را با wait_ms تازه می‌سازد',
+         $_s412BuildBlock!==''
+      && substr_count($_s412BuildBlock,'selectorWaitParam()')>=2
+      && strpos($_s412BuildBlock,"kind==='detail'")!==false
+      && strpos($_s412BuildBlock,'visual_proxy')!==false
+      && strpos($_s412OpenBlock,'selectorFsPaused=waitMs>0')!==false
+      && strpos($_s412ReloadBlock,'const waitMs=selectorWaitValue()')!==false
+      && strpos($_s412ReloadBlock,'selectorFsBuildSrc(kind)')!==false
+      && strpos($_s412ReloadBlock,'state.src=src')!==false
+      && strpos($_s412ReloadBlock,'selectorFsPaused=waitMs>0')!==false);
+    $add('10.412', 'انتظار انتخابگرِ فهرست و جزئیات تا پایان تایمر واقعاً مکث می‌کند',
+         substr_count($selfSrc,$_s412WaitInit)>=2
+      && strpos($selfSrc,"__post('picker_pause_state',{on:true,wait_ms:" . "__selectorWaitMs})")!==false
+      && strpos($selfSrc,"__vpPost('vp_pause_state',{on:true,wait_ms:" . "__selectorWaitMs})")!==false);
+    $add('10.412', 'نسخهٔ 10.412 و release notes ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.412','>=')
+      && strpos($selfSrc,"{v:'10." . "412'")!==false);
     unset($_bslFbStart,$_bslFbEnd,$_bslFbBlock,$_bslResumeStart,$_bslResumeEnd,$_bslResumeBlock,
-          $_s411Partial,$_s411Row,$_s411Counts);
+          $_s411Partial,$_s411Row,$_s411Counts,$_s412BuildStart,$_s412BuildEnd,$_s412BuildBlock,
+          $_s412OpenStart,$_s412OpenEnd,$_s412OpenBlock,$_s412ReloadStart,$_s412ReloadEnd,
+          $_s412ReloadBlock,$_s412WaitInit);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -75820,16 +75854,18 @@ function selectorFsBuildSrc(kind){
     return '?visual_proxy='+encodeURIComponent(url)+full+'&pk='+encodeURIComponent(_pk)+selectorWaitParam();
 }
 function selectorFsOpen(kind){
-    selectorSyncWait(selectorWaitValue());
-    const src=selectorFsBuildSrc(kind||'list'); if(!src)return;
-    selectorFsState={kind:kind||'list',src:src,inline:false};
-    selectorFsPaused=false; selectorFsUpdatePauseBtn();
+    const k=kind||'list';
+    const waitMs=selectorWaitValue();
+    selectorSyncWait(waitMs);
+    const src=selectorFsBuildSrc(k); if(!src)return;
+    selectorFsState={kind:k,src:src,inline:false};
+    selectorFsPaused=waitMs>0; selectorFsUpdatePauseBtn();
     const m=$('selectorFsModal'), fr=$('selectorFsFrame'), title=$('selectorFsTitle'), hint=$('selectorFsHint');
-    if(title)title.textContent=(kind==='detail'?'📄 نمونه جزئیات':'🧾 لیست محصولات');
+    if(title)title.textContent=(k==='detail'?'📄 نمونه جزئیات':'🧾 لیست محصولات');
     if(hint){hint.innerHTML='';hint.style.display='none';}
-    if(fr){fr.src='about:blank';setTimeout(()=>{fr.src=src;},30);}
+    if(fr){fr.src='about:blank';setTimeout(()=>{if(selectorFsState&&selectorFsState.src===src)fr.src=src;},30);}
     if(m){m.style.display='flex';document.body.classList.add('modal-open');}
-    if(kind==='detail'){
+    if(k==='detail'){
         renderSampleBar();
         const pp=$('pickerPanel'); if(pp)pp.classList.remove('hidden');
     }else{
@@ -75837,7 +75873,17 @@ function selectorFsOpen(kind){
     }
 }
 function selectorFsClose(){const m=$('selectorFsModal');if(m)m.style.display='none';const fr=$('selectorFsFrame');if(fr)fr.src='about:blank';document.body.classList.remove('modal-open');}
-function selectorFsReload(){const fr=$('selectorFsFrame');if(fr&&selectorFsState.src){selectorFsPaused=false;selectorFsUpdatePauseBtn();fr.src='about:blank';setTimeout(()=>{fr.src=selectorFsState.src;},30);}}
+function selectorFsReload(){
+    const fr=$('selectorFsFrame'), state=selectorFsState;
+    if(!fr||!state)return;
+    const kind=state.kind||'list';
+    const waitMs=selectorWaitValue();
+    const src=selectorFsBuildSrc(kind); if(!src)return;
+    state.src=src;
+    selectorFsPaused=waitMs>0; selectorFsUpdatePauseBtn();
+    fr.src='about:blank';
+    setTimeout(()=>{if(selectorFsState===state)fr.src=state.src;},30);
+}
 function selectorFsUseInline(){
     if(selectorFsState.kind==='detail'){
         const fr=$('detailFrame'); if(fr){$('detailFrameWrap').classList.remove('hidden');fr.src=selectorFsState.src;}
@@ -79241,6 +79287,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.412', t:'⏳ اعمال درستِ انتظار در انتخابگر تمام‌صفحه', items:[
+    'با تغییر انتظار در پنجرهٔ تمام‌صفحه، URL صفحهٔ نمونه دوباره از تنظیم جاری ساخته می‌شود؛ حالت فهرست و جزئیات دیگر URL قدیمیِ cacheشده را بارگذاری نمی‌کنند.',
+    'انتخابگر فهرست و جزئیات از آغاز تایمر واقعاً مکث می‌ماند و وضعیت دکمه/پنل را گزارش می‌کند؛ پیام آماده‌شدن iframe مکث را زودتر لغو نمی‌کند.',
+    'انتظار همچنان مکثی سمت مرورگر برای فعال‌شدن picker پس از اجرای اسکریپت iframe است و زمان درخواست سرور به fetch_html را تغییر نمی‌دهد.'
+  ]},
   {v:'10.411', t:'🧯 جلوگیری از اعلام پایان کاذبِ ارسال ناقص', items:[
     'پرچم done دیگر به‌تنهایی موفقیت نیست: failed_resume، توقف، pause، stale، خطای نهایی یا current کمتر از total در progress و ردیف صف به‌عنوان checkpoint ناقص می‌ماند.',
     'پنل باسلام و ووکامرس درصد واقعی، شمارنده و queue ID را نشان می‌دهد؛ برای کار ناقص پیام موفقیت، فاز دوم و شروع خودکار ردیف بعدی اجرا نمی‌شود.',
