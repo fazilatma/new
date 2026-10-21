@@ -357,7 +357,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.409';
+const APP_VERSION = '10.410';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -8164,6 +8164,18 @@ function bslReqMode(string $url, string $tk, string $m, $d, bool $mp, array $net
  *   • سیگنالِ توقف قبل از هر دسته چک می‌شود، دقیقاً مثل bslReq.
  *   • اگر curl_multi در دسترس نباشد، به اجرای ترتیبی برمی‌گردیم.
  * ===================================================================== */
+function bslStopRequestedForQueue(string $queueId=''): bool {
+    clearstatcache(true,BSL_STOP_FILE);
+    if(!is_file(BSL_STOP_FILE))return false;
+    $age=time()-(int)@filemtime(BSL_STOP_FILE);
+    if($age>BSL_STOP_HOLD_SEC){@unlink(BSL_STOP_FILE);clearstatcache(true,BSL_STOP_FILE);return false;}
+    $signal=json_decode((string)@file_get_contents(BSL_STOP_FILE),true);
+    $target=is_array($signal)?trim((string)($signal['queue_id']??'')):'';
+    if($queueId==='')$queueId=trim((string)($GLOBALS['_bslQueueIdNow']??''));
+    /* With no claimed row yet, a targeted signal must not stop the dispatcher;
+       it will select another waiting row and re-check after ownership is set. */
+    return $target===''||($queueId!==''&&hash_equals($target,$queueId));
+}
 function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false): array {
     $out = [];
     if (!$jobs) return $out;
@@ -8179,8 +8191,7 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
     for ($off = 0; $off < count($keys); $off += $concurrency) {
         // توقف وسطِ کار: بقیهٔ دسته‌ها اجرا نمی‌شوند
         if (!$skipStop) {
-            clearstatcache(true, BSL_STOP_FILE);
-            if (file_exists(BSL_STOP_FILE) && (time() - (int)@filemtime(BSL_STOP_FILE)) <= BSL_STOP_HOLD_SEC) {
+            if (bslStopRequestedForQueue()) {
                 foreach (array_slice($keys, $off) as $kk) {
                     $out[$kk] = ['ok' => false, 'code' => 0, 'error' => 'stopped', 'body' => null, 'raw' => '', 'mode' => 'multi'];
                 }
@@ -8324,16 +8335,8 @@ $r=['ok'=>false];
 for($attempt=1;$attempt<=$maxRetries;$attempt++){
 // v8.59: کش stat را پاک کن، وگرنه سیگنال توقفِ تازه دیده نمی‌شود
 // v9.82: تست اتصال نباید به‌خاطر فایل توقفِ باقی‌مانده «stopped» بدهد
-if(!$skipStop){
-clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
-// v9.84: فقط سیگنالِ تازه معتبر است. قدیمی‌تر از نگه‌داشت = جامانده،
-// پاکش کن و ادامه بده؛ وگرنه یک توقفِ هفتهٔ پیش تا ابد کار را می‌بندد.
-$stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if($stopAge<=BSL_STOP_HOLD_SEC){return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);}
-@unlink(BSL_STOP_FILE);
-clearstatcache(true,BSL_STOP_FILE);
-}
+if(!$skipStop&&bslStopRequestedForQueue()){
+return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
 /* v10.285: یک retry ترمیمی برای متن ممنوع؛ فقط درخواست محصول و فقط JSON. */
@@ -21957,8 +21960,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     // ---- فاز ۴: هر شکستی از مسیرِ تکیِ کاملِ قدیمی رد می‌شود.
     //      اگر سیگنالِ توقف رسیده باشد این فاز اجرا نمی‌شود، وگرنه هر غرفه
     //      یک 'stopped' می‌گیرد و آن محصول بی‌دلیل «خطا» شمرده می‌شود.
-    clearstatcache(true, BSL_STOP_FILE);
-    $__stopNow = file_exists(BSL_STOP_FILE) && (time() - (int)@filemtime(BSL_STOP_FILE)) <= BSL_STOP_HOLD_SEC;
+    $__stopNow = bslStopRequestedForQueue();
     foreach ($live as $vid => $sh) {
         if (!empty($out[$vid]['ok'])) continue;
         if ($__stopNow) { $out[(int)$vid] = ['ok' => false, 'stopped' => true, 'error' => 'stopped']; continue; }
@@ -45178,6 +45180,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "usort(\$rows,static fn(\$a,\$b)=>(int)\$b['unix']<=>(int)\$a['unix'])") !== false
       && strpos($selfSrc, "{v:'10." . "409'") !== false
       && version_compare(APP_VERSION, '10.' . '409', '>='));
+    $add('10.410', 'توقف باسلام فقط ردیف مالک را می‌بندد و کران از checkpoint ردیف‌های دیگر ادامه می‌دهد',
+         strpos($selfSrc, 'function bslStopRequestedForQueue(string $queueId=') !== false
+      && strpos($selfSrc, "queueHasExplicitUserStop('bsl',\$requestedBslQueueId)") !== false
+      && strpos($selfSrc, "queueHasExplicitUserStop(\$which,\$qid)") !== false
+      && strpos($selfSrc, "return \$target===''||(\$queueId!==''&&hash_equals(\$target,\$queueId));") !== false
+      && strpos($selfSrc, "if (queueHasFreshUserStop('bsl'))") !== false);
+    $add('10.410', 'progress متوقف قدیمی مقصد را قفل نمی‌کند و feedback مالک stop را گزارش می‌کند',
+         strpos($selfSrc, "if(\$queueId==='')return false;") !== false
+      && strpos($selfSrc, "hash_equals(\$progressQid,\$queueId)") !== false
+      && strpos($selfSrc, "'target_queue_id'=>\$stopTargetFb") !== false
+      && strpos($selfSrc, 'foreign_stopped_progress_is_scoped_and_ignored') !== false
+      && strpos($selfSrc, "{v:'10." . "410'") !== false
+      && version_compare(APP_VERSION, '10.' . '410', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -45543,7 +45558,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'$wooAutomaticResume')!==false
       && strpos($selfSrc,'$automaticResume')!==false
       && strpos($selfSrc,"tasksResumeExplicitlyStopped('woo_send'")!==false
-      && strpos($selfSrc,"tasksResumeExplicitlyStopped('bsl_send'")!==false
+      && strpos($selfSrc,"queueHasExplicitUserStop('bsl',\$requestedBslQueueId)")!==false
       && strpos($selfSrc,'$chk[\'reason_defer\']=\'explicit_user_stop_race\'')!==false
       && strpos($selfSrc,'$finished = !$explicitStop &&')!==false);
 
@@ -49758,17 +49773,32 @@ function queueResumeBook(string $which, string $qid, ?array $patch = null): arra
 }
 
 /** علامت‌زدن ردیف صف به‌عنوان failed بعد از ۳ تلاش ناموفق */
-function queueHasFreshUserStop(string $which): bool {
+function queueHasFreshUserStop(string $which,string $queueId=''): bool {
     $file=$which==='bsl'?BSL_STOP_FILE:WOO_STOP_FILE;
     $hold=$which==='bsl'?BSL_STOP_HOLD_SEC:WOO_STOP_HOLD_SEC;
     if(!is_file($file))return false;
-    clearstatcache(true,$file);
-    $age=time()-(int)@filemtime($file);
-    return $age<=max(0,$hold);
+    clearstatcache(true,$file);$age=time()-(int)@filemtime($file);
+    if($age>max(0,$hold))return false;
+    $signal=json_decode((string)@file_get_contents($file),true);
+    $target=is_array($signal)?trim((string)($signal['queue_id']??'')):'';
+    /* A queue-specific Stop must not freeze every other Basalam/Woo row for
+       the full hold window. Calls without a row only report global signals. */
+    if($queueId==='')return $target==='';
+    return $target===''||hash_equals($target,$queueId);
 }
-function queueHasExplicitUserStop(string $which): bool {
-    if(queueHasFreshUserStop($which))return true;
+function queueHasExplicitUserStop(string $which,string $queueId=''): bool {
+    if(queueHasFreshUserStop($which,$queueId))return true;
+    /* User-stop state is owned by a queue row. A cancelled shared progress
+       file from an older row must never disable cron recovery destination-wide. */
+    if($queueId==='')return false;
+    $q=$which==='bsl'?bslReadQueue():wooReadQueue();$row=null;
+    foreach((array)($q['entries']??[]) as $candidate){
+        if(is_array($candidate)&&(string)($candidate['id']??'')===$queueId){$row=$candidate;break;}
+    }
+    if(is_array($row)&&(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'))return true;
     $progress=readProgress($which==='bsl'?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE);
+    $progressQid=trim((string)($progress['queue_id']??$progress['checkpoint']['queue_id']??''));
+    if($progressQid===''||!hash_equals($progressQid,$queueId))return false;
     return !empty($progress['stopped'])||!empty($progress['cancelled'])
         ||!empty($progress['stopped_by_user'])||(string)($progress['paused_by']??'')==='user';
 }
@@ -49991,6 +50021,9 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     }
 
     $qid   = (string)($chk['queue_id'] ?? '');
+    if(!$allowUserStopped&&queueHasExplicitUserStop($which,$qid)){
+        $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_row';return $chk;
+    }
     /* flock شاهدِ قوی‌تری از سنِ heartbeat است: یک درخواستِ شبکهٔ طولانی
        ممکن است بیش از staleAfter طول بکشد، اما تا وقتی قفل در دستِ worker
        است، نه آن را بکش و نه worker دوم بساز. */
@@ -50053,7 +50086,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             $chk['reason_defer'] = 'lock_held';
             return $chk;
         }
-        if(!$allowUserStopped&&queueHasExplicitUserStop($which)){
+        if(!$allowUserStopped&&queueHasExplicitUserStop($which,$qid)){
             @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
             $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop';return $chk;
         }
@@ -60821,6 +60854,8 @@ if($lockFpFb){$lockFreeFb=@flock($lockFpFb,LOCK_EX|LOCK_NB);$lockProbeOkFb=$lock
 $lockMtimeFb=is_file($lockFileFb)?(int)@filemtime($lockFileFb):0;
 $stopFileFb=BSL_STOP_FILE;$stopExistsFb=is_file($stopFileFb);$stopAgeFb=$stopExistsFb?max(0,$nowFb-(int)@filemtime($stopFileFb)):null;
 $stopActiveFb=$stopExistsFb&&$stopAgeFb<=BSL_STOP_HOLD_SEC;
+$stopSignalFb=$stopExistsFb?json_decode((string)@file_get_contents($stopFileFb),true):[];
+$stopTargetFb=is_array($stopSignalFb)?trim((string)($stopSignalFb['queue_id']??'')):'';
 $queueRowFb=null;
 if(is_array($selectedFb))$queueRowFb=[
     'id'=>$selectedQid,'status'=>(string)($selectedFb['status']??''),
@@ -60945,7 +60980,9 @@ if(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$idleFb!==nul
 }
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='waiting')$diagnosisFb[]='waiting_row_should_be_claimed_by_cron_watchdog';
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='paused')$diagnosisFb[]=((string)($selectedFb['paused_by']??'')==='user'?'user_paused_row_is_not_auto_resumed':'paused_row_may_resume_on_cron');
-if($stopActiveFb)$diagnosisFb[]='active_stop_signal_may_block_resume';
+if($stopActiveFb&&($stopTargetFb===''||$selectedQid===''||$stopTargetFb===$selectedQid))$diagnosisFb[]='active_stop_signal_may_block_selected_row';
+elseif($stopActiveFb&&$stopTargetFb!==''&&$stopTargetFb!==$selectedQid)$diagnosisFb[]='foreign_row_stop_signal_is_scoped_and_ignored';
+if(!$progressOwnedFb&&$progressQidFb!==''&&(!empty($progressFb['stopped'])||!empty($progressFb['cancelled'])))$diagnosisFb[]='foreign_stopped_progress_is_scoped_and_ignored';
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$progressOwnedFb&&!empty($progressFb['done']))$diagnosisFb[]='progress_done_but_queue_row_still_running';
 if(!$diagnosisFb)$diagnosisFb[]='no_obvious_stall_from_saved_state';
 $queueRowsSummaryFb=[];
@@ -60995,7 +61032,8 @@ echo json_encode([
         'watchdog_enabled'=>$watchdogEnabledFb,'auto_resume_enabled'=>$autoResumeEnabledFb,
         'backend_lock'=>['held'=>$lockHeldFb,'probe_ok'=>$lockProbeOkFb,'file_exists'=>is_file($lockFileFb),
             'mtime_age_sec'=>$lockMtimeFb>0?max(0,$nowFb-$lockMtimeFb):null],
-        'stop_signal'=>['present'=>$stopExistsFb,'active'=>$stopActiveFb,'age_sec'=>$stopAgeFb],
+        'stop_signal'=>['present'=>$stopExistsFb,'active'=>$stopActiveFb,'age_sec'=>$stopAgeFb,
+            'target_queue_id'=>$stopTargetFb,'blocks_selected'=>$stopActiveFb&&($stopTargetFb===''||$selectedQid===''||$stopTargetFb===$selectedQid)],
         'resume_book'=>$selectedQid!==''?queueResumeBook('bsl',$selectedQid):[],
         'diagnosis'=>$diagnosisFb],
     'notifications'=>['enabled'=>$notifyFlagsFb,'last_ping_attempts'=>$pingSummaryFb],
@@ -61624,23 +61662,26 @@ register_shutdown_function(function()use($bslLockFp,$bslLockFile){@flock($bslLoc
 /* اکنون مالکیتِ واقعی داریم؛ سیگنال قدیمی را فقط همین worker مصرف می‌کند. */
 $explicitResume=!empty($_GET['resume'])||!empty($_POST['resume']);
 $automaticResume=!empty($_GET['auto_resume'])||!empty($_POST['auto_resume']);
-if($automaticResume&&tasksResumeExplicitlyStopped('bsl_send',[],readProgress(BSL_PROGRESS_FILE))){
-queuePauseRowsAfterStop('bsl',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+$requestedBslQueueId=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+if($automaticResume&&queueHasExplicitUserStop('bsl',$requestedBslQueueId)){
+queuePauseRowsAfterStop('bsl',$requestedBslQueueId);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
 'msg'=>'توقفِ صریحِ کاربر حفظ شد — ادامهٔ خودکار انجام نشد'],JSON_UNESCAPED_UNICODE);
 exit;
 }
 if(file_exists(BSL_STOP_FILE)){
-$stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if(!$explicitResume&&$stopAge<=BSL_STOP_HOLD_SEC){
-queuePauseRowsAfterStop('bsl',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+$stopMatchesRequested=bslStopRequestedForQueue($requestedBslQueueId);
+if(!$explicitResume&&$stopMatchesRequested){
+queuePauseRowsAfterStop('bsl',$requestedBslQueueId);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
 'msg'=>'ارسال توسط کاربر متوقف شده — برای شروع دوباره، از دکمهٔ صف استفاده کنید'],JSON_UNESCAPED_UNICODE);
 exit;
 }
-@unlink(BSL_STOP_FILE);
+/* Explicit Continue consumes only its own (or a legacy global) signal. A stop
+   for another row remains intact while this independent checkpoint runs. */
+if($explicitResume&&$stopMatchesRequested)@unlink(BSL_STOP_FILE);
 }
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
@@ -61726,8 +61767,7 @@ if($__chg)bslWriteQueue($__q);
 $bslEntriesDoneThisRun = 0;
 for ($bslEntryRound = 0; $bslEntryRound < BSL_MAX_ENTRIES_PER_RUN; $bslEntryRound++) {
 if ($bslEntryRound > 0) {
-    clearstatcache(true,BSL_STOP_FILE);
-    if (file_exists(BSL_STOP_FILE)) {
+    if (queueHasFreshUserStop('bsl')) {
         writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
         @unlink(BSL_PRODUCTS_FILE);
         exit;
@@ -62177,7 +62217,7 @@ $GLOBALS['_bslPhaseState']=['phase'=>'send','phase_label'=>'ارسال محصو�
 // v8.59: نتیجهٔ file_exists در PHP کش می‌شود؛ بدون پاک‌کردن کش ممکن است
 // حلقه سیگنال توقفِ تازه‌نوشته‌شده را چند دور نبیند.
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
+if(bslStopRequestedForQueue()){
 // v8.59: فایل توقف را پاک نکن — نگه‌داشتِ ۱۵ دقیقه‌ای باید سر جایش
 // بماند وگرنه اولین پینگ بعدی صف را دوباره راه می‌اندازد. دکمه‌های
 // «شروع» و «ادامه» خودشان آن را برمی‌دارند.
@@ -62472,7 +62512,7 @@ if($__sendAllShops && $__liveShops){
     foreach($pd as $__i=>$p){
         if($__i<$__msStartCompleted)continue;
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE)){$__msStop=true;break;}
+        if(bslStopRequestedForQueue()){$__msStop=true;break;}
         bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',null,
             ['phase'=>'multi_shop','phase_label'=>'ارسال به غرفه‌های اضافی','phase_current'=>$__i,
              'phase_total'=>$total,'phase_pct'=>(int)floor($__i*100/max(1,$total))]);
@@ -62558,7 +62598,7 @@ foreach($__liveShops as $__sh){
     foreach($pd as $__i=>$p){
         if($__i<$__priceStart)continue;
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE)){$__priceStop=true;break;}
+        if(bslStopRequestedForQueue()){$__priceStop=true;break;}
         bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__i,'',null,
             ['phase'=>'extra_shop_price','phase_label'=>'تعدیل قیمت غرفه‌های اضافی','phase_current'=>$__i,
              'phase_total'=>$total,'phase_pct'=>(int)floor($__i*100/max(1,$total)),
@@ -62610,7 +62650,7 @@ foreach($__liveShops as $__sh){
         "🏪 غرفهٔ $sVid: قیمت $__shopFixed محصول با تعدیلِ خودِ آن غرفه (و لایهٔ پروفایل) به‌روز شد");
     if($__priceStop)break;
 }
-if(!$__sendAllShops&&!$__isFanoutRow&&!file_exists(BSL_STOP_FILE))
+if(!$__sendAllShops&&!$__isFanoutRow&&!bslStopRequestedForQueue())
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','🏁 پایانِ تعدیل قیمت غرفه‌های اضافی',
         ['phase'=>'extra_shop_price_done','phase_label'=>'تعدیل قیمت غرفه‌های اضافی تمام شد',
          'phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100]);
@@ -62641,7 +62681,7 @@ foreach($pd as $si=>$p){
 /* v10.104: محصولات قبل از چک‌پوینت را رد کن */
 if(($si+1)<$bslResumeStart)continue;
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){$sStop=true;break;}
+if(bslStopRequestedForQueue()){$sStop=true;break;}
 $srAll=bslUpsertManyShops($p,[$__scopeShop],$sOpts,max(1,min(8,$bslParallelN)));
 if(isset($srAll[$__scopeVid])){
 $sr=$srAll[$__scopeVid];
@@ -62707,7 +62747,7 @@ if(!$__skipCategoryRetry){
     $__catDone=0;
     foreach($catRejected as $__catIndex=>$ae){
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE))break;
+        if(bslStopRequestedForQueue())break;
         $aeId=(int)($ae['id']??0);$aeTitle=trim((string)($ae['title']??$ae['name']??''));
         $aeCatId=autoMatchBslCategoryForce($aeTitle,$bslFlatCats);
         if($aeCatId<=0){
@@ -62739,7 +62779,7 @@ if(!$__skipCategoryRetry){
     }
 }
 $updated+=$catFixed;
-if(!$__skipCategoryRetry&&!file_exists(BSL_STOP_FILE))
+if(!$__skipCategoryRetry&&!bslStopRequestedForQueue())
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: '.$catFixed.' اصلاح, '.$catRetryFailed.' خطا',
         ['phase'=>'category_retry_done','phase_label'=>'اصلاح دسته‌بندی تمام شد',
          'phase_current'=>count($catRejected),'phase_total'=>count($catRejected),'phase_pct'=>100,
@@ -62765,7 +62805,7 @@ if(!$__skipImageRetry){
         $__imgDone=0;
         foreach($imgFailedEntries as $__imgIndex=>$imgF){
             clearstatcache(true,BSL_STOP_FILE);
-            if(file_exists(BSL_STOP_FILE))break;
+            if(bslStopRequestedForQueue())break;
             $imgRetryCount++;$imgTitle=(string)($imgF['title']??'');$imgLink=(string)($imgF['link']??'');
             $imgOriginalUrl=(string)($imgF['image_url']??'');$pid3=null;
             bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__imgIndex,'',null,
@@ -62875,7 +62915,7 @@ if(!$__skipImageRetry){
         }
     }
 }
-if(!$__skipImageRetry&&!file_exists(BSL_STOP_FILE))
+if(!$__skipImageRetry&&!bslStopRequestedForQueue())
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 3: '.$imgRetryFixed.'/'.$imgRetryCount.' تصویر اصلاح, '.$imgRetryFailed.' خطای retry',
         ['phase'=>'image_retry_done','phase_label'=>'تلاش دوبارهٔ تصویر تمام شد','phase_current'=>count($imgFailedEntries),
          'phase_total'=>count($imgFailedEntries),'phase_pct'=>100,'phase_shop_vendor_id'=>$vid]);
@@ -63325,6 +63365,7 @@ $tk=$bs['token'];$vid=(int)$bs['vendor_id'];$total=count($pd);
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
 $bslQueueId=trim($_POST['queue_id']??'');
+if($bslQueueId!=='')$GLOBALS['_bslQueueIdNow']=$bslQueueId;
 $bslSentList=[];$bslUpdatedList=[];$bslSkippedList=[];$bslFailedList=[];$bslLog=[];$bslFlatCats=[];
 
 $initProgress=['running'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>$total,'last_title'=>'','current'=>0,'done'=>false,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['شروع فرآیند ارسال'],'total_log_count'=>1,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList];
@@ -63378,7 +63419,7 @@ $bslPage=1;$bslMore=true;$maxDupPages=20;
 while($bslMore&&$bslPage<=$maxDupPages){
 
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
+if(bslStopRequestedForQueue()){
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,0,'',['❌ فرآیند متوقف شد']);
 taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)($GLOBALS['_bslQueueIdNow']??''), 'current'=>0, 'total'=>(int)$total,
@@ -78228,6 +78269,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.410', t:'🚀 بازیابی صف باسلام با کران و توقفِ ردیف‌محور', items:[
+    'ریشهٔ گیرکردن رفع شد: progress مشترکِ cancelled/stopped از یک ردیف قدیمی دیگر کل مقصد باسلام را برای همیشه «توقف صریح کاربر» تشخیص نمی‌دهد.',
+    'فایل Stop دارای queue_id فقط همان ردیف را متوقف می‌کند؛ ردیف‌های waiting یا checkpointدار دیگر در همان مقصد می‌توانند با کران ادامه یابند، بدون شکستن توقف دستی همان ردیف.',
+    'نگهبان کران پس از انتخاب ردیف، مالکیت توقف را با queue_id خود آن دوباره بررسی می‌کند؛ بررسی دوم زیر flock نیز race میان Stop و Resume را می‌بندد.',
+    'همهٔ حلقه‌های درخواست، قیمت، دسته و تصویر باسلام سیگنال Stop را با queue_id کار جاری می‌سنجند و دیگر از وجود فایل Stop متعلق به ردیف دیگر خارج نمی‌شوند.',
+    'خروجی bsl_send_feedback اکنون queue_id مالک Stop و اینکه واقعاً ردیف انتخاب‌شده را مسدود می‌کند یا نه نشان می‌دهد و progress متوقفِ بیگانه را صریحاً تشخیص می‌دهد.'
+  ]},
   {v:'10.409', t:'⏯ کنترل کارت همگام‌سازی و آپدیت چندبرنچی', items:[
     'کارت هر پروفایل در صف همگام‌سازی از ابتدا جمع‌شده است؛ نام پروفایل و نوار گرافیکی درصد کل همیشه دیده می‌شود و باز/بسته‌بودن کارت در تازه‌سازی سه‌ثانیه‌ای حفظ می‌گردد.',
     'روی هر کارت دکمه‌های توقف و ادامه وجود دارد. توقف فقط استخراج و صف‌های مقصد همان profile_key را هدف می‌گیرد و ادامه از checkpoint ذخیره‌شده دوباره در worker قرار می‌گیرد.',
