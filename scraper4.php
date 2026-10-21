@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.410';
+const APP_VERSION = '10.411';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -2615,8 +2615,59 @@ function queueProgressBelongsToRow(array $prog, array $row, int $runningRows = 1
     $rowId = trim((string)($row['id'] ?? ''));
     $progressId = trim((string)($prog['queue_id'] ?? ''));
     if ($progressId !== '') return $rowId !== '' && $progressId === $rowId;
-    // Legacy progress without queue_id is only attributable when there is one owner.
-    return $rowId !== '' && $runningRows === 1;
+    // Legacy progress without queue_id is attributable only to the sole running row.
+    return $rowId !== '' && $runningRows === 1 && (string)($row['status'] ?? '') === 'running';
+}
+
+/** Return checkpoint counters with the owned progress file taking precedence over a stale row snapshot. */
+function queueProgressCounters(array $progress, ?array $row = null): array {
+    $total = (int)($progress['total'] ?? 0);
+    if ($total <= 0) $total = (int)($row['total'] ?? 0);
+    $current = array_key_exists('current', $progress)
+        ? (int)$progress['current']
+        : (int)($row['current'] ?? 0);
+    return ['current' => max(0, $current), 'total' => max(0, $total)];
+}
+
+/** Failed, stopped, paused, errored, stale, or short-count progress is never completion. */
+function queueProgressHasIncompleteFlags(array $progress, ?array $row = null): bool {
+    foreach (['stopped', 'stopped_by_user', 'cancelled', 'paused', 'partial', 'incomplete',
+              'stale', 'failed_resume', 'terminal_error'] as $flag) {
+        if (!empty($progress[$flag])) return true;
+    }
+    if ((string)($progress['paused_by'] ?? '') === 'user') return true;
+    if (trim((string)($progress['error'] ?? '')) !== '') return true;
+    if ($row !== null) {
+        if (in_array((string)($row['status'] ?? ''), ['failed', 'paused'], true)
+            || !empty($row['resume_exhausted']) || !empty($row['fail_reason'])
+            || !empty($row['stopped_by_user']) || (string)($row['paused_by'] ?? '') === 'user') return true;
+    }
+    if (!empty($progress['done'])) {
+        $counts = queueProgressCounters($progress, $row);
+        if ($counts['total'] > 0 && $counts['current'] < $counts['total']) return true;
+    }
+    return false;
+}
+
+/** A queue row is complete only after its checkpoint is terminal and has no failure/partial markers. */
+function queueProgressIsComplete(array $progress, ?array $row = null): bool {
+    if (queueProgressHasIncompleteFlags($progress, $row) || !empty($progress['running'])) return false;
+    $counts = queueProgressCounters($progress, $row);
+    // A bare done bit without a known, fully accounted-for total is not proof of completion.
+    return $counts['total'] > 0 && $counts['current'] >= $counts['total'];
+}
+
+/** Do not start a later row while the shared progress checkpoint still belongs to unfinished work. */
+function queueProgressIncompleteOwnerId(array $entries, array $progress, int $runningRows = 1): string {
+    if (!$progress) return '';
+    $progressId = trim((string)($progress['queue_id'] ?? ''));
+    foreach ($entries as $row) {
+        if (!is_array($row)) continue;
+        $rowId = trim((string)($row['id'] ?? ''));
+        if ($progressId !== '' ? ($rowId !== $progressId) : !queueProgressBelongsToRow($progress, $row, $runningRows)) continue;
+        return queueProgressIsComplete($progress, $row) ? '' : ($rowId !== '' ? $rowId : 'orphan_progress');
+    }
+    return queueProgressIsComplete($progress) ? '' : ($progressId !== '' ? $progressId : 'orphan_progress');
 }
 
 function queueRowIdle(string $kind, array $row, array $prog, int $now, array $extraBeats = [], int $runningRows = 1): array {
@@ -42945,7 +42996,59 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.410', 'نسخهٔ 10.410 و release notes ثبت شده‌اند',
          version_compare(APP_VERSION,'10.410','>=')
       && strpos($selfSrc,"{v:'10." . "410'")!==false);
-    unset($_bslFbStart,$_bslFbEnd,$_bslFbBlock,$_bslResumeStart,$_bslResumeEnd,$_bslResumeBlock);
+    $_s411Partial=['queue_id'=>'q_regression_411','running'=>false,'done'=>true,'failed_resume'=>true,'current'=>1025,'total'=>4038];
+    $_s411Row=['id'=>'q_regression_411','status'=>'running','current'=>1025,'total'=>4038];
+    $_s411Counts=queueProgressCounters($_s411Partial,$_s411Row);
+    $add('10.411', 'done با failed_resume و checkpoint 1025/4038 تکمیل محسوب نمی‌شود',
+         !queueProgressIsComplete($_s411Partial,$_s411Row)
+      && queueProgressHasIncompleteFlags($_s411Partial,$_s411Row)
+      && $_s411Counts===['current'=>1025,'total'=>4038]
+      && !queueProgressBelongsToRow(['current'=>1025,'total'=>4038],['id'=>'q_other_done','status'=>'done'],1)
+      && queueProgressIncompleteOwnerId([$_s411Row],$_s411Partial,1)==='q_regression_411'
+      && queueProgressIncompleteOwnerId([], $_s411Partial, 0)==='q_regression_411');
+    $add('10.411', 'توقف، خطای پایانی، پردازش زنده و شمارندهٔ کوتاه جلوی done را می‌گیرند',
+         !queueProgressIsComplete(['running'=>false,'done'=>true,'stopped'=>true,'current'=>4,'total'=>4])
+      && !queueProgressIsComplete(['running'=>false,'done'=>true,'cancelled'=>true,'current'=>4,'total'=>4])
+      && !queueProgressIsComplete(['running'=>false,'done'=>true,'error'=>'failed','current'=>4,'total'=>4])
+      && !queueProgressIsComplete(['running'=>true,'done'=>true,'current'=>4,'total'=>4])
+      && !queueProgressIsComplete(['running'=>false,'done'=>true,'current'=>3,'total'=>4])
+      && queueProgressIsComplete(['running'=>false,'done'=>true,'current'=>4,'total'=>4])
+      && !queueProgressIsComplete(['running'=>false,'done'=>true])
+      && !queueProgressIsComplete(['running'=>false,'done'=>true,'current'=>4,'total'=>4],['id'=>'q_failed','status'=>'failed']));
+    $add('10.411', 'UI ارسال درصد واقعی را نگه می‌دارد و از اعلان موفقیت، فاز دوم و صف بعدی عبور نمی‌کند',
+         strpos($selfSrc,'function queueProgressIncompleteForUi(d)')!==false
+      && strpos($selfSrc,'function queueProgressPercentForUi(d)')!==false
+      && strpos($selfSrc,'Never toast success, run phase 2, or advance the queue from an incomplete checkpoint.')!==false
+      && strpos($selfSrc,'startNextBslQueueEntry(thisQueueId)')!==false
+      && strpos($selfSrc,"queueProgressIncompleteText(d,'ارسال ووکامرس')")!==false);
+    $add('10.411', 'watchdog، وضعیت صف و endpoint شروع بعدی فقط checkpoint کامل را done می‌کنند',
+         strpos($selfSrc,'$finished = $sameRow && queueProgressIsComplete($pg, $running);')!==false
+      && substr_count($selfSrc,"queueProgressIncompleteOwnerId((array)(\$queue['entries']??[]),\$progress,\$runningRows)")>=2
+      && strpos($selfSrc,'$latestProgress = readProgress($pFile);')!==false
+      && strpos($selfSrc,'queueProgressIsComplete($latestProgress, $e)')!==false
+      && strpos($selfSrc,'if(queueProgressIsComplete($progress,$e))')!==false
+      && strpos($selfSrc,'$allowSameRowRecovery')!==false
+      && strpos($selfSrc,'if(q&&q.unfinished_checkpoint)')!==false
+      && strpos($selfSrc,'unfinished_checkpoint')!==false
+      && strpos($selfSrc,'progress_done_but_incomplete_checkpoint')!==false);
+    $add('10.411', 'پس از پایان تلاش‌ها، queue_id و checkpoint شمارنده/فاز در همان ردیف حفظ می‌شوند',
+         strpos($selfSrc,"\$e['current'] = \$counts['current']; \$e['total'] = \$counts['total'];")!==false
+      && strpos($selfSrc,"'batch_done_indices', 'checkpoint'] as \$key")!==false
+      && strpos($selfSrc,"\$pg['incomplete'] = true;")!==false);
+    $add('10.411', 'endpoint قدیمی mark-done هم تعداد واقعی و current را پیش از تأیید کنترل می‌کند',
+         strpos($selfSrc,'$checkpointCurrent=min($reportedCurrent,$processed,$requiredTotal)')!==false
+      && strpos($selfSrc,'$checkpointCurrent<$requiredTotal')!==false
+      && strpos($selfSrc,"\$rowStatus,['running','done']")!==false
+      && strpos($selfSrc,'$markProgress=readProgress(BSL_PROGRESS_FILE)')!==false
+      && strpos($selfSrc,'$markProgressOwned&&!$markProgressComplete')!==false
+      && strpos($selfSrc,"queueBackendLock('bsl')")!==false
+      && strpos($selfSrc,"'&current='+(q.current||0)")!==false
+      && strpos($selfSrc,'در حال تأییدِ checkpoint نهایی')!==false);
+    $add('10.411', 'نسخهٔ 10.411 و release notes ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.411','>=')
+      && strpos($selfSrc,"{v:'10." . "411'")!==false);
+    unset($_bslFbStart,$_bslFbEnd,$_bslFbBlock,$_bslResumeStart,$_bslResumeEnd,$_bslResumeBlock,
+          $_s411Partial,$_s411Row,$_s411Counts);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -50134,11 +50237,7 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
     if ($running !== null) {
         $pg = $progressSnapshot;
         $sameRow = queueProgressBelongsToRow($pg, $running, $runningCount);
-        $tot = (int)($running['total'] ?? 0);
-        $cur = max((int)($running['current'] ?? 0), $sameRow ? (int)($pg['current'] ?? 0) : 0);
-        $explicitStop=!empty($pg['stopped'])||!empty($pg['cancelled'])||!empty($pg['stopped_by_user'])
-            ||(string)($pg['paused_by']??'')==='user';
-        $finished = !$explicitStop && (!empty($pg['done']) || ($tot > 0 && $cur >= $tot));
+        $finished = $sameRow && queueProgressIsComplete($pg, $running);
         if ($sameRow && $finished) {
             /* بسته‌کردنِ ردیفِ تمام‌شده هم mutation است؛ آن را با snapshot
                قدیمی و بدونِ مالکیت ننویس، چون worker/دکمه ممکن است در همین
@@ -50151,17 +50250,51 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
                 $latestQ = json_decode((string)@file_get_contents($qFile), true);
                 $latestQ = is_array($latestQ) ? $latestQ : ['entries' => []];
                 $latestEntries = is_array($latestQ['entries'] ?? null) ? $latestQ['entries'] : [];
+                $latestProgress = readProgress($pFile);
+                $latestRunningCount = count(array_filter($latestEntries, function($row) {
+                    return is_array($row) && (string)($row['status'] ?? '') === 'running';
+                }));
+                $finishConfirmed = false;
                 foreach ($latestEntries as $i => $e) {
                     if (!is_array($e) || (string)($e['id'] ?? '') !== (string)($running['id'] ?? '')
                         || (string)($e['status'] ?? '') !== 'running') continue;
+                    if (!queueProgressBelongsToRow($latestProgress, $e, $latestRunningCount)
+                        || !queueProgressIsComplete($latestProgress, $e)) break;
+                    $latestCounts = queueProgressCounters($latestProgress, $e);
                     $latestEntries[$i]['status'] = 'done';
+                    $latestEntries[$i]['done'] = true;
                     $latestEntries[$i]['done_at'] = time();
-                    $latestEntries[$i]['current'] = max((int)($latestEntries[$i]['current'] ?? 0), $cur);
+                    $latestEntries[$i]['current'] = $latestCounts['current'];
+                    $latestEntries[$i]['total'] = $latestCounts['total'];
+                    foreach (['sent', 'updated', 'skipped', 'failed'] as $counter) {
+                        if (array_key_exists($counter, $latestProgress)) $latestEntries[$i][$counter] = (int)$latestProgress[$counter];
+                    }
+                    $finishConfirmed = true;
                     break;
                 }
                 $latestQ['entries'] = $latestEntries;
-                @file_put_contents($qFile, json_encode($latestQ, JSON_UNESCAPED_UNICODE), LOCK_EX);
-                $q = $latestQ; $entries = $latestEntries; $running = null;
+                if ($finishConfirmed) @file_put_contents($qFile, json_encode($latestQ, JSON_UNESCAPED_UNICODE), LOCK_EX);
+                $priorRunningId = (string)($running['id'] ?? '');
+                $latestRunning = null;
+                foreach ($latestEntries as $latestEntry) {
+                    if (!is_array($latestEntry) || (string)($latestEntry['status'] ?? '') !== 'running') continue;
+                    if ($latestRunning === null) $latestRunning = $latestEntry;
+                    if ($priorRunningId !== '' && (string)($latestEntry['id'] ?? '') === $priorRunningId) {
+                        $latestRunning = $latestEntry;
+                        break;
+                    }
+                }
+                $q = $latestQ; $entries = $latestEntries; $running = $latestRunning;
+                $runningCount = $latestRunningCount;
+                $waiting = null;
+                foreach ($latestEntries as $latestEntry) {
+                    if (!is_array($latestEntry)) continue;
+                    $latestStatus = (string)($latestEntry['status'] ?? '');
+                    if ($latestStatus === 'waiting' || ($includePaused && $latestStatus === 'paused'
+                        && ($allowUserPaused || ((string)($latestEntry['paused_by'] ?? '') !== 'user' && empty($latestEntry['stopped_by_user']))))) {
+                        $waiting = $latestEntry; break;
+                    }
+                }
                 @flock($finishFp, LOCK_UN); @fclose($finishFp);
             }
             if ($running === null) {
@@ -50193,13 +50326,14 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
     }
 
     if ($running !== null && $progressOwned && !$lockFresh
-        && (!empty($prog['stopped']) || !empty($prog['cancelled']) || !empty($prog['failed_resume'])
-            || (!empty($prog['partial']) && !empty($prog['done'])))
+        && queueProgressHasIncompleteFlags($prog, $running)
         && empty($prog['running'])) {
         /* stop/error checkpoint بعد از مرگِ worker نباید ۵ دقیقهٔ دیگر پشتِ
            سنِ heartbeat بماند؛ lock آزاد + state ناقص یعنی همین cron باید
            آن را به queueStallRecover تحویل بدهد. */
-        $stopCur = max((int)($running['current'] ?? 0), $progressOwned ? (int)($prog['current'] ?? 0) : 0);
+        $stopCur = $progressOwned
+            ? queueProgressCounters($prog, $running)['current']
+            : (int)($running['current'] ?? 0);
         return ['stalled' => true, 'kind' => 'running', 'idle' => 0,
             'queue_id' => $running['id'] ?? '', 'lock_held' => false,
             'beat_from' => 'stopped_checkpoint', 'current' => $stopCur,
@@ -50444,11 +50578,29 @@ function queueMarkEntryFailed(string $which, string $qid, string $reason = ''): 
     $q = $isBsl
         ? (function_exists('bslReadQueue') ? bslReadQueue() : [])
         : (function_exists('wooReadQueue') ? wooReadQueue() : []);
+    $pFile = $isBsl ? BSL_PROGRESS_FILE : WOO_PROGRESS_FILE;
+    $pg = readProgress($pFile);
+    $entryRows = is_array($q['entries'] ?? null) ? $q['entries'] : [];
+    $runningRows = count(array_filter($entryRows, function($row) { return is_array($row) && ($row['status'] ?? '') === 'running'; }));
+    $progressOwned = false;
     if (is_array($q) && !empty($q['entries']) && is_array($q['entries'])) {
         foreach ($q['entries'] as &$e) {
             if (!is_array($e) || (string)($e['id'] ?? '') !== $qid
                 || !in_array((string)($e['status'] ?? ''), ['running', 'waiting', 'paused'], true)) continue;
+            if (queueProgressBelongsToRow($pg, $e, $runningRows)) {
+                $progressOwned = true;
+                $counts = queueProgressCounters($pg, $e);
+                $e['current'] = $counts['current']; $e['total'] = $counts['total'];
+                foreach (['sent', 'updated', 'skipped', 'failed', 'sent_details', 'updated_details',
+                          'skipped_details', 'failed_details', 'recent_log', 'total_log_count', 'started_at',
+                          'phase', 'phase_label', 'phase_current', 'phase_total', 'phase_pct',
+                          'phase_shop_vendor_id', 'phase_shop_name', 'shop_stats', 'batch_chunk',
+                          'batch_chunks', 'batch_stage', 'batch_done_indices', 'checkpoint'] as $key) {
+                    if (array_key_exists($key, $pg)) $e[$key] = $pg[$key];
+                }
+            }
             $e['status'] = 'failed';
+            $e['done'] = false;
             $e['fail_reason'] = $reason !== '' ? $reason : 'پس از ۳ تلاش ادامه، متوقف شد';
             $e['done_at'] = time();
             $e['resume_exhausted'] = 1;
@@ -50460,12 +50612,11 @@ function queueMarkEntryFailed(string $which, string $qid, string $reason = ''): 
     if ($found) {
         if ($isBsl && function_exists('bslWriteQueue')) bslWriteQueue($q);
         elseif (!$isBsl && function_exists('wooWriteQueue')) wooWriteQueue($q);
-        /* پیشرفت را هم ببند تا UI گیر نکند؛ این write زیر همان lock صف است. */
-        $pFile = $isBsl ? BSL_PROGRESS_FILE : WOO_PROGRESS_FILE;
-        $pg = readProgress($pFile);
-        if (is_array($pg) && ((string)($pg['queue_id'] ?? '') === $qid || empty($pg['queue_id']))) {
+        /* Keep the exact queue-owned checkpoint and make its terminal state explicitly incomplete. */
+        if ($progressOwned && is_array($pg) && ((string)($pg['queue_id'] ?? '') === $qid || empty($pg['queue_id']))) {
             $pg['running'] = false;
             $pg['done'] = true;
+            $pg['incomplete'] = true;
             $pg['failed_resume'] = true;
             $lg = is_array($pg['recent_log'] ?? null) ? $pg['recent_log'] : [];
             $lg[] = '❌ ' . ($reason !== '' ? $reason : 'پس از ۳ تلاش ادامه متوقف شد');
@@ -59515,11 +59666,11 @@ $_wooNeedDirect = in_array('direct', $_wooAttempts, true);
 $_wooApiOk = !empty($w['store_url']) && !empty($w['consumer_key']) && !empty($w['consumer_secret']);
 $_wooDirectOk = function_exists('wooDirectAvailable') && wooDirectAvailable();
 if ($_wooNeedApi && !$_wooApiOk && !($_wooNeedDirect && $_wooDirectOk)) {
-writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ تنظیمات ووکامرس ناقص (برای API: آدرس+کلید؛ برای مستقیم: ووکامرس روی همین سایت)'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'error'=>'woocommerce_configuration_missing','recent_log'=>['❌ تنظیمات ووکامرس ناقص (برای API: آدرس+کلید؛ برای مستقیم: ووکامرس روی همین سایت)'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 exit;
 }
 if ($_wooNeedDirect && !$_wooDirectOk && !$_wooApiOk) {
-writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ همگام مستقیم ممکن نیست — ووکامرس در این PHP لود نیست و API هم تنظیم نشده'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'error'=>'woocommerce_direct_unavailable','recent_log'=>['❌ همگام مستقیم ممکن نیست — ووکامرس در این PHP لود نیست و API هم تنظیم نشده'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 exit;
 }
 wooBackendProgress(0,0,0,0,0,0,'','⚙️ حالت: '.implode(' → ', $_wooAttempts)
@@ -59543,7 +59694,7 @@ break;
 }
 }
 if(empty($pd)){
-writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ فایل محصولات خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'error'=>'empty_products_file','recent_log'=>['❌ فایل محصولات خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 exit;
 }
 
@@ -60030,18 +60181,19 @@ $queue=wooReadQueue();
 $progress=readProgress(WOO_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??0;
-$e['updated']=$progress['updated']??0;
-$e['skipped']=$progress['skipped']??0;
-$e['failed']=$progress['failed']??0;
-$e['current']=$progress['current']??0;
-$e['total']=$progress['total']??$e['total']??0;
-$e['done']=$progress['done']??false;
-$progressIncomplete=!empty($progress['stopped']) || !empty($progress['partial'])
-    || !empty($progress['cancelled']) || !empty($progress['stale']) || !empty($progress['failed_resume']);
-if($progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
-else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
+if(in_array((string)($e['status']??''),['running','done'],true) && queueProgressBelongsToRow($progress,$e,$runningRows)){
+$wasDone=(string)($e['status']??'')==='done';
+$e['sent']=$progress['sent']??$e['sent']??0;
+$e['updated']=$progress['updated']??$e['updated']??0;
+$e['skipped']=$progress['skipped']??$e['skipped']??0;
+$e['failed']=$progress['failed']??$e['failed']??0;
+$counts=queueProgressCounters($progress,$e);$e['current']=$counts['current'];$e['total']=$counts['total'];
+$progressIncomplete=queueProgressHasIncompleteFlags($progress,$e);
+$progressComplete=queueProgressIsComplete($progress,$e);
+$e['done']=$progressComplete;
+if(!empty($progress['paused']) || $progressIncomplete || ($wasDone&&!$progressComplete)){
+$e['status']='paused';$e['paused_at']=time();unset($e['done_at']);$e['done']=false;
+}else if($progressComplete){$e['status']='done';$e['done_at']=$e['done_at']??time();}
 }
 }
 unset($e);
@@ -60135,13 +60287,32 @@ $queue=wooReadQueue();
 
 $progress=readProgress(WOO_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$blockedQueueId=queueProgressIncompleteOwnerId((array)($queue['entries']??[]),$progress,$runningRows);
+if($blockedQueueId!==''){
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows) && !empty($progress['done'])){
+if((string)($e['id']??'')!==$blockedQueueId)continue;
+$counts=queueProgressCounters($progress,$e);
+$e['current']=$counts['current'];$e['total']=$counts['total'];
+foreach(['sent','updated','skipped','failed'] as $counter)$e[$counter]=(int)($progress[$counter]??$e[$counter]??0);
+$e['done']=false;unset($e['done_at']);
+if(($e['status']??'')!=='failed'&&empty($progress['running'])){$e['status']='paused';$e['paused_at']=time();if(empty($e['paused_by']))$e['paused_by']='system';}
+break;
+}
+unset($e);
+wooWriteQueue($queue);
+echo json_encode(['ok'=>false,'incomplete'=>true,'queue_id'=>(string)($progress['queue_id']??$blockedQueueId),'current'=>queueProgressCounters($progress)['current'],'total'=>queueProgressCounters($progress)['total'],'error'=>'unfinished_checkpoint'],JSON_UNESCAPED_UNICODE);
+exit;
+}
+foreach($queue['entries'] as &$e){
+if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows) && queueProgressIsComplete($progress,$e)){
 $e['status']='done';
 $e['sent']=$progress['sent']??0;
 $e['updated']=$progress['updated']??0;
 $e['skipped']=$progress['skipped']??0;
 $e['failed']=$progress['failed']??0;
+$e['current']=queueProgressCounters($progress,$e)['current'];
+$e['total']=queueProgressCounters($progress,$e)['total'];
+$e['done']=true;
 $e['done_at']=time();
 }
 }
@@ -61581,7 +61752,11 @@ if(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$idleFb!==nul
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='waiting')$diagnosisFb[]='waiting_row_should_be_claimed_by_cron_watchdog';
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='paused')$diagnosisFb[]=((string)($selectedFb['paused_by']??'')==='user'?'user_paused_row_is_not_auto_resumed':'paused_row_may_resume_on_cron');
 if($stopActiveFb)$diagnosisFb[]='active_stop_signal_may_block_resume';
-if(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$progressOwnedFb&&!empty($progressFb['done']))$diagnosisFb[]='progress_done_but_queue_row_still_running';
+if(is_array($progressFb)&&!empty($progressFb['done'])
+    &&!queueProgressIsComplete($progressFb,($progressOwnedFb&&is_array($selectedFb))?$selectedFb:null))
+    $diagnosisFb[]='progress_done_but_incomplete_checkpoint';
+elseif(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$progressOwnedFb
+    &&queueProgressIsComplete($progressFb,$selectedFb))$diagnosisFb[]='progress_done_but_queue_row_still_running';
 if(!$diagnosisFb)$diagnosisFb[]='no_obvious_stall_from_saved_state';
 $queueRowsSummaryFb=[];
 foreach($entriesFb as $rowFb){if(!is_array($rowFb))continue;if(!in_array((string)($rowFb['status']??''),['running','waiting','paused'],true))continue;
@@ -61616,7 +61791,7 @@ foreach($entriesFb as $e){
 }
 foreach($groups as &$g){$g['codes']=(object)$g['codes'];$g['steps']=(object)$g['steps'];}unset($g);
 $progressSummaryFb=[];
-if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
+if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','incomplete','terminal_error','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
 $lastBeatAgeFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
 echo json_encode([
     'ok'=>true,'version'=>APP_VERSION,'at'=>$nowFb,
@@ -61652,27 +61827,48 @@ $queue=bslReadQueue();
 $progress=readProgress(BSL_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??0;
-$e['updated']=$progress['updated']??0;
-$e['skipped']=$progress['skipped']??0;
-$e['failed']=$progress['failed']??0;
-$e['current']=$progress['current']??0;
-$e['total']=$progress['total']??$e['total']??0;
-$e['done']=$progress['done']??false;
+if(in_array((string)($e['status']??''),['running','done'],true) && queueProgressBelongsToRow($progress,$e,$runningRows)){
+$wasDone=(string)($e['status']??'')==='done';
+$e['sent']=$progress['sent']??$e['sent']??0;
+$e['updated']=$progress['updated']??$e['updated']??0;
+$e['skipped']=$progress['skipped']??$e['skipped']??0;
+$e['failed']=$progress['failed']??$e['failed']??0;
+$counts=queueProgressCounters($progress,$e);$e['current']=$counts['current'];$e['total']=$counts['total'];
+$progressIncomplete=queueProgressHasIncompleteFlags($progress,$e);
+$progressComplete=queueProgressIsComplete($progress,$e);
+$e['done']=$progressComplete;
 foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$progress))$e[$__pk]=$progress[$__pk];}
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه‌ها زنده به صف می‌رسند */
 if(is_array($progress['shop_stats']??null))$e['shop_stats']=$progress['shop_stats'];
 
-$progressIncomplete=!empty($progress['stopped']) || !empty($progress['partial'])
-    || !empty($progress['cancelled']) || !empty($progress['stale']) || !empty($progress['failed_resume']);
-if(!empty($progress['paused']) || $progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
-else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
+if(!empty($progress['paused']) || $progressIncomplete || ($wasDone&&!$progressComplete)){
+$e['status']='paused';$e['paused_at']=time();unset($e['done_at']);$e['done']=false;
+}else if($progressComplete){$e['status']='done';$e['done_at']=$e['done_at']??time();}
 }
 }
 unset($e);
 if (is_resource($bslStatusFp)) bslWriteQueue($queue);
-echo json_encode($queue,JSON_UNESCAPED_UNICODE);
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$blockedProgressId=queueProgressIncompleteOwnerId((array)($queue['entries']??[]),$progress,$runningRows);
+$statusResponse=$queue;
+$statusResponse['unfinished_checkpoint']=$blockedProgressId!=='';
+$statusResponse['blocked_queue_id']=$blockedProgressId;
+if($blockedProgressId!==''){
+    $blockedRow=null;
+    foreach((array)($queue['entries']??[]) as $statusRow){if(is_array($statusRow)&&(string)($statusRow['id']??'')===$blockedProgressId){$blockedRow=$statusRow;break;}}
+    $checkpointCounts=queueProgressCounters($progress,$blockedRow);
+    $statusResponse['progress_checkpoint']=[
+        'queue_id'=>(string)($progress['queue_id']??$blockedProgressId),
+        'current'=>$checkpointCounts['current'],'total'=>$checkpointCounts['total'],'incomplete'=>true,
+        'sent'=>(int)($progress['sent']??$blockedRow['sent']??0),'updated'=>(int)($progress['updated']??$blockedRow['updated']??0),
+        'skipped'=>(int)($progress['skipped']??$blockedRow['skipped']??0),'failed'=>(int)($progress['failed']??$blockedRow['failed']??0),
+        'failed_resume'=>!empty($progress['failed_resume']),'cancelled'=>!empty($progress['cancelled']),
+        'paused'=>!empty($progress['paused']),'stopped'=>!empty($progress['stopped']),
+        'partial'=>!empty($progress['partial']),'stale'=>!empty($progress['stale']),
+        'error'=>!empty($progress['error'])?'terminal_error':''
+    ];
+}
+echo json_encode($statusResponse,JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -61810,13 +62006,32 @@ $queue=bslReadQueue();
 
 $progress=readProgress(BSL_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$blockedQueueId=queueProgressIncompleteOwnerId((array)($queue['entries']??[]),$progress,$runningRows);
+if($blockedQueueId!==''){
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done'])){
+if((string)($e['id']??'')!==$blockedQueueId)continue;
+$counts=queueProgressCounters($progress,$e);
+$e['current']=$counts['current'];$e['total']=$counts['total'];
+foreach(['sent','updated','skipped','failed'] as $counter)$e[$counter]=(int)($progress[$counter]??$e[$counter]??0);
+$e['done']=false;unset($e['done_at']);
+if(($e['status']??'')!=='failed'&&empty($progress['running'])){$e['status']='paused';$e['paused_at']=time();if(empty($e['paused_by']))$e['paused_by']='system';}
+break;
+}
+unset($e);
+bslWriteQueue($queue);
+$counts=queueProgressCounters($progress);
+echo json_encode(['ok'=>false,'incomplete'=>true,'queue_id'=>(string)($progress['queue_id']??$blockedQueueId),'current'=>$counts['current'],'total'=>$counts['total'],'error'=>'unfinished_checkpoint'],JSON_UNESCAPED_UNICODE);
+exit;
+}
+foreach($queue['entries'] as &$e){
+if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&queueProgressIsComplete($progress,$e)){
 $e['status']='done';
 $e['sent']=$progress['sent']??0;
 $e['updated']=$progress['updated']??0;
 $e['skipped']=$progress['skipped']??0;
 $e['failed']=$progress['failed']??0;
+$counts=queueProgressCounters($progress,$e);$e['current']=$counts['current'];$e['total']=$counts['total'];
+$e['done']=true;
 $e['done_at']=time();
 }
 }
@@ -61918,23 +62133,56 @@ if(isset($_GET['bsl_queue_mark_done'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false],JSON_UNESCAPED_UNICODE);exit;}
-$queue=bslReadQueue();
+$markDoneLock=queueBackendLock('bsl');
+if(!is_resource($markDoneLock)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'پردازندهٔ باسلام هنوز فعال است'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($markDoneLock){queueBackendUnlock($markDoneLock);});
+$queue=bslReadQueue();$found=false;$completed=false;$incompleteSnapshot=[];
+$markProgress=readProgress(BSL_PROGRESS_FILE);
+$markRunningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
 if($e['id']===$queueId){
-$e['status']='done';
-$e['sent']=(int)($_GET['sent']??0);
-$e['updated']=(int)($_GET['updated']??0);
-$e['skipped']=(int)($_GET['skipped']??0);
-$e['failed']=(int)($_GET['failed']??0);
-$e['total']=(int)($_GET['total']??$e['total']??0);
-$e['current']=$e['total'];
-$e['done_at']=time();
+$found=true;
+$sent=max(0,(int)($_GET['sent']??0));$updated=max(0,(int)($_GET['updated']??0));
+$skipped=max(0,(int)($_GET['skipped']??0));$failed=max(0,(int)($_GET['failed']??0));
+$reportedTotal=max(0,(int)($_GET['total']??0));
+$reportedCurrent=max(0,(int)($_GET['current']??($sent+$updated+$skipped+$failed)));
+$rowStatus=(string)($e['status']??'');
+$markProgressOwned=queueProgressBelongsToRow($markProgress,$e,$markRunningRows);
+$markProgressComplete=$markProgressOwned&&queueProgressIsComplete($markProgress,$e);
+$markCounts=[];
+if($markProgressOwned){
+$markCounts=queueProgressCounters($markProgress,$e);
+$sent=max(0,(int)($markProgress['sent']??$sent));$updated=max(0,(int)($markProgress['updated']??$updated));
+$skipped=max(0,(int)($markProgress['skipped']??$skipped));$failed=max(0,(int)($markProgress['failed']??$failed));
+$reportedTotal=max($reportedTotal,$markCounts['total']);$reportedCurrent=$markCounts['current'];
+foreach(['sent_details','updated_details','skipped_details','failed_details','recent_log','total_log_count','started_at',
+         'phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name',
+         'shop_stats','batch_chunk','batch_chunks','batch_stage','batch_done_indices','checkpoint'] as $key){
+    if(array_key_exists($key,$markProgress))$e[$key]=$markProgress[$key];
+}
+}
+$fileProducts=@json_decode(@file_get_contents((string)($e['products_file']??''))?:'[]',true);
+$fileTotal=is_array($fileProducts)?count($fileProducts):0;
+$requiredTotal=max((int)($e['total']??0),$reportedTotal,$fileTotal,$markCounts['total']??0);
+$processed=$sent+$updated+$skipped+$failed;
+$checkpointCurrent=min($reportedCurrent,$processed,$requiredTotal);
+$e['sent']=$sent;$e['updated']=$updated;$e['skipped']=$skipped;$e['failed']=$failed;
+$e['total']=$requiredTotal;$e['current']=$checkpointCurrent;$e['done']=false;
+if(!in_array($rowStatus,['running','done'],true)||($markProgressOwned&&!$markProgressComplete)
+    ||$requiredTotal<=0||$processed<$requiredTotal||$checkpointCurrent<$requiredTotal){
+if($rowStatus!=='failed')$e['status']='paused';
+$e['paused_at']=time();if(empty($e['paused_by']))$e['paused_by']='system';
+unset($e['done_at']);
+$incompleteSnapshot=['queue_id'=>$queueId,'current'=>$e['current'],'total'=>$requiredTotal,'processed'=>$processed];
+}else{
+$e['status']='done';$e['current']=$requiredTotal;$e['done']=true;$e['done_at']=time();$completed=true;
+}
 break;
 }
 }
 unset($e);
 bslWriteQueue($queue);
-echo json_encode(['ok'=>true],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>$completed,'incomplete'=>$found&&!$completed,'queue_id'=>$queueId,'checkpoint'=>$incompleteSnapshot],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -62032,8 +62280,8 @@ $entry['sent']=$progress['sent']??$entry['sent']??0;
 $entry['updated']=$progress['updated']??$entry['updated']??0;
 $entry['skipped']=$progress['skipped']??$entry['skipped']??0;
 $entry['failed']=$progress['failed']??$entry['failed']??0;
-$entry['current']=$progress['current']??$entry['current']??0;
-$entry['done']=$progress['done']??false;
+$counts=queueProgressCounters($progress,$entry);$entry['current']=$counts['current'];$entry['total']=$counts['total'];
+$entry['done']=queueProgressIsComplete($progress,$entry);
 foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$progress))$entry[$__pk]=$progress[$__pk];}
 $entry['sent_details']=$progress['sent_details']??$entry['sent_details']??[];
 $entry['updated_details']=$progress['updated_details']??$entry['updated_details']??[];
@@ -62392,15 +62640,38 @@ $queue=bslReadQueue();
 $progress=readProgress(BSL_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done']) && empty($_GET['resume']) && empty($_POST['resume'])){
+if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&empty($_GET['resume'])&&empty($_POST['resume'])){
+if(queueProgressIsComplete($progress,$e)){
 $e['status']='done';
 $e['sent']=$progress['sent']??$e['sent']??0;$e['updated']=$progress['updated']??$e['updated']??0;
 $e['skipped']=$progress['skipped']??$e['skipped']??0;$e['failed']=$progress['failed']??$e['failed']??0;
-$e['current']=$progress['current']??$e['current']??0;$e['done_at']=time();
+$counts=queueProgressCounters($progress,$e);$e['current']=$counts['current'];$e['total']=$counts['total'];$e['done']=true;$e['done_at']=time();
+}elseif(queueProgressHasIncompleteFlags($progress,$e)){
+$e['done']=false;
+$counts=queueProgressCounters($progress,$e);$e['current']=$counts['current'];$e['total']=$counts['total'];
+$e['sent']=$progress['sent']??$e['sent']??0;$e['updated']=$progress['updated']??$e['updated']??0;
+$e['skipped']=$progress['skipped']??$e['skipped']??0;$e['failed']=$progress['failed']??$e['failed']??0;
+}
 }
 }
 unset($e);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$blockedProgressId=queueProgressIncompleteOwnerId((array)($queue['entries']??[]),$progress,$runningRows);
+if($blockedProgressId!==''){
+    $blockedRow=null;
+    foreach((array)($queue['entries']??[]) as $candidateRow){if(is_array($candidateRow)&&(string)($candidateRow['id']??'')===$blockedProgressId){$blockedRow=$candidateRow;break;}}
+    $requestedQueueId=trim((string)($_POST['queue_id']??$_GET['queue_id']??''));
+    $blockedRowStatus=is_array($blockedRow)?(string)($blockedRow['status']??''):'';
+    $allowSameRowRecovery=($blockedRowStatus==='running'&&($requestedQueueId===''||$requestedQueueId===$blockedProgressId))
+        ||($blockedRowStatus==='waiting'&&$requestedQueueId===$blockedProgressId);
+    if(!$allowSameRowRecovery){
+        $blockedCounts=queueProgressCounters($progress,$blockedRow);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['ok'=>false,'incomplete'=>true,'queue_id'=>(string)($progress['queue_id']??$blockedProgressId),
+            'current'=>$blockedCounts['current'],'total'=>$blockedCounts['total'],'error'=>'unfinished_checkpoint'],JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
 
 $nextEntry=null;$nextIdx=null;
 $now=time();
@@ -62511,7 +62782,7 @@ if(!file_exists($nextEntry['products_file'])){
 $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'error'=>'products_file_missing','recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -62521,7 +62792,7 @@ $copyOk=@copy($nextEntry['products_file'],BSL_PRODUCTS_FILE);
 if(!$copyOk){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'error'=>'products_file_copy_failed','recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات ناموفک','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -62531,7 +62802,7 @@ $verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
 if(empty($verifyProducts)){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'error'=>'empty_products_file','recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -62593,7 +62864,7 @@ $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 $queue['entries'][$nextIdx]['fail_reason']='غرفهٔ هدف دیگر در تنظیمات نیست یا توکنش خالی است';
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'error'=>'target_shop_unavailable','recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 @unlink(BSL_PRODUCTS_FILE);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'غرفهٔ هدف یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
@@ -62652,7 +62923,7 @@ if($authCheck['code']===403||$authCheck['code']===401){
 $authErr=$authCheck['code']===401?'توکن نامعتبر (۴۰۱)':'دسترسی ممنوع (۴۰۳)';
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='failed';$qe['done_at']=time();break;}}unset($qe);bslWriteQueue($queue);
 @unlink(BSL_PRODUCTS_FILE);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'error'=>'basalam_auth_failed','recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>$authErr,'auth_fail'=>true,'queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -63932,7 +64203,7 @@ $tk=$bs['token'];$vid=(int)$bs['vendor_id'];
 $authCheck=bslReq($tk,'GET','users/me');
 if($authCheck['code']===403||$authCheck['code']===401){
 $authErr=$authCheck['code']===401?'\u062a\u0648\u06a9\u0646 \u0646\u0627\u0645\u0639\u062a\u0628\u0631 (\u06f4\u06f0\u06f1)':'\u062f\u0633\u062a\u0631\u0633\u06cc \u0645\u0645\u0646\u0648\u0639 (\u06f4\u06f0\u06f3 Forbidden) \u2014 \u0627\u062d\u0631\u0627\u0632 \u0647\u0648\u06cc\u062a \u0646\u0627\u0642\u0635';
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($pd),'total'=>count($pd),'current'=>0,'started_at'=>time(),'recent_log'=>['\u2717 '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($pd),'total'=>count($pd),'current'=>0,'started_at'=>time(),'queue_id'=>trim((string)($_POST['queue_id']??'')),'error'=>'basalam_auth_failed','recent_log'=>['\u2717 '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 $queueId=trim($_POST['queue_id']??'');
 if($queueId!==''){
 $queue=bslReadQueue();
@@ -78970,6 +79241,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.411', t:'🧯 جلوگیری از اعلام پایان کاذبِ ارسال ناقص', items:[
+    'پرچم done دیگر به‌تنهایی موفقیت نیست: failed_resume، توقف، pause، stale، خطای نهایی یا current کمتر از total در progress و ردیف صف به‌عنوان checkpoint ناقص می‌ماند.',
+    'پنل باسلام و ووکامرس درصد واقعی، شمارنده و queue ID را نشان می‌دهد؛ برای کار ناقص پیام موفقیت، فاز دوم و شروع خودکار ردیف بعدی اجرا نمی‌شود.',
+    'watchdog، status، backend و start-next فقط progress کامل را می‌بندند؛ اگر checkpoint ناقص یا orphan باشد صف بعدی آن را دور نمی‌زند و شناسه و فایل همان ردیف حفظ می‌شوند. endpoint قدیمی mark-done نیز شمارندهٔ همهٔ محصولات را کنترل می‌کند.',
+    'پس از اتمام تلاش‌های بازیابی، شمارنده‌ها و checkpoint کامل در همان queue row ذخیره می‌شوند؛ watchdog درست پیش از بستن ردیف، progress و مالکیت را دوباره زیر قفل انحصاری می‌خواند. ارسال client-side هم تا تأیید سرور موفقیت اعلام نمی‌کند.',
+    'خطاهای نهاییِ فایل محصول، غرفه و احراز هویت صریحاً در progress علامت‌گذاری می‌شوند تا حتی صفِ صفرمحصولی نیز پایان موفق گزارش نشود.'
+  ]},
   {v:'10.410', t:'🩺 عیب‌یابی روشن‌ترِ worker ارسال باسلام', items:[
     'پنل عیب‌یابی ارسال اکنون job، فاز، queue ID، زنده‌بودن PID و ضربان worker پایدار را کنار قفل backend و زمان آخرین cron نشان می‌دهد.',
     'توضیح می‌دهد که خاموش‌کردن زمان‌بندی cron پردازهٔ ارسالِ فعال را نمی‌کشد؛ Stop همان ردیف تعاونی است و ممکن است تا پایان درخواست شبکهٔ جاری زمان ببرد. گزارش تشخیصی را می‌توان برای ارسال کپی کرد.',
@@ -92776,6 +93054,29 @@ let bslLastCardCount=0;
 // v8.06: WooCommerce polling state
 let wooLastCardCount=0,wooLastUpdateTime=0,wooLastLogCount=0,wooResumeCount=0;
 
+// A terminal flag or a short checkpoint always outranks a generic done bit.
+function queueProgressIncompleteForUi(d){
+    if(!d||typeof d!=='object')return false;
+    const total=Math.max(0,Number(d.total)||0),current=Math.max(0,Number(d.current)||0);
+    const err=typeof d.error==='string'?d.error.trim():String(d.error||'').trim();
+    return !!(d.cancelled||d.failed_resume||d.partial||d.incomplete||d.terminal_error||d.stale||d.stopped||d.stopped_by_user||d.paused||err)
+        || (!!d.done&&!!d.running)
+        || (!!d.done&&(total<=0||current<total));
+}
+function queueProgressPercentForUi(d){
+    const total=Math.max(0,Number(d&&d.total)||0),current=Math.max(0,Number(d&&d.current)||0);
+    if(total>0)return Math.max(0,Math.min(100,current/total*100));
+    const phaseTotal=Math.max(0,Number(d&&d.phase_total)||0),phaseCurrent=Math.max(0,Number(d&&d.phase_current)||0);
+    return phaseTotal>0?Math.max(0,Math.min(100,phaseCurrent/phaseTotal*100)):0;
+}
+function queueProgressIncompleteText(d,label){
+    const total=Math.max(0,Number(d&&d.total)||0),current=Math.max(0,Number(d&&d.current)||0),pct=Math.round(queueProgressPercentForUi(d));
+    const phaseTotal=Math.max(0,Number(d&&d.phase_total)||0),phaseCurrent=Math.max(0,Number(d&&d.phase_current)||0);
+    const progress=total>0?(toFa(current)+'/'+toFa(total)+' ('+pct+'٪)'):(phaseTotal>0?(toFa(phaseCurrent)+'/'+toFa(phaseTotal)+' ('+pct+'٪)'):'checkpoint نامشخص');
+    const reason=d&&d.failed_resume?'ادامهٔ خودکار ناموفق شد':(d&&d.error?'خطای اجرا':(d&&(d.cancelled||d.stopped||d.paused)?'متوقف شد':'checkpoint کامل نیست'));
+    return '⚠️ '+(label||'ارسال')+' ناقص مانده — '+progress+' · '+reason;
+}
+
 // v7.48: Poll BaSalam send progress — live stats, synced logs, elapsed time, ETA
 function pollBslProgress() {
     fetch('?poll_bsl=1').then(r=>r.json()).then(d=>{
@@ -92925,6 +93226,7 @@ function pollBslProgress() {
             if(elapsedStr) progText+=' | '+elapsedStr;
             if(etaStr&&(!d.phase||d.phase==='send')) progText+=' | ~'+etaStr+' مانده';
             $('bSS').textContent=progText;
+            $('bPB').style.background='';
             $('bPB').style.width=((d.phase_label&&phaseTotal>0)?phasePct:(total>0?current/total*100:0))+'%';
             // v7.48: Show product title being processed
             if(d.last_title){
@@ -92939,6 +93241,27 @@ function pollBslProgress() {
             checkBslQueue();
             return; // Stop polling until resume
         }
+        if(queueProgressIncompleteForUi(d)){
+            const incompleteText=queueProgressIncompleteText(d,'ارسال باسلام');
+            const incompletePct=queueProgressPercentForUi(d);
+            $('bSS').textContent=incompleteText;
+            $('bSS').title='queue_id: '+String(d.queue_id||'');
+            $('bPB').style.width=incompletePct+'%';$('bPB').style.background='#ef4444';
+            const noticeKey=String(d.queue_id||'orphan')+':'+String(current)+':'+String(total)+':'+String(!!d.failed_resume);
+            window._bslIncompleteToastKeys=window._bslIncompleteToastKeys||{};
+            if(!window._bslIncompleteToastKeys[noticeKey]){
+                window._bslIncompleteToastKeys[noticeKey]=true;
+                $('bR').insertAdjacentHTML('beforeend','<div style="color:#f87171;font-weight:700;padding:8px;background:#7f1d1d20;border-radius:6px;margin:4px 0">'+esc(incompleteText)+(d.queue_id?' · صف '+esc(d.queue_id):'')+'</div>');
+                showToast('⚠️ ارسال باسلام ناقص ماند',true);
+            }
+            if(!running){
+                bSend=false;$('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');
+                checkBslQueue();
+            }else{
+                setTimeout(pollBslProgress,1500);
+            }
+            return; // Never toast success, run phase 2, or advance the queue from an incomplete checkpoint.
+        }
         if(done) {
             bSend=false;
             $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');
@@ -92950,7 +93273,7 @@ function pollBslProgress() {
                 checkBslQueue();
                 return;
             }
-            $('bPB').style.width='100%';
+            $('bPB').style.background='';$('bPB').style.width='100%';
             let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' تکراری | '+toFa(failed)+' خطا';
             if(elapsedStr) finalText+=' | '+elapsedStr;
             $('bSS').textContent=finalText;
@@ -92962,7 +93285,7 @@ function pollBslProgress() {
             // v7.38: Auto-run Phase 2 — check for category-rejected products
             setTimeout(bslPhase2Check,2000);
             // v7.48: After process done, check queue and auto-start next entry
-            setTimeout(()=>{startNextBslQueueEntry();},4000);
+            setTimeout(()=>{startNextBslQueueEntry(thisQueueId);},4000);
             return;
         }
         // v7.66: Improved stale detection — use last_progress_ts from progress file for reliable detection
@@ -93235,7 +93558,19 @@ function pollWooProgress(){
             }
             if(elapsedStr)progText+=' | '+elapsedStr;
             $('wSS').textContent=progText;
+            $('wPB').style.background='';
             $('wPB').style.width=(total>0?current/total*100:0)+'%';
+        }
+        if(queueProgressIncompleteForUi(d)){
+            const incompleteText=queueProgressIncompleteText(d,'ارسال ووکامرس');
+            const incompletePct=queueProgressPercentForUi(d);
+            $('wSS').textContent=incompleteText;$('wPB').style.width=incompletePct+'%';$('wPB').style.background='#ef4444';
+            const noticeKey=String(d.queue_id||'orphan')+':'+String(current)+':'+String(total)+':'+String(!!d.failed_resume);
+            window._wooIncompleteToastKeys=window._wooIncompleteToastKeys||{};
+            if(!window._wooIncompleteToastKeys[noticeKey]){window._wooIncompleteToastKeys[noticeKey]=true;showToast('⚠️ ارسال ووکامرس ناقص ماند',true);}
+            if(!running){wSend=false;$('wSB').textContent='🚀 ارسال ووکامرس';$('wST').classList.add('hidden');$('wRB').classList.remove('hidden');checkWooQueue();}
+            else setTimeout(pollWooProgress,1500);
+            return; // An incomplete row cannot announce completion or start the next one.
         }
         if(done){
             wSend=false;
@@ -93248,7 +93583,7 @@ function pollWooProgress(){
                 checkWooQueue();
                 return;
             }
-            $('wPB').style.width='100%';
+            $('wPB').style.background='';$('wPB').style.width='100%';
             let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' تکراری | '+toFa(failed)+' خطا';
             if(elapsedStr)finalText+=' | '+elapsedStr;
             $('wSS').textContent=finalText;
@@ -93312,7 +93647,17 @@ function wooStop(){
 function checkWooProgress(){
     fetch('?poll_woo=1').then(r=>r.json()).then(d=>{
         if(!d)return;
-        if(d.running||(!d.done&&d.total>0)){
+        if(queueProgressIncompleteForUi(d)){
+            const incompleteText=queueProgressIncompleteText(d,'ارسال ووکامرس');
+            wSend=!!d.running;$('wP').classList.remove('hidden');$('wR').classList.remove('hidden');$('wSM').classList.remove('hidden');
+            $('wSB').textContent='🚀 ارسال ووکامرس';$('wST').classList.toggle('hidden',!d.running);$('wRB').classList.remove('hidden');
+            $('wO').textContent=toFa(d.sent||0);$('wU').textContent=toFa(d.updated||0);$('wK').textContent=toFa(d.skipped||0);$('wF').textContent=toFa(d.failed||0);$('wX').textContent=toFa(d.retired||0);$('wT').textContent=toFa(d.total||0);
+            $('wSS').textContent=incompleteText;$('wPB').style.width=queueProgressPercentForUi(d)+'%';$('wPB').style.background='#ef4444';
+            const noticeKey=String(d.queue_id||'orphan')+':'+String(d.current||0)+':'+String(d.total||0)+':'+String(!!d.failed_resume);
+            window._wooIncompleteToastKeys=window._wooIncompleteToastKeys||{};
+            if(!d.running&&!window._wooIncompleteToastKeys[noticeKey]){window._wooIncompleteToastKeys[noticeKey]=true;showToast('⚠️ ارسال ووکامرس ناقص ماند',true);}
+            if(d.running)pollWooProgress();
+        }else if(d.running||(!d.done&&d.total>0)){
             // Server-side process is active — restore UI
             wSend=true;
             $('wSB').textContent='🚀 + افزودن به صف';$('wST').classList.remove('hidden');
@@ -93322,7 +93667,7 @@ function checkWooProgress(){
             // Process finished — show results
             $('wSB').textContent='🚀 ارسال ووکامرس';$('wST').classList.add('hidden');
             $('wP').classList.remove('hidden');$('wR').classList.remove('hidden');$('wSM').classList.remove('hidden');
-            $('wPB').style.width='100%';
+            $('wPB').style.background='';$('wPB').style.width='100%';
             $('wO').textContent=toFa(d.sent||0);$('wU').textContent=toFa(d.updated||0);
             $('wK').textContent=toFa(d.skipped||0);$('wF').textContent=toFa(d.failed||0);$('wX').textContent=toFa(d.retired||0);$('wT').textContent=toFa(d.total||0);
             if(d.cancelled){
@@ -93909,7 +94254,15 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
     // NEVER start client-driven sendNextQueueProduct — it conflicts with server-side processing!
     // If server process died, offer "resume from server" button.
     fetch('?poll_bsl=1').then(r=>r.json()).then(d=>{
-        if(d&&d.running&&!d.done){
+        if(d&&queueProgressIncompleteForUi(d)){
+            window._currentBslQueueId=String(d.queue_id||'');
+            const sent=d.sent||0,updated=d.updated||0,skipped=d.skipped||0,failed=d.failed||0,total=d.total||0;
+            $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
+            $('bO').textContent=toFa(sent);$('bU').textContent=toFa(updated);$('bK').textContent=toFa(skipped);$('bF').textContent=toFa(failed);$('bX').textContent=toFa(d.retired||0);$('bT').textContent=toFa(total);
+            $('bSS').textContent=queueProgressIncompleteText(d,'ارسال باسلام');$('bPB').style.width=queueProgressPercentForUi(d)+'%';$('bPB').style.background='#ef4444';
+            if(d.running){bSend=true;$('bST').classList.remove('hidden');pollBslProgress();}
+            else{bSend=false;$('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');}
+        }else if(d&&d.running&&!d.done){
             window._currentBslQueueId=String(d.queue_id||'');
             console.log('Server-side BSL process running on load — resuming polling');
             bSend=true;
@@ -93970,7 +94323,20 @@ function checkBslQueue(){
         // v7.66: NEVER start client-driven sendNextQueueProduct — bsl_backend does the work
         // If a 'running' entry is found and no polling is active, just start polling to display progress
         const running=q.entries?.find(e=>e.status==='running');
-        if(running&&!bSend){
+        const blockedId=String(q.blocked_queue_id||'');
+        if(q.unfinished_checkpoint&&(!running||String(running.id||'')!==blockedId)){
+            const cp=Object.assign({incomplete:true},q.progress_checkpoint||{});
+            window._currentBslQueueId=String(cp.queue_id||blockedId||'');bSend=false;
+            $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
+            $('bO').textContent=toFa(q.progress_checkpoint&&q.progress_checkpoint.sent||0);$('bU').textContent=toFa(q.progress_checkpoint&&q.progress_checkpoint.updated||0);
+            $('bK').textContent=toFa(q.progress_checkpoint&&q.progress_checkpoint.skipped||0);$('bF').textContent=toFa(q.progress_checkpoint&&q.progress_checkpoint.failed||0);
+            $('bT').textContent=toFa(cp.total||0);$('bSS').textContent=queueProgressIncompleteText(cp,'ارسال باسلام');$('bSS').title='queue_id: '+window._currentBslQueueId;
+            $('bPB').style.width=queueProgressPercentForUi(cp)+'%';$('bPB').style.background='#ef4444';
+            $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');
+            const noticeKey=window._currentBslQueueId+':'+String(cp.current||0)+':'+String(cp.total||0);
+            window._bslIncompleteToastKeys=window._bslIncompleteToastKeys||{};
+            if(!window._bslIncompleteToastKeys[noticeKey]){window._bslIncompleteToastKeys[noticeKey]=true;showToast('⚠️ checkpoint ناقص است؛ شروع خودکار متوقف شد',true);}
+        }else if(running&&!bSend){
             console.log('[v7.81 checkBslQueue] Found running entry, starting pollBslProgress (server-side mode)');
             window._currentBslQueueId=String(running.id||'');
             bSend=true;$('bST').classList.remove('hidden');
@@ -94794,12 +95160,30 @@ function closeBslQueueDetail(){
 // v7.51: Client-driven queue send — like sendBslClient, one product at a time
 // No server-side PHP stream needed. No polling. No timeout issues.
 let bslQueueRunner=null; // track current running queue entry
-function startNextBslQueueEntry(){
+function startNextBslQueueEntry(previousQueueId=''){
     // Resolve the next concrete row first; this keeps the UI bound to its queue_id
     // and never lets a stale shared progress file impersonate the next send.
     fetch('?bsl_queue_status=1').then(r=>r.json()).then(q=>{
         const entries=Array.isArray(q&&q.entries)?q.entries:[];
-        if(entries.some(e=>e&&e.status==='running')){setTimeout(startNextBslQueueEntry,1500);return;}
+        const prevId=String(previousQueueId||window._currentBslQueueId||'');
+        const previous=prevId?entries.find(e=>e&&String(e.id||'')===prevId):null;
+        if(previous&&['failed','paused'].includes(String(previous.status||''))){
+            bSend=false;$('bSS').textContent='⚠️ ردیف '+prevId+' ناقص است؛ از همان ردیف صف ادامه دهید';checkBslQueue();return;
+        }
+        if(entries.some(e=>e&&e.status==='running')){setTimeout(()=>startNextBslQueueEntry(prevId),1500);return;}
+        if(q&&q.unfinished_checkpoint){
+            const cp=Object.assign({incomplete:true},q.progress_checkpoint||{});
+            const blockedId=String(q.blocked_queue_id||cp.queue_id||prevId||'');
+            window._currentBslQueueId=blockedId;
+            const incompleteText=queueProgressIncompleteText(cp,'ارسال باسلام');
+            $('bSS').textContent=incompleteText;$('bSS').title='queue_id: '+blockedId;
+            $('bPB').style.width=queueProgressPercentForUi(cp)+'%';$('bPB').style.background='#ef4444';
+            $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');bSend=false;
+            const noticeKey=blockedId+':'+String(cp.current||0)+':'+String(cp.total||0);
+            window._bslIncompleteToastKeys=window._bslIncompleteToastKeys||{};
+            if(!window._bslIncompleteToastKeys[noticeKey]){window._bslIncompleteToastKeys[noticeKey]=true;showToast('⚠️ checkpoint ناقص است؛ ردیف بعدی شروع نشد',true);}
+            checkBslQueue();return;
+        }
         const next=entries.find(e=>e&&e.status==='waiting');
         if(!next){bSend=false;checkBslQueue();return;}
         window._currentBslQueueId=String(next.id||'');
@@ -94810,7 +95194,7 @@ function startNextBslQueueEntry(){
         const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',window._currentBslQueueId);
         fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});
         setTimeout(pollBslProgress,1000);checkBslQueue();
-    }).catch(()=>setTimeout(startNextBslQueueEntry,2000));
+    }).catch(()=>setTimeout(()=>startNextBslQueueEntry(previousQueueId),2000));
 }
 // v7.81 LEGACY: Old client-driven startNextBslQueueEntry — kept for reference
 function _legacyStartNextBslQueueEntry(){
@@ -94925,33 +95309,44 @@ function updateQueueEntryProgress(qid,q){
         {method:'POST'}).then(()=>{}).catch(()=>{});
 }
 function markQueueEntryDone(qid,q){
-    fetch('?bsl_queue_mark_done=1&queue_id='+encodeURIComponent(qid)+
-        '&sent='+q.sent+'&updated='+q.updated+'&skipped='+q.skipped+'&failed='+q.failed+'&total='+q.total,
-        {method:'POST'}).then(()=>{checkBslQueue();}).catch(()=>{});
+    return fetch('?bsl_queue_mark_done=1&queue_id='+encodeURIComponent(qid)+
+        '&sent='+q.sent+'&updated='+q.updated+'&skipped='+q.skipped+'&failed='+q.failed+'&total='+q.total+'&current='+(q.current||0),
+        {method:'POST'}).then(r=>r.json()).then(d=>{checkBslQueue();return d;}).catch(()=>({ok:false,error:'network'}));
 }
 function finishQueueEntry(){
     const q=bslQueueRunner;
     if(!q)return;
-    bSend=false;
-    $('bST').classList.add('hidden');
-    // v7.56: Update final visual stats (same as finishBslClient)
-    $('bO').textContent=toFa(q.sent);$('bU').textContent=toFa(q.updated);
-    $('bK').textContent=toFa(q.skipped);$('bF').textContent=toFa(q.failed);
-    $('bT').textContent=toFa(q.total);
-    $('bPB').style.width='100%';
-    let elapsed='';
-    if(q.startedAt){
-        const sec=Math.floor((Date.now()-q.startedAt)/1000);
-        elapsed=sec>=60?(Math.floor(sec/60)+' دقیقه '+sec%60+' ثانیه'):(sec+' ثانیه');
-    }
-    $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' تکراری | '+toFa(q.failed)+' خطا';
-    if(elapsed)$('bSS').textContent+=' | '+elapsed;
-    showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' تکراری, '+q.failed+' خطا');
-    markQueueEntryDone(q.id,q);
-    bslQueueRunner=null;
-    // Auto-start next waiting queue entry after 3 seconds
-    setTimeout(()=>{startNextBslQueueEntry();},3000);
+    bSend=false;$('bST').classList.add('hidden');
+    $('bO').textContent=toFa(q.sent);$('bU').textContent=toFa(q.updated);$('bK').textContent=toFa(q.skipped);$('bF').textContent=toFa(q.failed);$('bT').textContent=toFa(q.total);
+    $('bSS').textContent='🔎 در حال تأییدِ checkpoint نهایی...';
+    markQueueEntryDone(q.id,q).then(result=>{
+        if(!result||!result.ok){
+            const cp=result&&result.checkpoint?result.checkpoint:{};
+            const current=Math.max(0,Number(cp.current??q.current??0)||0),total=Math.max(0,Number(cp.total??q.total??0)||0);
+            const incomplete={queue_id:q.id,current:current,total:total,failed_resume:true};
+            const incompleteText=queueProgressIncompleteText(incomplete,'ارسال باسلام');
+            $('bPB').style.width=queueProgressPercentForUi(incomplete)+'%';$('bPB').style.background='#ef4444';$('bSS').textContent=incompleteText;
+            $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');
+            const noticeKey=String(q.id)+':'+String(current)+':'+String(total);
+            window._bslIncompleteToastKeys=window._bslIncompleteToastKeys||{};
+            if(!window._bslIncompleteToastKeys[noticeKey]){window._bslIncompleteToastKeys[noticeKey]=true;showToast('⚠️ ارسال باسلام ناقص ماند',true);}
+            bslQueueRunner=null;return;
+        }
+        $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');
+        $('bPB').style.background='';$('bPB').style.width='100%';
+        let elapsed='';
+        if(q.startedAt){
+            const sec=Math.floor((Date.now()-q.startedAt)/1000);
+            elapsed=sec>=60?(Math.floor(sec/60)+' دقیقه '+sec%60+' ثانیه'):(sec+' ثانیه');
+        }
+        $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' تکراری | '+toFa(q.failed)+' خطا';
+        if(elapsed)$('bSS').textContent+=' | '+elapsed;
+        showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' تکراری, '+q.failed+' خطا');
+        bslQueueRunner=null;
+        setTimeout(()=>{startNextBslQueueEntry(q.id);},3000);
+    });
 }
+
 
 /* v7.24: JS status bar removed — errors only shown in _dbg panel */
 
