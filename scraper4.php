@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.407';
+const APP_VERSION = '10.408';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -2728,7 +2728,7 @@ function extractMergeDetail(array $fresh, array $prev): array {
     // عکس شاخص: اگر فهرست عکسی نداد، قبلی سر جایش بماند
     if (empty($fresh['image']) && !empty($prev['image'])) $fresh['image'] = $prev['image'];
     // نشانه‌های داخلی که نباید هر بار صفر شوند
-    foreach (['_imgCached', '_imgValid'] as $f) {
+    foreach (['_imgCached', '_imgValid', '_extract_detail_pending', '_detail_cycle', '_detail_checked_at'] as $f) {
         if (!isset($fresh[$f]) && isset($prev[$f])) $fresh[$f] = $prev[$f];
     }
     return $fresh;
@@ -16596,6 +16596,19 @@ function variationsExtract(DOMXPath $xp, ?DOMNode $ctx, string $selStr, string $
     return $res;
 }
 
+/** A listing row is importable only when it has a usable title and a positive price. */
+function extractListingProductIsValid(array $product): bool {
+    $title = html_entity_decode(strip_tags((string)($product['title'] ?? ($product['name'] ?? ''))), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $title = trim(normalize_text($title));
+    return $title !== '' && extractPriceNum($product['price'] ?? '') > 0;
+}
+function extractFilterValidListingProducts(array $products): array {
+    foreach ($products as $key => $product) {
+        if (!is_array($product) || !extractListingProductIsValid($product)) unset($products[$key]);
+    }
+    return $products;
+}
+
 function parse_with_selectors(string $html, string $baseUrl, array $sel): array {
 [$dom, $xp] = load_dom($html);
 $products = [];
@@ -16750,7 +16763,7 @@ break;
 }
 }
 
-if (!$p['title'] && !$p['link']) continue;
+if (!extractListingProductIsValid($p)) continue;
 $p['title'] = mb_substr($p['title'], 0, 200);
 
 /* v9.89: تورِ ایمنی در برابر «چند کارت، یک آدرس».
@@ -16956,7 +16969,7 @@ break;
 }
 }
 
-if (!$p['title'] && !$p['link']) continue;
+if (!extractListingProductIsValid($p)) continue;
 
 $key = productKey($p);
 if (!isset($products[$key])) {
@@ -16987,7 +17000,7 @@ $p = [
 'sku' => $item['sku'] ?? ''
 ];
 $key = productKey($p);
-if (!isset($products[$key])) $products[$key] = $p;
+if (extractListingProductIsValid($p) && !isset($products[$key])) $products[$key] = $p;
 }
 }
 }
@@ -17111,7 +17124,7 @@ function parse_jsonld_products(string $html, string $baseUrl): array {
                 'image' => trim((string)$img) !== '' ? make_absolute_url((string)$img, $baseUrl) : '',
                 'sku'   => (string)($d['sku'] ?? ''),
             ];
-            if ($p['title'] !== '' || $p['link'] !== '') {
+            if (extractListingProductIsValid($p)) {
                 $key = productKey($p);
                 if (!isset($products[$key])) $products[$key] = $p;
             }
@@ -17170,12 +17183,13 @@ function parse_emalls_products(string $html, string $baseUrl): array {
             'image' => $image,
             'sku'   => '',
         ];
+        if (!extractListingProductIsValid($p)) continue;
         $key = productKey($p);
         if (!isset($products[$key])) $products[$key] = $p;
     }
     return $products;
 }
-function parse_list_by_engine(string $html, string $baseUrl, array $sel, string $engine, ?string &$usedEngine = null): array {
+function parse_list_by_engine_raw(string $html, string $baseUrl, array $sel, string $engine, ?string &$usedEngine = null): array {
     $engine = normalizeExtractionEngine($engine);
     $usedEngine = $engine;
     $hasSelectors = !empty($sel['container']);
@@ -17256,6 +17270,11 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     }
     $usedEngine = 'auto';
     return [];
+}
+
+function parse_list_by_engine(string $html, string $baseUrl, array $sel, string $engine, ?string &$usedEngine = null): array {
+    $rows = parse_list_by_engine_raw($html, $baseUrl, $sel, $engine, $usedEngine);
+    return extractFilterValidListingProducts($rows);
 }
 
 function build_page_url_custom(string $currentUrl, string $baseUrl, int $page, string $type, string $val): string {
@@ -17630,7 +17649,17 @@ header('X-Accel-Buffering: no');
 while (@ob_get_level()) @ob_end_clean();
 
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? DEFAULT_URL));
-$maxPages = max(1, (int)($_GET['pages'] ?? 20));
+$_streamPagesRaw=trim((string)($_GET['pages']??''));
+$_streamPagesParsed=$_streamPagesRaw===''?20:filter_var($_streamPagesRaw,FILTER_VALIDATE_INT);
+$_streamPagesRequested=$_streamPagesParsed===false?20:(int)$_streamPagesParsed;
+$autoPageMode=$_streamPagesRequested===0;
+/* Automatic mode follows natural end detection; this large guard only prevents a broken
+   pagination URL from looping forever and is surfaced to the UI if ever reached. */
+$maxPages=$autoPageMode?10000:max(1,$_streamPagesRequested);
+$streamNoFreshLimit=(function_exists('isEmallsUrl')&&isEmallsUrl($url))?5:3;
+$streamNoFreshStreak=0;
+$streamPagesScanned=0;
+$streamVisitedUrls=[rtrim($url,'/')=>true];
 $selectors = isset($_GET['selectors']) ? json_decode($_GET['selectors'], true) : null;
 $streamEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (($selectors && !empty($selectors['container'])) ? 'selectors' : 'heuristic')));
 $pagType = $_GET['pagType'] ?? 'query_page';
@@ -17652,20 +17681,29 @@ $pageUrl = $url;
 } elseif ($pagType === 'next_selector' && $nextUrl) {
 $pageUrl = $nextUrl;
 } elseif ($pagType === 'next_selector' && !$nextUrl) {
-send_sse('page', ['page' => $page, 'url' => '', 'ok' => false]);
+if($autoPageMode)send_sse('pagination_end',['last_page'=>$page-1,'reason'=>'next_selector_exhausted']);
+else send_sse('page', ['page' => $page, 'url' => '', 'ok' => false]);
 break;
 } else {
 $pageUrl = build_page_url_custom($url, $url, $page, $pagType, $pagVal);
 }
+$streamPagesScanned=$page;
 
 /* v10.173: واکش هوشمند — اگر render فعال باشد و صفحه «پوستهٔ JS» بود،
    یک بار هم با مرورگرِ واقعی (Playwright/Selenium) رندر می‌شود. */
 $res = fetch_html_for_engine($pageUrl, 20, $streamEngine, is_array($selectors)?$selectors:[]);
-
-send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
+$_streamHttpCode=(int)($res['code']??0);
+$_streamNaturalHttpEnd=!empty($autoPageMode)&&$page>1&&count($allProducts)>0&&in_array($_streamHttpCode,[404,410],true)&&empty($res['ok']);
+send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok'], 'code' => $_streamHttpCode, 'natural_end' => $_streamNaturalHttpEnd]);
 
 if (!$res['ok']) {
+if($_streamNaturalHttpEnd){
+    $streamPagesScanned=$page-1;
+    send_sse('pagination_end',['last_page'=>$page-1,'checked_page'=>$page,'reason'=>'http_'.$_streamHttpCode]);
+    break;
+}
 if ($page === 1) send_sse('error', ['message' => 'Failed: ' . $res['error']]);
+elseif($autoPageMode)send_sse('pagination_incomplete',['page'=>$page,'message'=>(string)($res['error']??'page fetch failed')]);
 break;
 }
 
@@ -17699,9 +17737,30 @@ $nextUrl = null;
 }
 }
 
-if ($page > 1 && $newCount === 0) break;
+if($autoPageMode&&$pagType==='next_selector'){
+    $_streamNextKey=is_string($nextUrl)?rtrim($nextUrl,'/'):'';
+    if($_streamNextKey===''||isset($streamVisitedUrls[$_streamNextKey])){
+        send_sse('pagination_end',['last_page'=>$page,'checked_page'=>$page,'reason'=>'next_selector_exhausted_or_repeated']);
+        break;
+    }
+    $streamVisitedUrls[$_streamNextKey]=true;
+}elseif($page>1&&$newCount===0){
+    if(!$autoPageMode)break;
+    $streamNoFreshStreak++;
+    if($streamNoFreshStreak>=$streamNoFreshLimit){
+        send_sse('pagination_end',['last_page'=>max(1,$page-$streamNoFreshStreak),'checked_page'=>$page,
+            'empty_pages'=>$streamNoFreshStreak,'reason'=>'no_fresh_products']);
+        break;
+    }
+}else{
+    $streamNoFreshStreak=0;
+}
 $__sp = max(0, min(5000, (int)((loadConnections()['extract_page_pause_ms'] ?? 80))));
 if ($__sp > 0) usleep($__sp * 1000);
+}
+
+if($autoPageMode&&$page>$maxPages){
+    send_sse('auto_page_limit',['limit'=>$maxPages,'message'=>'Automatic pagination safety limit reached before a natural end.']);
 }
 
 if (FETCH_MISSING_IMAGES) {
@@ -17771,7 +17830,7 @@ usleep(80000);
 if ($failCount > 0) send_sse('fetch_info', ['msg' => "⚠️ $failCount محصول قابل دسترسی نبود (می‌توانید دوباره تلاش کنید)"]);
 }
 
-send_sse('complete', ['total' => count($allProducts), 'products' => array_values($allProducts)]);
+send_sse('complete', ['total' => count($allProducts), 'pages_scanned' => $streamPagesScanned, 'automatic' => $autoPageMode, 'products' => array_values($allProducts)]);
 send_sse('done', []);
 exit;
 }
@@ -19826,6 +19885,21 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     return $out;
 }
 
+/** Select the durable scope for stage two. List-backed profiles default to new rows only;
+ * imported/noExtract profiles and explicit force-all runs retain their all-products behavior. */
+function extractDetailScopeMode(array $profile, string $phase, bool $forceAll = false): string {
+    if (!extractHasDetailSelectors($profile)) return '';
+    $syncCfg = is_array($profile['syncConfig'] ?? null) ? $profile['syncConfig'] : [];
+    if (!empty($syncCfg['noExtract'])) return 'all';
+    if ($phase === 'detail' && ($forceAll || !empty($profile['_extract_detail_force_all'])
+        || (string)($profile['_extract_detail_scope'] ?? '') === 'all')) return 'all';
+    if (in_array($phase, ['all', 'list', 'detail'], true)) return 'new';
+    return '';
+}
+function extractProductPendingNewDetail(array $product): bool {
+    return !empty($product['_extract_detail_pending']);
+}
+
 function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1): array {
 if (!in_array($phase, ['all', 'list', 'detail'], true)) $phase = 'all';
 @set_time_limit(0); @ignore_user_abort(true);
@@ -19872,6 +19946,7 @@ if(!$detailConfigured&&$phase==='all'){$phase='list';$_detailSkippedNoSelectors=
 if(!$detailConfigured&&$phase==='detail'){
     $_detailSkippedNoSelectors=true;
     $profile['_extract_stage']='complete';$profile['_extract_stage_at']=time();
+    unset($profile['_extract_detail_scope'],$profile['_extract_detail_force_all']);
     $profile['_extract_resume_needed']=0;$profile['_extract_resume_phase']='';
     $profile['_extract_list_incomplete']=false;$profile['_extract_resume_req']=0;
     saveOneProfileAtomic($profileKey,$profile);
@@ -20162,6 +20237,19 @@ $_wantKeys=[];
 foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantKeys[]=$_f; }
 $_inlineDetailDone=0;   // شمارندهٔ جزئیاتِ درجایِ همین اجرا (برای چک‌پوینت)
 $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
+$detailForceAll=($phase==='detail'&&($forceAll||!empty($profile['_extract_detail_force_all'])));
+$detailScopeMode=$detailConfigured?extractDetailScopeMode($profile,$phase,$detailForceAll):'';
+$detailScopeNewOnly=$detailScopeMode==='new';
+$_oldDetailCycle=trim((string)($profile['_extract_detail_cycle']??''));
+$_oldStage=(string)($profile['_extract_stage']??'');
+$_detailCycle=($phase==='detail'&&in_array($_oldStage,['detail','stopped'],true)&&$_oldDetailCycle!=='')
+    ? $_oldDetailCycle : ('dc_'.time().'_'.substr(md5($queueId),0,8));
+$checkpointExtract=static function(string $checkpointKey,array $products,array $extra=[]) use ($detailScopeMode,$detailForceAll,$detailConfigured,$phase,$_detailCycle): void {
+    $extra['_extract_detail_scope']=$detailScopeMode;
+    if($detailConfigured)$extra['_extract_detail_cycle']=$_detailCycle;
+    $extra['_extract_detail_force_all']=($phase==='detail'&&$detailForceAll)?1:0;
+    extractCheckpoint($checkpointKey,$products,$extra);
+};
 if($_listResume && $_startPage>1){
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$_startPage,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>[
         '▶️ ادامهٔ استخراج از صفحه '.$_startPage.' (یک صفحه قبل از محل گیر)',
@@ -20173,7 +20261,7 @@ for($page=$_startPage;$phase!=='detail'&&$page<=$maxPages;$page++){
 /* Each parallel row consumes only its own stop signal. */
 if(extractStopRequestedForQueue($queueId,true)){
 $pkTmp=$profileKey!==''?$profileKey:profileKey($url);
-extractCheckpoint($pkTmp,$allProducts,[
+$checkpointExtract($pkTmp,$allProducts,[
     '_extract_stage'=>'stopped','_extract_stage_at'=>time(),
     '_extract_resume_phase'=>'list','_extract_list_incomplete'=>true,
     '_extract_list_page_try'=>$page,'_extract_list_page_ok'=>max(0,$page-1),
@@ -20192,7 +20280,7 @@ return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'can
 /* v10.122: بودجهٔ فهرست — تمیز بایست تا نوبت بعد از صفحهٔ قبلی ادامه دهد */
 if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($allProducts)>0){
     $_listRanOut=true;
-    extractCheckpoint($pkFinal,$allProducts,[
+    $checkpointExtract($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_list_incomplete'=>true,
         '_extract_list_page_ok'=>max(0,$page-1),
@@ -20226,7 +20314,7 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
 }
 /* ثبت صفحه‌ای که الان تلاش می‌شود — برای resume = try-1 */
 if($pkFinal!==''){
-    extractCheckpoint($pkFinal,$allProducts,[
+    $checkpointExtract($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_list_incomplete'=>true,
         '_extract_list_page_try'=>$page,
@@ -20281,7 +20369,7 @@ if($page===1)$fetchFail='صفحهٔ اول باز نشد: '.mb_substr($res['erro
 extractLockTouch($queueId);
 if($page>1 && count($allProducts)>0){
     $_rpF=max(1,$page-1);
-    extractCheckpoint($pkFinal,$allProducts,[
+    $checkpointExtract($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_list_incomplete'=>true,
         '_extract_list_page_try'=>$page,
@@ -20388,6 +20476,8 @@ $newCount=0;
 foreach($pageProducts as $key=>$p){
 if(isset($seenKeys[$key]))continue;
 $seenKeys[$key]=1;
+$_newForProfile=!array_key_exists($key,$prevByKey);
+if($detailScopeNewOnly&&$_newForProfile)$p['_extract_detail_pending']=1;
 $allProducts[$key]=$p;
 $newCount++;
 /* v9.44: استخراج جزئیاتِ همین محصول، همین‌لحظه (درجا) — بجای فاز ۲ی جداگانه.
@@ -20399,7 +20489,7 @@ $newCount++;
 /* v9.72: رفعِ «استخراج خودکار جزئیات» — این بلوکِ درجا داخلِ حلقهٔ فهرست بود و
    برای فازِ list هم اجرا می‌شد (یعنی هر کران صفحهٔ جزئیاتِ محصولات را باز می‌کرد).
    حالا فقط وقتی اجرا می‌شود که فاز list نباشد (یعنی all/detail = دکمهٔ دستی). */
-if($phase!=='list'){
+if($phase!=='list' && (!$detailScopeNewOnly || extractProductPendingNewDetail($p))){
 $_mrg = (isset($prevByKey[$key]) && is_array($prevByKey[$key]))
     ? extractMergeDetail($p, $prevByKey[$key]) : $p;
 $_galDoneNow = $galleryCfg['enabled']
@@ -20424,9 +20514,14 @@ if (!($_galDoneNow && !$_fieldMissingNow)) {
             'total_log_count'=>$page+$_inlineDetailDone,'extracted'=>count($allProducts),'phase'=>'list_detail',
             'page'=>$page,'inline_detail_current'=>$_inlineDetailDone], extractLiveCompare($allProducts,$livePrevMap)));
     }
-    extractProductDetailInline($allProducts, $key, $detailSelectors, $galleryCfg, false);
+    $_inlineResult=extractProductDetailInline($allProducts, $key, $detailSelectors, $galleryCfg, false);
+    if(!empty($_inlineResult['opened'])&&((int)($_inlineResult['fields']??0)>0||(int)($_inlineResult['imgs']??0)>1)){
+        $allProducts[$key]['_detail_cycle']=$_detailCycle;
+        $allProducts[$key]['_detail_checked_at']=time();
+        unset($allProducts[$key]['_extract_detail_pending']);
+    }
     extractLockTouch($queueId);
-    extractCheckpoint($pkFinal, $allProducts,
+    $checkpointExtract($pkFinal, $allProducts,
         ['_extract_stage' => 'detail', '_extract_stage_at' => time(),
          '_extract_detail_done' => $_inlineDetailDone, '_extract_detail_total' => 0]);
 }
@@ -20450,7 +20545,7 @@ $nextUrl=make_absolute_url($href,$res['url']);
 }
 /* v10.122: چک‌پوینت بعد از nextUrl — برای ادامه از همین/صفحه قبل */
 extractLockTouch($queueId);
-extractCheckpoint($pkFinal,$allProducts,[
+$checkpointExtract($pkFinal,$allProducts,[
     '_extract_stage'=>'list','_extract_stage_at'=>time(),
     '_extract_list_incomplete'=>true,
     '_extract_list_page_ok'=>$page,
@@ -20617,11 +20712,7 @@ $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
 /* A detail cycle is the durable cursor across process/cron segments. Products
    already resolved in this cycle are skipped on resume, so a price selector
    that is intentionally refreshed can no longer restart from product one. */
-$_oldDetailCycle=trim((string)($profile['_extract_detail_cycle']??''));
-$_oldStage=(string)($profile['_extract_stage']??'');
-$_detailCycle=($phase==='detail'&&in_array($_oldStage,['detail','stopped'],true)&&$_oldDetailCycle!=='')
-    ? $_oldDetailCycle : ('dc_'.time().'_'.substr(md5($queueId),0,8));
-extractCheckpoint($pkFinal,$allProducts,[
+$checkpointExtract($pkFinal,$allProducts,[
     '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
     '_extract_detail_cycle'=>$_detailCycle,
     '_extract_list_incomplete'=>false,
@@ -20656,10 +20747,12 @@ $needDetail=[];
    scope=all اجرا شود، محصولی که قبلاً گالری گرفته هم دوباره باز
    می‌شود — برای وقتی که سلکتور گالری عوض شده یا مبدأ عکس‌ها را
    به‌روز کرده است. */
-$_forceAll=($phase==='detail'&&$forceAll);
+$_forceAll=$detailForceAll;
+$_detailNewOnlySkipped=0;
 foreach($allProducts as $key=>$p){
+if($detailScopeNewOnly&&!extractProductPendingNewDetail($p)){$_detailNewOnlySkipped++;continue;}
 if(empty($p['link'])){$_noLink++;continue;}
-if((string)($p['_detail_cycle']??'')===$_detailCycle){$_alreadyDone++;continue;}
+if((string)($p['_detail_cycle']??'')===$_detailCycle){unset($allProducts[$key]['_extract_detail_pending']);$_alreadyDone++;continue;}
 if($_forceAll){$needDetail[$key]=$p;continue;}
 /* v8.81: محصولی که گالری‌اش را قبلاً گرفته‌ایم دوباره باز نمی‌شود.
    پیش از این با روشن بودن گالری، هر بار همهٔ صفحات محصول از نو گرفته
@@ -20676,10 +20769,10 @@ foreach($_wantKeys as $_wk){
     $_cur=$p[$_wk]??'';
     if(is_array($_cur)?empty($_cur):(trim((string)$_cur)==='')){$_fieldMissing=true;break;}
 }
-if($_galDone&&!$_fieldMissing){$_alreadyDone++;continue;}   // هم گالری دارد هم فیلدها
+if($_galDone&&!$_fieldMissing){unset($allProducts[$key]['_extract_detail_pending']);$_alreadyDone++;continue;}   // هم گالری دارد هم فیلدها
 if($galleryCfg['enabled']||$_fieldMissing||empty($p['image'])||empty($p['price'])){
 $needDetail[$key]=$p;
-}
+}else{unset($allProducts[$key]['_extract_detail_pending']);}
 }
 $detailTotal=count($needDetail);
 $detailDone=0;
@@ -20706,6 +20799,7 @@ if($phase==='list'&&!$detailConfigured)              $_skipWhy='no_detail_select
 elseif($phase==='list')                               $_skipWhy='';           // عمدی
 elseif(empty($detailSelectors))                       $_skipWhy='no_config';
 elseif($detailTotal===0&&$_noLink>0&&$_alreadyDone===0)  $_skipWhy='no_link';
+elseif($detailScopeNewOnly&&$_detailNewOnlySkipped>0)     $_skipWhy='no_new_products';
 elseif($detailTotal===0&&$_alreadyDone>0)                $_skipWhy='already_done';
 elseif($detailTotal===0)                                 $_skipWhy='nothing_selected';
 
@@ -20785,7 +20879,7 @@ foreach($needDetail as $key=>$p){
 if($detailDone>=$_minPerRun&&time()>=$_deadline){$_ranOut=true;break;}
 /* Each parallel row consumes only its own stop signal. */
 if(extractStopRequestedForQueue($queueId,true)){
-extractCheckpoint($pkFinal,$allProducts,
+$checkpointExtract($pkFinal,$allProducts,
     ['_extract_stage'=>'stopped','_extract_stage_at'=>time(),
      '_extract_resume_phase'=>'detail','_extract_list_incomplete'=>false,
      '_extract_detail_done'=>$detailDone,'_extract_detail_total'=>$detailTotal]);
@@ -20917,6 +21011,7 @@ if(!empty($detailSelectors['price'])){
    remain retryable instead of being silently called complete. */
 $_detailResolved=($_gotFields>0||$_gotImgs>1||($_isIn===false&&!empty($detailSelectors['price'])));
 if($_detailResolved){
+    unset($allProducts[$key]['_extract_detail_pending']);
     $allProducts[$key]['_detail_cycle']=$_detailCycle;
     $allProducts[$key]['_detail_checked_at']=time();
 } else {
@@ -20975,7 +21070,7 @@ writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'
    می‌کرد. روی هاستی که هر بار وسط فاز جزئیات می‌مُرد، این یعنی هیچ
    گالری‌ای هرگز روی دیسک نمی‌نشست — همان چیزی که کاربر می‌دید.
    هزینهٔ نوشتن یک فایل در برابر یک درخواست HTTP ناچیز است. */
-extractCheckpoint($pkFinal,$allProducts,
+$checkpointExtract($pkFinal,$allProducts,
     ['_extract_stage'=>'detail','_extract_stage_at'=>time(),
      '_extract_detail_done'=>$detailDone,'_extract_detail_total'=>$detailTotal]);
 usleep(200000);
@@ -20984,7 +21079,7 @@ usleep(200000);
    v8.97: اگر وقت تمام شده و کار ناتمام مانده، نشانه را «detail» بگذار
    نه «detail_done»، تا اجرای بعدی بداند باید ادامه بدهد. */
 $_detailIncomplete=($_ranOut||$detailDone<$detailTotal||$detailFail>0||$detailNoField>0);
-extractCheckpoint($pkFinal,$allProducts,
+$checkpointExtract($pkFinal,$allProducts,
     ['_extract_stage'=>$_detailIncomplete?'detail':'detail_done','_extract_stage_at'=>time(),
      '_extract_resume_needed'=>$_detailIncomplete?1:0,
      '_extract_detail_cycle'=>$_detailCycle,
@@ -21116,6 +21211,20 @@ if(!empty($_listRanOut)){
 $profileOnDisk['_extract_stage_at']=time();
 $profileOnDisk['_extract_detail_done']=$detailDone;
 $profileOnDisk['_extract_detail_total']=$detailTotal;
+$_pendingNewDetailCount=0;
+foreach($allProducts as $_scopeProduct)if(is_array($_scopeProduct)&&extractProductPendingNewDetail($_scopeProduct))$_pendingNewDetailCount++;
+if($detailConfigured&&$phase==='list'){
+    $profileOnDisk['_extract_detail_scope']='new';
+}elseif($detailConfigured&&$detailScopeMode!==''
+    &&(!empty($_detailIncomplete)||!empty($_listRanOut)||$_pendingNewDetailCount>0)){
+    $profileOnDisk['_extract_detail_scope']=$detailScopeMode;
+}else{
+    unset($profileOnDisk['_extract_detail_scope']);
+}
+if($phase==='detail'&&$detailForceAll&&(!empty($_detailIncomplete)||!empty($_listRanOut)))
+    $profileOnDisk['_extract_detail_force_all']=1;
+else
+    unset($profileOnDisk['_extract_detail_force_all']);
 $profilesNow[$pkFinal]=$profileOnDisk;
 saveOneProfileAtomic($pkFinal,$profileOnDisk);
 $profiles=loadProfiles();$profile=$profiles[$pkFinal]??$profileOnDisk;
@@ -21192,7 +21301,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>($phase==='list'?'list':'detail'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -34719,14 +34828,16 @@ if (isset($_GET['selftest'])) {
                . '</body></html>';
         $tSel = ['container' => '.p', 'title' => '.ptitle', 'price' => '.price', 'image' => '.pimg'];
         $tOut = array_values(parse_with_selectors($tHtml, 'http://t.test/', $tSel));
-        $noLeakPrice = isset($tOut[0]) && trim((string)$tOut[0]['price']) === '';
-        $noLeakImage = isset($tOut[0]) && trim((string)$tOut[0]['image']) === '';
-        $goodKept    = isset($tOut[1]) && extractPriceNum($tOut[1]['price']) === 500000;
-        $add('8.56', 'قیمت از ویجت کناری به محصول نشت نمی‌کند', $noLeakPrice,
-             $noLeakPrice ? 'محصول بی‌قیمت، بی‌قیمت ماند' : 'نشت: ' . ($tOut[0]['price'] ?? '?'));
-        $add('8.56', 'عکس از نوار کناری به محصول نشت نمی‌کند', $noLeakImage,
-             $noLeakImage ? 'محصول بی‌عکس، بی‌عکس ماند' : 'نشت: ' . ($tOut[0]['image'] ?? '?'));
-        $add('8.56', 'محصول سالم قیمت درست خودش را می‌گیرد', $goodKept);
+        $onlyValid = count($tOut) === 1 && ($tOut[0]['title'] ?? '') === 'کالای سالم';
+        $noLeakPrice = $onlyValid && extractPriceNum($tOut[0]['price'] ?? '') === 500000;
+        $noLeakImage = $onlyValid && strpos((string)($tOut[0]['image'] ?? ''), 'ok.jpg') !== false
+            && strpos((string)($tOut[0]['image'] ?? ''), 'sidebar') === false;
+        $goodKept    = $onlyValid && extractPriceNum($tOut[0]['price'] ?? '') === 500000;
+        $add('10.408', 'محصولِ بدون قیمت رد می‌شود و قیمت ویجت کناری نشت نمی‌کند', $noLeakPrice,
+             $noLeakPrice ? 'فقط محصول سالم با قیمت خودش باقی ماند' : 'ردیف‌های خروجی: ' . count($tOut));
+        $add('10.408', 'تصویر محصول باقی‌مانده از همان کارت است، نه نوار کناری', $noLeakImage,
+             $noLeakImage ? 'تصویر ok.jpg انتخاب شد' : 'تصویر: ' . ($tOut[0]['image'] ?? '?'));
+        $add('10.408', 'محصول سالم با قیمت مثبت نگه داشته می‌شود', $goodKept);
     }
 
     // v8.57: تصویر ووکامرس — وقتی آپلود به کتابخانهٔ رسانه ممکن نیست،
@@ -42477,6 +42588,49 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'extractStopRequestedForQueue($queueId,false)||extractQueueRowStoppedByUser($queueId)') !== false);
     $add('10.407', 'نسخهٔ 10.407 در CHANGELOG ثبت شده',
          strpos($selfSrc, "{v:'10." . "407'") !== false);
+    $add('10.408', 'صفحات صفر به حالت خودکار می‌رود و تا پایان طبیعی/پیوند بعدی پیش می‌رود',
+         strpos($selfSrc, "\$autoPageMode=\$_streamPagesRequested===0;") !== false
+      && strpos($selfSrc, "\$maxPages=\$autoPageMode?10000:max(1,\$_streamPagesRequested);") !== false
+      && strpos($selfSrc, "if(\$autoPageMode&&\$pagType==='next_selector')") !== false
+      && strpos($selfSrc, "send_sse('auto_page_limit'") !== false
+      && strpos($selfSrc, "send_sse('pagination_end'") !== false);
+    $add('10.408', 'HTTP 404/410 پس از محصولات‌یابی در حالت خودکار پایان طبیعی است، نه خطای ناقص',
+         strpos($selfSrc, "in_array(\$_streamHttpCode,[404,410],true)") !== false
+      && strpos($selfSrc, "'reason'=>'http_'.\$_streamHttpCode") !== false
+      && strpos($selfSrc, "'natural_end' => \$_streamNaturalHttpEnd") !== false);
+    $_tSafeRows=extractFilterValidListingProducts([
+        'blank_title'=>['title'=>'  ','price'=>'12,000 تومان'],
+        'blank_price'=>['title'=>'بدون قیمت','price'=>''],
+        'zero_price'=>['title'=>'قیمت صفر','price'=>'0 تومان'],
+        'good'=>['title'=>'کالای سالم','price'=>'12,000 تومان'],
+    ]);
+    $add('10.408', 'فهرست فقط ردیف‌های دارای عنوان و قیمت مثبت را می‌پذیرد',
+         count($_tSafeRows)===1&&isset($_tSafeRows['good'])
+      && extractListingProductIsValid(['title'=>'کالای سالم','price'=>'۱۲٬۰۰۰ تومان'])
+      && !extractListingProductIsValid(['title'=>'','price'=>'۱۲٬۰۰۰ تومان']));
+    unset($_tSafeRows);
+    $_scopeProfile=['detailSelectors'=>['longDesc'=>['enabled'=>true,'selector'=>'.desc']]];
+    $add('10.408', 'دامنهٔ جزئیات تازه‌محور است و force-all/noExtract همهٔ محصولات را حفظ می‌کند',
+         extractDetailScopeMode($_scopeProfile,'all')==='new'
+      && extractDetailScopeMode($_scopeProfile,'detail')==='new'
+      && extractDetailScopeMode($_scopeProfile,'detail',true)==='all'
+      && extractDetailScopeMode(array_merge($_scopeProfile,['syncConfig'=>['noExtract'=>true]]),'detail')==='all'
+      && extractProductPendingNewDetail(['_extract_detail_pending'=>1])
+      && strpos($selfSrc, 'extractProductPendingNewDetail($p)') !== false
+      && strpos($selfSrc, "'_extract_detail_scope'") !== false
+      && strpos($selfSrc, "'_extract_detail_force_all'") !== false);
+    $_rpStart=strrpos($selfSrc,'function resultPriceBreakdown(p){');
+    $_rpEnd=$_rpStart!==false?strrpos($selfSrc,'function resultPricingRefresh(){'):false;
+    $_rpBlock=$_rpStart!==false&&$_rpEnd!==false?substr($selfSrc,$_rpStart,$_rpEnd-$_rpStart):'';
+    $add('10.408', 'نتایجِ قیمت غرفه‌های اضافی را از آرایهٔ زنده می‌خواند و با تغییر دوباره می‌سازد',
+         $_rpBlock!==''&&strpos($_rpBlock,'bslExtraVendors')!==false
+      && strpos($_rpBlock,'b.vendors')===false
+      && strpos($selfSrc,'function resultPricingRefresh(){')!==false
+      && strpos($selfSrc,"if(typeof resultPricingRefresh==='function')resultPricingRefresh();")!==false
+      && strpos($selfSrc,"list.appendChild(card);\n if(pm!=='none'||pv!==0)bslVPriceChange(idx);")!==false);
+    $add('10.408', 'نسخهٔ 10.408 و release notes در CHANGELOG ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.408','>=')
+      && strpos($selfSrc,"{v:'10." . "408'")!==false);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -44773,7 +44927,9 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
           || strpos($selfSrc, "? max(0, (int)\$_POST['pages'])") !== false)
       && (strpos($selfSrc, "\$maxPages=max(1,(int)(\$profile['pages']??10));") !== false
           || strpos($selfSrc, "\$savedMaxPages=max(0,(int)(\$profile['pages']??10));") !== false)
-      && strpos($selfSrc, "\$maxPages = max(1, (int)(\$_GET['pages'] ?? 20));") !== false
+      && strpos($selfSrc, "\$_streamPagesRequested=\$_streamPagesParsed===false?20:(int)\$_streamPagesParsed;") !== false
+      && strpos($selfSrc, "\$autoPageMode=\$_streamPagesRequested===0;") !== false
+      && strpos($selfSrc, "\$maxPages=\$autoPageMode?10000:max(1,\$_streamPagesRequested);") !== false
       && strpos($selfSrc, 'min(100,(int)($profile[\'pages\']??10))') === false
       && version_compare(APP_VERSION, '10.' . '380', '>='));
     $add('10.380', 'ورودی 10.380 در CHANGELOG ثبت شده است',
@@ -45819,7 +45975,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('8.94', 'تابع ثبت نقطهٔ امن هست',
          function_exists('extract' . 'Checkpoint'));
     $add('8.94', 'بعد از فاز فهرست ذخیره می‌شود',
-         strpos($selfSrc, "extractCheckpoint(\$pkFinal,\$allProducts,['_extract_stage'=>'list_" . "done'") !== false);
+         strpos($selfSrc, "\$checkpointExtract(\$pkFinal,\$allProducts,[") !== false
+      && strpos($selfSrc, "'_extract_stage'=>'list_" . "done'") !== false);
     /* v9.06: فاصلهٔ ۵ تایی برداشته شد — حالا بعد از «هر» محصول ذخیره
        می‌شود، چون کشته‌شدن پردازه قبل از پنجمی کار همه را دور می‌ریخت. */
     $add('9.06', 'حین فاز جزئیات بعد از هر محصول ذخیره می‌شود',
@@ -72942,7 +73099,7 @@ let bslExtraVendors=[];
 function addBslVendor(){bslExtraVendors.push({vendor_id:0,token:'',name:'',shop_name:''});renderBslVendors();}
 function removeBslVendor(idx){if(!confirm('حذف این غرفه؟'))return;bslExtraVendors.splice(idx,1);renderBslVendors();}
 function testBslVendor(idx){const v=bslExtraVendors[idx];if(!v||!v.token){showToast('توکن خالی است',1);return;}const btn=document.getElementById('bslVTestBtn_'+idx);if(btn){btn.disabled=true;btn.textContent='⏳';}const fd=new FormData();fd.append('action','test_basalam');fd.append('token',v.token);if($('bsIndirect'))fd.append('net_indirect',$('bsIndirect').checked?'1':'0');fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{if(btn){btn.disabled=false;btn.textContent='🔗';}if(d.ok){bslExtraVendors[idx].vendor_id=d.vendor_id||0;bslExtraVendors[idx].name=d.user_name||d.username||'';bslExtraVendors[idx].shop_name=d.vendor_title||'';renderBslVendors();showToast('✓ '+d.vendor_title+' (#'+d.vendor_id+')');}else{showToast('❌ '+(d.error||'خطا'),1);}}).catch(()=>{if(btn){btn.disabled=false;btn.textContent='🔗';}showToast('❌ خطا شبکه',1);});}
-function renderBslVendors(){try{bslRenderShopsHint();}catch(e){}const list=$('bslVendorsList');if(!list)return;list.innerHTML='';if(bslExtraVendors.length===0){list.innerHTML='<div style="color:#64748b;font-size:11px;text-align:center;padding:8px">غرفه اضافی وجود ندارد</div>';return;}bslExtraVendors.forEach((v,idx)=>{const card=document.createElement('div');card.style.cssText='background:#0f172a;border:1px solid #475569;border-radius:8px;padding:10px';const info=v.shop_name?'<div style="color:#22d3ee;font-size:11px;margin-bottom:4px">'+esc(v.shop_name)+' (#'+v.vendor_id+')</div>':'';const nameVal=v.name||'';const pm=v.price_mode||'none';const pv=v.price_val||0;card.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><span style="font-size:11px;color:#fbbf24;font-weight:700">غرفه '+(idx+1)+'</span><button class="btn btn-red" style="font-size:10px;padding:2px 6px" onclick="removeBslVendor('+idx+')">✕</button></div>'+info+'<div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="bslVName_'+idx+'" value="'+esc(nameVal)+'" placeholder="نام" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px;direction:rtl" oninput="bslExtraVendors['+idx+'].name=this.value"></div><div style="display:flex;gap:6px;margin-bottom:6px"><input type="password" id="bslVToken_'+idx+'" value="'+esc(v.token||'')+'" placeholder="Token" dir="ltr" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px" oninput="bslExtraVendors['+idx+'].token=this.value"></div><div style="display:flex;gap:6px"><input type="number" id="bslVVid_'+idx+'" value="'+(v.vendor_id||'')+'" placeholder="شماره غرفه" dir="ltr" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px" oninput="bslExtraVendors['+idx+'].vendor_id=parseInt(this.value)||0"><button class="btn btn-cyan" id="bslVTestBtn_'+idx+'" style="font-size:10px;padding:4px 8px" onclick="testBslVendor('+idx+')">🔗 تست</button></div>'
+function renderBslVendors(){try{bslRenderShopsHint();}catch(e){}if(typeof resultPricingRefresh==='function')resultPricingRefresh();const list=$('bslVendorsList');if(!list)return;list.innerHTML='';if(bslExtraVendors.length===0){list.innerHTML='<div style="color:#64748b;font-size:11px;text-align:center;padding:8px">غرفه اضافی وجود ندارد</div>';return;}bslExtraVendors.forEach((v,idx)=>{const card=document.createElement('div');card.style.cssText='background:#0f172a;border:1px solid #475569;border-radius:8px;padding:10px';const info=v.shop_name?'<div style="color:#22d3ee;font-size:11px;margin-bottom:4px">'+esc(v.shop_name)+' (#'+v.vendor_id+')</div>':'';const nameVal=v.name||'';const pm=v.price_mode||'none';const pv=v.price_val||0;card.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><span style="font-size:11px;color:#fbbf24;font-weight:700">غرفه '+(idx+1)+'</span><button class="btn btn-red" style="font-size:10px;padding:2px 6px" onclick="removeBslVendor('+idx+')">✕</button></div>'+info+'<div style="display:flex;gap:6px;margin-bottom:6px"><input type="text" id="bslVName_'+idx+'" value="'+esc(nameVal)+'" placeholder="نام" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px;direction:rtl" oninput="bslExtraVendors['+idx+'].name=this.value"></div><div style="display:flex;gap:6px;margin-bottom:6px"><input type="password" id="bslVToken_'+idx+'" value="'+esc(v.token||'')+'" placeholder="Token" dir="ltr" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px" oninput="bslExtraVendors['+idx+'].token=this.value"></div><div style="display:flex;gap:6px"><input type="number" id="bslVVid_'+idx+'" value="'+(v.vendor_id||'')+'" placeholder="شماره غرفه" dir="ltr" style="flex:1;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px" oninput="bslExtraVendors['+idx+'].vendor_id=parseInt(this.value)||0"><button class="btn btn-cyan" id="bslVTestBtn_'+idx+'" style="font-size:10px;padding:4px 8px" onclick="testBslVendor('+idx+')">🔗 تست</button></div>'
  // v9.68: تعدیل قیمتِ این غرفه (نسبت به قیمت پایهٔ محصول) + نمایش درصدِ مؤثر
  +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e293b">'
  +'<div style="font-size:10px;color:#94a3b8;margin-bottom:4px">💰 تعدیل قیمتِ این غرفه (روی قیمت پایه):</div>'
@@ -72958,8 +73115,8 @@ function renderBslVendors(){try{bslRenderShopsHint();}catch(e){}const list=$('bs
  +'🏪 ارسال مجدد این غرفه'
  +'</button></div>'
  +'</div>';
- if(pm!=='none'||pv!==0)bslVPriceChange(idx);
- list.appendChild(card);});}
+ list.appendChild(card);
+ if(pm!=='none'||pv!==0)bslVPriceChange(idx);});}
 // v9.68: وقتی تنظیم قیمتِ یک غرفهٔ اضافی عوض شد، مقدار را ذخیره و درصدِ مؤثر را نشان بده
 function bslVPriceChange(idx){
     const v=bslExtraVendors[idx]; if(!v)return;
@@ -72967,6 +73124,7 @@ function bslVPriceChange(idx){
     v.price_val=parseFloat(($('bslVPV_'+idx)||{}).value)||0;
     scheduleSave(); /* v10.87: persist price change immediately */
     const eff=document.getElementById('bslVPEff_'+idx);
+    if(typeof resultPricingRefresh==='function')resultPricingRefresh();
     if(eff){
         // لایهٔ ۱: تعدیلِ خودِ پروفایل (از فرمِ پروفایل)
         const profMode=($('priceMode')||{}).value||'none';
@@ -76020,11 +76178,17 @@ function resultPriceBreakdown(p){
     const z=bslCombinedPreview(raw,pm,pv,b.price_mode||'none',parseFloat(b.price_val)||0);
     out.dests.push({key:'bsl:'+String(parseInt(b.vendor_id)||0),name:b.shop_name||'غرفهٔ پیش‌فرض',mode:b.price_mode||'none',val:parseFloat(b.price_val)||0,price:resultRoundPrice(z.price,br)});
   }
-  (Array.isArray(b.vendors)?b.vendors:[]).forEach((v,idx)=>{
+  (Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach((v,idx)=>{
     if(!v)return;const z=bslCombinedPreview(raw,pm,pv,v.price_mode||'none',parseFloat(v.price_val)||0);
     out.dests.push({key:'bsl:'+String(parseInt(v.vendor_id)||idx),name:v.shop_name||v.name||('غرفه '+toFa(idx+1)),mode:v.price_mode||'none',val:parseFloat(v.price_val)||0,price:resultRoundPrice(z.price,br)});
   });
   return out;
+}
+function resultPricingRefresh(){
+  try{
+    if(typeof rvDirty!=='undefined')rvDirty.table=true;
+    if(typeof resultsVisible==='function'&&resultsVisible()&&typeof rvCurView!=='undefined'&&rvCurView==='table'&&typeof rvBuildTable==='function')rvBuildTable();
+  }catch(e){}
 }
 function resultMoney(n){n=parseInt(n)||0;return n>0?toFa(n.toLocaleString('en-US')):'—';}
 function resultPricingCells(p){
@@ -77293,6 +77457,8 @@ function renderPhase2Report(queueId){
                    +' خواسته‌شده را داشتند، پس دوباره باز نشدند.<br>'
                    +'اگر گالری‌ها را نمی‌بینید، یعنی داده روی دیسک هست ولی جای'
                    +' دیگری گم می‌شود — گزارش را بفرستید.';
+            }else if(why==='no_new_products'){
+                msg='⏭ محصول تازهٔ در انتظار جزئیات وجود ندارد؛ محصولات قبلی عمداً باز نشدند.';
             }else if(why==='nothing_selected'){
                 color='#f87171';
                 msg='⛔ محصولی برای باز کردن انتخاب نشد'
@@ -77719,6 +77885,7 @@ function start(useSel=false){
   rvDirty.grid=false; rvDirty.table=false; rvDirty.text=true;
   resetResultFilter();
   log('▶ شروع: '+url,'info');
+  if(String($('pages').value).trim()==='0')log('📄 تعداد صفحهٔ ۰: صفحه‌بندی خودکار تا پایان طبیعی فعال است','info');
 
   $('startBtn').classList.add('hidden');$('startManualBtn').classList.add('hidden');$('stopBtn').classList.remove('hidden');
   $('progress').classList.remove('hidden');$('progressBar').style.width='0%';
@@ -77733,9 +77900,12 @@ function start(useSel=false){
 
   es=new EventSource(sUrl);
 
-  es.addEventListener('page',e=>{const d=JSON.parse(e.data);pages=d.page;log(`📄 صفحه ${d.page}: ${d.ok?'✓':'✗'}`,d.ok?'ok':'err');update();});
+  es.addEventListener('page',e=>{const d=JSON.parse(e.data);const naturalEnd=!!d.natural_end;pages=naturalEnd?Math.max(0,d.page-1):d.page;log(`📄 صفحه ${d.page}: ${d.ok?'✓':(naturalEnd?'🏁 پایان طبیعی HTTP '+(d.code||''):'✗')}`,d.ok||naturalEnd?'ok':'err');update();});
   es.addEventListener('product',e=>{const p=JSON.parse(e.data);if(!products.has(p.key)){products.set(p.key,p);order.push(p.key);renderCard(p);renderRow(p,order.length);update();}});
   es.addEventListener('page_done',e=>{const d=JSON.parse(e.data);log(`✓ صفحه ${d.page}: +${d.new} جدید، کل: ${d.total}`,'ok');});
+  es.addEventListener('pagination_end',e=>{const d=JSON.parse(e.data);log(`🏁 صفحه‌بندی خودکار در صفحه ${d.last_page||d.checked_page||pages} به پایان طبیعی رسید`,'info');});
+  es.addEventListener('pagination_incomplete',e=>{const d=JSON.parse(e.data);log(`⚠️ صفحه‌بندی در صفحه ${d.page} به‌علت خطای واکشی کامل نشد: ${d.message||'خطای شبکه'}`,'err');});
+  es.addEventListener('auto_page_limit',e=>{const d=JSON.parse(e.data);log(`⚠️ سقف ایمنی ${d.limit} صفحه پیش از تشخیص پایان طبیعی رسید`,'err');showToast('⚠️ صفحه‌بندی به سقف ایمنی رسید؛ پایان فروشگاه تأیید نشد',true);});
   es.addEventListener('missing_start',e=>{const d=JSON.parse(e.data);$('status').textContent=`دریافت جزئیات ${toFa(d.current)}/${toFa(d.total)}`;$('progressBar').style.width=(d.current/d.total*100)+'%';});
   es.addEventListener('fetch_info',e=>{const d=JSON.parse(e.data);if(d.msg)$('status').textContent=d.msg;log(d.msg,'info');});
   es.addEventListener('missing_done',e=>{const d=JSON.parse(e.data);details++;const p=products.get(d.key);if(p){if(d.image)p.image=d.image;if(d.price)p.price=d.price;if(d.image_cached){p._imgCached=true;p._imgValid=true;}else if(d.image_valid){p._imgValid=true;}products.set(d.key,p);renderCard(p,d.key);renderRow(p,order.indexOf(d.key)+1,d.key);}update();});
@@ -78066,6 +78236,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.408', t:'🧭 صفحه‌بندی خودکار، محصولِ معتبر، جزئیاتِ تازه‌محور و قیمت غرفه‌های اضافه', items:[
+    'تعداد صفحهٔ ۰ در واکش زنده اکنون حالت خودکار است: تا پایان طبیعیِ لینکِ صفحهٔ بعد یا چند صفحهٔ پیاپیِ بدون محصول تازه ادامه می‌دهد؛ 404/410 پس از محصولات پایان طبیعی است و سایر خطاها یا سقف ایمنی در رابط آشکار می‌شود.',
+    'همهٔ موتورهای فهرست فقط محصولی را می‌پذیرند که عنوان غیرخالی و قیمت مثبت داشته باشد؛ این محافظ در پارسر CSS مستقیم و مسیرهای heuristic، JSON-LD، ایمالز و reader هم اعمال می‌شود.',
+    'برای پروفایل‌های فهرست‌محور، نشانگرِ پایدارِ «محصول تازه و در انتظار جزئیات» همراه checkpoint ذخیره می‌شود؛ فاز دوم و resume فقط همین محصولات را می‌خوانند و پس از موفقیت نشانگر پاک می‌شود. force-all و پروفایل‌های noExtract همچنان دامنهٔ همهٔ محصولات را حفظ می‌کنند.',
+    'جدول نتایجِ باسلام ضریب غرفه‌های دوم به بعد را از تنظیمات زندهٔ bslExtraVendors می‌گیرد و با تغییر ضریب یا افزودن/حذف غرفه به‌روز می‌شود؛ رندر غرفه نیز مقدار ذخیره‌شده را بازنشانی نمی‌کند.'
+  ]},
   {v:'10.407', t:'⏹️ توقف هدفمند و حذف امن ردیف‌های استخراج', items:[
     'Stop اکنون فقط queue_id انتخاب‌شده را علامت می‌زند، سیگنال جداگانه می‌فرستد، job بک‌اند متناظر را لغو می‌کند و در صورت امکان پردازهٔ child همان job را خاتمه می‌دهد؛ در استخراج موازی، کارهای دیگر دست‌نخورده می‌مانند.',
     'تا وقتی پردازه یا قفلِ ردیف زنده است، وضعیت «در حال توقف» می‌ماند و حذف رد می‌شود؛ پس از آزادشدن قفل، ردیف به paused تبدیل می‌شود. Continue همان شناسه و checkpoint را ادامه می‌دهد؛ توقف‌های دستی همچنان خودکار لغو یا حذف نمی‌شوند.',
