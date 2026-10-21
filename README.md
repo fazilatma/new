@@ -7,9 +7,11 @@
 
 ## 🛰 حالتِ سروریِ scraper4 (همیشه زنده — دو حالتِ قابل تنظیم)
 
-فایل `scraper4.php` (اپلیکیشن اسکرپر، نسخهٔ 10.172) علاوه بر هاستِ اشتراکی، می‌تواند
+فایل `scraper4.php` (اپلیکیشن اسکرپر، نسخهٔ 10.403) علاوه بر هاستِ اشتراکی، می‌تواند
 مثل یک **سرویسِ مستقلِ همیشه‌زنده** اجرا شود — با سوپروایزرِ بازراه‌اندازیِ نامحدود،
 بدون هیچ سقفِ زمانی PHP، چندکارگر و تیکِ کرانِ داخلی:
+
+**نسخهٔ 10.403:** تیک خاموشِ بله/روبیکا/تلگرام ارسال خودکار متن و رسانه به همان پیام‌رسان را متوقف می‌کند؛ تنظیمات جداگانهٔ رویداد و مسیرِ مرورگر/Web Push مستقل می‌مانند.
 
 ```bash
 ./server.sh run       # حالت ۱: پیش‌زمینه با لاگِ زنده
@@ -25,6 +27,8 @@ systemd: `scraper4-server.service`. راهنمای کامل: **[SERVER.md](SERVE
 ---
 
 ## ⚡ Quick One-Line Launch & Installation
+
+**WebConsole Pro 2.9.5:** removed HTML comment markers from the project-card JavaScript template; the inline script passes static syntax parsing.
 
 ### 💻 VPS Server / GitHub Codespaces
 ```bash

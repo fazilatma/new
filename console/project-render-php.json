@@ -2,7 +2,7 @@
   "name": "Scraper4 Render — pure-PHP (Playwright CDP / Selenium chromedriver)",
   "type": "php",
   "repo_url": "https://github.com/fazilatma/new",
-  "branch": "arena/01a0ebf7-new",
+  "branch": "arena/2d48c86d-new",
   "subfolder": "browser-php",
   "deploy_path": "",
   "port": "3100",

@@ -22,7 +22,7 @@ What it does, in plain terms:
 | Field | Value | Why |
 |---|---|---|
 | `type` | `php` | Single-file app, no composer step |
-| `branch` | `arena/01a0ebf7-new` | Contains v10.174 + browser-php/ pure-PHP renderer |
+| `branch` | `arena/2d48c86d-new` | Contains v10.399 + browser-php/ pure-PHP renderer |
 | `start_cmd` | `php -d max_execution_time=0 … -S 0.0.0.0:8000 server.php` | Runs the app through the built-in PHP server with **no time limit** (required for SSE streams) — same runtime flags as `server.sh` |
 | `port` | `8000` | The console maps the domain publishing & PORT env to this |
 | `env.PHP_CLI_SERVER_WORKERS` | `4` | **Real multi-process concurrency** — PHP ≥ 7.4 forks 4 workers, so a long SSE scrape never locks the admin UI |
@@ -162,7 +162,7 @@ Hints on what to do:
 
 ## 3) About the branch
 
-The JSONs pin `arena/01a0ebf7-new` (scraper4 **v10.174**). If you later run from
+The JSONs pin `arena/2d48c86d-new` (scraper4 **v10.399**). If you later run from
 `main` or another branch, just change the `branch` value in the form/JSON — every
 other field stays valid.
 

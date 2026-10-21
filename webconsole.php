@@ -7,7 +7,7 @@
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
 ini_set('display_errors', '0');
 @set_time_limit(300);
-define('WCP_VERSION', '2.9.4');
+define('WCP_VERSION', '2.9.5');
 function wcp_is_dir_writable(string $dir): bool {
     if (!is_dir($dir)) {
         if (!@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
@@ -5343,7 +5343,6 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       `:''}
     </div>
 
-    <!-- Compact Details Grid -->
     <div style="background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.7">
       <div style="display:flex;flex-wrap:wrap;gap:12px 18px">
         <div><span style="color:var(--muted)">🌿 ریپو:</span> <span class="ltr" style="font-family:monospace;font-weight:600">${esc(p.repo_url)}</span> <span class="tag sm ok">شاخه: ${esc(p.branch||'main')}</span>${p.subfolder?` <span class="tag sm">📁 ${esc(p.subfolder)}</span>`:''}</div>
@@ -5361,7 +5360,6 @@ async function renderProj(){try{projectList=(await api('proj.list')).projects;co
       </div>
     </div>
 
-    <!-- Unified Single Action Toolbar (All Buttons Together) -->
     <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
       ${webUrl?`
         <a href="${webUrl}" target="_blank" rel="noopener noreferrer" class="btn sm ${isRunning?'ok':'pri'}" style="text-decoration:none;font-weight:bold" title="مشاهده صفحه وب پروژه">
