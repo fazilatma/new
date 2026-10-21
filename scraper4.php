@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.405';
+const APP_VERSION = '10.406';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -19137,6 +19137,22 @@ function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array {
     return $result;
 }
 
+/** Profile whose manual sync was explicitly cancelled; auto-resume must not
+ * turn that user's Stop into an implicit Continue. Manual actions reset this
+ * progress record or explicitly resume the saved queue row. */
+function extractManualStopProfileKey(): string {
+    if(!defined('MANUAL_SYNC_PROGRESS_FILE'))return '';
+    $progress=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+    clearstatcache(true,MANUAL_SYNC_STOP_FILE);
+    $stopSignal=is_file(MANUAL_SYNC_STOP_FILE)
+        &&(time()-(int)@filemtime(MANUAL_SYNC_STOP_FILE))<=900;
+    $stopped=$stopSignal||!empty($progress['cancelled'])||!empty($progress['stopped'])
+        ||!empty($progress['stopped_by_user'])||(string)($progress['paused_by']??'')==='user';
+    if(!$stopped)return '';
+    $checkpoint=is_array($progress['checkpoint']??null)?$progress['checkpoint']:[];
+    return trim((string)($progress['profile_key']??$checkpoint['profile_key']??''));
+}
+
 /**
  * v10.123: آماده‌سازیِ «ادامهٔ خودکار» برای یک پروفایلِ رهاشده.
  *
@@ -24332,6 +24348,21 @@ $syncState = loadSyncState();
    resumable checkpoint. Explicit user stops remain stopped. */
 $_rQueueNow=extractReadQueue();
 $_resumeCandidates=cronExtractResumeCandidates($profiles,(array)($_rQueueNow['entries']??[]),(array)($wdEarly['extract_resume']??[]));
+/* A legacy/manual-stop progress record may predate stopped_by_user on its
+   extraction row. Keep that profile's checkpoint paused until a user starts
+   a new manual sync or explicitly continues the existing queue row. */
+$_manualStopProfileKey=extractManualStopProfileKey();
+if($_manualStopProfileKey!==''&&$_resumeCandidates){$_resumeKeep=[];
+    foreach($_resumeCandidates as$_candidate){
+        if((string)($_candidate['key']??'')===$_manualStopProfileKey){
+            $results['extract_resume_skipped'][]=['key'=>$_manualStopProfileKey,
+                'queue_id'=>(string)($_candidate['queue_id']??''),'reason'=>'explicit_manual_sync_stop'];
+            continue;
+        }
+        $_resumeKeep[]=$_candidate;
+    }
+    $_resumeCandidates=$_resumeKeep;
+}
 $_resumeTryLimit=max(1,min(10,(int)($cn['auto_resume_max']??3)));
 $_resumeWorker=s4WorkerIsActive()||!empty($GLOBALS['_cronWorkerReady'])
     ||(s4ParallelExtractSupported()&&extractTaskConcurrency()>1);
@@ -42073,6 +42104,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.405', 'نسخه 10.405 در CHANGELOG درج شده',
          strpos($selfSrc, "{v:'10." . "405'") !== false
       && version_compare(APP_VERSION, '10.' . '405', '>='));
+    $add('10.406', 'توقف صریح همگام‌سازی دستی، checkpoint استخراج همان پروفایل را از resume خودکار محافظت می‌کند',
+         strpos($selfSrc, 'function extractManualStopProfileKey(): string') !== false
+      && strpos($selfSrc, '$_manualStopProfileKey=extractManualStopProfileKey();') !== false
+      && strpos($selfSrc, "'reason'=>'explicit_manual_sync_stop'") !== false
+      && version_compare(APP_VERSION, '10.' . '406', '>='));
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -77650,6 +77686,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.406', t:'🛑 حفظ توقفِ همگام‌سازی دستی هنگام بازیابی checkpoint استخراج', items:[
+    'اگر همگام‌سازی دستی به‌صراحت لغو شده باشد، کران checkpointهای استخراجِ همان پروفایل را خودکار ادامه نمی‌دهد؛ شناسه و ردیف باقی می‌مانند تا کاربر صریحاً ادامه دهد یا اجرای دستی تازه‌ای آغاز کند.',
+    'این حفاظ ردیف‌های قدیمی را هم پوشش می‌دهد که پیش از ثبتِ stopped_by_user روی خودِ صف متوقف شده‌اند؛ پروفایل‌های دیگر مستقل می‌مانند.'
+  ]},
   {v:'10.405', t:'🛠️ رفعِ گیرکردنِ watchdog استخراج پشتِ slot فعال', items:[
     'نگهبان استخراج قفلِ مستقل دارد؛ اجرای سالمِ slot اول دیگر اسکن و بازیابیِ checkpointهای stale پروفایل‌های دیگر را متوقف نمی‌کند.',
     'هر ردیف پیش از بازیابی با قفلِ همان queue_id و PID کارگر دوباره بررسی می‌شود؛ تغییرِ running به paused زیرِ قفلِ فایل صف و فقط روی ردیفی انجام می‌شود که هنوز running است.',
