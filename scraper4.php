@@ -54,7 +54,7 @@ const WOO_PRODUCTS_FILE = __DIR__ . '/woo_products_temp.json';
 const BSL_QUEUE_FILE = __DIR__ . '/bsl_queue.json';
 const PRODUCT_HASH_FILE = __DIR__ . '/product_hash_cache.json'; /* v10.90 */
 /* v10.53 (۶۷): سقفِ چند ردیفِ صف که یک وِرکرِ ارسال در هر اجرا به نوبت پردازش می‌کند.
-   بقیهٔ «در انتظارها» در اجرای بعد (پمپ/زنجیره/دستی) ادامه می‌یابند —
+   بقیهٔ «در انتظارها» در تیک‌های بعدیِ کران یا با ادامهٔ دستی برداشته می‌شوند —
    وِرکر پنجرهٔ زمانیِ هاست را رد نکند؛ اگر هم وسطِ اجرا قطع شود، هر ردیف
    حالتِ مستقل دارد و ردیفِ بعدی سالم می‌ماند. */
 const BSL_MAX_ENTRIES_PER_RUN = 10;
@@ -355,7 +355,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.403';
+const APP_VERSION = '10.404';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -369,7 +369,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/28';
+const APP_VERSION_DATE = '1405/07/29';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1317,19 +1317,30 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
     return !empty($ret['requeued']);
 }
 
-function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1): array {
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     /* -1 means “not supplied”; zero is a real setting: discover the end. */
     if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));}
     $pageTotal=$maxPages===0?0:$maxPages;
-    $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey):'';
+    $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey,$preferredQueueId):'';
+    /* A caller that names a row must never silently fall back to a fresh id. */
+    if($resume&&$preferredQueueId!==''&&$plannedQueueId==='')
+        return ['ok'=>false,'queued'=>false,'error'=>'resume_row_not_found_or_not_resumable'];
+    $checkQueueId=$preferredQueueId!==''?$preferredQueueId:$plannedQueueId;
+    if($resume&&!$allowUserStoppedResume&&is_file(EXTRACT_STOP_FILE))
+        return ['ok'=>false,'queued'=>false,'error'=>'resume_explicit_user_stop'];
+    if($resume&&!$allowUserStoppedResume&&$checkQueueId!=='')foreach((array)(extractReadQueue()['entries']??[])as $_stopRow){
+        if(is_array($_stopRow)&&(string)($_stopRow['id']??'')===$checkQueueId
+            &&(!empty($_stopRow['stopped_by_user'])||(string)($_stopRow['paused_by']??'')==='user'))
+            return ['ok'=>false,'queued'=>false,'error'=>'resume_row_stopped_by_user'];
+    }
     if($plannedQueueId==='')$plannedQueueId='exw_'.substr(md5($profileKey.microtime(true).random_int(1,PHP_INT_MAX)),0,20);
     /* A paused extraction already owns the durable checkpoint. Cron/manual
        resume revives that row instead of adding a second owner with a slightly
        different phase-based dedup key. */
     $enq = null;
     if ($resume) {
-        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages, $preferredQueueId) {
             $now=time();$revive=-1;
             foreach ($q['entries'] as $i=>&$e) {
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
@@ -1337,7 +1348,8 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 $st=(string)($e['status']??'');
                 if(in_array($st,['pending','running'],true)){
                     $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
-                    if(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
+                    if($st==='pending'&&$preferredQueueId!=='')$e['payload']['extract_queue_id']=$plannedQueueId;
+                    elseif(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
                     $e['payload']['max_pages']=$maxPages;
                     $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
                 }
@@ -18684,9 +18696,9 @@ header('Content-Type: application/json; charset=UTF-8');
 $queue=extractReadQueue();
 $before=count($queue['entries']);
 foreach($queue['entries'] as $e){
-    if(in_array(($e['status']??''),['done','failed'],true)) @unlink(extractReportFile($e['id']??''));
+    if(in_array(($e['status']??''),['done','failed','superseded'],true)) @unlink(extractReportFile($e['id']??''));
 }
-$queue['entries']=array_values(array_filter($queue['entries'],fn($e)=>!in_array(($e['status']??''),['done','failed'],true)));
+$queue['entries']=array_values(array_filter($queue['entries'],fn($e)=>!in_array(($e['status']??''),['done','failed','superseded'],true)));
 extractWriteQueue($queue);
 echo json_encode(['ok'=>true,'removed'=>$before-count($queue['entries'])],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -18797,7 +18809,7 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     $phase = (string)$prep['phase'];
     if(s4WorkerIsActive()){
         extractLockRelease((string)($prep['queue_id']??''));
-        $enq=s4WorkerEnqueueBackendExtract($pk,$phase,false,true);
+        $enq=s4WorkerEnqueueBackendExtract($pk,$phase,false,true,-1,(string)($prep['queue_id']??''),true);
         echo json_encode(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),'resuming'=>true,'worker'=>true,
             'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'page_ok'=>(int)$meta['page_ok'],
             'page_try'=>(int)$meta['page_try'],'message'=>'ادامهٔ مرحلهٔ '.$phase.' از checkpoint به worker سپرده شد']+$enq,JSON_UNESCAPED_UNICODE);
@@ -19080,6 +19092,18 @@ function extractResumeQueueId(string $profileKey, string $preferredQueueId = '')
     return '';
 }
 
+/** Use the saved checkpoint phase rather than inferring from a fresh-run default. */
+function extractResumePhase(array $profile): string {
+    $stage=(string)($profile['_extract_stage']??'');
+    $savedPhase=(string)($profile['_extract_resume_phase']??'');
+    if(!in_array($savedPhase,['list','detail'],true))$savedPhase='';
+    if($stage==='stopped'&&$savedPhase!=='')return $savedPhase;
+    if($stage==='detail'||($stage==='list_done'&&empty($profile['_extract_list_incomplete'])))return 'detail';
+    if($stage==='list'||!empty($profile['_extract_list_incomplete'])
+        ||(int)($profile['_extract_resume_from']??0)>0)return 'list';
+    return 'all';
+}
+
 function extractResumePrepare(string $profileKey, array $cn, string $preferredQueueId = ''): array {
     $out = ['ok' => false, 'phase' => 'all', 'reason' => '', 'queue_id' => '', 'reused_row' => false];
     if ($profileKey === '') { $out['reason'] = 'no_key'; return $out; }
@@ -19101,22 +19125,8 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
         $out['busy_queue_id'] = (string)($lk['queue_id'] ?? '');
         return $out;
     }
-    $stage = (string)($pr['_extract_stage'] ?? '');
-    /* stage=stopped نوعِ آخرین توقف را نگه می‌دارد؛ از روی آن و stage=list_done
-       فاز دقیق را انتخاب کن تا resume نه از صفر و نه با فازِ اشتباه اجرا شود. */
-    $savedPhase = (string)($pr['_extract_resume_phase'] ?? '');
-    if (!in_array($savedPhase, ['list', 'detail'], true)) $savedPhase = '';
-    if ($stage === 'stopped' && $savedPhase !== '') {
-        $phase = $savedPhase;
-    } elseif ($stage === 'detail' || ($stage === 'list_done' && empty($pr['_extract_list_incomplete']))) {
-        $phase = 'detail';
-    } elseif ($stage === 'list' || !empty($pr['_extract_list_incomplete']) || (int)($pr['_extract_resume_from'] ?? 0)>0) {
-        /* List checkpoints must stay page-only. phase=all performs inline
-           per-product detail extraction and was the cause of resume changing mode. */
-        $phase = 'list';
-    } else {
-        $phase = 'all';
-    }
+    /* List checkpoints stay page-only; detail checkpoints keep their saved phase. */
+    $phase = extractResumePhase($pr);
     $pr['_extract_resume_req'] = time();
     if ($phase === 'list' && empty($pr['_extract_resume_from'])) {
         $pr['_extract_resume_from'] = extractResumeStartPage($pr);
@@ -19166,6 +19176,147 @@ function extractResumeSig(array $profile): string {
         . '|' . $cycle . '|' . $cycleDone . '|' . $cycleAt;
 }
 
+/** Collect every eligible extraction checkpoint, with at most one owner per profile. */
+function extractQueueRowStoppedByUser(string $queueId): bool {
+    if($queueId==='')return false;
+    foreach((array)(extractReadQueue()['entries']??[])as $e){
+        if(is_array($e)&&(string)($e['id']??'')===$queueId)
+            return !empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user';
+    }
+    return false;
+}
+
+/** Update only resume metadata under the shared profile-write lock. */
+function extractResumeMetaSaveAtomic(string $profileKey,array $meta): bool {
+    if($profileKey==='')return false;
+    $lock=@fopen(PROFILES_FILE.'.extract.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return false;}
+    $profiles=loadProfiles();
+    if(!is_array($profiles[$profileKey]??null)){@flock($lock,LOCK_UN);@fclose($lock);return false;}
+    $profiles[$profileKey]['_extract_resume_meta']=$meta;
+    $ok=saveProfiles($profiles);
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return $ok;
+}
+
+function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $watchdogKeys=[]): array {
+    $latestRows=[];$busy=[];$profileCheckpointKeys=[];$watchdog=[];$seq=0;
+    foreach($queueEntries as $e){
+        $seq++;if(!is_array($e))continue;
+        $key=trim((string)($e['profile_key']??''));if($key==='')continue;
+        $status=(string)($e['status']??'');
+        if($status==='running'){$busy[$key]=true;continue;}
+        $cronPendingWait=$status==='waiting'&&!empty($e['cron_resume_pending']);
+        if($status==='waiting'&&!$cronPendingWait){$busy[$key]=true;continue;}
+        if(!in_array($status,['paused','failed'],true)&&!$cronPendingWait)continue;
+        $profile=is_array($profiles[$key]??null)?$profiles[$key]:[];
+        $stage=(string)($profile['_extract_stage']??'');
+        $hasProfileCheckpoint=in_array($stage,['list','list_done','detail','stopped'],true)
+            ||!empty($profile['_extract_list_incomplete'])||!empty($profile['_extract_resume_req'])
+            ||(int)($profile['_extract_resume_from']??0)>0;
+        $hasRowCheckpoint=!empty($e['resumable'])||!empty($e['resume_needed'])||!empty($e['partial'])
+            ||(int)($e['resume_page']??0)>0||in_array((string)($e['resume_phase']??''),['list','detail'],true);
+        if(!$hasProfileCheckpoint&&!$hasRowCheckpoint)continue;
+        $at=max((int)($e['updated_at']??0),(int)($e['done_at']??0),(int)($e['paused_at']??0),(int)($e['started_at']??0));
+        if(!isset($latestRows[$key])||$at>(int)$latestRows[$key]['updated_at']
+            ||($at===(int)$latestRows[$key]['updated_at']&&$seq>(int)$latestRows[$key]['sequence'])){
+            $latestRows[$key]=['queue_id'=>(string)($e['id']??''),'updated_at'=>$at,'sequence'=>$seq,
+                'user_stopped'=>!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user'];
+        }
+    }
+    foreach($watchdogKeys as $key){$key=trim((string)$key);if($key!=='')$watchdog[$key]=true;}
+    foreach($profiles as $key=>$profile){
+        if(!is_array($profile))continue;
+        $stage=(string)($profile['_extract_stage']??'');
+        if(in_array($stage,['list','list_done','detail','stopped'],true)||!empty($profile['_extract_list_incomplete'])
+            ||!empty($profile['_extract_resume_req'])||(int)($profile['_extract_resume_from']??0)>0)
+            $profileCheckpointKeys[(string)$key]=true;
+    }
+    $keys=array_unique(array_merge(array_keys($latestRows),array_keys($profileCheckpointKeys),array_keys($watchdog)));
+    $out=[];
+    foreach($keys as $key){
+        if($key===''||!isset($profiles[$key])||!is_array($profiles[$key])||!empty($busy[$key]))continue;
+        $row=$latestRows[$key]??null;
+        /* Explicit Stop belongs to the user: an older duplicate row must not
+           override it, while a newer automatic checkpoint remains eligible. */
+        if(is_array($row)&&!empty($row['user_stopped']))continue;
+        $profile=$profiles[$key];
+        $stage=(string)($profile['_extract_stage']??'');
+        $hasCheckpoint=in_array($stage,['list','list_done','detail','stopped'],true)
+            ||!empty($profile['_extract_list_incomplete'])||!empty($profile['_extract_resume_req'])
+            ||(int)($profile['_extract_resume_from']??0)>0||is_array($row);
+        if(!$hasCheckpoint)continue;
+        $queueId=is_array($row)?(string)($row['queue_id']??''):extractResumeQueueId((string)$key);
+        $out[]=['key'=>(string)$key,'queue_id'=>$queueId,
+            'updated_at'=>(int)($row['updated_at']??$profile['_extract_stage_at']??0),
+            'sequence'=>(int)($row['sequence']??0),'source'=>is_array($row)?'queue':(!empty($watchdog[$key])?'watchdog':'profile')];
+    }
+    usort($out,static function($a,$b){
+        $cmp=(int)($a['updated_at']??0)<=>(int)($b['updated_at']??0);
+        if($cmp!==0)return $cmp;
+        $cmp=(int)($a['sequence']??0)<=>(int)($b['sequence']??0);
+        return $cmp!==0?$cmp:strcmp((string)$a['key'],(string)$b['key']);
+    });
+    return $out;
+}
+
+/** Mark duplicate automatic pauses as superseded once their profile checkpoint has an owner. */
+function extractQueueSupersedeOlderPausedRows(string $profileKey,string $keeperQueueId): int {
+    if($profileKey===''||$keeperQueueId==='')return 0;
+    $lock=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return 0;}
+    $q=json_decode((string)@file_get_contents(EXTRACT_QUEUE_FILE),true);
+    if(!is_array($q))$q=['entries'=>[]];
+    $entries=is_array($q['entries']??null)?$q['entries']:[];$keeperFound=false;
+    foreach($entries as $e){
+        if(!is_array($e)||(string)($e['id']??'')!==$keeperQueueId)continue;
+        if((string)($e['profile_key']??'')===$profileKey&&in_array((string)($e['status']??''),['waiting','running','paused','failed','done'],true))$keeperFound=true;
+        break;
+    }
+    if(!$keeperFound){@flock($lock,LOCK_UN);@fclose($lock);return 0;}
+    $now=time();$changed=0;
+    foreach($entries as &$e){
+        if(!is_array($e)||(string)($e['profile_key']??'')!==$profileKey||(string)($e['id']??'')===$keeperQueueId
+            ||(string)($e['status']??'')!=='paused'||!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user')continue;
+        $e['status']='superseded';$e['superseded_by']=$keeperQueueId;$e['superseded_at']=$now;
+        $e['updated_at']=$now;$e['done_at']=$now;$e['error']='این checkpoint با ردیف تازه‌تر ادامه می‌یابد: '.$keeperQueueId;$changed++;
+    }unset($e);
+    if($changed>0){$q['entries']=$entries;@file_put_contents(EXTRACT_QUEUE_FILE,json_encode($q,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return $changed;
+}
+
+/** Queue every eligible direct-mode checkpoint for later cron pulses without creating a new row. */
+function extractQueueScheduleResumeCandidates(array $candidates): array {
+    if(tasksResumeExplicitlyStopped('extract',[],readProgress(EXTRACT_PROGRESS_FILE)))
+        return ['ok'=>false,'scheduled'=>0,'queue_ids'=>[],'user_stopped'=>true];
+    $wanted=[];
+    foreach($candidates as $candidate){
+        if(!is_array($candidate))continue;
+        $id=trim((string)($candidate['queue_id']??''));if($id!=='')$wanted[$id]=true;
+    }
+    if(!$wanted)return ['ok'=>true,'scheduled'=>0,'queue_ids'=>[]];
+    $lock=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return ['ok'=>false,'scheduled'=>0,'queue_ids'=>[],'error'=>'queue_lock'];}
+    if(tasksResumeExplicitlyStopped('extract',[],readProgress(EXTRACT_PROGRESS_FILE))){
+        @flock($lock,LOCK_UN);@fclose($lock);return ['ok'=>false,'scheduled'=>0,'queue_ids'=>[],'user_stopped'=>true];
+    }
+    $q=json_decode((string)@file_get_contents(EXTRACT_QUEUE_FILE),true);
+    if(!is_array($q))$q=['entries'=>[]];
+    $now=time();$scheduled=[];$changed=false;
+    foreach((array)($q['entries']??[])as&$entry){
+        if(!is_array($entry)||(string)($entry['id']??'')===''||empty($wanted[(string)$entry['id']]))continue;
+        if(!empty($entry['stopped_by_user'])||(string)($entry['paused_by']??'')==='user')continue;
+        $status=(string)($entry['status']??'');
+        if(in_array($status,['paused','failed'],true)){
+            $entry['status']='waiting';$entry['cron_resume_pending']=true;$entry['updated_at']=$now;
+            unset($entry['done_at']);$changed=true;$scheduled[]=(string)$entry['id'];
+        }elseif($status==='waiting'&&!empty($entry['cron_resume_pending']))$scheduled[]=(string)$entry['id'];
+    }unset($entry);
+    if($changed)@file_put_contents(EXTRACT_QUEUE_FILE,json_encode($q,JSON_UNESCAPED_UNICODE),LOCK_EX);
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return ['ok'=>true,'scheduled'=>count(array_unique($scheduled)),'queue_ids'=>array_values(array_unique($scheduled))];
+}
 
 
 /**
@@ -19460,7 +19611,7 @@ if($_reuseQueueRow){
     foreach(['products_count','total','current','new','price_changed','removed','unchanged'] as $_keepCounter)
         if(array_key_exists($_keepCounter,$_oldRow))$_runRow[$_keepCounter]=$_oldRow[$_keepCounter];
     $_runRow['resuming']=true;$_runRow['resumable']=true;$_runRow['error']='';
-    unset($_runRow['done_at'],$_runRow['stopped_by_user']);
+    unset($_runRow['done_at'],$_runRow['stopped_by_user'],$_runRow['cron_resume_pending']);
     $queue['entries'][$_resumeRowIndex]=$_runRow;
 }else{
     $_runRow['started_at']=time();
@@ -20675,6 +20826,7 @@ if (!in_array($phaseIn, ['all','list','detail'], true)) $phaseIn = 'list';
 /* v9.11: دامنهٔ «همهٔ محصولات» از دکمهٔ اجرای فوریِ استخراج دوره‌ای */
 $forceAllIn = !empty($_GET['force_all']) || !empty($_POST['force_all']);
 $resumeRequested = !empty($_GET['resume']) || !empty($_POST['resume']);
+$resumeQueueId = trim((string)($_GET['queue_id'] ?? $_POST['queue_id'] ?? ''));
 /* Freeze the page target at click/enqueue time. A large profile save may take
    longer than an arbitrary browser delay, and a queued worker may start much
    later; neither is allowed to fall back to an older 100-page value. */
@@ -20686,7 +20838,7 @@ else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
    قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
 if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
-    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages);
+    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
         'queued'=>!empty($enq['queued']),'worker'=>true,'profile_key'=>$profileKey,
@@ -21747,6 +21899,18 @@ function cronWatchdogQueueOrder(): array {
     return $out;
 }
 
+function cronRecordResumeBlock(array &$results,array $block): void {
+    if(!isset($results['resume_blocks'])||!is_array($results['resume_blocks']))$results['resume_blocks']=[];
+    $sig=implode('|',[(string)($block['kind']??''),(string)($block['which']??''),(string)($block['key']??''),(string)($block['queue_id']??'')]);
+    foreach($results['resume_blocks'] as $old){
+        if(!is_array($old))continue;
+        $oldSig=implode('|',[(string)($old['kind']??''),(string)($old['which']??''),(string)($old['key']??''),(string)($old['queue_id']??'')]);
+        if($oldSig===$sig)return;
+    }
+    $results['resume_blocks'][]=$block;
+    if(empty($results['resume_blocking']))$results['resume_blocking']=$block;
+}
+
 function cronWatchdogs(array $cn): array {
     $results = ['watchdog' => []];
 // v8.33: مرحلهٔ نگهبان — اگر ارسالی وسط راه گیر کرده، ادامه‌اش بده.
@@ -21755,20 +21919,24 @@ function cronWatchdogs(array $cn): array {
     $stallWake = !isset($cn['stall_watchdog']) || !empty($cn['stall_watchdog']);
     if ($stallWake) {
         $results['watchdog'] = [];
-        /* v10.24 (۳۷الف): ترتیبِ بازیابی دیگر ثابتِ ['bsl','woo'] نیست.
-           این تنها جایی است که اولویتِ چیده‌شدهٔ کاربر اثرِ خودکار دارد:
-           وقتی هر دو صف با هم گیر کرده‌اند، آنکه بالاترِ فهرستِ مدیر وظیفه
-           است زودتر جان می‌گیرد — روی هاستِ اشتراکی که یک نوبتِ کران فقط
-           برای یکی‌شان وقت دارد، این تفاوتِ واقعی می‌سازد. */
+        /* Respect the saved destination order, but inspect both independent
+           queues during this pulse. Each backend still has its own flock and
+           only one row per destination can be dispatched at a time. */
         foreach (cronWatchdogQueueOrder() as $wq) {
-            /* توقفِ تمیز هم باید در کران بعدی از checkpoint برگردد؛
-               includePaused فقط در همین watchdogِ کران فعال است. */
-            $w = queueStallRecover($wq, $stallCfg, false, 1500, true);
+            /* Promote every eligible paused row even while a healthy row is
+               running. The destination flock keeps mutation separate from workers. */
+            $batchResume=queuePromotePausedForCron($wq);
+            if(!empty($batchResume['promoted']))
+                $results['paused_rows_promoted'][$wq]=(int)$batchResume['promoted'];
+            /* توقفِ صریحِ کاربر از مسیرِ خودکار عبور نمی‌کند؛ صفِ واجدشرایط
+               در همان ردیف/چک‌پوینت ادامه می‌یابد و workerها آن را به‌ترتیب برمی‌دارند. */
+            $w = queueStallRecover($wq, $stallCfg, false, 1500, true, false, true);
             if (!empty($w['stalled'])) {
                 $results['watchdog'][] = $w;
                 /* A still-held stale lock is reported in cron/task logs, but do
                    not send the same messenger alert every minute while waiting. */
-                if (empty($w['deferred']) || !empty($w['resumed']) || !empty($w['exhausted'])) {
+                if (empty($w['user_stopped'])
+                    && (empty($w['deferred']) || !empty($w['resumed']) || !empty($w['exhausted']))) {
                     notifRunFailure($cn, 'نگهبان صف',
                         $wq === 'bsl' ? 'باسلام' : 'ووکامرس',
                         'ارسال ' . ($w['kind'] === 'waiting' ? 'در صف مانده بود' : 'گیر کرده بود')
@@ -21777,13 +21945,11 @@ function cronWatchdogs(array $cn): array {
                         . (!empty($w['resumed']) ? 'خودکار ادامه داده شد ✅' : 'ادامه ناموفق ❌'));
                 }
             }
-            /* fireAndForget فقط درخواستِ worker را آغاز می‌کند، نه پایانش را.
-               پس صفِ بعدی و بقیهٔ کارها باید به کران بعدی واگذار شوند؛ فاصلهٔ
-               زمانیِ ثابت هرگز جایِ انتظار/ترتیب را نمی‌گیرد. */
+            /* Each destination is dispatched at most once here; their separate
+               backend locks keep repeated cron pulses from creating duplicates. */
             if (!empty($w['resumed'])) {
-                $results['resume_blocking'] = ['kind' => 'queue', 'which' => $wq,
-                    'queue_id' => (string)($w['queue_id'] ?? '')];
-                break;
+                cronRecordResumeBlock($results,['kind'=>'queue','which'=>$wq,
+                    'queue_id'=>(string)($w['queue_id']??'')]);
             }
         }
     }
@@ -21793,7 +21959,7 @@ function cronWatchdogs(array $cn): array {
        کار می‌مُرد (تایم‌اوت هاست، ری‌استارت PHP، قطع شبکه)، ردیف برای همیشه
        «در حال اجرا» می‌ماند و ردیف‌های بعدی هم راه نمی‌افتادند. علامت‌خوردنِ
        «خطا» هم فقط وقتی اتفاق می‌افتاد که کسی صفحهٔ صف را باز کند. */
-    if ($stallWake && empty($results['resume_blocking'])) {
+    if ($stallWake) {
         /* v10.148: بررسی و برداشتنِ ردیف stale باید زیرِ خودِ flock باشد؛
            metadata/سنِ lock به‌تنهایی مالکیت را ثابت نمی‌کند و بین probe و
            mutation پنجرهٔ race می‌سازد. */
@@ -21927,30 +22093,35 @@ function cronWatchdogs(array $cn): array {
 
          • فقط کارهای «رهاشده» (stale). کارِ تمام‌شده دوباره اجرا نمی‌شود؛
            «done» یعنی نتیجه گرفته، نه اینکه ناقص مانده.
-         • صف و استخراج مسیرِ اختصاصیِ checkpoint-aware دارند؛ اگر همان تیک
-           در آن مسیر اجرا شده باشند از گذرِ عمومی رد می‌شوند، وگرنه در همین
-           رجیستری مثل بقیهٔ کارها پوشش داده می‌شوند.
-         • v10.125: سقف «بدونِ پیشرفت» به‌جای سقفِ ساعتیِ کور — تا وقتی کار
-           جلو می‌رود هر تیک ادامه می‌یابد؛ فقط تکرارِ بدونِ پیشرفت مهار
-           می‌شود تا کارِ واقعاً خراب حلقه نسازد.
-         • تکی: هر نوبتِ کران فقط یک کار. روی هاستِ اشتراکی راه‌انداختنِ
-           همزمانِ چند کارِ سنگین همه را کند می‌کند و اصلِ مشکل را برمی‌گرداند.
-         • ترتیب همان اولویتی است که کاربر در مدیر وظیفه چیده. */
+         • صف‌ها مسیرِ checkpoint-aware خودشان را دارند؛ استخراج نیز فقط از
+           گذرِ اختصاصیِ per-profile عبور می‌کند تا queue_id/phase حفظ و توقفِ
+           دستی رعایت شود. سایر کارها از مسیرِ رجیستری ادامه می‌یابند.
+       • v10.125: سقف «بدونِ پیشرفت» به‌جای سقفِ ساعتیِ کور — تا وقتی کار
+         جلو می‌رود هر تیک ادامه می‌یابد؛ فقط تکرارِ بدونِ پیشرفت مهار
+         می‌شود تا کارِ واقعاً خراب حلقه نسازد.
+       • همهٔ کارهای stale و واجد شرایط در همین تیک dispatch می‌شوند؛ قفلِ
+         اختصاصی هر task از اجرای تکراری جلوگیری می‌کند و خودِ workerها/صف‌ها
+         همچنان محدودیتِ همزمانیِ تنظیم‌شده را اعمال می‌کنند.
+       • ترتیب همان اولویتی است که کاربر در مدیر وظیفه چیده. */
     $autoCfg = !isset($cn['auto_resume']) || !empty($cn['auto_resume']);
-    if (empty($results['resume_blocking']) && $autoCfg && function_exists('tasksRowsOrdered')) {
+    if ($autoCfg && function_exists('tasksRowsOrdered')) {
         $arMax  = max(1, min(10, (int)($cn['auto_resume_max'] ?? 3)));  /* v10.103: پیش‌فرض ۳ */
         /* v10.129: همهٔ ردیف‌های رجیستری از همین مسیر عبور می‌کنند.
            صف و استخراج داخل tasksResumeOne به مسیرهای checkpoint-aware خود
            می‌روند؛ بنابراین دیگر skip جداگانه‌ای که «ادامهٔ همه» را ناقص
            کند وجود ندارد. */
         $arNow  = time();
-        $arDone = []; $arBlocked = [];
+        $arDone = []; $arBlocked = []; $arStopped = [];
         foreach (tasksRowsOrdered($arNow) as $arRow) {
             $arKey = (string)$arRow['key'];
-            /* استخراجِ صف، نگهبانِ checkpoint-aware اختصاصی دارد و اگر همین
-               تیک آن را اجرا کرده، نباید یک resume عمومیِ دوم بگیرد. استخراجی
-               که بیرونِ صف stale مانده باشد همچنان از مسیر عمومی پوشش دارد. */
-            if ($arKey === 'extract' && !empty($results['extract_resumed'])) continue;
+            /* Extraction always uses its dedicated per-profile checkpoint pass:
+               it preserves queue_id/phase and honors stopped_by_user. A generic
+               task dispatch here could select a different row or bypass that stop. */
+            if ($arKey === 'extract') continue;
+            if(in_array($arKey,['bsl_send','woo_send'],true)){
+                $_queueKey=$arKey==='bsl_send'?'bsl':'woo';
+                if(!empty($GLOBALS['_queueResumeFired'][$_queueKey]))continue;
+            }
             if ((string)$arRow['state'] !== 'stale') continue;
             if (empty($arRow['resumable']))        continue;
             /* v10.125: سقفِ «بدون پیشرفت» — امضای پیشرفتِ فایلِ کار را با
@@ -21958,8 +22129,11 @@ function cronWatchdogs(array $cn): array {
             $_regT  = tasksRegistry();
             $_arDef = $_regT[$arKey] ?? null;
             $_arF   = is_array($_arDef) ? (string)($_arDef['file'] ?? '') : '';
-            $_arP   = ($_arF !== '' && is_file($_arF))
-                ? (array)json_decode((string)@file_get_contents($_arF), true) : [];
+            $_arP   = $_arF !== '' ? localTaskStateRead($_arF, []) : [];
+            if(tasksResumeExplicitlyStopped($arKey,is_array($_arDef)?$_arDef:[],$_arP)){
+                $arStopped[]=['key'=>$arKey,'title'=>(string)$arRow['title'],'reason'=>'explicit_user_stop'];
+                continue;
+            }
             $_arSig = taskProgressSig($_arP);
             $_arBk  = autoResumeBookSig($arKey);
             $_arTr  = (int)($_arBk['tries'] ?? 0);
@@ -21977,7 +22151,7 @@ function cronWatchdogs(array $cn): array {
                 continue;
             }
             autoResumeBookSet($arKey, $_arSig, $_arTr);
-            $arRes = tasksResumeOne($arKey);
+            $arRes = tasksResumeOne($arKey, 750);
             $arDone[] = ['key' => $arKey, 'title' => (string)$arRow['title'],
                          'idle' => (int)$arRow['age'], 'try' => $_arTr + 1, 'max' => $arMax,
                          'ok' => !empty($arRes['ok']), 'error' => (string)($arRes['error'] ?? '')];
@@ -21987,17 +22161,16 @@ function cronWatchdogs(array $cn): array {
                     ? 'خودکار ادامه داده شد ✅'
                     : 'ادامه ناموفق ❌ ' . (string)($arRes['error'] ?? ''))
                 . ' (تلاشِ بدونِ پیشرفت ' . ($_arTr + 1) . ' از ' . $arMax . ')');
-            /* fireAndForget پاسخِ زودهنگام دارد؛ حتی با پاسخِ موفق، worker
-               هنوز ممکن است مشغول باشد. فقط همین یک کار در این تیک آغاز شود
-               و ادامهٔ صف در کران بعدی، پس از آزادشدنِ کار، انجام گیرد. */
+            /* fireAndForget may return before work completes; continue through
+               other stale tasks because each task's own lock guards dispatch. */
             if (!empty($arRes['ok']) || strpos((string)($arRes['error'] ?? ''), 'فعال') !== false
                 || strpos((string)($arRes['error'] ?? ''), 'پاسخ نداد') !== false) {
-                $results['resume_blocking'] = ['kind' => 'registry', 'key' => $arKey];
-                break;
+                if(empty($arRes['already_dispatched']))cronRecordResumeBlock($results,['kind'=>'registry','key'=>$arKey]);
             }
         }
         if ($arDone)     $results['auto_resume'] = $arDone;
         if ($arBlocked)  $results['auto_resume_blocked'] = $arBlocked;
+        if ($arStopped)  $results['auto_resume_skipped'] = $arStopped;
     }
 
     return $results;
@@ -23761,7 +23934,11 @@ $_cronVisualKind=cronVisualPulseKind();cronVisualPulseWrite($_cronVisualKind);
    worker نباید خودش را به‌عنوان پشتیبان مستقل جا بزند. */
 if((string)getenv('S4_INTERNAL_CRON')!=='1'){
     $GLOBALS['_matrixExternalPulse']=matrixCronPulse(PHP_SAPI==='cli'?'external_cli':'external_http');
-    if(!s4WorkerIsActive())s4SpawnPersistentWorker();
+    $_cronWorkerReady=s4WorkerIsActive();
+    if(!$_cronWorkerReady){$_cronWorkerSpawn=s4SpawnPersistentWorker();$_cronWorkerReady=!empty($_cronWorkerSpawn['ok']);}
+    /* The daemon may need a moment to publish its first heartbeat; a successful
+       spawn is enough to queue this pulse's checkpoints durably. */
+    $GLOBALS['_cronWorkerReady']=$_cronWorkerReady;
 }
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
@@ -24033,15 +24210,9 @@ try {
     $results['watchdog_error'] = 'ابتدایی: ' . mb_substr($e->getMessage(), 0, 200);
 }
 foreach ($wdEarly as $k => $v) { if (!empty($v)) $results[$k] = $v; }
-/* workerهای ادامه با پاسخِ زودهنگام جدا می‌شوند؛ این تیک نباید بعد از
-   dispatch، استخراج/ارسال/ایجنتِ دیگری را هم راه بیندازد. کران بعدی همین
-   رجیستری و checkpoint را دوباره می‌خواند و اولویت را ادامه می‌دهد. */
-if (!empty($wdEarly['resume_blocking'])) {
-    $results['deferred_by_resume'] = true;
-    cronEmit($results);
-    exit;
-}
-
+/* Recovery dispatches are checkpointed and lock-guarded. Do not exit here:
+   first let the extraction pass enqueue every independent paused checkpoint;
+   ordinary scheduled sync remains deferred below when any recovery was started. */
 /* پروفایل‌ها و وضعیت دوباره خوانده می‌شوند تا همگام‌سازیِ پایین نسخهٔ
    کهنه (یا پروفایلِ تازه‌ای که همین تیک عوضش کرده) را نبیند. */
 $profiles  = loadProfiles();
@@ -24050,10 +24221,9 @@ $syncState = loadSyncState();
 /* v9.75: اگر نگهبان، ردیفِ استخراجِ گیرکرده (فازِ ۱ فهرست یا فازِ ۲ جزئیات) را
    برداشته باشد، همان پروفایل را همین‌جا «ادامه» می‌دهیم — نه اینکه صبر کنیم تا
    نوبتِ بعدیِ زمان‌بندی برسد. فازِ مناسب از روی نشانهٔ مرحله انتخاب می‌شود:
-   اگر اجرای قبلی وسطِ جزئیات مانده باشد (stage=detail تازه) → detail؛ وگرنه → all
-   (فهرست + جزئیاتِ فقطِ محصولاتِ جدید/ناقص). ردیفی که اینجا دوباره ساخته می‌شود
-   در صف است، پس حلقهٔ پایین همان پروفایل را تکراری رد می‌کند و کارِ دوگانه پیش
-   نمی‌آید. */
+   اگر اجرای قبلی وسطِ جزئیات مانده باشد (stage=detail تازه) → detail؛ وگرنه از
+   فاز ذخیره‌شده ادامه می‌دهیم. ردیفِ موجودِ صف مالکِ checkpoint می‌ماند؛ worker
+   همان queue_id را ادامه می‌دهد و حلقهٔ پایین برای آن پروفایل کارِ تازه نمی‌سازد. */
 /* v9.92: «ادامهٔ نگهبان» هم باید تابعِ زمان‌بندیِ پروفایل باشد.
 
    این در ۹.۹۱ باگِ اصلیِ «فاز ۲ در هر فراخوانیِ کران اجرا می‌شود» بود و
@@ -24080,117 +24250,132 @@ $syncState = loadSyncState();
    بایستد و چک‌پوینت بنویسد. ضدِ حلقهٔ بی‌پایان هم (v10.124) سقفِ «بدون
    پیشرفت» است نه سقفِ ساعتیِ کور: تا وقتی ادامه جلو می‌رود، هر تیک ادامه
    می‌یابد؛ فقط پروفایلی که چند بار پشت‌سرهم هیچ پیشرفتی نمی‌کند مهار می‌شود. */
-/* v10.123: گذرِ «ادامهٔ استخراج» — مستقل از گیتِ زمان‌بندیِ سینک.
-   خواستهٔ کاربر: استخراجِ متوقف/وسط‌راه‌مانده با کرانِ بعدی ادامه پیدا کند،
-   نه دورهٔ بعدیِ اجرایش — درست مثل زدنِ دکمهٔ «▶ ادامه از صفحهٔ X». فهرستِ
-   کاندیدا از دو جا می‌آید:
-     ۱) پروفایل‌هایی که نگهبانِ بالا ردیفِ بی‌حرکتشان را بسته (extract_resume).
-     ۲) هر پروفایلی که روی دیسک علامتِ فهرست/جزئیاتِ نیمه‌کاره دارد (stage میانی،
-        incomplete، یا _extract_resume_from) و الان واقعاً در حال اجرا نیست —
-        این شاملِ توقفِ تمیزِ بودجهٔ زمانی (ردیفِ paused) هم می‌شود، نه فقطِ مرده‌ها.
-   ضدِ حلقهٔ بی‌پایان: سقفِ تعداد در هر تیک + سقفِ «بدون پیشرفت» هر پروفایل —
-   اگر ادامهٔ قبلی جلو نرفته باشد (امضای پیشرفت ثابت)، پس از چند تلاش مهار
-   می‌شود؛ اما تا وقتی پیشرفت هست، هر تیک ادامه می‌یابد. */
-$_resumeCandidates = array_values(array_unique((array)($wdEarly['extract_resume'] ?? [])));
-$_rQueueNow = extractReadQueue();
-foreach ($profiles as $_rk => $_prR) {
-    if (!is_array($_prR)) continue;
-    $_rStage = (string)($_prR['_extract_stage'] ?? '');
-    $_rMid   = in_array($_rStage, ['list', 'list_done', 'detail', 'stopped'], true);
-    $_rInc   = !empty($_prR['_extract_list_incomplete']) || !empty($_prR['_extract_resume_req'])
-               || (int)($_prR['_extract_resume_from'] ?? 0) > 0;
-    if (!$_rMid && !$_rInc) continue;
-    /* اگر همین پروفایل ردیفِ running یا waiting دارد، یا الان کار می‌کند یا
-       در نوبت است — خودش می‌رود؛ اینجا دوباره شروعش نکن (اجرای موازی). */
-    $_rBusy = extractLockIsHeld();
-    foreach ((array)($_rQueueNow['entries'] ?? []) as $_qe) {
-        if (!is_array($_qe)) continue;
-        if ((string)($_qe['profile_key'] ?? '') !== $_rk) continue;
-        if (in_array((string)($_qe['status'] ?? ''), ['running', 'waiting'], true)) { $_rBusy = true; break; }
-    }
-    if ($_rBusy) continue;
-    if (!in_array($_rk, $_resumeCandidates, true)) $_resumeCandidates[] = $_rk;
+/* v10.404: collect every independent checkpoint and schedule it this pulse.
+   The worker queue applies configured concurrency; a profile owns only one
+   resumable checkpoint. Explicit user stops remain stopped. */
+$_rQueueNow=extractReadQueue();
+$_resumeCandidates=cronExtractResumeCandidates($profiles,(array)($_rQueueNow['entries']??[]),(array)($wdEarly['extract_resume']??[]));
+$_resumeTryLimit=max(1,min(10,(int)($cn['auto_resume_max']??3)));
+$_resumeWorker=s4WorkerIsActive()||!empty($GLOBALS['_cronWorkerReady'])
+    ||(s4ParallelExtractSupported()&&extractTaskConcurrency()>1);
+$_resumeRan=0;$_directResumeStarted=false;
+if(!$_resumeWorker&&$_resumeCandidates){
+    /* Without a worker, mark every eligible existing row as queued for the
+       next pulse. One bounded direct segment runs now; later pulses drain the
+       same row IDs/checkpoints serially instead of silently ignoring peers. */
+    $_directScheduled=extractQueueScheduleResumeCandidates($_resumeCandidates);
+    if(!empty($_directScheduled['scheduled']))$results['extract_resume_scheduled']=$_directScheduled['scheduled'];
 }
-if ($_resumeCandidates) {
-    $_resumeBudget = max(1, min(10, (int)($cn['auto_resume_max'] ?? 3)));  /* سقف در هر تیک */
-    $_resumeRan = 0;
-    foreach ($_resumeCandidates as $_rk) {
-        if ($_rk === '') continue;
-        if ($_resumeRan >= $_resumeBudget) {
-            $results['extract_resume_skipped'][] = ['key' => $_rk, 'reason' => 'tick_budget'];
+if($_resumeCandidates){
+    foreach($_resumeCandidates as $_rc){
+        $_rk=(string)($_rc['key']??'');if($_rk==='')continue;
+        $_profilesFresh=loadProfiles();$_prR=$_profilesFresh[$_rk]??null;if(!is_array($_prR))continue;
+        $_rQueueId=(string)($_rc['queue_id']??'');
+        if(tasksResumeExplicitlyStopped('extract',[],readProgress(EXTRACT_PROGRESS_FILE))){
+            $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'explicit_user_stop'];continue;
+        }
+        $_queueFresh=extractReadQueue();$_profileAlreadyActive=false;
+        foreach((array)($_queueFresh['entries']??[])as $_freshRow){
+            if(!is_array($_freshRow)||(string)($_freshRow['profile_key']??'')!==$_rk)continue;
+            if($_rQueueId!==''&&(string)($_freshRow['id']??'')===$_rQueueId)continue;
+            if(in_array((string)($_freshRow['status']??''),['running','waiting'],true)){
+                $_profileAlreadyActive=true;break;
+            }
+        }
+        if($_profileAlreadyActive){$results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'already_running_or_queued'];continue;}
+        if($_rQueueId!==''&&extractQueueRowStoppedByUser($_rQueueId)){
+            $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'stopped_by_user'];
             continue;
         }
-        $_prR = $profiles[$_rk] ?? null;
-        if (!is_array($_prR)) continue;
-        /* v10.124: سقفِ «بدون پیشرفت» — فقط وقتی مهار می‌شود که ادامهٔ قبلی
-           هیچ پیشرفتی نکرده باشد (امضای چک‌پوینت ثابت). پیشرفتِ هر بار، شمارنده
-           را صفر می‌کند تا کاتالوگِ بزرگِ سالم هر تیک جلو برود. */
-        $_rSig  = extractResumeSig($_prR);
-        $_rMeta = is_array($_prR['_extract_resume_meta'] ?? null) ? $_prR['_extract_resume_meta'] : [];
-        $_rPrevSig = (string)($_rMeta['sig'] ?? '');
-        $_rPrevAt  = (int)($_rMeta['at'] ?? 0);
-        $_rTries   = (int)($_rMeta['tries'] ?? 0);
-        if ($_rPrevSig !== '' && $_rPrevSig === $_rSig && (time() - $_rPrevAt) < AUTO_RESUME_WINDOW) {
-            $_rTries++;
-        } else {
-            $_rTries = 0;
+        if(!$_resumeWorker&&$_directResumeStarted){
+            /* Exec-disabled hosts have no durable worker/parallel slots. Every
+               existing candidate was already marked waiting above; start only
+               one bounded inline segment to stay within the host request budget. */
+            $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'direct_segment_budget','queued_for_next_cron'=>true];
+            continue;
         }
-        if ($_rTries >= $_resumeBudget) {
-            /* Never disable a checkpoint for the whole AUTO_RESUME_WINDOW.
-               Back off progressively, then let the next cron try again. */
-            $_rBackoff=min(900,30*(2**min(5,max(0,$_rTries-$_resumeBudget))));
+        /* v10.124: bound retries only when the saved checkpoint made no
+           progress; this limit is per profile, never a per-tick batch cap. */
+        $_rSig=extractResumeSig($_prR);
+        $_rMeta=is_array($_prR['_extract_resume_meta']??null)?$_prR['_extract_resume_meta']:[];
+        $_rPrevSig=(string)($_rMeta['sig']??'');$_rPrevAt=(int)($_rMeta['at']??0);$_rTries=(int)($_rMeta['tries']??0);
+        if($_rPrevSig!==''&&$_rPrevSig===$_rSig&&(time()-$_rPrevAt)<AUTO_RESUME_WINDOW)$_rTries++;
+        else $_rTries=0;
+        if($_rTries>=$_resumeTryLimit){
+            $_rBackoff=min(900,30*(2**min(5,max(0,$_rTries-$_resumeTryLimit))));
             if(time()-$_rPrevAt<$_rBackoff){
-                $results['extract_resume_skipped'][]=['key'=>$_rk,'reason'=>'backoff','tries'=>$_rTries,'retry_after'=>$_rBackoff-(time()-$_rPrevAt)];
+                $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'backoff','tries'=>$_rTries,
+                    'retry_after'=>$_rBackoff-(time()-$_rPrevAt)];
                 continue;
             }
         }
-        /* امضا و شمارنده را «پیش از» اجرا بنویس تا اگر هاست وسطِ کار کشت،
-           تیکِ بعدی بداند این تلاش از کجا شروع شد و پیشرفتی کرده یا نه. */
-        $_prR['_extract_resume_meta'] = ['sig' => $_rSig, 'at' => time(), 'tries' => $_rTries];
-        $profiles[$_rk] = $_prR;
-        saveProfiles($profiles);
-        $_prep = extractResumePrepare($_rk, $cn);
-        if (empty($_prep['ok'])) {
-            $results['extract_resume_skipped'][] = ['key' => $_rk, 'reason' => $_prep['reason'] ?: 'no_profile'];
+        /* Persist only resume metadata under the shared profile-write lock; a
+           concurrent checkpoint for this or another profile must stay intact. */
+        $_rMetaNew=['sig'=>$_rSig,'at'=>time(),'tries'=>$_rTries];
+        try{
+            if(!extractResumeMetaSaveAtomic($_rk,$_rMetaNew))throw new RuntimeException('profile_save');
+            $_prR['_extract_resume_meta']=$_rMetaNew;$profiles[$_rk]=$_prR;
+        }catch(Throwable $_saveResumeEx){
+            $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'profile_save'];
             continue;
         }
-        cronMarkRun($_rk, 'extract_resume');
-        $syncState = loadSyncState();
-        try {
-            if(s4WorkerIsActive()){
-                /* Reservation belongs to this cron process; release it before
-                   handing checkpoint ownership to the persistent worker. */
-                extractLockRelease((string)($_prep['queue_id']??''));
-                $_rr=s4WorkerEnqueueBackendExtract($_rk,(string)$_prep['phase'],false,true);
-                $results['extract_resumed'][]=['key'=>$_rk,'phase'=>$_prep['phase'],'ok'=>!empty($_rr['ok']),
-                    'driver'=>'persistent_worker','job_id'=>(string)($_rr['job_id']??''),'revived'=>!empty($_rr['revived'])];
-            }else{
-                /* On exec-disabled hosting this HTTP cron request remains
-                   attached and runs exactly one bounded checkpoint segment. */
-                $_rr=runBackendExtract($_rk,'cron_resume',false,$_prep['phase'],false,(string)($_prep['queue_id']??''));
-                $results['extract_resumed'][]=['key'=>$_rk,'phase'=>$_prep['phase'],'ok'=>!empty($_rr['ok']),
-                    'driver'=>isset($GLOBALS['_internalBrowserCronKeep'])?'internal_browser_cron':'external_http_cron',
-                    'resume_needed'=>!empty($_rr['resume_needed']),'extracted'=>(int)($_rr['extracted']??0)];
+        if($_resumeWorker){
+            $_rPhase=extractResumePhase($_prR);
+            try{
+                $_rr=s4WorkerEnqueueBackendExtract($_rk,$_rPhase,false,true,-1,$_rQueueId);
+                if(empty($_rr['ok'])){
+                    $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,
+                        'reason'=>(string)($_rr['error']??'worker_enqueue_failed')];
+                    continue;
+                }
+                $_actualQueueId=(string)($_rr['queue_id']??$_rQueueId);
+                cronMarkRun($_rk,'extract_resume');
+                $_superseded=$_actualQueueId!==''?extractQueueSupersedeOlderPausedRows($_rk,$_actualQueueId):0;
+                cronRecordResumeBlock($results,['kind'=>'extract','key'=>$_rk,'queue_id'=>$_actualQueueId]);
+                $results['extract_resumed'][]=['key'=>$_rk,'phase'=>$_rPhase,'queue_id'=>$_actualQueueId,'ok'=>true,
+                    'driver'=>s4WorkerIsActive()?'persistent_worker':'parallel_worker','job_id'=>(string)($_rr['job_id']??''),
+                    'revived'=>!empty($_rr['revived']),'superseded_rows'=>$_superseded];
+                $_resumeRan++;
+            }catch(Throwable $_rEx){
+                $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,
+                    'reason'=>mb_substr($_rEx->getMessage(),0,160)];
             }
-            $results['resume_blocking'] = true;
-        } catch (Throwable $_rEx) {
+            continue;
+        }
+        $_prep=extractResumePrepare($_rk,$cn,$_rQueueId);
+        if(empty($_prep['ok'])){
+            $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>(string)($_prep['reason']??'no_profile')];
+            continue;
+        }
+        $_directResumeStarted=true;cronMarkRun($_rk,'extract_resume');
+        try{
+            $_rr=runBackendExtract($_rk,'cron_resume',false,(string)$_prep['phase'],false,(string)($_prep['queue_id']??''));
+            $_actualQueueId=(string)($_prep['queue_id']??'');
+            $_superseded=!empty($_rr['ok'])&&$_actualQueueId!==''?extractQueueSupersedeOlderPausedRows($_rk,$_actualQueueId):0;
+            cronRecordResumeBlock($results,['kind'=>'extract','key'=>$_rk,'queue_id'=>$_actualQueueId]);
+            $results['extract_resumed'][]=['key'=>$_rk,'phase'=>(string)$_prep['phase'],'queue_id'=>$_actualQueueId,'ok'=>!empty($_rr['ok']),
+                'driver'=>isset($GLOBALS['_internalBrowserCronKeep'])?'internal_browser_cron':'external_http_cron',
+                'resume_needed'=>!empty($_rr['resume_needed']),'extracted'=>(int)($_rr['extracted']??0),'superseded_rows'=>$_superseded];
+        }catch(Throwable $_rEx){
             extractLockRelease((string)($_prep['queue_id']??''));
-            $results['extract_resumed'][] = ['key' => $_rk, 'phase' => $_prep['phase'], 'ok' => false,
-                'error' => mb_substr($_rEx->getMessage(), 0, 160)];
-            $results['resume_blocking'] = true;
+            cronRecordResumeBlock($results,['kind'=>'extract','key'=>$_rk,'queue_id'=>(string)($_prep['queue_id']??'')]);
+            $results['extract_resumed'][]=['key'=>$_rk,'phase'=>(string)$_prep['phase'],'queue_id'=>(string)($_prep['queue_id']??''),
+                'ok'=>false,'error'=>mb_substr($_rEx->getMessage(),0,160)];
         }
         $_resumeRan++;
-        break;
     }
-    // پروفایل‌ها و وضعیت را بعد از ادامه‌دادن دوباره بخوان تا حلقهٔ پایین نسخهٔ تازه ببیند
-    $profiles  = loadProfiles();
-    $syncState = loadSyncState();
+    $profiles=loadProfiles();$syncState=loadSyncState();
     if($_resumeRan>0){
-        /* One owner/segment per pulse keeps cron latency bounded and prevents
-           fresh scheduled work from overlapping the resumed checkpoint. */
         $results['deferred_by_extract_resume']=true;
+        $results['extract_resume_queued']=$_resumeRan;
         cronEmit($results);exit;
     }
+}
+/* Send/registry recovery must not suppress the checkpoint scan above, but it
+   still defers fresh scheduled sync when no extraction checkpoint was queued. */
+if(!empty($wdEarly['resume_blocking'])){
+    $results['deferred_by_resume']=true;
+    cronEmit($results);exit;
 }
 
 /* =====================================================================
@@ -24906,23 +25091,26 @@ if (!manualSyncActive()) {
     try {
         $_pumpStall = max(120, (int)($cn['stall_after'] ?? 300));
         foreach (cronWatchdogQueueOrder() as $_pq) {
-            $_pqChk = queueStallCheck($_pq, $_pumpStall);
+            /* Include all non-user pauses so this later pump also works when
+               the early watchdog is disabled or a checkpoint appeared mid-tick. */
+            $_pqChk = queueStallCheck($_pq, $_pumpStall, true);
             if (empty($_pqChk['stalled'])) continue;
-            $_pqRec = queueStallRecover($_pq, $_pumpStall, false, 120000);
+            /* Dispatch promptly, then inspect the other independent destination
+               in the same cron pulse instead of spending up to two minutes here. */
+            $_pqRec = queueStallRecover($_pq, $_pumpStall, false, 2500, true, false, true);
             $results['send_pump'][$_pq] = [
                 'from'    => (int)($_pqChk['current'] ?? 0),
                 'total'   => (int)($_pqChk['total'] ?? 0),
                 'resumed' => !empty($_pqRec['resumed']),
+                'promoted_rows'=>(int)($_pqRec['promoted_rows']??0),
             ];
             $_pqAfter = queueStallCheck($_pq, $_pumpStall);
             $results['send_pump'][$_pq]['now'] = (int)($_pqAfter['current'] ?? 0);
             if (!empty($_pqRec['resumed'])) {
-                /* این worker هم پاسخِ زودهنگام دارد؛ صفِ مقصدِ دیگر و همهٔ
-                   کارهای پایین‌تر باید به تیکِ بعدی واگذار شوند. */
                 $_pumpBlocking = true;
-                break;
+                cronRecordResumeBlock($results,['kind'=>'queue','which'=>$_pq,
+                    'queue_id'=>(string)($_pqRec['queue_id']??$_pqChk['queue_id']??'')]);
             }
-            if (empty($_pqAfter['stalled'])) break;
         }
     } catch (Throwable $e) {
         $results['send_pump_error'] = mb_substr($e->getMessage(), 0, 200);
@@ -27356,6 +27544,12 @@ function tasksStopFile(string $key): string {
     return (string)($files[$key] ?? '');
 }
 
+function tasksResumeExplicitlyStopped(string $key,array $def,array $progress=[]): bool {
+    $stopFile=tasksStopFile($key);
+    return ($stopFile!==''&&is_file($stopFile))||!empty($progress['stopped'])||!empty($progress['cancelled'])
+        ||!empty($progress['stopped_by_user'])||(string)($progress['paused_by']??'')==='user';
+}
+
 /** آیا قفلِ موتور واقعاً مرده است؟ unlink روی قفلِ در دستِ پردازه ممنوع است. */
 function tasksResumeLockDead(string $file): bool {
     if (!is_file($file)) return true;
@@ -27375,11 +27569,15 @@ function tasksResumeLockDead(string $file): bool {
  * زود یکی از دو نسخه اصلاح شود و دیگری نه — مثلاً قفلِ یک کارِ تازه فقط
  * در یکی از دو مسیر پاک شود.
  */
-function tasksResumeOne(string $key): array {
+function tasksResumeOne(string $key,int $timeoutMs=2500,bool $allowUserStoppedResume=false): array {
     $reg = tasksRegistry();
     if (!isset($reg[$key])) return ['ok' => false, 'error' => 'کارِ ناشناخته'];
     $def = $reg[$key];
     $row = tasksBuildRow($key, $def, time());
+    if(!$allowUserStoppedResume){
+        $progress=localTaskStateRead((string)($def['file']??''),[]);
+        if(tasksResumeExplicitlyStopped($key,$def,$progress))return ['ok'=>false,'error'=>'explicit_user_stop'];
+    }
     if ($row['state'] === 'running')
         return ['ok' => false, 'error' => 'این کار همین حالا در حال اجراست'];
     $url = (string)$row['resume'];
@@ -27406,7 +27604,8 @@ function tasksResumeOne(string $key): array {
         if (!empty($GLOBALS['_queueResumeFired'][$which])) {
             return ['ok' => true, 'resumed' => $key, 'already_dispatched' => true];
         }
-        $rec = queueStallRecover($which, max(120, (int)(loadConnections()['stall_after'] ?? 300)), false, 2500, true);
+        $rec = queueStallRecover($which, max(120, (int)(loadConnections()['stall_after'] ?? 300)), false, 2500,
+            true, $allowUserStoppedResume, !$allowUserStoppedResume);
         if (!empty($rec['resumed'])) {
             return ['ok' => true, 'resumed' => $key, 'url' => $url,
                 'dispatched' => true, 'resume_from' => (int)($rec['resume_from'] ?? 0)];
@@ -27445,7 +27644,7 @@ function tasksResumeOne(string $key): array {
         ];
     }
 
-    $started = fireAndForget($url, 2500, $post);
+    $started = fireAndForget($url, max(250,min(5000,$timeoutMs)), $post);
     return ['ok' => $started, 'resumed' => $key, 'url' => $url,
             'dispatched' => $started,
             'error' => $started ? '' : 'worker برای ادامه پاسخ نداد'];
@@ -27674,7 +27873,7 @@ if (isset($_GET['tasks_stop'])) {
  */
 if (isset($_GET['tasks_resume'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $res = tasksResumeOne((string)($_GET['key'] ?? ''));
+    $res = tasksResumeOne((string)($_GET['key'] ?? ''),2500,true);
     echo json_encode($res, JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -27706,7 +27905,7 @@ if (isset($_GET['tasks_resume_all'])) {
             $skipped[] = ['key' => $r['key'], 'why' => 'پس از پایانِ کارِ اولویتِ بالاتر، در کران بعدی ادامه می‌یابد'];
             continue;
         }
-        $one = tasksResumeOne((string)$r['key']);
+        $one = tasksResumeOne((string)$r['key'],2500,true);
         if (!empty($one['ok'])) {
             $done[] = ['key' => $r['key'], 'title' => $r['title'], 'rank' => $r['rank']];
             $dispatched = true;
@@ -38723,13 +38922,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
           && strpos($selfSrc, 'please keep this ' . 'tab open') === false));
 
     /* ==== ۶۳ (v10.49) ==== */
-    $add('10.49', 'نسخهٔ ۱۰.۴۹',
-         str_contains($selfSrc, "const APP_VERSION = '10.49';"));
-    $add('10.49.1', 'پمپِ ارسالِ کران: صفِ گیر را تا ۱۲۰ ثانیه جلو می‌راند',
-         str_contains($selfSrc, "\$_pqRec = queueStallRecover(\$_pq, \$_pumpStall, false, 120000);")
+    $add('10.49', 'نسخه از کفِ ۱۰.۴۹ پایین‌تر نرفته است',
+         version_compare(APP_VERSION,'10.49','>='));
+    $add('10.49.1', 'پمپِ ارسالِ کران هر دو مقصد را بی‌انتظارِ ۱۲۰ثانیه‌ای بررسی می‌کند',
+         str_contains($selfSrc, "\$_pqRec = queueStallRecover(\$_pq, \$_pumpStall, false, 2500, true, false, true);")
+      && str_contains($selfSrc, "foreach (cronWatchdogQueueOrder() as \$_pq)")
       && str_contains($selfSrc, "\$results['send_pump'][\$_pq]"));
     $add('10.49.2', 'queueStallRecover مهلتِ انتظارِ قابل‌تنظیم دارد',
-         str_contains($selfSrc, "function queueStallRecover(string \$which, int \$staleAfter = 300, bool \$dryRun = false, int \$waitMs = 1500, bool \$includePaused = false): array {")
+         str_contains($selfSrc, "function queueStallRecover(string \$which, int \$staleAfter = 300, bool \$dryRun = false, int \$waitMs = 1500, bool \$includePaused = false, bool \$allowUserStopped = false, bool \$resumeAllPaused = false): array {")
       && str_contains($selfSrc, "\$chk['resumed'] = fireAndForget('action=' . \$action, \$waitMs, \$post);"));
     $add('10.49.3', 'پمپ در همگام‌سازیِ دستی اجرا نمی‌شود (مرورگر خودش می‌کوبد)',
          str_contains($selfSrc, "if (!manualSyncActive()) {"));
@@ -41770,10 +41970,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          && strpos($selfSrc, 'runBackendExtract($profileKey,' . "isCliRun()?'worker_child':'manual'") !== false
          && strpos($selfSrc, "\$resumeLockQueueId);") !== false);
 
-    $add('10.147', 'توقفِ ساخت جدول فقط بعد از lock مصرف می‌شود و صفِ paused خودکار resume نمی‌شود',
-         strpos($selfSrc, "function queueStallCheck(string \$which, int \$staleAfter = 300, bool \$includePaused = false): array {") !== false
-         && strpos($selfSrc, "function queueStallRecover(string \$which, int \$staleAfter = 300, bool \$dryRun = false, int \$waitMs = 1500, bool \$includePaused = false): array {") !== false
-         && strpos($selfSrc, "queueStallRecover(\$which, max(120, (int)(loadConnections()['stall_after'] ?? 300)), false, 2500, true);") !== false
+    $add('10.404', 'هر تیکِ کران، checkpointهای صفِ paused را در همان ردیف به waiting می‌برد و توقفِ کاربر را نگه می‌دارد',
+         strpos($selfSrc, "function queueStallCheck(string \$which, int \$staleAfter = 300, bool \$includePaused = false, bool \$allowUserPaused = false): array {") !== false
+         && strpos($selfSrc, "function queueStallRecover(string \$which, int \$staleAfter = 300, bool \$dryRun = false, int \$waitMs = 1500, bool \$includePaused = false, bool \$allowUserStopped = false, bool \$resumeAllPaused = false): array {") !== false
+         && strpos($selfSrc, "queueStallRecover(\$which, max(120, (int)(loadConnections()['stall_after'] ?? 300)), false, 2500,") !== false
+         && strpos($selfSrc, 'function queuePromoteEligiblePausedRows(')!==false
+         && strpos($selfSrc, 'function queuePromotePausedForCron(')!==false
+         && strpos($selfSrc, '$batchResume=queuePromotePausedForCron($wq);')!==false
+         && strpos($selfSrc, 'function queueHasFreshUserStop(')!==false
+         && strpos($selfSrc, 'function queueHasExplicitUserStop(')!==false
          && strpos($selfSrc, "if (\$matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());") !== false);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
@@ -44622,6 +44827,106 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"\$__skipExtraPrice=\$bslResumePhase==='extra_shop_price_done'")!==false
       && strpos($selfSrc,'$__shopFixed++;')!==false
       && strpos($selfSrc,'if($__shopFixed>0)')!==false);
+
+    $_resumeProfiles404=[
+        'p-a'=>['_extract_stage'=>'list','_extract_list_incomplete'=>true,'_extract_resume_from'=>10],
+        'p-b'=>['_extract_stage'=>'detail','_extract_resume_phase'=>'detail'],
+        'p-c'=>['_extract_stage'=>'list','_extract_list_incomplete'=>true],
+        'p-d'=>['_extract_stage'=>'detail','_extract_resume_phase'=>'detail'],
+    ];
+    $_resumeRows404=[
+        ['id'=>'a-old','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'updated_at'=>100],
+        ['id'=>'a-new','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'updated_at'=>200],
+        ['id'=>'b-user-stop','profile_key'=>'p-b','status'=>'paused','resumable'=>true,'stopped_by_user'=>true,'updated_at'=>300],
+        ['id'=>'c-running','profile_key'=>'p-c','status'=>'running','updated_at'=>250],
+        ['id'=>'c-paused','profile_key'=>'p-c','status'=>'paused','resumable'=>true,'updated_at'=>220],
+        ['id'=>'d-paused','profile_key'=>'p-d','status'=>'paused','resumable'=>true,'updated_at'=>150],
+    ];
+    $_resumeCandidates404=cronExtractResumeCandidates($_resumeProfiles404,$_resumeRows404);
+    $_resumeMap404=[];foreach($_resumeCandidates404 as $_candidate404)$_resumeMap404[$_candidate404['key']]=$_candidate404['queue_id'];
+    $add('10.404','کران همهٔ checkpointهای مستقل را می‌چیند، ردیفِ تازه‌تر را نگه می‌دارد و توقفِ کاربر را محترم می‌شمارد',
+         count($_resumeMap404)===2&&($_resumeMap404['p-a']??'')==='a-new'&&($_resumeMap404['p-d']??'')==='d-paused'
+      && !isset($_resumeMap404['p-b'])&&!isset($_resumeMap404['p-c']));
+    $add('10.404','resume فازِ list/detail ذخیره‌شده را حفظ می‌کند و همهٔ queue_idهای eligible ثبت می‌شوند',
+         extractResumePhase(['_extract_stage'=>'stopped','_extract_resume_phase'=>'detail'])==='detail'
+      && extractResumePhase(['_extract_stage'=>'list','_extract_list_incomplete'=>true])==='list'
+      && strpos($selfSrc,'function cronExtractResumeCandidates(')!==false
+      && strpos($selfSrc,'extractQueueSupersedeOlderPausedRows(')!==false);
+    $_sendRows404=[
+        ['id'=>'send-running','status'=>'running','current'=>31],
+        ['id'=>'send-auto-paused','status'=>'paused','current'=>17,'phase'=>'send','resume_requested_at'=>123],
+        ['id'=>'send-auto-paused-2','status'=>'paused','current'=>40,'phase'=>'extra_shop_price_done'],
+        ['id'=>'send-user-paused','status'=>'paused','paused_by'=>'user','stopped_by_user'=>true,'current'=>8],
+        ['id'=>'send-waiting','status'=>'waiting','current'=>22],
+    ];
+    $_sendPromoted404=queuePromoteEligiblePausedRows($_sendRows404,'send-running',false);
+    $_sendMap404=[];foreach($_sendRows404 as $_sendRow404)$_sendMap404[$_sendRow404['id']]=$_sendRow404;
+    $add('10.404','صفِ ارسال همهٔ pausedهای خودکار را درجا به waiting می‌برد، checkpoint را نگه می‌دارد و توقفِ کاربر را رد می‌کند',
+         $_sendPromoted404===2&&($_sendMap404['send-auto-paused']['status']??'')==='waiting'
+      && (int)($_sendMap404['send-auto-paused']['current']??0)===17
+      && (string)($_sendMap404['send-auto-paused']['phase']??'')==='send'
+      && (int)($_sendMap404['send-auto-paused']['resume_requested_at']??-1)===0
+      && ($_sendMap404['send-auto-paused-2']['status']??'')==='waiting'
+      && (int)($_sendMap404['send-auto-paused-2']['current']??0)===40
+      && (string)($_sendMap404['send-auto-paused-2']['phase']??'')==='extra_shop_price_done'
+      && ($_sendMap404['send-user-paused']['status']??'')==='paused'
+      && !empty($_sendMap404['send-user-paused']['stopped_by_user']));
+    $_queuedProfiles404=['extract-direct'=>['_extract_stage'=>'detail'],'extract-other'=>['_extract_stage'=>'detail']];
+    $_queuedRows404=[
+        ['id'=>'extract-direct-1','profile_key'=>'extract-direct','status'=>'waiting','cron_resume_pending'=>true,'resumable'=>true,'current'=>14,'updated_at'=>400],
+        ['id'=>'extract-other-1','profile_key'=>'extract-other','status'=>'waiting','resumable'=>true,'current'=>9,'updated_at'=>500],
+    ];
+    $_queuedCandidates404=cronExtractResumeCandidates($_queuedProfiles404,$_queuedRows404);
+    $add('10.404','هاستِ بدون worker، ردیف‌های extraction زمان‌بندی‌شده را در tickهای بعدی از همان queue_id برمی‌دارد',
+         count($_queuedCandidates404)===1&&($_queuedCandidates404[0]['key']??'')==='extract-direct'
+      && ($_queuedCandidates404[0]['queue_id']??'')==='extract-direct-1'
+      && strpos($selfSrc,'function extractQueueScheduleResumeCandidates(')!==false
+      && strpos($selfSrc,'cron_resume_pending')!==false
+      && strpos($selfSrc,"'reason'=>'direct_segment_budget','queued_for_next_cron'=>true")!==false);
+    $_resumeBlocks404=[];
+    cronRecordResumeBlock($_resumeBlocks404,['kind'=>'queue','which'=>'bsl','queue_id'=>'bsl-1']);
+    cronRecordResumeBlock($_resumeBlocks404,['kind'=>'queue','which'=>'woo','queue_id'=>'woo-1']);
+    cronRecordResumeBlock($_resumeBlocks404,['kind'=>'registry','key'=>'ai_test']);
+    $add('10.404','گزارش کران همهٔ dispatchها را نگه می‌دارد و resume_blocking قدیمی را سازگار حفظ می‌کند',
+         count($_resumeBlocks404['resume_blocks']??[])===3
+      && (($_resumeBlocks404['resume_blocking']['which']??'')==='bsl')
+      && strpos($selfSrc,'$preferredQueueId')!==false
+      && strpos($selfSrc,'resume_row_stopped_by_user')!==false);
+    $_resumeScan404=strpos($selfSrc,'$_resumeCandidates=cronExtractResumeCandidates');
+    $_resumeExit404=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking']))",$_resumeScan404===false?0:$_resumeScan404);
+    $add('10.404','گذرِ checkpoint پیش از خروج به‌خاطر recovery صف اجرا می‌شود و نسخه/CHANGELOG هماهنگ‌اند',
+         $_resumeScan404!==false&&$_resumeExit404!==false&&$_resumeScan404<$_resumeExit404
+      && strpos($selfSrc,"{v:'10." . "404',")!==false
+      && version_compare(APP_VERSION,'10.404','>='));
+    $_sendPumpStart404=strpos($selfSrc,'$_pumpBlocking = false;');
+    $_sendPumpLoop404=strpos($selfSrc,'foreach (cronWatchdogQueueOrder() as $_pq)',$_sendPumpStart404===false?0:$_sendPumpStart404);
+    $_sendPumpEnd404=strpos($selfSrc,'if ($_pumpBlocking)',$_sendPumpLoop404===false?0:$_sendPumpLoop404);
+    $_sendPumpChunk404=$_sendPumpLoop404!==false&&$_sendPumpEnd404!==false
+        ?substr($selfSrc,$_sendPumpLoop404,$_sendPumpEnd404-$_sendPumpLoop404):'';
+    $add('10.404','پمپِ پایانی همهٔ صفوف paused را صف‌بندی می‌کند و پیش از بررسیِ مقصدِ دوم خارج نمی‌شود',
+         $_sendPumpChunk404!==''&&strpos($_sendPumpChunk404,'queueStallCheck($_pq, $_pumpStall, true)')!==false
+      && strpos($_sendPumpChunk404,'false, 2500, true, false, true)')!==false
+      && strpos($_sendPumpChunk404,'cronRecordResumeBlock')!==false
+      && strpos($_sendPumpChunk404,'break;')===false);
+    $add('10.404','بازیابیِ خودکار توقفِ صریح را نگه می‌دارد ولی ادامهٔ دستی آن را override می‌کند',
+         tasksResumeExplicitlyStopped('__selftest_unknown',[],['stopped'=>true])
+      && tasksResumeExplicitlyStopped('__selftest_unknown',[],['paused_by'=>'user'])
+      && !tasksResumeExplicitlyStopped('__selftest_unknown',[],[])
+         && strpos($selfSrc,"tasksResumeOne((string)(\$_GET['key'] ?? ''),2500,true)")!==false
+      && strpos($selfSrc,'tasksResumeOne($arKey, 750)')!==false
+      && strpos($selfSrc,'tasksResumeExplicitlyStopped($arKey,')!==false
+      && strpos($selfSrc,'function queueHasExplicitUserStop(')!==false
+      && strpos($selfSrc,'function queuePromotePausedForCron(')!==false
+      && strpos($selfSrc,'function queuePauseRowsAfterStop(')!==false
+      && strpos($selfSrc,"queuePauseRowsAfterStop('woo'")!==false
+      && strpos($selfSrc,"queuePauseRowsAfterStop('bsl'")!==false
+      && strpos($selfSrc,'$post[\'auto_resume\']=\'1\'')!==false
+      && strpos($selfSrc,'$wooAutomaticResume')!==false
+      && strpos($selfSrc,'$automaticResume')!==false
+      && strpos($selfSrc,"tasksResumeExplicitlyStopped('woo_send'")!==false
+      && strpos($selfSrc,"tasksResumeExplicitlyStopped('bsl_send'")!==false
+      && strpos($selfSrc,'$chk[\'reason_defer\']=\'explicit_user_stop_race\'')!==false
+      && strpos($selfSrc,'$finished = !$explicitStop &&')!==false);
 
     $add('10.354', 'دکمهٔ ترکیبی build و اصلاح کلی را به ترتیب در یک صف سرور می‌گذارد',
          strpos($selfSrc, 'function syncMatrixBuildAnd' . 'Fix()') !== false
@@ -48611,6 +48916,9 @@ function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): 
     if ($err !== 0) return false;
     /* پاسخِ فوریِ workerِ موازی «already running» است، نه dispatch موفق. */
     $reply = is_string($body) ? json_decode($body, true) : null;
+    if(is_array($reply)&&!empty($reply['stopped'])&&!empty($post['auto_resume'])){
+        $GLOBALS['_queueDispatchStopped']=true;return false;
+    }
     if (is_array($reply) && empty($reply['ok']) && (!empty($reply['skipped']) || !empty($reply['running']))) return false;
     return true;
 }
@@ -48634,7 +48942,7 @@ function queueBackendUnlock($fp): void {
  * گیر کرده = ردیفی در حال اجراست ولی از آخرین پیشرفتش بیش از
  * $staleAfter ثانیه گذشته، یا ردیفی در انتظار مانده و هیچ‌کس نمی‌بردش.
  */
-function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaused = false): array {
+function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaused = false, bool $allowUserPaused = false): array {
     $isBsl = $which === 'bsl';
     $qFile = $isBsl ? BSL_QUEUE_FILE : WOO_QUEUE_FILE;
     $pFile = $isBsl ? BSL_PROGRESS_FILE : WOO_PROGRESS_FILE;
@@ -48651,7 +48959,9 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
             if ($running === null) $running = $e;
             if ($ownedRunning === null && queueProgressBelongsToRow($progressSnapshot, $e, $runningCount)) $ownedRunning = $e;
         }
-        if (($st === 'waiting' || ($includePaused && $st === 'paused' && (string)($e['paused_by'] ?? '') !== 'user')) && $waiting === null) $waiting = $e;
+        if (($st === 'waiting' || ($includePaused && $st === 'paused'
+            && ($allowUserPaused || ((string)($e['paused_by'] ?? '') !== 'user' && empty($e['stopped_by_user'])))))
+            && $waiting === null) $waiting = $e;
     }
     if ($ownedRunning !== null) $running = $ownedRunning;
     if ($running === null && $waiting === null) {
@@ -48665,7 +48975,9 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
         $sameRow = queueProgressBelongsToRow($pg, $running, $runningCount);
         $tot = (int)($running['total'] ?? 0);
         $cur = max((int)($running['current'] ?? 0), $sameRow ? (int)($pg['current'] ?? 0) : 0);
-        $finished = !empty($pg['done']) || ($tot > 0 && $cur >= $tot);
+        $explicitStop=!empty($pg['stopped'])||!empty($pg['cancelled'])||!empty($pg['stopped_by_user'])
+            ||(string)($pg['paused_by']??'')==='user';
+        $finished = !$explicitStop && (!empty($pg['done']) || ($tot > 0 && $cur >= $tot));
         if ($sameRow && $finished) {
             /* بسته‌کردنِ ردیفِ تمام‌شده هم mutation است؛ آن را با snapshot
                قدیمی و بدونِ مالکیت ننویس، چون worker/دکمه ممکن است در همین
@@ -48695,7 +49007,8 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
                 $waiting = null;
                 foreach ($entries as $e) {
                     if (($e['status'] ?? '') === 'waiting'
-                        || ($includePaused && ($e['status'] ?? '') === 'paused' && (string)($e['paused_by'] ?? '') !== 'user')) { $waiting = $e; break; }
+                        || ($includePaused && ($e['status'] ?? '') === 'paused'
+                            && ($allowUserPaused || ((string)($e['paused_by'] ?? '') !== 'user' && empty($e['stopped_by_user']))))) { $waiting = $e; break; }
                 }
                 if ($waiting === null) {
                     return ['stalled' => false, 'reason' => 'ردیف تمام‌شده بسته شد'];
@@ -48823,6 +49136,88 @@ function queueResumeBook(string $which, string $qid, ?array $patch = null): arra
 }
 
 /** علامت‌زدن ردیف صف به‌عنوان failed بعد از ۳ تلاش ناموفق */
+function queueHasFreshUserStop(string $which): bool {
+    $file=$which==='bsl'?BSL_STOP_FILE:WOO_STOP_FILE;
+    $hold=$which==='bsl'?BSL_STOP_HOLD_SEC:WOO_STOP_HOLD_SEC;
+    if(!is_file($file))return false;
+    clearstatcache(true,$file);
+    $age=time()-(int)@filemtime($file);
+    return $age<=max(0,$hold);
+}
+function queueHasExplicitUserStop(string $which): bool {
+    if(queueHasFreshUserStop($which))return true;
+    $progress=readProgress($which==='bsl'?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE);
+    return !empty($progress['stopped'])||!empty($progress['cancelled'])
+        ||!empty($progress['stopped_by_user'])||(string)($progress['paused_by']??'')==='user';
+}
+
+/** Promote eligible paused rows in-place; IDs, counters, and saved phases stay untouched. */
+function queuePromoteEligiblePausedRows(array &$entries,string $keepId='',bool $allowUserStopped=false): int {
+    $promoted=0;$now=time();
+    foreach($entries as &$entry){
+        if(!is_array($entry)||(string)($entry['id']??'')===$keepId||(string)($entry['status']??'')!=='paused')continue;
+        $userStopped=!empty($entry['stopped_by_user'])||(string)($entry['paused_by']??'')==='user';
+        if($userStopped&&!$allowUserStopped)continue;
+        $entry['status']='waiting';$entry['paused_at']=0;$entry['updated_at']=$now;$entry['resume_requested_at']=0;unset($entry['done_at']);
+        if($allowUserStopped)unset($entry['paused_by'],$entry['stopped_by_user']);
+        $promoted++;
+    }
+    unset($entry);return $promoted;
+}
+
+/** Promote all eligible paused send rows on each cron pulse without dispatching a second worker. */
+function queuePromotePausedForCron(string $which): array {
+    if(queueHasExplicitUserStop($which))return ['ok'=>false,'promoted'=>0,'user_stopped'=>true];
+    $fp=queueBackendLock($which);
+    if(!$fp)return ['ok'=>false,'promoted'=>0,'deferred'=>true,'reason'=>'lock_held'];
+    if(queueHasExplicitUserStop($which)){
+        queueBackendUnlock($fp);return ['ok'=>false,'promoted'=>0,'user_stopped'=>true];
+    }
+    $q=$which==='bsl'?bslReadQueue():wooReadQueue();
+    if(!is_array($q))$q=['entries'=>[]];
+    if(!is_array($q['entries']??null))$q['entries']=[];
+    $count=queuePromoteEligiblePausedRows($q['entries'],'',false);
+    if($count>0){
+        if($which==='bsl')bslWriteQueue($q);else wooWriteQueue($q);
+    }
+    queueBackendUnlock($fp);
+    return ['ok'=>true,'promoted'=>$count];
+}
+
+/** Restore rows to paused if an automatic dispatch loses a race with Stop. */
+function queuePauseRowsAfterStop(string $which,string $requestQueueId=''): void {
+    $isBsl=$which==='bsl';$stopFile=$isBsl?BSL_STOP_FILE:WOO_STOP_FILE;
+    $signal=json_decode((string)@file_get_contents($stopFile),true);
+    $target=trim((string)($signal['queue_id']??''));
+    $globalStop=$target==='';
+    $q=$isBsl?bslReadQueue():wooReadQueue();
+    if(!is_array($q))$q=['entries'=>[]];
+    if(!is_array($q['entries']??null))$q['entries']=[];
+    $progress=readProgress($isBsl?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE);
+    $runningCount=count(array_filter($q['entries'],static fn($row)=>is_array($row)&&($row['status']??'')==='running'));
+    $changed=false;
+    foreach($q['entries'] as &$entry){
+        if(!is_array($entry))continue;
+        $id=(string)($entry['id']??'');$status=(string)($entry['status']??'');
+        $isTarget=$globalStop||($target!==''&&$id===$target);
+        $isDispatchRow=$requestQueueId!==''&&$id===$requestQueueId;
+        if(!$isTarget&&!$isDispatchRow)continue;
+        $canPause=in_array($status,['running','waiting'],true)||($isTarget&&$status==='paused');
+        if(!$canPause)continue;
+        if(queueProgressBelongsToRow($progress,$entry,$runningCount)){
+            foreach(['current','sent','updated','skipped','failed'] as $field)
+                if(array_key_exists($field,$progress))$entry[$field]=(int)$progress[$field];
+        }
+        $entry['status']='paused';$entry['paused_at']=time();
+        if($isTarget){$entry['paused_by']='user';$entry['stopped_by_user']=true;}
+        else{$entry['paused_by']='system';unset($entry['stopped_by_user']);}
+        $changed=true;
+    }
+    unset($entry);
+    if(!$changed)return;
+    if($isBsl)bslWriteQueue($q);else wooWriteQueue($q);
+}
+
 function queueMarkEntryFailed(string $which, string $qid, string $reason = ''): bool {
     if ($qid === '') return false;
     $isBsl = $which === 'bsl';
@@ -48876,12 +49271,16 @@ function queueMarkEntryFailed(string $which, string $qid, string $reason = ''): 
  * v10.155: انتخاب، تبدیل به waiting و dispatch زیرِ همان flock انجام می‌شود.
  */
 function queueIdleRetryFailed(string $which): ?array {
+    if(queueHasExplicitUserStop($which))return null;
     $isBsl = $which === 'bsl';
     $lockFile = __DIR__ . ($isBsl ? '/bsl_backend.lock' : '/woo_backend.lock');
     $lockFp = @fopen($lockFile, 'c');
     if (!$lockFp || !@flock($lockFp, LOCK_EX | LOCK_NB)) {
         if (is_resource($lockFp)) @fclose($lockFp);
         return null;
+    }
+    if(queueHasExplicitUserStop($which)){
+        @flock($lockFp,LOCK_UN);@fclose($lockFp);return null;
     }
     $q = $isBsl
         ? (function_exists('bslReadQueue') ? bslReadQueue() : [])
@@ -48936,8 +49335,11 @@ function queueIdleRetryFailed(string $which): ?array {
     @flock($lockFp, LOCK_UN); @fclose($lockFp);
     $action = $isBsl ? 'bsl_backend' : 'woo_backend';
     $post = ['from_file' => '1', 'start_index' => (string)$start, 'queue_id' => $qid,
-             'resume' => '1'];
+             'resume' => '1', 'auto_resume'=>'1'];
+    $GLOBALS['_queueDispatchStopped']=false;
     $ok = fireAndForget('action=' . $action, 2000, $post);
+    if(!empty($GLOBALS['_queueDispatchStopped']))
+        return ['ok'=>false,'which'=>$which,'queue_id'=>$qid,'kind'=>'idle_retry','user_stopped'=>true];
     $book = queueResumeBook($which, $qid);
     $tries = (int)($book['tries'] ?? 0) + 1;
     queueResumeBook($which, $qid, ['tries' => $tries, 'at' => $now, 'from' => $start,
@@ -48948,8 +49350,10 @@ function queueIdleRetryFailed(string $which): ?array {
             'kind' => 'idle_retry', 'resume_from' => $start];
 }
 
-function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = false, int $waitMs = 1500, bool $includePaused = false): array {
-    $chk = queueStallCheck($which, $staleAfter, $includePaused);
+function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = false, int $waitMs = 1500, bool $includePaused = false, bool $allowUserStopped = false, bool $resumeAllPaused = false): array {
+    if(!$allowUserStopped&&queueHasExplicitUserStop($which))
+        return ['stalled'=>false,'resumed'=>false,'which'=>$which,'user_stopped'=>true,'reason'=>'explicit_user_stop'];
+    $chk = queueStallCheck($which, $staleAfter, $includePaused, $allowUserStopped);
     $chk['which'] = $which;
     if (empty($chk['stalled']) || $dryRun) {
         $chk['resumed'] = false;
@@ -48996,7 +49400,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $book['tries'] = 0;
     }
     /* کول‌داون بین تلاش‌ها */
-    if ($lastAt > 0 && ($now - $lastAt) < QUEUE_RESUME_COOLDOWN && $tries > 0
+    if (!$allowUserStopped && $lastAt > 0 && ($now - $lastAt) < QUEUE_RESUME_COOLDOWN && $tries > 0
         && !in_array((string)($book['status'] ?? ''), ['exhausted','awaiting_lock_release'], true)) {
         $chk['resumed'] = false;
         $chk['deferred'] = true;
@@ -49004,7 +49408,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $chk['reason_defer'] = 'cooldown';
         return $chk;
     }
-    if ($tries >= QUEUE_RESUME_MAX_TRIES) {
+    if (!$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES) {
         $reason = 'پس از ' . QUEUE_RESUME_MAX_TRIES . ' تلاش ادامه، متوقف شد (از محصول #' . max(1, $start) . ')';
         queueMarkEntryFailed($which, $qid, $reason);
         queueResumeBook($which, $qid, ['tries' => $tries, 'at' => $now, 'from' => $start, 'status' => 'exhausted']);
@@ -49027,8 +49431,13 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             $chk['reason_defer'] = 'lock_held';
             return $chk;
         }
+        if(!$allowUserStopped&&queueHasExplicitUserStop($which)){
+            @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
+            $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop';return $chk;
+        }
         $rq = json_decode((string)@file_get_contents($which === 'bsl' ? BSL_QUEUE_FILE : WOO_QUEUE_FILE), true);
         $rq = is_array($rq) ? $rq : ['entries' => []];
+        if(!is_array($rq['entries']??null))$rq['entries']=[];
         $ridx = -1; $rentry = null;
         foreach (($rq['entries'] ?? []) as $ri => $re) {
             if (is_array($re) && (string)($re['id'] ?? '') === $qid) {
@@ -49042,6 +49451,13 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             $chk['reason_defer'] = 'queue_row_changed';
             return $chk;
         }
+        if(!$allowUserStopped&&(!empty($rentry['stopped_by_user'])||(string)($rentry['paused_by']??'')==='user')){
+            @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
+            $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop';return $chk;
+        }
+        $promotedRows=0;
+        if($resumeAllPaused&&$includePaused)
+            $promotedRows=queuePromoteEligiblePausedRows($rq['entries'],$qid,$allowUserStopped);
         /* هر دو worker از اینجا با یک ردیفِ running شروع می‌شوند؛ مخصوصاً
            woo_backend ردیفِ waiting را خودش انتخاب نمی‌کند. */
         $rq['entries'][$ridx]['resume_requested_at'] = time();
@@ -49050,8 +49466,10 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             $rq['entries'][$ridx]['started_at'] = time();
             $rq['entries'][$ridx]['paused_at'] = 0;
         }
+        if($allowUserStopped)unset($rq['entries'][$ridx]['paused_by'],$rq['entries'][$ridx]['stopped_by_user']);
         $qFile = $which === 'bsl' ? BSL_QUEUE_FILE : WOO_QUEUE_FILE;
         @file_put_contents($qFile, json_encode($rq, JSON_UNESCAPED_UNICODE), LOCK_EX);
+        if($promotedRows>0)$chk['promoted_rows']=$promotedRows;
         if ($which !== 'bsl') {
             /* products_file همان row است؛ copy هم پیش از آزادکردنِ reservation
                انجام می‌شود تا woo از فایلِ مقصدِ اشتباه شروع نکند. */
@@ -49067,10 +49485,16 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
        flock واقعی آن را در یک resume صریح مصرف می‌کند. */
     $action = $which === 'bsl' ? 'bsl_backend' : 'woo_backend';
     $post = ['from_file' => '1', 'start_index' => (string)$start, 'resume' => '1'];
+    if(!$allowUserStopped)$post['auto_resume']='1';
     if ($qid !== '') $post['queue_id'] = $qid;
 
     $chk['resume_from'] = $start;
+    $GLOBALS['_queueDispatchStopped']=false;
     $chk['resumed'] = fireAndForget('action=' . $action, $waitMs, $post);
+    if(!empty($GLOBALS['_queueDispatchStopped'])){
+        $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_race';
+        return $chk;
+    }
     if (!empty($chk['resumed'])) {
         if (!isset($GLOBALS['_queueResumeFired']) || !is_array($GLOBALS['_queueResumeFired']))
             $GLOBALS['_queueResumeFired'] = [];
@@ -49093,7 +49517,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         notifSaveState($st);
     } catch (Throwable $e) {}
     /* اگر این سومین تلاش بود و fire شکست خورد → همان‌جا failed */
-    if ($tries >= QUEUE_RESUME_MAX_TRIES && empty($chk['resumed'])) {
+    if (!$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES && empty($chk['resumed'])) {
         $reason = 'پس از ' . QUEUE_RESUME_MAX_TRIES . ' تلاش ادامه، متوقف شد';
         queueMarkEntryFailed($which, $qid, $reason);
         queueResumeBook($which, $qid, ['tries' => $tries, 'at' => $now, 'status' => 'exhausted']);
@@ -57782,11 +58206,20 @@ exit;
 }
 register_shutdown_function(function()use($wooLockFp,$wooLockFile){@flock($wooLockFp,LOCK_UN);@fclose($wooLockFp);});
 
-/* توقف تازه بدون resume نباید با یک kick معمولی بلعیده شود. */
+/* توقفِ صریح حتی اگر سیگنال از فایل پاک شده باشد، جلوی resume خودکار را می‌گیرد. */
+$wooExplicitResume = !empty($_GET['resume']) || !empty($_POST['resume']);
+$wooAutomaticResume = !empty($_GET['auto_resume']) || !empty($_POST['auto_resume']);
+if ($wooAutomaticResume && tasksResumeExplicitlyStopped('woo_send',[],readProgress(WOO_PROGRESS_FILE))) {
+    queuePauseRowsAfterStop('woo',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
+        'msg'=>'توقفِ صریحِ کاربر حفظ شد — ادامهٔ خودکار انجام نشد'],JSON_UNESCAPED_UNICODE);
+    exit;
+}
 if (file_exists(WOO_STOP_FILE)) {
-    $wooExplicitResume = !empty($_GET['resume']) || !empty($_POST['resume']);
     $wooStopAge = time() - (int)@filemtime(WOO_STOP_FILE);
     if (!$wooExplicitResume && $wooStopAge <= WOO_STOP_HOLD_SEC) {
+        queuePauseRowsAfterStop('woo',(string)($_GET['queue_id']??$_POST['queue_id']??''));
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
             'msg'=>'ارسال توسط کاربر متوقف شده — برای ادامه از دکمهٔ ادامه استفاده کنید'],JSON_UNESCAPED_UNICODE);
@@ -57976,6 +58409,8 @@ wooBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف �
 taskMarkPartial(WOO_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)($GLOBALS['_wooQueueIdNow']??''), 'current'=>(int)$i, 'total'=>(int)$total,
      'sent'=>(int)$sent, 'updated'=>(int)$updated, 'skipped'=>(int)$skipped, 'failed'=>(int)$fail]);
+$__stopQid=(string)($GLOBALS['_wooQueueIdNow']??'');
+queuePauseRowsAfterStop('woo',$__stopQid);
 exit;
 }
 
@@ -58230,11 +58665,11 @@ $queue=bslReadQueue();
 $stopPaused=0;$stopQid=(string)($prevProgress['queue_id']??'');
 foreach($queue['entries'] as &$e){
 if($e['status']==='running' && ($stopQid==='' || (string)($e['id']??'')===$stopQid)){
-$e['status']='paused';$e['paused_at']=time();
+$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
 $e['sent']=$prevProgress['sent']??0;$e['updated']=$prevProgress['updated']??0;$e['skipped']=$prevProgress['skipped']??0;$e['failed']=$prevProgress['failed']??0;$e['current']=$prevProgress['current']??0;
 $stopPaused++;
-}elseif($e['status']==='waiting'){
-$e['status']='paused';
+}elseif($e['status']==='waiting'||$e['status']==='paused'){
+$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;
 $e['paused_at']=time();
 $stopPaused++;
 }
@@ -58313,8 +58748,10 @@ $queue=wooReadQueue();
 $stopQid=(string)($prevProgress['queue_id']??'');
 foreach($queue['entries'] as &$e){
 if($e['status']==='running' && ($stopQid==='' || (string)($e['id']??'')===$stopQid)){
-$e['status']='paused';$e['paused_at']=time();
+$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
 $e['sent']=$prevProgress['sent']??0;$e['updated']=$prevProgress['updated']??0;$e['skipped']=$prevProgress['skipped']??0;$e['failed']=$prevProgress['failed']??0;$e['current']=$prevProgress['current']??0;
+}elseif($e['status']==='waiting'||$e['status']==='paused'){
+$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
 }
 }
 unset($e);
@@ -58573,6 +59010,7 @@ if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل
 $entry['status']='running';
 $entry['started_at']=time();
 $entry['resume_requested_at']=0;
+unset($entry['paused_by'],$entry['stopped_by_user']);
 wooWriteQueue($queue);
 
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
@@ -60249,7 +60687,7 @@ if(queueProgressBelongsToRow($progress,$e,$runningRows)){
 foreach(['sent','updated','skipped','failed','current','sent_details','updated_details','skipped_details','failed_details','recent_log','total_log_count','started_at','phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','shop_stats','batch_done_indices'] as $__k){if(array_key_exists($__k,$progress))$e[$__k]=$progress[$__k];}
 }
 $e['status']='paused';
-$e['paused_by']='user';
+$e['paused_by']='user';$e['stopped_by_user']=true;
 $e['paused_at']=time();
 $found=true;
 
@@ -60277,7 +60715,7 @@ foreach($queue['entries'] as &$e){
 if($e['id']===$queueId&&in_array((string)$e['status'],['paused','failed'],true)&&!empty($e['products_file'])){
 $e['status']='running';
 $e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';
-unset($e['resume_exhausted'],$e['paused_by']);
+unset($e['resume_exhausted'],$e['paused_by'],$e['stopped_by_user']);
 $found=true;
 
 @unlink(BSL_PRODUCTS_FILE);
@@ -60391,7 +60829,7 @@ localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STO
 if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 @copy($entry['products_file'],BSL_PRODUCTS_FILE);
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
-unset($queue['entries'][$entryIdx]['paused_by']);
+unset($queue['entries'][$entryIdx]['paused_by'],$queue['entries'][$entryIdx]['stopped_by_user']);
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
@@ -60551,19 +60989,25 @@ set_time_limit(0); ignore_user_abort(true);
 
 register_shutdown_function(function()use($bslLockFp,$bslLockFile){@flock($bslLockFp,LOCK_UN);@fclose($bslLockFp);});
 /* اکنون مالکیتِ واقعی داریم؛ سیگنال قدیمی را فقط همین worker مصرف می‌کند. */
+$explicitResume=!empty($_GET['resume'])||!empty($_POST['resume']);
+$automaticResume=!empty($_GET['auto_resume'])||!empty($_POST['auto_resume']);
+if($automaticResume&&tasksResumeExplicitlyStopped('bsl_send',[],readProgress(BSL_PROGRESS_FILE))){
+queuePauseRowsAfterStop('bsl',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
+'msg'=>'توقفِ صریحِ کاربر حفظ شد — ادامهٔ خودکار انجام نشد'],JSON_UNESCAPED_UNICODE);
+exit;
+}
 if(file_exists(BSL_STOP_FILE)){
-if(!empty($_GET['resume']) || !empty($_POST['resume'])){
-@unlink(BSL_STOP_FILE);
-}else{
 $stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if($stopAge<=BSL_STOP_HOLD_SEC){
+if(!$explicitResume&&$stopAge<=BSL_STOP_HOLD_SEC){
+queuePauseRowsAfterStop('bsl',(string)($_GET['queue_id']??$_POST['queue_id']??''));
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
 'msg'=>'ارسال توسط کاربر متوقف شده — برای شروع دوباره، از دکمهٔ صف استفاده کنید'],JSON_UNESCAPED_UNICODE);
 exit;
 }
 @unlink(BSL_STOP_FILE);
-}
 }
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
@@ -61108,7 +61552,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف #
 taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)$bslQueueId, 'current'=>(int)$i, 'total'=>(int)$total,
      'sent'=>(int)$sent, 'updated'=>(int)$updated, 'skipped'=>(int)$skipped, 'failed'=>(int)$fail]);
-$queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='paused';$qe['paused_by']='user';$qe['paused_at']=time();$qe['current']=(int)$i;$qe['sent']=$sent;$qe['updated']=$updated;$qe['skipped']=$skipped;$qe['failed']=$fail;break;}}unset($qe);bslWriteQueue($queue);
+queuePauseRowsAfterStop('bsl',(string)$bslQueueId);
 @unlink(BSL_PRODUCTS_FILE);exit;
 }
 $pTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
@@ -76016,9 +76460,9 @@ function renderExtractQueue(entries, progress){
         list.innerHTML='<span style="color:#64748b">صف خالی — برای افزودن، دکمه «⚡ استخراج بک‌اند» را کلیک کنید</span>';
         return;
     }
-    const statusLabels={waiting:'⏳ در صف',running:'🔄 در حال استخراج',paused:'⏹ متوقف شد',done:'✅ انجام شد',failed:'❌ خطا'};
-    const statusColors={waiting:'#fbbf24',running:'#a855f7',paused:'#f97316',done:'#4ade80',failed:'#f87171'};
-    const statusBg={waiting:'#42200630',running:'#7c3aed20',paused:'#c2410c20',done:'#14532d20',failed:'#7f1d1d20'};
+    const statusLabels={waiting:'⏳ در صف',running:'🔄 در حال استخراج',paused:'⏹ متوقف شد',done:'✅ انجام شد',failed:'❌ خطا',superseded:'↪ checkpoint جایگزین شد'};
+    const statusColors={waiting:'#fbbf24',running:'#a855f7',paused:'#f97316',done:'#4ade80',failed:'#f87171',superseded:'#94a3b8'};
+    const statusBg={waiting:'#42200630',running:'#7c3aed20',paused:'#c2410c20',done:'#14532d20',failed:'#7f1d1d20',superseded:'#33415540'};
 
     let html='';
     entries.slice().reverse().forEach(e=>{
@@ -76081,6 +76525,8 @@ function renderExtractQueue(entries, progress){
             if(e.resumable||e.resume_page){
                 progText+=' · ▶️ قابل ادامه'+(e.resume_page?(' از ص '+toFa(e.resume_page)):'');
             }
+        }else if(st==='superseded'){
+            progText='checkpoint تکراری بود؛ ادامه از ردیف '+esc(e.superseded_by||'تازه‌تر')+' انجام می‌شود';
         }
         /* v9.11: ردیف گزارشیِ استخراج دوره‌ای — متن خودش را دارد و
            شمارنده‌های محصول برایش بی‌معناست. */
@@ -76127,7 +76573,8 @@ function renderExtractQueue(entries, progress){
                 const rp=e.resume_page||0;
                 html+='<button class="btn" style="font-size:10px;padding:3px 8px;background:#059669;color:#fff;border:none;border-radius:4px" onclick="event.stopPropagation();resumeExtractQueue(\''+esc(e.profile_key)+'\',\''+esc(e.id)+'\','+(rp||0)+')" title="ادامه از یک صفحه قبل از محل گیر">▶ ادامه'+(rp?(' از '+toFa(rp)):'')+'</button>';
             }
-            html+='<button class="btn" style="font-size:10px;padding:3px 8px;background:'+(st==='done'?'#334155':'#dc2626')+';color:'+(st==='done'?'#94a3b8':'#fff')+';border:none;border-radius:4px" onclick="event.stopPropagation();deleteExtractQueue(\''+esc(e.id)+'\')">🗑️ حذف</button>';
+            const archivedRow=st==='done'||st==='superseded';
+            html+='<button class="btn" style="font-size:10px;padding:3px 8px;background:'+(archivedRow?'#334155':'#dc2626')+';color:'+(archivedRow?'#94a3b8':'#fff')+';border:none;border-radius:4px" onclick="event.stopPropagation();deleteExtractQueue(\''+esc(e.id)+'\')">🗑️ حذف</button>';
         }
         html+='</div></div>';
 
@@ -77110,6 +77557,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.404', t:'♻️ ادامهٔ همهٔ فعالیت‌های واجد شرایط در هر تیکِ کران', items:[
+    'یک بازیابیِ موفقِ صف دیگر باعث خروجِ زودهنگامِ کران پیش از بررسی checkpointهای استخراج نمی‌شود؛ همهٔ پروفایل‌های مستقلِ متوقف‌شده به worker صف می‌شوند و همزمانی از slotهای تنظیم‌شده پیروی می‌کند. در هاستِ بدون worker، همهٔ ردیف‌های واجد شرایط به‌صورت waiting زمان‌بندی می‌شوند و همان شناسه‌ها در تیک‌های بعدی، هر تیک یک بخشِ محدود، ادامه می‌یابند.',
+    'شناسهٔ ردیف و فازِ checkpoint در ادامهٔ خودکار حفظ می‌شود؛ ردیف‌های قدیمیِ تکراریِ همان پروفایل به‌عنوان جایگزین‌شده مشخص می‌شوند و توقفِ صریحِ کاربر خودکار لغو نمی‌شود.',
+    'با هر تیکِ کران، زیرِ قفلِ همان مقصد همهٔ ردیف‌های pausedِ واجد شرایط به waiting برمی‌گردند؛ حتی وقتی یک ردیفِ سالم در حال اجراست. شناسه و checkpoint عوض نمی‌شود. باسلام تا سقفِ BSL_MAX_ENTRIES_PER_RUN در همان worker ادامه می‌دهد و ووکامرس ردیف‌های باقی‌مانده را در تیک‌های بعدی برمی‌دارد.',
+    'بازیابیِ رجیستری همهٔ کارهای واجد شرایط را با حفظ قفل‌ها، backoff و محدودیتِ پردازش می‌فرستد؛ توقفِ صریحِ کاربر در فایل یا checkpoint مانع بازیابی خودکار است و دکمه‌های دستیِ «ادامه» آن را آگاهانه override می‌کنند.'
+  ]},
   {v:'10.403', t:'🔕 احترام به کلید روشن/خاموش هر پیام‌رسان', items:[
     'ریشهٔ اعلان‌های ادامه‌دار پیدا شد: مسیر مرکزی ارسال توکن و شناسهٔ چت را بررسی می‌کرد اما مقدارِ enabled ذخیره‌شده از تیک پیام‌رسان را نادیده می‌گرفت.',
     'ارسال خودکارِ متن و رسانه به بله/روبیکا/تلگرام اکنون برای هر مقصد جداگانه به تیکِ فعال و اعتبارنامهٔ کامل نیاز دارد؛ خاموش‌کردن یک کانال، مقصدهای دیگر را دست نمی‌زند.',
