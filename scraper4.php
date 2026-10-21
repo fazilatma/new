@@ -233,6 +233,7 @@ const WORKER_STOP_FILE  = __DIR__ . '/worker_stop.json';
    می‌نوشتند، هرکدام queue_id دیگری را پاک می‌کرد؛ نتیجه‌اش رها شدنِ استخراج
    وسطِ کار و «خطا»ی دروغین بود. */
 const EXTRACT_LOCK_FILE = __DIR__ . '/extract.lock';
+const EXTRACT_WATCHDOG_LOCK_FILE = __DIR__ . '/extract_watchdog.lock'; // v10.405: نگهبان از slot پردازه‌ها جداست
 const EXTRACT_LOCK_TTL  = 3600;   // قفلِ کهنه‌تر از این، مالِ پردازهٔ مرده است
 /* v10.32 (۴۵د): بایگانیِ محصولاتِ رفته از مبدأ — لاگِ ماندگار.
    retireRemoved نتیجه‌اش را فقط برمی‌گرداند و به اعلان می‌داد؛ هیچ‌جا ذخیره
@@ -355,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.404';
+const APP_VERSION = '10.405';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -2367,7 +2368,7 @@ function extractLockRelease(string $queueId): void {
     }
     /* سازگاری با workerهای قدیمیِ بدون handle: فقط وقتی lock واقعاً آزاد است
        metadata خنثی می‌شود. هرگز مسیرِ lock را حذف نمی‌کنیم. */
-    foreach(extractLockSlotFiles() as $file){
+    foreach(extractLockKnownSlotFiles() as $file){
         $probe=@fopen($file,'c');if(!$probe)continue;
         if(@flock($probe,LOCK_EX|LOCK_NB)){
             $cur=@json_decode((string)@file_get_contents($file),true);
@@ -2393,7 +2394,7 @@ function extractLockTouch(string $queueId): void {
     }
     /* legacy fallback هم باید مالکیت را با flock ثابت کند؛ file_put_contents
        بدون probe می‌توانست metadata یک worker زنده را بازنویسی کند. */
-    foreach(extractLockSlotFiles() as $file){
+    foreach(extractLockKnownSlotFiles() as $file){
         $legacyFp=@fopen($file,'c');if(!$legacyFp)continue;
         if(!@flock($legacyFp,LOCK_EX|LOCK_NB)){@fclose($legacyFp);continue;}
         $cur=@json_decode((string)@file_get_contents($file),true);
@@ -19045,26 +19046,95 @@ function extractListResumeMeta(array $profile): array {
     ];
 }
 
-/** Stable slot paths. Slot one keeps the legacy path for safe upgrades. */
+/** Stable dispatch slots. Slot one keeps the legacy path for safe upgrades. */
 function extractLockSlotFiles(?int $limit = null): array {
     $limit=$limit??extractTaskConcurrency();$out=[];
     for($i=1;$i<=max(1,$limit);$i++)$out[]=$i===1?EXTRACT_LOCK_FILE:(EXTRACT_LOCK_FILE.'.slot'.$i);
     return $out;
 }
+/** Probe configured slots plus older on-disk slots without expanding capacity. */
+function extractLockKnownSlotFiles(): array {
+    $slots=[];foreach(extractLockSlotFiles()as$i=>$file)$slots[$i+1]=$file;
+    foreach((array)@glob(EXTRACT_LOCK_FILE.'.slot*')as$file){
+        if(!is_string($file)||!preg_match('~\\.slot([0-9]+)$~',$file,$m))continue;
+        $slot=(int)$m[1];if($slot>=2)$slots[$slot]=$file;
+    }
+    ksort($slots,SORT_NUMERIC);return array_values($slots);
+}
 function extractLockBeatForQueue(string $queueId): int {
     if($queueId==='')return 0;
-    foreach(extractLockSlotFiles()as$file){$m=@json_decode((string)@file_get_contents($file),true);
+    foreach(extractLockKnownSlotFiles()as$file){$m=@json_decode((string)@file_get_contents($file),true);
         if(is_array($m)&&(string)($m['queue_id']??'')===$queueId)return(int)($m['at']??0);}
     return 0;
 }
-/** فقط flock می‌گوید extraction واقعاً در حال اجراست. */
+/** Is a worker lock held by this queue row, not merely by any extractor? */
+function extractLockHeldForQueue(string $queueId): bool {
+    if($queueId==='')return extractLockIsHeld();
+    foreach(extractLockKnownSlotFiles()as$file){
+        $fp=@fopen($file,'c');if(!$fp)return true;
+        $held=!@flock($fp,LOCK_EX|LOCK_NB);
+        if(!$held){@flock($fp,LOCK_UN);@fclose($fp);continue;}
+        $meta=@json_decode((string)@file_get_contents($file),true);@fclose($fp);
+        /* An empty owner is the tiny slot-acquisition window; defer rather
+           than risk recovering a row just as a child is claiming it. */
+        if(!is_array($meta)||trim((string)($meta['queue_id']??''))==='')return true;
+        if((string)($meta['queue_id']??'')===$queueId)return true;
+    }
+    return false;
+}
+/** فقط flock می‌گوید دست‌کم یک extraction واقعاً در حال اجراست. */
 function extractLockIsHeld(): bool {
-    foreach(extractLockSlotFiles() as $file){
+    foreach(extractLockKnownSlotFiles() as $file){
         $fp=@fopen($file,'c');if(!$fp)return true;
         $held=!@flock($fp,LOCK_EX|LOCK_NB);if(!$held)@flock($fp,LOCK_UN);@fclose($fp);
         if($held)return true;
     }
     return false;
+}
+
+/**
+ * Atomically pause one genuinely stale extraction row without replacing its
+ * ID or checkpoint. Rechecks the current row, its slot lock and worker PID
+ * while holding the queue mutation lock so a stale cron snapshot cannot
+ * overwrite a worker's completion/progress update.
+ */
+function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array {
+    if($queueId==='')return null;
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return null;
+    if(!@flock($lf,LOCK_EX)){@fclose($lf);return null;}
+    $result=null;
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];$idx=-1;
+        foreach($entries as$i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
+        if($idx<0||($entries[$idx]['status']??'')!=='running')return null;
+        $row=$entries[$idx];
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user')return null;
+        if(extractLockHeldForQueue($queueId))return null;
+        $jobId=(string)($row['worker_job_id']??'');
+        if($jobId!=='')foreach((array)(s4WorkerLoadQueue()['entries']??[])as$job){
+            if(!is_array($job)||(string)($job['id']??'')!==$jobId||(string)($job['status']??'')!=='running')continue;
+            if(s4WorkerPidAlive((int)($job['worker_pid']??0)))return null;
+        }
+        $progress=readProgress(EXTRACT_PROGRESS_FILE);
+        $runningRows=0;foreach($entries as$entry)if(is_array($entry)&&($entry['status']??'')==='running')$runningRows++;
+        $progressOwned=queueProgressBelongsToRow($progress,$row,$runningRows);
+        $now=time();
+        $idleInfo=queueRowIdle('extract',$row,$progress,$now,
+            ['lock'=>extractLockBeatForQueue($queueId)],$runningRows);
+        $idle=(int)($idleInfo['idle']??0);if($idle<=$staleAfter)return null;
+        $progressForRow=$progressOwned?$progress:[];
+        $phase=(string)($progressForRow['phase']??$row['resume_phase']??$row['phase']??'list');
+        $phase=$phase==='detail'?'detail':'list';
+        $row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
+        $row['resume_phase']=$phase;$row['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
+        $row['updated_at']=$now;$row['paused_at']=$now;unset($row['done_at']);
+        $entries[$idx]=$row;$q['entries']=array_values($entries);
+        $json=json_encode($q,JSON_UNESCAPED_UNICODE);
+        if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false)return null;
+        $result=['row'=>$row,'idle'=>$idle,'phase'=>$phase,'progress_owned'=>$progressOwned,
+            'progress'=>$progressForRow];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    return $result;
 }
 
 /**
@@ -19759,7 +19829,7 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>
     'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkTmp,
     'recent_log'=>['⏹ توقف کاربر — تا اینجا ذخیره شد','   • '.count($allProducts).' محصول'],'total_log_count'=>2,'extracted'=>count($allProducts)]);
 $queue=extractReadQueue();
-foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true];
@@ -20371,7 +20441,7 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>
     'detail_current'=>$detailDone,'detail_total'=>$detailTotal,
     'recent_log'=>['⏹ توقف کاربر — جزئیات ذخیره شد','   • '.$detailDone.' / '.$detailTotal],'total_log_count'=>$totalPages+$detailDone+1]);
 $queue=extractReadQueue();
-foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'detail_done'=>$detailDone];
@@ -21960,10 +22030,10 @@ function cronWatchdogs(array $cn): array {
        «در حال اجرا» می‌ماند و ردیف‌های بعدی هم راه نمی‌افتادند. علامت‌خوردنِ
        «خطا» هم فقط وقتی اتفاق می‌افتاد که کسی صفحهٔ صف را باز کند. */
     if ($stallWake) {
-        /* v10.148: بررسی و برداشتنِ ردیف stale باید زیرِ خودِ flock باشد؛
-           metadata/سنِ lock به‌تنهایی مالکیت را ثابت نمی‌کند و بین probe و
-           mutation پنجرهٔ race می‌سازد. */
-        $exWatchFp = @fopen(EXTRACT_LOCK_FILE, 'c');
+        /* v10.405: guard cron scans with its own lock, never with slot 1.
+           A healthy extractor in slot 1 must not hide stale rows in other
+           profiles; each candidate is rechecked against its own live lock. */
+        $exWatchFp = @fopen(EXTRACT_WATCHDOG_LOCK_FILE, 'c');
         $exWatchOwned = $exWatchFp && @flock($exWatchFp, LOCK_EX | LOCK_NB);
         if (!$exWatchOwned) {
             if (is_resource($exWatchFp)) @fclose($exWatchFp);
@@ -21976,7 +22046,8 @@ function cronWatchdogs(array $cn): array {
         /* Extraction heartbeats are precise, so recover sooner than generic send
            queues while still allowing a slow source request to finish. */
         $exStallCfg=max(60,min($stallCfg,(int)($cn['extract_stall_after']??120)));
-        $exDirty = false; $exStuck = null; $exResumeKeys = []; $exProgressOwnedStuck = false;
+        $exDirty=false;$exStuck=null;$exResumeKeys=[];$exProgressOwnedStuck=false;
+        $exProgressStuck=null;$exProgressOwnerQueueId='';
         $exRunningRows=0;foreach((array)($exQ['entries']??[]) as $__qeCount){if(is_array($__qeCount)&&($__qeCount['status']??'')==='running')$exRunningRows++;}
         foreach ($exQ['entries'] as $qi => $qe) {
             if (($qe['status'] ?? '') !== 'running') continue;
@@ -22004,55 +22075,61 @@ function cronWatchdogs(array $cn): array {
             $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => max($_lkWBeat,$_childBeat)], $exRunningRows);
             $idle = (int)$_iwW['idle'];
             if ($idle <= $exStallCfg) continue;
-            /* v9.75: به‌جای «بستن و رها کردن»، ردیفِ گیرکرده را از صف برمی‌داریم
-               (تا محافظِ تکراری، پروفایل را بلاک نکند) و همان پروفایل را برای
-               «ادامهٔ» فازِ ۱/۲ استخراج علامت می‌زنیم. خودِ استخراج با نشانهٔ
-               مرحله (_extract_stage) می‌داند از کجا ادامه دهد. */
-            $exKey = (string)($qe['profile_key'] ?? '');
-            /* Keep this exact row as the continuation owner. Cron/manual resume
-               changes it back to running in place; no replacement row is made. */
-            $exQ['entries'][$qi]['status']='paused';
-            $exQ['entries'][$qi]['resumable']=true;
-            $exQ['entries'][$qi]['resume_needed']=1;
-            $exQ['entries'][$qi]['resume_phase']=((string)($_qeProg['phase']??$qe['resume_phase']??$qe['phase']??'list'))==='detail'?'detail':'list';
-            $exQ['entries'][$qi]['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
-            $exQ['entries'][$qi]['updated_at']=$exNow;
-            unset($exQ['entries'][$qi]['done_at']);
-            $exDirty = true;
-            $exStuck = ['idle' => $idle, 'profile' => (string)($qe['profile_name'] ?? $exKey),
-                        'key' => $exKey];
-            if($_qeProgressOwned)$exProgressOwnedStuck=true;
-            if ($exKey !== '') {
-                $exResumeKeys[] = $exKey;
-                /* Persist the exact interrupted stage while retaining the same
-                   queue row; the next cron must not guess list vs detail. */
+            /* v10.405: a separate watchdog lock lets this scan run beside
+               healthy slots. Before changing anything, re-read this exact row
+               under the queue-file lock and prove its own worker is not live. */
+            $qePaused=extractQueuePauseStaleRow((string)($qe['id']??''),$exStallCfg);
+            if(!is_array($qePaused))continue;
+            $exKey=(string)($qePaused['row']['profile_key']??$qe['profile_key']??'');
+            $idle=(int)($qePaused['idle']??$idle);$exPhase=(string)($qePaused['phase']??'list');
+            $_qeProgressOwned=!empty($qePaused['progress_owned']);
+            $_qeProg=is_array($qePaused['progress']??null)?$qePaused['progress']:[];
+            /* The same row ID and saved phase remain the continuation owner. */
+            $exDirty=true;
+            $exStuck=['idle'=>$idle,'profile'=>(string)($qe['profile_name']??$exKey),
+                      'key'=>$exKey,'queue_id'=>(string)($qePaused['row']['id']??'')];
+            if($_qeProgressOwned){$exProgressOwnedStuck=true;$exProgressStuck=$_qeProg;
+                $exProgressOwnerQueueId=(string)($qePaused['row']['id']??'');}
+            if($exKey!==''){
+                $exResumeKeys[]=$exKey;
+                /* Save just this profile against the newest disk snapshot so
+                   another parallel profile's checkpoint cannot be clobbered. */
                 $exProfiles=loadProfiles();
                 if(isset($exProfiles[$exKey])&&is_array($exProfiles[$exKey])){
-                    $exPhase=((string)($_qeProg['phase']??$qe['resume_phase']??$qe['phase']??'list'))==='detail'?'detail':'list';
                     $exProfiles[$exKey]['_extract_stage']='stopped';
                     $exProfiles[$exKey]['_extract_resume_phase']=$exPhase;
                     $exProfiles[$exKey]['_extract_list_incomplete']=$exPhase==='list';
-                    $exProfiles[$exKey]['_extract_stage_at']=$exNow;
-                    saveProfiles($exProfiles);
+                    $exProfiles[$exKey]['_extract_stage_at']=time();
+                    saveOneProfileAtomic($exKey,$exProfiles[$exKey]);
                 }
             }
         }
-        if ($exDirty) {
-            $exQ['entries'] = array_values($exQ['entries']);
-            extractWriteQueue($exQ);
-            // فایل پیشرفت هم باز شود وگرنه رابط کاربری «در حال اجرا» نشان می‌دهد
-            if ($exProgressOwnedStuck && !empty($exProg['running'])) {
-                $exProg['running'] = false; $exProg['done'] = false; $exProg['paused'] = true;
-                $exProg['resume_needed'] = true; $exProg['stalled'] = true;
-                $exProg['recent_log'] = array_slice(array_merge((array)($exProg['recent_log']??[]),
-                    ['♻️ کران اجرای بی‌حرکت را تحویل گرفت؛ ادامه از checkpoint در نوبت بعد']),-12);
-                writeProgress(EXTRACT_PROGRESS_FILE, $exProg);
+        if($exDirty){
+            /* The queue row was already changed atomically by
+               extractQueuePauseStaleRow(); never write the old scan snapshot. */
+            if($exProgressOwnedStuck&&is_array($exProgressStuck)){
+                $latestProgress=readProgress(EXTRACT_PROGRESS_FILE);
+                $latestOwner=(string)($latestProgress['queue_id']??'');
+                $sameOwner=$latestOwner!==''&&$latestOwner===$exProgressOwnerQueueId;
+                if($latestOwner===''&&$exProgressOwnerQueueId!==''){
+                    $latestQueue=extractReadQueue();$stillRunning=0;
+                    foreach((array)($latestQueue['entries']??[])as$entry)
+                        if(is_array($entry)&&($entry['status']??'')==='running')$stillRunning++;
+                    $sameOwner=$stillRunning===0;
+                }
+                if($sameOwner&&!empty($latestProgress['running'])){
+                    $latestProgress['running']=false;$latestProgress['done']=false;$latestProgress['paused']=true;
+                    $latestProgress['resume_needed']=true;$latestProgress['stalled']=true;
+                    $latestProgress['recent_log']=array_slice(array_merge((array)($latestProgress['recent_log']??[]),
+                        ['♻️ کران اجرای بی‌حرکت را تحویل گرفت؛ ادامه از checkpoint در نوبت بعد']),-12);
+                    writeProgress(EXTRACT_PROGRESS_FILE,$latestProgress);
+                }
             }
-            $results['extract_watchdog'] = $exStuck;
-            $results['extract_resume'] = array_values(array_unique($exResumeKeys));
-            notifRunFailure($cn, 'نگهبان استخراج', $exStuck['profile'] ?: 'استخراج',
-                'استخراج ' . (int)$exStuck['idle'] . ' ثانیه بی‌حرکت بود — همان ردیف حفظ شد و '
-                . 'در همین نوبت از checkpoint ادامه داده می‌شود.');
+            $results['extract_watchdog']=$exStuck;
+            $results['extract_resume']=array_values(array_unique($exResumeKeys));
+            notifRunFailure($cn,'نگهبان استخراج',$exStuck['profile']?:'استخراج',
+                'استخراج '.(int)$exStuck['idle'].' ثانیه بی‌حرکت بود — همان ردیف حفظ شد و '
+                .'در همین نوبت از checkpoint ادامه داده می‌شود.');
         }
         @flock($exWatchFp, LOCK_UN); @fclose($exWatchFp); $exWatchFp = null;
         }
@@ -41980,6 +42057,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          && strpos($selfSrc, 'function queueHasFreshUserStop(')!==false
          && strpos($selfSrc, 'function queueHasExplicitUserStop(')!==false
          && strpos($selfSrc, "if (\$matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());") !== false);
+
+    $add('10.405', 'watchdog استخراج از slot کارگر مستقل است و هر stale row را با قفل اختصاصی بازبینی می‌کند',
+         strpos($selfSrc, "const EXTRACT_WATCHDOG_LOCK_FILE = __DIR__ . '/extract_watchdog.lock';") !== false
+      && strpos($selfSrc, "fopen(EXTRACT_WATCHDOG_LOCK_FILE, 'c')") !== false
+      && strpos($selfSrc, 'function extractLockHeldForQueue(string $queueId): bool') !== false
+      && strpos($selfSrc, 'function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array') !== false
+      && strpos($selfSrc, 'if(extractLockHeldForQueue($queueId))return null;') !== false);
+    $add('10.405', 'بازیابی stale زیر قفل صف است، فقط running را تغییر می‌دهد و توقف دستی را حفظ می‌کند',
+         strpos($selfSrc, "function extractQueuePauseStaleRow(string \$queueId, int \$staleAfter): ?array {") !== false
+      && strpos($selfSrc, "fopen(EXTRACT_QUEUE_FILE.'.lock','c')") !== false
+      && strpos($selfSrc, "if(!empty(\$row['stopped_by_user'])||(string)(\$row['paused_by']??'')==='user')return null;") !== false
+      && strpos($selfSrc, "\$row['status']='paused';\$row['resumable']=true;") !== false
+      && substr_count($selfSrc, "'stopped_by_user']=true;") >= 2);
+    $add('10.405', 'نسخه 10.405 در CHANGELOG درج شده',
+         strpos($selfSrc, "{v:'10." . "405'") !== false
+      && version_compare(APP_VERSION, '10.' . '405', '>='));
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -77557,6 +77650,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.405', t:'🛠️ رفعِ گیرکردنِ watchdog استخراج پشتِ slot فعال', items:[
+    'نگهبان استخراج قفلِ مستقل دارد؛ اجرای سالمِ slot اول دیگر اسکن و بازیابیِ checkpointهای stale پروفایل‌های دیگر را متوقف نمی‌کند.',
+    'هر ردیف پیش از بازیابی با قفلِ همان queue_id و PID کارگر دوباره بررسی می‌شود؛ تغییرِ running به paused زیرِ قفلِ فایل صف و فقط روی ردیفی انجام می‌شود که هنوز running است.',
+    'شناسه، فاز و checkpoint حفظ می‌شوند؛ توقفِ صریحِ استخراج (از جمله سیگنالِ توقفِ همگام‌سازی دستی) روی همان ردیف ثبت می‌شود تا با عوض‌شدن فایل progress گم نشود و خودکار ادامه نیابد. اسلات‌های قدیمیِ موجود نیز هنگام بررسی قفل شناسایی می‌شوند.'
+  ]},
   {v:'10.404', t:'♻️ ادامهٔ همهٔ فعالیت‌های واجد شرایط در هر تیکِ کران', items:[
     'یک بازیابیِ موفقِ صف دیگر باعث خروجِ زودهنگامِ کران پیش از بررسی checkpointهای استخراج نمی‌شود؛ همهٔ پروفایل‌های مستقلِ متوقف‌شده به worker صف می‌شوند و همزمانی از slotهای تنظیم‌شده پیروی می‌کند. در هاستِ بدون worker، همهٔ ردیف‌های واجد شرایط به‌صورت waiting زمان‌بندی می‌شوند و همان شناسه‌ها در تیک‌های بعدی، هر تیک یک بخشِ محدود، ادامه می‌یابند.',
     'شناسهٔ ردیف و فازِ checkpoint در ادامهٔ خودکار حفظ می‌شود؛ ردیف‌های قدیمیِ تکراریِ همان پروفایل به‌عنوان جایگزین‌شده مشخص می‌شوند و توقفِ صریحِ کاربر خودکار لغو نمی‌شود.',
