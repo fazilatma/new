@@ -12318,7 +12318,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/2d48c86d-new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -43946,7 +43946,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "2d48c86d-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
