@@ -357,7 +357,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.408';
+const APP_VERSION = '10.409';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -12200,8 +12200,9 @@ const VC_FILE = __DIR__ . '/.versioncheck.json';
 function vc_defaults(): array {
     return [
         'check_on_load' => false,
-        'repo'          => 'fazilatma/code',
-        'branch'        => 'main',
+        'repo'          => 'fazilatma/new',
+        'branch'        => 'arena/01a0ebf7-new',
+        'branches'       => ['arena/01a0ebf7-new'],
         // v8.68: نام فایل در مخزن. اگر فایل را با نام دیگری نصب کرده‌اید،
         // خودِ همان نام مبنا قرار می‌گیرد تا به‌روزرسانی دنبال فایل اشتباه نگردد.
         'path'          => basename(__FILE__),
@@ -12227,7 +12228,35 @@ function vc_load(): array {
         && preg_match('~^scraper[-_v0-9.]*\.php$~i', basename($saved)))) {
         $c['path'] = $self;
     }
+    /* v10.409: migrate the former single branch without losing it. */
+    $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
+        ? $j['branches'] : [(string)($c['branch']??'')];
+    $c['branches']=vc_normalize_branches($rawBranches);
+    if(!$c['branches'])$c['branches']=['arena/01a0ebf7-new'];
+    if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     return $c;
+}
+function vc_normalize_branches(array $branches):array{
+    $out=[];foreach($branches as $branch){$branch=trim((string)$branch);
+        if($branch===''||strlen($branch)>180||preg_match('~[\x00-\x20\x7f]|\.\.|^/|/$|//~',$branch))continue;
+        if(!in_array($branch,$out,true))$out[]=$branch;if(count($out)>=20)break;
+    }return $out;
+}
+/** Probe configured branches and order them by their newest path commit time. */
+function vc_probe_branches(array $c):array{
+    $rows=[];$errors=[];$repo=(string)$c['repo'];$path=(string)$c['path'];$token=(string)$c['github_token'];
+    foreach(vc_normalize_branches((array)($c['branches']??[])) as $branch){
+        $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($branch).'&path='.rawurlencode($path).'&per_page=1';
+        $cr=vc_get_json_auto($commitUrl,$token,25);
+        $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($branch);
+        $mr=vc_get_json_auto($metaUrl,$token,25);
+        if(empty($cr['ok'])||empty($cr['data'][0])||empty($mr['ok'])||empty($mr['data']['sha'])){$errors[$branch]=(string)($mr['error']??$cr['error']??'probe_failed');continue;}
+        $commit=$cr['data'][0];$date=(string)($commit['commit']['committer']['date']??$commit['commit']['author']['date']??'');
+        $rows[]=['branch'=>$branch,'timestamp'=>$date,'unix'=>$date!==''?(int)strtotime($date):0,
+            'commit_sha'=>(string)($commit['sha']??''),'sha'=>(string)$mr['data']['sha'],'size'=>(int)($mr['data']['size']??0),'download_url'=>(string)($mr['data']['download_url']??'')];
+    }
+    usort($rows,static fn($a,$b)=>(int)$b['unix']<=>(int)$a['unix']);
+    return ['rows'=>$rows,'errors'=>$errors];
 }
 
 function vc_save(array $c): bool {
@@ -12352,10 +12381,14 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
     $tmp='';
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
-        $api='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/contents/'.rawurlencode(S4_CODE_UPDATE_PATH).'?ref='.rawurlencode(S4_CODE_UPDATE_BRANCH);
-        $meta=vc_get_json_auto($api,$ghToken,35);
-        if(empty($meta['ok'])||empty($meta['data']['download_url']))return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>(string)($meta['error']??'')];
-        $remoteSha=(string)($meta['data']['sha']??'');
+        $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
+        $requested=trim((string)($_POST['branch']??''));
+        if($requested!==''&&!in_array($requested,$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
+        $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
+        $probe=vc_probe_branches($probeCfg);$picked=$probe['rows'][0]??null;
+        if(!$picked)return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>json_encode($probe['errors'],JSON_UNESCAPED_UNICODE)];
+        $sourceBranch=(string)$picked['branch'];$remoteSha=(string)$picked['sha'];
+        $meta=['ok'=>true,'data'=>$picked];
         $localCode=(string)@file_get_contents(__FILE__);$localSha=vc_content_id($localCode);preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$localCode,$lvm);$diskVersion=(string)($lvm[1]??APP_VERSION);
         if($remoteSha!==''&&hash_equals($remoteSha,$localSha))return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>$diskVersion,'restart_required'=>$diskVersion!==APP_VERSION,'sha'=>substr($remoteSha,0,12)];
         $download=(string)$meta['data']['download_url'];
@@ -12387,7 +12420,7 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
         clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);$worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
         return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
-            'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,'backup'=>basename($backup),'worker'=>$worker,
+            'source'=>S4_CODE_UPDATE_REPO.'@'.$sourceBranch.':'.S4_CODE_UPDATE_PATH,'branch'=>$sourceBranch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
 }
@@ -12420,8 +12453,8 @@ if(isset($_GET['code_update_status'])){
     $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
         'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
-        'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
-        'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
+        'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.implode(',',vc_normalize_branches((array)($cfg['branches']??[]))).':'.S4_CODE_UPDATE_PATH,
+        'branches'=>vc_normalize_branches((array)($cfg['branches']??[])),'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if(isset($_GET['code_update'])||($_POST['action']??'')==='code_update'){
@@ -12564,41 +12597,20 @@ if (isset($_GET['vc_check'])) {
     }
 
     $local = vc_content_id((string)@file_get_contents(__FILE__));
-    $api = 'https://api.github.com/repos/' . $c['repo'] . '/contents/'
-         . implode('/', array_map('rawurlencode', explode('/', $c['path'])))
-         . '?ref=' . rawurlencode($c['branch']);
-    $r = vc_get_json_auto($api, $c['github_token']);
-    if (!$r['ok'] || !isset($r['data']['sha'])) {
-        echo json_encode([
-            'ok' => false,
-            'error' => vc_http_error((int)$r['code'], (string)$r['error'], $c['github_token'] !== ''),
-            'code' => (int)$r['code'],
-            'bad_token' => (int)$r['code'] === 401,
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
+    $probe=vc_probe_branches($c);$candidates=$probe['rows'];
+    if(!$candidates){
+        echo json_encode(['ok'=>false,'error'=>'هیچ‌یک از برنچ‌های تنظیم‌شده قابل بررسی نبود','branch_errors'=>$probe['errors']],JSON_UNESCAPED_UNICODE);exit;
     }
-    // توکن بد بود ولی بدون آن کار کرد — خودکار پاکش کن تا دفعهٔ بعد خطا ندهد
-    if (!empty($r['token_rejected'])) {
-        $c['github_token'] = '';
-        vc_save($c);
-    }
-
-    $c['last_check'] = time();
-    vc_save($c);
-
-    $remote = (string)$r['data']['sha'];
+    $winner=$candidates[0];
+    $c['last_check']=time();$c['branch']=$winner['branch'];vc_save($c);
     echo json_encode([
-        'ok'          => true,
-        'update'      => $remote !== $local,
-        'local_id'    => substr($local, 0, 8),
-        'remote_id'   => substr($remote, 0, 8),
-        'remote_size' => (int)($r['data']['size'] ?? 0),
-        'local_size'  => (int)@filesize(__FILE__),
-        'branch'      => $c['branch'],
-        'path'        => $c['path'],
-        'deploy_ready'=> $c['deploy_token'] !== '' && is_file(__DIR__ . '/' . basename($c['deploy_file'])),
-        'deploy_file' => basename($c['deploy_file']),
-    ], JSON_UNESCAPED_UNICODE);
+        'ok'=>true,'update'=>$winner['sha']!==$local,'local_id'=>substr($local,0,8),
+        'remote_id'=>substr($winner['sha'],0,8),'remote_size'=>$winner['size'],
+        'local_size'=>(int)@filesize(__FILE__),'branch'=>$winner['branch'],'commit_time'=>$winner['timestamp'],
+        'branches'=>$candidates,'branch_errors'=>$probe['errors'],'path'=>$c['path'],
+        'deploy_ready'=>$c['deploy_token']!==''&&is_file(__DIR__.'/'.basename($c['deploy_file'])),
+        'deploy_file'=>basename($c['deploy_file']),
+    ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -12670,7 +12682,14 @@ if (isset($_GET['vc_settings'])) {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $c['check_on_load'] = !empty($_POST['check_on_load']);
         if (isset($_POST['repo']))        $c['repo']        = trim((string)$_POST['repo']);
+        if (isset($_POST['branches'])) {
+            $decoded=json_decode((string)$_POST['branches'],true);
+            if(!is_array($decoded)){$decoded=preg_split('~[\r\n,]+~',(string)$_POST['branches']);}
+            $c['branches']=vc_normalize_branches((array)$decoded);
+        }
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
+        if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
+        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/01a0ebf7-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -23870,6 +23889,30 @@ if(isset($_GET['sync_pipeline_clear_done'])){
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     echo json_encode(['ok'=>true,'removed'=>$removed,'kept_active'=>$kept],JSON_UNESCAPED_UNICODE);exit;
 }
+if(isset($_GET['sync_pipeline_control'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $pk=trim((string)($_POST['profile_key']??$_GET['profile_key']??''));$action=(string)($_POST['control']??$_GET['control']??'');
+    if($pk===''||!in_array($action,['stop','continue'],true)){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'invalid_control'],JSON_UNESCAPED_UNICODE);exit;}
+    $row=null;foreach(syncPipelineRows() as $candidate)if((string)($candidate['profile_key']??'')===$pk){$row=$candidate;break;}
+    if(!$row){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'pipeline_not_found'],JSON_UNESCAPED_UNICODE);exit;}
+    if($action==='stop'){
+        if((string)($row['trigger']??'')==='manual')@file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode(['at'=>time(),'profile_key'=>$pk],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $extract=extractStopActiveRows($pk);$paused=[];
+        foreach([['bslReadQueue','bslWriteQueue',BSL_STOP_FILE],['wooReadQueue','wooWriteQueue',WOO_STOP_FILE]] as $spec){
+            if(!function_exists($spec[0])||!function_exists($spec[1]))continue;$q=$spec[0]();$changed=false;
+            foreach($q['entries'] as &$entry){if(!is_array($entry)||(string)($entry['profile_key']??'')!==$pk||!in_array((string)($entry['status']??''),['waiting','running'],true))continue;
+                if((string)$entry['status']==='running')@file_put_contents($spec[2],json_encode(['stop'=>true,'time'=>time(),'queue_id'=>(string)($entry['id']??''),'by'=>'sync_pipeline'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+                $entry['status']='paused';$entry['paused_by']='sync_pipeline';$entry['stopped_by_user']=true;$entry['paused_at']=time();$paused[]=(string)($entry['id']??'');$changed=true;
+            }unset($entry);if($changed)$spec[1]($q);
+        }
+        syncPipelineMark($pk,(string)($row['profile_name']??$pk),'stopped',(string)($row['trigger']??'manual'),['message'=>'با درخواست کاربر متوقف شد','control_at'=>time()]);
+        echo json_encode(['ok'=>true,'stopped'=>true,'extract'=>$extract,'paused_queues'=>$paused],JSON_UNESCAPED_UNICODE);exit;
+    }
+    @unlink(MANUAL_SYNC_STOP_FILE);
+    syncPipelineMark($pk,(string)($row['profile_name']??$pk),'queued','manual',['message'=>'ادامه از checkpoint ذخیره‌شده','failed_stage'=>'','resume_control'=>true]);
+    $queued=fireAndForget('manual_sync=1&profile='.rawurlencode($pk).'&force=1',1200);
+    echo json_encode(['ok'=>$queued,'continued'=>$queued,'profile_key'=>$pk,'error'=>$queued?'':'worker_start_failed'],JSON_UNESCAPED_UNICODE);exit;
+}
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
     $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
@@ -25185,6 +25228,8 @@ $exRes['queue_id'] = $_syncExtractQid;
 $_pipeExtractDetail=syncExtractStageDetails((array)($exRes??[]));
 syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
     ['stage_details'=>['extract'=>$_pipeExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
+$_pipeNow=null;foreach(syncPipelineRows() as $_pipeCandidate)if((string)($_pipeCandidate['profile_key']??'')===(string)$key){$_pipeNow=$_pipeCandidate;break;}
+if((string)($_pipeNow['stage']??'')==='stopped'){if(manualSyncActive())manualSyncProgress(['cancelled'=>true,'running'=>false,'done'=>true],'⏹ این پروفایل از کارت صف متوقف شد');continue;}
 $_pipePricing=syncPricingSnapshot((array)$profile,$cn);
 syncPipelineMark((string)$key,(string)($profile['name']??$key),'pricing',manualSyncActive()?'manual':'periodic',
     ['pricing'=>$_pipePricing,'stage_details'=>['pricing'=>['counts'=>['products'=>(int)$_pipePricing['products']],
@@ -45118,6 +45163,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.408', 'ورودی 10.408 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "408'") !== false
       && version_compare(APP_VERSION, '10.' . '408', '>='));
+    $add('10.409', 'کارت همگام‌سازی جمع‌شده می‌ماند و کنترل هدفمند توقف و ادامه دارد',
+         strpos($selfSrc, 'const syncPipeExpanded=new Set()') !== false
+      && strpos($selfSrc, "isset(\$_GET['sync_pipeline_control'])") !== false
+      && strpos($selfSrc, 'extractStopActiveRows($pk)') !== false
+      && strpos($selfSrc, 'sync-pipe-overall') !== false);
+    $add('10.409', 'فهرست چندبرنچی مهاجرت، حذف و نصب دستی هر برنچ را دارد',
+         strpos($selfSrc, 'function vc_normalize_branches(array $branches):array') !== false
+      && strpos($selfSrc, 'function vc_probe_branches(array $c):array') !== false
+      && strpos($selfSrc, 'function vcRemoveBranch(b)') !== false
+      && strpos($selfSrc, 'branch_not_configured') !== false);
+    $add('10.409', 'جدیدترین commit فایل بین برنچ‌های مجاز انتخاب می‌شود',
+         strpos($selfSrc, "'/commits?sha='") !== false
+      && strpos($selfSrc, "usort(\$rows,static fn(\$a,\$b)=>(int)\$b['unix']<=>(int)\$a['unix'])") !== false
+      && strpos($selfSrc, "{v:'10." . "409'") !== false
+      && version_compare(APP_VERSION, '10.' . '409', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -49328,6 +49388,9 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
     try{
         $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))$all=[];
         $old=is_array($all[$profileKey]??null)?$all[$profileKey]:[];
+        /* A worker holding an older snapshot may report after Stop. Never let it
+           resurrect this profile; only an explicit Continue (resume_control) can. */
+        if((string)($old['stage']??'')==='stopped'&&empty($extra['resume_control']))return;
         $started=in_array($stage,['queued','extract'],true)?time():(int)($old['started_at']??time());
         if(in_array($stage,['error','stopped'],true)&&!isset($extra['failed_stage']))$extra['failed_stage']=(string)($old['stage']??'extract');
         /* هر مرحله گزارش خودش را نگه می‌دارد؛ ورود به pricing نباید لیست
@@ -68867,13 +68930,16 @@ endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) �
   <button class="btn btn-gray" onclick="vcLoadBranches(true)" id="vcBtnRepo" style="flex:0 0 auto;padding:8px 12px">🔄</button>
 </div>
 <div class="crow vc-pick">
-  <label>برنچ:</label>
+  <label>افزودن برنچ:</label>
   <div style="flex:1;position:relative;min-width:150px">
-    <input id="vcBranch" placeholder="ابتدا 🔄 را بزنید" dir="ltr" autocomplete="off"
+    <input id="vcBranch" placeholder="نام برنچ یا انتخاب از فهرست" dir="ltr" autocomplete="off"
            oninput="vcFilterBranch()" onfocus="vcFilterBranch()">
     <div class="vc-drop" id="vcBranchDrop"></div>
   </div>
+  <button class="btn btn-cyan" type="button" onclick="vcAddBranch()" style="flex:0 0 auto">＋</button>
 </div>
+<div id="vcBranchList" style="display:grid;gap:6px;margin:0 0 10px"></div>
+<div style="font-size:10px;color:#64748b;margin:-4px 0 8px">بررسی خودکار، برنچی را انتخاب می‌کند که تازه‌ترین commit مربوط به همین فایل را دارد.</div>
 <div class="crow vc-pick">
   <label>مسیر فایل:</label>
   <div style="flex:1;position:relative;min-width:150px">
@@ -71264,7 +71330,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <style>
                   .sync-pipe-list{margin-top:10px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
                   .sync-pipe-card{background:linear-gradient(160deg,#0b1220,#111827);border:1px solid #273449;border-radius:14px;padding:11px;min-width:0;box-shadow:0 8px 24px #02061755}
-                  .sync-pipe-head{display:flex;align-items:center;gap:7px;margin-bottom:9px}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+                  .sync-pipe-head{display:flex;align-items:center;gap:7px;margin-bottom:9px;cursor:pointer}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.sync-pipe-card.collapsed .sync-pipe-head{margin-bottom:7px}.sync-pipe-overall{height:8px;border-radius:999px;background:#1e293b;overflow:hidden;position:relative}.sync-pipe-overall>i{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#38bdf8,#34d399);transition:width .4s}.sync-pipe-overall-label{font-size:9px;color:#bae6fd;min-width:34px;text-align:left}.sync-pipe-controls{display:flex;gap:5px;margin-top:8px}.sync-pipe-card.collapsed .sync-pipe-detail{display:none}
                   .sync-pipe-badge{font-size:9px;padding:2px 7px;border-radius:999px;white-space:nowrap}.sync-pipe-track{position:relative;display:grid;gap:5px;padding-right:3px}
                   .sync-pipe-track:before{content:"";position:absolute;right:15px;top:17px;bottom:17px;width:2px;background:#243147}
                   .sync-pipe-step{position:relative;z-index:1;display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px;border-radius:10px;border:1px solid transparent;transition:.2s;overflow:hidden;cursor:pointer;isolation:isolate}
@@ -76597,7 +76663,13 @@ function msSetState(txt,cls){
   if(el){el.textContent=txt;el.className='cst '+(cls||'off');}
 }
 
-let syncPipeRows=[];
+let syncPipeRows=[];const syncPipeExpanded=new Set();
+function syncPipelineToggle(key){if(syncPipeExpanded.has(key))syncPipeExpanded.delete(key);else syncPipeExpanded.add(key);syncPipelineRender();}
+function syncPipelineControl(key,action){
+  const label=action==='stop'?'توقف این همگام‌سازی':'ادامهٔ این همگام‌سازی';
+  if(!confirm(label+'؟'))return;const fd=new FormData();fd.append('profile_key',key);fd.append('control',action);
+  fetch('?sync_pipeline_control=1',{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{if(!d.ok){showToast(d.error||'عملیات ناموفق بود',1);return;}showToast(action==='stop'?'⏹ متوقف شد':'▶ ادامه در صف اجرا قرار گرفت');syncPipelineRender();}).catch(()=>showToast('خطا در کنترل همگام‌سازی',1));
+}
 function syncPipelineClearDone(){
   if(!confirm('همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف پاک شوند؟ کارهای فعال باقی می‌مانند.'))return;
   fetch('?sync_pipeline_clear_done=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
@@ -76627,11 +76699,13 @@ function syncPipelineRender(){
         return '<div class="sync-pipe-step '+cls+'" style="--pipe-progress:'+pct+'%" onclick="syncDetailOpen('+ri+',\''+s[0]+'\')"><span class="sync-pipe-dot">'+(complete?'✓':failed?'!':s[1])+'</span>'
           +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+' · '+toFa(pct)+'٪<b style="display:block;color:#7dd3fc;margin-top:2px">مشاهده جزئیات ›</b></span>'+minis+'</div>';
       }).join('');
-      const periodic=row.trigger==='periodic';
-      return '<article class="sync-pipe-card"><header class="sync-pipe-head"><span class="sync-pipe-title">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
-        +'<span class="sync-pipe-badge" style="color:'+(periodic?'#fde68a':'#bae6fd')+';background:'+(periodic?'#713f123d':'#0759853d')+'">'+(periodic?'⏱ دوره‌ای':'👤 دستی')+'</span></header>'
-        +'<div class="sync-pipe-track">'+steps+'</div>'
-        +(row.message?'<div class="sync-pipe-msg" style="color:'+(bad?'#fca5a5':'#94a3b8')+'">'+esc(row.message)+'</div>':'')+'</article>';
+      const key=String(row.profile_key||''),ek=encodeURIComponent(key),expanded=syncPipeExpanded.has(key),activePct=terminal?100:(bad?Math.max(0,cur*25):Math.min(99,Math.round(cur*25+(parseInt(row.stage_progress)||42)/4)));
+      const canStop=!terminal&&!bad,canContinue=row.stage==='stopped'||row.stage==='error';
+      return '<article class="sync-pipe-card '+(expanded?'':'collapsed')+'"><header class="sync-pipe-head" onclick="syncPipelineToggle(decodeURIComponent(\''+ek+'\'))"><span class="sync-pipe-title">'+esc(row.profile_name||key||'—')+'</span><span class="sync-pipe-overall-label">'+toFa(activePct)+'٪</span></header>'
+        +'<div style="display:flex;align-items:center;gap:7px"><div class="sync-pipe-overall" style="flex:1"><i style="width:'+activePct+'%"></i></div></div>'
+        +'<div class="sync-pipe-controls"><button class="btn btn-red" '+(canStop?'':'disabled')+' onclick="event.stopPropagation();syncPipelineControl(decodeURIComponent(\''+ek+'\'),\'stop\')">⏹ توقف</button><button class="btn btn-green" '+(canContinue?'':'disabled')+' onclick="event.stopPropagation();syncPipelineControl(decodeURIComponent(\''+ek+'\'),\'continue\')">▶ ادامه</button></div>'
+        +'<div class="sync-pipe-detail"><div class="sync-pipe-track">'+steps+'</div>'
+        +(row.message?'<div class="sync-pipe-msg" style="color:'+(bad?'#fca5a5':'#94a3b8')+'">'+esc(row.message)+'</div>':'')+'</div></article>';
     }).join('');
   }).catch(()=>{});
 }
@@ -78130,7 +78204,7 @@ renderDetailFieldsList();
  *  بررسی نسخه و نصب از طریق deploy.php یا code_update احراز‌شده.
  *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
-let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false;
+let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false, VC_PENDING_BRANCH = '';
 /* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
    tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
 const S4_LOADED_VERSION='<?=APP_VERSION?>';
@@ -78154,6 +78228,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.409', t:'⏯ کنترل کارت همگام‌سازی و آپدیت چندبرنچی', items:[
+    'کارت هر پروفایل در صف همگام‌سازی از ابتدا جمع‌شده است؛ نام پروفایل و نوار گرافیکی درصد کل همیشه دیده می‌شود و باز/بسته‌بودن کارت در تازه‌سازی سه‌ثانیه‌ای حفظ می‌گردد.',
+    'روی هر کارت دکمه‌های توقف و ادامه وجود دارد. توقف فقط استخراج و صف‌های مقصد همان profile_key را هدف می‌گیرد و ادامه از checkpoint ذخیره‌شده دوباره در worker قرار می‌گیرد.',
+    'بخش نسخهٔ کد چند برنچ را ذخیره، اضافه و حذف می‌کند؛ تنظیم تک‌برنچی قدیمی بدون از دست رفتن اطلاعات به فهرست جدید مهاجرت می‌شود.',
+    'بررسی خودکار commit مربوط به فایل را در همهٔ برنچ‌های تنظیم‌شده مقایسه می‌کند و تازه‌ترین زمان را برمی‌گزیند؛ کنار هر برنچ نیز نصب دستی همان منبع قرار دارد.',
+    'endpoint نصب کامل فقط نام برنچ موجود در فهرست ذخیره‌شده را می‌پذیرد و در حالت خودکار تازه‌ترین برنچ مجاز را انتخاب می‌کند؛ ورودی دلخواه درخواست همچنان رد می‌شود.'
+  ]},
   {v:'10.408', t:'🧹 استخراج معتبر، جزئیات تازه و قیمت زندهٔ همه غرفه‌ها', items:[
     'عدد ۰ صفحه پیش از شروع حتماً ذخیره می‌شود و معنای آن «خودکار تا آخرین صفحه» می‌ماند؛ اجرای بک‌اند دیگر snapshot قدیمی ۱۰ صفحه را برنمی‌دارد.',
     'ردیف فاقد عنوان یا قیمت معتبر محصول شمرده نمی‌شود؛ placeholderهای قدیمی مانند موارد آوند پرینتر نیز بدون ایجاد بایگانی کاذب در مقصد از snapshot پاک می‌شوند.',
@@ -86993,7 +87074,9 @@ function vcLoad(then) {
         VC = d.settings;
         if ($('vcOnLoad'))     $('vcOnLoad').checked   = !!VC.check_on_load;
         if ($('vcRepo'))       $('vcRepo').value       = VC.repo || '';
-        if ($('vcBranch'))     $('vcBranch').value     = VC.branch || '';
+        if (!Array.isArray(VC.branches)) VC.branches=VC.branch?[VC.branch]:[];
+        if ($('vcBranch'))     $('vcBranch').value     = '';
+        vcRenderBranches();
         if ($('vcPath'))       $('vcPath').value       = VC.path || '';
         if ($('vcDeployFile')) $('vcDeployFile').value = VC.deploy_file || 'deploy.php';
         if ($('vcGhState'))    $('vcGhState').textContent  = VC.has_gh_token ? 'تنظیم شده' : 'تنظیم نشده';
@@ -87009,11 +87092,20 @@ function vcLoad(then) {
     }).catch(() => {});
 }
 
+function vcRenderBranches(){
+    const host=$('vcBranchList');if(!host)return;const rows=VC&&Array.isArray(VC.branches)?VC.branches:[];
+    host.innerHTML=rows.length?rows.map(b=>{const eb=encodeURIComponent(b);return '<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;border:1px solid #334155;border-radius:8px;background:#0f172a"><code dir="ltr" style="flex:1;color:#bae6fd;overflow:hidden;text-overflow:ellipsis">'+esc(b)+'</code><button class="btn btn-green" type="button" style="font-size:9px;padding:4px 7px" onclick="vcUpdate(false,decodeURIComponent(\''+eb+'\'))">⬇ آپدیت از این برنچ</button><button class="btn btn-red" type="button" style="font-size:9px;padding:4px 7px" onclick="vcRemoveBranch(decodeURIComponent(\''+eb+'\'))">حذف</button></div>'}).join(''):'<div style="color:#fca5a5;font-size:10px">هنوز برنچی اضافه نشده است.</div>';
+}
+function vcAddBranch(){const el=$('vcBranch'),b=el?el.value.trim():'';if(!b)return showToast('نام برنچ را وارد کنید',1);if(!VC)VC={branches:[]};if(!Array.isArray(VC.branches))VC.branches=[];if(!VC.branches.includes(b))VC.branches.push(b);VC.branch=b;if(el)el.value='';vcRenderBranches();vcSave(true);}
+function vcRemoveBranch(b){if(!VC||!Array.isArray(VC.branches))return;if(!confirm('برنچ «'+b+'» حذف شود؟'))return;VC.branches=VC.branches.filter(x=>x!==b);if(VC.branch===b)VC.branch=VC.branches[0]||'';vcRenderBranches();vcSave(true);}
+
 function vcSave(showMsg) {
     const fd = new FormData();
     fd.append('check_on_load', $('vcOnLoad').checked ? '1' : '');
     fd.append('repo',        $('vcRepo').value.trim());
-    fd.append('branch',      $('vcBranch').value.trim());
+    const configured=VC&&Array.isArray(VC.branches)?VC.branches:[];
+    fd.append('branches',JSON.stringify(configured));
+    fd.append('branch',(VC&&VC.branch)||configured[0]||'');
     fd.append('path',        $('vcPath').value.trim());
     fd.append('deploy_file', $('vcDeployFile').value.trim() || 'deploy.php');
     if ($('vcGhToken').value)  fd.append('github_token', $('vcGhToken').value);
@@ -87082,6 +87174,7 @@ function vcCheck(manual) {
             if (manual) showToast(d.error || 'خطا', true);
             reset(); return;
         }
+        VC_PENDING_BRANCH=d.branch||'';if(VC&&VC_PENDING_BRANCH)VC.branch=VC_PENDING_BRANCH;
         if (!d.update) {
             VC_PENDING = false;
             $('vcBtnUpdate').classList.add('hidden');
@@ -87100,7 +87193,7 @@ function vcCheck(manual) {
         const av = $('appVer');
         if (av) { av.classList.add('upd'); av.title = 'نسخهٔ جدید موجود است — کلیک کنید'; }
         vcStat('⬆ نسخهٔ جدید: <code>' + esc(d.remote_id) + '</code> · ' +
-               toFa((d.remote_size / 1024).toFixed(0)) + ' KB', '#fbbf24');
+               toFa((d.remote_size / 1024).toFixed(0)) + ' KB · '+esc(d.branch||''), '#fbbf24');
         reset();
 
         if (!d.deploy_ready) {
@@ -87111,7 +87204,7 @@ function vcCheck(manual) {
 
         // v8.46: کاری در جریان باشد یا نه، نصب انجام می‌شود. جایگزینی
         // اتمیک است و اجرای فعلی با نسخهٔ قبلی تمام می‌شود.
-        const busy = vcBusy();
+    const busy = vcBusy();
         if (busy) showToast('«' + busy + '» در جریان است — نصب بدون وقفه انجام می‌شود');
 
         // دکمهٔ دستی = کاربر خودش خواسته، پس همان‌جا نصب و رفرش می‌کنیم
@@ -87151,7 +87244,8 @@ function vcCloseBar() {
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
  */
-function vcUpdate(skipConfirm) {
+function vcUpdate(skipConfirm, requestedBranch) {
+    const installBranch=requestedBranch||VC_PENDING_BRANCH||(VC&&VC.branch)||((VC&&VC.branches&&VC.branches[0])||'');
     // v8.46: دیگر رد نمی‌شود. فقط اگر ارسالی در جریان باشد یک تأیید
     // می‌گیرد، چون آن مورد تنها حالتی است که کاربر شاید بخواهد صبر کند.
     const busy = vcBusy();
@@ -87189,7 +87283,7 @@ function vcUpdate(skipConfirm) {
         fd.append('action',    'deploy');
         fd.append('api_token', d.token);
         fd.append('repo',      $('vcRepo').value.trim());
-        fd.append('branch',    $('vcBranch').value.trim());
+        fd.append('branch',    installBranch);
         fd.append('source',    $('vcPath').value.trim());
         fd.append('dest',      VC ? VC.self_name : '');
         fd.append('folder',    '');
