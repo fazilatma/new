@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.408';
+const APP_VERSION = '10.410';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -1463,14 +1463,20 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
         $line = !empty($enq['duplicate'])
             ? '🧵 همگام‌سازی دستی از قبل در صف worker دائمی است.'
             : '🧵 همگام‌سازی دستی به worker دائمی سپرده شد — مرورگر فقط پیشرفت را می‌خواند.';
-        writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
+        $previous=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+        $sameProfile=(string)($previous['profile_key']??'')===$profileKey;
+        $checkpoint=$sameProfile&&is_array($previous['checkpoint']??null)?$previous['checkpoint']:[];
+        $recent=is_array($previous['recent_log']??null)?$previous['recent_log']:[];$recent[]=$line;
+        writeProgress(MANUAL_SYNC_PROGRESS_FILE, array_merge($sameProfile?$previous:[],[
             'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
-            'phase' => 'در صف worker', 'started_at' => time(), 'ts' => time(),
-            'last_progress_ts' => time(), 'total' => 4, 'current' => 0,
-            'profile_key' => $profileKey, 'profile_name' => $profileKey,
+            'phase' => 'در صف worker', 'started_at' => (int)($checkpoint['started_at']??$previous['started_at']??time()), 'ts' => time(),
+            'last_progress_ts' => time(), 'total' => 4, 'current' => (int)($checkpoint['current']??0),
+            'profile_key' => $profileKey, 'profile_name' => (string)($previous['profile_name']??$profileKey),
+            'checkpoint' => array_merge($checkpoint,['profile_key'=>$profileKey]),
+            'extract_queue_id' => (string)($checkpoint['extract']['queue_id']??$previous['extract_queue_id']??''),
             'job_id' => (string)($enq['job_id'] ?? ''),
-            'recent_log' => [$line], 'total_log_count' => 1,
-        ]);
+            'recent_log' => array_slice($recent,-40), 'total_log_count' => (int)($previous['total_log_count']??0)+1,
+        ]));
     }
     return $enq;
 }
@@ -8172,7 +8178,7 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
         // توقف وسطِ کار: بقیهٔ دسته‌ها اجرا نمی‌شوند
         if (!$skipStop) {
             clearstatcache(true, BSL_STOP_FILE);
-            if (file_exists(BSL_STOP_FILE) && (time() - (int)@filemtime(BSL_STOP_FILE)) <= BSL_STOP_HOLD_SEC) {
+            if (queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)) {
                 foreach (array_slice($keys, $off) as $kk) {
                     $out[$kk] = ['ok' => false, 'code' => 0, 'error' => 'stopped', 'body' => null, 'raw' => '', 'mode' => 'multi'];
                 }
@@ -8318,13 +8324,8 @@ for($attempt=1;$attempt<=$maxRetries;$attempt++){
 // v9.82: تست اتصال نباید به‌خاطر فایل توقفِ باقی‌مانده «stopped» بدهد
 if(!$skipStop){
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
-// v9.84: فقط سیگنالِ تازه معتبر است. قدیمی‌تر از نگه‌داشت = جامانده،
-// پاکش کن و ادامه بده؛ وگرنه یک توقفِ هفتهٔ پیش تا ابد کار را می‌بندد.
-$stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if($stopAge<=BSL_STOP_HOLD_SEC){return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);}
-@unlink(BSL_STOP_FILE);
-clearstatcache(true,BSL_STOP_FILE);
+if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){
+return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
 }
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
@@ -12201,6 +12202,8 @@ function vc_defaults(): array {
         'deploy_file'   => 'deploy.php',
         'deploy_token'  => '',
         'last_check'    => 0,
+        // شاخه‌های منبع updater داخلی؛ repo و مسیر فایل در سرور ثابت و امن می‌مانند.
+        'code_update_branches' => ['arena/2d48c86d-new'],
     ];
 }
 
@@ -12219,6 +12222,8 @@ function vc_load(): array {
         && preg_match('~^scraper[-_v0-9.]*\.php$~i', basename($saved)))) {
         $c['path'] = $self;
     }
+    $invalidBranches=[];
+    $c['code_update_branches']=vcNormalizeCodeUpdateBranches($c['code_update_branches']??[], $invalidBranches);
     return $c;
 }
 
@@ -12315,6 +12320,106 @@ const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
 
+/** Branch refs are data, not URLs. Keep their accepted syntax deliberately narrow. */
+function vcValidCodeUpdateBranch(string $branch):bool{
+    $branch=trim($branch);
+    if($branch===''||strlen($branch)>200||!preg_match('~^[A-Za-z0-9._/-]+$~D',$branch)
+        ||strpos($branch,'..')!==false||strpos($branch,'//')!==false||strpos($branch,'@{')!==false
+        ||$branch[0]==='/'||substr($branch,-1)==='/'||substr($branch,-1)==='.')return false;
+    foreach(explode('/',$branch)as$part){
+        if($part===''||$part==='.'||$part==='..'||$part[0]==='.'||preg_match('~\.lock$~i',$part))return false;
+    }
+    return true;
+}
+function vcNormalizeCodeUpdateBranches($value,?array &$invalid=null):array{
+    $invalid=[];
+    if(is_string($value)){$decoded=json_decode($value,true);$value=is_array($decoded)?$decoded:[];}
+    if(!is_array($value)){$invalid[]='(list)';return[];}
+    if(count($value)>20){$invalid[]='(maximum 20 branches)';return[];}
+    $out=[];$seen=[];
+    foreach($value as$raw){
+        if(!is_scalar($raw)){$invalid[]='(non-string)';continue;}
+        $branch=trim((string)$raw);
+        if(!vcValidCodeUpdateBranch($branch)){$invalid[]=$branch!==''?$branch:'(empty)';continue;}
+        if(isset($seen[$branch]))continue;
+        $seen[$branch]=true;$out[]=$branch;
+    }
+    return$out;
+}
+/** Read branch-tip timestamps from one paged GitHub API listing. */
+function s4CodeUpdateBranchTips(array $wanted=[],string $token=''):array{
+    $wanted=vcNormalizeCodeUpdateBranches($wanted,$invalid);
+    $wantedMap=$wanted?array_fill_keys($wanted,true):null;$items=[];$page=1;$maxPages=$wanted?5:10;
+    do{
+        $url='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/branches?per_page=100&page='.$page;
+        $r=vc_get_json_auto($url,$token,30);
+        if(empty($r['ok']))return['ok'=>false,'error'=>(string)($r['error']??'github_branch_list_failed'),
+            'code'=>(int)($r['code']??0),'token_rejected'=>!empty($r['token_rejected'])];
+        $rows=is_array($r['data'])?$r['data']:[];
+        foreach($rows as$b){
+            $name=trim((string)($b['name']??''));if($name===''||($wantedMap!==null&&!isset($wantedMap[$name])))continue;
+            $tip=is_array($b['commit']??null)?$b['commit']:[];
+            $commit=is_array($tip['commit']??null)?$tip['commit']:[];
+            $committer=is_array($commit['committer']??null)?$commit['committer']:[];
+            $author=is_array($commit['author']??null)?$commit['author']:[];
+            $date=(string)($committer['date']??$author['date']??$tip['committer']['date']??$tip['author']['date']??'');
+            $items[$name]=['name'=>$name,'sha'=>(string)($tip['sha']??''),
+                'commit_date'=>$date,'commit_at'=>$date!==''?(int)(strtotime($date)?:0):0];
+        }
+        if(!$rows||count($rows)<100||($wantedMap!==null&&count($items)>=count($wantedMap)))break;
+        $page++;
+    }while($page<=$maxPages);
+    if($wantedMap!==null){
+        foreach($wanted as$name)if(!isset($items[$name]))$items[$name]=['name'=>$name,'sha'=>'','commit_date'=>'','commit_at'=>0,'missing'=>true];
+        $items=array_values($items);
+    }else{$items=array_values($items);}
+    return['ok'=>true,'branches'=>$items,'token_rejected'=>!empty($r['token_rejected'])];
+}
+function s4CodeUpdateNewestBranch(array $cfg,array $previousState=[]):array{
+    $branches=vcNormalizeCodeUpdateBranches($cfg['code_update_branches']??[],$invalid);
+    if(!$branches)return['ok'=>false,'error'=>'no_update_branches','branches'=>[],'branch_metadata'=>[]];
+    $token=trim((string)($cfg['github_token']??''));
+    $tips=s4CodeUpdateBranchTips($branches,$token);
+    if(empty($tips['ok']))return$tips+['branches'=>[],'branch_metadata'=>[]];
+    $oldMeta=is_array($previousState['branch_metadata']??null)?$previousState['branch_metadata']:[];
+    $metadata=[];$best=null;$tokenRejected=!empty($tips['token_rejected']);
+    foreach((array)($tips['branches']??[])as$item){
+        $name=(string)($item['name']??'');$tipSha=(string)($item['sha']??'');
+        if($name===''||!in_array($name,$branches,true))continue;
+        $cached=is_array($oldMeta[$name]??null)?$oldMeta[$name]:[];
+        if($tipSha!==''&&hash_equals((string)($cached['tip_sha']??''),$tipSha)
+            &&(int)($cached['update_at']??0)>0){
+            $row=['name'=>$name,'tip_sha'=>$tipSha,'update_sha'=>(string)($cached['update_sha']??''),
+                'commit_date'=>(string)($cached['commit_date']??''),'commit_at'=>(int)$cached['update_at'],
+                'cached'=>true];
+        }else{
+            $url='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/commits?path='.rawurlencode(S4_CODE_UPDATE_PATH)
+                .'&sha='.rawurlencode($name).'&per_page=1';
+            $cr=vc_get_json_auto($url,$token,30);$tokenRejected=$tokenRejected||!empty($cr['token_rejected']);
+            if(empty($cr['ok'])){$row=['name'=>$name,'tip_sha'=>$tipSha,'update_sha'=>'','commit_date'=>'','commit_at'=>0,
+                'lookup_error'=>(string)($cr['error']??'commit_lookup_failed')];}
+            else{
+                $head=is_array($cr['data'][0]??null)?$cr['data'][0]:[];
+                $commit=is_array($head['commit']??null)?$head['commit']:[];
+                $committer=is_array($commit['committer']??null)?$commit['committer']:[];
+                $author=is_array($commit['author']??null)?$commit['author']:[];
+                $date=(string)($committer['date']??$author['date']??'');
+                $row=['name'=>$name,'tip_sha'=>$tipSha,'update_sha'=>(string)($head['sha']??''),
+                    'commit_date'=>$date,'commit_at'=>$date!==''?(int)(strtotime($date)?:0):0,
+                    'missing'=>!$head];
+            }
+        }
+        $metadata[$name]=$row;
+        if((int)($row['commit_at']??0)>0&&($best===null||(int)$row['commit_at']>(int)$best['commit_at']))$best=$row;
+    }
+    $rows=array_values($metadata);
+    if($best===null)return['ok'=>false,'error'=>'branch_file_commit_time_unavailable','branches'=>$rows,
+        'branch_metadata'=>$metadata,'token_rejected'=>$tokenRejected];
+    return['ok'=>true,'branch'=>(string)$best['name'],'commit_at'=>(int)$best['commit_at'],
+        'commit_date'=>(string)($best['commit_date']??''),'sha'=>(string)($best['update_sha']??''),
+        'branches'=>$rows,'branch_metadata'=>$metadata,'token_rejected'=>$tokenRejected];
+}
+
 function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
     if(!function_exists('curl_init'))return ['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
     $h=['User-Agent: scraper4-code-updater','Accept: application/octet-stream','Cache-Control: no-cache'];
@@ -12332,7 +12437,7 @@ function s4CodeUpdateAdminAuth():array{
     $nonce=(string)($_POST['_wpnonce']??($_SERVER['HTTP_X_WP_NONCE']??''));
     return ['admin'=>$admin,'ok'=>$admin&&function_exists('wp_verify_nonce')&&wp_verify_nonce($nonce,'s4_code_update')];
 }
-function s4CodeUpdateRun(bool $trustedAuto=false):array{
+function s4CodeUpdateRun(bool $trustedAuto=false,string $requestedBranch=''):array{
     $cfg=vc_load();
     if(!$trustedAuto){
         $expected=trim((string)($cfg['deploy_token']??''));
@@ -12340,11 +12445,17 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);$wp=s4CodeUpdateAdminAuth();
         if(!$tokenOk&&empty($wp['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized: deploy_token یا مدیر وردپرس با nonce لازم است'];
     }
+    $branch=trim($requestedBranch!==''?$requestedBranch:(string)($_POST['branch']??''));
+    if($branch==='')$branch=S4_CODE_UPDATE_BRANCH;
+    $allowedBranches=vcNormalizeCodeUpdateBranches($cfg['code_update_branches']??[],$invalidBranches);
+    if(!vcValidCodeUpdateBranch($branch))return ['ok'=>false,'http'=>400,'error'=>'invalid_branch'];
+    if(($trustedAuto||trim($requestedBranch)!==''||trim((string)($_POST['branch']??''))!=='')&&!in_array($branch,$allowedBranches,true))
+        return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
     $lock=@fopen(__DIR__.'/.scraper4-code-update.lock','c');if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if($lock)@fclose($lock);return ['ok'=>false,'http'=>409,'error'=>'update_already_running'];}
     $tmp='';
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
-        $api='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/contents/'.rawurlencode(S4_CODE_UPDATE_PATH).'?ref='.rawurlencode(S4_CODE_UPDATE_BRANCH);
+        $api='https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/contents/'.rawurlencode(S4_CODE_UPDATE_PATH).'?ref='.rawurlencode($branch);
         $meta=vc_get_json_auto($api,$ghToken,35);
         if(empty($meta['ok'])||empty($meta['data']['download_url']))return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>(string)($meta['error']??'')];
         $remoteSha=(string)($meta['data']['sha']??'');
@@ -12379,28 +12490,49 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
         clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);$worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
         return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
-            'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,'backup'=>basename($backup),'worker'=>$worker,
+            'source'=>S4_CODE_UPDATE_REPO.'@'.$branch.':'.S4_CODE_UPDATE_PATH,'branch'=>$branch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
 }
 /** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
-    $now=time();$state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
-    if(!$force&&$now-(int)($state['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($state['to_version'])&&(string)$state['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$state];}
+    $now=time();$cfg=vc_load();$branches=vcNormalizeCodeUpdateBranches($cfg['code_update_branches']??[],$invalid);
+    $branchesSig=hash('sha256',implode("\n",$branches));$state=[];
+    if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
+    if(!$force&&hash_equals((string)($state['branches_sig']??''),$branchesSig)
+        &&$now-(int)($state['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){
+        $restart=!empty($state['to_version'])&&(string)$state['to_version']!==APP_VERSION;
+        return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$state];
+    }
     $gate=@fopen(__DIR__.'/.scraper4-auto-update.lock','c');if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['ok'=>true,'skipped'=>true,'reason'=>'busy'];}
     try{
-        clearstatcache(true,S4_CODE_UPDATE_STATE_FILE);$latest=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$latest=$j;}
-        if(!$force&&$now-(int)($latest['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($latest['to_version'])&&(string)$latest['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$latest];}
-        /* پیش از شبکه timestamp بنویس تا شکست GitHub نیز requestهای بعدی را طوفانی نکند. */
-        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode(['checked_at'=>$now,'checking'=>true,'local_version'=>APP_VERSION],JSON_UNESCAPED_UNICODE),LOCK_EX);
-        $res=s4CodeUpdateRun(true);$save=['checked_at'=>$now,'finished_at'=>time(),'ok'=>!empty($res['ok']),
-            'updated'=>!empty($res['updated']),'from_version'=>APP_VERSION,'to_version'=>(string)($res['to_version']??$res['version']??APP_VERSION),
-            'error'=>(string)($res['error']??''),'sha'=>(string)($res['sha']??'')];
+        clearstatcache(true,S4_CODE_UPDATE_STATE_FILE);$latest=[];
+        if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$latest=$j;}
+        if(!$force&&hash_equals((string)($latest['branches_sig']??''),$branchesSig)
+            &&$now-(int)($latest['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){
+            $restart=!empty($latest['to_version'])&&(string)$latest['to_version']!==APP_VERSION;
+            return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$latest];
+        }
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode(['checked_at'=>$now,'checking'=>true,
+            'local_version'=>APP_VERSION,'branches_sig'=>$branchesSig,'branches'=>$branches],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $pick=s4CodeUpdateNewestBranch($cfg,$latest);
+        if(!empty($pick['token_rejected'])){$cfg['github_token']='';vc_save($cfg);}
+        if(empty($pick['ok']))$res=['ok'=>false,'error'=>(string)($pick['error']??'branch_selection_failed'),'branches'=>$pick['branches']??[]];
+        else $res=s4CodeUpdateRun(true,(string)$pick['branch']);
+        $save=['checked_at'=>$now,'finished_at'=>time(),'ok'=>!empty($res['ok']),
+            'updated'=>!empty($res['updated']),'from_version'=>APP_VERSION,
+            'to_version'=>(string)($res['to_version']??$res['version']??APP_VERSION),
+            'error'=>(string)($res['error']??''),'sha'=>(string)($res['sha']??''),
+            'branch'=>(string)($pick['branch']??''),'branch_commit_at'=>(int)($pick['commit_at']??0),
+            'branch_commit_date'=>(string)($pick['commit_date']??''),'branch_commit_sha'=>(string)($pick['sha']??''),
+            'branches_sig'=>$branchesSig,'branches'=>$branches,'branch_metadata'=>(array)($pick['branch_metadata']??($latest['branch_metadata']??[]))];
         @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($save,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
-        return $res+['auto'=>true];
+        return $res+['auto'=>true,'selected_branch'=>(string)($pick['branch']??''),
+            'selected_commit_at'=>(int)($pick['commit_at']??0)];
     }finally{@flock($gate,LOCK_UN);@fclose($gate);}
 }
+
 /* مرورگر endpoint سبک زیر را دوره‌ای صدا می‌زند؛ worker نیز پایین loop آن را
  * اجرا می‌کند. requestهای عادی هرگز منتظر شبکهٔ GitHub نمی‌مانند. */
 if(isset($_GET['code_auto_update'])){
@@ -12412,9 +12544,27 @@ if(isset($_GET['code_update_status'])){
     $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
         'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
-        'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH.':'.S4_CODE_UPDATE_PATH,
+        'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.((string)($auto['branch']??S4_CODE_UPDATE_BRANCH)).':'.S4_CODE_UPDATE_PATH,
+        'branches'=>vcNormalizeCodeUpdateBranches($cfg['code_update_branches']??[],$unusedBranches),
         'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+if(isset($_GET['code_update_branch_info'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $cfg=vc_load();$tips=s4CodeUpdateBranchTips([],trim((string)($cfg['github_token']??'')));
+    if(!empty($tips['token_rejected'])){$cfg['github_token']='';vc_save($cfg);}
+    echo json_encode(['ok'=>!empty($tips['ok']),'repo'=>S4_CODE_UPDATE_REPO,
+        'selected'=>vcNormalizeCodeUpdateBranches($cfg['code_update_branches']??[],$unusedBranches),
+        'branches'=>(array)($tips['branches']??[]),'error'=>(string)($tips['error']??'')],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+if(isset($_GET['code_update_branch_versions'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $cfg=vc_load();$previous=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$q=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($q))$previous=$q;}
+    $tips=s4CodeUpdateNewestBranch($cfg,$previous);
+    if(!empty($tips['token_rejected'])){$cfg['github_token']='';vc_save($cfg);}
+    echo json_encode(['ok'=>!empty($tips['ok']),'repo'=>S4_CODE_UPDATE_REPO,
+        'branches'=>(array)($tips['branches']??[]),'latest_branch'=>(string)($tips['branch']??''),
+        'error'=>(string)($tips['error']??'')],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if(isset($_GET['code_update'])||($_POST['action']??'')==='code_update'){
     header('Content-Type: application/json; charset=UTF-8');
@@ -12663,6 +12813,12 @@ if (isset($_GET['vc_settings'])) {
         $c['check_on_load'] = !empty($_POST['check_on_load']);
         if (isset($_POST['repo']))        $c['repo']        = trim((string)$_POST['repo']);
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
+        if (isset($_POST['code_update_branches'])) {
+            $rawCodeBranches=json_decode((string)$_POST['code_update_branches'],true);
+            $badCodeBranches=[];$normalizedCodeBranches=vcNormalizeCodeUpdateBranches($rawCodeBranches,$badCodeBranches);
+            if($badCodeBranches){echo json_encode(['ok'=>false,'error'=>'فهرست برنچ‌های updater نامعتبر است','invalid'=>$badCodeBranches],JSON_UNESCAPED_UNICODE);exit;}
+            $c['code_update_branches']=$normalizedCodeBranches;
+        }
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -23945,14 +24101,31 @@ if(isset($_GET['sync_pipeline_clear_done'])){
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     echo json_encode(['ok'=>true,'removed'=>$removed,'kept_active'=>$kept],JSON_UNESCAPED_UNICODE);exit;
 }
+if(isset($_GET['sync_pipeline_control'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    if(($_SERVER['REQUEST_METHOD']??'GET')!=='POST'){http_response_code(405);echo json_encode(['ok'=>false,'error'=>'POST required'],JSON_UNESCAPED_UNICODE);exit;}
+    $action=trim((string)($_POST['action']??''));$profileKey=trim((string)($_POST['profile_key']??''));
+    if($profileKey===''||!in_array($action,['pause','continue'],true)){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'profile_key/action نامعتبر است'],JSON_UNESCAPED_UNICODE);exit;}
+    $result=$action==='pause'?syncPipelineStopProfile($profileKey):syncPipelineSetUserPaused($profileKey,false);
+    if(empty($result['ok']))http_response_code(409);
+    echo json_encode($result,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
 if(isset($_GET['sync_pipeline_status'])){
-    header('Content-Type: application/json; charset=UTF-8');
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
     $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
     $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];$wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
-    /* کارت‌های ساخته‌شده پیش از v10.279 هم با آخرین ردیف صف غنی شوند؛
-       کلیک روی کارت قدیمی نباید مودال خالی باز کند. */
-    $_eq=extractReadQueue();$_lastEx=[];foreach((array)($_eq['entries']??[]) as $_ee){if(!is_array($_ee))continue;$_ep=(string)($_ee['profile_key']??'');if($_ep!=='')$_lastEx[$_ep]=$_ee;}
-    foreach($rows as &$sr){$pk=(string)($sr['profile_key']??'');if($pk==='')continue;
+    $manualProgress=readProgress(MANUAL_SYNC_PROGRESS_FILE);$workerQueue=function_exists('s4WorkerLoadQueue')?s4WorkerLoadQueue():['entries'=>[]];
+    /* Keep the latest matching extraction row and direct ID lookup. IDs are
+       sent to Continue, which must resume that row rather than mint another. */
+    $_eq=extractReadQueue();$_lastEx=[];$_exById=[];
+    foreach((array)($_eq['entries']??[])as$_ee){
+        if(!is_array($_ee))continue;$_eid=(string)($_ee['id']??'');$_ep=(string)($_ee['profile_key']??'');
+        if($_eid!=='')$_exById[$_eid]=$_ee;
+        if($_ep!==''){$oldAt=(int)($_lastEx[$_ep]['updated_at']??$_lastEx[$_ep]['started_at']??0);$at=(int)($_ee['updated_at']??$_ee['started_at']??$_ee['done_at']??0);
+            if(!isset($_lastEx[$_ep])||$at>=$oldAt)$_lastEx[$_ep]=$_ee;}
+    }
+    foreach($rows as &$sr){
+        $pk=(string)($sr['profile_key']??'');if($pk==='')continue;
         if(empty($sr['stage_details']['extract'])&&isset($_lastEx[$pk])){
             $_eh=$_lastEx[$pk];$sr['stage_details']['extract']=['counts'=>[
                 'extracted'=>(int)($_eh['products_count']??0),'new'=>(int)($_eh['new']??0),
@@ -23964,27 +24137,54 @@ if(isset($_GET['sync_pipeline_status'])){
         if(empty($sr['stage_details']['pricing'])&&!empty($sr['pricing']))$sr['stage_details']['pricing']=[
             'counts'=>['products'=>(int)($sr['pricing']['products']??0)],'data'=>$sr['pricing'],
             'report'=>'ضرایب ذخیره‌شدهٔ این اجرا'];
-        if(empty($sr['stage_details']['extract'])&&(string)($xp['profile_key']??'')===$pk){
+        if(empty($sr['stage_details']['extract'])&&(string)($xp['profile_key']??'')===$pk)
             $sr['stage_details']['extract']=syncExtractStageDetails($xp);
-        }
         if((string)($sr['stage']??'')==='extract'&&(string)($xp['profile_key']??'')===$pk&&!empty($xp['running'])){
             $sr['stage_details']['extract']=syncExtractStageDetails($xp);
             $cur=(int)($xp['current']??0);$tot=(int)($xp['total']??0);$sr['stage_progress']=$tot>0?min(99,(int)round($cur*100/$tot)):35;
         }
-        if((string)($sr['stage']??'')==='send'||empty($sr['stage_details']['send'])){
-            $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];$dest=[];
-            foreach([['bsl',(array)($bq['entries']??[])],['woo',(array)($wq['entries']??[])]] as [$dn,$entries])foreach($entries as $qe){
-                if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk)continue;
-                if(!in_array((string)($qe['status']??''),['waiting','running','paused','done'],true))continue;
-                $agg['queued']+=(int)($qe['total']??0);$agg['sent']+=(int)($qe['sent']??$qe['current']??0);
-                $agg['updated']+=(int)($qe['updated']??0);$agg['failed']+=(int)($qe['failed']??0);$agg['skipped']+=(int)($qe['skipped']??0);
-                $dest[]=['destination'=>$dn,'status'=>(string)($qe['status']??''),'current'=>(int)($qe['current']??0),'total'=>(int)($qe['total']??0),'failed'=>(int)($qe['failed']??0)];
-            }
-            if($dest){$sr['stage_details']['send']=['counts'=>$agg,'data'=>['destinations'=>$dest],'report'=>'پیشرفت زندهٔ صف‌های مقصد'];$sr['stage_progress']=$agg['queued']>0?min(99,(int)round($agg['sent']*100/$agg['queued'])):25;}
+        $_extractId=(string)($sr['stage_details']['extract']['queue_id']??'');
+        if($_extractId===''&&isset($_lastEx[$pk]))$_extractId=(string)($_lastEx[$pk]['id']??'');
+        if($_extractId===''&&(string)($xp['profile_key']??'')===$pk)$_extractId=(string)($xp['queue_id']??'');
+        $_extractEntry=$_extractId!==''?($_exById[$_extractId]??null):null;
+        if(!is_array($_extractEntry)&&isset($_lastEx[$pk])){$_extractEntry=$_lastEx[$pk];$_extractId=(string)($_extractEntry['id']??$_extractId);}
+        $sr['extract_control']=['queue_id'=>$_extractId,'status'=>(string)(is_array($_extractEntry)?($_extractEntry['status']??''):'missing'),
+            'current'=>(int)(is_array($_extractEntry)?($_extractEntry['current']??0):((string)($xp['queue_id']??'')===$_extractId?($xp['current']??0):0)),
+            'total'=>(int)(is_array($_extractEntry)?($_extractEntry['total']??0):((string)($xp['queue_id']??'')===$_extractId?($xp['total']??0):0)),
+            'resumable'=>!empty($_extractEntry['resumable'])||!empty($_extractEntry['resume_needed'])||in_array((string)($_extractEntry['status']??''),['paused','failed'],true),
+            'paused_by'=>(string)(is_array($_extractEntry)?($_extractEntry['paused_by']??''):'')];
+        $_dest=[];$agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];
+        foreach([['bsl',(array)($bq['entries']??[])],['woo',(array)($wq['entries']??[])]]as[$dn,$entries])foreach($entries as$qe){
+            if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk)continue;
+            $status=(string)($qe['status']??'');if(!in_array($status,['waiting','running','paused','failed','done'],true))continue;
+            $_dest[]=['destination'=>$dn,'queue_id'=>(string)($qe['id']??''),'profile_key'=>$pk,'status'=>$status,
+                'current'=>(int)($qe['current']??0),'total'=>(int)($qe['total']??0),
+                'sent'=>(int)($qe['sent']??0),'updated'=>(int)($qe['updated']??0),'failed'=>(int)($qe['failed']??0),
+                'skipped'=>(int)($qe['skipped']??0),'paused_by'=>(string)($qe['paused_by']??''),
+                'stopped_by_user'=>!empty($qe['stopped_by_user']),'resumable'=>!empty($qe['resumable'])];
+            $agg['queued']+=(int)($qe['total']??0);$agg['sent']+=(int)($qe['sent']??$qe['current']??0);
+            $agg['updated']+=(int)($qe['updated']??0);$agg['failed']+=(int)($qe['failed']??0);$agg['skipped']+=(int)($qe['skipped']??0);
         }
+        if($_dest&&((string)($sr['stage']??'')==='send'||empty($sr['stage_details']['send']))){
+            $sr['stage_details']['send']=['counts'=>$agg,'data'=>['destinations'=>$_dest],'report'=>'پیشرفت زندهٔ صف‌های مقصد'];
+            $sr['stage_progress']=$agg['queued']>0?min(99,(int)round(($agg['sent']+$agg['updated']+$agg['failed']+$agg['skipped'])*100/$agg['queued'])):25;
+        }
+        $sr['control_queues']=$_dest;
+        $_mp=(string)($manualProgress['profile_key']??'')===$pk?$manualProgress:[];
+        $_manualJobStatus='';$_manualJobId=(string)($_mp['job_id']??'');
+        if($_manualJobId!=='')foreach((array)($workerQueue['entries']??[])as$_job){
+            if(is_array($_job)&&(string)($_job['id']??'')===$_manualJobId){$_manualJobStatus=(string)($_job['status']??'');break;}}
+        $_manualActive=(!empty($_mp['running'])&&empty($_mp['done']))||in_array($_manualJobStatus,['pending','running'],true);
+        $_cp=is_array($_mp['checkpoint']??null)?$_mp['checkpoint']:[];
+        $_mcExtract=is_array($_cp['extract']??null)?$_cp['extract']:[];
+        $sr['manual_control']=['profile_key'=>$pk,'active'=>$_manualActive,'queued'=>$_manualJobStatus==='pending'||!empty($_mp['queued']),
+            'job_status'=>$_manualJobStatus,'resumable'=>!$_manualActive&&!empty($_mp['resumable'])&&($_cp!==[]),
+            'stopped'=>!empty($_mp['stopped'])||!empty($_mp['cancelled']),'current'=>(int)($_mp['current']??$_cp['current']??0),
+            'total'=>(int)($_mp['total']??$_cp['total']??4),'extract_queue_id'=>(string)($_mcExtract['queue_id']??$_mp['extract_queue_id']??'')];
     }unset($sr);
     echo json_encode(['ok'=>true,'rows'=>$rows,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
+
 if (isset($_GET['manual_sync'])) {
     /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
        از request وب جدا می‌شود. childِ CLI با direct=1 از enqueue دوباره رد می‌شود. */
@@ -24048,11 +24248,6 @@ if (isset($_GET['manual_sync'])) {
             exit;
         }
     }
-    @unlink(MANUAL_SYNC_STOP_FILE);
-    if (defined('EXTRACT_STOP_FILE') && is_file(EXTRACT_STOP_FILE)) @unlink(EXTRACT_STOP_FILE);
-    if (defined('BSL_STOP_FILE') && is_file(BSL_STOP_FILE)) @unlink(BSL_STOP_FILE);
-    if (defined('WOO_STOP_FILE') && is_file(WOO_STOP_FILE)) @unlink(WOO_STOP_FILE);
-
     $_msKey  = trim((string)($_GET['profile'] ?? $_GET['profile_key'] ?? ''));
     $_msAll  = loadProfiles();
     $_msProf = ($_msKey !== '' && isset($_msAll[$_msKey]) && is_array($_msAll[$_msKey])) ? $_msAll[$_msKey] : null;
@@ -24062,6 +24257,10 @@ if (isset($_GET['manual_sync'])) {
             $_msKey  = $_msRes;
             $_msProf = $_msAll[$_msRes] ?? null;
         }
+    }
+    if ($_msKey !== '' && is_array($_msProf)) {
+        $resumeOwnCheckpoint=$_msResumeRequested&&(string)($_msResumeCp['profile_key']??'')===$_msKey;
+        manualSyncClearStopSignalForProfile($_msKey,$resumeOwnCheckpoint);
     }
     if ($_msKey === '' || !is_array($_msProf)) {
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
@@ -24077,13 +24276,17 @@ if (isset($_GET['manual_sync'])) {
         exit;
     }
 
-    try {
-        extractClearStaleBlockers($_msKey, [
-            'max_idle' => min(90, max(60, (int)(loadConnections()['stall_after'] ?? 300))),
-            'clear_waiting' => true,
-            'reason' => 'جایگزین شد توسط همگام‌سازی دستی',
-        ]);
-    } catch (Throwable $e) {}
+    /* Resume owns the saved queue row/checkpoint. A cleanup pass here used to
+       demote a user-paused row before the resume helper could reserve its ID. */
+    if (!($_msResumeRequested && (string)($_msResumeCp['profile_key']??'') === $_msKey)) {
+        try {
+            extractClearStaleBlockers($_msKey, [
+                'max_idle' => min(90, max(60, (int)(loadConnections()['stall_after'] ?? 300))),
+                'clear_waiting' => true,
+                'reason' => 'جایگزین شد توسط همگام‌سازی دستی',
+            ]);
+        } catch (Throwable $e) {}
+    }
 
     $GLOBALS['_manualSync'] = true;
     $GLOBALS['_msKeepConn'] = true;
@@ -24093,9 +24296,13 @@ if (isset($_GET['manual_sync'])) {
     $_msName = (string)($_msProf['name'] ?? $_msKey);
     $_msResumeSameProfile = $_msResumeRequested
         && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey;
+    $_msResumeExtractData = is_array($_msResumeCp['extract'] ?? null) ? $_msResumeCp['extract'] : [];
     $_msResumeExtractDone = $_msResumeSameProfile
         && (int)($_msResumeCp['current'] ?? 0) >= 2
-        && is_array($_msResumeCp['extract'] ?? null);
+        && !empty($_msResumeExtractData['ok']);
+    $_msResumeExtractQueueId = trim((string)($_msResumeExtractData['queue_id']??$_msPrev['extract_queue_id']??''));
+    if($_msResumeSameProfile&&!$_msResumeExtractDone&&$_msResumeExtractQueueId==='')
+        $_msResumeExtractQueueId=extractResumeQueueId($_msKey);
     $_msResumeQueueDone = $_msResumeSameProfile
         && is_array($_msResumeCp['enqueue'] ?? null);
     $_msInitialCurrent = $_msResumeQueueDone ? 3 : ($_msResumeExtractDone ? 2 : 1);
@@ -24112,6 +24319,7 @@ if (isset($_GET['manual_sync'])) {
         'checkpoint' => array_merge($_msResumeCp, ['profile_key' => $_msKey, 'profile_name' => $_msName,
             'phase' => $_msInitialPhase, 'current' => $_msInitialCurrent, 'total' => 4,
             'started_at' => (int)($_msResumeCp['started_at'] ?? time())]),
+        'extract_queue_id' => $_msResumeExtractQueueId,
         'recent_log' => [
             '▶ همگام‌سازی دستی — همان مسیر «استخراج بک‌اند»',
             '🔑 ' . $_msKey,
@@ -24144,16 +24352,36 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress([], '📋 پروفایل بدون‌استخراج فهرست — فاز detail');
     }
     if ($_msResumeExtractDone && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey) {
-        $_msEx = $_msResumeCp['extract'];
+        $_msEx = $_msResumeExtractData;
         $_msEx['checkpoint_reused'] = true;
         manualSyncProgress(['phase' => 'استخراج تمام', 'current' => 2],
             '↻ استخراجِ کاملِ checkpoint دوباره اجرا نشد');
     } else {
         manualSyncProgress(['phase' => 'استخراج بک‌اند', 'current' => 1],
-            '⚡ استخراج بک‌اند: ' . $_msName);
+            ($_msResumeExtractQueueId!==''?'▶ ادامهٔ همان ردیف استخراج: ':'⚡ استخراج بک‌اند: ') . $_msName);
         msAlive('extract');
-        /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم؛ trigger=manual_sync */
-        $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
+        /* Resume reserves and reuses the exact paused/failed queue ID. A stale
+           or busy row is an error, never a reason to mint a replacement ID. */
+        if ($_msResumeSameProfile && $_msResumeExtractQueueId!=='') {
+            $_msPrep = extractResumePrepare($_msKey, loadConnections(), $_msResumeExtractQueueId, true);
+            if (empty($_msPrep['ok'])) {
+                $_msReason=(string)($_msPrep['reason']??'resume_failed');
+                $_msErr=$_msReason==='lock_held'?'استخراج دیگری هنوز قفل را در اختیار دارد؛ همان ردیف محفوظ ماند':'ردیف قبلی قابل ادامه نیست؛ ردیف تازه‌ای ساخته نشد';
+                $_msState=readProgress(MANUAL_SYNC_PROGRESS_FILE);$_msState['running']=false;$_msState['done']=true;
+                $_msState['cancelled']=false;$_msState['partial']=true;$_msState['resumable']=true;
+                $_msState['phase']='ادامهٔ استخراج در انتظار';$_msState['error']=$_msErr;
+                $_msState['extract_queue_id']=$_msResumeExtractQueueId;$_msState['ts']=time();$_msState['last_progress_ts']=time();
+                writeProgress(MANUAL_SYNC_PROGRESS_FILE,$_msState);
+                syncPipelineMark($_msKey,$_msName,'error','manual',['message'=>$_msErr,'failed_stage'=>'extract']);
+                manualSyncClearStopSignalForProfile($_msKey);
+                try { if (defined('MS_KEEP_CONN')) { echo json_encode(['done'=>true,'ok'=>false,'error'=>$_msErr], JSON_UNESCAPED_UNICODE)."\n"; @ob_flush(); @flush(); } } catch (Throwable $e) {}
+                exit;
+            }
+            $_msPhase=(string)$_msPrep['phase'];
+            $_msEx=runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false, (string)$_msPrep['queue_id']);
+        } else {
+            $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
+        }
     }
     $_msQueueId = extractEnsureSyncQueueRow($_msKey, (array)$_msProf, 'manual_sync', $_msPhase,
         (array)$_msEx, !empty($_msEx['checkpoint_reused']) ? 'استخراج این همگام‌سازی از checkpoint کامل بازیابی شد' : 'مرحلهٔ استخراج همگام‌سازی دستی');
@@ -24354,6 +24582,20 @@ if (isset($_GET['manual_sync'])) {
         exit;
     }
 
+    if ($_msResumeQueueDone && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey) {
+        $_msResumeSendRows=syncPipelineResumeManualSendRows($_msKey,(array)($_msResumeCp['enqueue']??[]));
+        $_msResults['resume_send_rows']=$_msResumeSendRows;
+        if(empty($_msResumeSendRows['ok'])){
+            $_msErr=(string)($_msResumeSendRows['error']??'ادامهٔ صف ارسال ممکن نشد');
+            manualSyncProgress(['running'=>false,'done'=>true,'stale'=>true,'partial'=>true,'resumable'=>true,
+                'phase'=>'ادامهٔ ارسال در انتظار','current'=>3,'error'=>$_msErr],
+                '⚠️ checkpoint صف حفظ شد؛ ردیف موجود تغییر یا جایگزین نشد: '.$_msErr);
+            syncPipelineMark($_msKey,$_msName,'error','manual',['message'=>$_msErr,'failed_stage'=>'send']);
+            manualSyncClearStopSignalForProfile($_msKey);
+            exit;
+        }
+    }
+
     /* ── ۳) پمپ ارسال سرورساید ── */
     manualSyncProgress(['phase' => 'ارسال', 'current' => 3], '📡 ارسال از صف…');
     msAlive('send');
@@ -24401,7 +24643,7 @@ if (isset($_GET['manual_sync'])) {
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msPartialP);
         syncPipelineMark($_msKey,$_msName,$_msSendStopped?'stopped':'error','manual',
             ['message'=>$_msPartialP['error'],'pricing'=>$_msPricing??[]]);
-        @unlink(MANUAL_SYNC_STOP_FILE);
+        manualSyncClearStopSignalForProfile($_msKey);
         exit;
     }
     try { cronMarkRun($_msKey, 'manual_done'); } catch (Throwable $e) {}
@@ -24421,7 +24663,7 @@ if (isset($_GET['manual_sync'])) {
     $_msDone['last_progress_ts'] = time();
     $_msDone['summary_data'] = $_msResults;
     writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msDone);
-    @unlink(MANUAL_SYNC_STOP_FILE);
+    manualSyncClearStopSignalForProfile($_msKey);
 
     /* cron_last_run برای سازگاری */
     try {
@@ -25832,7 +26074,7 @@ if (manualSyncActive()) {
     }
     $_msDone['recent_log'] = array_slice($_lg, -40);
     writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msDone);
-    @unlink(MANUAL_SYNC_STOP_FILE);
+    manualSyncClearStopSignalForProfile((string)($_msDone['profile_key']??''));
     $results['manual_sync'] = true;
 }
 cronEmit($results);
@@ -42631,6 +42873,79 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.408', 'نسخهٔ 10.408 و release notes در CHANGELOG ثبت شده‌اند',
          version_compare(APP_VERSION,'10.408','>=')
       && strpos($selfSrc,"{v:'10." . "408'")!==false);
+    $_branchBad=[];$_branchNorm=vcNormalizeCodeUpdateBranches(['main','release/v1','main','bad..branch'],$_branchBad);
+    $add('10.409', 'شاخه‌های updater اعتبارسنجی و deduplicate می‌شوند',
+         $_branchNorm===['main','release/v1']&&$_branchBad===['bad..branch']
+      && vcValidCodeUpdateBranch('release/v1.2')&&!vcValidCodeUpdateBranch('bad..branch'));
+    unset($_branchBad,$_branchNorm);
+    $_stopTestFile=sys_get_temp_dir().'/s4-stop-signal-test-'.substr(hash('sha256',uniqid('',true)),0,12).'.json';
+    $_stopTestOk=false;
+    try{
+        file_put_contents($_stopTestFile,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>'']),LOCK_EX);
+        $_allowTest=queueStopSignalAllowQueue($_stopTestFile,'resume-row',900);
+        $_stopTestOk=!empty($_allowTest['ok'])&&!queueStopSignalApplies($_stopTestFile,'resume-row',900)
+            &&queueStopSignalApplies($_stopTestFile,'other-row',900);
+    }catch(Throwable $_stopTestError){}finally{@unlink($_stopTestFile);}
+    $add('10.409', 'Continue از توقف سراسری فقط ردیف انتخاب‌شده را مستثنا می‌کند',
+         $_stopTestOk&&strpos($selfSrc,'function queueStopSignalAllowQueue(')!==false
+      && strpos($selfSrc,'queueStopSignalConsumeForQueue(BSL_STOP_FILE,$bslQueueId')!==false);
+    unset($_stopTestFile,$_stopTestOk,$_allowTest);
+    $add('10.409', 'updater چندشاخه تازه‌ترین commit فایل را انتخاب و نصب دستی را به شاخهٔ مجاز محدود می‌کند',
+         strpos($selfSrc,'function s4CodeUpdateNewestBranch(')!==false
+      && strpos($selfSrc,"if((int)(\$row['commit_at']??0)>0&&(\$best===null||(int)\$row['commit_at']>(int)\$best['commit_at']))")!==false
+      && strpos($selfSrc,"\$_POST['branch']??''")!==false
+      && strpos($selfSrc,'branch_not_configured')!==false
+      && strpos($selfSrc,'code_update_branch_versions=1')!==false);
+    $add('10.409', 'فهرست شاخه‌ها ذخیره می‌شود و هر شاخه دکمهٔ نصب جداگانه دارد',
+         strpos($selfSrc,'id="vcCodeBranchList"')!==false
+      && strpos($selfSrc,'function vcCodeBranchAdd()')!==false
+      && strpos($selfSrc,'function vcCodeBranchRemove(index)')!==false
+      && strpos($selfSrc,'function vcManualCodeUpdate(index)')!==false
+      && strpos($selfSrc,"fd.append('code_update_branches', JSON.stringify(VC_CODE_BRANCHES))")!==false);
+    $add('10.409', 'Stop/Continue پروفایل، checkpoint و شناسهٔ صف ارسال را حفظ می‌کند',
+         strpos($selfSrc,'function syncPipelineResumeManualSendRows(')!==false
+      && strpos($selfSrc,'function syncPipelineStopProfile(')!==false
+      && strpos($selfSrc,'function syncPipelineResumeQueue(q)')!==false
+      && strpos($selfSrc,'extract_resume=1&profile_key=')!==false
+      && strpos($selfSrc,'syncPipelineSetUserPaused($profileKey,false)')!==false);
+    $add('10.409', 'پمپ همگام‌سازی دستی همان ردیف صف ووکامرس/باسلام را با شناسهٔ ذخیره‌شده ادامه می‌دهد',
+         strpos($selfSrc,'function wooQueuePrepareServerRow(string $queueId)')!==false
+      && strpos($selfSrc,'function msQueuePendingRow(string $which): ?array')!==false
+      && strpos($selfSrc,"['from_file' => '1','queue_id'=>\$queueId]")!==false
+      && strpos($selfSrc,'wooQueuePrepareServerRow($queueId)')!==false
+      && strpos($selfSrc,'function syncPipelineResumeManualSendRows(')!==false);
+    $add('10.409', 'کارت‌ها از ابتدا جمع‌اند و خلاصهٔ کلی شامل درصدِ گرافیکی است',
+         strpos($selfSrc,'const syncPipeExpanded=new Set();')!==false
+      && strpos($selfSrc,"(expanded?'expanded':'collapsed')")!==false
+      && strpos($selfSrc,'sync-pipe-overall-fill')!==false
+      && strpos($selfSrc,'sync-pipe-overall-pct')!==false);
+    $add('10.409', 'نسخهٔ 10.409 و release notes ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.409','>=')
+      && strpos($selfSrc,"{v:'10." . "409'")!==false);
+    $_bslFbStart=strpos($selfSrc,"if(isset(\$_GET['bsl_send_feedback']))");
+    $_bslFbEnd=$_bslFbStart!==false?strpos($selfSrc,"if(isset(\$_GET['bsl_queue_status']))",$_bslFbStart):false;
+    $_bslFbBlock=$_bslFbStart!==false&&$_bslFbEnd!==false?substr($selfSrc,$_bslFbStart,$_bslFbEnd-$_bslFbStart):'';
+    $add('10.410', 'عیب‌یابی باسلام وضعیت worker، job، queue و قفل را کنار cron گزارش و JSON را کپی می‌کند',
+         $_bslFbBlock!==''
+      && strpos($_bslFbBlock,"'pid_alive'=>")!==false
+      && strpos($_bslFbBlock,"'job_type'=>")!==false
+      && strpos($_bslFbBlock,"'task_queue_id'=>")!==false
+      && strpos($selfSrc,'function bslCopySendFeedbackDiagnostics(')!==false
+      && strpos($selfSrc,'خاموش‌کردن زمان‌بندی cron')!==false);
+    $_bslResumeStart=strpos($selfSrc,"if(isset(\$_GET['bsl_queue_resume']))");
+    $_bslResumeEnd=$_bslResumeStart!==false?strpos($selfSrc,"if(isset(\$_GET['bsl_queue_detail']))",$_bslResumeStart):false;
+    $_bslResumeBlock=$_bslResumeStart!==false&&$_bslResumeEnd!==false?substr($selfSrc,$_bslResumeStart,$_bslResumeEnd-$_bslResumeStart):'';
+    $add('10.410', 'ادامهٔ باسلام پیش از running قفل، فایل محصول و checkpoint همان queue را بررسی می‌کند',
+         $_bslResumeBlock!==''
+      && strpos($_bslResumeBlock,"queueBackendLock('bsl')")!==false
+      && strpos($_bslResumeBlock,'queueStopSignalAllowQueue(BSL_STOP_FILE,$queueId,BSL_STOP_HOLD_SEC)')!==false
+      && strpos($_bslResumeBlock,'if(!is_file($productsFile))')!==false
+      && strpos($_bslResumeBlock,'copy($productsFile,BSL_PRODUCTS_FILE)')!==false
+      && strpos($_bslResumeBlock,"\$e['status']='running'")!==false);
+    $add('10.410', 'نسخهٔ 10.410 و release notes ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.410','>=')
+      && strpos($selfSrc,"{v:'10." . "410'")!==false);
+    unset($_bslFbStart,$_bslFbEnd,$_bslFbBlock,$_bslResumeStart,$_bslResumeEnd,$_bslResumeBlock);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -49446,6 +49761,138 @@ function syncPipelineRows():array{
     uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
     return array_values($all);
 }
+function syncPipelineSetUserPaused(string $profileKey,bool $paused):array{
+    $lf=@fopen(SYNC_PIPELINE_LOCK_FILE,'c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'pipeline_lock_busy'];}
+    $row=null;
+    try{
+        $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))$all=[];
+        if(!is_array($all[$profileKey]??null))return['ok'=>false,'error'=>'pipeline_row_not_found'];
+        $all[$profileKey]['user_paused']=$paused;$all[$profileKey]['control_updated_at']=time();
+        if(!$paused)unset($all[$profileKey]['control_message']);else $all[$profileKey]['control_message']='توقف موقت با درخواست کاربر';
+        $row=$all[$profileKey];$tmp=SYNC_PIPELINE_FILE.'.tmp.'.getmypid();
+        if(@file_put_contents($tmp,json_encode($all,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)===false||!@rename($tmp,SYNC_PIPELINE_FILE))
+            return['ok'=>false,'error'=>'pipeline_write_failed'];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    return['ok'=>true,'profile_key'=>$profileKey,'user_paused'=>$paused,'row'=>$row];
+}
+function syncPipelinePauseSendRows(string $which,string $profileKey):array{
+    $isBsl=$which==='bsl';$queue=$isBsl?bslReadQueue():wooReadQueue();
+    if(!is_array($queue))$queue=['entries'=>[]];if(!is_array($queue['entries']??null))$queue['entries']=[];
+    $progressFile=$isBsl?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE;
+    $stopFile=$isBsl?BSL_STOP_FILE:WOO_STOP_FILE;$hold=$isBsl?BSL_STOP_HOLD_SEC:WOO_STOP_HOLD_SEC;
+    $progress=readProgress($progressFile);$runningRows=count(array_filter($queue['entries'],static fn($r)=>is_array($r)&&($r['status']??'')==='running'));
+    $ids=[];$changed=false;$progressOwner='';$now=time();
+    foreach($queue['entries']as&$entry){
+        if(!is_array($entry)||(string)($entry['profile_key']??'')!==$profileKey
+            ||!in_array((string)($entry['status']??''),['running','waiting'],true))continue;
+        $qid=trim((string)($entry['id']??''));if($qid==='')continue;
+        $owned=queueProgressBelongsToRow($progress,$entry,$runningRows);
+        if((string)($entry['status']??'')==='running'){
+            $signal=json_decode((string)@file_get_contents($stopFile),true);$target=trim((string)(is_array($signal)?($signal['queue_id']??''):''));
+            if($target===$qid||!queueStopSignalApplies($stopFile,$target,$hold))
+                @file_put_contents($stopFile,json_encode(['stop'=>true,'time'=>$now,'queue_id'=>$qid,'by'=>'sync_pipeline'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        }
+        if($owned){
+            foreach(['current','total','sent','updated','skipped','failed','recent_log','total_log_count','started_at','phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','shop_stats','batch_done_indices','sent_details','updated_details','skipped_details','failed_details']as$field)
+                if(array_key_exists($field,$progress))$entry[$field]=$progress[$field];
+            $progressOwner=$qid;
+        }
+        $entry['status']='paused';$entry['paused_by']='user';$entry['stopped_by_user']=true;$entry['paused_at']=$now;
+        $entry['resumable']=true;$entry['stop_requested']=true;$entry['updated_at']=$now;unset($entry['done_at']);
+        $ids[]=$qid;$changed=true;
+    }
+    unset($entry);
+    if($changed){if($isBsl)bslWriteQueue($queue);else wooWriteQueue($queue);}
+    if($progressOwner!==''){
+        $patched=array_merge($progress,['running'=>false,'done'=>false,'paused'=>true,'paused_by'=>'user',
+            'stopped'=>true,'cancelled'=>false,'partial'=>true,'resumable'=>true,'queue_id'=>$progressOwner,
+            'last_progress_ts'=>$now]);
+        writeProgress($progressFile,$patched);
+    }
+    return['ok'=>true,'destination'=>$which,'paused'=>count($ids),'queue_ids'=>$ids,
+        'stop_pending'=>$progressOwner!==''&&is_file($stopFile)];
+}
+function syncPipelineStopProfile(string $profileKey):array{
+    $known=false;foreach(syncPipelineRows()as$row)if((string)($row['profile_key']??'')===$profileKey){$known=true;break;}
+    if(!$known)return['ok'=>false,'error'=>'pipeline_row_not_found'];
+    $manual=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+    $manualMatch=(string)($manual['profile_key']??'')===$profileKey;
+    $manualActive=$manualMatch&&(!empty($manual['running'])||!empty($manual['queued']))&&empty($manual['done']);
+    $pendingCancelled=false;
+    if($manualActive){
+        @file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode(['at'=>time(),'profile_key'=>$profileKey,'by'=>'sync_pipeline'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        if(!empty($manual['queued'])&&!empty($manual['job_id'])&&function_exists('s4WorkerQueueMutate')){
+            $jid=(string)$manual['job_id'];$mut=s4WorkerQueueMutate(function(&$q)use($jid,$profileKey,&$pendingCancelled){
+                foreach($q['entries']as&$job){if(!is_array($job)||(string)($job['id']??'')!==$jid||(string)($job['type']??'')!=='manual_sync')continue;
+                    $payload=is_array($job['payload']??null)?$job['payload']:[];
+                    if((string)($payload['profile_key']??'')!==$profileKey||(string)($job['status']??'')!=='pending')break;
+                    $job['status']='cancelled';$job['error']='stopped_by_user';$job['cancel_requested_at']=time();$job['done_at']=time();$job['updated_at']=time();$pendingCancelled=true;break;
+                }unset($job);return['ok'=>true,'cancelled'=>$pendingCancelled];
+            });
+            if($pendingCancelled){$manual['running']=false;$manual['done']=true;$manual['queued']=false;$manual['cancelled']=true;$manual['stopped']=true;
+                $manual['partial']=true;$manual['resumable']=true;$manual['paused_by']='user';$manual['phase']='متوقف — آمادهٔ ادامه';
+                $manual['last_progress_ts']=time();$manual['ts']=time();writeProgress(MANUAL_SYNC_PROGRESS_FILE,$manual);}
+        }
+    }
+    $extractStops=extractStopActiveRows($profileKey);
+    $bsl=syncPipelinePauseSendRows('bsl',$profileKey);$woo=syncPipelinePauseSendRows('woo',$profileKey);
+    $mark=syncPipelineSetUserPaused($profileKey,true);
+    if(empty($mark['ok']))return$mark;
+    return['ok'=>true,'profile_key'=>$profileKey,'manual_stop_requested'=>$manualActive,
+        'manual_job_cancelled'=>$pendingCancelled,'extract_stop'=>$extractStops,'bsl'=>$bsl,'woo'=>$woo,
+        'user_paused'=>true];
+}
+/** Resume only paused send rows owned by a saved manual-sync checkpoint.
+ * The existing row IDs, product files and counters are retained. */
+function syncPipelineResumeManualSendRows(string $profileKey,array $enqueueCheckpoint):array{
+    if($profileKey==='')return['ok'=>false,'error'=>'missing_profile_key','resumed'=>[]];
+    $out=['ok'=>true,'profile_key'=>$profileKey,'resumed'=>[],'missing'=>[]];
+    $hasSavedQueueIds=trim((string)($enqueueCheckpoint['bsl_queue_id']??''))!==''
+        ||trim((string)($enqueueCheckpoint['woo_queue_id']??''))!==''
+        ||!empty($enqueueCheckpoint['queue_ids']);
+    foreach([['bsl','bsl_queue_id'],['woo','woo_queue_id']]as[$which,$idField]){
+        $ids=[];$saved=trim((string)($enqueueCheckpoint[$idField]??''));if($saved!=='')$ids[$saved]=true;
+        foreach((array)($enqueueCheckpoint['queue_ids']??[])as$qid){
+            $qid=trim((string)$qid);if($qid!==''&&((strpos($qid,'bsl_')===0&&$which==='bsl')||(strpos($qid,'woo_')===0&&$which==='woo')))$ids[$qid]=true;
+        }
+        $lock=queueBackendLock($which);
+        if(!is_resource($lock)){$out['ok']=false;$out['error']=$which.'_worker_busy';continue;}
+        try{
+            $queue=$which==='bsl'?bslReadQueue():wooReadQueue();
+            if(!is_array($queue))$queue=['entries'=>[]];if(!is_array($queue['entries']??null))$queue['entries']=[];
+            $changed=false;$rows=[];$now=time();
+            foreach($queue['entries']as&$entry){
+                if(!is_array($entry)||(string)($entry['profile_key']??'')!==$profileKey)continue;
+                $qid=trim((string)($entry['id']??''));$status=(string)($entry['status']??'');
+                $explicit=isset($ids[$qid]);
+                $fallback=!$hasSavedQueueIds&&$status==='paused'&&((string)($entry['paused_by']??'')==='user'||!empty($entry['stopped_by_user']))
+                    &&(string)($entry['trigger']??'')==='manual_sync';
+                if(!$explicit&&!$fallback)continue;
+                if($status==='waiting'&&$explicit){$rows[]=$qid;continue;}
+                if(!in_array($status,['paused','failed'],true))continue;
+                $productsFile=trim((string)($entry['products_file']??''));
+                if($productsFile===''||!is_file($productsFile)){$out['missing'][]=$qid;continue;}
+                $signal=$which==='bsl'?queueStopSignalAllowQueue(BSL_STOP_FILE,$qid,BSL_STOP_HOLD_SEC)
+                    :queueStopSignalAllowQueue(WOO_STOP_FILE,$qid,WOO_STOP_HOLD_SEC);
+                if(empty($signal['ok'])){$out['ok']=false;$out['error']=$which.'_stop_signal_update_failed';continue;}
+                $entry['status']='waiting';$entry['paused_at']=0;$entry['done_at']=0;$entry['updated_at']=$now;
+                $entry['resume_requested_at']=$now;$entry['resumable']=false;unset($entry['paused_by'],$entry['stopped_by_user'],
+                    $entry['stop_requested'],$entry['fail_reason'],$entry['resume_exhausted'],$entry['error']);
+                $rows[]=$qid;$changed=true;
+            }
+            unset($entry);
+            if($rows){
+                $priority=[];$rest=[];$want=array_fill_keys($rows,true);
+                foreach((array)$queue['entries']as$entry){$qid=(string)($entry['id']??'');if($qid!==''&&isset($want[$qid]))$priority[]=$entry;else$rest[]=$entry;}
+                $queue['entries']=array_values(array_merge($priority,$rest));$changed=true;
+                $out['resumed'][$which]=$rows;
+            }
+            if($changed){if($which==='bsl')bslWriteQueue($queue);else wooWriteQueue($queue);}
+        }finally{queueBackendUnlock($lock);}
+    }
+    if($out['missing']){$out['ok']=false;$out['error']=$out['error']??'manual_send_products_file_missing';}
+    return$out;
+}
 function syncPricingSnapshot(array $profile,array $cn):array{
     $products=profileOrderedProducts($profile);
     return ['profile_signature'=>profilePriceSignature($profile),'destination_signature'=>shopPricingSignature($cn),
@@ -49481,11 +49928,40 @@ function manualSyncActive(): bool {
     return !empty($_GET['manual_sync']);
 }
 
-/** سیگنالِ توقف — فقط وقتی تازه باشد معتبر است */
+/** Clear only this profile's manual-sync signal; a legacy global stop can
+ * grant one profile an exception without releasing every other profile. */
+function manualSyncClearStopSignalForProfile(string $profileKey,bool $allowGlobal=false):void{
+    if(!is_file(MANUAL_SYNC_STOP_FILE))return;
+    $data=json_decode((string)@file_get_contents(MANUAL_SYNC_STOP_FILE),true);$data=is_array($data)?$data:[];
+    $target=trim((string)($data['profile_key']??''));
+    if($target!==''&&$target===$profileKey){@unlink(MANUAL_SYNC_STOP_FILE);return;}
+    if($target!=='')return;
+    $at=(int)($data['at']??@filemtime(MANUAL_SYNC_STOP_FILE));
+    if($at<=0||time()-$at>900){@unlink(MANUAL_SYNC_STOP_FILE);return;}
+    $exceptions=array_values(array_unique(array_map('strval',(array)($data['except_profile_keys']??[]))));
+    if($allowGlobal){
+        if(!in_array($profileKey,$exceptions,true))$exceptions[]=$profileKey;
+        $data['except_profile_keys']=array_slice($exceptions,-100);
+        $data['at']=$at;
+        @file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    }elseif(in_array($profileKey,$exceptions,true)){
+        $data['except_profile_keys']=array_values(array_diff($exceptions,[$profileKey]));
+        @file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    }
+}
+/** A targeted stop for another profile must not cancel the current manual run. */
 function manualSyncStopped(): bool {
     clearstatcache(true, MANUAL_SYNC_STOP_FILE);
     if (!file_exists(MANUAL_SYNC_STOP_FILE)) return false;
-    return (time() - (int)@filemtime(MANUAL_SYNC_STOP_FILE)) <= 900;
+    $data=json_decode((string)@file_get_contents(MANUAL_SYNC_STOP_FILE),true);$data=is_array($data)?$data:[];
+    $at=(int)($data['at']??@filemtime(MANUAL_SYNC_STOP_FILE));
+    if($at<=0||time()-$at>900)return false;
+    $target=trim((string)($data['profile_key']??''));
+    $current=trim((string)($_GET['profile']??$_GET['profile_key']??''));
+    if($current==='')$current=trim((string)(readProgress(MANUAL_SYNC_PROGRESS_FILE)['profile_key']??''));
+    if($target!=='')return $target===$current;
+    $exceptions=array_map('strval',(array)($data['except_profile_keys']??[]));
+    return $current===''||!in_array($current,$exceptions,true);
 }
 
 /** یک خط در پیشرفتِ همگام‌سازیِ دستی می‌نویسد (اگر اجرای دستی نباشد بی‌اثر است) */
@@ -49589,6 +50065,37 @@ function queueBackendLock(string $which) {
 }
 function queueBackendUnlock($fp): void {
     if (is_resource($fp)) { @flock($fp, LOCK_UN); @fclose($fp); }
+}
+
+/** Prepare one existing WooCommerce row for the server-side manual sync worker. */
+function wooQueuePrepareServerRow(string $queueId):array{
+    if($queueId==='')return['ok'=>false,'error'=>'missing_queue_id'];
+    $lock=queueBackendLock('woo');if(!is_resource($lock))return['ok'=>false,'error'=>'woo_worker_busy'];
+    try{
+        $queue=wooReadQueue();if(!is_array($queue['entries']??null))$queue['entries']=[];
+        $idx=null;$entry=null;
+        foreach($queue['entries']as$i=>$row){
+            if(!is_array($row))continue;
+            if((string)($row['status']??'')==='running'&&(string)($row['id']??'')!==$queueId)
+                return['ok'=>false,'error'=>'another_woo_queue_row_running'];
+            if((string)($row['id']??'')===$queueId){$idx=$i;$entry=$row;}
+        }
+        if($idx===null||!is_array($entry))return['ok'=>false,'error'=>'woo_queue_row_not_found'];
+        if(!in_array((string)($entry['status']??''),['waiting','running'],true))
+            return['ok'=>false,'error'=>'woo_queue_row_not_resumable'];
+        $source=trim((string)($entry['products_file']??''));
+        if($source===''||!is_file($source))$source=wooQueueProductsFile($queueId);
+        if(!is_file($source))return['ok'=>false,'error'=>'woo_queue_products_file_missing'];
+        $allow=queueStopSignalAllowQueue(WOO_STOP_FILE,$queueId,WOO_STOP_HOLD_SEC);
+        if(empty($allow['ok']))return['ok'=>false,'error'=>'woo_stop_signal_update_failed'];
+        if(!@copy($source,WOO_PRODUCTS_FILE))return['ok'=>false,'error'=>'woo_products_file_copy_failed'];
+        $queue['entries'][$idx]['status']='running';
+        $queue['entries'][$idx]['started_at']=(int)($entry['started_at']??0)?:time();
+        $queue['entries'][$idx]['updated_at']=time();
+        $queue['entries'][$idx]['resumable']=true;
+        wooWriteQueue($queue);
+        return['ok'=>true,'queue_id'=>$queueId,'current'=>(int)($entry['current']??0)];
+    }finally{queueBackendUnlock($lock);}
 }
 
 /**
@@ -49789,18 +50296,69 @@ function queueResumeBook(string $which, string $qid, ?array $patch = null): arra
     return $row;
 }
 
-/** علامت‌زدن ردیف صف به‌عنوان failed بعد از ۳ تلاش ناموفق */
+/** A stop file may be global (legacy Stop) or scoped to one queue row. */
+function queueStopSignalApplies(string $file,string $queueId='',int $hold=900):bool{
+    if(!is_file($file))return false;
+    clearstatcache(true,$file);$data=json_decode((string)@file_get_contents($file),true);
+    $at=(int)(is_array($data)?($data['time']??$data['at']??0):0);
+    if($at<=0)$at=(int)@filemtime($file);
+    if($at<=0||time()-$at>max(0,$hold))return false;
+    $target=trim((string)(is_array($data)?($data['queue_id']??''):''));
+    if($target!=='')return $queueId!==''&&$target===$queueId;
+    $exceptions=is_array($data['except_queue_ids']??null)?$data['except_queue_ids']:[];
+    return $queueId===''||!in_array($queueId,array_map('strval',$exceptions),true);
+}
+/** An explicit Continue consumes its own row signal; a legacy global stop stays
+ * in force for every other row and records only this deliberate exception. */
+function queueStopSignalAllowQueue(string $file,string $queueId,int $hold=900):array{
+    if($queueId===''||!is_file($file))return['ok'=>true,'changed'=>false];
+    $data=json_decode((string)@file_get_contents($file),true);$data=is_array($data)?$data:[];
+    $target=trim((string)($data['queue_id']??''));
+    if($target!==''){
+        if($target!==$queueId)return['ok'=>true,'changed'=>false,'target'=>$target];
+        @unlink($file);return['ok'=>true,'changed'=>true,'removed'=>true];
+    }
+    if(!queueStopSignalApplies($file,'',$hold))return['ok'=>true,'changed'=>false,'expired'=>true];
+    $exceptions=array_values(array_unique(array_map('strval',(array)($data['except_queue_ids']??[]))));
+    if(!in_array($queueId,$exceptions,true))$exceptions[]=$queueId;
+    $data['except_queue_ids']=array_slice($exceptions,-100);
+    $data['time']=(int)($data['time']??$data['at']??time());
+    $ok=@file_put_contents($file,json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)!==false;
+    return['ok'=>$ok,'changed'=>$ok,'global'=>true,'queue_id'=>$queueId];
+}
+/** Consume only this row's targeted signal or a stale global signal. */
+function queueStopSignalConsumeForQueue(string $file,string $queueId,int $hold=900):void{
+    if(!is_file($file))return;
+    $data=json_decode((string)@file_get_contents($file),true);$data=is_array($data)?$data:[];
+    $target=trim((string)($data['queue_id']??''));
+    if($target!==''){
+        if($queueId!==''&&$target===$queueId)@unlink($file);
+        return;
+    }
+    $at=(int)($data['time']??$data['at']??@filemtime($file));
+    if($at<=0||time()-$at>max(0,$hold)){@unlink($file);return;}
+    $exceptions=array_map('strval',(array)($data['except_queue_ids']??[]));
+    if($queueId!==''&&in_array($queueId,$exceptions,true))return;
+    /* An active global signal is intentionally retained for other rows. */
+}
+/** True only for a fresh global stop; per-row pauses are represented on their queue rows. */
 function queueHasFreshUserStop(string $which): bool {
     $file=$which==='bsl'?BSL_STOP_FILE:WOO_STOP_FILE;
     $hold=$which==='bsl'?BSL_STOP_HOLD_SEC:WOO_STOP_HOLD_SEC;
-    if(!is_file($file))return false;
-    clearstatcache(true,$file);
-    $age=time()-(int)@filemtime($file);
-    return $age<=max(0,$hold);
+    return queueStopSignalApplies($file,'',$hold);
 }
 function queueHasExplicitUserStop(string $which): bool {
     if(queueHasFreshUserStop($which))return true;
-    $progress=readProgress($which==='bsl'?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE);
+    $file=$which==='bsl'?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE;
+    $progress=readProgress($file);$qid=trim((string)($progress['queue_id']??''));
+    if($qid!==''){
+        $q=$which==='bsl'?bslReadQueue():wooReadQueue();
+        foreach((array)($q['entries']??[])as$row){
+            if(!is_array($row)||(string)($row['id']??'')!==$qid)continue;
+            if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user')return false;
+            break;
+        }
+    }
     return !empty($progress['stopped'])||!empty($progress['cancelled'])
         ||!empty($progress['stopped_by_user'])||(string)($progress['paused_by']??'')==='user';
 }
@@ -49844,6 +50402,7 @@ function queuePauseRowsAfterStop(string $which,string $requestQueueId=''): void 
     $signal=json_decode((string)@file_get_contents($stopFile),true);
     $target=trim((string)($signal['queue_id']??''));
     $globalStop=$target==='';
+    $exceptions=$globalStop&&is_array($signal['except_queue_ids']??null)?array_map('strval',$signal['except_queue_ids']):[];
     $q=$isBsl?bslReadQueue():wooReadQueue();
     if(!is_array($q))$q=['entries'=>[]];
     if(!is_array($q['entries']??null))$q['entries']=[];
@@ -49853,7 +50412,7 @@ function queuePauseRowsAfterStop(string $which,string $requestQueueId=''): void 
     foreach($q['entries'] as &$entry){
         if(!is_array($entry))continue;
         $id=(string)($entry['id']??'');$status=(string)($entry['status']??'');
-        $isTarget=$globalStop||($target!==''&&$id===$target);
+        $isTarget=$globalStop?!in_array($id,$exceptions,true):($target!==''&&$id===$target);
         $isDispatchRow=$requestQueueId!==''&&$id===$requestQueueId;
         if(!$isTarget&&!$isDispatchRow)continue;
         $canPause=in_array($status,['running','waiting'],true)||($isTarget&&$status==='paused');
@@ -50254,7 +50813,7 @@ function msQueuePendingRow(string $which): ?array {
     $q = $which === 'bsl' ? bslReadQueue() : wooReadQueue();
     $entries = is_array($q['entries'] ?? null) ? $q['entries'] : [];
     foreach ($entries as $e) {
-        if (is_array($e) && in_array((string)($e['status'] ?? ''), ['waiting', 'running', 'paused'], true)) {
+        if (is_array($e) && in_array((string)($e['status'] ?? ''), ['waiting', 'running'], true)) {
             return $e;
         }
     }
@@ -50361,6 +50920,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             ];
             wooWriteQueue($wooQueue);
             $out['woo'] = true;
+            $out['woo_queue_id'] = $wooQueueId;
             $out['woo_total'] = count($wooSend);
             $out['log'][] = '🛒 ووکامرس: ' . count($wooSend) . ' در صف';
         } catch (Throwable $e) {
@@ -50412,6 +50972,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             ];
             bslWriteQueue($queue);
             $out['bsl'] = true;
+            $out['bsl_queue_id'] = $queueId;
             $out['bsl_total'] = count($bslSend);
             $out['log'][] = '⭐ باسلام: ' . count($bslSend) . ' در صف';
         } catch (Throwable $e) {
@@ -50442,6 +51003,7 @@ function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array
         $label  = $isBsl ? 'باسلام' : 'ووکامرس';
         $lastSig = '';
         $stuck = 0;
+        $startError = '';
         for ($round = 1; $round <= $maxRounds; $round++) {
             if (manualSyncStopped()) { $out['stopped'] = true; break; }
             $row = msQueuePendingRow($dest);
@@ -50459,7 +51021,17 @@ function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array
                  . ':' . (int)($pg['current'] ?? 0) . ':' . (int)($pg['sent'] ?? 0)
                  . ':' . (int)($pg['updated'] ?? 0) . ':' . (int)($pg['skipped'] ?? 0);
             msAlive('ارسال ' . $label . ' — ' . (int)($row['current'] ?? 0) . '/' . (int)($row['total'] ?? 0));   /* v10.61 (۷۵) */
-            $fired = fireAndForget('action=' . $action, $roundMs, ['from_file' => '1']);
+            $queueId=trim((string)($row['id']??''));
+            if($queueId===''){$startError='missing_queue_id';break;}
+            if($isBsl){
+                $allow=queueStopSignalAllowQueue(BSL_STOP_FILE,$queueId,BSL_STOP_HOLD_SEC);
+                if(empty($allow['ok'])){$startError='bsl_stop_signal_update_failed';break;}
+            }else{
+                $prepared=wooQueuePrepareServerRow($queueId);
+                if(empty($prepared['ok'])){$startError=(string)($prepared['error']??'woo_queue_start_failed');break;}
+            }
+            $fired = fireAndForget('action=' . $action, $roundMs,
+                ['from_file' => '1','queue_id'=>$queueId]);
             $out['rounds']++;
             if (!$fired || $sig === $lastSig) { $stuck++; } else { $stuck = 0; }
             if ($sig !== '') $lastSig = $sig;
@@ -50470,8 +51042,9 @@ function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array
             }
         }
         $rowAfter = msQueuePendingRow($dest);
-        $out['dests'][$dest] = $rowAfter === null ? 'done'
-            : ('pending:' . (int)($rowAfter['total'] ?? 0) . ':' . (int)($rowAfter['current'] ?? 0));
+        $out['dests'][$dest] = $startError!=='' ? ('start_failed:'.$startError)
+            : ($rowAfter === null ? 'done'
+                : ('pending:' . (int)($rowAfter['total'] ?? 0) . ':' . (int)($rowAfter['current'] ?? 0)));
         if (!empty($out['stopped'])) break;
     }
     return $out;
@@ -58679,7 +59252,7 @@ foreach($pd as $i=>$p){
 if($i<$startIndex){continue;}
 
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
+if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){
 // v8.59: سیگنال را نگه دار تا نگه‌داشتِ توقف بی‌اثر نشود
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$i,mb_substr($pTitle??'',0,30),['❌ فرآیند توسط کاربر متوقف شد']);
 writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'current'=>$i,'started_at'=>$GLOBALS['startedAt'],'recent_log'=>['❌ فرآیند متوقف شد'],'total_log_count'=>1,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList]);
@@ -58870,16 +59443,17 @@ if ($wooAutomaticResume && tasksResumeExplicitlyStopped('woo_send',[],readProgre
         'msg'=>'توقفِ صریحِ کاربر حفظ شد — ادامهٔ خودکار انجام نشد'],JSON_UNESCAPED_UNICODE);
     exit;
 }
-if (file_exists(WOO_STOP_FILE)) {
-    $wooStopAge = time() - (int)@filemtime(WOO_STOP_FILE);
-    if (!$wooExplicitResume && $wooStopAge <= WOO_STOP_HOLD_SEC) {
-        queuePauseRowsAfterStop('woo',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+$_wooRequestedQid=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+if (queueStopSignalApplies(WOO_STOP_FILE,$_wooRequestedQid,WOO_STOP_HOLD_SEC)) {
+    if (!$wooExplicitResume) {
+        queuePauseRowsAfterStop('woo',$_wooRequestedQid);
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
             'msg'=>'ارسال توسط کاربر متوقف شده — برای ادامه از دکمهٔ ادامه استفاده کنید'],JSON_UNESCAPED_UNICODE);
         exit;
     }
-    @unlink(WOO_STOP_FILE);
+    if($_wooRequestedQid!=='')queueStopSignalAllowQueue(WOO_STOP_FILE,$_wooRequestedQid,WOO_STOP_HOLD_SEC);
+    else @unlink(WOO_STOP_FILE);
 }
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -59058,7 +59632,7 @@ wooBackendProgress($sent,$updated,$skipped,$fail,$total,max($wooResumeStart,0),'
 foreach($pd as $i=>$p){
 /* v10.56 (۷۰): محصولاتِ قبلِ چک‌پوینت را رد کن (در اجرأ قبلی انجام شده‌اند). */
 if(($i+1)<$wooResumeStart)continue;
-if(file_exists(WOO_STOP_FILE)){
+if(queueStopSignalApplies(WOO_STOP_FILE,(string)($GLOBALS['_wooQueueIdNow']??''),WOO_STOP_HOLD_SEC)){
 wooBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف شد']);
 taskMarkPartial(WOO_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)($GLOBALS['_wooQueueIdNow']??''), 'current'=>(int)$i, 'total'=>(int)$total,
@@ -59671,6 +60245,45 @@ echo json_encode(['ok'=>true,'queue_id'=>$queueId,'msg'=>'شروع پردازش 
 exit;
 }
 
+
+if(isset($_GET['woo_queue_resume'])){
+header('Content-Type: application/json; charset=UTF-8');
+$queueId=trim((string)($_GET['queue_id']??''));
+if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$lock=queueBackendLock('woo');
+if(!is_resource($lock)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'ووکامرس هنوز در حال اجراست؛ همان ردیف محفوظ ماند'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($lock){queueBackendUnlock($lock);});
+$queue=wooReadQueue();$index=-1;
+foreach((array)($queue['entries']??[])as$i=>$entry){
+    if((string)($entry['id']??'')===$queueId)$index=$i;
+    elseif((string)($entry['status']??'')==='running'){
+        echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک ارسال دیگر در حال اجراست — همان ردیف محفوظ ماند'],JSON_UNESCAPED_UNICODE);exit;
+    }
+}
+if($index<0){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد؛ ردیف تازه‌ای ساخته نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$entry=$queue['entries'][$index];
+if(!in_array((string)($entry['status']??''),['paused','failed'],true)||empty($entry['products_file'])||!is_file((string)$entry['products_file'])){
+    echo json_encode(['ok'=>false,'error'=>'ردیف در وضعیت قابل‌ادامه نیست یا فایل محصولاتش موجود نیست'],JSON_UNESCAPED_UNICODE);exit;
+}
+if(!@copy((string)$entry['products_file'],WOO_PRODUCTS_FILE)){
+    echo json_encode(['ok'=>false,'error'=>'فایل همان ردیف کپی نشد'],JSON_UNESCAPED_UNICODE);exit;
+}
+$queue['entries'][$index]['status']='running';$queue['entries'][$index]['paused_at']=0;
+$queue['entries'][$index]['done_at']=0;$queue['entries'][$index]['resume_requested_at']=0;
+unset($queue['entries'][$index]['paused_by'],$queue['entries'][$index]['stopped_by_user'],$queue['entries'][$index]['fail_reason']);
+queueStopSignalAllowQueue(WOO_STOP_FILE,$queueId,WOO_STOP_HOLD_SEC);
+wooWriteQueue($queue);$entry=$queue['entries'][$index];
+writeProgress(WOO_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
+    'current'=>(int)($entry['current']??0),'total'=>(int)($entry['total']??0),
+    'sent'=>(int)($entry['sent']??0),'updated'=>(int)($entry['updated']??0),
+    'skipped'=>(int)($entry['skipped']??0),'failed'=>(int)($entry['failed']??0),
+    'started_at'=>(int)($entry['started_at']??time()),'last_progress_ts'=>time(),
+    'recent_log'=>array_slice(array_merge((array)($entry['recent_log']??[]),['▶ ادامه از checkpoint همان ردیف']),-40),
+    'total_log_count'=>(int)($entry['total_log_count']??0)+1,
+    'sent_details'=>$entry['sent_details']??[],'updated_details'=>$entry['updated_details']??[],
+    'skipped_details'=>$entry['skipped_details']??[],'failed_details'=>$entry['failed_details']??[]]);
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'current'=>(int)($entry['current']??0)],JSON_UNESCAPED_UNICODE);exit;
+}
 
 if(isset($_GET['woo_queue_detail'])){
 header('Content-Type: application/json; charset=UTF-8');
@@ -61359,6 +61972,9 @@ if(isset($_GET['bsl_queue_resume'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$__resumeLock=queueBackendLock('bsl');
+if(!is_resource($__resumeLock)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'باسلام هنوز در حال اجراست؛ همان ردیف محفوظ ماند'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($__resumeLock){queueBackendUnlock($__resumeLock);});
 $queue=bslReadQueue();
 foreach((array)($queue['entries']??[]) as $_activeResume){
 if((string)($_activeResume['id']??'')!==$queueId&&(string)($_activeResume['status']??'')==='running'){
@@ -61367,17 +61983,21 @@ echo json_encode(['ok'=>false,'error'=>'یک ارسال دیگر در حال ا�
 $found=false;
 foreach($queue['entries'] as &$e){
 if($e['id']===$queueId&&in_array((string)$e['status'],['paused','failed'],true)&&!empty($e['products_file'])){
+$productsFile=(string)$e['products_file'];
+if(!is_file($productsFile)){
+    echo json_encode(['ok'=>false,'error'=>'فایل محصولات همان ردیف موجود نیست؛ شناسه و checkpoint حفظ شدند'],JSON_UNESCAPED_UNICODE);exit;
+}
+$allow=queueStopSignalAllowQueue(BSL_STOP_FILE,$queueId,BSL_STOP_HOLD_SEC);
+if(empty($allow['ok'])){
+    echo json_encode(['ok'=>false,'error'=>'سیگنال توقف همان ردیف به‌روزرسانی نشد؛ صف بدون تغییر ماند'],JSON_UNESCAPED_UNICODE);exit;
+}
+if(!@copy($productsFile,BSL_PRODUCTS_FILE)){
+    echo json_encode(['ok'=>false,'error'=>'کپی فایل همان ردیف ناموفق بود؛ صف بدون تغییر ماند'],JSON_UNESCAPED_UNICODE);exit;
+}
 $e['status']='running';
-$e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';
+$e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';$e['resume_requested_at']=time();
 unset($e['resume_exhausted'],$e['paused_by'],$e['stopped_by_user']);
 $found=true;
-
-@unlink(BSL_PRODUCTS_FILE);
-@copy($e['products_file'],BSL_PRODUCTS_FILE);
-// v8.57: ادامهٔ دستی یعنی کاربر می‌خواهد — نگه‌داشتِ توقف برداشته شود.
-// تنظیمات عمومی هم بازنویسی نمی‌شود.
-@unlink(BSL_STOP_FILE);
-
 writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??$e['current'],'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>['🔄 ادامه ارسال از محصول #'.($e['current']+1)],'total_log_count'=>($e['total_log_count']??0)+1,'sent_details'=>$e['sent_details']??[],'updated_details'=>$e['updated_details']??[],'skipped_details'=>$e['skipped_details']??[],'failed_details'=>$e['failed_details']??[]]);
 break;
 }
@@ -61652,16 +62272,17 @@ echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
 'msg'=>'توقفِ صریحِ کاربر حفظ شد — ادامهٔ خودکار انجام نشد'],JSON_UNESCAPED_UNICODE);
 exit;
 }
-if(file_exists(BSL_STOP_FILE)){
-$stopAge=time()-(int)@filemtime(BSL_STOP_FILE);
-if(!$explicitResume&&$stopAge<=BSL_STOP_HOLD_SEC){
-queuePauseRowsAfterStop('bsl',(string)($_GET['queue_id']??$_POST['queue_id']??''));
+$_bslRequestedQid=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+if(queueStopSignalApplies(BSL_STOP_FILE,$_bslRequestedQid,BSL_STOP_HOLD_SEC)){
+if(!$explicitResume){
+queuePauseRowsAfterStop('bsl',$_bslRequestedQid);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>true,'stopped'=>true,'started'=>false,
 'msg'=>'ارسال توسط کاربر متوقف شده — برای شروع دوباره، از دکمهٔ صف استفاده کنید'],JSON_UNESCAPED_UNICODE);
 exit;
 }
-@unlink(BSL_STOP_FILE);
+if($_bslRequestedQid!=='')queueStopSignalAllowQueue(BSL_STOP_FILE,$_bslRequestedQid,BSL_STOP_HOLD_SEC);
+else @unlink(BSL_STOP_FILE);
 }
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
@@ -61748,7 +62369,7 @@ $bslEntriesDoneThisRun = 0;
 for ($bslEntryRound = 0; $bslEntryRound < BSL_MAX_ENTRIES_PER_RUN; $bslEntryRound++) {
 if ($bslEntryRound > 0) {
     clearstatcache(true,BSL_STOP_FILE);
-    if (file_exists(BSL_STOP_FILE)) {
+    if (queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)) {
         writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
         @unlink(BSL_PRODUCTS_FILE);
         exit;
@@ -61885,7 +62506,7 @@ if($bslResumeStart>0){
     if(!empty($bslResumeSnapshot['skipped_details'])&&is_array($bslResumeSnapshot['skipped_details']))$bslSkippedList=$bslResumeSnapshot['skipped_details'];
     if(!empty($bslResumeSnapshot['failed_details'])&&is_array($bslResumeSnapshot['failed_details']))$bslFailedList=$bslResumeSnapshot['failed_details'];
 }
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);queueStopSignalConsumeForQueue(BSL_STOP_FILE,$bslQueueId,BSL_STOP_HOLD_SEC);@unlink(BSL_PRODUCTS_FILE);
 if(!file_exists($nextEntry['products_file'])){
 $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
@@ -62198,7 +62819,7 @@ $GLOBALS['_bslPhaseState']=['phase'=>'send','phase_label'=>'ارسال محصو�
 // v8.59: نتیجهٔ file_exists در PHP کش می‌شود؛ بدون پاک‌کردن کش ممکن است
 // حلقه سیگنال توقفِ تازه‌نوشته‌شده را چند دور نبیند.
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
+if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){
 // v8.59: فایل توقف را پاک نکن — نگه‌داشتِ ۱۵ دقیقه‌ای باید سر جایش
 // بماند وگرنه اولین پینگ بعدی صف را دوباره راه می‌اندازد. دکمه‌های
 // «شروع» و «ادامه» خودشان آن را برمی‌دارند.
@@ -62490,7 +63111,7 @@ if($__sendAllShops && $__liveShops){
     foreach($pd as $__i=>$p){
         if($__i<$__msStartCompleted)continue;
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE)){$__msStop=true;break;}
+        if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){$__msStop=true;break;}
         bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',null,
             ['phase'=>'multi_shop','phase_label'=>'ارسال به غرفه‌های اضافی','phase_current'=>$__i,
              'phase_total'=>$total,'phase_pct'=>(int)floor($__i*100/max(1,$total))]);
@@ -62576,7 +63197,7 @@ foreach($__liveShops as $__sh){
     foreach($pd as $__i=>$p){
         if($__i<$__priceStart)continue;
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE)){$__priceStop=true;break;}
+        if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){$__priceStop=true;break;}
         bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__i,'',null,
             ['phase'=>'extra_shop_price','phase_label'=>'تعدیل قیمت غرفه‌های اضافی','phase_current'=>$__i,
              'phase_total'=>$total,'phase_pct'=>(int)floor($__i*100/max(1,$total)),
@@ -62628,7 +63249,7 @@ foreach($__liveShops as $__sh){
         "🏪 غرفهٔ $sVid: قیمت $__shopFixed محصول با تعدیلِ خودِ آن غرفه (و لایهٔ پروفایل) به‌روز شد");
     if($__priceStop)break;
 }
-if(!$__sendAllShops&&!$__isFanoutRow&&!file_exists(BSL_STOP_FILE))
+if(!$__sendAllShops&&!$__isFanoutRow&&!queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC))
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','🏁 پایانِ تعدیل قیمت غرفه‌های اضافی',
         ['phase'=>'extra_shop_price_done','phase_label'=>'تعدیل قیمت غرفه‌های اضافی تمام شد',
          'phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100]);
@@ -62659,7 +63280,7 @@ foreach($pd as $si=>$p){
 /* v10.104: محصولات قبل از چک‌پوینت را رد کن */
 if(($si+1)<$bslResumeStart)continue;
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){$sStop=true;break;}
+if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){$sStop=true;break;}
 $srAll=bslUpsertManyShops($p,[$__scopeShop],$sOpts,max(1,min(8,$bslParallelN)));
 if(isset($srAll[$__scopeVid])){
 $sr=$srAll[$__scopeVid];
@@ -62725,7 +63346,7 @@ if(!$__skipCategoryRetry){
     $__catDone=0;
     foreach($catRejected as $__catIndex=>$ae){
         clearstatcache(true,BSL_STOP_FILE);
-        if(file_exists(BSL_STOP_FILE))break;
+        if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC))break;
         $aeId=(int)($ae['id']??0);$aeTitle=trim((string)($ae['title']??$ae['name']??''));
         $aeCatId=autoMatchBslCategoryForce($aeTitle,$bslFlatCats);
         if($aeCatId<=0){
@@ -62757,7 +63378,7 @@ if(!$__skipCategoryRetry){
     }
 }
 $updated+=$catFixed;
-if(!$__skipCategoryRetry&&!file_exists(BSL_STOP_FILE))
+if(!$__skipCategoryRetry&&!queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC))
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: '.$catFixed.' اصلاح, '.$catRetryFailed.' خطا',
         ['phase'=>'category_retry_done','phase_label'=>'اصلاح دسته‌بندی تمام شد',
          'phase_current'=>count($catRejected),'phase_total'=>count($catRejected),'phase_pct'=>100,
@@ -62783,7 +63404,7 @@ if(!$__skipImageRetry){
         $__imgDone=0;
         foreach($imgFailedEntries as $__imgIndex=>$imgF){
             clearstatcache(true,BSL_STOP_FILE);
-            if(file_exists(BSL_STOP_FILE))break;
+            if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC))break;
             $imgRetryCount++;$imgTitle=(string)($imgF['title']??'');$imgLink=(string)($imgF['link']??'');
             $imgOriginalUrl=(string)($imgF['image_url']??'');$pid3=null;
             bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__imgIndex,'',null,
@@ -62893,7 +63514,7 @@ if(!$__skipImageRetry){
         }
     }
 }
-if(!$__skipImageRetry&&!file_exists(BSL_STOP_FILE))
+if(!$__skipImageRetry&&!queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC))
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 3: '.$imgRetryFixed.'/'.$imgRetryCount.' تصویر اصلاح, '.$imgRetryFailed.' خطای retry',
         ['phase'=>'image_retry_done','phase_label'=>'تلاش دوبارهٔ تصویر تمام شد','phase_current'=>count($imgFailedEntries),
          'phase_total'=>count($imgFailedEntries),'phase_pct'=>100,'phase_shop_vendor_id'=>$vid]);
@@ -63338,7 +63959,9 @@ $sent=0;$fail=0;$skipped=0;$updated=0;
 }
 $tk=$bs['token'];$vid=(int)$bs['vendor_id'];$total=count($pd);
 
-@unlink(BSL_STOP_FILE);
+/* Consume only this worker's row-scoped signal or an expired global stop. */
+$__bslStreamQueueId=trim((string)($_POST['queue_id']??$_GET['queue_id']??''));
+queueStopSignalConsumeForQueue(BSL_STOP_FILE,$__bslStreamQueueId,BSL_STOP_HOLD_SEC);
 
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
@@ -63396,7 +64019,7 @@ $bslPage=1;$bslMore=true;$maxDupPages=20;
 while($bslMore&&$bslPage<=$maxDupPages){
 
 clearstatcache(true,BSL_STOP_FILE);
-if(file_exists(BSL_STOP_FILE)){
+if(queueStopSignalApplies(BSL_STOP_FILE,(string)($GLOBALS['_bslQueueIdNow']??''),BSL_STOP_HOLD_SEC)){
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,0,'',['❌ فرآیند متوقف شد']);
 taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)($GLOBALS['_bslQueueIdNow']??''), 'current'=>0, 'total'=>(int)$total,
@@ -68927,9 +69550,20 @@ html[data-skin="gloss"] .progress-bar{
 <input type="checkbox" id="vcOnLoad" onchange="vcSave(true)"> بررسی خودکار هنگام باز/رفرش شدن صفحه
 </label>
 </div>
-<div style="font-size:10.5px;color:#64748b;margin:0 0 6px;line-height:1.7">
-فقط <b>اطلاع می‌دهد</b>؛ نصب همیشه با تأیید خودتان انجام می‌شود.
-اگر خاموش باشد، هیچ درخواستی هنگام رفرش فرستاده نمی‌شود.
+<div style="font-size:10.5px;color:#64748b;margin:0 0 8px;line-height:1.7">
+«بررسی هنگام باز/رفرش» فقط هشدار می‌دهد. updater داخلی Scraper4 از فهرست شاخه‌های زیر، آخرین تغییرِ مرتبط با <code dir="ltr">scraper4.php</code> را انتخاب و به‌صورت خودکار نصب می‌کند؛ نصب دستی هم کنار هر شاخه در دسترس است.
+</div>
+<div id="vcCodeBranchManager" style="background:#0b1324;border:1px solid #334155;border-radius:10px;padding:9px;margin:8px 0 10px">
+  <div style="font-size:11px;font-weight:800;color:#bae6fd;margin-bottom:4px">🌿 شاخه‌های updater داخلی Scraper4</div>
+  <div style="font-size:9.5px;color:#64748b;line-height:1.7;margin-bottom:7px;direction:rtl">منبع ثابت و امن: <code dir="ltr">fazilatma/new:scraper4.php</code>. انتخاب خودکار بر اساس زمان آخرین commit همین فایل است، نه commitهای نامرتبط شاخه.</div>
+  <div class="crow" style="gap:5px;margin-bottom:6px">
+    <input id="vcCodeBranchInput" list="vcCodeBranchOptions" placeholder="شاخهٔ GitHub را انتخاب یا بنویسید" dir="ltr" autocomplete="off" style="flex:1;min-width:130px">
+    <datalist id="vcCodeBranchOptions"></datalist>
+    <button class="btn btn-gray" onclick="vcLoadCodeBranches(true)" id="vcCodeBranchRefresh" style="flex:0 0 auto;padding:7px 9px">🔄</button>
+    <button class="btn btn-cyan" onclick="vcCodeBranchAdd()" style="flex:0 0 auto;padding:7px 9px">＋ افزودن</button>
+  </div>
+  <div id="vcCodeBranchStatus" style="font-size:9.5px;color:#64748b;margin-bottom:6px">در حال بارگذاری شاخه‌ها…</div>
+  <div id="vcCodeBranchList" style="display:grid;gap:5px"></div>
 </div>
 
 <div class="smenu-hdr" onclick="toggleSmenu(this)" style="padding:9px 0;border-top:1px solid #1e293b">
@@ -71344,9 +71978,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 </div>
                 <style>
                   .sync-pipe-list{margin-top:10px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-                  .sync-pipe-card{background:linear-gradient(160deg,#0b1220,#111827);border:1px solid #273449;border-radius:14px;padding:11px;min-width:0;box-shadow:0 8px 24px #02061755}
-                  .sync-pipe-head{display:flex;align-items:center;gap:7px;margin-bottom:9px}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-                  .sync-pipe-badge{font-size:9px;padding:2px 7px;border-radius:999px;white-space:nowrap}.sync-pipe-track{position:relative;display:grid;gap:5px;padding-right:3px}
+                  .sync-pipe-card{background:linear-gradient(160deg,#0b1220,#111827);border:1px solid #273449;border-radius:14px;padding:10px;min-width:0;box-shadow:0 8px 24px #02061755}
+                  .sync-pipe-head{display:flex;align-items:center;gap:8px;min-height:34px}.sync-pipe-card.expanded .sync-pipe-head{margin-bottom:9px}.sync-pipe-title{color:#e2e8f0;font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 32%;min-width:70px}
+                  .sync-pipe-overall{display:flex;align-items:center;gap:7px;flex:1;min-width:70px}.sync-pipe-overall-track{height:10px;flex:1;min-width:35px;overflow:hidden;border-radius:999px;background:#111827;border:1px solid #334155}.sync-pipe-overall-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#22d3ee,#34d399);box-shadow:0 0 10px #22d3ee55;transition:width .45s ease}.sync-pipe-overall-pct{font-size:10px;font-weight:900;color:#bae6fd;min-width:34px;text-align:left;direction:ltr}
+                  .sync-pipe-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}.sync-pipe-action,.sync-pipe-toggle{border:1px solid #334155;border-radius:7px;background:#101a2b;color:#cbd5e1;padding:5px 7px;font:inherit;font-size:9px;white-space:nowrap;cursor:pointer}.sync-pipe-action.stop{color:#fecaca;border-color:#7f1d1d;background:#3f1218}.sync-pipe-action.continue{color:#bbf7d0;border-color:#166534;background:#052e20}.sync-pipe-action:disabled{opacity:.38;cursor:not-allowed}.sync-pipe-toggle{padding:4px 8px;color:#93c5fd}
+                  .sync-pipe-expanded{display:none}.sync-pipe-card.expanded .sync-pipe-expanded{display:block}.sync-pipe-badge{font-size:9px;padding:2px 7px;border-radius:999px;white-space:nowrap}.sync-pipe-track{position:relative;display:grid;gap:5px;padding-right:3px}
                   .sync-pipe-track:before{content:"";position:absolute;right:15px;top:17px;bottom:17px;width:2px;background:#243147}
                   .sync-pipe-step{position:relative;z-index:1;display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px;border-radius:10px;border:1px solid transparent;transition:.2s;overflow:hidden;cursor:pointer;isolation:isolate}
                   .sync-pipe-step:after{content:"";position:absolute;z-index:-1;inset:0 auto 0 0;width:var(--pipe-progress,0%);background:linear-gradient(90deg,#2563eb28,#38bdf81f);transition:width .45s ease}
@@ -71359,7 +71995,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                   .sync-pipe-step.active{background:linear-gradient(90deg,#172554cc,#0f1c35);border-color:#3b82f6;box-shadow:0 0 0 2px #3b82f622}.sync-pipe-step.active .sync-pipe-dot{background:#2563eb;border-color:#93c5fd;color:white;box-shadow:0 0 14px #3b82f688}.sync-pipe-step.active .sync-pipe-name{color:white;font-weight:900}.sync-pipe-step.active .sync-pipe-state{color:#93c5fd;font-weight:800}
                   .sync-pipe-step.failed{background:#3f1218;border-color:#ef4444}.sync-pipe-step.failed .sync-pipe-dot{background:#991b1b;border-color:#fca5a5;color:white}.sync-pipe-step.failed .sync-pipe-name,.sync-pipe-step.failed .sync-pipe-state{color:#fecaca}
                   .sync-pipe-msg{margin-top:8px;border-top:1px dashed #273449;padding-top:7px;color:#94a3b8;font-size:9.5px;line-height:1.7}
-                  @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:7px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}.sync-pipe-count{flex:1;min-width:64px}.sync-detail-modal{align-items:flex-end;padding:0}.sync-detail-sheet{width:100%;max-height:88vh;border-radius:18px 18px 0 0;padding:13px}.sync-detail-top{top:-13px}}
+                  @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-head{flex-wrap:wrap;gap:6px}.sync-pipe-title{flex:1 1 42%;min-width:90px}.sync-pipe-overall{flex:1 1 42%;min-width:100px}.sync-pipe-actions{flex:0 0 auto;margin-right:auto}.sync-pipe-action{padding:5px 6px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:7px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}.sync-pipe-count{flex:1;min-width:64px}.sync-detail-modal{align-items:flex-end;padding:0}.sync-detail-sheet{width:100%;max-height:88vh;border-radius:18px 18px 0 0;padding:13px}.sync-detail-top{top:-13px}}
                   @media(prefers-reduced-motion:reduce){.sync-pipe-step.active:after{animation:none}}
                 </style>
                 <div id="syncPipelineCards" class="sync-pipe-list"></div>
@@ -76674,6 +77310,8 @@ function msSetState(txt,cls){
 }
 
 let syncPipeRows=[];
+const syncPipeExpanded=new Set();
+const syncPipeBusy={};
 function syncPipelineClearDone(){
   if(!confirm('همهٔ همگام‌سازی‌های تمام‌شده، خطادار و متوقف پاک شوند؟ کارهای فعال باقی می‌مانند.'))return;
   fetch('?sync_pipeline_clear_done=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
@@ -76682,9 +77320,43 @@ function syncPipelineClearDone(){
   }).catch(()=>showToast('خطا در پاک‌سازی همگام‌سازی‌ها',1));
 }
 const syncCountLabels={extracted:'استخراج',new:'جدید',updated:'آپدیت',removed:'حذف/رفته',unchanged:'بدون تغییر',price_up:'گران',price_down:'ارزان',products:'محصول',queued:'صف‌شده',sent:'ارسال',failed:'خطا',skipped:'ردشده'};
+function syncPipeOverallPercent(row){
+  const details=row.stage_details||{},ex=row.extract_control||{},manual=row.manual_control||{};
+  let stage=String(row.stage||'queued');
+  if(stage==='error'||stage==='stopped')stage=String(row.failed_stage||'extract');
+  if(row.stage==='done')return 100;
+  let part=Math.max(0,Math.min(1,(parseInt(row.stage_progress)||0)/100));
+  if(stage==='extract'){
+    const current=parseInt(ex.current)||parseInt(manual.current)||0,total=parseInt(ex.total)||parseInt(manual.total)||0;
+    if(total>0)part=Math.max(part,Math.min(1,current/total));
+    return Math.max(1,Math.min(35,Math.round(4+31*part)));
+  }
+  if(stage==='pricing')return Math.max(36,Math.min(49,Math.round(36+13*(part||.45))));
+  if(stage==='send'){
+    const det=details.send||{},counts=det.counts||{},total=parseInt(counts.queued)||0;
+    if(total>0){const done=(parseInt(counts.sent)||0)+(parseInt(counts.updated)||0)+(parseInt(counts.failed)||0)+(parseInt(counts.skipped)||0);part=Math.max(part,Math.min(1,done/total));}
+    return Math.max(50,Math.min(98,Math.round(50+48*part)));
+  }
+  return 0;
+}
+function syncPipeCanStop(row){
+  const mc=row.manual_control||{},ex=row.extract_control||{},qs=Array.isArray(row.control_queues)?row.control_queues:[];
+  return !!mc.active||['running','waiting'].includes(String(ex.status||''))||qs.some(q=>['running','waiting'].includes(String(q.status||'')));
+}
+function syncPipeCanContinue(row){
+  const mc=row.manual_control||{},ex=row.extract_control||{},qs=Array.isArray(row.control_queues)?row.control_queues:[];
+  if(mc.active)return false;
+  return !!mc.resumable||(['paused','failed'].includes(String(ex.status||''))&&!!ex.queue_id)
+    ||qs.some(q=>['paused','failed'].includes(String(q.status||''))&&q.queue_id);
+}
+function syncPipelineToggle(rowIndex){
+  const row=syncPipeRows[rowIndex]||{},key=String(row.profile_key||'');if(!key)return;
+  if(syncPipeExpanded.has(key))syncPipeExpanded.delete(key);else syncPipeExpanded.add(key);
+  syncPipelineRender();
+}
 function syncPipelineRender(){
   const host=$('syncPipelineCards');if(!host)return;
-  fetch('?sync_pipeline_status=1').then(r=>r.json()).then(d=>{
+  fetch('?sync_pipeline_status=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     syncPipeRows=Array.isArray(d.rows)?d.rows.slice(0,8):[];const rows=syncPipeRows;
     if(!rows.length){host.innerHTML='';return;}
     const stages=[['extract','⚡','استخراج بک‌اند سریع'],['pricing','٪','ذخیره و اعمال ضرایب'],['send','↑','ساخت صف و ارسال'],['done','✓','پایان و گزارش']];
@@ -76693,6 +77365,9 @@ function syncPipelineRender(){
       const bad=row.stage==='error'||row.stage==='stopped';
       const cur=idx[bad?(row.failed_stage||'extract'):row.stage]??0,terminal=row.stage==='done';
       const details=row.stage_details||{};
+      const expanded=syncPipeExpanded.has(String(row.profile_key||''));
+      const overall=syncPipeOverallPercent(row),busy=!!syncPipeBusy[String(row.profile_key||'')];
+      const canStop=syncPipeCanStop(row),canContinue=syncPipeCanContinue(row);
       const steps=stages.map((s,i)=>{
         const complete=terminal||i<cur,active=!terminal&&i===cur,failed=bad&&active,det=details[s[0]]||{};
         const cls=failed?'failed':active?'active':complete?'done':'';
@@ -76704,13 +77379,71 @@ function syncPipelineRender(){
           +'<span class="sync-pipe-name">'+s[2]+'</span><span class="sync-pipe-state">'+state+' · '+toFa(pct)+'٪<b style="display:block;color:#7dd3fc;margin-top:2px">مشاهده جزئیات ›</b></span>'+minis+'</div>';
       }).join('');
       const periodic=row.trigger==='periodic';
-      return '<article class="sync-pipe-card"><header class="sync-pipe-head"><span class="sync-pipe-title">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
-        +'<span class="sync-pipe-badge" style="color:'+(periodic?'#fde68a':'#bae6fd')+';background:'+(periodic?'#713f123d':'#0759853d')+'">'+(periodic?'⏱ دوره‌ای':'👤 دستی')+'</span></header>'
+      const actionButtons='<div class="sync-pipe-actions">'
+        +'<button type="button" class="sync-pipe-action stop" title="توقف همین پروفایل و صف‌های وابسته" onclick="event.stopPropagation();syncPipelineRowAction('+ri+',\'pause\')" '+(!canStop||busy?'disabled':'')+'>⏹ توقف</button>'
+        +'<button type="button" class="sync-pipe-action continue" title="ادامه از همان ردیف و checkpoint" onclick="event.stopPropagation();syncPipelineRowAction('+ri+',\'continue\')" '+(!canContinue||busy?'disabled':'')+'>▶ ادامه</button>'
+        +'<button type="button" class="sync-pipe-toggle" aria-expanded="'+(expanded?'true':'false')+'" title="'+(expanded?'بستن جزئیات':'نمایش جزئیات')+'" onclick="event.stopPropagation();syncPipelineToggle('+ri+')">'+(expanded?'⌃':'⌄')+'</button></div>';
+      return '<article class="sync-pipe-card '+(expanded?'expanded':'collapsed')+'"><header class="sync-pipe-head"><span class="sync-pipe-title" title="'+esc(row.profile_name||row.profile_key||'—')+'">'+esc(row.profile_name||row.profile_key||'—')+'</span>'
+        +'<div class="sync-pipe-overall" role="img" aria-label="پیشرفت کلی '+toFa(overall)+' درصد"><div class="sync-pipe-overall-track"><div class="sync-pipe-overall-fill" style="width:'+overall+'%"></div></div><span class="sync-pipe-overall-pct">'+toFa(overall)+'٪</span></div>'
+        +actionButtons+'</header><div class="sync-pipe-expanded">'
+        +'<div style="display:flex;justify-content:flex-start;align-items:center;margin:-3px 0 8px"><span class="sync-pipe-badge" style="color:'+(periodic?'#fde68a':'#bae6fd')+';background:'+(periodic?'#713f123d':'#0759853d')+'">'+(periodic?'⏱ دوره‌ای':'👤 دستی')+'</span>'
+        +(row.user_paused?'<span class="sync-pipe-badge" style="margin-right:5px;color:#fca5a5;background:#7f1d1d55">⏸ متوقف موقت</span>':'')+'</div>'
         +'<div class="sync-pipe-track">'+steps+'</div>'
-        +(row.message?'<div class="sync-pipe-msg" style="color:'+(bad?'#fca5a5':'#94a3b8')+'">'+esc(row.message)+'</div>':'')+'</article>';
+        +(row.message?'<div class="sync-pipe-msg" style="color:'+(bad?'#fca5a5':'#94a3b8')+'">'+esc(row.message)+'</div>':'')+'</div></article>';
     }).join('');
   }).catch(()=>{});
 }
+async function syncPipelineResumeQueue(q){
+  const qid=String(q.queue_id||'');if(!qid)return false;
+  if(q.destination==='bsl'){
+    const r=await fetch('?bsl_queue_resume=1&queue_id='+encodeURIComponent(qid),{cache:'no-store'});const d=await r.json();
+    if(!d.ok)throw new Error(d.error||'باسلام ادامه نداد');
+    const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',qid);fd.append('start_index',String(d.current||0));fd.append('resume','1');
+    fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});return true;
+  }
+  const r=await fetch('?woo_queue_resume=1&queue_id='+encodeURIComponent(qid),{cache:'no-store'});const d=await r.json();
+  if(!d.ok)throw new Error(d.error||'ووکامرس ادامه نداد');
+  const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',qid);fd.append('start_index',String(d.current||0));fd.append('resume','1');
+  fetch('?action=woo_backend&queue_id='+encodeURIComponent(qid),{method:'POST',body:fd}).catch(()=>{});return true;
+}
+async function syncPipelineRowAction(rowIndex,action){
+  const row=syncPipeRows[rowIndex];if(!row)return;const pk=String(row.profile_key||'');if(!pk)return;
+  if(action==='pause'&&!confirm('«'+(row.profile_name||pk)+'» و صف‌های وابسته متوقف شوند؟\n\nشناسهٔ صف و checkpoint حفظ می‌شوند و با «ادامه» از همان‌جا ادامه خواهد یافت.'))return;
+  if(action==='pause'&&!syncPipeCanStop(row)){showToast('این همگام‌سازی کارِ فعالی برای توقف ندارد',1);return;}
+  if(action==='continue'&&!syncPipeCanContinue(row)){showToast('ردیفِ قابل‌ادامه‌ای برای این پروفایل پیدا نشد',1);return;}
+  syncPipeBusy[pk]=true;syncPipelineRender();
+  try{
+    const fd=new FormData();fd.append('action',action==='pause'?'pause':'continue');fd.append('profile_key',pk);
+    const control=await fetch('?sync_pipeline_control=1',{method:'POST',body:fd,cache:'no-store'});
+    const cd=await control.json().catch(()=>({ok:false,error:'پاسخ کنترل نامعتبر است'}));
+    if(!cd.ok)throw new Error(cd.error||'کنترل همگام‌سازی ناموفق بود');
+    if(action==='pause'){
+      showToast('⏸ توقف ثبت شد — صف و checkpoint همین پروفایل حفظ می‌شوند');
+    }else{
+      const mc=row.manual_control||{};
+      if(row.trigger==='manual'&&mc.resumable&&typeof msFire==='function'){
+        msFire(pk,true);
+      }else{
+        const ex=row.extract_control||{};
+        if(['paused','failed'].includes(String(ex.status||''))&&ex.queue_id){
+          fetch('?extract_resume=1&profile_key='+encodeURIComponent(pk)+'&queue_id='+encodeURIComponent(ex.queue_id),{cache:'no-store'})
+            .then(r=>r.json()).then(d=>{if(!d.ok)showToast(d.error||'ادامهٔ استخراج ناموفق بود',1);else showToast('▶ استخراج از همان ردیف ادامه یافت');})
+            .catch(()=>showToast('درخواست ادامهٔ استخراج ارسال شد'));
+        }else{
+          const queues=(Array.isArray(row.control_queues)?row.control_queues:[]).filter(q=>['paused','failed'].includes(String(q.status||''))&&q.queue_id);
+          const chosen=[];for(const q of queues){if(!chosen.some(x=>x.destination===q.destination))chosen.push(q);}
+          if(!chosen.length)throw new Error('ردیف صفِ قابل‌ادامه‌ای موجود نیست');
+          const results=await Promise.allSettled(chosen.map(syncPipelineResumeQueue));
+          const err=results.find(x=>x.status==='rejected');if(err)throw err.reason;
+          showToast('▶ ادامه از checkpoint همان صف آغاز شد');
+        }
+      }
+    }
+    setTimeout(syncPipelineRender,900);
+  }catch(e){showToast((e&&e.message)||'عملیات انجام نشد',1);}
+  finally{delete syncPipeBusy[pk];setTimeout(syncPipelineRender,350);}
+}
+
 function syncDetailOpen(rowIndex,stage,filterKey){
   const row=syncPipeRows[rowIndex]||{},det=((row.stage_details||{})[stage])||{};
   const labels={extract:'استخراج بک‌اند',pricing:'ذخیره و اعمال ضرایب',send:'صف و ارسال',done:'گزارش پایان'};
@@ -76778,7 +77511,7 @@ function startManualSync(){
   go();
 }
 
-function msFire(pkey){
+function msFire(pkey,resume){
   const btn=$('manualSyncBtn'); if(btn)btn.disabled=true;
   const box=$('manualSyncProgress'); if(box)box.style.display='block';
   const sb=$('manualSyncStopBtn'); if(sb)sb.classList.remove('hidden');
@@ -76791,7 +77524,7 @@ function msFire(pkey){
   try{ if(typeof openExtractPanel==='function') openExtractPanel('🔄 همگام‌سازی دستی — استخراج بک‌اند'); }catch(e){}
   try{ if(typeof watchExtractProgress==='function') watchExtractProgress(); }catch(e){}
   try{ if(typeof refreshExtractQueue==='function') refreshExtractQueue(); }catch(e){}
-  fetch('?manual_sync=1&profile='+encodeURIComponent(pkey)+'&force=1')
+  fetch('?manual_sync=1&profile='+encodeURIComponent(pkey)+'&force=1'+(resume?'&resume=1':''))
     .then(r=>r.text()).then(t=>{
       /* v10.61 (۷۵): پاسخ ndjson است — خطِ اول «شروع شد» و هر خطِ بعدی
          یک ضربانِ زنده تا پایانِ کار. نتیجهٔ واقعی را همان‌طور از فایلِ
@@ -76806,7 +77539,7 @@ function msFire(pkey){
       }
       try{ if(typeof refreshExtractQueue==='function') refreshExtractQueue(); }catch(e){}
     }).catch(()=>{/* خطای شبکه — وضعیت را از پویینگِ دستی می‌پرسیم */});
-  showToast('🔄 همگام‌سازی شروع شد — پیشرفت و صف استخراج را همین‌جا ببینید');
+  showToast(resume?'▶ همگام‌سازی از checkpoint و همان ردیف ادامه یافت':'🔄 همگام‌سازی شروع شد — پیشرفت و صف استخراج را همین‌جا ببینید');
   msWatch();
   setTimeout(()=>{ try{ refreshExtractQueue(); }catch(e){} }, 800);
   setTimeout(()=>{ try{ refreshExtractQueue(); }catch(e){} }, 2500);
@@ -78213,6 +78946,7 @@ renderDetailFieldsList();
  *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
 let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false;
+let VC_CODE_BRANCHES=[],VC_CODE_AVAILABLE=[],VC_CODE_BRANCH_META=[],VC_CODE_LATEST_BRANCH='',VC_CODE_BRANCH_BUSY='',VC_CODE_BRANCH_LOADING=false;
 /* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
    tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
 const S4_LOADED_VERSION='<?=APP_VERSION?>';
@@ -78236,6 +78970,17 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.410', t:'🩺 عیب‌یابی روشن‌ترِ worker ارسال باسلام', items:[
+    'پنل عیب‌یابی ارسال اکنون job، فاز، queue ID، زنده‌بودن PID و ضربان worker پایدار را کنار قفل backend و زمان آخرین cron نشان می‌دهد.',
+    'توضیح می‌دهد که خاموش‌کردن زمان‌بندی cron پردازهٔ ارسالِ فعال را نمی‌کشد؛ Stop همان ردیف تعاونی است و ممکن است تا پایان درخواست شبکهٔ جاری زمان ببرد. گزارش تشخیصی را می‌توان برای ارسال کپی کرد.',
+    'Continue باسلام پیش از running، قفل backend، فایل محصولات و سیگنال همان queue را بررسی می‌کند تا شناسه و checkpoint ردیف موجود حفظ شوند.'
+  ]},
+  {v:'10.409', t:'🌿 updater چندشاخه و توقف/ادامهٔ همگام‌سازی', items:[
+    'کارت‌های همگام‌سازی از ابتدا جمع‌شده‌اند؛ نمای خلاصه فقط نام پروفایل، درصد پیشرفت گرافیکی کلی و کنترل‌های توقف/ادامه را نشان می‌دهد و جزئیات مراحل با بازکردن کارت دیده می‌شود.',
+    'Stop/Continue به پروفایل و ردیف‌های وابسته محدود است؛ ادامهٔ استخراج از همان queue ID و checkpoint، ادامهٔ sync دستی از همان مرحله و بازگرداندن ردیف‌های ارسالِ متوقف‌شده حفظ می‌شود.',
+    'updater داخلی می‌تواند چند شاخهٔ مخزن fazilatma/new را پایش کند؛ انتخاب خودکار بر اساس تازه‌ترین commit فایل scraper4.php است و نصب دستیِ شاخهٔ مشخص کنار همان شاخه ارائه می‌شود.',
+    'فهرست شاخه‌ها در تنظیمات ذخیره می‌شود؛ نام شاخه‌ها و SHA فایل پیش از نصب اعتبارسنجی می‌شوند و نصب همچنان به مجوز مدیر یا deploy token نیاز دارد.'
+  ]},
   {v:'10.408', t:'🧭 صفحه‌بندی خودکار، محصولِ معتبر، جزئیاتِ تازه‌محور و قیمت غرفه‌های اضافه', items:[
     'تعداد صفحهٔ ۰ در واکش زنده اکنون حالت خودکار است: تا پایان طبیعیِ لینکِ صفحهٔ بعد یا چند صفحهٔ پیاپیِ بدون محصول تازه ادامه می‌دهد؛ 404/410 پس از محصولات پایان طبیعی است و سایر خطاها یا سقف ایمنی در رابط آشکار می‌شود.',
     'همهٔ موتورهای فهرست فقط محصولی را می‌پذیرند که عنوان غیرخالی و قیمت مثبت داشته باشد؛ این محافظ در پارسر CSS مستقیم و مسیرهای heuristic، JSON-LD، ایمالز و reader هم اعمال می‌شود.',
@@ -87065,10 +87810,110 @@ function vcCloseDrops() {
     ['vcBranchDrop', 'vcPathDrop'].forEach(id => { const e = $(id); if (e) e.classList.remove('open'); });
 }
 
+function vcFormatCodeBranchDate(row){
+    const ts=parseInt((row&&row.commit_at)||0);if(!ts)return 'زمان commit در دسترس نیست';
+    try{return new Date(ts*1000).toLocaleString('fa-IR');}catch(e){return new Date(ts*1000).toLocaleString();}
+}
+function vcRenderCodeBranches(){
+    const list=$('vcCodeBranchList'),options=$('vcCodeBranchOptions');
+    if(options)options.innerHTML=VC_CODE_AVAILABLE.map(b=>'<option value="'+esc(b.name)+'"></option>').join('');
+    if(!list)return;
+    if(!VC_CODE_BRANCHES.length){list.innerHTML='<div style="font-size:10px;color:#fbbf24;padding:5px">هیچ شاخه‌ای انتخاب نشده؛ افزودنِ دست‌کم یک شاخه، updater خودکار را فعال می‌کند.</div>';return;}
+    list.innerHTML=VC_CODE_BRANCHES.map((name,i)=>{
+        const meta=VC_CODE_BRANCH_META.find(x=>x.name===name)||{};
+        const date=vcFormatCodeBranchDate(meta);
+        const latest=name===VC_CODE_LATEST_BRANCH;
+        const busy=VC_CODE_BRANCH_BUSY===name;
+        return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#111827;border:1px solid '+(latest?'#0e7490':'#273449')+';border-radius:8px;padding:6px 7px">'
+          +'<div style="flex:1;min-width:120px;direction:ltr;text-align:left"><code style="color:#e2e8f0;font-size:10px">'+esc(name)+'</code>'
+          +(latest?'<span style="font-size:8px;color:#67e8f9;margin-left:6px">● newest</span>':'')
+          +'<div style="direction:rtl;text-align:right;color:#64748b;font-size:8.5px;margin-top:3px">آخرین تغییر scraper4.php: '+esc(date)+(meta.update_sha?' · '+esc(String(meta.update_sha).slice(0,10)):'')+'</div></div>'
+          +'<button type="button" class="btn btn-green" onclick="vcManualCodeUpdate('+i+')" '+(busy?'disabled':'')+' style="flex:0 0 auto;padding:5px 7px;font-size:9px">'+(busy?'⏳ نصب…':'⬇ نصب از این شاخه')+'</button>'
+          +'<button type="button" class="btn btn-red" onclick="vcCodeBranchRemove('+i+')" '+(busy?'disabled':'')+' title="حذف این شاخه از پایش updater" style="flex:0 0 auto;padding:5px 7px;font-size:9px">✕</button></div>';
+    }).join('');
+}
+function vcLoadCodeBranchVersions(manual){
+    return fetch('?code_update_branch_versions=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+        if(!d.ok){if(manual)showToast(d.error||'زمان commitهای فایل دریافت نشد',true);return d;}
+        VC_CODE_BRANCH_META=Array.isArray(d.branches)?d.branches:[];
+        VC_CODE_LATEST_BRANCH=String(d.latest_branch||'');vcRenderCodeBranches();
+        const state=$('vcCodeBranchStatus');
+        if(state){
+            const latest=VC_CODE_BRANCH_META.find(x=>x.name===VC_CODE_LATEST_BRANCH)||{};
+            state.textContent=VC_CODE_BRANCHES.length
+              ?('خودکار: '+(VC_CODE_LATEST_BRANCH||'—')+' · آخرین commit فایل: '+vcFormatCodeBranchDate(latest))
+              :'فهرست خالی است؛ updater خودکار تا افزودن شاخه غیرفعال می‌ماند';
+        }
+        return d;
+    }).catch(()=>{if(manual)showToast('خطا در دریافت تاریخ شاخه‌ها',true);return null;});
+}
+function vcLoadCodeBranches(manual){
+    if(VC_CODE_BRANCH_LOADING)return Promise.resolve();
+    VC_CODE_BRANCH_LOADING=true;const btn=$('vcCodeBranchRefresh');if(btn){btn.disabled=true;btn.textContent='⏳';}
+    const state=$('vcCodeBranchStatus');if(state)state.textContent='در حال دریافت شاخه‌های GitHub…';
+    return fetch('?code_update_branch_info=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+        if(!d.ok){VC_CODE_AVAILABLE=[];if(state)state.textContent='شاخه‌ها دریافت نشدند: '+(d.error||'خطا');if(manual)showToast(d.error||'دریافت شاخه‌ها ناموفق بود',true);vcRenderCodeBranches();return null;}
+        VC_CODE_AVAILABLE=Array.isArray(d.branches)?d.branches:[];
+        if(!VC_CODE_BRANCHES.length&&Array.isArray(d.selected))VC_CODE_BRANCHES=d.selected.slice();
+        vcRenderCodeBranches();
+        if(manual)showToast('✓ '+toFa(VC_CODE_AVAILABLE.length)+' شاخهٔ GitHub دریافت شد');
+        return vcLoadCodeBranchVersions(false);
+    }).catch(()=>{if(state)state.textContent='خطا در ارتباط با GitHub';if(manual)showToast('خطا در دریافت شاخه‌ها',true);})
+      .finally(()=>{VC_CODE_BRANCH_LOADING=false;if(btn){btn.disabled=false;btn.textContent='🔄';}});
+}
+function vcCodeBranchAdd(){
+    const input=$('vcCodeBranchInput');const name=String((input&&input.value)||'').trim();
+    if(!name){showToast('ابتدا نام شاخه را بنویسید یا انتخاب کنید',true);return;}
+    if(!/^[A-Za-z0-9._/-]+$/.test(name)||name.includes('..')||name.includes('//')||name.startsWith('/')||name.endsWith('/')||name.endsWith('.')){
+        showToast('قالب نام شاخه معتبر نیست',true);return;
+    }
+    if(VC_CODE_BRANCHES.includes(name)){showToast('این شاخه از قبل افزوده شده است',true);return;}
+    if(VC_CODE_BRANCHES.length>=20){showToast('حداکثر ۲۰ شاخه قابل پایش است',true);return;}
+    if(!VC_CODE_AVAILABLE.some(b=>b.name===name)){showToast('این شاخه در مخزن پیدا نشد؛ ابتدا 🔄 را بزنید',true);return;}
+    VC_CODE_BRANCHES.push(name);if(input)input.value='';vcRenderCodeBranches();
+    vcSave(true).then(d=>{if(d)vcLoadCodeBranchVersions(false);});
+}
+function vcCodeBranchRemove(index){
+    if(!Number.isInteger(index)||index<0||index>=VC_CODE_BRANCHES.length)return;
+    const removed=VC_CODE_BRANCHES.splice(index,1)[0];vcRenderCodeBranches();
+    vcSave(false).then(d=>{if(d){showToast('شاخهٔ '+removed+' از پایش updater برداشته شد');vcLoadCodeBranchVersions(false);}});
+}
+async function vcManualCodeUpdate(index){
+    const branch=VC_CODE_BRANCHES[index];if(!branch)return;
+    const busyTask=vcBusy();
+    if(busyTask&&!confirm('«'+busyTask+'» در جریان است.\n\nنصب نسخه از شاخهٔ '+branch+' بدون توقف آن ادامه یابد؟'))return;
+    if(!confirm('فایل scraper4.php از شاخهٔ '+branch+' نصب شود؟\n\nپیش از جایگزینی، SHA و syntax بررسی می‌شود و نسخهٔ فعلی backup خواهد شد.'))return;
+    VC_CODE_BRANCH_BUSY=branch;vcRenderCodeBranches();
+    try{
+        const status=await fetch('?code_update_status=1',{cache:'no-store'}).then(r=>r.json());
+        let deployToken=String(($('vcDepToken')||{}).value||'').trim(),deployInfo=null;
+        try{deployInfo=await fetch('?vc_deploy_info=1',{cache:'no-store'}).then(r=>r.json());}catch(e){}
+        if(!deployToken&&deployInfo&&deployInfo.ok)deployToken=String(deployInfo.token||'');
+        const fd=new FormData();fd.append('branch',branch);
+        if(status&&status.admin&&status.nonce)fd.append('_wpnonce',status.nonce);
+        else if(deployToken)fd.append('token',deployToken);
+        else{
+            deployToken=String(prompt('برای نصب دستی، deploy token را وارد کنید:')||'').trim();
+            if(!deployToken){showToast('نصب لغو شد؛ توکن یا nonce مدیر لازم است',true);return;}
+            fd.append('token',deployToken);
+        }
+        const response=await fetch('?code_update=1',{method:'POST',body:fd,cache:'no-store'});
+        const result=await response.json().catch(()=>({ok:false,error:'پاسخ updater نامعتبر است'}));
+        if(!result.ok)throw new Error(result.error||'نصب نسخه ناموفق بود');
+        if(result.same||result.updated===false){showToast('✓ شاخهٔ '+branch+' با فایل فعلی یکسان است');return;}
+        vcStat('✓ نسخهٔ '+esc(result.to_version||'جدید')+' از شاخهٔ '+esc(branch)+' نصب شد — بارگذاری مجدد…','#4ade80');
+        showToast('✓ نسخه از '+branch+' نصب شد — صفحه رفرش می‌شود');
+        setTimeout(()=>s4ReloadForNewCode(result.to_version||'جدید'),500);
+    }catch(e){showToast((e&&e.message)||'نصب شاخه ناموفق بود',true);}
+    finally{VC_CODE_BRANCH_BUSY='';vcRenderCodeBranches();}
+}
+
 function vcLoad(then) {
     fetch('?vc_settings=1').then(r => r.json()).then(d => {
         if (!d.ok) return;
         VC = d.settings;
+        VC_CODE_BRANCHES=Array.isArray(VC.code_update_branches)?VC.code_update_branches.slice():[];
+        vcRenderCodeBranches();
         if ($('vcOnLoad'))     $('vcOnLoad').checked   = !!VC.check_on_load;
         if ($('vcRepo'))       $('vcRepo').value       = VC.repo || '';
         if ($('vcBranch'))     $('vcBranch').value     = VC.branch || '';
@@ -87084,6 +87929,7 @@ function vcLoad(then) {
         vcBadge(VC.check_on_load ? 'خودکار' : 'دستی', VC.check_on_load ? 'on' : 'off');
         vcStat('برای بررسی نسخهٔ جدید دکمه را بزنید', '#64748b');
         if (typeof then === 'function') then();
+        setTimeout(()=>vcLoadCodeBranches(false),1200);
     }).catch(() => {});
 }
 
@@ -87094,18 +87940,22 @@ function vcSave(showMsg) {
     fd.append('branch',      $('vcBranch').value.trim());
     fd.append('path',        $('vcPath').value.trim());
     fd.append('deploy_file', $('vcDeployFile').value.trim() || 'deploy.php');
+    fd.append('code_update_branches', JSON.stringify(VC_CODE_BRANCHES));
     if ($('vcGhToken').value)  fd.append('github_token', $('vcGhToken').value);
     if ($('vcDepToken').value) fd.append('deploy_token', $('vcDepToken').value);
 
-    fetch('?vc_settings=1', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
-        if (!d.ok) { showToast(d.error || 'ذخیره ناموفق', true); return; }
+    return fetch('?vc_settings=1', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
+        if (!d.ok) { showToast(d.error || 'ذخیره ناموفق', true); return null; }
         VC = d.settings;
+        VC_CODE_BRANCHES=Array.isArray(VC.code_update_branches)?VC.code_update_branches.slice():VC_CODE_BRANCHES;
+        vcRenderCodeBranches();
         $('vcGhToken').value = ''; $('vcDepToken').value = '';
         if ($('vcGhState'))  $('vcGhState').textContent  = VC.has_gh_token ? 'تنظیم شده' : 'تنظیم نشده';
         if ($('vcDepState')) $('vcDepState').textContent = VC.has_dep_token ? 'تنظیم شده' : 'تنظیم نشده';
         vcBadge(VC.check_on_load ? 'خودکار' : 'دستی', VC.check_on_load ? 'on' : 'off');
         if (showMsg) showToast('✓ ذخیره شد');
-    }).catch(() => showToast('خطا در ذخیره', true));
+        return d;
+    }).catch(() => {showToast('خطا در ذخیره', true);return null;});
 }
 
 /**
@@ -93136,6 +93986,7 @@ function bslRunSendFeedback(btn){
     if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent='⏳ بررسی وضعیت…';}
     fetch('?bsl_send_feedback=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
         if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ فیدبک نامعتبر است');
+        window._bslSendFeedbackDiagnostics=d;
         const ident=d.site||{},q=d.queue||{},row=q.active_row||{},cron=d.cron||{},worker=cron.worker||{},book=q.resume_book||{},lockInfo=q.backend_lock||{};
         const notif=(d.notifications&&d.notifications.enabled)||{};
         const lockLabel=lockInfo.probe_ok?(lockInfo.held?'گرفته':'آزاد'):'نامشخص';
@@ -93152,22 +94003,40 @@ function bslRunSendFeedback(btn){
         h+='نگهبان صف: '+(q.watchdog_enabled?'روشن':'خاموش')+' · resume خودکار: '+(q.auto_resume_enabled?'روشن':'خاموش')+' · آستانه: '+toFa(q.stall_after_sec||0)+' ثانیه<br>';
         h+='تلاش‌های resume: '+toFa(book.tries||0)+'/'+toFa(3)+' · وضعیت آخر: '+safe(book.status)+' · dispatch: '+safe(book.dispatch_mode)+' · PID: '+safe(book.dispatch_pid||'—')+'</div></div>';
         h+='<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px;margin-bottom:10px"><b style="color:#c4b5fd">کران و اعلان‌ها</b><div style="font-size:11px;line-height:1.8;margin-top:5px">آخرین کران: '+(cron.last_file_age_sec===null?'ثبت نشده':toFa(cron.last_file_age_sec)+' ثانیه پیش')+' · کران داخلی: '+(cron.internal_enabled?'روشن':'خاموش')+'<br>';
-        h+='worker: '+(worker.active?'فعال':'غیرفعال')+' · heartbeat worker: '+(worker.heartbeat_age_sec===null?'—':toFa(worker.heartbeat_age_sec)+' ثانیه')+' · نسخه worker: '+safe(worker.version)+'<br>';
+        h+='worker پایدار: '+(worker.active?'فعال':'غیرفعال')+' · PID: '+(worker.pid_alive?'زنده':'نامشخص/متوقف')+' · heartbeat: '+(worker.heartbeat_age_sec===null?'—':toFa(worker.heartbeat_age_sec)+' ثانیه')+' · نسخه: '+safe(worker.version)+'<br>';
+        h+='job: '+safe(worker.job_type)+' · فاز: '+safe(worker.phase)+' / '+safe(worker.task_phase)+' · queue: '+safe(worker.task_queue_id)+'<br>';
         h+=badge('پینگ کران',!!notif.cron_ping)+badge('خطای اجرا',!!notif.run_fail)+badge('گزارش همگام‌سازی',!!notif.sync_report)+badge('مغایرت‌گیری',!!notif.recon_auto_report)+badge('اصلاح دسته',!!notif.catfix_auto_report);
         h+='<div style="font-size:10px;color:#94a3b8;margin-top:5px">سایر تیک‌های رویداد:</div>';
         h+=badge('قیمت',!!notif.src_price)+badge('موجودی',!!notif.src_stock)+badge('بازنشستگی',!!notif.retire)+badge('سفارش تازه',!!notif.order_new)+badge('وضعیت سفارش',!!notif.order_status)+badge('پیام مشتری',!!notif.chat_msg)+badge('محصول تازه',!!notif.product_new)+badge('وضعیت محصول',!!notif.product_status)+badge('مرجوعی',!!notif.order_refund);
         h+='<details style="margin-top:6px;font-size:10px"><summary style="cursor:pointer;color:#cbd5e1">آخرین تصمیم‌های watchdog / send pump</summary><pre style="white-space:pre-wrap;direction:ltr;color:#94a3b8">'+safe(JSON.stringify({watchdog:cron.watchdog||[],send_pump:cron.send_pump||{}},null,2))+'</pre></details>';
-        h+='<div style="color:#94a3b8;margin-top:5px">خاموش‌بودن پینگ کران فقط heartbeat را خاموش می‌کند؛ خطای صف، گزارش همگام‌سازی و رویدادهای دیگر تیک‌های جداگانه دارند.</div></div></div>';
+        h+='<div style="color:#94a3b8;margin-top:5px">خاموش‌بودن پینگ کران فقط heartbeat را خاموش می‌کند؛ خطای صف، گزارش همگام‌سازی و رویدادهای دیگر تیک‌های جداگانه دارند.</div>';
+        h+='<div style="margin-top:8px;padding:8px;border-radius:7px;background:#172033;color:#cbd5e1;font-size:10px;line-height:1.8">خاموش‌کردن زمان‌بندی cron فقط تیک‌های آینده را متوقف می‌کند؛ پردازهٔ ارسال فعالی که قفل باسلام را گرفته است با آن کشته نمی‌شود. Stop همان ردیف تعاونی است و ممکن است تا پایان درخواست شبکهٔ جاری زمان ببرد.</div></div></div>';
         h+='<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px;margin-bottom:10px"><b style="color:#fca5a5">نشانه‌های تشخیص</b><ul style="margin:6px 18px 0 0;padding:0;font-size:11px;line-height:1.8">';
         (q.diagnosis||[]).forEach(x=>{h+='<li>'+safe(x)+'</li>';});h+='</ul></div>';
         if((d.groups||[]).length){h+='<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px;margin-bottom:10px"><b style="color:#f87171">خطاهای ذخیره‌شده</b>';
             d.groups.forEach(g=>{h+='<div style="font-size:11px;margin-top:5px">'+safe(g.title)+' × '+toFa(g.count)+' — '+safe(g.solution)+'</div>';});h+='</div>';}
         if((d.notifications&&d.notifications.last_ping_attempts||[]).length){h+='<details style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:9px"><summary style="cursor:pointer;color:#cbd5e1;font-size:11px">۵ تلاش آخرِ پینگ</summary>';
             d.notifications.last_ping_attempts.forEach(p=>{h+='<div style="font-size:10px;color:#94a3b8;margin-top:4px">'+safe(p.source)+' · '+(p.ok?'موفق':'ناموفق/ردشده')+' · '+safe(JSON.stringify(p.delivery||{}))+'</div>';});h+='</details>';}
-        h+='<div style="text-align:center;margin-top:12px"><button class="btn btn-cyan" onclick="document.getElementById(\'bslSendFeedbackModal\').remove()">بستن</button></div></div></div>';
+        h+='<div style="display:flex;justify-content:center;gap:8px;margin-top:12px"><button class="btn btn-cyan" onclick="bslCopySendFeedbackDiagnostics(this)">📋 کپی گزارش تشخیصی</button><button class="btn btn-gray" onclick="document.getElementById(\'bslSendFeedbackModal\').remove()">بستن</button></div></div></div>';
         const old=document.getElementById('bslSendFeedbackModal');if(old)old.remove();document.body.insertAdjacentHTML('beforeend',h);
     }).catch(e=>{showToast('فیدبک ارسال در دسترس نیست: '+(e.message||'خطای شبکه'),1);})
     .finally(()=>{if(btn){btn.disabled=false;btn.textContent=btn.dataset.oldText||'🩺 عیب‌یابی ارسال و کران';}});
+}
+function bslCopySendFeedbackDiagnostics(btn){
+    const data=window._bslSendFeedbackDiagnostics;
+    if(!data){showToast('گزارش تشخیصی در دسترس نیست',1);return;}
+    const text=JSON.stringify(data,null,2);
+    const fallback=()=>{
+        const box=document.createElement('textarea');box.value=text;box.setAttribute('readonly','');
+        box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();
+        const ok=document.execCommand('copy');box.remove();if(!ok)throw new Error('clipboard_unavailable');
+    };
+    if(window.navigator&&navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(()=>showToast('✓ گزارش تشخیصی کپی شد'))
+          .catch(()=>{try{fallback();showToast('✓ گزارش تشخیصی کپی شد')}catch(e){showToast('کپی خودکار نشد؛ گزارش را از endpoint عیب‌یابی دریافت کنید',1);}});
+    }else{
+        try{fallback();showToast('✓ گزارش تشخیصی کپی شد')}catch(e){showToast('کپی خودکار نشد؛ گزارش را از endpoint عیب‌یابی دریافت کنید',1);}
+    }
 }
 /* v10.23 (۳۶ه): بلوکِ شمارنده‌های تفکیکیِ غرفه‌ها.
  *
