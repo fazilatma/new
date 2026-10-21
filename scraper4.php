@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.406';
+const APP_VERSION = '10.407';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -912,7 +912,31 @@ function extractWriteQueue(array $queue): void {
         $cur=json_decode((string)@file_get_contents(EXTRACT_QUEUE_FILE),true);
         if(is_array($cur)&&is_array($cur['entries']??null)){
             $incoming=null;foreach((array)($queue['entries']??[])as $e)if(is_array($e)&&(string)($e['id']??'')===$owner){$incoming=$e;break;}
-            if($incoming!==null){$found=false;foreach($cur['entries']as&$e)if(is_array($e)&&(string)($e['id']??'')===$owner){$e=$incoming;$found=true;break;}unset($e);if(!$found)$cur['entries'][]=$incoming;$queue=$cur;}
+            if($incoming!==null){
+                $found=false;
+                foreach($cur['entries']as&$e){
+                    if(!is_array($e)||(string)($e['id']??'')!==$owner)continue;
+                    $userStopped=!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user';
+                    $explicitResume=!empty($incoming['resuming'])
+                        &&(int)($incoming['resume_count']??0)>(int)($e['resume_count']??0);
+                    if($userStopped&&!$explicitResume){
+                        $incoming['stopped_by_user']=true;
+                        if((string)($e['paused_by']??'')==='user')$incoming['paused_by']='user';
+                        if((string)($e['status']??'')==='paused'){
+                            $incoming['status']='paused';
+                            $incoming['paused_at']=(int)($e['paused_at']??$e['done_at']??time());
+                            if(isset($e['done_at']))$incoming['done_at']=$e['done_at'];
+                        }
+                        if(!empty($e['stop_requested'])&&($incoming['status']??'')!=='paused')
+                            $incoming['stop_requested']=true;
+                        elseif(($incoming['status']??'')==='paused')unset($incoming['stop_requested'],$incoming['stop_requested_at']);
+                    }
+                    $e=$incoming;$found=true;break;
+                }
+                unset($e);
+                if(!$found)$cur['entries'][]=$incoming;
+                $queue=$cur;
+            }
         }
     }
     @file_put_contents(EXTRACT_QUEUE_FILE,json_encode($queue,JSON_UNESCAPED_UNICODE),LOCK_EX);
@@ -1188,6 +1212,8 @@ function s4RunParallelExtractJob(string $jobId): array {
     $job=null;
     foreach((array)(s4WorkerLoadQueue()['entries']??[])as $e){if(is_array($e)&&(string)($e['id']??'')===$jobId&&(string)($e['type']??'')==='backend_extract'){$job=$e;break;}}
     if(!$job)return ['ok'=>false,'error'=>'parallel_extract_job_not_found'];
+    if((string)($job['status']??'')==='cancelled')return ['ok'=>false,'cancelled'=>true,'error'=>'job_cancelled_before_start'];
+    if((string)($job['status']??'')!=='running')return ['ok'=>false,'error'=>'parallel_extract_job_not_running'];
     $GLOBALS['_s4ParallelExtractChild']=true;
     try{$res=s4WorkerRunJob($job);$ok=!empty($res['ok']);
         if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jobId)){
@@ -1328,7 +1354,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     if($resume&&$preferredQueueId!==''&&$plannedQueueId==='')
         return ['ok'=>false,'queued'=>false,'error'=>'resume_row_not_found_or_not_resumable'];
     $checkQueueId=$preferredQueueId!==''?$preferredQueueId:$plannedQueueId;
-    if($resume&&!$allowUserStoppedResume&&is_file(EXTRACT_STOP_FILE))
+    if($resume&&!$allowUserStoppedResume&&extractStopRequestedForQueue($checkQueueId,false))
         return ['ok'=>false,'queued'=>false,'error'=>'resume_explicit_user_stop'];
     if($resume&&!$allowUserStoppedResume&&$checkQueueId!=='')foreach((array)(extractReadQueue()['entries']??[])as $_stopRow){
         if(is_array($_stopRow)&&(string)($_stopRow['id']??'')===$checkQueueId
@@ -1387,6 +1413,10 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             if((string)($_xe['worker_job_id']??'')===$jobId&&in_array((string)($_xe['status']??''),['waiting','paused','failed'],true)){$visibleQueueId=(string)($_xe['id']??'');break;}
         }
         if($visibleQueueId==='')$visibleQueueId='exw_'.($jobId!==''?$jobId:substr(md5($profileKey.microtime(true)),0,16));
+        if($resume&&$allowUserStoppedResume&&extractQueueClearUserStopForResume($visibleQueueId)){
+            extractClearStopSignalForQueue($visibleQueueId);
+            $xq=extractReadQueue();
+        }
         $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];
         $foundVisible=false;
         foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
@@ -2071,7 +2101,15 @@ function s4WorkerRunCronChild(): array {
     return ['ok' => $rc === 0, 'exit_code' => $rc, 'tail' => mb_substr($txt, -2000)];
 }
 
+function s4WorkerJobIsCancelled(string $jobId): bool {
+    if($jobId===''||!function_exists('s4WorkerLoadQueue'))return false;
+    foreach((array)(s4WorkerLoadQueue()['entries']??[])as$entry)
+        if(is_array($entry)&&(string)($entry['id']??'')===$jobId)return(string)($entry['status']??'')==='cancelled';
+    return false;
+}
 function s4WorkerRunJob(array $job): array {
+    $jobId=(string)($job['id']??'');
+    if(s4WorkerJobIsCancelled($jobId))return ['ok'=>false,'cancelled'=>true,'error'=>'job_cancelled_before_start'];
     $type = (string)($job['type'] ?? '');
     $payload = is_array($job['payload'] ?? null) ? $job['payload'] : [];
     if ($type === 'manual_sync') {
@@ -2099,6 +2137,7 @@ function s4WorkerRunJob(array $job): array {
         $maxTransientResumes = max(0, min(100, (int)(loadConnections()['worker_extract_retry_segments'] ?? 20)));
         $res = ['ok' => false, 'error' => 'worker did not start'];
         while (true) {
+            if(s4WorkerJobIsCancelled($jobId)){$res=['ok'=>false,'cancelled'=>true,'error'=>'job_cancelled'];break;}
             $segments++;
             $reserved = (!$resumeNext&&$extractQueueId!=='')?$extractQueueId:'';
             $runPhase = $phase;
@@ -2114,7 +2153,9 @@ function s4WorkerRunJob(array $job): array {
             }
             if(empty($GLOBALS['_s4ParallelExtractChild']))s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
                 'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase, 'job_max_pages'=>$maxPagesOverride]);
-            $res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride);
+            $GLOBALS['_s4WorkerJobId']=$jobId;
+            try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride);}
+            finally{unset($GLOBALS['_s4WorkerJobId']);}
             $res['worker_segments'] = $segments;
             $budgetResume = !empty($res['ran_out']);
             $transientResume = !empty($res['resume_needed']) && !$budgetResume;
@@ -18592,6 +18633,11 @@ if (isset($_GET['s4_comprehensive_test'])) {
 if(isset($_GET['extract_queue_status'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queue=extractReadQueue();
+foreach((array)($queue['entries']??[])as$_stoppingRow){
+    if(is_array($_stoppingRow)&&!empty($_stoppingRow['stop_requested']))
+        extractQueueFinalizeStopIfIdle((string)($_stoppingRow['id']??''));
+}
+$queue=extractReadQueue();
 $progress=readProgress(EXTRACT_PROGRESS_FILE);
 // v8.20: اگر پردازش قطع شده باشد (مثلاً timeout سرور)، ردیف نباید برای
 // همیشه «در حال اجرا» بماند؛ بعد از ۱۵ دقیقه بی‌پاسخی «خطا» علامت می‌خورد.
@@ -18609,6 +18655,7 @@ $exRunningRows=0;foreach((array)($queue['entries']??[]) as $__qeCount){if(is_arr
 $exIdleMax=max(120,(int)(loadConnections()['stall_after']??300));
 foreach($queue['entries'] as &$qe){
     if(($qe['status']??'')!=='running')continue;
+    if(!empty($qe['stop_requested']))continue;
     /* پردازه‌ای که مرده، خودش running=true را در فایل پیشرفت جا گذاشته —
        دقیقاً چون فرصت نکرده done بنویسد. پس «زنده بودن» را نمی‌شود از
        همان فایل پرسید؛ تنها شاهد قابل اعتماد، زمان آخرین نوشتن است. */
@@ -18678,17 +18725,18 @@ if($rep===null){echo json_encode(['ok'=>false,'error'=>'گزارشی برای ا
 echo json_encode(['ok'=>true,'report'=>$rep],JSON_UNESCAPED_UNICODE);exit;
 }
 
-/* حذف یک ردیف از صف استخراج — همتای bsl_queue_delete */
+/* Delete only a stopped/terminal row after atomically verifying that no worker
+   job or extraction slot still owns it; otherwise the worker could write it back. */
 if(isset($_GET['extract_queue_delete'])){
-header('Content-Type: application/json; charset=UTF-8');
-$qid=trim($_GET['queue_id']??'');
-if($qid===''){echo json_encode(['ok'=>false,'error'=>'شناسه نامعتبر']);exit;}
-$queue=extractReadQueue();
-$before=count($queue['entries']);
-$queue['entries']=array_values(array_filter($queue['entries'],fn($e)=>($e['id']??'')!==$qid));
-extractWriteQueue($queue);
-@unlink(extractReportFile($qid));   // v8.25: گزارش یتیم نماند
-echo json_encode(['ok'=>true,'removed'=>$before-count($queue['entries'])],JSON_UNESCAPED_UNICODE);exit;
+    header('Content-Type: application/json; charset=UTF-8');
+    $qid=trim((string)($_GET['queue_id']??''));
+    if($qid===''){echo json_encode(['ok'=>false,'error'=>'missing_queue_id'],JSON_UNESCAPED_UNICODE);exit;}
+    extractQueueFinalizeStopIfIdle($qid);
+    $deleted=extractQueueDeleteSafe($qid);
+    if(!empty($deleted['ok'])&&(int)($deleted['removed']??0)>0){
+        @unlink(extractReportFile($qid));extractClearStopSignalForQueue($qid);
+    }
+    echo json_encode($deleted,JSON_UNESCAPED_UNICODE);exit;
 }
 
 /* پاک کردن ردیف‌های تکمیل‌شده — همتای woo_queue_clear_done */
@@ -18705,69 +18753,47 @@ echo json_encode(['ok'=>true,'removed'=>$before-count($queue['entries'])],JSON_U
 }
 
 if(isset($_GET['extract_stop'])){
-header('Content-Type: application/json; charset=UTF-8');
-$prev=readProgress(EXTRACT_PROGRESS_FILE);
-$stopQid=trim((string)($_GET['queue_id']??''));
-/* v10.134: توقف فقط signal نیست؛ آخرین progress/phase/profile را هم نگه می‌داریم
-   تا اگر worker پیش از دیدنِ signal مرد، مدیر وظیفه همان checkpoint را ببیند. */
-$stopPhase=(string)($prev['phase']??'list');
-if($stopPhase!=='detail')$stopPhase='list';
-$stopPatch=['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,
-    'resumable'=>true,'resume_phase'=>$stopPhase,'total'=>$prev['total']??0,'current'=>$prev['current']??0,
-    'started_at'=>$prev['started_at']??0,'last_progress_ts'=>time(),
-    'recent_log'=>array_merge((array)($prev['recent_log']??[]),['❌ متوقف شد — checkpoint حفظ شد']),
-    'total_log_count'=>($prev['total_log_count']??0)+1,'extracted'=>$prev['extracted']??0,'new'=>$prev['new']??0,
-    'price_changed'=>$prev['price_changed']??0,'removed'=>$prev['removed']??0,'unchanged'=>$prev['unchanged']??0,
-    'products_saved'=>true];
-if($stopQid!=='')$stopPatch['queue_id']=$stopQid;
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge($prev,$stopPatch));
-@file_put_contents(EXTRACT_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$stopQid],LOCK_EX));
-
-/* v8.91: خودِ ردیف صف هم بسته شود.
-   تا اینجا «توقف» فقط یک فایل سیگنال می‌نوشت و فایل پیشرفت را می‌بست.
-   اگر پردازهٔ استخراج زنده بود سیگنال را می‌دید و ردیف را می‌بست، ولی
-   وقتی آن پردازه دیگر وجود نداشت — تایم‌اوت هاست، ری‌استارت PHP، بسته
-   شدن تب — هیچ‌کس ردیف را نمی‌بست. نتیجه: ردیف تا ابد «در حال استخراج»
-   می‌ماند و چون محافظ تکراری‌نبودن همان پروفایل را در صف می‌دید، اجرای
-   بعدی هم رد می‌شد. یعنی دقیقاً همان «با دکمهٔ توقف هم متوقف نمی‌شود».
-   حالا توقف صریحاً ردیف را «متوقف» علامت می‌زند. */
-$queue=extractReadQueue();
-$stopped=[];$now=time();
-foreach($queue['entries'] as &$qe){
-    if(($qe['status']??'')!=='running')continue;
-    if($stopQid!==''&&($qe['id']??'')!==$stopQid)continue;
-    $qe['status']='paused';
-    $qe['error']='با دکمهٔ توقف متوقف شد';
-    $qe['done_at']=$now;
-    $qe['stopped_by_user']=true;
-    $stopped[]=$qe['id']??'';
-}
-unset($qe);
-if($stopped)extractWriteQueue($queue);
-/* اگر worker دیگر وجود نداشته باشد، همین snapshotِ روی دیسک باید قابل resume بماند. */
-$stopPk=trim((string)($prev['profile_key']??''));
-if($stopPk!==''){
-    try{
-        $stopProfiles=loadProfiles();
-        if(is_array($stopProfiles[$stopPk]??null)){
-            $stopProducts=extractPrevMap($stopProfiles[$stopPk]);
-            $stopExtra=['_extract_stage'=>'stopped','_extract_stage_at'=>time(),
-                '_extract_resume_phase'=>$stopPhase,'_extract_list_incomplete'=>$stopPhase==='list',
-                '_extract_detail_done'=>(int)($prev['detail_current']??$prev['detail_done']??0),
-                '_extract_detail_total'=>(int)($prev['detail_total']??0)];
-            if($stopPhase==='list'){
-                $stopPage=max(1,(int)($prev['page']??$prev['current']??1));
-                $stopExtra['_extract_list_page_try']=$stopPage;
-                $stopExtra['_extract_list_page_ok']=max(0,$stopPage-1);
-                $stopExtra['_extract_resume_from']=max(1,$stopPage-1);
-            }
-            extractCheckpoint($stopPk,$stopProducts,$stopExtra);
+    header('Content-Type: application/json; charset=UTF-8');
+    $stopQid=trim((string)($_GET['queue_id']??''));
+    $prev=readProgress(EXTRACT_PROGRESS_FILE);
+    /* Record the explicit user decision under the queue lock first. Worker
+       snapshots can then no longer erase it while the matching child exits. */
+    $requested=extractQueueRequestStop($stopQid);
+    if(empty($requested['ok'])){
+        echo json_encode(['ok'=>false,'error'=>(string)($requested['error']??'queue_write_failed')],JSON_UNESCAPED_UNICODE);exit;
+    }
+    $stopped=[];$pending=[];$terminated=[];$results=[];
+    foreach((array)($requested['rows']??[])as$stopRow){
+        if(!is_array($stopRow))continue;$id=trim((string)($stopRow['id']??''));if($id==='')continue;
+        extractStopSignalSetForQueue($id);
+        $cancel=extractCancelWorkerForQueueRow($stopRow);
+        $final=extractQueueFinalizeStopIfIdle($id);
+        $isPending=empty($final['ok'])||!empty($final['active']);
+        if(!empty($final['finalized']))$stopped[]=$id;
+        if($isPending)$pending[]=$id;
+        if(!empty($cancel['signal_sent']))$terminated[]=(int)($cancel['pid']??0);
+        if(!empty($requested['progress_owned'][$id])
+            &&(string)($prev['queue_id']??'')===$id){
+            $phase=(string)($stopRow['resume_phase']??$stopRow['phase']??$prev['phase']??'list');
+            $phase=$phase==='detail'?'detail':'list';
+            $log=$isPending?'⏳ درخواست توقف ثبت شد؛ پردازه در حال آزادکردن قفل است':'❌ متوقف شد — checkpoint حفظ شد';
+            $patch=['running'=>$isPending,'done'=>!$isPending,'cancelled'=>!$isPending,
+                'stopped'=>!$isPending,'stop_requested'=>$isPending,'stop_pending'=>$isPending,
+                'stopped_by_user'=>true,'partial'=>true,'resumable'=>true,'resume_phase'=>$phase,
+                'profile_key'=>(string)($stopRow['profile_key']??$prev['profile_key']??''),
+                'last_progress_ts'=>time(),'recent_log'=>array_slice(array_merge((array)($prev['recent_log']??[]),[$log]),-40),
+                'total_log_count'=>max((int)($prev['total_log_count']??0)+1,count((array)($prev['recent_log']??[]))+1)];
+            writeProgress(EXTRACT_PROGRESS_FILE,array_merge($prev,$patch));
         }
-    }catch(Throwable $stopEx){}
+        $results[]=['queue_id'=>$id,'job_id'=>(string)($cancel['job_id']??''),
+            'signal_sent'=>!empty($cancel['signal_sent']),'termination_pending'=>$isPending,
+            'finalized'=>!empty($final['finalized'])];
+    }
+    echo json_encode(['ok'=>true,'stopped'=>$stopped,'requested'=>array_values(array_unique(array_map(
+        static fn($r)=>(string)($r['id']??''),(array)($requested['rows']??[])))),
+        'stop_pending'=>$pending,'terminated_pids'=>$terminated,'results'=>$results],JSON_UNESCAPED_UNICODE);
+    exit;
 }
-echo json_encode(['ok'=>true,'stopped'=>$stopped],JSON_UNESCAPED_UNICODE);exit;
-}
-
 
 /* v10.122: ادامهٔ استخراج از یک صفحه قبل از محل گیر — نه از صفر */
 if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_resume')) {
@@ -18797,7 +18823,7 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     $pr = $profiles[$pk];
     /* v10.136: آماده‌سازی، بستن blocker و mutation پروفایل فقط زیرِ
        reservation انجام می‌شود؛ بعد worker همان handle را مصرف می‌کند. */
-    $prep = extractResumePrepare($pk, loadConnections(), $qid);
+    $prep = extractResumePrepare($pk, loadConnections(), $qid, true);
     if (empty($prep['ok'])) {
         $_prepReason=(string)($prep['reason']??'');
         $_prepMsg=$_prepReason==='resume_row_not_found_or_not_resumable'
@@ -19092,6 +19118,299 @@ function extractLockIsHeld(): bool {
     return false;
 }
 
+/** One stop-signal file per extraction row; the legacy file remains an all-row signal. */
+function extractStopSignalFileForQueue(string $queueId): string {
+    return EXTRACT_STOP_FILE.'.q.'.substr(hash('sha256',$queueId),0,24).'.json';
+}
+function extractStopSignalSetForQueue(string $queueId): bool {
+    $path=$queueId!==''?extractStopSignalFileForQueue($queueId):EXTRACT_STOP_FILE;
+    $body=['stop'=>true,'time'=>time(),'queue_id'=>$queueId];
+    return @file_put_contents($path,json_encode($body,JSON_UNESCAPED_UNICODE),LOCK_EX)!==false;
+}
+function extractStopSignalStateForQueue(string $queueId): array {
+    $candidates=[];
+    if($queueId!=='')$candidates[]=['file'=>extractStopSignalFileForQueue($queueId),'row_specific'=>true];
+    $candidates[]=['file'=>EXTRACT_STOP_FILE,'row_specific'=>false];
+    foreach($candidates as$c){
+        $file=(string)$c['file'];if(!is_file($file))continue;
+        $data=@json_decode((string)@file_get_contents($file),true);$data=is_array($data)?$data:[];
+        $target=trim((string)($data['queue_id']??''));
+        $at=(int)($data['time']??$data['at']??@filemtime($file));
+        /* Keep row-targeted stops until that row is resumed/deleted; only an
+           untargeted legacy stop-all signal has a short expiry. */
+        if($at>0&&time()-$at>900&&empty($c['row_specific'])&&$target===''){@unlink($file);continue;}
+        if($target!==''&&$target!==$queueId)continue;
+        if($queueId===''&&$target!=='')continue;
+        return ['found'=>true,'file'=>$file,'at'=>$at,'row_specific'=>!empty($c['row_specific']),
+            'target'=>$target,'global_all'=>empty($c['row_specific'])&&$target===''];
+    }
+    return ['found'=>false];
+}
+function extractStopRequestedForQueue(string $queueId,bool $consumeSpecific=true): bool {
+    $state=extractStopSignalStateForQueue($queueId);if(empty($state['found']))return false;
+    if($queueId!==''&&!empty($state['global_all'])){
+        /* Explicit Continue after a legacy stop-all signal overrides that
+           older signal for this row only; other rows still observe it. */
+        foreach((array)(extractReadQueue()['entries']??[])as$row){
+            if(is_array($row)&&(string)($row['id']??'')===$queueId
+                &&(int)($row['resume_requested_at']??0)>=(int)($state['at']??PHP_INT_MAX))return false;
+        }
+    }
+    /* An untargeted legacy signal means stop all current extractors; each one
+       must be allowed to observe it instead of the first worker consuming it. */
+    $specific=!empty($state['row_specific'])||trim((string)($state['target']??''))!=='';
+    if($consumeSpecific&&$specific)@unlink((string)$state['file']);
+    return true;
+}
+function extractClearStopSignalForQueue(string $queueId): void {
+    if($queueId==='')return;
+    @unlink(extractStopSignalFileForQueue($queueId));
+    $data=@json_decode((string)@file_get_contents(EXTRACT_STOP_FILE),true);
+    if(is_array($data)&&(string)($data['queue_id']??'')===$queueId)@unlink(EXTRACT_STOP_FILE);
+}
+function extractLockActiveMetaForQueue(string $queueId): array {
+    if($queueId==='')return [];
+    foreach(extractLockKnownSlotFiles()as$file){
+        $fp=@fopen($file,'c');if(!$fp)continue;
+        $held=!@flock($fp,LOCK_EX|LOCK_NB);
+        if(!$held){@flock($fp,LOCK_UN);@fclose($fp);continue;}
+        $meta=@json_decode((string)@file_get_contents($file),true);@fclose($fp);
+        if(is_array($meta)&&(string)($meta['queue_id']??'')===$queueId)return $meta;
+    }
+    return [];
+}
+function extractWorkerJobForQueueRow(array $row): array {
+    $queueId=trim((string)($row['id']??''));$wanted=trim((string)($row['worker_job_id']??''));
+    if(!function_exists('s4WorkerLoadQueue'))return [];
+    foreach((array)(s4WorkerLoadQueue()['entries']??[])as$job){
+        if(!is_array($job)||(string)($job['type']??'')!=='backend_extract')continue;
+        $jobId=(string)($job['id']??'');$payload=is_array($job['payload']??null)?$job['payload']:[];
+        $boundId=trim((string)($payload['extract_queue_id']??''));
+        if(($wanted!==''&&$jobId===$wanted&&($queueId===''||$boundId===''||$boundId===$queueId))
+            ||($queueId!==''&&$boundId===$queueId))return $job;
+    }
+    return [];
+}
+function extractQueueRowHasLiveOwner(array $row): bool {
+    $queueId=trim((string)($row['id']??''));
+    if($queueId!==''&&extractLockHeldForQueue($queueId))return true;
+    $job=extractWorkerJobForQueueRow($row);$status=(string)($job['status']??'');
+    if(in_array($status,['pending','running'],true))return true;
+    /* A cancelled child can still be exiting before it acquired its slot.
+       Terminal jobs and stale lock metadata are not process-liveness evidence. */
+    if($status!=='cancelled')return false;
+    $pid=(int)($job['worker_pid']??0);
+    $daemonPid=function_exists('s4WorkerStateLoad')?(int)(s4WorkerStateLoad()['pid']??0):0;
+    return $pid>0&&$pid!==$daemonPid&&$pid!==getmypid()
+        &&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($pid);
+}
+function extractQueueClearUserStopForResume(string $queueId): bool {
+    if($queueId==='')return false;
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return false;
+    if(!@flock($lf,LOCK_EX)){@fclose($lf);return false;}
+    $ok=false;
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];
+        foreach($entries as$i=>$row){
+            if(!is_array($row)||(string)($row['id']??'')!==$queueId)continue;
+            if(!in_array((string)($row['status']??''),['waiting','paused','failed'],true))return false;
+            unset($row['stopped_by_user'],$row['paused_by'],$row['stop_requested'],$row['stop_requested_at']);
+            $row['resume_requested_at']=time();$row['updated_at']=time();$row['error']='';unset($row['done_at']);
+            $entries[$i]=$row;$q['entries']=array_values($entries);$json=json_encode($q,JSON_UNESCAPED_UNICODE);
+            $ok=$json!==false&&@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)!==false;break;
+        }
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    if($ok)extractClearStopSignalForQueue($queueId);
+    return $ok;
+}
+function extractPersistStoppedCheckpoint(array $row): void {
+    $profileKey=trim((string)($row['profile_key']??''));if($profileKey==='')return;
+    try{
+        $profiles=loadProfiles();$profile=is_array($profiles[$profileKey]??null)?$profiles[$profileKey]:null;
+        if($profile===null)return;
+        $phase=(string)($row['resume_phase']??$row['phase']??'list');$phase=$phase==='detail'?'detail':'list';
+        $extra=['_extract_stage'=>'stopped','_extract_stage_at'=>time(),
+            '_extract_resume_phase'=>$phase,'_extract_list_incomplete'=>$phase==='list'];
+        if($phase==='list'){
+            $resumePage=max(1,(int)($row['resume_page']??1));
+            $extra['_extract_list_page_try']=$resumePage+1;
+            $extra['_extract_list_page_ok']=$resumePage;
+            $extra['_extract_resume_from']=$resumePage;
+        }else{
+            $extra['_extract_detail_done']=max(0,(int)($row['detail_done']??$row['current']??0));
+            $extra['_extract_detail_total']=max(0,(int)($row['detail_total']??$row['total']??0));
+        }
+        extractCheckpoint($profileKey,extractPrevMap($profile),$extra);
+    }catch(Throwable $_stopCheckpointError){}
+}
+function extractQueueFinalizeStopIfIdle(string $queueId): array {
+    if($queueId==='')return ['ok'=>false,'error'=>'missing_queue_id'];
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return ['ok'=>false,'error'=>'queue_lock_unavailable'];
+    if(!@flock($lf,LOCK_EX)){@fclose($lf);return ['ok'=>false,'error'=>'queue_lock_unavailable'];}
+    $out=['ok'=>true,'finalized'=>false,'active'=>false];
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];$idx=-1;
+        foreach($entries as$i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
+        if($idx<0)return $out;$row=$entries[$idx];
+        if(empty($row['stopped_by_user'])||empty($row['stop_requested']))return $out;
+        if(extractQueueRowHasLiveOwner($row)){$out['active']=true;return $out;}
+        $now=time();$row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
+        $row['paused_at']=$now;$row['done_at']=$now;$row['updated_at']=$now;
+        $row['error']='با درخواست کاربر متوقف شد؛ checkpoint حفظ شد';
+        unset($row['stop_requested'],$row['stop_requested_at']);
+        $entries[$idx]=$row;$q['entries']=array_values($entries);$json=json_encode($q,JSON_UNESCAPED_UNICODE);
+        if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false){$out=['ok'=>false,'error'=>'queue_write_failed'];return $out;}
+        $out['finalized']=true;$out['row']=$row;
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    if(!empty($out['finalized'])&&is_array($out['row']??null)){
+        extractClearStopSignalForQueue($queueId);
+        extractPersistStoppedCheckpoint($out['row']);
+    }
+    return $out;
+}
+function extractQueueRequestStop(string $queueId=''): array {
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return ['ok'=>false,'error'=>'queue_lock_unavailable','rows'=>[]];
+    if(!@flock($lf,LOCK_EX)){@fclose($lf);return ['ok'=>false,'error'=>'queue_lock_unavailable','rows'=>[]];}
+    $out=['ok'=>true,'rows'=>[],'progress_owned'=>[]];
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];
+        $progress=readProgress(EXTRACT_PROGRESS_FILE);$runningRows=0;
+        foreach($entries as$entry)if(is_array($entry)&&(string)($entry['status']??'')==='running')$runningRows++;
+        $now=time();$changed=false;
+        foreach($entries as$i=>$row){
+            if(!is_array($row))continue;$id=trim((string)($row['id']??''));
+            if($queueId!==''&&$id!==$queueId)continue;
+            $status=(string)($row['status']??'');
+            if(!in_array($status,['running','waiting'],true)&&empty($row['stop_requested']))continue;
+            $owned=queueProgressBelongsToRow($progress,$row,$runningRows);
+            $phase=(string)($owned?($progress['phase']??$row['resume_phase']??$row['phase']??'list'):
+                ($row['resume_phase']??$row['phase']??'list'));
+            $phase=$phase==='detail'?'detail':'list';
+            if($owned){
+                foreach(['total','current','new','price_changed','removed','unchanged','products_count','detail_done','detail_total']as$key)
+                    if(array_key_exists($key,$progress))$row[$key]=$progress[$key];
+            }
+            $row['stopped_by_user']=true;$row['stop_requested']=true;$row['stop_requested_at']=$now;
+            $row['resumable']=true;$row['resume_needed']=1;$row['resume_phase']=$phase;$row['updated_at']=$now;
+            $row['error']='درخواست توقف ثبت شد؛ در حال آزادشدن پردازش…';
+            if($phase==='list'){
+                $page=max(1,(int)($owned?($progress['page']??$progress['current']??$row['current']??1):($row['resume_page']??$row['current']??1)));
+                $row['resume_page']=max(1,$page-1);
+            }
+            unset($row['done_at']);$entries[$i]=$row;$out['rows'][]=$row;$out['progress_owned'][$id]=$owned;$changed=true;
+        }
+        if($queueId!==''&&empty($out['rows'])){
+            foreach((array)(function_exists('s4WorkerLoadQueue')?(s4WorkerLoadQueue()['entries']??[]):[])as$job){
+                $payload=is_array($job['payload']??null)?$job['payload']:[];
+                if(is_array($job)&&(string)($job['type']??'')==='backend_extract'
+                    &&(string)($payload['extract_queue_id']??'')===$queueId){
+                    $out['rows'][]=['id'=>$queueId,'worker_job_id'=>(string)($job['id']??''),
+                        'profile_key'=>(string)($payload['profile_key']??''),'status'=>(string)($job['status']??'running')];break;
+                }
+            }
+        }
+        if($changed){$q['entries']=array_values($entries);$json=json_encode($q,JSON_UNESCAPED_UNICODE);
+            if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false){$out=['ok'=>false,'error'=>'queue_write_failed','rows'=>[]];}}
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    return $out;
+}
+function extractCancelWorkerForQueueRow(array $row): array {
+    $queueId=trim((string)($row['id']??''));$job=extractWorkerJobForQueueRow($row);
+    $jobId=(string)($job['id']??'');$jobStatus=(string)($job['status']??'');$pid=(int)($job['worker_pid']??0);$cancelled=false;
+    if($jobId!==''&&function_exists('s4WorkerQueueMutate')){
+        s4WorkerQueueMutate(function(&$q)use($jobId,$queueId,&$cancelled){$now=time();
+            foreach($q['entries']as&$entry){
+                if(!is_array($entry)||(string)($entry['id']??'')!==$jobId||(string)($entry['type']??'')!=='backend_extract')continue;
+                $payload=is_array($entry['payload']??null)?$entry['payload']:[];
+                $boundId=trim((string)($payload['extract_queue_id']??''));
+                if($queueId!==''&&$boundId!==''&&$boundId!==$queueId)break;
+                if(in_array((string)($entry['status']??''),['pending','running'],true)){
+                    $entry['status']='cancelled';$entry['cancel_requested_at']=$now;$entry['updated_at']=$now;
+                    $entry['done_at']=$now;$entry['error']='stopped_by_user';$cancelled=true;
+                }
+                break;
+            }unset($entry);return ['ok'=>true,'cancelled'=>$cancelled];
+        });
+    }
+    $activeLockMeta=extractLockActiveMetaForQueue($queueId);
+    if($pid<=0)$pid=(int)($activeLockMeta['pid']??0);
+    $daemonPid=function_exists('s4WorkerStateLoad')?(int)(s4WorkerStateLoad()['pid']??0):0;
+    $pidAlive=$pid>0&&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($pid);$signalSent=false;
+    $pidOwnsThisLock=!empty($activeLockMeta)&&$pid>0&&(int)($activeLockMeta['pid']??0)===$pid;
+    if($pidAlive&&$pidOwnsThisLock&&$pid!==$daemonPid&&$pid!==getmypid()&&function_exists('posix_kill'))
+        $signalSent=(bool)@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);
+    return ['job_id'=>$jobId,'job_status'=>$jobStatus,'cancelled_job'=>$cancelled,
+        'pid'=>$pid,'pid_alive'=>$pidAlive,'signal_sent'=>$signalSent];
+}
+function extractQueueDeleteSafe(string $queueId): array {
+    if($queueId==='')return ['ok'=>false,'error'=>'missing_queue_id'];
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return ['ok'=>false,'error'=>'queue_lock_unavailable'];
+    if(!@flock($lf,LOCK_EX)){@fclose($lf);return ['ok'=>false,'error'=>'queue_lock_unavailable'];}
+    $out=['ok'=>false,'removed'=>0];
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];$idx=-1;
+        foreach($entries as$i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
+        if($idx<0)return ['ok'=>true,'removed'=>0,'not_found'=>true];
+        $row=$entries[$idx];$status=(string)($row['status']??'');
+        if(in_array($status,['running','waiting'],true)||!empty($row['stop_requested'])||extractQueueRowHasLiveOwner($row))
+            return ['ok'=>false,'removed'=>0,'error'=>'row_active_stop_first',
+                'message'=>'ردیف هنوز worker یا قفل فعال دارد؛ ابتدا توقف را کامل کنید.'];
+        if(!in_array($status,['paused','failed','done','superseded'],true))
+            return ['ok'=>false,'removed'=>0,'error'=>'row_not_stopped','message'=>'فقط ردیف متوقف یا تمام‌شده قابل حذف است.'];
+        array_splice($entries,$idx,1);$q['entries']=array_values($entries);$json=json_encode($q,JSON_UNESCAPED_UNICODE);
+        if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false)
+            return ['ok'=>false,'removed'=>0,'error'=>'queue_write_failed'];
+        $out=['ok'=>true,'removed'=>1];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    return $out;
+}
+function extractStopActiveRows(string $profileKey=''): array {
+    $results=[];
+    foreach((array)(extractReadQueue()['entries']??[])as$row){
+        if(!is_array($row)||($profileKey!==''&&(string)($row['profile_key']??'')!==$profileKey))continue;
+        if(!in_array((string)($row['status']??''),['running','waiting'],true)&&empty($row['stop_requested']))continue;
+        $id=trim((string)($row['id']??''));if($id==='')continue;
+        $request=extractQueueRequestStop($id);if(empty($request['ok']))continue;
+        extractStopSignalSetForQueue($id);$target=$request['rows'][0]??$row;
+        $cancel=extractCancelWorkerForQueueRow($target);$final=extractQueueFinalizeStopIfIdle($id);
+        $results[]=['queue_id'=>$id,'signal_sent'=>!empty($cancel['signal_sent']),
+            'termination_pending'=>!empty($final['active']),'finalized'=>!empty($final['finalized'])];
+    }
+    return $results;
+}
+function extractStopManualSyncProfileWorkers(): array {
+    $progress=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+    $checkpoint=is_array($progress['checkpoint']??null)?$progress['checkpoint']:[];
+    $extract=is_array($checkpoint['extract']??null)?$checkpoint['extract']:[];
+    $profileKey=trim((string)($progress['profile_key']??$checkpoint['profile_key']??''));
+    $queueId=trim((string)($extract['queue_id']??$progress['extract_queue_id']??''));
+    $rows=[];
+    foreach((array)(extractReadQueue()['entries']??[])as$row){
+        if(!is_array($row))continue;
+        if($queueId!==''&&(string)($row['id']??'')!==$queueId)continue;
+        if($queueId===''&&($profileKey===''||(string)($row['profile_key']??'')!==$profileKey))continue;
+        if(!in_array((string)($row['status']??''),['running','waiting'],true)&&empty($row['stop_requested']))continue;
+        $rows[]=$row;
+    }
+    if(!$rows&&$queueId!==''){
+        $job=extractWorkerJobForQueueRow(['id'=>$queueId]);
+        $orphan=['id'=>$queueId,'worker_job_id'=>(string)($job['id']??''),
+            'profile_key'=>$profileKey,'status'=>'running'];
+        if(extractQueueRowHasLiveOwner($orphan))$rows[]=$orphan;
+    }
+    $results=[];
+    foreach($rows as$row){
+        $id=trim((string)($row['id']??''));if($id==='')continue;
+        $request=extractQueueRequestStop($id);if(empty($request['ok']))continue;
+        extractStopSignalSetForQueue($id);
+        $target=$request['rows'][0]??$row;$cancel=extractCancelWorkerForQueueRow($target);
+        $final=extractQueueFinalizeStopIfIdle($id);
+        $results[]=['queue_id'=>$id,'signal_sent'=>!empty($cancel['signal_sent']),
+            'termination_pending'=>!empty($final['active']),'finalized'=>!empty($final['finalized'])];
+    }
+    return $results;
+}
+
 /**
  * Atomically pause one genuinely stale extraction row without replacing its
  * ID or checkpoint. Rechecks the current row, its slot lock and worker PID
@@ -19190,7 +19509,7 @@ function extractResumePhase(array $profile): string {
     return 'all';
 }
 
-function extractResumePrepare(string $profileKey, array $cn, string $preferredQueueId = ''): array {
+function extractResumePrepare(string $profileKey, array $cn, string $preferredQueueId = '', bool $allowUserStopped = false): array {
     $out = ['ok' => false, 'phase' => 'all', 'reason' => '', 'queue_id' => '', 'reused_row' => false];
     if ($profileKey === '') { $out['reason'] = 'no_key'; return $out; }
     $profiles = loadProfiles();
@@ -19201,6 +19520,10 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
     $resumeQueueId=extractResumeQueueId($profileKey,$preferredQueueId);
     if($preferredQueueId!==''&&$resumeQueueId===''){
         $out['reason']='resume_row_not_found_or_not_resumable';
+        return $out;
+    }
+    if(!$allowUserStopped&&$resumeQueueId!==''&&extractQueueRowStoppedByUser($resumeQueueId)){
+        $out['reason']='explicit_user_stop';
         return $out;
     }
     $reusedRow=$resumeQueueId!=='';
@@ -19228,6 +19551,12 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
         $out['reason'] = 'profile_save';
         return $out;
     }
+    if($allowUserStopped&&$reusedRow&&!extractQueueClearUserStopForResume($resumeQueueId)){
+        extractLockRelease($resumeQueueId);
+        $out['reason']='resume_row_update_failed';
+        return $out;
+    }
+    if($allowUserStopped)extractClearStopSignalForQueue($resumeQueueId);
     /* runBackendExtract با همین handle ردیف stale را زیر مالکیت lock می‌بندد؛
        cleanup جداگانه بعد از probe لازم نیست و خودش race ایجاد می‌کرد. */
     $out['ok'] = true;
@@ -19604,6 +19933,17 @@ if(empty($_lk['ok'])){
     return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
     'locked'=>true,'busy_queue_id'=>(string)($_lk['queue_id']??'')];
 }
+/* A cancelled worker may have been spawned just before its queue row was
+   deleted. Recheck job + row-specific user-stop state after taking the slot,
+   before creating/upserting the visible row, so that late children cannot
+   resurrect a deleted queue ID. */
+$_currentWorkerJobId=(string)($GLOBALS['_s4WorkerJobId']??'');
+if(($_currentWorkerJobId!==''&&s4WorkerJobIsCancelled($_currentWorkerJobId))
+    ||extractStopRequestedForQueue($queueId,false)||extractQueueRowStoppedByUser($queueId)){
+    extractLockRelease($queueId);
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'cancelled'=>true,
+        'queue_id'=>$queueId,'error'=>'stopped_by_user'];
+}
 $queue=extractReadQueue();
 /* Resume owns the old visible queue row. Reusing its id keeps logs, report
    links and UI history attached to one row instead of appending a clone. */
@@ -19683,7 +20023,7 @@ return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
 /* queueId و lock پیش از dedup ساخته شدند تا probe و بستنِ ردیف بدون مالکیت
    انجام نشود؛ اکنون فقط workerِ صاحبِ lock فایلِ مشترک را آغاز می‌کند. */
 localTaskDbForget(EXTRACT_PROGRESS_FILE); @unlink(EXTRACT_PROGRESS_FILE);
-@unlink(EXTRACT_STOP_FILE);
+/* Stop signals are cleared only by an explicit resume for this queue_id. */
 $_runRow=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,
     'profile_name'=>$profile['name']??$profileKey,'products_count'=>0,'total'=>0,'current'=>0,
     'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase,
@@ -19830,9 +20170,8 @@ if($_listResume && $_startPage>1){
     ],'total_log_count'=>3,'extracted'=>count($allProducts),'page'=>$_startPage,'resuming'=>true,'resume_from'=>$_startPage]);
 }
 for($page=$_startPage;$phase!=='detail'&&$page<=$maxPages;$page++){
-/* v10.121 FAIL-SAFE: if بدون {} فقط unlink بود و cancel همیشه اجرا می‌شد */
-if(file_exists(EXTRACT_STOP_FILE)){
-@unlink(EXTRACT_STOP_FILE);
+/* Each parallel row consumes only its own stop signal. */
+if(extractStopRequestedForQueue($queueId,true)){
 $pkTmp=$profileKey!==''?$profileKey:profileKey($url);
 extractCheckpoint($pkTmp,$allProducts,[
     '_extract_stage'=>'stopped','_extract_stage_at'=>time(),
@@ -19845,7 +20184,7 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>
     'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkTmp,
     'recent_log'=>['⏹ توقف کاربر — تا اینجا ذخیره شد','   • '.count($allProducts).' محصول'],'total_log_count'=>2,'extracted'=>count($allProducts)]);
 $queue=extractReadQueue();
-foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['paused_at']=time();$qe['updated_at']=time();$qe['resumable']=true;$qe['resume_needed']=1;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);$qe['error']='با دکمهٔ توقف متوقف شد؛ checkpoint حفظ شد';unset($qe['stop_requested'],$qe['stop_requested_at']);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true];
@@ -20444,9 +20783,8 @@ foreach($needDetail as $key=>$p){
    v8.98: ولی حداقل چند محصول باید انجام شود، وگرنه پیشرفتی حاصل نمی‌شود
    و هر نوبت دقیقاً از همان جای قبل شروع می‌کند. */
 if($detailDone>=$_minPerRun&&time()>=$_deadline){$_ranOut=true;break;}
-/* v10.121 FAIL-SAFE: stop فقط وقتی فایل stop هست */
-if(file_exists(EXTRACT_STOP_FILE)){
-@unlink(EXTRACT_STOP_FILE);
+/* Each parallel row consumes only its own stop signal. */
+if(extractStopRequestedForQueue($queueId,true)){
 extractCheckpoint($pkFinal,$allProducts,
     ['_extract_stage'=>'stopped','_extract_stage_at'=>time(),
      '_extract_resume_phase'=>'detail','_extract_list_incomplete'=>false,
@@ -20457,7 +20795,7 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>
     'detail_current'=>$detailDone,'detail_total'=>$detailTotal,
     'recent_log'=>['⏹ توقف کاربر — جزئیات ذخیره شد','   • '.$detailDone.' / '.$detailTotal],'total_log_count'=>$totalPages+$detailDone+1]);
 $queue=extractReadQueue();
-foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['paused_at']=time();$qe['updated_at']=time();$qe['resumable']=true;$qe['resume_needed']=1;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;$qe['error']='با دکمهٔ توقف متوقف شد؛ checkpoint حفظ شد';unset($qe['stop_requested'],$qe['stop_requested_at']);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'detail_done'=>$detailDone];
@@ -20924,7 +21262,7 @@ else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
    قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
 if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
-    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId);
+    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId, $resumeRequested);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
         'queued'=>!empty($enq['queued']),'worker'=>true,'profile_key'=>$profileKey,
@@ -20950,7 +21288,7 @@ $resumeLockQueueId = '';
 /* v10.136: resumeِ فرزند باید خودش، در همان process که worker را می‌سازد،
    lock بگیرد؛ parent فقط دیگر probe و mutation جداگانه انجام نمی‌دهد. */
 if ($resumeRequested) {
-    $resumePrep = extractResumePrepare($profileKey, loadConnections());
+    $resumePrep = extractResumePrepare($profileKey, loadConnections(), '', true);
     if (empty($resumePrep['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok' => false, 'locked' => ($resumePrep['reason'] ?? '') === 'lock_held',
@@ -23415,7 +23753,7 @@ if (isset($_GET['backend_extract_cli'])) {
     $resumeCli = !empty($_GET['resume']);
     $reservedCli = '';
     if ($resumeCli) {
-        $prepCli = extractResumePrepare($pk, loadConnections());
+        $prepCli = extractResumePrepare($pk, loadConnections(), '', true);
         if (empty($prepCli['ok'])) {
             echo json_encode(['ok'=>false,'error'=>'checkpoint استخراج قابل رزرو نیست: '.(string)($prepCli['reason']??'')], JSON_UNESCAPED_UNICODE) . PHP_EOL;
             exit(2);
@@ -23446,13 +23784,12 @@ if (isset($_GET['manual_sync_stop'])) {
     header('Content-Type: application/json; charset=UTF-8');
     @file_put_contents(MANUAL_SYNC_STOP_FILE, json_encode(['at' => time()]));
     /* v10.55 (۶۹): توقفِ دستی باید به پردازنده‌هایِ در حالِ اجرایِ ارسال/استخراج
-       هم برسد — آن‌ها فقط سیگنالِ توقفِ خودشان را می‌بینند. بدونِ این، «توقف»
-       فقط زنجیرهٔ میانِ دو نوبت را می‌ایستاند و ردیفِ در حالِ ارسال تا آخر
-       (و با v10.53 ردیف‌های بعدیِ صف هم!) فرستاده می‌شد. */
+       هم برسد. استخراج فقط برای همان پروفایل/queue_id سیگنال می‌گیرد تا اجرای
+       هم‌زمانِ پروفایل‌های دیگر با یک فایلِ مشترک تصادفاً متوقف نشود. */
     @file_put_contents(BSL_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));
     @file_put_contents(WOO_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));
-    @file_put_contents(EXTRACT_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));
-    echo json_encode(['ok' => true, 'stopped' => true], JSON_UNESCAPED_UNICODE);
+    $msStopResults=extractStopManualSyncProfileWorkers();
+    echo json_encode(['ok' => true, 'stopped' => true,'extraction_stop'=>$msStopResults], JSON_UNESCAPED_UNICODE);
     exit;
 }
 if (isset($_GET['manual_sync_status'])) {
@@ -27955,15 +28292,20 @@ if (isset($_GET['tasks_stop'])) {
     $sf = tasksStopFile($key);
     if ($sf === '') { echo json_encode(['ok' => false, 'error' => 'این کار توقفِ دستی ندارد'], JSON_UNESCAPED_UNICODE); exit; }
     $stopAt = time();
-    @file_put_contents($sf, json_encode(['at' => $stopAt], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    /* Extraction uses per-row signals and worker cancellation; a shared global
+       file would stop unrelated parallel profiles. Other task controls remain as before. */
+    if($key!=='extract')@file_put_contents($sf, json_encode(['at' => $stopAt], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    $extractStops=[];
     /* همگام‌سازیِ دستی چند موتور را پشتِ سر هم اجرا می‌کند؛ stop آن باید
        به همهٔ موتورهای درگیر برسد، نه فقط به orchestrator. */
     if ($key === 'manual_sync') {
-        foreach ([BSL_STOP_FILE, WOO_STOP_FILE, EXTRACT_STOP_FILE] as $_sf) {
+        foreach ([BSL_STOP_FILE, WOO_STOP_FILE] as $_sf)
             @file_put_contents($_sf, json_encode(['stop' => true, 'at' => $stopAt], JSON_UNESCAPED_UNICODE), LOCK_EX);
-        }
+        $extractStops=extractStopManualSyncProfileWorkers();
+    }elseif($key==='extract'){
+        $extractStops=extractStopActiveRows();
     }
-    echo json_encode(['ok' => true, 'stopped' => $key], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => true, 'stopped' => $key,'extraction_stop'=>$extractStops], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -38944,7 +39286,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          (strpos($selfSrc, "if (isset(\$_GET['manual_sync_stop'])) {") !== false
           && substr_count($selfSrc, "@file_put_contents(BSL_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));") >= 1
           && (strpos($selfSrc, "@file_put_contents(WOO_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));") !== false)
-          && (strpos($selfSrc, "@file_put_contents(EXTRACT_STOP_FILE, json_encode(['stop' => true, 'time' => time()], LOCK_EX));") !== false)));
+          && strpos($selfSrc, 'extractStopManualSyncProfileWorkers()') !== false));
     $add('10.55', 'Manual sync takes the cron lock when free (no parallel cron tick)',
          (strpos($selfSrc, "/* v10.55 (۶۹): اجرایِ دستی قفلِ «زندهٔ» کران را بازنویسی نمی‌کند") !== false
           && (preg_match('~if \(!is_file\(\$cronLock\)\) \{~', $selfSrc) === 1)));
@@ -42109,6 +42451,32 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$_manualStopProfileKey=extractManualStopProfileKey();') !== false
       && strpos($selfSrc, "'reason'=>'explicit_manual_sync_stop'") !== false
       && version_compare(APP_VERSION, '10.' . '406', '>='));
+    $add('10.407', 'توقف استخراج به queue_id محدود است، job همان ردیف را لغو می‌کند و حذف تا آزادشدن worker رد می‌شود',
+         strpos($selfSrc, 'function extractStopSignalFileForQueue(string $queueId): string') !== false
+      && strpos($selfSrc, 'extractStopRequestedForQueue($queueId,true)') !== false
+      && strpos($selfSrc, "function extractQueueRequestStop(string \$queueId=''): array") !== false
+      && strpos($selfSrc, 'function extractCancelWorkerForQueueRow(array $row): array') !== false
+      && strpos($selfSrc, 'function extractQueueDeleteSafe(string $queueId): array') !== false
+      && strpos($selfSrc, 'extractQueueRowHasLiveOwner($row)') !== false
+      && strpos($selfSrc, 'function extractQueueFinalizeStopIfIdle(string $queueId): array') !== false);
+    $add('10.407', 'سیگنالِ توقفِ queue-specific تا ادامه/حذف همان ردیف باقی می‌ماند و بعد پاک می‌شود',
+         strpos($selfSrc, "empty(\$c['row_specific'])&&\$target===''") !== false
+      && strpos($selfSrc, 'extractClearStopSignalForQueue($queueId);') !== false);
+    $add('10.407', 'Continue پاک‌سازی توقف صریح را فقط روی همان ردیف انجام می‌دهد و checkpoint را حفظ می‌کند',
+         strpos($selfSrc, 'function extractQueueClearUserStopForResume(string $queueId): bool') !== false
+      && strpos($selfSrc, 'extractQueueClearUserStopForResume($resumeQueueId)') !== false
+      && strpos($selfSrc, "extractResumePrepare(\$pk, loadConnections(), \$qid, true)") !== false
+      && strpos($selfSrc, "if(st==='running'||st==='waiting'||e.stop_requested)") !== false
+      && version_compare(APP_VERSION, '10.' . '407', '>='));
+    $add('10.407', 'SIGTERM فقط به پردازه‌ای می‌رود که مالکِ قفلِ فعال همان queue_id است',
+         strpos($selfSrc, 'function extractLockActiveMetaForQueue(string $queueId): array') !== false
+      && strpos($selfSrc, '$pidOwnsThisLock=!empty($activeLockMeta)') !== false
+      && strpos($selfSrc, 'if($pidAlive&&$pidOwnsThisLock') !== false);
+    $add('10.407', 'کارگرِ لغوشده پس از گرفتنِ slot دوباره بررسی می‌شود تا ردیف حذف‌شده زنده نشود',
+         strpos($selfSrc, 's4WorkerJobIsCancelled($_currentWorkerJobId)') !== false
+      && strpos($selfSrc, 'extractStopRequestedForQueue($queueId,false)||extractQueueRowStoppedByUser($queueId)') !== false);
+    $add('10.407', 'نسخهٔ 10.407 در CHANGELOG ثبت شده',
+         strpos($selfSrc, "{v:'10." . "407'") !== false);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -44449,7 +44817,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.382', 'ورودی 10.382 در CHANGELOG ثبت شده است',
          strpos($selfSrc, "{v:'10." . "382'") !== false);
     $add('10.383', 'دکمهٔ ادامه شناسهٔ همان ردیف را به reservation می‌دهد',
-         strpos($selfSrc, "extractResumePrepare(\$pk, loadConnections(), \$qid)") !== false
+         strpos($selfSrc, "extractResumePrepare(\$pk, loadConnections(), \$qid, true)") !== false
       && strpos($selfSrc, "fd.append('queue_id', qid)") !== false);
     $add('10.383', 'ردیف انتخاب‌شده باید موجود و resumable باشد و جایگزین تازه ساخته نمی‌شود',
          strpos($selfSrc, 'function extractResumeQueue' . 'Id(string $profileKey') !== false
@@ -76596,8 +76964,11 @@ function renderExtractQueue(entries, progress){
     let html='';
     entries.slice().reverse().forEach(e=>{
         const st=statusLabels[e.status]?e.status:'failed';
-        // زندهٔ ردیف در حال اجرا از progress خوانده می‌شود
-        const live=(st==='running'&&progress&&progress.running)?progress:null;
+        // Shared progress belongs to one queue ID; never paint it onto a parallel row.
+        const runningCount=entries.filter(x=>x&&x.status==='running').length;
+        const progressOwns=progress&&((String(progress.queue_id||'')===String(e.id||''))
+            ||(!progress.queue_id&&runningCount===1));
+        const live=(st==='running'&&progress&&progress.running&&progressOwns)?progress:null;
         const total=(live&&live.total)||e.total||0;
         const current=(live&&live.current)||e.current||0;
         const products=e.products_count||(live&&live.extracted)||0;
@@ -76657,6 +77028,7 @@ function renderExtractQueue(entries, progress){
         }else if(st==='superseded'){
             progText='checkpoint تکراری بود؛ ادامه از ردیف '+esc(e.superseded_by||'تازه‌تر')+' انجام می‌شود';
         }
+        if(e.stop_requested)progText='⏳ درخواست توقف ثبت شد؛ در حال آزادکردن قفل worker — checkpoint محفوظ است';
         /* v9.11: ردیف گزارشیِ استخراج دوره‌ای — متن خودش را دارد و
            شمارنده‌های محصول برایش بی‌معناست. */
         if(e.note_only){
@@ -76671,7 +77043,9 @@ function renderExtractQueue(entries, progress){
         // ردیف ۱: وضعیت + نام پروفایل + دکمه‌ها
         html+='<div style="display:flex;justify-content:space-between;align-items:center">';
         html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-        html+='<span style="color:'+statusColors[st]+';font-weight:700;font-size:12px">'+statusLabels[st]+'</span>';
+        const statusLabel=e.stop_requested?'⏳ در حال توقف':statusLabels[st];
+        const statusColor=e.stop_requested?'#fb923c':statusColors[st];
+        html+='<span style="color:'+statusColor+';font-weight:700;font-size:12px">'+statusLabel+'</span>';
         // v10.284: منشأ همهٔ ردیف‌ها، از جمله worker و resume، صریحاً دستی یا دوره‌ای باشد
         const exManual=['manual','manual_sync','manual_resume','worker','worker_child'].includes(e.trigger);
         const exPeriodic=['periodic_sync','auto','cron','watchdog_resume','auto_resume'].includes(e.trigger);
@@ -76695,8 +77069,9 @@ function renderExtractQueue(entries, progress){
         if(products>0)html+='<span style="color:#e2e8f0;font-weight:600;font-size:12px">'+toFa(products)+' محصول</span>';
         html+='</div>';
         html+='<div style="display:flex;gap:4px">';
-        if(st==='running'){
-            html+='<button class="btn" style="font-size:10px;padding:3px 8px;background:#f97316;color:#fff;border:none;border-radius:4px" onclick="event.stopPropagation();stopExtractQueue(\''+esc(e.id)+'\')">⏹ توقف</button>';
+        if(st==='running'||st==='waiting'||e.stop_requested){
+            const stopLabel=e.stop_requested?'⏳ توقف در جریان':(st==='waiting'?'✖ لغو از صف':'⏹ توقف');
+            html+='<button class="btn" style="font-size:10px;padding:3px 8px;background:#f97316;color:#fff;border:none;border-radius:4px" onclick="event.stopPropagation();stopExtractQueue(\''+esc(e.id)+'\')">'+stopLabel+'</button>';
         }else{
             if((st==='failed'||st==='paused') && e.profile_key){
                 const rp=e.resume_page||0;
@@ -76753,7 +77128,7 @@ function deleteExtractQueue(qid){
     if(!confirm('این ردیف از صف حذف شود؟'))return;
     fetch('?extract_queue_delete=1&queue_id='+encodeURIComponent(qid)).then(r=>r.json()).then(d=>{
         if(d.ok){showToast('🗑️ حذف شد');refreshExtractQueue();}
-        else showToast(d.error||'خطا در حذف',1);
+        else showToast(d.message||d.error||'خطا در حذف',1);
     }).catch(()=>showToast('خطا شبکه',1));
 }
 
@@ -76806,15 +77181,17 @@ function resumeExtractQueue(profileKey, qid, resumePage, autoResume){
       });
 }
 function stopExtractQueue(qid){
-    if(!confirm('استخراج در حال اجرا متوقف شود؟'))return;
-    /* v8.91: شناسهٔ ردیف هم فرستاده می‌شود تا سرور بتواند دقیقاً همان را
-       ببندد. تا حالا فقط یک سیگنال کلی می‌رفت و اگر پردازه مرده بود،
-       ردیف تا ابد «در حال استخراج» می‌ماند. */
+    if(!confirm('این استخراج/کارِ در صف لغو شود؟ ردیف و checkpoint برای ادامه حفظ می‌شوند.'))return;
+    /* The queue ID lets the server signal/cancel only this row's worker. */
     fetch('?extract_stop=1&queue_id='+encodeURIComponent(qid||'')).then(r=>r.json()).then(d=>{
-        const n=(d&&d.stopped&&d.stopped.length)||0;
-        showToast(n>0?'⏹ متوقف شد':'⏹ درخواست توقف ارسال شد');
+        if(!d||!d.ok){showToast((d&&d.error)||'درخواست توقف ناموفق بود',1);return;}
+        const n=(d.stopped&&d.stopped.length)||0;
+        const pending=(d.stop_pending&&d.stop_pending.length)||0;
+        showToast(pending>0?'⏳ درخواست توقف ارسال شد؛ worker در حال آزادکردن قفل است و checkpoint حفظ می‌شود'
+            :(n>0?'⏹ متوقف شد؛ ردیف و checkpoint حفظ شدند':'⏹ درخواست توقف ثبت شد'));
         refreshExtractQueue();
         setTimeout(refreshExtractQueue,1200);
+        setTimeout(refreshExtractQueue,3500);
     }).catch(()=>showToast('خطا شبکه',1));
 }
 // v7.81: Show extract log modal for a specific queue entry
@@ -76871,7 +77248,10 @@ function renderPhase2Report(queueId){
             box.innerHTML=nh;
             return;
         }
-        const live=(e.status==='running'&&d.progress&&d.progress.running)?d.progress:null;
+        const runningCount=rows.filter(x=>x&&x.status==='running').length;
+        const progressOwns=String(d.progress&&d.progress.queue_id||'')===String(e.id||'')
+            ||(!(d.progress&&d.progress.queue_id)&&runningCount===1);
+        const live=(e.status==='running'&&d.progress&&d.progress.running&&progressOwns)?d.progress:null;
         const pages=(live&&live.detail_ok)||e.detail_ok||0;
         const fail =(live&&live.detail_fail)||e.detail_fail||0;
         const flds =(live&&live.detail_fields)||e.detail_fields||0;
@@ -77686,6 +78066,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.407', t:'⏹️ توقف هدفمند و حذف امن ردیف‌های استخراج', items:[
+    'Stop اکنون فقط queue_id انتخاب‌شده را علامت می‌زند، سیگنال جداگانه می‌فرستد، job بک‌اند متناظر را لغو می‌کند و در صورت امکان پردازهٔ child همان job را خاتمه می‌دهد؛ در استخراج موازی، کارهای دیگر دست‌نخورده می‌مانند.',
+    'تا وقتی پردازه یا قفلِ ردیف زنده است، وضعیت «در حال توقف» می‌ماند و حذف رد می‌شود؛ پس از آزادشدن قفل، ردیف به paused تبدیل می‌شود. Continue همان شناسه و checkpoint را ادامه می‌دهد؛ توقف‌های دستی همچنان خودکار لغو یا حذف نمی‌شوند.',
+    'دکمهٔ لغو برای ردیف‌های منتظر نیز نمایش داده می‌شود، progress مشترک فقط به queue_id مالک وصل است، و worker دیگر نمی‌تواند پس از درخواست توقف ردیف را از snapshot کهنه به حالت فعال برگرداند.'
+  ]},
   {v:'10.406', t:'🛑 حفظ توقفِ همگام‌سازی دستی هنگام بازیابی checkpoint استخراج', items:[
     'اگر همگام‌سازی دستی به‌صراحت لغو شده باشد، کران checkpointهای استخراجِ همان پروفایل را خودکار ادامه نمی‌دهد؛ شناسه و ردیف باقی می‌مانند تا کاربر صریحاً ادامه دهد یا اجرای دستی تازه‌ای آغاز کند.',
     'این حفاظ ردیف‌های قدیمی را هم پوشش می‌دهد که پیش از ثبتِ stopped_by_user روی خودِ صف متوقف شده‌اند؛ پروفایل‌های دیگر مستقل می‌مانند.'
