@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.437';
+const APP_VERSION = '10.438';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -9225,7 +9225,8 @@ static $cache=[];
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 $imgUrl=trim($imgUrl);
 if(empty($imgUrl)||preg_match('~^(data:|blob:|javascript:|#)~i',$imgUrl))return['ok'=>0,'error'=>'empty/invalid URL'];
-$cacheKey=md5($imgUrl);
+$productLinkCtx=(string)($GLOBALS['_currentProductLink']??'');
+$cacheKey=function_exists('s4ImageCacheKey')?s4ImageCacheKey($imgUrl,$productLinkCtx):md5($imgUrl);
 if(isset($cache[$cacheKey]))return['ok'=>1,'media_id'=>$cache[$cacheKey],'source_url'=>''];
 
 $wooMediaUpload=function($fdata,$ct,$filename)use($storeUrl,$ck,$cs,$cacheKey,&$cache){
@@ -9277,7 +9278,8 @@ CURLOPT_REFERER=>$imgUrl,CURLOPT_COOKIEFILE=>'',
 CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7','Origin: '.$origin,'Sec-Fetch-Dest: image','Sec-Fetch-Mode: no-cors']]);
 $imgData=curl_exec($ch);$imgErr=curl_error($ch);$imgCode=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$imgCT=curl_getinfo($ch,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch);
 if($imgData&&strlen($imgData)>=100&&isImageData($imgData)){
-
+$ccDirect=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,$productLinkCtx):['active'=>false];
+if(!empty($ccDirect['active'])&&function_exists('s4CropImageBottomBytes')){$crD=s4CropImageBottomBytes($imgData,(int)$ccDirect['pct'],(int)$ccDirect['px']);if(!empty($crD['ok'])&&!empty($crD['cropped'])&&!empty($crD['data']))$imgData=(string)$crD['data'];}
 $realFmt=detectImageFormat($imgData);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($imgData);
@@ -9298,7 +9300,8 @@ CURLOPT_REFERER=>$productLink,CURLOPT_COOKIEFILE=>'',
 CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Origin: '.$origin,'Sec-Fetch-Dest: image','Sec-Fetch-Mode: no-cors']]);
 $d3=curl_exec($ch3);$d3CT=curl_getinfo($ch3,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch3);
 if($d3&&strlen($d3)>=100&&isImageData($d3)){
-
+$ccDirect3=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,(string)$productLink):['active'=>false];
+if(!empty($ccDirect3['active'])&&function_exists('s4CropImageBottomBytes')){$crD3=s4CropImageBottomBytes($d3,(int)$ccDirect3['pct'],(int)$ccDirect3['px']);if(!empty($crD3['ok'])&&!empty($crD3['cropped'])&&!empty($crD3['data']))$d3=(string)$crD3['data'];}
 $realFmt=detectImageFormat($d3);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($d3);
@@ -9353,6 +9356,22 @@ function wooImagePayload(array $w, string $imgUrl, ?string &$note = null): array
     if (!empty($up['ok']) && (int)($up['media_id'] ?? 0) > 0) {
         $note = 'تصویر در کتابخانهٔ رسانه (Media#' . (int)$up['media_id'] . ')';
         return [['id' => (int)$up['media_id']]];
+    }
+
+    /* v10.438: اگر برش پایین تصویر فعال است و آپلود مستقیم wp/v2/media (مثلاً با کلید ck_/cs_)
+       مجاز نبود، آدرس فایل برش‌خوردهٔ ذخیره‌شده در uploads همین سرور را به ووکامرس بده تا
+       تگ پایین تصویر در side-load ووکامرس هم حذف شود. */
+    $productLinkCtx = (string)($GLOBALS['_currentProductLink'] ?? '');
+    $cropCfg = function_exists('s4ResolveImageCropForUrl') ? s4ResolveImageCropForUrl($imgUrl, $productLinkCtx) : ['active' => false];
+    if (!empty($cropCfg['active']) && function_exists('saveImageLocal') && function_exists('s4PublicUrlForLocalUpload')) {
+        $croppedLocal = saveImageLocal($imgUrl, $productLinkCtx);
+        if ($croppedLocal !== '' && is_file($croppedLocal) && filesize($croppedLocal) > 200) {
+            $pubUrl = s4PublicUrlForLocalUpload($croppedLocal);
+            if ($pubUrl !== '' && preg_match('~^https?://~i', $pubUrl)) {
+                $note = 'تصویر برش‌خورده با آدرس محلی به ووکامرس سپرده شد';
+                return [['src' => $pubUrl]];
+            }
+        }
     }
 
     // آدرس باید از بیرون قابل دسترس باشد، وگرنه ووکامرس هم نمی‌تواند بگیردش
@@ -10699,11 +10718,135 @@ if ($hasNull || $hasNonPrintable) return true;
 return false;
 }
 
+function s4NormalizeCropCfg($raw): array {
+    if (!is_array($raw)) return ['pct' => 0, 'px' => 0, 'active' => false];
+    $pct = max(0, min(45, (int)($raw['crop_bottom_pct'] ?? ($raw['pct'] ?? 0))));
+    $px  = max(0, min(600, (int)($raw['crop_bottom_px'] ?? ($raw['px'] ?? 0))));
+    return ['pct' => $pct, 'px' => $px, 'active' => ($pct > 0 || $px > 0)];
+}
+
+function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = ''): array {
+    if (isset($GLOBALS['_s4ActiveImageCrop']) && is_array($GLOBALS['_s4ActiveImageCrop'])) {
+        $explicit = s4NormalizeCropCfg($GLOBALS['_s4ActiveImageCrop']);
+        if ($explicit['active']) return $explicit;
+    }
+    static $profileCropCache = null;
+    if ($profileCropCache === null) {
+        $profileCropCache = [];
+        if (function_exists('loadProfiles')) {
+            foreach ((array)loadProfiles() as $pk => $pr) {
+                if (!is_array($pr)) continue;
+                $g = is_array($pr['gallery'] ?? null) ? $pr['gallery'] : [];
+                $cc = s4NormalizeCropCfg($g);
+                if (!$cc['active']) continue;
+                $pUrl = trim((string)($pr['url'] ?? ''));
+                $pHost = strtolower((string)(parse_url($pUrl, PHP_URL_HOST) ?: ''));
+                if ($pHost !== '') {
+                    $pHostBase = preg_replace('~^www\.~i', '', $pHost) ?? $pHost;
+                    $profileCropCache[] = ['key' => (string)$pk, 'url' => $pUrl, 'host' => $pHostBase, 'crop' => $cc];
+                }
+            }
+        }
+    }
+    if (!$profileCropCache) return ['pct' => 0, 'px' => 0, 'active' => false];
+    $linkHost = strtolower((string)(parse_url($productLink, PHP_URL_HOST) ?: ''));
+    $imgHost  = strtolower((string)(parse_url($imgUrl, PHP_URL_HOST) ?: ''));
+    $hostMatches = function (string $candHost, string $profHost): bool {
+        if ($candHost === '' || $profHost === '') return false;
+        $candHost = preg_replace('~^www\.~i', '', $candHost) ?? $candHost;
+        if ($candHost === $profHost || str_ends_with($candHost, '.' . $profHost)) return true;
+        if ($profHost === 'snappshop.ir' && str_ends_with($candHost, 'snappshop.ir')) return true;
+        if ($profHost === 'digikala.com' && strpos($candHost, 'digikala.com') !== false) return true;
+        if ($profHost === 'emalls.ir' && strpos($candHost, 'emalls.ir') !== false) return true;
+        return false;
+    };
+    foreach ($profileCropCache as $entry) {
+        if ($linkHost !== '' && $hostMatches($linkHost, $entry['host'])) return $entry['crop'];
+    }
+    foreach ($profileCropCache as $entry) {
+        if ($imgHost !== '' && $hostMatches($imgHost, $entry['host'])) return $entry['crop'];
+    }
+    return ['pct' => 0, 'px' => 0, 'active' => false];
+}
+
+function s4ImageCacheKey(string $imgUrl, string $productLink = ''): string {
+    $cc = s4ResolveImageCropForUrl($imgUrl, $productLink);
+    if (empty($cc['active'])) return md5($imgUrl);
+    return md5($imgUrl . '|cb:' . (int)$cc['pct'] . ':' . (int)$cc['px']);
+}
+
+function s4PublicUrlForLocalUpload(string $localPath): string {
+    if ($localPath === '' || !is_file($localPath) || empty($_SERVER['HTTP_HOST']) || empty($_SERVER['SCRIPT_NAME'])) return '';
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $baseDir = rtrim(str_replace('\\', '/', dirname((string)$_SERVER['SCRIPT_NAME'])), '/');
+    return $scheme . '://' . $_SERVER['HTTP_HOST'] . $baseDir . '/uploads/' . rawurlencode(basename($localPath));
+}
+
+function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropBottomPx = 0): array {
+    $pct = max(0, min(45, $cropBottomPct));
+    $px  = max(0, min(600, $cropBottomPx));
+    if ($pct <= 0 && $px <= 0) return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => detectImageFormat($data) ?: 'jpg'];
+    if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor')) {
+        return ['ok' => false, 'error' => 'GD not available', 'data' => $data, 'cropped' => false];
+    }
+    $fmt = detectImageFormat($data);
+    if ($fmt === 'svg' || $fmt === 'gif') {
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => $fmt];
+    }
+    $src = @imagecreatefromstring($data);
+    if (!$src) return ['ok' => false, 'error' => 'imagecreatefromstring failed', 'data' => $data, 'cropped' => false];
+    $w = imagesx($src);
+    $h = imagesy($src);
+    $cut = $px > 0 ? $px : (int)round($h * ($pct / 100.0));
+    $cut = min($cut, (int)floor($h * 0.45));
+    $newH = $h - $cut;
+    if ($w < 20 || $h < 60 || $cut <= 0 || $newH < 40) {
+        imagedestroy($src);
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => $fmt ?: 'jpg'];
+    }
+    $dst = imagecreatetruecolor($w, $newH);
+    if (!$dst) {
+        imagedestroy($src);
+        return ['ok' => false, 'error' => 'imagecreatetruecolor failed', 'data' => $data, 'cropped' => false];
+    }
+    $keepAlpha = ($fmt === 'png' && function_exists('imagepng')) || ($fmt === 'webp' && function_exists('imagewebp'));
+    if ($keepAlpha) {
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        $trans = imagecolorallocatealpha($dst, 255, 255, 255, 127);
+        imagefilledrectangle($dst, 0, 0, $w, $newH, $trans);
+    } else {
+        $white = imagecolorallocate($dst, 255, 255, 255);
+        imagefilledrectangle($dst, 0, 0, $w, $newH, $white);
+    }
+    imagecopy($dst, $src, 0, 0, 0, 0, $w, $newH);
+    imagedestroy($src);
+    ob_start();
+    $outFmt = 'jpg';
+    if ($fmt === 'png' && function_exists('imagepng')) {
+        imagepng($dst, null, 6);
+        $outFmt = 'png';
+    } elseif ($fmt === 'webp' && function_exists('imagewebp')) {
+        imagewebp($dst, null, 90);
+        $outFmt = 'webp';
+    } else {
+        imagejpeg($dst, null, 92);
+        $outFmt = 'jpg';
+    }
+    $outData = ob_get_clean();
+    imagedestroy($dst);
+    if ($outData && strlen($outData) > 100) {
+        return ['ok' => true, 'data' => $outData, 'cropped' => true, 'format' => $outFmt, 'width' => $w, 'old_height' => $h, 'new_height' => $newH];
+    }
+    return ['ok' => false, 'error' => 'encode failed', 'data' => $data, 'cropped' => false];
+}
+
 function saveImageLocal(string $imgUrl, string $productLink = ''): string {
 if (empty($imgUrl) || preg_match('~^(data:|blob:|javascript:|#)~i', $imgUrl)) return '';
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
-$cacheKey = md5($imgUrl);
+$cropCfg = s4ResolveImageCropForUrl($imgUrl, $productLink);
+$cacheKey = s4ImageCacheKey($imgUrl, $productLink);
 
 $existing = glob(UPLOAD_DIR . 'img_' . $cacheKey . '.*');
 foreach ($existing as $f) {
@@ -10753,13 +10896,20 @@ if(!$d || strlen($d) < 200 || !isImageData($d ?? '')) $d='';
 
 if(!$d || strlen($d) < 200 || !isImageData($d ?? '')){
 $selfBase2=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'];
-$proxyUrl2=$selfBase2.'?image_proxy='.rawurlencode($imgUrl);
+$proxyUrl2=$selfBase2.'?image_proxy='.rawurlencode($imgUrl).'&no_crop=1';
 $ch5=curl_init($proxyUrl2);curl_setopt_array($ch5,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_TIMEOUT=>25,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0]);
 $d=curl_exec($ch5);$ct5=curl_getinfo($ch5,CURLINFO_CONTENT_TYPE);if($ct5)$ct=$ct5;curl_close($ch5);
 if(!$d || strlen($d) < 200 || !isImageData($d ?? '')) $d='';
 }
 
 if (!$d || strlen($d) < 200 || !isImageData($d)) return '';
+
+if (!empty($cropCfg['active'])) {
+$cropped = s4CropImageBottomBytes($d, (int)$cropCfg['pct'], (int)$cropCfg['px']);
+if (!empty($cropped['ok']) && !empty($cropped['cropped']) && !empty($cropped['data'])) {
+$d = (string)$cropped['data'];
+}
+}
 
 $realFmt=detectImageFormat($d);
 if($realFmt==='')$realFmt='jpg';
@@ -10780,7 +10930,8 @@ function bslUpload(string $tk, string $imgUrl): array {
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 $imgUrl=trim($imgUrl);
 if(empty($imgUrl))return['ok'=>0,'error'=>'empty URL'];
-$cacheKey=md5($imgUrl);
+$productLinkCtx=(string)($GLOBALS['_currentProductLink']??'');
+$cacheKey=function_exists('s4ImageCacheKey')?s4ImageCacheKey($imgUrl,$productLinkCtx):md5($imgUrl);
 $log=[];
 
 $urlExt=strtolower(pathinfo(parse_url($imgUrl,PHP_URL_PATH)??'',PATHINFO_EXTENSION)?:'');
@@ -12204,23 +12355,147 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     }
     $attrRows = '';
     $shortItems = '';
+    $weightVal = '';
     foreach ((array)($data['attributes'] ?? []) as $idx => $at) {
         if (!is_array($at)) continue;
         $ak = normalize_text((string)($at['title'] ?? ''));
         $av = normalize_text((string)($at['value'] ?? ''));
         if ($ak === '' || $av === '') continue;
+        if ($weightVal === '' && mb_strpos($ak, 'وزن') !== false) $weightVal = $av;
         $attrRows .= '<tr><th>' . h($ak) . '</th><td>' . h($av) . '</td></tr>';
         if ($idx < 6) $shortItems .= '<li>' . h($ak . ': ' . $av) . '</li>';
     }
+    $warrantyNames = [];
+    foreach ((array)($data['warranties'] ?? []) as $wItem) {
+        if (!is_array($wItem)) continue;
+        $wn = normalize_text(trim((string)($wItem['name'] ?? '') . ' ' . (string)($wItem['duration'] ?? '')));
+        if ($wn !== '' && !in_array($wn, $warrantyNames, true)) $warrantyNames[] = $wn;
+    }
+    if ($warrantyNames) {
+        $wJoined = implode('، ', $warrantyNames);
+        $attrRows .= '<tr><th>گارانتی</th><td>' . h($wJoined) . '</td></tr>';
+        $shortItems .= '<li>' . h('گارانتی: ' . $wJoined) . '</li>';
+    }
+    $vendorNames = [];
+    foreach ((array)($data['vendors'] ?? []) as $vItem) {
+        if (!is_array($vItem)) continue;
+        $vt = normalize_text((string)($vItem['title'] ?? ''));
+        if ($vt !== '' && !in_array($vt, $vendorNames, true)) $vendorNames[] = $vt;
+    }
+    if ($vendorNames) {
+        $attrRows .= '<tr><th>فروشنده</th><td>' . h(implode('، ', array_slice($vendorNames, 0, 5))) . '</td></tr>';
+    }
+    /* v10.438: استخراج کامل تنوع‌های محصول (رنگ، سایز، گارانتی/مدل) همراه با قیمت
+       هر تنوع به تومان در قالب استاندارد variations_form و .snappshop-variation-group
+       تا variationsExtract و variationPriceTable آن‌ها را دقیق بخوانند. */
+    $attrMeta = [];
+    foreach ((array)($data['configurable_attribute'] ?? []) as $ca) {
+        if (!is_array($ca)) continue;
+        $aid = trim((string)($ca['id'] ?? ''));
+        $atitle = normalize_text((string)($ca['title'] ?? 'تنوع'));
+        $valObj = is_array($ca['value'] ?? null) ? $ca['value'] : [];
+        $vid = trim((string)($valObj['id'] ?? ''));
+        $vtitle = normalize_text((string)($valObj['title'] ?? ''));
+        if ($aid === '' || $vid === '' || $vtitle === '') continue;
+        if (!isset($attrMeta[$aid])) $attrMeta[$aid] = ['title' => $atitle !== '' ? $atitle : 'تنوع', 'values' => []];
+        if (!isset($attrMeta[$aid]['values'][$vid])) {
+            $attrMeta[$aid]['values'][$vid] = [
+                'title' => $vtitle,
+                'hex'   => trim((string)($valObj['hex_code'] ?? '')),
+                'price' => 0,
+            ];
+        }
+    }
+    $wcVariationsJson = [];
+    foreach ((array)($data['variants'] ?? []) as $varRow) {
+        if (!is_array($varRow)) continue;
+        $vBest = 0;
+        $vOrig = 0;
+        $vStock = false;
+        foreach ((array)($varRow['vendor'] ?? []) as $vd) {
+            if (!is_array($vd)) continue;
+            $st = (int)($vd['stock'] ?? 0);
+            $av = $st > 0 || !empty($vd['is_available_in_vendor_inventory']) || !empty($vd['is_available_in_shop']);
+            $po = (int)round((float)($vd['price'] ?? 0));
+            $ps = (int)round((float)($vd['special_price'] ?? 0));
+            $ef = ($ps > 0 && ($po <= 0 || $ps <= $po)) ? $ps : $po;
+            if ($av && $ef > 0) {
+                $vStock = true;
+                if ($vBest <= 0 || $ef < $vBest) {
+                    $vBest = $ef;
+                    $vOrig = $po > $ef ? $po : $ef;
+                }
+            }
+        }
+        $varAttrs = [];
+        foreach ((array)($varRow['attribute_ids'] ?? []) as $pair) {
+            if (!is_array($pair)) continue;
+            $aid = trim((string)($pair['attribute_id'] ?? ''));
+            $vid = trim((string)($pair['attribute_value_id'] ?? ''));
+            if ($aid !== '' && $vid !== '' && isset($attrMeta[$aid]['values'][$vid])) {
+                $lbl = $attrMeta[$aid]['values'][$vid]['title'];
+                $varAttrs['attribute_' . $aid] = $lbl;
+                if ($vBest > 0 && ($attrMeta[$aid]['values'][$vid]['price'] <= 0 || $vBest < $attrMeta[$aid]['values'][$vid]['price'])) {
+                    $attrMeta[$aid]['values'][$vid]['price'] = $vBest;
+                }
+            }
+        }
+        if ($varAttrs && $vBest > 0) {
+            $wcVariationsJson[] = [
+                'variation_id' => (string)($varRow['variation_id'] ?? ''),
+                'display_price' => $vBest,
+                'display_regular_price' => $vOrig > 0 ? $vOrig : $vBest,
+                'is_in_stock' => $vStock,
+                'attributes' => $varAttrs,
+            ];
+        }
+    }
+    $variationsHtml = '';
+    if (!empty($attrMeta)) {
+        $groupsHtml = '';
+        foreach ($attrMeta as $aid => $gInfo) {
+            if (empty($gInfo['values'])) continue;
+            $optsHtml = '';
+            foreach ($gInfo['values'] as $vid => $vInfo) {
+                $vp = (int)($vInfo['price'] ?? 0);
+                $pAttr = $vp > 0 ? (' data-price="' . $vp . '"') : '';
+                $optsHtml .= '<option value="' . h($vInfo['title']) . '"' . $pAttr . '>' . h($vInfo['title']) . '</option>';
+            }
+            $groupsHtml .= '<div class="variations snappshop-variation-group" data-name="' . h($gInfo['title']) . '" aria-label="' . h($gInfo['title']) . '">'
+                . '<label>' . h($gInfo['title']) . '</label>'
+                . '<select name="attribute_' . h($aid) . '" data-attribute_name="' . h($gInfo['title']) . '">' . $optsHtml . '</select>'
+                . '</div>';
+        }
+        if ($groupsHtml !== '') {
+            $varJsonAttr = $wcVariationsJson ? (' data-product_variations="' . h(json_encode($wcVariationsJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"') : '';
+            $variationsHtml = '<form class="variations_form cart"' . $varJsonAttr . '>' . $groupsHtml . '</form>';
+        }
+    }
     $cats = [];
+    $catLinksHtml = [];
     foreach ((array)($data['categories'] ?? []) as $cat) {
         if (!is_array($cat)) continue;
         $ct = normalize_text((string)($cat['title'] ?? ''));
-        if ($ct !== '' && $ct !== 'اسنپ شاپ') $cats[] = $ct;
+        $chref = trim((string)($cat['href'] ?? ''));
+        if ($ct !== '' && $ct !== 'اسنپ شاپ') {
+            $cats[] = $ct;
+            $catLinksHtml[] = '<a href="' . h($chref !== '' ? make_absolute_url($chref, 'https://snappshop.ir') : '#') . '">' . h($ct) . '</a>';
+        }
     }
-    $descHtml = $descRaw !== '' ? ('<div class="product-description entry-content woocommerce-Tabs-panel--description">' . nl2br(h($descRaw)) . '</div>') : '';
+    $tagItems = [];
+    if ($brand !== '') $tagItems[] = '<a href="#">' . h($brand) . '</a>';
+    foreach (array_slice($cats, -2) as $cTag) $tagItems[] = '<a href="#">' . h($cTag) . '</a>';
     $specHtml = $attrRows !== '' ? ('<table class="woocommerce-product-attributes shop_attributes"><tbody>' . $attrRows . '</tbody></table>') : '';
-    $shortHtml = $shortItems !== '' ? ('<div class="short-description woocommerce-product-details__short-description"><ul>' . $shortItems . '</ul></div>') : '';
+    $longInner = ($descRaw !== '' ? ('<div class="snappshop-desc-text">' . nl2br(h($descRaw)) . '</div>') : '') . $specHtml;
+    $descHtml = $longInner !== '' ? ('<div id="tab-description" class="product-description entry-content woocommerce-Tabs-panel--description">' . $longInner . '</div>') : '';
+    $shortHtml = $shortItems !== '' ? ('<div class="short-description product-short-description woocommerce-product-details__short-description"><ul>' . $shortItems . '</ul></div>') : '';
+    $metaHtml = '<div class="product_meta">'
+        . ($sku !== '' ? '<span class="sku_wrapper">SKU: <span class="sku">' . h($sku) . '</span></span> ' : '')
+        . ($catLinksHtml ? '<span class="posted_in">' . implode('، ', $catLinksHtml) . '</span> ' : '')
+        . ($tagItems ? '<span class="tagged_as">' . implode('، ', $tagItems) . '</span> ' : '')
+        . ($brand !== '' ? '<span class="brand product-brand">' . h($brand) . '</span> ' : '')
+        . ($weightVal !== '' ? '<span class="weight product-weight">' . h($weightVal) . '</span>' : '')
+        . '</div>';
     $ld = [
         '@context' => 'https://schema.org',
         '@type'    => 'Product',
@@ -12245,18 +12520,21 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
         . ($mainImg !== '' ? '<meta property="og:image" content="' . h($mainImg) . '">' : '')
         . ($bestToman > 0 ? '<meta property="product:price:amount" content="' . (int)$bestToman . '">' : '')
         . '<meta property="product:availability" content="' . ($inStock ? 'in stock' : 'out of stock') . '">'
+        . '<style>body{font-family:tahoma,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:20px;line-height:1.9}.single-product{max-width:980px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:22px}.product-gallery{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.product-gallery img{width:150px;height:150px;object-fit:contain;border:1px solid #e2e8f0;border-radius:10px;background:#fff}.price{font-size:18px;font-weight:800;color:#16a34a;margin:10px 0}.old-price{color:#94a3b8;font-weight:400;margin-left:8px}.shop_attributes{width:100%;border-collapse:collapse;margin-top:14px}.shop_attributes th,.shop_attributes td{border:1px solid #e2e8f0;padding:8px 12px;text-align:right}.shop_attributes th{background:#f1f5f9;width:220px}.snappshop-variation-group{margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px}.product_meta span{display:inline-block;margin-left:12px;font-size:12px;color:#475569}</style>'
         . '<script type="application/ld+json">' . json_encode($ld, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>'
-        . '</head><body data-snappshop-api-detail="1"><main class="product single-product">'
+        . '</head><body data-snappshop-api-detail="1"><main class="product single-product"><div class="summary entry-summary">'
         . ($cats ? '<nav class="woocommerce-breadcrumb breadcrumb">' . h(implode(' / ', $cats)) . '</nav>' : '')
         . '<h1 class="product_title entry-title product-title">' . h($title) . '</h1>'
-        . ($brand !== '' ? '<div class="product-brand brand">' . h($brand) . '</div>' : '')
-        . '<div class="price product-price">'
+        . '<p class="price product-price">'
         . ($origToman > $bestToman ? '<del class="old-price">' . h(number_format($origToman) . ' تومان') . '</del> ' : '')
-        . ($priceFormatted !== '' ? '<ins class="amount">' . h($priceFormatted) . '</ins>' : '')
-        . '</div>'
-        . '<div class="stock ' . ($inStock ? 'in-stock' : 'out-of-stock') . '">' . ($inStock ? 'موجود' : 'ناموجود') . '</div>'
-        . '<div class="product-gallery gallery woocommerce-product-gallery">' . $galleryHtml . '</div>'
-        . $shortHtml . $descHtml . $specHtml
+        . ($priceFormatted !== '' ? '<ins><span class="amount">' . h($priceFormatted) . '</span></ins>' : '')
+        . '</p>'
+        . '<p class="stock ' . ($inStock ? 'in-stock' : 'out-of-stock') . '">' . ($inStock ? 'موجود' : 'ناموجود') . '</p>'
+        . $variationsHtml
+        . $shortHtml
+        . $metaHtml
+        . '</div><div class="product-gallery gallery woocommerce-product-gallery">' . $galleryHtml . '</div>'
+        . $descHtml
         . '</main></body></html>';
 }
 
@@ -13409,8 +13687,25 @@ $body = curl_exec($ch);
 $type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: 'image/jpeg';
 curl_close($ch);
 if (!$body) { http_response_code(404); exit; }
+if (empty($_GET['no_crop'])) {
+    $qPct = isset($_GET['crop_bottom_pct']) ? max(0, min(45, (int)$_GET['crop_bottom_pct'])) : 0;
+    $qPx  = isset($_GET['crop_bottom_px']) ? max(0, min(600, (int)$_GET['crop_bottom_px'])) : 0;
+    if ($qPct <= 0 && $qPx <= 0 && function_exists('s4ResolveImageCropForUrl')) {
+        $autoCrop = s4ResolveImageCropForUrl($url, (string)($_GET['product_url'] ?? ''));
+        $qPct = (int)($autoCrop['pct'] ?? 0);
+        $qPx  = (int)($autoCrop['px'] ?? 0);
+    }
+    if (($qPct > 0 || $qPx > 0) && function_exists('s4CropImageBottomBytes')) {
+        $cr = s4CropImageBottomBytes((string)$body, $qPct, $qPx);
+        if (!empty($cr['ok']) && !empty($cr['cropped']) && !empty($cr['data'])) {
+            $body = (string)$cr['data'];
+            $fmtOut = (string)($cr['format'] ?? 'jpg');
+            $type = 'image/' . ($fmtOut === 'jpg' ? 'jpeg' : $fmtOut);
+        }
+    }
+}
 header('Content-Type: ' . $type);
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: ' . ((isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px'])) ? 'no-store' : 'public, max-age=86400'));
 echo $body;
 exit;
 }
@@ -14528,8 +14823,13 @@ $suggestions = [
 '.stock.in-stock',
 ],
 'brand' => [
-'span.posted_in a',
 '.product_meta .brand',
+'span.posted_in a',
+],
+'variations' => [
+'.snappshop-variation-group',
+'table.variations select',
+'form.variations_form .variations',
 ],
 ];
 
@@ -16898,15 +17198,17 @@ function galleryNormalizeCfg($raw): array {
     $mode = (string)($raw['mode'] ?? 'off');
     if (!in_array($mode, ['off', 'auto', 'manual', 'number'], true)) $mode = 'off';
     return [
-        'mode'      => $mode,
-        'enabled'   => $mode !== 'off',
-        'box'       => trim((string)($raw['box'] ?? '')),
-        'selectors' => trim((string)($raw['selectors'] ?? '')),
-        'pattern'   => trim((string)($raw['pattern'] ?? '')),
-        'from'      => max(0, (int)($raw['from'] ?? 1)),
-        'to'        => max(0, (int)($raw['to'] ?? 10)),
-        'max'       => max(1, min(GALLERY_MAX_IMAGES, (int)($raw['max'] ?? GALLERY_MAX_IMAGES))),
-        'skip_first'=> !empty($raw['skip_first']),
+        'mode'            => $mode,
+        'enabled'         => $mode !== 'off',
+        'box'             => trim((string)($raw['box'] ?? '')),
+        'selectors'       => trim((string)($raw['selectors'] ?? '')),
+        'pattern'         => trim((string)($raw['pattern'] ?? '')),
+        'from'            => max(0, (int)($raw['from'] ?? 1)),
+        'to'              => max(0, (int)($raw['to'] ?? 10)),
+        'max'             => max(1, min(GALLERY_MAX_IMAGES, (int)($raw['max'] ?? GALLERY_MAX_IMAGES))),
+        'skip_first'      => !empty($raw['skip_first']),
+        'crop_bottom_pct' => max(0, min(45, (int)($raw['crop_bottom_pct'] ?? 0))),
+        'crop_bottom_px'  => max(0, min(600, (int)($raw['crop_bottom_px'] ?? 0))),
     ];
 }
 
@@ -46723,6 +47025,48 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"'jina_reader_via'] = 'snappshop-apix'")!==false
       && strpos($selfSrc,"{v:'10." . "437'")!==false
       && version_compare(APP_VERSION,'10.437','>='));
+    $_snDet438=function_exists('snappshopDetailSyntheticHtml')?snappshopDetailSyntheticHtml([
+        'content'=>['title_fa'=>'قوری تست','description'=>'توضیح کامل محصول'],
+        'brand'=>['title_fa'=>'زینو'],
+        'attributes'=>[['title'=>'وزن','value'=>'250 گرم'],['title'=>'جنس','value'=>'بلور']],
+        'warranties'=>[['name'=>'گارانتی سلامت فیزیکی','duration'=>'1 ماه']],
+        'categories'=>[['title'=>'آشپزخانه','href'=>'/category/kitchen-appliances']],
+        'images'=>[['src'=>'https://cdn.snappshop.ir/products/a.jpg'],['src'=>'https://cdn.snappshop.ir/products/b.jpg']],
+        'configurable_attribute'=>[
+            ['id'=>'c1','type'=>'color','title'=>'رنگ','value'=>['id'=>'v1','title'=>'مشکی','hex_code'=>'#000']],
+            ['id'=>'c1','type'=>'color','title'=>'رنگ','value'=>['id'=>'v2','title'=>'سفید','hex_code'=>'#fff']],
+        ],
+        'variants'=>[
+            ['variation_id'=>'var1','attribute_ids'=>[['attribute_id'=>'c1','attribute_value_id'=>'v1']],'vendor'=>[['price'=>300000,'special_price'=>240000,'stock'=>2]]],
+            ['variation_id'=>'var2','attribute_ids'=>[['attribute_id'=>'c1','attribute_value_id'=>'v2']],'vendor'=>[['price'=>280000,'special_price'=>0,'stock'=>1]]],
+        ],
+    ],'https://snappshop.ir/product/snp-1784183539'):'';
+    [,$_snXp438]=load_dom($_snDet438);
+    $_snVars438=$_snXp438?variationsExtract($_snXp438,null,'.snappshop-variation-group','https://snappshop.ir/product/snp-1784183539'):[];
+    $_galCrop438=galleryNormalizeCfg(['mode'=>'off','crop_bottom_pct'=>12,'crop_bottom_px'=>55]);
+    $_gdCropOk438=true;
+    if(function_exists('imagecreatetruecolor')&&function_exists('imagejpeg')){
+        $_im438=imagecreatetruecolor(120,200);
+        ob_start();imagejpeg($_im438,null,90);$_rawJpg438=ob_get_clean();imagedestroy($_im438);
+        $_crRes438=s4CropImageBottomBytes((string)$_rawJpg438,15,0);
+        $_gdCropOk438=!empty($_crRes438['ok'])&&!empty($_crRes438['cropped'])&&(int)($_crRes438['new_height']??0)===170;
+    }
+    $add('10.438', 'صفحهٔ جزئیات سنتتیک اسنپ‌شاپ همهٔ تنوع‌ها، قیمت هر تنوع، وزن، گارانتی و جدول مشخصات را می‌سازد',
+         ($_snVars438['count']??0)===2
+      && in_array('مشکی',(array)($_snVars438['values']??[]),true)
+      && in_array('سفید',(array)($_snVars438['values']??[]),true)
+      && (int)($_snVars438['price_min']??0)===240000
+      && (int)($_snVars438['price_max']??0)===280000
+      && strpos($_snDet438,'250 گرم')!==false
+      && strpos($_snDet438,'گارانتی سلامت فیزیکی')!==false);
+    $add('10.438', 'برش پایین تصویر (حذف تگ اسنپ‌شاپ) در پروفایل، کش محلی، باسلام، ووکامرس و پیش‌نمایش فعال است',
+         (int)($_galCrop438['crop_bottom_pct']??0)===12
+      && (int)($_galCrop438['crop_bottom_px']??0)===55
+      && $_gdCropOk438
+      && strpos($selfSrc,'id="galCropBottomPct"')!==false
+      && strpos($selfSrc,'function previewImageBottomCrop()')!==false
+      && strpos($selfSrc,"{v:'10." . "438'")!==false
+      && version_compare(APP_VERSION,'10.438','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -74072,6 +74416,20 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             </details>
             <div id="galTestR" style="margin-top:6px"></div>
         </div>
+
+        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #334155">
+            <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:6px">✂️ برش پایین تصویر (حذف تگ/واترمارک اسنپ‌شاپ و ...)</div>
+            <div class="row" style="align-items:center;gap:6px">
+                <label style="flex:0 0 62px;font-size:11px">پایین (%):</label>
+                <input type="number" id="galCropBottomPct" value="0" min="0" max="45" step="1" placeholder="مثلاً 10" oninput="galChanged()" style="flex:1">
+                <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
+                <input type="number" id="galCropBottomPx" value="0" min="0" max="600" step="5" placeholder="مثلاً 60" oninput="galChanged()" style="flex:1">
+            </div>
+            <div class="row" style="margin-top:6px">
+                <button type="button" class="btn btn-purple" onclick="previewImageBottomCrop()" style="flex:1;font-size:11px">👁️ پیش‌نمایش قبل و بعد از برش روی نمونه محصول</button>
+            </div>
+            <div id="galCropPreview" style="margin-top:6px"></div>
+        </div>
     </div>
         </div>
     </div>
@@ -75663,14 +76021,16 @@ function testDetailSel(key) {
 function galCollect() {
     const g = id => $(id) || {};
     return {
-        mode:       (g('galMode').value || 'off'),
-        box:        (g('galBox').value || '').trim(),
-        selectors:  (g('galSelectors').value || '').trim(),
-        pattern:    (g('galPattern').value || '').trim(),
-        from:       parseInt(g('galFrom').value || '1') || 1,
-        to:         parseInt(g('galTo').value || '10') || 10,
-        max:        parseInt(g('galMax').value || '10') || 10,
-        skip_first: !!g('galSkipFirst').checked
+        mode:            (g('galMode').value || 'off'),
+        box:             (g('galBox').value || '').trim(),
+        selectors:       (g('galSelectors').value || '').trim(),
+        pattern:         (g('galPattern').value || '').trim(),
+        from:            parseInt(g('galFrom').value || '1') || 1,
+        to:              parseInt(g('galTo').value || '10') || 10,
+        max:             parseInt(g('galMax').value || '10') || 10,
+        skip_first:      !!g('galSkipFirst').checked,
+        crop_bottom_pct: Math.max(0, Math.min(45, parseInt(g('galCropBottomPct').value || '0') || 0)),
+        crop_bottom_px:  Math.max(0, Math.min(600, parseInt(g('galCropBottomPx').value || '0') || 0))
     };
 }
 
@@ -75685,8 +76045,31 @@ function galApply(cfg) {
     set('galFrom', cfg.from !== undefined ? cfg.from : 1);
     set('galTo', cfg.to !== undefined ? cfg.to : 10);
     set('galMax', cfg.max !== undefined ? cfg.max : 10);
+    set('galCropBottomPct', cfg.crop_bottom_pct !== undefined ? cfg.crop_bottom_pct : 0);
+    set('galCropBottomPx', cfg.crop_bottom_px !== undefined ? cfg.crop_bottom_px : 0);
     if ($('galSkipFirst')) $('galSkipFirst').checked = !!cfg.skip_first;
+    if ($('galCropPreview')) $('galCropPreview').innerHTML = '';
     galModeChanged(true);
+}
+
+function previewImageBottomCrop() {
+    const box = $('galCropPreview');
+    if (!box) return;
+    let sampleImg = '';
+    for (const [, p] of products) {
+        if (p && p.image && /^https?:\/\//i.test(p.image)) { sampleImg = p.image; break; }
+    }
+    if (!sampleImg) {
+        box.innerHTML = '<div style="font-size:11px;color:#fbbf24">ابتدا یک‌بار استخراج انجام دهید یا پروفایل دارای محصول را انتخاب کنید تا نمونه تصویر پیدا شود.</div>';
+        return;
+    }
+    const cfg = galCollect();
+    const origSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&no_crop=1&_t=' + Date.now();
+    const cropSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&crop_bottom_pct=' + cfg.crop_bottom_pct + '&crop_bottom_px=' + cfg.crop_bottom_px + '&_t=' + Date.now();
+    box.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
+        + '<div style="text-align:center"><div style="font-size:10px;color:#94a3b8;margin-bottom:4px">اصلی</div><img src="' + origSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
+        + '<div style="text-align:center"><div style="font-size:10px;color:#4ade80;margin-bottom:4px">پس از برش (' + (cfg.crop_bottom_px > 0 ? (cfg.crop_bottom_px + 'px') : (cfg.crop_bottom_pct + '%')) + ')</div><img src="' + cropSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
+        + '</div>';
 }
 
 /** با تغییر روش، فقط جعبهٔ همان روش نشان داده می‌شود */
@@ -80448,6 +80831,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.438', t:'🎨 استخراج کامل تنوع/جزئیات اسنپ‌شاپ + برش پایین تصویر برای حذف تگ', items:[
+    'صفحهٔ جزئیات سنتتیک اسنپ‌شاپ اکنون تنوع‌ها (رنگ، سایز و configurable_attribute) را همراه با قیمت دقیق هر تنوع (تومان) در قالب استاندارد variations_form و .snappshop-variation-group تولید می‌کند و تشخیص خودکار سلکتور جزئیات نیز آن را یک‌کلیکی می‌شناسد.',
+    'وزن (از جدول مشخصات)، گارانتی، فروشنده، برند، دسته‌بندی، SKU، توضیحات کوتاه، توضیحات کامل + جدول مشخصات فنی و تمام تصاویر گالری با کیفیت اصلی CDN در مرحلهٔ دوم استخراج می‌شوند.',
+    'قابلیت «برش پایین تصویر (% یا px)» به بخش گالری/تصاویر هر پروفایل اضافه شد تا تگ یا نوار پایین تصاویر اسنپ‌شاپ هنگام ذخیرهٔ محلی، آپلود به باسلام و ارسال/side-load به ووکامرس به‌صورت خودکار حذف شود.',
+    'دکمهٔ «پیش‌نمایش قبل و بعد از برش» روی نمونه محصول پروفایل اضافه شد و کلید کش تصاویر برش‌خورده از تصاویر خام جدا گردید.'
+  ]},
   {v:'10.437', t:'⚡ استخراج پایدار اسنپ‌شاپ در موتور Jina با fallback مستقیم apix', items:[
     'علت صفر شدن استخراج r.jina.ai روی هاست ایران مشخص و ثبت شد: r.jina.ai هم مستقیم/DoH و هم از طریق Cloudflare Worker (به‌خاطر نشت IP مبدأ در X-Forwarded-For و سقف نرخ ۴۲۹ روی IP اشتراکی Worker) با HTTP 451/429 پاسخ می‌دهد.',
     'وقتی موتور r.jina.ai برای اسنپ‌شاپ انتخاب شود و Jina با ۴۵۱/۴۲۹/۴۰۱ یا خروجی خالی برگردد، سیستم پس از ثبت کامل trace جینا به‌صورت خودکار از API عمومی apix.snappshop.ir لیست دسته‌بندی، جستجو، غرفه، برند و جزئیات محصول را با قیمت دقیق تومان و تصاویر اصلی واکشی می‌کند.',
