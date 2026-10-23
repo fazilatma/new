@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.417';
+const APP_VERSION = '10.418';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -78666,6 +78666,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.418', t:'📦 تازه‌سازی بستهٔ نصب', items:[
+    'بستهٔ کامل پس از cache قدیمی GitHub با شناسهٔ محتوای تازه منتشر شد؛ منطق عملیاتی 10.416 و آزمون اصلاح‌شدهٔ 10.417 بدون تغییر حفظ شده‌اند.'
+  ]},
   {v:'10.417', t:'✅ اصلاح آزمون UTF-8 انتخاب غرفه', items:[
     'آزمون متمرکز برچسب غرفه اکنون وجود متن صحیح و نبود بایت‌های رایج mojibake را مستقل از تکرار طبیعی همان عبارت در changelog بررسی می‌کند.'
   ]},
