@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.444';
+const APP_VERSION = '10.445';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -10556,7 +10556,7 @@ CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8
 $imgData=curl_exec($ch);$imgErr=curl_error($ch);$imgCode=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$imgCT=curl_getinfo($ch,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch);
 if($imgData&&strlen($imgData)>=100&&isImageData($imgData)){
 $ccDirect=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,$productLinkCtx):['active'=>false];
-if(!empty($ccDirect['active'])&&function_exists('s4CropImageBottomBytes')){$crD=s4CropImageBottomBytes($imgData,(int)$ccDirect['pct'],(int)$ccDirect['px']);if(!empty($crD['ok'])&&!empty($crD['cropped'])&&!empty($crD['data']))$imgData=(string)$crD['data'];}
+if(!empty($ccDirect['active'])&&function_exists('s4ApplyImageEditBytes')){$crD=s4ApplyImageEditBytes($imgData,$ccDirect);if(!empty($crD['ok'])&&!empty($crD['cropped'])&&!empty($crD['data']))$imgData=(string)$crD['data'];}
 $realFmt=detectImageFormat($imgData);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($imgData);
@@ -10578,7 +10578,7 @@ CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8
 $d3=curl_exec($ch3);$d3CT=curl_getinfo($ch3,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch3);
 if($d3&&strlen($d3)>=100&&isImageData($d3)){
 $ccDirect3=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,(string)$productLink):['active'=>false];
-if(!empty($ccDirect3['active'])&&function_exists('s4CropImageBottomBytes')){$crD3=s4CropImageBottomBytes($d3,(int)$ccDirect3['pct'],(int)$ccDirect3['px']);if(!empty($crD3['ok'])&&!empty($crD3['cropped'])&&!empty($crD3['data']))$d3=(string)$crD3['data'];}
+if(!empty($ccDirect3['active'])&&function_exists('s4ApplyImageEditBytes')){$crD3=s4ApplyImageEditBytes($d3,$ccDirect3);if(!empty($crD3['ok'])&&!empty($crD3['cropped'])&&!empty($crD3['data']))$d3=(string)$crD3['data'];}
 $realFmt=detectImageFormat($d3);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($d3);
@@ -10670,12 +10670,17 @@ function wooImagePayload(array $w, string $imgUrl, ?string &$note = null): array
  */
 function wooGalleryPayload(array $w, array $imgUrls, ?string &$note = null): array {
     $out = []; $okN = 0; $badN = 0; $firstNote = null;
-    foreach (galleryDedupe($imgUrls) as $u) {
+    $prevRole = $GLOBALS['_s4CurrentImageRole'] ?? null;
+    $deduped = array_values(galleryDedupe($imgUrls));
+    foreach ($deduped as $idx => $u) {
+        $GLOBALS['_s4CurrentImageRole'] = ($idx === 0 && count($deduped) === 1) ? 'list' : ($idx === 0 ? 'list' : 'gallery');
         $n1 = null;
         $one = wooImagePayload($w, (string)$u, $n1);
         if ($firstNote === null) $firstNote = $n1;
         if (!empty($one)) { $out[] = $one[0]; $okN++; } else { $badN++; }
     }
+    if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
+    else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
     if ($okN === 0) { $note = $firstNote ?? 'هیچ تصویری آماده نشد'; return []; }
     $note = $okN . ' تصویر آماده شد' . ($badN > 0 ? ' (' . $badN . ' ناموفق)' : '')
           . ($firstNote ? ' — ' . $firstNote : '');
@@ -12021,37 +12026,141 @@ if ($hasNull || $hasNonPrintable) return true;
 return false;
 }
 
-function s4NormalizeCropCfg($raw): array {
-    if (!is_array($raw)) return ['pct' => 0, 'px' => 0, 'active' => false];
-    $pct = max(0, min(45, (int)($raw['crop_bottom_pct'] ?? ($raw['pct'] ?? 0))));
-    $px  = max(0, min(600, (int)($raw['crop_bottom_px'] ?? ($raw['px'] ?? 0))));
-    return ['pct' => $pct, 'px' => $px, 'active' => ($pct > 0 || $px > 0)];
+/**
+ * v10.445: نرمال‌سازی یکپارچهٔ تنظیمات ویرایش تصویر (هم برای عکس فهرست و هم برای عکس‌های گالری).
+ * دو حالت:
+ *  - white_square (پیش‌فرض): افزودن مربع سفید در یکی از ۴ گوشهٔ تصویر با اندازهٔ قابل تنظیم (% یا px)
+ *  - crop: برش پایین تصویر با تنظیمات سابق (crop_bottom_pct / crop_bottom_px)
+ */
+function s4NormalizeImageEditCfg($raw): array {
+    if (is_string($raw)) $raw = json_decode($raw, true);
+    if (!is_array($raw)) $raw = [];
+    $cropPct = max(0, min(45, (int)($raw['crop_bottom_pct'] ?? ($raw['pct'] ?? 0))));
+    $cropPx  = max(0, min(600, (int)($raw['crop_bottom_px'] ?? ($raw['px'] ?? 0))));
+    $sqPct   = max(0, min(48, (int)($raw['square_pct'] ?? 0)));
+    $sqPx    = max(0, min(600, (int)($raw['square_px'] ?? 0)));
+    $corner  = strtolower(trim((string)($raw['square_corner'] ?? 'bottom_right')));
+    if (!in_array($corner, ['bottom_right', 'bottom_left', 'top_right', 'top_left'], true)) {
+        $corner = 'bottom_right';
+    }
+    $modeIn = strtolower(trim((string)($raw['edit_mode'] ?? '')));
+    if (in_array($modeIn, ['white_square', 'crop'], true)) {
+        $editMode = $modeIn;
+    } elseif (($cropPct > 0 || $cropPx > 0) && $sqPct <= 0 && $sqPx <= 0) {
+        /* سازگاری کامل با پروفایل‌های v10.438 که قبلاً فقط برش پایین عکس تنظیم کرده بودند */
+        $editMode = 'crop';
+    } else {
+        $editMode = 'white_square';
+    }
+    $active = ($editMode === 'white_square')
+        ? ($sqPct > 0 || $sqPx > 0)
+        : ($cropPct > 0 || $cropPx > 0);
+    return [
+        'edit_mode'       => $editMode,
+        'square_corner'   => $corner,
+        'square_pct'      => $sqPct,
+        'square_px'       => $sqPx,
+        'crop_bottom_pct' => $cropPct,
+        'crop_bottom_px'  => $cropPx,
+        'pct'             => $cropPct,
+        'px'              => $cropPx,
+        'active'          => $active,
+    ];
 }
 
-function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = ''): array {
+function listImageEditNormalizeCfg($raw): array {
+    $c = s4NormalizeImageEditCfg($raw);
+    return [
+        'edit_mode'       => $c['edit_mode'],
+        'square_corner'   => $c['square_corner'],
+        'square_pct'      => $c['square_pct'],
+        'square_px'       => $c['square_px'],
+        'crop_bottom_pct' => $c['crop_bottom_pct'],
+        'crop_bottom_px'  => $c['crop_bottom_px'],
+    ];
+}
+
+function s4NormalizeCropCfg($raw): array {
+    return s4NormalizeImageEditCfg($raw);
+}
+
+function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = '', string $role = ''): array {
     if (isset($GLOBALS['_s4ActiveImageCrop']) && is_array($GLOBALS['_s4ActiveImageCrop'])) {
-        $explicit = s4NormalizeCropCfg($GLOBALS['_s4ActiveImageCrop']);
+        $explicit = s4NormalizeImageEditCfg($GLOBALS['_s4ActiveImageCrop']);
         if ($explicit['active']) return $explicit;
     }
-    static $profileCropCache = null;
-    if ($profileCropCache === null) {
-        $profileCropCache = [];
+    if ($role === '' && !empty($GLOBALS['_s4CurrentImageRole'])) {
+        $role = (string)$GLOBALS['_s4CurrentImageRole'];
+    }
+    static $cache = null;
+    static $cacheMtime = -1;
+    $curMtime = defined('PROFILES_FILE') && is_file(PROFILES_FILE) ? (int)@filemtime(PROFILES_FILE) : 0;
+    if ($cache === null || $cacheMtime !== $curMtime) {
+        $cacheMtime = $curMtime;
+        $cache = ['hosts' => [], 'list_urls' => [], 'gal_urls' => [], 'gal_first_urls' => []];
         if (function_exists('loadProfiles')) {
             foreach ((array)loadProfiles() as $pk => $pr) {
                 if (!is_array($pr)) continue;
-                $g = is_array($pr['gallery'] ?? null) ? $pr['gallery'] : [];
-                $cc = s4NormalizeCropCfg($g);
-                if (!$cc['active']) continue;
+                $listCfg = s4NormalizeImageEditCfg($pr['listImageEdit'] ?? []);
+                $galCfg  = s4NormalizeImageEditCfg($pr['gallery'] ?? []);
+                if (!$listCfg['active'] && !$galCfg['active']) continue;
                 $pUrl = trim((string)($pr['url'] ?? ''));
                 $pHost = strtolower((string)(parse_url($pUrl, PHP_URL_HOST) ?: ''));
                 if ($pHost !== '') {
                     $pHostBase = preg_replace('~^www\.~i', '', $pHost) ?? $pHost;
-                    $profileCropCache[] = ['key' => (string)$pk, 'url' => $pUrl, 'host' => $pHostBase, 'crop' => $cc];
+                    $cache['hosts'][] = [
+                        'key'      => (string)$pk,
+                        'url'      => $pUrl,
+                        'host'     => $pHostBase,
+                        'list_cfg' => $listCfg,
+                        'gal_cfg'  => $galCfg,
+                    ];
+                }
+                foreach ((array)($pr['products'] ?? []) as $pEntry) {
+                    $prod = (is_array($pEntry) && isset($pEntry[1]) && is_array($pEntry[1])) ? $pEntry[1] : (is_array($pEntry) ? $pEntry : null);
+                    if (!$prod) continue;
+                    $mImg = trim((string)($prod['image'] ?? ''));
+                    if ($mImg !== '') {
+                        $effMain = $listCfg['active'] ? $listCfg : $galCfg;
+                        if ($effMain['active']) $cache['list_urls'][$mImg] = $effMain;
+                    }
+                    $gImgs = $prod['images'] ?? null;
+                    if (is_string($gImgs)) $gImgs = json_decode($gImgs, true);
+                    if (is_array($gImgs)) {
+                        foreach (array_values($gImgs) as $gi => $gu) {
+                            if (is_array($gu)) $gu = (string)($gu['src'] ?? ($gu['url'] ?? ''));
+                            $gu = trim((string)$gu);
+                            if ($gu === '') continue;
+                            if ($gi === 0) {
+                                $eff0 = $listCfg['active'] ? $listCfg : $galCfg;
+                                if ($eff0['active']) $cache['gal_first_urls'][$gu] = $eff0;
+                            } else {
+                                $effG = $galCfg['active'] ? $galCfg : $listCfg;
+                                if ($effG['active']) $cache['gal_urls'][$gu] = $effG;
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    if (!$profileCropCache) return ['pct' => 0, 'px' => 0, 'active' => false];
+    $cleanImg = trim($imgUrl);
+    if ($cleanImg !== '') {
+        if ($role === 'list') {
+            if (isset($cache['list_urls'][$cleanImg])) return $cache['list_urls'][$cleanImg];
+            if (isset($cache['gal_first_urls'][$cleanImg])) return $cache['gal_first_urls'][$cleanImg];
+            if (isset($cache['gal_urls'][$cleanImg])) return $cache['gal_urls'][$cleanImg];
+        } elseif ($role === 'gallery') {
+            if (isset($cache['gal_urls'][$cleanImg])) return $cache['gal_urls'][$cleanImg];
+            if (isset($cache['gal_first_urls'][$cleanImg])) return $cache['gal_first_urls'][$cleanImg];
+            if (isset($cache['list_urls'][$cleanImg])) return $cache['list_urls'][$cleanImg];
+        } else {
+            if (isset($cache['gal_urls'][$cleanImg]) && !isset($cache['list_urls'][$cleanImg])) return $cache['gal_urls'][$cleanImg];
+            if (isset($cache['list_urls'][$cleanImg])) return $cache['list_urls'][$cleanImg];
+            if (isset($cache['gal_first_urls'][$cleanImg])) return $cache['gal_first_urls'][$cleanImg];
+        }
+    }
+    if (empty($cache['hosts'])) return s4NormalizeImageEditCfg([]);
     $linkHost = strtolower((string)(parse_url($productLink, PHP_URL_HOST) ?: ''));
     $imgHost  = strtolower((string)(parse_url($imgUrl, PHP_URL_HOST) ?: ''));
     $hostMatches = function (string $candHost, string $profHost): bool {
@@ -12061,21 +12170,32 @@ function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = ''): arr
         if ($profHost === 'snappshop.ir' && str_ends_with($candHost, 'snappshop.ir')) return true;
         if ($profHost === 'digikala.com' && strpos($candHost, 'digikala.com') !== false) return true;
         if ($profHost === 'emalls.ir' && strpos($candHost, 'emalls.ir') !== false) return true;
+        if ($profHost === 'torob.com' && strpos($candHost, 'torob.com') !== false) return true;
+        if ($profHost === 'basalam.com' && strpos($candHost, 'basalam.com') !== false) return true;
         return false;
     };
-    foreach ($profileCropCache as $entry) {
-        if ($linkHost !== '' && $hostMatches($linkHost, $entry['host'])) return $entry['crop'];
+    $pickEntryCfg = function (array $entry) use ($role): array {
+        $lc = $entry['list_cfg']; $gc = $entry['gal_cfg'];
+        if ($role === 'list') return $lc['active'] ? $lc : $gc;
+        if ($role === 'gallery') return $gc['active'] ? $gc : $lc;
+        return $lc['active'] ? $lc : $gc;
+    };
+    foreach ($cache['hosts'] as $entry) {
+        if ($linkHost !== '' && $hostMatches($linkHost, $entry['host'])) return $pickEntryCfg($entry);
     }
-    foreach ($profileCropCache as $entry) {
-        if ($imgHost !== '' && $hostMatches($imgHost, $entry['host'])) return $entry['crop'];
+    foreach ($cache['hosts'] as $entry) {
+        if ($imgHost !== '' && $hostMatches($imgHost, $entry['host'])) return $pickEntryCfg($entry);
     }
-    return ['pct' => 0, 'px' => 0, 'active' => false];
+    return s4NormalizeImageEditCfg([]);
 }
 
-function s4ImageCacheKey(string $imgUrl, string $productLink = ''): string {
-    $cc = s4ResolveImageCropForUrl($imgUrl, $productLink);
+function s4ImageCacheKey(string $imgUrl, string $productLink = '', string $role = ''): string {
+    $cc = s4ResolveImageCropForUrl($imgUrl, $productLink, $role);
     if (empty($cc['active'])) return md5($imgUrl);
-    return md5($imgUrl . '|cb:' . (int)$cc['pct'] . ':' . (int)$cc['px']);
+    if (($cc['edit_mode'] ?? 'white_square') === 'white_square') {
+        return md5($imgUrl . '|ws:' . (string)$cc['square_corner'] . ':' . (int)$cc['square_pct'] . ':' . (int)$cc['square_px']);
+    }
+    return md5($imgUrl . '|cb:' . (int)$cc['crop_bottom_pct'] . ':' . (int)$cc['crop_bottom_px']);
 }
 
 function s4PublicUrlForLocalUpload(string $localPath): string {
@@ -12083,6 +12203,118 @@ function s4PublicUrlForLocalUpload(string $localPath): string {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $baseDir = rtrim(str_replace('\\', '/', dirname((string)$_SERVER['SCRIPT_NAME'])), '/');
     return $scheme . '://' . $_SERVER['HTTP_HOST'] . $baseDir . '/uploads/' . rawurlencode(basename($localPath));
+}
+
+/**
+ * v10.445: افزودن یک مربع سفید خالص در یکی از چهار گوشهٔ تصویر بدون تغییر ابعاد عکس.
+ */
+function s4AddWhiteSquareBytes(string $data, string $corner = 'bottom_right', int $squarePct = 0, int $squarePx = 0): array {
+    $pct = max(0, min(48, $squarePct));
+    $px  = max(0, min(600, $squarePx));
+    if ($pct <= 0 && $px <= 0) {
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'edited' => false, 'format' => detectImageFormat($data) ?: 'jpg'];
+    }
+    if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor')) {
+        return ['ok' => false, 'error' => 'GD not available', 'data' => $data, 'cropped' => false, 'edited' => false];
+    }
+    $fmt = detectImageFormat($data);
+    if ($fmt === 'svg' || $fmt === 'gif') {
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'edited' => false, 'format' => $fmt];
+    }
+    $src = @imagecreatefromstring($data);
+    if (!$src) {
+        return ['ok' => false, 'error' => 'imagecreatefromstring failed', 'data' => $data, 'cropped' => false, 'edited' => false];
+    }
+    $w = imagesx($src);
+    $h = imagesy($src);
+    $minDim = min($w, $h);
+    if ($w < 20 || $h < 20) {
+        imagedestroy($src);
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'edited' => false, 'format' => $fmt ?: 'jpg'];
+    }
+    $side = $px > 0 ? $px : (int)round($minDim * ($pct / 100.0));
+    $side = max(1, min($side, (int)floor($minDim * 0.60)));
+
+    $dst = imagecreatetruecolor($w, $h);
+    if (!$dst) {
+        imagedestroy($src);
+        return ['ok' => false, 'error' => 'imagecreatetruecolor failed', 'data' => $data, 'cropped' => false, 'edited' => false];
+    }
+    $keepAlpha = ($fmt === 'png' && function_exists('imagepng')) || ($fmt === 'webp' && function_exists('imagewebp'));
+    if ($keepAlpha) {
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        $trans = imagecolorallocatealpha($dst, 255, 255, 255, 127);
+        imagefilledrectangle($dst, 0, 0, $w, $h, $trans);
+    } else {
+        $bgWhite = imagecolorallocate($dst, 255, 255, 255);
+        imagefilledrectangle($dst, 0, 0, $w, $h, $bgWhite);
+    }
+    imagecopy($dst, $src, 0, 0, 0, 0, $w, $h);
+    imagedestroy($src);
+
+    $corner = strtolower(trim($corner));
+    if ($corner === 'top_left') {
+        $x1 = 0; $y1 = 0;
+    } elseif ($corner === 'top_right') {
+        $x1 = $w - $side; $y1 = 0;
+    } elseif ($corner === 'bottom_left') {
+        $x1 = 0; $y1 = $h - $side;
+    } else {
+        $corner = 'bottom_right';
+        $x1 = $w - $side; $y1 = $h - $side;
+    }
+    $x2 = max($x1, min($w - 1, $x1 + $side - 1));
+    $y2 = max($y1, min($h - 1, $y1 + $side - 1));
+
+    imagealphablending($dst, true);
+    $solidWhite = imagecolorallocate($dst, 255, 255, 255);
+    imagefilledrectangle($dst, $x1, $y1, $x2, $y2, $solidWhite);
+    if ($keepAlpha) imagesavealpha($dst, true);
+
+    ob_start();
+    $outFmt = 'jpg';
+    if ($fmt === 'png' && function_exists('imagepng')) {
+        imagepng($dst, null, 6);
+        $outFmt = 'png';
+    } elseif ($fmt === 'webp' && function_exists('imagewebp')) {
+        imagewebp($dst, null, 90);
+        $outFmt = 'webp';
+    } else {
+        imagejpeg($dst, null, 92);
+        $outFmt = 'jpg';
+    }
+    $outData = ob_get_clean();
+    imagedestroy($dst);
+    if ($outData && strlen($outData) > 100) {
+        return [
+            'ok'          => true,
+            'data'        => $outData,
+            'cropped'     => true,
+            'edited'      => true,
+            'mode'        => 'white_square',
+            'corner'      => $corner,
+            'square_size' => $side,
+            'format'      => $outFmt,
+            'width'       => $w,
+            'height'      => $h,
+        ];
+    }
+    return ['ok' => false, 'error' => 'encode failed', 'data' => $data, 'cropped' => false, 'edited' => false];
+}
+
+/**
+ * v10.445: اعمال حالت انتخاب‌شدهٔ ویرایش تصویر (مربع سفید گوشه یا برش پایین عکس).
+ */
+function s4ApplyImageEditBytes(string $data, array $cfg): array {
+    $c = s4NormalizeImageEditCfg($cfg);
+    if (empty($c['active'])) {
+        return ['ok' => true, 'data' => $data, 'cropped' => false, 'edited' => false, 'format' => detectImageFormat($data) ?: 'jpg'];
+    }
+    if ($c['edit_mode'] === 'white_square') {
+        return s4AddWhiteSquareBytes($data, (string)$c['square_corner'], (int)$c['square_pct'], (int)$c['square_px']);
+    }
+    return s4CropImageBottomBytes($data, (int)$c['crop_bottom_pct'], (int)$c['crop_bottom_px']);
 }
 
 function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropBottomPx = 0): array {
@@ -12208,7 +12440,7 @@ if(!$d || strlen($d) < 200 || !isImageData($d ?? '')) $d='';
 if (!$d || strlen($d) < 200 || !isImageData($d)) return '';
 
 if (!empty($cropCfg['active'])) {
-$cropped = s4CropImageBottomBytes($d, (int)$cropCfg['pct'], (int)$cropCfg['px']);
+$cropped = s4ApplyImageEditBytes($d, $cropCfg);
 if (!empty($cropped['ok']) && !empty($cropped['cropped']) && !empty($cropped['data'])) {
 $d = (string)$cropped['data'];
 }
@@ -12338,13 +12570,18 @@ return['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']'
  */
 function bslUploadMany(string $tk, array $imgUrls, int $max = 10): array {
     $ids = []; $failN = 0; $firstErr = ''; $firstMeta=[];
-    foreach (galleryDedupe($imgUrls, max(1, $max)) as $u) {
+    $prevRole = $GLOBALS['_s4CurrentImageRole'] ?? null;
+    $deduped = array_values(galleryDedupe($imgUrls, max(1, $max)));
+    foreach ($deduped as $idx => $u) {
+        $GLOBALS['_s4CurrentImageRole'] = ($idx === 0 ? 'list' : 'gallery');
         $up = bslUpload($tk, (string)$u);
         if (!empty($up['ok']) && !empty($up['file_id'])) { $ids[] = (int)$up['file_id']; continue; }
         $failN++;
         if ($firstErr === '') {$firstErr = mb_substr((string)($up['error'] ?? '?'), 0, 180);$firstMeta=$up;}
         if((int)($up['error_code']??0)===429)break;
     }
+    if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
+    else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
     $okN = count($ids);
     return ['ok' => $okN > 0, 'main' => $okN > 0 ? $ids[0] : null, 'ids' => $ids,
             'ok_n' => $okN, 'fail_n' => $failN,
@@ -14990,16 +15227,23 @@ $body = curl_exec($ch);
 $type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: 'image/jpeg';
 curl_close($ch);
 if (!$body) { http_response_code(404); exit; }
+$hasExplicitEdit = isset($_GET['edit_mode']) || isset($_GET['square_pct']) || isset($_GET['square_px'])
+    || isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px']);
 if (empty($_GET['no_crop'])) {
-    $qPct = isset($_GET['crop_bottom_pct']) ? max(0, min(45, (int)$_GET['crop_bottom_pct'])) : 0;
-    $qPx  = isset($_GET['crop_bottom_px']) ? max(0, min(600, (int)$_GET['crop_bottom_px'])) : 0;
-    if ($qPct <= 0 && $qPx <= 0 && function_exists('s4ResolveImageCropForUrl')) {
-        $autoCrop = s4ResolveImageCropForUrl($url, (string)($_GET['product_url'] ?? ''));
-        $qPct = (int)($autoCrop['pct'] ?? 0);
-        $qPx  = (int)($autoCrop['px'] ?? 0);
+    if ($hasExplicitEdit) {
+        $editCfg = s4NormalizeImageEditCfg([
+            'edit_mode'       => $_GET['edit_mode'] ?? null,
+            'square_corner'   => $_GET['square_corner'] ?? 'bottom_right',
+            'square_pct'      => $_GET['square_pct'] ?? 0,
+            'square_px'       => $_GET['square_px'] ?? 0,
+            'crop_bottom_pct' => $_GET['crop_bottom_pct'] ?? 0,
+            'crop_bottom_px'  => $_GET['crop_bottom_px'] ?? 0,
+        ]);
+    } else {
+        $editCfg = s4ResolveImageCropForUrl($url, (string)($_GET['product_url'] ?? ''), (string)($_GET['img_role'] ?? ''));
     }
-    if (($qPct > 0 || $qPx > 0) && function_exists('s4CropImageBottomBytes')) {
-        $cr = s4CropImageBottomBytes((string)$body, $qPct, $qPx);
+    if (!empty($editCfg['active']) && function_exists('s4ApplyImageEditBytes')) {
+        $cr = s4ApplyImageEditBytes((string)$body, $editCfg);
         if (!empty($cr['ok']) && !empty($cr['cropped']) && !empty($cr['data'])) {
             $body = (string)$cr['data'];
             $fmtOut = (string)($cr['format'] ?? 'jpg');
@@ -15008,7 +15252,7 @@ if (empty($_GET['no_crop'])) {
     }
 }
 header('Content-Type: ' . $type);
-header('Cache-Control: ' . ((isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px'])) ? 'no-store' : 'public, max-age=86400'));
+header('Cache-Control: ' . ($hasExplicitEdit ? 'no-store' : 'public, max-age=86400'));
 echo $body;
 exit;
 }
@@ -15489,9 +15733,14 @@ $galleryIn  = array_key_exists('gallery', $_POST)
     ? galleryNormalizeCfg($_POST['gallery'])
     : galleryNormalizeCfg($profiles[$key]['gallery'] ?? []);
 $galleryOld = galleryNormalizeCfg($profiles[$key]['gallery'] ?? []);
-// گالریِ خاموشِ خالی از یک فرمِ پرنشده، تنظیم قبلی را از بین نبرد
-$galleryFinal = ($formIsBlank && !$galleryIn['enabled'] && $galleryOld['enabled'])
+$galleryFinal = ($formIsBlank && ((!$galleryIn['enabled'] && $galleryOld['enabled']) || (!s4NormalizeImageEditCfg($galleryIn)['active'] && s4NormalizeImageEditCfg($galleryOld)['active'])))
     ? $galleryOld : $galleryIn;
+$listImgEditIn  = array_key_exists('listImageEdit', $_POST)
+    ? listImageEditNormalizeCfg($_POST['listImageEdit'])
+    : listImageEditNormalizeCfg($profiles[$key]['listImageEdit'] ?? []);
+$listImgEditOld = listImageEditNormalizeCfg($profiles[$key]['listImageEdit'] ?? []);
+$listImgEditFinal = ($formIsBlank && !s4NormalizeImageEditCfg($listImgEditIn)['active'] && s4NormalizeImageEditCfg($listImgEditOld)['active'])
+    ? $listImgEditOld : $listImgEditIn;
 // v8.55: اگر syncConfig در درخواست نباشد، تنظیم قبلی حفظ شود.
 // قبلاً هر ذخیرهٔ جزئی، بازهٔ همگام‌سازی را پاک می‌کرد و پروفایل
 // دوباره «هر بار فراخوانی» می‌شد.
@@ -15527,6 +15776,8 @@ $profilePatch = [
 'detailSelectors' => $detailSelectors,
 // v8.64: تنظیمات گالری چندعکسی — اگر در درخواست نباشد مقدار قبلی می‌ماند
 'gallery' => $galleryFinal,
+// v10.445: تنظیمات ویرایش تصویر فهرست (مربع سفید گوشه / برش پایین عکس)
+'listImageEdit' => $listImgEditFinal,
 'titleSuffix' => array_key_exists('titleSuffix', $_POST) ? (string)$_POST['titleSuffix'] : (string)($existingProfile['titleSuffix'] ?? ''),
 'priceMode' => array_key_exists('priceMode', $_POST) ? (string)$_POST['priceMode'] : (string)($existingProfile['priceMode'] ?? 'none'),
 'priceVal' => array_key_exists('priceVal', $_POST) ? (float)$_POST['priceVal'] : (float)($existingProfile['priceVal'] ?? 0),
@@ -18533,6 +18784,7 @@ function galleryNormalizeCfg($raw): array {
     if (!is_array($raw)) $raw = [];
     $mode = (string)($raw['mode'] ?? 'off');
     if (!in_array($mode, ['off', 'auto', 'manual', 'number'], true)) $mode = 'off';
+    $ed = s4NormalizeImageEditCfg($raw);
     return [
         'mode'            => $mode,
         'enabled'         => $mode !== 'off',
@@ -18543,8 +18795,12 @@ function galleryNormalizeCfg($raw): array {
         'to'              => max(0, (int)($raw['to'] ?? 10)),
         'max'             => max(1, min(GALLERY_MAX_IMAGES, (int)($raw['max'] ?? GALLERY_MAX_IMAGES))),
         'skip_first'      => !empty($raw['skip_first']),
-        'crop_bottom_pct' => max(0, min(45, (int)($raw['crop_bottom_pct'] ?? 0))),
-        'crop_bottom_px'  => max(0, min(600, (int)($raw['crop_bottom_px'] ?? 0))),
+        'edit_mode'       => $ed['edit_mode'],
+        'square_corner'   => $ed['square_corner'],
+        'square_pct'      => $ed['square_pct'],
+        'square_px'       => $ed['square_px'],
+        'crop_bottom_pct' => $ed['crop_bottom_pct'],
+        'crop_bottom_px'  => $ed['crop_bottom_px'],
     ];
 }
 
@@ -49100,6 +49356,57 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && aiIsReasoningModel(null, 'Prism-ML/Ternary-Bonsai-27B') === true
       && strpos($selfSrc, "{v:'10." . "444'") !== false
       && version_compare(APP_VERSION, '10.444', '>='));
+    $_defEd445  = s4NormalizeImageEditCfg([]);
+    $_legEd445  = s4NormalizeImageEditCfg(['crop_bottom_pct' => 14, 'crop_bottom_px' => 0]);
+    $_galSq445  = galleryNormalizeCfg(['mode' => 'off', 'square_corner' => 'top_left', 'square_pct' => 20]);
+    $_lstEd445  = listImageEditNormalizeCfg(['edit_mode' => 'white_square', 'square_corner' => 'bottom_left', 'square_px' => 75]);
+    $_gdWs445Ok = true;
+    if (function_exists('imagecreatetruecolor') && function_exists('imagejpeg') && function_exists('imagecolorat')) {
+        $_im445 = imagecreatetruecolor(160, 160);
+        imagefilledrectangle($_im445, 0, 0, 160, 160, imagecolorallocate($_im445, 10, 20, 40));
+        ob_start(); imagejpeg($_im445, null, 95); $_raw445 = (string)ob_get_clean(); imagedestroy($_im445);
+        $_wsTl = s4ApplyImageEditBytes($_raw445, ['edit_mode' => 'white_square', 'square_corner' => 'top_left', 'square_pct' => 25]);
+        $_wsBr = s4ApplyImageEditBytes($_raw445, ['edit_mode' => 'white_square', 'square_corner' => 'bottom_right', 'square_px' => 36]);
+        $_crBm = s4ApplyImageEditBytes($_raw445, ['edit_mode' => 'crop', 'crop_bottom_pct' => 25]);
+        $_gdWs445Ok = !empty($_wsTl['ok']) && !empty($_wsTl['edited'])
+            && (int)($_wsTl['width'] ?? 0) === 160 && (int)($_wsTl['height'] ?? 0) === 160 && (int)($_wsTl['square_size'] ?? 0) === 40
+            && !empty($_wsBr['ok']) && !empty($_wsBr['edited']) && (int)($_wsBr['square_size'] ?? 0) === 36
+            && !empty($_crBm['ok']) && !empty($_crBm['cropped']) && (int)($_crBm['new_height'] ?? 0) === 120;
+        if ($_gdWs445Ok && function_exists('imagecreatefromstring')) {
+            $_chkTl = @imagecreatefromstring((string)$_wsTl['data']);
+            $_chkBr = @imagecreatefromstring((string)$_wsBr['data']);
+            if ($_chkTl && $_chkBr) {
+                $_cTlWhite = imagecolorat($_chkTl, 10, 10);
+                $_cTlDark  = imagecolorat($_chkTl, 145, 145);
+                $_cBrWhite = imagecolorat($_chkBr, 145, 145);
+                $_cBrDark  = imagecolorat($_chkBr, 10, 10);
+                $_gdWs445Ok = ((($_cTlWhite >> 16) & 0xFF) >= 245) && ((($_cTlDark >> 16) & 0xFF) < 40)
+                    && ((($_cBrWhite >> 16) & 0xFF) >= 245) && ((($_cBrDark >> 16) & 0xFF) < 40);
+                imagedestroy($_chkTl);
+                imagedestroy($_chkBr);
+            }
+        }
+    }
+    $add('10.445', 'افزودن ویرایش تصویر به استخراج لیست و گالری با منوی کشویی دوگزینه‌ای: مربع سفید چهارگوشه (پیش‌فرض) یا کراپ پایین عکس',
+         function_exists('s4NormalizeImageEditCfg')
+      && function_exists('listImageEditNormalizeCfg')
+      && function_exists('s4AddWhiteSquareBytes')
+      && function_exists('s4ApplyImageEditBytes')
+      && $_defEd445['edit_mode'] === 'white_square' && $_defEd445['square_corner'] === 'bottom_right' && $_defEd445['active'] === false
+      && $_legEd445['edit_mode'] === 'crop' && $_legEd445['active'] === true && (int)$_legEd445['crop_bottom_pct'] === 14
+      && $_galSq445['edit_mode'] === 'white_square' && $_galSq445['square_corner'] === 'top_left' && (int)$_galSq445['square_pct'] === 20
+      && $_lstEd445['edit_mode'] === 'white_square' && $_lstEd445['square_corner'] === 'bottom_left' && (int)$_lstEd445['square_px'] === 75
+      && $_gdWs445Ok
+      && strpos($selfSrc, 'id="listImgEditMode"') !== false
+      && strpos($selfSrc, 'id="listImgSquareCorner"') !== false
+      && strpos($selfSrc, 'id="galImgEditMode"') !== false
+      && strpos($selfSrc, 'id="galSquareCorner"') !== false
+      && strpos($selfSrc, 'id="galCropBottomPct"') !== false
+      && strpos($selfSrc, 'function listImgEditCollect()') !== false
+      && strpos($selfSrc, 'function previewListImageEdit()') !== false
+      && strpos($selfSrc, 'function previewImageBottomCrop()') !== false
+      && strpos($selfSrc, "{v:'10." . "445'") !== false
+      && version_compare(APP_VERSION, '10.445', '>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -77005,6 +77312,43 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <button class="btn btn-indigo" onclick="testSel('image')">👁 تست</button>
                 </div>
                 <div class="sel-preview img-prev empty" id="prev-image">در انتظار...</div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #334155">
+                    <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:5px">🖼️ ویرایش تصویر فهرست (مربع سفید گوشه / کراپ عکس)</div>
+                    <select id="listImgEditMode" onchange="listImgEditModeChanged()" style="width:100%;font-size:11px;margin-bottom:6px">
+                        <option value="white_square" selected>⬜ افزودن مربع سفید در یکی از چهار گوشه عکس (پیش‌فرض)</option>
+                        <option value="crop">✂️ کراپ تصویر با تنظیمات سابق (برش پایین عکس)</option>
+                    </select>
+                    <div id="listImgSquareBox">
+                        <div class="row" style="align-items:center;gap:6px;margin-bottom:5px">
+                            <label style="flex:0 0 62px;font-size:11px">گوشهٔ عکس:</label>
+                            <select id="listImgSquareCorner" onchange="listImgEditChanged()" style="flex:1;font-size:11px">
+                                <option value="bottom_right">پایین راست ↘</option>
+                                <option value="bottom_left">پایین چپ ↙</option>
+                                <option value="top_right">بالا راست ↗</option>
+                                <option value="top_left">بالا چپ ↖</option>
+                            </select>
+                        </div>
+                        <div class="row" style="align-items:center;gap:6px">
+                            <label style="flex:0 0 62px;font-size:11px">اندازه (%):</label>
+                            <input type="number" id="listImgSquarePct" value="0" min="0" max="48" step="1" placeholder="مثلاً 15" oninput="listImgEditChanged()" style="flex:1">
+                            <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
+                            <input type="number" id="listImgSquarePx" value="0" min="0" max="600" step="5" placeholder="مثلاً 80" oninput="listImgEditChanged()" style="flex:1">
+                        </div>
+                        <div style="font-size:10px;color:#94a3b8;margin-top:4px">۰ = بدون تغییر · مربع سفید بدون به‌هم‌ریختن ابعاد مربعی تصویر، لوگو/تگ گوشه را می‌پوشاند.</div>
+                    </div>
+                    <div id="listImgCropBox" class="hidden">
+                        <div class="row" style="align-items:center;gap:6px">
+                            <label style="flex:0 0 62px;font-size:11px">پایین (%):</label>
+                            <input type="number" id="listImgCropBottomPct" value="0" min="0" max="45" step="1" placeholder="مثلاً 10" oninput="listImgEditChanged()" style="flex:1">
+                            <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
+                            <input type="number" id="listImgCropBottomPx" value="0" min="0" max="600" step="5" placeholder="مثلاً 60" oninput="listImgEditChanged()" style="flex:1">
+                        </div>
+                    </div>
+                    <div class="row" style="margin-top:6px">
+                        <button type="button" class="btn btn-purple" onclick="previewListImageEdit()" style="flex:1;font-size:11px">👁️ پیش‌نمایش قبل و بعد روی نمونه عکس فهرست</button>
+                    </div>
+                    <div id="listImgEditPreview" style="margin-top:6px"></div>
+                </div>
             </div>
             <div id="suggestions" class="hidden">
                 <h3 style="margin-top:12px">💡 پیشنهادها</h3>
@@ -77158,15 +77502,39 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
 
         <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #334155">
-            <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:6px">✂️ برش پایین تصویر (حذف تگ/واترمارک اسنپ‌شاپ و ...)</div>
-            <div class="row" style="align-items:center;gap:6px">
-                <label style="flex:0 0 62px;font-size:11px">پایین (%):</label>
-                <input type="number" id="galCropBottomPct" value="0" min="0" max="45" step="1" placeholder="مثلاً 10" oninput="galChanged()" style="flex:1">
-                <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
-                <input type="number" id="galCropBottomPx" value="0" min="0" max="600" step="5" placeholder="مثلاً 60" oninput="galChanged()" style="flex:1">
+            <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:5px">🖼️ ویرایش تصاویر گالری (مربع سفید گوشه / کراپ تصویر)</div>
+            <select id="galImgEditMode" onchange="galImgEditModeChanged()" style="width:100%;font-size:11px;margin-bottom:6px">
+                <option value="white_square" selected>⬜ افزودن مربع سفید در یکی از چهار گوشه عکس (پیش‌فرض)</option>
+                <option value="crop">✂️ کراپ تصویر با تنظیمات سابق (برش پایین عکس)</option>
+            </select>
+            <div id="galSquareBox">
+                <div class="row" style="align-items:center;gap:6px;margin-bottom:5px">
+                    <label style="flex:0 0 62px;font-size:11px">گوشهٔ عکس:</label>
+                    <select id="galSquareCorner" onchange="galChanged()" style="flex:1;font-size:11px">
+                        <option value="bottom_right">پایین راست ↘</option>
+                        <option value="bottom_left">پایین چپ ↙</option>
+                        <option value="top_right">بالا راست ↗</option>
+                        <option value="top_left">بالا چپ ↖</option>
+                    </select>
+                </div>
+                <div class="row" style="align-items:center;gap:6px">
+                    <label style="flex:0 0 62px;font-size:11px">اندازه (%):</label>
+                    <input type="number" id="galSquarePct" value="0" min="0" max="48" step="1" placeholder="مثلاً 15" oninput="galChanged()" style="flex:1">
+                    <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
+                    <input type="number" id="galSquarePx" value="0" min="0" max="600" step="5" placeholder="مثلاً 80" oninput="galChanged()" style="flex:1">
+                </div>
+                <div style="font-size:10px;color:#94a3b8;margin-top:4px">۰ = بدون تغییر · مربع سفید بدون تغییر ابعاد تصویر، لوگو/واترمارک گوشه را می‌پوشاند.</div>
+            </div>
+            <div id="galCropBox" class="hidden">
+                <div class="row" style="align-items:center;gap:6px">
+                    <label style="flex:0 0 62px;font-size:11px">پایین (%):</label>
+                    <input type="number" id="galCropBottomPct" value="0" min="0" max="45" step="1" placeholder="مثلاً 10" oninput="galChanged()" style="flex:1">
+                    <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
+                    <input type="number" id="galCropBottomPx" value="0" min="0" max="600" step="5" placeholder="مثلاً 60" oninput="galChanged()" style="flex:1">
+                </div>
             </div>
             <div class="row" style="margin-top:6px">
-                <button type="button" class="btn btn-purple" onclick="previewImageBottomCrop()" style="flex:1;font-size:11px">👁️ پیش‌نمایش قبل و بعد از برش روی نمونه محصول</button>
+                <button type="button" class="btn btn-purple" onclick="previewImageBottomCrop()" style="flex:1;font-size:11px">👁️ پیش‌نمایش قبل و بعد روی نمونه عکس گالری</button>
             </div>
             <div id="galCropPreview" style="margin-top:6px"></div>
         </div>
@@ -78812,6 +79180,9 @@ function testDetailSel(key) {
 /** تنظیمات گالری را از فرم می‌خواند */
 function galCollect() {
     const g = id => $(id) || {};
+    const editMode = (g('galImgEditMode').value === 'crop') ? 'crop' : 'white_square';
+    const cornerRaw = (g('galSquareCorner').value || 'bottom_right');
+    const corner = ['bottom_right', 'bottom_left', 'top_right', 'top_left'].includes(cornerRaw) ? cornerRaw : 'bottom_right';
     return {
         mode:            (g('galMode').value || 'off'),
         box:             (g('galBox').value || '').trim(),
@@ -78821,9 +79192,113 @@ function galCollect() {
         to:              parseInt(g('galTo').value || '10') || 10,
         max:             parseInt(g('galMax').value || '10') || 10,
         skip_first:      !!g('galSkipFirst').checked,
+        edit_mode:       editMode,
+        square_corner:   corner,
+        square_pct:      Math.max(0, Math.min(48, parseInt(g('galSquarePct').value || '0') || 0)),
+        square_px:       Math.max(0, Math.min(600, parseInt(g('galSquarePx').value || '0') || 0)),
         crop_bottom_pct: Math.max(0, Math.min(45, parseInt(g('galCropBottomPct').value || '0') || 0)),
         crop_bottom_px:  Math.max(0, Math.min(600, parseInt(g('galCropBottomPx').value || '0') || 0))
     };
+}
+
+function s4InferImgEditModeJs(cfg) {
+    cfg = cfg || {};
+    if (cfg.edit_mode === 'crop' || cfg.edit_mode === 'white_square') return cfg.edit_mode;
+    const cp = parseInt(cfg.crop_bottom_pct || 0) || 0;
+    const cx = parseInt(cfg.crop_bottom_px || 0) || 0;
+    const sp = parseInt(cfg.square_pct || 0) || 0;
+    const sx = parseInt(cfg.square_px || 0) || 0;
+    if ((cp > 0 || cx > 0) && sp <= 0 && sx <= 0) return 'crop';
+    return 'white_square';
+}
+
+function s4CornerLabelFa(corner) {
+    const map = {bottom_right: 'پایین راست', bottom_left: 'پایین چپ', top_right: 'بالا راست', top_left: 'بالا چپ'};
+    return map[corner] || 'پایین راست';
+}
+
+function s4BuildImgEditPreviewQuery(cfg) {
+    cfg = cfg || {};
+    const m = (cfg.edit_mode === 'crop') ? 'crop' : 'white_square';
+    if (m === 'crop') {
+        return '&edit_mode=crop&crop_bottom_pct=' + (parseInt(cfg.crop_bottom_pct || 0) || 0)
+            + '&crop_bottom_px=' + (parseInt(cfg.crop_bottom_px || 0) || 0);
+    }
+    return '&edit_mode=white_square&square_corner=' + encodeURIComponent(cfg.square_corner || 'bottom_right')
+        + '&square_pct=' + (parseInt(cfg.square_pct || 0) || 0)
+        + '&square_px=' + (parseInt(cfg.square_px || 0) || 0);
+}
+
+function s4RenderBeforeAfterPreview(box, sampleImg, cfg) {
+    if (!box) return;
+    if (!sampleImg) {
+        box.innerHTML = '<div style="font-size:11px;color:#fbbf24">ابتدا یک‌بار «👁 تست» سلکتور عکس یا استخراج انجام دهید تا نمونه تصویر پیدا شود.</div>';
+        return;
+    }
+    const ts = Date.now();
+    const origSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&no_crop=1&_t=' + ts;
+    const editSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + s4BuildImgEditPreviewQuery(cfg) + '&_t=' + ts;
+    let afterLabel = '';
+    if ((cfg.edit_mode || 'white_square') === 'crop') {
+        const sz = (cfg.crop_bottom_px > 0) ? (cfg.crop_bottom_px + 'px') : (cfg.crop_bottom_pct + '%');
+        afterLabel = 'پس از برش پایین (' + sz + ')';
+    } else {
+        const sz = (cfg.square_px > 0) ? (cfg.square_px + 'px') : (cfg.square_pct + '%');
+        afterLabel = 'مربع سفید · ' + s4CornerLabelFa(cfg.square_corner) + ' (' + sz + ')';
+    }
+    box.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
+        + '<div style="text-align:center"><div style="font-size:10px;color:#94a3b8;margin-bottom:4px">اصلی</div><img src="' + origSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#cbd5e1;border-radius:6px"></div>'
+        + '<div style="text-align:center"><div style="font-size:10px;color:#4ade80;margin-bottom:4px">' + esc(afterLabel) + '</div><img src="' + editSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#cbd5e1;border-radius:6px"></div>'
+        + '</div>';
+}
+
+function listImgEditCollect() {
+    const g = id => $(id) || {};
+    const editMode = (g('listImgEditMode').value === 'crop') ? 'crop' : 'white_square';
+    const cornerRaw = (g('listImgSquareCorner').value || 'bottom_right');
+    const corner = ['bottom_right', 'bottom_left', 'top_right', 'top_left'].includes(cornerRaw) ? cornerRaw : 'bottom_right';
+    return {
+        edit_mode:       editMode,
+        square_corner:   corner,
+        square_pct:      Math.max(0, Math.min(48, parseInt(g('listImgSquarePct').value || '0') || 0)),
+        square_px:       Math.max(0, Math.min(600, parseInt(g('listImgSquarePx').value || '0') || 0)),
+        crop_bottom_pct: Math.max(0, Math.min(45, parseInt(g('listImgCropBottomPct').value || '0') || 0)),
+        crop_bottom_px:  Math.max(0, Math.min(600, parseInt(g('listImgCropBottomPx').value || '0') || 0))
+    };
+}
+
+function listImgEditModeChanged(silent) {
+    const m = (($('listImgEditMode') || {}).value === 'crop') ? 'crop' : 'white_square';
+    if ($('listImgSquareBox')) $('listImgSquareBox').classList.toggle('hidden', m !== 'white_square');
+    if ($('listImgCropBox'))   $('listImgCropBox').classList.toggle('hidden', m !== 'crop');
+    if (!silent) listImgEditChanged();
+}
+
+function listImgEditChanged() { markDirty(); scheduleSave(); }
+
+function listImgEditApply(cfg) {
+    cfg = cfg || {};
+    const set = (id, v) => { const e = $(id); if (e) e.value = v; };
+    set('listImgEditMode', s4InferImgEditModeJs(cfg));
+    set('listImgSquareCorner', ['bottom_right', 'bottom_left', 'top_right', 'top_left'].includes(cfg.square_corner) ? cfg.square_corner : 'bottom_right');
+    set('listImgSquarePct', cfg.square_pct !== undefined ? cfg.square_pct : 0);
+    set('listImgSquarePx', cfg.square_px !== undefined ? cfg.square_px : 0);
+    set('listImgCropBottomPct', cfg.crop_bottom_pct !== undefined ? cfg.crop_bottom_pct : 0);
+    set('listImgCropBottomPx', cfg.crop_bottom_px !== undefined ? cfg.crop_bottom_px : 0);
+    if ($('listImgEditPreview')) $('listImgEditPreview').innerHTML = '';
+    listImgEditModeChanged(true);
+}
+
+function previewListImageEdit() {
+    const box = $('listImgEditPreview');
+    if (!box) return;
+    let sampleImg = (window._lastListTestedImageUrl && /^https?:\/\//i.test(window._lastListTestedImageUrl)) ? window._lastListTestedImageUrl : '';
+    if (!sampleImg) {
+        for (const [, p] of products) {
+            if (p && p.image && /^https?:\/\//i.test(p.image)) { sampleImg = p.image; break; }
+        }
+    }
+    s4RenderBeforeAfterPreview(box, sampleImg, listImgEditCollect());
 }
 
 /** تنظیمات ذخیره‌شده را در فرم می‌نشاند */
@@ -78837,31 +79312,37 @@ function galApply(cfg) {
     set('galFrom', cfg.from !== undefined ? cfg.from : 1);
     set('galTo', cfg.to !== undefined ? cfg.to : 10);
     set('galMax', cfg.max !== undefined ? cfg.max : 10);
+    set('galImgEditMode', s4InferImgEditModeJs(cfg));
+    set('galSquareCorner', ['bottom_right', 'bottom_left', 'top_right', 'top_left'].includes(cfg.square_corner) ? cfg.square_corner : 'bottom_right');
+    set('galSquarePct', cfg.square_pct !== undefined ? cfg.square_pct : 0);
+    set('galSquarePx', cfg.square_px !== undefined ? cfg.square_px : 0);
     set('galCropBottomPct', cfg.crop_bottom_pct !== undefined ? cfg.crop_bottom_pct : 0);
     set('galCropBottomPx', cfg.crop_bottom_px !== undefined ? cfg.crop_bottom_px : 0);
     if ($('galSkipFirst')) $('galSkipFirst').checked = !!cfg.skip_first;
     if ($('galCropPreview')) $('galCropPreview').innerHTML = '';
+    galImgEditModeChanged(true);
     galModeChanged(true);
+}
+
+function galImgEditModeChanged(silent) {
+    const m = (($('galImgEditMode') || {}).value === 'crop') ? 'crop' : 'white_square';
+    if ($('galSquareBox')) $('galSquareBox').classList.toggle('hidden', m !== 'white_square');
+    if ($('galCropBox'))   $('galCropBox').classList.toggle('hidden', m !== 'crop');
+    if (!silent) galChanged();
 }
 
 function previewImageBottomCrop() {
     const box = $('galCropPreview');
     if (!box) return;
-    let sampleImg = '';
-    for (const [, p] of products) {
-        if (p && p.image && /^https?:\/\//i.test(p.image)) { sampleImg = p.image; break; }
-    }
+    let sampleImg = (window._lastGalleryTestedImageUrl && /^https?:\/\//i.test(window._lastGalleryTestedImageUrl)) ? window._lastGalleryTestedImageUrl : '';
     if (!sampleImg) {
-        box.innerHTML = '<div style="font-size:11px;color:#fbbf24">ابتدا یک‌بار استخراج انجام دهید یا پروفایل دارای محصول را انتخاب کنید تا نمونه تصویر پیدا شود.</div>';
-        return;
+        for (const [, p] of products) {
+            if (p && Array.isArray(p.images) && p.images.length > 1 && /^https?:\/\//i.test(p.images[1])) { sampleImg = p.images[1]; break; }
+            if (p && Array.isArray(p.images) && p.images.length > 0 && /^https?:\/\//i.test(p.images[0])) { sampleImg = p.images[0]; break; }
+            if (p && p.image && /^https?:\/\//i.test(p.image)) { sampleImg = p.image; break; }
+        }
     }
-    const cfg = galCollect();
-    const origSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&no_crop=1&_t=' + Date.now();
-    const cropSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&crop_bottom_pct=' + cfg.crop_bottom_pct + '&crop_bottom_px=' + cfg.crop_bottom_px + '&_t=' + Date.now();
-    box.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
-        + '<div style="text-align:center"><div style="font-size:10px;color:#94a3b8;margin-bottom:4px">اصلی</div><img src="' + origSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
-        + '<div style="text-align:center"><div style="font-size:10px;color:#4ade80;margin-bottom:4px">پس از برش (' + (cfg.crop_bottom_px > 0 ? (cfg.crop_bottom_px + 'px') : (cfg.crop_bottom_pct + '%')) + ')</div><img src="' + cropSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
-        + '</div>';
+    s4RenderBeforeAfterPreview(box, sampleImg, galCollect());
 }
 
 /** با تغییر روش، فقط جعبهٔ همان روش نشان داده می‌شود */
@@ -78935,9 +79416,11 @@ function galleryTest() {
                + (d.count > 0 ? '✅ ' + toFa(d.count) + ' عکس پیدا شد' : '⚠️ هیچ عکسی پیدا نشد') + '</div>';
             h += '<div style="color:#94a3b8;font-size:10px;margin-bottom:6px">' + esc(d.note || '') + '</div>';
             if (d.images && d.images.length) {
+                window._lastGalleryTestedImageUrl = d.images[0];
+                const editQs = s4BuildImgEditPreviewQuery(cfg);
                 h += '<div style="display:flex;gap:5px;flex-wrap:wrap">';
                 d.images.slice(0, 12).forEach((u, i) => {
-                    h += '<div style="position:relative"><img src="?image_proxy=' + encodeURIComponent(u) + '" '
+                    h += '<div style="position:relative"><img src="?image_proxy=' + encodeURIComponent(u) + editQs + '" '
                        + 'style="width:62px;height:62px;object-fit:cover;border-radius:6px;border:1px solid '
                        + (i === 0 ? '#22c55e' : '#334155') + '" title="' + esc(u) + '">'
                        + '<span style="position:absolute;bottom:1px;right:2px;background:#000a;color:#fff;font-size:9px;padding:0 3px;border-radius:3px">'
@@ -79161,6 +79644,7 @@ function testSel(type) {
                     display = d.value || '(لینک یافت نشد)';
                     prevEl.className = 'sel-preview link-prev' + (d.value ? '' : ' empty');
                 } else if (type === 'image') {
+                    if (d.value && /^https?:\/\//i.test(d.value)) window._lastListTestedImageUrl = d.value;
                     display = d.value || '(تصویر یافت نشد)';
                     prevEl.className = 'sel-preview img-prev' + (d.value ? '' : ' empty');
                 }
@@ -79735,6 +80219,9 @@ function applyProfile(p, keepTab) {
         });
         renderDetailFieldsList();
     }
+    window._lastListTestedImageUrl = '';
+    window._lastGalleryTestedImageUrl = '';
+    listImgEditApply(p.listImageEdit || {}); // v10.445
     galApply(p.gallery || {});           // v8.64
 
     updatePagUI();
@@ -79899,6 +80386,7 @@ function collectProfileData() {
         pagVal: $('pagVal').value,
         selectors: {...sel},
         detailSelectors: JSON.parse(JSON.stringify(detailSel)),
+        listImageEdit: listImgEditCollect(),         // v10.445
         gallery: galCollect(),                       // v8.64
         titleSuffix: $('titleSuffix').value,
         priceMode: $('priceMode').value,
@@ -79947,7 +80435,7 @@ function saveProfileSilent() {
     fd.append('loaded_updated_at',String(currentProfileUpdatedAt));
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
@@ -80003,7 +80491,7 @@ function saveProfile() {
     fd.append('action', 'save_profile');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
@@ -80062,6 +80550,7 @@ function purgeDeletedProfileClientState(deletedKey, deletedUrl) {
         currentProfileUpdatedAt = 0;
         if ($('url')) $('url').value = '';
         if ($('profileName')) $('profileName').value = '';
+        try { listImgEditApply({}); galApply({}); } catch (e) {}
         products.clear();
         order = [];
         try { refreshViews(); update(); } catch (e) {}
@@ -83852,6 +84341,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.445', t:'🖼️ ویرایش تصویر در استخراج فهرست و گالری با منوی دوگزینه‌ای: افزودن مربع سفید چهارگوشه (پیش‌فرض) یا کراپ تصویر', items:[
+    'ویرایش تصویر محصول اکنون علاوه بر بخش «گالری» (صفحهٔ جزئیات)، به سلکتور «🖼️ تصویر» در «سلکتورهای لیست محصولات» (#s-image) نیز اضافه شد و تنظیمات مستقل آن در پروفایل (listImageEdit) ذخیره، بازیابی و پیش‌نمایش زنده می‌شود.',
+    'در هر دو بخشِ سلکتور عکس لیست و سلکتور گالری، منوی کشویی دوگزینه‌ای اضافه شد: ۱) حالت پیش‌فرض «⬜ افزودن مربع سفید در یکی از چهار گوشه عکس» با انتخاب گوشه (پایین راست، پایین چپ، بالا راست، بالا چپ) و اندازهٔ قابل تنظیم به درصد یا پیکسل؛ ۲) حالت «✂️ کراپ تصویر با تنظیمات سابق» (برش پایین عکس با درصد یا پیکسل).',
+    'موتور گرافیکی s4AddWhiteSquareBytes و توزیع‌کنندهٔ یکپارچهٔ s4ApplyImageEditBytes با حفظ ابعاد دقیق تصویر (بدون به‌هم‌ریختن نسبت مربعی عکس در باسلام/ووکامرس) و حفظ شفافیت PNG/WebP پیاده‌سازی شد و پروفایل‌های قدیمی دارای برش پایین عکس از نسخهٔ 10.438 نیز به‌صورت خودکار با همان حالت کراپ سازگار می‌مانند.',
+    'تفکیک هوشمند نقش عکس فهرست (عکس شاخص اول) و عکس‌های گالری در s4ResolveImageCropForUrl، کلید کش مجزای s4ImageCacheKey، آپلودرهای باسلام و ووکامرس (saveImageLocal / bslUploadMany / wooUploadImage / wooGalleryPayload) و پراکسی پیش‌نمایش زنده (?image_proxy) برقرار شد.'
+  ]},
   {v:'10.444', t:'🤖 بازنگری جامع پروایدرهای هوش مصنوعی: استانداردسازی اندپوینت‌ها، هدرهای احراز هویت، پروتکل‌های نیتیو، بدنهٔ درخواست و ضدحذف هدر در Worker', items:[
     'لایهٔ HTTP و Cloudflare Worker بازطراحی شد (aiHttpPrepare + webconsole.worker.js + aiShowWorkerCode): در حالت template (?url={url}) هدرهای X-Target-* دیگر به سرورهای مقصد نشت نمی‌کنند (رفع خطای 403 Access denied by security policy در OpenRouter)، هدرهای پشتیبان X-Authorization و X-API-Key-Fwd برای بازیابی کلید در صورت حذف هدر Authorization اضافه شدند، و خطای ۴۰۱ ناشی از حذف هدر در Worker دیگر کلیدهای سالم (Mistral، Cohere، Gemini، Ollama Cloud) را در ai_key_state.json مسدود نمی‌کند بلکه خودکار به DoH/Direct یا اندپوینت نیتیو سوئیچ می‌کند.',
     'پشتیبانی کامل از ۲۲ پروایدر استاندارد (aiProviderPresets + aiDetectProviderDialect + aiProviderEndpoint) اضافه شد: مسیریابی کانونیکال و بدون تکرار مسیر برای OpenRouter، Groq (/openai/v1/chat/completions)، Google Gemini (/v1beta/openai/chat/completions و نیتیو :generateContent?key=...)، Anthropic (/v1/messages با هدرهای x-api-key و anthropic-version)، مدل‌های Claude روی OpenCode Zen (/zen/v1/messages)، Cohere (/compatibility/v1/chat/completions و نیتیو /v2/chat)، Hugging Face Router (router.huggingface.co/v1/chat/completions به‌جای اندپوینت بازنشستهٔ 410)، Together، Cerebras، DeepSeek، OpenAI، xAI، GitHub Models، NVIDIA NIM، Fireworks (/inference/v1/chat/completions)، Perplexity، SambaNova، LLM7، Pollinations و Ollama محلی/ابری (رفع باگ /v1/v1/chat/completions).',
