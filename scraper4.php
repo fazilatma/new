@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.435';
+const APP_VERSION = '10.436';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13121,15 +13121,9 @@ if(isset($_POST['start_profile_destination_equalize'])){
     if($pk===''||!isset($profiles[$pk])){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'profile_not_found'],JSON_UNESCAPED_UNICODE);exit;}
     if($destination===''||!in_array($destination,$allowed,true)){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'destination_not_enabled'],JSON_UNESCAPED_UNICODE);exit;}
     $requested=time();$chain='cell_equalize|'.substr(sha1($pk.'|'.$destination),0,16);
-    $build=s4WorkerEnqueueMatrixBuild(['profile'=>$pk,'parallel_destinations'=>false,'live_fill'=>true,
-        'selected_destinations'=>[$destination],'slice_seconds'=>20,'source'=>'start_cell_equalize','dedup_key'=>'matrix_build|'.$chain],false);
-    if(empty($build['ok'])){http_response_code(409);echo json_encode(['ok'=>false,'error'=>(string)($build['error']??'build_enqueue_failed'),'build'=>$build],JSON_UNESCAPED_UNICODE);exit;}
-    $fix=s4WorkerEnqueueMatrixFix(['scope'=>$destination==='woo'?'woo':'bsl','source'=>'start_cell_equalize','delay_ms'=>120,
-        'duplicate_keep'=>'newest','view_filters'=>['target_profile_key'=>$pk],
-        'selected_destinations'=>[$destination],'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chain],false);
-    if(empty($fix['ok'])){http_response_code(409);echo json_encode(['ok'=>false,'error'=>(string)($fix['error']??'fix_enqueue_failed'),'build'=>$build,'fix'=>$fix],JSON_UNESCAPED_UNICODE);exit;}
-    /* A real destination queue owns add/update work, so this operation appears
-       in Send and inherits the same locks, checkpoint, Continue and watchdog. */
+    /* v10.436: equalization is owned by a real full-profile destination queue.
+       It must not wait for, or fail because of, stale/missing Start-table counts
+       or a busy discrepancy build. The matrix refresh below is best-effort only. */
     $sendProfile=$profiles[$pk];$sendProfile['name']=(string)($profiles[$pk]['name']??$pk).' · برابر‌سازی مقصد';$sendProfile['syncConfig']=array_merge((array)($sendProfile['syncConfig']??[]),[
         'target'=>$destination==='woo'?'woo':'bsl','actionBasis'=>'profile','wooOnlyChanged'=>false,'bslOnlyChanged'=>false]);
     $sendOpts=['target'=>$destination==='woo'?'woo':'bsl','trigger'=>'cell_equalize','replace_waiting'=>false,'allow_parallel'=>true];
@@ -13142,23 +13136,38 @@ if(isset($_POST['start_profile_destination_equalize'])){
         :manualSyncEnqueueSends($pk,$sendProfile,$cn,['ok'=>true],$sendOpts);
     if(!$queueIds)$queueIds=array_values(array_unique(array_filter(array_map('strval',(array)($send['queue_ids']??[])))));
     if(!$queueIds){
+        $sendError=(string)($send['error']??implode(' · ',array_filter(array_map('strval',(array)($send['log']??[])))));
+        if($sendError==='')$sendError='برای این پروفایل و مقصد صف ارسالی ساخته نشد';
         syncPipelineMark($pk,(string)($profiles[$pk]['name']??$pk),'error','manual',[
             'pipeline_key'=>'cell:'.$pk.':'.$destination,'operation'=>'cell_equalize','destination'=>$destination,
-            'matrix_build_job_id'=>(string)($build['job_id']??''),'matrix_fix_job_id'=>(string)($fix['job_id']??''),
-            'message'=>'ساخت صف واقعی مقصد ناموفق بود','error'=>(string)($send['error']??implode(' · ',(array)($send['log']??[])))]);
-        http_response_code(409);echo json_encode(['ok'=>false,'error'=>'send_queue_not_created','send'=>$send,'build'=>$build,'fix'=>$fix],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+            'message'=>'ساخت صف واقعی مقصد ناموفق بود','error'=>$sendError]);
+        http_response_code(409);echo json_encode(['ok'=>false,'error'=>$sendError,'code'=>'send_queue_not_created','send'=>$send],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
     }
+
+    /* Refresh/correction is useful for destination-only removals, but it is no
+       longer a prerequisite for add/update equalization. Busy/deduplicated
+       matrix workers are reported without turning the button action into an error. */
+    $build=s4WorkerEnqueueMatrixBuild(['profile'=>$pk,'parallel_destinations'=>false,'live_fill'=>true,
+        'selected_destinations'=>[$destination],'slice_seconds'=>20,'source'=>'start_cell_equalize','dedup_key'=>'matrix_build|'.$chain],false);
+    $fix=['ok'=>false,'skipped'=>'build_not_queued'];
+    if(!empty($build['ok']))$fix=s4WorkerEnqueueMatrixFix(['scope'=>$destination==='woo'?'woo':'bsl','source'=>'start_cell_equalize','delay_ms'=>120,
+        'duplicate_keep'=>'newest','view_filters'=>['target_profile_key'=>$pk],
+        'selected_destinations'=>[$destination],'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chain],false);
+    $matrixOptional=['build_queued'=>!empty($build['ok']),'fix_queued'=>!empty($fix['ok']),
+        'build_error'=>(string)($build['error']??''),'fix_error'=>(string)($fix['error']??$fix['skipped']??'')];
     syncPipelineMark($pk,(string)($profiles[$pk]['name']??$pk),'send','manual',[
         'pipeline_key'=>'cell:'.$pk.':'.$destination,
         'operation'=>'cell_equalize','destination'=>$destination,'send_queue_ids'=>$queueIds,
         'matrix_build_job_id'=>(string)($build['job_id']??''),'matrix_fix_job_id'=>(string)($fix['job_id']??''),
-        'message'=>'برابر‌سازی سلول: صف واقعی مقصد + ساخت و اصلاح هدفمند',
+        'matrix_refresh_optional'=>$matrixOptional,
+        'message'=>'برابر‌سازی مستقیم از پروفایل ذخیره‌شده؛ تازه‌سازی شمارش‌ها اختیاری است',
         'stage_details'=>['send'=>syncSendStageDetails(['queued'=>(int)($send['woo_total']??$send['bsl_total']??0),
-            'message'=>'صف واقعی مقصد ساخته شد؛ پایداری و ادامه از تب ارسال'])]]);
+            'message'=>'صف واقعی مقصد مستقل از شمارش جدول ساخته شد؛ پایداری و ادامه از تب ارسال'])]]);
     $spawn=s4WorkerIsActive()?['ok'=>true,'already_active'=>true]:s4SpawnPersistentWorker();
     echo json_encode(['ok'=>true,'queued'=>true,'profile_key'=>$pk,'destination'=>$destination,
-        'build_job_id'=>(string)($build['job_id']??''),'fix_job_id'=>(string)($fix['job_id']??''),'send_queue_ids'=>$queueIds,'send'=>$send,'worker'=>$spawn,
-        'message'=>'همگام‌سازی، صف واقعی مقصد و اصلاح هدفمند در worker ثبت شد'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        'build_job_id'=>(string)($build['job_id']??''),'fix_job_id'=>(string)($fix['job_id']??''),'matrix_refresh_optional'=>$matrixOptional,
+        'send_queue_ids'=>$queueIds,'send'=>$send,'worker'=>$spawn,
+        'message'=>'صف برابر‌سازی مستقیم ساخته شد؛ شمارش جدول شرط اجرا نیست'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if (isset($_GET['start_product_stats'])) {
@@ -46117,6 +46126,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'⚠ مغایرت قیمت:')!==false
       && strpos($selfSrc,"{v:'10." . "435'")!==false
       && version_compare(APP_VERSION,'10.435','>='));
+    $_eqSend436=strpos($selfSrc,":manualSyncEnqueueSends(\$pk,\$sendProfile,\$cn,['ok'=>true],\$sendOpts)");
+    $_eqBuild436=strpos($selfSrc,"\$build=s4WorkerEnqueueMatrixBuild(['profile'=>\$pk");
+    $add('10.436', 'برابر‌سازی پیش از هر تازه‌سازی ماتریس صف مستقیم مقصد را می‌سازد',
+         $_eqSend436!==false&&$_eqBuild436!==false&&$_eqSend436<$_eqBuild436
+      && strpos($selfSrc,"'matrix_refresh_optional'=>\$matrixOptional")!==false
+      && strpos($selfSrc,"'message'=>'صف برابر‌سازی مستقیم ساخته شد؛ شمارش جدول شرط اجرا نیست'")!==false);
+    $add('10.436', 'دکمه برابر‌سازی همیشه و مستقل از عدد سلول در دسترس است',
+         strpos($selfSrc,"pending=startDestinationEqualizePending.has")!==false
+      && strpos($selfSrc,"pending?'⏳ صف مستقیم فعال…':'⚖️ برابر‌سازی'")!==false
+      && strpos($selfSrc,"btn.textContent='⏳ ساخت صف مستقیم…'")!==false
+      && strpos($selfSrc,"{v:'10." . "436'")!==false
+      && version_compare(APP_VERSION,'10.436','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -72903,7 +72924,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <tfoot id="startProfileBreakdownFoot"></tfoot>
           </table>
         </div>
-        <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل جدول مغایرت‌اند. «متفرقه بدون کد» در شمار پروفایل‌ها وارد نمی‌شود. دکمهٔ برابر‌سازی فقط همان پروفایل و مقصد را دوباره می‌سازد و اصلاح می‌کند و به محصولات بدون کد دست نمی‌زند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
+        <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل جدول مغایرت‌اند. «متفرقه بدون کد» در شمار پروفایل‌ها وارد نمی‌شود. دکمهٔ برابر‌سازی بدون وابستگی به تازه‌بودن این شمارش‌ها، همهٔ محصولات ذخیره‌شدهٔ همان پروفایل را مستقیماً در صف مقصد می‌گذارد؛ تازه‌سازی ماتریس فقط یک کار تکمیلی است و به محصولات بدون کد دست نمی‌زند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
         <style>
           .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-price-mismatch{display:block;margin-top:3px;font-size:7.5px;line-height:1.35;color:#facc15;font-weight:700;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
@@ -74131,7 +74152,7 @@ function renderStartProfileBreakdown(d){
   if(!rows.length){body.innerHTML='<tr><td colspan="'+cols+'" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
   let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
   const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},pm=row.price_mismatches||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
-    const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),mis=parseInt(pm[x.key]||0),dp=total?Math.round(n*100/total):0,unequal=n!==total,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small><small class="spb-price-mismatch" title="بر پایهٔ قیمت مورد انتظار پس از اعمال ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mis)+'</small>'+(unequal?'<button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ در صف ساخت و اصلاح…':'⚖️ برابر‌سازی')+'</button>':'')+'</td>';}).join('');
+    const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),mis=parseInt(pm[x.key]||0),dp=total?Math.round(n*100/total):0,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small><small class="spb-price-mismatch" title="بر پایهٔ قیمت مورد انتظار پس از اعمال ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mis)+'</small><button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ صف مستقیم فعال…':'⚖️ برابر‌سازی')+'</button></td>';}).join('');
     return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
       '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
@@ -74210,11 +74231,13 @@ async function startMiscRunActions(action,chosen){
 const startDestinationEqualizePending=new Set();
 function equalizeStartDestination(btn){
   const pk=String((btn&&btn.dataset.profile)||''),dest=String((btn&&btn.dataset.destination)||''),sig=pk+'|'+dest;if(!pk||!dest||startDestinationEqualizePending.has(sig))return;
-  startDestinationEqualizePending.add(sig);btn.disabled=true;btn.textContent='⏳ در صف ساخت و اصلاح…';
+  startDestinationEqualizePending.add(sig);btn.disabled=true;btn.textContent='⏳ ساخت صف مستقیم…';
   const fd=new FormData();fd.append('start_profile_destination_equalize','1');fd.append('profile_key',pk);fd.append('destination',dest);
-  fetch(location.pathname,{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json().then(d=>({r,d}))).then(({r,d})=>{
-    if(!r.ok||!d.ok)throw new Error(d.error||'صف‌کردن عملیات ناموفق بود');btn.textContent='✓ در صف worker';showToast('ساخت مغایرت هدفمند و اصلاح این مقصد در صف قرار گرفت');
+  fetch(location.pathname,{method:'POST',body:fd,cache:'no-store'}).then(async r=>{const text=await r.text();let d={};try{d=JSON.parse(text)}catch(e){d={ok:false,error:text.trim()||('HTTP '+r.status)}}return{r,d}}).then(({r,d})=>{
+    if(!r.ok||!d.ok){const logs=d&&d.send&&Array.isArray(d.send.log)?d.send.log.join(' · '):'';throw new Error((d&&d.error)||logs||'صف‌کردن عملیات ناموفق بود')}
+    btn.textContent='✓ در صف ارسال';showToast(d.message||'صف برابر‌سازی مستقیم ساخته شد؛ شمارش جدول شرط اجرا نیست');
     setTimeout(()=>loadStartProductOverview(true),12000);
+    setTimeout(()=>{startDestinationEqualizePending.delete(sig);if(document.body.contains(btn)){btn.disabled=false;btn.textContent='⚖️ برابر‌سازی'}},60000);
   }).catch(e=>{startDestinationEqualizePending.delete(sig);btn.disabled=false;btn.textContent='⚖️ برابر‌سازی';showToast(e.message||String(e),true)});
 }
 function loadStartProductOverview(force){
@@ -79840,6 +79863,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.436', t:'⚖️ برابر‌سازی مستقل از شمارش جدول', items:[
+    'کلیک برابر‌سازی ابتدا مستقیماً از محصولات ذخیره‌شدهٔ پروفایل، صف واقعی همان مقصد را می‌سازد و دیگر منتظر build جدول مغایرت نمی‌ماند.',
+    'قدیمی، صفر یا ناهماهنگ بودن تعداد محصولاتِ نمایش‌داده‌شده برای پروفایل/غرفه مانع ساخت صف نیست.',
+    'تازه‌سازی ماتریس و اصلاح مقصدهای اضافی همچنان به‌صورت تکمیلی صف می‌شود، اما busy یا خطای آن عملیات اصلی را ناموفق نشان نمی‌دهد.',
+    'دکمه در همهٔ سلول‌های پروفایل/مقصد نمایش داده می‌شود و خطای واقعی ساخت صف مقصد را با متن کامل نشان می‌دهد.'
+  ]},
   {v:'10.435', t:'💰 شمار مغایرت قیمت در جدول پروفایل‌ها', items:[
     'زیر تعداد موجودی هر مقصد، شمار محصولات دارای مغایرت قیمت با فونت کوچک و رنگ زرد نمایش داده می‌شود.',
     'شمارش برای هر پروفایل و هر مقصد جداست و ردیف جمع جدول نیز مجموع هر مقصد را نشان می‌دهد.',
