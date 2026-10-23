@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.444';
+const APP_VERSION = '10.446';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47932,6 +47932,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'function s4ApplyImageTransformBytes(')!==false
       && strpos($selfSrc,"{v:'10." . "444'")!==false
       && version_compare(APP_VERSION,'10.444','>='));
+    $add('10.446', 'پیش‌نمایش مربع سفید و برش پایین مستقل از image_proxy و با ابعاد واقعی تصویر در مرورگر رندر می‌شود',
+         strpos($selfSrc,'function previewImageTransformLoaded(')!==false
+      && strpos($selfSrc,'data-s4-square')!==false
+      && strpos($selfSrc,"original.src=sampleImg;result.onload=()=>previewImageTransformLoaded(prefix,result,c);result.src=sampleImg;")!==false
+      && strpos($selfSrc,"stage.style.height=Math.max(1,h-Math.min(h-1,cut))+'px';")!==false
+      && strpos($selfSrc,"{v:'10." . "446'")!==false
+      && version_compare(APP_VERSION,'10.446','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -77595,13 +77602,36 @@ function previewImageTransform(prefix) {
     const box=$(prefix+'TransformPreview');if(!box)return;let sampleImg='';
     for(const [,p] of products){if(p&&p.image&&/^https?:\/\//i.test(p.image)){sampleImg=p.image;break;}}
     if(!sampleImg){box.innerHTML='<div style="font-size:11px;color:#fbbf24">ابتدا یک محصول دارای تصویر استخراج کنید.</div>';return;}
-    const c=imageTransformCollect(prefix), q=new URLSearchParams(c);q.set('image_proxy',sampleImg);q.set('_t',Date.now());
-    const original='?image_proxy='+encodeURIComponent(sampleImg)+'&no_crop=1&_t='+Date.now(), transformed='?'+q.toString();
+    const c=imageTransformCollect(prefix);
     const label=c.transform_mode==='white_square'?'مربع سفید '+c.white_square_size+'px':'برش '+(c.crop_bottom_px>0?c.crop_bottom_px+'px':c.crop_bottom_pct+'%');
     box.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
-      +'<div style="text-align:center"><div style="font-size:10px;color:#94a3b8">اصلی</div><img src="'+original+'" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff"></div>'
-      +'<div style="text-align:center"><div style="font-size:10px;color:#4ade80">'+label+'</div><img src="'+transformed+'" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff"></div></div>';
+      +'<div style="text-align:center;min-width:0"><div style="font-size:10px;color:#94a3b8">اصلی</div><div style="height:174px;display:flex;align-items:center;justify-content:center"><img data-s4-original style="max-width:100%;max-height:170px;object-fit:contain;background:#fff"></div></div>'
+      +'<div style="text-align:center;min-width:0"><div style="font-size:10px;color:#4ade80">'+label+'</div><div style="height:174px;display:flex;align-items:center;justify-content:center"><span data-s4-stage style="position:relative;display:inline-block;overflow:hidden;line-height:0;background:#fff"><img data-s4-result style="display:block;max-width:100%;max-height:170px;object-fit:contain"><i data-s4-square style="display:none;position:absolute;background:#fff;z-index:2"></i></span></div></div></div>';
+    const original=box.querySelector('[data-s4-original]'), result=box.querySelector('[data-s4-result]');
+    // Preview is intentionally browser-side: it remains visible even when the server cannot fetch a hotlink-protected image.
+    original.src=sampleImg;result.onload=()=>previewImageTransformLoaded(prefix,result,c);result.src=sampleImg;
 }
+function previewImageTransformLoaded(prefix,img,cfg) {
+    const box=$(prefix+'TransformPreview');if(!box||!img)return;
+    const stage=box.querySelector('[data-s4-stage]'),square=box.querySelector('[data-s4-square]');if(!stage||!square)return;
+    requestAnimationFrame(()=>{
+        const w=img.clientWidth||img.width,h=img.clientHeight||img.height;if(!w||!h)return;
+        stage.style.width=w+'px';stage.style.height=h+'px';square.style.display='none';
+        if(cfg.transform_mode==='crop'){
+            const scale=img.naturalHeight>0?h/img.naturalHeight:1;
+            const cut=cfg.crop_bottom_px>0?cfg.crop_bottom_px*scale:h*cfg.crop_bottom_pct/100;
+            stage.style.height=Math.max(1,h-Math.min(h-1,cut))+'px';
+            return;
+        }
+        const scale=img.naturalWidth>0?w/img.naturalWidth:1,size=Math.max(1,Math.min(w,h,cfg.white_square_size*scale));
+        square.style.width=size+'px';square.style.height=size+'px';square.style.display='block';
+        square.style.top=cfg.white_square_corner.startsWith('top')?'0':'auto';
+        square.style.bottom=cfg.white_square_corner.startsWith('bottom')?'0':'auto';
+        square.style.left=cfg.white_square_corner.endsWith('left')?'0':'auto';
+        square.style.right=cfg.white_square_corner.endsWith('right')?'0':'auto';
+    });
+}
+
 function previewImageBottomCrop(){ previewImageTransform('gal'); }
 
 /** با تغییر روش، فقط جعبهٔ همان روش نشان داده می‌شود */
@@ -82594,6 +82624,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.446', t:'👁️ تعمیر پیش‌نمایش مربع سفید و برش پایین تصویر', items:[
+    'پیش‌نمایش قبل/بعد دیگر برای ساخت تصویر سمت راست به واکشی دوبارهٔ سرور وابسته نیست و مستقیماً در مرورگر رندر می‌شود؛ بنابراین محدودیت hotlink، خطای پراکسی یا کش سرور مانع نمایش اثر نمی‌شود.',
+    'اندازهٔ مربع سفید بر اساس نسبت اندازهٔ طبیعی تصویر به اندازهٔ نمایشی محاسبه می‌شود و هر چهار گوشه دقیقاً در همان موقعیت انتخاب‌شده نمایش داده می‌شوند.',
+    'برش درصدی و پیکسلی با محاسبهٔ ارتفاع نمایشی واقعی، پایین تصویر را فوراً پنهان می‌کند و تغییر تنظیمات با زدن پیش‌نمایش جدید قابل مشاهده است.'
+  ]},
   {v:'10.444', t:'🖼️ پردازش مستقل تصاویر فهرست و گالری با مربع سفید یا برش پایین', items:[
     'کنار سلکتور تصویر فهرست و سلکتورهای گالری، دراپ‌داون مستقل پردازش تصویر اضافه شد: «افزودن مربع سفید به یکی از چهار گوشه» با اندازهٔ پیکسلی قابل تنظیم (پیش‌فرض) یا «برش پایین تصویر».',
     'تنظیمات قدیمی درصد/پیکسل برش پایین بدون تغییر حفظ شده‌اند؛ پروفایل‌های قدیمی دارای برش به‌صورت خودکار در حالت برش باز می‌شوند و پروفایل‌های بدون تنظیم از مربع سفید پیش‌فرض استفاده می‌کنند.',
