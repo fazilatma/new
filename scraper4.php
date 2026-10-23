@@ -37,6 +37,7 @@ ignore_user_abort(true);
 const DEFAULT_URL = 'https://barfbox.ir/search/?page=1';
 const FETCH_MISSING_IMAGES = true;
 const PROFILES_FILE = __DIR__ . '/profiles.json';
+const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
@@ -368,7 +369,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.438';
+const APP_VERSION = '10.439';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2166,6 +2167,7 @@ function s4WorkerRunJob(array $job): array {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         $phase = (string)($payload['phase'] ?? 'all');
         if (!in_array($phase, ['all','list','detail'], true)) $phase = 'all';
+        $initialPhase = $phase;
         $forceAll = !empty($payload['force_all']);
         $extractQueueId=trim((string)($payload['extract_queue_id']??''));
         $maxPagesOverride=array_key_exists('max_pages',$payload)?max(0,(int)$payload['max_pages']):-1;
@@ -2187,6 +2189,7 @@ function s4WorkerRunJob(array $job): array {
                     break;
                 }
                 $runPhase = (string)($prep['phase'] ?? $runPhase);
+                if ($initialPhase === 'all' && $runPhase === 'list') $runPhase = 'all';
                 $reserved = (string)($prep['queue_id'] ?? '');
                 $extractQueueId=$reserved;
             }
@@ -3258,6 +3261,97 @@ function profileResolveKey(string $given, array $profiles): ?string {
    نگه‌داشته می‌شود تا داده از دست نرود، (۲) اگر نسخهٔ پشتیبانِ سالمی
    هست از آن خوانده می‌شود، (۳) و مهم‌تر از همه، پرچمِ خرابی روشن
    می‌شود تا saveProfiles از نوشتنِ روی آن خودداری کند. */
+function s4DeletedProfilesLoad(): array {
+    if (!defined('PROFILES_DELETED_FILE') || !is_file(PROFILES_DELETED_FILE)) return [];
+    $d = @json_decode((string)@file_get_contents(PROFILES_DELETED_FILE), true);
+    return is_array($d) ? $d : [];
+}
+
+function s4DeletedProfilesSave(array $map): void {
+    if (!defined('PROFILES_DELETED_FILE')) return;
+    if (count($map) > 500) {
+        asort($map);
+        $map = array_slice($map, -500, null, true);
+    }
+    writeJsonFile(PROFILES_DELETED_FILE, $map);
+}
+
+function s4MarkProfileDeletedTombstone(string $key, string $url = ''): void {
+    $key = trim($key);
+    if ($key === '') return;
+    $map = s4DeletedProfilesLoad();
+    $now = time();
+    $map[$key] = $now;
+    if ($url !== '') {
+        $normKey = profileKey(function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($url) : $url);
+        if ($normKey !== '') $map[$normKey] = $now;
+    }
+    s4DeletedProfilesSave($map);
+}
+
+function s4ClearProfileDeletedTombstone(string $key, string $url = ''): void {
+    $map = s4DeletedProfilesLoad();
+    if (!$map) return;
+    $changed = false;
+    if ($key !== '' && isset($map[$key])) { unset($map[$key]); $changed = true; }
+    if ($url !== '') {
+        $normKey = profileKey(function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($url) : $url);
+        if ($normKey !== '' && isset($map[$normKey])) { unset($map[$normKey]); $changed = true; }
+    }
+    if ($changed) s4DeletedProfilesSave($map);
+}
+
+function s4IsProfileDeletedTombstone(string $key): bool {
+    if ($key === '') return false;
+    $map = s4DeletedProfilesLoad();
+    return isset($map[$key]);
+}
+
+function s4StripDeletedProfiles(array $profiles): array {
+    if (!$profiles) return $profiles;
+    $del = s4DeletedProfilesLoad();
+    if (!$del) return $profiles;
+    foreach ($del as $dk => $_at) {
+        if (isset($profiles[$dk])) unset($profiles[$dk]);
+    }
+    return $profiles;
+}
+
+function s4CleanupDeletedProfileArtifacts(string $key, string $url = ''): void {
+    if ($key === '') return;
+    try {
+        if (function_exists('loadSyncState') && function_exists('saveSyncState')) {
+            $st = loadSyncState();
+            if (isset($st[$key])) {
+                unset($st[$key]);
+                saveSyncState($st);
+            }
+        }
+    } catch (Throwable $_e) {}
+    try {
+        if (function_exists('extractReadQueue') && function_exists('extractWriteQueue')) {
+            $eq = extractReadQueue();
+            $changedEq = false;
+            $kept = [];
+            foreach ((array)($eq['entries'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                if ((string)($row['profile_key'] ?? '') === $key) {
+                    $qid = trim((string)($row['id'] ?? ''));
+                    if ($qid !== '' && function_exists('extractStopSignalSetForQueue')) extractStopSignalSetForQueue($qid);
+                    if (function_exists('extractCancelWorkerForQueueRow')) @extractCancelWorkerForQueueRow($row);
+                    $changedEq = true;
+                    continue;
+                }
+                $kept[] = $row;
+            }
+            if ($changedEq) {
+                $eq['entries'] = $kept;
+                extractWriteQueue($eq);
+            }
+        }
+    } catch (Throwable $_e) {}
+}
+
 function loadProfiles(): array {
 $GLOBALS['_profilesCorrupt'] = false;
 if (!file_exists(PROFILES_FILE)) return [];
@@ -3269,13 +3363,14 @@ if ($json === false || trim((string)$json) === '') {
         $bd = @json_decode((string)@file_get_contents($bk), true);
         if (is_array($bd) && $bd !== []) {
             @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . " | فایل خالی بود — از نسخهٔ پشتیبان خوانده شد (" . count($bd) . " پروفایل)\n", FILE_APPEND);
-            return $bd;
+            return s4StripDeletedProfiles($bd);
         }
     }
     return [];
 }
 $data = @json_decode($json, true);
 if (is_array($data)) {
+    $data = s4StripDeletedProfiles($data);
     /* نسخهٔ پشتیبان فقط از یک خوانشِ سالم و غیرخالی ساخته می‌شود، و فقط
        وقتی محتوا واقعاً عوض شده — تا هزینهٔ نوشتن در هر بار خواندن نباشد. */
     if ($data !== []) {
@@ -3291,6 +3386,7 @@ $bk = PROFILES_FILE . '.bak';
 if (is_file($bk)) {
     $bd = @json_decode((string)@file_get_contents($bk), true);
     if (is_array($bd) && $bd !== []) {
+        $bd = s4StripDeletedProfiles($bd);
         /* v9.92: بازیابی موفق بود، پس دیگر «خراب» نیستیم. اگر پرچم را
            روشن بگذاریم، saveProfiles تا ابد رد می‌شود و برنامه بی‌آنکه
            کسی بفهمد فقط‌خواندنی می‌ماند. فایل اصلی را همین‌جا از روی
@@ -3319,8 +3415,12 @@ if (!empty($GLOBALS['_profilesCorrupt'])) {
     @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . " | نوشتن رد شد: خوانشِ قبلی خراب بود\n", FILE_APPEND);
     return false;
 }
+if (!$allowDelete) {
+    $profiles = s4StripDeletedProfiles($profiles);
+}
 if (!$allowDelete && is_file(PROFILES_FILE)) {
     $onDisk = @json_decode((string)@file_get_contents(PROFILES_FILE), true);
+    if (is_array($onDisk)) $onDisk = s4StripDeletedProfiles($onDisk);
     if (is_array($onDisk) && count($onDisk) > count($profiles) && count($profiles) > 0) {
         $lost = array_diff(array_keys($onDisk), array_keys($profiles));
         if ($lost) {
@@ -3329,13 +3429,22 @@ if (!$allowDelete && is_file(PROFILES_FILE)) {
         }
     }
 }
-return writeJsonFile(PROFILES_FILE, $profiles)['ok'];
+$ok = writeJsonFile(PROFILES_FILE, $profiles)['ok'];
+if ($ok && $allowDelete) {
+    $bk = PROFILES_FILE . '.bak';
+    if ($profiles !== []) @copy(PROFILES_FILE, $bk);
+    elseif (is_file($bk)) @unlink($bk);
+}
+return $ok;
 }
 /** Update one profile against the latest disk snapshot. This prevents three
  * concurrent extraction slots from restoring stale copies of other profiles. */
 function saveOneProfileAtomic(string $key, array $profile): bool {
-    if($key==='')return false;$lf=@fopen(PROFILES_FILE.'.extract.lock','c');if($lf&&!@flock($lf,LOCK_EX)){@fclose($lf);$lf=null;}
-    $all=loadProfiles();$all[$key]=$profile;$ok=saveProfiles($all);
+    if($key===''||s4IsProfileDeletedTombstone($key))return false;
+    $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if($lf&&!@flock($lf,LOCK_EX)){@fclose($lf);$lf=null;}
+    $all=loadProfiles();
+    if(s4IsProfileDeletedTombstone($key)){if($lf){@flock($lf,LOCK_UN);@fclose($lf);}return false;}
+    $all[$key]=$profile;$ok=saveProfiles($all);
     if($lf){@flock($lf,LOCK_UN);@fclose($lf);}return $ok;
 }
 /* =====================================================================
@@ -14077,18 +14186,21 @@ if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
 echo json_encode(['ok' => false, 'error' => 'Invalid URL']);
 exit;
 }
-$key = profileKey($url);
 $profiles = loadProfiles();
+$key = profileResolveKey($url, $profiles) ?: profileKey($url);
 $existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : [];
-/* v10.336: autosave یک تب قدیمی یا فرمی که هنوز profile را نگرفته است
-   نباید نسخهٔ تازه‌تر روی سرور را با نام host و مقادیر پیش‌فرض بپوشاند. */
+/* v10.336 + v10.439: autosave یک تب قدیمی، فرمی که هنوز profile را نگرفته،
+   یا پروفایلی که تازه حذف شده است هرگز نباید روی سرور دوباره ساخته شود. */
 $isAutosave = !empty($_POST['autosave']);
 $loadedUpdatedAt = max(0, (int)($_POST['loaded_updated_at'] ?? 0));
 $serverUpdatedAt = max(0, (int)($existingProfile['updatedAt'] ?? 0));
-if ($isAutosave && $existingProfile && ($loadedUpdatedAt <= 0 || $serverUpdatedAt > $loadedUpdatedAt)) {
+if ($isAutosave && (!$existingProfile || s4IsProfileDeletedTombstone($key) || $loadedUpdatedAt <= 0 || $serverUpdatedAt > $loadedUpdatedAt)) {
     http_response_code(409);
-    echo json_encode(['ok'=>false,'error'=>'stale_profile','message'=>'پروفایل روی سرور تازه‌تر است؛ آن را دوباره بارگذاری کنید.','key'=>$key,'updated_at'=>$serverUpdatedAt], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok'=>false,'error'=>!$existingProfile?'profile_deleted':'stale_profile','message'=>!$existingProfile?'پروفایل حذف شده است؛ ذخیرهٔ خودکار لغو شد.':'پروفایل روی سرور تازه‌تر است؛ آن را دوباره بارگذاری کنید.','key'=>$key,'updated_at'=>$serverUpdatedAt], JSON_UNESCAPED_UNICODE);
     exit;
+}
+if (!$isAutosave) {
+    s4ClearProfileDeletedTombstone($key, $url);
 }
 $oldMxPriceSig = matrixPricingFingerprint($profiles, loadConnections());
 $detailSelectors = json_decode($_POST['detailSelectors'] ?? '{}', true) ?: [];
@@ -14255,11 +14367,19 @@ $profilePatch = [
 'productSource' => array_key_exists('productSource', $_POST)
     ? (json_decode((string)$_POST['productSource'], true) ?: ['mode'=>'direct'])
     : (array)($profiles[$key]['productSource'] ?? ['mode'=>'direct']),
+'backendExtractWithDetail' => array_key_exists('backendExtractWithDetail', $_POST)
+    ? !empty($_POST['backendExtractWithDetail'])
+    : !empty($profiles[$key]['backendExtractWithDetail']),
 'updatedAt' => time()
 ];
 /* metadataهای lifecycle/extraction که save_profile مالکشان نیست حفظ شوند. */
+$lfSave = @fopen(PROFILES_FILE . '.extract.lock', 'c');
+if ($lfSave && !@flock($lfSave, LOCK_EX)) { @fclose($lfSave); $lfSave = null; }
+$profiles = s4StripDeletedProfiles(loadProfiles());
+$existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : $existingProfile;
 $profiles[$key] = array_merge($existingProfile, $profilePatch);
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
+if ($lfSave) { @flock($lfSave, LOCK_UN); @fclose($lfSave); }
 if ($_saved['ok']) {
 $newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
 $mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
@@ -14273,20 +14393,41 @@ exit;
 
 if (($_POST['action'] ?? '') === 'delete_profile') {
 header('Content-Type: application/json; charset=UTF-8');
+$keyIn = trim((string)($_POST['key'] ?? ''));
 $url = s4NormalizeInputUrl((string)($_POST['url'] ?? ''));
-if (!$url) {
-echo json_encode(['ok' => false, 'error' => 'No URL']);
+if ($keyIn === '' && !$url) {
+echo json_encode(['ok' => false, 'error' => 'No URL or key']);
 exit;
 }
-$key = profileKey($url);
+$lfDel = @fopen(PROFILES_FILE . '.extract.lock', 'c');
+if ($lfDel && !@flock($lfDel, LOCK_EX)) { @fclose($lfDel); $lfDel = null; }
 $profiles = loadProfiles();
-if (isset($profiles[$key])) {
+$key = '';
+if ($keyIn !== '' && isset($profiles[$keyIn])) {
+    $key = $keyIn;
+} elseif ($keyIn !== '') {
+    $key = profileResolveKey($keyIn, $profiles) ?: '';
+}
+if ($key === '' && $url !== '') {
+    $key = profileResolveKey($url, $profiles) ?: profileKey($url);
+}
+if ($key !== '' && isset($profiles[$key])) {
+$removedUrl = (string)($profiles[$key]['url'] ?? $url);
+s4MarkProfileDeletedTombstone($key, $removedUrl);
 unset($profiles[$key]);
 // v9.92: حذفِ صریحِ کاربر — محافظِ ضدِ حذفِ ناخواسته باید کنار برود
-saveProfiles($profiles, true);
-echo json_encode(['ok' => true, 'key' => $key, 'message' => 'پروفایل حذف شد']);
+$delOk = saveProfiles($profiles, true);
+if ($lfDel) { @flock($lfDel, LOCK_UN); @fclose($lfDel); }
+if ($delOk) {
+    s4CleanupDeletedProfileArtifacts($key, $removedUrl);
+    echo json_encode(['ok' => true, 'key' => $key, 'url' => $removedUrl, 'remaining' => count($profiles), 'message' => 'پروفایل حذف شد'], JSON_UNESCAPED_UNICODE);
 } else {
-echo json_encode(['ok' => false, 'error' => 'Not found']);
+    echo json_encode(['ok' => false, 'error' => 'خطا در ذخیرهٔ حذف پروفایل'], JSON_UNESCAPED_UNICODE);
+}
+} else {
+if ($keyIn !== '' || $url !== '') s4MarkProfileDeletedTombstone($keyIn !== '' ? $keyIn : profileKey($url), $url);
+if ($lfDel) { @flock($lfDel, LOCK_UN); @fclose($lfDel); }
+echo json_encode(['ok' => true, 'key' => $keyIn !== '' ? $keyIn : ($url !== '' ? profileKey($url) : ''), 'already_deleted' => true, 'message' => 'پروفایل از قبل حذف شده بود'], JSON_UNESCAPED_UNICODE);
 }
 exit;
 }
@@ -25220,6 +25361,7 @@ if (isset($_GET['backend_extract_cli'])) {
     $pk = trim((string)($_GET['profile_key'] ?? ''));
     $phaseCli = (string)($_GET['phase'] ?? 'list');
     if (!in_array($phaseCli, ['all','list','detail'], true)) $phaseCli = 'list';
+    $initialPhaseCli = $phaseCli;
     $forceCli = !empty($_GET['force_all']);
     $resumeCli = !empty($_GET['resume']);
     $reservedCli = '';
@@ -25230,10 +25372,21 @@ if (isset($_GET['backend_extract_cli'])) {
             exit(2);
         }
         $phaseCli = (string)($prepCli['phase'] ?? $phaseCli);
+        if ($initialPhaseCli === 'all' && $phaseCli === 'list') $phaseCli = 'all';
         $reservedCli = (string)($prepCli['queue_id'] ?? '');
     }
     $pagesCli=array_key_exists('pages',$_GET)?max(0,(int)$_GET['pages']):-1;
     $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli);
+    $cliSegs = 1;
+    while (!empty($resCli['ok']) && empty($resCli['cancelled']) && !empty($resCli['ran_out']) && $cliSegs < 20) {
+        sleep(2);
+        $prepNext = extractResumePrepare($pk, loadConnections(), (string)($resCli['queue_id'] ?? ''), false);
+        if (empty($prepNext['ok'])) break;
+        $nextPh = (string)($prepNext['phase'] ?? 'detail');
+        if ($initialPhaseCli === 'all' && $nextPh === 'list') $nextPh = 'all';
+        $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli);
+        $cliSegs++;
+    }
     echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
     exit(!empty($resCli['ok']) ? 0 : 1);
 }
@@ -47067,6 +47220,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'function previewImageBottomCrop()')!==false
       && strpos($selfSrc,"{v:'10." . "438'")!==false
       && version_compare(APP_VERSION,'10.438','>='));
+    $add('10.439', 'حذف پروفایل tombstone دائمی دارد، autosave آن را زنده نمی‌کند و جدول تب شروع بلافاصله پاک می‌شود',
+         defined('PROFILES_DELETED_FILE')
+      && function_exists('s4StripDeletedProfiles')
+      && function_exists('s4MarkProfileDeletedTombstone')
+      && strpos($selfSrc,'function purgeDeletedProfileClientState(')!==false
+      && strpos($selfSrc,'function deleteStartBreakdownProfile(')!==false
+      && strpos($selfSrc,"error'=>!\$existingProfile?'profile_deleted':'stale_profile'")!==false);
+    $add('10.439', 'تیک اجرای خودکار فاز ۲ پس از فاز ۱ در دکمهٔ استخراج بک‌اند تب شروع فعال و پایدار است',
+         strpos($selfSrc,'id="backendExtractWithDetail"')!==false
+      && strpos($selfSrc,"const runPh=wantDetail?'all':'list';")!==false
+      && strpos($selfSrc,"if (\$initialPhase === 'all' && \$runPhase === 'list') \$runPhase = 'all';")!==false
+      && strpos($selfSrc,"{v:'10." . "439'")!==false
+      && version_compare(APP_VERSION,'10.439','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -73717,6 +73883,10 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-purple" id="startBackendBtn" onclick="startBackendSync()" style="flex:1;font-size:13px;padding:8px 12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;border-radius:8px;cursor:pointer">⚡ استخراج بک‌اند</button>
             </div>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:6px;padding:7px 10px;background:#1e1b4b66;border:1px solid #4c1d95;border-radius:8px;cursor:pointer;font-size:11px;color:#e9d5ff;line-height:1.6">
+                <input type="checkbox" id="backendExtractWithDetail" onchange="syncBackendExtractDetailUi();scheduleSave()">
+                <span>🔍 پس از استخراج لیست (فاز ۱)، استخراج جزئیات محصولات (فاز ۲) هم انجام شود</span>
+            </label>
             <!-- v10.217: one comprehensive test button instead of the old single-profile engine benchmark button -->
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-orange" id="comprehensiveTestBtn" onclick="comprehensiveTestStart()" style="flex:1;font-size:12px;padding:8px 12px;font-weight:800">🧪 تست جامع همهٔ پروفایل‌ها (۵ صفحه)</button>
@@ -73855,7 +74025,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
         <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل جدول مغایرت‌اند. «متفرقه بدون کد» در شمار پروفایل‌ها وارد نمی‌شود. دکمهٔ برابر‌سازی بدون وابستگی به تازه‌بودن این شمارش‌ها، همهٔ محصولات ذخیره‌شدهٔ همان پروفایل را مستقیماً در صف مقصد می‌گذارد؛ تازه‌سازی ماتریس فقط یک کار تکمیلی است و به محصولات بدون کد دست نمی‌زند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
         <style>
-          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-price-mismatch{display:block;margin-top:3px;font-size:7.5px;line-height:1.35;color:#facc15;font-weight:700;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
+          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;flex:1}.spb-del-btn{padding:2px 6px;border:1px solid #7f1d1d;border-radius:6px;background:#3f1218;color:#fca5a5;font:700 9px var(--app-font);cursor:pointer;flex:0 0 auto;opacity:.82;transition:.15s}.spb-del-btn:hover{opacity:1;background:#7f1d1d;color:#fff}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-price-mismatch{display:block;margin-top:3px;font-size:7.5px;line-height:1.35;color:#facc15;font-weight:700;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
         </style>
     </section>
@@ -75096,7 +75266,7 @@ function renderStartProfileBreakdown(d){
   let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
   const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},pm=row.price_mismatches||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
     const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),mis=parseInt(pm[x.key]||0),dp=total?Math.round(n*100/total):0,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small><small class="spb-price-mismatch" title="بر پایهٔ قیمت مورد انتظار پس از اعمال ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mis)+'</small><button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ صف مستقیم فعال…':'⚖️ برابر‌سازی')+'</button></td>';}).join('');
-    return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
+    return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b><button type="button" class="spb-del-btn" data-del-profile="'+esc(row.key||'')+'" data-del-name="'+esc(row.name||row.key||'')+'" onclick="deleteStartBreakdownProfile(this)" title="حذف کامل این پروفایل">🗑</button></span></td>'+
       '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?'▶ اجرا می‌شود':'— اجرا نمی‌شود')+'</span></td>'+
@@ -77042,7 +77212,22 @@ function applyProfile(p, keepTab) {
     if(wooProfileCatId>0&&wooAllCats.length===0)loadCats();
     // v8.59: همان دسته‌ها را در کادر بالای «ارسال باسلام» هم نشان بده
     syncBslSendBoxCats(p.bslCategoryId||0,p.bslFallbackCatIds||[]);
+    if($('backendExtractWithDetail')){
+        $('backendExtractWithDetail').checked = p.backendExtractWithDetail !== undefined ? !!p.backendExtractWithDetail : loadBackendExtractWithDetailPref();
+        syncBackendExtractDetailUi(true);
+    }
 }
+
+function loadBackendExtractWithDetailPref(){
+    try{ return localStorage.getItem('s4_backend_extract_with_detail')==='1'; }catch(e){ return false; }
+}
+function syncBackendExtractDetailUi(skipPrefWrite){
+    const cb=$('backendExtractWithDetail'),btn=$('startBackendBtn');
+    const on=!!(cb&&cb.checked);
+    if(!skipPrefWrite){ try{ localStorage.setItem('s4_backend_extract_with_detail', on?'1':'0'); }catch(e){} }
+    if(btn) btn.textContent = on ? '⚡ استخراج بک‌اند (فاز ۱ فهرست + فاز ۲ جزئیات)' : '⚡ استخراج بک‌اند';
+}
+setTimeout(()=>syncBackendExtractDetailUi(true),50);
 
 function collectProfileData() {
     // Serialize current products Map and order array
@@ -77065,6 +77250,7 @@ function collectProfileData() {
         minPrice: parseInt($('minPrice').value) || 10000,
         useCustomCol: $('useCustomCol').checked,
         fullMode: $('fullMode')?$('fullMode').checked:false,
+        backendExtractWithDetail: $('backendExtractWithDetail') ? !!$('backendExtractWithDetail').checked : false,
         customColName: $('customColName').value,
         customColVal: $('customColVal').value,
         iframeHeight: parseInt($('iframeSizeSlider').value) || 600,
@@ -77200,31 +77386,92 @@ function saveProfile() {
         .catch(() => showToast('خطا در ارتباط', true));
 }
 
+function purgeDeletedProfileClientState(deletedKey, deletedUrl) {
+    clearTimeout(saveTimer);
+    profiles = profiles.filter(p => {
+        if (deletedKey && p.key === deletedKey) return false;
+        if (deletedUrl && p.url === deletedUrl) return false;
+        return true;
+    });
+    const curUrl = (($('url')||{}).value || '').trim();
+    const isActiveProfile = (deletedKey && currentProfileKey === deletedKey)
+        || (deletedUrl && (curUrl === deletedUrl || currentProfileUrl === deletedUrl));
+    if (isActiveProfile) {
+        profileFormReady = false;
+        isDirty = false;
+        currentProfileKey = null;
+        currentProfileUrl = '';
+        currentProfileUpdatedAt = 0;
+        if ($('url')) $('url').value = '';
+        if ($('profileName')) $('profileName').value = '';
+        products.clear();
+        order = [];
+        try { refreshViews(); update(); } catch (e) {}
+        setProfileSelectValue('');
+        const s = $('profileStatus');
+        if (s) { s.textContent = 'جدید'; s.className = 'profile-indicator unsaved'; }
+    }
+    if ((deletedUrl && lastProfileUrl() === deletedUrl) || isActiveProfile) forgetProfile();
+    renderProfileDropdown();
+    if (startProductOverviewData && Array.isArray(startProductOverviewData.by_profile)) {
+        startProductOverviewData.by_profile = startProductOverviewData.by_profile.filter(r => r && r.key !== deletedKey);
+        startProductOverviewData.profiles = startProductOverviewData.by_profile.length;
+        renderStartProfileBreakdown(startProductOverviewData);
+    }
+    clearTimeout(startBreakdownRefreshTimer);
+    startProductOverviewBusy = false;
+    loadStartProductOverview(true);
+}
+
+function deleteStartBreakdownProfile(btn) {
+    const key = String((btn && btn.dataset.delProfile) || '').trim();
+    const name = String((btn && btn.dataset.delName) || key).trim();
+    if (!key) return;
+    if (!confirm('پروفایل «' + name + '» و آمار آن به‌طور کامل حذف شود؟')) return;
+    btn.disabled = true;
+    const found = profiles.find(p => p && p.key === key) || {};
+    const fd = new FormData();
+    fd.append('action', 'delete_profile');
+    fd.append('key', key);
+    if (found.url) fd.append('url', found.url);
+    fetch('', {method:'POST', body:fd, cache:'no-store'})
+        .then(r => r.json())
+        .then(d => {
+            if (d && d.ok) {
+                purgeDeletedProfileClientState(d.key || key, d.url || found.url || '');
+                showToast('✓ پروفایل «' + name + '» حذف شد');
+            } else {
+                btn.disabled = false;
+                showToast('خطا: ' + ((d && d.error) || ''), true);
+            }
+        })
+        .catch(() => { btn.disabled = false; showToast('خطا در حذف پروفایل', true); });
+}
+
 function deleteProfile() {
     const url = $('url').value.trim();
-    if (!url) {
+    const matched = (currentProfileKey && profiles.find(p => p.key === currentProfileKey))
+        || (url && profiles.find(p => p.url === url))
+        || null;
+    const key = (matched && matched.key) || currentProfileKey || '';
+    if (!url && !key) {
         showToast('URL وارد کنید', true);
         return;
     }
     if (!confirm('حذف این پروفایل؟')) return;
+    clearTimeout(saveTimer);
+    profileFormReady = false;
 
     const fd = new FormData();
     fd.append('action', 'delete_profile');
-    fd.append('url', url);
+    if (url) fd.append('url', url);
+    if (key) fd.append('key', key);
 
-    fetch('', {method:'POST', body:fd})
+    fetch('', {method:'POST', body:fd, cache:'no-store'})
         .then(r => r.json())
         .then(d => {
             if (d.ok) {
-                profiles = profiles.filter(p => p.url !== url);
-                renderProfileDropdown();
-                setProfileSelectValue('');
-                if (lastProfileUrl() === url) forgetProfile();   // v8.68
-                currentProfileKey = null;
-                const s = $('profileStatus');
-                s.textContent = 'جدید';
-                s.className = 'profile-indicator unsaved';
-                scheduleStartBreakdownRefresh();
+                purgeDeletedProfileClientState(d.key || key, d.url || url);
                 showToast('✓ حذف شد');
             } else {
                 showToast('خطا: ' + (d.error || ''), true);
@@ -79156,14 +79403,18 @@ function backendExtractFor(url,panelTitle,phase){
         }
         openExtractPanel(panelTitle||'⚡ استخراج سریع فهرست — پیشرفت زنده');
         const galOn=((prof.gallery||{}).mode||'off')!=='off';
-        const nDet=Object.keys(prof.detailSelectors||{}).length;
+        const nDet=Object.entries(prof.detailSelectors||{}).filter(([,v])=>v&&(typeof v==='string'?v.trim()!=='':(v.enabled&&String(v.selector||'').trim()!==''))).length;
         if(ph==='detail'){
             showToast('🔍 استخراج تفصیلی روی سرور شروع شد — گالری '+(galOn?'روشن':'خاموش')
                 +(nDet?(' · '+toFa(nDet)+' فیلد'):''));
         }else if(ph==='list'){
             showToast('⚡ استخراج سریع فهرست — همان مسیر تست سه‌صفحه‌ای، بدون باز کردن صفحهٔ تک‌محصول');
         }else{
-            showToast('⚡ استخراج کامل — شامل جزئیات/گالری و کندتر از تست سه‌صفحه‌ای');
+            if(!nDet){
+                showToast('⚠️ سلکتور جزئیاتی در این پروفایل فعال نیست؛ فاز ۱ اجرا می‌شود (برای فاز ۲ ابتدا سلکتورهای جزئیات را فعال کنید)',1);
+            }else{
+                showToast('⚡ استخراج کامل دو مرحله‌ای شروع شد — فاز ۱ (لیست) سپس فاز ۲ ('+toFa(nDet)+' فیلد جزئیات'+(galOn?' + گالری':'')+')');
+            }
         }
         // Trigger backend extract endpoint (fire-and-forget)
         const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));
@@ -79232,6 +79483,9 @@ function startBackendSync(){
         switchMainTab('profiles');
         return;
     }
+    const wantDetail=!!($('backendExtractWithDetail')&&$('backendExtractWithDetail').checked);
+    const runPh=wantDetail?'all':'list';
+    const runTitle=wantDetail?'⚡ استخراج بک‌اند (فاز ۱ لیست + فاز ۲ جزئیات) — پیشرفت زنده':undefined;
     /* موتور بک‌اند سلکتورها را از فایل پروفایل می‌خواند، نه از فرم باز.
        پس تغییر ذخیره‌نشده باید اول روی دیسک بنشیند وگرنه استخراج با
        سلکتورهای قدیمی اجرا می‌شود. */
@@ -79241,12 +79495,15 @@ function startBackendSync(){
         if(typeof saveTimer!=='undefined')clearTimeout(saveTimer);
         showToast('💾 ذخیرهٔ تنظیمات و تأیید تعداد صفحات…');
         saveProfileSilent().then(d=>{
-            if(!d||!d.ok){showToast('⛔ تنظیمات ذخیره نشد؛ استخراج با مقدار قدیمی شروع نشد',1);return;}
-            backendExtractFor(url);
+            if(!d||!d.ok){
+                if(d&&d.error==='profile_form_not_ready'){backendExtractFor(url,runTitle,runPh);return;}
+                showToast('⛔ تنظیمات ذخیره نشد؛ استخراج با مقدار قدیمی شروع نشد',1);return;
+            }
+            backendExtractFor(url,runTitle,runPh);
         });
         return;
     }
-    backendExtractFor(url);
+    backendExtractFor(url,runTitle,runPh);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -80831,6 +81088,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.439', t:'🗑️ حذف قطعی پروفایل از جدول تب شروع + تیک اجرای فاز ۱ و ۲ در استخراج بک‌اند', items:[
+    'علت باقی‌ماندن یا برگشت پروفایل‌های حذف‌شده با ۰ محصول در جدول انتهای تب شروع برطرف شد: هنگام حذف، تایمر autosave، وضعیت فرم باز و کش پروفایل کاملاً پاک می‌شود، در سرور نیز tombstone حذف ثبت می‌گردد تا نه ذخیرهٔ خودکار تب باز، نه worker پس‌زمینه و نه فایل پشتیبان نتوانند پروفایل حذف‌شده را دوباره زنده کنند.',
+    'حذف پروفایل اکنون کلیدهای قدیمی/فارسی را از راه profileResolveKey تشخیص می‌دهد، صف استخراج آن پروفایل را پاک می‌کند، جدول انتهای تب شروع را در همان لحظه به‌روز می‌کند و یک دکمهٔ 🗑 مستقیم هم کنار هر ردیف جدول تب شروع اضافه شد.',
+    'تیک «پس از استخراج لیست (فاز ۱)، استخراج جزئیات محصولات (فاز ۲) هم انجام شود» زیر دکمهٔ «استخراج بک‌اند» در صفحهٔ شروع اضافه شد، در پروفایل و مرورگر ذخیره می‌شود و در اجراهای چندقطعه‌ای worker/CLI نیز پس از پایان صفحات فاز ۱ بلافاصله وارد فاز ۲ می‌شود.'
+  ]},
   {v:'10.438', t:'🎨 استخراج کامل تنوع/جزئیات اسنپ‌شاپ + برش پایین تصویر برای حذف تگ', items:[
     'صفحهٔ جزئیات سنتتیک اسنپ‌شاپ اکنون تنوع‌ها (رنگ، سایز و configurable_attribute) را همراه با قیمت دقیق هر تنوع (تومان) در قالب استاندارد variations_form و .snappshop-variation-group تولید می‌کند و تشخیص خودکار سلکتور جزئیات نیز آن را یک‌کلیکی می‌شناسد.',
     'وزن (از جدول مشخصات)، گارانتی، فروشنده، برند، دسته‌بندی، SKU، توضیحات کوتاه، توضیحات کامل + جدول مشخصات فنی و تمام تصاویر گالری با کیفیت اصلی CDN در مرحلهٔ دوم استخراج می‌شوند.',
