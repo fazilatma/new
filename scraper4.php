@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.424';
+const APP_VERSION = '10.425';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1498,6 +1498,20 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
         ]);
     }
     return $enq;
+}
+/** Cancel only not-yet-started recovery jobs after an equivalent direct run
+ * has already completed. This prevents a delayed busy worker from re-extracting
+ * after the successful run cleared its checkpoint. */
+function s4WorkerCancelPendingManualSync(string $profileKey,string $reason='pipeline_already_done'):int{
+    if($profileKey===''||!function_exists('s4WorkerQueueMutate'))return 0;$cancelled=0;
+    s4WorkerQueueMutate(function(&$q)use($profileKey,$reason,&$cancelled){$now=time();
+        foreach($q['entries'] as &$e){$p=is_array($e['payload']??null)?$e['payload']:[];
+            if((string)($e['type']??'')!=='manual_sync'||(string)($e['status']??'')!=='pending'
+                ||(string)($p['profile_key']??'')!==$profileKey||empty($p['resume']))continue;
+            $e['status']='cancelled';$e['updated_at']=$now;$e['done_at']=$now;$e['worker_pid']=0;$e['error']=$reason;$cancelled++;
+        }unset($e);return ['ok'=>true,'cancelled'=>$cancelled];
+    });
+    return$cancelled;
 }
 
 /** An unfinished matrix checkpoint always owns continuation. A fresh request
@@ -24756,6 +24770,7 @@ if (isset($_GET['manual_sync'])) {
     syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
         'stage_details'=>['done'=>['counts'=>['products'=>(int)($_msResults['extract']['extracted']??0)],
             'data'=>$_msResults,'report'=>'استخراج، اعمال ضرایب و ارسال با موفقیت پایان یافت']]]);
+    s4WorkerCancelPendingManualSync($_msKey,'equivalent_manual_sync_completed');
     manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], '✅ همگام‌سازی دستی تمام شد');
     $_msDone = readProgress(MANUAL_SYNC_PROGRESS_FILE);
     $_msDone['running'] = false;
@@ -45705,8 +45720,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc,"\$GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);")!==false
       && strpos($selfSrc,'$sendReconcile=syncPipelineReconcileMissingSendQueues(true);')!==false
       && strpos($selfSrc,"'send_reconciliation'=>\$sendReconcile")!==false
-      && strpos($selfSrc,"{v:'10." . "424'")!==false
       && version_compare(APP_VERSION,'10.424','>='));
+    $add('10.425', 'job بازیابی pending پس از تکمیل معادل مستقیم لغو می‌شود',
+         strpos($selfSrc,'function s4WorkerCancelPendingManualSync(string $profileKey')!==false
+      && strpos($selfSrc,"(string)(\$e['status']??'')!=='pending'")!==false
+      && strpos($selfSrc,"s4WorkerCancelPendingManualSync(\$_msKey,'equivalent_manual_sync_completed');")!==false
+      && strpos($selfSrc,"'cancelled_completed_jobs'=>0")!==false
+      && strpos($selfSrc,"{v:'10." . "425'")!==false
+      && version_compare(APP_VERSION,'10.425','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -50050,7 +50071,7 @@ function syncPipelineRows():array{
  * durably writing a destination queue. Only a matching completed extraction
  * checkpoint may be resumed, and a live destination owner always wins. */
 function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
-    $out=['checked'=>0,'recovered'=>0,'skipped'=>0,'rows'=>[]];
+    $out=['checked'=>0,'recovered'=>0,'cancelled_completed_jobs'=>0,'skipped'=>0,'rows'=>[]];
     $lf=@fopen(__DIR__.'/.sync_send_reconcile.lock','c');
     if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);$out['busy']=true;return$out;}
     try{
@@ -50058,8 +50079,12 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
         $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];
         $wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
         foreach(syncPipelineRows() as $row){
-            if(!is_array($row)||(string)($row['stage']??'')!=='send'||!empty($row['done']))continue;
-            $out['checked']++;$pk=(string)($row['profile_key']??'');
+            if(!is_array($row))continue;$pk=(string)($row['profile_key']??'');
+            if(!empty($row['done'])||(string)($row['stage']??'')==='done'){
+                $out['cancelled_completed_jobs']+=s4WorkerCancelPendingManualSync($pk);continue;
+            }
+            if((string)($row['stage']??'')!=='send')continue;
+            $out['checked']++;
             if($pk===''||(string)($row['trigger']??'')!=='manual'){$out['skipped']++;continue;}
             $hasOwner=false;
             foreach(array_merge((array)($bq['entries']??[]),(array)($wq['entries']??[])) as $qe){
@@ -79182,6 +79207,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.425', t:'🛡 جلوگیری از اجرای دوبارهٔ بازیابی تکمیل‌شده', items:[
+    'اگر worker به‌دلیل کار فعال دیگری دیر به job بازیابی برسد و اجرای مستقیم معادل زودتر تمام شود، job منتظر همان پروفایل لغو می‌شود.',
+    'poll وضعیت نیز job بازیابی pending متعلق به pipeline پایان‌یافته را پاک‌سازی می‌کند تا checkpoint پاک‌شده باعث استخراج دوباره نشود.'
+  ]},
   {v:'10.424', t:'🧩 بازیابی صف مقصد گم‌شده پس از استخراج کامل', items:[
     'شکاف چرخه‌ای میان ثبت مرحلهٔ ارسال و نوشتن پایدار صف مقصد شناسایی و با reconciler قفل‌دار پوشانده شد.',
     'اولین کران یا poll وضعیت، ردیف send بدون مالک را فقط با checkpoint کامل همان پروفایل به worker بازیابی می‌سپارد؛ وجود هر صف زنده مانع ساخت تکراری است.',
