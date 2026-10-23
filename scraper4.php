@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.432';
+const APP_VERSION = '10.433';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20999,10 +20999,24 @@ $needDetail=[];
    می‌شود — برای وقتی که سلکتور گالری عوض شده یا مبدأ عکس‌ها را
    به‌روز کرده است. */
 $_forceAll=($phase==='detail'&&$forceAll);
+/* v10.433: a synchronization cycle may supply an explicit union of products
+   absent from one or more enabled destinations.  This scope is deliberately
+   independent of actionBasis: matrix/profile only controls what gets sent,
+   never which destination-presence test authorizes detail extraction. */
+$_syncScope=[];
+if($phase==='detail'&&!$_forceAll){
+    foreach((array)($profile['_sync_detail_scope_keys']??[]) as $_sk){
+        $_sk=trim((string)$_sk);if($_sk!=='')$_syncScope[$_sk]=true;
+    }
+}
 foreach($allProducts as $key=>$p){
 if(empty($p['link'])){$_noLink++;continue;}
 if((string)($p['_detail_cycle']??'')===$_detailCycle){$_alreadyDone++;continue;}
 if($_forceAll){$needDetail[$key]=$p;continue;}
+if($_syncScope){
+    if(isset($_syncScope[(string)$key]))$needDetail[$key]=$p;else $_alreadyDone++;
+    continue;
+}
 /* Normal extraction only details products discovered in this cycle. Existing
    catalogue rows retain their saved details and are not reopened merely because
    a detail selector (especially price) is enabled. */
@@ -21471,6 +21485,11 @@ if(!empty($_listRanOut)){
 $profileOnDisk['_extract_stage_at']=time();
 $profileOnDisk['_extract_detail_done']=$detailDone;
 $profileOnDisk['_extract_detail_total']=$detailTotal;
+/* The explicit missing-destination scope survives checkpoints, then is cleared
+   only after its detail pass really finishes. */
+if($phase==='detail'&&empty($_detailIncomplete)&&empty($_listRanOut)){
+    unset($profileOnDisk['_sync_detail_scope_keys'],$profileOnDisk['_sync_detail_scope_meta']);
+}
 $profilesNow[$pkFinal]=$profileOnDisk;
 saveOneProfileAtomic($pkFinal,$profileOnDisk);
 $profiles=loadProfiles();$profile=$profiles[$pkFinal]??$profileOnDisk;
@@ -25528,13 +25547,29 @@ if ($noExtract) {
        selector must be saved. */
     // چند محصولِ روی دیسک لینکِ صفحهٔ محصول دارند؟
     $_neLinked = noExtractLinkedCount($profile);
-    $_neDue    = $_neHasCfg && $_neLinked > 0 && noExtractRefreshOn($syncCfg);
+    $_neAll=!empty($syncCfg['detailAllEachCycle']);
+    $_nePlan=$_neAll?['available'=>true,'keys'=>[],'by_destination'=>[]]
+        : syncMissingDestinationDetailPlan($profile,(string)$key,(string)$target,$cn);
+    $_neKeys=(array)($_nePlan['keys']??[]);
+    $_neDue = $_neHasCfg && $_neLinked > 0 && noExtractRefreshOn($syncCfg)
+        && ($_neAll||(!empty($_nePlan['available'])&&!empty($_neKeys)));
 
     if ($_neDue) {
         $pResult['step'] = 'no_extract_detail';
         $pResult['detail_linked'] = $_neLinked;
-        // فازِ detail: فقط صفحاتِ محصول باز می‌شوند، صفحهٔ فهرست هرگز
-        $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, 'detail', false); /* v10.282: هر دو نوع همگام‌سازی با برچسب روشن در صف استخراج */
+        $pResult['detail_policy']=$_neAll?'all_each_cycle':'missing_destinations';
+        $pResult['detail_destination_counts']=[];
+        foreach((array)($_nePlan['by_destination']??[]) as $_dk=>$_ks)
+            $pResult['detail_destination_counts'][$_dk]=count((array)$_ks);
+        if(!$_neAll&&!syncSetDetailScope((string)$key,$_neKeys,[
+            'policy'=>'missing_destinations','by_destination'=>$pResult['detail_destination_counts'],
+            'matrix_at'=>(int)($_nePlan['matrix_at']??0),
+        ])){
+            $exRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
+        }else{
+            // فازِ detail: فقط صفحاتِ محصول باز می‌شوند، صفحهٔ فهرست هرگز
+            $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, 'detail', $_neAll); /* v10.433 */
+        }
         if (!empty($exRes['ok'])) {
             $pResult['extracted']      = (int)($exRes['extracted'] ?? 0);
             $pResult['extract_method'] = 'no_extract_detail';
@@ -25566,11 +25601,19 @@ if ($noExtract) {
         if (!noExtractRefreshOn($syncCfg))  $pResult['no_refresh_why'] = 'disabled';
         elseif (!$_neHasCfg)                $pResult['no_refresh_why'] = 'no_detail_selectors';
         elseif ($_neLinked === 0)           $pResult['no_refresh_why'] = 'no_product_links';
+        elseif (!$_neAll&&empty($_nePlan['available'])) $pResult['no_refresh_why']='matrix_unavailable';
+        elseif (!$_neAll&&empty($_neKeys))  $pResult['no_refresh_why']='nothing_missing';
         // برای ارسالِ «فقط محصولاتِ موجود»، exRes را موفق و بدون تغییراتِ جدید بگذار
         $exRes = ['ok'=>true, 'extracted'=>0, 'no_extract'=>true,
                   'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
                   'new_items'=>[],'changed_items'=>[],'removed_items'=>[],
                   'price_up'=>0,'price_down'=>0];
+    }
+    if((!empty($exRes['ran_out'])||!empty($exRes['resume_needed']))&&!manualSyncActive()){
+        $pResult['status']='extract_checkpoint';$pResult['extract_resume']=true;
+        $pResult['note']='جزئیات در checkpoint امن متوقف شد — ارسال پس از تکمیل در تیک بعدی';
+        $results['profiles'][]=$pResult;$results['deferred_by_extract_checkpoint']=true;
+        cronEmit($results);exit;
     }
     // گیتِ ارسال را باز کن: در حافظه (نه روی دیسک) نشانه را complete بگذار
     $profile['_extract_stage'] = 'complete';
@@ -25624,7 +25667,11 @@ $detailWasUnfinished = in_array($stagePrev, ['list_done', 'detail'], true)
    با فازِ detail ادامه می‌دهیم (بدون گرفتن دوبارهٔ فهرست). */
 /* v10.278: همگام‌سازی دوره‌ای نیز دقیقاً همان استخراج بک‌اند سریع را آغاز
    می‌کند: list، بدون force_all و بدون گذرِ پنهانِ جزئیات. */
-$stepMode = 'list';
+/* v10.433: policy-driven detail checkpoints resume before another list pass.
+   Selective runs retain their explicit scope; force-all runs retain stage=detail. */
+$_syncDetailPending=in_array($stagePrev,['list_done','detail'],true)
+    && (!empty($profile['_sync_detail_scope_keys'])||!empty($syncCfg['detailAllEachCycle']));
+$stepMode = $_syncDetailPending?'detail':'list';
 /* v10.81: قبل از extract خودکار، موانع کهنهٔ همین پروفایل را بردار — مثل دکمهٔ بک‌اند */
 try {
     extractClearStaleBlockers((string)$key, [
@@ -25633,7 +25680,8 @@ try {
         'reason' => 'پاک‌سازی پیش از extract خودکار',
     ]);
 } catch (Throwable $_preEx) {}
-$exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, $stepMode); /* v10.282: مرحلهٔ استخراج هر sync در صف بک‌اند */
+$exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, $stepMode,
+    $stepMode==='detail'&&!empty($syncCfg['detailAllEachCycle'])); /* v10.433: resume exact policy scope */
 $pResult['step'] = $stepMode;
 
 /* v9.67: «استخراج تفصیلیِ جداگانه» در هر اجرای کران حذف شد.
@@ -25647,9 +25695,46 @@ $pResult['step'] = $stepMode;
    باشد ($stagePrev == detail) همان را ادامه می‌دهیم تا محصولِ ناقص ارسال
    نشود — این ادامهٔ کارِ ناتمام است، نه استخراج دوره‌ای. */
 if ($stepMode === 'list') {
-    // (گامِ جداگانهٔ جزئیات حذف شد — فقط پروفایلِ تازه‌شده را دوباره می‌خوانیم)
     $profiles = loadProfiles();
     $profile  = $profiles[$key] ?? $profile;
+    /* v10.433: run the configured detail policy after every successful list
+       extraction. Enabled = every linked profile product. Disabled = only the
+       union missing from Woo and/or each selected Basalam shop. */
+    if(!empty($exRes['ok'])&&syncProfileHasDetailSelectors($profile)){
+        $_detailAll=!empty($syncCfg['detailAllEachCycle']);
+        $_detailPlan=$_detailAll
+            ? ['available'=>true,'keys'=>[],'by_destination'=>[],'destinations'=>[]]
+            : syncMissingDestinationDetailPlan($profile,(string)$key,(string)$target,$cn);
+        $_detailKeys=(array)($_detailPlan['keys']??[]);
+        $pResult['detail_policy']=$_detailAll?'all_each_cycle':'missing_destinations';
+        $pResult['detail_destination_counts']=[];
+        foreach((array)($_detailPlan['by_destination']??[]) as $_dk=>$_ks)
+            $pResult['detail_destination_counts'][$_dk]=count((array)$_ks);
+        if(!$_detailAll&&empty($_detailPlan['available']))$pResult['detail_skipped']='matrix_unavailable';
+        elseif(!$_detailAll&&!$_detailKeys)$pResult['detail_skipped']='nothing_missing';
+        else{
+            if(!$_detailAll&&!syncSetDetailScope((string)$key,$_detailKeys,[
+                'policy'=>'missing_destinations','by_destination'=>$pResult['detail_destination_counts'],
+                'matrix_at'=>(int)($_detailPlan['matrix_at']??0),
+            ])){
+                $_detailRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
+            }else{
+                $_detailRes=runBackendExtract($key,manualSyncActive()?'manual_sync':'periodic_sync',false,'detail',$_detailAll);
+            }
+            if(empty($_detailRes['ok']))$exRes=$_detailRes;
+            else{
+                $pResult['detail_done']=(int)($_detailRes['detail_done']??0);
+                $pResult['detail_total']=(int)($_detailRes['detail_total']??0);
+                $pResult['detail_scope_count']=$_detailAll
+                    ? count(profileOrderedProducts($profile,null,true)):count($_detailKeys);
+                if(!empty($_detailRes['ran_out'])||!empty($_detailRes['resume_needed'])){
+                    $exRes['ran_out']=true;$exRes['resume_needed']=true;
+                    $exRes['detail_done']=$pResult['detail_done'];$exRes['detail_total']=$pResult['detail_total'];
+                }
+                $profiles=loadProfiles();$profile=$profiles[$key]??$profile;
+            }
+        }
+    }elseif(!empty($exRes['ok']))$pResult['detail_skipped']='no_detail_selectors';
 }
 if (!empty($exRes['ok'])) {
 $pResult['extracted'] = (int)($exRes['extracted'] ?? 0);
@@ -25885,6 +25970,20 @@ if ($actionBasis === 'matrix' && !$pricingChanged && !$shopPricingChanged) {
         if ($mk === null) $pResult['matrix_basis_error'] = 'نتیجهٔ جدول مغایرت موجود نیست';
     }
     $pResult['action_basis'] = 'matrix';
+}
+/* v10.433: a destination-missing product whose details were refreshed must
+   reach that destination even when the saved-profile change detector sees no
+   list-page change. This merge is after action-basis selection by design. */
+if(syncProfileHasDetailSelectors($profile)){
+    $_sendPresence=syncMissingDestinationDetailPlan($profile,(string)$key,(string)$target,$cn);
+    if(!empty($_sendPresence['available'])){
+        $_wooMissing=(array)($_sendPresence['by_destination']['woo']??[]);$_bslMissing=[];
+        foreach((array)($_sendPresence['by_destination']??[]) as $_dk=>$_ks)
+            if(strpos((string)$_dk,'bsl:')===0)foreach((array)$_ks as $_k)$_bslMissing[(string)$_k]=true;
+        if($wooActionKeys!==null&&$_wooMissing)$wooActionKeys=array_values(array_unique(array_merge($wooActionKeys,$_wooMissing)));
+        if($bslActionKeys!==null&&$_bslMissing)$bslActionKeys=array_values(array_unique(array_merge($bslActionKeys,array_keys($_bslMissing))));
+        $pResult['presence_send_counts']=['woo'=>count($_wooMissing),'bsl'=>count($_bslMissing)];
+    }
 }
 $wooChangedProducts = $wooActionKeys === null ? $orderedProducts : profileOrderedProducts($profile, $wooActionKeys);
 $bslChangedProducts = $bslActionKeys === null ? $orderedProducts : profileOrderedProducts($profile, $bslActionKeys);
@@ -45943,6 +46042,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc,'Queue recovery may originate from HTTP cron too.')!==false
       && strpos($selfSrc,"{v:'10." . "432'")!==false
       && version_compare(APP_VERSION,'10.432','>='));
+    $add('10.433', 'سیاست جزئیات مستقل از مبنای اقدام ذخیره و در UI بارگذاری می‌شود',
+         syncProfileHasDetailSelectors(['detailSelectors'=>['price'=>['enabled'=>true,'selector'=>'.price']]])
+      && !syncProfileHasDetailSelectors(['detailSelectors'=>['price'=>['enabled'=>false,'selector'=>'.price']]])
+      && strpos($selfSrc,'detailAllEachCycle:!!')!==false
+      && strpos($selfSrc,"p.syncConfig.detailAllEachCycle")!==false
+      && strpos($selfSrc,'id=\"profileSyncDetailAll\"')!==false);
+    $add('10.433', 'جزئیات همه یا اتحادِ غایب‌های مقصد با checkpoint اجرا می‌شود',
+         strpos($selfSrc,'function syncMissingDestinationDetailPlan')!==false
+      && strpos($selfSrc,"\$present=is_array(\$r)&&!empty(\$r['woo']['id'])")!==false
+      && strpos($selfSrc,"\$present=is_array(\$r)&&!empty(\$r['shops'][\$vid]['id'])")!==false
+      && strpos($selfSrc,"'_sync_detail_scope_keys'")!==false
+      && strpos($selfSrc,"'detail',\$_detailAll")!==false
+      && strpos($selfSrc,"{v:'10." . "433'")!==false
+      && version_compare(APP_VERSION,'10.433','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -52555,6 +52668,71 @@ function syncMatrixActionKeys(array $profile, string $profileKey, string $target
         if($k!==''&&isset($validKeys[$k]))$keys[$k]=true;
     }
     return array_keys($keys);
+}
+
+/** v10.433: configured detail fields, not gallery alone, authorize this policy. */
+function syncProfileHasDetailSelectors(array $profile): bool {
+    foreach(extractNormalizeDetailSelectors($profile['detailSelectors']??[]) as $v){
+        if(trim((string)$v)!=='')return true;
+    }
+    return false;
+}
+
+/**
+ * Resolve destination absence independently for WooCommerce and every selected
+ * Basalam shop.  Price/content warnings are intentionally ignored: this policy
+ * is presence-only and is independent of the profile-vs-matrix action basis.
+ */
+function syncMissingDestinationDetailPlan(array $profile,string $profileKey,string $target,array $cn=[]): array {
+    $out=['available'=>false,'keys'=>[],'by_destination'=>[],'destinations'=>[]];
+    if(!in_array($target,['woo','bsl','both'],true))return $out;
+    $mx=function_exists('matrixResultLoad')?matrixResultLoad():[];
+    $rows=is_array($mx['rows']??null)?$mx['rows']:[];
+    if(!$rows)return $out;
+    $out['available']=true;
+    $ask=strpos($profileKey,'://')!==false?profileKey($profileKey):$profileKey;
+    $suffixes=(array)($mx['suffixes']??[]);$byKey=[];$byBare=[];
+    foreach($rows as $r){
+        if(!is_array($r)||(int)($r['profile_hits']??0)<=0)continue;
+        $rp=(string)($r['profile_key']??'');if(strpos($rp,'://')!==false)$rp=profileKey($rp);
+        if($rp!==$ask)continue;
+        $rk=(string)($r['key']??'');if($rk!=='')$byKey[$rk]=$r;
+        $rb=(string)($r['bare']??'');if($rb!=='')$byBare[$rb]=$r;
+    }
+    $dest=[];
+    if(($target==='woo'||$target==='both')&&!empty($cn['woocommerce']['enabled'])
+       &&trim((string)($cn['woocommerce']['store_url']??''))!=='')$dest['woo']='WooCommerce';
+    if($target==='bsl'||$target==='both'){
+        foreach((function_exists('bslAllShops')?bslAllShops($cn):[]) as $sh){
+            $vid=(int)($sh['vendor_id']??0);
+            if(function_exists('bslShopSelectedForSend')&&!bslShopSelectedForSend($cn,$vid))continue;
+            if($vid>0)$dest['bsl:'.$vid]=(string)($sh['shop_name']??$sh['name']??('Basalam '.$vid));
+        }
+    }
+    $out['destinations']=$dest;$union=[];
+    foreach($dest as $dk=>$dn)$out['by_destination'][$dk]=[];
+    foreach(profileOrderedProducts($profile,null,true) as $p){
+        $k=(string)($p['key']??'');if($k===''||trim((string)($p['link']??''))==='')continue;
+        $r=$byKey[$k]??null;
+        if(!$r){$bare=matrixBareTitle((string)($p['title']??''),$suffixes);$r=$byBare[$bare]??null;}
+        foreach($dest as $dk=>$dn){
+            if($dk==='woo')$present=is_array($r)&&!empty($r['woo']['id']);
+            else{$vid=(int)substr($dk,4);$present=is_array($r)&&!empty($r['shops'][$vid]['id']);}
+            if(!$present){$out['by_destination'][$dk][]=$k;$union[$k]=true;}
+        }
+    }
+    $out['keys']=array_keys($union);
+    $out['matrix_at']=(int)($mx['generated_at']??$mx['updated_at']??0);
+    return $out;
+}
+
+/** Persist an explicit, checkpoint-safe detail scope on the latest profile. */
+function syncSetDetailScope(string $profileKey,array $keys,array $meta=[]): bool {
+    $all=loadProfiles();if(!is_array($all[$profileKey]??null))return false;
+    $clean=[];foreach($keys as $k){$k=trim((string)$k);if($k!=='')$clean[$k]=true;}
+    $p=$all[$profileKey];$p['_sync_detail_scope_keys']=array_keys($clean);
+    $p['_sync_detail_scope_meta']=array_merge($meta,['created_at'=>time()]);
+    return saveOneProfileAtomic($profileKey,$p);
 }
 
 /** مقصدِ extra در جدول برای یک عنوان حذف‌شدهٔ تأییدشده از snapshot پروفایل. */
@@ -72378,6 +72556,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                         </label>
                     </div>
                     <div style="font-size:9px;color:#64748b;line-height:1.6;margin:-2px 2px 2px">در حالت جدول، فقط ردیف‌های missing/مغایرت همان پروفایل و نتیجهٔ ذخیره‌شدهٔ جدول مبنای افزودن، آپدیت و حذف امن هستند.</div>
+                    <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;background:#082f49;border:1px solid #0e7490;border-radius:10px">
+                        <div style="flex:1">
+                            <div style="font-size:10.5px;color:#a5f3fc">🔎 جزئیاتِ همهٔ محصولات در هر نوبت</div>
+                            <div id="profileSyncDetailPolicyHint" style="font-size:9px;color:#94a3b8;line-height:1.6;margin-top:2px">خاموش: فقط محصولاتی که در هر مقصدِ فعال وجود ندارند؛ ووکامرس و هر غرفهٔ باسلام جداگانه بررسی می‌شوند.</div>
+                        </div>
+                        <label class="prof-net-switch" title="روشن: جزئیات همهٔ محصولات · خاموش: فقط محصولاتِ غایب از مقصد">
+                            <input type="checkbox" id="profileSyncDetailAll" style="display:none" onchange="syncDetailPolicyUi();scheduleSave();updateSyncStatusText()"><span class="prof-net-slider"></span>
+                        </label>
+                    </div>
+                    <div style="font-size:9px;color:#64748b;line-height:1.6;margin:-2px 2px 2px">این انتخاب از مبنای «پروفایل/جدول مغایرت» مستقل است و فقط در صورت داشتن سلکتورِ فعالِ جزئیات اجرا می‌شود.</div>
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">
                         <input type="checkbox" id="profileSyncWooAddUpdate" onchange="scheduleSave();updateSyncStatusText();try{updateRetireBadge()}catch(e){}">
                         <span style="color:#c4b5fd">ووکامرس — افزودن/آپدیت/حذف از روی پروفایل ذخیره‌شده</span>
@@ -79543,6 +79731,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.433', t:'🔎 سیاست جزئیاتِ همگام‌سازی برای هر مقصد', items:[
+    'سوییچ تازه کنار کنترل‌های ووکامرس/باسلام تعیین می‌کند هر چرخه جزئیات همهٔ محصولات را بخواند یا فقط محصولاتِ غایب از مقصد را.',
+    'در حالت خاموش، حضور ووکامرس و هر غرفهٔ فعال باسلام جداگانه سنجیده و اتحاد محصولات غایب به گذر جزئیات داده می‌شود؛ مغایرت قیمت/محتوا به‌اشتباه غیبت محسوب نمی‌شود.',
+    'این سیاست از مبنای افزودن/آپدیت (پروفایل ذخیره‌شده یا جدول مغایرت) مستقل است و تنها با سلکتور فعال جزئیات اجرا می‌شود.',
+    'دامنهٔ انتخابی و چرخهٔ همه‌محصولی هر دو از صف استخراج، checkpoint و ادامهٔ امن موجود استفاده می‌کنند.'
+  ]},
   {v:'10.432', t:'🔁 ادامهٔ کران هم‌سطح دکمهٔ Continue', items:[
     'نگهبان کران پیش از dispatch همان تراکنش Continue را انجام می‌دهد: مالک‌های running مرده کنار می‌روند، ردیف انتخابی مالک یکتا می‌شود و checkpoint تازه با queue_id نوشته می‌شود.',
     'در هاست دارای PHP CLI، کران backend ارسال را به پردازهٔ مستقل متصل به checkpoint تحویل می‌دهد و دیگر به عمر self-HTTP یا اتصال سرویس کران وابسته نیست.',
@@ -97295,6 +97489,14 @@ function syncBasisUi(){
     const el=$('profileSyncBasisLabel');
     if(el){el.textContent=mx?'مبنا: جدول و نتایج مغایرت‌گیری':'مبنا: پروفایل‌های ذخیره‌شده';el.style.color=mx?'#4ade80':'#c4b5fd';}
 }
+function syncDetailPolicyUi(){
+    const all=!!($('profileSyncDetailAll')&&$('profileSyncDetailAll').checked);
+    const el=$('profileSyncDetailPolicyHint');if(!el)return;
+    el.textContent=all
+        ?'روشن: در هر چرخه، جزئیاتِ همهٔ محصولاتِ دارای لینک دوباره استخراج می‌شود.'
+        :'خاموش: فقط محصولاتی که در هر مقصدِ فعال وجود ندارند؛ ووکامرس و هر غرفهٔ باسلام جداگانه بررسی می‌شوند.';
+    el.style.color=all?'#67e8f9':'#94a3b8';
+}
 function loadProfileSyncConfig(){
     // Load from current profile via server
     const url=$('url').value.trim();
@@ -97311,7 +97513,8 @@ function loadProfileSyncConfig(){
             $('profileSyncWooAddUpdate').checked=!!sc.wooAddUpdate;
             $('profileSyncBslAddUpdate').checked=!!sc.bslAddUpdate;
             if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=(sc.actionBasis==='matrix');
-            syncBasisUi();
+            if($('profileSyncDetailAll'))$('profileSyncDetailAll').checked=!!sc.detailAllEachCycle;
+            syncBasisUi();syncDetailPolicyUi();
             // v9.45: بدون استخراج (پروفایل‌های اکسل/CSV)
             if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=!!sc.noExtract;
             // v10.21 (۳۴الف): تازه‌سازیِ دوره‌ای — نبودِ کلید یعنی روشن
@@ -97323,7 +97526,8 @@ function loadProfileSyncConfig(){
             $('profileSyncWooAddUpdate').checked=false;
             $('profileSyncBslAddUpdate').checked=false;
             if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=false;
-            syncBasisUi();
+            if($('profileSyncDetailAll'))$('profileSyncDetailAll').checked=false;
+            syncBasisUi();syncDetailPolicyUi();
             if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=false;
             syncToggleNoExtractBox();
             $('profileSyncStatus').textContent='';
@@ -97341,6 +97545,8 @@ function getSyncConfig(){
         wooAddUpdate:$('profileSyncWooAddUpdate').checked,
         bslAddUpdate:$('profileSyncBslAddUpdate').checked,
         actionBasis:($('profileSyncBasisMatrix')&&$('profileSyncBasisMatrix').checked)?'matrix':'profile',
+        // v10.433: false is the backward-compatible, destination-selective default
+        detailAllEachCycle:!!($('profileSyncDetailAll')&&$('profileSyncDetailAll').checked),
         // v9.45: بدون استخراج — فقط آپدیت دوره‌ای قیمت/موجودی (پروفایل‌های اکسل/CSV)
         noExtract:!!($('profileSyncNoExtract')&&$('profileSyncNoExtract').checked),
         /* v10.21 (۳۴الف): تازه‌سازیِ دوره‌ایِ قیمت/موجودی از صفحهٔ محصول.
@@ -97386,6 +97592,8 @@ function updateSyncStatusText(){
        تیکِ روشن یعنی سه‌گانهٔ افزودن/آپدیت/حذف، تیکِ خاموش یعنی ارسالِ کامل. */
     const wm=$('profileSyncWooAddUpdate').checked?'➕🔄🗑 ووکامرس':'📦 ووکامرسِ کامل';
     const bm=$('profileSyncBslAddUpdate').checked?'➕🔄🗄 باسلام':'📦 باسلامِ کامل';
+    const dp=($('profileSyncDetailAll')&&$('profileSyncDetailAll').checked)
+        ?'🔎 جزئیاتِ همه':'🔎 جزئیاتِ غایب‌های هر مقصد';
     /* v10.21 (۳۴الف): وقتی تازه‌سازی روشن است، «بدون استخراج» دیگر یعنی
        «بدون فهرست» نه «بدون هیچ‌چیز» — متن باید همین را بگوید. */
     let ne='';
@@ -97396,9 +97604,9 @@ function updateSyncStatusText(){
     /* v9.91: مقصدِ «هیچ‌کدام» — استخراج انجام می‌شود ولی چیزی ارسال نمی‌شود،
        پس نشان‌دادن حالتِ ووکامرس/باسلام گمراه‌کننده است. */
     const tg=$('profileSyncTarget')?$('profileSyncTarget').value:'woo';
-    if(tg==='none'){$('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | 🚫 بدون ارسال (فقط استخراج)'+ne;return;}
+    if(tg==='none'){$('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | '+dp+' | 🚫 بدون ارسال (فقط استخراج)'+ne;return;}
     const basis=($('profileSyncBasisMatrix')&&$('profileSyncBasisMatrix').checked)?'📊 مبنا: جدول مغایرت':'📁 مبنا: پروفایل';
-    $('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | '+basis+' | '+wm+' | '+bm+ne;
+    $('profileSyncStatus').textContent='✓ سینک فعال ('+intv+') | '+basis+' | '+dp+' | '+wm+' | '+bm+ne;
 }
 function refreshSyncStatus(){
     fetch('?sync_status=1').then(r=>r.json()).then(d=>{
@@ -97435,7 +97643,8 @@ applyProfile=function(p){
         $('profileSyncWooAddUpdate').checked=!!p.syncConfig.wooAddUpdate;
         $('profileSyncBslAddUpdate').checked=!!p.syncConfig.bslAddUpdate;
         if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=(p.syncConfig.actionBasis==='matrix');
-        syncBasisUi();
+        if($('profileSyncDetailAll'))$('profileSyncDetailAll').checked=!!p.syncConfig.detailAllEachCycle;
+        syncBasisUi();syncDetailPolicyUi();
         // v9.45: بدون استخراج (پروفایل‌های اکسل/CSV)
         if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=!!p.syncConfig.noExtract;
         // v10.21 (۳۴الف)
@@ -97447,7 +97656,8 @@ applyProfile=function(p){
         $('profileSyncWooAddUpdate').checked=false;
         $('profileSyncBslAddUpdate').checked=false;
         if($('profileSyncBasisMatrix'))$('profileSyncBasisMatrix').checked=false;
-        syncBasisUi();
+        if($('profileSyncDetailAll'))$('profileSyncDetailAll').checked=false;
+        syncBasisUi();syncDetailPolicyUi();
         if($('profileSyncNoExtract'))$('profileSyncNoExtract').checked=false;
         syncToggleNoExtractBox();
         $('profileSyncStatus').textContent='';
