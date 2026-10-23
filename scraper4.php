@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.443';
+const APP_VERSION = '10.444';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -4853,15 +4853,37 @@ function aiHttpPrepare(string $url, array $headers, ?array $payload, array $net,
         if ($tPort > 0) $base .= ':' . $tPort;
         $tPath = (string)($tParts['path'] ?? '/');
         if (isset($tParts['query']) && $tParts['query'] !== '') $tPath .= '?' . $tParts['query'];
-        $extraHeaders[] = 'X-Target-URL: ' . $url;
-        $extraHeaders[] = 'X-Target-Base: ' . $base;
-        $extraHeaders[] = 'X-Target-Path: ' . $tPath;
+        if ($workerStyle !== 'template') {
+            $extraHeaders[] = 'X-Target-URL: ' . $url;
+            $extraHeaders[] = 'X-Target-Base: ' . $base;
+            $extraHeaders[] = 'X-Target-Path: ' . $tPath;
+        }
+        foreach ($headers as $hdrLine) {
+            if (stripos($hdrLine, 'Authorization:') === 0) {
+                $authVal = trim(substr($hdrLine, strlen('Authorization:')));
+                if ($authVal !== '') $extraHeaders[] = 'X-Authorization: ' . $authVal;
+            } elseif (stripos($hdrLine, 'x-api-key:') === 0) {
+                $akVal = trim(substr($hdrLine, strlen('x-api-key:')));
+                if ($akVal !== '') $extraHeaders[] = 'X-API-Key-Fwd: ' . $akVal;
+            }
+        }
         $via = 'worker' . ($workerStyle !== '' ? '(' . $workerStyle . ')' : '');
     } elseif ($mode === 'gateway') {
         // درگاه واسط: کاربر Base URL را مستقیم در بخش هوش مصنوعی می‌گذارد،
         // پس اینجا کاری لازم نیست جز اینکه مثل direct عمل کنیم.
         $via = 'gateway';
     }
+
+    /* v10.444: افزودن هدرهای استاندارد User-Agent و Accept در صورت نبودن؛
+       فقدان User-Agent در cURL خام باعث بلاک ۴۰۳ کلادفلر (کد 1010) روی Groq،
+       OpenRouter، Together، Mistral و دروازه‌های سازگار می‌شد. */
+    $hasUa = false; $hasAccept = false;
+    foreach ($headers as $hl) {
+        if (stripos($hl, 'User-Agent:') === 0) $hasUa = true;
+        elseif (stripos($hl, 'Accept:') === 0) $hasAccept = true;
+    }
+    if (!$hasAccept) $extraHeaders[] = 'Accept: application/json';
+    if (!$hasUa) $extraHeaders[] = 'User-Agent: Mozilla/5.0 (compatible; S4AI/10.444; +https://openapi.basalam.com)';
 
     $ch = curl_init($reqUrl);
     $opt = [
@@ -4879,7 +4901,8 @@ function aiHttpPrepare(string $url, array $headers, ?array $payload, array $net,
     }
     if ($payload !== null) {
         $opt[CURLOPT_POST] = true;
-        $opt[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        if (defined('CURL_REDIR_POST_ALL')) $opt[CURLOPT_POSTREDIR] = CURL_REDIR_POST_ALL;
+        $opt[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     if ($mode === 'dns' || $mode === 'doh') {
@@ -5167,9 +5190,15 @@ function aiKeyHealth(string $pid, string $kid, ?array $state = null): array {
 function aiKeyFailureKind(array $r): array {
     if (!empty($r['ok'])) return ['kind' => '', 'label' => '', 'msg' => ''];
     $code = (int)($r['code'] ?? 0);
-    /* خطایی که از Worker/پروکسی آمده ربطی به کلید ندارد — کلیدِ سالم را
-       بی‌خود نسوزانیم. */
-    if (!empty($r['proxy_blocked'])) return ['kind' => '', 'label' => '', 'msg' => ''];
+    /* خطایی که از Worker/پروکسی آمده یا ناشی از حذف هدر Authorization در واسطه است
+       ربطی به خود کلید ندارد — کلیدِ سالم را بی‌خود نسوزانیم. */
+    if (!empty($r['proxy_blocked']) || !empty($r['auth_stripped_suspect'])) {
+        return ['kind' => '', 'label' => '', 'msg' => ''];
+    }
+    $mode = (string)($r['mode'] ?? '');
+    if (in_array($mode, ['worker', 'proxy'], true) && ($code === 401 || ($code === 400 && aiIsMissingAuthHeaderError($r)))) {
+        return ['kind' => '', 'label' => '', 'msg' => ''];
+    }
     $bill = aiBillingFailure($r);
     if ($bill['is']) return ['kind' => 'billing', 'label' => $bill['label'], 'msg' => (string)$bill['msg']];
     if ($code === 429) return ['kind' => 'rate',
@@ -5404,12 +5433,31 @@ function aiTestStopRequested(): bool {
    اگر فقط curl_error را بخوانیم، کاربر فقط HTTP 500/400 می‌بیند. */
 function aiHttpErrorMessage(array $r): string {
     $body = $r['body'] ?? null;
+    /* v10.444: Gemini خطاها را به‌صورت آرایهٔ یک‌عضوی [{"error":{"code":400,"message":"..."}}]
+       برمی‌گرداند و برخی سرویس‌های FastAPI/Mistral فیلد detail را آرایه‌ای از خطاهای
+       اعتبارسنجی می‌دهند؛ بازکردنِ آرایه باعث می‌شود متنِ دقیق خطا دیده شود. */
+    if (is_array($body) && isset($body[0]) && is_array($body[0]) && !isset($body['error']) && !isset($body['message'])) {
+        $body = $body[0];
+    }
     $msg = '';
     if (is_array($body)) {
         $e = $body['error'] ?? null;
-        if (is_array($e)) $msg = (string)($e['message'] ?? ($e['error'] ?? ''));
+        if (is_array($e)) $msg = (string)($e['message'] ?? ($e['error'] ?? ($e['detail'] ?? '')));
         elseif (is_string($e)) $msg = $e;
-        if ($msg === '') $msg = (string)($body['message'] ?? ($body['detail'] ?? ''));
+        if ($msg === '' && isset($body['message']) && is_string($body['message'])) $msg = $body['message'];
+        if ($msg === '' && isset($body['detail'])) {
+            if (is_string($body['detail'])) $msg = $body['detail'];
+            elseif (is_array($body['detail'])) {
+                $dParts = [];
+                foreach ($body['detail'] as $dItem) {
+                    if (is_array($dItem) && !empty($dItem['msg'])) {
+                        $loc = is_array($dItem['loc'] ?? null) ? implode('.', $dItem['loc']) : '';
+                        $dParts[] = ($loc !== '' ? ($loc . ': ') : '') . (string)$dItem['msg'];
+                    } elseif (is_string($dItem)) $dParts[] = $dItem;
+                }
+                if ($dParts) $msg = implode(' | ', $dParts);
+            }
+        }
         if ($msg === '' && isset($body['errors'][0]['message'])) $msg = (string)$body['errors'][0]['message'];
     } elseif (is_string($body) && $body !== '') {
         $msg = $body;
@@ -5425,6 +5473,56 @@ function aiHttpErrorMessage(array $r): string {
     }
     if (!empty($r['cf_error'])) $msg = (string)$r['cf_error'];
     return mb_substr($msg, 0, 500);
+}
+
+/**
+ * v10.444: آیا خطا صراحتاً می‌گوید «هیچ کلید/هدر احراز هویتی نرسیده»؟
+ * وقتی ما خودمان یک کلید غیرخالی فرستاده‌ایم ولی پاسخِ Worker/پروکسی می‌گوید
+ * «Missing API key» یا «no api key supplied» یا «Missing or invalid Authorization header»،
+ * یعنی واسطه هدر Authorization را در میانهٔ راه حذف کرده است.
+ */
+function aiIsMissingAuthHeaderError(array $r): bool {
+    $code = (int)($r['code'] ?? 0);
+    if (!in_array($code, [400, 401, 403], true)) return false;
+    $hay = strtolower(aiHttpErrorMessage($r) . ' ' . (string)($r['raw'] ?? ''));
+    foreach ([
+        'missing api key', 'no api key supplied', 'api key is missing',
+        'missing or invalid authorization header', 'authorization header is missing',
+        'missing authorization header', 'provide an api key', 'no authorization header',
+        'authentication credentials were not provided', 'x-api-key header is required',
+    ] as $sig) {
+        if (strpos($hay, $sig) !== false) return true;
+    }
+    return false;
+}
+
+/**
+ * v10.444: تشخیص بلاک جغرافیایی/تحریمی یا فایروال لبه روی مسیر مستقیم/DoH
+ * (مثلاً Groq 403 Forbidden، Google User location is not supported،
+ * Ollama Cloud 403 Your client does not have permission) تا aiProviderCallOnce
+ * به‌جای توقف زودهنگام سراغ Worker/Proxy برود.
+ */
+function aiIsGeoOrEdgeBlock(array $r, string $mode = ''): bool {
+    $code = (int)($r['code'] ?? 0);
+    if (!in_array($code, [400, 403, 451], true)) return false;
+    if (aiBillingFailure($r)['is']) return false;
+    $hay = strtolower(aiHttpErrorMessage($r) . ' ' . (string)($r['raw'] ?? ''));
+    foreach ([
+        'user location is not supported', 'location is not supported',
+        'country, region, or territory not supported', 'not available in your country',
+        'not available in your region', 'your client does not have permission to get url',
+        'access denied by security policy', 'error code: 1020', 'error code: 1010',
+        'blocked in your region', 'unavailable in your region',
+    ] as $sig) {
+        if (strpos($hay, $sig) !== false) return true;
+    }
+    if ($code === 403 && in_array($mode, ['direct', 'doh', 'dns'], true)) {
+        $msg = strtolower(trim(aiHttpErrorMessage($r)));
+        if ($msg === '' || $msg === 'forbidden' || $msg === 'access denied' || $msg === '403 forbidden') {
+            return true;
+        }
+    }
+    return false;
 }
 
 function aiTestNetworkFailure(array $r): array {
@@ -5524,6 +5622,7 @@ function aiBillingFailure(array $r): array {
     $raw  = strtolower((string)($r['raw'] ?? ''));
     $body = $r['body'] ?? null;
     $msg  = '';
+    if (is_array($body) && isset($body[0]) && is_array($body[0]) && !isset($body['error'])) $body = $body[0];
     if (is_array($body)) {
         $msg = (string)($body['error']['message'] ?? ($body['message'] ?? ''));
         if ($msg === '' && isset($body['error']) && is_string($body['error'])) $msg = $body['error'];
@@ -5550,8 +5649,8 @@ function aiBillingFailure(array $r): array {
         ['trial',   ['trial key', 'trial keys are limited', '1000 api calls'],
                     'کلید آزمایشی سقف ماهانه دارد — کلید تولیدی لازم است'],
         ['credit',  ['depleted your monthly included credits', 'monthly included credits',
-                     'insufficient credits', 'insufficient_quota', 'exceeded your current quota',
-                     'payment required', 'billing', 'add credits', 'out of credit'],
+                     'insufficient credits', 'insufficient balance', 'insufficient_quota', 'exceeded your current quota',
+                     'no remaining credits', 'payment required', 'billing', 'add credits', 'out of credit', 'top up your balance'],
                     'اعتبار تمام شده — باید حساب را شارژ کنید (رفع‌شدنی با کد نیست)'],
     ];
     foreach ($rules as $ru) {
@@ -5584,23 +5683,28 @@ function aiNonChatModel(string $modelId, array $m = []): string {
     if (isset($m['chat'])) return empty($m['chat']) ? 'کاربر آن را غیرچت علامت زده' : '';
     $rules = [
         ['امبدینگ (متن را به بردار تبدیل می‌کند، پاسخ متنی ندارد)',
-         ['bge-', 'embeddinggemma', '/embed', 'text-embedding', 'embed-', 'e5-', 'gte-', 'jina-embed']],
+         ['bge-', 'embeddinggemma', '/embed', 'text-embedding', '-embedding', 'embed-', 'e5-', 'gte-', 'jina-embed']],
         ['بازچینش نتایج (rerank) — ورودی‌اش query و contexts است',
          ['rerank', 'bge-reranker']],
-        ['تولید تصویر — خروجی‌اش تصویر است نه متن',
-         ['flux', 'stable-diffusion', 'sd-', 'sdxl', 'dreamshaper', 'lightning', 'phoenix-1', 'text-to-image']],
-        ['تبدیل گفتار به متن (ASR)', ['whisper', 'nova-3', 'speech-to-text', 'transcribe']],
-        ['تبدیل متن به گفتار (TTS)', ['melotts', 'aura-1', 'text-to-speech', 'tts-']],
-        ['طبقه‌بندی/بینایی — خروجی برچسب است نه متن',
-         ['resnet', 'detr-', 'uform', 'clip-', 'image-classification']],
+        ['تولید تصویر یا ویدیو — خروجی‌اش رسانه است نه متن',
+         ['flux', 'stable-diffusion', 'sd-', 'sdxl', 'xl-lightning', 'dreamshaper', 'phoenix-1', 'text-to-image',
+          'imagen', 'gpt-image', 'firefly-', '-image', 'veo-', 'kling-', 'seedance', 'lyria-', 'diffusion', 'chroma-v.', 'dark-beast-krea', 'imagine-1']],
+        ['تبدیل گفتار به متن یا صوت زنده (ASR/Audio)',
+         ['whisper', 'nova-3', 'speech-to-text', 'transcribe', 'voxtral', 'native-audio', '-live-preview', '-live-translate']],
+        ['تبدیل متن به گفتار (TTS)',
+         ['melotts', 'aura-1', 'aura-2', 'aura-', 'orpheus-', 'text-to-speech', 'tts-', '-tts']],
+        ['طبقه‌بندی/بینایی/خلاصه‌سازی غیرچت',
+         ['resnet', 'detr-', 'uform', 'clip-', 'image-classification', 'bart-large-cnn', 'distilbert-sst', 'mistral-ocr']],
         ['ترجمهٔ تخصصی — ورودی‌اش قالبِ چت نیست', ['m2m100', 'opus-mt']],
         ['تشخیصِ نوبتِ گفتار', ['smart-turn']],
         ['محافظ/مدیریت محتوا — پاسخِ گفت‌وگویی نمی‌دهد',
          ['guard', 'shieldstral', 'moderation', 'llamaguard', 'llama-guard']],
+        ['اندپوینت غیرچت (Batch ناهمگام / فایل وزن خام GGUF-MLX / عامل اختصاصی)',
+         [':batch', '-gguf', '.gguf', '-mlx-', 'computer-use', 'robotics-er', 'deep-research-']],
     ];
     foreach ($rules as $ru) {
         foreach ($ru[1] as $needle) {
-            if (strpos($id, $needle) !== false) return $ru[0];
+            if ($needle !== '' && strpos($id, $needle) !== false) return $ru[0];
         }
     }
     return '';
@@ -5686,9 +5790,12 @@ function aiModelKey(string $s): string {
 
 /** الگوهای نامِ مدل‌های استدلالیِ شناخته‌شده */
 function aiReasoningPatterns(): array {
-    return ['deepseek-r1', 'deepseek-reason', 'qwq', 'qwen3', 'qwen-3', 'thinking', 'think',
-            'reasoner', 'reasoning', 'gpt-oss', 'o1-', 'o3-', 'o4-', 'magistral', 'phi-4-reasoning',
-            'nemotron', 'skywork-o1', 'marco-o1', 'sky-t1', 'exaone-deep', 'r1-distill'];
+    return ['deepseek-r1', 'deepseek-reason', 'deepseek-v4', 'qwq', 'qwen3', 'qwen-3', 'thinking', 'think',
+            'reasoner', 'reasoning', 'gpt-oss', 'gpt-5', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'magistral', 'leanstral',
+            'phi-4-reasoning', 'nemotron', 'skywork-o1', 'marco-o1', 'sky-t1', 'exaone-deep', 'r1-distill',
+            'bonsai', 'ternary-bonsai', 'hy3', 'kimi-k2', 'kimi-k3', 'glm-5', 'glm-4.7', 'grok-4',
+            'gemini-2.5-pro', 'gemini-3', 'minimax-m2', 'minimax-m3', 'mimo', 'command-a-reasoning',
+            'claude-opus-4', 'claude-opus-5', 'claude-sonnet-4', 'claude-sonnet-5', 'claude-fable'];
 }
 
 /**
@@ -5722,7 +5829,7 @@ function aiFindModelRow(?array $p, string $modelId): ?array {
  */
 function aiReasoningBudget(int $want, bool $isReasoning): int {
     if (!$isReasoning) return $want;
-    return max(768, $want * 8);
+    return max(1024, $want * 8);
 }
 
 /**
@@ -5827,44 +5934,473 @@ function aiPayloadRepairVariants(array $payload, array $r, string $model = ''): 
         || strpos($hay, 'invalid') !== false || strpos($hay, 'must be') !== false)
         && array_key_exists('temperature', $payload)) {
         $p2 = $payload;
-        unset($p2['temperature']);
+        unset($p2['temperature'], $p2['top_p']);
         $add($p2, 'حذف temperature');
+    }
+    /* v10.444: سقف max_tokens بالاتر از حد مجاز مدل (مثلاً 9600 > 8192 یا 4096) */
+    if (($mentionsMaxTokens || $mentionsMaxCompletion)
+        && (strpos($hay, 'maximum') !== false || strpos($hay, 'less than') !== false
+            || strpos($hay, 'at most') !== false || strpos($hay, 'exceed') !== false
+            || strpos($hay, '<=') !== false)) {
+        $cap = 2048;
+        if (preg_match('~(?:<=|less than or equal to|at most|maximum[^\d]{0,20})(\d{3,6})~i', $hay, $cm)) {
+            $cap = max(128, min(32768, (int)$cm[1]));
+        }
+        $p2 = $payload;
+        if (isset($p2['max_tokens']) && (int)$p2['max_tokens'] > $cap) {
+            $p2['max_tokens'] = $cap;
+            $add($p2, 'کاهش max_tokens به ' . $cap);
+        }
+        if (isset($p2['max_completion_tokens']) && (int)$p2['max_completion_tokens'] > $cap) {
+            $p2['max_completion_tokens'] = $cap;
+            $add($p2, 'کاهش max_completion_tokens به ' . $cap);
+        }
+    }
+    /* v10.444: مدل‌هایی که نقش system/developer را قبول نمی‌کنند (مثلاً gemma-2 یا o1-mini) */
+    if ((strpos($hay, 'system') !== false || strpos($hay, 'developer instruction') !== false)
+        && (strpos($hay, 'not supported') !== false || strpos($hay, 'unsupported') !== false
+            || strpos($hay, 'not enabled') !== false || strpos($hay, 'invalid role') !== false)
+        && !empty($payload['messages']) && is_array($payload['messages'])) {
+        $sysTxt = []; $rest = [];
+        foreach ($payload['messages'] as $mm) {
+            if (!is_array($mm)) continue;
+            if (in_array((string)($mm['role'] ?? ''), ['system', 'developer'], true)) {
+                $c = is_string($mm['content'] ?? null) ? trim($mm['content']) : '';
+                if ($c !== '') $sysTxt[] = $c;
+            } else {
+                $rest[] = $mm;
+            }
+        }
+        if ($sysTxt && $rest) {
+            $prefix = implode("\n\n", $sysTxt) . "\n\n";
+            if (($rest[0]['role'] ?? '') === 'user' && is_string($rest[0]['content'] ?? null)) {
+                $rest[0]['content'] = $prefix . $rest[0]['content'];
+            } else {
+                array_unshift($rest, ['role' => 'user', 'content' => trim($prefix)]);
+            }
+            $p2 = $payload;
+            $p2['messages'] = $rest;
+            $add($p2, 'ادغام نقش system در پیام user');
+        }
+    }
+    /* v10.444: خطای پارامترهای اضافی در اعتبارسنج‌های سخت‌گیر (Mistral/Cohere 422 Extra inputs) */
+    if ($code === 422 || strpos($hay, 'extra inputs') !== false || strpos($hay, 'additional properties') !== false
+        || strpos($hay, 'unknown field') !== false || strpos($hay, 'unrecognized field') !== false) {
+        $p2 = [];
+        foreach (['model', 'messages', 'max_tokens', 'temperature', 'tools', 'tool_choice'] as $allowK) {
+            if (array_key_exists($allowK, $payload)) $p2[$allowK] = $payload[$allowK];
+        }
+        if (!isset($p2['max_tokens']) && isset($payload['max_completion_tokens'])) {
+            $p2['max_tokens'] = (int)$payload['max_completion_tokens'];
+        }
+        if (empty($p2['tools'])) unset($p2['tools'], $p2['tool_choice']);
+        $add($p2, 'پاک‌سازی فیلدهای غیرمجاز 422');
     }
     return array_values($out);
 }
 
 /**
- * آدرس «chat/completions» یک ارائه‌دهنده را می‌سازد.
- * همهٔ فرمت‌ها OpenAI-compatible اند به‌جز Cloudflare که native است.
+ * v10.444: کاتالوگ استاندارد تنظیمات و اندپوینت‌های رسمی پروایدرهای هوش مصنوعی.
+ */
+function aiProviderPresets(): array {
+    return [
+        'openrouter'   => ['id' => 'openrouter',   'name' => 'OpenRouter',                'vendor' => 'openrouter',   'url' => 'https://openrouter.ai/api/v1/chat/completions',                        'dialect' => 'openrouter', 'models' => [['id' => 'deepseek/deepseek-chat-v3.1:free', 'name' => 'DeepSeek V3.1 (Free)', 'free' => true, 'toolCalling' => true], ['id' => 'meta-llama/llama-3.3-70b-instruct:free', 'name' => 'Llama 3.3 70B (Free)', 'free' => true, 'toolCalling' => true]]],
+        'groq'         => ['id' => 'groq',         'name' => 'Groq',                      'vendor' => 'groq',         'url' => 'https://api.groq.com/openai/v1/chat/completions',                      'dialect' => 'groq',       'models' => [['id' => 'llama-3.3-70b-versatile', 'name' => 'Llama 3.3 70B Versatile', 'free' => true, 'toolCalling' => true], ['id' => 'llama-3.1-8b-instant', 'name' => 'Llama 3.1 8B Instant', 'free' => true, 'toolCalling' => true], ['id' => 'openai/gpt-oss-120b', 'name' => 'GPT-OSS 120B', 'free' => true, 'toolCalling' => true, 'reasoning' => true]]],
+        'gemini'       => ['id' => 'gemini',       'name' => 'Google AI Studio / Gemini', 'vendor' => 'gemini',       'url' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'dialect' => 'gemini', 'models' => [['id' => 'gemini-2.5-flash', 'name' => 'Gemini 2.5 Flash', 'free' => true, 'toolCalling' => true], ['id' => 'gemini-2.5-flash-lite', 'name' => 'Gemini 2.5 Flash Lite', 'free' => true, 'toolCalling' => true], ['id' => 'gemini-2.0-flash', 'name' => 'Gemini 2.0 Flash', 'free' => true, 'toolCalling' => true]]],
+        'anthropic'    => ['id' => 'anthropic',    'name' => 'Anthropic Claude',          'vendor' => 'anthropic',    'url' => 'https://api.anthropic.com/v1/messages',                                'dialect' => 'anthropic',  'models' => [['id' => 'claude-sonnet-4-5', 'name' => 'Claude Sonnet 4.5', 'toolCalling' => true], ['id' => 'claude-haiku-4-5', 'name' => 'Claude Haiku 4.5', 'toolCalling' => true]]],
+        'mistral'      => ['id' => 'mistral',      'name' => 'Mistral AI',                'vendor' => 'mistral',      'url' => 'https://api.mistral.ai/v1/chat/completions',                           'dialect' => 'mistral',    'models' => [['id' => 'mistral-small-latest', 'name' => 'Mistral Small (Latest)', 'toolCalling' => true, 'reasoning' => true], ['id' => 'ministral-8b-latest', 'name' => 'Ministral 8B (Latest)', 'toolCalling' => true]]],
+        'cohere'       => ['id' => 'cohere',       'name' => 'Cohere',                    'vendor' => 'cohere',       'url' => 'https://api.cohere.com/compatibility/v1/chat/completions',             'dialect' => 'cohere',     'models' => [['id' => 'command-a-03-2025', 'name' => 'Command A (03-2025)', 'toolCalling' => true], ['id' => 'command-r-plus-08-2024', 'name' => 'Command R+ (08-2024)', 'toolCalling' => true], ['id' => 'c4ai-aya-expanse-32b', 'name' => 'Aya Expanse 32B', 'toolCalling' => true]]],
+        'together'     => ['id' => 'together',     'name' => 'Together AI',               'vendor' => 'together',     'url' => 'https://api.together.xyz/v1/chat/completions',                         'dialect' => 'together',   'models' => [['id' => 'Prism-ML/Ternary-Bonsai-27B', 'name' => 'Ternary Bonsai 27B', 'free' => true, 'toolCalling' => true, 'reasoning' => true]]],
+        'huggingface'  => ['id' => 'huggingface',  'name' => 'Hugging Face Router',       'vendor' => 'huggingface',  'url' => 'https://router.huggingface.co/v1/chat/completions',                    'dialect' => 'huggingface','models' => [['id' => 'Qwen/Qwen3-32B', 'name' => 'Qwen3 32B', 'toolCalling' => true, 'reasoning' => true], ['id' => 'meta-llama/Llama-3.1-8B-Instruct', 'name' => 'Llama 3.1 8B Instruct', 'toolCalling' => true]]],
+        'cerebras'     => ['id' => 'cerebras',     'name' => 'Cerebras',                  'vendor' => 'cerebras',     'url' => 'https://api.cerebras.ai/v1/chat/completions',                          'dialect' => 'cerebras',   'models' => [['id' => 'gpt-oss-120b', 'name' => 'GPT-OSS 120B', 'free' => true, 'toolCalling' => true, 'reasoning' => true], ['id' => 'qwen-3-32b', 'name' => 'Qwen3 32B', 'free' => true, 'toolCalling' => true, 'reasoning' => true], ['id' => 'llama-3.3-70b', 'name' => 'Llama 3.3 70B', 'free' => true, 'toolCalling' => true]]],
+        'deepseek'     => ['id' => 'deepseek',     'name' => 'DeepSeek',                  'vendor' => 'deepseek',     'url' => 'https://api.deepseek.com/chat/completions',                            'dialect' => 'deepseek',   'models' => [['id' => 'deepseek-chat', 'name' => 'DeepSeek V3 Chat', 'toolCalling' => true], ['id' => 'deepseek-reasoner', 'name' => 'DeepSeek R1 Reasoner', 'reasoning' => true]]],
+        'openai'       => ['id' => 'openai',       'name' => 'OpenAI',                    'vendor' => 'openai',       'url' => 'https://api.openai.com/v1/chat/completions',                           'dialect' => 'openai',     'models' => [['id' => 'gpt-4o-mini', 'name' => 'GPT-4o mini', 'toolCalling' => true], ['id' => 'gpt-4.1-mini', 'name' => 'GPT-4.1 mini', 'toolCalling' => true]]],
+        'xai'          => ['id' => 'xai',          'name' => 'xAI Grok',                  'vendor' => 'xai',          'url' => 'https://api.x.ai/v1/chat/completions',                                 'dialect' => 'xai',        'models' => [['id' => 'grok-3-mini', 'name' => 'Grok 3 Mini', 'toolCalling' => true, 'reasoning' => true]]],
+        'github'       => ['id' => 'github',       'name' => 'GitHub Models',             'vendor' => 'github',       'url' => 'https://models.inference.ai.azure.com/chat/completions',               'dialect' => 'github',     'models' => [['id' => 'gpt-4o-mini', 'name' => 'GPT-4o mini', 'free' => true, 'toolCalling' => true], ['id' => 'gpt-4.1-mini', 'name' => 'GPT-4.1 mini', 'free' => true, 'toolCalling' => true]]],
+        'nvidia'       => ['id' => 'nvidia',       'name' => 'NVIDIA NIM',                'vendor' => 'nvidia',       'url' => 'https://integrate.api.nvidia.com/v1/chat/completions',                 'dialect' => 'nvidia',     'models' => [['id' => 'meta/llama-3.3-70b-instruct', 'name' => 'Llama 3.3 70B', 'free' => true, 'toolCalling' => true]]],
+        'fireworks'    => ['id' => 'fireworks',    'name' => 'Fireworks AI',              'vendor' => 'fireworks',    'url' => 'https://api.fireworks.ai/inference/v1/chat/completions',               'dialect' => 'fireworks',  'models' => [['id' => 'accounts/fireworks/models/llama-v3p3-70b-instruct', 'name' => 'Llama 3.3 70B', 'toolCalling' => true]]],
+        'perplexity'   => ['id' => 'perplexity',   'name' => 'Perplexity',                'vendor' => 'perplexity',   'url' => 'https://api.perplexity.ai/chat/completions',                           'dialect' => 'perplexity', 'models' => [['id' => 'sonar', 'name' => 'Sonar', 'toolCalling' => false]]],
+        'sambanova'    => ['id' => 'sambanova',    'name' => 'SambaNova',                 'vendor' => 'sambanova',    'url' => 'https://api.sambanova.ai/v1/chat/completions',                         'dialect' => 'sambanova',  'models' => [['id' => 'Meta-Llama-3.3-70B-Instruct', 'name' => 'Llama 3.3 70B', 'free' => true, 'toolCalling' => true]]],
+        'opencode'     => ['id' => 'opencode',     'name' => 'OpenCode Zen',              'vendor' => 'opencode',     'url' => 'https://opencode.ai/zen/v1/chat/completions',                          'dialect' => 'opencode',   'models' => [['id' => 'hy3-free', 'name' => 'Hy3 Free', 'free' => true, 'toolCalling' => true, 'reasoning' => true]]],
+        'llm7'         => ['id' => 'llm7',         'name' => 'LLM7.io',                   'vendor' => 'llm7',         'url' => 'https://api.llm7.io/v1/chat/completions',                              'dialect' => 'llm7',       'models' => [['id' => 'mistral-Nemo-Instruct-2407', 'name' => 'Mistral Nemo 2407', 'free' => true]]],
+        'ollama_cloud' => ['id' => 'ollama_cloud', 'name' => 'Ollama Cloud',              'vendor' => 'ollama-cloud', 'url' => 'https://ollama.com/v1/chat/completions',                               'dialect' => 'ollama_cloud','models' => [['id' => 'gpt-oss:120b', 'name' => 'GPT-OSS 120B', 'toolCalling' => true, 'reasoning' => true]]],
+        'ollama'       => ['id' => 'ollama',       'name' => 'Ollama (Local)',            'vendor' => 'ollama-models','url' => 'http://127.0.0.1:11434/v1/chat/completions',                           'dialect' => 'ollama',     'models' => []],
+        'pollinations' => ['id' => 'pollinations', 'name' => 'Pollinations AI (Free)',    'vendor' => 'pollinations', 'url' => 'https://text.pollinations.ai/openai',                                  'dialect' => 'pollinations','models' => [['id' => 'openai', 'name' => 'Pollinations OpenAI (Free)', 'free' => true]]],
+    ];
+}
+
+/**
+ * v10.444: تشخیص لهجهٔ واقعی ارائه‌دهنده از روی دامنه، vendor و شناسه.
+ */
+function aiDetectProviderDialect(array $p, string $rawUrl = ''): string {
+    $u = strtolower($rawUrl !== '' ? $rawUrl : trim((string)($p['url'] ?? '')));
+    $vendor = strtolower(trim((string)($p['vendor'] ?? '')));
+    $pid    = strtolower(trim((string)($p['id'] ?? '')));
+    $host   = strtolower((string)(parse_url($u, PHP_URL_HOST) ?? ''));
+    if (stripos($u, '/ai/run') !== false || ($host === 'api.cloudflare.com' && stripos($u, '/ai/') !== false)) {
+        return stripos($u, '/ai/v1') !== false ? 'cloudflare_openai' : 'cloudflare';
+    }
+    if (strpos($host, 'anthropic.com') !== false || $vendor === 'anthropic' || $pid === 'anthropic') return 'anthropic';
+    if (strpos($host, 'generativelanguage.googleapis.com') !== false || in_array($vendor, ['gemini', 'google'], true) || $pid === 'gemini') return 'gemini';
+    if (strpos($host, 'cohere.com') !== false || strpos($host, 'cohere.ai') !== false || $vendor === 'cohere' || $pid === 'cohere') return 'cohere';
+    if (strpos($host, 'mistral.ai') !== false || $vendor === 'mistral' || $pid === 'mistral') return 'mistral';
+    if (strpos($host, 'groq.com') !== false || $vendor === 'groq' || $pid === 'groq') return 'groq';
+    if (strpos($host, 'openrouter.ai') !== false || $vendor === 'openrouter' || $pid === 'openrouter') return 'openrouter';
+    if (strpos($host, 'together.xyz') !== false || strpos($host, 'together.ai') !== false || $vendor === 'together' || $pid === 'together') return 'together';
+    if (strpos($host, 'huggingface.co') !== false || $vendor === 'huggingface' || $pid === 'huggingface') return 'huggingface';
+    if (strpos($host, 'cerebras.ai') !== false || $vendor === 'cerebras' || $pid === 'cerebras') return 'cerebras';
+    if (strpos($host, 'deepseek.com') !== false || $vendor === 'deepseek' || $pid === 'deepseek') return 'deepseek';
+    if (strpos($host, 'api.openai.com') !== false || $vendor === 'openai' || $pid === 'openai') return 'openai';
+    if (strpos($host, 'api.x.ai') !== false || $vendor === 'xai' || $pid === 'xai') return 'xai';
+    if (strpos($host, 'models.inference.ai.azure.com') !== false || strpos($host, 'models.github.ai') !== false || $vendor === 'github' || $pid === 'github') return 'github';
+    if (strpos($host, 'integrate.api.nvidia.com') !== false || $vendor === 'nvidia' || $pid === 'nvidia') return 'nvidia';
+    if (strpos($host, 'fireworks.ai') !== false || $vendor === 'fireworks' || $pid === 'fireworks') return 'fireworks';
+    if (strpos($host, 'perplexity.ai') !== false || $vendor === 'perplexity' || $pid === 'perplexity') return 'perplexity';
+    if (strpos($host, 'sambanova.ai') !== false || $vendor === 'sambanova' || $pid === 'sambanova') return 'sambanova';
+    if (strpos($host, 'opencode.ai') !== false || $vendor === 'opencode' || $pid === 'opencode') return 'opencode';
+    if (strpos($host, 'llm7.io') !== false || $vendor === 'llm7' || $pid === 'llm7') return 'llm7';
+    if ($host === 'ollama.com' || $host === 'www.ollama.com' || $vendor === 'ollama-cloud' || $pid === 'ollama_cloud') return 'ollama_cloud';
+    if ($vendor === 'ollama-models' || strpos($u, ':11434') !== false || $pid === 'ollama') return 'ollama';
+    if (strpos($host, 'pollinations.ai') !== false || $vendor === 'pollinations' || $pid === 'pollinations') return 'pollinations';
+    return 'openai_compat';
+}
+
+/**
+ * v10.444: پاک‌سازی شناسهٔ مدل از پیشوندها/پسوندهای خراب هنگام ارسال به پروایدر.
+ */
+function aiSanitizeModelId(string $model, string $dialect = ''): string {
+    $m = aiModelKey($model);
+    $m = ltrim($m, "~ \t\r\n");
+    if ($dialect === 'gemini' && stripos($m, 'models/') === 0) {
+        $m = substr($m, 7);
+    }
+    if (substr(strtolower($m), -6) === ':batch') {
+        $m = substr($m, 0, -6);
+    }
+    return trim($m);
+}
+
+/**
+ * آدرس نهایی اندپوینت و نوع پروتکل یک ارائه‌دهنده را می‌سازد (v10.444).
+ * از همهٔ پروایدرهای OpenAI-compatible و پروتکل‌های نیتیو (Cloudflare، Anthropic،
+ * Gemini Native، Cohere v2، Ollama Native) پشتیبانی می‌کند و مسیرهای ناقص را اصلاح می‌نماید.
  */
 function aiProviderEndpoint(array $p, string $model = ''): array {
     $raw = trim((string)($p['url'] ?? ''));
-    if (preg_match('~^\[([^]]+)\]\(([^)]+)\)$~', $raw, $m)) $raw = $m[2];
-    $vendor = strtolower(trim((string)($p['vendor'] ?? '')));
-    // Cloudflare: آدرس خودِ مدل (`.../ai/run/@cf/...`) یا آدرس پایهٔ `.../ai/run`
-    // v9.99: قبلاً فقط `/ai/run/` (با اسلشِ پایانی) شناخته می‌شد؛ اگر کاربر آدرس
-    // را بدون اسلشِ آخر وارد می‌کرد، اشتباهاً OpenAI فرض می‌شد و `/chat/completions`
-    // به دنبالش می‌چسبید ⇒ خطای «No route for that URI».
+    if (preg_match('~^\[([^]]+)\]\(([^)]+)\)$~', $raw, $m)) $raw = trim($m[2]);
+    $dialect = aiDetectProviderDialect($p, $raw);
+    $cleanModel = aiSanitizeModelId($model, $dialect);
+    if ($raw === '') {
+        $presets = aiProviderPresets();
+        if (isset($presets[$dialect]['url'])) $raw = $presets[$dialect]['url'];
+    }
+    $uNoTrail = rtrim($raw, '/');
+    $path = (string)(parse_url($uNoTrail, PHP_URL_PATH) ?? '');
+    $schemeHost = '';
+    if (preg_match('~^(https?://[^/?#]+)~i', $uNoTrail, $shm)) $schemeHost = $shm[1];
+
+    // ۱) Cloudflare Workers AI (native /ai/run vs OpenAI-compat /ai/v1)
     if (stripos($raw, '/ai/run/') !== false || preg_match('~/ai/run/?$~i', $raw)) {
-        return ['kind' => 'cloudflare', 'url' => $raw, 'model' => $model];
+        return ['kind' => 'cloudflare', 'url' => $raw, 'model' => $cleanModel, 'dialect' => 'cloudflare'];
     }
-    // v9.99: اندپوینت‌های نیتیوِ غیر-OpenAI که نباید `/chat/completions` بگیرند
-    if (preg_match('~/v\d+/(messages|generateContent|complete|generate)/?$~i', $raw)
-        || stripos($raw, ':generateContent') !== false) {
-        return ['kind' => 'native', 'url' => $raw, 'model' => $model];
+    if ($dialect === 'cloudflare_openai' && preg_match('~/ai/v1/?$~i', $path)) {
+        return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'cloudflare_openai'];
     }
-    // Ollama: اندپوینت سازگار با OpenAI روی /v1
-    if ($vendor === 'ollama-models' || strpos($raw, '11434') !== false) {
-        return ['kind' => 'openai', 'url' => rtrim($raw, '/') . '/v1/chat/completions', 'model' => $model];
+
+    // ۲) Anthropic Claude (/v1/messages) و مدل‌های Claude روی OpenCode Zen (/zen/v1/messages)
+    if ($dialect === 'opencode' && stripos($cleanModel, 'claude-') === 0) {
+        return ['kind' => 'anthropic', 'url' => ($schemeHost !== '' ? $schemeHost : 'https://opencode.ai') . '/zen/v1/messages', 'model' => $cleanModel, 'dialect' => 'opencode'];
     }
-    if (preg_match('~/chat/completions/?$~i', $raw)) {
-        return ['kind' => 'openai', 'url' => $raw, 'model' => $model];
+    if ($dialect === 'anthropic' || preg_match('~/v\d+/messages/?$~i', $path)) {
+        $anthUrl = $uNoTrail;
+        if (!preg_match('~/messages$~i', $anthUrl)) {
+            $anthUrl = preg_match('~/v\d+$~i', $anthUrl) ? ($anthUrl . '/messages') : (($schemeHost !== '' ? $schemeHost : 'https://api.anthropic.com') . '/v1/messages');
+        }
+        return ['kind' => 'anthropic', 'url' => $anthUrl, 'model' => $cleanModel, 'dialect' => 'anthropic'];
     }
-    $path = (string)parse_url($raw, PHP_URL_PATH);
-    if ($path === '' || $path === '/' || preg_match('~/v\d+(\.\d+)?/?$~i', $path)) {
-        return ['kind' => 'openai', 'url' => rtrim($raw, '/') . '/chat/completions', 'model' => $model];
+
+    // ۳) Google Gemini (هم OpenAI-compat و هم Native :generateContent)
+    if ($dialect === 'gemini' || stripos($raw, ':generateContent') !== false || stripos($raw, ':streamGenerateContent') !== false) {
+        if (stripos($raw, ':generateContent') !== false || stripos($raw, ':streamGenerateContent') !== false
+            || preg_match('~/v1(?:beta)?/models(?:/[^/]+)?$~i', $path)) {
+            $gBase = ($schemeHost !== '' ? $schemeHost : 'https://generativelanguage.googleapis.com') . '/v1beta';
+            if (preg_match('~^(https?://[^/?#]+/v1(?:beta)?)/models~i', $uNoTrail, $gm)) $gBase = $gm[1];
+            $gUrl = $gBase . '/models/' . rawurlencode($cleanModel !== '' ? $cleanModel : 'gemini-2.5-flash') . ':generateContent';
+            return ['kind' => 'gemini', 'url' => $gUrl, 'model' => $cleanModel, 'dialect' => 'gemini'];
+        }
+        if (preg_match('~/chat/completions$~i', $path)) {
+            $fixedGem = preg_replace('~/(v1(?:beta)?)/chat/completions$~i', '/$1/openai/chat/completions', $uNoTrail);
+            return ['kind' => 'openai', 'url' => (string)$fixedGem, 'model' => $cleanModel, 'dialect' => 'gemini'];
+        }
+        if (preg_match('~/openai$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'gemini'];
+        }
+        $gRoot = $schemeHost !== '' ? $schemeHost : 'https://generativelanguage.googleapis.com';
+        return ['kind' => 'openai', 'url' => $gRoot . '/v1beta/openai/chat/completions', 'model' => $cleanModel, 'dialect' => 'gemini'];
     }
-    return ['kind' => 'openai', 'url' => rtrim($raw, '/') . '/chat/completions', 'model' => $model];
+
+    // ۴) Cohere (/compatibility/v1/chat/completions و نیتیو /v2/chat)
+    if ($dialect === 'cohere') {
+        if (preg_match('~/v[12]/chat$~i', $path)) {
+            return ['kind' => 'cohere', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => 'cohere'];
+        }
+        if (preg_match('~/compatibility/v1/chat/completions$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => 'cohere'];
+        }
+        $cRoot = $schemeHost !== '' ? $schemeHost : 'https://api.cohere.com';
+        return ['kind' => 'openai', 'url' => $cRoot . '/compatibility/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'cohere'];
+    }
+
+    // ۵) Hugging Face: ارتقای خودکار اندپوینت بازنشستهٔ api-inference به router.huggingface.co
+    if ($dialect === 'huggingface') {
+        if (stripos($uNoTrail, 'api-inference.huggingface.co') !== false || $path === '' || $path === '/' || $path === '/v1') {
+            return ['kind' => 'openai', 'url' => 'https://router.huggingface.co/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'huggingface'];
+        }
+        if (!preg_match('~/chat/completions$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail . (preg_match('~/v1$~i', $path) ? '/chat/completions' : '/v1/chat/completions'), 'model' => $cleanModel, 'dialect' => 'huggingface'];
+        }
+        return ['kind' => 'openai', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => 'huggingface'];
+    }
+
+    // ۶) Ollama محلی و Ollama Cloud (/api/chat نیتیو و /v1/chat/completions بدون تکرار /v1/v1)
+    if ($dialect === 'ollama' || ($dialect === 'ollama_cloud' && preg_match('~/api/(?:chat|generate)$~i', $path))) {
+        if (preg_match('~/api/(?:chat|generate)$~i', $path)) {
+            return ['kind' => 'ollama', 'url' => (string)preg_replace('~/api/generate$~i', '/api/chat', $uNoTrail), 'model' => $cleanModel, 'dialect' => $dialect];
+        }
+        if (preg_match('~/chat/completions$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => $dialect];
+        }
+        if (preg_match('~/v1$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+        }
+        return ['kind' => 'openai', 'url' => $uNoTrail . '/v1/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+    }
+
+    // ۷) Pollinations AI (مسیر مستقیم /openai بدون افزودن اشتباهی /chat/completions)
+    if ($dialect === 'pollinations') {
+        if ($path === '' || $path === '/' || strcasecmp($path, '/openai') === 0) {
+            return ['kind' => 'openai', 'url' => ($schemeHost !== '' ? $schemeHost : 'https://text.pollinations.ai') . '/openai', 'model' => $cleanModel, 'dialect' => 'pollinations'];
+        }
+        if (preg_match('~/chat/completions$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => 'pollinations'];
+        }
+    }
+
+    // ۸) اگر از قبل به /chat/completions ختم می‌شود، دست‌نخورده نگه دار (مگر مسیر ناقص Groq/OpenRouter)
+    if (preg_match('~/chat/completions$~i', $path)) {
+        if ($dialect === 'groq' && stripos($path, '/openai/') === false) {
+            return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://api.groq.com') . '/openai/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'groq'];
+        }
+        if ($dialect === 'openrouter' && stripos($path, '/api/v1/') === false) {
+            return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://openrouter.ai') . '/api/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'openrouter'];
+        }
+        return ['kind' => 'openai', 'url' => $uNoTrail, 'model' => $cleanModel, 'dialect' => $dialect];
+    }
+
+    // ۹) تکمیل مسیر کانونیکال بر اساس دامنه/لهجه وقتی کاربر فقط دامنه یا مسیر پایه را وارد کرده
+    if ($dialect === 'groq') {
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://api.groq.com') . '/openai/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'groq'];
+    }
+    if ($dialect === 'openrouter') {
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://openrouter.ai') . '/api/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'openrouter'];
+    }
+    if ($dialect === 'opencode') {
+        if (preg_match('~/zen/v1$~i', $path)) return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'opencode'];
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://opencode.ai') . '/zen/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'opencode'];
+    }
+    if ($dialect === 'fireworks') {
+        if (preg_match('~/inference/v1$~i', $path)) return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'fireworks'];
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://api.fireworks.ai') . '/inference/v1/chat/completions', 'model' => $cleanModel, 'dialect' => 'fireworks'];
+    }
+    if ($dialect === 'github') {
+        if (stripos($uNoTrail, 'models.github.ai') !== false) {
+            return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://models.github.ai') . '/inference/chat/completions', 'model' => $cleanModel, 'dialect' => 'github'];
+        }
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://models.inference.ai.azure.com') . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'github'];
+    }
+    if ($dialect === 'perplexity') {
+        return ['kind' => 'openai', 'url' => ($schemeHost ?: 'https://api.perplexity.ai') . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'perplexity'];
+    }
+    if (in_array($dialect, ['mistral', 'together', 'cerebras', 'openai', 'xai', 'nvidia', 'sambanova', 'llm7', 'ollama_cloud'], true)) {
+        if (preg_match('~/v\d+(\.\d+)?$~i', $path)) {
+            return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+        }
+        return ['kind' => 'openai', 'url' => $uNoTrail . '/v1/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+    }
+    if ($dialect === 'deepseek') {
+        return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => 'deepseek'];
+    }
+
+    // ۱۰) اندپوینت‌های نیتیو متفرقه یا سازگار با OpenAI سفارشی
+    if (preg_match('~/v\d+/(complete|generate)/?$~i', $raw)) {
+        return ['kind' => 'native', 'url' => $raw, 'model' => $cleanModel, 'dialect' => $dialect];
+    }
+    if ($path === '' || $path === '/') {
+        return ['kind' => 'openai', 'url' => $uNoTrail . '/v1/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+    }
+    return ['kind' => 'openai', 'url' => $uNoTrail . '/chat/completions', 'model' => $cleanModel, 'dialect' => $dialect];
+}
+
+/**
+ * v10.444: ساخت هدرهای احراز هویت و پروتکل متناسب با هر پروایدر.
+ */
+function aiBuildProviderHeaders(array $p, array $ep, string $apiKey): array {
+    $dialect = (string)($ep['dialect'] ?? aiDetectProviderDialect($p));
+    $kind    = (string)($ep['kind'] ?? 'openai');
+    $apiKey  = trim($apiKey);
+    $headers = ['Content-Type: application/json', 'Accept: application/json'];
+
+    if ($kind === 'anthropic') {
+        if ($apiKey !== '') {
+            $headers[] = 'x-api-key: ' . $apiKey;
+            if ($dialect !== 'anthropic') $headers[] = 'Authorization: Bearer ' . $apiKey;
+        }
+        $headers[] = 'anthropic-version: 2023-06-01';
+        return $headers;
+    }
+    if ($kind === 'gemini') {
+        if ($apiKey !== '') $headers[] = 'x-goog-api-key: ' . $apiKey;
+        return $headers;
+    }
+    if ($apiKey !== '') {
+        $headers[] = 'Authorization: Bearer ' . $apiKey;
+    } elseif ($dialect === 'llm7') {
+        /* LLM7 برای پلن رایگان عمومی مقدار unused را در هدر Bearer می‌پذیرد */
+        $headers[] = 'Authorization: Bearer unused';
+    }
+    if ($dialect === 'openrouter') {
+        $ref = !empty($_SERVER['HTTP_HOST']) ? ('https://' . $_SERVER['HTTP_HOST']) : 'https://basalam.com';
+        $headers[] = 'HTTP-Referer: ' . $ref;
+        $headers[] = 'X-Title: S4-AI-Connector';
+    }
+    return $headers;
+}
+
+/**
+ * v10.444: آیا مدل از خانوادهٔ o1/o3/o4/gpt-5/codex است که در لهجهٔ OpenAI
+ * به‌جای max_tokens پارامتر max_completion_tokens می‌خواهد و temperature غیرپیش‌فرض را رد می‌کند؟
+ */
+function aiModelRequiresCompletionTokens(string $model, string $dialect): bool {
+    if (!in_array($dialect, ['openai', 'github', 'opencode'], true)) return false;
+    $low = strtolower(trim($model));
+    if (strpos($low, '/') !== false) $low = substr($low, strrpos($low, '/') + 1);
+    return (bool)preg_match('~^(o1|o3|o4|gpt-5|codex)(?:[-._:]|$)~i', $low);
+}
+
+/**
+ * v10.444: نرمال‌سازی و تطبیق هوشمند بدنهٔ درخواست (payload) پیش از ارسال
+ * بر اساس قواعد سخت‌گیرانهٔ هر پروایدر (Mistral، Cohere، Gemini، OpenAI o-series/GPT-5،
+ * Perplexity، DeepSeek، Groq، Together و...).
+ */
+function aiBuildOpenAiPayload(array $payload, string $model, string $dialect = 'openai_compat', array $p = []): array {
+    $cleanModel = aiSanitizeModelId($model, $dialect);
+    $body = $payload;
+    unset($body['_s4_no_repair']);
+    $body['model'] = $cleanModel;
+
+    // ۱) تمیزسازی آرایهٔ messages (حذف content=null بدون tool_calls، جابه‌جایی system به ابتدا، ادغام پیام‌های متوالی در Perplexity)
+    if (isset($body['messages']) && is_array($body['messages'])) {
+        $sysMsgs = [];
+        $convMsgs = [];
+        $strictOrder = in_array($dialect, ['mistral', 'cohere', 'gemini', 'perplexity', 'anthropic'], true);
+        $lowModel = strtolower($cleanModel);
+        $noSystemRole = (strpos($lowModel, 'o1-mini') !== false || strpos($lowModel, 'o1-preview') !== false);
+
+        foreach ($body['messages'] as $m) {
+            if (!is_array($m)) continue;
+            $role = strtolower(trim((string)($m['role'] ?? 'user')));
+            $hasToolCalls = !empty($m['tool_calls']) && is_array($m['tool_calls']);
+            if (!array_key_exists('content', $m) || ($m['content'] === null && !$hasToolCalls)) {
+                $m['content'] = '';
+            }
+            if ($role === 'system' || $role === 'developer') {
+                if ($noSystemRole) {
+                    $txt = is_string($m['content']) ? trim($m['content']) : '';
+                    if ($txt !== '') $sysMsgs[] = $txt;
+                    continue;
+                }
+                if ($strictOrder) {
+                    $txt = is_string($m['content']) ? trim($m['content']) : '';
+                    if ($txt !== '') $sysMsgs[] = $txt;
+                    continue;
+                }
+            }
+            $convMsgs[] = $m;
+        }
+        if ($noSystemRole && $sysMsgs) {
+            $sysBlob = implode("\n\n", $sysMsgs);
+            if ($convMsgs && ($convMsgs[0]['role'] ?? '') === 'user' && is_string($convMsgs[0]['content'] ?? null)) {
+                $convMsgs[0]['content'] = $sysBlob . "\n\n" . $convMsgs[0]['content'];
+            } else {
+                array_unshift($convMsgs, ['role' => 'user', 'content' => $sysBlob]);
+            }
+        } elseif ($strictOrder && $sysMsgs) {
+            array_unshift($convMsgs, ['role' => 'system', 'content' => implode("\n\n", $sysMsgs)]);
+        }
+        if ($dialect === 'perplexity' && count($convMsgs) > 1) {
+            $merged = [];
+            foreach ($convMsgs as $cm) {
+                $lastIdx = count($merged) - 1;
+                if ($lastIdx >= 0 && ($merged[$lastIdx]['role'] ?? '') === ($cm['role'] ?? '')
+                    && is_string($merged[$lastIdx]['content'] ?? null) && is_string($cm['content'] ?? null)) {
+                    $merged[$lastIdx]['content'] .= "\n\n" . $cm['content'];
+                } else {
+                    $merged[] = $cm;
+                }
+            }
+            $convMsgs = $merged;
+        }
+        $body['messages'] = array_values($convMsgs);
+    }
+
+    // ۲) پاک‌سازی tools / tool_choice وقتی ابزاری تعریف نشده یا پروایدر پشتیبانی نمی‌کند
+    if (empty($body['tools']) || !is_array($body['tools']) || $dialect === 'perplexity') {
+        unset($body['tools'], $body['tool_choice'], $body['parallel_tool_calls']);
+    }
+
+    // ۳) حذف پارامترهای اختصاصی OpenAI برای پروایدرهای دارای اعتبارسنج سخت‌گیر (مثل Mistral 422 / Cohere)
+    if (in_array($dialect, ['mistral', 'cohere', 'gemini', 'groq', 'cerebras', 'together', 'huggingface', 'perplexity', 'ollama', 'ollama_cloud', 'deepseek', 'sambanova', 'pollinations'], true)) {
+        unset($body['parallel_tool_calls'], $body['service_tier'], $body['store']);
+        if (empty($body['stream'])) unset($body['stream_options']);
+    }
+
+    // ۴) رعایت سقف خروجی مدل (maxOutputTokens) برای جلوگیری از خطای 400 max_tokens exceeds model limit
+    $mRow = aiFindModelRow($p, $model) ?? aiFindModelRow($p, $cleanModel);
+    $modelMaxOut = is_array($mRow) ? (int)($mRow['maxOutputTokens'] ?? 0) : 0;
+
+    // ۵) تطبیق max_tokens ⇄ max_completion_tokens و محدودهٔ temperature
+    if (aiModelRequiresCompletionTokens($cleanModel, $dialect)) {
+        if (isset($body['max_tokens'])) {
+            $tok = (int)$body['max_tokens'];
+            if ($modelMaxOut >= 256 && $tok > $modelMaxOut) $tok = $modelMaxOut;
+            $body['max_completion_tokens'] = max(1, $tok);
+            unset($body['max_tokens']);
+        }
+        if (isset($body['temperature']) && (float)$body['temperature'] !== 1.0) {
+            unset($body['temperature']);
+        }
+        unset($body['top_p']);
+    } else {
+        if (isset($body['max_completion_tokens']) && in_array($dialect, ['mistral', 'cohere', 'together', 'huggingface', 'cerebras', 'deepseek', 'perplexity', 'ollama', 'ollama_cloud', 'sambanova', 'fireworks', 'pollinations', 'llm7'], true)) {
+            $body['max_tokens'] = (int)$body['max_completion_tokens'];
+            unset($body['max_completion_tokens']);
+        }
+        if (isset($body['max_tokens'])) {
+            $tok = max(1, (int)$body['max_tokens']);
+            if ($modelMaxOut >= 256 && $tok > $modelMaxOut) $tok = $modelMaxOut;
+            if ($modelMaxOut <= 0 && in_array($dialect, ['cohere', 'deepseek'], true) && $tok > 4096) $tok = 4096;
+            $body['max_tokens'] = $tok;
+        }
+        if (isset($body['temperature'])) {
+            $temp = (float)$body['temperature'];
+            if ($dialect === 'mistral') $temp = max(0.0, min(1.5, $temp));
+            elseif (in_array($dialect, ['cohere', 'anthropic'], true)) $temp = max(0.0, min(1.0, $temp));
+            else $temp = max(0.0, min(2.0, $temp));
+            $body['temperature'] = $temp;
+        }
+    }
+
+    return $body;
 }
 
 /**
@@ -5966,6 +6502,11 @@ function aiCloudflareCall(array $p, string $model, array $payload, array $net): 
             'sqlcoder'         => 'defog',
             'florence'         => 'microsoft',
             'llava'            => 'llava-hf',
+            'openchat'         => 'openchat',
+            'starling'         => 'nexusflow',
+            'zephyr'           => 'huggingface',
+            'tinyllama'        => 'tinyllama',
+            'bart'             => 'facebook',
         ];
         $cfAlt = null;
         foreach ($orgRules as $kw => $org) {
@@ -6020,30 +6561,31 @@ function aiCloudflareCall(array $p, string $model, array $payload, array $net): 
             if (aiTestStopRequested()) {   // v9.45
                 return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'cf_tried_models' => $modelIds];
             }
-            $rr = aiHttp($target, $headers, $ab, $net, 'direct');
+            $cfMode = in_array(($net['mode'] ?? 'direct'), ['direct', 'doh', 'dns'], true) ? (string)$net['mode'] : 'direct';
+            $rr = aiHttp($target, $headers, $ab, $net, $cfMode);
+            if (((int)($rr['code'] ?? 0) === 0 || (int)($rr['code'] ?? 0) === 403) && $cfMode !== ($net['mode'] ?? 'direct') && !empty($net['mode'])) {
+                $rr2 = aiHttp($target, $headers, $ab, $net, (string)$net['mode']);
+                if (!empty($rr2['ok']) || (int)($rr2['code'] ?? 0) > 0) $rr = $rr2;
+            }
             $last = $rr;
             $tried[] = ['url' => $target, 'body' => array_keys($ab), 'code' => (int)$rr['code']];
             if ((int)$rr['code'] === 200) { $r = $rr; break 2; }
         }
     }
     if (aiTestStopRequested()) return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true];   // v9.45
-    /* v9.48: اگر مسیر native (ai/run/...) با هیچ نامی جواب نداد و پیام‌هایی
-       هست، یک بار از اندپوینت OpenAI-compatible خودِ Cloudflare
-       (ai/v1/chat/completions) استفاده کن. این اندپوینت نام مدل را داخل بدنهٔ
-       JSON می‌گیرد و خروجیِ استاندارد OpenAI را برمی‌گرداند؛ خیلی از ابزارهای
-       تستِ خارجی با همین مسیر همهٔ مدل‌ها را ok گزارش می‌دهند. */
     if (empty($r['ok']) && !empty($messages)) {
-        // v9.99: همان ریشه‌ای که برای native استفاده شد (نه هاستِ ثابت)
         $chatUrl = $cfRoot !== ''
             ? preg_replace('~/ai/run$~i', '/ai/v1/chat/completions', rtrim($cfRoot, '/'))
             : 'https://api.cloudflare.com/client/v4/accounts/' . rawurlencode($acct) . '/ai/v1/chat/completions';
+        $cfMode2 = in_array(($net['mode'] ?? 'direct'), ['direct', 'doh', 'dns'], true) ? (string)$net['mode'] : 'direct';
         foreach ($modelIds as $mid2) {
             if (aiTestStopRequested()) {
                 return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'cf_tried_models' => $modelIds];
             }
             $cb = ['model' => $mid2, 'messages' => $messages];
             if ($maxTok > 0) $cb['max_tokens'] = $maxTok;
-            $rr = aiHttp($chatUrl, $headers, $cb, $net, 'direct');
+            if (!empty($payload['tools'])) $cb['tools'] = $payload['tools'];
+            $rr = aiHttp($chatUrl, $headers, $cb, $net, $cfMode2);
             $tried[] = ['url' => $chatUrl, 'body' => 'chat-' . $mid2, 'code' => (int)$rr['code']];
             if ((int)$rr['code'] === 200) { $r = $rr; $viaChat = true; break; }
         }
@@ -6054,10 +6596,30 @@ function aiCloudflareCall(array $p, string $model, array $payload, array $net): 
     $r['cf_tried'] = count($tried);
     if (!empty($r['ok'])) {
         if (!$viaChat) {
-            $result = $r['body']['result'] ?? [];
-            $text = (string)($result['response'] ?? '');
-            $r['body'] = ['choices' => [['message' => ['content' => $text]]], 'model' => $model, 'usage' => []];
+            /* v10.444: مدل‌های جدید Cloudflare (مثل gpt-oss، qwen3، llama-4، gemma-3)
+               حتی روی /ai/run پاسخ را به‌صورت result.choices برمی‌گردانند و result.response
+               ندارند؛ قبلاً این بخش choices را با رشتهٔ خالی بازنویسی می‌کرد! */
+            $result = is_array($r['body']['result'] ?? null) ? $r['body']['result'] : [];
+            if (isset($result['choices']) && is_array($result['choices']) && !empty($result['choices'])) {
+                $r['body'] = [
+                    'choices' => $result['choices'],
+                    'model'   => (string)($result['model'] ?? $model),
+                    'usage'   => is_array($result['usage'] ?? null) ? $result['usage'] : [],
+                ];
+            } else {
+                $text = (isset($result['response']) && is_string($result['response']) && trim($result['response']) !== '')
+                    ? $result['response']
+                    : aiExtractText($r['body']);
+                $r['body'] = [
+                    'choices' => [['message' => ['role' => 'assistant', 'content' => $text]]],
+                    'model'   => $model,
+                    'usage'   => is_array($result['usage'] ?? null) ? $result['usage'] : [],
+                ];
+            }
         } else {
+            if (is_array($r['body']) && isset($r['body']['result']['choices']) && !isset($r['body']['choices'])) {
+                $r['body']['choices'] = $r['body']['result']['choices'];
+            }
             $r['body']['model'] = $r['body']['model'] ?? $model;
         }
     } else {
@@ -6091,34 +6653,84 @@ function aiExtractText($body, int $depth = 0): string {
             if (!is_array($ch)) continue;
             $msg = $ch['message'] ?? null;
             if (is_array($msg)) {
-                // message.content (OpenAI)
-                if (isset($msg['content']) && trim((string)$msg['content']) !== '')
-                    return (string)$msg['content'];
-                // message.content که آرایهٔ قطعه‌ای است (Responses/چندبخشی)
+                // v10.444: اول آرایه‌بودنِ content بررسی شود (در PHP 8 تبدیل آرایه به string رشتهٔ 'Array' می‌ساخت!)
+                if (isset($msg['content']) && is_string($msg['content']) && trim($msg['content']) !== '')
+                    return $msg['content'];
                 if (isset($msg['content']) && is_array($msg['content'])) {
-                    $t = '';
+                    $t = ''; $think = '';
                     foreach ($msg['content'] as $seg) {
-                        if (is_array($seg) && isset($seg['text'])) $t .= (string)$seg['text'];
-                        elseif (is_string($seg)) $t .= $seg;
+                        if (is_array($seg)) {
+                            $st = (string)($seg['type'] ?? '');
+                            if ($st === 'thinking' || $st === 'reasoning') {
+                                $think .= (string)($seg['thinking'] ?? ($seg['text'] ?? ''));
+                            } elseif (isset($seg['text']) && is_string($seg['text'])) {
+                                $t .= $seg['text'];
+                            }
+                        } elseif (is_string($seg)) {
+                            $t .= $seg;
+                        }
                     }
                     if (trim($t) !== '') return $t;
+                    if (trim($think) !== '') return $think;
                 }
-                // v9.57: اگر content خالی/تهی بود ولی reasoning یا reasoning_content
-                // پر بود (مدل‌های استدلالی مثل gpt-oss، qwen، nemotron، bonsai،
-                // cohere-reasoning) آن را برگردان تا حداقل «فکر کردن» دیده شود.
                 foreach (['reasoning', 'reasoning_content'] as $rk) {
-                    if (isset($msg[$rk]) && trim((string)$msg[$rk]) !== '')
-                        return (string)$msg[$rk];
+                    if (isset($msg[$rk]) && is_string($msg[$rk]) && trim($msg[$rk]) !== '')
+                        return $msg[$rk];
                 }
             }
-            // choices[0].text (سرویس‌هایی مثل Together/Cohere/Ollama-compat)
-            if (isset($ch['text']) && trim((string)$ch['text']) !== '')
-                return (string)$ch['text'];
+            if (isset($ch['text']) && is_string($ch['text']) && trim($ch['text']) !== '')
+                return $ch['text'];
+        }
+    }
+    // ۱ب) Anthropic Messages نیتیو: content=[{type:'text',text:'...'}, {type:'thinking',thinking:'...'}]
+    if (isset($body['content']) && is_array($body['content'])) {
+        $t = ''; $think = '';
+        foreach ($body['content'] as $blk) {
+            if (!is_array($blk)) continue;
+            $bt = (string)($blk['type'] ?? '');
+            if ($bt === 'text' && isset($blk['text']) && is_string($blk['text'])) $t .= $blk['text'];
+            elseif (($bt === 'thinking' || $bt === 'reasoning') && isset($blk['thinking']) && is_string($blk['thinking'])) $think .= $blk['thinking'];
+            elseif ($bt === '' && isset($blk['text']) && is_string($blk['text'])) $t .= $blk['text'];
+        }
+        if (trim($t) !== '') return $t;
+        if (trim($think) !== '') return $think;
+    }
+    // ۱ج) Google Gemini نیتیو: candidates[0].content.parts[].text
+    if (isset($body['candidates']) && is_array($body['candidates'])) {
+        foreach ($body['candidates'] as $cand) {
+            $parts = $cand['content']['parts'] ?? null;
+            if (!is_array($parts)) continue;
+            $t = ''; $think = '';
+            foreach ($parts as $pt) {
+                if (!is_array($pt) || !isset($pt['text']) || !is_string($pt['text'])) continue;
+                if (!empty($pt['thought'])) $think .= $pt['text'];
+                else $t .= $pt['text'];
+            }
+            if (trim($t) !== '') return $t;
+            if (trim($think) !== '') return $think;
+        }
+    }
+    // ۱د) Cohere v2 / Ollama نیتیو: message.content (رشته یا آرایهٔ بلوک‌ها)
+    if (isset($body['message']) && is_array($body['message'])) {
+        $mc = $body['message']['content'] ?? null;
+        if (is_string($mc) && trim($mc) !== '') return $mc;
+        if (is_array($mc)) {
+            $t = ''; $think = '';
+            foreach ($mc as $blk) {
+                if (!is_array($blk)) continue;
+                if (($blk['type'] ?? '') === 'thinking') $think .= (string)($blk['thinking'] ?? ($blk['text'] ?? ''));
+                elseif (isset($blk['text']) && is_string($blk['text'])) $t .= $blk['text'];
+            }
+            if (trim($t) !== '') return $t;
+            if (trim($think) !== '') return $think;
+        }
+        if (isset($body['message']['thinking']) && is_string($body['message']['thinking']) && trim($body['message']['thinking']) !== '') {
+            return $body['message']['thinking'];
         }
     }
     // ۲) پاسخ‌های Responses/Items: output[] + output_text
-    if (isset($body['output_text']) && trim((string)$body['output_text']) !== '')
-        return (string)$body['output_text'];
+    if (isset($body['output_text']) && is_string($body['output_text']) && trim($body['output_text']) !== '')
+        return $body['output_text'];
     if (isset($body['output']) && is_array($body['output'])) {
         $t = '';
         foreach ($body['output'] as $item) {
@@ -6132,30 +6744,22 @@ function aiExtractText($body, int $depth = 0): string {
         }
         if (trim($t) !== '') return $t;
     }
-    // ۳) output.choices[0].text (برخی اندپوینت‌های inference)
+    // ۳) output.choices[0].text
     if (isset($body['output']['choices']) && is_array($body['output']['choices'])) {
         foreach ($body['output']['choices'] as $ch) {
-            if (is_array($ch) && isset($ch['text']) && trim((string)$ch['text']) !== '')
-                return (string)$ch['text'];
-            if (is_array($ch) && isset($ch['message']['content']) && trim((string)$ch['message']['content']) !== '')
-                return (string)$ch['message']['content'];
+            if (is_array($ch) && isset($ch['text']) && is_string($ch['text']) && trim($ch['text']) !== '')
+                return $ch['text'];
+            if (is_array($ch) && isset($ch['message']['content']) && is_string($ch['message']['content']) && trim($ch['message']['content']) !== '')
+                return $ch['message']['content'];
         }
     }
     // ۴) Cloudflare native: result.response
-    if (isset($body['result']['response']) && trim((string)$body['result']['response']) !== '')
-        return (string)$body['result']['response'];
-    /* ۴ب) v10.18 (۳۱الف): Cloudflare پاسخِ سازگارِ OpenAI را هم داخلِ همان
-       پوستهٔ result می‌گذارد:
-         {"result":{"choices":[{"message":{"content":"…","reasoning":"…"}}]}}
-       تا اینجا فقط result.response شناخته می‌شد، پس متنِ این مدل‌ها گم
-       می‌شد و تست «پاسخ خالی/پاسخ نامعتبر» گزارش می‌کرد در حالی که مدل
-       واقعاً جواب داده بود. حالا همان منطقِ بالا یک بار روی خودِ result
-       اجرا می‌شود (عمقِ محدود، تا حلقهٔ بی‌پایان ممکن نشود). */
+    if (isset($body['result']['response']) && is_string($body['result']['response']) && trim($body['result']['response']) !== '')
+        return $body['result']['response'];
     if ($depth < 2 && isset($body['result']) && is_array($body['result'])) {
         $inner = aiExtractText($body['result'], $depth + 1);
         if (trim($inner) !== '') return $inner;
     }
-    /* ۴ج) v10.18: بعضی دروازه‌ها کلِ پاسخ را زیر data/output می‌پیچند */
     if ($depth < 2 && isset($body['data']) && is_array($body['data'])
         && (isset($body['data']['choices']) || isset($body['data']['message']))) {
         $inner = aiExtractText($body['data'], $depth + 1);
@@ -6168,8 +6772,8 @@ function aiExtractText($body, int $depth = 0): string {
         return $body['text'];
     // ۶) data[0] (embedding/بعضی ابزارها)
     if (isset($body['data']) && is_array($body['data']) && isset($body['data'][0]['text'])
-        && trim((string)$body['data'][0]['text']) !== '')
-        return (string)$body['data'][0]['text'];
+        && is_string($body['data'][0]['text']) && trim($body['data'][0]['text']) !== '')
+        return $body['data'][0]['text'];
     return '';
 }
 
@@ -6180,16 +6784,365 @@ function aiExtractText($body, int $depth = 0): string {
  * کلید بود (اعتبار/سهمیه/۴۲۹/۴۰۱) همان کلید را علامت می‌زند و بی‌درنگ با
  * کلیدِ بعدیِ همان ارائه‌دهنده دوباره تلاش می‌کند.
  */
+/**
+ * v10.444: اجرای حلقهٔ شبکه (Direct/DoH/Worker/Proxy) برای پروتکل‌های نیتیو غیر-OpenAI.
+ */
+function aiNativeHttpModes(string $url, array $headers, array $body, array $net, bool $hasKey = true, ?callable $urlForMode = null): array {
+    $modes = [$net['mode'] ?? 'direct'];
+    foreach (['direct', 'doh'] as $m) {
+        if (!in_array($m, $modes, true)) $modes[] = $m;
+    }
+    if (!empty($net['fallback'])) {
+        foreach (['dns', 'worker', 'proxy'] as $m) {
+            if (in_array($m, $modes, true)) continue;
+            if ($m === 'dns'    && ($net['resolve_ip'] ?? '') === '') continue;
+            if ($m === 'worker' && ($net['worker_url'] ?? '') === '') continue;
+            if ($m === 'proxy'  && ($net['proxy'] ?? '') === '')      continue;
+            $modes[] = $m;
+        }
+    }
+    $tried = []; $proxyBlocked = null; $svcAnswer = null; $r = null;
+    for ($mi = 0; $mi < count($modes); $mi++) {
+        $m = $modes[$mi];
+        if (aiTestStopRequested()) return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
+        $u = $urlForMode ? (string)$urlForMode($url, $m) : $url;
+        $r = aiHttp($u, $headers, $body, $net, $m);
+        $tried[] = ['mode' => $m, 'code' => $r['code'], 'error' => mb_substr(aiHttpErrorMessage($r), 0, 80)];
+        if (!empty($r['ok'])) { $r['tried'] = $tried; return $r; }
+        if (aiProxyLevelFailure($r, $m)) {
+            $r['proxy_blocked'] = true; $r['proxy_mode'] = $m;
+            if ($proxyBlocked === null) $proxyBlocked = $r;
+            continue;
+        }
+        if ($hasKey && in_array($m, ['worker', 'proxy'], true) && ((int)$r['code'] === 401 || ((int)$r['code'] === 400 && aiIsMissingAuthHeaderError($r)))) {
+            $r['auth_stripped_suspect'] = true;
+            if ($proxyBlocked === null) $proxyBlocked = $r;
+            continue;
+        }
+        if (in_array($m, ['direct', 'doh', 'dns'], true) && aiIsGeoOrEdgeBlock($r, $m)) {
+            foreach (['worker', 'proxy'] as $wm) {
+                if (!in_array($wm, $modes, true)) {
+                    if ($wm === 'worker' && ($net['worker_url'] ?? '') !== '') $modes[] = $wm;
+                    if ($wm === 'proxy'  && ($net['proxy'] ?? '') !== '')      $modes[] = $wm;
+                }
+            }
+            if ($svcAnswer === null) $svcAnswer = $r;
+            continue;
+        }
+        if (in_array((int)$r['code'], [400, 401, 402, 403, 404, 422, 429], true)) {
+            $r['tried'] = $tried;
+            return $r;
+        }
+        if ($svcAnswer === null && (int)($r['code'] ?? 0) > 0) $svcAnswer = $r;
+    }
+    $last = $svcAnswer ?? $proxyBlocked ?? ($r ?? ['ok' => false, 'code' => 0, 'error' => 'هیچ روشی اجرا نشد']);
+    $last['tried'] = $tried;
+    return $last;
+}
+
+/**
+ * v10.444: فراخوانی نیتیو Anthropic Messages API (/v1/messages) و تبدیل به قالب OpenAI.
+ */
+function aiAnthropicCall(array $p, array $ep, array $payload, array $net): array {
+    $apiKey = trim((string)($p['apiKey'] ?? ''));
+    $model  = (string)($ep['model'] ?? '');
+    $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+    $sysParts = [];
+    $anthMsgs = [];
+    foreach ((array)($payload['messages'] ?? []) as $m) {
+        if (!is_array($m)) continue;
+        $role = strtolower((string)($m['role'] ?? 'user'));
+        if ($role === 'system' || $role === 'developer') {
+            $sc = is_string($m['content'] ?? null) ? trim($m['content']) : '';
+            if ($sc !== '') $sysParts[] = $sc;
+            continue;
+        }
+        if ($role === 'tool') {
+            $anthMsgs[] = [
+                'role' => 'user',
+                'content' => [[
+                    'type' => 'tool_result',
+                    'tool_use_id' => (string)($m['tool_call_id'] ?? 'tool_1'),
+                    'content' => is_string($m['content'] ?? null) ? $m['content'] : json_encode($m['content'] ?? '', JSON_UNESCAPED_UNICODE),
+                ]],
+            ];
+            continue;
+        }
+        if ($role === 'assistant' && !empty($m['tool_calls']) && is_array($m['tool_calls'])) {
+            $blocks = [];
+            if (is_string($m['content'] ?? null) && trim($m['content']) !== '') {
+                $blocks[] = ['type' => 'text', 'text' => $m['content']];
+            }
+            foreach ($m['tool_calls'] as $tc) {
+                $fn = $tc['function'] ?? $tc;
+                $args = $fn['arguments'] ?? [];
+                if (is_string($args)) { $dec = json_decode($args, true); $args = is_array($dec) ? $dec : []; }
+                $blocks[] = [
+                    'type'  => 'tool_use',
+                    'id'    => (string)($tc['id'] ?? ('toolu_' . substr(md5(json_encode($fn)), 0, 12))),
+                    'name'  => (string)($fn['name'] ?? ''),
+                    'input' => (object)(is_array($args) ? $args : []),
+                ];
+            }
+            $anthMsgs[] = ['role' => 'assistant', 'content' => $blocks];
+            continue;
+        }
+        $c = $m['content'] ?? '';
+        $anthMsgs[] = ['role' => ($role === 'assistant' ? 'assistant' : 'user'), 'content' => (is_string($c) && $c !== '' ? $c : (is_array($c) ? $c : '...'))];
+    }
+    if (empty($anthMsgs)) $anthMsgs[] = ['role' => 'user', 'content' => 'سلام'];
+    // ادغام پیام‌های هم‌نقش متوالی (قانون سخت‌گیرانهٔ Anthropic)
+    $merged = [];
+    foreach ($anthMsgs as $am) {
+        $li = count($merged) - 1;
+        if ($li >= 0 && $merged[$li]['role'] === $am['role']) {
+            $a = is_array($merged[$li]['content']) ? $merged[$li]['content'] : [['type' => 'text', 'text' => (string)$merged[$li]['content']]];
+            $b = is_array($am['content']) ? $am['content'] : [['type' => 'text', 'text' => (string)$am['content']]];
+            $merged[$li]['content'] = array_merge($a, $b);
+        } else {
+            $merged[] = $am;
+        }
+    }
+    if (($merged[0]['role'] ?? '') !== 'user') {
+        array_unshift($merged, ['role' => 'user', 'content' => 'Continue.']);
+    }
+    $maxTok = max(64, (int)($payload['max_tokens'] ?? ($payload['max_completion_tokens'] ?? 1024)));
+    $mRow = aiFindModelRow($p, $model);
+    if (is_array($mRow) && (int)($mRow['maxOutputTokens'] ?? 0) >= 256 && $maxTok > (int)$mRow['maxOutputTokens']) {
+        $maxTok = (int)$mRow['maxOutputTokens'];
+    } elseif ($maxTok > 8192) {
+        $maxTok = 8192;
+    }
+    $body = ['model' => $model, 'max_tokens' => $maxTok, 'messages' => $merged];
+    if ($sysParts) $body['system'] = implode("\n\n", $sysParts);
+    if (isset($payload['temperature'])) {
+        $body['temperature'] = max(0.0, min(1.0, (float)$payload['temperature']));
+    }
+    if (!empty($payload['tools']) && is_array($payload['tools'])) {
+        $aTools = [];
+        foreach ($payload['tools'] as $t) {
+            $fn = $t['function'] ?? $t;
+            if (empty($fn['name'])) continue;
+            $schema = is_array($fn['parameters'] ?? null) ? $fn['parameters'] : ['type' => 'object', 'properties' => (object)[]];
+            if (!isset($schema['type'])) $schema['type'] = 'object';
+            $aTools[] = ['name' => (string)$fn['name'], 'description' => (string)($fn['description'] ?? ''), 'input_schema' => $schema];
+        }
+        if ($aTools) $body['tools'] = $aTools;
+    }
+    $r = aiNativeHttpModes((string)$ep['url'], $headers, $body, $net, $apiKey !== '');
+    if (!empty($r['ok']) && is_array($r['body'] ?? null) && !isset($r['body']['choices'])) {
+        $b = $r['body'];
+        $txt = ''; $think = ''; $tcs = [];
+        foreach ((array)($b['content'] ?? []) as $blk) {
+            if (!is_array($blk)) continue;
+            $bt = (string)($blk['type'] ?? '');
+            if ($bt === 'text') $txt .= (string)($blk['text'] ?? '');
+            elseif ($bt === 'thinking') $think .= (string)($blk['thinking'] ?? '');
+            elseif ($bt === 'tool_use') {
+                $tcs[] = [
+                    'id'   => (string)($blk['id'] ?? ('call_' . count($tcs))),
+                    'type' => 'function',
+                    'function' => [
+                        'name'      => (string)($blk['name'] ?? ''),
+                        'arguments' => json_encode($blk['input'] ?? (object)[], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ],
+                ];
+            }
+        }
+        $msgOut = ['role' => 'assistant', 'content' => $txt];
+        if ($think !== '') $msgOut['reasoning_content'] = $think;
+        if ($tcs) $msgOut['tool_calls'] = $tcs;
+        $r['body'] = [
+            'choices' => [['index' => 0, 'message' => $msgOut, 'finish_reason' => (($b['stop_reason'] ?? '') === 'max_tokens' ? 'length' : (($b['stop_reason'] ?? '') === 'tool_use' ? 'tool_calls' : 'stop'))]],
+            'model'   => (string)($b['model'] ?? $model),
+            'usage'   => [
+                'prompt_tokens'     => (int)($b['usage']['input_tokens'] ?? 0),
+                'completion_tokens' => (int)($b['usage']['output_tokens'] ?? 0),
+            ],
+        ];
+    }
+    return $r;
+}
+
+/**
+ * v10.444: فراخوانی نیتیو Google Gemini (:generateContent) با ارسال کلید هم در
+ * هدر x-goog-api-key و هم در پارامتر ?key= (ضد حذف هدر در Workerهای قدیمی!).
+ */
+function aiGeminiCall(array $p, array $ep, array $payload, array $net): array {
+    $apiKey = trim((string)($p['apiKey'] ?? ''));
+    $model  = aiSanitizeModelId((string)($ep['model'] ?? 'gemini-2.5-flash'), 'gemini');
+    $baseUrl = (string)($ep['url'] ?? '');
+    if (stripos($baseUrl, ':generateContent') === false) {
+        $schemeHost = 'https://generativelanguage.googleapis.com';
+        if (preg_match('~^(https?://[^/?#]+)~i', $baseUrl, $m)) $schemeHost = $m[1];
+        $baseUrl = $schemeHost . '/v1beta/models/' . rawurlencode($model !== '' ? $model : 'gemini-2.5-flash') . ':generateContent';
+    }
+    $headers = ['Content-Type: application/json', 'Accept: application/json'];
+    if ($apiKey !== '') $headers[] = 'x-goog-api-key: ' . $apiKey;
+
+    $sysParts = [];
+    $contents = [];
+    foreach ((array)($payload['messages'] ?? []) as $m) {
+        if (!is_array($m)) continue;
+        $role = strtolower((string)($m['role'] ?? 'user'));
+        if ($role === 'system' || $role === 'developer') {
+            $sc = is_string($m['content'] ?? null) ? trim($m['content']) : '';
+            if ($sc !== '') $sysParts[] = ['text' => $sc];
+            continue;
+        }
+        if ($role === 'tool') {
+            $respObj = is_string($m['content'] ?? null) ? json_decode($m['content'], true) : ($m['content'] ?? []);
+            if (!is_array($respObj)) $respObj = ['result' => (string)($m['content'] ?? '')];
+            $contents[] = [
+                'role'  => 'user',
+                'parts' => [['functionResponse' => ['name' => (string)($m['name'] ?? 'tool'), 'response' => $respObj]]],
+            ];
+            continue;
+        }
+        if ($role === 'assistant' && !empty($m['tool_calls']) && is_array($m['tool_calls'])) {
+            $parts = [];
+            if (is_string($m['content'] ?? null) && trim($m['content']) !== '') $parts[] = ['text' => $m['content']];
+            foreach ($m['tool_calls'] as $tc) {
+                $fn = $tc['function'] ?? $tc;
+                $args = $fn['arguments'] ?? [];
+                if (is_string($args)) { $dec = json_decode($args, true); $args = is_array($dec) ? $dec : []; }
+                $parts[] = ['functionCall' => ['name' => (string)($fn['name'] ?? ''), 'args' => (object)(is_array($args) ? $args : [])]];
+            }
+            $contents[] = ['role' => 'model', 'parts' => $parts];
+            continue;
+        }
+        $txt = is_string($m['content'] ?? null) ? $m['content'] : json_encode($m['content'] ?? '', JSON_UNESCAPED_UNICODE);
+        $gRole = ($role === 'assistant' || $role === 'model') ? 'model' : 'user';
+        $contents[] = ['role' => $gRole, 'parts' => [['text' => $txt !== '' ? $txt : ' ']]];
+    }
+    if (empty($contents)) $contents[] = ['role' => 'user', 'parts' => [['text' => 'سلام']]];
+
+    $genCfg = [];
+    $maxTok = (int)($payload['max_tokens'] ?? ($payload['max_completion_tokens'] ?? 0));
+    if ($maxTok > 0) $genCfg['maxOutputTokens'] = min(8192, $maxTok);
+    if (isset($payload['temperature'])) $genCfg['temperature'] = max(0.0, min(2.0, (float)$payload['temperature']));
+
+    $body = ['contents' => $contents];
+    if ($sysParts) $body['systemInstruction'] = ['parts' => $sysParts];
+    if ($genCfg) $body['generationConfig'] = $genCfg;
+    if (!empty($payload['tools']) && is_array($payload['tools'])) {
+        $decls = [];
+        foreach ($payload['tools'] as $t) {
+            $fn = $t['function'] ?? $t;
+            if (empty($fn['name'])) continue;
+            $d = ['name' => (string)$fn['name'], 'description' => (string)($fn['description'] ?? '')];
+            if (is_array($fn['parameters'] ?? null) && !empty($fn['parameters']['properties'])) {
+                $d['parameters'] = $fn['parameters'];
+            }
+            $decls[] = $d;
+        }
+        if ($decls) $body['tools'] = [['functionDeclarations' => $decls]];
+    }
+
+    $urlBuilder = function (string $u, string $_m) use ($apiKey): string {
+        if ($apiKey === '' || stripos($u, 'key=') !== false) return $u;
+        return $u . (strpos($u, '?') === false ? '?' : '&') . 'key=' . rawurlencode($apiKey);
+    };
+    $r = aiNativeHttpModes($baseUrl, $headers, $body, $net, $apiKey !== '', $urlBuilder);
+    if (!empty($r['ok']) && is_array($r['body'] ?? null) && !isset($r['body']['choices'])) {
+        $b = $r['body'];
+        $cand = $b['candidates'][0] ?? [];
+        $txt = ''; $think = ''; $tcs = [];
+        foreach ((array)($cand['content']['parts'] ?? []) as $pt) {
+            if (!is_array($pt)) continue;
+            if (isset($pt['functionCall']) && is_array($pt['functionCall'])) {
+                $fc = $pt['functionCall'];
+                $tcs[] = [
+                    'id'   => 'call_gem_' . count($tcs),
+                    'type' => 'function',
+                    'function' => [
+                        'name'      => (string)($fc['name'] ?? ''),
+                        'arguments' => json_encode($fc['args'] ?? (object)[], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ],
+                ];
+            } elseif (isset($pt['text']) && is_string($pt['text'])) {
+                if (!empty($pt['thought'])) $think .= $pt['text'];
+                else $txt .= $pt['text'];
+            }
+        }
+        $msgOut = ['role' => 'assistant', 'content' => $txt];
+        if ($think !== '') $msgOut['reasoning_content'] = $think;
+        if ($tcs) $msgOut['tool_calls'] = $tcs;
+        $fr = strtoupper((string)($cand['finishReason'] ?? 'STOP'));
+        $r['body'] = [
+            'choices' => [['index' => 0, 'message' => $msgOut, 'finish_reason' => ($fr === 'MAX_TOKENS' ? 'length' : ($tcs ? 'tool_calls' : 'stop'))]],
+            'model'   => $model,
+            'usage'   => [
+                'prompt_tokens'     => (int)($b['usageMetadata']['promptTokenCount'] ?? 0),
+                'completion_tokens' => (int)($b['usageMetadata']['candidatesTokenCount'] ?? 0),
+            ],
+        ];
+    }
+    return $r;
+}
+
+/**
+ * v10.444: فراخوانی نیتیو Cohere v2 (/v2/chat) و نرمال‌سازی پاسخ به OpenAI.
+ */
+function aiCohereNativeCall(array $p, array $ep, array $payload, array $net): array {
+    $apiKey  = trim((string)($p['apiKey'] ?? ''));
+    $model   = (string)($ep['model'] ?? 'command-a-03-2025');
+    $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+    $body    = aiBuildOpenAiPayload($payload, $model, 'cohere', $p);
+    $r = aiNativeHttpModes((string)$ep['url'], $headers, $body, $net, $apiKey !== '');
+    if (!empty($r['ok']) && is_array($r['body'] ?? null) && !isset($r['body']['choices'])) {
+        $b = $r['body'];
+        $txt = aiExtractText($b);
+        $tcs = [];
+        foreach ((array)($b['message']['tool_calls'] ?? []) as $tc) {
+            if (is_array($tc)) $tcs[] = $tc;
+        }
+        $msgOut = ['role' => 'assistant', 'content' => $txt];
+        if ($tcs) $msgOut['tool_calls'] = $tcs;
+        $r['body'] = ['choices' => [['index' => 0, 'message' => $msgOut, 'finish_reason' => ($tcs ? 'tool_calls' : 'stop')]], 'model' => $model];
+    }
+    return $r;
+}
+
+/**
+ * v10.444: فراخوانی نیتیو Ollama (/api/chat با stream=false) و نرمال‌سازی پاسخ به OpenAI.
+ */
+function aiOllamaNativeCall(array $p, array $ep, array $payload, array $net): array {
+    $apiKey  = trim((string)($p['apiKey'] ?? ''));
+    $model   = (string)($ep['model'] ?? '');
+    $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+    $opts    = [];
+    $maxTok  = (int)($payload['max_tokens'] ?? ($payload['max_completion_tokens'] ?? 0));
+    if ($maxTok > 0) $opts['num_predict'] = $maxTok;
+    if (isset($payload['temperature'])) $opts['temperature'] = (float)$payload['temperature'];
+    $body = [
+        'model'    => $model,
+        'messages' => array_values((array)($payload['messages'] ?? [])),
+        'stream'   => false,
+    ];
+    if ($opts) $body['options'] = $opts;
+    if (!empty($payload['tools'])) $body['tools'] = $payload['tools'];
+    $r = aiNativeHttpModes((string)$ep['url'], $headers, $body, $net, $apiKey !== '');
+    if (!empty($r['ok']) && is_array($r['body'] ?? null) && !isset($r['body']['choices'])) {
+        $b = $r['body'];
+        $m = is_array($b['message'] ?? null) ? $b['message'] : [];
+        $msgOut = ['role' => 'assistant', 'content' => (string)($m['content'] ?? ($b['response'] ?? ''))];
+        if (!empty($m['thinking']) && is_string($m['thinking'])) $msgOut['reasoning_content'] = $m['thinking'];
+        if (!empty($m['tool_calls']) && is_array($m['tool_calls'])) $msgOut['tool_calls'] = $m['tool_calls'];
+        $r['body'] = ['choices' => [['index' => 0, 'message' => $msgOut, 'finish_reason' => 'stop']], 'model' => (string)($b['model'] ?? $model)];
+    }
+    return $r;
+}
+
 function aiProviderCall(array $p, string $model, array $payload, ?array $net = null): array {
     if ($net === null) $net = aiNetCfg();
     $pid  = (string)($p['id'] ?? '');
     $keys = aiProviderKeys($p);
     if (count($keys) < 2) {
-        /* یک کلید (یا هیچ کلید) ⇒ مسیرِ ساده، بدون هیچ سربار؛ فقط نتیجهٔ
-           موفق/ناموفقِ همان کلید ثبت می‌شود تا در UI دیده شود. */
-        /* v10.16: حتی با یک کلید هم اگر شمارهٔ حسابِ اختصاصی دارد باید
-           اعمال شود — کاربر ممکن است حسابِ اولش را عوض کرده باشد. */
         $p1 = $keys ? aiApplyKeyAccount($p, $keys[0]) : $p;
+        if ($keys && trim((string)($p1['apiKey'] ?? '')) === '' && (string)($keys[0]['key'] ?? '') !== '') {
+            $p1['apiKey'] = (string)$keys[0]['key'];
+        }
         $r = aiProviderCallOnce($p1, $model, $payload, $net);
         $kid = $keys ? $keys[0]['id'] : '';
         if ($kid !== '' && $pid !== '') {
@@ -6211,8 +7164,6 @@ function aiProviderCall(array $p, string $model, array $payload, ?array $net = n
         $kid = (string)$pick['id'];
         $pk  = $p;
         $pk['apiKey'] = (string)$pick['key'];
-        /* v10.16: کلید و حسابش با هم عوض می‌شوند. بدون این، توکنِ حسابِ دوم
-           به آدرسِ حسابِ اول می‌رفت و چرخش عملاً بی‌اثر بود. */
         $pk = aiApplyKeyAccount($pk, $pick);
         $r = aiProviderCallOnce($pk, $model, $payload, $net);
         $r['keyId']      = $kid;
@@ -6222,7 +7173,7 @@ function aiProviderCall(array $p, string $model, array $payload, ?array $net = n
         if (!empty($r['ok'])) { aiKeyMarkOk($pid, $kid); return $r; }
         if (!empty($r['stopped'])) return $r;
         $kf = aiKeyFailureKind($r);
-        if ($kf['kind'] === '') return $r;              // خطا ربطی به کلید ندارد
+        if ($kf['kind'] === '') return $r;
         aiKeyMarkFail($pid, $kid, $kf['kind'], $kf['label'], $kf['msg']);
         $r['keyFailed'] = $kf['kind'];
         $r['keyFailLabel'] = $kf['label'];
@@ -6238,26 +7189,22 @@ function aiProviderCall(array $p, string $model, array $payload, ?array $net = n
 
 function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net = null): array {
     if ($net === null) $net = aiNetCfg();
-    /* v9.94: اگر مدل استدلالی است، سقفِ توکن را همین‌جا (یک نقطهٔ مشترک برای
-       همهٔ مسیرها: دسته‌بندی، پاسخ مشتری، تستِ مدل‌ها) بزرگ می‌کنیم. بدون این،
-       مدل کلِ بودجه را صرفِ «فکر کردن» می‌کند و content خالی برمی‌گردد. */
     if (isset($payload['max_tokens'])) {
         $isR = aiIsReasoningModel(aiFindModelRow($p, $model), $model);
         $payload['max_tokens'] = aiReasoningBudget((int)$payload['max_tokens'], $isR);
     }
     $ep = aiProviderEndpoint($p, $model);
     if ($ep['kind'] === 'cloudflare') return aiCloudflareCall($p, $model, $payload, $net);
-    $apiKey = trim((string)($p['apiKey'] ?? ''));
-    $headers = ['Content-Type: application/json'];
-    if ($apiKey !== '') $headers[] = 'Authorization: Bearer ' . $apiKey;
-    $body = $payload;
-    $body['model'] = $model;
-    /* v9.33: ترتیب روش‌ها — همیشه «مستقیم» و «DoH» را به‌ترتیب امتحان می‌کنیم.
-       دلیل: بعضی سایت‌ها IP هاست را بلاک می‌کنند؛ مستقیم با تایم‌اوت/خطای
-       شبکه fail می‌شود و DoH (که DNS را دور می‌زند و گاهی به IP دیگری وصل
-       می‌شود) می‌تواند جواب دهد. پس: روشِ انتخاب‌شده اول، سپس مستقیم و DoH
-       (هرکدام که استفاده نشده)، و بعد dns/worker/proxy اگر «تلاش خودکار»
-       روشن باشد. در اولین موفقیت یا خطای منطقی (4xx/429) متوقف می‌شویم. */
+    if ($ep['kind'] === 'anthropic')  return aiAnthropicCall($p, $ep, $payload, $net);
+    if ($ep['kind'] === 'gemini')     return aiGeminiCall($p, $ep, $payload, $net);
+    if ($ep['kind'] === 'cohere')     return aiCohereNativeCall($p, $ep, $payload, $net);
+    if ($ep['kind'] === 'ollama')     return aiOllamaNativeCall($p, $ep, $payload, $net);
+
+    $dialect = (string)($ep['dialect'] ?? aiDetectProviderDialect($p));
+    $apiKey  = trim((string)($p['apiKey'] ?? ''));
+    $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+    $body    = aiBuildOpenAiPayload($payload, (string)($ep['model'] ?? $model), $dialect, $p);
+
     $modes = [$net['mode']];
     foreach (['direct', 'doh'] as $m) {
         if (!in_array($m, $modes, true)) $modes[] = $m;
@@ -6272,12 +7219,10 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
         }
     }
     $tried = [];
-    $proxyBlocked = null;   // v9.99: اولین پاسخی که از «واسطه» آمده، نه از سرویس
-    $svcAnswer = null;      // v9.99: اولین پاسخی که واقعاً از خودِ سرویس آمده
-    foreach ($modes as $m) {
-        /* v9.45: اگر وسطِ امتحانِ روش‌های مختلفِ اتصال، کاربر «توقف» را زده
-           باشد، فوراً بیرون بیا — نه اینکه به سراغ روشِ بعدی برود. بدون این،
-           هر روشِ بلاک‌شده یکی‌یکی تا تایم‌اوت می‌سوخت و دکمهٔ توقف بی‌اثر بود. */
+    $proxyBlocked = null;
+    $svcAnswer = null;
+    for ($mi = 0; $mi < count($modes); $mi++) {
+        $m = $modes[$mi];
         if (aiTestStopRequested()) {
             return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
         }
@@ -6286,9 +7231,6 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
         if (aiTestStopRequested()) {
             return ['ok' => false, 'code' => 0, 'error' => 'stopped', 'stopped' => true, 'tried' => $tried];
         }
-        /* v10.219: خطاهای ۴۰۰/۴۲۲ ناشی از اختلاف payload (max_tokens/temperature)
-           را با بدنهٔ اصلاح‌شده همان‌جا دوباره امتحان کن؛ این‌ها نه credit اند
-           و نه rate-limit، پس قابل رفعِ کدی‌اند. */
         $repairs = aiPayloadRepairVariants($body, $r, $model);
         if (empty($r['ok']) && $repairs) {
             foreach ($repairs as $rv) {
@@ -6301,32 +7243,70 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
                 $tried[] = ['mode' => $m . ':payload', 'code' => $rr['code'],
                             'error' => mb_substr(aiHttpErrorMessage($rr), 0, 80),
                             'repair' => (string)$rv['repair']];
-                if (!empty($rr['ok'])) { $rr['tried'] = $tried; return $rr; }
+                if (!empty($rr['ok'])) { $r = $rr; break; }
                 if (!in_array((int)($rr['code'] ?? 0), [400, 422], true) || aiBillingFailure($rr)['is']) { $r = $rr; break; }
             }
         }
-        if (!empty($r['ok'])) { $r['tried'] = $tried; return $r; }
-        /* v9.99: خطای ۴xx فقط وقتی «حرفِ آخرِ سرویس» است که از خودِ سرویس
-           آمده باشد. اگر امضای Worker/پروکسی/CDN داشت، روشِ بعدی را امتحان
-           کن — وگرنه یک واسطهٔ خرابْ همهٔ مدل‌ها را ناموفق نشان می‌دهد. */
+        /* v10.444: اگر مدل همهٔ بودجهٔ توکن را صرف reasoning_content کرد و content خالی ماند
+           (finish_reason=length)، یک بار با سقف بزرگ‌تر تکرار کن تا پاسخ نهایی تولید شود. */
+        if (!empty($r['ok']) && is_array($r['body'] ?? null)) {
+            $ch0 = $r['body']['choices'][0] ?? null;
+            $cTxt = is_array($ch0['message'] ?? null) && is_string($ch0['message']['content'] ?? null) ? trim($ch0['message']['content']) : '';
+            $rTxt = is_array($ch0['message'] ?? null) ? trim((string)($ch0['message']['reasoning_content'] ?? ($ch0['message']['reasoning'] ?? ''))) : '';
+            if (($ch0['finish_reason'] ?? '') === 'length' && $cTxt === '' && $rTxt !== '') {
+                $curMax = (int)($body['max_completion_tokens'] ?? ($body['max_tokens'] ?? 0));
+                if ($curMax > 0 && $curMax < 2048 && !aiTestStopRequested()) {
+                    $bMore = $body;
+                    $nextMax = max(2048, $curMax * 4);
+                    if (isset($bMore['max_completion_tokens'])) $bMore['max_completion_tokens'] = $nextMax;
+                    else $bMore['max_tokens'] = $nextMax;
+                    $rrMore = aiHttp($ep['url'], $headers, $bMore, $net, $m);
+                    $tried[] = ['mode' => $m . ':more_tokens', 'code' => $rrMore['code'], 'error' => mb_substr(aiHttpErrorMessage($rrMore), 0, 80)];
+                    if (!empty($rrMore['ok'])) $r = $rrMore;
+                }
+            }
+            $r['tried'] = $tried;
+            return $r;
+        }
         if (aiProxyLevelFailure($r, $m)) {
             $r['proxy_blocked'] = true;
             $r['proxy_mode'] = $m;
             if ($proxyBlocked === null) $proxyBlocked = $r;
             continue;
         }
-        /* v9.99: پاسخِ اعتبار/اشتراک (۴۰۲ و مانند آن) هم حرفِ آخرِ سرویس است؛
-           امتحانِ روش‌های دیگر فقط وقت تلف می‌کند چون مشکل شبکه‌ای نیست. */
+        /* v10.444: وقتی از مسیر Worker/Proxy با کلید غیرخالی رفته‌ایم ولی ۴۰۱ یا خطای نبود هدر احراز هویت
+           گرفته‌ایم، به‌احتمال زیاد Worker هدر Authorization را حذف کرده است؛ توقف نکن و Direct/DoH را امتحان کن. */
+        if ($apiKey !== '' && in_array($m, ['worker', 'proxy'], true)
+            && ((int)$r['code'] === 401 || ((int)$r['code'] === 400 && aiIsMissingAuthHeaderError($r)))) {
+            $r['auth_stripped_suspect'] = true;
+            if ($proxyBlocked === null) $proxyBlocked = $r;
+            continue;
+        }
+        /* v10.444: اگر روی مسیر مستقیم/DoH به بلاک جغرافیایی/تحریمی خوردیم (۴۰۳ یا User location is not supported)،
+           توقف نکن و در صورت تعریف‌بودن Worker/Proxy سراغ آن‌ها برو. */
+        if (in_array($m, ['direct', 'doh', 'dns'], true) && aiIsGeoOrEdgeBlock($r, $m)) {
+            foreach (['worker', 'proxy'] as $wm) {
+                if (!in_array($wm, $modes, true)) {
+                    if ($wm === 'worker' && ($net['worker_url'] ?? '') !== '') $modes[] = $wm;
+                    if ($wm === 'proxy'  && ($net['proxy'] ?? '') !== '')      $modes[] = $wm;
+                }
+            }
+            if ($svcAnswer === null) $svcAnswer = $r;
+            continue;
+        }
         if (in_array($r['code'], [400, 401, 402, 403, 404, 422, 429], true)) {
             $r['tried'] = $tried;
             return $r;
         }
-        /* v9.99: پاسخی که از خودِ سرویس آمده (کد HTTP معنادار دارد) را نگه دار
-           تا اگر هیچ روشی موفق نشد، بر پاسخِ واسطه ترجیح داده شود. */
         if ($svcAnswer === null && (int)($r['code'] ?? 0) > 0) $svcAnswer = $r;
     }
-    /* اگر هیچ روشی موفق نشد: پاسخِ واقعیِ سرویس بر پاسخِ واسطه اولویت دارد،
-       وگرنه پاسخِ واسطه با برچسبِ درست برمی‌گردد تا در گزارش «۴۰۳ مدل» دیده نشود. */
+    /* v10.444: در Gemini اگر اندپوینت OpenAI-compat به دلیل حذف هدر در Worker یا بلاک جغرافیایی Direct
+       شکست خورد، خودکار اندپوینت نیتیو :generateContent?key=... را امتحان کن که کلید را در Query می‌فرستد! */
+    if ($dialect === 'gemini' && $apiKey !== '' && !aiTestStopRequested()) {
+        $gemRes = aiGeminiCall($p, ['url' => '', 'model' => $ep['model']], $payload, $net);
+        $gemRes['tried'] = array_merge($tried, (array)($gemRes['tried'] ?? []));
+        if (!empty($gemRes['ok'])) return $gemRes;
+    }
     $last = $svcAnswer ?? $proxyBlocked ?? ($r ?? ['ok' => false, 'code' => 0, 'error' => 'هیچ روشی اجرا نشد']);
     $last['tried'] = $tried;
     return $last;
@@ -6757,7 +7737,8 @@ function aiCatParse(array $r, string $title, array $cats, string $model, int $la
        تا در مودالِ «جزئیات کاملِ تستِ مدل» کنارِ پاسخ خامِ پیام دیده شود. */
     $rawCat = mb_substr((string)($r['raw'] ?? ''), 0, 4000);
     if ((int)$r['code'] !== 200) {
-        $err = $r['body']['error']['message'] ?? ($r['body']['message'] ?? ($r['error'] ?? ('HTTP ' . $r['code'])));
+        $err = aiHttpErrorMessage($r);
+        if ($err === '') $err = 'HTTP ' . $r['code'];
         if (!empty($r['cf_error'])) $err = $r['cf_error'];
         return ['ok' => false, 'category_id' => 0, 'category_name' => '', 'ai_text' => '', 'error' => mb_substr((string)$err, 0, 160),
                 'latency' => $lat, 'model' => $model, 'raw' => $rawCat, 'status' => (int)$r['code'], 'via' => (string)($r['via'] ?? '')];
@@ -8047,11 +9028,17 @@ function aiNormalizeProviders($raw): array {
                Cerebras) مدل نیستند: تگ‌های HTML، کلماتِ ستونِ جدول و رشته‌های
                تک‌کلمه‌ایِ خیلی کوتاه. اگر تست شوند فقط ۴۰۴/۴۰۰ می‌گیرند و
                گزارش را شلوغ می‌کنند. */
+            if (isset($mid[0]) && $mid[0] === '~') $mid = ltrim($mid, "~ \t");
             $midLow = strtolower($mid);
             $htmlJunk = ['tbody','thead','tr','td','th','ul','ol','li','div','span','table',
                          'nav','svg','path','button','section','header','footer','script',
-                         'style','p','a','h1','h2','h3','h4','br','hr','img','form','input'];
+                         'style','p','a','h1','h2','h3','h4','br','hr','img','form','input',
+                         'cerebras-frequently-asked-questions','frequently-asked-questions',
+                         'available-models','supported-models','model-deprecation','deprecations',
+                         'rate-limits','pricing','quickstart','getting-started','api-reference',
+                         'authentication','overview','introduction','changelog','troubleshooting'];
             if (in_array($midLow, $htmlJunk, true)) continue;
+            if (strpos($midLow, 'frequently-asked-questions') !== false || strpos($midLow, 'what-is-cerebras') !== false) continue;
             if (preg_match('~^[<>{}\[\]\\/|]+$~', $mid)) continue;
             // شناسهٔ مدل دست‌کم ۳ نویسه و شاملِ حرف/رقم است
             if (mb_strlen($mid) < 3 || !preg_match('~[a-z0-9]~i', $mid)) continue;
@@ -8068,11 +9055,16 @@ function aiNormalizeProviders($raw): array {
                 'available'      => !empty($m['available']),
                 'rateLimited'    => !empty($m['rateLimited']),
             ];
-            /* v9.94: تیکِ دستیِ «این مدل استدلالی است».
-               فقط وقتی ذخیره می‌شود که کاربر واقعاً تصمیم گرفته باشد؛
-               اگر کلید نباشد، تشخیص خودکار از روی نامِ مدل کار می‌کند. */
+            $lastIdx = count($models) - 1;
             if (array_key_exists('reasoning', $m)) $models[count($models) - 1]['reasoning'] = !empty($m['reasoning']);
-            if (!empty($m['testDetails'])) $models[count($models) - 1]['testDetails'] = $m['testDetails'];
+            if (array_key_exists('chat', $m)) $models[$lastIdx]['chat'] = !empty($m['chat']);
+            if (!empty($m['testDetails'])) $models[$lastIdx]['testDetails'] = $m['testDetails'];
+            if (!empty($m['feedbackExcluded'])) {
+                $models[$lastIdx]['feedbackExcluded'] = true;
+                if (!empty($m['feedbackExcludedAt'])) $models[$lastIdx]['feedbackExcludedAt'] = (int)$m['feedbackExcludedAt'];
+                if (!empty($m['feedbackExcludeReason'])) $models[$lastIdx]['feedbackExcludeReason'] = (string)$m['feedbackExcludeReason'];
+            }
+            if (!empty($m['billingIssue'])) $models[$lastIdx]['billingIssue'] = $m['billingIssue'];
         }
         $row = [
             'id'      => $id,
@@ -8093,6 +9085,108 @@ function aiNormalizeProviders($raw): array {
         $out[$id] = $row;
     }
     return $out;
+}
+
+/**
+ * v10.444: تعمیر خودکار تنظیمات ارائه‌دهنده‌ها، اصلاح URLهای منسوخ/ناقص،
+ * تکمیل نام‌های ناقص مدل‌های Cloudflare (@cf/<org>/...)، حذف مدل‌های غیرچت/اسلاگ‌های خراب،
+ * و پاک‌سازی برچسب‌های اشتباهیِ مسدودیت کلید (ناشی از حذف هدر در Workerهای قدیمی).
+ */
+function aiRepairProvidersConfig(array &$providers, bool $clearSuspectKeyBlocks = true): array {
+    $presets = aiProviderPresets();
+    $cfOrgRules = [
+        'gemma-sea-lion' => 'aisingapore', 'mistral-small' => 'mistralai', 'llama-guard' => 'meta',
+        'gpt-oss' => 'openai', 'deepseek' => 'deepseek-ai', 'nemotron' => 'nvidia',
+        'moondream' => 'moondream', 'embeddinggemma' => 'google', 'hermes' => 'nousresearch',
+        'uform' => 'unum-cloud', 'plamo' => 'pfnet', 'granite' => 'ibm-granite',
+        'kimi' => 'moonshotai', 'gemma' => 'google', 'mistral' => 'mistral',
+        'glm' => 'zai-org', 'phi' => 'microsoft', 'bge' => 'baai', 'llama' => 'meta',
+        'qwen' => 'qwen', 'qwq' => 'qwen', 'sqlcoder' => 'defog', 'florence' => 'microsoft',
+        'llava' => 'llava-hf', 'openchat' => 'openchat', 'starling' => 'nexusflow',
+        'zephyr' => 'huggingface', 'tinyllama' => 'tinyllama', 'bart' => 'facebook',
+    ];
+    $stats = ['urls_fixed' => 0, 'vendors_fixed' => 0, 'models_renamed' => 0, 'junk_removed' => 0, 'keys_unblocked' => 0, 'details' => []];
+
+    foreach ($providers as $pid => &$p) {
+        if (!is_array($p)) continue;
+        $dialect = aiDetectProviderDialect($p);
+        $oldUrl = trim((string)($p['url'] ?? ''));
+
+        if (trim((string)($p['vendor'] ?? '')) === '' && isset($presets[$dialect]['vendor'])) {
+            $p['vendor'] = $presets[$dialect]['vendor'];
+            $stats['vendors_fixed']++;
+        }
+
+        if ($dialect !== 'cloudflare') {
+            $ep = aiProviderEndpoint($p, '');
+            $canonUrl = (string)($ep['url'] ?? '');
+            $needsUrlFix = ($oldUrl === '' && $canonUrl !== '')
+                || stripos($oldUrl, 'api-inference.huggingface.co') !== false
+                || ($dialect === 'cohere' && stripos($oldUrl, '/compatibility/') === false && !preg_match('~/v[12]/chat/?$~i', $oldUrl))
+                || ($dialect === 'gemini' && stripos($oldUrl, ':generateContent') === false && stripos($oldUrl, '/openai/') === false)
+                || ($dialect === 'groq' && stripos($oldUrl, '/openai/v1') === false)
+                || ($dialect === 'openrouter' && stripos($oldUrl, '/api/v1') === false)
+                || ($dialect === 'fireworks' && stripos($oldUrl, '/inference/v1') === false)
+                || ($dialect === 'opencode' && stripos($oldUrl, '/zen/v1') === false);
+            if ($needsUrlFix && $canonUrl !== '' && $canonUrl !== $oldUrl) {
+                $p['url'] = $canonUrl;
+                $stats['urls_fixed']++;
+                $stats['details'][] = $pid . ': URL -> ' . $canonUrl;
+            }
+        }
+
+        $cleanModels = [];
+        $seenM = [];
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (!is_array($m)) continue;
+            $origId = trim((string)($m['id'] ?? ''));
+            if ($origId === '') continue;
+            $lowOrig = strtolower($origId);
+            if (strpos($lowOrig, 'frequently-asked-questions') !== false || strpos($lowOrig, 'what-is-cerebras') !== false
+                || in_array($lowOrig, ['available-models','supported-models','rate-limits','pricing','quickstart','getting-started','api-reference','overview'], true)) {
+                $stats['junk_removed']++;
+                continue;
+            }
+            $newId = aiSanitizeModelId($origId, $dialect);
+            if ($dialect === 'cloudflare' && stripos($newId, '@cf/') === 0) {
+                $afterCf = substr($newId, 4);
+                if ($afterCf !== '' && strpos($afterCf, '/') === false) {
+                    foreach ($cfOrgRules as $kw => $org) {
+                        if (stripos($afterCf, $kw) === 0) {
+                            $newId = '@cf/' . $org . '/' . $afterCf;
+                            break;
+                        }
+                    }
+                }
+            }
+            if ($newId !== $origId && $newId !== '') {
+                $m['id'] = $newId;
+                $stats['models_renamed']++;
+            }
+            $mKey = strtolower($m['id']);
+            if (isset($seenM[$mKey])) continue;
+            $seenM[$mKey] = true;
+            $cleanModels[] = $m;
+        }
+        $p['models'] = $cleanModels;
+    }
+    unset($p);
+
+    if ($clearSuspectKeyBlocks) {
+        $st = aiKeyStateLoad();
+        $changed = false;
+        foreach ($st as $k => &$v) {
+            if (is_array($v) && (($v['kind'] ?? '') === 'auth' || ($v['kind'] ?? '') === 'rate')) {
+                $v['kind'] = ''; $v['label'] = ''; $v['msg'] = ''; $v['fails'] = 0;
+                $stats['keys_unblocked']++;
+                $changed = true;
+            }
+        }
+        unset($v);
+        if ($changed) aiKeyStateSave($st);
+    }
+
+    return $stats;
 }
 
 /* =====================================================================
@@ -36732,14 +37826,14 @@ function aiFeedbackExcludeInvalid(array &$m,string $reason=''): void {
     $m['available']=false;$m['rateLimited']=false;
 }
 
-function aiFeedbackProbeModes(array $net, string $url, string $apiKey, string $model): array {
+function aiFeedbackProbeModes(array $net, string $url, string $apiKey, string $model, array $p = []): array {
     $modes = ['direct', 'doh'];
     if (!empty($net['resolve_ip'])) $modes[] = 'dns';
     if (!empty($net['worker_url'])) $modes[] = 'worker';
     if (!empty($net['proxy'])) $modes[] = 'proxy';
-    $headers = ['Content-Type: application/json'];
-    if ($apiKey !== '') $headers[] = 'Authorization: Bearer ' . $apiKey;
-    $payload = ['model' => $model, 'max_tokens' => 4, 'messages' => [['role' => 'user', 'content' => 'ping']]];
+    $ep = $p ? aiProviderEndpoint($p, $model) : ['kind' => 'openai', 'url' => $url, 'model' => $model, 'dialect' => aiDetectProviderDialect($p, $url)];
+    $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+    $payload = aiBuildOpenAiPayload(['max_tokens' => 8, 'messages' => [['role' => 'user', 'content' => 'ping']]], $model, (string)($ep['dialect'] ?? ''), $p);
     $out = [];
     foreach ($modes as $m) {
         $t0 = microtime(true);
@@ -36748,12 +37842,19 @@ function aiFeedbackProbeModes(array $net, string $url, string $apiKey, string $m
         $msg = aiHttpErrorMessage($r);
         $code = (int)($r['code'] ?? 0);
         $proxyFailure = aiProxyLevelFailure($r, $m);
+        $authStripped = ($apiKey !== '' && in_array($m, ['worker', 'proxy'], true)
+            && ($code === 401 || ($code === 400 && aiIsMissingAuthHeaderError($r))));
+        $geoBlocked = (in_array($m, ['direct', 'doh', 'dns'], true) && aiIsGeoOrEdgeBlock($r, $m));
         $out[$m] = [
-            'mode' => $m, 'reached' => ($code > 0 && ($diag['cat'] ?? '') !== 'port' && !$proxyFailure), 'ok' => $code >= 200 && $code < 300,
+            'mode' => $m,
+            'reached' => ($code > 0 && ($diag['cat'] ?? '') !== 'port' && !$proxyFailure && !$authStripped && !$geoBlocked),
+            'ok' => $code >= 200 && $code < 300,
             'http' => $code, 'diag' => (string)($diag['cat'] ?? ''),
             'label' => (string)($diag['label'] ?? ''), 'error' => mb_substr($msg, 0, 220),
             'via' => (string)($r['via'] ?? $m), 'worker_style' => (string)($r['worker_style'] ?? ''),
             'proxy_failure' => $proxyFailure,
+            'auth_stripped' => $authStripped,
+            'geo_blocked'   => $geoBlocked,
             'ms' => (int)round((microtime(true) - $t0) * 1000),
         ];
     }
@@ -36764,13 +37865,27 @@ function aiFeedbackBestMode(array $probe, array $net): array {
     $cur = (string)($net['mode'] ?? 'direct');
     $pick = $cur;
     $why = 'روش فعلی قابل استفاده است';
-    if (isset($probe[$cur]) && !empty($probe[$cur]['reached']) && ($probe[$cur]['diag'] ?? '') !== 'port' && empty($probe[$cur]['proxy_failure'])) {
+    if (isset($probe[$cur]) && !empty($probe[$cur]['ok'])) {
         return ['mode' => $pick, 'why' => $why, 'changed' => false];
     }
-    foreach (['doh', 'direct', 'dns', 'proxy'] as $m) {
+    foreach (['doh', 'direct', 'worker', 'dns', 'proxy'] as $m) {
+        if (isset($probe[$m]) && !empty($probe[$m]['ok'])) {
+            $why = ($m !== $cur && !empty($probe[$cur]['auth_stripped']))
+                ? ('واسطهٔ ' . $cur . ' هدر Authorization را حذف کرد (۴۰۱) و ' . $m . ' پاسخ ۲۰۰ داد')
+                : ('روش ' . $m . ' پاسخ مستقیم ۲۰۰ داد');
+            return ['mode' => $m, 'why' => $why, 'changed' => $m !== $cur];
+        }
+    }
+    if (isset($probe[$cur]) && !empty($probe[$cur]['reached']) && ($probe[$cur]['diag'] ?? '') !== 'port'
+        && empty($probe[$cur]['proxy_failure']) && empty($probe[$cur]['auth_stripped']) && empty($probe[$cur]['geo_blocked'])) {
+        return ['mode' => $pick, 'why' => $why, 'changed' => false];
+    }
+    foreach (['doh', 'direct', 'worker', 'dns', 'proxy'] as $m) {
         if (isset($probe[$m]) && !empty($probe[$m]['reached'])) {
             $pick = $m;
-            $why = ($cur === 'worker' ? 'Worker خطای مسیر/پورت داد و ' : 'روش فعلی نرسید و ') . $m . ' به اندپوینت رسید';
+            $why = !empty($probe[$cur]['auth_stripped'])
+                ? ('واسطهٔ ' . $cur . ' هدر احراز هویت را حذف کرد و ' . $m . ' سالم به اندپوینت رسید')
+                : (($cur === 'worker' ? 'Worker خطای مسیر/پورت داد و ' : 'روش فعلی نرسید و ') . $m . ' به اندپوینت رسید');
             return ['mode' => $pick, 'why' => $why, 'changed' => $pick !== $cur];
         }
     }
@@ -36833,7 +37948,7 @@ if (isset($_GET['ai_feedback_fix'])) {
         $pk = aiPickApiKey($ap, (string)($ap['id'] ?? ''));
         $ep = aiProviderEndpoint($ap, (string)$active['model']);
         if (!empty($ep['url'])) {
-            $probe = aiFeedbackProbeModes($net, (string)$ep['url'], (string)($pk['key'] ?? ''), (string)$active['model']);
+            $probe = aiFeedbackProbeModes($net, (string)$ep['url'], (string)($pk['key'] ?? ''), (string)$active['model'], $ap);
             $best = aiFeedbackBestMode($probe, $net);
         }
     }
@@ -36856,7 +37971,12 @@ if (isset($_GET['ai_feedback_fix'])) {
 
     $providerFilter=trim((string)($_GET['provider']??''));
     $preExcluded=0;
+    $configRepairs=[];
     if($apply){
+        $configRepairs = aiRepairProvidersConfig($providers, true);
+        if (!empty($configRepairs['urls_fixed'])) $changes[] = 'Provider URLs repaired: ' . $configRepairs['urls_fixed'];
+        if (!empty($configRepairs['models_renamed'])) $changes[] = 'Model IDs normalized: ' . $configRepairs['models_renamed'];
+        if (!empty($configRepairs['keys_unblocked'])) $changes[] = 'Suspect blocked keys cleared: ' . $configRepairs['keys_unblocked'];
         foreach($providers as $px=>&$pp){
             if(!is_array($pp['models']??null))continue;
             foreach($pp['models'] as $mx=>&$mm){
@@ -47935,6 +49055,51 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "['reason_kind']     = 'category_ai_pending'") !== false
       && strpos($selfSrc, "{v:'10." . "443'") !== false
       && version_compare(APP_VERSION, '10.443', '>='));
+    $_epGem444   = aiProviderEndpoint(['id' => 'gemini', 'url' => 'https://generativelanguage.googleapis.com/v1beta'], 'models/gemini-2.5-flash');
+    $_epGemNat   = aiProviderEndpoint(['id' => 'gemini', 'url' => 'https://generativelanguage.googleapis.com/v1beta/models'], 'gemini-2.5-flash');
+    $_epAnth444  = aiProviderEndpoint(['id' => 'anthropic', 'url' => 'https://api.anthropic.com'], 'claude-sonnet-4-5');
+    $_epOcCl444  = aiProviderEndpoint(['id' => 'opencode', 'url' => 'https://opencode.ai/zen/v1/chat/completions'], 'claude-sonnet-4-6');
+    $_epHf444    = aiProviderEndpoint(['id' => 'huggingface', 'url' => 'https://api-inference.huggingface.co/v1'], 'Qwen/Qwen3-32B');
+    $_epCoh444   = aiProviderEndpoint(['id' => 'cohere', 'url' => 'https://api.cohere.ai/v1'], 'command-a-03-2025');
+    $_epOll444   = aiProviderEndpoint(['id' => 'ollama', 'vendor' => 'ollama-models', 'url' => 'http://127.0.0.1:11434/v1'], 'llama3.2');
+    $_plO3_444   = aiBuildOpenAiPayload(['messages' => [['role' => 'user', 'content' => 'hi']], 'max_tokens' => 300, 'temperature' => 0.2], 'o3-mini', 'openai');
+    $_plMis444   = aiBuildOpenAiPayload(['messages' => [['role' => 'user', 'content' => 'u1'], ['role' => 'system', 'content' => 's1']], 'max_completion_tokens' => 250, 'temperature' => 1.9, 'store' => true], '~mistral-small-latest', 'mistral');
+    $_hdrAnth444 = implode("\n", aiBuildProviderHeaders(['id' => 'anthropic'], $_epAnth444, 'sk-ant-test'));
+    $_kfWorker401 = aiKeyFailureKind(['ok' => false, 'code' => 401, 'mode' => 'worker', 'body' => ['message' => 'Invalid API Key']]);
+    $_kfDirect401 = aiKeyFailureKind(['ok' => false, 'code' => 401, 'mode' => 'direct', 'body' => ['message' => 'Invalid API Key']]);
+    $_arrMsg444   = aiExtractText(['choices' => [['message' => ['content' => [['type' => 'text', 'text' => 'سلام دنیا']]]]]]);
+    $_gemErr444   = aiHttpErrorMessage(['code' => 400, 'body' => [['error' => ['code' => 400, 'message' => 'User location is not supported']]]]);
+    $add('10.444', 'استانداردسازی چندپروتکلی پروایدرهای هوش مصنوعی، هدرها، بدنهٔ درخواست، جلوگیری از مسمومیت کلید در Worker و تعمیر خودکار',
+         function_exists('aiProviderPresets')
+      && function_exists('aiDetectProviderDialect')
+      && function_exists('aiBuildProviderHeaders')
+      && function_exists('aiBuildOpenAiPayload')
+      && function_exists('aiAnthropicCall')
+      && function_exists('aiGeminiCall')
+      && function_exists('aiCohereNativeCall')
+      && function_exists('aiOllamaNativeCall')
+      && function_exists('aiRepairProvidersConfig')
+      && $_epGem444['url'] === 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+      && $_epGem444['model'] === 'gemini-2.5-flash'
+      && $_epGemNat['kind'] === 'gemini'
+      && $_epAnth444['kind'] === 'anthropic' && $_epAnth444['url'] === 'https://api.anthropic.com/v1/messages'
+      && $_epOcCl444['kind'] === 'anthropic' && $_epOcCl444['url'] === 'https://opencode.ai/zen/v1/messages'
+      && $_epHf444['url'] === 'https://router.huggingface.co/v1/chat/completions'
+      && $_epCoh444['url'] === 'https://api.cohere.ai/compatibility/v1/chat/completions'
+      && $_epOll444['url'] === 'http://127.0.0.1:11434/v1/chat/completions'
+      && isset($_plO3_444['max_completion_tokens']) && !isset($_plO3_444['max_tokens']) && !isset($_plO3_444['temperature'])
+      && isset($_plMis444['max_tokens']) && !isset($_plMis444['max_completion_tokens']) && !isset($_plMis444['store'])
+      && (float)$_plMis444['temperature'] === 1.5 && ($_plMis444['messages'][0]['role'] ?? '') === 'system'
+      && $_plMis444['model'] === 'mistral-small-latest'
+      && strpos($_hdrAnth444, 'x-api-key: sk-ant-test') !== false && strpos($_hdrAnth444, 'anthropic-version: 2023-06-01') !== false
+      && $_kfWorker401['kind'] === '' && $_kfDirect401['kind'] === 'auth'
+      && $_arrMsg444 === 'سلام دنیا'
+      && $_gemErr444 === 'User location is not supported'
+      && aiNonChatModel('nemotron-3.5-lightning-free') === ''
+      && aiNonChatModel('gemini-2.5-flash-preview-tts') !== ''
+      && aiIsReasoningModel(null, 'Prism-ML/Ternary-Bonsai-27B') === true
+      && strpos($selfSrc, "{v:'10." . "444'") !== false
+      && version_compare(APP_VERSION, '10.444', '>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -59864,9 +61029,10 @@ function aiModelCaps(string $modelId, array $row = [], array $catRow = []): arra
         $tools = false;
         $low = strtolower($modelId);
         foreach (['llama-3.3', 'llama-3.1', 'llama-4', 'mistral', 'ministral', 'devstral',
-                  'magistral', 'codestral', 'gpt-oss', 'gpt-4', 'gemini-2', 'gemini-1.5',
-                  'qwen', 'command-r', 'firefunction', 'hermes', 'nemotron', 'glm-4',
-                  'deepseek-v3', 'kimi-k2', 'grok'] as $kw) {
+                  'magistral', 'leanstral', 'codestral', 'gpt-oss', 'gpt-4', 'gpt-5', 'o3', 'o4-',
+                  'claude-', 'gemini-2', 'gemini-3', 'gemini-1.5', 'qwen', 'command-r', 'command-a',
+                  'firefunction', 'hermes', 'nemotron', 'glm-4', 'glm-5', 'deepseek-v3', 'deepseek-v4',
+                  'deepseek-chat', 'kimi-k2', 'kimi-k3', 'grok', 'bonsai', 'hy3', 'minimax-m', 'mimo'] as $kw) {
             if (strpos($low, $kw) !== false) { $tools = true; break; }
         }
     }
@@ -60156,6 +61322,69 @@ echo json_encode(['ok'=>$ok, 'models'=>count($cat['models']), 'has_key'=>$key !=
     'message'=>'Mistral با '.count($cat['models']).' مدل متن‌به‌متن اضافه شد'
         .($key === '' ? ' — کلید API را در فایل تنظیمات وارد کنید' : '')], JSON_UNESCAPED_UNICODE);
 exit;
+}
+/* v10.444: تعمیر خودکار یک‌کلیکی همهٔ پروایدرها، آدرس‌ها، مدل‌ها و کلیدهای مسدودِ اشتباه */
+if (($_POST['action'] ?? '') === 'ai_repair_providers') {
+    header('Content-Type: application/json; charset=UTF-8');
+    $providers = aiProvidersLoad();
+    $stats = aiRepairProvidersConfig($providers, true);
+    $providers = aiNormalizeProviders($providers);
+    $ok = aiProvidersSave($providers);
+    $msg = sprintf(
+        'تعمیر انجام شد: %d آدرس اصلاح شد · %d شناسهٔ مدل استاندارد شد · %d ردیف خراب حذف شد · %d کلید مسدود آزاد شد',
+        (int)$stats['urls_fixed'], (int)$stats['models_renamed'], (int)$stats['junk_removed'], (int)$stats['keys_unblocked']
+    );
+    echo json_encode(['ok' => $ok, 'stats' => $stats, 'message' => $msg], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+/* v10.444: افزودن یک‌کلیکی هر پروایدر استاندارد از کاتالوگ aiProviderPresets */
+if (($_POST['action'] ?? '') === 'ai_add_preset') {
+    header('Content-Type: application/json; charset=UTF-8');
+    $presetId = strtolower(trim((string)($_POST['preset_id'] ?? '')));
+    $apiKey   = trim((string)($_POST['api_key'] ?? ''));
+    if ($presetId === 'mistral') {
+        $preset = aiMistralCatalog();
+    } else {
+        $presets = aiProviderPresets();
+        if (!isset($presets[$presetId])) {
+            echo json_encode(['ok' => false, 'error' => 'پروایدر انتخابی در فهرست استاندارد نیست'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $preset = $presets[$presetId];
+    }
+    $providers = aiProvidersLoad();
+    $old = $providers[$presetId] ?? null;
+    if ($apiKey === '' && is_array($old)) $apiKey = trim((string)($old['apiKey'] ?? ''));
+    $preset['apiKey'] = $apiKey;
+    $preset['enabled'] = true;
+    $pKeys = is_array($old) ? aiProviderKeys($old) : [];
+    if ($apiKey !== '') {
+        $dup = false;
+        foreach ($pKeys as $ek) { if ((string)($ek['key'] ?? '') === $apiKey) { $dup = true; break; } }
+        if (!$dup) array_unshift($pKeys, ['key' => $apiKey, 'label' => '', 'enabled' => true]);
+    }
+    if ($pKeys) $preset = aiProviderSetKeys($preset, $pKeys);
+    if (is_array($old) && !empty($old['models'])) {
+        $mergedModels = (array)$old['models'];
+        foreach ((array)($preset['models'] ?? []) as $pm) {
+            if (!aiFindModelRow($old, (string)($pm['id'] ?? ''))) $mergedModels[] = $pm;
+        }
+        $preset['models'] = $mergedModels;
+    }
+    $providers[$presetId] = $preset;
+    $providers = aiNormalizeProviders($providers);
+    $ok = aiProvidersSave($providers);
+    $sel = aiSelected();
+    if ($sel['provider'] === '' || !isset($providers[$sel['provider']])) {
+        aiSaveSelected($presetId, (string)($providers[$presetId]['models'][0]['id'] ?? ''));
+    }
+    echo json_encode([
+        'ok' => $ok,
+        'provider_id' => $presetId,
+        'models' => count($providers[$presetId]['models'] ?? []),
+        'message' => 'پروایدر «' . ($preset['name'] ?? $presetId) . '» با تنظیمات استاندارد ذخیره شد',
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 /* درون‌ریزی فایل JSON تنظیمات ارائه‌دهنده‌ها */
 if (($_POST['action'] ?? '') === 'ai_import_providers') {
@@ -60845,12 +62074,12 @@ function aiParallelCalls(array $jobs, array $net, int $concurrency = 4): array {
         }
         /* v10.01: به‌جای apiKey ثابت، «اولین کلیدِ سالمِ» این ارائه‌دهنده. */
         $pick   = aiPickApiKey($p, (string)($p['id'] ?? ''));
+        if (!empty($pick['acct'])) { $p = aiApplyKeyAccount($p, $pick); $ep = aiProviderEndpoint($p, $mid); }
         $apiKey = trim((string)($pick['key'] ?? ''));
-        $headers = ['Content-Type: application/json'];
-        if ($apiKey !== '') $headers[] = 'Authorization: Bearer ' . $apiKey;
-        $body = $payload; $body['model'] = $mid;
+        $headers = aiBuildProviderHeaders($p, $ep, $apiKey);
+        $body = aiBuildOpenAiPayload($payload, (string)($ep['model'] ?? $mid), (string)($ep['dialect'] ?? ''), $p);
         $pending[$k] = ['job' => $job, 'url' => $ep['url'], 'headers' => $headers, 'body' => $body,
-                        'keyId' => (string)($pick['id'] ?? '')];
+                        'apiKey' => $apiKey, 'keyId' => (string)($pick['id'] ?? '')];
     }
     $keys = array_keys($pending);
     $nk = count($keys);
@@ -60897,15 +62126,28 @@ function aiParallelCalls(array $jobs, array $net, int $concurrency = 4): array {
                 $r2['retried_payload_seq'] = true;
                 $r = $r2;
             }
-            /* اگر مسیرِ موازی به‌خاطر واسطهٔ خراب یا خطای شبکه شکست خورد،
-               همان مدل را یک بار از مسیرِ ترتیبیِ کامل (که همهٔ روش‌های
-               اتصال را امتحان می‌کند) رد کن. */
+            /* v10.444: اگر مسیر موازی به واسطهٔ خراب، حذف هدر در Worker (۴۰۱)،
+               بلاک جغرافیایی Direct (۴۰۳) یا خطای شبکه خورد، مسیر ترتیبیِ کامل را اجرا کن. */
+            $rMode = (string)($r['mode'] ?? '');
+            $parAuthStripped = ((string)($b['pd']['apiKey'] ?? '') !== '' && in_array($rMode, ['worker', 'proxy'], true)
+                && ((int)$r['code'] === 401 || ((int)$r['code'] === 400 && aiIsMissingAuthHeaderError($r))));
+            $parGeoBlocked = (in_array($rMode, ['direct', 'doh', 'dns'], true) && aiIsGeoOrEdgeBlock($r, $rMode));
             if (empty($r['ok']) && !aiTestStopRequested()
-                && (aiProxyLevelFailure($r, (string)($r['mode'] ?? '')) || (int)$r['code'] === 0)) {
+                && (aiProxyLevelFailure($r, $rMode) || (int)$r['code'] === 0 || $parAuthStripped || $parGeoBlocked)) {
                 $r2 = aiProviderCall($b['pd']['job']['p'], (string)$b['pd']['job']['mid'],
                                      (array)$b['pd']['job']['payload'], $net);
                 $r2['retried_seq'] = true;
                 $r = $r2;
+            } elseif (!empty($r['ok']) && !aiTestStopRequested() && is_array($r['body'] ?? null)) {
+                $ch0 = $r['body']['choices'][0] ?? null;
+                $cTxt = is_array($ch0['message'] ?? null) && is_string($ch0['message']['content'] ?? null) ? trim($ch0['message']['content']) : '';
+                $rTxt = is_array($ch0['message'] ?? null) ? trim((string)($ch0['message']['reasoning_content'] ?? ($ch0['message']['reasoning'] ?? ''))) : '';
+                if (($ch0['finish_reason'] ?? '') === 'length' && $cTxt === '' && $rTxt !== '') {
+                    $plMore = (array)$b['pd']['job']['payload'];
+                    $plMore['max_tokens'] = max(2048, ((int)($plMore['max_tokens'] ?? 300)) * 4);
+                    $r2 = aiProviderCall($b['pd']['job']['p'], (string)$b['pd']['job']['mid'], $plMore, $net);
+                    if (!empty($r2['ok'])) { $r2['retried_seq'] = true; $r = $r2; }
+                }
             }
             /* v10.01: نتیجهٔ کلیدی که در مسیرِ موازی استفاده شد را ثبت کن؛ اگر
                خطا از جنسِ کلید بود، کلید را بسوزان و همان مدل را یک بار از
@@ -61127,16 +62369,30 @@ function aiTestJudge(array $r, string $mid, string $pid = ''): array {
         $note = 'خطا از مسیرِ عبور (Worker/پروکسی/CDN) است نه از خودِ مدل — روش اتصال را عوض کنید';
         $diag['cat'] = 'proxy';
         $diag['label'] = 'مسیرِ عبور مسدود است (' . $code . ') — نه خطای مدل';
-    /* ۳) مدلی که در این سرویس وجود ندارد یا چت نیست */
-    } elseif (!$ok && $code === 400) {
+    /* ۲ب) v10.444: حذف هدر احراز هویت در Worker قدیمی یا بلاک جغرافیایی */
+    } elseif (!$ok && !empty($r['auth_stripped_suspect'])) {
+        $kind = 'proxy';
+        $note = 'واسطهٔ Worker هدر Authorization را حذف کرده است — کد جدید Worker را از تب «🌐 اتصال» کپی و Deploy کنید';
+        $diag['cat'] = 'proxy';
+        $diag['label'] = 'حذف هدر در Worker (' . $code . ')';
+    } elseif (!$ok && aiIsGeoOrEdgeBlock($r, (string)($r['mode'] ?? ''))) {
+        $kind = 'proxy';
+        $note = 'دسترسی مستقیم از IP هاست توسط سرویس مسدود است (' . $code . ') — Worker سالم را فعال کنید';
+        $diag['cat'] = 'forbidden';
+        $diag['label'] = 'مسدودیت جغرافیایی/IP (' . $code . ')';
+    /* ۳) مدلی که در این سرویس وجود ندارد، بازنشسته شده (404/410) یا چت نیست */
+    } elseif (!$ok && in_array($code, [400, 404, 410], true)) {
         $low = strtolower((string)$err . ' ' . (string)($r['raw'] ?? ''));
-        if (strpos($low, 'model_not_supported') !== false || strpos($low, 'invalid model') !== false
+        if ($code === 410 || strpos($low, 'model_not_supported') !== false || strpos($low, 'invalid model') !== false
             || strpos($low, 'no route for that uri') !== false || strpos($low, 'not a chat model') !== false
-            || strpos($low, 'no such model') !== false) {
+            || strpos($low, 'no such model') !== false || strpos($low, 'model_not_found') !== false
+            || strpos($low, 'model not found') !== false || strpos($low, 'does not exist') !== false
+            || strpos($low, 'decommissioned') !== false || strpos($low, 'deprecated') !== false
+            || strpos($low, 'no longer supported') !== false) {
             $kind = 'badmodel';
-            $note = 'این شناسهٔ مدل در این سرویس وجود ندارد یا مدلِ چت نیست — از فهرست حذفش کنید';
+            $note = 'این مدل/اندپوینت منسوخ یا ناموجود است (' . $code . ') — با دکمهٔ «تعمیر خودکار» اصلاح کنید';
             $diag['cat'] = 'badmodel';
-            $diag['label'] = 'مدل نامعتبر (۴۰۰)';
+            $diag['label'] = 'مدل ناموجود/منسوخ (' . $code . ')';
         }
     }
 
@@ -69639,6 +70895,19 @@ function aiExtractToolCalls($body): array {
                                      'arguments' => $it['arguments'] ?? '{}']];
         }
     }
+    // v10.444: Anthropic نیتیو content[] با type=tool_use و Gemini نیتیو candidates[].content.parts[].functionCall
+    foreach (($body['content'] ?? []) as $blk) {
+        if (is_array($blk) && ($blk['type'] ?? '') === 'tool_use' && !empty($blk['name'])) {
+            $raw[] = ['id' => (string)($blk['id'] ?? ''), 'name' => (string)$blk['name'], 'input' => $blk['input'] ?? []];
+        }
+    }
+    foreach (($body['candidates'] ?? []) as $cand) {
+        foreach (($cand['content']['parts'] ?? []) as $pt) {
+            if (is_array($pt) && isset($pt['functionCall']['name'])) {
+                $raw[] = ['id' => '', 'name' => (string)$pt['functionCall']['name'], 'input' => $pt['functionCall']['args'] ?? []];
+            }
+        }
+    }
     foreach ($raw as $i => $t) {
         if (!is_array($t)) continue;
         $fn = $t['function'] ?? $t;
@@ -73038,9 +74307,38 @@ endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) �
 <button class="btn btn-green" onclick="aiExportProviders(1)" style="flex:1;font-size:11px" title="دانلود فایل JSON تنظیمات هوش‌های مصنوعی، همراه با کلیدهای API">📤 برون‌ریزی JSON (با کلید)</button>
 <button class="btn btn-gray" onclick="aiExportProviders(0)" style="flex:1;font-size:11px" title="همان فایل ولی بدون کلیدهای API — برای اشتراک‌گذاری امن">🔒 بدون کلید</button>
 </div>
-<!-- v9.95 (۹ج): افزودن یک‌کلیکیِ همهٔ مدل‌های متن‌به‌متنِ Mistral -->
-<div class="cact" style="margin-top:4px">
+<!-- v9.95 (۹ج) + v10.444: افزودن یک‌کلیکی پروایدرهای استاندارد + تعمیر خودکار تنظیمات -->
+<div class="cact" style="margin-top:4px;gap:4px">
 <button class="btn btn-purple" onclick="aiAddMistral()" style="flex:1;font-size:11px" title="ارائه‌دهندهٔ Mistral AI با همهٔ مدل‌های چت (متن به متن) اضافه می‌شود؛ فقط کلید API را وارد کنید">✨ افزودن مدل‌های Mistral</button>
+<button class="btn btn-amber" onclick="aiRepairProviders()" style="flex:1;font-size:11px" title="تعمیر خودکار URLهای منسوخ/ناقص، اصلاح شناسه‌های مدل Cloudflare، حذف اسلاگ‌های خراب و آزادسازی کلیدهای مسدودِ اشتباه">🔧 تعمیر خودکار پروایدرها</button>
+</div>
+<div class="cact" style="margin-top:4px;gap:4px">
+<select id="aiPresetSel" dir="ltr" style="flex:1;font-size:11px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 6px">
+<option value="">— افزودن پروایدر استاندارد (۲۲ سرویس) —</option>
+<option value="openrouter">OpenRouter (Free + Paid)</option>
+<option value="groq">Groq (Fast LPU)</option>
+<option value="gemini">Google Gemini / AI Studio</option>
+<option value="anthropic">Anthropic Claude (/v1/messages)</option>
+<option value="mistral">Mistral AI</option>
+<option value="cohere">Cohere (Compatibility v1)</option>
+<option value="together">Together AI (Bonsai Free)</option>
+<option value="huggingface">Hugging Face Router</option>
+<option value="cerebras">Cerebras</option>
+<option value="deepseek">DeepSeek</option>
+<option value="openai">OpenAI</option>
+<option value="xai">xAI Grok</option>
+<option value="github">GitHub Models</option>
+<option value="nvidia">NVIDIA NIM</option>
+<option value="fireworks">Fireworks AI</option>
+<option value="perplexity">Perplexity Sonar</option>
+<option value="sambanova">SambaNova</option>
+<option value="opencode">OpenCode Zen</option>
+<option value="llm7">LLM7.io</option>
+<option value="ollama_cloud">Ollama Cloud</option>
+<option value="ollama">Ollama (Local 11434)</option>
+<option value="pollinations">Pollinations AI (Free No-Key)</option>
+</select>
+<button class="btn btn-cyan" onclick="aiAddPresetProvider()" style="flex:0 0 auto;font-size:11px">➕ افزودن</button>
 </div>
 <input type="file" id="aiImportFile" accept=".json,application/json" style="display:none" onchange="aiImportFromFile(this)">
 <div id="aiImportBoxWrap" style="display:none;margin-top:6px">
@@ -82554,6 +83852,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.444', t:'🤖 بازنگری جامع پروایدرهای هوش مصنوعی: استانداردسازی اندپوینت‌ها، هدرهای احراز هویت، پروتکل‌های نیتیو، بدنهٔ درخواست و ضدحذف هدر در Worker', items:[
+    'لایهٔ HTTP و Cloudflare Worker بازطراحی شد (aiHttpPrepare + webconsole.worker.js + aiShowWorkerCode): در حالت template (?url={url}) هدرهای X-Target-* دیگر به سرورهای مقصد نشت نمی‌کنند (رفع خطای 403 Access denied by security policy در OpenRouter)، هدرهای پشتیبان X-Authorization و X-API-Key-Fwd برای بازیابی کلید در صورت حذف هدر Authorization اضافه شدند، و خطای ۴۰۱ ناشی از حذف هدر در Worker دیگر کلیدهای سالم (Mistral، Cohere، Gemini، Ollama Cloud) را در ai_key_state.json مسدود نمی‌کند بلکه خودکار به DoH/Direct یا اندپوینت نیتیو سوئیچ می‌کند.',
+    'پشتیبانی کامل از ۲۲ پروایدر استاندارد (aiProviderPresets + aiDetectProviderDialect + aiProviderEndpoint) اضافه شد: مسیریابی کانونیکال و بدون تکرار مسیر برای OpenRouter، Groq (/openai/v1/chat/completions)، Google Gemini (/v1beta/openai/chat/completions و نیتیو :generateContent?key=...)، Anthropic (/v1/messages با هدرهای x-api-key و anthropic-version)، مدل‌های Claude روی OpenCode Zen (/zen/v1/messages)، Cohere (/compatibility/v1/chat/completions و نیتیو /v2/chat)، Hugging Face Router (router.huggingface.co/v1/chat/completions به‌جای اندپوینت بازنشستهٔ 410)، Together، Cerebras، DeepSeek، OpenAI، xAI، GitHub Models، NVIDIA NIM، Fireworks (/inference/v1/chat/completions)، Perplexity، SambaNova، LLM7، Pollinations و Ollama محلی/ابری (رفع باگ /v1/v1/chat/completions).',
+    'تطبیق هوشمند بدنهٔ درخواست (aiBuildOpenAiPayload + aiPayloadRepairVariants) برای تفاوت‌های سخت‌گیرانهٔ هر پروایدر پیاده‌سازی شد: تبدیل خودکار max_tokens به max_completion_tokens و حذف temperature غیرپیش‌فرض برای مدل‌های o1/o3/o4/gpt-5/codex، تبدیل معکوس و حذف فیلدهای اضافی OpenAI برای اعتبارسنج‌های سخت‌گیر ۴۲۲ (Mistral/Cohere)، مرتب‌سازی نقش system در ابتدای پیام‌ها، ادغام پیام‌های هم‌نقش متوالی در Perplexity/Anthropic، و پاک‌سازی پیشوند ~ و پسوند :batch از شناسهٔ مدل‌ها.',
+    'پشتیبانی از مدل‌های استدلالی و چندبخشی تکمیل شد: رفع باگ تبدیل آرایهٔ message.content به رشتهٔ "Array" در PHP 8 درون aiExtractText، حفظ result.choices در مدل‌های جدید Cloudflare Workers AI به‌جای بازنویسی با رشتهٔ خالی، شناسایی خانواده‌های استدلالی جدید (Ternary-Bonsai، hy3، glm-5، kimi-k2، gpt-5، claude-4، gemini-2.5-pro/3، minimax-m2، mimo) با بودجهٔ حداقل ۱۰۲۴ توکن و تلاش مجدد خودکار هنگام پر شدن بودجه در reasoning_content، رفع مثبت کاذب کلمهٔ lightning در aiNonChatModel (برای nemotron-3.5-lightning-free) و افزودن فیلتر کامل مدل‌های TTS/تصویر/ویدیو/صوت زنده.',
+    'دکمهٔ «🔧 تعمیر خودکار پروایدرها» و انتخاب‌گر «➕ افزودن پروایدر استاندارد (۲۲ سرویس)» به تب «🧠 ارائه‌دهنده‌ها» اضافه شد (aiRepairProvidersConfig + ai_repair_providers + ai_add_preset) که آدرس‌های ناقص/منسوخ، شناسه‌های دو‌بخشی Cloudflare (@cf/<org>/...)، اسلاگ‌های خراب کاتالوگ (مثل صفحات FAQ در Cerebras) و کلیدهای مسدودِ اشتباه را یک‌کلیکی اصلاح می‌کند.'
+  ]},
   {v:'10.443', t:'📂 تلاش ترتیبی روی دسته‌های دستی انتخاب‌شده هنگام خطای دسته‌بندی ۴۲۲ + کنارگذاشتن خودکار برای تصحیح دسته‌بندی با هوش مصنوعی', items:[
     'تشخیص دقیق ساختار خطای دسته‌بندی باسلام در اندپوینت vendors/{id}/products (از جمله {"http_status":422,"messages":[{"code":0,"fields":["category"],"message":".دسته بندی انتخابی دارای فرزند می باشد"}]}) در bslIsCategoryError و استخراج کامل آرایهٔ body.messages[*] در bslErrText اضافه شد تا پیام واقعی خطا در هیچ مسیری پشت HTTP 422 پنهان نماند.',
     'تابع bslCollectManualCategories زنجیرهٔ کامل و بدون تکرار تمام دسته‌های دستی انتخاب‌شده توسط کاربر (دستهٔ مستقیم ردیف/پروفایل، دسته‌های جایگزین پروفایل به همان ترتیب انتخاب، و دستهٔ اصلی/جایگزین تنظیمات باسلام) را می‌سازد و bslTryCreateWithFallback آن‌ها را دقیقاً یک‌به‌یک و به ترتیب، بدون دستکاری شناسه با children[0] یا حدس تصادفی کلمه‌کلیدی، با حفظ تصویر ازقبل‌آپلودشده امتحان می‌کند.',
@@ -94030,7 +95335,12 @@ function aiShowWorkerCode(){
 "    target = tu.toString();",
 "",
 "    const h = new Headers(request.headers);",
-"    ['X-Target-URL','X-Target-Base','X-Target-Path','Host','CF-Connecting-IP','CF-IPCountry','CF-Ray','CF-Visitor','X-Forwarded-For','X-Real-IP','True-Client-IP','Forwarded'].forEach(k => h.delete(k));",
+"    const xAuth = request.headers.get('X-Authorization');",
+"    if (!h.has('Authorization') && xAuth) h.set('Authorization', xAuth);",
+"    const xKey = request.headers.get('X-API-Key-Fwd');",
+"    if (!h.has('x-api-key') && xKey) h.set('x-api-key', xKey);",
+"    if (!h.has('User-Agent')) h.set('User-Agent', 'Mozilla/5.0 (compatible; S4AIWorker/1.0)');",
+"    ['X-Target-URL','X-Target-Base','X-Target-Path','X-Authorization','X-API-Key-Fwd','Host','CF-Connecting-IP','CF-IPCountry','CF-Ray','CF-Visitor','X-Forwarded-For','X-Real-IP','True-Client-IP','Forwarded'].forEach(k => h.delete(k));",
 "",
 "    const resp = await fetch(target, {",
 "      method: request.method,",
@@ -95597,6 +96907,44 @@ function aiExportProviders(withKeys){
     });
 }
 /* v9.95 (۹ج): افزودن ارائه‌دهندهٔ Mistral با همهٔ مدل‌های متن‌به‌متن */
+function aiRepairProviders(){
+    const r=$('aiTR');
+    if(r)r.innerHTML='<div style="color:#67e8f9;font-size:11px">🔧 در حال بررسی و تعمیر خودکار تنظیمات پروایدرها...</div>';
+    const fd=new FormData();fd.append('action','ai_repair_providers');
+    fetch('',{method:'POST',body:fd}).then(r2=>r2.json()).then(d=>{
+        if(d&&d.ok){
+            showToast('✓ '+d.message);
+            if(r)r.innerHTML='<div class="alert alert-success" style="padding:8px;font-size:11px">✓ '+esc(d.message)+'</div>';
+            aiLoadProviders();
+        }else{
+            showToast('✗ '+((d&&d.error)||'خطا در تعمیر'),1);
+        }
+    }).catch(()=>showToast('✗ خطای شبکه',1));
+}
+function aiAddPresetProvider(){
+    const sel=$('aiPresetSel');
+    const pid=sel?sel.value.trim():'';
+    if(!pid){showToast('ابتدا یک پروایدر از لیست انتخاب کنید',1);return;}
+    const noKey=(pid==='pollinations'||pid==='ollama');
+    const key=noKey?'':prompt('کلید API برای «'+pid+'» را وارد کنید (اختیاری — می‌توانید خالی بگذارید و بعداً وارد کنید):','');
+    if(key===null)return;
+    const fd=new FormData();
+    fd.append('action','ai_add_preset');
+    fd.append('preset_id',pid);
+    fd.append('api_key',(key||'').trim());
+    const r=$('aiTR');
+    if(r)r.innerHTML='<div style="color:#67e8f9;font-size:11px">🔄 در حال افزودن پروایدر '+esc(pid)+'...</div>';
+    fetch('',{method:'POST',body:fd}).then(r2=>r2.json()).then(d=>{
+        if(d&&d.ok){
+            showToast('✓ '+d.message);
+            if(r)r.innerHTML='<div class="alert alert-success" style="padding:8px;font-size:11px">✓ '+esc(d.message)+'</div>';
+            if(sel)sel.value='';
+            aiLoadProviders();
+        }else{
+            showToast('✗ '+((d&&d.error)||'خطا'),1);
+        }
+    }).catch(()=>showToast('✗ خطای شبکه',1));
+}
 function aiAddMistral(){
     const key=prompt('کلید API میسترال (Mistral) را وارد کنید.\nاگر خالی بگذارید فقط فهرست مدل‌ها اضافه می‌شود و بعداً می‌توانید کلید را وارد کنید.','');
     if(key===null)return;
