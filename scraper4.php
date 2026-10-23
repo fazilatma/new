@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.419';
+const APP_VERSION = '10.420';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -30242,7 +30242,7 @@ function matrixCompactCheckpoint(array &$cp): array {
 }
 
 function matrixPricingFingerprint(?array $profiles=null, ?array $cn=null): string {
-    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=['matrix-pricing-schema-v3-missing-shop-expect'];
+    $profiles=$profiles??loadProfiles();$cn=$cn??loadConnections();$parts=['matrix-pricing-schema-v4-live-shop-rounding'];
     foreach($profiles as $pk=>$p){if(!is_array($p))continue;$parts[]=(string)$pk.'|'.(string)($p['priceMode']??'none').'|'.(string)($p['priceVal']??0).'|'.(string)($p['roundPrice']??0);}
     sort($parts,SORT_STRING);$parts[]='dest|'.shopPricingSignature($cn);
     return hash('sha256',implode("\n",$parts));
@@ -30638,8 +30638,10 @@ function matrixBuild(array $opts = []): array {
             if ($bare === '') continue;
             $raw = (int)extractPriceNum((string)($p['price'] ?? $p['orig_price'] ?? '0'));
             if ($raw <= 0) $raw = (int)preg_replace('/\D/', '', (string)($p['orig_price'] ?? '0'));
-            $profP = (int)($p['final_price'] ?? 0);
-            if ($profP <= 0) $profP = profileFinalPrice($profile, (string)($p['price'] ?? ''));
+            /* final_price is a historical cache and may predate the current
+               coefficient/rounding. Results must always derive expectations
+               from the canonical source price and current profile settings. */
+            $profP = $raw > 0 ? profileFinalPrice($profile, (string)$raw) : 0;
             $wooExpect = $profP > 0 && ($wooCfg['mode'] ?? 'none') !== 'none'
                 ? destAdjustPrice($profP, $wooCfg) : $profP;
             $bslExpect = $profP > 0 && ($bslCfg['mode'] ?? 'none') !== 'none'
@@ -31658,8 +31660,11 @@ function matrixFixBuildWooPayload(array $p, array $profile, array $cn): array {
     $sfx = trim((string)($profile['titleSuffix'] ?? ''));
     if ($sfx === '') $sfx = trim((string)($cn['basalam']['title_suffix'] ?? ''));
     if ($sfx !== '' && mb_strpos($title, $sfx) === false) $title = trim($title . ' ' . $sfx);
-    $price = (int)($p['final_price'] ?? 0);
-    if ($price <= 0) $price = profileFinalPrice($profile, (string)($p['price'] ?? ''));
+    /* Never trust stored final_price here: coefficient/rounding changes make it
+       stale. Correction must use the same current canonical calculation shown
+       in Results. */
+    $rawPrice=function_exists('extractSourcePrice')?extractSourcePrice($p):(string)($p['price']??'');
+    $price = profileFinalPrice($profile, $rawPrice);
     $wooCfg = function_exists('destPriceCfg') ? destPriceCfg($cn, 'woocommerce') : ['mode' => 'none'];
     if ($price > 0 && ($wooCfg['mode'] ?? 'none') !== 'none' && function_exists('destAdjustPrice')) {
         $price = destAdjustPrice($price, $wooCfg);
@@ -45392,6 +45397,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, hex2bin('c399')) === false
       && strpos($selfSrc, "{v:'10." . "417'") !== false
       && version_compare(APP_VERSION, '10.' . '417', '>='));
+    $add('10.420', 'ضریب غرفهٔ غیراصلی در Results زنده و در connections ذخیره می‌شود',
+         strpos($selfSrc, 'function bslVPriceChange(idx,persist)') !== false
+      && strpos($selfSrc, 'scheduleConnSave();') !== false
+      && strpos($selfSrc, 'const liveVendors=Array.isArray(bslExtraVendors)') !== false
+      && strpos($selfSrc, 'cn.basalam.vendors=(bslExtraVendors||[]).map') !== false);
+    $add('10.420', 'گردکردن زنده در همهٔ ستون‌های Results و مسیر اصلاح اعمال می‌شود',
+         substr_count($selfSrc, "onchange=\"destPricingChanged('") >= 4
+      && strpos($selfSrc, "function destPricingChanged(pre)") !== false
+      && strpos($selfSrc, "matrix-pricing-schema-v4-live-shop-rounding") !== false
+      && strpos($selfSrc, '$profP = $raw > 0 ? profileFinalPrice($profile, (string)$raw) : 0;') !== false
+      && strpos($selfSrc, '$price = profileFinalPrice($profile, $rawPrice);') !== false
+      && strpos($selfSrc, "{v:'10." . "420'") !== false
+      && version_compare(APP_VERSION, '10.' . '420', '>='));
     $add('10.419', 'اولین کران ردیف running بدون مالک باسلام را فوری ادامه می‌دهد',
          strpos($selfSrc, "if (\$isBsl && !\$lockFresh) {") !== false
       && strpos($selfSrc, "'owner_absent'=>true") !== false
@@ -71940,16 +71958,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <div style="font-weight:700;font-size:11.5px;color:#c4b5fd;margin-bottom:6px">🛒 ووکامرس</div>
                 <div class="row" style="align-items:center">
                     <label style="min-width:62px">روش:</label>
-                    <select id="wcPMode" onchange="syncWcPriceUi('main');destPricePreview('wc')" style="flex:1">
+                    <select id="wcPMode" onchange="destPricingChanged('wc')" style="flex:1">
                         <option value="none">بدون تغییر</option>
                         <option value="percent">درصد (مثلاً ۲۰ یا ۲۰-)</option>
                         <option value="multiplier">ضریب (مثلاً ۱٫۵)</option>
                     </select>
-                    <input type="number" id="wcPVal" value="0" step="0.01" oninput="syncWcPriceUi('main');destPricePreview('wc')" style="max-width:110px">
+                    <input type="number" id="wcPVal" value="0" step="0.01" oninput="destPricingChanged('wc')" style="max-width:110px">
                 </div>
                 <div class="row" style="align-items:center;margin-top:6px">
                     <label style="min-width:62px">گرد کردن:</label>
-                    <select id="wcPRound" onchange="syncWcPriceUi('main');destPricePreview('wc')" style="flex:1">
+                    <select id="wcPRound" onchange="destPricingChanged('wc')" style="flex:1">
                         <option value="0">بدون گرد کردن</option>
                         <option value="1000">هزار (1,000)</option>
                         <option value="5000">۵ هزار (5,000)</option>
@@ -71965,16 +71983,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <div style="font-weight:700;font-size:11.5px;color:#67e8f9;margin-bottom:6px">🏪 باسلام</div>
                 <div class="row" style="align-items:center">
                     <label style="min-width:62px">روش:</label>
-                    <select id="bsPMode" onchange="destPricePreview('bs')" style="flex:1">
+                    <select id="bsPMode" onchange="destPricingChanged('bs')" style="flex:1">
                         <option value="none">بدون تغییر</option>
                         <option value="percent">درصد (مثلاً ۲۰ یا ۲۰-)</option>
                         <option value="multiplier">ضریب (مثلاً ۱٫۵)</option>
                     </select>
-                    <input type="number" id="bsPVal" value="0" step="0.01" oninput="destPricePreview('bs')" style="max-width:110px">
+                    <input type="number" id="bsPVal" value="0" step="0.01" oninput="destPricingChanged('bs')" style="max-width:110px">
                 </div>
                 <div class="row" style="align-items:center;margin-top:6px">
                     <label style="min-width:62px">گرد کردن:</label>
-                    <select id="bsPRound" onchange="destPricePreview('bs')" style="flex:1">
+                    <select id="bsPRound" onchange="destPricingChanged('bs')" style="flex:1">
                         <option value="0">بدون گرد کردن</option>
                         <option value="1000">هزار (1,000)</option>
                         <option value="5000">۵ هزار (5,000)</option>
@@ -73573,14 +73591,20 @@ function renderBslVendors(){try{bslRenderShopsHint();}catch(e){}const list=$('bs
  +'🏪 ارسال مجدد این غرفه'
  +'</button></div>'
  +'</div>';
- if(pm!=='none'||pv!==0)bslVPriceChange(idx);
+ if(pm!=='none'||pv!==0)bslVPriceChange(idx,false);
  list.appendChild(card);});}
-// v9.68: وقتی تنظیم قیمتِ یک غرفهٔ اضافی عوض شد، مقدار را ذخیره و درصدِ مؤثر را نشان بده
-function bslVPriceChange(idx){
+// v9.68/v10.420: تغییر ضریب غرفه اتصال است، نه تنظیم پروفایل. قبلاً
+// scheduleSave فقط profile را ذخیره می‌کرد؛ بنابراین مقدار در Results زنده
+// نمی‌شد و پس از refresh نیز ممکن بود از connections قدیمی برگردد.
+function bslVPriceChange(idx,persist){
     const v=bslExtraVendors[idx]; if(!v)return;
     v.price_mode=($('bslVPMode_'+idx)||{}).value||'none';
     v.price_val=parseFloat(($('bslVPV_'+idx)||{}).value)||0;
-    scheduleSave(); /* v10.87: persist price change immediately */
+    if(!cn.basalam)cn.basalam={};cn.basalam.vendors=(bslExtraVendors||[]).map(x=>Object.assign({},x));
+    if(persist!==false){
+        try{refreshViews();}catch(e){}
+        scheduleConnSave();
+    }
     const eff=document.getElementById('bslVPEff_'+idx);
     if(eff){
         // لایهٔ ۱: تعدیلِ خودِ پروفایل (از فرمِ پروفایل)
@@ -76627,15 +76651,26 @@ function resultRoundPrice(n,round){n=Math.round(parseFloat(n)||0);round=parseInt
 function resultPriceBreakdown(p){
   const raw=extractNumber(p&&p.price);const pm=($('priceMode')||{}).value||'none';const pv=parseFloat(($('priceVal')||{}).value)||0;
   const profilePrice=getFinalPriceNum(p&&p.price);const out={raw:raw,profileMode:pm,profileVal:pv,profilePrice:profilePrice,dests:[]};
-  const w=(cn&&cn.woocommerce)||{};
+  /* Read live pricing controls, not the last asynchronous loadConn snapshot.
+     This makes coefficients and rounding visible immediately and guarantees
+     all destination columns use exactly what save_connections will persist. */
+  const ws=(cn&&cn.woocommerce)||{},w=Object.assign({},ws,{
+    price_mode:(($('wcPMode')||{}).value||ws.price_mode||'none'),
+    price_val:parseFloat(($('wcPVal')||{}).value??ws.price_val)||0,
+    price_round:parseInt(($('wcPRound')||{}).value??ws.price_round)||0});
   const wFinal=destAdjustPreviewNum(profilePrice,w.price_mode||'none',parseFloat(w.price_val)||0,parseInt(w.price_round)||0);
   out.dests.push({key:'woo',name:'ووکامرس',mode:w.price_mode||'none',val:parseFloat(w.price_val)||0,price:wFinal});
-  const b=(cn&&cn.basalam)||{};const br=parseInt(b.price_round)||0;
+  const bs=(cn&&cn.basalam)||{},b=Object.assign({},bs,{
+    price_mode:(($('bsPMode')||{}).value||bs.price_mode||'none'),
+    price_val:parseFloat(($('bsPVal')||{}).value??bs.price_val)||0,
+    price_round:parseInt(($('bsPRound')||{}).value??bs.price_round)||0});
+  const br=parseInt(b.price_round)||0;
   if((parseInt(b.vendor_id)||0)>0||b.token){
     const z=bslCombinedPreview(raw,pm,pv,b.price_mode||'none',parseFloat(b.price_val)||0);
     out.dests.push({key:'bsl:'+String(parseInt(b.vendor_id)||0),name:b.shop_name||'غرفهٔ پیش‌فرض',mode:b.price_mode||'none',val:parseFloat(b.price_val)||0,price:resultRoundPrice(z.price,br)});
   }
-  (Array.isArray(b.vendors)?b.vendors:[]).forEach((v,idx)=>{
+  const liveVendors=Array.isArray(bslExtraVendors)?bslExtraVendors:(Array.isArray(b.vendors)?b.vendors:[]);
+  liveVendors.forEach((v,idx)=>{
     if(!v)return;const z=bslCombinedPreview(raw,pm,pv,v.price_mode||'none',parseFloat(v.price_val)||0);
     out.dests.push({key:'bsl:'+String(parseInt(v.vendor_id)||idx),name:v.shop_name||v.name||('غرفه '+toFa(idx+1)),mode:v.price_mode||'none',val:parseFloat(v.price_val)||0,price:resultRoundPrice(z.price,br)});
   });
@@ -78694,6 +78729,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.420', t:'💰 اعمال واقعی ضریب غرفه‌های اضافی و گردکردن در Results', items:[
+    'ریشهٔ ضریب غرفهٔ غیراصلی اصلاح شد: تغییر آن قبلاً اشتباهاً ذخیرهٔ پروفایل را صدا می‌زد، نه save_connections؛ اکنون همان لحظه در connections ذخیره و در Results بازسازی می‌شود.',
+    'ستون‌های قیمت Results دیگر snapshot قدیمی cn را نمی‌خوانند و ضریب/گردکردن زندهٔ ووکامرس، باسلام و همهٔ غرفه‌های اضافی را مستقیماً از کنترل‌های فعلی محاسبه می‌کنند.',
+    'ساخت و اصلاح جدول مغایرت دیگر final_price ذخیره‌شده و کهنه را مبنا نمی‌گیرد؛ قیمت خام با تنظیمات و گردکردن فعلی دوباره محاسبه می‌شود.',
+    'نسخهٔ schema قیمت ماتریس تغییر کرد تا جدول ذخیره‌شدهٔ فعلی نیز در اولین خواندن، بدون واکشی دوبارهٔ مقصدها، خودکار بازقیمت‌گذاری شود.'
+  ]},
   {v:'10.419', t:'⚡ ادامهٔ فوری ارسال مرده در اولین کران و بازگشت ETA', items:[
     'اگر ردیف ارسال running باشد ولی flock بک‌اند آزاد باشد، نبودِ worker قطعی است و همان اولین کران بدون انتظار ۶۰ ثانیه آن را از checkpoint ادامه می‌دهد.',
     'رزرو flock، queue_id دقیق و claim صریح resume همچنان اجازهٔ دو sender همزمان را نمی‌دهند؛ آستانهٔ ۶۰ ثانیه فقط برای مالک زنده‌ای می‌ماند که قفل را نگه داشته ولی پیشرفت ندارد.',
@@ -88005,6 +88046,21 @@ function destPricePreview(pre){
   }
   paint(out); paint(outHb);
 }
+/* v10.420: destination pricing must update Results from the live controls,
+   then persist through save_connections. Previously these handlers only
+   painted the tiny preview; cn and the Results table retained old values. */
+function destPricingChanged(pre){
+  if(pre==='wc')syncWcPriceUi('main');
+  const mode=(($(pre+'PMode')||{}).value||'none');
+  const val=parseFloat(($(pre+'PVal')||{}).value)||0;
+  const round=parseInt(($(pre+'PRound')||{}).value)||0;
+  const key=pre==='wc'?'woocommerce':'basalam';
+  if(!cn[key])cn[key]={};
+  cn[key].price_mode=mode;cn[key].price_val=val;cn[key].price_round=round;
+  destPricePreview(pre);
+  try{refreshViews();}catch(e){}
+  scheduleConnSave();
+}
 
 
 /* v10.113: جدول مقایسه — سرورساید + progress + فقط خواندن صفحه */
@@ -88731,7 +88787,10 @@ fd.append('ai_content_auto',JSON.stringify({
   per_run:parseInt(($('aiContentAutoPerRun')||{}).value)||8
 }));
 fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-if(d.ok){loadConn();try{rvDirty.table=true;if(resultsVisible())rvBuildTable();}catch(e){}}
+/* Debounced field autosave must not rebuild the vendor form under the user's
+   cursor. Live pricing already updated cn; manual Save still reloads the
+   normalized server copy. */
+if(d.ok){if(!window._connSaveNoToast)loadConn();try{rvDirty.table=true;if(resultsVisible())rvBuildTable();}catch(e){}}
 if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 if(!window._connSaveNoToast)showToast(d.ok?(d.matrix_repriced&&d.matrix_repriced.changed?'✓ ذخیره شد؛ جدول مغایرت فوراً به‌روز شد':'✓ ذخیره شد'):'خطا',!d.ok);
 window._connSaveNoToast=false;_connSaveIndicator(d.ok?'ok':'err');
