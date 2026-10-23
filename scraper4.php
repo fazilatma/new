@@ -50252,7 +50252,11 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
         $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];
         $wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
         foreach(syncPipelineRows() as $row){
-            if(!is_array($row))continue;$pk=(string)($row['profile_key']??'');
+            if(!is_array($row))continue;
+            /* Cell equalization has explicit queue IDs and its own two-owner
+               reconciler; generic recovery must neither duplicate nor cancel it. */
+            if((string)($row['operation']??'')==='cell_equalize'){$out['skipped']++;continue;}
+            $pk=(string)($row['profile_key']??'');
             if(!empty($row['done'])||(string)($row['stage']??'')==='done'){
                 $out['cancelled_completed_jobs']+=s4WorkerCancelPendingManualSync($pk);continue;
             }
