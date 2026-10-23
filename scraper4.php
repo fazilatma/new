@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.430';
+const APP_VERSION = '10.431';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -30498,7 +30498,11 @@ function matrixTitleHasCode(string $title): bool {
     $t = function_exists('persianToEnglish') ? persianToEnglish(trim($title)) : trim($title);
     $t=(string)preg_replace('~[\p{Cf}\x{00A0}\x{2007}\x{202F}]~u','',$t);
     $t=strtr($t,['（'=>'(', '）'=>')', '﹙'=>'(', '﹚'=>')']);
-    return (bool)preg_match('~\(\s*(?:کد|کُد|code|sku)\s*[:：]\s*[^()\s][^()]*?\s*\)~iu', $t);
+    if((bool)preg_match('~\(\s*(?:کد|کُد|code|sku)\s*[:：]\s*[^()\s][^()]*?\s*\)~iu',$t))return true;
+    /* Basalam may truncate its 120-character title at any byte of the suffix,
+       e.g. "...(ک", "...(کد:" or "...(cod". Such a terminal fragment is
+       coded/indeterminate, never genuinely uncoded miscellaneous inventory. */
+    return (bool)preg_match('~\(\s*(?:ک(?:ُ?د)?|c(?:o(?:d(?:e)?)?)?|s(?:k(?:u)?)?)\s*[:：]?\s*[0-9]*\s*$~iu',$t);
 }
 function matrixRowHasCode(array $r): bool {
     if (matrixTitleHasCode((string)($r['title'] ?? ''))) return true;
@@ -45924,6 +45928,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'matrixTitleHasCode($title)||matrixRowHasCode($row)')!==false
       && strpos($selfSrc,"{v:'10." . "430'")!==false
       && version_compare(APP_VERSION,'10.430','>='));
+    $add('10.431', 'بریده‌شدن عنوان در هر بخش نشانگر کد نیز متفرقه کاذب نمی‌سازد',
+         matrixTitleHasCode('اجاق گاز رومیزی با ضمانت (ک')
+      && matrixTitleHasCode('محصول آزمایشی (کد:')
+      && matrixTitleHasCode('test product (cod')
+      && strpos($selfSrc,"{v:'10." . "431'")!==false
+      && version_compare(APP_VERSION,'10.431','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -79464,6 +79474,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.431', t:'✂️ پوشش کامل عنوان کددار بریده‌شده', items:[
+    'اگر محدودیت طول باسلام عنوان را در (ک، (کد:، (cod یا بخش دیگری از نشانگر کد قطع کند، محصول کددار/نامعین محسوب می‌شود و متفرقه نیست.',
+    'آخرین مورد فعال باقی‌مانده در دادهٔ واقعی تولید به regression test تبدیل شد.'
+  ]},
   {v:'10.430', t:'🧹 حذف قطعی کددارها و غیرفعال‌ها از متفرقه', items:[
     'متفرقه فقط محصول باسلام با status فعال 2976 و موجودی بیشتر از صفر است؛ بایگانی، غیرفعال و ناموجود حذف می‌شوند.',
     'اگر عنوان ۱۲۰ نویسه‌ای مقصد وسط عبارت کد بریده باشد، کد از عنوان کامل ردیف ماتریس تشخیص داده می‌شود.',
