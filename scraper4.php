@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.445';
+const APP_VERSION = '10.446';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -14658,17 +14658,20 @@ const VC_FILE = __DIR__ . '/.versioncheck.json';
 
 function vc_defaults(): array {
     return [
-        'check_on_load' => false,
-        'repo'          => 'fazilatma/new',
-        'branch'        => 'arena/e868e86a-new',
-        'branches'       => ['arena/e868e86a-new'],
+        'check_on_load'   => false,
+        'repo'            => 'fazilatma/new',
+        'branch'          => 'arena/e868e86a-new',
+        'branches'        => ['arena/e868e86a-new'],
+        'pinned_branch'   => '',
+        'pinned_at'       => 0,
+        'pinned_max_unix' => 0,
         // v8.68: نام فایل در مخزن. اگر فایل را با نام دیگری نصب کرده‌اید،
         // خودِ همان نام مبنا قرار می‌گیرد تا به‌روزرسانی دنبال فایل اشتباه نگردد.
-        'path'          => basename(__FILE__),
-        'github_token'  => '',
-        'deploy_file'   => 'deploy.php',
-        'deploy_token'  => '',
-        'last_check'    => 0,
+        'path'            => basename(__FILE__),
+        'github_token'    => '',
+        'deploy_file'     => 'deploy.php',
+        'deploy_token'    => '',
+        'last_check'      => 0,
     ];
 }
 
@@ -14693,7 +14696,32 @@ function vc_load(): array {
     $c['branches']=vc_normalize_branches($rawBranches);
     if(!$c['branches'])$c['branches']=['arena/e868e86a-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
+    $pin=trim((string)($c['pinned_branch']??''));
+    if($pin!==''&&!in_array($pin,$c['branches'],true)){
+        $c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;
+    }
     return $c;
+}
+/**
+ * v10.446: اگر کاربر به‌صورت دستی روی «⬇ آپدیت از این برنچ» کلیک کرده باشد،
+ * تا زمانی که هیچ برنچ دیگری کامیت تازه‌تر از لحظهٔ انتخاب دستی دریافت نکرده،
+ * همان برنچ انتخابی حفظ می‌شود و برنچِ قدیمی‌ترِ دیگر آن را بازنویسی نمی‌کند.
+ */
+function vc_pick_target_branch(array $c, array $candidates): ?array {
+    if (empty($candidates)) return null;
+    $newest = $candidates[0];
+    $pinned = trim((string)($c['pinned_branch'] ?? ''));
+    if ($pinned !== '') {
+        $pinnedRow = null;
+        foreach ($candidates as $row) {
+            if (($row['branch'] ?? '') === $pinned) { $pinnedRow = $row; break; }
+        }
+        $baseline = max((int)($c['pinned_at'] ?? 0), (int)($c['pinned_max_unix'] ?? 0));
+        if ($pinnedRow !== null && (int)($newest['unix'] ?? 0) <= $baseline) {
+            return $pinnedRow;
+        }
+    }
+    return $newest;
 }
 function vc_normalize_branches(array $branches):array{
     $out=[];foreach($branches as $branch){$branch=trim((string)$branch);
@@ -14828,6 +14856,73 @@ function s4CodeUpdateAdminAuth():array{
     $nonce=(string)($_POST['_wpnonce']??($_SERVER['HTTP_X_WP_NONCE']??''));
     return ['admin'=>$admin,'ok'=>$admin&&function_exists('wp_verify_nonce')&&wp_verify_nonce($nonce,'s4_code_update')];
 }
+function s4DiskCodeMeta():array{
+    clearstatcache(true,__FILE__);
+    $raw=(string)@file_get_contents(__FILE__);
+    if($raw==='')return ['version'=>APP_VERSION,'sha'=>''];
+    $ver=APP_VERSION;
+    if(preg_match("~const\\s+APP_VERSION\\s*=\\s*'([^']+)'~",substr($raw,0,65536),$m))$ver=(string)$m[1];
+    $sha=substr(vc_content_id($raw),0,12);
+    if($ver!==APP_VERSION&&function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);
+    return ['version'=>$ver,'sha'=>$sha];
+}
+function s4SyncAutoUpdateStateToDisk(string $branch='',bool $clearForPendingDeploy=false):array{
+    $now=time();
+    if($clearForPendingDeploy){
+        /* v10.446: پیش از اجرای deploy.php مقدار to_version را خالی می‌کنیم تا حتی اگر
+           برنچ مقصد نسخهٔ قدیمی‌ترِ قبل از 10.446 باشد، s4WatchInstalledCode در حلقهٔ رفرش نیفتد. */
+        $save=['checked_at'=>$now,'finished_at'=>$now,'ok'=>true,'updated'=>false,'from_version'=>'','to_version'=>'','error'=>'','sha'=>'','branch'=>$branch,'manual_pending'=>true];
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($save,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+        return $save;
+    }
+    $meta=s4DiskCodeMeta();
+    $save=['checked_at'=>$now,'finished_at'=>$now,'ok'=>true,'updated'=>false,'from_version'=>$meta['version'],'to_version'=>$meta['version'],'error'=>'','sha'=>$meta['sha'],'branch'=>$branch];
+    @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($save,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    return $save;
+}
+function s4CodeUpdateDownloadVerified(array $picked,string $ghToken=''):array{
+    $remoteSha=(string)($picked['sha']??'');
+    $commitSha=trim((string)($picked['commit_sha']??''));
+    $urls=[];
+    /* اولویت ۱: آدرس تغییرناپذیر مبتنی بر commit_sha که هرگز کش ۵ دقیقه‌ای نام برنچ در CDN گیت‌هاب را ندارد */
+    if($commitSha!==''){
+        $encPath=implode('/',array_map('rawurlencode',explode('/',S4_CODE_UPDATE_PATH)));
+        $urls[]=['url'=>'https://raw.githubusercontent.com/'.S4_CODE_UPDATE_REPO.'/'.rawurlencode($commitSha).'/'.$encPath,'raw_api'=>false];
+    }
+    $dl=(string)($picked['download_url']??'');
+    if($dl!==''){
+        if($remoteSha!=='')$dl.=(strpos($dl,'?')===false?'?':'&').'s4sha='.rawurlencode($remoteSha);
+        $urls[]=['url'=>$dl,'raw_api'=>false];
+    }
+    if($remoteSha!==''){
+        $urls[]=['url'=>'https://api.github.com/repos/'.S4_CODE_UPDATE_REPO.'/git/blobs/'.rawurlencode($remoteSha),'raw_api'=>true];
+    }
+    $lastErr=['ok'=>false,'http'=>502,'error'=>'github_download_failed'];
+    foreach($urls as $cand){
+        if(!empty($cand['raw_api'])){
+            if(!function_exists('curl_init'))continue;
+            $h=['User-Agent: scraper4-code-updater','Accept: application/vnd.github.raw+json','Cache-Control: no-cache'];
+            if($ghToken!=='')$h[]='Authorization: Bearer '.$ghToken;
+            $ch=curl_init($cand['url']);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,
+                CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_TIMEOUT=>120,CURLOPT_ENCODING=>'',CURLOPT_HTTPHEADER=>$h,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+            $body=curl_exec($ch);$err=(string)curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
+            $got=['ok'=>$body!==false&&$code>=200&&$code<300,'code'=>$code,'error'=>$err?:($code>=200&&$code<300?'':'HTTP '.$code),'body'=>$body===false?'':(string)$body];
+        }else{
+            $got=s4CodeUpdateHttp($cand['url'],$ghToken,120);
+        }
+        if(empty($got['ok'])){
+            $lastErr=['ok'=>false,'http'=>502,'error'=>'github_download_failed','code'=>(int)$got['code'],'detail'=>(string)$got['error']];
+            continue;
+        }
+        $code=(string)$got['body'];
+        if($remoteSha!==''&&vc_content_id($code)!==$remoteSha){
+            $lastErr=['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
+            continue;
+        }
+        return ['ok'=>true,'body'=>$code];
+    }
+    return $lastErr;
+}
 function s4CodeUpdateRun(bool $trustedAuto=false):array{
     $cfg=vc_load();
     if(!$trustedAuto){
@@ -14844,31 +14939,34 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         $requested=trim((string)($_POST['branch']??''));
         if($requested!==''&&!in_array($requested,$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
-        $probe=vc_probe_branches($probeCfg);$picked=$probe['rows'][0]??null;
+        $probe=vc_probe_branches($probeCfg);
+        $picked=($requested!=='')?($probe['rows'][0]??null):vc_pick_target_branch($cfg,$probe['rows']);
         if(!$picked)return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>json_encode($probe['errors'],JSON_UNESCAPED_UNICODE)];
         $sourceBranch=(string)$picked['branch'];$remoteSha=(string)$picked['sha'];
-        $meta=['ok'=>true,'data'=>$picked];
         $localCode=(string)@file_get_contents(__FILE__);$localSha=vc_content_id($localCode);preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$localCode,$lvm);$diskVersion=(string)($lvm[1]??APP_VERSION);
-        if($remoteSha!==''&&hash_equals($remoteSha,$localSha))return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>$diskVersion,'restart_required'=>$diskVersion!==APP_VERSION,'sha'=>substr($remoteSha,0,12)];
-        $download=(string)$meta['data']['download_url'];
-        /* v10.284: GitHub metadata زودتر از raw CDN تازه می‌شود؛ SHA را cache-buster
-           می‌کنیم تا push پیاپی به git_blob_sha_mismatch کاذب نخورد. */
-        if($remoteSha!=='')$download.=(strpos($download,'?')===false?'?':'&').'s4sha='.rawurlencode($remoteSha);
-        $got=s4CodeUpdateHttp($download,$ghToken,120);if(empty($got['ok']))return ['ok'=>false,'http'=>502,'error'=>'github_download_failed','code'=>(int)$got['code'],'detail'=>(string)$got['error']];
-        $code=(string)$got['body'];$size=strlen($code);
+        if(!$trustedAuto&&$requested!==''){
+            $maxUnix=time();foreach($probe['rows'] as $pr){if((int)($pr['unix']??0)>$maxUnix)$maxUnix=(int)$pr['unix'];}
+            $cfg['branch']=$sourceBranch;$cfg['pinned_branch']=$sourceBranch;$cfg['pinned_at']=time();$cfg['pinned_max_unix']=$maxUnix;
+            vc_save($cfg);
+        }
+        if($remoteSha!==''&&hash_equals($remoteSha,$localSha)){
+            s4SyncAutoUpdateStateToDisk($sourceBranch,false);
+            return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>$diskVersion,'branch'=>$sourceBranch,'restart_required'=>$diskVersion!==APP_VERSION,'sha'=>substr($remoteSha,0,12)];
+        }
+        $dlRes=s4CodeUpdateDownloadVerified($picked,$ghToken);
+        if(empty($dlRes['ok']))return $dlRes;
+        $code=(string)$dlRes['body'];$size=strlen($code);
         if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
             return ['ok'=>false,'http'=>422,'error'=>'download_validation_failed','size'=>$size];
         if($remoteSha!==''&&vc_content_id($code)!==$remoteSha)return ['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
         preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$code,$vm);$remoteVersion=(string)($vm[1]??'unknown');
-        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,APP_VERSION,'<')&&empty($_POST['allow_downgrade']))
-            return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>APP_VERSION,'remote'=>$remoteVersion];
+        $allowDowngrade=!empty($_POST['allow_downgrade'])||(!$trustedAuto&&$requested!=='');
+        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,$diskVersion,'<')&&!$allowDowngrade)
+            return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion];
         $tmp=__FILE__.'.update.'.getmypid().'.tmp';if(@file_put_contents($tmp,$code,LOCK_EX)!==$size)return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];
         @chmod($tmp,(int)(@fileperms(__FILE__)&0777));
         if(function_exists('exec')){
             $lint=[];$rc=0;$lintPhp=function_exists('s4CliPhpBinary')?s4CliPhpBinary():(defined('PHP_BINARY')?(string)PHP_BINARY:'php');
-            /* request وب LiteSpeed معمولاً PHP_BINARY=lsphp دارد. lsphp -l در
-               LSAPI mode بدون خروجی fail می‌شود؛ binary واقعی php کنار آن را
-               برای lint ترجیح بده، سپس سازندهٔ CLI سازگار را به‌کار ببر. */
             if(stripos(basename($lintPhp),'lsphp')!==false){$plain=dirname($lintPhp).'/php';if(is_file($plain)&&is_executable($plain))$lintPhp=$plain;}
             $lintBase=function_exists('s4CliPhpCommand')?s4CliPhpCommand($lintPhp,'256M'):escapeshellarg($lintPhp);
             @exec($lintBase.' -l '.escapeshellarg($tmp).' 2>&1',$lint,$rc);
@@ -14877,8 +14975,13 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         $backup=__FILE__.'.before-code-update';@unlink($backup);if(!@copy(__FILE__,$backup))return ['ok'=>false,'http'=>500,'error'=>'backup_failed'];
         $installed=@rename($tmp,__FILE__);if(!$installed){$installed=@copy($tmp,__FILE__);if($installed)@unlink($tmp);}
         if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
-        clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);$worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
-        return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
+        clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);
+        if($trustedAuto&&!empty($cfg['pinned_branch'])&&$cfg['pinned_branch']!==$sourceBranch){
+            $cfg['branch']=$sourceBranch;$cfg['pinned_branch']='';$cfg['pinned_at']=0;$cfg['pinned_max_unix']=0;vc_save($cfg);
+        }
+        s4SyncAutoUpdateStateToDisk($sourceBranch,false);
+        $worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
+        return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'disk_version'=>$remoteVersion,'disk_sha'=>substr($remoteSha,0,12),'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
             'source'=>S4_CODE_UPDATE_REPO.'@'.$sourceBranch.':'.S4_CODE_UPDATE_PATH,'branch'=>$sourceBranch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
@@ -14886,19 +14989,36 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
 /** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
-    $now=time();$state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
-    if(!$force&&$now-(int)($state['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($state['to_version'])&&(string)$state['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$state];}
-    $gate=@fopen(__DIR__.'/.scraper4-auto-update.lock','c');if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['ok'=>true,'skipped'=>true,'reason'=>'busy'];}
+    $now=time();$disk=s4DiskCodeMeta();$diskVer=$disk['version'];$diskSha=$disk['sha'];
+    $state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
+    if(!empty($state['to_version'])&&(string)$state['to_version']!==$diskVer&&empty($state['checking'])){
+        /* فایل روی دیسک بیرون از auto-updater (مثلاً توسط deploy.php روی برنچ دستی) عوض شده است؛
+           state کهنه را بلافاصله با دیسک واقعی همگام کن تا مرورگر وارد حلقهٔ رفرش بی‌نهایت نشود. */
+        $state['to_version']=$diskVer;$state['sha']=$diskSha;
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+    }
+    if(!$force&&$now-(int)($state['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){
+        $restart=($diskVer!==APP_VERSION);
+        return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'disk_version'=>$diskVer,'disk_sha'=>$diskSha,'state'=>$state];
+    }
+    $gate=@fopen(__DIR__.'/.scraper4-auto-update.lock','c');if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['ok'=>true,'skipped'=>true,'reason'=>'busy','disk_version'=>$diskVer,'disk_sha'=>$diskSha,'restart_required'=>($diskVer!==APP_VERSION)];}
     try{
         clearstatcache(true,S4_CODE_UPDATE_STATE_FILE);$latest=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$latest=$j;}
-        if(!$force&&$now-(int)($latest['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){$restart=!empty($latest['to_version'])&&(string)$latest['to_version']!==APP_VERSION;return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'state'=>$latest];}
+        if(!$force&&$now-(int)($latest['checked_at']??0)<S4_CODE_UPDATE_INTERVAL){
+            $disk2=s4DiskCodeMeta();
+            if(!empty($latest['to_version'])&&(string)$latest['to_version']!==$disk2['version']){$latest['to_version']=$disk2['version'];$latest['sha']=$disk2['sha'];}
+            $restart=($disk2['version']!==APP_VERSION);
+            return ['ok'=>true,'skipped'=>true,'restart_required'=>$restart,'disk_version'=>$disk2['version'],'disk_sha'=>$disk2['sha'],'state'=>$latest];
+        }
         /* پیش از شبکه timestamp بنویس تا شکست GitHub نیز requestهای بعدی را طوفانی نکند. */
-        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode(['checked_at'=>$now,'checking'=>true,'local_version'=>APP_VERSION],JSON_UNESCAPED_UNICODE),LOCK_EX);
-        $res=s4CodeUpdateRun(true);$save=['checked_at'=>$now,'finished_at'=>time(),'ok'=>!empty($res['ok']),
-            'updated'=>!empty($res['updated']),'from_version'=>APP_VERSION,'to_version'=>(string)($res['to_version']??$res['version']??APP_VERSION),
-            'error'=>(string)($res['error']??''),'sha'=>(string)($res['sha']??'')];
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode(['checked_at'=>$now,'checking'=>true,'local_version'=>$diskVer,'to_version'=>$diskVer,'sha'=>$diskSha],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $res=s4CodeUpdateRun(true);
+        $afterDisk=s4DiskCodeMeta();
+        $save=['checked_at'=>$now,'finished_at'=>time(),'ok'=>!empty($res['ok']),
+            'updated'=>!empty($res['updated']),'from_version'=>$diskVer,'to_version'=>$afterDisk['version'],
+            'error'=>(string)($res['error']??''),'sha'=>$afterDisk['sha'],'branch'=>(string)($res['branch']??'')];
         @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($save,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
-        return $res+['auto'=>true];
+        return $res+['auto'=>true,'disk_version'=>$afterDisk['version'],'disk_sha'=>$afterDisk['sha'],'restart_required'=>($afterDisk['version']!==APP_VERSION)];
     }finally{@flock($gate,LOCK_UN);@fclose($gate);}
 }
 /* مرورگر endpoint سبک زیر را دوره‌ای صدا می‌زند؛ worker نیز پایین loop آن را
@@ -14907,13 +15027,20 @@ if(isset($_GET['code_auto_update'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
     echo json_encode(s4AutoCodeUpdateTick(!empty($_GET['force']??$_POST['force']??null)),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
+if(isset($_GET['code_update_sync_state'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $br=trim((string)($_POST['branch']??($_GET['branch']??'')));
+    $st=s4SyncAutoUpdateStateToDisk($br,false);
+    echo json_encode(['ok'=>true,'version'=>$st['to_version'],'sha'=>$st['sha'],'branch'=>$br],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
 if(isset($_GET['code_update_status'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
+    $disk=s4DiskCodeMeta();
     $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
-    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'disk_version'=>$disk['version'],'disk_sha'=>$disk['sha'],'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
         'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
         'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.implode(',',vc_normalize_branches((array)($cfg['branches']??[]))).':'.S4_CODE_UPDATE_PATH,
-        'branches'=>vc_normalize_branches((array)($cfg['branches']??[])),'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
+        'branches'=>vc_normalize_branches((array)($cfg['branches']??[])),'pinned_branch'=>(string)($cfg['pinned_branch']??''),'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if(isset($_GET['code_update'])||($_POST['action']??'')==='code_update'){
@@ -15060,7 +15187,7 @@ if (isset($_GET['vc_check'])) {
     if(!$candidates){
         echo json_encode(['ok'=>false,'error'=>'هیچ‌یک از برنچ‌های تنظیم‌شده قابل بررسی نبود','branch_errors'=>$probe['errors']],JSON_UNESCAPED_UNICODE);exit;
     }
-    $winner=$candidates[0];
+    $winner=empty($_GET['force'])?(vc_pick_target_branch($c,$candidates)??$candidates[0]):$candidates[0];
     $c['last_check']=time();$c['branch']=$winner['branch'];vc_save($c);
     echo json_encode([
         'ok'=>true,'update'=>$winner['sha']!==$local,'local_id'=>substr($local,0,8),
@@ -15139,6 +15266,32 @@ if (isset($_GET['vc_settings'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $c = vc_load();
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
+            if (!empty($_POST['pin_only'])) {
+                $pinB = trim((string)($_POST['pin_branch'] ?? ''));
+                if ($pinB !== '' && in_array($pinB, $c['branches'], true)) {
+                    $maxUnix = time();
+                    if (!empty($c['repo']) && !empty($c['path'])) {
+                        $pr = vc_probe_branches($c);
+                        foreach ($pr['rows'] as $r0) { if ((int)($r0['unix'] ?? 0) > $maxUnix) $maxUnix = (int)$r0['unix']; }
+                    }
+                    $c['branch'] = $pinB;
+                    $c['pinned_branch'] = $pinB;
+                    $c['pinned_at'] = time();
+                    $c['pinned_max_unix'] = $maxUnix;
+                    vc_save($c);
+                }
+                s4SyncAutoUpdateStateToDisk($pinB, true);
+            } else {
+                $c['pinned_branch'] = '';
+                $c['pinned_at'] = 0;
+                $c['pinned_max_unix'] = 0;
+                vc_save($c);
+                s4SyncAutoUpdateStateToDisk('', true);
+            }
+            echo json_encode(['ok' => true, 'pinned_branch' => $c['pinned_branch']], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
         $c['check_on_load'] = !empty($_POST['check_on_load']);
         if (isset($_POST['repo']))        $c['repo']        = trim((string)$_POST['repo']);
         if (isset($_POST['branches'])) {
@@ -15177,11 +15330,13 @@ if (isset($_GET['vc_deploy_info'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $c = vc_load();
     $f = basename($c['deploy_file']);
+    $wp = s4CodeUpdateAdminAuth();
+    $nonce = !empty($wp['admin']) && function_exists('wp_create_nonce') ? wp_create_nonce('s4_code_update') : '';
     if (!is_file(__DIR__ . '/' . $f)) {
-        echo json_encode(['ok' => false, 'error' => 'فایل ' . $f . ' روی هاست پیدا نشد'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'error' => 'فایل ' . $f . ' روی هاست پیدا نشد', 'token' => $c['deploy_token'], 'nonce' => $nonce, 'can_self_update' => ($c['deploy_token'] !== '' || $nonce !== '')], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    echo json_encode(['ok' => true, 'file' => $f, 'token' => $c['deploy_token']], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => true, 'file' => $f, 'token' => $c['deploy_token'], 'nonce' => $nonce, 'can_self_update' => true], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -49407,6 +49562,26 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'function previewImageBottomCrop()') !== false
       && strpos($selfSrc, "{v:'10." . "445'") !== false
       && version_compare(APP_VERSION, '10.445', '>='));
+    $_cand446 = [
+        ['branch' => 'arena/newer', 'unix' => 2000, 'sha' => 'aaa'],
+        ['branch' => 'arena/manual-older', 'unix' => 1500, 'sha' => 'bbb'],
+    ];
+    $_pickedPinned446 = vc_pick_target_branch(['pinned_branch' => 'arena/manual-older', 'pinned_at' => 2050, 'pinned_max_unix' => 2050], $_cand446);
+    $_pickedAfterNewPush446 = vc_pick_target_branch(['pinned_branch' => 'arena/manual-older', 'pinned_at' => 1800, 'pinned_max_unix' => 1800], $_cand446);
+    $_diskMeta446 = s4DiskCodeMeta();
+    $add('10.446', 'رفع رفرش بی‌نهایت هنگام آپدیت دستی از برنچی که از نظر زمانی آخرین برنچ نیست + همگام‌سازی دیسک واقعی و قفل هوشمند برنچ دستی',
+         function_exists('vc_pick_target_branch')
+      && function_exists('s4DiskCodeMeta')
+      && function_exists('s4SyncAutoUpdateStateToDisk')
+      && function_exists('s4CodeUpdateDownloadVerified')
+      && ($_pickedPinned446['branch'] ?? '') === 'arena/manual-older'
+      && ($_pickedAfterNewPush446['branch'] ?? '') === 'arena/newer'
+      && ($_diskMeta446['version'] ?? '') === APP_VERSION
+      && strlen((string)($_diskMeta446['sha'] ?? '')) === 12
+      && strpos($selfSrc, "isset(\$_GET['code_update_sync_state'])") !== false
+      && strpos($selfSrc, 's4_code_reload_guard') !== false
+      && strpos($selfSrc, "{v:'10." . "446'") !== false
+      && version_compare(APP_VERSION, '10.446', '>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -84321,16 +84496,41 @@ let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING =
 /* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
    tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
 const S4_LOADED_VERSION='<?=APP_VERSION?>';
+const S4_LOADED_SHA='<?=s4DiskCodeMeta()['sha']?>';
 window._s4CodeReloading=false;
-function s4ReloadForNewCode(nextVersion){
-  if(window._s4CodeReloading)return;window._s4CodeReloading=true;
+window._vcInstalling=false;
+function s4ReloadForNewCode(nextVersion, manualInstall){
+  if(window._s4CodeReloading)return;
+  if(!manualInstall){
+    try{
+      const key='s4_code_reload_guard';
+      const prev=JSON.parse(sessionStorage.getItem(key)||'null')||{};
+      const sig=String(S4_LOADED_VERSION)+':'+String(S4_LOADED_SHA||'');
+      const now=Date.now();
+      const sameTrap=(prev.from===sig&&String(prev.target||'')===String(nextVersion||'')&&(now-(prev.ts||0))<60000);
+      const cnt=sameTrap?((prev.count||0)+1):1;
+      sessionStorage.setItem(key,JSON.stringify({from:sig,target:String(nextVersion||''),ts:now,count:cnt}));
+      if(cnt>=2)return;
+    }catch(e){}
+  }else{
+    try{sessionStorage.removeItem('s4_code_reload_guard');}catch(e){}
+  }
+  window._s4CodeReloading=true;
   try{showToast('✅ کد '+String(nextVersion||'جدید')+' نصب شد — صفحه رفرش می‌شود');}catch(e){}
   setTimeout(()=>{const u=new URL(location.href);u.searchParams.set('_v',Date.now());location.replace(u.toString());},900);
 }
 function s4WatchInstalledCode(){
-  if(window._s4CodeReloading||document.visibilityState==='hidden')return;
+  if(window._s4CodeReloading||window._vcInstalling||document.visibilityState==='hidden')return;
   fetch('?code_auto_update=1&_watch='+Date.now(),{cache:'no-store',credentials:'same-origin'})
-    .then(r=>r.ok?r.json():null).then(d=>{const v=d&&(d.to_version||d.version||(d.state&&d.state.to_version));if(d&&d.ok&&v&&String(v)!==String(S4_LOADED_VERSION))s4ReloadForNewCode(v);}).catch(()=>{});
+    .then(r=>r.ok?r.json():null).then(d=>{
+      if(!d||!d.ok)return;
+      if(d.disk_sha&&S4_LOADED_SHA){
+        if(String(d.disk_sha)!==String(S4_LOADED_SHA))s4ReloadForNewCode(d.disk_version||d.to_version||d.version||'جدید',false);
+        return;
+      }
+      const v=d.disk_version||(d.updated?d.to_version:'')||d.version||(d.state&&!d.state.manual_pending?d.state.to_version:'');
+      if(v&&String(v)!==String(S4_LOADED_VERSION))s4ReloadForNewCode(v,false);
+    }).catch(()=>{});
 }
 setTimeout(s4WatchInstalledCode,1500);
 setInterval(s4WatchInstalledCode,30000);
@@ -84341,6 +84541,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.446', t:'🛑 رفع حلقهٔ رفرش بی‌نهایت هنگام آپدیت دستی از برنچ غیرنهایی از نظر زمانی + همگام‌سازی نسخهٔ واقعی دیسک و رفع خطای کش CDN گیت‌هاب', items:[
+    'علت اصلی رفرش بی‌نهایت برطرف شد: وقتی با دکمهٔ «⬇ آپدیت از این برنچ» برنچی نصب می‌شد که از نظر زمانی آخرین برنچ نبود، فایل وضعیت .scraper4-auto-update.json همچنان نسخهٔ برنچ جدیدتر قبلی (to_version) را نگه می‌داشت و s4WatchInstalledCode هر ۲ ثانیه اختلاف آن با S4_LOADED_VERSION را می‌دید و صفحه را تا بی‌نهایت رفرش می‌کرد؛ اکنون s4AutoCodeUpdateTick با s4DiskCodeMeta همیشه نسخه و هش واقعی فایل روی دیسک را مبنا قرار می‌دهد و وضعیت کهنه را بلافاصله اصلاح می‌کند.',
+    'قفل هوشمند برنچ دستی (vc_pick_target_branch + pinned_branch / pinned_max_unix) اضافه شد: با کلیک دستی روی «⬇ آپدیت از این برنچ»، همان برنچ به‌عنوان برنچ فعال (📌 فعال) قفل می‌شود تا آپدیتر خودکار بلافاصله آن را با کامیت ازقبل‌موجودِ برنچ دیگر بازنویسی نکند؛ تنها در صورتی که پس از لحظهٔ انتخاب دستی، کامیت تازه‌تری پوش شود به‌روزرسانی خودکار انجام می‌گیرد.',
+    'سازگاری رو به عقب با برنچ‌های قدیمی‌تر و محافظ ضدحلقه در مرورگر: پیش از فراخوانی deploy.php، مقدار to_version در .scraper4-auto-update.json پاک می‌شود تا حتی در صورت نصب برنچ‌های قدیمی‌ترِ فاقد این اصلاح نیز حلقهٔ رفرش رخ ندهد؛ همچنین محافظ sessionStorage (s4_code_reload_guard) در s4ReloadForNewCode جلوی هرگونه رفرش تکراری ناشی از تأخیر OPcache در LiteSpeed را می‌گیرد.',
+    'رفع خطای git_blob_sha_mismatch در آپدیتر خودکار (s4CodeUpdateDownloadVerified): دانلود فایل اکنون ابتدا از آدرس تغییرناپذیر مبتنی بر commit_sha و در صورت نیاز اندپوینت git/blobs انجام می‌شود تا کش ۵ دقیقه‌ای نام برنچ در raw.githubusercontent.com باعث خطای عدم تطابق SHA نشود.'
+  ]},
   {v:'10.445', t:'🖼️ ویرایش تصویر در استخراج فهرست و گالری با منوی دوگزینه‌ای: افزودن مربع سفید چهارگوشه (پیش‌فرض) یا کراپ تصویر', items:[
     'ویرایش تصویر محصول اکنون علاوه بر بخش «گالری» (صفحهٔ جزئیات)، به سلکتور «🖼️ تصویر» در «سلکتورهای لیست محصولات» (#s-image) نیز اضافه شد و تنظیمات مستقل آن در پروفایل (listImageEdit) ذخیره، بازیابی و پیش‌نمایش زنده می‌شود.',
     'در هر دو بخشِ سلکتور عکس لیست و سلکتور گالری، منوی کشویی دوگزینه‌ای اضافه شد: ۱) حالت پیش‌فرض «⬜ افزودن مربع سفید در یکی از چهار گوشه عکس» با انتخاب گوشه (پایین راست، پایین چپ، بالا راست، بالا چپ) و اندازهٔ قابل تنظیم به درصد یا پیکسل؛ ۲) حالت «✂️ کراپ تصویر با تنظیمات سابق» (برش پایین عکس با درصد یا پیکسل).',
@@ -93417,7 +93623,8 @@ function vcLoad(then) {
 
 function vcRenderBranches(){
     const host=$('vcBranchList');if(!host)return;const rows=VC&&Array.isArray(VC.branches)?VC.branches:[];
-    host.innerHTML=rows.length?rows.map(b=>{const eb=encodeURIComponent(b);return '<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;border:1px solid #334155;border-radius:8px;background:#0f172a"><code dir="ltr" style="flex:1;color:#bae6fd;overflow:hidden;text-overflow:ellipsis">'+esc(b)+'</code><button class="btn btn-green" type="button" style="font-size:9px;padding:4px 7px" onclick="vcUpdate(false,decodeURIComponent(\''+eb+'\'))">⬇ آپدیت از این برنچ</button><button class="btn btn-red" type="button" style="font-size:9px;padding:4px 7px" onclick="vcRemoveBranch(decodeURIComponent(\''+eb+'\'))">حذف</button></div>'}).join(''):'<div style="color:#fca5a5;font-size:10px">هنوز برنچی اضافه نشده است.</div>';
+    const pinned=(VC&&VC.pinned_branch)?String(VC.pinned_branch):'';
+    host.innerHTML=rows.length?rows.map(b=>{const eb=encodeURIComponent(b);const isPin=(pinned&&pinned===b);return '<div style="display:flex;align-items:center;gap:6px;padding:7px 8px;border:1px solid '+(isPin?'#22c55e':'#334155')+';border-radius:8px;background:#0f172a"><code dir="ltr" style="flex:1;color:#bae6fd;overflow:hidden;text-overflow:ellipsis">'+esc(b)+'</code>'+(isPin?'<span style="font-size:9px;color:#4ade80;background:#14532d;padding:2px 6px;border-radius:4px">📌 فعال</span>':'')+'<button class="btn btn-green" type="button" style="font-size:9px;padding:4px 7px" onclick="vcUpdate(false,decodeURIComponent(\''+eb+'\'))">⬇ آپدیت از این برنچ</button><button class="btn btn-red" type="button" style="font-size:9px;padding:4px 7px" onclick="vcRemoveBranch(decodeURIComponent(\''+eb+'\'))">حذف</button></div>'}).join(''):'<div style="color:#fca5a5;font-size:10px">هنوز برنچی اضافه نشده است.</div>';
 }
 function vcAddBranch(){const el=$('vcBranch'),b=el?el.value.trim():'';if(!b)return showToast('نام برنچ را وارد کنید',1);if(!VC)VC={branches:[]};if(!Array.isArray(VC.branches))VC.branches=[];if(!VC.branches.includes(b))VC.branches.push(b);VC.branch=b;if(el)el.value='';vcRenderBranches();vcSave(true);}
 function vcRemoveBranch(b){if(!VC||!Array.isArray(VC.branches))return;if(!confirm('برنچ «'+b+'» حذف شود؟'))return;VC.branches=VC.branches.filter(x=>x!==b);if(VC.branch===b)VC.branch=VC.branches[0]||'';vcRenderBranches();vcSave(true);}
@@ -93568,9 +93775,9 @@ function vcCloseBar() {
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
  */
 function vcUpdate(skipConfirm, requestedBranch) {
-    const installBranch=requestedBranch||VC_PENDING_BRANCH||(VC&&VC.branch)||((VC&&VC.branches&&VC.branches[0])||'');
-    // v8.46: دیگر رد نمی‌شود. فقط اگر ارسالی در جریان باشد یک تأیید
-    // می‌گیرد، چون آن مورد تنها حالتی است که کاربر شاید بخواهد صبر کند.
+    const isExplicitBranch = !!(requestedBranch && String(requestedBranch).trim());
+    const installBranch = (isExplicitBranch ? String(requestedBranch).trim() : '')
+        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');
     const busy = vcBusy();
     if (busy && !skipConfirm) {
         if (!confirm('«' + busy + '» در جریان است.\n\n'
@@ -93579,60 +93786,97 @@ function vcUpdate(skipConfirm, requestedBranch) {
     }
 
     const btn = $('vcBtnUpdate');
-    const lock = () => { if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال نصب...'; } };
-    const unlock = () => { if (btn) { btn.disabled = false; btn.textContent = '⬇ نصب نسخهٔ جدید'; } };
+    const lock = () => { window._vcInstalling = true; if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال نصب...'; } };
+    const unlock = () => { window._vcInstalling = false; if (btn) { btn.disabled = false; btn.textContent = '⬇ نصب نسخهٔ جدید'; } };
 
     fetch('?vc_deploy_info=1').then(r => r.json()).then(d => {
-        if (!d.ok) {
+        const useSelfUpdate = (!d.ok && d.can_self_update);
+        if (!d.ok && !useSelfUpdate) {
             showToast(d.error || 'نصب‌کننده در دسترس نیست', true);
             vcStat('✗ ' + esc(d.error || ''), '#f87171');
             return;
         }
-        if (!d.token) {
+        if (!d.token && !d.nonce) {
             showToast('ابتدا رمز نصب‌کننده را در تنظیمات وارد کنید', true);
             vcStat('✗ رمز نصب‌کننده تنظیم نشده — بخش «منبع و نصب‌کننده»', '#fbbf24');
             return;
         }
-        if (!skipConfirm && !confirm('نسخهٔ جدید نصب شود؟\n\nنصب توسط ' + d.file +
-            ' انجام می‌شود و از نسخهٔ فعلی بکاپ گرفته خواهد شد.')) return;
+        const installerLabel = useSelfUpdate ? 'نصب‌کنندهٔ داخلی (code_update)' : d.file;
+        if (!skipConfirm && !confirm((isExplicitBranch ? ('نصب از برنچ «' + installBranch + '» انجام شود؟') : 'نسخهٔ جدید نصب شود؟')
+            + '\n\nنصب توسط ' + installerLabel + ' انجام می‌شود و از نسخهٔ فعلی بکاپ گرفته خواهد شد.')) return;
 
         lock();
         vcCloseBar();
-        showToast('⏳ در حال نصب نسخهٔ جدید...');
-        vcStat('<span style="opacity:.7">' + esc(d.file) + ' در حال نصب...</span>', '#93c5fd');
+        showToast('⏳ در حال نصب از ' + (installBranch || 'گیت‌هاب') + '...');
+        vcStat('<span style="opacity:.7">' + esc(installerLabel) + ' در حال نصب...</span>', '#93c5fd');
 
-        // در پس‌زمینه صدا زده می‌شود؛ نصب را deploy.php انجام می‌دهد نه این فایل
-        const fd = new FormData();
-        fd.append('action',    'deploy');
-        fd.append('api_token', d.token);
-        fd.append('repo',      $('vcRepo').value.trim());
-        fd.append('branch',    installBranch);
-        fd.append('source',    $('vcPath').value.trim());
-        fd.append('dest',      VC ? VC.self_name : '');
-        fd.append('folder',    '');
-        fd.append('check_php', '1');
-        fd.append('backup',    '1');
-
-        return fetch(d.file, { method: 'POST', body: fd })
-            .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کننده' })))
+        /* v10.446: پیش از جایگزینی فایل، برنچ دستی را قفل و وضعیت auto-update را پاک کن
+           تا پس از رفرش، حتی روی برنچ‌های قدیمی‌تر، حلقهٔ رفرش بی‌نهایت رخ ندهد. */
+        const prepFd = new FormData();
+        if (isExplicitBranch) {
+            prepFd.append('pin_only', '1');
+            prepFd.append('pin_branch', installBranch);
+        } else {
+            prepFd.append('unpin_only', '1');
+        }
+        return fetch('?vc_settings=1', { method: 'POST', body: prepFd, cache: 'no-store' })
+            .catch(() => null)
+            .then(() => {
+                if (useSelfUpdate) {
+                    const ufd = new FormData();
+                    ufd.append('action', 'code_update');
+                    if (d.token) ufd.append('token', d.token);
+                    if (d.nonce) ufd.append('_wpnonce', d.nonce);
+                    if (installBranch) ufd.append('branch', installBranch);
+                    if (isExplicitBranch) ufd.append('allow_downgrade', '1');
+                    return fetch('?code_update=1', { method: 'POST', body: ufd, cache: 'no-store' })
+                        .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کنندهٔ داخلی' })));
+                }
+                const fd = new FormData();
+                fd.append('action',    'deploy');
+                fd.append('api_token', d.token);
+                fd.append('repo',      $('vcRepo').value.trim());
+                fd.append('branch',    installBranch);
+                fd.append('source',    $('vcPath').value.trim());
+                fd.append('dest',      VC ? VC.self_name : '');
+                fd.append('folder',    '');
+                fd.append('check_php', '1');
+                fd.append('backup',    '1');
+                return fetch(d.file, { method: 'POST', body: fd, cache: 'no-store' })
+                    .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کننده' })));
+            })
             .then(res => {
-                if (!res.ok) {
-                    vcStat('✗ ' + esc(res.error || 'نصب ناموفق'), '#f87171');
-                    showToast(res.error || 'نصب ناموفق', true);
+                if (!res || !res.ok) {
+                    const errMsg = (res && res.error) ? res.error : 'نصب ناموفق';
+                    vcStat('✗ ' + esc(errMsg), '#f87171');
+                    showToast(errMsg, true);
+                    fetch('?code_update_sync_state=1', { method: 'POST', cache: 'no-store' }).catch(() => {});
                     unlock();
                     return;
                 }
-                if (res.same || res.changed === false) {
-                    vcStat('✓ از قبل به‌روز بود', '#4ade80');
-                    showToast('✓ از قبل به‌روز بود');
-                    $('vcBtnUpdate').classList.add('hidden');
-                    unlock();
-                    return;
-                }
-                vcStat('✓ نصب شد' + (res.backup ? ' · بکاپ: <code>' + esc(res.backup) + '</code>' : '') +
-                       ' — بارگذاری مجدد...', '#4ade80');
-                showToast('✓ به‌روزرسانی انجام شد — صفحه رفرش می‌شود');
-                s4ReloadForNewCode(res.version||res.to_version||'جدید');
+                const syncFd = new FormData();
+                if (installBranch) syncFd.append('branch', installBranch);
+                return fetch('?code_update_sync_state=1', { method: 'POST', body: syncFd, cache: 'no-store' })
+                    .then(r => r.ok ? r.json() : null).catch(() => null)
+                    .then(syncRes => {
+                        if (VC) {
+                            VC.pinned_branch = isExplicitBranch ? installBranch : '';
+                            if (installBranch) VC.branch = installBranch;
+                            vcRenderBranches();
+                        }
+                        if (res.same || res.changed === false) {
+                            vcStat('✓ این برنچ از قبل نصب و فعال بود', '#4ade80');
+                            showToast('✓ این برنچ از قبل نصب بود');
+                            $('vcBtnUpdate').classList.add('hidden');
+                            unlock();
+                            return;
+                        }
+                        const nextVer = (syncRes && syncRes.version) || res.to_version || res.version || 'جدید';
+                        vcStat('✓ نصب شد' + (res.backup ? ' · بکاپ: <code>' + esc(res.backup) + '</code>' : '') +
+                               ' — بارگذاری مجدد...', '#4ade80');
+                        showToast('✓ به‌روزرسانی انجام شد — صفحه رفرش می‌شود');
+                        s4ReloadForNewCode(nextVer, true);
+                    });
             });
     }).catch(() => {
         showToast('خطا در ارتباط با نصب‌کننده', true);
