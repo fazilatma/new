@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.434';
+const APP_VERSION = '10.435';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13041,8 +13041,8 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
         if($vid<=0||!isset($selectedSet[$key]))continue;
         $dest[$key]=['key'=>$key,'type'=>'bsl','vendor_id'=>$vid,'label'=>(string)($shop['name']??('غرفه '.$vid))];
     }
-    $known=array_fill_keys(array_map('strval',array_keys($profiles)),true);$ids=[];$uncoded=[];
-    foreach($known as $pk=>$_)foreach($dest as $dk=>$_d)$ids[$pk][$dk]=[];
+    $known=array_fill_keys(array_map('strval',array_keys($profiles)),true);$ids=[];$uncoded=[];$priceMismatch=[];
+    foreach($known as $pk=>$_)foreach($dest as $dk=>$_d){$ids[$pk][$dk]=[];$priceMismatch[$pk][$dk]=[];}
     foreach($dest as$dk=>$meta)if(($meta['type']??'')==='bsl')$uncoded[$dk]=[];
     foreach((array)($matrix['rows']??[]) as $ri=>$row){
         if(!is_array($row))continue;
@@ -13060,21 +13060,28 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
         $pk=matrixRowProfileScopeKey($row,$profiles);if($pk===''||!isset($known[$pk]))continue;
         if(isset($dest['woo'])&&is_array($row['woo']??null)){
             $id=(int)($row['woo']['id']??0);if($id>0)$ids[$pk]['woo'][(string)$id]=true;
+            /* woo_tone is calculated by matrixPriceTone after applying the
+               saved profile + destination adjustment coefficients. */
+            if($id>0&&in_array((string)($row['woo_tone']??'na'),['bad','warn'],true))$priceMismatch[$pk]['woo'][(string)$ri]=true;
             foreach((array)($row['woo_extra']??[]) as $ex){$id=(int)($ex['id']??0);if($id>0)$ids[$pk]['woo'][(string)$id]=true;}
         }
         foreach($dest as $dk=>$meta){if(($meta['type']??'')!=='bsl')continue;$vid=(int)$meta['vendor_id'];
             $cell=$row['shops'][$vid]??$row['shops'][(string)$vid]??null;
-            if(is_array($cell)){$id=(int)($cell['id']??0);if($id>0)$ids[$pk][$dk][(string)$id]=true;}
+            if(is_array($cell)){$id=(int)($cell['id']??0);if($id>0)$ids[$pk][$dk][(string)$id]=true;if($id>0&&in_array((string)($cell['tone']??'na'),['bad','warn'],true))$priceMismatch[$pk][$dk][(string)$ri]=true;}
             $extras=$row['shop_extra'][$vid]??$row['shop_extra'][(string)$vid]??[];
             foreach((array)$extras as $ex){$id=(int)($ex['id']??0);if($id>0)$ids[$pk][$dk][(string)$id]=true;}
         }
     }
-    $counts=[];$totals=array_fill_keys(array_keys($dest),0);
-    foreach($known as $pk=>$_){foreach($dest as $dk=>$_d){$n=count($ids[$pk][$dk]??[]);$counts[$pk][$dk]=$n;$totals[$dk]+=$n;}}
+    $counts=[];$totals=array_fill_keys(array_keys($dest),0);$mismatchCounts=[];$mismatchTotals=array_fill_keys(array_keys($dest),0);
+    foreach($known as $pk=>$_){foreach($dest as $dk=>$_d){
+        $n=count($ids[$pk][$dk]??[]);$counts[$pk][$dk]=$n;$totals[$dk]+=$n;
+        $mn=count($priceMismatch[$pk][$dk]??[]);$mismatchCounts[$pk][$dk]=$mn;$mismatchTotals[$dk]+=$mn;
+    }}
     foreach($dest as$dk=>&$meta)$meta['uncoded']=count($uncoded[$dk]??[]);unset($meta);
     $uncodedProducts=[];foreach($uncoded as$dk=>$items)$uncodedProducts[$dk]=array_values($items);
     return ['generated_at'=>(int)($matrix['generated_at']??0),'source'=>(string)($matrix['source']??''),
         'destinations'=>array_values($dest),'counts'=>$counts,'totals'=>$totals,
+        'price_mismatch_counts'=>$mismatchCounts,'price_mismatch_totals'=>$mismatchTotals,
         'uncoded'=>array_map('count',$uncoded),'uncoded_products'=>$uncodedProducts];
 }
 
@@ -13191,12 +13198,14 @@ if (isset($_GET['start_product_stats'])) {
         }
         $detailSummary=extractProfileDetailSummary($profile);
         $byProfile[] = ['key'=>(string)$pk,'name'=>$pn,'updated_at'=>(int)($profile['updatedAt'] ?? 0),
-            'counts'=>$pm,'detail'=>$detailSummary,'destinations'=>(array)($matrixStats['counts'][(string)$pk]??[])];
+            'counts'=>$pm,'detail'=>$detailSummary,'destinations'=>(array)($matrixStats['counts'][(string)$pk]??[]),
+            'price_mismatches'=>(array)($matrixStats['price_mismatch_counts'][(string)$pk]??[])];
     }
     usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
     echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples,
         'matrix'=>['generated_at'=>(int)$matrixStats['generated_at'],'source'=>(string)$matrixStats['source'],
             'destinations'=>$matrixStats['destinations'],'totals'=>$matrixStats['totals'],
+            'price_mismatch_totals'=>$matrixStats['price_mismatch_totals'],
             'uncoded_products'=>$matrixStats['uncoded_products']]],
         JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE); exit;
 }
@@ -45995,7 +46004,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
         'generated_at'=>123,'source'=>'manual','selected_destinations'=>['woo','bsl:77'],
         'shops'=>[['vendor_id'=>77,'name'=>'غرفه آزمون']],
         'rows'=>[
-            ['profile_key'=>'p1','woo'=>['id'=>10,'title'=>'الف (کد:۱)'],'woo_extra'=>[['id'=>11,'title'=>'الف (کد:۱)']],'shops'=>[77=>['id'=>20,'title'=>'الف (کد:۱)']],'shop_extra'=>[77=>[['id'=>21,'title'=>'الف (کد:۱)']]]],
+            ['profile_key'=>'p1','woo'=>['id'=>10,'title'=>'الف (کد:۱)'],'woo_tone'=>'bad','woo_extra'=>[['id'=>11,'title'=>'الف (کد:۱)']],'shops'=>[77=>['id'=>20,'title'=>'الف (کد:۱)','tone'=>'warn']],'shop_extra'=>[77=>[['id'=>21,'title'=>'الف (کد:۱)']]]],
             ['profile_key'=>'p2','woo'=>['id'=>12,'title'=>'ب (کد:۲)'],'shops'=>[77=>['id'=>22,'title'=>'ب (کد:۲)']]],
             ['profile_key'=>'','title'=>'قدیمی (کد:۱)','woo'=>['id'=>99,'title'=>'قدیمی (کد:۱)'],'shops'=>[77=>['id'=>23,'title'=>'قدیمی (کد:۱)']]],
             ['profile_key'=>'','title'=>'متفرقه','woo'=>null,'shops'=>[77=>['id'=>24,'title'=>'متفرقه','status'=>2976,'stock'=>2]]],
@@ -46097,6 +46106,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"function startMiscRunActions(action,chosen)")!==false
       && strpos($selfSrc,"{v:'10." . "434'")!==false
       && version_compare(APP_VERSION,'10.434','>='));
+    $add('10.435', 'مغایرت قیمت تعدیل‌شده برای هر پروفایل و مقصد جدا شمرده می‌شود',
+         (int)($_mxDest426['price_mismatch_counts']['p1']['woo']??0)===1
+      && (int)($_mxDest426['price_mismatch_counts']['p1']['bsl:77']??0)===1
+      && (int)($_mxDest426['price_mismatch_totals']['woo']??0)===1
+      && strpos($selfSrc,"'price_mismatches'=>(array)(\$matrixStats['price_mismatch_counts']")!==false);
+    $add('10.435', 'شمار مغایرت قیمت با فونت کوچک زرد در سلول و جمع جدول نمایش داده می‌شود',
+         strpos($selfSrc,'.spb-price-mismatch{')!==false
+      && strpos($selfSrc,'color:#facc15')!==false
+      && strpos($selfSrc,'⚠ مغایرت قیمت:')!==false
+      && strpos($selfSrc,"{v:'10." . "435'")!==false
+      && version_compare(APP_VERSION,'10.435','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -72885,7 +72905,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
         <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل جدول مغایرت‌اند. «متفرقه بدون کد» در شمار پروفایل‌ها وارد نمی‌شود. دکمهٔ برابر‌سازی فقط همان پروفایل و مقصد را دوباره می‌سازد و اصلاح می‌کند و به محصولات بدون کد دست نمی‌زند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
         <style>
-          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
+          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-price-mismatch{display:block;margin-top:3px;font-size:7.5px;line-height:1.35;color:#facc15;font-weight:700;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
         </style>
     </section>
@@ -74110,8 +74130,8 @@ function renderStartProfileBreakdown(d){
   if(meta){const at=parseInt(mx.generated_at||0);meta.textContent=dests.length?('تعداد محصولات ذخیره‌شده و موجودی مقصدها بر اساس جدول مغایرت '+(at?new Date(at*1000).toLocaleString('fa-IR'):'')+'؛ به‌همراه پوشش مرحلهٔ دوم.'):'تعداد محصولات ذخیره‌شده؛ هنوز مقصدی در نتیجهٔ جدول مغایرت موجود نیست.';}
   if(!rows.length){body.innerHTML='<tr><td colspan="'+cols+'" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
   let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
-  const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
-    const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),dp=total?Math.round(n*100/total):0,unequal=n!==total,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small>'+(unequal?'<button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ در صف ساخت و اصلاح…':'⚖️ برابر‌سازی')+'</button>':'')+'</td>';}).join('');
+  const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},pm=row.price_mismatches||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
+    const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),mis=parseInt(pm[x.key]||0),dp=total?Math.round(n*100/total):0,unequal=n!==total,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small><small class="spb-price-mismatch" title="بر پایهٔ قیمت مورد انتظار پس از اعمال ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mis)+'</small>'+(unequal?'<button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ در صف ساخت و اصلاح…':'⚖️ برابر‌سازی')+'</button>':'')+'</td>';}).join('');
     return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
       '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
@@ -74124,7 +74144,7 @@ function renderStartProfileBreakdown(d){
   body.innerHTML=profileHtml+miscHtml;
   body.onclick=e=>{const cell=e.target.closest('[data-misc-destination]');if(cell&&body.contains(cell))openStartMiscProducts(cell.dataset.miscDestination||'all')};
   body.onkeydown=e=>{if(e.key!=='Enter'&&e.key!==' ')return;const row=e.target.closest('.spb-misc-row');if(row){e.preventDefault();openStartMiscProducts('all')}};
-  const pct=all?Math.round(detailed*100/all):0,destFoot=dests.map(x=>'<td><b class="spb-dest-num">'+spoNum(destTotals[x.key]||0)+'</b><small class="spb-dest-pct">موجود کددارِ پروفایل‌ها</small>'+(x.type==='bsl'?'<small class="spb-uncoded">متفرقه بدون کد: '+spoNum(x.uncoded||0)+'</small>':'')+'</td>').join('');
+  const pct=all?Math.round(detailed*100/all):0,mismatchTotals=mx.price_mismatch_totals||{},destFoot=dests.map(x=>'<td><b class="spb-dest-num">'+spoNum(destTotals[x.key]||0)+'</b><small class="spb-dest-pct">موجود کددارِ پروفایل‌ها</small><small class="spb-price-mismatch" title="بر پایهٔ ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mismatchTotals[x.key]||0)+'</small>'+(x.type==='bsl'?'<small class="spb-uncoded">متفرقه بدون کد: '+spoNum(x.uncoded||0)+'</small>':'')+'</td>').join('');
   foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td>'+destFoot+'<td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
 }
 let startMiscModalItems=[],startMiscSelected=new Set(),startMiscDrafts={},startMiscEditing=false,startMiscBusy=false,startMiscLabel='';
@@ -79820,6 +79840,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.435', t:'💰 شمار مغایرت قیمت در جدول پروفایل‌ها', items:[
+    'زیر تعداد موجودی هر مقصد، شمار محصولات دارای مغایرت قیمت با فونت کوچک و رنگ زرد نمایش داده می‌شود.',
+    'شمارش برای هر پروفایل و هر مقصد جداست و ردیف جمع جدول نیز مجموع هر مقصد را نشان می‌دهد.',
+    'فقط tone قیمت bad/warn از آخرین ماتریس کامل شمرده می‌شود؛ این tone پس از اعمال ضرایب تعدیل ذخیره‌شده محاسبه شده است و محصول غایب یا مغایرت غیرقیمتی وارد شمار نمی‌شود.'
+  ]},
   {v:'10.434', t:'🧩 مدیریت انتخابی محصولات متفرقه', items:[
     'متن و اعداد ردیف متفرقه با همان چینش راست و کلاس‌های ردیف‌های پروفایل نمایش داده می‌شوند.',
     'مودال هنگام بازشدن به body منتقل می‌شود و با لایهٔ ثابت و z-index مستقل، بالای کل صفحه قرار می‌گیرد.',
