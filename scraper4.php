@@ -357,7 +357,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.412';
+const APP_VERSION = '10.413';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -45221,6 +45221,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false
       && strpos($selfSrc, "{v:'10." . "412'") !== false
       && version_compare(APP_VERSION, '10.' . '412', '>='));
+    $add('10.413', 'پروفایل مالک worker واقعی در وضعیت صف باسلام و ووکامرس مشخص است',
+         substr_count($selfSrc, "\$queue['active_send']=null;") >= 2
+      && substr_count($selfSrc, "['_worker_owner']") >= 2
+      && substr_count($selfSrc, "['_worker_live']") >= 2
+      && strpos($selfSrc, "'profile_name'=>(string)(\$e['profile_name']??'')") !== false);
+    $add('10.413', 'رابط پروفایل فعلی را برجسته و running کهنه را متوقف نشان می‌دهد',
+         strpos($selfSrc, 'در حال ارسال واقعی: ') !== false
+      && strpos($selfSrc, 'در حال حاضر worker زنده‌ای در حال ارسال نیست') !== false
+      && strpos($selfSrc, "const staleRunning=e.status==='running'&&!e._worker_live") !== false
+      && strpos($selfSrc, '🟢 ارسال واقعی فعلی') !== false
+      && strpos($selfSrc, "{v:'10." . "413'") !== false
+      && version_compare(APP_VERSION, '10.' . '413', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -59519,6 +59531,16 @@ else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 unset($e);
 if (is_resource($wooStatusFp)) wooWriteQueue($queue);
+/* UI must distinguish a real lock-owning sender from stale rows still marked
+   running. The shared progress queue_id identifies the exact profile owner. */
+$queue['active_send']=null;$wooWorkerLive=!is_resource($wooStatusFp);
+foreach($queue['entries'] as &$e){
+    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
+    $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$wooWorkerLive;
+    if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
+        'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
+        'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'woo'];
+}unset($e);
 echo json_encode($queue,JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -61112,6 +61134,14 @@ else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 unset($e);
 if (is_resource($bslStatusFp)) bslWriteQueue($queue);
+$queue['active_send']=null;$bslWorkerLive=!is_resource($bslStatusFp);
+foreach($queue['entries'] as &$e){
+    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
+    $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$bslWorkerLive;
+    if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
+        'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
+        'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'bsl'];
+}unset($e);
 echo json_encode($queue,JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -78322,6 +78352,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.413', t:'🟢 نمایش صریح پروفایلِ واقعاً در حال ارسال', items:[
+    'وضعیت صف اکنون queue_id مالک progress را با قفل زندهٔ backend تطبیق می‌دهد؛ صرفِ status=running دیگر به معنی ارسال واقعی نیست.',
+    'بالای صف باسلام و ووکامرس یک بنر برجسته نام پروفایل واقعاً در حال ارسال، غرفه و current/total را نشان می‌دهد.',
+    'اگر هیچ worker زنده‌ای مالک صف نباشد، رابط صریحاً اعلام می‌کند در حال حاضر ارسالی زنده نیست؛ بنابراین ردیف‌های running کهنه با ارسال فعلی اشتباه نمی‌شوند.',
+    'روی کارت مالک زنده نشان «ارسال واقعی فعلی» دیده می‌شود و running بدون قفل زنده با عنوان «worker متوقف — آمادهٔ ادامه» و رنگ توقف نمایش داده می‌شود.',
+    'فهرست سایر پروفایل‌های waiting/paused/running زیر بنر فعلی باقی می‌ماند تا هم مالک جاری و هم نوبت‌های بعدی همزمان مشخص باشند.'
+  ]},
   {v:'10.412', t:'▶ دکمهٔ ادامه برای همهٔ ردیف‌های تکمیل‌نشدهٔ باسلام', items:[
     'روی هر کارت باسلام که هنوز current آن به total نرسیده یا وضعیت آن waiting، running، paused یا failed است دکمهٔ ادامه نمایش داده می‌شود؛ ردیف کامل فقط دکمه پاک‌کردن دارد.',
     'دکمهٔ ادامه برای ردیفی که ظاهراً running است اما worker آن مرده، همان queue_id و checkpoint را زیر flock دوباره رزرو و از محصول بعدی راه‌اندازی می‌کند.',
@@ -93397,7 +93434,7 @@ function sendQueueRetireAgg(entries){
     });
     return {retired:retired,notFound:notFound,failed:failed};
 }
-function renderSendQueueProfileSummary(which,entries){
+function renderSendQueueProfileSummary(which,entries,activeSend){
     const badge=$(which==='woo'?'wooQueueProfilesBadge':'bslQueueProfilesBadge');
     if(!badge)return;
     const grouped=new Map();
@@ -93412,7 +93449,14 @@ function renderSendQueueProfileSummary(which,entries){
         g[state]++;
     });
     const profiles=Array.from(grouped.values());
-    if(!profiles.length){badge.innerHTML='<span style="color:#94a3b8">👤 پروفایل فعال در صف: هیچ‌کدام</span>';return;}
+    const live=activeSend&&activeSend.queue_id?activeSend:null;
+    const liveName=live?String(live.profile_name||live.profile_key||'پروفایل نامشخص'):'';
+    const liveShop=live&&live.shop_name?' · 🏪 '+esc(live.shop_name):'';
+    const liveProgress=live?' · '+toFa(live.current||0)+' از '+toFa(live.total||0):'';
+    const liveHtml=live
+      ?'<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;border:1px solid #22c55e88;border-radius:10px;background:#052e164d;color:#dcfce7;box-shadow:0 0 0 2px #22c55e12"><span style="font-size:16px">🟢</span><span style="min-width:0"><b style="display:block;font-size:11px">در حال ارسال واقعی: '+esc(liveName)+'</b><small style="color:#86efac">'+(which==='bsl'?'باسلام':'ووکامرس')+liveShop+liveProgress+'</small></span></div>'
+      :'<div style="padding:6px 9px;margin-bottom:6px;border:1px solid #475569;border-radius:9px;background:#0f172a;color:#94a3b8;font-size:10px">⚪ در حال حاضر worker زنده‌ای در حال ارسال نیست</div>';
+    if(!profiles.length){badge.innerHTML=liveHtml+'<span style="color:#64748b">پروفایل دیگری در صف نیست</span>';return;}
     profiles.sort(function(a,b){
         const rank=function(x){return x.running?0:(x.waiting?1:2);};
         return rank(a)-rank(b)||String(a.name||a.key).localeCompare(String(b.name||b.key));
@@ -93425,7 +93469,7 @@ function renderSendQueueProfileSummary(which,entries){
         if(p.paused)states.push('⏸ '+toFa(p.paused)+' وظیفه متوقف');
         return '<span style="display:inline-block;margin:2px 6px 0 0;padding:2px 7px;border:1px solid #334155;border-radius:999px;background:#0f172a;color:#e2e8f0;font-size:9px;max-width:100%;vertical-align:middle" title="'+esc(p.key||name)+'">👤 '+esc(name)+' <span style="color:#94a3b8">'+states.join(' · ')+'</span></span>';
     });
-    badge.innerHTML='<span style="color:#94a3b8;font-weight:600">پروفایل‌های فعال:</span> '+chips.join('');
+    badge.innerHTML=liveHtml+'<div><span style="color:#94a3b8;font-weight:600">پروفایل‌های صف:</span> '+chips.join('')+'</div>';
 }
 function sendQueueVisualCard(e,opt){
     opt=opt||{};const total=parseInt(e.total)||0,cur=Math.min(total,parseInt(e.current)||0);
@@ -93433,18 +93477,23 @@ function sendQueueVisualCard(e,opt){
     const done=e.status==='done',failed=e.status==='failed',pct=done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0));
     const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
-    const processed=done?total:cur,remain=Math.max(0,total-processed),status=labels[e.status]||e.status;
+    const processed=done?total:cur,remain=Math.max(0,total-processed);
+    const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=staleRunning?'paused':e.status;
+    const status=staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status);
     const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
     const profileName=String(e.profile_name||'').trim();
     const profileKey=String(e.profile_key||'').trim();
     const profileLabel=profileName||profileKey||'پروفایل نامشخص';
     const retired=parseInt(e.retired??e.archived??e.deleted??(isRetire?e.sent:0))||0;
     const newSent=isRetire?0:(parseInt(e.sent)||0);
-    let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
+    let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';
+    if(e._worker_live)chips+='<span class="sendq-chip" style="color:#86efac;background:#14532d">🟢 ارسال واقعی فعلی</span>';
+    else if(staleRunning)chips+='<span class="sendq-chip" style="color:#fdba74;background:#7c2d12">⚠ worker متوقف</span>';
+    if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
     const metric=(n,l,c,important)=>'<div class="sendq-metric'+(important?' sendq-metric-retired':'')+'"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
     const reason=e.fail_reason||e.error||'';
-    return '<article class="sendq-card is-'+esc(e.status||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
-      +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name" title="'+esc(profileKey||profileLabel)+'">👤 پروفایل ارسال: '+esc(profileLabel)+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[e.status]+';background:'+colors[e.status]+'18;border:1px solid '+colors[e.status]+'55">'+status+'</span></div>'
+    return '<article class="sendq-card is-'+esc(visualStatus||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
+      +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name" title="'+esc(profileKey||profileLabel)+'">👤 پروفایل ارسال: '+esc(profileLabel)+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[visualStatus]+';background:'+colors[visualStatus]+'18;border:1px solid '+colors[visualStatus]+'55">'+status+'</span></div>'
       +'<div class="sendq-progress-head"><b>'+(hasPhase?esc(e.phase_label):toFa(pct)+'٪ انجام شده')+'</b><span>'+(hasPhase?(toFa(phCur)+' از '+toFa(phTotal)+' · '+toFa(pct)+'٪'):(toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده'))+'</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
       +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
@@ -93456,7 +93505,7 @@ function renderBslQueue(q){
     if(!section||!list)return;
     const entries=q.entries||[];
 
-    renderSendQueueProfileSummary('bsl',entries);
+    renderSendQueueProfileSummary('bsl',entries,q.active_send||null);
 
     try{const bd=$('bslQueueCountBadge');if(bd){const n=(entries||[]).length;const act=(entries||[]).filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
     if(entries.length===0){list.innerHTML='<span style="color:#64748b">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</span>';return;}
@@ -93697,7 +93746,7 @@ function renderWooQueue(q){
     if(!section||!list)return;
     const entries=q.entries||[];
 
-    renderSendQueueProfileSummary('woo',entries);
+    renderSendQueueProfileSummary('woo',entries,q.active_send||null);
 
     try{const bd=$('wooQueueCountBadge');if(bd){const n=(entries||[]).length;const act=(entries||[]).filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
     if(entries.length===0){list.innerHTML='<span style="color:#64748b">صف خالی — برای افزودن، دکمه «🚀 ارسال ووکامرس» را کلیک کنید</span>';return;}
