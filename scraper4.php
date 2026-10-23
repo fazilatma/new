@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.422';
+const APP_VERSION = '10.423';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -22640,8 +22640,80 @@ function cronRecordResumeBlock(array &$results,array $block): void {
     if(empty($results['resume_blocking']))$results['resume_blocking']=$block;
 }
 
+/** v10.423: rebuild a Basalam queue owner when the durable progress and
+ * per-run products file survived but bsl_queue.json lost the row. This is the
+ * exact production failure where progress remained at 2588/4040, the backend
+ * flock was free, and cron had nothing to select. */
+function bslRecoverMissingQueueRowFromProgress(array $cn): array {
+    $progress=readProgress(BSL_PROGRESS_FILE);$qid=trim((string)($progress['queue_id']??''));
+    $current=max(0,(int)($progress['current']??0));$total=max(0,(int)($progress['total']??0));
+    if($qid===''||!empty($progress['done'])||$total<=0||$current>=$total)
+        return ['recovered'=>false,'reason'=>'no_incomplete_progress'];
+    if(queueHasExplicitUserStop('bsl',$qid))return ['recovered'=>false,'reason'=>'explicit_user_stop'];
+    $guard=@fopen(BSL_QUEUE_FILE.'.orphan.lock','c');
+    if(!$guard||!@flock($guard,LOCK_EX|LOCK_NB)){if($guard)@fclose($guard);return ['recovered'=>false,'reason'=>'repair_busy'];}
+    try{
+        $queue=bslReadQueue();
+        foreach((array)($queue['entries']??[])as$row)
+            if(is_array($row)&&(string)($row['id']??'')===$qid)return ['recovered'=>false,'reason'=>'row_exists','queue_id'=>$qid];
+        $baseQid=preg_replace('/_s\d+$/','',$qid)?:$qid;
+        $files=array_values(array_unique([
+            __DIR__.'/bsl_queue_products_'.basename($qid).'.json',
+            __DIR__.'/bsl_queue_products_'.basename($baseQid).'.json',
+        ]));
+        $productsFile='';$actualTotal=0;
+        foreach($files as$file){
+            if(!is_file($file))continue;$items=@json_decode((string)@file_get_contents($file),true);
+            if(!is_array($items)||count($items)<$current)continue;
+            $productsFile=$file;$actualTotal=count($items);break;
+        }
+        if($productsFile==='')return ['recovered'=>false,'reason'=>'missing_products_file','queue_id'=>$qid];
+        $profiles=loadProfiles();$profileKey=trim((string)($progress['profile_key']??''));
+        if($profileKey===''||!is_array($profiles[$profileKey]??null)){
+            $bestLen=-1;
+            foreach($profiles as$key=>$candidate){
+                if(!is_array($candidate))continue;$needle='_'.(string)$key.'_';
+                if(strpos($qid,$needle)!==false&&strlen((string)$key)>$bestLen){$profileKey=(string)$key;$bestLen=strlen((string)$key);}
+            }
+        }
+        $profile=is_array($profiles[$profileKey]??null)?$profiles[$profileKey]:[];
+        if(!$profile)return ['recovered'=>false,'reason'=>'profile_not_found','queue_id'=>$qid];
+        $vendorId=(int)($progress['phase_shop_vendor_id']??0);
+        if($vendorId<=0&&preg_match('/_s(\d+)$/',$qid,$m))$vendorId=(int)$m[1];
+        $shop=[];foreach((array)bslAllShops($cn)as$candidate)
+            if((int)($candidate['vendor_id']??0)===$vendorId){$shop=$candidate;break;}
+        if($vendorId<=0)$vendorId=(int)($shop['vendor_id']??$cn['basalam']['vendor_id']??0);
+        $catId=(int)($profile['bslCategoryId']??0);if($catId<=0)$catId=(int)($cn['basalam']['category_id']??0);
+        $fallback=array_values(array_unique(array_merge((array)($profile['bslFallbackCatIds']??[]),(array)($cn['basalam']['fallback_cat_ids']??[]))));
+        $now=time();$row=['id'=>$qid,'status'=>'running','products_file'=>$productsFile,
+            'total'=>max($total,$actualTotal),'sent'=>(int)($progress['sent']??0),'updated'=>(int)($progress['updated']??0),
+            'skipped'=>(int)($progress['skipped']??0),'failed'=>(int)($progress['failed']??0),'current'=>$current,
+            'started_at'=>(int)($progress['started_at']??$now),'updated_at'=>(int)($progress['last_progress_ts']??$now),
+            'done_at'=>0,'paused_at'=>0,'resumable'=>true,'resume_requested_at'=>$now,
+            'profile_key'=>$profileKey,'profile_name'=>(string)($profile['name']??$profileKey),
+            'shop_vendor_id'=>$vendorId,'shop_name'=>(string)($shop['shop_name']??$progress['phase_shop_name']??''),
+            'shop_is_default'=>!empty($shop['is_default']),'batch_id'=>$baseQid,
+            'trigger'=>strpos($qid,'manual')===0?'manual_sync':'cron','auto_sync'=>true,'only_changed'=>true,
+            'config'=>['category_id'=>$catId,'auto_category'=>!empty($cn['basalam']['auto_category']),
+                'title_suffix'=>trim((string)($profile['titleSuffix']??''))?:trim((string)($cn['basalam']['title_suffix']??'')),
+                'delay_ms'=>max(0,(int)($cn['basalam']['delay_ms']??500)),
+                'retry_delay_ms'=>max(0,(int)($cn['basalam']['retry_delay_ms']??1000)),
+                'fallback_cat_ids'=>$fallback,'send_all_shops'=>0,'fanout'=>$vendorId>0?1:0,
+                'shop_vendor_id'=>$vendorId,'shop_name'=>(string)($shop['shop_name']??$progress['phase_shop_name']??''),
+                'force_all'=>false],
+            'recovered_from_progress'=>true,'recovered_at'=>$now,
+            'error'=>'ردیف صف از checkpoint و فایل محصولات بازسازی شد'];
+        $queue['entries'][]=$row;bslWriteQueue($queue);
+        autoResumeBookSet('bsl_send','',0);queueResumeBook('bsl',$qid,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'orphan_row_rebuilt']);
+        return ['recovered'=>true,'queue_id'=>$qid,'profile_key'=>$profileKey,'current'=>$current,
+            'total'=>max($total,$actualTotal),'products_file'=>basename($productsFile),'vendor_id'=>$vendorId];
+    }finally{@flock($guard,LOCK_UN);@fclose($guard);}
+}
+
 function cronWatchdogs(array $cn): array {
     $results = ['watchdog' => []];
+    $orphanSend=bslRecoverMissingQueueRowFromProgress($cn);
+    if(!empty($orphanSend['recovered']))$results['bsl_orphan_row_recovered']=$orphanSend;
     /* Reconcile Send-tab shop selection before any recovery. This also cleans
        a shop-disabled row after an older in-memory worker honored our targeted
        stop and released its flock. */
@@ -45585,6 +45657,23 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$price = profileFinalPrice($profile, $rawPrice);') !== false
       && strpos($selfSrc, "{v:'10." . "420'") !== false
       && version_compare(APP_VERSION, '10.' . '420', '>='));
+    $add('10.423', 'progress ناتمام باسلام بدون ردیف صف از فایل اختصاصی همان queue_id بازسازی می‌شود',
+         strpos($selfSrc,'function bslRecoverMissingQueueRowFromProgress(array $cn): array')!==false
+      && strpos($selfSrc,"preg_replace('/_s\\d+$/','',\$qid)")!==false
+      && strpos($selfSrc,"queueHasExplicitUserStop('bsl',\$qid)")!==false
+      && strpos($selfSrc,"'recovered_from_progress'=>true")!==false
+      && strpos($selfSrc,"\$orphanSend=bslRecoverMissingQueueRowFromProgress(\$cn);")!==false);
+    $add('10.423', 'فایل صف هنگام نوشتن هرگز در حالت truncate شده دیده نمی‌شود',
+         strpos($selfSrc,'function sendQueueAtomicWrite(string $file,array $queue): bool')!==false
+      && strpos($selfSrc,"\$ok=@rename(\$tmp,\$file);")!==false
+      && strpos($selfSrc,'sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);')!==false
+      && strpos($selfSrc,'sendQueueAtomicWrite(WOO_QUEUE_FILE,$queue);')!==false);
+    $add('10.423', 'فیدبک باسلام repair ردیف گم‌شده را بازسازی و به watchdog تحویل می‌دهد',
+         strpos($selfSrc,"\$repairRequestedFb=!empty(\$_GET['repair'])")!==false
+      && strpos($selfSrc,"\$repairResultFb['dispatch']=queueStallRecover('bsl'")!==false
+      && strpos($selfSrc,"'missing_queue_row'=>\$repairResultFb")!==false
+      && strpos($selfSrc,"{v:'10." . "423'")!==false
+      && version_compare(APP_VERSION,'10.423','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -60047,6 +60136,18 @@ echo json_encode($p, JSON_UNESCAPED_UNICODE);
 exit;
 }
 
+/** Queue JSON must never be observable between truncate and write. Status and
+ * cron requests read these files concurrently; the old in-place write could be
+ * decoded as an empty queue and that empty snapshot was then written back. */
+function sendQueueAtomicWrite(string $file,array $queue): bool {
+    $json=json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+    if($json===false)return false;
+    $tmp=$file.'.tmp.'.(int)@getmypid().'.'.substr(md5(uniqid('',true)),0,8);
+    $ok=@file_put_contents($tmp,$json,LOCK_EX)===strlen($json);
+    if($ok)$ok=@rename($tmp,$file);
+    if(!$ok){@unlink($tmp);$ok=@file_put_contents($file,$json,LOCK_EX)===strlen($json);}
+    return $ok;
+}
 function wooReadQueue(): array {
 clearstatcache(true,WOO_QUEUE_FILE);
 if(!file_exists(WOO_QUEUE_FILE)) return ['entries'=>[]];
@@ -60054,7 +60155,7 @@ $d=@json_decode(@file_get_contents(WOO_QUEUE_FILE)?:'',true);
 return is_array($d)&&isset($d['entries'])?$d:['entries'=>[]];
 }
 function wooWriteQueue(array $queue): void {
-@file_put_contents(WOO_QUEUE_FILE,json_encode($queue,JSON_UNESCAPED_UNICODE),LOCK_EX);
+sendQueueAtomicWrite(WOO_QUEUE_FILE,$queue);
 }
 
 if(isset($_GET['woo_queue_status'])){
@@ -61317,7 +61418,7 @@ $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
 return is_array($d)&&isset($d['entries'])?$d:['entries'=>[]];
 }
 function bslWriteQueue(array $queue): void {
-@file_put_contents(BSL_QUEUE_FILE,json_encode($queue,JSON_UNESCAPED_UNICODE),LOCK_EX);
+sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
 }
 
 /**
@@ -61430,7 +61531,13 @@ if (isset($_GET['send_pipeline_audit'])) {
 if(isset($_GET['bsl_send_feedback'])){
 header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store');
-$cnFb=loadConnections();$qFb=bslReadQueue();$entriesFb=(array)($qFb['entries']??[]);
+$cnFb=loadConnections();$repairRequestedFb=!empty($_GET['repair']);$repairResultFb=[];
+if($repairRequestedFb){
+    $repairResultFb=bslRecoverMissingQueueRowFromProgress($cnFb);
+    if(!empty($repairResultFb['recovered']))
+        $repairResultFb['dispatch']=queueStallRecover('bsl',BSL_SEND_STALL_SEC,false,1500,true,false,true);
+}
+$qFb=bslReadQueue();$entriesFb=(array)($qFb['entries']??[]);
 $progressFb=readProgress(BSL_PROGRESS_FILE);$nowFb=time();
 $requestedQid=trim((string)($_GET['queue_id']??''));
 $runningCountFb=count(array_filter($entriesFb,static fn($r)=>is_array($r)&&($r['status']??'')==='running'));
@@ -61664,7 +61771,8 @@ echo json_encode([
         'cron_handoff'=>$handoffFb,
         'diagnosis'=>$diagnosisFb],
     'notifications'=>['enabled'=>$notifyFlagsFb,'last_ping_attempts'=>$pingSummaryFb],
-    'cron'=>$cronFb,'repairs'=>['forbidden_content_retry'=>true]
+    'cron'=>$cronFb,'repairs'=>['forbidden_content_retry'=>true,'requested'=>$repairRequestedFb,
+        'missing_queue_row'=>$repairResultFb]
 ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
@@ -78997,6 +79105,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.423', t:'🚑 بازسازی مالک گم‌شدهٔ ارسال و ادامه با کران', items:[
+    'علت توقف تولید مشخص شد: progress باسلام روی ۲۵۸۸ از ۴۰۴۰ مانده بود، flock آزاد بود، اما bsl_queue.json هیچ ردیفی نداشت؛ بنابراین watchdog با وجود کران سالم چیزی برای انتخاب نداشت.',
+    'کران اکنون queue_id گم‌شده را فقط با checkpoint ناتمام، فایل اختصاصی همان اجرا، پروفایل معتبر و نبود Stop کاربر بازسازی می‌کند و همان ردیف را از current قبلی ادامه می‌دهد.',
+    'نوشتن صف‌های باسلام و ووکامرس اتمیک شد تا خوانندهٔ همزمان دیگر فاصلهٔ truncate/write را صف خالی نبیند و همان snapshot خالی را روی صف واقعی بازنویسی نکند.',
+    'فیدبک ارسال باسلام repair هدفمند دارد و نتیجهٔ بازسازی/dispatch را بدون افشای تنظیمات محرمانه گزارش می‌کند؛ سقف عمومی تلاش نیز برای ردیف بازسازی‌شده پاک می‌شود.'
+  ]},
   {v:'10.422', t:'📋 جدول تفکیکی محصولات و مرحلهٔ جزئیات در تب شروع', items:[
     'در انتهای واقعی تب شروع، جدول واکنش‌گرای همهٔ پروفایل‌ها با نام و تعداد محصولات ذخیره‌شده اضافه شد.',
     'جدول برای هر پروفایل تعداد سلکتورهای جزئیات فعال را نشان می‌دهد و صریحاً مشخص می‌کند مرحلهٔ دوم استخراج اجرا می‌شود یا خیر.',
