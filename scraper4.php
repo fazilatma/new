@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.416';
+const APP_VERSION = '10.417';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -45385,11 +45385,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && substr_count($selfSrc, 'bslShopSelectedForSend(loadConnections()') >= 2
       && strpos($selfSrc, "if(\$staleSeconds>=BSL_SEND_STALL_SEC)") !== false
       && strpos($selfSrc, "'active_shop_selected'=>\$activeShopSelectedFb") !== false);
-    $add('10.416', 'متن انتخاب غرفه در تب ارسال UTF-8 سالم است',
+    $add('10.417', 'متن انتخاب غرفه در تب ارسال UTF-8 سالم است',
          strpos($selfSrc, '🏪 ارسال به غرفه‌ها:') !== false
-      && substr_count($selfSrc, '🏪 ارسال به غرفه‌ها:') === 1
-      && strpos($selfSrc, "{v:'10." . "416'") !== false
-      && version_compare(APP_VERSION, '10.' . '416', '>='));
+      && strpos($selfSrc, hex2bin('c398')) === false
+      && strpos($selfSrc, hex2bin('c399')) === false
+      && strpos($selfSrc, "{v:'10." . "417'") !== false
+      && version_compare(APP_VERSION, '10.' . '417', '>='));
     $add('10.415', 'هر کران باسلام پس از ۶۰ ثانیه بی‌حرکتی همان checkpoint را ادامه می‌دهد',
          strpos($selfSrc, 'const BSL_SEND_STALL_SEC = 60;') !== false
       && strpos($selfSrc, 'const BSL_RESUME_COOLDOWN_SEC = 55;') !== false
@@ -78665,6 +78666,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.417', t:'✅ اصلاح آزمون UTF-8 انتخاب غرفه', items:[
+    'آزمون متمرکز برچسب غرفه اکنون وجود متن صحیح و نبود بایت‌های رایج mojibake را مستقل از تکرار طبیعی همان عبارت در changelog بررسی می‌کند.'
+  ]},
   {v:'10.416', t:'🏪 توقف فوری ارسال به غرفهٔ غیرفعال', items:[
     'انتخاب غرفه دیگر فقط هنگام ساخت صف snapshot نمی‌شود؛ backend پیش از claim هر ردیف، انتخاب زندهٔ ذخیره‌شده در تب ارسال را دوباره می‌خواند.',
     'worker ردیف اختصاصی پیش از ارسال هر محصول وضعیت همان vendor_id را بازبینی می‌کند؛ برداشتن تیک غرفه، ارسال جاری را با حفظ checkpoint فوراً متوقف می‌کند. worker قدیمیِ درحال‌اجرا نیز یک Stop هدفمند مخصوص همان ردیف دریافت می‌کند.',
