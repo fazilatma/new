@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.420';
+const APP_VERSION = '10.421';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2217,10 +2217,11 @@ function s4WorkerRunJob(array $job): array {
 }
 
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
-    $n=0;$extractCheckpoint=[];$extractProfiles=[];
+    $n=0;$extractCheckpoint=[];$extractProfiles=[];$extractRows=[];
     try{$extractCheckpoint=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
     try{$extractProfiles=loadProfiles();}catch(Throwable $_e){}
-    s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint,$extractProfiles){$now=time();foreach($q['entries'] as &$e){
+    try{$extractRows=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
+    s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint,$extractProfiles,$extractRows){$now=time();foreach($q['entries'] as &$e){
         if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
@@ -2236,9 +2237,22 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
             &&$extractProfile===(string)($extractCheckpoint['profile_key']??'')
             &&empty($extractCheckpoint['done'])
             &&(!empty($extractCheckpoint['queue_id'])||!empty($extractCheckpoint['stopped'])||!empty($extractCheckpoint['running'])||!empty($extractCheckpoint['resume_needed']));
-        /* The profile checkpoint is authoritative even if a hard kill happened
-           before the shared progress file acquired profile_key. */
-        $isCheckpointExtract=$type==='backend_extract'&&($extractProfileCheckpoint||$extractProgressCheckpoint);
+        $extractQueueId=trim((string)($e['payload']['extract_queue_id']??''));
+        $extractProgressOwnsJob=$extractProgressCheckpoint
+            &&($extractQueueId===''||(string)($extractCheckpoint['queue_id']??'')===$extractQueueId);
+        $extractRowProducts=0;
+        if($extractQueueId!=='')foreach($extractRows as$_extractRow){
+            if(!is_array($_extractRow)||(string)($_extractRow['id']??'')!==$extractQueueId)continue;
+            $extractRowProducts=max((int)($_extractRow['run_extracted']??0),
+                (int)($_extractRow['products_count']??0),(int)($_extractRow['extracted']??0));break;
+        }
+        $extractMadeProducts=$extractRowProducts>0
+            ||($extractProgressOwnsJob&&(int)($extractCheckpoint['extracted']??0)>0);
+        /* A cursor/stage alone is not proof of useful work. Zero-product source
+           failures retain the ordinary bounded worker-attempt cap, but never
+           receive unlimited checkpoint recycling or an attempts reset. */
+        $isCheckpointExtract=$type==='backend_extract'&&$extractMadeProducts
+            &&($extractProfileCheckpoint||$extractProgressCheckpoint);
         /* A checkpoint-backed matrix build may span many hosting process lives.
            The generic four-attempt cap is appropriate for non-resumable jobs, but
            must never permanently fail a durable matrix continuation. */
@@ -3505,6 +3519,15 @@ function writeJsonFile(string $path, $data): array {
 
 function writeProgress(string $file, array $data): void {
 writeJsonFile($file, $data);
+/* v10.421: the shared progress file can later be replaced by another parallel
+   extractor. Persist positive product progress on the owning extraction row
+   while it is available, so a later cron can decide safely whether this exact
+   interrupted run may be resumed. */
+if (defined('EXTRACT_PROGRESS_FILE') && $file === EXTRACT_PROGRESS_FILE
+    && !empty($data['queue_id']) && (int)($data['extracted'] ?? 0) > 0
+    && function_exists('extractQueueRecordRunProgress'))
+    extractQueueRecordRunProgress((string)$data['queue_id'], (int)$data['extracted'],
+        (int)($data['last_progress_ts'] ?? time()));
 if (function_exists('s4WorkerHeartbeatFromProgress')) s4WorkerHeartbeatFromProgress($file, $data);
 }
 function localTaskDbForget(string $path): void {
@@ -19361,11 +19384,12 @@ function extractQueueRequestStop(string $queueId=''): array {
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     return $out;
 }
-function extractCancelWorkerForQueueRow(array $row): array {
+function extractCancelWorkerForQueueRow(array $row,string $reason='user'): array {
     $queueId=trim((string)($row['id']??''));$job=extractWorkerJobForQueueRow($row);
+    $automatic=$reason!=='user';
     $jobId=(string)($job['id']??'');$jobStatus=(string)($job['status']??'');$pid=(int)($job['worker_pid']??0);$cancelled=false;
     if($jobId!==''&&function_exists('s4WorkerQueueMutate')){
-        s4WorkerQueueMutate(function(&$q)use($jobId,$queueId,&$cancelled){$now=time();
+        s4WorkerQueueMutate(function(&$q)use($jobId,$queueId,$reason,&$cancelled){$now=time();
             foreach($q['entries']as&$entry){
                 if(!is_array($entry)||(string)($entry['id']??'')!==$jobId||(string)($entry['type']??'')!=='backend_extract')continue;
                 $payload=is_array($entry['payload']??null)?$entry['payload']:[];
@@ -19373,7 +19397,7 @@ function extractCancelWorkerForQueueRow(array $row): array {
                 if($queueId!==''&&$boundId!==''&&$boundId!==$queueId)break;
                 if(in_array((string)($entry['status']??''),['pending','running'],true)){
                     $entry['status']='cancelled';$entry['cancel_requested_at']=$now;$entry['updated_at']=$now;
-                    $entry['done_at']=$now;$entry['error']='stopped_by_user';$cancelled=true;
+                    $entry['done_at']=$now;$entry['error']=$reason==='user'?'stopped_by_user':'stalled_auto_recovery';$cancelled=true;
                 }
                 break;
             }unset($entry);return ['ok'=>true,'cancelled'=>$cancelled];
@@ -19384,7 +19408,11 @@ function extractCancelWorkerForQueueRow(array $row): array {
     $daemonPid=function_exists('s4WorkerStateLoad')?(int)(s4WorkerStateLoad()['pid']??0):0;
     $pidAlive=$pid>0&&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($pid);$signalSent=false;
     $pidOwnsThisLock=!empty($activeLockMeta)&&$pid>0&&(int)($activeLockMeta['pid']??0)===$pid;
-    if($pidAlive&&$pidOwnsThisLock&&$pid!==$daemonPid&&$pid!==getmypid()&&function_exists('posix_kill'))
+    /* User stop never kills the persistent daemon. Automatic stale recovery
+       may retire it when that daemon itself owns the frozen extraction, but a
+       cron executing inside that same PID defers to the next external pulse. */
+    $maySignalOwner=$pid!==getmypid()&&($pid!==$daemonPid||$automatic);
+    if($pidAlive&&$pidOwnsThisLock&&$maySignalOwner&&function_exists('posix_kill'))
         $signalSent=(bool)@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);
     return ['job_id'=>$jobId,'job_status'=>$jobStatus,'cancelled_job'=>$cancelled,
         'pid'=>$pid,'pid_alive'=>$pidAlive,'signal_sent'=>$signalSent];
@@ -19458,13 +19486,55 @@ function extractStopManualSyncProfileWorkers(): array {
     return $results;
 }
 
+/** Persist product progress against its queue row, not merely the shared
+ * compatibility progress file which another parallel extractor may replace. */
+function extractQueueRecordRunProgress(string $queueId,int $extracted,int $at=0): bool {
+    static $saved=[];
+    if($queueId===''||$extracted<=0||$extracted<=(int)($saved[$queueId]??0))return false;
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return false;
+    if(!@flock($lf,LOCK_EX|LOCK_NB)){@fclose($lf);return false;}
+    $ok=false;
+    try{
+        $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];
+        foreach($entries as$i=>$row){
+            if(!is_array($row)||(string)($row['id']??'')!==$queueId)continue;
+            $old=max((int)($row['run_extracted']??0),(int)($row['products_count']??0));
+            if($extracted>$old){
+                $row['run_extracted']=$extracted;$row['last_product_progress_at']=$at>0?$at:time();
+                $row['updated_at']=max((int)($row['updated_at']??0),$row['last_product_progress_at']);
+                $entries[$i]=$row;$q['entries']=array_values($entries);
+                $json=json_encode($q,JSON_UNESCAPED_UNICODE);
+                $ok=$json!==false&&@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)!==false;
+            }else $ok=true;
+            break;
+        }
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    if($ok)$saved[$queueId]=$extracted;
+    return $ok;
+}
+
+/** Positive product evidence must belong to this exact queue run. Historical
+ * profile products intentionally do not count. */
+function extractQueueRunProductCount(array $row,array $progress=[],int $runningRows=1): int {
+    $count=max((int)($row['run_extracted']??0),(int)($row['products_count']??0),
+        (int)($row['extracted']??0));
+    if($progress&&queueProgressBelongsToRow($progress,$row,max(1,$runningRows)))
+        $count=max($count,(int)($progress['extracted']??0));
+    return max(0,$count);
+}
+function extractQueueRunHasProducts(array $row,array $progress=[],int $runningRows=1): bool {
+    return extractQueueRunProductCount($row,$progress,$runningRows)>0;
+}
+
 /**
- * Atomically pause one genuinely stale extraction row without replacing its
- * ID or checkpoint. Rechecks the current row, its slot lock and worker PID
- * while holding the queue mutation lock so a stale cron snapshot cannot
- * overwrite a worker's completion/progress update.
+ * Atomically close one abandoned/stale extraction row without replacing its
+ * ID or checkpoint. A positive-product run becomes resumable; a zero-product
+ * run becomes terminal so an unavailable source cannot loop forever.
+ * When $ownerAbsent is true, definitive owner loss is enough and no age wait
+ * is imposed. Otherwise the row must have at least $staleAfter seconds without
+ * real progress. The live lock/PID is rechecked while mutating the row.
  */
-function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array {
+function extractQueuePauseStaleRow(string $queueId, int $staleAfter, bool $ownerAbsent=false): ?array {
     if($queueId==='')return null;
     $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return null;
     if(!@flock($lf,LOCK_EX)){@fclose($lf);return null;}
@@ -19487,18 +19557,29 @@ function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array {
         $now=time();
         $idleInfo=queueRowIdle('extract',$row,$progress,$now,
             ['lock'=>extractLockBeatForQueue($queueId)],$runningRows);
-        $idle=(int)($idleInfo['idle']??0);if($idle<=$staleAfter)return null;
+        $idle=(int)($idleInfo['idle']??0);
+        if(!$ownerAbsent&&$idle<$staleAfter)return null;
         $progressForRow=$progressOwned?$progress:[];
         $phase=(string)($progressForRow['phase']??$row['resume_phase']??$row['phase']??'list');
         $phase=$phase==='detail'?'detail':'list';
-        $row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
-        $row['resume_phase']=$phase;$row['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
-        $row['updated_at']=$now;$row['paused_at']=$now;unset($row['done_at']);
+        $productCount=extractQueueRunProductCount($row,$progress,$runningRows);
+        $row['run_extracted']=max((int)($row['run_extracted']??0),$productCount);
+        $row['updated_at']=$now;$row['paused_at']=$now;
+        if($productCount>0){
+            $row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
+            $row['resume_phase']=$phase;$row['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
+            unset($row['done_at'],$row['auto_resume_blocked'],$row['auto_resume_blocked_at']);
+        }else{
+            $row['status']='failed';$row['resumable']=false;$row['resume_needed']=0;
+            $row['done_at']=$now;$row['auto_resume_blocked']='zero_products';$row['auto_resume_blocked_at']=$now;
+            $row['error']='استخراج بدون هیچ محصولی متوقف شد؛ ادامهٔ خودکار غیرفعال شد';
+        }
         $entries[$idx]=$row;$q['entries']=array_values($entries);
         $json=json_encode($q,JSON_UNESCAPED_UNICODE);
         if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false)return null;
         $result=['row'=>$row,'idle'=>$idle,'phase'=>$phase,'progress_owned'=>$progressOwned,
-            'progress'=>$progressForRow];
+            'progress'=>$progressForRow,'products'=>$productCount,'resumable'=>$productCount>0,
+            'terminal_zero_products'=>$productCount<=0,'owner_absent'=>$ownerAbsent];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     return $result;
 }
@@ -19662,7 +19743,9 @@ function extractResumeMetaSaveAtomic(string $profileKey,array $meta): bool {
 }
 
 function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $watchdogKeys=[]): array {
-    $latestRows=[];$busy=[];$profileCheckpointKeys=[];$watchdog=[];$seq=0;
+    $latestRows=[];$resumeBarriers=[];$busy=[];$profileCheckpointKeys=[];$watchdog=[];$seq=0;
+    $progress=readProgress(EXTRACT_PROGRESS_FILE);$runningRows=0;
+    foreach($queueEntries as$_countRow)if(is_array($_countRow)&&(string)($_countRow['status']??'')==='running')$runningRows++;
     foreach($queueEntries as $e){
         $seq++;if(!is_array($e))continue;
         $key=trim((string)($e['profile_key']??''));if($key==='')continue;
@@ -19671,6 +19754,19 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
         $cronPendingWait=$status==='waiting'&&!empty($e['cron_resume_pending']);
         if($status==='waiting'&&!$cronPendingWait){$busy[$key]=true;continue;}
         if(!in_array($status,['paused','failed'],true)&&!$cronPendingWait)continue;
+        $at=max((int)($e['updated_at']??0),(int)($e['done_at']??0),(int)($e['paused_at']??0),(int)($e['started_at']??0));
+        /* Automatic continuation is permitted only after this queue run has
+           actually produced products. Cursors and historical profile products
+           are deliberately insufficient evidence. A newer zero-product row is
+           also a barrier against reviving an older positive checkpoint. */
+        $runProducts=extractQueueRunProductCount($e,$progress,max(1,$runningRows));
+        if(!empty($e['auto_resume_blocked'])||$runProducts<=0){
+            $oldBarrier=$resumeBarriers[$key]??null;
+            if(!is_array($oldBarrier)||$at>(int)($oldBarrier['updated_at']??0)
+                ||($at===(int)($oldBarrier['updated_at']??0)&&$seq>(int)($oldBarrier['sequence']??0)))
+                $resumeBarriers[$key]=['updated_at'=>$at,'sequence'=>$seq];
+            continue;
+        }
         $profile=is_array($profiles[$key]??null)?$profiles[$key]:[];
         $stage=(string)($profile['_extract_stage']??'');
         $hasProfileCheckpoint=in_array($stage,['list','list_done','detail','stopped'],true)
@@ -19679,10 +19775,10 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
         $hasRowCheckpoint=!empty($e['resumable'])||!empty($e['resume_needed'])||!empty($e['partial'])
             ||(int)($e['resume_page']??0)>0||in_array((string)($e['resume_phase']??''),['list','detail'],true);
         if(!$hasProfileCheckpoint&&!$hasRowCheckpoint)continue;
-        $at=max((int)($e['updated_at']??0),(int)($e['done_at']??0),(int)($e['paused_at']??0),(int)($e['started_at']??0));
         if(!isset($latestRows[$key])||$at>(int)$latestRows[$key]['updated_at']
             ||($at===(int)$latestRows[$key]['updated_at']&&$seq>(int)$latestRows[$key]['sequence'])){
             $latestRows[$key]=['queue_id'=>(string)($e['id']??''),'updated_at'=>$at,'sequence'=>$seq,
+                'run_extracted'=>$runProducts,
                 'user_stopped'=>!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user'];
         }
     }
@@ -19699,9 +19795,19 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
     foreach($keys as $key){
         if($key===''||!isset($profiles[$key])||!is_array($profiles[$key])||!empty($busy[$key]))continue;
         $row=$latestRows[$key]??null;
+        /* A profile checkpoint without an eligible queue row cannot prove that
+           this interrupted run extracted anything; never infer it from the
+           profile's historical product catalogue. */
+        if(!is_array($row)||(int)($row['run_extracted']??0)<=0)continue;
+        $barrier=$resumeBarriers[$key]??null;
+        if(is_array($barrier)){
+            $barrierAt=(int)($barrier['updated_at']??0);$rowAt=(int)($row['updated_at']??0);
+            if($barrierAt>$rowAt||($barrierAt===$rowAt
+                &&(int)($barrier['sequence']??0)>(int)($row['sequence']??0)))continue;
+        }
         /* Explicit Stop belongs to the user: an older duplicate row must not
            override it, while a newer automatic checkpoint remains eligible. */
-        if(is_array($row)&&!empty($row['user_stopped']))continue;
+        if(!empty($row['user_stopped']))continue;
         $profile=$profiles[$key];
         $stage=(string)($profile['_extract_stage']??'');
         $hasCheckpoint=in_array($stage,['list','list_done','detail','stopped'],true)
@@ -22554,7 +22660,10 @@ function cronWatchdogs(array $cn): array {
        کار می‌مُرد (تایم‌اوت هاست، ری‌استارت PHP، قطع شبکه)، ردیف برای همیشه
        «در حال اجرا» می‌ماند و ردیف‌های بعدی هم راه نمی‌افتادند. علامت‌خوردنِ
        «خطا» هم فقط وقتی اتفاق می‌افتاد که کسی صفحهٔ صف را باز کند. */
-    if ($stallWake) {
+    /* Extraction recovery is a correctness guarantee, not a notification
+       preference. Keep it active even when the generic send watchdog toggle is
+       disabled; explicit user-stopped rows remain protected below. */
+    if (true) {
         /* v10.405: guard cron scans with its own lock, never with slot 1.
            A healthy extractor in slot 1 must not hide stale rows in other
            profiles; each candidate is rechecked against its own live lock. */
@@ -22568,9 +22677,10 @@ function cronWatchdogs(array $cn): array {
         $exProg = readProgress(EXTRACT_PROGRESS_FILE);
         $exQ = extractReadQueue();
         $exNow = time();
-        /* Extraction heartbeats are precise, so recover sooner than generic send
-           queues while still allowing a slow source request to finish. */
-        $exStallCfg=max(60,min($stallCfg,(int)($cn['extract_stall_after']??120)));
+        /* Product/lock heartbeats are precise. One minute without real progress
+           is the fixed takeover threshold; definitive owner loss is recovered
+           immediately on this cron pulse. */
+        $exStallCfg=60;
         $exDirty=false;$exStuck=null;$exResumeKeys=[];$exProgressOwnedStuck=false;
         $exProgressStuck=null;$exProgressOwnerQueueId='';
         $exRunningRows=0;foreach((array)($exQ['entries']??[]) as $__qeCount){if(is_array($__qeCount)&&($__qeCount['status']??'')==='running')$exRunningRows++;}
@@ -22590,32 +22700,51 @@ function cronWatchdogs(array $cn): array {
                دروغ می‌فرستاد؛ حالا هر سه شاهد را با هم می‌سنجد. */
             $_qeProgressOwned=queueProgressBelongsToRow($exProg,$qe,$exRunningRows);
             $_qeProg=$_qeProgressOwned?$exProg:[];
-            $_lkWBeat=extractLockBeatForQueue((string)($qe['id']??''));
-            /* Parallel child PID is an additional authoritative heartbeat even
-               while another slot owns the shared compatibility progress file. */
-            $_childBeat=0;$_workerJobId=(string)($qe['worker_job_id']??'');
+            $_queueId=(string)($qe['id']??'');
+            $_lkWBeat=extractLockBeatForQueue($_queueId);
+            /* A living PID is ownership evidence, not progress evidence. Using
+               "PID alive = heartbeat now" hid a blocked network call forever.
+               Only product/progress and extraction-lock touches reset idle. */
+            $_workerAlive=false;$_workerJobId=(string)($qe['worker_job_id']??'');
             if($_workerJobId!=='')foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_we){
                 if(!is_array($_we)||(string)($_we['id']??'')!==$_workerJobId||(string)($_we['status']??'')!=='running')continue;
-                if(s4WorkerPidAlive((int)($_we['worker_pid']??0)))$_childBeat=$exNow;break;}
-            $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => max($_lkWBeat,$_childBeat)], $exRunningRows);
+                $_workerAlive=s4WorkerPidAlive((int)($_we['worker_pid']??0));break;}
+            $_lockHeld=extractLockHeldForQueue($_queueId);
+            $_ownerPresent=$_lockHeld||$_workerAlive;
+            $_iwW = queueRowIdle('extract', $qe, $exProg, $exNow, ['lock' => $_lkWBeat], $exRunningRows);
             $idle = (int)$_iwW['idle'];
-            if ($idle <= $exStallCfg) continue;
+            if($_ownerPresent&&$idle<$exStallCfg)continue;
+            /* A genuinely frozen child must relinquish its lock before the same
+               queue row can be resumed. Mark only its worker job cancelled and
+               signal that exact lock owner; this does not create a user stop. */
+            $_retire=[];
+            if($_ownerPresent){
+                $_retire=extractCancelWorkerForQueueRow($qe,'stalled_auto_recovery');
+                if(!empty($_retire['signal_sent']))usleep(250000);
+            }
             /* v10.405: a separate watchdog lock lets this scan run beside
                healthy slots. Before changing anything, re-read this exact row
                under the queue-file lock and prove its own worker is not live. */
-            $qePaused=extractQueuePauseStaleRow((string)($qe['id']??''),$exStallCfg);
-            if(!is_array($qePaused))continue;
+            $qePaused=extractQueuePauseStaleRow($_queueId,$exStallCfg,!$_ownerPresent);
+            if(!is_array($qePaused)){
+                if($_ownerPresent)$results['extract_termination_pending'][]=['queue_id'=>$_queueId,
+                    'idle'=>$idle,'signal_sent'=>!empty($_retire['signal_sent'])];
+                continue;
+            }
             $exKey=(string)($qePaused['row']['profile_key']??$qe['profile_key']??'');
             $idle=(int)($qePaused['idle']??$idle);$exPhase=(string)($qePaused['phase']??'list');
             $_qeProgressOwned=!empty($qePaused['progress_owned']);
             $_qeProg=is_array($qePaused['progress']??null)?$qePaused['progress']:[];
             /* The same row ID and saved phase remain the continuation owner. */
             $exDirty=true;
+            $_canResume=!empty($qePaused['resumable']);
             $exStuck=['idle'=>$idle,'profile'=>(string)($qe['profile_name']??$exKey),
-                      'key'=>$exKey,'queue_id'=>(string)($qePaused['row']['id']??'')];
-            if($_qeProgressOwned){$exProgressOwnedStuck=true;$exProgressStuck=$_qeProg;
+                      'key'=>$exKey,'queue_id'=>(string)($qePaused['row']['id']??''),
+                      'products'=>(int)($qePaused['products']??0),'resumable'=>$_canResume,
+                      'owner_absent'=>!empty($qePaused['owner_absent'])];
+            if($_canResume&&$_qeProgressOwned){$exProgressOwnedStuck=true;$exProgressStuck=$_qeProg;
                 $exProgressOwnerQueueId=(string)($qePaused['row']['id']??'');}
-            if($exKey!==''){
+            if($_canResume&&$exKey!==''){
                 $exResumeKeys[]=$exKey;
                 /* Save just this profile against the newest disk snapshot so
                    another parallel profile's checkpoint cannot be clobbered. */
@@ -22627,6 +22756,9 @@ function cronWatchdogs(array $cn): array {
                     $exProfiles[$exKey]['_extract_stage_at']=time();
                     saveOneProfileAtomic($exKey,$exProfiles[$exKey]);
                 }
+            }elseif(!$_canResume){
+                $results['extract_terminal_zero_products'][]=['key'=>$exKey,
+                    'queue_id'=>(string)($qePaused['row']['id']??''),'idle'=>$idle];
             }
         }
         if($exDirty){
@@ -22653,8 +22785,10 @@ function cronWatchdogs(array $cn): array {
             $results['extract_watchdog']=$exStuck;
             $results['extract_resume']=array_values(array_unique($exResumeKeys));
             notifRunFailure($cn,'نگهبان استخراج',$exStuck['profile']?:'استخراج',
-                'استخراج '.(int)$exStuck['idle'].' ثانیه بی‌حرکت بود — همان ردیف حفظ شد و '
-                .'در همین نوبت از checkpoint ادامه داده می‌شود.');
+                !empty($exStuck['resumable'])
+                    ? ('استخراج '.(int)$exStuck['idle'].' ثانیه بی‌حرکت بود — همان ردیف حفظ شد و '
+                        .'در همین نوبت از checkpoint ادامه داده می‌شود.')
+                    : ('استخراج بدون محصول متوقف شد — ادامهٔ خودکار برای جلوگیری از تکرار بی‌پایان بسته شد.'));
         }
         @flock($exWatchFp, LOCK_UN); @fclose($exWatchFp); $exWatchFp = null;
         }
@@ -42683,10 +42817,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "const EXTRACT_WATCHDOG_LOCK_FILE = __DIR__ . '/extract_watchdog.lock';") !== false
       && strpos($selfSrc, "fopen(EXTRACT_WATCHDOG_LOCK_FILE, 'c')") !== false
       && strpos($selfSrc, 'function extractLockHeldForQueue(string $queueId): bool') !== false
-      && strpos($selfSrc, 'function extractQueuePauseStaleRow(string $queueId, int $staleAfter): ?array') !== false
+      && strpos($selfSrc, 'function extractQueuePauseStaleRow(string $queueId, int $staleAfter') !== false
       && strpos($selfSrc, 'if(extractLockHeldForQueue($queueId))return null;') !== false);
     $add('10.405', 'بازیابی stale زیر قفل صف است، فقط running را تغییر می‌دهد و توقف دستی را حفظ می‌کند',
-         strpos($selfSrc, "function extractQueuePauseStaleRow(string \$queueId, int \$staleAfter): ?array {") !== false
+         strpos($selfSrc, "function extractQueuePauseStaleRow(string \$queueId, int \$staleAfter") !== false
       && strpos($selfSrc, "fopen(EXTRACT_QUEUE_FILE.'.lock','c')") !== false
       && strpos($selfSrc, "if(!empty(\$row['stopped_by_user'])||(string)(\$row['paused_by']??'')==='user')return null;") !== false
       && strpos($selfSrc, "\$row['status']='paused';\$row['resumable']=true;") !== false
@@ -42703,7 +42837,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, 'function extractStopSignalFileForQueue(string $queueId): string') !== false
       && strpos($selfSrc, 'extractStopRequestedForQueue($queueId,true)') !== false
       && strpos($selfSrc, "function extractQueueRequestStop(string \$queueId=''): array") !== false
-      && strpos($selfSrc, 'function extractCancelWorkerForQueueRow(array $row): array') !== false
+      && strpos($selfSrc, 'function extractCancelWorkerForQueueRow(array $row') !== false
       && strpos($selfSrc, 'function extractQueueDeleteSafe(string $queueId): array') !== false
       && strpos($selfSrc, 'extractQueueRowHasLiveOwner($row)') !== false
       && strpos($selfSrc, 'function extractQueueFinalizeStopIfIdle(string $queueId): array') !== false);
@@ -45410,6 +45544,33 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$price = profileFinalPrice($profile, $rawPrice);') !== false
       && strpos($selfSrc, "{v:'10." . "420'") !== false
       && version_compare(APP_VERSION, '10.' . '420', '>='));
+    $_ex421Profiles=['p421'=>['_extract_stage'=>'list','_extract_list_incomplete'=>true]];
+    $_ex421Base=['id'=>'q421','profile_key'=>'p421','status'=>'paused','resume_phase'=>'list',
+        'resumable'=>true,'updated_at'=>100];
+    $_ex421Positive=cronExtractResumeCandidates($_ex421Profiles,[array_merge($_ex421Base,['run_extracted'=>3])]);
+    $_ex421Zero=cronExtractResumeCandidates($_ex421Profiles,[array_merge($_ex421Base,['run_extracted'=>0,'products_count'=>0])]);
+    $_ex421Blocked=cronExtractResumeCandidates($_ex421Profiles,[array_merge($_ex421Base,
+        ['run_extracted'=>3,'auto_resume_blocked'=>'zero_products'])]);
+    $_ex421NewZero=cronExtractResumeCandidates($_ex421Profiles,[
+        array_merge($_ex421Base,['id'=>'q421-old','run_extracted'=>3,'updated_at'=>100]),
+        array_merge($_ex421Base,['id'=>'q421-new-zero','run_extracted'=>0,'updated_at'=>200])]);
+    $add('10.421', 'ادامهٔ خودکار استخراج فقط با شاهد محصول در همان queue_id انجام می‌شود',
+         count($_ex421Positive)===1
+      && (string)($_ex421Positive[0]['queue_id']??'')==='q421'
+      && count($_ex421Zero)===0&&count($_ex421Blocked)===0&&count($_ex421NewZero)===0
+      && strpos($selfSrc, 'function extractQueueRecordRunProgress(')!==false
+      && strpos($selfSrc, "'auto_resume_blocked']='zero_products'")!==false);
+    $add('10.421', 'مرگ قطعی فوری و گیر ۶۰ ثانیه‌ای بدون PID-heartbeat مصنوعی بازیابی می‌شوند',
+         strpos($selfSrc, '$exStallCfg=60;')!==false
+      && strpos($selfSrc, 'if($_ownerPresent&&$idle<$exStallCfg)continue;')!==false
+      && strpos($selfSrc, 'extractQueuePauseStaleRow($_queueId,$exStallCfg,!$_ownerPresent)')!==false
+      && strpos($selfSrc, 'PID alive = heartbeat now')!==false
+      && strpos($selfSrc, "extractCancelWorkerForQueueRow(\$qe,'stalled_auto_recovery')")!==false);
+    $add('10.421', 'worker checkpoint صفرمحصول تلاش‌ها را نامحدود reset نمی‌کند',
+         strpos($selfSrc, '$extractMadeProducts=$extractRowProducts>0')!==false
+      && strpos($selfSrc, "\$isCheckpointExtract=\$type==='backend_extract'&&\$extractMadeProducts")!==false
+      && strpos($selfSrc, "{v:'10." . "421'") !== false
+      && version_compare(APP_VERSION, '10.' . '421', '>='));
     $add('10.419', 'اولین کران ردیف running بدون مالک باسلام را فوری ادامه می‌دهد',
          strpos($selfSrc, "if (\$isBsl && !\$lockFresh) {") !== false
       && strpos($selfSrc, "'owner_absent'=>true") !== false
@@ -45737,12 +45898,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
         'p-d'=>['_extract_stage'=>'detail','_extract_resume_phase'=>'detail'],
     ];
     $_resumeRows404=[
-        ['id'=>'a-old','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'updated_at'=>100],
-        ['id'=>'a-new','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'updated_at'=>200],
-        ['id'=>'b-user-stop','profile_key'=>'p-b','status'=>'paused','resumable'=>true,'stopped_by_user'=>true,'updated_at'=>300],
+        ['id'=>'a-old','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'run_extracted'=>2,'updated_at'=>100],
+        ['id'=>'a-new','profile_key'=>'p-a','status'=>'paused','resumable'=>true,'run_extracted'=>3,'updated_at'=>200],
+        ['id'=>'b-user-stop','profile_key'=>'p-b','status'=>'paused','resumable'=>true,'run_extracted'=>4,'stopped_by_user'=>true,'updated_at'=>300],
         ['id'=>'c-running','profile_key'=>'p-c','status'=>'running','updated_at'=>250],
-        ['id'=>'c-paused','profile_key'=>'p-c','status'=>'paused','resumable'=>true,'updated_at'=>220],
-        ['id'=>'d-paused','profile_key'=>'p-d','status'=>'paused','resumable'=>true,'updated_at'=>150],
+        ['id'=>'c-paused','profile_key'=>'p-c','status'=>'paused','resumable'=>true,'run_extracted'=>2,'updated_at'=>220],
+        ['id'=>'d-paused','profile_key'=>'p-d','status'=>'paused','resumable'=>true,'run_extracted'=>5,'updated_at'=>150],
     ];
     $_resumeCandidates404=cronExtractResumeCandidates($_resumeProfiles404,$_resumeRows404);
     $_resumeMap404=[];foreach($_resumeCandidates404 as $_candidate404)$_resumeMap404[$_candidate404['key']]=$_candidate404['queue_id'];
@@ -45775,8 +45936,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && !empty($_sendMap404['send-user-paused']['stopped_by_user']));
     $_queuedProfiles404=['extract-direct'=>['_extract_stage'=>'detail'],'extract-other'=>['_extract_stage'=>'detail']];
     $_queuedRows404=[
-        ['id'=>'extract-direct-1','profile_key'=>'extract-direct','status'=>'waiting','cron_resume_pending'=>true,'resumable'=>true,'current'=>14,'updated_at'=>400],
-        ['id'=>'extract-other-1','profile_key'=>'extract-other','status'=>'waiting','resumable'=>true,'current'=>9,'updated_at'=>500],
+        ['id'=>'extract-direct-1','profile_key'=>'extract-direct','status'=>'waiting','cron_resume_pending'=>true,'resumable'=>true,'run_extracted'=>14,'current'=>14,'updated_at'=>400],
+        ['id'=>'extract-other-1','profile_key'=>'extract-other','status'=>'waiting','resumable'=>true,'run_extracted'=>9,'current'=>9,'updated_at'=>500],
     ];
     $_queuedCandidates404=cronExtractResumeCandidates($_queuedProfiles404,$_queuedRows404);
     $add('10.404','هاستِ بدون worker، ردیف‌های extraction زمان‌بندی‌شده را در tickهای بعدی از همان queue_id برمی‌دارد',
@@ -78729,6 +78890,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.421', t:'♻️ بازیابی امن استخراج متوقف یا گیرکرده', items:[
+    'استخراج دستی یا دوره‌ای با مرگ قطعی مالک در اولین کران و با وجود مالک زنده پس از دقیقاً ۶۰ ثانیه بدون پیشرفت واقعی، با همان queue_id و فاز checkpoint ادامه می‌یابد.',
+    'زنده‌بودن PID دیگر heartbeat جعلی محسوب نمی‌شود؛ worker واقعاً گیرکرده به‌صورت هدفمند بازنشسته می‌شود و قفل همان ردیف پیش از ادامه دوباره بررسی می‌شود.',
+    'تعداد محصولات همین اجرای صف در خود ردیف پایدار می‌شود؛ فقط اجرای دارای حداقل یک محصول اجازهٔ ادامهٔ خودکار دارد و محصولات تاریخی پروفایل شاهد محسوب نمی‌شوند.',
+    'استخراج صفرمحصول terminal می‌شود و worker نیز checkpoint صفرمحصول را با reset تلاش‌ها بی‌نهایت زنده نمی‌کند؛ توقف صریح کاربر همچنان هرگز خودکار ادامه نمی‌یابد.'
+  ]},
   {v:'10.420', t:'💰 اعمال واقعی ضریب غرفه‌های اضافی و گردکردن در Results', items:[
     'ریشهٔ ضریب غرفهٔ غیراصلی اصلاح شد: تغییر آن قبلاً اشتباهاً ذخیرهٔ پروفایل را صدا می‌زد، نه save_connections؛ اکنون همان لحظه در connections ذخیره و در Results بازسازی می‌شود.',
     'ستون‌های قیمت Results دیگر snapshot قدیمی cn را نمی‌خوانند و ضریب/گردکردن زندهٔ ووکامرس، باسلام و همهٔ غرفه‌های اضافی را مستقیماً از کنترل‌های فعلی محاسبه می‌کنند.',
