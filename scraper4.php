@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.431';
+const APP_VERSION = '10.432';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -45934,6 +45934,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && matrixTitleHasCode('test product (cod')
       && strpos($selfSrc,"{v:'10." . "431'")!==false
       && version_compare(APP_VERSION,'10.431','>='));
+    $add('10.432', 'کران دقیقاً مانند Continue مالک و checkpoint صف را تازه می‌کند',
+         strpos($selfSrc,"\$other['status']='waiting';\$other['resume_requested_at']=0")!==false
+      && strpos($selfSrc,"'queue_id'=>\$qid")!==false
+      && strpos($selfSrc,"'dispatch_failed_retryable'")!==false
+      && strpos($selfSrc,'if(fireAndForgetCliQueueBackend($get,$post))return true;')!==false);
+    $add('10.432', 'بازیابی صف HTTP cron نیز CLI مستقل را پیش از self-HTTP امتحان می‌کند',
+         strpos($selfSrc,'Queue recovery may originate from HTTP cron too.')!==false
+      && strpos($selfSrc,"{v:'10." . "432'")!==false
+      && version_compare(APP_VERSION,'10.432','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -50493,7 +50502,10 @@ function queueCronHandoffPrepare(): ?array {
    same backend entry point as a detached CLI child instead of consuming the
    resume retry budget on a guaranteed-empty base URL. */
 function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
-    if(!isCliRun()||!in_array((string)($get['action']??''),['bsl_backend','woo_backend'],true))return false;
+    /* Queue recovery may originate from HTTP cron too. If detached PHP CLI is
+       available, prefer it over a self-HTTP child that LiteSpeed can kill as
+       soon as the cron client disconnects. */
+    if(!in_array((string)($get['action']??''),['bsl_backend','woo_backend'],true))return false;
     $GLOBALS['_queueDispatchMode']='cli_spawn';$GLOBALS['_queueDispatchPid']=0;
     if(!function_exists('exec')||strtoupper(substr(PHP_OS,0,3))==='WIN'){
         $GLOBALS['_queueDispatchMode']='cli_spawn_unavailable';return false;
@@ -50514,8 +50526,12 @@ function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
 
 function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): bool {
     $get=[];parse_str(ltrim($qs,'?'),$get);
-    if(isCliRun()&&in_array((string)($get['action']??''),['bsl_backend','woo_backend'],true))
-        return fireAndForgetCliQueueBackend($get,$post);
+    if(in_array((string)($get['action']??''),['bsl_backend','woo_backend'],true)){
+        /* The same queue_backend payload works from CLI cron and HTTP cron.
+           A successful spawn is independent of the caller connection; hosts
+           without exec transparently retain the durable HTTP handoff below. */
+        if(fireAndForgetCliQueueBackend($get,$post))return true;
+    }
     $base = selfBaseUrl();
     if ($base === '') return false;
     $GLOBALS['_queueDispatchMode']='http_curl';$GLOBALS['_queueDispatchPid']=0;
@@ -51132,22 +51148,56 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $promotedRows=0;
         if($resumeAllPaused&&$includePaused)
             $promotedRows=queuePromoteEligiblePausedRows($rq['entries'],$qid,$allowUserStopped);
-        /* هر دو worker از اینجا با یک ردیفِ running شروع می‌شوند؛ مخصوصاً
-           woo_backend ردیفِ waiting را خودش انتخاب نمی‌کند. */
-        $rq['entries'][$ridx]['resume_requested_at'] = time();
-        if (in_array((string)($rentry['status'] ?? ''), ['paused', 'waiting'], true)) {
-            $rq['entries'][$ridx]['status'] = 'running';
-            $rq['entries'][$ridx]['started_at'] = time();
-            $rq['entries'][$ridx]['paused_at'] = 0;
+        $productsFile=(string)($rentry['products_file']??'');
+        if($productsFile===''||!is_file($productsFile)){
+            @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
+            $chk['resumed']=false;$chk['deferred']=false;$chk['reason_defer']='products_file_missing';return $chk;
         }
-        if($allowUserStopped)unset($rq['entries'][$ridx]['paused_by'],$rq['entries'][$ridx]['stopped_by_user']);
-        $qFile = $which === 'bsl' ? BSL_QUEUE_FILE : WOO_QUEUE_FILE;
-        @file_put_contents($qFile, json_encode($rq, JSON_UNESCAPED_UNICODE), LOCK_EX);
+        /* A free destination flock proves every old running owner is dead.
+           Mirror the manual Continue transaction: demote ambiguous stale
+           owners, make the selected row the sole owner, and publish a fresh
+           queue-specific checkpoint before dispatch. */
+        $resumeNow=time();
+        foreach($rq['entries'] as$oi=>&$other){
+            if($oi===$ridx||!is_array($other)||(string)($other['status']??'')!=='running')continue;
+            $other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$resumeNow;
+        }unset($other);
+        $rq['entries'][$ridx]['status']='running';
+        $rq['entries'][$ridx]['current']=max((int)($rq['entries'][$ridx]['current']??0),$start);
+        $rq['entries'][$ridx]['resume_requested_at']=$resumeNow;
+        $rq['entries'][$ridx]['started_at']=$resumeNow;$rq['entries'][$ridx]['updated_at']=$resumeNow;
+        $rq['entries'][$ridx]['paused_at']=0;$rq['entries'][$ridx]['done_at']=0;
+        unset($rq['entries'][$ridx]['resume_exhausted'],$rq['entries'][$ridx]['error'],$rq['entries'][$ridx]['fail_reason']);
+        if($allowUserStopped||((string)($rq['entries'][$ridx]['paused_by']??'')!=='user'&&empty($rq['entries'][$ridx]['stopped_by_user'])))
+            unset($rq['entries'][$ridx]['paused_by'],$rq['entries'][$ridx]['stopped_by_user']);
+        if($which==='bsl')bslWriteQueue($rq);else wooWriteQueue($rq);
         if($promotedRows>0)$chk['promoted_rows']=$promotedRows;
+        $progressFile=$which==='bsl'?BSL_PROGRESS_FILE:WOO_PROGRESS_FILE;
+        $prior=readProgress($progressFile);
+        /* Recovery must never attribute an unnamed/foreign shared progress file
+           merely because stale rows were just demoted. Only an exact queue_id
+           may override this row's durable counters. */
+        $priorQid=trim((string)($prior['queue_id']??''));
+        $priorOwned=$priorQid!==''&&hash_equals($qid,$priorQid);
+        $snapshot=$priorOwned?array_merge($rentry,$prior):$rentry;
+        $resumeLog=is_array($snapshot['recent_log']??null)?$snapshot['recent_log']:[];
+        $resumeLog[]='🔄 ادامهٔ کران با همان مالکیت دکمهٔ ادامه از محصول #'.($start+1);
+        $progressRow=['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$qid,
+            'sent'=>(int)($snapshot['sent']??0),'updated'=>(int)($snapshot['updated']??0),
+            'skipped'=>(int)($snapshot['skipped']??0),'failed'=>(int)($snapshot['failed']??0),
+            'total'=>(int)($rentry['total']??0),'current'=>$start,'last_title'=>'','started_at'=>$resumeNow,
+            'last_progress_ts'=>$resumeNow,'recent_log'=>array_slice($resumeLog,-200),
+            'total_log_count'=>(int)($snapshot['total_log_count']??0)+1,
+            'checkpoint'=>['queue_id'=>$qid,'current'=>$start,'total'=>(int)($rentry['total']??0),
+                'sent'=>(int)($snapshot['sent']??0),'updated'=>(int)($snapshot['updated']??0),
+                'skipped'=>(int)($snapshot['skipped']??0),'failed'=>(int)($snapshot['failed']??0),'started_at'=>$resumeNow]];
+        foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','shop_stats','batch_done_indices','sent_details','updated_details','skipped_details','failed_details']as$pk)
+            if(array_key_exists($pk,$snapshot))$progressRow[$pk]=$snapshot[$pk];
+        writeProgress($progressFile,$progressRow);
         if ($which !== 'bsl') {
             /* products_file همان row است؛ copy هم پیش از آزادکردنِ reservation
                انجام می‌شود تا woo از فایلِ مقصدِ اشتباه شروع نکند. */
-            @copy((string)($rentry['products_file'] ?? ''), WOO_PRODUCTS_FILE);
+            @copy($productsFile, WOO_PRODUCTS_FILE);
         }
         /* child باید بتواند همین lock را بگیرد؛ جلوگیری از duplicate با مهرِ
            resume_requested_at و سنِ شروعِ تازه انجام می‌شود، نه با held ماندنِ
@@ -51168,6 +51218,25 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     if(!empty($GLOBALS['_queueDispatchStopped'])){
         $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_race';
         return $chk;
+    }
+    if(empty($chk['resumed'])&&$qid!==''){
+        /* A failed spawn must not leave the fresh ownership heartbeat looking
+           healthy until another long stale timeout. Return it to waiting so
+           the very next cron retries the same checkpoint. */
+        $rollbackFp=queueBackendLock($which);
+        if(is_resource($rollbackFp)){
+            $rollbackQ=$which==='bsl'?bslReadQueue():wooReadQueue();
+            foreach((array)($rollbackQ['entries']??[])as&$rollbackRow){
+                if(!is_array($rollbackRow)||(string)($rollbackRow['id']??'')!==$qid)continue;
+                if((string)($rollbackRow['status']??'')==='running'){
+                    $rollbackRow['status']='waiting';$rollbackRow['resume_requested_at']=0;
+                    $rollbackRow['updated_at']=time();
+                }break;
+            }unset($rollbackRow);
+            if($which==='bsl')bslWriteQueue($rollbackQ);else wooWriteQueue($rollbackQ);
+            queueBackendUnlock($rollbackFp);
+        }
+        $chk['reason_defer']='dispatch_failed_retryable';
     }
     if (!empty($chk['resumed'])) {
         if (!isset($GLOBALS['_queueResumeFired']) || !is_array($GLOBALS['_queueResumeFired']))
@@ -79474,6 +79543,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.432', t:'🔁 ادامهٔ کران هم‌سطح دکمهٔ Continue', items:[
+    'نگهبان کران پیش از dispatch همان تراکنش Continue را انجام می‌دهد: مالک‌های running مرده کنار می‌روند، ردیف انتخابی مالک یکتا می‌شود و checkpoint تازه با queue_id نوشته می‌شود.',
+    'در هاست دارای PHP CLI، کران backend ارسال را به پردازهٔ مستقل متصل به checkpoint تحویل می‌دهد و دیگر به عمر self-HTTP یا اتصال سرویس کران وابسته نیست.',
+    'اگر spawn واقعاً شکست بخورد، ردیف فوراً waiting می‌شود تا اولین کران بعدی دوباره تلاش کند؛ heartbeat ساختگی آن را چند دقیقه سالم نشان نمی‌دهد.',
+    'توقف صریح کاربر همچنان محافظت می‌شود و هیچ ادامهٔ خودکاری آن را دور نمی‌زند.'
+  ]},
   {v:'10.431', t:'✂️ پوشش کامل عنوان کددار بریده‌شده', items:[
     'اگر محدودیت طول باسلام عنوان را در (ک، (کد:، (cod یا بخش دیگری از نشانگر کد قطع کند، محصول کددار/نامعین محسوب می‌شود و متفرقه نیست.',
     'آخرین مورد فعال باقی‌مانده در دادهٔ واقعی تولید به regression test تبدیل شد.'
