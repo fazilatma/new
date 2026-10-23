@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.446';
+const APP_VERSION = '10.448';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -14961,8 +14961,13 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         if($remoteSha!==''&&vc_content_id($code)!==$remoteSha)return ['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
         preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$code,$vm);$remoteVersion=(string)($vm[1]??'unknown');
         $allowDowngrade=!empty($_POST['allow_downgrade'])||(!$trustedAuto&&$requested!=='');
-        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,$diskVersion,'<')&&!$allowDowngrade)
+        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,$diskVersion,'<')&&!$allowDowngrade){
+            if($trustedAuto){
+                s4SyncAutoUpdateStateToDisk($sourceBranch,false);
+                return ['ok'=>true,'updated'=>false,'same'=>true,'downgrade_skipped'=>true,'current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion,'branch'=>$sourceBranch,'restart_required'=>$diskVersion!==APP_VERSION];
+            }
             return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion];
+        }
         $tmp=__FILE__.'.update.'.getmypid().'.tmp';if(@file_put_contents($tmp,$code,LOCK_EX)!==$size)return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];
         @chmod($tmp,(int)(@fileperms(__FILE__)&0777));
         if(function_exists('exec')){
@@ -49582,6 +49587,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $add('10.448', 'هم‌ترازی شمارهٔ نسخه با برنچ‌های موازی و پرش تمیز از دانگرید ناخواسته در آپدیت خودکار پس‌زمینه',
+         strpos($selfSrc, "'downgrade_skipped'=>true") !== false
+      && strpos($selfSrc, "{v:'10." . "448'") !== false
+      && version_compare(APP_VERSION, '10.448', '>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -84541,6 +84550,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.448', t:'🔄 هم‌ترازی شمارهٔ نسخه بین برنچ‌های موازی و پرش بی‌خطا از دانگرید خودکار در پس‌زمینه', items:[
+    'شمارهٔ نسخه بالاتر از برنچ موازی تنظیم شد تا هاست‌هایی که روی 10.447 قرار داشتند بدون خطای downgrade_refused به‌صورت خودکار اصلاحات حلقهٔ رفرش و ویرایش تصویر را دریافت کنند.',
+    'در حالت آپدیت خودکار پس‌زمینه (trustedAuto)، اگر برنچ تازه‌تر از نظر زمانی شمارهٔ نسخهٔ پایین‌تری از نسخهٔ فعلی دیسک داشته باشد، به‌جای ثبت خطای ۴۰۹ وضعیت، به‌صورت تمیز (downgrade_skipped) نسخهٔ فعلی دیسک را حفظ و همگام می‌کند؛ درحالی‌که کلیک دستی روی «⬇ آپدیت از این برنچ» همچنان امکان جابه‌جایی صریح به هر برنچ مجاز را دارد.'
+  ]},
   {v:'10.446', t:'🛑 رفع حلقهٔ رفرش بی‌نهایت هنگام آپدیت دستی از برنچ غیرنهایی از نظر زمانی + همگام‌سازی نسخهٔ واقعی دیسک و رفع خطای کش CDN گیت‌هاب', items:[
     'علت اصلی رفرش بی‌نهایت برطرف شد: وقتی با دکمهٔ «⬇ آپدیت از این برنچ» برنچی نصب می‌شد که از نظر زمانی آخرین برنچ نبود، فایل وضعیت .scraper4-auto-update.json همچنان نسخهٔ برنچ جدیدتر قبلی (to_version) را نگه می‌داشت و s4WatchInstalledCode هر ۲ ثانیه اختلاف آن با S4_LOADED_VERSION را می‌دید و صفحه را تا بی‌نهایت رفرش می‌کرد؛ اکنون s4AutoCodeUpdateTick با s4DiskCodeMeta همیشه نسخه و هش واقعی فایل روی دیسک را مبنا قرار می‌دهد و وضعیت کهنه را بلافاصله اصلاح می‌کند.',
     'قفل هوشمند برنچ دستی (vc_pick_target_branch + pinned_branch / pinned_max_unix) اضافه شد: با کلیک دستی روی «⬇ آپدیت از این برنچ»، همان برنچ به‌عنوان برنچ فعال (📌 فعال) قفل می‌شود تا آپدیتر خودکار بلافاصله آن را با کامیت ازقبل‌موجودِ برنچ دیگر بازنویسی نکند؛ تنها در صورتی که پس از لحظهٔ انتخاب دستی، کامیت تازه‌تری پوش شود به‌روزرسانی خودکار انجام می‌گیرد.',
