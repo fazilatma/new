@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.423';
+const APP_VERSION = '10.424';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1476,13 +1476,25 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
         $line = !empty($enq['duplicate'])
             ? '🧵 همگام‌سازی دستی از قبل در صف worker دائمی است.'
             : '🧵 همگام‌سازی دستی به worker دائمی سپرده شد — مرورگر فقط پیشرفت را می‌خواند.';
+        /* v10.424: a recovery enqueue must never erase the completed extraction
+           checkpoint. The child uses it to enter queue creation directly; losing
+           it here caused a full re-extract and left stage=send ownerless. */
+        $old=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+        $same=(string)($old['profile_key']??'')===$profileKey;
+        $cp=$resume&&$same&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
+        $oldLog=$resume&&$same&&is_array($old['recent_log']??null)?$old['recent_log']:[];
+        $oldLog[]=$line;
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
             'running' => true, 'done' => false, 'queued' => true, 'worker' => true,
-            'phase' => 'در صف worker', 'started_at' => time(), 'ts' => time(),
-            'last_progress_ts' => time(), 'total' => 4, 'current' => 0,
-            'profile_key' => $profileKey, 'profile_name' => $profileKey,
+            'phase' => $cp?'در صف بازیابی ارسال':'در صف worker',
+            'started_at' => $cp?(int)($old['started_at']??$cp['started_at']??time()):time(), 'ts' => time(),
+            'last_progress_ts' => time(), 'total' => 4,
+            'current' => $cp?max(2,(int)($old['current']??$cp['current']??2)):0,
+            'profile_key' => $profileKey,
+            'profile_name' => $same?(string)($old['profile_name']??$profileKey):$profileKey,
+            'checkpoint'=>$cp,
             'job_id' => (string)($enq['job_id'] ?? ''),
-            'recent_log' => [$line], 'total_log_count' => 1,
+            'recent_log' => array_slice($oldLog,-40), 'total_log_count' => max(count($oldLog),(int)($old['total_log_count']??0)+1),
         ]);
     }
     return $enq;
@@ -24280,6 +24292,9 @@ if(isset($_GET['sync_pipeline_control'])){
 }
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
+    /* Polling also closes an already-proven ownerless send gap. The reconciler
+       is locked/deduplicated and never touches rows that have a real sender. */
+    $sendReconcile=syncPipelineReconcileMissingSendQueues(true);
     $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
     $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];$wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
     /* کارت‌های ساخته‌شده پیش از v10.279 هم با آخرین ردیف صف غنی شوند؛
@@ -24316,7 +24331,7 @@ if(isset($_GET['sync_pipeline_status'])){
             if($dest){$sr['stage_details']['send']=['counts'=>$agg,'data'=>['destinations'=>$dest],'report'=>'پیشرفت زندهٔ صف‌های مقصد'];$sr['stage_progress']=$agg['queued']>0?min(99,(int)round($agg['sent']*100/$agg['queued'])):25;}
         }
     }unset($sr);
-    echo json_encode(['ok'=>true,'rows'=>$rows,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    echo json_encode(['ok'=>true,'rows'=>$rows,'send_reconciliation'=>$sendReconcile,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if (isset($_GET['manual_sync'])) {
     /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
@@ -24826,6 +24841,9 @@ if((string)getenv('S4_INTERNAL_CRON')!=='1'){
        spawn is enough to queue this pulse's checkpoints durably. */
     $GLOBALS['_cronWorkerReady']=$_cronWorkerReady;
 }
+/* v10.424: first accepted cron pulse repairs a send-stage pipeline that lost
+   its destination owner, reusing the completed extraction checkpoint. */
+$GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -45674,6 +45692,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"'missing_queue_row'=>\$repairResultFb")!==false
       && strpos($selfSrc,"{v:'10." . "423'")!==false
       && version_compare(APP_VERSION,'10.423','>='));
+    $add('10.424', 'resume دستی checkpoint استخراج کامل را هنگام ورود به worker حفظ می‌کند',
+         strpos($selfSrc,"\$cp=\$resume&&\$same&&is_array(\$old['checkpoint']??null)?\$old['checkpoint']:null;")!==false
+      && strpos($selfSrc,"'checkpoint'=>\$cp")!==false
+      && strpos($selfSrc,"'current' => \$cp?max(2")!==false);
+    $add('10.424', 'reconciler فقط send بدون مالک زنده و دارای checkpoint را بازیابی می‌کند',
+         strpos($selfSrc,'function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array')!==false
+      && strpos($selfSrc,"in_array((string)(\$qe['status']??''),['waiting','running','paused'],true)")!==false
+      && strpos($selfSrc,"&&is_array(\$cp['extract']??null)")!==false
+      && strpos($selfSrc,'$enq=s4WorkerEnqueueManualSync($pk,true);')!==false);
+    $add('10.424', 'اولین کران و poll صف همگام‌سازی reconciliation را اجرا می‌کنند',
+         strpos($selfSrc,"\$GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);")!==false
+      && strpos($selfSrc,'$sendReconcile=syncPipelineReconcileMissingSendQueues(true);')!==false
+      && strpos($selfSrc,"'send_reconciliation'=>\$sendReconcile")!==false
+      && strpos($selfSrc,"{v:'10." . "424'")!==false
+      && version_compare(APP_VERSION,'10.424','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -50012,6 +50045,50 @@ function syncPipelineRows():array{
     $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))return[];
     uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
     return array_values($all);
+}
+/** v10.424: repair the narrow crash window between marking stage=send and
+ * durably writing a destination queue. Only a matching completed extraction
+ * checkpoint may be resumed, and a live destination owner always wins. */
+function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
+    $out=['checked'=>0,'recovered'=>0,'skipped'=>0,'rows'=>[]];
+    $lf=@fopen(__DIR__.'/.sync_send_reconcile.lock','c');
+    if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);$out['busy']=true;return$out;}
+    try{
+        $now=time();$mp=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+        $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];
+        $wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
+        foreach(syncPipelineRows() as $row){
+            if(!is_array($row)||(string)($row['stage']??'')!=='send'||!empty($row['done']))continue;
+            $out['checked']++;$pk=(string)($row['profile_key']??'');
+            if($pk===''||(string)($row['trigger']??'')!=='manual'){$out['skipped']++;continue;}
+            $hasOwner=false;
+            foreach(array_merge((array)($bq['entries']??[]),(array)($wq['entries']??[])) as $qe){
+                if(is_array($qe)&&(string)($qe['profile_key']??'')===$pk
+                    &&in_array((string)($qe['status']??''),['waiting','running','paused'],true)){$hasOwner=true;break;}
+            }
+            if($hasOwner){$out['skipped']++;continue;}
+            $idle=$now-(int)($row['updated_at']??$row['started_at']??0);
+            $claimed=$now-(int)($row['send_recovery_queued_at']??0)<max(120,(int)(loadConnections()['stall_after']??300));
+            $cp=is_array($mp['checkpoint']??null)?$mp['checkpoint']:[];
+            $checkpointReady=(string)($mp['profile_key']??'')===$pk
+                &&(string)($cp['profile_key']??'')===$pk
+                &&(int)($cp['current']??$mp['current']??0)>=2
+                &&is_array($cp['extract']??null);
+            if($idle<60||$claimed||!$checkpointReady){$out['skipped']++;continue;}
+            if(!$dispatch){$out['rows'][]=['profile_key'=>$pk,'recoverable'=>true];continue;}
+            /* The durable worker queue is the claim. Its dedup key prevents a
+               concurrent status poll and cron pulse from creating two senders. */
+            $enq=s4WorkerEnqueueManualSync($pk,true);
+            if(!empty($enq['ok'])){
+                syncPipelineMark($pk,(string)($row['profile_name']??$pk),'send','manual',[
+                    'send_recovery_queued_at'=>$now,'send_recovery_job_id'=>(string)($enq['job_id']??''),
+                    'message'=>'صف مقصد گم شده بود؛ بازیابی مستقیم از checkpoint استخراج در صف worker قرار گرفت']);
+                $out['recovered']++;$out['rows'][]=['profile_key'=>$pk,'job_id'=>(string)($enq['job_id']??''),'duplicate'=>!empty($enq['duplicate'])];
+                if(!s4WorkerIsActive())$out['worker_spawn']=s4SpawnPersistentWorker();
+            }else{$out['skipped']++;$out['rows'][]=['profile_key'=>$pk,'error'=>(string)($enq['error']??'enqueue_failed')];}
+        }
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    return$out;
 }
 function syncPricingSnapshot(array $profile,array $cn):array{
     $products=profileOrderedProducts($profile);
@@ -79105,6 +79182,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.424', t:'🧩 بازیابی صف مقصد گم‌شده پس از استخراج کامل', items:[
+    'شکاف چرخه‌ای میان ثبت مرحلهٔ ارسال و نوشتن پایدار صف مقصد شناسایی و با reconciler قفل‌دار پوشانده شد.',
+    'اولین کران یا poll وضعیت، ردیف send بدون مالک را فقط با checkpoint کامل همان پروفایل به worker بازیابی می‌سپارد؛ وجود هر صف زنده مانع ساخت تکراری است.',
+    'صف‌کردن resume دیگر checkpoint استخراج را پاک نمی‌کند؛ بنابراین ۴۰۳۸ محصول ذخیره‌شده مستقیماً وارد صف‌سازی می‌شوند و استخراج دوباره اجرا نمی‌شود.',
+    'مقصد none یا مقصد غیرفعال نیز به‌جای ماندن به‌شکل ردیف روح، با دلیل روشن تا پایان چرخه بسته می‌شود.'
+  ]},
   {v:'10.423', t:'🚑 بازسازی مالک گم‌شدهٔ ارسال و ادامه با کران', items:[
     'علت توقف تولید مشخص شد: progress باسلام روی ۲۵۸۸ از ۴۰۴۰ مانده بود، flock آزاد بود، اما bsl_queue.json هیچ ردیفی نداشت؛ بنابراین watchdog با وجود کران سالم چیزی برای انتخاب نداشت.',
     'کران اکنون queue_id گم‌شده را فقط با checkpoint ناتمام، فایل اختصاصی همان اجرا، پروفایل معتبر و نبود Stop کاربر بازسازی می‌کند و همان ردیف را از current قبلی ادامه می‌دهد.',
