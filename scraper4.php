@@ -65,6 +65,12 @@ const QUEUE_RESUME_HANDOFF_SEC = 120;
    near queueStallRecover were ever executed. */
 const QUEUE_RESUME_MAX_TRIES = 3;
 const QUEUE_RESUME_COOLDOWN  = 90;
+/* v10.415: Basalam has an explicit one-minute product-progress SLA. Every
+   external cron arrival uses this fixed threshold, independent of the older
+   generic watchdog setting. A slightly shorter dispatch cooldown ensures the
+   first cron at/after 60 seconds is never suppressed by the old 90s guard. */
+const BSL_SEND_STALL_SEC = 60;
+const BSL_RESUME_COOLDOWN_SEC = 55;
 const QUEUE_IDLE_RETRY_AFTER = 300;
 /* Task-priority queue ordering is called by early cron watchdog routes. */
 const TASKS_STALE_SEC = 300;
@@ -362,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.414';
+const APP_VERSION = '10.415';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -22418,7 +22424,11 @@ function cronWatchdogs(array $cn): array {
                 $results['paused_rows_promoted'][$wq]=(int)$batchResume['promoted'];
             /* توقفِ صریحِ کاربر از مسیرِ خودکار عبور نمی‌کند؛ صفِ واجدشرایط
                در همان ردیف/چک‌پوینت ادامه می‌یابد و workerها آن را به‌ترتیب برمی‌دارند. */
-            $w = queueStallRecover($wq, $stallCfg, false, 1500, true, false, true);
+            /* Basalam is checked against its real last-product heartbeat on
+               every cron. One full minute without movement is enough; the
+               generic configurable threshold remains for WooCommerce. */
+            $queueStallAfter=$wq==='bsl'?BSL_SEND_STALL_SEC:$stallCfg;
+            $w = queueStallRecover($wq, $queueStallAfter, false, 1500, true, false, true);
             if (!empty($w['stalled'])) {
                 $results['watchdog'][] = $w;
                 /* A still-held stale lock is reported in cron/task logs, but do
@@ -25644,20 +25654,24 @@ if (!manualSyncActive()) {
     try {
         $_pumpStall = max(120, (int)($cn['stall_after'] ?? 300));
         foreach (cronWatchdogQueueOrder() as $_pq) {
+            /* Basalam keeps the same one-minute rule in this later pump too;
+               otherwise this second checker could disagree with the early
+               watchdog and report a stale row as fresh. */
+            $_pqStall=$_pq==='bsl'?BSL_SEND_STALL_SEC:$_pumpStall;
             /* Include all non-user pauses so this later pump also works when
                the early watchdog is disabled or a checkpoint appeared mid-tick. */
-            $_pqChk = queueStallCheck($_pq, $_pumpStall, true);
+            $_pqChk = queueStallCheck($_pq, $_pqStall, true);
             if (empty($_pqChk['stalled'])) continue;
             /* Dispatch promptly, then inspect the other independent destination
                in the same cron pulse instead of spending up to two minutes here. */
-            $_pqRec = queueStallRecover($_pq, $_pumpStall, false, 2500, true, false, true);
+            $_pqRec = queueStallRecover($_pq, $_pqStall, false, 2500, true, false, true);
             $results['send_pump'][$_pq] = [
                 'from'    => (int)($_pqChk['current'] ?? 0),
                 'total'   => (int)($_pqChk['total'] ?? 0),
                 'resumed' => !empty($_pqRec['resumed']),
                 'promoted_rows'=>(int)($_pqRec['promoted_rows']??0),
             ];
-            $_pqAfter = queueStallCheck($_pq, $_pumpStall);
+            $_pqAfter = queueStallCheck($_pq, $_pqStall);
             $results['send_pump'][$_pq]['now'] = (int)($_pqAfter['current'] ?? 0);
             if (!empty($_pqRec['resumed'])) {
                 $_pumpBlocking = true;
@@ -39315,7 +39329,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
           && strpos($selfSrc, 'if(d.recovered)') !== false
           && strpos($selfSrc, 'send_autorecover_state.json') !== false));
     $add('10.59', 'ردیفِ تمام‌شدهٔ بسته‌نشده در وضعیتِ صف فوراً بسته می‌شود',
-         (strpos($selfSrc, "queueStallCheck('bsl', max(120, (int)(\$stB['stall_after'] ?? 300)));") !== false
+         (strpos($selfSrc, "queueStallCheck('bsl', BSL_SEND_STALL_SEC);") !== false
           && strpos($selfSrc, "queueStallCheck('woo', max(120, (int)(\$stW['stall_after'] ?? 300)));") !== false));
 
     /* ==== ۷۲ (v10.58) ==== */
@@ -45247,7 +45261,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'retry_policy' => \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false);
     $add('10.411', 'کران باسلام حتی با خاموشی watchdog عمومی اجباری است و failed قدیمی را بازمی‌گرداند',
          strpos($selfSrc, "if(!\$stallWake&&\$wq!=='bsl')continue;") !== false
-      && strpos($selfSrc, "\$retryAfter=\$which==='bsl'?QUEUE_RESUME_COOLDOWN:QUEUE_IDLE_RETRY_AFTER;") !== false
+      && strpos($selfSrc, "\$retryAfter=\$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_IDLE_RETRY_AFTER;") !== false
       && strpos($selfSrc, "'retry_policy'=>'until_row_complete'") !== false
       && strpos($selfSrc, "{v:'10." . "411'") !== false
       && version_compare(APP_VERSION, '10.' . '411', '>='));
@@ -45264,6 +45278,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false
       && strpos($selfSrc, "{v:'10." . "412'") !== false
       && version_compare(APP_VERSION, '10.' . '412', '>='));
+    $add('10.415', 'هر کران باسلام پس از ۶۰ ثانیه بی‌حرکتی همان checkpoint را ادامه می‌دهد',
+         strpos($selfSrc, 'const BSL_SEND_STALL_SEC = 60;') !== false
+      && strpos($selfSrc, 'const BSL_RESUME_COOLDOWN_SEC = 55;') !== false
+      && strpos($selfSrc, "\$queueStallAfter=\$wq==='bsl'?BSL_SEND_STALL_SEC:\$stallCfg;") !== false
+      && strpos($selfSrc, 'if ($idle >= $staleAfter)') !== false
+      && strpos($selfSrc, "\$resumeCooldown=\$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_RESUME_COOLDOWN;") !== false
+      && strpos($selfSrc, "\$stallAfterFb=BSL_SEND_STALL_SEC;") !== false);
+    $add('10.415', 'وظیفهٔ فعال باسلام زیر کش کاتالوگِ خود تب ارسال نمایش داده می‌شود',
+         strpos($selfSrc, 'id="bslActiveSendTask"') !== false
+      && strpos($selfSrc, 'function renderBslActiveSendTask(q)') !== false
+      && strpos($selfSrc, "renderBslActiveSendTask(q);") !== false
+      && strpos($selfSrc, '👤 پروفایل ارسال: ') !== false
+      && strpos($selfSrc, "{v:'10." . "415'") !== false
+      && version_compare(APP_VERSION, '10.' . '415', '>='));
     $add('10.414', 'self-curl نامطمئن با handoff ماندگار به cron بعدی جایگزین می‌شود',
          strpos($selfSrc, "const QUEUE_CRON_HANDOFF_FILE") !== false
       && strpos($selfSrc, 'function queueCronHandoffPrepare()') !== false
@@ -49867,10 +49895,10 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
            is released. Previously ['lock'=>$now] reset idle to zero forever. */
         $_iwS = queueRowIdle($which, $running, $prog, $now, [], $runningCount);
         $idle = (int)$_iwS['idle'];
-        if ($lockFresh && $idle <= $staleAfter) {
+        if ($lockFresh && $idle < $staleAfter) {
             return ['stalled' => false, 'reason' => 'در حال اجرا', 'idle' => $idle];
         }
-        if ($idle > $staleAfter) {
+        if ($idle >= $staleAfter) {
             /* v10.56 (۷۰): چک‌پوینتِ ادامه. در طولِ ارسالِ طولانی «current»ِ
                ردیفِ صف صفر می‌ماند (وِرکر آن را فقط در پایان و در هنگام پُلِ
                مرورگر می‌نویسد) — نگهبان اگر فقط ردیف را بخواند، وظیفه را از
@@ -50127,7 +50155,7 @@ function queueIdleRetryFailed(string $which): ?array {
         if ($qid === '') continue;
         $book = queueResumeBook($which, $qid);
         $lastAt = (int)($book['at'] ?? 0);
-        $retryAfter=$which==='bsl'?QUEUE_RESUME_COOLDOWN:QUEUE_IDLE_RETRY_AFTER;
+        $retryAfter=$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_IDLE_RETRY_AFTER;
         if ($lastAt > 0 && ($now - $lastAt) < $retryAfter) continue;
         if ((string)($book['status'] ?? '') === 'exhausted') {
             queueResumeBook($which, $qid, ['tries' => 0, 'status' => 'idle_retry', 'at' => $now]);
@@ -50232,8 +50260,11 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         queueResumeBook($which, $qid, ['tries' => 0, 'from' => $start, 'status' => 'progressed', 'at' => $now]);
         $book['tries'] = 0;
     }
-    /* کول‌داون بین تلاش‌ها */
-    if (!$allowUserStopped && $lastAt > 0 && ($now - $lastAt) < QUEUE_RESUME_COOLDOWN && $tries > 0
+    /* Basalam must be eligible again on the first cron after one minute of no
+       product progress. Its cooldown therefore cannot retain the generic 90s
+       delay; progress ownership and backend flock still prevent duplicates. */
+    $resumeCooldown=$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_RESUME_COOLDOWN;
+    if (!$allowUserStopped && $lastAt > 0 && ($now - $lastAt) < $resumeCooldown && $tries > 0
         && !in_array((string)($book['status'] ?? ''), ['exhausted','awaiting_lock_release'], true)) {
         $chk['resumed'] = false;
         $chk['deferred'] = true;
@@ -61038,7 +61069,7 @@ $progressOwnedFb=is_array($selectedFb)&&($selectedFb['status']??'')==='running'
 $progressBeatFb=$progressOwnedFb?tasksHeartbeat($progressFb):0;
 $rowBeatFb=is_array($selectedFb)?tasksHeartbeat($selectedFb):0;
 $beatFb=max($progressBeatFb,$rowBeatFb);$idleFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
-$stallAfterFb=max(120,(int)($cnFb['stall_after']??300));
+$stallAfterFb=BSL_SEND_STALL_SEC;
 $watchdogEnabledFb=!isset($cnFb['stall_watchdog'])||!empty($cnFb['stall_watchdog']);
 $autoResumeEnabledFb=!isset($cnFb['auto_resume'])||!empty($cnFb['auto_resume']);
 $lockFileFb=__DIR__.'/bsl_backend.lock';$lockFpFb=@fopen($lockFileFb,'c');$lockHeldFb=false;$lockProbeOkFb=false;
@@ -61250,7 +61281,7 @@ header('Content-Type: application/json; charset=UTF-8');
    «total» رسیده (یا progress کامل است) ولی ردیف هنوز «running» است.
    queueStallCheck دقیقاً همین ردیف را فوراً «done» می‌کند؛ پس قبل از
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
-try { $stB = loadConnections(); queueStallCheck('bsl', max(120, (int)($stB['stall_after'] ?? 300))); } catch (Throwable $eB) {}
+try { queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $bslStatusFp = queueBackendLock('bsl');
 if (is_resource($bslStatusFp)) register_shutdown_function(function() use ($bslStatusFp) { queueBackendUnlock($bslStatusFp); });
 $queue=bslReadQueue();
@@ -72504,6 +72535,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div></details>
 <div id="bcBox" style="font-size:10.5px;color:#64748b">برای دیدن، «وضعیت» را بزنید.</div>
 </div>
+<!-- v10.415: active Basalam task belongs here in the Send tab, directly below
+     Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
+<div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
 <div class="cact"><button class="btn btn-cyan" id="bSB" onclick="sendBsl()" style="flex:1">🚀 ارسال باسلام</button><button class="btn btn-green" id="bSBlegacy" onclick="sendBslClient()" style="flex:1">🚀 ارسال فرات</button><button class="btn btn-orange hidden" id="bRB" onclick="sendBsl()" style="flex:1">🔄 تلاش مجدد</button><button class="btn btn-teal" onclick="showBslProductsModal()" style="flex-shrink:0;font-size:12px;padding:6px 10px">🏪 مدیریت جامع محصولات باسلام</button><button class="btn btn-red hidden" id="bST" onclick="stopBslProcess()">⏹ توقف</button></div>
 <div class="progress hidden" id="bP"><div class="progress-bar" id="bPB" style="background:linear-gradient(90deg,#0891b2,#22d3ee)"></div></div>
 <div class="status" id="bSS" style="color:#67e8f9"></div>
@@ -78497,6 +78531,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.415', t:'⏱ ادامهٔ باسلام در اولین کران پس از یک دقیقه توقف', items:[
+    'کارت وظیفهٔ فعال باسلام اکنون در خود تب ارسال و دقیقاً زیر کش کاتالوگ نمایش داده می‌شود؛ نام پروفایل، غرفه، checkpoint و زمان آخرین محصول همیشه جلوی چشم است.',
+    'اگر worker همان ردیف زنده نباشد و وظیفه متوقف یا گیرکرده باشد، دکمهٔ «ادامه» روی همین کارت ظاهر می‌شود و queue_id و شمارنده‌های قبلی را حفظ می‌کند.',
+    'آستانهٔ باسلام دیگر از تنظیم عمومی ۳۰۰ ثانیه پیروی نمی‌کند: هر cron واقعی، آخرین heartbeat محصول را با آستانهٔ ثابت ۶۰ ثانیه می‌سنجد.',
+    'مقایسهٔ بی‌حرکتی شامل خود ثانیهٔ ۶۰ است و cooldown اختصاصی باسلام ۵۵ ثانیه شده تا اولین cron واجدشرایط توسط تأخیر ۹۰ ثانیه‌ای قدیمی رد نشود.',
+    'نگهبان آغاز cron، پمپ انتهای cron، feedback و وضعیت صف همگی از همان آستانهٔ یک‌دقیقه‌ای استفاده می‌کنند؛ flock و Stop صریح همچنان مانع worker تکراری می‌شوند.'
+  ]},
   {v:'10.414', t:'⏭ تحویل قطعی بازیابی ارسال به cron بعدی', items:[
     'تشخیص production نشان داد cron تازه است و ردیف درست را انتخاب می‌کند، اما self-curl کوتاه فقط timeout را موفق حساب می‌کرد و در LiteSpeed هیچ backend ماندگاری به lock نمی‌رسید.',
     'هر بازیابی HTTP اکنون queue_id، checkpoint و پارامترهای همان ردیف را در handoff اتمیک و ماندگار ذخیره می‌کند؛ اگر child واقعاً شروع شود پس از گرفتن flock آن را پاک می‌کند.',
@@ -93653,12 +93694,46 @@ function sendQueueVisualCard(e,opt){
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
       +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
 }
+/* v10.415: compact current-task card in the Send tab, immediately below
+   Catalog Cache. It deliberately does not depend on the Task Manager modal or
+   on opening the full queue accordion. */
+function renderBslActiveSendTask(q){
+    const box=$('bslActiveSendTask');if(!box)return;
+    const entries=Array.isArray(q&&q.entries)?q.entries:[];
+    let row=null;
+    if(q&&q.active_send&&q.active_send.queue_id)
+        row=entries.find(e=>e&&String(e.id||'')===String(q.active_send.queue_id||''))||q.active_send;
+    if(!row){
+        const rank={running:0,paused:1,waiting:2,failed:3};
+        row=entries.filter(e=>e&&rank[e.status]!==undefined&&((parseInt(e.total)||0)<=0||(parseInt(e.current)||0)<(parseInt(e.total)||0)))
+            .sort((a,b)=>rank[a.status]-rank[b.status]||Number(b.resume_requested_at||b.started_at||0)-Number(a.resume_requested_at||a.started_at||0))[0]||null;
+    }
+    if(!row){box.style.display='none';box.innerHTML='';return;}
+    const total=Math.max(0,parseInt(row.total)||0),current=Math.max(0,parseInt(row.current)||0);
+    const incomplete=row.status!=='done'&&(total<=0||current<total);
+    const live=!!row._worker_live||!!(q&&q.active_send&&String(q.active_send.queue_id||'')===String(row.id||''));
+    const canContinue=incomplete&&!live&&['running','paused','waiting','failed'].includes(String(row.status||''));
+    const profile=String(row.profile_name||row.profile_key||'پروفایل نامشخص');
+    const shop=String(row.shop_name||row.phase_shop_name||'غرفهٔ پیش‌فرض');
+    const beat=parseInt(row.last_progress_ts||0),age=beat>0?Math.max(0,Math.floor(Date.now()/1000)-beat):null;
+    const pct=total>0?Math.max(0,Math.min(100,Math.round(current*100/total))):0;
+    const state=live?'🟢 در حال ارسال واقعی':(canContinue?'⚠ ارسال متوقف/گیرکرده':'⏳ در صف ارسال');
+    box.style.display='block';
+    box.innerHTML='<div style="padding:10px 12px;background:'+(live?'#052e164d':'#43140755')+';border:1px solid '+(live?'#22c55e88':'#f9731688')+';border-radius:10px">'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:'+(live?'#86efac':'#fdba74')+';font-size:12px">'+state+'</b><span style="flex:1"></span>'
+      +(canContinue?'<button class="btn btn-green" style="font-size:11px;padding:5px 12px" onclick="resumeBslQueue(\''+jsAttr(String(row.id||''))+'\')">▶ ادامه از '+toFa(current+1)+'</button>':'')+'</div>'
+      +'<div style="margin-top:6px;color:#e2e8f0;font-size:11px;font-weight:700">👤 پروفایل ارسال: '+esc(profile)+'</div>'
+      +'<div style="margin-top:3px;color:#94a3b8;font-size:10px">🏪 '+esc(shop)+' · checkpoint: '+toFa(current)+' از '+toFa(total)
+      +(age===null?'':' · آخرین محصول: '+toFa(age)+' ثانیه پیش')+'</div>'
+      +'<div style="height:5px;background:#0f172a;border-radius:99px;overflow:hidden;margin-top:7px"><i style="display:block;height:100%;width:'+pct+'%;background:'+(live?'#22c55e':'#f97316')+'"></i></div></div>';
+}
 function renderBslQueue(q){
     const section=$('bslQueueSection');
     const list=$('bslQueueList');
     if(!section||!list)return;
     const entries=q.entries||[];
 
+    renderBslActiveSendTask(q);
     renderSendQueueProfileSummary('bsl',entries,q.active_send||null);
 
     try{const bd=$('bslQueueCountBadge');if(bd){const n=(entries||[]).length;const act=(entries||[]).filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
