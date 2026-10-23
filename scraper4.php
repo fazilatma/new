@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.421';
+const APP_VERSION = '10.422';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2848,6 +2848,41 @@ function extractNormalizeDetailSelectors($raw): array {
  * every product page. */
 function extractHasDetailSelectors(array $profile): bool {
     return count(extractNormalizeDetailSelectors($profile['detailSelectors'] ?? [])) > 0;
+}
+
+/** v10.422: profile-level detail coverage for the Start-tab breakdown.
+ * A durable resolved-detail marker is authoritative. Older products created by
+ * inline extraction predate that marker, so distinctive configured detail
+ * fields are accepted as a compatibility fallback. List-page price/main image
+ * alone are intentionally not treated as proof that stage two completed. */
+function extractProductHasDetailData(array $product,array $detailSelectors): bool {
+    if((int)($product['_detail_checked_at']??0)>0||trim((string)($product['_detail_cycle']??''))!=='')return true;
+    foreach(array_keys($detailSelectors)as$field){
+        if($field==='variations'){
+            foreach(['variations','variation_groups','variations_text']as$key){$v=$product[$key]??null;
+                if((is_array($v)&&count($v)>0)||(!is_array($v)&&trim((string)$v)!==''))return true;}
+            continue;
+        }
+        if($field==='shortDesc'||$field==='longDesc'||$field==='description'){
+            foreach([$field,$field==='shortDesc'?'short_desc':'',$field==='longDesc'?'long_desc':'','description']as$key)
+                if($key!==''&&trim(strip_tags((string)($product[$key]??'')))!=='')return true;
+            continue;
+        }
+        if(in_array($field,['price','image'],true))continue;
+        $v=$product[$field]??null;
+        if((is_array($v)&&count($v)>0)||(!is_array($v)&&trim((string)$v)!==''))return true;
+    }
+    return false;
+}
+function extractProfileDetailSummary(array $profile): array {
+    $selectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+    $total=0;$detailed=0;
+    foreach(profileProductsMap($profile)as$product){
+        if(!is_array($product))continue;$total++;
+        if($selectors&&extractProductHasDetailData($product,$selectors))$detailed++;
+    }
+    return ['enabled'=>count($selectors)>0,'selector_count'=>count($selectors),
+        'total'=>$total,'detailed'=>$detailed];
 }
 
 /* =====================================================================
@@ -12986,7 +13021,9 @@ if (isset($_GET['start_product_stats'])) {
                 'price'=>extractPriceNum($p['price'] ?? 0),'images'=>count($images),'link'=>$linkOk ? $linkRaw : ''];
             foreach ($flags as $metric => $yes) if ($yes) { $totals[$metric]++; $pm[$metric]++; if (count($samples[$metric]) < 8) $samples[$metric][] = $sample; }
         }
-        $byProfile[] = ['key'=>(string)$pk,'name'=>$pn,'updated_at'=>(int)($profile['updatedAt'] ?? 0),'counts'=>$pm];
+        $detailSummary=extractProfileDetailSummary($profile);
+        $byProfile[] = ['key'=>(string)$pk,'name'=>$pn,'updated_at'=>(int)($profile['updatedAt'] ?? 0),
+            'counts'=>$pm,'detail'=>$detailSummary];
     }
     usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
     echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples],
@@ -20583,7 +20620,11 @@ if (!($_galDoneNow && !$_fieldMissingNow)) {
             'page'=>$page,'inline_detail_current'=>$_inlineDetailDone], extractLiveCompare($allProducts,$livePrevMap)));
     }
     $_inlineRes=extractProductDetailInline($allProducts, $key, $detailSelectors, $galleryCfg, false);
-    if(!empty($_inlineRes['ok']))unset($allProducts[$key]['_detail_new_pending']);
+    if(!empty($_inlineRes['ok'])){
+        unset($allProducts[$key]['_detail_new_pending']);
+        if((int)($_inlineRes['fields']??0)>0||(int)($_inlineRes['imgs']??0)>0||(int)($_inlineRes['vars']??0)>0)
+            $allProducts[$key]['_detail_checked_at']=time();
+    }
     extractLockTouch($queueId);
     extractCheckpoint($pkFinal, $allProducts,
         ['_extract_stage' => 'detail', '_extract_stage_at' => time(),
@@ -45544,6 +45585,31 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, '$price = profileFinalPrice($profile, $rawPrice);') !== false
       && strpos($selfSrc, "{v:'10." . "420'") !== false
       && version_compare(APP_VERSION, '10.' . '420', '>='));
+    $_detailProfile422=['detailSelectors'=>[
+        'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
+        'price'=>['enabled'=>false,'selector'=>'.price']],
+        'products'=>[
+            ['a',['title'=>'الف','shortDesc'=>'شرح']],
+            ['b',['title'=>'ب','price'=>100]],
+            ['c',['title'=>'ج','_detail_checked_at'=>123]],
+        ],'productsOrder'=>['a','b','c']];
+    $_detailSummary422=extractProfileDetailSummary($_detailProfile422);
+    $_startPane422=strpos($selfSrc,'id="pane-start"');
+    $_table422=strpos($selfSrc,'id="startProfileBreakdown"');
+    $_settingsPane422=strpos($selfSrc,'id="pane-settings"');
+    $add('10.422', 'جدول تفکیکی پروفایل‌ها در انتهای تب شروع و پیش از تب تنظیمات است',
+         $_startPane422!==false&&$_table422!==false&&$_settingsPane422!==false
+      && $_startPane422<$_table422&&$_table422<$_settingsPane422
+      && strpos($selfSrc,'id="startProfileBreakdownBody"')!==false
+      && strpos($selfSrc,'renderStartProfileBreakdown(d)')!==false);
+    $add('10.422', 'فعال‌بودن مرحلهٔ دوم و پوشش جزئیات از سلکتورهای فعال و دادهٔ واقعی شمرده می‌شود',
+         !empty($_detailSummary422['enabled'])
+      && (int)($_detailSummary422['selector_count']??0)===1
+      && (int)($_detailSummary422['total']??0)===3
+      && (int)($_detailSummary422['detailed']??0)===2
+      && strpos($selfSrc,"\$allProducts[\$key]['_detail_checked_at']=time();")!==false
+      && strpos($selfSrc,"{v:'10." . "422'")!==false
+      && version_compare(APP_VERSION,'10.422','>='));
     $_ex421Profiles=['p421'=>['_extract_stage'=>'list','_extract_list_incomplete'=>true]];
     $_ex421Base=['id'=>'q421','profile_key'=>'p421','status'=>'paused','resume_phase'=>'list',
         'resumable'=>true,'updated_at'=>100];
@@ -72059,6 +72125,26 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
           @media(prefers-reduced-motion:reduce){.spo-card{transition:none}.spo-skeleton{animation:none}}
         </style>
     </div>
+
+    <!-- v10.422: requested per-profile extraction/detail breakdown at the true end of Start. -->
+    <section class="card start-profile-breakdown" id="startProfileBreakdown" aria-labelledby="startProfileBreakdownTitle">
+        <div class="spb-head">
+            <div><h3 id="startProfileBreakdownTitle">📋 تفکیک محصولات پروفایل‌ها</h3><p>تعداد محصولات ذخیره‌شده، وضعیت سلکتور جزئیات و پوشش داده‌های مرحلهٔ دوم برای هر پروفایل.</p></div>
+            <button class="btn btn-gray" onclick="loadStartProductOverview(true)" title="تازه‌سازی جدول">🔄</button>
+        </div>
+        <div class="spb-scroll">
+          <table class="spb-table">
+            <thead><tr><th>پروفایل</th><th>کل محصولات</th><th>سلکتور جزئیات</th><th>مرحلهٔ دوم</th><th>دارای جزئیات</th></tr></thead>
+            <tbody id="startProfileBreakdownBody"><tr><td colspan="5" class="spb-empty">در حال محاسبهٔ جدول…</td></tr></tbody>
+            <tfoot id="startProfileBreakdownFoot"></tfoot>
+          </table>
+        </div>
+        <div class="spb-note">«دارای جزئیات» یعنی محصولی که مرحلهٔ جزئیات آن با موفقیت ثبت شده یا حداقل یکی از فیلدهای اختصاصیِ فعالِ جزئیات را دارد.</div>
+        <style>
+          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}
+          @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
+        </style>
+    </section>
 </div>
 
 <div class="tab-pane" id="pane-settings">
@@ -73270,19 +73356,35 @@ const START_PRODUCT_METRICS = [
   ['brand','🏭','دارای برند','#f59e0b','محصولات دارای نام برند'],
   ['ready','🚀','آمادهٔ پایهٔ ارسال','#4ade80','محصولاتی که هم‌زمان قیمت، تصویر و لینک دارند']
 ];
-let startProductOverviewData=null,startProductOverviewBusy=false;
+let startProductOverviewData=null,startProductOverviewBusy=false,startBreakdownRefreshTimer=null;
+function scheduleStartBreakdownRefresh(){clearTimeout(startBreakdownRefreshTimer);startBreakdownRefreshTimer=setTimeout(()=>loadStartProductOverview(true),1800)}
 function spoNum(n){try{return Number(n||0).toLocaleString('fa-IR')}catch(e){return toFa(n||0)}}
+function renderStartProfileBreakdown(d){
+  const body=$('startProfileBreakdownBody'),foot=$('startProfileBreakdownFoot');if(!body||!foot)return;
+  const rows=Array.isArray(d&&d.by_profile)?d.by_profile:[];
+  if(!rows.length){body.innerHTML='<tr><td colspan="5" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
+  let all=0,detailed=0,enabled=0;
+  body.innerHTML=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
+    return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
+      '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+
+      '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
+      '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?'▶ اجرا می‌شود':'— اجرا نمی‌شود')+'</span></td>'+
+      '<td><div class="spb-coverage"><div class="spb-coverage-top"><b>'+spoNum(done)+' از '+spoNum(total)+'</b><span>'+spoNum(pct)+'٪</span></div><span class="spb-bar"><i style="width:'+pct+'%"></i></span></div></td></tr>';
+  }).join('');
+  const pct=all?Math.round(detailed*100/all):0;
+  foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td><td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
+}
 function loadStartProductOverview(force){
   const grid=$('startProductOverviewGrid'),meta=$('startProductOverviewMeta');if(!grid||startProductOverviewBusy)return;
   startProductOverviewBusy=true;if(force)meta.textContent='در حال محاسبهٔ دوباره…';
   fetch('?start_product_stats=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
-    if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ نامعتبر');startProductOverviewData=d;
+    if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ نامعتبر');startProductOverviewData=d;renderStartProfileBreakdown(d);
     const total=parseInt((d.totals||{}).total||0),prof=parseInt(d.profiles||0);
     meta.textContent=spoNum(total)+' محصول در '+spoNum(prof)+' پروفایل · آخرین محاسبه: '+new Date((d.generated_at||0)*1000).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});
     grid.innerHTML=START_PRODUCT_METRICS.map(m=>{const n=parseInt((d.totals||{})[m[0]]||0),pct=total?Math.round(n*100/total):0;
       return '<button class="spo-card" style="--spo-color:'+m[3]+'" onclick="openStartProductOverviewDetail(\''+m[0]+'\')" title="'+esc(m[4])+'"><span class="spo-icon">'+m[1]+'</span><b class="spo-value">'+spoNum(n)+'</b><span class="spo-label">'+esc(m[2])+'</span><span class="spo-foot"><span>'+esc(m[4])+'</span><b class="spo-pct">'+spoNum(pct)+'٪</b></span></button>';
     }).join('');
-  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';}).finally(()=>{startProductOverviewBusy=false;});
+  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';const b=$('startProfileBreakdownBody'),f=$('startProfileBreakdownFoot');if(b)b.innerHTML='<tr><td colspan="5" class="spb-empty">جدول پروفایل‌ها خوانده نشد؛ دوباره تلاش کنید.</td></tr>';if(f)f.innerHTML='';}).finally(()=>{startProductOverviewBusy=false;});
 }
 function openStartProductOverviewDetail(metric){
   const d=startProductOverviewData;if(!d)return;const def=START_PRODUCT_METRICS.find(x=>x[0]===metric);if(!def)return;
@@ -73367,6 +73469,7 @@ function switchMainTab(name) {
     /* v10.31 (۴۴): نتایج تا لحظهٔ دیده‌شدن ساخته نمی‌شوند. ورود به تب
        همان لحظه است — پس اگر نمای جاری کهنه است، همین‌جا ساختش. */
     if (name === 'results' && typeof rvEnsure === 'function') rvEnsure(rvCurView);
+    if (name === 'start' && typeof loadStartProductOverview === 'function') loadStartProductOverview(false);
     /* Refresh both send queues on entry so queued profiles are visible immediately. */
     if (name === 'send') {
         try { if (typeof checkWooQueue === 'function') checkWooQueue(); } catch(e) {}
@@ -75191,6 +75294,7 @@ function saveProfileSilent() {
                 }
                 renderProfileDropdown();
                 setProfileSelectValue(data.url);
+                scheduleStartBreakdownRefresh();
             } else if(d.error==='stale_profile') {
                 profileFormReady=false;
                 clearTimeout(saveTimer);
@@ -75246,6 +75350,7 @@ function saveProfile() {
                 }
                 renderProfileDropdown();
                 setProfileSelectValue(data.url);
+                scheduleStartBreakdownRefresh();
                 // v7.66: Show selector status after save
                 if(data.selectors && data.selectors.container){
                     showToast('✓ ذخیره شد — سلکتورها: '+data.selectors.container+' ✓');
@@ -75285,6 +75390,7 @@ function deleteProfile() {
                 const s = $('profileStatus');
                 s.textContent = 'جدید';
                 s.className = 'profile-indicator unsaved';
+                scheduleStartBreakdownRefresh();
                 showToast('✓ حذف شد');
             } else {
                 showToast('خطا: ' + (d.error || ''), true);
@@ -78419,6 +78525,7 @@ function pollExtractProgress(){
             $('extractProgress').classList.add('hidden');
             if(firstDonePoll){
                 refreshExtractQueue();
+                scheduleStartBreakdownRefresh();
                 if(d.new_items||d.changed_items||d.removed_items){
                     extractReportData={newItems:d.new_items||[],changedItems:d.changed_items||[],removedItems:d.removed_items||[],unchangedCount:d.unchanged||0,totalOld:(d.new_items||[]).length+(d.changed_items||[]).length+(d.removed_items||[]).length+(d.unchanged||0)};
                     buildStatusMap();refreshResultBadges();
@@ -78890,6 +78997,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.422', t:'📋 جدول تفکیکی محصولات و مرحلهٔ جزئیات در تب شروع', items:[
+    'در انتهای واقعی تب شروع، جدول واکنش‌گرای همهٔ پروفایل‌ها با نام و تعداد محصولات ذخیره‌شده اضافه شد.',
+    'جدول برای هر پروفایل تعداد سلکتورهای جزئیات فعال را نشان می‌دهد و صریحاً مشخص می‌کند مرحلهٔ دوم استخراج اجرا می‌شود یا خیر.',
+    'تعداد و درصد محصولات دارای دادهٔ جزئیات برای هر پروفایل و جمع کل نمایش داده می‌شود؛ قیمت یا تصویر اصلیِ فهرست به‌تنهایی به‌اشتباه جزئیات شمرده نمی‌شود.',
+    'نتیجه از endpoint بدون cache خوانده می‌شود، با ورود به تب شروع و هر دقیقه تازه می‌شود و استخراج جزئیات درجای موفق نیز نشان پایدار جزئیات ثبت می‌کند.'
+  ]},
   {v:'10.421', t:'♻️ بازیابی امن استخراج متوقف یا گیرکرده', items:[
     'استخراج دستی یا دوره‌ای با مرگ قطعی مالک در اولین کران و با وجود مالک زنده پس از دقیقاً ۶۰ ثانیه بدون پیشرفت واقعی، با همان queue_id و فاز checkpoint ادامه می‌یابد.',
     'زنده‌بودن PID دیگر heartbeat جعلی محسوب نمی‌شود؛ worker واقعاً گیرکرده به‌صورت هدفمند بازنشسته می‌شود و قفل همان ردیف پیش از ادامه دوباره بررسی می‌شود.',
