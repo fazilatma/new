@@ -357,7 +357,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.411';
+const APP_VERSION = '10.412';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -45208,6 +45208,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'retry_policy'=>'until_row_complete'") !== false
       && strpos($selfSrc, "{v:'10." . "411'") !== false
       && version_compare(APP_VERSION, '10.' . '411', '>='));
+    $add('10.412', 'هر کارت باسلامِ تکمیل‌نشده دکمه ادامه از checkpoint دارد',
+         strpos($selfSrc, "const __incomplete=e.status!=='done'||(__total>0&&__current<__total);") !== false
+      && substr_count($selfSrc, "resumeBslQueue(\\'") >= 2
+      && strpos($selfSrc, "if(d.already_running)") !== false
+      && strpos($selfSrc, "worker تکراری ساخته نشد") !== false);
+    $add('10.412', 'ادامهٔ ردیف running مرده زیر flock و بدون worker تکراری انجام می‌شود',
+         strpos($selfSrc, "\$resumeFp=queueBackendLock('bsl');") !== false
+      && strpos($selfSrc, "'dispatch_ready'=>true") !== false
+      && strpos($selfSrc, "'status']='waiting';\$other['resume_requested_at']=0") !== false
+      && strpos($selfSrc, "queueResumeBook('bsl',\$queueId,['tries'=>0") !== false
+      && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false
+      && strpos($selfSrc, "{v:'10." . "412'") !== false
+      && version_compare(APP_VERSION, '10.' . '412', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -61397,41 +61410,51 @@ exit;
 }
 
 if(isset($_GET['bsl_queue_resume'])){
-header('Content-Type: application/json; charset=UTF-8');
-$queueId=trim($_GET['queue_id']??'');
+header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+$queueId=trim((string)($_GET['queue_id']??''));
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
-$queue=bslReadQueue();
-foreach((array)($queue['entries']??[]) as $_activeResume){
-if((string)($_activeResume['id']??'')!==$queueId&&(string)($_activeResume['status']??'')==='running'){
-echo json_encode(['ok'=>false,'error'=>'یک ارسال دیگر در حال اجراست — پس از پایان آن ادامه دهید'],JSON_UNESCAPED_UNICODE);exit;
-}}
-$found=false;
-foreach($queue['entries'] as &$e){
-if($e['id']===$queueId&&in_array((string)$e['status'],['paused','failed'],true)&&!empty($e['products_file'])){
-$e['status']='running';
-$e['paused_at']=0;$e['done_at']=0;$e['fail_reason']='';
-unset($e['resume_exhausted'],$e['paused_by'],$e['stopped_by_user']);
-$found=true;
-
-@unlink(BSL_PRODUCTS_FILE);
-@copy($e['products_file'],BSL_PRODUCTS_FILE);
-// v8.57: ادامهٔ دستی یعنی کاربر می‌خواهد — نگه‌داشتِ توقف برداشته شود.
-// تنظیمات عمومی هم بازنویسی نمی‌شود.
-@unlink(BSL_STOP_FILE);
-
-writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??$e['current'],'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>['🔄 ادامه ارسال از محصول #'.($e['current']+1)],'total_log_count'=>($e['total_log_count']??0)+1,'sent_details'=>$e['sent_details']??[],'updated_details'=>$e['updated_details']??[],'skipped_details'=>$e['skipped_details']??[],'failed_details'=>$e['failed_details']??[]]);
-break;
+/* Continue is safe for every incomplete state. If a worker really owns the
+   destination lock, this is a no-op rather than a second worker. */
+$resumeFp=queueBackendLock('bsl');
+if(!is_resource($resumeFp)){
+    $busyQueue=bslReadQueue();$busyCurrent=0;$busyStatus='';
+    foreach((array)($busyQueue['entries']??[]) as $busyRow)if(is_array($busyRow)&&(string)($busyRow['id']??'')===$queueId){$busyCurrent=(int)($busyRow['current']??0);$busyStatus=(string)($busyRow['status']??'');break;}
+    echo json_encode(['ok'=>true,'already_running'=>true,'queued'=>$busyStatus==='waiting','queue_id'=>$queueId,'current'=>$busyCurrent,
+        'message'=>$busyStatus==='waiting'?'ردیف در صف است و پس از کار جاری ادامه می‌یابد':'worker همین حالا فعال است'],JSON_UNESCAPED_UNICODE);exit;
 }
+$queue=bslReadQueue();if(!is_array($queue['entries']??null))$queue['entries']=[];
+$idx=-1;foreach($queue['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
+if($idx<0){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$row=$queue['entries'][$idx];$current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
+if((string)($row['status']??'')==='done'&&($total===0||$current>=$total)){
+    queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'complete'=>true,'error'=>'این ردیف کامل شده است'],JSON_UNESCAPED_UNICODE);exit;
 }
-unset($e);
-
-$resumeCurrent=0;
-foreach($queue['entries'] as $ent){
-if($ent['id']===$queueId){$resumeCurrent=$ent['current']??0;break;}
+$productsFile=(string)($row['products_file']??'');
+if($productsFile===''||!is_file($productsFile)){
+    queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات این ردیف یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
-bslWriteQueue($queue);
-echo json_encode(['ok'=>$found,'queue_id'=>$queueId,'current'=>$resumeCurrent],JSON_UNESCAPED_UNICODE);
-exit;
+/* A free flock proves every old running owner is dead. Keep their checkpoints
+   but return them to waiting so the explicitly selected row is unambiguous. */
+$now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
+$row=&$queue['entries'][$idx];$row['status']='running';$row['started_at']=$now;$row['updated_at']=$now;$row['paused_at']=0;$row['done_at']=0;$row['resume_requested_at']=$now;$row['fail_reason']='';
+unset($row['resume_exhausted'],$row['paused_by'],$row['stopped_by_user'],$row['error']);
+@unlink(BSL_PRODUCTS_FILE);if(!@copy($productsFile,BSL_PRODUCTS_FILE)){
+    $row['status']='paused';$row['paused_by']='system';bslWriteQueue($queue);queueBackendUnlock($resumeFp);
+    echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات برای ادامه ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;
+}
+/* Consume only this row's stop (or a legacy global stop), never another row's. */
+if(bslStopRequestedForQueue($queueId))@unlink(BSL_STOP_FILE);
+writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
+    'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),
+    'total'=>$total,'current'=>$current,'last_title'=>'','started_at'=>$now,'last_progress_ts'=>$now,
+    'phase'=>(string)($row['phase']??'send'),'phase_label'=>(string)($row['phase_label']??''),
+    'phase_current'=>(int)($row['phase_current']??$current),'phase_total'=>(int)($row['phase_total']??$total),'phase_pct'=>(int)($row['phase_pct']??0),
+    'phase_shop_vendor_id'=>(int)($row['phase_shop_vendor_id']??0),'shop_stats'=>$row['shop_stats']??[],'batch_done_indices'=>$row['batch_done_indices']??[],
+    'recent_log'=>['🔄 ادامهٔ صریح ردیف از محصول #'.($current+1)],'total_log_count'=>(int)($row['total_log_count']??0)+1,
+    'sent_details'=>$row['sent_details']??[],'updated_details'=>$row['updated_details']??[],'skipped_details'=>$row['skipped_details']??[],'failed_details'=>$row['failed_details']??[],
+    'checkpoint'=>['queue_id'=>$queueId,'current'=>$current,'total'=>$total,'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),'started_at'=>$now]]);
+bslWriteQueue($queue);queueResumeBook('bsl',$queueId,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'manual_continue']);queueBackendUnlock($resumeFp);
+echo json_encode(['ok'=>true,'dispatch_ready'=>true,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_detail'])){
@@ -61835,7 +61858,13 @@ if($runningCandidates){
     foreach($runningCandidates as $i=>$candidate){if(queueProgressBelongsToRow($progress,$candidate,$runningRows)){$ownerIdx=$i;break;}}
     if($ownerIdx!==null){
         $candidate=$runningCandidates[$ownerIdx];
-        if(!empty($progress['running'])&&empty($progress['done'])){
+        /* The Continue endpoint has just written a fresh checkpoint. This worker
+           owns the flock, so that fresh heartbeat is ours—not evidence of a
+           duplicate process. Claim the exact POSTed row immediately. */
+        $explicitSelected=$explicitResume&&$requestedBslQueueId!==''
+            &&hash_equals($requestedBslQueueId,(string)($candidate['id']??''));
+        if($explicitSelected){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
+        elseif(!empty($progress['running'])&&empty($progress['done'])){
             $progTs=tasksHeartbeat($progress);$entryStarted=(int)($candidate['started_at']??0);
             $staleSeconds=$progTs>0?($now-$progTs):($entryStarted>0?($now-$entryStarted):9999);
             if($staleSeconds>120){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
@@ -78293,6 +78322,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.412', t:'▶ دکمهٔ ادامه برای همهٔ ردیف‌های تکمیل‌نشدهٔ باسلام', items:[
+    'روی هر کارت باسلام که هنوز current آن به total نرسیده یا وضعیت آن waiting، running، paused یا failed است دکمهٔ ادامه نمایش داده می‌شود؛ ردیف کامل فقط دکمه پاک‌کردن دارد.',
+    'دکمهٔ ادامه برای ردیفی که ظاهراً running است اما worker آن مرده، همان queue_id و checkpoint را زیر flock دوباره رزرو و از محصول بعدی راه‌اندازی می‌کند.',
+    'اگر worker واقعاً زنده باشد، کلیک ادامه worker دوم نمی‌سازد؛ فقط وضعیت زنده تازه می‌شود. ردیف waiting نیز جای خود را در صف حفظ می‌کند.',
+    'هنگام ادامهٔ صریح، شمارنده‌ها، جزئیات، فاز غرفه و batch checkpoint حفظ می‌شوند؛ stop همان ردیف مصرف می‌شود ولی stop ردیف دیگر دست‌نخورده می‌ماند.',
+    'اگر چند running کهنه باقی مانده باشد، فقط ردیف انتخاب‌شده running می‌ماند و بقیه با checkpoint خود به waiting برمی‌گردند تا مالکیت worker مبهم نشود.'
+  ]},
   {v:'10.411', t:'♾ ادامهٔ قطعی ارسال باسلام تا پایان هر ردیف و غرفه', items:[
     'سقف سه تلاش برای بازیابی ردیف باسلام حذف شد؛ قطع مکرر پردازه توسط هاست دیگر ردیف نیمه‌تمام را failed نمی‌کند و هر ضربان کران از همان current ادامه می‌دهد تا current به total برسد.',
     'محدودیت تلاش ووکامرس بدون تغییر مانده است؛ سیاست بی‌نهایت فقط برای صف باسلام و با حفظ flock، queue_id و checkpoint اعمال می‌شود.',
@@ -93453,12 +93489,12 @@ function renderBslQueue(q){
               +'<span style="flex:1"></span>'
               +'<span style="color:#475569;font-weight:400">همهٔ وظایفِ همین ارسال</span></div>';
         }else if(!e.batch_id){__batch='';}
-        let __acts='';
-        if(e.status==='running')__acts='<button class="btn btn-blue" onclick="restartBslServer(\''+e.id+'\')">↻ راه‌اندازی مجدد</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
-        else if(e.status==='paused')__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
-        else if(e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startBslServer(\''+e.id+'\')">▶ شروع ارسال</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
-        else if(e.status==='failed'&&(parseInt(e.current)||0)>0)__acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه از '+toFa(e.current)+'</button><button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
-        else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
+        let __acts='',__total=Math.max(0,parseInt(e.total)||0),__current=Math.max(0,parseInt(e.current)||0);
+        const __incomplete=e.status!=='done'||(__total>0&&__current<__total);
+        if(__incomplete){
+            __acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه'+(__current>0?' از '+toFa(__current+1):'')+'</button>'
+              +'<button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
+        }else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
         html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
         let progText='';
@@ -93548,13 +93584,13 @@ function pauseBslQueue(qid){
         else{showToast('خطا در توقف: '+d.error,1);}
     }).catch(()=>{showToast('خطا شبکه',1);});
 }
-/* v8.56: دکمهٔ «▶ ادامه» روی ردیف متوقف‌شده وجود داشت ولی این تابع هیچ‌وقت
-   نوشته نشده بود، پس کلیک روی آن فقط یک ReferenceError در کنسول می‌داد.
-   سرویس bsl_queue_resume از قبل آماده بود. */
+/* v10.412: یک Continue مشترک برای waiting/running-stale/paused/failed؛
+   endpoint با flock تشخیص می‌دهد worker زنده است یا باید checkpoint را راه بیندازد. */
 function resumeBslQueue(qid){
     $('bSS').textContent='ادامهٔ ارسال...';
     fetch('?bsl_queue_resume=1&queue_id='+encodeURIComponent(qid)).then(r=>r.json()).then(d=>{
-        if(!d.ok){showToast('خطا در ادامه: '+(d.error||'ردیف متوقف‌شده یافت نشد'),1);return;}
+        if(!d.ok){showToast('خطا در ادامه: '+(d.error||'ردیف تکمیل‌نشده یافت نشد'),1);return;}
+        if(d.already_running){showToast(d.queued?'⏳ ردیف در صف است و خودکار ادامه می‌یابد':'✅ worker این ردیف هنوز زنده است؛ worker تکراری ساخته نشد');checkBslQueue();setTimeout(pollBslProgress,700);return;}
         showToast('▶ ادامه از محصول '+toFa((d.current||0)+1));
         bSend=true;
         window._currentBslQueueId=qid;
