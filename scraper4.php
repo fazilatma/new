@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.443';
+const APP_VERSION = '10.444';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -386,7 +386,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/01';
+const APP_VERSION_DATE = '1405/08/02';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -9436,7 +9436,7 @@ if($attempt<2)usleep(1000000);
 return['ok'=>0,'error'=>'آپلود مدیا ناموفق (2 تلاش): '.$errMsg];
 };
 
-$localPath=saveImageLocal($imgUrl);
+$localPath=saveImageLocal($imgUrl,$productLinkCtx);
 if($localPath&&file_exists($localPath)&&filesize($localPath)>200){
 $fdata=@file_get_contents($localPath);
 if($fdata&&isImageData($fdata)){
@@ -9461,8 +9461,8 @@ CURLOPT_REFERER=>$imgUrl,CURLOPT_COOKIEFILE=>'',
 CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7','Origin: '.$origin,'Sec-Fetch-Dest: image','Sec-Fetch-Mode: no-cors']]);
 $imgData=curl_exec($ch);$imgErr=curl_error($ch);$imgCode=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$imgCT=curl_getinfo($ch,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch);
 if($imgData&&strlen($imgData)>=100&&isImageData($imgData)){
-$ccDirect=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,$productLinkCtx):['active'=>false];
-if(!empty($ccDirect['active'])&&function_exists('s4CropImageBottomBytes')){$crD=s4CropImageBottomBytes($imgData,(int)$ccDirect['pct'],(int)$ccDirect['px']);if(!empty($crD['ok'])&&!empty($crD['cropped'])&&!empty($crD['data']))$imgData=(string)$crD['data'];}
+$ccDirect=function_exists('s4ResolveImageTransformForUrl')?s4ResolveImageTransformForUrl($imgUrl,$productLinkCtx):['active'=>false];
+if(!empty($ccDirect['active'])&&function_exists('s4ApplyImageTransformBytes')){$crD=s4ApplyImageTransformBytes($imgData,$ccDirect);if(!empty($crD['ok'])&&!empty($crD['changed'])&&!empty($crD['data']))$imgData=(string)$crD['data'];}
 $realFmt=detectImageFormat($imgData);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($imgData);
@@ -9483,8 +9483,8 @@ CURLOPT_REFERER=>$productLink,CURLOPT_COOKIEFILE=>'',
 CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Origin: '.$origin,'Sec-Fetch-Dest: image','Sec-Fetch-Mode: no-cors']]);
 $d3=curl_exec($ch3);$d3CT=curl_getinfo($ch3,CURLINFO_CONTENT_TYPE)?:'image/jpeg';curl_close($ch3);
 if($d3&&strlen($d3)>=100&&isImageData($d3)){
-$ccDirect3=function_exists('s4ResolveImageCropForUrl')?s4ResolveImageCropForUrl($imgUrl,(string)$productLink):['active'=>false];
-if(!empty($ccDirect3['active'])&&function_exists('s4CropImageBottomBytes')){$crD3=s4CropImageBottomBytes($d3,(int)$ccDirect3['pct'],(int)$ccDirect3['px']);if(!empty($crD3['ok'])&&!empty($crD3['cropped'])&&!empty($crD3['data']))$d3=(string)$crD3['data'];}
+$ccDirect3=function_exists('s4ResolveImageTransformForUrl')?s4ResolveImageTransformForUrl($imgUrl,(string)$productLink):['active'=>false];
+if(!empty($ccDirect3['active'])&&function_exists('s4ApplyImageTransformBytes')){$crD3=s4ApplyImageTransformBytes($d3,$ccDirect3);if(!empty($crD3['ok'])&&!empty($crD3['changed'])&&!empty($crD3['data']))$d3=(string)$crD3['data'];}
 $realFmt=detectImageFormat($d3);
 if($realFmt==='')$realFmt='jpg';
 $convResult=convertToSupportedFormat($d3);
@@ -9576,12 +9576,15 @@ function wooImagePayload(array $w, string $imgUrl, ?string &$note = null): array
  */
 function wooGalleryPayload(array $w, array $imgUrls, ?string &$note = null): array {
     $out = []; $okN = 0; $badN = 0; $firstNote = null;
+    $imageIndex = 0; $oldRole = $GLOBALS['_currentImageRole'] ?? null;
     foreach (galleryDedupe($imgUrls) as $u) {
+        $GLOBALS['_currentImageRole'] = $imageIndex++ === 0 ? 'list' : 'gallery';
         $n1 = null;
         $one = wooImagePayload($w, (string)$u, $n1);
         if ($firstNote === null) $firstNote = $n1;
         if (!empty($one)) { $out[] = $one[0]; $okN++; } else { $badN++; }
     }
+    if ($oldRole === null) unset($GLOBALS['_currentImageRole']); else $GLOBALS['_currentImageRole'] = $oldRole;
     if ($okN === 0) { $note = $firstNote ?? 'هیچ تصویری آماده نشد'; return []; }
     $note = $okN . ' تصویر آماده شد' . ($badN > 0 ? ' (' . $badN . ' ناموفق)' : '')
           . ($firstNote ? ' — ' . $firstNote : '');
@@ -10927,61 +10930,51 @@ if ($hasNull || $hasNonPrintable) return true;
 return false;
 }
 
-function s4NormalizeCropCfg($raw): array {
-    if (!is_array($raw)) return ['pct' => 0, 'px' => 0, 'active' => false];
+function s4NormalizeImageTransformCfg($raw, bool $legacyGallery = false): array {
+    if (!is_array($raw)) $raw = [];
     $pct = max(0, min(45, (int)($raw['crop_bottom_pct'] ?? ($raw['pct'] ?? 0))));
-    $px  = max(0, min(600, (int)($raw['crop_bottom_px'] ?? ($raw['px'] ?? 0))));
-    return ['pct' => $pct, 'px' => $px, 'active' => ($pct > 0 || $px > 0)];
+    $px = max(0, min(600, (int)($raw['crop_bottom_px'] ?? ($raw['px'] ?? 0))));
+    $mode = strtolower(trim((string)($raw['transform_mode'] ?? '')));
+    if (!in_array($mode, ['white_square','crop'], true)) $mode = ($legacyGallery && ($pct || $px)) ? 'crop' : 'white_square';
+    $corner = strtolower(trim((string)($raw['white_square_corner'] ?? 'bottom_right')));
+    if (!in_array($corner, ['top_left','top_right','bottom_left','bottom_right'], true)) $corner = 'bottom_right';
+    return ['mode'=>$mode, 'transform_mode'=>$mode, 'white_square_corner'=>$corner,
+        'white_square_size'=>max(1,min(1200,(int)($raw['white_square_size']??80))),
+        'crop_bottom_pct'=>$pct, 'crop_bottom_px'=>$px, 'pct'=>$pct, 'px'=>$px,
+        'active'=>$mode==='white_square'||($mode==='crop'&&($pct>0||$px>0))];
 }
+function s4NormalizeCropCfg($raw): array { return s4NormalizeImageTransformCfg($raw, true); }
 
-function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = ''): array {
-    if (isset($GLOBALS['_s4ActiveImageCrop']) && is_array($GLOBALS['_s4ActiveImageCrop'])) {
-        $explicit = s4NormalizeCropCfg($GLOBALS['_s4ActiveImageCrop']);
-        if ($explicit['active']) return $explicit;
-    }
-    static $profileCropCache = null;
-    if ($profileCropCache === null) {
-        $profileCropCache = [];
-        if (function_exists('loadProfiles')) {
-            foreach ((array)loadProfiles() as $pk => $pr) {
-                if (!is_array($pr)) continue;
-                $g = is_array($pr['gallery'] ?? null) ? $pr['gallery'] : [];
-                $cc = s4NormalizeCropCfg($g);
-                if (!$cc['active']) continue;
-                $pUrl = trim((string)($pr['url'] ?? ''));
-                $pHost = strtolower((string)(parse_url($pUrl, PHP_URL_HOST) ?: ''));
-                if ($pHost !== '') {
-                    $pHostBase = preg_replace('~^www\.~i', '', $pHost) ?? $pHost;
-                    $profileCropCache[] = ['key' => (string)$pk, 'url' => $pUrl, 'host' => $pHostBase, 'crop' => $cc];
-                }
-            }
+function s4ResolveImageTransformForUrl(string $imgUrl, string $productLink = '', string $role = ''): array {
+    $role = strtolower(trim($role !== '' ? $role : (string)($GLOBALS['_currentImageRole'] ?? 'list')));
+    if ($role !== 'gallery') $role = 'list';
+    if (isset($GLOBALS['_s4ActiveImageTransform']) && is_array($GLOBALS['_s4ActiveImageTransform']))
+        return s4NormalizeImageTransformCfg($GLOBALS['_s4ActiveImageTransform'], $role === 'gallery');
+    static $cache = [];
+    $cacheKey = $role;
+    if (!isset($cache[$cacheKey])) {
+        $cache[$cacheKey] = [];
+        if (function_exists('loadProfiles')) foreach ((array)loadProfiles() as $pk=>$pr) {
+            if (!is_array($pr)) continue;
+            $raw = $role === 'gallery' ? (array)($pr['gallery']??[]) : (array)($pr['image_transform']??[]);
+            $pUrl=trim((string)($pr['url']??'')); $host=strtolower((string)(parse_url($pUrl,PHP_URL_HOST)?:''));
+            $host=preg_replace('~^www\.~i','',$host)??$host;
+            if ($host!=='') $cache[$cacheKey][]=['host'=>$host,'cfg'=>s4NormalizeImageTransformCfg($raw,$role==='gallery')];
         }
     }
-    if (!$profileCropCache) return ['pct' => 0, 'px' => 0, 'active' => false];
-    $linkHost = strtolower((string)(parse_url($productLink, PHP_URL_HOST) ?: ''));
-    $imgHost  = strtolower((string)(parse_url($imgUrl, PHP_URL_HOST) ?: ''));
-    $hostMatches = function (string $candHost, string $profHost): bool {
-        if ($candHost === '' || $profHost === '') return false;
-        $candHost = preg_replace('~^www\.~i', '', $candHost) ?? $candHost;
-        if ($candHost === $profHost || str_ends_with($candHost, '.' . $profHost)) return true;
-        if ($profHost === 'snappshop.ir' && str_ends_with($candHost, 'snappshop.ir')) return true;
-        if ($profHost === 'digikala.com' && strpos($candHost, 'digikala.com') !== false) return true;
-        if ($profHost === 'emalls.ir' && strpos($candHost, 'emalls.ir') !== false) return true;
-        return false;
+    $match=function(string $candidate,string $profile):bool{
+        $candidate=preg_replace('~^www\.~i','',strtolower($candidate))??$candidate;
+        return $candidate!==''&&($candidate===$profile||str_ends_with($candidate,'.'.$profile)||str_contains($candidate,$profile));
     };
-    foreach ($profileCropCache as $entry) {
-        if ($linkHost !== '' && $hostMatches($linkHost, $entry['host'])) return $entry['crop'];
-    }
-    foreach ($profileCropCache as $entry) {
-        if ($imgHost !== '' && $hostMatches($imgHost, $entry['host'])) return $entry['crop'];
-    }
-    return ['pct' => 0, 'px' => 0, 'active' => false];
+    $lh=(string)(parse_url($productLink,PHP_URL_HOST)?:''); $ih=(string)(parse_url($imgUrl,PHP_URL_HOST)?:'');
+    foreach ($cache[$cacheKey] as $e) if ($match($lh,$e['host'])) return $e['cfg'];
+    foreach ($cache[$cacheKey] as $e) if ($match($ih,$e['host'])) return $e['cfg'];
+    return s4NormalizeImageTransformCfg([], false);
 }
-
-function s4ImageCacheKey(string $imgUrl, string $productLink = ''): string {
-    $cc = s4ResolveImageCropForUrl($imgUrl, $productLink);
-    if (empty($cc['active'])) return md5($imgUrl);
-    return md5($imgUrl . '|cb:' . (int)$cc['pct'] . ':' . (int)$cc['px']);
+function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = ''): array { return s4ResolveImageTransformForUrl($imgUrl,$productLink); }
+function s4ImageCacheKey(string $imgUrl, string $productLink = '', string $role = ''): string {
+    $c=s4ResolveImageTransformForUrl($imgUrl,$productLink,$role);
+    return md5($imgUrl.'|'.$role.'|'.$c['mode'].'|'.$c['white_square_corner'].'|'.$c['white_square_size'].'|'.$c['pct'].'|'.$c['px']);
 }
 
 function s4PublicUrlForLocalUpload(string $localPath): string {
@@ -10991,71 +10984,34 @@ function s4PublicUrlForLocalUpload(string $localPath): string {
     return $scheme . '://' . $_SERVER['HTTP_HOST'] . $baseDir . '/uploads/' . rawurlencode(basename($localPath));
 }
 
+function s4ApplyImageTransformBytes(string $data, array $raw): array {
+    $c=s4NormalizeImageTransformCfg($raw,false); $fmt=detectImageFormat($data);
+    if (empty($c['active'])) return ['ok'=>true,'data'=>$data,'changed'=>false,'cropped'=>false,'format'=>$fmt?:'jpg'];
+    if (!function_exists('imagecreatefromstring')||!function_exists('imagecreatetruecolor')) return ['ok'=>false,'error'=>'GD not available','data'=>$data,'changed'=>false,'cropped'=>false];
+    if ($fmt==='svg'||$fmt==='gif') return ['ok'=>true,'data'=>$data,'changed'=>false,'cropped'=>false,'format'=>$fmt];
+    $src=@imagecreatefromstring($data); if(!$src)return ['ok'=>false,'error'=>'decode failed','data'=>$data,'changed'=>false,'cropped'=>false];
+    $w=imagesx($src);$h=imagesy($src);$dst=$src;$oldH=$h;
+    if($c['mode']==='crop'){
+        $cut=$c['px']>0?$c['px']:(int)round($h*$c['pct']/100);$cut=min($cut,(int)floor($h*.45));$h-=$cut;
+        if($w<20||$oldH<60||$cut<=0||$h<40){imagedestroy($src);return ['ok'=>true,'data'=>$data,'changed'=>false,'cropped'=>false,'format'=>$fmt?:'jpg'];}
+        $dst=imagecreatetruecolor($w,$h);imagealphablending($dst,false);imagesavealpha($dst,true);$tr=imagecolorallocatealpha($dst,255,255,255,127);imagefill($dst,0,0,$tr);imagecopy($dst,$src,0,0,0,0,$w,$h);imagedestroy($src);
+    }else{
+        $size=min($w,$h,(int)$c['white_square_size']);$x=str_contains($c['white_square_corner'],'right')?$w-$size:0;$y=str_contains($c['white_square_corner'],'bottom')?$h-$size:0;
+        imagealphablending($dst,true);$white=imagecolorallocate($dst,255,255,255);imagefilledrectangle($dst,$x,$y,$x+$size-1,$y+$size-1,$white);
+    }
+    ob_start();$outFmt='jpg';if($fmt==='png'&&function_exists('imagepng')){imagepng($dst,null,6);$outFmt='png';}elseif($fmt==='webp'&&function_exists('imagewebp')){imagewebp($dst,null,90);$outFmt='webp';}else imagejpeg($dst,null,92);$out=(string)ob_get_clean();imagedestroy($dst);
+    return strlen($out)>100?['ok'=>true,'data'=>$out,'changed'=>true,'cropped'=>$c['mode']==='crop','format'=>$outFmt,'width'=>$w,'old_height'=>$oldH,'new_height'=>$h]:['ok'=>false,'error'=>'encode failed','data'=>$data,'changed'=>false,'cropped'=>false];
+}
 function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropBottomPx = 0): array {
-    $pct = max(0, min(45, $cropBottomPct));
-    $px  = max(0, min(600, $cropBottomPx));
-    if ($pct <= 0 && $px <= 0) return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => detectImageFormat($data) ?: 'jpg'];
-    if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor')) {
-        return ['ok' => false, 'error' => 'GD not available', 'data' => $data, 'cropped' => false];
-    }
-    $fmt = detectImageFormat($data);
-    if ($fmt === 'svg' || $fmt === 'gif') {
-        return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => $fmt];
-    }
-    $src = @imagecreatefromstring($data);
-    if (!$src) return ['ok' => false, 'error' => 'imagecreatefromstring failed', 'data' => $data, 'cropped' => false];
-    $w = imagesx($src);
-    $h = imagesy($src);
-    $cut = $px > 0 ? $px : (int)round($h * ($pct / 100.0));
-    $cut = min($cut, (int)floor($h * 0.45));
-    $newH = $h - $cut;
-    if ($w < 20 || $h < 60 || $cut <= 0 || $newH < 40) {
-        imagedestroy($src);
-        return ['ok' => true, 'data' => $data, 'cropped' => false, 'format' => $fmt ?: 'jpg'];
-    }
-    $dst = imagecreatetruecolor($w, $newH);
-    if (!$dst) {
-        imagedestroy($src);
-        return ['ok' => false, 'error' => 'imagecreatetruecolor failed', 'data' => $data, 'cropped' => false];
-    }
-    $keepAlpha = ($fmt === 'png' && function_exists('imagepng')) || ($fmt === 'webp' && function_exists('imagewebp'));
-    if ($keepAlpha) {
-        imagealphablending($dst, false);
-        imagesavealpha($dst, true);
-        $trans = imagecolorallocatealpha($dst, 255, 255, 255, 127);
-        imagefilledrectangle($dst, 0, 0, $w, $newH, $trans);
-    } else {
-        $white = imagecolorallocate($dst, 255, 255, 255);
-        imagefilledrectangle($dst, 0, 0, $w, $newH, $white);
-    }
-    imagecopy($dst, $src, 0, 0, 0, 0, $w, $newH);
-    imagedestroy($src);
-    ob_start();
-    $outFmt = 'jpg';
-    if ($fmt === 'png' && function_exists('imagepng')) {
-        imagepng($dst, null, 6);
-        $outFmt = 'png';
-    } elseif ($fmt === 'webp' && function_exists('imagewebp')) {
-        imagewebp($dst, null, 90);
-        $outFmt = 'webp';
-    } else {
-        imagejpeg($dst, null, 92);
-        $outFmt = 'jpg';
-    }
-    $outData = ob_get_clean();
-    imagedestroy($dst);
-    if ($outData && strlen($outData) > 100) {
-        return ['ok' => true, 'data' => $outData, 'cropped' => true, 'format' => $outFmt, 'width' => $w, 'old_height' => $h, 'new_height' => $newH];
-    }
-    return ['ok' => false, 'error' => 'encode failed', 'data' => $data, 'cropped' => false];
+    return s4ApplyImageTransformBytes($data,['transform_mode'=>'crop','crop_bottom_pct'=>$cropBottomPct,'crop_bottom_px'=>$cropBottomPx]);
 }
 
 function saveImageLocal(string $imgUrl, string $productLink = ''): string {
 if (empty($imgUrl) || preg_match('~^(data:|blob:|javascript:|#)~i', $imgUrl)) return '';
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
-$cropCfg = s4ResolveImageCropForUrl($imgUrl, $productLink);
-$cacheKey = s4ImageCacheKey($imgUrl, $productLink);
+$transformCfg = s4ResolveImageTransformForUrl($imgUrl, $productLink);
+$cacheKey = s4ImageCacheKey($imgUrl, $productLink, (string)($GLOBALS['_currentImageRole'] ?? 'list'));
 
 $existing = glob(UPLOAD_DIR . 'img_' . $cacheKey . '.*');
 foreach ($existing as $f) {
@@ -11113,11 +11069,9 @@ if(!$d || strlen($d) < 200 || !isImageData($d ?? '')) $d='';
 
 if (!$d || strlen($d) < 200 || !isImageData($d)) return '';
 
-if (!empty($cropCfg['active'])) {
-$cropped = s4CropImageBottomBytes($d, (int)$cropCfg['pct'], (int)$cropCfg['px']);
-if (!empty($cropped['ok']) && !empty($cropped['cropped']) && !empty($cropped['data'])) {
-$d = (string)$cropped['data'];
-}
+if (!empty($transformCfg['active'])) {
+$transformed = s4ApplyImageTransformBytes($d, $transformCfg);
+if (!empty($transformed['ok']) && !empty($transformed['changed']) && !empty($transformed['data'])) $d = (string)$transformed['data'];
 }
 
 $realFmt=detectImageFormat($d);
@@ -11244,13 +11198,16 @@ return['ok'=>0,'error'=>'تصویر آپلود نشد ['.implode(' | ',$log).']'
  */
 function bslUploadMany(string $tk, array $imgUrls, int $max = 10): array {
     $ids = []; $failN = 0; $firstErr = ''; $firstMeta=[];
+    $imageIndex = 0; $oldRole = $GLOBALS['_currentImageRole'] ?? null;
     foreach (galleryDedupe($imgUrls, max(1, $max)) as $u) {
+        $GLOBALS['_currentImageRole'] = $imageIndex++ === 0 ? 'list' : 'gallery';
         $up = bslUpload($tk, (string)$u);
         if (!empty($up['ok']) && !empty($up['file_id'])) { $ids[] = (int)$up['file_id']; continue; }
         $failN++;
         if ($firstErr === '') {$firstErr = mb_substr((string)($up['error'] ?? '?'), 0, 180);$firstMeta=$up;}
         if((int)($up['error_code']??0)===429)break;
     }
+    if ($oldRole === null) unset($GLOBALS['_currentImageRole']); else $GLOBALS['_currentImageRole'] = $oldRole;
     $okN = count($ids);
     return ['ok' => $okN > 0, 'main' => $okN > 0 ? $ids[0] : null, 'ids' => $ids,
             'ok_n' => $okN, 'fail_n' => $failN,
@@ -13897,24 +13854,21 @@ $type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: 'image/jpeg';
 curl_close($ch);
 if (!$body) { http_response_code(404); exit; }
 if (empty($_GET['no_crop'])) {
-    $qPct = isset($_GET['crop_bottom_pct']) ? max(0, min(45, (int)$_GET['crop_bottom_pct'])) : 0;
-    $qPx  = isset($_GET['crop_bottom_px']) ? max(0, min(600, (int)$_GET['crop_bottom_px'])) : 0;
-    if ($qPct <= 0 && $qPx <= 0 && function_exists('s4ResolveImageCropForUrl')) {
-        $autoCrop = s4ResolveImageCropForUrl($url, (string)($_GET['product_url'] ?? ''));
-        $qPct = (int)($autoCrop['pct'] ?? 0);
-        $qPx  = (int)($autoCrop['px'] ?? 0);
-    }
-    if (($qPct > 0 || $qPx > 0) && function_exists('s4CropImageBottomBytes')) {
-        $cr = s4CropImageBottomBytes((string)$body, $qPct, $qPx);
-        if (!empty($cr['ok']) && !empty($cr['cropped']) && !empty($cr['data'])) {
-            $body = (string)$cr['data'];
-            $fmtOut = (string)($cr['format'] ?? 'jpg');
-            $type = 'image/' . ($fmtOut === 'jpg' ? 'jpeg' : $fmtOut);
-        }
+    $hasExplicit = isset($_GET['transform_mode']) || isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px']);
+    $cfg = $hasExplicit ? s4NormalizeImageTransformCfg([
+        'transform_mode'=>(string)($_GET['transform_mode']??'crop'),
+        'white_square_corner'=>(string)($_GET['white_square_corner']??'bottom_right'),
+        'white_square_size'=>(int)($_GET['white_square_size']??80),
+        'crop_bottom_pct'=>(int)($_GET['crop_bottom_pct']??0),
+        'crop_bottom_px'=>(int)($_GET['crop_bottom_px']??0)
+    ], false) : s4ResolveImageTransformForUrl($url, (string)($_GET['product_url']??''), (string)($_GET['image_role']??'list'));
+    $cr = s4ApplyImageTransformBytes((string)$body, $cfg);
+    if (!empty($cr['ok']) && !empty($cr['changed']) && !empty($cr['data'])) {
+        $body=(string)$cr['data'];$fmtOut=(string)($cr['format']??'jpg');$type='image/'.($fmtOut==='jpg'?'jpeg':$fmtOut);
     }
 }
 header('Content-Type: ' . $type);
-header('Cache-Control: ' . ((isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px'])) ? 'no-store' : 'public, max-age=86400'));
+header('Cache-Control: ' . ((isset($_GET['transform_mode']) || isset($_GET['crop_bottom_pct']) || isset($_GET['crop_bottom_px'])) ? 'no-store' : 'public, max-age=86400'));
 echo $body;
 exit;
 }
@@ -14398,6 +14352,18 @@ $galleryOld = galleryNormalizeCfg($profiles[$key]['gallery'] ?? []);
 // گالریِ خاموشِ خالی از یک فرمِ پرنشده، تنظیم قبلی را از بین نبرد
 $galleryFinal = ($formIsBlank && !$galleryIn['enabled'] && $galleryOld['enabled'])
     ? $galleryOld : $galleryIn;
+$imageTransformRaw = array_key_exists('image_transform', $_POST)
+    ? (json_decode((string)$_POST['image_transform'], true) ?: [])
+    : (array)($profiles[$key]['image_transform'] ?? []);
+if ($formIsBlank && !empty($profiles[$key]['image_transform'])) $imageTransformRaw = (array)$profiles[$key]['image_transform'];
+$imageTransformNorm = s4NormalizeImageTransformCfg($imageTransformRaw, false);
+$imageTransformFinal = [
+    'transform_mode'=>$imageTransformNorm['mode'],
+    'white_square_corner'=>$imageTransformNorm['white_square_corner'],
+    'white_square_size'=>$imageTransformNorm['white_square_size'],
+    'crop_bottom_pct'=>$imageTransformNorm['crop_bottom_pct'],
+    'crop_bottom_px'=>$imageTransformNorm['crop_bottom_px'],
+];
 // v8.55: اگر syncConfig در درخواست نباشد، تنظیم قبلی حفظ شود.
 // قبلاً هر ذخیرهٔ جزئی، بازهٔ همگام‌سازی را پاک می‌کرد و پروفایل
 // دوباره «هر بار فراخوانی» می‌شد.
@@ -14433,6 +14399,7 @@ $profilePatch = [
 'detailSelectors' => $detailSelectors,
 // v8.64: تنظیمات گالری چندعکسی — اگر در درخواست نباشد مقدار قبلی می‌ماند
 'gallery' => $galleryFinal,
+'image_transform' => $imageTransformFinal,
 'titleSuffix' => array_key_exists('titleSuffix', $_POST) ? (string)$_POST['titleSuffix'] : (string)($existingProfile['titleSuffix'] ?? ''),
 'priceMode' => array_key_exists('priceMode', $_POST) ? (string)$_POST['priceMode'] : (string)($existingProfile['priceMode'] ?? 'none'),
 'priceVal' => array_key_exists('priceVal', $_POST) ? (float)$_POST['priceVal'] : (float)($existingProfile['priceVal'] ?? 0),
@@ -17449,6 +17416,10 @@ function galleryNormalizeCfg($raw): array {
         'to'              => max(0, (int)($raw['to'] ?? 10)),
         'max'             => max(1, min(GALLERY_MAX_IMAGES, (int)($raw['max'] ?? GALLERY_MAX_IMAGES))),
         'skip_first'      => !empty($raw['skip_first']),
+        'transform_mode'  => in_array((string)($raw['transform_mode'] ?? ''), ['white_square','crop'], true)
+            ? (string)$raw['transform_mode'] : (((int)($raw['crop_bottom_pct']??0)>0||(int)($raw['crop_bottom_px']??0)>0)?'crop':'white_square'),
+        'white_square_corner' => in_array((string)($raw['white_square_corner']??''), ['top_left','top_right','bottom_left','bottom_right'], true) ? (string)$raw['white_square_corner'] : 'bottom_right',
+        'white_square_size' => max(1, min(1200, (int)($raw['white_square_size'] ?? 80))),
         'crop_bottom_pct' => max(0, min(45, (int)($raw['crop_bottom_pct'] ?? 0))),
         'crop_bottom_px'  => max(0, min(600, (int)($raw['crop_bottom_px'] ?? 0))),
     ];
@@ -47935,6 +47906,32 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "['reason_kind']     = 'category_ai_pending'") !== false
       && strpos($selfSrc, "{v:'10." . "443'") !== false
       && version_compare(APP_VERSION, '10.443', '>='));
+    $_defaultTx444=s4NormalizeImageTransformCfg([],false);
+    $_legacyTx444=s4NormalizeImageTransformCfg(['crop_bottom_pct'=>12],true);
+    $_squareTx444=s4NormalizeImageTransformCfg(['transform_mode'=>'white_square','white_square_corner'=>'top_left','white_square_size'=>140],false);
+    $_gdSquareOk444=true;
+    if(function_exists('imagecreatetruecolor')&&function_exists('imagejpeg')&&function_exists('imagecreatefromstring')){
+        $_im444=imagecreatetruecolor(100,80);$_black444=imagecolorallocate($_im444,0,0,0);imagefill($_im444,0,0,$_black444);
+        ob_start();imagejpeg($_im444,null,95);$_raw444=(string)ob_get_clean();imagedestroy($_im444);
+        $_out444=s4ApplyImageTransformBytes($_raw444,['transform_mode'=>'white_square','white_square_corner'=>'top_left','white_square_size'=>20]);
+        $_chk444=!empty($_out444['data'])?@imagecreatefromstring((string)$_out444['data']):false;
+        if($_chk444){$_rgb444=imagecolorat($_chk444,5,5);$_gdSquareOk444=((($_rgb444>>16)&255)>240&&(($_rgb444>>8)&255)>240&&($_rgb444&255)>240);imagedestroy($_chk444);}else $_gdSquareOk444=false;
+    }
+    $add('10.444', 'پردازش مستقل تصویر فهرست و گالری با مربع سفید پیش‌فرض و برش سازگار با پروفایل قدیمی فعال است',
+         ($_defaultTx444['mode']??'')==='white_square'
+      && ($_defaultTx444['white_square_corner']??'')==='bottom_right'
+      && (int)($_defaultTx444['white_square_size']??0)===80
+      && ($_legacyTx444['mode']??'')==='crop'
+      && ($_squareTx444['white_square_corner']??'')==='top_left'
+      && (int)($_squareTx444['white_square_size']??0)===140
+      && $_gdSquareOk444
+      && strpos($selfSrc,'id="listTransformMode"')!==false
+      && strpos($selfSrc,'id="galTransformMode"')!==false
+      && strpos($selfSrc,"'image_transform' => \$imageTransformFinal")!==false
+      && strpos($selfSrc,"\$GLOBALS['_currentImageRole'] = \$imageIndex++ === 0 ? 'list' : 'gallery';")!==false
+      && strpos($selfSrc,'function s4ApplyImageTransformBytes(')!==false
+      && strpos($selfSrc,"{v:'10." . "444'")!==false
+      && version_compare(APP_VERSION,'10.444','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -75707,6 +75704,26 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <button class="btn btn-indigo" onclick="testSel('image')">👁 تست</button>
                 </div>
                 <div class="sel-preview img-prev empty" id="prev-image">در انتظار...</div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #334155">
+                    <label style="font-size:11px;color:#e2e8f0">پردازش تصویر فهرست</label>
+                    <select id="listTransformMode" onchange="imageTransformChanged('list')" style="width:100%;margin-top:5px">
+                        <option value="white_square">⬜ افزودن مربع سفید به گوشه (پیش‌فرض)</option>
+                        <option value="crop">✂️ برش پایین تصویر</option>
+                    </select>
+                    <div id="listWhiteSquareSettings" class="row" style="margin-top:6px;align-items:center;gap:6px">
+                        <select id="listWhiteSquareCorner" onchange="imageTransformChanged('list')" style="flex:1">
+                            <option value="top_left">بالا چپ</option><option value="top_right">بالا راست</option>
+                            <option value="bottom_left">پایین چپ</option><option value="bottom_right" selected>پایین راست</option>
+                        </select>
+                        <input id="listWhiteSquareSize" type="number" value="80" min="1" max="1200" oninput="imageTransformChanged('list')" style="flex:1" title="اندازه مربع (پیکسل)">
+                    </div>
+                    <div id="listCropSettings" class="row hidden" style="margin-top:6px;align-items:center;gap:6px">
+                        <input id="listCropBottomPct" type="number" value="0" min="0" max="45" placeholder="درصد پایین" oninput="imageTransformChanged('list')" style="flex:1">
+                        <input id="listCropBottomPx" type="number" value="0" min="0" max="600" placeholder="پیکسل پایین" oninput="imageTransformChanged('list')" style="flex:1">
+                    </div>
+                    <button type="button" class="btn btn-purple" onclick="previewImageTransform('list')" style="width:100%;margin-top:6px;font-size:11px">👁️ پیش‌نمایش پردازش تصویر فهرست</button>
+                    <div id="listTransformPreview" style="margin-top:6px"></div>
+                </div>
             </div>
             <div id="suggestions" class="hidden">
                 <h3 style="margin-top:12px">💡 پیشنهادها</h3>
@@ -75860,17 +75877,24 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
 
         <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #334155">
-            <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:6px">✂️ برش پایین تصویر (حذف تگ/واترمارک اسنپ‌شاپ و ...)</div>
-            <div class="row" style="align-items:center;gap:6px">
-                <label style="flex:0 0 62px;font-size:11px">پایین (%):</label>
-                <input type="number" id="galCropBottomPct" value="0" min="0" max="45" step="1" placeholder="مثلاً 10" oninput="galChanged()" style="flex:1">
-                <label style="flex:0 0 58px;font-size:11px">یا (px):</label>
-                <input type="number" id="galCropBottomPx" value="0" min="0" max="600" step="5" placeholder="مثلاً 60" oninput="galChanged()" style="flex:1">
+            <div style="font-size:11px;font-weight:700;color:#e2e8f0;margin-bottom:6px">پردازش تصاویر گالری</div>
+            <select id="galTransformMode" onchange="imageTransformChanged('gal')" style="width:100%">
+                <option value="white_square">⬜ افزودن مربع سفید به گوشه (پیش‌فرض)</option>
+                <option value="crop">✂️ برش پایین تصویر</option>
+            </select>
+            <div id="galWhiteSquareSettings" class="row" style="margin-top:6px;align-items:center;gap:6px">
+                <select id="galWhiteSquareCorner" onchange="imageTransformChanged('gal')" style="flex:1">
+                    <option value="top_left">بالا چپ</option><option value="top_right">بالا راست</option>
+                    <option value="bottom_left">پایین چپ</option><option value="bottom_right" selected>پایین راست</option>
+                </select>
+                <input id="galWhiteSquareSize" type="number" value="80" min="1" max="1200" oninput="imageTransformChanged('gal')" style="flex:1" title="اندازه مربع (پیکسل)">
             </div>
-            <div class="row" style="margin-top:6px">
-                <button type="button" class="btn btn-purple" onclick="previewImageBottomCrop()" style="flex:1;font-size:11px">👁️ پیش‌نمایش قبل و بعد از برش روی نمونه محصول</button>
+            <div id="galCropSettings" class="row hidden" style="margin-top:6px;align-items:center;gap:6px">
+                <input type="number" id="galCropBottomPct" value="0" min="0" max="45" step="1" placeholder="درصد پایین" oninput="imageTransformChanged('gal')" style="flex:1">
+                <input type="number" id="galCropBottomPx" value="0" min="0" max="600" step="5" placeholder="پیکسل پایین" oninput="imageTransformChanged('gal')" style="flex:1">
             </div>
-            <div id="galCropPreview" style="margin-top:6px"></div>
+            <button type="button" class="btn btn-purple" onclick="previewImageTransform('gal')" style="width:100%;margin-top:6px;font-size:11px">👁️ پیش‌نمایش پردازش تصاویر گالری</button>
+            <div id="galTransformPreview" style="margin-top:6px"></div>
         </div>
     </div>
         </div>
@@ -77523,8 +77547,7 @@ function galCollect() {
         to:              parseInt(g('galTo').value || '10') || 10,
         max:             parseInt(g('galMax').value || '10') || 10,
         skip_first:      !!g('galSkipFirst').checked,
-        crop_bottom_pct: Math.max(0, Math.min(45, parseInt(g('galCropBottomPct').value || '0') || 0)),
-        crop_bottom_px:  Math.max(0, Math.min(600, parseInt(g('galCropBottomPx').value || '0') || 0))
+        ...imageTransformCollect('gal')
     };
 }
 
@@ -77539,32 +77562,47 @@ function galApply(cfg) {
     set('galFrom', cfg.from !== undefined ? cfg.from : 1);
     set('galTo', cfg.to !== undefined ? cfg.to : 10);
     set('galMax', cfg.max !== undefined ? cfg.max : 10);
-    set('galCropBottomPct', cfg.crop_bottom_pct !== undefined ? cfg.crop_bottom_pct : 0);
-    set('galCropBottomPx', cfg.crop_bottom_px !== undefined ? cfg.crop_bottom_px : 0);
     if ($('galSkipFirst')) $('galSkipFirst').checked = !!cfg.skip_first;
-    if ($('galCropPreview')) $('galCropPreview').innerHTML = '';
+    imageTransformApply('gal', cfg, true);
     galModeChanged(true);
 }
 
-function previewImageBottomCrop() {
-    const box = $('galCropPreview');
-    if (!box) return;
-    let sampleImg = '';
-    for (const [, p] of products) {
-        if (p && p.image && /^https?:\/\//i.test(p.image)) { sampleImg = p.image; break; }
-    }
-    if (!sampleImg) {
-        box.innerHTML = '<div style="font-size:11px;color:#fbbf24">ابتدا یک‌بار استخراج انجام دهید یا پروفایل دارای محصول را انتخاب کنید تا نمونه تصویر پیدا شود.</div>';
-        return;
-    }
-    const cfg = galCollect();
-    const origSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&no_crop=1&_t=' + Date.now();
-    const cropSrc = '?image_proxy=' + encodeURIComponent(sampleImg) + '&crop_bottom_pct=' + cfg.crop_bottom_pct + '&crop_bottom_px=' + cfg.crop_bottom_px + '&_t=' + Date.now();
-    box.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
-        + '<div style="text-align:center"><div style="font-size:10px;color:#94a3b8;margin-bottom:4px">اصلی</div><img src="' + origSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
-        + '<div style="text-align:center"><div style="font-size:10px;color:#4ade80;margin-bottom:4px">پس از برش (' + (cfg.crop_bottom_px > 0 ? (cfg.crop_bottom_px + 'px') : (cfg.crop_bottom_pct + '%')) + ')</div><img src="' + cropSrc + '" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff;border-radius:6px"></div>'
-        + '</div>';
+function imageTransformCollect(prefix) {
+    const g=id=>$(id)||{};
+    return {
+        transform_mode: (g(prefix+'TransformMode').value || 'white_square'),
+        white_square_corner: (g(prefix+'WhiteSquareCorner').value || 'bottom_right'),
+        white_square_size: Math.max(1,Math.min(1200,parseInt(g(prefix+'WhiteSquareSize').value||'80')||80)),
+        crop_bottom_pct: Math.max(0,Math.min(45,parseInt(g(prefix+'CropBottomPct').value||'0')||0)),
+        crop_bottom_px: Math.max(0,Math.min(600,parseInt(g(prefix+'CropBottomPx').value||'0')||0))
+    };
 }
+function imageTransformApply(prefix, cfg, legacyGallery) {
+    cfg=cfg||{}; const set=(id,v)=>{const e=$(id);if(e)e.value=v;};
+    let mode=cfg.transform_mode;
+    if(mode!=='white_square'&&mode!=='crop') mode=(legacyGallery&&((+cfg.crop_bottom_pct||0)>0||(+cfg.crop_bottom_px||0)>0))?'crop':'white_square';
+    set(prefix+'TransformMode',mode);set(prefix+'WhiteSquareCorner',cfg.white_square_corner||'bottom_right');
+    set(prefix+'WhiteSquareSize',cfg.white_square_size!==undefined?cfg.white_square_size:80);
+    set(prefix+'CropBottomPct',cfg.crop_bottom_pct!==undefined?cfg.crop_bottom_pct:0);
+    set(prefix+'CropBottomPx',cfg.crop_bottom_px!==undefined?cfg.crop_bottom_px:0);
+    const w=$(prefix+'WhiteSquareSettings'),c=$(prefix+'CropSettings'),pv=$(prefix+'TransformPreview');
+    if(w)w.classList.toggle('hidden',mode!=='white_square');if(c)c.classList.toggle('hidden',mode!=='crop');if(pv)pv.innerHTML='';
+}
+function imageTransformChanged(prefix) {
+    imageTransformApply(prefix,imageTransformCollect(prefix),false);markDirty();scheduleSave();
+}
+function previewImageTransform(prefix) {
+    const box=$(prefix+'TransformPreview');if(!box)return;let sampleImg='';
+    for(const [,p] of products){if(p&&p.image&&/^https?:\/\//i.test(p.image)){sampleImg=p.image;break;}}
+    if(!sampleImg){box.innerHTML='<div style="font-size:11px;color:#fbbf24">ابتدا یک محصول دارای تصویر استخراج کنید.</div>';return;}
+    const c=imageTransformCollect(prefix), q=new URLSearchParams(c);q.set('image_proxy',sampleImg);q.set('_t',Date.now());
+    const original='?image_proxy='+encodeURIComponent(sampleImg)+'&no_crop=1&_t='+Date.now(), transformed='?'+q.toString();
+    const label=c.transform_mode==='white_square'?'مربع سفید '+c.white_square_size+'px':'برش '+(c.crop_bottom_px>0?c.crop_bottom_px+'px':c.crop_bottom_pct+'%');
+    box.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
+      +'<div style="text-align:center"><div style="font-size:10px;color:#94a3b8">اصلی</div><img src="'+original+'" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff"></div>'
+      +'<div style="text-align:center"><div style="font-size:10px;color:#4ade80">'+label+'</div><img src="'+transformed+'" style="max-width:100%;max-height:170px;object-fit:contain;background:#fff"></div></div>';
+}
+function previewImageBottomCrop(){ previewImageTransform('gal'); }
 
 /** با تغییر روش، فقط جعبهٔ همان روش نشان داده می‌شود */
 function galModeChanged(silent) {
@@ -78437,6 +78475,7 @@ function applyProfile(p, keepTab) {
         });
         renderDetailFieldsList();
     }
+    imageTransformApply('list', p.image_transform || {}, false); // v10.444
     galApply(p.gallery || {});           // v8.64
 
     updatePagUI();
@@ -78601,6 +78640,7 @@ function collectProfileData() {
         pagVal: $('pagVal').value,
         selectors: {...sel},
         detailSelectors: JSON.parse(JSON.stringify(detailSel)),
+        image_transform: imageTransformCollect('list'), // v10.444
         gallery: galCollect(),                       // v8.64
         titleSuffix: $('titleSuffix').value,
         priceMode: $('priceMode').value,
@@ -78649,7 +78689,7 @@ function saveProfileSilent() {
     fd.append('loaded_updated_at',String(currentProfileUpdatedAt));
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'image_transform' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
@@ -78705,7 +78745,7 @@ function saveProfile() {
     fd.append('action', 'save_profile');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise "[object Object]"
-        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'productSource') {
+        if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'image_transform' || k === 'productSource') {
             fd.append(k, JSON.stringify(data[k]));
         } else {
             fd.append(k, typeof data[k]==='boolean' ? (data[k]?'1':'0') : data[k]);
@@ -82554,6 +82594,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.444', t:'🖼️ پردازش مستقل تصاویر فهرست و گالری با مربع سفید یا برش پایین', items:[
+    'کنار سلکتور تصویر فهرست و سلکتورهای گالری، دراپ‌داون مستقل پردازش تصویر اضافه شد: «افزودن مربع سفید به یکی از چهار گوشه» با اندازهٔ پیکسلی قابل تنظیم (پیش‌فرض) یا «برش پایین تصویر».',
+    'تنظیمات قدیمی درصد/پیکسل برش پایین بدون تغییر حفظ شده‌اند؛ پروفایل‌های قدیمی دارای برش به‌صورت خودکار در حالت برش باز می‌شوند و پروفایل‌های بدون تنظیم از مربع سفید پیش‌فرض استفاده می‌کنند.',
+    'مسیرهای کش محلی، آپلود ووکامرس، آپلود باسلام، fallback آدرس محلی و پراکسی پیش‌نمایش همگی از موتور یکسان پردازش استفاده می‌کنند و با زمینهٔ list/gallery، عکس اصلی و عکس‌های گالری را مستقل پردازش و کلید کش جدا تولید می‌کنند.',
+    'پیش‌نمایش قبل/بعد برای هر دو بخش اضافه شد و چهار گوشه، اندازه مربع، درصد برش و پیکسل برش در خود پروفایل ذخیره و بازیابی می‌شوند.'
+  ]},
   {v:'10.443', t:'📂 تلاش ترتیبی روی دسته‌های دستی انتخاب‌شده هنگام خطای دسته‌بندی ۴۲۲ + کنارگذاشتن خودکار برای تصحیح دسته‌بندی با هوش مصنوعی', items:[
     'تشخیص دقیق ساختار خطای دسته‌بندی باسلام در اندپوینت vendors/{id}/products (از جمله {"http_status":422,"messages":[{"code":0,"fields":["category"],"message":".دسته بندی انتخابی دارای فرزند می باشد"}]}) در bslIsCategoryError و استخراج کامل آرایهٔ body.messages[*] در bslErrText اضافه شد تا پیام واقعی خطا در هیچ مسیری پشت HTTP 422 پنهان نماند.',
     'تابع bslCollectManualCategories زنجیرهٔ کامل و بدون تکرار تمام دسته‌های دستی انتخاب‌شده توسط کاربر (دستهٔ مستقیم ردیف/پروفایل، دسته‌های جایگزین پروفایل به همان ترتیب انتخاب، و دستهٔ اصلی/جایگزین تنظیمات باسلام) را می‌سازد و bslTryCreateWithFallback آن‌ها را دقیقاً یک‌به‌یک و به ترتیب، بدون دستکاری شناسه با children[0] یا حدس تصادفی کلمه‌کلیدی، با حفظ تصویر ازقبل‌آپلودشده امتحان می‌کند.',
