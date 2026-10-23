@@ -369,7 +369,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.441';
+const APP_VERSION = '10.442';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1148,6 +1148,7 @@ function s4WorkerEnqueue(string $type, array $payload, string $label = ''): arra
         $now = time();
         foreach ($q['entries'] as $e) {
             if (!is_array($e)) continue;
+            if ((string)($e['type'] ?? '') === 'backend_extract' && s4WorkerBackendExtractRowIsDeadOrphan($e)) continue;
             $activeStates=['pending','running'];
             /* In cron_only a paused matrix job still owns the checkpoint and is
                waiting for the next pulse; enqueueing another owner creates a herd. */
@@ -1176,10 +1177,21 @@ function s4ParallelExtractSupported(): bool {
     return function_exists('exec') && strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN'
         && empty($GLOBALS['_s4ParallelExtractDisabled']);
 }
+function s4WorkerBackendExtractRowIsDeadOrphan(array $e): bool {
+    if ((string)($e['type'] ?? '') !== 'backend_extract' || (string)($e['status'] ?? '') !== 'running') return false;
+    $pid = (int)($e['worker_pid'] ?? 0);
+    $age = time() - (int)($e['updated_at'] ?? $e['started_at'] ?? 0);
+    $pidDead = ($pid > 0 && !s4WorkerPidAlive($pid)) || ($pid <= 0 && $age > 25);
+    if (!$pidDead) return false;
+    $eqId = trim((string)($e['payload']['extract_queue_id'] ?? ''));
+    if ($eqId !== '' && function_exists('extractLockHeldForQueue') && extractLockHeldForQueue($eqId)) return false;
+    return true;
+}
 function s4WorkerParallelExtractRunning(): int {
     $n=0;
     foreach((array)(s4WorkerLoadQueue()['entries']??[]) as $e){
         if(!is_array($e)||(string)($e['type']??'')!=='backend_extract'||(string)($e['status']??'')!=='running')continue;
+        if(s4WorkerBackendExtractRowIsDeadOrphan($e))continue;
         $pid=(int)($e['worker_pid']??0);
         if($pid<=0||s4WorkerPidAlive($pid))$n++;
     }
@@ -1201,9 +1213,45 @@ function s4SpawnParallelExtractJob(string $jobId): array {
  * main daemon; each extraction child owns one queue row and one extraction slot. */
 function s4DispatchParallelExtractJobs(): array {
     $limit=extractTaskConcurrency();
-    if($limit<=1||!s4ParallelExtractSupported())return ['ok'=>false,'skipped'=>'unsupported_or_single','limit'=>$limit];
-    $running=0;$claimed=[];
-    s4WorkerQueueMutate(function(&$q)use($limit,&$running,&$claimed){$now=time();
+    if($limit<1||!s4ParallelExtractSupported())return ['ok'=>false,'skipped'=>'unsupported_or_single','limit'=>$limit];
+    $profilesSnap=[];$extractRowsSnap=[];$progSnap=[];
+    try{$profilesSnap=loadProfiles();}catch(Throwable $_e){}
+    try{$extractRowsSnap=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
+    try{$progSnap=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
+    $running=0;$claimed=[];$recoveredOrphans=[];
+    s4WorkerQueueMutate(function(&$q)use($limit,&$running,&$claimed,&$recoveredOrphans,$profilesSnap,$extractRowsSnap,$progSnap){$now=time();
+        foreach($q['entries']as &$re){
+            if(!is_array($re)||!s4WorkerBackendExtractRowIsDeadOrphan($re))continue;
+            $rpk=trim((string)($re['payload']['profile_key']??''));
+            $rqid=trim((string)($re['payload']['extract_queue_id']??''));
+            $userStop=$rqid!==''&&function_exists('extractQueueRowStoppedByUser')&&extractQueueRowStoppedByUser($rqid);
+            $madeProducts=false;
+            if($rqid!==''){
+                foreach($extractRowsSnap as $_er){
+                    if(!is_array($_er)||(string)($_er['id']??'')!==$rqid)continue;
+                    if(!empty($_er['stopped_by_user'])||(string)($_er['paused_by']??'')==='user')$userStop=true;
+                    if(max((int)($_er['run_extracted']??0),(int)($_er['products_count']??0),(int)($_er['extracted']??0))>0)$madeProducts=true;
+                    break;
+                }
+            }
+            if(!$madeProducts&&$rpk!==''&&(string)($progSnap['profile_key']??'')===$rpk&&($rqid===''||(string)($progSnap['queue_id']??'')===$rqid)&&(int)($progSnap['extracted']??0)>0)$madeProducts=true;
+            $attempts=(int)($re['attempts']??0);
+            if(!$userStop&&($madeProducts||$attempts<3)&&$rpk!==''&&isset($profilesSnap[$rpk])&&is_array($profilesSnap[$rpk])){
+                $prSnap=$profilesSnap[$rpk];
+                $nextPh=function_exists('extractResumePhase')?extractResumePhase($prSnap):'list';
+                if($nextPh==='list'&&!empty($prSnap['_extract_want_detail']))$nextPh='all';
+                $re['status']='pending';$re['worker_pid']=0;$re['updated_at']=$now;$re['recovered_at']=$now;
+                if($madeProducts){$re['attempts']=0;$re['recycles']=(int)($re['recycles']??0)+1;}
+                $re['payload']=is_array($re['payload']??null)?$re['payload']:[];
+                $re['payload']['resume']=true;$re['payload']['phase']=$nextPh;
+                $re['error']='پردازش استخراج متوقف شد؛ ادامهٔ خودکار از checkpoint';
+                unset($re['done_at']);
+                $recoveredOrphans[]=(string)($re['id']??'');
+            }else{
+                $re['status']=$userStop?'cancelled':'failed';$re['worker_pid']=0;$re['updated_at']=$now;$re['done_at']=$now;
+                $re['error']=$userStop?'stopped_by_user':'dead_worker_orphan';
+            }
+        }unset($re);
         foreach($q['entries']as $e)if(is_array($e)&&(string)($e['type']??'')==='backend_extract'&&(string)($e['status']??'')==='running'){
             $pid=(int)($e['worker_pid']??0);if($pid<=0||s4WorkerPidAlive($pid))$running++;}
         $room=max(0,$limit-$running);
@@ -1220,7 +1268,7 @@ function s4DispatchParallelExtractJobs(): array {
         }else{$failed[]=['job_id'=>$jid,'error'=>(string)($sp['error']??'spawn_failed')];
             s4WorkerQueueMutate(function(&$q)use($jid){foreach($q['entries']as&$e){if((string)($e['id']??'')===$jid&&(int)($e['worker_pid']??0)===0){$e['status']='pending';$e['updated_at']=time();}}unset($e);return['ok'=>true];});}
     }
-    return ['ok'=>empty($failed),'limit'=>$limit,'running_before'=>$running,'started'=>$started,'failed'=>$failed];
+    return ['ok'=>empty($failed),'limit'=>$limit,'running_before'=>$running,'recovered'=>$recoveredOrphans,'started'=>$started,'failed'=>$failed];
 }
 function s4RunParallelExtractJob(string $jobId): array {
     $job=null;
@@ -1238,13 +1286,15 @@ function s4RunParallelExtractJob(string $jobId): array {
             s4WorkerFinishJob($jobId,($ok&&empty($res['resume_needed']))?'done':($ok?'paused':'failed'),$summary,$ok?'':(string)($res['error']??'job failed'));
         }
     }catch(Throwable $e){$res=['ok'=>false,'error'=>$e->getMessage()];s4WorkerFinishJob($jobId,'failed',[],$e->getMessage());}
-    s4DispatchParallelExtractJobs();return $res;
+    s4DispatchParallelExtractJobs();
+    if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('parallel_finish',false);
+    return $res;
 }
 
 function s4WorkerClaimJob(): ?array {
     $ret = s4WorkerQueueMutate(function (&$q) {
         $now = time();$pick=-1;$pickRank=PHP_INT_MAX;
-        $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>1||s4WorkerParallelExtractRunning()>0);
+        $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>=1||s4WorkerParallelExtractRunning()>0);
         /* Long matrix checkpoints recycle many times. Give queued extraction
            and manual synchronization one turn before another matrix segment,
            otherwise “Start extraction” can remain pending for hours. FIFO is
@@ -1388,7 +1438,8 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
                 if((string)($e['payload']['profile_key']??'')!==$profileKey)continue;
                 $st=(string)($e['status']??'');
-                if(in_array($st,['pending','running'],true)){
+                $deadRunning=$st==='running'&&s4WorkerBackendExtractRowIsDeadOrphan($e);
+                if(in_array($st,['pending','running'],true)&&!$deadRunning){
                     $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
                     if($detailModeNorm!=='')$e['payload']['detail_mode']=$detailModeNorm;
                     if($st==='pending'&&$preferredQueueId!=='')$e['payload']['extract_queue_id']=$plannedQueueId;
@@ -1396,7 +1447,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                     $e['payload']['max_pages']=$maxPages;
                     $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
                 }
-                if(in_array($st,['paused','failed'],true)&&$revive<0)$revive=$i;
+                if((in_array($st,['paused','failed'],true)||$deadRunning)&&$revive<0)$revive=$i;
             }unset($e);
             if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
                 $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;$e['payload']['max_pages']=$maxPages;
@@ -1654,6 +1705,7 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $tail=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($tail!=='')$tails[]=$tail;
         $decoded['child_exit_code']=$rc;if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
         $last=$decoded;s4WorkerStateWrite(['phase'=>'job','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time()]);
+        if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
         if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
         $retryAfter=max(0,min(300,(int)($decoded['retry_after']??0)));
         if($retryAfter>0){s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);}
@@ -1708,6 +1760,7 @@ function s4WorkerRunMatrixBuild(array $payload): array {
         do {
             $segments++;
             s4WorkerStateWrite(['phase'=>'matrix','job_type'=>'matrix_build','job_segment'=>$segments]);
+            if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
             $res = matrixBuild($opts);
             if (empty($res['yielded'])) break;
             $nextCp=is_array($res['checkpoint']??null)?$res['checkpoint']:null;
@@ -2082,11 +2135,12 @@ function s4SpawnPersistentWorker(): array {
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
 }
 
-function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $detailMode = ''): array {
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $detailMode = '', string $preferredQueueId = ''): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
+    $preferredQueueId = trim($preferredQueueId);
     if ($profileKey === '') return ['ok' => false, 'error' => 'profile_key_empty'];
     if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
     $php = s4CliPhpBinary();
@@ -2102,6 +2156,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         . ($resume ? ' --resume' : '')
         . ($maxPages>=0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
         . ($detailModeNorm !== '' ? ' --detail-mode=' . escapeshellarg($detailModeNorm) : '')
+        . ($preferredQueueId !== '' ? ' --queue-id=' . escapeshellarg($preferredQueueId) : '')
         . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -2181,9 +2236,16 @@ function s4WorkerRunJob(array $job): array {
         $detailModeJob = isset($payload['detail_mode']) && trim((string)$payload['detail_mode']) !== ''
             ? normalizeDetailExtractMode($payload['detail_mode']) : '';
         $resumeNext = !empty($payload['resume']);
+        if ($resumeNext && $initialPhase === 'list') {
+            $_prInit = loadProfiles()[$pk] ?? null;
+            if (is_array($_prInit) && !empty($_prInit['_extract_want_detail'])) {
+                $initialPhase = 'all';
+                $phase = 'all';
+            }
+        }
         $segments = 0;
         $transientResumes = 0;
-        $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 8)));
+        $maxSegments = max(1, min(500, (int)(loadConnections()['worker_extract_max_segments'] ?? 60)));
         $maxTransientResumes = max(0, min(100, (int)(loadConnections()['worker_extract_retry_segments'] ?? 20)));
         $res = ['ok' => false, 'error' => 'worker did not start'];
         while (true) {
@@ -2337,6 +2399,7 @@ function s4WorkerLoopFromCli(): void {
            serialized in this daemon. */
         $px=s4DispatchParallelExtractJobs();
         if(!empty($px['failed']))$GLOBALS['_s4ParallelExtractDisabled']=true;
+        if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
         $job = s4WorkerClaimJob();
         if ($job) {
             $jid = (string)($job['id'] ?? '');
@@ -19971,25 +20034,42 @@ foreach($queue['entries'] as &$qe){
     $_iw=queueRowIdle('extract',$qe,$progress,$now,['lock'=>max($_lkBeat,$_wjBeat)],$exRunningRows);
     $idle=(int)$_iw['idle'];
     if($idle>$exIdleMax){
-        $qe['status']='failed';
+        $_rowPh = ((string)($qe['resume_phase'] ?? $qe['phase'] ?? $_progressForRow['phase'] ?? 'list')) === 'detail' ? 'detail' : 'list';
+        $_rowProds = extractQueueRunProductCount($qe, $progress, max(1, $exRunningRows));
         $_rpQ = max(1, (int)($qe['resume_page'] ?? $qe['current'] ?? $_progressForRow['page'] ?? 1));
         if ($_rpQ > 1) $_rpQ = max(1, $_rpQ - 1);
-        $qe['error']='نیمه‌کاره رها شد ('.$idle.'ث) — ادامه از صفحه '.$_rpQ;
-        $qe['resumable']=true;
-        $qe['resume_page']=$_rpQ;
-        $qe['done_at']=$now;
+        if ($_rowProds > 0) {
+            $qe['status']='paused';
+            $qe['resumable']=true;
+            $qe['resume_needed']=1;
+            $qe['resume_phase']=$_rowPh;
+            if ($_rowPh === 'list') $qe['resume_page']=$_rpQ;
+            $qe['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامهٔ خودکار از checkpoint';
+            unset($qe['done_at']);
+        } else {
+            $qe['status']='failed';
+            $qe['resumable']=false;
+            $qe['resume_needed']=0;
+            $qe['auto_resume_blocked']='zero_products';
+            $qe['error']='بدون محصول متوقف شد ('.$idle.'ث)';
+            $qe['done_at']=$now;
+        }
         $dirty=true;
         $_pkQ=(string)($qe['profile_key']??'');
-        if($_pkQ!==''){
+        if($_pkQ!=='' && $_rowProds > 0){
             try{
                 $_psQ=loadProfiles();
                 if(isset($_psQ[$_pkQ])&&is_array($_psQ[$_pkQ])){
-                    $_psQ[$_pkQ]['_extract_list_incomplete']=true;
-                    $_psQ[$_pkQ]['_extract_resume_from']=$_rpQ;
-                    $_psQ[$_pkQ]['_extract_list_page_try']=(int)($qe['current']??$_rpQ+1);
-                    $_psQ[$_pkQ]['_extract_list_page_ok']=max(0,$_rpQ);
+                    $_psQ[$_pkQ]['_extract_stage']='stopped';
+                    $_psQ[$_pkQ]['_extract_resume_phase']=$_rowPh;
+                    $_psQ[$_pkQ]['_extract_list_incomplete']=($_rowPh==='list');
+                    if($_rowPh==='list'){
+                        $_psQ[$_pkQ]['_extract_resume_from']=$_rpQ;
+                        $_psQ[$_pkQ]['_extract_list_page_try']=(int)($qe['current']??$_rpQ+1);
+                        $_psQ[$_pkQ]['_extract_list_page_ok']=max(0,$_rpQ);
+                    }
                     $_psQ[$_pkQ]['_extract_stage_at']=time();
-                    saveProfiles($_psQ);
+                    saveOneProfileAtomic($_pkQ,$_psQ[$_pkQ]);
                 }
             }catch(Throwable $e){}
         }
@@ -19997,7 +20077,12 @@ foreach($queue['entries'] as &$qe){
 }
 unset($qe);
 if($dirty)extractWriteQueue($queue);
-echo json_encode(['ok'=>true,'entries'=>$queue['entries'],'progress'=>$progress],JSON_UNESCAPED_UNICODE);
+$_arQueueRes = s4AutoResumeInterruptedExtractions('queue_status', !$dirty);
+if (!empty($_arQueueRes['resumed']) || !empty($_arQueueRes['paused_stalled'])) {
+    $queue = extractReadQueue();
+    $progress = readProgress(EXTRACT_PROGRESS_FILE);
+}
+echo json_encode(['ok'=>true,'entries'=>$queue['entries'],'progress'=>$progress,'auto_resume'=>$_arQueueRes['resumed']??[]],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -20131,20 +20216,38 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     }
     $meta = extractListResumeMeta(loadProfiles()[$pk] ?? $pr);
     $phase = (string)$prep['phase'];
+    $prNowResume = loadProfiles()[$pk] ?? $pr;
+    $runPhaseResume = ($phase === 'list' && !empty($prNowResume['_extract_want_detail'])) ? 'all' : $phase;
+    $detailModeResume = normalizeDetailExtractMode($prNowResume['detailExtractMode'] ?? 'two_stage');
     if(s4WorkerIsActive()){
         extractLockRelease((string)($prep['queue_id']??''));
-        $enq=s4WorkerEnqueueBackendExtract($pk,$phase,false,true,-1,(string)($prep['queue_id']??''),true);
+        $enq=s4WorkerEnqueueBackendExtract($pk,$runPhaseResume,false,true,-1,(string)($prep['queue_id']??''),true,$detailModeResume);
         echo json_encode(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),'resuming'=>true,'worker'=>true,
-            'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'page_ok'=>(int)$meta['page_ok'],
+            'profile_key'=>$pk,'phase'=>$phase,'run_phase'=>$runPhaseResume,'start_page'=>(int)$meta['start_page'],'page_ok'=>(int)$meta['page_ok'],
             'page_try'=>(int)$meta['page_try'],'message'=>'ادامهٔ مرحلهٔ '.$phase.' از checkpoint به worker سپرده شد']+$enq,JSON_UNESCAPED_UNICODE);
         exit;
+    }
+    if(function_exists('s4SpawnBackendExtractChild')){
+        extractLockRelease((string)($prep['queue_id']??''));
+        $spResume=s4SpawnBackendExtractChild($pk,$runPhaseResume,false,true,-1,$detailModeResume,(string)($prep['queue_id']??''));
+        if(!empty($spResume['ok'])){
+            echo json_encode(['ok'=>true,'started'=>true,'resuming'=>true,'worker_child'=>true,
+                'profile_key'=>$pk,'phase'=>$phase,'run_phase'=>$runPhaseResume,'start_page'=>(int)$meta['start_page'],
+                'queue_id'=>(string)($prep['queue_id']??''),'pid'=>(int)($spResume['pid']??0)],JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $prep = extractResumePrepare($pk, loadConnections(), $qid, true);
+        if (empty($prep['ok'])) {
+            echo json_encode(['ok'=>false,'error'=>'ادامه ممکن نشد','reason'=>(string)($prep['reason']??'')],JSON_UNESCAPED_UNICODE);
+            exit;
+        }
     }
     /* exec-disabled hosting: keep this browser POST attached. Detaching here
        caused Apache/LiteSpeed to kill the resume before its next page. */
     header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
     $resumeResult=null;
     try {
-        $resumeResult=runBackendExtract($pk, 'manual_resume', false, $phase, false, (string)($prep['queue_id'] ?? ''));
+        $resumeResult=runBackendExtract($pk, 'manual_resume', false, $runPhaseResume, false, (string)($prep['queue_id'] ?? ''), -1, $detailModeResume);
     } catch (Throwable $e) {
         $failed = readProgress(EXTRACT_PROGRESS_FILE);
         if (!$failed) $failed = $pr;
@@ -20169,21 +20272,20 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
 
 if(isset($_GET['poll_extract'])){
 header('Content-Type: application/json; charset=UTF-8');
+$_arPoll = s4AutoResumeInterruptedExtractions('poll_extract', true);
 clearstatcache(true,EXTRACT_PROGRESS_FILE);
 $p=readProgress(EXTRACT_PROGRESS_FILE);
-/* A queued worker job is alive even while another bounded job owns the daemon.
-   Do not convert that waiting state to a fake 121-second extraction stall. */
 $_pQueuedPending=false;
 if(!empty($p['worker'])&&!empty($p['job_id'])){
     $_wqNow=s4WorkerLoadQueue();
     foreach((array)($_wqNow['entries']??[])as $_wj){
         if(!is_array($_wj)||(string)($_wj['id']??'')!==(string)$p['job_id'])continue;
         $_wst=(string)($_wj['status']??'');
-        if(in_array($_wst,['pending','running'],true)){
+        if(in_array($_wst,['pending','running'],true)&&!s4WorkerBackendExtractRowIsDeadOrphan($_wj)){
             $_pQueuedPending=$_wst==='pending';$p['running']=true;$p['done']=false;$p['stalled']=false;
             $p['worker_waiting']=$_pQueuedPending;$p['worker_job_status']=$_wst;$p['error']='';
             if($_pQueuedPending)$p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
-                ['⏳ استخراج در صف worker است و پیش از segment بعدی ماتریس اجرا می‌شود']),-12);
+                ['⏳ استخراج در صف worker است و به‌صورت خودکار ادامه می‌یابد']),-12);
         }
         break;
     }
@@ -20210,26 +20312,30 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
         if($_pWAt>0)$p['worker_alive']=true;
     }
     $_pIdle=$_pTs>0?(time()-$_pTs):PHP_INT_MAX;
-    $_pMax=max(120,(int)(loadConnections()['stall_after']??300));
+    $_pMax=max(90,(int)(loadConnections()['stall_after']??180));
     if($_pIdle>$_pMax){
-        $p['running']=false;$p['done']=true;$p['stalled']=true;
-        $p['error']='استخراج '.$_pIdle.' ثانیه بی‌حرکت ماند — پردازه توسط سرور بسته شده';
+        $_stalePhase=((string)($p['phase']??$p['resume_phase']??'list'))==='detail'?'detail':'list';
+        $_hasProds=((int)($p['extracted']??0))>0;
         $_rp = max(1, (int)($p['page'] ?? $p['resume_page'] ?? 1));
-        if ($_rp > 1) $_rp = max(1, $_rp - 1); // یک صفحه قبل
-        $p['resumable']=true;
-        $p['resume_page']=$_rp;
-        $p['recent_log']=array_merge((array)($p['recent_log']??[]),
-            ['⛔ پردازش نیمه‌کاره رها شد ('.$_pIdle.' ثانیه بی‌حرکت)',
-             '   • کارِ انجام‌شده تا این لحظه ذخیره شده — از دست نرفته',
-             '   • ▶ ادامه از صفحه '.$_rp.' (یک صفحه قبل از محل گیر)']);
+        if ($_rp > 1) $_rp = max(1, $_rp - 1);
+        $p['running']=false;$p['done']=!$_hasProds;$p['paused']=$_hasProds;
+        $p['resume_needed']=$_hasProds;$p['stalled']=true;$p['resumable']=$_hasProds;
+        $p['resume_phase']=$_stalePhase;
+        if($_stalePhase==='list')$p['resume_page']=$_rp;
+        $p['error']=$_hasProds
+            ? ('استخراج '.$_pIdle.' ثانیه بی‌حرکت ماند — در حال ادامهٔ خودکار از checkpoint')
+            : ('استخراج بدون محصول متوقف شد ('.$_pIdle.'ث)');
+        $p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
+            $_hasProds
+                ? ['♻️ توقف پردازش پس از '.$_pIdle.' ثانیه — کارِ انجام‌شده ذخیره شده و خودکار ادامه می‌یابد ('
+                   .($_stalePhase==='detail'?'فاز ۲: جزئیات':('فاز ۱: از صفحه '.$_rp)).')']
+                : ['⛔ استخراج بدون دریافت محصول متوقف شد']),-40);
         writeProgress(EXTRACT_PROGRESS_FILE,$p);
-        /* resume meta روی پروفایل */
         $_pkSave = (string)($p['profile_key'] ?? '');
-        if ($_pkSave !== '') {
+        if ($_pkSave !== '' && $_hasProds) {
             try {
                 $_ps = loadProfiles();
                 if (isset($_ps[$_pkSave]) && is_array($_ps[$_pkSave])) {
-                    $_stalePhase=(string)($p['phase']??'list');$_stalePhase=$_stalePhase==='detail'?'detail':'list';
                     $_ps[$_pkSave]['_extract_resume_phase']=$_stalePhase;
                     $_ps[$_pkSave]['_extract_list_incomplete'] = $_stalePhase==='list';
                     if($_stalePhase==='list'){
@@ -20239,32 +20345,64 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
                     }
                     $_ps[$_pkSave]['_extract_stage'] = 'stopped';
                     $_ps[$_pkSave]['_extract_stage_at'] = time();
-                    saveProfiles($_ps);
+                    saveOneProfileAtomic($_pkSave,$_ps[$_pkSave]);
                 }
             } catch (Throwable $e) {}
         }
-        // ردیف صف هم بسته شود، وگرنه «در حال اجرا» می‌ماند
         $_q=extractReadQueue();$_qd=false;
         foreach($_q['entries'] as &$_qe){
             if(($_qe['status']??'')!=='running')continue;
             if(((string)($p['queue_id']??''))!==''&&((string)($_qe['id']??''))!==((string)$p['queue_id']))continue;
-            $_qe['status']='failed';
-            $_qe['error']='بی‌حرکت ماند ('.$_pIdle.'ث) — ادامه از صفحه '.$_rp;
-            $_qe['resumable']=true;
-            $_qe['resume_page']=$_rp;
-            $_qe['done_at']=time();$_qd=true;
+            if($_hasProds){
+                $_qe['status']='paused';
+                $_qe['error']='بی‌حرکت ماند ('.$_pIdle.'ث) — ادامهٔ خودکار در همین ردیف';
+                $_qe['resumable']=true;$_qe['resume_needed']=1;$_qe['resume_phase']=$_stalePhase;
+                if($_stalePhase==='list')$_qe['resume_page']=$_rp;
+                unset($_qe['done_at']);
+            }else{
+                $_qe['status']='failed';$_qe['resumable']=false;$_qe['resume_needed']=0;
+                $_qe['auto_resume_blocked']='zero_products';$_qe['done_at']=time();
+            }
+            $_qd=true;
         }
         unset($_qe);
         if($_qd)extractWriteQueue($_q);
+        if($_hasProds){
+            $_arPoll = s4AutoResumeInterruptedExtractions('poll_stall', false);
+            clearstatcache(true,EXTRACT_PROGRESS_FILE);
+            $p=readProgress(EXTRACT_PROGRESS_FILE);
+        }
     }
 }
-if((!empty($p['done']) || !empty($p['ran_out']) || !empty($p['resume_needed']))
-    && !empty($p['resume_needed']) && function_exists('s4WorkerExtractBeatForRow')){
-    $_pW=s4WorkerExtractBeatForRow((string)($p['queue_id']??''),(string)($p['profile_key']??''));
-    if((int)($_pW['beat']??0)>0){
-        $p['running']=true;$p['done']=false;$p['worker_continuing']=true;$p['worker_alive']=true;
+if((!empty($p['done']) || !empty($p['ran_out']) || !empty($p['resume_needed']) || !empty($p['paused']))
+    && (!empty($p['resume_needed']) || !empty($p['ran_out']) || !empty($p['paused']))
+    && empty($p['cancelled']) && empty($p['stopped_by_user'])){
+    $_pContinuing = false;
+    if(function_exists('s4WorkerExtractBeatForRow')){
+        $_pW=s4WorkerExtractBeatForRow((string)($p['queue_id']??''),(string)($p['profile_key']??''));
+        if((int)($_pW['beat']??0)>0){ $_pContinuing = true; $p['worker_alive']=true; }
+    }
+    if(!$_pContinuing){
+        $_pPk=(string)($p['profile_key']??''); $_pQid=(string)($p['queue_id']??'');
+        foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_wjC){
+            if(!is_array($_wjC)||(string)($_wjC['type']??'')!=='backend_extract')continue;
+            if(!in_array((string)($_wjC['status']??''),['pending','running'],true)||s4WorkerBackendExtractRowIsDeadOrphan($_wjC))continue;
+            if($_pPk!==''&&(string)($_wjC['payload']['profile_key']??'')===$_pPk){ $_pContinuing = true; break; }
+            if($_pQid!==''&&(string)($_wjC['payload']['extract_queue_id']??'')===$_pQid){ $_pContinuing = true; break; }
+        }
+        if(!$_pContinuing && !empty($_arPoll['resumed'])){
+            foreach((array)$_arPoll['resumed'] as $_arItem){
+                if($_pPk!==''&&(string)($_arItem['key']??'')===$_pPk){ $_pContinuing = true; break; }
+            }
+        }
+    }
+    if($_pContinuing){
+        $p['running']=true;$p['done']=false;$p['worker_continuing']=true;$p['auto_resuming']=true;
         $p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
-            ['🧵 worker زنده است و همین استخراج را از checkpoint ادامه می‌دهد…']),-40);
+            ['♻️ ادامهٔ خودکار از checkpoint در حال اجراست…']),-40);
+    }elseif(!empty($_arPoll['browser_resume'])&&is_array($_arPoll['browser_resume'])){
+        $p['running']=true;$p['done']=false;$p['auto_resuming']=true;
+        $p['auto_resume_browser']=$_arPoll['browser_resume'];
     }
 }
 $p['avg_ppm'] = extractAvgPpmValue($p);
@@ -21113,6 +21251,158 @@ function extractQueueScheduleResumeCandidates(array $candidates): array {
     return ['ok'=>true,'scheduled'=>count(array_unique($scheduled)),'queue_ids'=>array_values(array_unique($scheduled))];
 }
 
+function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throttled = true): array {
+    $cn = loadConnections();
+    if (isset($cn['auto_resume']) && empty($cn['auto_resume'])) return ['ok' => true, 'disabled' => true, 'source' => $source];
+    $pulseLockFile = __DIR__ . '/_auto_resume_pulse.lock';
+    $lf = @fopen($pulseLockFile, 'c');
+    if (!$lf || !@flock($lf, LOCK_EX | LOCK_NB)) { if ($lf) @fclose($lf); return ['ok' => true, 'busy' => true, 'source' => $source]; }
+    try {
+        clearstatcache(true, $pulseLockFile);
+        $now = time();
+        $minGap = $source === 'worker_loop' ? 8 : 5;
+        $lastPulse = (int)@filemtime($pulseLockFile);
+        if ($throttled && $lastPulse > 0 && ($now - $lastPulse) < $minGap) return ['ok' => true, 'throttled' => true, 'source' => $source];
+        @touch($pulseLockFile, $now);
+        $dispatch0 = s4ParallelExtractSupported() ? s4DispatchParallelExtractJobs() : [];
+        $stallCfg = in_array($source, ['worker_loop', 'parallel_finish', 'cron'], true)
+            ? 60 : max(75, min(180, (int)($cn['stall_after'] ?? 120)));
+        $exQ = extractReadQueue();
+        $exProg = readProgress(EXTRACT_PROGRESS_FILE);
+        $runningRows = 0;
+        foreach ((array)($exQ['entries'] ?? []) as $_cntR) {
+            if (is_array($_cntR) && (string)($_cntR['status'] ?? '') === 'running') $runningRows++;
+        }
+        $pausedKeys = [];
+        foreach ((array)($exQ['entries'] ?? []) as $qe) {
+            if (!is_array($qe) || (string)($qe['status'] ?? '') !== 'running') continue;
+            if (!empty($qe['stop_requested']) || !empty($qe['stopped_by_user']) || (string)($qe['paused_by'] ?? '') === 'user') continue;
+            $qid = trim((string)($qe['id'] ?? ''));
+            if ($qid === '') continue;
+            $lkBeat = extractLockBeatForQueue($qid);
+            $workerAlive = false;
+            $wjId = trim((string)($qe['worker_job_id'] ?? ''));
+            if ($wjId !== '') {
+                foreach ((array)(s4WorkerLoadQueue()['entries'] ?? []) as $_we) {
+                    if (!is_array($_we) || (string)($_we['id'] ?? '') !== $wjId || (string)($_we['status'] ?? '') !== 'running') continue;
+                    $workerAlive = s4WorkerPidAlive((int)($_we['worker_pid'] ?? 0));
+                    break;
+                }
+            }
+            $lockHeld = extractLockHeldForQueue($qid);
+            $ownerPresent = $lockHeld || $workerAlive;
+            $iw = queueRowIdle('extract', $qe, $exProg, $now, ['lock' => $lkBeat], max(1, $runningRows));
+            $idle = (int)($iw['idle'] ?? 0);
+            if ($ownerPresent && $idle < $stallCfg) continue;
+            if ($ownerPresent) {
+                $retire = extractCancelWorkerForQueueRow($qe, 'stalled_auto_recovery');
+                if (!empty($retire['signal_sent'])) usleep(200000);
+            }
+            $paused = extractQueuePauseStaleRow($qid, $stallCfg, !$ownerPresent);
+            if (!is_array($paused)) continue;
+            $pk = trim((string)($paused['row']['profile_key'] ?? $qe['profile_key'] ?? ''));
+            $exPhase = (string)($paused['phase'] ?? 'list') === 'detail' ? 'detail' : 'list';
+            if (!empty($paused['resumable']) && $pk !== '') {
+                $pausedKeys[] = $pk;
+                $ps = loadProfiles();
+                if (isset($ps[$pk]) && is_array($ps[$pk])) {
+                    $ps[$pk]['_extract_stage'] = 'stopped';
+                    $ps[$pk]['_extract_resume_phase'] = $exPhase;
+                    $ps[$pk]['_extract_list_incomplete'] = ($exPhase === 'list');
+                    if ($exPhase === 'list' && empty($ps[$pk]['_extract_resume_from'])) {
+                        $rp = max(1, (int)($paused['row']['resume_page'] ?? $paused['row']['current'] ?? 1));
+                        if ($rp > 1) $rp = max(1, $rp - 1);
+                        $ps[$pk]['_extract_resume_from'] = $rp;
+                    }
+                    $ps[$pk]['_extract_stage_at'] = time();
+                    saveOneProfileAtomic($pk, $ps[$pk]);
+                }
+                if (!empty($paused['progress_owned'])) {
+                    $latestPg = readProgress(EXTRACT_PROGRESS_FILE);
+                    if ((string)($latestPg['queue_id'] ?? '') === $qid || $runningRows <= 1) {
+                        $latestPg['running'] = false;$latestPg['done'] = false;$latestPg['paused'] = true;
+                        $latestPg['resume_needed'] = true;$latestPg['stalled'] = true;$latestPg['resumable'] = true;
+                        $latestPg['resume_phase'] = $exPhase;
+                        $latestPg['recent_log'] = array_slice(array_merge((array)($latestPg['recent_log'] ?? []), [
+                            '♻️ توقف ناخواسته تشخیص داده شد — آماده‌سازی ادامهٔ خودکار از checkpoint (' . ($exPhase === 'detail' ? 'فاز ۲: جزئیات' : 'فاز ۱: لیست') . ')…'
+                        ]), -15);
+                        writeProgress(EXTRACT_PROGRESS_FILE, $latestPg);
+                    }
+                }
+            }
+        }
+        $profiles = loadProfiles();
+        $queueNow = extractReadQueue();
+        $candidates = cronExtractResumeCandidates($profiles, (array)($queueNow['entries'] ?? []), $pausedKeys);
+        $manualStopPk = extractManualStopProfileKey();
+        $tryLimit = max(1, min(10, (int)($cn['auto_resume_max'] ?? 3)));
+        $resumed = [];$skipped = [];$browserResume = null;
+        $workerActive = s4WorkerIsActive();
+        if (!$workerActive && s4ParallelExtractSupported() && function_exists('s4SpawnPersistentWorker') && $candidates) {
+            try { s4SpawnPersistentWorker(); usleep(150000); $workerActive = s4WorkerIsActive(); } catch (Throwable $_spEx) {}
+        }
+        foreach ($candidates as $cand) {
+            $rk = trim((string)($cand['key'] ?? ''));
+            $rqId = trim((string)($cand['queue_id'] ?? ''));
+            if ($rk === '') continue;
+            if ($manualStopPk !== '' && $rk === $manualStopPk) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'explicit_manual_sync_stop']; continue; }
+            $pgChk = readProgress(EXTRACT_PROGRESS_FILE);
+            $samePgRow = $rqId === '' || (string)($pgChk['queue_id'] ?? '') === $rqId;
+            if (tasksResumeExplicitlyStopped('extract', [], $samePgRow ? $pgChk : [])) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'explicit_user_stop']; continue; }
+            if ($rqId !== '' && extractQueueRowStoppedByUser($rqId)) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'stopped_by_user']; continue; }
+            $prFresh = loadProfiles()[$rk] ?? null;
+            if (!is_array($prFresh)) continue;
+            $qFresh = extractReadQueue();
+            $alreadyActive = false;
+            foreach ((array)($qFresh['entries'] ?? []) as $fr) {
+                if (!is_array($fr) || (string)($fr['profile_key'] ?? '') !== $rk) continue;
+                if ($rqId !== '' && (string)($fr['id'] ?? '') === $rqId) continue;
+                if (in_array((string)($fr['status'] ?? ''), ['running', 'waiting'], true)) { $alreadyActive = true; break; }
+            }
+            if ($alreadyActive) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'already_running_or_queued']; continue; }
+            $rSig = extractResumeSig($prFresh);
+            $rMeta = is_array($prFresh['_extract_resume_meta'] ?? null) ? $prFresh['_extract_resume_meta'] : [];
+            $rPrevSig = (string)($rMeta['sig'] ?? '');
+            $rPrevAt = (int)($rMeta['at'] ?? 0);
+            $rTries = (int)($rMeta['tries'] ?? 0);
+            if ($rPrevSig !== '' && $rPrevSig === $rSig && ($now - $rPrevAt) < AUTO_RESUME_WINDOW) $rTries++; else $rTries = 0;
+            if ($rTries >= $tryLimit) {
+                $backoff = min(900, 30 * (2 ** min(5, max(0, $rTries - $tryLimit))));
+                if (($now - $rPrevAt) < $backoff) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'backoff', 'retry_after' => $backoff - ($now - $rPrevAt)]; continue; }
+            }
+            $rPhase = extractResumePhase($prFresh);
+            $runPhase = ($rPhase === 'list' && !empty($prFresh['_extract_want_detail'])) ? 'all' : $rPhase;
+            $dMode = normalizeDetailExtractMode($prFresh['detailExtractMode'] ?? 'two_stage');
+            if ($workerActive || s4ParallelExtractSupported()) {
+                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries]);
+                $enq = s4WorkerEnqueueBackendExtract($rk, $runPhase, false, true, -1, $rqId, false, $dMode);
+                if (!empty($enq['ok'])) {
+                    $actualQid = (string)($enq['queue_id'] ?? $rqId);
+                    if ($actualQid !== '') extractQueueSupersedeOlderPausedRows($rk, $actualQid);
+                    $resumed[] = ['key' => $rk, 'queue_id' => $actualQid, 'phase' => $runPhase, 'via' => 'worker', 'job_id' => (string)($enq['job_id'] ?? '')];
+                    continue;
+                }
+            }
+            if (function_exists('s4SpawnBackendExtractChild')) {
+                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries]);
+                $sp = s4SpawnBackendExtractChild($rk, $runPhase, false, true, -1, $dMode, $rqId);
+                if (!empty($sp['ok'])) {
+                    if ($rqId !== '') extractQueueSupersedeOlderPausedRows($rk, $rqId);
+                    $resumed[] = ['key' => $rk, 'queue_id' => $rqId, 'phase' => $runPhase, 'via' => 'cli_child', 'pid' => (int)($sp['pid'] ?? 0)];
+                    continue;
+                }
+            }
+            if ($browserResume === null) {
+                $browserResume = ['profile_key' => $rk, 'queue_id' => $rqId, 'phase' => $rPhase, 'resume_page' => $rPhase === 'list' ? extractResumeStartPage($prFresh) : 0];
+            }
+        }
+        return ['ok' => true, 'source' => $source, 'paused_stalled' => $pausedKeys, 'resumed' => $resumed, 'skipped' => $skipped, 'browser_resume' => $browserResume, 'dispatch' => $dispatch0];
+    } finally {
+        @flock($lf, LOCK_UN);
+        @fclose($lf);
+    }
+}
+
 
 /**
  * v9.01: استخراج در مراحل جدا.
@@ -21246,6 +21536,12 @@ $pagVal=$profile['pagVal']??'';
 $detailSelectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
 $_detailExtractMode=normalizeDetailExtractMode($detailModeOverride!==''?$detailModeOverride:($profile['detailExtractMode']??'two_stage'));
 $detailConfigured=!empty($detailSelectors);
+$_isResumeRun=($reservedLockQueueId!=='')||!empty($profile['_extract_resume_req'])
+    ||in_array((string)$trigger,['manual_resume','watchdog_resume','auto_resume','cron_resume'],true);
+if($phase==='list'&&$_isResumeRun&&!empty($profile['_extract_want_detail'])&&$detailConfigured){
+    $phase='all';
+}
+$_wantDetailAfterList=($phase==='all'||($phase==='detail'&&!empty($profile['_extract_want_detail'])))&&$detailConfigured?1:0;
 $_detailSkippedNoSelectors=false;
 /* No enabled selector means there is no stage two. Gallery configuration by
    itself is not permission to open every product page. */
@@ -21585,6 +21881,7 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
     $_listRanOut=true;
     extractCheckpoint($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
+        '_extract_want_detail'=>$_wantDetailAfterList,
         '_extract_list_incomplete'=>true,
         '_extract_list_page_ok'=>max(0,$page-1),
         '_extract_list_page_try'=>$page,
@@ -21864,6 +22161,7 @@ $nextUrl=make_absolute_url($href,$res['url']);
 extractLockTouch($queueId);
 extractCheckpoint($pkFinal,$allProducts,[
     '_extract_stage'=>'list','_extract_stage_at'=>time(),
+    '_extract_want_detail'=>$_wantDetailAfterList,
     '_extract_list_incomplete'=>true,
     '_extract_list_page_ok'=>$page,
     '_extract_list_page_try'=>$page,
@@ -22039,6 +22337,7 @@ $_listSavedCount = ($phase === 'detail' && !empty($profile['_extract_list_saved_
 if ($phase !== 'detail') {
     extractCheckpoint($pkFinal,$allProducts,[
         'detailExtractMode'=>$_detailExtractMode,
+        '_extract_want_detail'=>$_wantDetailAfterList,
         '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
         '_extract_list_saved_at'=>$_listSavedAt,
         '_extract_list_saved_count'=>$_listSavedCount,
@@ -22588,6 +22887,7 @@ if(empty($_detailIncomplete)&&empty($_listRanOut)&&($phase!=='list'||!$detailCon
     $profileOnDisk['_extract_resume_req']=0;
     $profileOnDisk['_extract_resume_from']=0;
     $profileOnDisk['_extract_resume_phase']='';
+    $profileOnDisk['_extract_want_detail']=0;
 }
 if(!empty($_listRanOut)){
     $profileOnDisk['_extract_stage']='list';
@@ -25418,6 +25718,7 @@ if (isCliRun()) {
             elseif ($_a === '--resume' || $_a === 'resume') $_GET['resume'] = '1';
             elseif (preg_match('~^--pages=(\d+)$~', $_a, $_pm)) $_GET['pages'] = $_pm[1];
             elseif (preg_match('~^--detail-mode=(two_stage|inline)$~', $_a, $_dm)) $_GET['detail_mode'] = $_dm[1];
+            elseif (preg_match('~^--queue-id=([A-Za-z0-9._-]+)$~', $_a, $_qm)) $_GET['queue_id'] = $_qm[1];
         }
         $_GET['direct'] = '1';
     } elseif ($_cliCmd === 'whoami') {
@@ -25482,8 +25783,13 @@ if (isset($_GET['backend_extract_cli'])) {
     $forceCli = !empty($_GET['force_all']);
     $resumeCli = !empty($_GET['resume']);
     $reservedCli = '';
+    $preferredQidCli = trim((string)($_GET['queue_id'] ?? ''));
     if ($resumeCli) {
-        $prepCli = extractResumePrepare($pk, loadConnections(), '', true);
+        $_prCli0 = loadProfiles()[$pk] ?? null;
+        if ($initialPhaseCli === 'list' && is_array($_prCli0) && !empty($_prCli0['_extract_want_detail'])) {
+            $initialPhaseCli = 'all';
+        }
+        $prepCli = extractResumePrepare($pk, loadConnections(), $preferredQidCli, true);
         if (empty($prepCli['ok'])) {
             echo json_encode(['ok'=>false,'error'=>'checkpoint استخراج قابل رزرو نیست: '.(string)($prepCli['reason']??'')], JSON_UNESCAPED_UNICODE) . PHP_EOL;
             exit(2);
@@ -25496,8 +25802,12 @@ if (isset($_GET['backend_extract_cli'])) {
     $detailModeCli=isset($_GET['detail_mode'])&&trim((string)$_GET['detail_mode'])!==''?normalizeDetailExtractMode($_GET['detail_mode']):'';
     $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli, $detailModeCli);
     $cliSegs = 1;
-    while (!empty($resCli['ok']) && empty($resCli['cancelled']) && !empty($resCli['ran_out']) && $cliSegs < 20) {
-        sleep(2);
+    $cliTransientRetries = 0;
+    while (!empty($resCli['ok']) && empty($resCli['cancelled'])
+           && (!empty($resCli['ran_out']) || (!empty($resCli['resume_needed']) && $cliTransientRetries < 10))
+           && $cliSegs < 60) {
+        if (empty($resCli['ran_out'])) $cliTransientRetries++;
+        sleep(!empty($resCli['ran_out']) ? 2 : min(30, 5 + ($cliTransientRetries * 3)));
         $prepNext = extractResumePrepare($pk, loadConnections(), (string)($resCli['queue_id'] ?? ''), false);
         if (empty($prepNext['ok'])) break;
         $nextPh = (string)($prepNext['phase'] ?? 'detail');
@@ -26505,7 +26815,9 @@ if($_resumeCandidates){
         $_rk=(string)($_rc['key']??'');if($_rk==='')continue;
         $_profilesFresh=loadProfiles();$_prR=$_profilesFresh[$_rk]??null;if(!is_array($_prR))continue;
         $_rQueueId=(string)($_rc['queue_id']??'');
-        if(tasksResumeExplicitlyStopped('extract',[],readProgress(EXTRACT_PROGRESS_FILE))){
+        $_pgCronChk = readProgress(EXTRACT_PROGRESS_FILE);
+        $_pgCronSameRow = $_rQueueId==='' || (string)($_pgCronChk['queue_id']??'')===$_rQueueId;
+        if(tasksResumeExplicitlyStopped('extract',[],$_pgCronSameRow?$_pgCronChk:[])){
             $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,'reason'=>'explicit_user_stop'];continue;
         }
         $_queueFresh=extractReadQueue();$_profileAlreadyActive=false;
@@ -26555,8 +26867,10 @@ if($_resumeCandidates){
         }
         if($_resumeWorker){
             $_rPhase=extractResumePhase($_prR);
+            $_rRunPhase=($_rPhase==='list'&&!empty($_prR['_extract_want_detail']))?'all':$_rPhase;
+            $_rDetailMode=normalizeDetailExtractMode($_prR['detailExtractMode']??'two_stage');
             try{
-                $_rr=s4WorkerEnqueueBackendExtract($_rk,$_rPhase,false,true,-1,$_rQueueId);
+                $_rr=s4WorkerEnqueueBackendExtract($_rk,$_rRunPhase,false,true,-1,$_rQueueId,false,$_rDetailMode);
                 if(empty($_rr['ok'])){
                     $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,
                         'reason'=>(string)($_rr['error']??'worker_enqueue_failed')];
@@ -47396,6 +47710,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"'&detail_mode='+encodeURIComponent(detailMode)")!==false
       && strpos($selfSrc,"{v:'10." . "441'")!==false
       && version_compare(APP_VERSION,'10.441','>='));
+    $_deadJob442=['type'=>'backend_extract','status'=>'running','worker_pid'=>999999999,'updated_at'=>100,'payload'=>['extract_queue_id'=>'']];
+    $add('10.442', 'استخراج‌های متوقف‌شده در فاز ۱ (لیست) و فاز ۲ (جزئیات) بدون قفل‌شدن پشت PID مرده به‌صورت خودکار ادامه می‌یابند',
+         function_exists('s4AutoResumeInterruptedExtractions')
+      && function_exists('s4WorkerBackendExtractRowIsDeadOrphan')
+      && s4WorkerBackendExtractRowIsDeadOrphan($_deadJob442)===true
+      && strpos($selfSrc,"'_extract_want_detail'=>\$_wantDetailAfterList")!==false
+      && strpos($selfSrc,"if(\$phase==='list'&&\$_isResumeRun&&!empty(\$profile['_extract_want_detail'])&&\$detailConfigured){")!==false
+      && strpos($selfSrc,"s4AutoResumeInterruptedExtractions('poll_extract', true)")!==false
+      && strpos($selfSrc,"s4AutoResumeInterruptedExtractions('worker_loop',true)")!==false
+      && strpos($selfSrc,"d.auto_resume_browser && d.auto_resume_browser.profile_key")!==false
+      && strpos($selfSrc,"{v:'10." . "442'")!==false
+      && version_compare(APP_VERSION,'10.442','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -80546,13 +80872,16 @@ function resumeExtractQueue(profileKey, qid, resumePage, autoResume){
         refreshExtractQueue();
         setTimeout(refreshExtractQueue,2000);
         if(d.browser_held&&d.result&&d.result.resume_needed){
+          const r=d.result||{};
+          const sig=[r.extracted||0,r.detail_done||0,d.start_page||0,d.phase||''].join('|');
+          if(window._extractAutoResumeSig!==sig){window._extractAutoResumeSig=sig;window._extractAutoResumeCount=0;}
           window._extractAutoResumeCount=(window._extractAutoResumeCount||0)+1;
-          if(window._extractAutoResumeCount<=20)setTimeout(()=>resumeExtractQueue(profileKey,(d.result.queue_id||qid),d.start_page||resumePage,true),2000);
+          if(window._extractAutoResumeCount<=15)setTimeout(()=>resumeExtractQueue(profileKey,(r.queue_id||qid),d.start_page||resumePage,true),2000);
         }else window._extractAutoResumeCount=0;
       }).catch(e=>{
         showToast('اتصال ادامه قطع شد؛ تلاش خودکار دوباره…',1);
         window._extractAutoResumeCount=(window._extractAutoResumeCount||0)+1;
-        if(window._extractAutoResumeCount<=20)setTimeout(()=>resumeExtractQueue(profileKey,qid,resumePage,true),5000);
+        if(window._extractAutoResumeCount<=15)setTimeout(()=>resumeExtractQueue(profileKey,qid,resumePage,true),5000);
       });
 }
 function stopExtractQueue(qid){
@@ -80930,8 +81259,8 @@ function pollExtractProgress(){
     fetch('?poll_extract=1').then(r=>r.json()).then(d=>{
         if(!d)return;
         renderLiveCounters(d);   // v8.22
-        const running=d.running||false;
-        const done=!!d.done && !d.worker_continuing;
+        const running=!!(d.running||d.worker_continuing||d.auto_resuming);
+        const done=!!d.done && !d.worker_continuing && !d.auto_resuming;
         const completionKey=done?extractCompletionToastKey(d):'';
         const firstDonePoll=done&&window._extractFinalizedCompletionKey!==completionKey;
         if(firstDonePoll)window._extractFinalizedCompletionKey=completionKey;
@@ -80949,6 +81278,17 @@ function pollExtractProgress(){
         const page=d.page||0;
         updateSpeedCard(extracted, d.started_at||0);
 
+        // v10.442: روی هاست‌های بدون exec/worker نیز در صورت دریافت auto_resume_browser
+        // مرورگر به‌صورت خودکار و بدون دیالوگ، ادامه از checkpoint (فاز ۱ یا فاز ۲) را اجرا می‌کند.
+        if(!cancelled && d.auto_resume_browser && d.auto_resume_browser.profile_key){
+            const nowMs=Date.now();
+            if(!window._lastBrowserAutoResumeAt || (nowMs-window._lastBrowserAutoResumeAt)>6000){
+                window._lastBrowserAutoResumeAt=nowMs;
+                const br=d.auto_resume_browser;
+                setTimeout(()=>resumeExtractQueue(br.profile_key, br.queue_id||'', br.resume_page||0, true), 800);
+            }
+        }
+
         // v10.441: در حالت دو مرحله‌ای (پیش‌فرض)، بلافاصله پس از پایان مرحلهٔ ۱ (لیست)
         // محصولات استخراج‌شده در تب نتایج نیز بارگذاری و ذخیره می‌شوند و سپس مرحلهٔ ۲ اجرا می‌گردد.
         if(!cancelled && !done && d.list_saved_for_results && d.profile_key && rememberStageOneExtractSync(d)){
@@ -80961,7 +81301,9 @@ function pollExtractProgress(){
         // Update status text
         let statusText='';
         if(running&&!done){
-            if(phase==='list_done'){
+            if(d.auto_resuming && (d.paused || d.stalled || d.ran_out)){
+                statusText='♻️ ادامهٔ خودکار از نقطهٔ توقف ('+(phase==='detail'?'فاز ۲: جزئیات':('فاز ۱: صفحه '+toFa(d.resume_page||page||1)))+') — '+toFa(extracted)+' محصول حفظ شده';
+            }else if(phase==='list_done'){
                 statusText='✅ مرحلهٔ ۱ تمام شد ('+toFa(extracted)+' محصول در تب نتایج ذخیره شد) — ورود به مرحلهٔ ۲ (استخراج جزئیات)...';
             }else if(phase==='detail'){
                 statusText='🔍 مرحلهٔ ۲ (استخراج جزئیات) '+toFa(d.detail_current||0)+'/'+toFa(d.detail_total||0)+' — لیست ('+toFa(extracted)+' محصول) در تب نتایج ذخیره شده';
@@ -81484,6 +81826,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.442', t:'♻️ ادامهٔ خودکار و بی‌وقفهٔ استخراج‌های متوقف‌شده در هر دو فاز ۱ (لیست) و فاز ۲ (جزئیات)', items:[
+    'علت گیرکردن استخراج‌های متوقف‌شده روی هاست برطرف شد: ردیف‌های backend_extract که پردازهٔ فرزندشان (worker_pid) توسط سرور بسته شده اما در worker_queue در وضعیت running مانده بودند، اکنون بلافاصله به‌عنوان یتیم تشخیص داده شده، آزاد و از آخرین checkpoint دوباره اجرا می‌شوند (حتی زمانی که worker اصلی مشغول اصلاح ماتریس است).',
+    'موتور یکپارچهٔ s4AutoResumeInterruptedExtractions اضافه شد که در حلقهٔ worker دائمی، پایان هر استخراج موازی، poll_extract، extract_queue_status و کران، ردیف‌های متوقف یا بی‌حرکتِ دارای محصول را بدون دخالت کاربر از همان نقطهٔ ذخیره ادامه می‌دهد و فقط توقف صریح دکمهٔ «⏹ توقف» کاربر را متوقف نگه می‌دارد.',
+    'حفاظت کامل از هر دو فاز ۱ و فاز ۲ هنگام ادامهٔ خودکار: پرچم _extract_want_detail در تمام checkpointهای فاز ۱ ذخیره می‌شود تا اگر استخراج دو مرحله‌ای وسط فاز ۱ متوقف شد، پس از تکمیل صفحات باقی‌ماندهٔ لیست و ذخیره در تب نتایج، خودکار وارد فاز ۲ (جزئیات) شود؛ همچنین باگ بازنویسی فاز ۲ به فاز ۱ در تشخیص بی‌حرکتی صف برطرف شد.',
+    'در نوار پیشرفت زنده (poll_extract) وضعیت ادامهٔ خودکار بدون بسته‌شدن زودهنگام پنل حفظ می‌شود و روی هاست‌های بدون دسترسی exec نیز مرورگر به‌صورت خودکار و بدون پنجرهٔ تأیید، برش‌های بعدی فاز ۱ و فاز ۲ را تا تکمیل صددرصدی ادامه می‌دهد.'
+  ]},
   {v:'10.441', t:'🔍 دراپ‌داون حالت استخراج جزئیات در صفحهٔ شروع (دو مرحله‌ای پیش‌فرض / درجا) + ذخیرهٔ فوری لیست در تب نتایج', items:[
     'دراپ‌داون جدید «حالت استخراج جزئیات» به صفحهٔ شروع (زیر دکمه‌های استخراج) با دو گزینهٔ «استخراج جزئیات دو مرحله‌ای (پیش‌فرض)» و «استخراج جزئیات درجا» اضافه شد و انتخاب آن در هر پروفایل و مرورگر ذخیره می‌گردد.',
     'در حالت پیش‌فرض «دو مرحله‌ای»، مرحلهٔ اول فقط لیست تمام صفحات محصولات را بدون مکثِ بازکردن صفحهٔ تک‌محصول استخراج می‌کند، بلافاصله پس از پایان لیست همهٔ محصولات را در پروفایل و تب نتایج (بدون تداخل با اجرای پس‌زمینه) بارگذاری و ذخیره می‌کند و سپس خودکار وارد مرحلهٔ دوم (استخراج جزئیات، گالری و تنوع‌ها) می‌شود.',
