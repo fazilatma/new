@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.427';
+const APP_VERSION = '10.428';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13043,7 +13043,11 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
         foreach($dest as$dk=>$meta){if(($meta['type']??'')!=='bsl')continue;$vid=(int)$meta['vendor_id'];$cells=[];
             $main=$row['shops'][$vid]??$row['shops'][(string)$vid]??null;if(is_array($main))$cells[]=$main;
             foreach((array)($row['shop_extra'][$vid]??$row['shop_extra'][(string)$vid]??[])as$ex)if(is_array($ex))$cells[]=$ex;
-            foreach($cells as$c){$id=(int)($c['id']??0);$title=(string)($c['title']??$row['title']??'');if($id>0&&!matrixTitleHasCode($title))$uncoded[$dk][(string)$id]=true;}
+            foreach($cells as$c){$id=(int)($c['id']??0);$title=(string)($c['title']??$row['title']??'');if($id>0&&!matrixTitleHasCode($title))$uncoded[$dk][(string)$id]=[
+                'id'=>$id,'title'=>$title!==''?$title:'بدون عنوان','price'=>(int)($c['price']??0),
+                'stock'=>(int)($c['stock']??0),'status'=>(string)($c['status']??''),
+                'destination'=>$dk,'shop'=>(string)($meta['label']??''),
+                'url'=>'https://basalam.com/p/'.$id];}
         }
         $pk=matrixRowProfileScopeKey($row,$profiles);if($pk===''||!isset($known[$pk]))continue;
         if(isset($dest['woo'])&&is_array($row['woo']??null)){
@@ -13060,9 +13064,10 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
     $counts=[];$totals=array_fill_keys(array_keys($dest),0);
     foreach($known as $pk=>$_){foreach($dest as $dk=>$_d){$n=count($ids[$pk][$dk]??[]);$counts[$pk][$dk]=$n;$totals[$dk]+=$n;}}
     foreach($dest as$dk=>&$meta)$meta['uncoded']=count($uncoded[$dk]??[]);unset($meta);
+    $uncodedProducts=[];foreach($uncoded as$dk=>$items)$uncodedProducts[$dk]=array_values($items);
     return ['generated_at'=>(int)($matrix['generated_at']??0),'source'=>(string)($matrix['source']??''),
         'destinations'=>array_values($dest),'counts'=>$counts,'totals'=>$totals,
-        'uncoded'=>array_map('count',$uncoded)];
+        'uncoded'=>array_map('count',$uncoded),'uncoded_products'=>$uncodedProducts];
 }
 
 if(isset($_POST['start_profile_destination_equalize'])){
@@ -13127,7 +13132,8 @@ if (isset($_GET['start_product_stats'])) {
     usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
     echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples,
         'matrix'=>['generated_at'=>(int)$matrixStats['generated_at'],'source'=>(string)$matrixStats['source'],
-            'destinations'=>$matrixStats['destinations'],'totals'=>$matrixStats['totals']]],
+            'destinations'=>$matrixStats['destinations'],'totals'=>$matrixStats['totals'],
+            'uncoded_products'=>$matrixStats['uncoded_products']]],
         JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE); exit;
 }
 
@@ -45843,6 +45849,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'function equalizeStartDestination(btn)')!==false
       && strpos($selfSrc,"{v:'10." . "427'")!==false
       && version_compare(APP_VERSION,'10.427','>='));
+    $add('10.428', 'جزئیات کامل متفرقه‌ها با شناسه و مقصد از endpoint آمار Start برمی‌گردد',
+         count((array)($_mxDest426['uncoded_products']['bsl:77']??[]))===1
+      && (int)($_mxDest426['uncoded_products']['bsl:77'][0]['id']??0)===24
+      && strpos($selfSrc,"'uncoded_products'=>\$matrixStats['uncoded_products']")!==false);
+    $add('10.428', 'ردیف رنگی متفرقه و مودال جدولی با کلیک سلول‌ها وجود دارد',
+         strpos($selfSrc,'class=\"spb-misc-row\"')!==false
+      && strpos($selfSrc,'function openStartMiscProducts(destination)')!==false
+      && strpos($selfSrc,'class=\"spb-misc-table\"')!==false
+      && strpos($selfSrc,"{v:'10." . "428'")!==false
+      && version_compare(APP_VERSION,'10.428','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -72466,7 +72482,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
         <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل جدول مغایرت‌اند. «متفرقه بدون کد» در شمار پروفایل‌ها وارد نمی‌شود. دکمهٔ برابر‌سازی فقط همان پروفایل و مقصد را دوباره می‌سازد و اصلاح می‌کند و به محصولات بدون کد دست نمی‌زند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
         <style>
-          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}
+          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:center;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell b{display:block;font-size:13px;color:#fef3c7}.spb-misc-cell small{display:block;margin-top:2px;font-size:8px;color:#fbbf24}.spb-misc-na{text-align:center;color:#d97706!important}.spb-misc-modal-scroll{overflow:auto;max-height:65vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:760px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:top}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
         </style>
     </section>
@@ -73691,7 +73707,7 @@ function renderStartProfileBreakdown(d){
   if(meta){const at=parseInt(mx.generated_at||0);meta.textContent=dests.length?('تعداد محصولات ذخیره‌شده و موجودی مقصدها بر اساس جدول مغایرت '+(at?new Date(at*1000).toLocaleString('fa-IR'):'')+'؛ به‌همراه پوشش مرحلهٔ دوم.'):'تعداد محصولات ذخیره‌شده؛ هنوز مقصدی در نتیجهٔ جدول مغایرت موجود نیست.';}
   if(!rows.length){body.innerHTML='<tr><td colspan="'+cols+'" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
   let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
-  body.innerHTML=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
+  const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
     const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),dp=total?Math.round(n*100/total):0,unequal=n!==total,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small>'+(unequal?'<button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ در صف ساخت و اصلاح…':'⚖️ برابر‌سازی')+'</button>':'')+'</td>';}).join('');
     return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
       '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
@@ -73699,8 +73715,24 @@ function renderStartProfileBreakdown(d){
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?'▶ اجرا می‌شود':'— اجرا نمی‌شود')+'</span></td>'+
       '<td><div class="spb-coverage"><div class="spb-coverage-top"><b>'+spoNum(done)+' از '+spoNum(total)+'</b><span>'+spoNum(pct)+'٪</span></div><span class="spb-bar"><i style="width:'+pct+'%"></i></span></div></td></tr>';
   }).join('');
+  const miscMap=mx.uncoded_products||{},miscTotal=dests.reduce((n,x)=>n+(x.type==='bsl'?(Array.isArray(miscMap[x.key])?miscMap[x.key].length:parseInt(x.uncoded||0)):0),0);
+  const miscCells=dests.map(x=>{const n=x.type==='bsl'?(Array.isArray(miscMap[x.key])?miscMap[x.key].length:parseInt(x.uncoded||0)):0;return '<td class="spb-misc-cell" onclick="event.stopPropagation();openStartMiscProducts(\''+esc(x.key||'')+'\')"><b>'+spoNum(n)+'</b><small>'+(x.type==='bsl'?'نمایش محصولات':'موردی ندارد')+'</small></td>';}).join('');
+  const miscHtml='<tr class="spb-misc-row" tabindex="0" role="button" onclick="openStartMiscProducts(\'all\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openStartMiscProducts(\'all\')}"><td><span class="spb-profile"><i></i><b>متفرقه‌های بدون کد</b></span></td><td class="spb-misc-cell"><b>'+spoNum(miscTotal)+'</b><small>جمع همهٔ غرفه‌ها</small></td>'+miscCells+'<td class="spb-misc-na">—</td><td class="spb-misc-na">—</td><td class="spb-misc-na">برای مشاهده کلیک کنید</td></tr>';
+  body.innerHTML=profileHtml+miscHtml;
   const pct=all?Math.round(detailed*100/all):0,destFoot=dests.map(x=>'<td><b class="spb-dest-num">'+spoNum(destTotals[x.key]||0)+'</b><small class="spb-dest-pct">موجود کددارِ پروفایل‌ها</small>'+(x.type==='bsl'?'<small class="spb-uncoded">متفرقه بدون کد: '+spoNum(x.uncoded||0)+'</small>':'')+'</td>').join('');
   foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td>'+destFoot+'<td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
+}
+function openStartMiscProducts(destination){
+  const d=startProductOverviewData,mx=(d&&d.matrix)||{},map=mx.uncoded_products||{},dests=Array.isArray(mx.destinations)?mx.destinations:[];if(!d)return;
+  let items=[],label='همهٔ غرفه‌ها';
+  if(destination==='all'){dests.forEach(x=>{if(Array.isArray(map[x.key]))items=items.concat(map[x.key])});}
+  else{items=Array.isArray(map[destination])?map[destination]:[];const md=dests.find(x=>x.key===destination);if(md)label=md.label||md.key||label;}
+  $('spoDetailTitle').textContent='🧩 محصولات متفرقهٔ بدون کد';
+  $('spoDetailSub').textContent=spoNum(items.length)+' محصول · '+label+' · بر اساس آخرین جدول مغایرت';
+  let h='<div class="spb-misc-modal-scroll"><table class="spb-misc-table"><thead><tr><th>#</th><th>غرفه</th><th>شناسه</th><th>عنوان محصول</th><th>قیمت</th><th>موجودی / وضعیت</th><th>لینک</th></tr></thead><tbody>';
+  if(!items.length)h+='<tr><td colspan="7" class="spb-empty">محصول متفرقهٔ بدون کدی در این مقصد نیست.</td></tr>';
+  items.forEach((p,i)=>{h+='<tr><td>'+spoNum(i+1)+'</td><td>'+esc(p.shop||'—')+'</td><td><code>'+spoNum(p.id||0)+'</code></td><td><b>'+esc(p.title||'بدون عنوان')+'</b></td><td>'+((parseInt(p.price)||0)>0?spoNum(p.price):'—')+'</td><td>'+spoNum(p.stock||0)+' / '+esc(String(p.status||'—'))+'</td><td>'+(p.url?'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">مشاهده ↗</a>':'—')+'</td></tr>';});
+  h+='</tbody></table></div>';$('spoDetailBody').innerHTML=h;$('startProductOverviewModal').classList.add('open');document.body.style.overflow='hidden';
 }
 const startDestinationEqualizePending=new Set();
 function equalizeStartDestination(btn){
@@ -79335,6 +79367,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.428', t:'🧩 ردیف رنگی و مودال محصولات متفرقه', items:[
+    'یک ردیف مستقل با پس‌زمینهٔ کهربایی برای محصولات متفرقهٔ بدون کد به جدول پروفایل‌های Start اضافه شد.',
+    'جمع همهٔ غرفه‌ها و تعداد هر غرفه در سلول‌های قابل‌کلیک نمایش داده می‌شود؛ کلیک هر سلول مودال همان محدوده را باز می‌کند.',
+    'مودال، جدول کامل عنوان، شناسه، غرفه، قیمت، موجودی/وضعیت و لینک مستقیم هر محصول را از آخرین ماتریس نشان می‌دهد.'
+  ]},
   {v:'10.427', t:'⚖️ متفرقهٔ بدون کد و برابر‌سازی مستقیم سلول مقصد', items:[
     'برای هر غرفه تعداد یکتای محصولات متفرقهٔ بدون کد از آخرین ماتریس در سربرگ و جمع جدول Start نمایش داده می‌شود.',
     'اگر تعداد کددار یک پروفایل در مقصد با مبدأ برابر نباشد، دکمهٔ برابر‌سازی همان سلول ظاهر می‌شود.',
