@@ -318,6 +318,11 @@ const REMOTEMAP_MAX_ROWS = 20000;
    انجام می‌شود. شیر اطمینان: TTL و بازسازیِ دستی. */
 const BSL_CATALOG_PREFIX   = __DIR__ . '/bsl_catalog_v';
 const BSL_CATALOG_PROGRESS_FILE = __DIR__ . '/bsl_catalog_progress.json'; // v10.233: پیشرفت زندهٔ کاتالوگ/ماتریس باسلام
+/* v10.414: روی بعضی LiteSpeedها self-curl بعد از timeout واقعاً وارد backend
+   نمی‌شود. این handoff دقیقِ صف را نگه می‌دارد تا درخواست cron بعدی خودش
+   همان backend شود؛ بنابراین ادامه دیگر به عمر درخواست فرزند HTTP وابسته نیست. */
+const QUEUE_CRON_HANDOFF_FILE = __DIR__ . '/queue_cron_handoff.json';
+const QUEUE_CRON_HANDOFF_LOCK = __DIR__ . '/queue_cron_handoff.lock';
 const BSL_CATALOG_TTL      = 21600;   // ۶ ساعت — پیش‌فرض؛ از تنظیمات قابل تغییر است (bslCatalogTtl)
 const BSL_CATALOG_MAX_PAGES = 400;    // v10.40 (۵۴الف): سقفِ ۴۰۰۰۰ محصول در هر غرفه (تا ۱۰.۳۹ فقط ۶۰ صفحه = ۶۰۰۰ بود)
 /* v10.41 (۵۵): درختِ دسته‌بندیِ باسلام — یک‌بار گرفته می‌شود و می‌ماند.
@@ -357,7 +362,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.413';
+const APP_VERSION = '10.414';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -372,7 +377,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/29';
+const APP_VERSION_DATE = '1405/08/01';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -24423,6 +24428,20 @@ if(isset($_GET['matrix_execution_status'])){
         'external_cron_url'=>selfBaseUrl().'?cron_run=1'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
+/* v10.414: if a previous HTTP self-dispatch never reached PHP, let this real
+   cron request carry the exact queue checkpoint instead of launching another
+   short-lived child. This happens before entering the cron route on purpose. */
+if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
+    $_queueCronHandoff=queueCronHandoffPrepare();
+    if(is_array($_queueCronHandoff)){
+        unset($_GET['cron_run']);
+        if((string)($_POST['action']??'')==='cron_run')unset($_POST['action']);
+        $_GET=array_merge($_GET,(array)$_queueCronHandoff['get']);
+        $_POST=array_merge($_POST,(array)$_queueCronHandoff['post']);
+        $GLOBALS['_queueCronHandoff']=$_queueCronHandoff;
+    }
+}
+
 if (isset($_GET['cron_run']) || (($_POST['action'] ?? '') === 'cron_run')) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(0);
@@ -27994,10 +28013,34 @@ function tasksBuildRow(string $key, array $def, int $now): array {
        کارِ در حال اجرا نشان دادنش فقط باعثِ اجرای موازیِ ناخواسته می‌شود. */
     $resumeUrl = ($st === 'stale' || $st === 'done' || $st === 'idle')
         ? tasksResumeUrl($key, $def, $p) : '';
+    /* v10.414: the sending card must identify the checkpoint owner, not just
+       say "send to Basalam". Progress is authoritative for queue_id; the queue
+       row supplies the persisted profile/shop even after the worker died. */
+    $queueId=trim((string)($p['queue_id']??($p['checkpoint']['queue_id']??'')));
+    $profileKey=trim((string)($p['profile_key']??($p['checkpoint']['profile_key']??'')));
+    $profileName=trim((string)($p['profile_name']??($p['checkpoint']['profile_name']??'')));
+    $shopName=trim((string)($p['shop_name']??$p['phase_shop_name']??''));
+    if(in_array($key,['bsl_send','woo_send'],true)&&$queueId!==''){
+        $sendQueue=$key==='bsl_send'?(function_exists('bslReadQueue')?bslReadQueue():[]):(function_exists('wooReadQueue')?wooReadQueue():[]);
+        foreach((array)($sendQueue['entries']??[])as $sendRow){
+            if(!is_array($sendRow)||(string)($sendRow['id']??'')!==$queueId)continue;
+            if($profileKey==='')$profileKey=trim((string)($sendRow['profile_key']??''));
+            if($profileName==='')$profileName=trim((string)($sendRow['profile_name']??''));
+            if($shopName==='')$shopName=trim((string)($sendRow['shop_name']??$sendRow['phase_shop_name']??''));
+            break;
+        }
+    }
+    if($profileName===''&&$profileKey!==''){
+        $profilesNow=loadProfiles();$profileName=trim((string)($profilesNow[$profileKey]['name']??$profileKey));
+    }
     return [
         'key'       => $key,
         'title'     => (string)$def['title'],
         'icon'      => (string)$def['icon'],
+        'queue_id'  => $queueId,
+        'profile_key' => $profileKey,
+        'profile_name' => $profileName,
+        'shop_name' => $shopName,
         'tab'       => (string)$def['tab'],
         /* v10.23 (۳۶الف): نشانیِ ناوبریِ کلیک روی کارت */
         'pane'      => (string)($def['pane'] ?? ''),
@@ -45221,6 +45264,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false
       && strpos($selfSrc, "{v:'10." . "412'") !== false
       && version_compare(APP_VERSION, '10.' . '412', '>='));
+    $add('10.414', 'self-curl نامطمئن با handoff ماندگار به cron بعدی جایگزین می‌شود',
+         strpos($selfSrc, "const QUEUE_CRON_HANDOFF_FILE") !== false
+      && strpos($selfSrc, 'function queueCronHandoffPrepare()') !== false
+      && strpos($selfSrc, "\$GLOBALS['_queueDispatchMode']='http_curl+cron_handoff'") !== false
+      && strpos($selfSrc, "\$_queueCronHandoff=queueCronHandoffPrepare();") !== false
+      && strpos($selfSrc, "queueCronHandoffClear('bsl',\$requestedBslQueueId)") !== false
+      && strpos($selfSrc, "'cron_handoff'=>\$handoffFb") !== false
+      && version_compare(APP_VERSION, '10.' . '414', '>='));
+    $add('10.414', 'کارت ارسال مدیر وظیفه نام پروفایل را دارد و ادامهٔ checkpoint را نگه می‌دارد',
+         strpos($selfSrc, "'profile_name' => \$profileName") !== false
+      && strpos($selfSrc, 'پروفایل مالک این checkpoint') !== false
+      && strpos($selfSrc, "(t.key==='bsl_send'||t.key==='woo_send')&&t.profile_name") !== false
+      && strpos($selfSrc, "{v:'10." . "414'") !== false);
     $add('10.413', 'پروفایل مالک worker واقعی در وضعیت صف باسلام و ووکامرس مشخص است',
          substr_count($selfSrc, "\$queue['active_send']=null;") >= 2
       && substr_count($selfSrc, "['_worker_owner']") >= 2
@@ -49543,6 +49599,72 @@ function manualSyncProgress(array $patch, string $log = ''): void {
     writeProgress(MANUAL_SYNC_PROGRESS_FILE, $p);
 }
 
+/**
+ * Durable web-cron handoff for queue backends.
+ *
+ * Shared hosting may report the self-curl as "fired" merely because its short
+ * timeout elapsed, then cancel that child before PHP acquires the backend
+ * lock. Persisting the exact request lets the next real cron arrival become
+ * the backend request itself. The row id, checkpoint and stop semantics are
+ * therefore identical to the original recovery attempt.
+ */
+function queueCronHandoffMutate(callable $fn): array {
+    $fp=@fopen(QUEUE_CRON_HANDOFF_LOCK,'c');
+    if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'handoff_lock'];}
+    try{
+        $all=json_decode((string)@file_get_contents(QUEUE_CRON_HANDOFF_FILE),true);if(!is_array($all))$all=[];
+        $result=$fn($all);if(!is_array($result))$result=['ok'=>true];
+        $tmp=QUEUE_CRON_HANDOFF_FILE.'.tmp.'.getmypid();
+        $saved=@file_put_contents($tmp,json_encode($all,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX)!==false&&@rename($tmp,QUEUE_CRON_HANDOFF_FILE);
+        if(!$saved)$result=['ok'=>false,'error'=>'handoff_write'];
+        return $result;
+    }finally{@flock($fp,LOCK_UN);@fclose($fp);}
+}
+function queueCronHandoffStore(string $which,array $get,array $post,string $reason='http_curl'): array {
+    if(!in_array($which,['bsl','woo'],true))return ['ok'=>false,'error'=>'handoff_target'];
+    $qid=trim((string)($post['queue_id']??$get['queue_id']??''));if($qid==='')return ['ok'=>false,'error'=>'handoff_queue_id'];
+    return queueCronHandoffMutate(function(&$all)use($which,$get,$post,$reason,$qid){
+        $old=is_array($all[$which]??null)?$all[$which]:[];
+        $all[$which]=['which'=>$which,'queue_id'=>$qid,'get'=>$get,'post'=>$post,
+            'created_at'=>(int)($old['created_at']??time()),'updated_at'=>time(),
+            'claims'=>(int)($old['claims']??0),'reason'=>$reason,'version'=>APP_VERSION];
+        return ['ok'=>true,'queued'=>true,'queue_id'=>$qid];
+    });
+}
+function queueCronHandoffClear(string $which,string $queueId=''): void {
+    queueCronHandoffMutate(function(&$all)use($which,$queueId){
+        $row=is_array($all[$which]??null)?$all[$which]:[];
+        if($row&&($queueId===''||hash_equals((string)($row['queue_id']??''),$queueId)))unset($all[$which]);
+        return ['ok'=>true];
+    });
+}
+/** Before the ordinary cron route, claim one safe handoff and rewrite this
+ * request into action=bsl_backend/woo_backend. The backend's own flock remains
+ * authoritative and clears the handoff only after it owns that flock. */
+function queueCronHandoffPrepare(): ?array {
+    $picked=null;
+    queueCronHandoffMutate(function(&$all)use(&$picked){$now=time();
+        foreach(['bsl','woo'] as $which){
+            $h=is_array($all[$which]??null)?$all[$which]:[];if(!$h)continue;
+            $qid=trim((string)($h['queue_id']??''));$created=(int)($h['created_at']??0);
+            if($qid===''||($created>0&&$now-$created>86400)){unset($all[$which]);continue;}
+            $qFile=$which==='bsl'?BSL_QUEUE_FILE:WOO_QUEUE_FILE;
+            $q=json_decode((string)@file_get_contents($qFile),true);$entry=null;
+            foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['id']??'')===$qid){$entry=$e;break;}
+            $status=(string)($entry['status']??'');$total=(int)($entry['total']??0);$current=(int)($entry['current']??0);
+            if(!$entry||$status==='done'||($total>0&&$current>=$total)){unset($all[$which]);continue;}
+            if(queueHasExplicitUserStop($which,$qid)){unset($all[$which]);continue;}
+            $probe=queueBackendLock($which);if(!$probe)continue;queueBackendUnlock($probe);
+            $get=is_array($h['get']??null)?$h['get']:[];$post=is_array($h['post']??null)?$h['post']:[];
+            $get['action']=$which==='bsl'?'bsl_backend':'woo_backend';$post['queue_id']=$qid;
+            $h['claims']=(int)($h['claims']??0)+1;$h['last_claim_at']=$now;$all[$which]=$h;
+            $picked=['which'=>$which,'queue_id'=>$qid,'get'=>$get,'post'=>$post];break;
+        }
+        return ['ok'=>true];
+    });
+    return $picked;
+}
+
 /** یک فراخوانی «شلیک کن و فراموش کن» به خود اسکریپت */
 /* A CLI cron has no HTTP_HOST, so self-HTTP dispatch is impossible. Launch the
    same backend entry point as a detached CLI child instead of consuming the
@@ -49574,6 +49696,15 @@ function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): 
     $base = selfBaseUrl();
     if ($base === '') return false;
     $GLOBALS['_queueDispatchMode']='http_curl';$GLOBALS['_queueDispatchPid']=0;
+    /* The timeout below is not proof that LiteSpeed started the child. Record
+       an exact durable fallback before firing; a successful child clears it
+       after acquiring the real backend flock, otherwise the next cron owns it. */
+    $action=(string)($get['action']??'');
+    if(in_array($action,['bsl_backend','woo_backend'],true)){
+        $which=$action==='bsl_backend'?'bsl':'woo';
+        $handoff=queueCronHandoffStore($which,$get,is_array($post)?$post:[],'http_curl');
+        if(!empty($handoff['ok']))$GLOBALS['_queueDispatchMode']='http_curl+cron_handoff';
+    }
     $ch = curl_init($base . '?' . ltrim($qs, '?'));
     $opt = [CURLOPT_RETURNTRANSFER => 1, CURLOPT_NOSIGNAL => 1,
         CURLOPT_TIMEOUT_MS => $timeoutMs, CURLOPT_CONNECTTIMEOUT => 3,
@@ -58918,6 +59049,10 @@ echo json_encode(['ok'=>false,'error'=>'woo_backend already running','skipped'=>
 exit;
 }
 register_shutdown_function(function()use($wooLockFp,$wooLockFile){@flock($wooLockFp,LOCK_UN);@fclose($wooLockFp);});
+/* Owning the real flock proves that either self-curl worked or the next cron
+   accepted the durable request. Only now is it safe to consume the handoff. */
+$requestedWooQueueId=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+if($requestedWooQueueId!=='')queueCronHandoffClear('woo',$requestedWooQueueId);
 
 /* توقفِ صریح حتی اگر سیگنال از فایل پاک شده باشد، جلوی resume خودکار را می‌گیرد. */
 $wooExplicitResume = !empty($_GET['resume']) || !empty($_POST['resume']);
@@ -61078,6 +61213,14 @@ foreach($groups as &$g){$g['codes']=(object)$g['codes'];$g['steps']=(object)$g['
 $progressSummaryFb=[];
 if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
 $lastBeatAgeFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
+$handoffAllFb=json_decode((string)@file_get_contents(QUEUE_CRON_HANDOFF_FILE),true);
+$handoffRawFb=is_array($handoffAllFb['bsl']??null)?$handoffAllFb['bsl']:[];
+$handoffFb=$handoffRawFb?[
+    'pending'=>true,'queue_id'=>(string)($handoffRawFb['queue_id']??''),
+    'age_sec'=>max(0,$nowFb-(int)($handoffRawFb['created_at']??$nowFb)),
+    'updated_age_sec'=>max(0,$nowFb-(int)($handoffRawFb['updated_at']??$nowFb)),
+    'claims'=>(int)($handoffRawFb['claims']??0),'reason'=>(string)($handoffRawFb['reason']??''),
+    'version'=>(string)($handoffRawFb['version']??'')]:['pending'=>false];
 echo json_encode([
     'ok'=>true,'version'=>APP_VERSION,'at'=>$nowFb,
     'site'=>$identityFb,
@@ -61094,6 +61237,7 @@ echo json_encode([
         'stop_signal'=>['present'=>$stopExistsFb,'active'=>$stopActiveFb,'age_sec'=>$stopAgeFb,
             'target_queue_id'=>$stopTargetFb,'blocks_selected'=>$stopActiveFb&&($stopTargetFb===''||$selectedQid===''||$stopTargetFb===$selectedQid)],
         'resume_book'=>$selectedQid!==''?queueResumeBook('bsl',$selectedQid):[],
+        'cron_handoff'=>$handoffFb,
         'diagnosis'=>$diagnosisFb],
     'notifications'=>['enabled'=>$notifyFlagsFb,'last_ping_attempts'=>$pingSummaryFb],
     'cron'=>$cronFb,'repairs'=>['forbidden_content_retry'=>true]
@@ -61740,6 +61884,7 @@ register_shutdown_function(function()use($bslLockFp,$bslLockFile){@flock($bslLoc
 $explicitResume=!empty($_GET['resume'])||!empty($_POST['resume']);
 $automaticResume=!empty($_GET['auto_resume'])||!empty($_POST['auto_resume']);
 $requestedBslQueueId=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+if($requestedBslQueueId!=='')queueCronHandoffClear('bsl',$requestedBslQueueId);
 if($automaticResume&&queueHasExplicitUserStop('bsl',$requestedBslQueueId)){
 queuePauseRowsAfterStop('bsl',$requestedBslQueueId);
 header('Content-Type: application/json; charset=UTF-8');
@@ -78352,6 +78497,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.414', t:'⏭ تحویل قطعی بازیابی ارسال به cron بعدی', items:[
+    'تشخیص production نشان داد cron تازه است و ردیف درست را انتخاب می‌کند، اما self-curl کوتاه فقط timeout را موفق حساب می‌کرد و در LiteSpeed هیچ backend ماندگاری به lock نمی‌رسید.',
+    'هر بازیابی HTTP اکنون queue_id، checkpoint و پارامترهای همان ردیف را در handoff اتمیک و ماندگار ذخیره می‌کند؛ اگر child واقعاً شروع شود پس از گرفتن flock آن را پاک می‌کند.',
+    'اگر child شروع نشود، درخواست cron واقعی بعدی پیش از اجرای کارهای عادی خودش به bsl_backend/woo_backend تبدیل می‌شود و همان ردیف را از current ذخیره‌شده ادامه می‌دهد.',
+    'handoff هنگام Stop صریح، پایان ردیف یا تکمیل current/total دور انداخته می‌شود و تا وقتی flock زنده است cron worker دوم نمی‌سازد.',
+    'کارت ارسال در مدیر وظیفه اکنون نام پروفایل مالک checkpoint و نام غرفه را نشان می‌دهد؛ برای stopped/stale همان دکمهٔ ادامهٔ امن با queue_id دقیق نمایش داده می‌شود.'
+  ]},
   {v:'10.413', t:'🟢 نمایش صریح پروفایلِ واقعاً در حال ارسال', items:[
     'وضعیت صف اکنون queue_id مالک progress را با قفل زندهٔ backend تطبیق می‌دهد؛ صرفِ status=running دیگر به معنی ارسال واقعی نیست.',
     'بالای صف باسلام و ووکامرس یک بنر برجسته نام پروفایل واقعاً در حال ارسال، غرفه و current/total را نشان می‌دهد.',
@@ -90162,6 +90314,8 @@ function tmCard(t){
     + 'style="cursor:pointer" title="کلیک: بردن به ابتدای صف">'+toFa(t.rank||0)+'</span>'
     +'<span style="font-size:15px">'+esc(t.icon)+'</span>'
     +'<span class="tmc-t">'+esc(t.title)+'</span>'
+    +((t.key==='bsl_send'||t.key==='woo_send')&&t.profile_name
+      ?'<span class="tmc-tab" style="color:#67e8f9;border-color:#0e7490;font-weight:800" title="پروفایل مالک این checkpoint">👤 '+esc(t.profile_name)+(t.shop_name?' · '+esc(t.shop_name):'')+'</span>':'')
     +'<span class="tmc-tab">'+esc(t.tab)+(nav?' ↗':'')+'</span>'
     +'<span class="tmc-badge '+bcl+'">'+esc(lbl)+'</span>';
   if(t.cancelled) h+='<span class="tmc-badge tmb-stale">لغو شده</span>';
