@@ -356,7 +356,7 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
-const APP_VERSION = '10.412';
+const APP_VERSION = '10.413';
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
         $haystack = (string)$haystack; $needle = (string)$needle;
@@ -370,7 +370,7 @@ if (!function_exists('str_contains')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/07/29';
+const APP_VERSION_DATE = '1405/08/01';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -11235,18 +11235,33 @@ function isSnappshopUrl(string $url): bool {
 function snappshopProductsFromReaderText(string $text, string $baseUrl): array {
     $products = [];
     if (trim($text) === '' || stripos($text, 'snappshop.ir/product/') === false) return [];
-    if (!preg_match_all('~\[!\[Image\s+\d+:\s*([^\]]*)\]\((https?://[^)\s]+)\)(.*?)\]\((https?://(?:www\.)?snappshop\.ir/product/[^)\s]+)(?:\s+"([^"]*)")?\)~isu', $text, $matches, PREG_SET_ORDER)) return [];
+    if (!preg_match_all('~\[!\[Image\s+\d+:\s*([^\]]*)\]\((https?://[^)\s]+)\)(.*?)\]\((https?://(?:www\.)?snappshop\.ir/product/[^)\s]+)(?:\s+"([^"]*)")?\)~isu', $text, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
     foreach ($matches as $m) {
-        $image = html_entity_decode((string)($m[2] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $body = normalize_text(html_entity_decode((string)($m[3] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-        $link = html_entity_decode((string)($m[4] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $title = normalize_text(html_entity_decode((string)($m[5] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $matched = (string)($m[0][0] ?? '');
+        $offset = (int)($m[0][1] ?? 0);
+        $image = html_entity_decode((string)($m[2][0] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $body = normalize_text(html_entity_decode((string)($m[3][0] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $link = html_entity_decode((string)($m[4][0] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $title = normalize_text(html_entity_decode((string)($m[5][0] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         if ($title === '' && preg_match('~###\s*(.+)$~u', $body, $tm)) {
             $title = normalize_text(preg_replace('~\s+%?[۰-۹٠-٩0-9][۰-۹٠-٩0-9,،٬\s]*$~u', '', (string)$tm[1]));
         }
+        // Jina may omit the Markdown link title and leave the product name only
+        // in the linked image's alt text (for example, "Image 1: Kettle").
+        if ($title === '') $title = s4JinaMarkdownLabel((string)($m[1][0] ?? ''));
         if ($title === '' || $link === '') continue;
-        $price = '';
-        if (preg_match_all('~[۰-۹٠-٩0-9]{1,3}(?:[,،٬][۰-۹٠-٩0-9]{3})+(?:\s*(?:تومان|تومن|ریال))?|[۰-۹٠-٩0-9]{5,}(?:\s*(?:تومان|تومن|ریال))?~u', $body, $pm)) {
+
+        // The price commonly follows the product link in Reader Markdown, not
+        // inside the image/link label. Bound this context at the next product
+        // URL so a neighboring card's price is never assigned to this product.
+        $tailStart = $offset + strlen($matched);
+        $tail = substr($text, $tailStart, 1800);
+        if (preg_match('~(?:https?://(?:www\.)?snappshop\.ir)?/product/snp-[^)\s]+~iu', $tail, $nextProduct, PREG_OFFSET_CAPTURE)) {
+            $tail = substr($tail, 0, (int)$nextProduct[0][1]);
+        }
+        $priceContext = normalize_text(html_entity_decode($body . ' ' . $tail, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $price = extractPrice($priceContext);
+        if ($price === '' && preg_match_all('~[۰-۹٠-٩0-9]{1,3}(?:[,،٬][۰-۹٠-٩0-9]{3})+(?:\s*(?:تومان|تومن|ریال))?|[۰-۹٠-٩0-9]{5,}(?:\s*(?:تومان|تومن|ریال))?~u', $priceContext, $pm)) {
             $cands = [];
             foreach ($pm[0] as $raw) {
                 $clean = preg_replace('~[^۰-۹٠-٩0-9]~u', '', (string)$raw);
@@ -11317,7 +11332,11 @@ function s4JinaReaderUrls(string $url): array {
 
 function s4JinaMarkdownLabel(string $label): string {
     $label = html_entity_decode($label, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-    $label = preg_replace('~!\[[^\]]*\]\([^)]*\)~u', ' ', $label) ?? $label;
+    // Preserve image alt text: Jina often puts the product name there and
+    // omits the optional Markdown link title attribute.
+    $label = preg_replace_callback('~!\[([^\]]*)\]\([^)]*\)~u', function ($m) {
+        return ' ' . (string)($m[1] ?? '') . ' ';
+    }, $label) ?? $label;
     $label = preg_replace('~\[([^\]]+)\]\([^)]*\)~u', '$1', $label) ?? $label;
     $label = preg_replace('~^\s*Image\s+\d+\s*:\s*~iu', '', $label) ?? $label;
     return normalize_text(strip_tags($label));
@@ -43079,10 +43098,32 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.412', 'نسخهٔ 10.412 و release notes ثبت شده‌اند',
          version_compare(APP_VERSION,'10.412','>=')
       && strpos($selfSrc,"{v:'10." . "412'")!==false);
+
+    $_s413JinaShopText = '[![Image 1: کتری برقی آزمایشی](https://cdn.snappshop.ir/kettle.jpg)](https://snappshop.ir/product/snp-1540201588)' . "\nقیمت: ۲,۴۹۰,۰۰۰ تومان\n"
+        . '[![Image 2: توستر آزمایشی](https://cdn.snappshop.ir/toaster.jpg)](https://snappshop.ir/product/snp-1540201589)' . "\nقیمت: ۱,۹۹۰,۰۰۰ تومان";
+    $_s413JinaShopUsed = '';
+    $_s413JinaShopRows = parse_list_by_engine($_s413JinaShopText,
+        'https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=1', [], 'jina', $_s413JinaShopUsed);
+    $_s413JinaShopValues = array_values($_s413JinaShopRows);
+    $add('10.413', 'Markdown شبیه Jina برای لوازم آشپزخانه نام و قیمت هر کارت را از alt و متن پس از لینک می‌گیرد',
+         count($_s413JinaShopValues)===2
+      && ($_s413JinaShopValues[0]['title']??'')==='کتری برقی آزمایشی'
+      && extractPriceNum($_s413JinaShopValues[0]['price']??'')===2490000
+      && strpos((string)($_s413JinaShopValues[0]['link']??''),'/product/snp-1540201588')!==false
+      && strpos((string)($_s413JinaShopValues[0]['image']??''),'kettle.jpg')!==false
+      && ($_s413JinaShopValues[1]['title']??'')==='توستر آزمایشی'
+      && extractPriceNum($_s413JinaShopValues[1]['price']??'')===1990000
+      && strpos((string)($_s413JinaShopValues[1]['link']??''),'/product/snp-1540201589')!==false
+      && $_s413JinaShopUsed==='Jina Reader'
+      && s4JinaMarkdownLabel('![Image 3: تشخیص alt](https://cdn.snappshop.ir/test.jpg)')==='تشخیص alt');
+    $add('10.413', 'نسخهٔ 10.413 و release notes ثبت شده‌اند',
+         version_compare(APP_VERSION,'10.413','>=')
+      && strpos($selfSrc,"{v:'10." . "413'")!==false);
     unset($_bslFbStart,$_bslFbEnd,$_bslFbBlock,$_bslResumeStart,$_bslResumeEnd,$_bslResumeBlock,
           $_s411Partial,$_s411Row,$_s411Counts,$_s412BuildStart,$_s412BuildEnd,$_s412BuildBlock,
           $_s412OpenStart,$_s412OpenEnd,$_s412OpenBlock,$_s412ReloadStart,$_s412ReloadEnd,
-          $_s412ReloadBlock,$_s412WaitInit);
+          $_s412ReloadBlock,$_s412WaitInit,$_s413JinaShopText,$_s413JinaShopUsed,
+          $_s413JinaShopRows,$_s413JinaShopValues);
 
     /* ---------- v10.172: صفحه‌بندی ~page~{page} و قالب‌های مشابه ---------- */
     $add('10.172', 'الگوی ~page~{page} به انتهای مسیر می‌چسبد',
@@ -79287,6 +79328,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.413', t:'🧾 استخراج عنوان و قیمت از Markdown جینا برای اسنپ‌شاپ', items:[
+    'اگر Jina عنوانِ لینک را نفرستد، نام محصول از alt تصویرِ لینک‌شده خوانده می‌شود؛ خروجی‌هایی مثل «Image 1: نام محصول» هم عنوان قابل‌استفاده می‌دهند.',
+    'برای کارت‌های Markdown اسنپ‌شاپ، قیمتِ پس از لینک همان محصول خوانده می‌شود و جست‌وجو پیش از لینک محصول بعدی متوقف می‌ماند تا قیمت کارت‌ها با هم جابه‌جا نشود.',
+    'آزمون داخلیِ دستهٔ لوازم آشپزخانه دو کارت Reader را با عنوان، قیمت، لینک و تصویر بررسی می‌کند؛ این آزمون نمونهٔ محلی است و جای آزمون زندهٔ سایت را نمی‌گیرد.'
+  ]},
   {v:'10.412', t:'⏳ اعمال درستِ انتظار در انتخابگر تمام‌صفحه', items:[
     'با تغییر انتظار در پنجرهٔ تمام‌صفحه، URL صفحهٔ نمونه دوباره از تنظیم جاری ساخته می‌شود؛ حالت فهرست و جزئیات دیگر URL قدیمیِ cacheشده را بارگذاری نمی‌کنند.',
     'انتخابگر فهرست و جزئیات از آغاز تایمر واقعاً مکث می‌ماند و وضعیت دکمه/پنل را گزارش می‌کند؛ پیام آماده‌شدن iframe مکث را زودتر لغو نمی‌کند.',
