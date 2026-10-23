@@ -357,7 +357,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.410';
+const APP_VERSION = '10.411';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -22396,12 +22396,16 @@ function cronWatchdogs(array $cn): array {
     // هزینه‌اش وقتی چیزی گیر نکرده صفر است: فقط چند خط خواندن از فایل.
     $stallCfg  = (int)($cn['stall_after'] ?? 300);
     $stallWake = !isset($cn['stall_watchdog']) || !empty($cn['stall_watchdog']);
-    if ($stallWake) {
+    /* Basalam completion recovery is mandatory: disabling the generic stall
+       watchdog must not strand a partially sent shop row. Woo still follows
+       the saved watchdog switch. */
+    {
         $results['watchdog'] = [];
         /* Respect the saved destination order, but inspect both independent
            queues during this pulse. Each backend still has its own flock and
            only one row per destination can be dispatched at a time. */
         foreach (cronWatchdogQueueOrder() as $wq) {
+            if(!$stallWake&&$wq!=='bsl')continue;
             /* Promote every eligible paused row even while a healthy row is
                running. The destination flock keeps mutation separate from workers. */
             $batchResume=queuePromotePausedForCron($wq);
@@ -45193,6 +45197,17 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'foreign_stopped_progress_is_scoped_and_ignored') !== false
       && strpos($selfSrc, "{v:'10." . "410'") !== false
       && version_compare(APP_VERSION, '10.' . '410', '>='));
+    $add('10.411', 'ردیف باسلام تا current=total بدون سقف تلاش از checkpoint ادامه می‌یابد',
+         strpos($selfSrc, "\$resumeUntilDone = \$which === 'bsl';") !== false
+      && strpos($selfSrc, "if (!\$resumeUntilDone && !\$allowUserStopped && \$tries >= QUEUE_RESUME_MAX_TRIES)") !== false
+      && substr_count($selfSrc, "!\$resumeUntilDone && !\$allowUserStopped") >= 2
+      && strpos($selfSrc, "'retry_policy' => \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false);
+    $add('10.411', 'کران باسلام حتی با خاموشی watchdog عمومی اجباری است و failed قدیمی را بازمی‌گرداند',
+         strpos($selfSrc, "if(!\$stallWake&&\$wq!=='bsl')continue;") !== false
+      && strpos($selfSrc, "\$retryAfter=\$which==='bsl'?QUEUE_RESUME_COOLDOWN:QUEUE_IDLE_RETRY_AFTER;") !== false
+      && strpos($selfSrc, "'retry_policy'=>'until_row_complete'") !== false
+      && strpos($selfSrc, "{v:'10." . "411'") !== false
+      && version_compare(APP_VERSION, '10.' . '411', '>='));
     $add('10.374', 'بازیابی اصلاح فقط یک owner نگه می‌دارد و jobهای failed قدیمی را supersede می‌کند',
          strpos($selfSrc, "'reason'=>'active_fix_owner'") !== false
       && strpos($selfSrc, 'superseded_by_active_matrix_fix') !== false
@@ -49956,7 +49971,8 @@ function queueIdleRetryFailed(string $which): ?array {
         if ($qid === '') continue;
         $book = queueResumeBook($which, $qid);
         $lastAt = (int)($book['at'] ?? 0);
-        if ($lastAt > 0 && ($now - $lastAt) < QUEUE_IDLE_RETRY_AFTER) continue;
+        $retryAfter=$which==='bsl'?QUEUE_RESUME_COOLDOWN:QUEUE_IDLE_RETRY_AFTER;
+        if ($lastAt > 0 && ($now - $lastAt) < $retryAfter) continue;
         if ((string)($book['status'] ?? '') === 'exhausted') {
             queueResumeBook($which, $qid, ['tries' => 0, 'status' => 'idle_retry', 'at' => $now]);
         }
@@ -50043,8 +50059,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     /* v10.56 (۷۰): resume_from = چک‌پوینتِ واقعی */
     $start = max(0, (int)($chk['resume_from'] ?? $chk['current'] ?? 0));
 
-    /* v10.103: سقف ۳ تلاش ادامه — مثل دکمهٔ «ادامه» در مدیر وظیفه؛ بعد failed */
+    /* Woo keeps the v10.103 three-attempt ceiling. Basalam is completion-bound
+       from v10.411 and therefore never becomes failed merely due to restarts. */
     $book = queueResumeBook($which, $qid);
+    /* Basalam rows are completion-bound, not attempt-bound. Shared hosting may
+       kill a long request many times; each cron pulse must keep resuming the
+       same queue/shop checkpoint until current reaches total. Woo retains the
+       bounded policy to avoid changing its established operational behavior. */
+    $resumeUntilDone = $which === 'bsl';
     $tries = (int)($book['tries'] ?? 0);
     $lastAt = (int)($book['at'] ?? 0);
     $now = time();
@@ -50063,7 +50085,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $chk['reason_defer'] = 'cooldown';
         return $chk;
     }
-    if (!$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES) {
+    if (!$resumeUntilDone && !$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES) {
         $reason = 'پس از ' . QUEUE_RESUME_MAX_TRIES . ' تلاش ادامه، متوقف شد (از محصول #' . max(1, $start) . ')';
         queueMarkEntryFailed($which, $qid, $reason);
         queueResumeBook($which, $qid, ['tries' => $tries, 'at' => $now, 'from' => $start, 'status' => 'exhausted']);
@@ -50163,7 +50185,8 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         'dispatch_pid'=>(int)($GLOBALS['_queueDispatchPid']??0),
     ]);
     $chk['attempt'] = $tries;
-    $chk['attempt_max'] = QUEUE_RESUME_MAX_TRIES;
+    $chk['attempt_max'] = $resumeUntilDone ? null : QUEUE_RESUME_MAX_TRIES;
+    $chk['retry_policy'] = $resumeUntilDone ? 'until_row_complete' : 'bounded';
     /* سازگاری با شمارندهٔ قدیمی state */
     try {
         $st = notifLoadState();
@@ -50172,7 +50195,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         notifSaveState($st);
     } catch (Throwable $e) {}
     /* اگر این سومین تلاش بود و fire شکست خورد → همان‌جا failed */
-    if (!$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES && empty($chk['resumed'])) {
+    if (!$resumeUntilDone && !$allowUserStopped && $tries >= QUEUE_RESUME_MAX_TRIES && empty($chk['resumed'])) {
         $reason = 'پس از ' . QUEUE_RESUME_MAX_TRIES . ' تلاش ادامه، متوقف شد';
         queueMarkEntryFailed($which, $qid, $reason);
         queueResumeBook($which, $qid, ['tries' => $tries, 'at' => $now, 'status' => 'exhausted']);
@@ -61030,6 +61053,7 @@ echo json_encode([
         'progress'=>$progressSummaryFb,'progress_belongs_to_active_row'=>$progressOwnedFb,
         'last_heartbeat_age_sec'=>$lastBeatAgeFb,'stall_after_sec'=>$stallAfterFb,
         'watchdog_enabled'=>$watchdogEnabledFb,'auto_resume_enabled'=>$autoResumeEnabledFb,
+        'retry_policy'=>'until_row_complete','generic_watchdog_switch_can_disable_recovery'=>false,
         'backend_lock'=>['held'=>$lockHeldFb,'probe_ok'=>$lockProbeOkFb,'file_exists'=>is_file($lockFileFb),
             'mtime_age_sec'=>$lockMtimeFb>0?max(0,$nowFb-$lockMtimeFb):null],
         'stop_signal'=>['present'=>$stopExistsFb,'active'=>$stopActiveFb,'age_sec'=>$stopAgeFb,
@@ -78269,6 +78293,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.411', t:'♾ ادامهٔ قطعی ارسال باسلام تا پایان هر ردیف و غرفه', items:[
+    'سقف سه تلاش برای بازیابی ردیف باسلام حذف شد؛ قطع مکرر پردازه توسط هاست دیگر ردیف نیمه‌تمام را failed نمی‌کند و هر ضربان کران از همان current ادامه می‌دهد تا current به total برسد.',
+    'محدودیت تلاش ووکامرس بدون تغییر مانده است؛ سیاست بی‌نهایت فقط برای صف باسلام و با حفظ flock، queue_id و checkpoint اعمال می‌شود.',
+    'حتی اگر کلید عمومی stall watchdog خاموش باشد، بازیابی completion-bound باسلام در ابتدای هر cron اجرا می‌شود؛ توقف صریح کاربر همچنان تنها استثناست.',
+    'ردیف‌های باسلامی که نسخه‌های قبلی پس از سه تلاش exhausted کرده‌اند با cooldown کوتاه دوباره به waiting برمی‌گردند و سپس وارد سیاست until_row_complete می‌شوند.',
+    'feedback ارسال باسلام اکنون سیاست retry را صریحاً until_row_complete گزارش می‌کند تا مشخص باشد ردیف نیمه‌تمام نباید به‌علت تعداد تلاش کنار گذاشته شود.'
+  ]},
   {v:'10.410', t:'🚀 بازیابی صف باسلام با کران و توقفِ ردیف‌محور', items:[
     'ریشهٔ گیرکردن رفع شد: progress مشترکِ cancelled/stopped از یک ردیف قدیمی دیگر کل مقصد باسلام را برای همیشه «توقف صریح کاربر» تشخیص نمی‌دهد.',
     'فایل Stop دارای queue_id فقط همان ردیف را متوقف می‌کند؛ ردیف‌های waiting یا checkpointدار دیگر در همان مقصد می‌توانند با کران ادامه یابند، بدون شکستن توقف دستی همان ردیف.',
