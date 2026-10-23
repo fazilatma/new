@@ -98,7 +98,7 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
     }
 
     const forwardHeaders = new Headers();
-    const skipHeaders = ['host', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-proto', 'x-real-ip'];
+    const skipHeaders = ['host', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto', 'x-real-ip', 'true-client-ip', 'forwarded'];
 
     for (const [key, value] of request.headers.entries()) {
       const lk = key.toLowerCase();

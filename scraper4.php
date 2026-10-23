@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.436';
+const APP_VERSION = '10.437';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -11283,24 +11283,58 @@ function fetch_html_emalls_public_fallback(string $url, int $timeout = 25, array
 
 function isSnappshopUrl(string $url): bool {
     $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
-    return $host === 'snappshop.ir' || substr($host, -12) === '.snappshop.ir';
+    return $host === 'snappshop.ir' || substr($host, -13) === '.snappshop.ir' || substr($host, -12) === '.snappshop.ir';
+}
+
+function isSnappshopPlaceholderImage(string $img): bool {
+    $img = trim($img);
+    if ($img === '') return true;
+    $low = strtolower($img);
+    if (str_starts_with($low, 'blob:') || str_starts_with($low, 'data:')) return true;
+    foreach (['image-fallback', 'text-logo.', '/placeholder', 'default-placeholder'] as $bad) {
+        if (strpos($low, $bad) !== false) return true;
+    }
+    return false;
+}
+
+function snappshopCanonicalProductUrl(string $href, string $baseUrl = 'https://snappshop.ir'): string {
+    $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    if ($href === '') return '';
+    if (preg_match('~/(?:product|products)/(snp-\d+)~i', $href, $m)) {
+        return 'https://snappshop.ir/product/' . strtolower($m[1]);
+    }
+    $abs = make_absolute_url($href, $baseUrl !== '' ? $baseUrl : 'https://snappshop.ir');
+    $abs = preg_replace('~\?nip(?:=[^&#]*)?$~i', '', $abs) ?? $abs;
+    return $abs;
 }
 
 function snappshopProductsFromReaderText(string $text, string $baseUrl): array {
     $products = [];
     if (trim($text) === '' || stripos($text, 'snappshop.ir/product/') === false) return [];
-    if (!preg_match_all('~\[!\[Image\s+\d+:\s*([^\]]*)\]\((https?://[^)\s]+)\)(.*?)\]\((https?://(?:www\.)?snappshop\.ir/product/[^)\s]+)(?:\s+"([^"]*)")?\)~isu', $text, $matches, PREG_SET_ORDER)) return [];
+    /* v10.437: کارت‌های اسنپ‌شاپ در خروجی r.jina.ai گاهی پیش از ![Image ...] نشانک
+       کمپین مثل «[تخفیف بنفش! ![Image 18: ...]...]» دارند و در ردیف‌های پایین صفحه
+       تصویر lazy به شکل image-fallback.svg می‌آید. */
+    if (!preg_match_all('~\[(?:[^\[\]]{0,100}?)!\[Image\s+\d+:\s*([^\]]*)\]\(([^)\s]+)\)(.*?)\]\((https?://(?:www\.)?snappshop\.ir/product/[^)\s"]+)(?:\s+"([^"]*)")?\)~isu', $text, $matches, PREG_SET_ORDER)) return [];
     foreach ($matches as $m) {
         $image = html_entity_decode((string)($m[2] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if (isSnappshopPlaceholderImage($image)) $image = '';
         $body = normalize_text(html_entity_decode((string)($m[3] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-        $link = html_entity_decode((string)($m[4] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $link = snappshopCanonicalProductUrl((string)($m[4] ?? ''), $baseUrl);
         $title = normalize_text(html_entity_decode((string)($m[5] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         if ($title === '' && preg_match('~###\s*(.+)$~u', $body, $tm)) {
             $title = normalize_text(preg_replace('~\s+%?[۰-۹٠-٩0-9][۰-۹٠-٩0-9,،٬\s]*$~u', '', (string)$tm[1]));
         }
         if ($title === '' || $link === '') continue;
+        $priceZone = $body;
+        if (preg_match('~###\s*.+$~u', $body, $hm)) {
+            $afterHeading = (string)$hm[0];
+            $posT = mb_strpos($afterHeading, $title);
+            if ($posT !== false) {
+                $priceZone = trim(mb_substr($afterHeading, $posT + mb_strlen($title)));
+            }
+        }
         $price = '';
-        if (preg_match_all('~[۰-۹٠-٩0-9]{1,3}(?:[,،٬][۰-۹٠-٩0-9]{3})+(?:\s*(?:تومان|تومن|ریال))?|[۰-۹٠-٩0-9]{5,}(?:\s*(?:تومان|تومن|ریال))?~u', $body, $pm)) {
+        if ($priceZone !== '' && preg_match_all('~[۰-۹٠-٩0-9]{1,3}(?:[,،٬][۰-۹٠-٩0-9]{3})+(?:\s*(?:تومان|تومن|ریال))?|[۰-۹٠-٩0-9]{5,}(?:\s*(?:تومان|تومن|ریال))?~u', $priceZone, $pm)) {
             $cands = [];
             foreach ($pm[0] as $raw) {
                 $clean = preg_replace('~[^۰-۹٠-٩0-9]~u', '', (string)$raw);
@@ -11312,8 +11346,8 @@ function snappshopProductsFromReaderText(string $text, string $baseUrl): array {
         $p = [
             'title' => mb_substr($title, 0, 220),
             'price' => $price,
-            'link'  => make_absolute_url($link, $baseUrl),
-            'image' => url_is_image($image) ? make_absolute_url($image, $baseUrl) : '',
+            'link'  => $link,
+            'image' => ($image !== '' && url_is_image($image)) ? make_absolute_url($image, $baseUrl) : '',
             'sku'   => '',
         ];
         $key = productKey($p);
@@ -11502,6 +11536,10 @@ function s4JinaIndirectNet(): array {
         $net['worker_url'] = 'https://proxy.fazilat-ma.workers.dev/?url={url}';
     }
     if (trim((string)($net['doh_url'] ?? '')) === '') $net['doh_url'] = 'https://cloudflare-dns.com/dns-query';
+    $jinaKey = trim((string)($net['jina_api_key'] ?? ''));
+    if ($jinaKey === '' && is_array($cn['ai_net'] ?? null)) $jinaKey = trim((string)($cn['ai_net']['jina_api_key'] ?? ''));
+    if ($jinaKey === '') $jinaKey = trim((string)($cn['jina_api_key'] ?? ''));
+    $net['jina_api_key'] = $jinaKey;
     $net['mode'] = in_array((string)($net['mode'] ?? 'direct'), ['direct','doh','dns','proxy','worker'], true) ? (string)$net['mode'] : 'direct';
     $net['fallback'] = true;
     return $net;
@@ -11532,9 +11570,34 @@ function s4JinaFetchPlan(): array {
     return ['net'=>$net, 'modes'=>$modes, 'diagnostic_direct' => $diag];
 }
 
+function s4JinaFormatHttpError(int $code, string $err, string $body): string {
+    $err = trim($err);
+    if ($err !== '') return $err;
+    if ($code <= 0) return 'Empty';
+    $detail = '';
+    $trimBody = trim($body);
+    if ($trimBody !== '') {
+        if ($trimBody[0] === '{') {
+            $j = @json_decode($trimBody, true);
+            if (is_array($j)) {
+                $msg = trim((string)($j['message'] ?? ($j['readableMessage'] ?? ($j['error'] ?? ''))));
+                $nm  = trim((string)($j['name'] ?? ''));
+                $detail = ($nm !== '' && $msg !== '' && stripos($msg, $nm) === false) ? ($nm . ': ' . $msg) : ($msg !== '' ? $msg : $nm);
+            }
+        }
+        if ($detail === '') {
+            $plain = normalize_text(strip_tags($trimBody));
+            if ($plain !== '') $detail = mb_substr($plain, 0, 140);
+        }
+    }
+    return $detail !== '' ? ('HTTP ' . $code . ': ' . $detail) : ('HTTP ' . $code);
+}
+
 function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'direct', ?array $netOverride = null): array {
+    $netForKey = $netOverride ?: s4JinaIndirectNet();
+    $jinaAuthHeader = trim((string)($netForKey['jina_api_key'] ?? ''));
     if ($mode !== 'direct') {
-        $net = $netOverride ?: s4JinaIndirectNet();
+        $net = $netForKey;
         // v10.231: indirect Jina must still look like a Jina Reader request.
         // The generic source fetcher sends HTML/browser headers through Worker,
         // which can turn r.jina.ai into a Cloudflare "Just a moment" page.
@@ -11542,22 +11605,24 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
             $parsed = parse_url($readerUrl);
             $host = strtolower((string)($parsed['host'] ?? ''));
             $reqUrl = $readerUrl;
+            $hdrs = [
+                'Accept: text/plain,text/markdown,*/*;q=0.8',
+                'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+                'X-Return-Format: markdown',
+                'X-Respond-With: markdown',
+                'X-Engine: browser',
+                'X-Respond-Timing: network-idle',
+                'X-Timeout: ' . (string)min(60, max(8, $timeout)),
+                'X-Cache-Tolerance: 604800',
+            ];
+            if ($jinaAuthHeader !== '') $hdrs[] = 'Authorization: Bearer ' . $jinaAuthHeader;
             $ch = curl_init($readerUrl);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5,
                 CURLOPT_CONNECTTIMEOUT => 7, CURLOPT_TIMEOUT => $timeout, CURLOPT_ENCODING => '',
                 CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
                 CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Scraper4-JinaReader/' . APP_VERSION . '; +https://r.jina.ai/)',
-                CURLOPT_HTTPHEADER => [
-                    'Accept: text/plain,text/markdown,*/*;q=0.8',
-                    'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
-                    'X-Return-Format: markdown',
-                    'X-Respond-With: markdown',
-                    'X-Engine: browser',
-                    'X-Respond-Timing: network-idle',
-                    'X-Timeout: ' . (string)min(60, max(8, $timeout)),
-                    'X-Cache-Tolerance: 604800',
-                ],
+                CURLOPT_HTTPHEADER => $hdrs,
             ]);
             if ($mode === 'dns' || $mode === 'doh') {
                 $ip = '';
@@ -11587,10 +11652,12 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
             $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $readerUrl;
             curl_close($ch);
-            $r = ['ok' => $body !== false && $code >= 200 && $code < 400,
-                  'error' => $err ?: 'Empty', 'code' => $code,
+            $bodyStr = $body === false ? '' : (string)$body;
+            $ok = $body !== false && $code >= 200 && $code < 400 && trim($bodyStr) !== '';
+            $r = ['ok' => $ok,
+                  'error' => $ok ? '' : s4JinaFormatHttpError($code, $err, $bodyStr), 'code' => $code,
                   'url' => $mode === 'worker' ? $readerUrl : $finalUrl,
-                  'html' => $body === false ? '' : $body, 'mode' => $mode,
+                  'html' => $bodyStr, 'mode' => $mode,
                   'jina_reader_request_url' => $mode === 'worker' ? $reqUrl : ''];
         } else {
             $r = srcNetFetchAttempt($readerUrl, $timeout, $net, $mode);
@@ -11604,6 +11671,17 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
     // و روی هاست به 451 Empty برسند. این درخواست مینیمال و markdown-friendly است.
     if (function_exists('curl_init')) {
         $ch = curl_init($readerUrl);
+        $directHdrs = [
+            'Accept: text/plain,text/markdown,*/*;q=0.8',
+            'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+            'X-Return-Format: markdown',
+            'X-Respond-With: markdown',
+            'X-Engine: browser',
+            'X-Respond-Timing: network-idle',
+            'X-Timeout: ' . (string)min(60, max(8, $timeout)),
+            'X-Cache-Tolerance: 604800',
+        ];
+        if ($jinaAuthHeader !== '') $directHdrs[] = 'Authorization: Bearer ' . $jinaAuthHeader;
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 5,
             CURLOPT_CONNECTTIMEOUT => 7, CURLOPT_TIMEOUT => $timeout, CURLOPT_ENCODING => '',
@@ -11620,14 +11698,16 @@ function s4JinaFetchAttempt(string $readerUrl, int $timeout, string $mode = 'dir
                 'X-Cache-Tolerance: 604800',
             ],
         ]);
+        if ($jinaAuthHeader !== '') curl_setopt($ch, CURLOPT_HTTPHEADER, $directHdrs);
         $body = curl_exec($ch); $err = curl_error($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) ?: $readerUrl;
         curl_close($ch);
-        $ok = $body !== false && $code >= 200 && $code < 400;
+        $bodyStr = $body === false ? '' : (string)$body;
+        $ok = $body !== false && $code >= 200 && $code < 400 && trim($bodyStr) !== '';
         return ['ok' => $ok,
-                'error' => $ok ? '' : ($err ?: 'Empty'), 'code' => $code, 'url' => $finalUrl,
-                'html' => $body === false ? '' : $body, 'mode' => 'direct', 'jina_reader_via' => 'direct'];
+                'error' => $ok ? '' : s4JinaFormatHttpError($code, $err, $bodyStr), 'code' => $code, 'url' => $finalUrl,
+                'html' => $bodyStr, 'mode' => 'direct', 'jina_reader_via' => 'direct'];
     }
     $r = srcNetFetchAttempt($readerUrl, $timeout, ['ipv4' => true, 'hosts' => '', 'fallback' => false], 'direct');
     $r['jina_reader_via'] = 'direct';
@@ -11707,6 +11787,23 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
                 continue;
             }
             $last = $r + $last;
+            /* v10.437: اگر همان مسیر شبکه با بلاک منطقه‌ای/احراز هویت/سقف نرخ Jina
+               (451/401/403/429) رد شد، تکرار bridge و nested روی همان مسیر فقط درخواست
+               سوخته و تشدید 429 می‌سازد؛ بلافاصله سراغ مسیر بعدی برو. */
+            if (in_array((int)($r['code'] ?? 0), [401, 403, 429, 451], true)) break;
+        }
+    }
+    /* v10.437: روی سرورهای ایران r.jina.ai با HTTP 451 (و روی Worker اشتراکی با 451/429)
+       رد می‌شود، در حالی که API عمومی خودِ اسنپ‌شاپ (apix.snappshop.ir) مستقیم و سریع پاسخ
+       ساختاریافتهٔ JSON می‌دهد. پس از ثبت کامل trace جینا، برای URLهای اسنپ‌شاپ به apix برگرد. */
+    if (function_exists('isSnappshopUrl') && isSnappshopUrl($target) && function_exists('fetch_html_snappshop_api')) {
+        $apiFallback = fetch_html_snappshop_api($target, $timeout, is_array($last) ? $last : $prev);
+        if (!empty($apiFallback['ok']) && ((int)($apiFallback['jina_product_count'] ?? 0) > 0 || ($apiFallback['snappshop_route_kind'] ?? '') === 'product')) {
+            $apiFallback['jina_reader_trace'] = $trace;
+            $apiFallback['jina_reader_modes'] = $jinaModes;
+            $apiFallback['jina_reader_via'] = 'snappshop-apix';
+            $apiFallback['jina_error_before_apix'] = (string)($last['error'] ?? '');
+            return $apiFallback;
         }
     }
     if ($firstText !== null) {
@@ -11748,18 +11845,19 @@ function parse_snappshop_products_html(string $html, string $baseUrl): array {
         return $price;
     };
     if (!preg_match_all('#<a\b(?=[^>]*href\s*=\s*(["\'])(?:https?://(?:www\.)?snappshop\.ir)?/product/snp-[^"\']+\1)[^>]*>.*?</a>#isu', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) return [];
-    foreach ($matches as $m) {
+    $totalMatches = count($matches);
+    foreach ($matches as $idx => $m) {
         $tagHtml = (string)$m[0][0];
         $off = (int)$m[0][1];
         $href = $attrOf($tagHtml, 'href');
         if ($href === '' || stripos($href, '/product/snp-') === false) continue;
         $title = normalize_text($attrOf($tagHtml, 'title'));
         if ($title === '') $title = normalize_text($attrOf($tagHtml, 'aria-label'));
-        if ($title === '' && preg_match('~<img\b[^>]*\balt\s*=\s*(["\'])(.*?)\1~isu', $tagHtml, $im)) {
-            $title = normalize_text(html_entity_decode((string)$im[2], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-        }
         if ($title === '' && preg_match('~<h[1-4]\b[^>]*>(.*?)</h[1-4]>~isu', $tagHtml, $hm)) {
             $title = normalize_text(strip_tags((string)$hm[1]));
+        }
+        if ($title === '' && preg_match('~<img\b[^>]*\balt\s*=\s*(["\'])(.*?)\1~isu', $tagHtml, $im)) {
+            $title = normalize_text(html_entity_decode((string)$im[2], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         }
         if ($title === '') {
             $txt = normalize_text(strip_tags($tagHtml));
@@ -11770,14 +11868,28 @@ function parse_snappshop_products_html(string $html, string $baseUrl): array {
         $img = '';
         if (preg_match('~<img\b[^>]*(?:data-src|data-lazy-src|data-original|src)\s*=\s*(["\'])(.*?)\1~isu', $tagHtml, $im)) {
             $img = html_entity_decode((string)$im[2], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            if (isSnappshopPlaceholderImage($img)) $img = '';
         }
-        $ctx = substr($html, max(0, $off - 600), strlen($tagHtml) + 2200);
-        $price = $pickPrice(strip_tags($ctx));
+        /* v10.437: محدودسازی بازهٔ قیمت به همان کارت (<article> یا فاصله تا لینک بعدی)
+           تا قیمت کارت‌های بعدی وارد کارت فعلی نشود. */
+        $ctx = '';
+        $artStart = strripos(substr($html, 0, $off), '<article');
+        $artEnd = $artStart !== false ? stripos($html, '</article>', $off) : false;
+        if ($artStart !== false && $artEnd !== false && ($off - $artStart) < 1600 && ($artEnd - $off) < 2400) {
+            $ctx = substr($html, $artStart, ($artEnd + 10) - $artStart);
+        } else {
+            $nextOff = ($idx + 1 < $totalMatches) ? (int)$matches[$idx + 1][0][1] : ($off + strlen($tagHtml) + 900);
+            $endOff = min(strlen($html), max($off + strlen($tagHtml), min($nextOff, $off + strlen($tagHtml) + 900)));
+            $ctx = substr($html, $off, $endOff - $off);
+        }
+        $ctxPlain = strip_tags($ctx);
+        if ($title !== '') $ctxPlain = str_replace($title, ' ', $ctxPlain);
+        $price = $pickPrice($ctxPlain);
         $p = [
             'title' => mb_substr($title, 0, 220),
             'price' => $price,
-            'link'  => make_absolute_url($href, $baseUrl),
-            'image' => url_is_image($img) ? make_absolute_url($img, $baseUrl) : '',
+            'link'  => snappshopCanonicalProductUrl($href, $baseUrl),
+            'image' => ($img !== '' && url_is_image($img)) ? make_absolute_url($img, $baseUrl) : '',
             'sku'   => '',
         ];
         $key = productKey($p);
@@ -11807,13 +11919,419 @@ function snappshopSyntheticHtml(array $products, string $sourceUrl, string $note
         . '<main class="product-grid products">' . $cards . '</main></body></html>';
 }
 
+/* v10.437: لایهٔ مستقیم API عمومی اسنپ‌شاپ (apix.snappshop.ir) برای استخراج لیست‌ها
+   و جزئیات محصول زمانی که پوستهٔ Next.js خالی است و r.jina.ai با 451/429 مسدود است. */
+function snappshopParseTargetRoute(string $url): array {
+    $target = function_exists('s4JinaUnwrapTargetUrl') ? s4JinaUnwrapTargetUrl($url) : trim($url);
+    $parts = @parse_url($target);
+    if (!is_array($parts) || empty($parts['host'])) return ['ok' => false, 'url' => $target];
+    $path = '/' . trim((string)($parts['path'] ?? ''), '/');
+    $q = [];
+    if (!empty($parts['query'])) @parse_str((string)$parts['query'], $q);
+    $page = max(1, (int)($q['page'] ?? 1));
+    $skip = max(0, $page - 1);
+    if (preg_match('~^/(?:product|products)/(?:snp-)?(\d+)(?:/|$)~i', $path, $m)) {
+        return ['ok' => true, 'kind' => 'product', 'url' => $target, 'product_id' => (string)$m[1], 'page' => 1, 'skip' => 0, 'query_params' => $q];
+    }
+    $searchQuery = trim((string)($q['query'] ?? ($q['q'] ?? ($q['s'] ?? ''))));
+    if (preg_match('~^/search(?:/|$)~i', $path) || ($searchQuery !== '' && $path === '/')) {
+        return ['ok' => true, 'kind' => 'search', 'url' => $target, 'search_query' => $searchQuery, 'page' => $page, 'skip' => $skip, 'render' => 4, 'query_params' => $q];
+    }
+    if (preg_match('~^/(?:product-)?category/([^/?#]+)(?:/([^/?#]+))?~i', $path, $m)) {
+        $slug = rawurldecode((string)$m[1]);
+        $slug2 = isset($m[2]) && $m[2] !== '' ? rawurldecode((string)$m[2]) : '';
+        return ['ok' => true, 'kind' => 'landing', 'url' => $target,
+                'page_type' => $slug2 !== '' ? 'category_brand' : 'category',
+                'slug' => $slug, 'slug_2' => $slug2, 'page' => $page, 'skip' => $skip, 'render' => 4, 'query_params' => $q];
+    }
+    if (preg_match('~^/(?:vendor|vendors|seller|sellers)/([^/?#]+)~i', $path, $m)) {
+        return ['ok' => true, 'kind' => 'landing', 'url' => $target, 'page_type' => 'vendor',
+                'slug' => rawurldecode((string)$m[1]), 'slug_2' => '', 'page' => $page, 'skip' => $skip, 'render' => 3, 'query_params' => $q];
+    }
+    if (preg_match('~^/(?:brand|brands)/([^/?#]+)~i', $path, $m)) {
+        return ['ok' => true, 'kind' => 'landing', 'url' => $target, 'page_type' => 'brand',
+                'slug' => rawurldecode((string)$m[1]), 'slug_2' => '', 'page' => $page, 'skip' => $skip, 'render' => 4, 'query_params' => $q];
+    }
+    if (preg_match('~^/(product-list|campaign|landing)/([^/?#]+)~i', $path, $m)) {
+        $pt = str_replace('-', '_', strtolower((string)$m[1]));
+        return ['ok' => true, 'kind' => 'landing', 'url' => $target, 'page_type' => $pt,
+                'slug' => rawurldecode((string)$m[2]), 'slug_2' => '', 'page' => $page, 'skip' => $skip, 'render' => 4, 'query_params' => $q];
+    }
+    return ['ok' => false, 'url' => $target];
+}
+
+function snappshopBuildLandingPayload(array $route): array {
+    $q = is_array($route['query_params'] ?? null) ? $route['query_params'] : [];
+    $payload = [
+        'render' => (int)($route['render'] ?? 4),
+        'skip'   => max(0, (int)($route['skip'] ?? 0)),
+    ];
+    if (($route['kind'] ?? '') === 'search') {
+        $payload['query'] = (string)($route['search_query'] ?? '');
+    } else {
+        $payload['exclude_filters'] = true;
+        $payload['page_type'] = (string)($route['page_type'] ?? 'category');
+        $payload['slug'] = (string)($route['slug'] ?? '');
+        if (trim((string)($route['slug_2'] ?? '')) !== '') {
+            $payload['slug_2'] = trim((string)$route['slug_2']);
+        }
+    }
+    $asBool = function ($v): ?bool {
+        if (is_bool($v)) return $v;
+        $s = strtolower(trim((string)$v));
+        if (in_array($s, ['1', 'true', 'yes', 'on'], true)) return true;
+        if (in_array($s, ['0', 'false', 'no', 'off'], true)) return false;
+        return null;
+    };
+    if (array_key_exists('is_available', $q)) {
+        $bv = $asBool($q['is_available']);
+        if ($bv !== null) $payload['is_available'] = $bv;
+    }
+    if (array_key_exists('has_discount', $q) && $asBool($q['has_discount']) === true) {
+        $payload['has_discount'] = true;
+    }
+    if (array_key_exists('is_express', $q) && $asBool($q['is_express']) === true) {
+        $payload['is_express'] = true;
+    }
+    if (trim((string)($q['sort'] ?? '')) !== '') {
+        $payload['sort'] = trim((string)$q['sort']);
+    }
+    foreach (['brands', 'colors'] as $arrKey) {
+        if (!empty($q[$arrKey])) {
+            $vals = is_array($q[$arrKey]) ? array_values(array_filter(array_map('strval', $q[$arrKey]))) : [trim((string)$q[$arrKey])];
+            if ($vals) $payload[$arrKey] = $vals;
+        }
+    }
+    return $payload;
+}
+
+function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonBody = null, int $timeout = 20): array {
+    $timeout = max(6, min(45, $timeout));
+    $sep = strpos($endpoint, '?') !== false ? '&' : '?';
+    $apiUrl = 'https://apix.snappshop.ir/' . ltrim($endpoint, '/') . $sep . 'lat=35.77331&lng=51.418591';
+    $method = strtoupper(trim($method));
+    $encodedBody = $jsonBody !== null ? json_encode($jsonBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+    $hdrs = [
+        'Accept: application/json, text/plain, */*',
+        'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Origin: https://snappshop.ir',
+        'Referer: https://snappshop.ir/',
+        'x-origin: https://snappshop.ir',
+        's-device: DESKTOP',
+        's-device-source: shop',
+    ];
+    if ($encodedBody !== null) $hdrs[] = 'Content-Type: application/json';
+    $net = function_exists('loadConnections') ? srcNetCfg() : ['mode' => 'direct', 'ipv4' => true];
+    $tryModes = ['direct'];
+    foreach (['doh', 'proxy', 'worker'] as $cand) {
+        if ($cand === 'doh' && trim((string)($net['doh_url'] ?? '')) === '') continue;
+        if ($cand === 'proxy' && trim((string)($net['proxy'] ?? '')) === '') continue;
+        if ($cand === 'worker' && trim((string)($net['worker_url'] ?? '')) === '') continue;
+        $tryModes[] = $cand;
+    }
+    $lastErr = 'Empty';
+    $lastCode = 0;
+    foreach ($tryModes as $via) {
+        if (!function_exists('curl_init')) break;
+        $reqUrl = $apiUrl;
+        $ch = curl_init($apiUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+            CURLOPT_CONNECTTIMEOUT => 6,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_CUSTOMREQUEST  => $method,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => $hdrs,
+        ]);
+        if ($encodedBody !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedBody);
+        if ($via === 'doh' && function_exists('aiDohResolve')) {
+            $dr = aiDohResolve('apix.snappshop.ir', (string)($net['doh_url'] ?? ''), min(8, $timeout));
+            if (!empty($dr['ok']) && !empty($dr['ip'])) {
+                curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . (string)$dr['ip']]);
+            }
+        } elseif ($via === 'proxy' && trim((string)($net['proxy'] ?? '')) !== '') {
+            curl_setopt($ch, CURLOPT_PROXY, (string)$net['proxy']);
+            $map = ['http' => CURLPROXY_HTTP,
+                    'socks5' => defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5,
+                    'socks4' => defined('CURLPROXY_SOCKS4') ? CURLPROXY_SOCKS4 : CURLPROXY_HTTP];
+            curl_setopt($ch, CURLOPT_PROXYTYPE, $map[(string)($net['proxy_type'] ?? 'http')] ?? CURLPROXY_HTTP);
+            if (trim((string)($net['proxy_auth'] ?? '')) !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, (string)$net['proxy_auth']);
+        } elseif ($via === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
+            $w = rtrim((string)$net['worker_url'], '/');
+            $reqUrl = (strpos($w, '{url}') !== false) ? str_replace('{url}', rawurlencode($apiUrl), $w) : ($w . '/?url=' . rawurlencode($apiUrl));
+            curl_setopt($ch, CURLOPT_URL, $reqUrl);
+        }
+        if (!empty($net['ipv4']) && defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        $raw = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        $rawStr = $raw === false ? '' : (string)$raw;
+        $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
+        if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
+            return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
+        }
+        $lastCode = $code;
+        $lastErr = s4JinaFormatHttpError($code, $err, $rawStr);
+        if ($code === 404 || $code === 400 || $code === 422) break;
+    }
+    return ['ok' => false, 'code' => $lastCode, 'api_url' => $apiUrl, 'data' => [], 'error' => $lastErr];
+}
+
+function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requestedPage = 1): array {
+    $data = is_array($json['data'] ?? null) ? $json['data'] : $json;
+    $structure = is_array($data['structure'] ?? null) ? $data['structure'] : [];
+    $products = [];
+    $sections = [];
+    foreach ($structure as $sec) {
+        if (!is_array($sec) || empty($sec['items']) || !is_array($sec['items'])) continue;
+        if (($sec['section_type'] ?? '') === 'plp') array_unshift($sections, $sec);
+        else $sections[] = $sec;
+    }
+    if (!$sections && !empty($data['items']) && is_array($data['items'])) {
+        $sections[] = ['section_type' => 'plp', 'items' => $data['items'], 'pagination' => $data['pagination'] ?? []];
+    }
+    foreach ($sections as $sec) {
+        $pg = is_array($sec['pagination'] ?? null) ? $sec['pagination'] : [];
+        $totalPages = (int)($pg['total_pages'] ?? 0);
+        if ($requestedPage > 1 && $totalPages > 0 && $requestedPage > $totalPages) {
+            return [];
+        }
+        foreach ((array)$sec['items'] as $item) {
+            if (!is_array($item)) continue;
+            $href = trim((string)($item['href'] ?? ''));
+            if ($href === '' && !empty($item['product_id']) && ctype_digit((string)$item['product_id'])) {
+                $href = '/product/snp-' . (string)$item['product_id'];
+            }
+            if ($href === '' || stripos($href, '/product/') === false) continue;
+            $title = normalize_text((string)($item['title'] ?? ($item['fa_title'] ?? '')));
+            if ($title === '') continue;
+            $toman = 0;
+            if (is_array($item['price'] ?? null)) {
+                $pr = $item['price'];
+                $orig = (int)round((float)($pr['price'] ?? 0));
+                $disc = (int)round((float)($pr['discounted_price'] ?? ($pr['special_price'] ?? ($pr['selling_price'] ?? 0))));
+                $toman = ($disc > 0 && ($orig <= 0 || $disc <= $orig)) ? $disc : $orig;
+            } elseif (is_numeric($item['price'] ?? null)) {
+                $toman = (int)round((float)$item['price']);
+            }
+            $priceStr = $toman > 0 ? (number_format($toman) . ' تومان') : '';
+            $img = '';
+            if (is_array($item['image'] ?? null)) {
+                $img = trim((string)($item['image']['src'] ?? ($item['image']['url'] ?? '')));
+            } elseif (is_string($item['image'] ?? null)) {
+                $img = trim((string)$item['image']);
+            }
+            if (isSnappshopPlaceholderImage($img)) $img = '';
+            $sku = '';
+            if (preg_match('~/(snp-\d+)~i', $href, $sm)) $sku = strtolower($sm[1]);
+            $p = [
+                'title' => mb_substr($title, 0, 220),
+                'price' => $priceStr,
+                'link'  => snappshopCanonicalProductUrl($href, $baseUrl),
+                'image' => ($img !== '' && url_is_image($img)) ? make_absolute_url($img, 'https://cdn.snappshop.ir') : '',
+                'sku'   => $sku,
+            ];
+            $key = productKey($p);
+            if (!isset($products[$key])) $products[$key] = $p;
+        }
+        if ($products && ($sec['section_type'] ?? '') === 'plp') break;
+    }
+    return $products;
+}
+
+function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
+    $content = is_array($data['content'] ?? null) ? $data['content'] : [];
+    $pageMeta = is_array($data['page'] ?? null) ? $data['page'] : [];
+    $title = normalize_text((string)($content['title_fa'] ?? ($pageMeta['title'] ?? '')));
+    $descRaw = trim((string)($content['description'] ?? ($pageMeta['description'] ?? '')));
+    $brand = normalize_text((string)($data['brand']['title_fa'] ?? ($data['brand']['title_en'] ?? '')));
+    $defaultVendorInfoId = trim((string)($data['default_variant']['vendor_product_info_id'] ?? ''));
+    $bestToman = 0;
+    $origToman = 0;
+    $inStock = false;
+    foreach ((array)($data['variants'] ?? []) as $variant) {
+        if (!is_array($variant)) continue;
+        foreach ((array)($variant['vendor'] ?? []) as $vd) {
+            if (!is_array($vd)) continue;
+            $stock = (int)($vd['stock'] ?? 0);
+            $avail = $stock > 0 || !empty($vd['is_available_in_vendor_inventory']) || !empty($vd['is_available_in_shop']);
+            $pOrig = (int)round((float)($vd['price'] ?? 0));
+            $pSpec = (int)round((float)($vd['special_price'] ?? 0));
+            $eff = ($pSpec > 0 && ($pOrig <= 0 || $pSpec <= $pOrig)) ? $pSpec : $pOrig;
+            if ($avail && $eff > 0) {
+                $inStock = true;
+                $isDef = $defaultVendorInfoId !== '' && (string)($vd['vendor_product_info_id'] ?? '') === $defaultVendorInfoId;
+                if ($bestToman <= 0 || $isDef || $eff < $bestToman) {
+                    $bestToman = $eff;
+                    $origToman = $pOrig > $eff ? $pOrig : 0;
+                    if ($isDef) break 2;
+                }
+            }
+        }
+    }
+    if ($bestToman <= 0) {
+        foreach ((array)($pageMeta['extra_meta'] ?? []) as $em) {
+            if (is_array($em) && strtolower((string)($em['property'] ?? '')) === 'product:price:amount') {
+                $amt = (int)round((float)($em['content'] ?? 0));
+                if ($amt > 0) $bestToman = $amt;
+            }
+            if (is_array($em) && strtolower((string)($em['property'] ?? '')) === 'product:availability') {
+                if (stripos((string)($em['content'] ?? ''), 'in stock') !== false) $inStock = true;
+            }
+        }
+    }
+    $imgs = [];
+    foreach ((array)($data['images'] ?? []) as $im) {
+        $src = is_array($im) ? trim((string)($im['src'] ?? ($im['url'] ?? ''))) : trim((string)$im);
+        if ($src !== '' && !isSnappshopPlaceholderImage($src) && url_is_image($src) && !in_array($src, $imgs, true)) {
+            $imgs[] = $src;
+        }
+    }
+    $mainImg = $imgs[0] ?? '';
+    $priceFormatted = $bestToman > 0 ? (number_format($bestToman) . ' تومان') : '';
+    $sku = '';
+    if (preg_match('~/(snp-\d+)~i', $sourceUrl, $sm)) $sku = strtolower($sm[1]);
+    $galleryHtml = '';
+    foreach ($imgs as $idx => $gUrl) {
+        $cls = $idx === 0 ? 'product-image wp-post-image gallery-image' : 'gallery-image attachment-shop_single';
+        $galleryHtml .= '<img class="' . $cls . '" src="' . h($gUrl) . '" alt="' . h($title) . '">';
+    }
+    $attrRows = '';
+    $shortItems = '';
+    foreach ((array)($data['attributes'] ?? []) as $idx => $at) {
+        if (!is_array($at)) continue;
+        $ak = normalize_text((string)($at['title'] ?? ''));
+        $av = normalize_text((string)($at['value'] ?? ''));
+        if ($ak === '' || $av === '') continue;
+        $attrRows .= '<tr><th>' . h($ak) . '</th><td>' . h($av) . '</td></tr>';
+        if ($idx < 6) $shortItems .= '<li>' . h($ak . ': ' . $av) . '</li>';
+    }
+    $cats = [];
+    foreach ((array)($data['categories'] ?? []) as $cat) {
+        if (!is_array($cat)) continue;
+        $ct = normalize_text((string)($cat['title'] ?? ''));
+        if ($ct !== '' && $ct !== 'اسنپ شاپ') $cats[] = $ct;
+    }
+    $descHtml = $descRaw !== '' ? ('<div class="product-description entry-content woocommerce-Tabs-panel--description">' . nl2br(h($descRaw)) . '</div>') : '';
+    $specHtml = $attrRows !== '' ? ('<table class="woocommerce-product-attributes shop_attributes"><tbody>' . $attrRows . '</tbody></table>') : '';
+    $shortHtml = $shortItems !== '' ? ('<div class="short-description woocommerce-product-details__short-description"><ul>' . $shortItems . '</ul></div>') : '';
+    $ld = [
+        '@context' => 'https://schema.org',
+        '@type'    => 'Product',
+        'name'     => $title,
+        'url'      => $sourceUrl,
+        'sku'      => $sku,
+        'image'    => $imgs,
+        'description' => mb_substr($descRaw, 0, 2000),
+    ];
+    if ($brand !== '') $ld['brand'] = ['@type' => 'Brand', 'name' => $brand];
+    if ($bestToman > 0) {
+        $ld['offers'] = [
+            '@type' => 'Offer',
+            'price' => (string)$bestToman,
+            'priceCurrency' => 'IRT',
+            'availability' => $inStock ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+            'url' => $sourceUrl,
+        ];
+    }
+    return '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">'
+        . '<title>' . h($title) . '</title>'
+        . ($mainImg !== '' ? '<meta property="og:image" content="' . h($mainImg) . '">' : '')
+        . ($bestToman > 0 ? '<meta property="product:price:amount" content="' . (int)$bestToman . '">' : '')
+        . '<meta property="product:availability" content="' . ($inStock ? 'in stock' : 'out of stock') . '">'
+        . '<script type="application/ld+json">' . json_encode($ld, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>'
+        . '</head><body data-snappshop-api-detail="1"><main class="product single-product">'
+        . ($cats ? '<nav class="woocommerce-breadcrumb breadcrumb">' . h(implode(' / ', $cats)) . '</nav>' : '')
+        . '<h1 class="product_title entry-title product-title">' . h($title) . '</h1>'
+        . ($brand !== '' ? '<div class="product-brand brand">' . h($brand) . '</div>' : '')
+        . '<div class="price product-price">'
+        . ($origToman > $bestToman ? '<del class="old-price">' . h(number_format($origToman) . ' تومان') . '</del> ' : '')
+        . ($priceFormatted !== '' ? '<ins class="amount">' . h($priceFormatted) . '</ins>' : '')
+        . '</div>'
+        . '<div class="stock ' . ($inStock ? 'in-stock' : 'out-of-stock') . '">' . ($inStock ? 'موجود' : 'ناموجود') . '</div>'
+        . '<div class="product-gallery gallery woocommerce-product-gallery">' . $galleryHtml . '</div>'
+        . $shortHtml . $descHtml . $specHtml
+        . '</main></body></html>';
+}
+
+function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = []): array {
+    $route = snappshopParseTargetRoute($url);
+    $target = (string)($route['url'] ?? $url);
+    if (empty($route['ok'])) {
+        return ['ok' => false, 'error' => (string)($prev['error'] ?? 'unsupported snappshop route'), 'code' => (int)($prev['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix'];
+    }
+    if (($route['kind'] ?? '') === 'product') {
+        $pid = (string)($route['product_id'] ?? '');
+        $res = snappshopApiHttpRequest('GET', 'products/v2/' . rawurlencode($pid), null, $timeout);
+        $d = is_array($res['data']['data'] ?? null) ? $res['data']['data'] : [];
+        if (!empty($res['ok']) && !empty($d)) {
+            $html = snappshopDetailSyntheticHtml($d, $target);
+            return ['ok' => true, 'error' => '', 'code' => (int)($res['code'] ?? 200), 'url' => $target,
+                    'html' => $html, 'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
+                    'snappshop_api_via' => (string)($res['via'] ?? 'direct'), 'snappshop_route_kind' => 'product',
+                    'jina_product_count' => 1];
+        }
+        return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop detail api failed'), 'code' => (int)($res['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix'];
+    }
+    $endpoint = ($route['kind'] ?? '') === 'search' ? 'search/v1' : 'landing/v2';
+    $payload = snappshopBuildLandingPayload($route);
+    $res = snappshopApiHttpRequest('POST', $endpoint, $payload, $timeout);
+    if (empty($res['ok']) && ($route['kind'] ?? '') === 'landing' && in_array($route['page_type'] ?? '', ['product_list', 'campaign', 'landing'], true)) {
+        foreach (['product_list', 'campaign', 'landing'] as $altPt) {
+            if ($altPt === ($route['page_type'] ?? '')) continue;
+            $altRoute = $route;
+            $altRoute['page_type'] = $altPt;
+            $resAlt = snappshopApiHttpRequest('POST', 'landing/v2', snappshopBuildLandingPayload($altRoute), $timeout);
+            if (!empty($resAlt['ok'])) { $res = $resAlt; break; }
+        }
+    }
+    if (!empty($res['ok']) && is_array($res['data'] ?? null)) {
+        $ps = snappshopProductsFromApiPayload($res['data'], $target, (int)($route['page'] ?? 1));
+        if (!empty($ps)) {
+            $note = 'SnappShop API (' . $endpoint . ' · via ' . (string)($res['via'] ?? 'direct') . ')';
+            return ['ok' => true, 'error' => '', 'code' => (int)($res['code'] ?? 200), 'url' => $target,
+                    'html' => s4JinaSyntheticHtml($ps, $target, $note), 'mode' => 'snappshop-apix',
+                    'snappshop_api' => (string)($res['api_url'] ?? ''), 'snappshop_api_via' => (string)($res['via'] ?? 'direct'),
+                    'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                    'jina_product_count' => count($ps), 'source_error' => (string)($prev['error'] ?? '')];
+        }
+        return ['ok' => false, 'error' => 'SnappShop API returned 0 products for page ' . (int)($route['page'] ?? 1),
+                'code' => (int)($res['code'] ?? 200), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix',
+                'jina_product_count' => 0];
+    }
+    return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop api failed'), 'code' => (int)($res['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix', 'jina_product_count' => 0];
+}
+
+function snappshopNeedsApiFallback(string $url, string $html): bool {
+    if (!isSnappshopUrl($url)) return false;
+    $route = snappshopParseTargetRoute($url);
+    if (empty($route['ok'])) return false;
+    if (trim($html) === '') return true;
+    if (stripos($html, 'data-snappshop-api-detail="1"') !== false || stripos($html, 'data-jina-reader="1"') !== false || stripos($html, 'data-snappshop-fallback="1"') !== false) {
+        return false;
+    }
+    if (($route['kind'] ?? '') === 'product') {
+        return stripos($html, 'product:price:amount') === false && stripos($html, 'application/ld+json') === false;
+    }
+    return stripos($html, '/product/snp-') === false;
+}
+
 function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, array $prev = []): array {
     if (!isSnappshopUrl($url)) {
         return ['ok' => false, 'error' => 'not snappshop', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
     }
     $timeout = max(8, min(60, $timeout));
     $last = ['ok' => false, 'error' => (string)($prev['error'] ?? 'Empty'), 'code' => (int)($prev['code'] ?? 0), 'url' => $url, 'html' => '', 'mode' => 'snappshop-public'];
+    $oldSkip = $GLOBALS['_s4SkipSnappApiInFetchHtml'] ?? null;
+    $GLOBALS['_s4SkipSnappApiInFetchHtml'] = true;
     $raw = fetch_html($url, $timeout);
+    if ($oldSkip === null) unset($GLOBALS['_s4SkipSnappApiInFetchHtml']); else $GLOBALS['_s4SkipSnappApiInFetchHtml'] = $oldSkip;
     $raw['snappshop_public_fallback'] = 'fetch-html';
     $rawBody = (string)($raw['html'] ?? '');
     if (!empty($raw['ok']) && !empty(parse_snappshop_products_html($rawBody, $url))) {
@@ -11828,16 +12346,29 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
         $ps = snappshopProductsFromReaderText($body, $url);
         if (empty($ps)) $ps = parse_snappshop_products_html($body, $url);
         if (!empty($ps)) {
+            $viaLabel = (string)($jr['jina_reader_via'] ?? '') === 'snappshop-apix' ? 'SnappShop Public API' : 'Jina Reader';
+            $modeLabel = (string)($jr['jina_reader_via'] ?? '') === 'snappshop-apix' ? 'snappshop-apix' : 'snappshop-jina-reader';
             return ['ok' => true, 'error' => '', 'code' => (int)($jr['code'] ?? 200), 'url' => $url,
-                    'html' => snappshopSyntheticHtml($ps, $url, 'Jina Reader'), 'mode' => 'snappshop-jina-reader',
-                    'snappshop_public_fallback' => 'jina-reader', 'jina_reader' => (string)($jr['jina_reader'] ?? ''),
+                    'html' => snappshopSyntheticHtml($ps, $url, $viaLabel), 'mode' => $modeLabel,
+                    'snappshop_public_fallback' => $modeLabel === 'snappshop-apix' ? 'snappshop-apix' : 'jina-reader',
+                    'jina_reader' => (string)($jr['jina_reader'] ?? ''),
                     'jina_reader_via' => (string)($jr['jina_reader_via'] ?? ''), 'jina_product_count' => count($ps),
                     'jina_reader_trace' => is_array($jr['jina_reader_trace'] ?? null) ? $jr['jina_reader_trace'] : [],
                     'jina_reader_modes' => is_array($jr['jina_reader_modes'] ?? null) ? $jr['jina_reader_modes'] : [],
                     'source_error' => (string)($prev['error'] ?? '')];
         }
+        if (stripos($body, 'data-snappshop-api-detail="1"') !== false) {
+            return $jr;
+        }
     }
     $last = $jr + $last;
+    $apiDirect = fetch_html_snappshop_api($url, $timeout, $last);
+    if (!empty($apiDirect['ok'])) {
+        $apiDirect['snappshop_public_fallback'] = 'snappshop-apix';
+        $apiDirect['jina_reader_trace'] = is_array($jr['jina_reader_trace'] ?? null) ? $jr['jina_reader_trace'] : [];
+        $apiDirect['jina_reader_modes'] = is_array($jr['jina_reader_modes'] ?? null) ? $jr['jina_reader_modes'] : [];
+        return $apiDirect;
+    }
     return ['ok' => false, 'error' => trim((string)($last['error'] ?? '')) !== '' ? (string)$last['error'] : (string)($prev['error'] ?? 'Empty'),
             'code' => (int)($last['code'] ?? ($prev['code'] ?? 0)), 'url' => $url, 'html' => '',
             'mode' => (string)($last['mode'] ?? 'snappshop-jina-reader'), 'snappshop_public_fallback' => (string)($last['snappshop_public_fallback'] ?? 'jina-reader'),
@@ -11881,7 +12412,15 @@ function fetch_html(string $url, int $timeout = 25): array {
         $emallsNoProducts = !empty($last['ok']) && function_exists('isEmallsUrl') && isEmallsUrl($url)
             && function_exists('emallsNeedsProductSignal') && emallsNeedsProductSignal($url)
             && stripos((string)($last['html'] ?? ''), '~id~') === false;
-        if (!empty($last['ok']) && !$emallsNoProducts) return $last;
+        $snappEmptyShell = empty($GLOBALS['_s4SkipSnappApiInFetchHtml']) && !empty($last['ok'])
+            && function_exists('snappshopNeedsApiFallback') && snappshopNeedsApiFallback($url, (string)($last['html'] ?? ''));
+        if (!empty($last['ok']) && !$emallsNoProducts && !$snappEmptyShell) return $last;
+        if ($snappEmptyShell) {
+            $last['snappshop_empty_shell'] = true;
+            $__snApi = fetch_html_snappshop_api($url, $timeout, is_array($last) ? $last : []);
+            if (!empty($__snApi['ok'])) return $__snApi;
+            return $last;
+        }
         if ($emallsNoProducts) {
             /* v10.249: HTTP 200 پوسته/صفحهٔ ضدربات پاسخ منطقی نیست. قبلاً break
                می‌کرد و proxy/worker بعدی هرگز امتحان نمی‌شد. */
@@ -11944,6 +12483,10 @@ function fetch_html(string $url, int $timeout = 25): array {
         $__pub = fetch_html_emalls_public_fallback($url, $timeout, is_array($last) ? $last : []);
         if (!empty($__pub['ok'])) return $__pub;
         if (is_array($__pub) && trim((string)($__pub['error'] ?? '')) !== '') $last = $__pub;
+    }
+    if (empty($GLOBALS['_s4SkipSnappApiInFetchHtml']) && function_exists('fetch_html_snappshop_api') && function_exists('isSnappshopUrl') && isSnappshopUrl($url)) {
+        $__snApi = fetch_html_snappshop_api($url, $timeout, is_array($last) ? $last : []);
+        if (!empty($__snApi['ok'])) return $__snApi;
     }
     return $last ?? ['ok' => false, 'error' => 'Empty', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
 }
@@ -12299,8 +12842,8 @@ function vc_defaults(): array {
     return [
         'check_on_load' => false,
         'repo'          => 'fazilatma/new',
-        'branch'        => 'arena/01a0ebf7-new',
-        'branches'       => ['arena/01a0ebf7-new'],
+        'branch'        => 'arena/e868e86a-new',
+        'branches'       => ['arena/e868e86a-new'],
         // v8.68: نام فایل در مخزن. اگر فایل را با نام دیگری نصب کرده‌اید،
         // خودِ همان نام مبنا قرار می‌گیرد تا به‌روزرسانی دنبال فایل اشتباه نگردد.
         'path'          => basename(__FILE__),
@@ -12330,7 +12873,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=['arena/01a0ebf7-new'];
+    if(!$c['branches'])$c['branches']=['arena/e868e86a-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     return $c;
 }
@@ -12445,7 +12988,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
+const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -12787,7 +13330,7 @@ if (isset($_GET['vc_settings'])) {
         }
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
-        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/01a0ebf7-new';
+        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -44717,7 +45260,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
@@ -46138,6 +46681,48 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"btn.textContent='⏳ ساخت صف مستقیم…'")!==false
       && strpos($selfSrc,"{v:'10." . "436'")!==false
       && version_compare(APP_VERSION,'10.436','>='));
+    $_snRoute437=function_exists('snappshopParseTargetRoute')?snappshopParseTargetRoute('https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=336'):[];
+    $_snPay437=function_exists('snappshopBuildLandingPayload')?snappshopBuildLandingPayload($_snRoute437):[];
+    $_snBrandRoute437=function_exists('snappshopParseTargetRoute')?snappshopParseTargetRoute('https://snappshop.ir/category/mobile/samsung?page=2'):[];
+    $_snApiJson437=['status'=>true,'data'=>['structure'=>[['section_type'=>'plp','pagination'=>['current_page'=>0,'total_pages'=>500,'per_page'=>12],'items'=>[
+        ['id'=>'LZmyW4','title'=>'قوری بلور زینو کد M-1100','price'=>['price'=>380000,'discounted_price'=>246400,'discount'=>35],'image'=>['src'=>'https://cdn.snappshop.ir/products/82/ac/a211796c.jpg'],'href'=>'/product/snp-1784183539?nip'],
+        ['id'=>'B2x9kQ','title'=>'بانکه مدل 6100','price'=>['price'=>78000],'image'=>['src'=>'https://cdn.snappshop.ir/customer-production-assets/public/assets/images/general/image-fallback.svg'],'href'=>'/product/snp-586803278'],
+    ]]]]];
+    $_snApiRows437=array_values(function_exists('snappshopProductsFromApiPayload')?snappshopProductsFromApiPayload($_snApiJson437,'https://snappshop.ir/category/kitchen-appliances',1):[]);
+    $_snApiBeyond437=function_exists('snappshopProductsFromApiPayload')?snappshopProductsFromApiPayload($_snApiJson437,'https://snappshop.ir/category/kitchen-appliances',501):['x'];
+    $_snJinaMd437='[تخفیف بنفش! ![Image 18: سبد سیب زمینی و پیاز رد فلاور مدل B-358](https://cdn.snappshop.ir/products/de/d5/9dc0e5bc.jpg?q=75&w=384) خرید قسطی ### سبد سیب زمینی و پیاز رد فلاور مدل B-358 %59 1,000,000 405,000](https://snappshop.ir/product/snp-578781562 "سبد سیب زمینی و پیاز رد فلاور مدل B-358")'
+        . '[![Image 23: عنوان تکراری](https://cdn.snappshop.ir/customer-production-assets/public/assets/images/general/image-fallback.svg) خرید قسطی ### سرویس تابه مدل 55219 %51 3,600,000 1,775,000](https://snappshop.ir/product/snp-789470463 "سرویس تابه مدل 55219")';
+    $_snJinaRows437=array_values(function_exists('snappshopProductsFromReaderText')?snappshopProductsFromReaderText($_snJinaMd437,'https://snappshop.ir/category/kitchen-appliances'):[]);
+    $_snHtml437=s4JinaSyntheticHtml($_snJinaRows437,'https://snappshop.ir/category/kitchen-appliances','test');
+    $_snHtmlParsed437=array_values(parse_snappshop_products_html($_snHtml437,'https://snappshop.ir/category/kitchen-appliances'));
+    $add('10.437', 'مسیر apix اسنپ‌شاپ پارامترهای دسته، برند، صفحه، موجودی و مرتب‌سازی را دقیق می‌سازد',
+         ($_snPay437['page_type']??'')==='category'
+      && ($_snPay437['slug']??'')==='kitchen-appliances'
+      && (int)($_snPay437['skip']??-1)===335
+      && ($_snPay437['is_available']??null)===true
+      && ($_snPay437['sort']??'')==='50aLgW'
+      && ($_snBrandRoute437['page_type']??'')==='category_brand'
+      && ($_snBrandRoute437['slug_2']??'')==='samsung');
+    $add('10.437', 'خروجی apix اسنپ‌شاپ قیمت تومان، لینک canonical و توقف صفحهٔ آخر را رعایت می‌کند',
+         count($_snApiRows437)===2
+      && ($_snApiRows437[0]['price']??'')==='246,400 تومان'
+      && ($_snApiRows437[0]['link']??'')==='https://snappshop.ir/product/snp-1784183539'
+      && ($_snApiRows437[0]['image']??'')!=''
+      && ($_snApiRows437[1]['image']??'')===''
+      && $_snApiBeyond437===[]);
+    $add('10.437', 'parser جینا و HTML اسنپ‌شاپ کارت‌های نشان‌دار، placeholder تصویر و جداسازی قیمت کارت‌ها را حفظ می‌کنند',
+         count($_snJinaRows437)===2
+      && ($_snJinaRows437[0]['price']??'')==='405,000 تومان'
+      && ($_snJinaRows437[1]['image']??'')===''
+      && ($_snHtmlParsed437[0]['price']??'')==='405,000 تومان'
+      && ($_snHtmlParsed437[1]['price']??'')==='1,775,000 تومان');
+    $add('10.437', 'موتور Jina خطای واقعی 451/429 را گزارش و روی اسنپ‌شاپ خودکار به apix سوییچ می‌کند',
+         function_exists('s4JinaFormatHttpError')
+      && strpos(s4JinaFormatHttpError(451,'','Unavailable For Legal Reasons'),'HTTP 451')!==false
+      && strpos(s4JinaFormatHttpError(429,'','{"message":"Per IP rate limit exceeded"}'),'Per IP rate limit exceeded')!==false
+      && strpos($selfSrc,"'jina_reader_via'] = 'snappshop-apix'")!==false
+      && strpos($selfSrc,"{v:'10." . "437'")!==false
+      && version_compare(APP_VERSION,'10.437','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -79863,6 +80448,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.437', t:'⚡ استخراج پایدار اسنپ‌شاپ در موتور Jina با fallback مستقیم apix', items:[
+    'علت صفر شدن استخراج r.jina.ai روی هاست ایران مشخص و ثبت شد: r.jina.ai هم مستقیم/DoH و هم از طریق Cloudflare Worker (به‌خاطر نشت IP مبدأ در X-Forwarded-For و سقف نرخ ۴۲۹ روی IP اشتراکی Worker) با HTTP 451/429 پاسخ می‌دهد.',
+    'وقتی موتور r.jina.ai برای اسنپ‌شاپ انتخاب شود و Jina با ۴۵۱/۴۲۹/۴۰۱ یا خروجی خالی برگردد، سیستم پس از ثبت کامل trace جینا به‌صورت خودکار از API عمومی apix.snappshop.ir لیست دسته‌بندی، جستجو، غرفه، برند و جزئیات محصول را با قیمت دقیق تومان و تصاویر اصلی واکشی می‌کند.',
+    'در خروجی Markdown خود r.jina.ai نیز کارت‌های دارای نشان کمپین قبل از تصویر (مثل «تخفیف بنفش!») اکنون کامل پارس می‌شوند، placeholderهای lazy مثل image-fallback.svg کنار گذاشته می‌شوند و قیمت کارت‌ها دیگر بین تگ‌های article نشت نمی‌کند.',
+    'پیام خطای واقعی HTTP 451 / 429 / 401 در Jina به‌جای Empty ثبت می‌شود، تکرار بی‌فایدهٔ فرم‌های bridge/nested روی مسیر مسدود متوقف شد و شاخهٔ آپدیت خودکار روی arena/e868e86a-new تنظیم گردید.'
+  ]},
   {v:'10.436', t:'⚖️ برابر‌سازی مستقل از شمارش جدول', items:[
     'کلیک برابر‌سازی ابتدا مستقیماً از محصولات ذخیره‌شدهٔ پروفایل، صف واقعی همان مقصد را می‌سازد و دیگر منتظر build جدول مغایرت نمی‌ماند.',
     'قدیمی، صفر یا ناهماهنگ بودن تعداد محصولاتِ نمایش‌داده‌شده برای پروفایل/غرفه مانع ساخت صف نیست.',
@@ -91292,10 +91883,7 @@ function aiShowWorkerCode(){
 "    target = tu.toString();",
 "",
 "    const h = new Headers(request.headers);",
-"    h.delete('X-Target-URL');",
-"    h.delete('X-Target-Base');",
-"    h.delete('X-Target-Path');",
-"    h.delete('Host');",
+"    ['X-Target-URL','X-Target-Base','X-Target-Path','Host','CF-Connecting-IP','CF-IPCountry','CF-Ray','CF-Visitor','X-Forwarded-For','X-Real-IP','True-Client-IP','Forwarded'].forEach(k => h.delete(k));",
 "",
 "    const resp = await fetch(target, {",
 "      method: request.method,",
