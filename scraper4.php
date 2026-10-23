@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.425';
+const APP_VERSION = '10.426';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13013,6 +13013,38 @@ if (isset($_GET['push_route_save'])) {
     exit;
 }
 
+/** v10.426: destination inventory per saved profile, derived only from the
+ * latest completed discrepancy matrix (no destination network requests). */
+function startMatrixDestinationStats(array $matrix,array $profileKeys):array{
+    $selected=array_values((array)($matrix['selected_destinations']??[]));$selectedSet=array_fill_keys($selected,true);
+    $dest=[];
+    if(isset($selectedSet['woo']))$dest['woo']=['key'=>'woo','type'=>'woo','label'=>'ووکامرس'];
+    foreach((array)($matrix['shops']??[]) as $shop){
+        if(!is_array($shop))continue;$vid=(int)($shop['vendor_id']??0);$key='bsl:'.$vid;
+        if($vid<=0||!isset($selectedSet[$key]))continue;
+        $dest[$key]=['key'=>$key,'type'=>'bsl','vendor_id'=>$vid,'label'=>(string)($shop['name']??('غرفه '.$vid))];
+    }
+    $known=array_fill_keys(array_map('strval',$profileKeys),true);$ids=[];
+    foreach($known as $pk=>$_)foreach($dest as $dk=>$_d)$ids[$pk][$dk]=[];
+    foreach((array)($matrix['rows']??[]) as $ri=>$row){
+        if(!is_array($row))continue;$pk=(string)($row['profile_key']??'');if($pk===''||!isset($known[$pk]))continue;
+        if(isset($dest['woo'])&&is_array($row['woo']??null)){
+            $id=(int)($row['woo']['id']??0);if($id>0)$ids[$pk]['woo'][(string)$id]=true;
+            foreach((array)($row['woo_extra']??[]) as $ex){$id=(int)($ex['id']??0);if($id>0)$ids[$pk]['woo'][(string)$id]=true;}
+        }
+        foreach($dest as $dk=>$meta){if(($meta['type']??'')!=='bsl')continue;$vid=(int)$meta['vendor_id'];
+            $cell=$row['shops'][$vid]??$row['shops'][(string)$vid]??null;
+            if(is_array($cell)){$id=(int)($cell['id']??0);if($id>0)$ids[$pk][$dk][(string)$id]=true;}
+            $extras=$row['shop_extra'][$vid]??$row['shop_extra'][(string)$vid]??[];
+            foreach((array)$extras as $ex){$id=(int)($ex['id']??0);if($id>0)$ids[$pk][$dk][(string)$id]=true;}
+        }
+    }
+    $counts=[];$totals=array_fill_keys(array_keys($dest),0);
+    foreach($known as $pk=>$_){foreach($dest as $dk=>$_d){$n=count($ids[$pk][$dk]??[]);$counts[$pk][$dk]=$n;$totals[$dk]+=$n;}}
+    return ['generated_at'=>(int)($matrix['generated_at']??0),'source'=>(string)($matrix['source']??''),
+        'destinations'=>array_values($dest),'counts'=>$counts,'totals'=>$totals];
+}
+
 if (isset($_GET['start_product_stats'])) {
     header('Content-Type: application/json; charset=UTF-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -13020,6 +13052,7 @@ if (isset($_GET['start_product_stats'])) {
         'gallery','variations','linked','sku','description','category','brand','ready'];
     $totals = array_fill_keys($defs, 0); $byProfile = []; $samples = array_fill_keys($defs, []);
     $profiles = loadProfiles();
+    $matrixStats=startMatrixDestinationStats(function_exists('matrixResultLoad')?matrixResultLoad():[],array_keys($profiles));
     foreach ($profiles as $pk => $profile) {
         if (!is_array($profile)) continue;
         $pn = trim((string)($profile['name'] ?? $pk)); $pm = array_fill_keys($defs, 0);
@@ -13049,10 +13082,12 @@ if (isset($_GET['start_product_stats'])) {
         }
         $detailSummary=extractProfileDetailSummary($profile);
         $byProfile[] = ['key'=>(string)$pk,'name'=>$pn,'updated_at'=>(int)($profile['updatedAt'] ?? 0),
-            'counts'=>$pm,'detail'=>$detailSummary];
+            'counts'=>$pm,'detail'=>$detailSummary,'destinations'=>(array)($matrixStats['counts'][(string)$pk]??[])];
     }
     usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
-    echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples],
+    echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples,
+        'matrix'=>['generated_at'=>(int)$matrixStats['generated_at'],'source'=>(string)$matrixStats['source'],
+            'destinations'=>$matrixStats['destinations'],'totals'=>$matrixStats['totals']]],
         JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE); exit;
 }
 
@@ -45728,6 +45763,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"'cancelled_completed_jobs'=>0")!==false
       && strpos($selfSrc,"{v:'10." . "425'")!==false
       && version_compare(APP_VERSION,'10.425','>='));
+    $_mxDest426=startMatrixDestinationStats([
+        'generated_at'=>123,'source'=>'manual','selected_destinations'=>['woo','bsl:77'],
+        'shops'=>[['vendor_id'=>77,'name'=>'غرفه آزمون']],
+        'rows'=>[
+            ['profile_key'=>'p1','woo'=>['id'=>10],'woo_extra'=>[['id'=>11]],'shops'=>[77=>['id'=>20]],'shop_extra'=>[77=>[['id'=>21]]]],
+            ['profile_key'=>'p2','woo'=>['id'=>12],'shops'=>[77=>['id'=>22]]],
+            ['profile_key'=>'','woo'=>['id'=>99],'shops'=>[77=>['id'=>99]]],
+        ]],['p1','p2']);
+    $add('10.426', 'شمارش مقصد بر اساس ماتریس به پروفایل متصل است و duplicate واقعی را می‌شمارد',
+         (int)($_mxDest426['counts']['p1']['woo']??0)===2
+      && (int)($_mxDest426['counts']['p1']['bsl:77']??0)===2
+      && (int)($_mxDest426['totals']['woo']??0)===3
+      && count((array)($_mxDest426['destinations']??[]))===2);
+    $add('10.426', 'جدول انتهای Start ستون‌های پویای مقصد و زمان ماتریس را نمایش می‌دهد',
+         strpos($selfSrc,'id="startProfileBreakdownHead"')!==false
+      && strpos($selfSrc,"dests.map(x=>'<th title=\"بر اساس آخرین نتیجهٔ کامل جدول مغایرت\"")!==false
+      && strpos($selfSrc,"'destinations'=>(array)(\$matrixStats['counts']")!==false
+      && strpos($selfSrc,"{v:'10." . "426'")!==false
+      && version_compare(APP_VERSION,'10.426','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -72339,19 +72393,19 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
     <!-- v10.422: requested per-profile extraction/detail breakdown at the true end of Start. -->
     <section class="card start-profile-breakdown" id="startProfileBreakdown" aria-labelledby="startProfileBreakdownTitle">
         <div class="spb-head">
-            <div><h3 id="startProfileBreakdownTitle">📋 تفکیک محصولات پروفایل‌ها</h3><p>تعداد محصولات ذخیره‌شده، وضعیت سلکتور جزئیات و پوشش داده‌های مرحلهٔ دوم برای هر پروفایل.</p></div>
+            <div><h3 id="startProfileBreakdownTitle">📋 تفکیک محصولات پروفایل‌ها</h3><p id="startProfileBreakdownMeta">تعداد محصولات ذخیره‌شده، موجودی هر مقصد بر اساس آخرین جدول مغایرت و پوشش مرحلهٔ دوم.</p></div>
             <button class="btn btn-gray" onclick="loadStartProductOverview(true)" title="تازه‌سازی جدول">🔄</button>
         </div>
         <div class="spb-scroll">
           <table class="spb-table">
-            <thead><tr><th>پروفایل</th><th>کل محصولات</th><th>سلکتور جزئیات</th><th>مرحلهٔ دوم</th><th>دارای جزئیات</th></tr></thead>
+            <thead><tr id="startProfileBreakdownHead"><th>پروفایل</th><th>کل محصولات</th><th>سلکتور جزئیات</th><th>مرحلهٔ دوم</th><th>دارای جزئیات</th></tr></thead>
             <tbody id="startProfileBreakdownBody"><tr><td colspan="5" class="spb-empty">در حال محاسبهٔ جدول…</td></tr></tbody>
             <tfoot id="startProfileBreakdownFoot"></tfoot>
           </table>
         </div>
-        <div class="spb-note">«دارای جزئیات» یعنی محصولی که مرحلهٔ جزئیات آن با موفقیت ثبت شده یا حداقل یکی از فیلدهای اختصاصیِ فعالِ جزئیات را دارد.</div>
+        <div class="spb-note">ستون‌های مقصد از آخرین نتیجهٔ کامل ساخت جدول مغایرت خوانده می‌شوند و محصولات مقصد را با پروفایل مبدأ تطبیق می‌دهند؛ نسخه‌های تکراری مقصد نیز در شمارش واقعی لحاظ می‌شوند. «دارای جزئیات» یعنی مرحلهٔ جزئیات موفق یا حداقل یک فیلد اختصاصی فعال.</div>
         <style>
-          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}
+          .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
         </style>
     </section>
@@ -73570,19 +73624,22 @@ let startProductOverviewData=null,startProductOverviewBusy=false,startBreakdownR
 function scheduleStartBreakdownRefresh(){clearTimeout(startBreakdownRefreshTimer);startBreakdownRefreshTimer=setTimeout(()=>loadStartProductOverview(true),1800)}
 function spoNum(n){try{return Number(n||0).toLocaleString('fa-IR')}catch(e){return toFa(n||0)}}
 function renderStartProfileBreakdown(d){
-  const body=$('startProfileBreakdownBody'),foot=$('startProfileBreakdownFoot');if(!body||!foot)return;
-  const rows=Array.isArray(d&&d.by_profile)?d.by_profile:[];
-  if(!rows.length){body.innerHTML='<tr><td colspan="5" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
-  let all=0,detailed=0,enabled=0;
-  body.innerHTML=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
+  const body=$('startProfileBreakdownBody'),foot=$('startProfileBreakdownFoot'),head=$('startProfileBreakdownHead'),meta=$('startProfileBreakdownMeta');if(!body||!foot||!head)return;
+  const rows=Array.isArray(d&&d.by_profile)?d.by_profile:[],mx=(d&&d.matrix)||{},dests=Array.isArray(mx.destinations)?mx.destinations:[],cols=5+dests.length;
+  head.innerHTML='<th>پروفایل</th><th>کل محصولات</th>'+dests.map(x=>'<th title="بر اساس آخرین نتیجهٔ کامل جدول مغایرت">'+(x.type==='woo'?'🛒 ':'🏪 ')+esc(x.label||x.key||'مقصد')+'</th>').join('')+'<th>سلکتور جزئیات</th><th>مرحلهٔ دوم</th><th>دارای جزئیات</th>';
+  if(meta){const at=parseInt(mx.generated_at||0);meta.textContent=dests.length?('تعداد محصولات ذخیره‌شده و موجودی مقصدها بر اساس جدول مغایرت '+(at?new Date(at*1000).toLocaleString('fa-IR'):'')+'؛ به‌همراه پوشش مرحلهٔ دوم.'):'تعداد محصولات ذخیره‌شده؛ هنوز مقصدی در نتیجهٔ جدول مغایرت موجود نیست.';}
+  if(!rows.length){body.innerHTML='<tr><td colspan="'+cols+'" class="spb-empty">هیچ پروفایل ذخیره‌شده‌ای وجود ندارد.</td></tr>';foot.innerHTML='';return;}
+  let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
+  body.innerHTML=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
+    const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),dp=total?Math.round(n*100/total):0;destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small></td>';}).join('');
     return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b></span></td>'+
-      '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+
+      '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?'▶ اجرا می‌شود':'— اجرا نمی‌شود')+'</span></td>'+
       '<td><div class="spb-coverage"><div class="spb-coverage-top"><b>'+spoNum(done)+' از '+spoNum(total)+'</b><span>'+spoNum(pct)+'٪</span></div><span class="spb-bar"><i style="width:'+pct+'%"></i></span></div></td></tr>';
   }).join('');
-  const pct=all?Math.round(detailed*100/all):0;
-  foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td><td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
+  const pct=all?Math.round(detailed*100/all):0,destFoot=dests.map(x=>'<td><b class="spb-dest-num">'+spoNum(destTotals[x.key]||0)+'</b><small class="spb-dest-pct">موجود در مقصد</small></td>').join('');
+  foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td>'+destFoot+'<td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
 }
 function loadStartProductOverview(force){
   const grid=$('startProductOverviewGrid'),meta=$('startProductOverviewMeta');if(!grid||startProductOverviewBusy)return;
@@ -73594,7 +73651,7 @@ function loadStartProductOverview(force){
     grid.innerHTML=START_PRODUCT_METRICS.map(m=>{const n=parseInt((d.totals||{})[m[0]]||0),pct=total?Math.round(n*100/total):0;
       return '<button class="spo-card" style="--spo-color:'+m[3]+'" onclick="openStartProductOverviewDetail(\''+m[0]+'\')" title="'+esc(m[4])+'"><span class="spo-icon">'+m[1]+'</span><b class="spo-value">'+spoNum(n)+'</b><span class="spo-label">'+esc(m[2])+'</span><span class="spo-foot"><span>'+esc(m[4])+'</span><b class="spo-pct">'+spoNum(pct)+'٪</b></span></button>';
     }).join('');
-  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';const b=$('startProfileBreakdownBody'),f=$('startProfileBreakdownFoot');if(b)b.innerHTML='<tr><td colspan="5" class="spb-empty">جدول پروفایل‌ها خوانده نشد؛ دوباره تلاش کنید.</td></tr>';if(f)f.innerHTML='';}).finally(()=>{startProductOverviewBusy=false;});
+  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';const b=$('startProfileBreakdownBody'),f=$('startProfileBreakdownFoot');if(b)b.innerHTML='<tr><td colspan="99" class="spb-empty">جدول پروفایل‌ها خوانده نشد؛ دوباره تلاش کنید.</td></tr>';if(f)f.innerHTML='';}).finally(()=>{startProductOverviewBusy=false;});
 }
 function openStartProductOverviewDetail(metric){
   const d=startProductOverviewData;if(!d)return;const def=START_PRODUCT_METRICS.find(x=>x[0]===metric);if(!def)return;
@@ -79207,6 +79264,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.426', t:'📊 تعداد محصولات هر مقصد در جدول انتهای Start', items:[
+    'برای هر پروفایل، ستون پویا برای ووکامرس و هر غرفهٔ حاضر در آخرین نتیجهٔ کامل جدول مغایرت اضافه شد.',
+    'شمارش از شناسه‌های واقعی مقصد انجام می‌شود، نسخه‌های تکراری را هم حساب می‌کند و هیچ درخواست شبکه‌ای تازه‌ای به مقصد نمی‌فرستد.',
+    'زمان جدول مغایرت مبنا، درصد پوشش هر پروفایل و جمع موجودی هر مقصد در همان جدول نمایش داده می‌شود.'
+  ]},
   {v:'10.425', t:'🛡 جلوگیری از اجرای دوبارهٔ بازیابی تکمیل‌شده', items:[
     'اگر worker به‌دلیل کار فعال دیگری دیر به job بازیابی برسد و اجرای مستقیم معادل زودتر تمام شود، job منتظر همان پروفایل لغو می‌شود.',
     'poll وضعیت نیز job بازیابی pending متعلق به pipeline پایان‌یافته را پاک‌سازی می‌کند تا checkpoint پاک‌شده باعث استخراج دوباره نشود.'
