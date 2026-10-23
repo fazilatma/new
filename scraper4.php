@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.415';
+const APP_VERSION = '10.416';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -18163,6 +18163,9 @@ if (isset($_POST['digest_hours']))      $conn['digest_hours']      = max(1, min(
 if (isset($_POST['digest_tz']))         $conn['digest_tz']         = trim((string)$_POST['digest_tz']);
 $_savedC = writeJsonFile(CONNECTIONS_FILE, $conn);
 if ($_savedC['ok']) {
+    /* Shop-picker changes are operational controls, not merely settings for a
+       future queue. Apply them now; a live backend rechecks before next item. */
+    $bslShopSelectionApply=isset($_POST['basalam'])?bslReconcileDisabledShopsNow($conn):null;
     $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
     $mxRefresh=$oldMxShopSig!==$newMxShopSig?matrixRefreshExpectedPrices('destination_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
     $modeTransition=null;
@@ -18176,7 +18179,8 @@ if ($_savedC['ok']) {
             matrixFixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
         }
     }
-    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition,
+        'bsl_shop_selection'=>$bslShopSelectionApply], JSON_UNESCAPED_UNICODE);
 } else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -21605,6 +21609,94 @@ function bslAllShops(array $cn): array {
     شناسهٔ سالم و توکنِ غیرخالی دارند (همان تعریفِ مسیرِ همزمان).
     توکن برنمی‌گردد (در صف ذخیره نمی‌شود)؛ وِرکر توکن را تازه از
     connections می‌خواند. خروجی: [vendor_id, shop_name, is_default] */
+/** Whether a shop is presently enabled in the Send-tab shop picker.
+ * This is intentionally read from current connections, not the queue snapshot:
+ * disabling a shop must affect a row that was queued before the change. */
+function bslShopSelectedForSend(array $cn,int $vendorId): bool {
+    if($vendorId<=0)return false;
+    $b=is_array($cn['basalam']??null)?$cn['basalam']:[];
+    if(array_key_exists('enabled',$b)&&empty($b['enabled']))return false;
+    $found=false;
+    foreach(bslAllShops($cn) as $sh){
+        if((int)($sh['vendor_id']??0)!==$vendorId)continue;
+        if(trim((string)($sh['token']??''))!=='')$found=true;
+        break;
+    }
+    if(!$found)return false;
+    $selected=$b['send_shop_ids']??null;
+    if(!is_array($selected))return true; // legacy/null means all configured shops
+    return in_array($vendorId,array_map('intval',$selected),true);
+}
+/** Mark queued rows for newly disabled shops complete-without-sending. Running
+ * workers also recheck the same predicate before every product. */
+function bslQueueApplyCurrentShopSelection(array &$queue,array $cn): array {
+    $disabled=[];$defaultVid=(int)($cn['basalam']['vendor_id']??0);
+    foreach((array)($queue['entries']??[]) as &$e){
+        if(!is_array($e)||!in_array((string)($e['status']??''),['running','waiting','paused'],true))continue;
+        $vid=(int)($e['shop_vendor_id']??$e['config']['shop_vendor_id']??0);
+        if($vid<=0&&empty($e['config']['fanout']))$vid=$defaultVid;
+        if($vid<=0||bslShopSelectedForSend($cn,$vid))continue;
+        $e['status']='done';$e['done_at']=time();$e['shop_disabled']=true;$e['disabled_at']=time();
+        $e['status_reason']='غرفه در تب ارسال غیرفعال شد؛ ادامهٔ این ردیف متوقف شد';
+        $disabled[]=['queue_id'=>(string)($e['id']??''),'vendor_id'=>$vid,'shop_name'=>(string)($e['shop_name']??'')];
+    }unset($e);
+    return $disabled;
+}
+/** Remove only our internal shop-disable stop; never consume a user's Stop. */
+function bslClearShopDisabledStop(string $queueId): void {
+    $sig=json_decode((string)@file_get_contents(BSL_STOP_FILE),true);
+    if(!is_array($sig)||(string)($sig['reason']??'')!=='shop_disabled')return;
+    $target=trim((string)($sig['queue_id']??''));
+    if($target===''||$queueId===''||hash_equals($target,$queueId))@unlink(BSL_STOP_FILE);
+}
+/** Apply the selection immediately after Save when no backend owns the queue.
+ * A worker loaded before this deployment cannot execute the new per-product
+ * predicate, so when its active shop is now disabled we also send a targeted
+ * stop that every historical worker version already understands. */
+function bslReconcileDisabledShopsNow(array $cn): array {
+    $fp=queueBackendLock('bsl');
+    if(!$fp){
+        $q=bslReadQueue();$signalled=[];
+        foreach((array)($q['entries']??[]) as $e){
+            if(!is_array($e)||(string)($e['status']??'')!=='running')continue;
+            $vid=(int)($e['shop_vendor_id']??$e['config']['shop_vendor_id']??$cn['basalam']['vendor_id']??0);
+            if($vid<=0||bslShopSelectedForSend($cn,$vid))continue;
+            $qid=(string)($e['id']??'');
+            @file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'at'=>time(),'queue_id'=>$qid,
+                'reason'=>'shop_disabled','vendor_id'=>$vid],JSON_UNESCAPED_UNICODE),LOCK_EX);
+            $signalled[]=['queue_id'=>$qid,'vendor_id'=>$vid];break;
+        }
+        return ['ok'=>true,'deferred'=>true,'reason'=>'active_worker_targeted_stop','signalled'=>$signalled];
+    }
+    try{
+        $q=bslReadQueue();$disabled=bslQueueApplyCurrentShopSelection($q,$cn);
+        if($disabled){bslWriteQueue($q);foreach($disabled as $d)bslClearShopDisabledStop((string)($d['queue_id']??''));}
+        return ['ok'=>true,'deferred'=>false,'disabled'=>$disabled,'count'=>count($disabled)];
+    }finally{queueBackendUnlock($fp);}
+}
+/** Stop the currently executing row as soon as its shop is disabled. */
+function bslFinishDisabledShopRow(string $queueId,int $vendorId,string $shopName,int $current,int $total,int $sent,int $updated,int $skipped,int $failed): void {
+    $q=bslReadQueue();
+    foreach($q['entries'] as &$e){
+        if(!is_array($e)||(string)($e['id']??'')!==$queueId)continue;
+        $e['status']='done';$e['done_at']=time();$e['shop_disabled']=true;$e['disabled_at']=time();
+        $e['status_reason']='غرفه در تب ارسال غیرفعال شد؛ ارسال فوراً متوقف شد';
+        $e['current']=max((int)($e['current']??0),$current);
+        $e['sent']=$sent;$e['updated']=$updated;$e['skipped']=$skipped;$e['failed']=$failed;break;
+    }unset($e);bslWriteQueue($q);
+    $p=readProgress(BSL_PROGRESS_FILE);if(!is_array($p))$p=[];
+    $logs=is_array($p['recent_log']??null)?$p['recent_log']:[];
+    $logs[]='⏹ غرفهٔ '.$shopName.' (#'.$vendorId.') غیرفعال شد — ارسال این ردیف متوقف شد';
+    $p=array_merge($p,['running'=>false,'done'=>true,'shop_disabled'=>true,'phase'=>'shop_disabled',
+        'phase_label'=>'غرفه غیرفعال است','queue_id'=>$queueId,'current'=>$current,'total'=>$total,
+        'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed,
+        'last_progress_ts'=>time(),'finished_at'=>time(),'recent_log'=>array_slice($logs,-200)]);
+    writeProgress(BSL_PROGRESS_FILE,$p);bslClearShopDisabledStop($queueId);@unlink(BSL_PRODUCTS_FILE);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['ok'=>true,'stopped'=>true,'shop_disabled'=>true,'queue_id'=>$queueId,
+        'vendor_id'=>$vendorId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
+}
+
 function bslFanoutShops(?array $cn): array {
     $cn = $cn ?: loadConnections();
     $out = [];
@@ -22403,6 +22495,10 @@ function cronRecordResumeBlock(array &$results,array $block): void {
 
 function cronWatchdogs(array $cn): array {
     $results = ['watchdog' => []];
+    /* Reconcile Send-tab shop selection before any recovery. This also cleans
+       a shop-disabled row after an older in-memory worker honored our targeted
+       stop and released its flock. */
+    $results['bsl_shop_selection']=bslReconcileDisabledShopsNow($cn);
 // v8.33: مرحلهٔ نگهبان — اگر ارسالی وسط راه گیر کرده، ادامه‌اش بده.
     // هزینه‌اش وقتی چیزی گیر نکرده صفر است: فقط چند خط خواندن از فایل.
     $stallCfg  = (int)($cn['stall_after'] ?? 300);
@@ -45278,6 +45374,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false
       && strpos($selfSrc, "{v:'10." . "412'") !== false
       && version_compare(APP_VERSION, '10.' . '412', '>='));
+    $add('10.416', 'غیرفعال‌کردن غرفه فوراً صف و worker باسلام همان غرفه را متوقف می‌کند',
+         strpos($selfSrc, 'function bslShopSelectedForSend(array $cn,int $vendorId)') !== false
+      && strpos($selfSrc, 'function bslQueueApplyCurrentShopSelection(array &$queue,array $cn)') !== false
+      && strpos($selfSrc, 'function bslReconcileDisabledShopsNow(array $cn)') !== false
+      && strpos($selfSrc, "'bsl_shop_selection'=>\$bslShopSelectionApply") !== false
+      && strpos($selfSrc, "'reason'=>'shop_disabled'") !== false
+      && strpos($selfSrc, "\$results['bsl_shop_selection']=bslReconcileDisabledShopsNow(\$cn);") !== false
+      && strpos($selfSrc, 'function bslFinishDisabledShopRow(') !== false
+      && substr_count($selfSrc, 'bslShopSelectedForSend(loadConnections()') >= 2
+      && strpos($selfSrc, "if(\$staleSeconds>=BSL_SEND_STALL_SEC)") !== false
+      && strpos($selfSrc, "'active_shop_selected'=>\$activeShopSelectedFb") !== false);
+    $add('10.416', 'متن انتخاب غرفه در تب ارسال UTF-8 سالم است',
+         strpos($selfSrc, '🏪 ارسال به غرفه‌ها:') !== false
+      && substr_count($selfSrc, '🏪 ارسال به غرفه‌ها:') === 1
+      && strpos($selfSrc, "{v:'10." . "416'") !== false
+      && version_compare(APP_VERSION, '10.' . '416', '>='));
     $add('10.415', 'هر کران باسلام پس از ۶۰ ثانیه بی‌حرکتی همان checkpoint را ادامه می‌دهد',
          strpos($selfSrc, 'const BSL_SEND_STALL_SEC = 60;') !== false
       && strpos($selfSrc, 'const BSL_RESUME_COOLDOWN_SEC = 55;') !== false
@@ -61246,6 +61358,11 @@ if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial
 $lastBeatAgeFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
 $handoffAllFb=json_decode((string)@file_get_contents(QUEUE_CRON_HANDOFF_FILE),true);
 $handoffRawFb=is_array($handoffAllFb['bsl']??null)?$handoffAllFb['bsl']:[];
+$selectedShopIdsFb=is_array($cnFb['basalam']['send_shop_ids']??null)
+    ?array_values(array_map('intval',(array)$cnFb['basalam']['send_shop_ids'])):null;
+$activeVendorFb=(int)($selectedFb['shop_vendor_id']??$selectedFb['vendor_id']??0);
+$activeShopSelectedFb=$activeVendorFb>0?bslShopSelectedForSend($cnFb,$activeVendorFb):null;
+if($activeShopSelectedFb===false)$diagnosisFb[]='active_queue_shop_is_disabled_in_send_tab';
 $handoffFb=$handoffRawFb?[
     'pending'=>true,'queue_id'=>(string)($handoffRawFb['queue_id']??''),
     'age_sec'=>max(0,$nowFb-(int)($handoffRawFb['created_at']??$nowFb)),
@@ -61263,6 +61380,8 @@ echo json_encode([
         'last_heartbeat_age_sec'=>$lastBeatAgeFb,'stall_after_sec'=>$stallAfterFb,
         'watchdog_enabled'=>$watchdogEnabledFb,'auto_resume_enabled'=>$autoResumeEnabledFb,
         'retry_policy'=>'until_row_complete','generic_watchdog_switch_can_disable_recovery'=>false,
+        'shop_selection'=>['selected_vendor_ids'=>$selectedShopIdsFb,'active_vendor_id'=>$activeVendorFb,
+            'active_shop_selected'=>$activeShopSelectedFb],
         'backend_lock'=>['held'=>$lockHeldFb,'probe_ok'=>$lockProbeOkFb,'file_exists'=>is_file($lockFileFb),
             'mtime_age_sec'=>$lockMtimeFb>0?max(0,$nowFb-$lockMtimeFb):null],
         'stop_signal'=>['present'=>$stopExistsFb,'active'=>$stopActiveFb,'age_sec'=>$stopAgeFb,
@@ -62039,6 +62158,10 @@ unset($GLOBALS['_bslResumeCounters'],$GLOBALS['_bslResumeFloor'],$GLOBALS['_bslP
 $bslShopStats=[]; $bslDefaultVid=0; $bslDefaultShopName='';
 
 $queue=bslReadQueue();
+/* v10.416: shop selection is live configuration, not a historical queue
+   snapshot. Deselecting a shop removes its waiting/stale rows before claim. */
+$__selectionCn=loadConnections();$__disabledRows=bslQueueApplyCurrentShopSelection($queue,$__selectionCn);
+if($__disabledRows)bslWriteQueue($queue);
 
 $progress=readProgress(BSL_PROGRESS_FILE);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
@@ -62073,7 +62196,7 @@ if($runningCandidates){
         elseif(!empty($progress['running'])&&empty($progress['done'])){
             $progTs=tasksHeartbeat($progress);$entryStarted=(int)($candidate['started_at']??0);
             $staleSeconds=$progTs>0?($now-$progTs):($entryStarted>0?($now-$entryStarted):9999);
-            if($staleSeconds>120){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
+            if($staleSeconds>=BSL_SEND_STALL_SEC){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
         }else{$nextEntry=$candidate;$nextIdx=$ownerIdx;}
     }elseif($runningRows===1){
         // The single row is stale/legacy; resume from its own checkpoint, not a foreign progress file.
@@ -62445,6 +62568,10 @@ $GLOBALS['_bslBatchDoneIndices']=array_values(array_map('intval',array_keys($bsl
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⏭ پرش سریع از کاتالوگ: '.count($__fastSkipped).' محصول بدون درخواست شبکه']);}
 if(count($__fastItems)>=2){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚡ آپدیت گروهی باسلام: '.count($__fastItems).' محصول موجود (بدون آپلود تصویر)'],['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>0,'phase_total'=>count($__fastItems),'phase_pct'=>0]);
+/* A shop may be unchecked while the existing-product scan is preparing this
+   batch. Revalidate immediately before the first network write. */
+if(!bslShopSelectedForSend(loadConnections(),(int)$vid))
+    bslFinishDisabledShopRow((string)$bslQueueId,(int)$vid,$bslDefaultShopName,max(0,$bslResumeStart-1),$total,$sent,$updated,$skipped,$fail);
 $__br=bslBatchUpdate($tk,$vid,$__fastItems,function($done,$failed,$chunk,$chunks,$stage)use(&$sent,&$updated,&$skipped,&$fail,$total,$bslResumeStart,$__fastItems){$pc=min(count($__fastItems),$done+$failed);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>$pc,'phase_total'=>count($__fastItems),'phase_pct'=>(int)floor($pc*100/max(1,count($__fastItems))),'batch_chunk'=>$chunk,'batch_chunks'=>$chunks,'batch_stage'=>$stage]);},false);
 if(!empty($__br['ok'])){
 foreach($__fastMeta as $__fi=>$__m){$updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$__m['changes']);$bslUpdatedList[]=array_merge(['title'=>$__m['title'],'key'=>$__m['key'],'remote_id'=>$__m['id'],
@@ -62472,6 +62599,9 @@ foreach($pd as $i=>$p){
 /* v10.56 (۷۰): محصولاتِ قبلِ چک‌پوینت را رد کن (در اجرأ قبلی انجام شده‌اند). */
 if(($i+1)<$bslResumeStart)continue;
 if(isset($bslFastDoneIdx[$i]))continue;
+/* Legacy single-shop rows also obey the live picker immediately. */
+if(!bslShopSelectedForSend(loadConnections(),(int)$vid))
+    bslFinishDisabledShopRow((string)$bslQueueId,(int)$vid,$bslDefaultShopName,$i,$total,$sent,$updated,$skipped,$fail);
 $GLOBALS['_bslPhaseState']=['phase'=>'send','phase_label'=>'ارسال محصولات','phase_current'=>$i,'phase_total'=>$total,'phase_pct'=>(int)floor($i*100/max(1,$total)),'batch_done_indices'=>array_values(array_map('intval',array_keys($bslFastDoneIdx)))];
 // v8.59: نتیجهٔ file_exists در PHP کش می‌شود؛ بدون پاک‌کردن کش ممکن است
 // حلقه سیگنال توقفِ تازه‌نوشته‌شده را چند دور نبیند.
@@ -62939,6 +63069,10 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,max($bslResumeStart,0),'
 foreach($pd as $si=>$p){
 /* v10.104: محصولات قبل از چک‌پوینت را رد کن */
 if(($si+1)<$bslResumeStart)continue;
+/* v10.416: settings can change while this long worker is running. Re-read the
+   picker before every product so unchecking this shop stops it immediately. */
+if(!bslShopSelectedForSend(loadConnections(),$__scopeVid))
+    bslFinishDisabledShopRow((string)$bslQueueId,$__scopeVid,$sShopName,$sDone,$total,$sent,$updated,$skipped,$fail);
 clearstatcache(true,BSL_STOP_FILE);
 if(bslStopRequestedForQueue()){$sStop=true;break;}
 $srAll=bslUpsertManyShops($p,[$__scopeShop],$sOpts,max(1,min(8,$bslParallelN)));
@@ -72496,7 +72630,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <!-- v10.88: multi-shop picker dropdown -->
 <div style="margin-bottom:8px" id="bsShopPickerWrap">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-    <span style="font-size:11px;color:#c4b5fd;font-weight:600">🏪 اØ±Ø³Ø§Ù Ø¨Ù ØºØ±ÙÙÙØ§:</span>
+    <span style="font-size:11px;color:#c4b5fd;font-weight:600">🏪 ارسال به غرفه‌ها:</span>
     <div style="position:relative;display:inline-block" id="bsShopDropWrap">
       <button type="button" id="bsShopDropBtn"
         onclick="bslToggleShopDrop()"
@@ -78531,6 +78665,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.416', t:'🏪 توقف فوری ارسال به غرفهٔ غیرفعال', items:[
+    'انتخاب غرفه دیگر فقط هنگام ساخت صف snapshot نمی‌شود؛ backend پیش از claim هر ردیف، انتخاب زندهٔ ذخیره‌شده در تب ارسال را دوباره می‌خواند.',
+    'worker ردیف اختصاصی پیش از ارسال هر محصول وضعیت همان vendor_id را بازبینی می‌کند؛ برداشتن تیک غرفه، ارسال جاری را با حفظ checkpoint فوراً متوقف می‌کند. worker قدیمیِ درحال‌اجرا نیز یک Stop هدفمند مخصوص همان ردیف دریافت می‌کند.',
+    'ردیف‌های waiting/running/paused متعلق به غرفهٔ خارج‌شده از انتخاب، بدون ارسال محصول جدید با نشان «غرفه غیرفعال» بسته می‌شوند و cron آن‌ها را دوباره زنده نمی‌کند.',
+    'backend بازیابی باسلام نیز به‌جای گارد قدیمی ۱۲۰ ثانیه‌ای، همان آستانهٔ ۶۰ ثانیه‌ای watchdog را برای claim ردیف stale به‌کار می‌برد.',
+    'برچسب خرابِ انتخاب غرفه در تب ارسال با متن UTF-8 صحیح «ارسال به غرفه‌ها» جایگزین شد و جست‌وجوی منبع وجود نمونهٔ خراب دیگری را رد می‌کند.'
+  ]},
   {v:'10.415', t:'⏱ ادامهٔ باسلام در اولین کران پس از یک دقیقه توقف', items:[
     'کارت وظیفهٔ فعال باسلام اکنون در خود تب ارسال و دقیقاً زیر کش کاتالوگ نمایش داده می‌شود؛ نام پروفایل، غرفه، checkpoint و زمان آخرین محصول همیشه جلوی چشم است.',
     'اگر worker همان ردیف زنده نباشد و وظیفه متوقف یا گیرکرده باشد، دکمهٔ «ادامه» روی همین کارت ظاهر می‌شود و queue_id و شمارنده‌های قبلی را حفظ می‌کند.',
@@ -93669,12 +93810,13 @@ function renderSendQueueProfileSummary(which,entries,activeSend){
 function sendQueueVisualCard(e,opt){
     opt=opt||{};const total=parseInt(e.total)||0,cur=Math.min(total,parseInt(e.current)||0);
     const phTotal=parseInt(e.phase_total)||0,phCur=Math.min(phTotal,parseInt(e.phase_current)||0),hasPhase=e.status==='running'&&phTotal>0&&e.phase_label&&e.phase!=='send';
-    const done=e.status==='done',failed=e.status==='failed',pct=done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0));
+    const done=e.status==='done',failed=e.status==='failed',shopDisabled=!!e.shop_disabled;
+    const pct=shopDisabled?(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0):(done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0)));
     const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
-    const processed=done?total:cur,remain=Math.max(0,total-processed);
-    const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=staleRunning?'paused':e.status;
-    const status=staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status);
+    const processed=shopDisabled?cur:(done?total:cur),remain=Math.max(0,total-processed);
+    const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=shopDisabled?'paused':(staleRunning?'paused':e.status);
+    const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status));
     const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
     const profileName=String(e.profile_name||'').trim();
     const profileKey=String(e.profile_key||'').trim();
@@ -93769,7 +93911,10 @@ function renderBslQueue(q){
         }else if(!e.batch_id){__batch='';}
         let __acts='',__total=Math.max(0,parseInt(e.total)||0),__current=Math.max(0,parseInt(e.current)||0);
         const __incomplete=e.status!=='done'||(__total>0&&__current<__total);
-        if(__incomplete){
+        if(e.shop_disabled){
+            __acts='<span style="font-size:10px;color:#fdba74">⏹ غرفه از انتخاب ارسال خارج شده</span>'
+              +'<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
+        }else if(__incomplete){
             __acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه'+(__current>0?' از '+toFa(__current+1):'')+'</button>'
               +'<button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         }else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
