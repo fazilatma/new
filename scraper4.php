@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.429';
+const APP_VERSION = '10.430';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13024,6 +13024,12 @@ function matrixRowProfileScopeKey(array $row,array $profiles):string{
         foreach($titles as$title)if($title!==''&&mb_strpos($title,$suffix)!==false){$hits[(string)$key]=true;break;}}
     return count($hits)===1?(string)array_key_first($hits):'';
 }
+/** ردیف متفرقه فقط محصول واقعاً فعال و قابل فروش باسلام است. دادهٔ archive
+ * قدیمی با status خالی و stock=0 در ماتریس می‌ماند، اما موجودی فروشگاه نیست. */
+function startMatrixMiscBslCellIsSellable(array $cell):bool{
+    $status=$cell['status']??'';if(is_array($status))$status=$status['value']??$status['id']??'';
+    return (string)$status==='2976'&&(int)($cell['stock']??0)>0;
+}
 /** v10.426: destination inventory per saved profile, derived only from the
  * latest completed discrepancy matrix (no destination network requests). */
 function startMatrixDestinationStats(array $matrix,array $profiles):array{
@@ -13043,7 +13049,9 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
         foreach($dest as$dk=>$meta){if(($meta['type']??'')!=='bsl')continue;$vid=(int)$meta['vendor_id'];$cells=[];
             $main=$row['shops'][$vid]??$row['shops'][(string)$vid]??null;if(is_array($main))$cells[]=$main;
             foreach((array)($row['shop_extra'][$vid]??$row['shop_extra'][(string)$vid]??[])as$ex)if(is_array($ex))$cells[]=$ex;
-            foreach($cells as$c){$id=(int)($c['id']??0);$title=(string)($c['title']??$row['title']??'');if($id>0&&!matrixTitleHasCode($title))$uncoded[$dk][(string)$id]=[
+            foreach($cells as$c){$id=(int)($c['id']??0);$title=(string)($c['title']??$row['title']??'');
+                $coded=matrixTitleHasCode($title)||matrixRowHasCode($row);
+                if($id>0&&startMatrixMiscBslCellIsSellable($c)&&!$coded)$uncoded[$dk][(string)$id]=[
                 'id'=>$id,'title'=>$title!==''?$title:'بدون عنوان','price'=>(int)($c['price']??0),
                 'stock'=>(int)($c['stock']??0),'status'=>(string)($c['status']??''),
                 'destination'=>$dk,'shop'=>(string)($meta['label']??''),
@@ -30482,10 +30490,15 @@ function matrixCollectSuffixes(): array {
     }
     return array_keys($sfx);
 }
-/** آیا عنوان با شناسهٔ صریح محصول مثل «(کد:۱۲۳)» تمام می‌شود؟ */
+/** آیا عنوان شناسهٔ صریح محصول مثل «(کد:۱۲۳)» دارد؟
+ * عنوان مقصد ممکن است پس از ۱۲۰ نویسه بریده شود؛ بنابراین این تابع قالب کامل
+ * را با ارقام فارسی/عربی، فاصله و نویسه‌های جهت‌دهی Unicode تشخیص می‌دهد و
+ * caller برای عنوان بریده‌شده از عنوان کامل ردیف نیز fallback می‌گیرد. */
 function matrixTitleHasCode(string $title): bool {
     $t = function_exists('persianToEnglish') ? persianToEnglish(trim($title)) : trim($title);
-    return (bool)preg_match('~\(\s*(?:کد|کُد|code|sku)\s*[:：]\s*[^()\s][^()]*?\s*\)\s*$~iu', $t);
+    $t=(string)preg_replace('~[\p{Cf}\x{00A0}\x{2007}\x{202F}]~u','',$t);
+    $t=strtr($t,['（'=>'(', '）'=>')', '﹙'=>'(', '﹚'=>')']);
+    return (bool)preg_match('~\(\s*(?:کد|کُد|code|sku)\s*[:：]\s*[^()\s][^()]*?\s*\)~iu', $t);
 }
 function matrixRowHasCode(array $r): bool {
     if (matrixTitleHasCode((string)($r['title'] ?? ''))) return true;
@@ -45853,7 +45866,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             ['profile_key'=>'p1','woo'=>['id'=>10,'title'=>'الف (کد:۱)'],'woo_extra'=>[['id'=>11,'title'=>'الف (کد:۱)']],'shops'=>[77=>['id'=>20,'title'=>'الف (کد:۱)']],'shop_extra'=>[77=>[['id'=>21,'title'=>'الف (کد:۱)']]]],
             ['profile_key'=>'p2','woo'=>['id'=>12,'title'=>'ب (کد:۲)'],'shops'=>[77=>['id'=>22,'title'=>'ب (کد:۲)']]],
             ['profile_key'=>'','title'=>'قدیمی (کد:۱)','woo'=>['id'=>99,'title'=>'قدیمی (کد:۱)'],'shops'=>[77=>['id'=>23,'title'=>'قدیمی (کد:۱)']]],
-            ['profile_key'=>'','title'=>'متفرقه','woo'=>null,'shops'=>[77=>['id'=>24,'title'=>'متفرقه']]],
+            ['profile_key'=>'','title'=>'متفرقه','woo'=>null,'shops'=>[77=>['id'=>24,'title'=>'متفرقه','status'=>2976,'stock'=>2]]],
+            /* عنوان باسلام در محدودیت ۱۲۰ نویسه وسط کد بریده، ولی عنوان کامل
+               ردیف کد دارد؛ نباید متفرقه شود. */
+            ['profile_key'=>'','title'=>'تابه مرغ و ماهی عروس مدل ویکتوریا سایز بزرگ (کد:12)','shops'=>[77=>['id'=>25,'title'=>'تابه مرغ و ماهی عروس مدل ویکتوریا سایز بزرگ (کد:','status'=>2976,'stock'=>2]]],
+            /* inactive/out-of-stock حتی اگر بی‌کد باشد موجودی متفرقه نیست. */
+            ['profile_key'=>'','title'=>'متفرقه بایگانی','shops'=>[77=>['id'=>26,'title'=>'متفرقه بایگانی','status'=>'','stock'=>0]]],
         ]],['p1'=>['titleSuffix'=>'(کد:۱)'],'p2'=>['titleSuffix'=>'(کد:۲)']]);
     $add('10.426', 'شمارش مقصد بر اساس ماتریس به پروفایل متصل است و duplicate واقعی را می‌شمارد',
          (int)($_mxDest426['counts']['p1']['woo']??0)===3
@@ -45898,6 +45916,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"body.onclick=e=>{const cell=e.target.closest('[data-misc-destination]')")!==false
       && strpos($selfSrc,"{v:'10." . "429'")!==false
       && version_compare(APP_VERSION,'10.429','>='));
+    $add('10.430', 'عنوان کددار بریده‌شده و محصول غیرفعال هرگز متفرقه شمرده نمی‌شوند',
+         matrixTitleHasCode('تابه مرغ و ماهی عروس مدل ویکتوریا سایز بزرگ (کد:12)')
+      && count((array)($_mxDest426['uncoded_products']['bsl:77']??[]))===1
+      && (int)($_mxDest426['uncoded_products']['bsl:77'][0]['id']??0)===24
+      && strpos($selfSrc,'startMatrixMiscBslCellIsSellable($c)')!==false
+      && strpos($selfSrc,'matrixTitleHasCode($title)||matrixRowHasCode($row)')!==false
+      && strpos($selfSrc,"{v:'10." . "430'")!==false
+      && version_compare(APP_VERSION,'10.430','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -79438,6 +79464,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.430', t:'🧹 حذف قطعی کددارها و غیرفعال‌ها از متفرقه', items:[
+    'متفرقه فقط محصول باسلام با status فعال 2976 و موجودی بیشتر از صفر است؛ بایگانی، غیرفعال و ناموجود حذف می‌شوند.',
+    'اگر عنوان ۱۲۰ نویسه‌ای مقصد وسط عبارت کد بریده باشد، کد از عنوان کامل ردیف ماتریس تشخیص داده می‌شود.',
+    'تشخیص (کد:...) اکنون ارقام فارسی/عربی، پرانتزهای Unicode و نویسه‌های نامرئی جهت متن را نیز پوشش می‌دهد.',
+    'عنوان گزارش‌شدهٔ تابه عروس مدل ویکتوریا (کد:12) به‌عنوان regression test ثبت شد.'
+  ]},
   {v:'10.429', t:'📨 برابر‌سازی با صف واقعی مقصد و اصلاح کلیک مودال', items:[
     'هر برابر‌سازی اکنون علاوه بر build/fix هدفمند، یک ردیف واقعی waiting در صف ووکامرس یا همان غرفهٔ باسلام می‌سازد.',
     'عملیات با queue_idهای مقصد در ردیف همگام‌سازی ثبت می‌شود و تا پایان هم صف ارسال و هم worker اصلاح، done نمی‌شود؛ توقف، ادامه، checkpoint و watchdog همان ارسال عادی را دارد.',
