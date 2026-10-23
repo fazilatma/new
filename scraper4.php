@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.446';
+const APP_VERSION = '10.447';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47939,6 +47939,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"stage.style.height=Math.max(1,h-Math.min(h-1,cut))+'px';")!==false
       && strpos($selfSrc,"{v:'10." . "446'")!==false
       && version_compare(APP_VERSION,'10.446','>='));
+    $add('10.447', 'پیش‌نمایش پردازش فهرست از نمونهٔ تست سلکتور و بدون الزام استخراج محصول استفاده می‌کند',
+         strpos($selfSrc,'function imageTransformSampleUrl(')!==false
+      && strpos($selfSrc,"prev.dataset.imageUrl")!==false
+      && strpos($selfSrc,"prevEl.dataset.imageUrl=d.value||'';")!==false
+      && strpos($selfSrc,'ابتدا سلکتور تصویر را تست کنید یا یک محصول دارای تصویر استخراج کنید.')!==false
+      && strpos($selfSrc,"{v:'10." . "447'")!==false
+      && version_compare(APP_VERSION,'10.447','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -77598,10 +77605,25 @@ function imageTransformApply(prefix, cfg, legacyGallery) {
 function imageTransformChanged(prefix) {
     imageTransformApply(prefix,imageTransformCollect(prefix),false);markDirty();scheduleSave();
 }
+function imageTransformSampleUrl(prefix) {
+    // The list selector test already knows a sample image before any extraction has run.
+    if(prefix==='list'){
+        const prev=$('prev-image');
+        const saved=prev&&prev.dataset?String(prev.dataset.imageUrl||'').trim():'';
+        if(/^https?:\/\//i.test(saved))return saved;
+        const nested=prev?prev.querySelector('img[src]'):null;if(nested&&/^https?:\/\//i.test(nested.src||''))return nested.src;
+        const hit=prev?String(prev.textContent||'').match(/https?:\/\/[^\s)]+/i):null;if(hit)return hit[0];
+    }
+    for(const [,p] of products){
+        if(p&&p.image&&/^https?:\/\//i.test(p.image))return p.image;
+        if(prefix==='gal'&&p&&Array.isArray(p.images))for(const u of p.images)if(/^https?:\/\//i.test(u||''))return u;
+    }
+    return '';
+}
 function previewImageTransform(prefix) {
-    const box=$(prefix+'TransformPreview');if(!box)return;let sampleImg='';
-    for(const [,p] of products){if(p&&p.image&&/^https?:\/\//i.test(p.image)){sampleImg=p.image;break;}}
-    if(!sampleImg){box.innerHTML='<div style="font-size:11px;color:#fbbf24">ابتدا یک محصول دارای تصویر استخراج کنید.</div>';return;}
+    const box=$(prefix+'TransformPreview');if(!box)return;
+    const sampleImg=imageTransformSampleUrl(prefix);
+    if(!sampleImg){box.innerHTML='<div style="font-size:11px;color:#fbbf24">ابتدا سلکتور تصویر را تست کنید یا یک محصول دارای تصویر استخراج کنید.</div>';return;}
     const c=imageTransformCollect(prefix);
     const label=c.transform_mode==='white_square'?'مربع سفید '+c.white_square_size+'px':'برش '+(c.crop_bottom_px>0?c.crop_bottom_px+'px':c.crop_bottom_pct+'%');
     box.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0f172a;padding:8px;border-radius:10px;border:1px solid #334155">'
@@ -77897,6 +77919,7 @@ function testSel(type) {
     if (!selector) { showToast('ابتدا سلکتور را انتخاب کنید', true); return; }
 
     prevEl.textContent = '⏳ در حال تست...';
+    if(type==='image'&&prevEl.dataset)prevEl.dataset.imageUrl='';
     prevEl.className = prevEl.className.replace(/empty|__preview-\w+/g, '').trim();
 
     // Debounce
@@ -77932,6 +77955,7 @@ function testSel(type) {
                     prevEl.className = 'sel-preview link-prev' + (d.value ? '' : ' empty');
                 } else if (type === 'image') {
                     display = d.value || '(تصویر یافت نشد)';
+                    if(prevEl.dataset)prevEl.dataset.imageUrl=d.value||'';
                     prevEl.className = 'sel-preview img-prev' + (d.value ? '' : ' empty');
                 }
 
@@ -82624,6 +82648,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.447', t:'🖼️ استفاده از نمونهٔ تست سلکتور در پیش‌نمایش پردازش تصویر فهرست', items:[
+    'دکمهٔ پیش‌نمایش تصویر فهرست دیگر استخراج محصول را اجباری نمی‌کند و ابتدا همان URL تصویری را استفاده می‌کند که دکمهٔ تست سلکتور تصویر پیدا و نمایش داده است.',
+    'URL نمونه در data attribute اختصاصی نگه‌داری می‌شود تا متن شمارش نتایج یا رندر رابط آدرس تصویر را خراب نکند؛ محصولات استخراج‌شده همچنان fallback هستند.',
+    'پیام راهنما نیز اصلاح شد تا فقط در نبود هر دو منبع، تست سلکتور تصویر یا استخراج محصول را درخواست کند.'
+  ]},
   {v:'10.446', t:'👁️ تعمیر پیش‌نمایش مربع سفید و برش پایین تصویر', items:[
     'پیش‌نمایش قبل/بعد دیگر برای ساخت تصویر سمت راست به واکشی دوبارهٔ سرور وابسته نیست و مستقیماً در مرورگر رندر می‌شود؛ بنابراین محدودیت hotlink، خطای پراکسی یا کش سرور مانع نمایش اثر نمی‌شود.',
     'اندازهٔ مربع سفید بر اساس نسبت اندازهٔ طبیعی تصویر به اندازهٔ نمایشی محاسبه می‌شود و هر چهار گوشه دقیقاً در همان موقعیت انتخاب‌شده نمایش داده می‌شوند.',
