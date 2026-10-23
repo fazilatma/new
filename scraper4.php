@@ -369,7 +369,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.440';
+const APP_VERSION = '10.441';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1358,8 +1358,9 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
     return !empty($ret['requeued']);
 }
 
-function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false): array {
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false, string $detailMode = ''): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
     /* -1 means “not supplied”; zero is a real setting: discover the end. */
     if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));}
     $pageTotal=$maxPages===0?0:$maxPages;
@@ -1381,7 +1382,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
        different phase-based dedup key. */
     $enq = null;
     if ($resume) {
-        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages, $preferredQueueId) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages, $preferredQueueId, $detailModeNorm) {
             $now=time();$revive=-1;
             foreach ($q['entries'] as $i=>&$e) {
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
@@ -1389,6 +1390,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                 $st=(string)($e['status']??'');
                 if(in_array($st,['pending','running'],true)){
                     $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;$e['payload']['phase']=$phase;
+                    if($detailModeNorm!=='')$e['payload']['detail_mode']=$detailModeNorm;
                     if($st==='pending'&&$preferredQueueId!=='')$e['payload']['extract_queue_id']=$plannedQueueId;
                     elseif(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
                     $e['payload']['max_pages']=$maxPages;
@@ -1398,6 +1400,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             }unset($e);
             if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
                 $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;$e['payload']['max_pages']=$maxPages;
+                if($detailModeNorm!=='')$e['payload']['detail_mode']=$detailModeNorm;
                 $e['recycles']=(int)($e['recycles']??0)+1;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'revived'=>true,'job_id'=>$id,'status'=>'pending'];}
             return ['ok'=>true,'missing'=>true];
         });
@@ -1406,11 +1409,13 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
         } else $enq=null;
     }
     $dedup = 'backend_extract|' . $profileKey . '|' . $phase . '|' . ($forceAll ? 'force' : 'normal') . '|' . ($resume ? 'resume' : 'fresh');
-    if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', [
+    $_workerPayload = [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
         'resume' => $resume, 'dedup_key' => $dedup, 'extract_queue_id'=>$plannedQueueId,
         'max_pages'=>$maxPages,
-    ], 'استخراج بک‌اند');
+    ];
+    if ($detailModeNorm !== '') $_workerPayload['detail_mode'] = $detailModeNorm;
+    if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', $_workerPayload, 'استخراج بک‌اند');
     if (!empty($enq['ok'])) {
         /* Create/reclaim the visible extraction row immediately, not only when
            the daemon eventually claims the job. The worker payload carries this
@@ -2077,10 +2082,11 @@ function s4SpawnPersistentWorker(): array {
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
 }
 
-function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1): array {
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $detailMode = ''): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
     if ($profileKey === '') return ['ok' => false, 'error' => 'profile_key_empty'];
     if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
     $php = s4CliPhpBinary();
@@ -2095,6 +2101,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         . ($forceAll ? ' --force-all' : '')
         . ($resume ? ' --resume' : '')
         . ($maxPages>=0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
+        . ($detailModeNorm !== '' ? ' --detail-mode=' . escapeshellarg($detailModeNorm) : '')
         . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
@@ -2171,6 +2178,8 @@ function s4WorkerRunJob(array $job): array {
         $forceAll = !empty($payload['force_all']);
         $extractQueueId=trim((string)($payload['extract_queue_id']??''));
         $maxPagesOverride=array_key_exists('max_pages',$payload)?max(0,(int)$payload['max_pages']):-1;
+        $detailModeJob = isset($payload['detail_mode']) && trim((string)$payload['detail_mode']) !== ''
+            ? normalizeDetailExtractMode($payload['detail_mode']) : '';
         $resumeNext = !empty($payload['resume']);
         $segments = 0;
         $transientResumes = 0;
@@ -2196,7 +2205,7 @@ function s4WorkerRunJob(array $job): array {
             if(empty($GLOBALS['_s4ParallelExtractChild']))s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
                 'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase, 'job_max_pages'=>$maxPagesOverride]);
             $GLOBALS['_s4WorkerJobId']=$jobId;
-            try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride);}
+            try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride, $detailModeJob);}
             finally{unset($GLOBALS['_s4WorkerJobId']);}
             $res['worker_segments'] = $segments;
             $budgetResume = !empty($res['ran_out']);
@@ -14369,7 +14378,8 @@ $profilePatch = [
     : (array)($profiles[$key]['productSource'] ?? ['mode'=>'direct']),
 'backendExtractWithDetail' => array_key_exists('backendExtractWithDetail', $_POST)
     ? !empty($_POST['backendExtractWithDetail'])
-    : !empty($profiles[$key]['backendExtractWithDetail']),
+    : (array_key_exists('backendExtractWithDetail', (array)($profiles[$key] ?? [])) ? !empty($profiles[$key]['backendExtractWithDetail']) : true),
+'detailExtractMode' => normalizeDetailExtractMode($_POST['detailExtractMode'] ?? ($profiles[$key]['detailExtractMode'] ?? 'two_stage')),
 'updatedAt' => time()
 ];
 /* metadataهای lifecycle/extraction که save_profile مالکشان نیست حفظ شوند. */
@@ -18294,6 +18304,10 @@ function extractionEngineRenderDriver(string $engine): string {
     $engine = normalizeExtractionEngine($engine);
     return $engine === 'selenium' ? 'selenium' : ($engine === 'playwright' ? 'playwright' : '');
 }
+function normalizeDetailExtractMode($v): string {
+    $v = strtolower(trim((string)$v));
+    return $v === 'inline' ? 'inline' : 'two_stage';
+}
 function isEmallsUrl(string $url): bool {
     $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
     return $host === 'emalls.ir' || substr($host, -10) === '.emalls.ir' || stripos($url, '~Category~') !== false;
@@ -21192,7 +21206,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     return $out;
 }
 
-function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1): array {
+function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1, string $detailModeOverride = ''): array {
 if (!in_array($phase, ['all', 'list', 'detail'], true)) $phase = 'all';
 @set_time_limit(0); @ignore_user_abort(true);
 /* v10.134: فایل‌های مشترکِ پیشرفت/توقف فقط بعد از گرفتنِ lock پاک می‌شوند؛
@@ -21230,6 +21244,7 @@ $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?
 $pagType=$profile['pagType']??'query_page';
 $pagVal=$profile['pagVal']??'';
 $detailSelectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+$_detailExtractMode=normalizeDetailExtractMode($detailModeOverride!==''?$detailModeOverride:($profile['detailExtractMode']??'two_stage'));
 $detailConfigured=!empty($detailSelectors);
 $_detailSkippedNoSelectors=false;
 /* No enabled selector means there is no stage two. Gallery configuration by
@@ -21531,7 +21546,13 @@ $galleryCfg=galleryNormalizeCfg($profile['gallery']??[]);
 $_wantKeys=[];
 foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantKeys[]=$_f; }
 $_inlineDetailDone=0;   // شمارندهٔ جزئیاتِ درجایِ همین اجرا (برای چک‌پوینت)
+$_inlineDetailOk=0; $_inlineDetailFail=0; $_inlineDetailFields=0;
+$_inlineGalleryFound=0; $_inlineGalleryImgs=0; $_inlineVarFound=0;
 $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
+$_oldDetailCycle=trim((string)($profile['_extract_detail_cycle']??''));
+$_oldStage=(string)($profile['_extract_stage']??'');
+$_detailCycle=($phase==='detail'&&in_array($_oldStage,['detail','stopped'],true)&&$_oldDetailCycle!=='')
+    ? $_oldDetailCycle : ('dc_'.time().'_'.substr(md5($queueId),0,8));
 if($_listResume && $_startPage>1){
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$_startPage,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>[
         '▶️ ادامهٔ استخراج از صفحه '.$_startPage.' (یک صفحه قبل از محل گیر)',
@@ -21771,6 +21792,7 @@ $newCount++;
    برای فازِ list هم اجرا می‌شد (یعنی هر کران صفحهٔ جزئیاتِ محصولات را باز می‌کرد).
    حالا فقط وقتی اجرا می‌شود که فاز list نباشد (یعنی all/detail = دکمهٔ دستی). */
 if($phase!=='list'){
+if($_detailExtractMode==='inline'){
 $_mrg = (isset($prevByKey[$key]) && is_array($prevByKey[$key]))
     ? extractMergeDetail($p, $prevByKey[$key]) : $p;
 $_galDoneNow = $galleryCfg['enabled']
@@ -21791,20 +21813,34 @@ if (!($_galDoneNow && !$_fieldMissingNow)) {
     if ($_inlineDetailDone === 1 || $_inlineDetailDone % 3 === 0) {
         $_inlineLogs = array_slice(array_merge($logs, ['🔍 جزئیات درجای صفحه '.$page.' — محصول '.$_inlineDetailDone.': '.$_inlineTitle]), -12);
         writeProgress(EXTRACT_PROGRESS_FILE, array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,
-            'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$_inlineLogs,
+            'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'detail_extract_mode'=>$_detailExtractMode,'recent_log'=>$_inlineLogs,
             'total_log_count'=>$page+$_inlineDetailDone,'extracted'=>count($allProducts),'phase'=>'list_detail',
             'page'=>$page,'inline_detail_current'=>$_inlineDetailDone], extractLiveCompare($allProducts,$livePrevMap)));
     }
     $_inlineRes=extractProductDetailInline($allProducts, $key, $detailSelectors, $galleryCfg, false);
     if(!empty($_inlineRes['ok'])){
+        $_inlineDetailOk++;
+        $_inlineDetailFields+=(int)($_inlineRes['fields']??0);
+        if((int)($_inlineRes['imgs']??0)>1){$_inlineGalleryFound++;$_inlineGalleryImgs+=(int)$_inlineRes['imgs'];}
+        if((int)($_inlineRes['vars']??0)>0)$_inlineVarFound++;
+        $allProducts[$key]['_inlineDetailDone']=true;
+        $allProducts[$key]['_detail_cycle']=$_detailCycle;
         unset($allProducts[$key]['_detail_new_pending']);
         if((int)($_inlineRes['fields']??0)>0||(int)($_inlineRes['imgs']??0)>0||(int)($_inlineRes['vars']??0)>0)
             $allProducts[$key]['_detail_checked_at']=time();
+    } else {
+        $_inlineDetailFail++;
     }
     extractLockTouch($queueId);
     extractCheckpoint($pkFinal, $allProducts,
         ['_extract_stage' => 'detail', '_extract_stage_at' => time(),
+         '_extract_detail_cycle' => $_detailCycle,
          '_extract_detail_done' => $_inlineDetailDone, '_extract_detail_total' => 0]);
+} else {
+    $allProducts[$key] = $_mrg;
+    $allProducts[$key]['_detail_cycle'] = $_detailCycle;
+    unset($allProducts[$key]['_detail_new_pending']);
+}
 }
 }
 }
@@ -21812,7 +21848,7 @@ $logs[]='✓ +'.($newCount).' محصول (کل: '.count($allProducts).')';
 // v8.22: مقایسهٔ زنده — شمارنده‌ها و لیست‌ها همان لحظه محاسبه می‌شوند
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 msAlive('صفحه ' . $page . ' — ' . count($allProducts) . ' محصول');   /* v10.61 (۷۵) */
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'detail_extract_mode'=>$_detailExtractMode,'phase'=>($_detailExtractMode==='inline'&&$phase!=='list'?'list_detail':'list'),'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
 if($pagType==='next_selector'&&!empty($pagVal)){
 [$dom,$xp]=load_dom($res['html']);
 $xpath=cssToXpath($pagVal);
@@ -21993,19 +22029,49 @@ $pkFinal=$profileKey!==''?$profileKey:profileKey($url);
 /* A detail cycle is the durable cursor across process/cron segments. Products
    already resolved in this cycle are skipped on resume, so a price selector
    that is intentionally refreshed can no longer restart from product one. */
-$_oldDetailCycle=trim((string)($profile['_extract_detail_cycle']??''));
-$_oldStage=(string)($profile['_extract_stage']??'');
-$_detailCycle=($phase==='detail'&&in_array($_oldStage,['detail','stopped'],true)&&$_oldDetailCycle!=='')
-    ? $_oldDetailCycle : ('dc_'.time().'_'.substr(md5($queueId),0,8));
-extractCheckpoint($pkFinal,$allProducts,[
-    '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
-    '_extract_detail_cycle'=>$_detailCycle,
-    '_extract_list_incomplete'=>false,
-    '_extract_list_page_ok'=>$totalPages,
-    '_extract_list_page_try'=>$totalPages,
-    '_extract_resume_req'=>0,
-    '_extract_resume_from'=>0,
-]);
+$_listSavedForResults = count($allProducts) > 0;
+$_listSavedAt = ($phase === 'detail' && !empty($profile['_extract_list_saved_at']))
+    ? (int)$profile['_extract_list_saved_at']
+    : ($_listSavedForResults ? time() : 0);
+$_listSavedCount = ($phase === 'detail' && !empty($profile['_extract_list_saved_count']))
+    ? (int)$profile['_extract_list_saved_count']
+    : count($allProducts);
+if ($phase !== 'detail') {
+    extractCheckpoint($pkFinal,$allProducts,[
+        'detailExtractMode'=>$_detailExtractMode,
+        '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
+        '_extract_list_saved_at'=>$_listSavedAt,
+        '_extract_list_saved_count'=>$_listSavedCount,
+        '_extract_detail_cycle'=>$_detailCycle,
+        '_extract_list_incomplete'=>false,
+        '_extract_list_page_ok'=>$totalPages,
+        '_extract_list_page_try'=>$totalPages,
+        '_extract_resume_req'=>0,
+        '_extract_resume_from'=>0,
+    ]);
+}
+$_stageProgressMeta = [
+    'detail_extract_mode' => $_detailExtractMode,
+    'list_done' => ($_detailExtractMode === 'two_stage' && $_listSavedForResults),
+    'list_saved_for_results' => ($_detailExtractMode === 'two_stage' && $_listSavedForResults),
+    'list_saved_at' => $_listSavedAt,
+    'list_saved_count' => $_listSavedCount,
+];
+if ($phase !== 'detail' && $phase !== 'list' && $_detailExtractMode === 'two_stage' && $_listSavedForResults) {
+    $_stage1Logs = array_slice(array_merge($logs, [
+        '✅ مرحلهٔ ۱ (استخراج لیست) کامل شد: ' . count($allProducts) . ' محصول استخراج و در پروفایل و تب نتایج ذخیره شد',
+        '⏳ ورود خودکار به مرحلهٔ ۲ (استخراج جزئیات محصولات)...',
+    ]), -12);
+    writeProgress(EXTRACT_PROGRESS_FILE, array_merge([
+        'running' => true, 'done' => false,
+        'total' => ($autoPageMode ? $totalPages : $maxPages),
+        'current' => $totalPages, 'started_at' => $startedAt, 'last_progress_ts' => time(),
+        'queue_id' => $queueId, 'profile_key' => $pkFinal,
+        'phase' => 'list_done', 'extract_stage' => 'list_done',
+        'products_saved' => true, 'extracted' => count($allProducts),
+        'recent_log' => $_stage1Logs, 'total_log_count' => $totalPages + 1,
+    ], $_stageProgressMeta, extractLiveCompare($allProducts, $livePrevMap)));
+}
 
 // v8.64: اگر گالری روشن است، صفحهٔ همهٔ محصولات باید باز شود — نه فقط
 // آن‌هایی که عکس یا قیمت ندارند. وگرنه محصولی که یک عکس دارد هرگز
@@ -22170,7 +22236,7 @@ $logs[]='   • ⏱ سقف زمانی این نوبت: '.$_budget.' ثانیه �
    false می‌شد، زمانِ بی‌حرکتی از started_at حساب می‌شد و ردیفِ کاملاً
    زنده «پردازش نیمه‌کاره رها شد» می‌خورد. دقیقاً همان چیزی که کاربر
    می‌دید: صف «خطا» ولی کار در جریان. */
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal]);
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal],$_stageProgressMeta));
 
 foreach($needDetail as $key=>$p){
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
@@ -22355,7 +22421,7 @@ foreach($detailLog as $_dl)$logs[]=$_dl;
 // قیمت‌ها در این مرحله ممکن است تکمیل شوند، پس مقایسه دوباره محاسبه می‌شود
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 extractLockTouch($queueId);   // v10.32 (۴۵ب): ضربان، تا قفلِ اجرای سالم کهنه نشود
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+$detailDone,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$_stageProgressMeta,$liveCmp));
 }
 /* v8.94: هر ۵ محصول، کارِ انجام‌شده روی دیسک بنشیند.
 
@@ -22409,7 +22475,18 @@ $_sumLines[]='   • یعنی IP هاست بلاک یا محدود شده — س
 $_sumLines[]='   • تنظیمات ← «اتصال به سایت مبدأ»: فاصلهٔ بین درخواست‌ها را زیاد کنید یا پروکسی بگذارید';
 }
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$_sumLines,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$_stageProgressMeta,$liveCmp));
+}
+if ($_detailExtractMode === 'inline' && $_inlineDetailDone > 0) {
+    $detailTotal += $_inlineDetailDone;
+    $detailDone += $_inlineDetailDone;
+    $detailOk += $_inlineDetailOk;
+    $detailFail += $_inlineDetailFail;
+    $detailFields += $_inlineDetailFields;
+    $galleryFound += $_inlineGalleryFound;
+    $galleryImgsTotal += $_inlineGalleryImgs;
+    $varFound += $_inlineVarFound;
+    if ($_skipWhy === 'already_done') $_skipWhy = '';
 }
 
 /* Never persist parser placeholders as products. Detail extraction gets the
@@ -22601,7 +22678,7 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?'detail':'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound]);
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?($_detailExtractMode==='inline'&&$phase!=='detail'?'list_detail':'detail'):'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$_stageProgressMeta));
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -22666,16 +22743,27 @@ $resumeQueueId = trim((string)($_GET['queue_id'] ?? $_POST['queue_id'] ?? ''));
 $_requestedPagesRaw=$_GET['pages']??$_POST['pages']??null;
 if($_requestedPagesRaw!==null)$requestedMaxPages=max(0,(int)$_requestedPagesRaw);
 else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages']??10));}
+$_detailModeRaw = $_GET['detail_mode'] ?? $_POST['detail_mode'] ?? null;
+$detailModeIn = ($_detailModeRaw !== null && trim((string)$_detailModeRaw) !== '')
+    ? normalizeDetailExtractMode($_detailModeRaw) : '';
+if ($detailModeIn !== '' && $profileKey !== '') {
+    $_ppMode = loadProfiles();
+    if (isset($_ppMode[$profileKey]) && is_array($_ppMode[$profileKey])
+        && normalizeDetailExtractMode($_ppMode[$profileKey]['detailExtractMode'] ?? 'two_stage') !== $detailModeIn) {
+        $_ppMode[$profileKey]['detailExtractMode'] = $detailModeIn;
+        saveOneProfileAtomic($profileKey, $_ppMode[$profileKey]);
+    }
+}
 
 /* v10.183: اگر worker دائمی سرور زنده است، درخواست وب فقط job می‌سازد.
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
    قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
 if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
-    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId, $resumeRequested);
+    $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId, $resumeRequested, $detailModeIn);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
         'queued'=>!empty($enq['queued']),'worker'=>true,'profile_key'=>$profileKey,
-        'phase'=>$phaseIn,'max_pages'=>$requestedMaxPages,'note'=>'operation queued for persistent worker'], $enq), JSON_UNESCAPED_UNICODE);
+        'phase'=>$phaseIn,'detail_mode'=>$detailModeIn!==''?$detailModeIn:null,'max_pages'=>$requestedMaxPages,'note'=>'operation queued for persistent worker'], $enq), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -22683,11 +22771,11 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
    همان request اجرا نمی‌کند؛ یک CLI child جدا بالا می‌آید تا timeout وب‌سرور
    بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
 if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
-    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages);
+    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn);
     if (!empty($spawn['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'started'=>true,'worker_child'=>true,'profile_key'=>$profileKey,
-            'phase'=>$phaseIn,'pid'=>(int)($spawn['pid']??0),'log'=>(string)($spawn['log']??''),
+            'phase'=>$phaseIn,'detail_mode'=>$detailModeIn!==''?$detailModeIn:null,'pid'=>(int)($spawn['pid']??0),'log'=>(string)($spawn['log']??''),
             'note'=>'operation detached to CLI child'], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -22707,7 +22795,7 @@ if ($resumeRequested) {
     $phaseIn = (string)$resumePrep['phase'];
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
-$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages);
+$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages,$detailModeIn);
 // v8.30: همان اعلان‌های تغییر مبدأ که کران‌جاب می‌فرستد
 if(!empty($res['ok'])){
 $cnNow=loadConnections();
@@ -25329,6 +25417,7 @@ if (isCliRun()) {
             elseif ($_a === '--force-all' || $_a === 'force_all') $_GET['force_all'] = '1';
             elseif ($_a === '--resume' || $_a === 'resume') $_GET['resume'] = '1';
             elseif (preg_match('~^--pages=(\d+)$~', $_a, $_pm)) $_GET['pages'] = $_pm[1];
+            elseif (preg_match('~^--detail-mode=(two_stage|inline)$~', $_a, $_dm)) $_GET['detail_mode'] = $_dm[1];
         }
         $_GET['direct'] = '1';
     } elseif ($_cliCmd === 'whoami') {
@@ -25404,7 +25493,8 @@ if (isset($_GET['backend_extract_cli'])) {
         $reservedCli = (string)($prepCli['queue_id'] ?? '');
     }
     $pagesCli=array_key_exists('pages',$_GET)?max(0,(int)$_GET['pages']):-1;
-    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli);
+    $detailModeCli=isset($_GET['detail_mode'])&&trim((string)$_GET['detail_mode'])!==''?normalizeDetailExtractMode($_GET['detail_mode']):'';
+    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli, $detailModeCli);
     $cliSegs = 1;
     while (!empty($resCli['ok']) && empty($resCli['cancelled']) && !empty($resCli['ran_out']) && $cliSegs < 20) {
         sleep(2);
@@ -25412,7 +25502,7 @@ if (isset($_GET['backend_extract_cli'])) {
         if (empty($prepNext['ok'])) break;
         $nextPh = (string)($prepNext['phase'] ?? 'detail');
         if ($initialPhaseCli === 'all' && $nextPh === 'list') $nextPh = 'all';
-        $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli);
+        $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli, $detailModeCli);
         $cliSegs++;
     }
     echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
@@ -47290,6 +47380,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"onchange=\"syncWcPriceUi('hb');destPricingChanged('wc')\"")!==false
       && strpos($selfSrc,"{v:'10." . "440'")!==false
       && version_compare(APP_VERSION,'10.440','>='));
+    $add('10.441', 'دراپ‌داون حالت استخراج جزئیات (دو مرحله‌ای پیش‌فرض / درجا) در صفحهٔ شروع و موتور استخراج فعال است',
+         normalizeDetailExtractMode('')==='two_stage'
+      && normalizeDetailExtractMode('two_stage')==='two_stage'
+      && normalizeDetailExtractMode('inline')==='inline'
+      && normalizeDetailExtractMode('unknown')==='two_stage'
+      && strpos($selfSrc,'id="detailExtractMode"')!==false
+      && strpos($selfSrc,'<option value="two_stage" selected>استخراج جزئیات دو مرحله‌ای (پیش‌فرض)</option>')!==false
+      && strpos($selfSrc,'<option value="inline">استخراج جزئیات درجا</option>')!==false
+      && strpos($selfSrc,"if(\$_detailExtractMode==='inline'){")!==false);
+    $add('10.441', 'در حالت دو مرحله‌ای پس از استخراج لیست، محصولات بلافاصله در پروفایل و تب نتایج ذخیره می‌شوند و سپس مرحلهٔ دوم اجرا می‌شود',
+         strpos($selfSrc,"'list_saved_for_results' => (\$_detailExtractMode === 'two_stage' && \$_listSavedForResults)")!==false
+      && strpos($selfSrc,'function rememberStageOneExtractSync(')!==false
+      && strpos($selfSrc,"loadBackendExtractResults(d.profile_key, {stageOne:true, skipSaveBack:true});")!==false
+      && strpos($selfSrc,"'&detail_mode='+encodeURIComponent(detailMode)")!==false
+      && strpos($selfSrc,"{v:'10." . "441'")!==false
+      && version_compare(APP_VERSION,'10.441','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -73983,10 +74089,22 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-purple" id="startBackendBtn" onclick="startBackendSync()" style="flex:1;font-size:13px;padding:8px 12px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;border-radius:8px;cursor:pointer">⚡ استخراج بک‌اند</button>
             </div>
-            <label style="display:flex;align-items:center;gap:7px;margin-top:6px;padding:7px 10px;background:#1e1b4b66;border:1px solid #4c1d95;border-radius:8px;cursor:pointer;font-size:11px;color:#e9d5ff;line-height:1.6">
-                <input type="checkbox" id="backendExtractWithDetail" onchange="syncBackendExtractDetailUi();scheduleSave()">
-                <span>🔍 پس از استخراج لیست (فاز ۱)، استخراج جزئیات محصولات (فاز ۲) هم انجام شود</span>
-            </label>
+            <div style="margin-top:6px;padding:8px 10px;background:#1e1b4b66;border:1px solid #4c1d95;border-radius:8px">
+                <div class="row" style="align-items:center;gap:8px;margin-bottom:6px">
+                    <label for="detailExtractMode" style="min-width:126px;font-size:11.5px;color:#e9d5ff;font-weight:700">🔍 حالت استخراج جزئیات:</label>
+                    <select id="detailExtractMode" onchange="syncDetailExtractModeUi();scheduleSave()" style="flex:1">
+                        <option value="two_stage" selected>استخراج جزئیات دو مرحله‌ای (پیش‌فرض)</option>
+                        <option value="inline">استخراج جزئیات درجا</option>
+                    </select>
+                </div>
+                <div id="detailExtractModeHint" style="font-size:10.5px;color:#c4b5fd;line-height:1.7;margin-bottom:6px">
+                    اول لیست محصولات استخراج و در پروفایل و تب نتایج ذخیره می‌شود؛ سپس خودکار به مرحلهٔ دوم (استخراج جزئیات) می‌رود.
+                </div>
+                <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:11px;color:#e9d5ff;line-height:1.6">
+                    <input type="checkbox" id="backendExtractWithDetail" checked onchange="syncBackendExtractDetailUi();scheduleSave()">
+                    <span id="backendExtractWithDetailLbl">🔍 پس از استخراج لیست (فاز ۱)، استخراج جزئیات محصولات (فاز ۲) هم انجام شود</span>
+                </label>
+            </div>
             <!-- v10.217: one comprehensive test button instead of the old single-profile engine benchmark button -->
             <div class="row" style="margin-top:6px">
                 <button class="btn btn-orange" id="comprehensiveTestBtn" onclick="comprehensiveTestStart()" style="flex:1;font-size:12px;padding:8px 12px;font-weight:800">🧪 تست جامع همهٔ پروفایل‌ها (۵ صفحه)</button>
@@ -77364,22 +77482,57 @@ function applyProfile(p, keepTab) {
     if(wooProfileCatId>0&&wooAllCats.length===0)loadCats();
     // v8.59: همان دسته‌ها را در کادر بالای «ارسال باسلام» هم نشان بده
     syncBslSendBoxCats(p.bslCategoryId||0,p.bslFallbackCatIds||[]);
+    if($('detailExtractMode')){
+        $('detailExtractMode').value = normalizeDetailExtractModeJs(p.detailExtractMode || loadDetailExtractModePref());
+    }
     if($('backendExtractWithDetail')){
         $('backendExtractWithDetail').checked = p.backendExtractWithDetail !== undefined ? !!p.backendExtractWithDetail : loadBackendExtractWithDetailPref();
-        syncBackendExtractDetailUi(true);
     }
+    syncDetailExtractModeUi(true);
+    syncBackendExtractDetailUi(true);
 }
 
+function normalizeDetailExtractModeJs(v){
+    return String(v||'').trim().toLowerCase()==='inline' ? 'inline' : 'two_stage';
+}
+function loadDetailExtractModePref(){
+    try{ return normalizeDetailExtractModeJs(localStorage.getItem('s4_detail_extract_mode')||'two_stage'); }catch(e){ return 'two_stage'; }
+}
 function loadBackendExtractWithDetailPref(){
-    try{ return localStorage.getItem('s4_backend_extract_with_detail')==='1'; }catch(e){ return false; }
+    try{
+        const raw=localStorage.getItem('s4_backend_extract_with_detail');
+        return raw===null ? true : raw==='1';
+    }catch(e){ return true; }
+}
+function syncDetailExtractModeUi(skipPrefWrite){
+    const selEl=$('detailExtractMode'), hint=$('detailExtractModeHint'), lbl=$('backendExtractWithDetailLbl');
+    const mode=normalizeDetailExtractModeJs(selEl?selEl.value:loadDetailExtractModePref());
+    if(selEl && selEl.value!==mode) selEl.value=mode;
+    if(!skipPrefWrite){ try{ localStorage.setItem('s4_detail_extract_mode', mode); }catch(e){} }
+    if(hint){
+        hint.textContent = mode==='inline'
+            ? 'در حین استخراج هر صفحهٔ لیست، جزئیات هر محصول همان لحظه به‌صورت درجا استخراج و ذخیره می‌شود.'
+            : 'اول کل لیست محصولات استخراج و در پروفایل و تب نتایج ذخیره می‌شود؛ سپس خودکار به سراغ مرحلهٔ دوم (استخراج جزئیات) می‌رود.';
+    }
+    if(lbl){
+        lbl.textContent = mode==='inline'
+            ? '🔍 استخراج جزئیات درجا هم‌زمان با پیمایش لیست انجام شود'
+            : '🔍 پس از استخراج لیست و ذخیره در تب نتایج، مرحلهٔ دوم (استخراج جزئیات) هم اجرا شود';
+    }
+    syncBackendExtractDetailUi(true);
 }
 function syncBackendExtractDetailUi(skipPrefWrite){
     const cb=$('backendExtractWithDetail'),btn=$('startBackendBtn');
     const on=!!(cb&&cb.checked);
+    const mode=normalizeDetailExtractModeJs($('detailExtractMode')?$('detailExtractMode').value:loadDetailExtractModePref());
     if(!skipPrefWrite){ try{ localStorage.setItem('s4_backend_extract_with_detail', on?'1':'0'); }catch(e){} }
-    if(btn) btn.textContent = on ? '⚡ استخراج بک‌اند (فاز ۱ فهرست + فاز ۲ جزئیات)' : '⚡ استخراج بک‌اند';
+    if(btn){
+        btn.textContent = on
+            ? (mode==='inline' ? '⚡ استخراج بک‌اند (لیست + جزئیات درجا)' : '⚡ استخراج بک‌اند (دو مرحله‌ای: لیست ← جزئیات)')
+            : '⚡ استخراج بک‌اند (فقط لیست)';
+    }
 }
-setTimeout(()=>syncBackendExtractDetailUi(true),50);
+setTimeout(()=>{syncDetailExtractModeUi(true);syncBackendExtractDetailUi(true);},50);
 
 function collectProfileData() {
     // Serialize current products Map and order array
@@ -77402,7 +77555,8 @@ function collectProfileData() {
         minPrice: parseInt($('minPrice').value) || 10000,
         useCustomCol: $('useCustomCol').checked,
         fullMode: $('fullMode')?$('fullMode').checked:false,
-        backendExtractWithDetail: $('backendExtractWithDetail') ? !!$('backendExtractWithDetail').checked : false,
+        backendExtractWithDetail: $('backendExtractWithDetail') ? !!$('backendExtractWithDetail').checked : true,
+        detailExtractMode: $('detailExtractMode') ? normalizeDetailExtractModeJs($('detailExtractMode').value) : loadDetailExtractModePref(),
         customColName: $('customColName').value,
         customColVal: $('customColVal').value,
         iframeHeight: parseInt($('iframeSizeSlider').value) || 600,
@@ -79597,6 +79751,7 @@ function backendExtractFor(url,panelTitle,phase){
         openExtractPanel(panelTitle||'⚡ استخراج سریع فهرست — پیشرفت زنده');
         const galOn=((prof.gallery||{}).mode||'off')!=='off';
         const nDet=Object.entries(prof.detailSelectors||{}).filter(([,v])=>v&&(typeof v==='string'?v.trim()!=='':(v.enabled&&String(v.selector||'').trim()!==''))).length;
+        const detailMode=normalizeDetailExtractModeJs(($('detailExtractMode')&&$('detailExtractMode').value)||prof.detailExtractMode||'two_stage');
         if(ph==='detail'){
             showToast('🔍 استخراج تفصیلی روی سرور شروع شد — گالری '+(galOn?'روشن':'خاموش')
                 +(nDet?(' · '+toFa(nDet)+' فیلد'):''));
@@ -79605,8 +79760,10 @@ function backendExtractFor(url,panelTitle,phase){
         }else{
             if(!nDet){
                 showToast('⚠️ سلکتور جزئیاتی در این پروفایل فعال نیست؛ فاز ۱ اجرا می‌شود (برای فاز ۲ ابتدا سلکتورهای جزئیات را فعال کنید)',1);
+            }else if(detailMode==='inline'){
+                showToast('⚡ استخراج درجا شروع شد — در حین پیمایش لیست، جزئیات ('+toFa(nDet)+' فیلد'+(galOn?' + گالری':'')+') هم‌زمان استخراج می‌شود');
             }else{
-                showToast('⚡ استخراج کامل دو مرحله‌ای شروع شد — فاز ۱ (لیست) سپس فاز ۲ ('+toFa(nDet)+' فیلد جزئیات'+(galOn?' + گالری':'')+')');
+                showToast('⚡ استخراج دو مرحله‌ای شروع شد — اول لیست ← ذخیره در تب نتایج ← مرحلهٔ دوم ('+toFa(nDet)+' فیلد جزئیات'+(galOn?' + گالری':'')+')');
             }
         }
         // Trigger backend extract endpoint (fire-and-forget)
@@ -79614,6 +79771,7 @@ function backendExtractFor(url,panelTitle,phase){
         const pageTarget=(prof.pages===0||prof.pages==='0')?0:Math.max(1,parseInt(prof.pages)||10);
         showToast(pageTarget===0?'📄 هدف تأییدشده: تشخیص خودکار آخرین صفحه':'📄 هدف تأییدشدهٔ این اجرا: '+toFa(pageTarget)+' صفحه');
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
+              +'&detail_mode='+encodeURIComponent(detailMode)
               +'&profile_key='+encodeURIComponent(serverProfileKey)
               +'&pages='+encodeURIComponent(pageTarget),{method:'GET'}).catch(()=>{});
         watchExtractProgress();
@@ -79677,8 +79835,11 @@ function startBackendSync(){
         return;
     }
     const wantDetail=!!($('backendExtractWithDetail')&&$('backendExtractWithDetail').checked);
+    const detailMode=normalizeDetailExtractModeJs($('detailExtractMode')?$('detailExtractMode').value:loadDetailExtractModePref());
     const runPh=wantDetail?'all':'list';
-    const runTitle=wantDetail?'⚡ استخراج بک‌اند (فاز ۱ لیست + فاز ۲ جزئیات) — پیشرفت زنده':undefined;
+    const runTitle=wantDetail
+        ?(detailMode==='inline'?'⚡ استخراج بک‌اند (لیست + جزئیات درجا) — پیشرفت زنده':'⚡ استخراج بک‌اند دو مرحله‌ای (لیست ← تب نتایج ← جزئیات) — پیشرفت زنده')
+        :undefined;
     /* موتور بک‌اند سلکتورها را از فایل پروفایل می‌خواند، نه از فرم باز.
        پس تغییر ذخیره‌نشده باید اول روی دیسک بنشیند وگرنه استخراج با
        سلکتورهای قدیمی اجرا می‌شود. */
@@ -80741,6 +80902,25 @@ function rememberBslCompletionToast(d){
     return true;
 }
 
+function rememberStageOneExtractSync(d){
+    d=d||{};
+    if(!d.list_saved_for_results||!d.profile_key||!(Number(d.list_saved_count||d.extracted||0)>0))return false;
+    const key=[String(d.queue_id||d.profile_key||'legacy'),Number(d.list_saved_at||d.started_at||0)].join('|');
+    try{
+        const stored=JSON.parse(localStorage.getItem('extract_stage1_results_v1')||'{}');
+        const seen=stored&&typeof stored==='object'?stored:{};
+        if(Object.prototype.hasOwnProperty.call(seen,key))return false;
+        seen[key]=Date.now();
+        const recent=Object.entries(seen).sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,40);
+        localStorage.setItem('extract_stage1_results_v1',JSON.stringify(Object.fromEntries(recent)));
+    }catch(e){
+        window._extractStageOneSyncKeys=window._extractStageOneSyncKeys||new Set();
+        if(window._extractStageOneSyncKeys.has(key))return false;
+        window._extractStageOneSyncKeys.add(key);
+    }
+    return true;
+}
+
 function pollExtractProgress(){
     // v8.20: keep the queue list live while a run is in progress, the same
     // way the Basalam queue refreshes itself during a send.
@@ -80759,6 +80939,7 @@ function pollExtractProgress(){
         const extracted=d.extracted||0;
         const logs=d.recent_log||[];
         const phase=d.phase||'list';
+        const detailMode=normalizeDetailExtractModeJs(d.detail_extract_mode||'two_stage');
         const current=d.current||0;
         const total=d.total||0;
         const newCount=d.new||0;
@@ -80768,16 +80949,26 @@ function pollExtractProgress(){
         const page=d.page||0;
         updateSpeedCard(extracted, d.started_at||0);
 
+        // v10.441: در حالت دو مرحله‌ای (پیش‌فرض)، بلافاصله پس از پایان مرحلهٔ ۱ (لیست)
+        // محصولات استخراج‌شده در تب نتایج نیز بارگذاری و ذخیره می‌شوند و سپس مرحلهٔ ۲ اجرا می‌گردد.
+        if(!cancelled && !done && d.list_saved_for_results && d.profile_key && rememberStageOneExtractSync(d)){
+            loadBackendExtractResults(d.profile_key, {stageOne:true, skipSaveBack:true});
+        }
+
         // Update progress bar
         $('extractProgressBar').style.width=(total>0?Math.min(current/total*100,100):0)+'%';
 
         // Update status text
         let statusText='';
         if(running&&!done){
-            if(phase==='detail'){
-                statusText='🔍 جزئیات '+toFa(d.detail_current||0)+'/'+toFa(d.detail_total||0)+' — کل: '+toFa(extracted)+' محصول';
+            if(phase==='list_done'){
+                statusText='✅ مرحلهٔ ۱ تمام شد ('+toFa(extracted)+' محصول در تب نتایج ذخیره شد) — ورود به مرحلهٔ ۲ (استخراج جزئیات)...';
+            }else if(phase==='detail'){
+                statusText='🔍 مرحلهٔ ۲ (استخراج جزئیات) '+toFa(d.detail_current||0)+'/'+toFa(d.detail_total||0)+' — لیست ('+toFa(extracted)+' محصول) در تب نتایج ذخیره شده';
+            }else if(phase==='list_detail'||detailMode==='inline'){
+                statusText='⚡ استخراج درجا — صفحه '+toFa(page)+(d.inline_detail_current?(' · جزئیات: '+toFa(d.inline_detail_current)):'')+' · '+toFa(extracted)+' محصول';
             }else{
-                statusText='📄 صفحه '+toFa(page)+' — '+toFa(extracted)+' محصول استخراج شده';
+                statusText='📄 مرحلهٔ ۱ (استخراج لیست) — صفحه '+toFa(page)+' · '+toFa(extracted)+' محصول استخراج شده';
             }
         }else if(done){
             if(cancelled){
@@ -80815,7 +81006,7 @@ function pollExtractProgress(){
                     buildStatusMap();refreshResultBadges();
                 }
                 if(!cancelled&&extracted>0){
-                    loadBackendExtractResults(d.profile_key||'');
+                    loadBackendExtractResults(d.profile_key||'', {skipSaveBack:true});
                     showLiveComparison();
                     const statsDiv=$('extractStats');
                     if(statsDiv){
@@ -80828,7 +81019,8 @@ function pollExtractProgress(){
         }
     }).catch(()=>{});
 }
-function loadBackendExtractResults(key){
+function loadBackendExtractResults(key, opts){
+    opts = opts || {};
     // Load the profile that was just updated by backend extract
     fetch('?load_profile='+encodeURIComponent(key)).then(r=>r.json()).then(d=>{
         if(!d.ok||!d.profile)return;
@@ -80873,8 +81065,19 @@ function loadBackendExtractResults(key){
         /* Data stays complete in memory; the Results DOM receives only the
            first scroll page and appends later pages near the viewport. */
         refreshViews();
-        // Auto-save current session
-        if($('url').value.trim()&&products.size>0)saveProfileSilent();
+        const activeUrl=($('url')&&$('url').value.trim())||'';
+        if(prof.url && (!activeUrl || activeUrl===prof.url || profileKey(activeUrl)===(d.key||key))){
+            currentProfileUpdatedAt=parseInt(prof.updatedAt||0)||currentProfileUpdatedAt;
+            markClean(d.key||key);
+        }
+        scheduleStartBreakdownRefresh();
+        if(opts.stageOne){
+            const resTab=document.querySelector('.main-tab[data-tab="results"]');
+            if(resTab&&typeof fxPulse==='function')fxPulse(resTab);
+            showToast('💾 مرحلهٔ ۱ تمام شد: '+toFa(products.size)+' محصول در تب نتایج ذخیره شد — شروع مرحلهٔ ۲ (استخراج جزئیات)...');
+        }
+        // Only save back from client if explicitly needed (never overwrite an active Stage 2 worker!)
+        if(!opts.skipSaveBack && $('url').value.trim()&&products.size>0)saveProfileSilent();
     }).catch(()=>{});
 }
 // Helper: profileKey from URL — mirrors PHP profileKey()
@@ -81281,6 +81484,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.441', t:'🔍 دراپ‌داون حالت استخراج جزئیات در صفحهٔ شروع (دو مرحله‌ای پیش‌فرض / درجا) + ذخیرهٔ فوری لیست در تب نتایج', items:[
+    'دراپ‌داون جدید «حالت استخراج جزئیات» به صفحهٔ شروع (زیر دکمه‌های استخراج) با دو گزینهٔ «استخراج جزئیات دو مرحله‌ای (پیش‌فرض)» و «استخراج جزئیات درجا» اضافه شد و انتخاب آن در هر پروفایل و مرورگر ذخیره می‌گردد.',
+    'در حالت پیش‌فرض «دو مرحله‌ای»، مرحلهٔ اول فقط لیست تمام صفحات محصولات را بدون مکثِ بازکردن صفحهٔ تک‌محصول استخراج می‌کند، بلافاصله پس از پایان لیست همهٔ محصولات را در پروفایل و تب نتایج (بدون تداخل با اجرای پس‌زمینه) بارگذاری و ذخیره می‌کند و سپس خودکار وارد مرحلهٔ دوم (استخراج جزئیات، گالری و تنوع‌ها) می‌شود.',
+    'در حالت «استخراج جزئیات درجا»، جزئیات هر محصول همان لحظه و در حین پیمایش هر صفحهٔ لیست استخراج و چک‌پوینت می‌شود و از بازشدن دوبارهٔ محصولات کامل‌شده در پایان لیست جلوگیری شد.',
+    'مقدار انتخابی حالت استخراج جزئیات در درخواست مستقیم backend_extract، صف worker دائمی و اجرای CLI فرزند نیز به‌طور کامل منتقل و در نوار پیشرفت زنده تفکیک شد.'
+  ]},
   {v:'10.440', t:'💰 اعمال یکپارچهٔ ضرایب تعدیل کلی در تب نتایج، غرفه‌های غیرپیش‌فرض، ماتریس و ارسال', items:[
     'علت اصلی اعمال‌نشدن ضریب تعدیل کلی باسلام روی غرفه‌های غیرپیش‌فرض در هر دو سمت کلاینت و سرور برطرف شد: bslAllShops، bslShopPriceFor و bslShopPriceForProfile اکنون لایهٔ تعدیل کلی باسلام (درصد/ضریب/گردکردن) را روی همهٔ غرفه‌ها (پیش‌فرض و غیرپیش‌فرض) روی قیمت پروفایل اعمال می‌کنند و در صورت وجود ضریب اختصاصی غرفه، آن را نیز اضافه می‌نمایند.',
     'باگ پاک‌شدن ضرایب غرفه‌های اضافی در renderBslVendors (فراخوانی bslVPriceChange پیش از الحاق کارت به DOM که مقدار انتخاب‌شده را به none/0 برمی‌گرداند) و باگ بازنویسی مقادیر ذخیره‌شدهٔ cn توسط مقدار اولیهٔ none کنترل‌های DOM پیش از بارگذاری تنظیمات (liveDestCfg) برطرف شد.',
