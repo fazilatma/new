@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.428';
+const APP_VERSION = '10.429';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13084,10 +13084,37 @@ if(isset($_POST['start_profile_destination_equalize'])){
         'duplicate_keep'=>'newest','view_filters'=>['target_profile_key'=>$pk],
         'selected_destinations'=>[$destination],'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chain],false);
     if(empty($fix['ok'])){http_response_code(409);echo json_encode(['ok'=>false,'error'=>(string)($fix['error']??'fix_enqueue_failed'),'build'=>$build,'fix'=>$fix],JSON_UNESCAPED_UNICODE);exit;}
+    /* A real destination queue owns add/update work, so this operation appears
+       in Send and inherits the same locks, checkpoint, Continue and watchdog. */
+    $sendProfile=$profiles[$pk];$sendProfile['name']=(string)($profiles[$pk]['name']??$pk).' · برابر‌سازی مقصد';$sendProfile['syncConfig']=array_merge((array)($sendProfile['syncConfig']??[]),[
+        'target'=>$destination==='woo'?'woo':'bsl','actionBasis'=>'profile','wooOnlyChanged'=>false,'bslOnlyChanged'=>false]);
+    $sendOpts=['target'=>$destination==='woo'?'woo':'bsl','trigger'=>'cell_equalize','replace_waiting'=>false,'allow_parallel'=>true];
+    $targetVid=str_starts_with($destination,'bsl:')?(int)substr($destination,4):0;if($targetVid>0)$sendOpts['bsl_vendor_id']=$targetVid;
+    $queueIds=[];$existingQ=$destination==='woo'?wooReadQueue():bslReadQueue();
+    foreach((array)($existingQ['entries']??[])as$qe){if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk||!in_array((string)($qe['status']??''),['waiting','running','paused'],true))continue;
+        if($targetVid>0&&(int)($qe['shop_vendor_id']??$qe['config']['shop_vendor_id']??0)!==$targetVid)continue;$queueIds[]=(string)($qe['id']??'');}
+    $queueIds=array_values(array_unique(array_filter($queueIds)));
+    $send=$queueIds?['ok'=>true,'existing'=>true,'queue_ids'=>$queueIds,'log'=>['صف فعال همین سلول دوباره استفاده شد']]
+        :manualSyncEnqueueSends($pk,$sendProfile,$cn,['ok'=>true],$sendOpts);
+    if(!$queueIds)$queueIds=array_values(array_unique(array_filter(array_map('strval',(array)($send['queue_ids']??[])))));
+    if(!$queueIds){
+        syncPipelineMark($pk,(string)($profiles[$pk]['name']??$pk),'error','manual',[
+            'pipeline_key'=>'cell:'.$pk.':'.$destination,'operation'=>'cell_equalize','destination'=>$destination,
+            'matrix_build_job_id'=>(string)($build['job_id']??''),'matrix_fix_job_id'=>(string)($fix['job_id']??''),
+            'message'=>'ساخت صف واقعی مقصد ناموفق بود','error'=>(string)($send['error']??implode(' · ',(array)($send['log']??[])))]);
+        http_response_code(409);echo json_encode(['ok'=>false,'error'=>'send_queue_not_created','send'=>$send,'build'=>$build,'fix'=>$fix],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    }
+    syncPipelineMark($pk,(string)($profiles[$pk]['name']??$pk),'send','manual',[
+        'pipeline_key'=>'cell:'.$pk.':'.$destination,
+        'operation'=>'cell_equalize','destination'=>$destination,'send_queue_ids'=>$queueIds,
+        'matrix_build_job_id'=>(string)($build['job_id']??''),'matrix_fix_job_id'=>(string)($fix['job_id']??''),
+        'message'=>'برابر‌سازی سلول: صف واقعی مقصد + ساخت و اصلاح هدفمند',
+        'stage_details'=>['send'=>syncSendStageDetails(['queued'=>(int)($send['woo_total']??$send['bsl_total']??0),
+            'message'=>'صف واقعی مقصد ساخته شد؛ پایداری و ادامه از تب ارسال'])]]);
     $spawn=s4WorkerIsActive()?['ok'=>true,'already_active'=>true]:s4SpawnPersistentWorker();
     echo json_encode(['ok'=>true,'queued'=>true,'profile_key'=>$pk,'destination'=>$destination,
-        'build_job_id'=>(string)($build['job_id']??''),'fix_job_id'=>(string)($fix['job_id']??''),'worker'=>$spawn,
-        'message'=>'ساخت جدول هدفمند و اصلاح امن در صف worker قرار گرفت'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        'build_job_id'=>(string)($build['job_id']??''),'fix_job_id'=>(string)($fix['job_id']??''),'send_queue_ids'=>$queueIds,'send'=>$send,'worker'=>$spawn,
+        'message'=>'همگام‌سازی، صف واقعی مقصد و اصلاح هدفمند در worker ثبت شد'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if (isset($_GET['start_product_stats'])) {
@@ -24390,6 +24417,7 @@ if(isset($_GET['sync_pipeline_status'])){
     /* Polling also closes an already-proven ownerless send gap. The reconciler
        is locked/deduplicated and never touches rows that have a real sender. */
     $sendReconcile=syncPipelineReconcileMissingSendQueues(true);
+    $cellEqualizeReconcile=syncCellEqualizeReconcile();
     $rows=syncPipelineRows();$xp=readProgress(EXTRACT_PROGRESS_FILE);
     $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];$wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
     /* کارت‌های ساخته‌شده پیش از v10.279 هم با آخرین ردیف صف غنی شوند؛
@@ -24415,9 +24443,9 @@ if(isset($_GET['sync_pipeline_status'])){
             $cur=(int)($xp['current']??0);$tot=(int)($xp['total']??0);$sr['stage_progress']=$tot>0?min(99,(int)round($cur*100/$tot)):35;
         }
         if((string)($sr['stage']??'')==='send'||empty($sr['stage_details']['send'])){
-            $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];$dest=[];
+            $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];$dest=[];$ownedQueueIds=array_values(array_filter(array_map('strval',(array)($sr['send_queue_ids']??[]))));$ownedQueueSet=$ownedQueueIds?array_fill_keys($ownedQueueIds,true):[];
             foreach([['bsl',(array)($bq['entries']??[])],['woo',(array)($wq['entries']??[])]] as [$dn,$entries])foreach($entries as $qe){
-                if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk)continue;
+                if(!is_array($qe)||(string)($qe['profile_key']??'')!==$pk||($ownedQueueSet&&!isset($ownedQueueSet[(string)($qe['id']??'')])))continue;
                 if(!in_array((string)($qe['status']??''),['waiting','running','paused','done'],true))continue;
                 $agg['queued']+=(int)($qe['total']??0);$agg['sent']+=(int)($qe['sent']??$qe['current']??0);
                 $agg['updated']+=(int)($qe['updated']??0);$agg['failed']+=(int)($qe['failed']??0);$agg['skipped']+=(int)($qe['skipped']??0);
@@ -24426,7 +24454,7 @@ if(isset($_GET['sync_pipeline_status'])){
             if($dest){$sr['stage_details']['send']=['counts'=>$agg,'data'=>['destinations'=>$dest],'report'=>'پیشرفت زندهٔ صف‌های مقصد'];$sr['stage_progress']=$agg['queued']>0?min(99,(int)round($agg['sent']*100/$agg['queued'])):25;}
         }
     }unset($sr);
-    echo json_encode(['ok'=>true,'rows'=>$rows,'send_reconciliation'=>$sendReconcile,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    echo json_encode(['ok'=>true,'rows'=>$rows,'send_reconciliation'=>$sendReconcile,'cell_equalize_reconciliation'=>$cellEqualizeReconcile,'server_time'=>time()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if (isset($_GET['manual_sync'])) {
     /* v10.183: وقتی worker دائمی زنده است، همگام‌سازی دستی هم مثل استخراج
@@ -24940,6 +24968,7 @@ if((string)getenv('S4_INTERNAL_CRON')!=='1'){
 /* v10.424: first accepted cron pulse repairs a send-stage pipeline that lost
    its destination owner, reusing the completed extraction checkpoint. */
 $GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);
+$GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -45859,6 +45888,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'class=\"spb-misc-table\"')!==false
       && strpos($selfSrc,"{v:'10." . "428'")!==false
       && version_compare(APP_VERSION,'10.428','>='));
+    $add('10.429', 'برابر‌سازی سلول ردیف واقعی مقصد و مالک همگام‌سازی پایدار می‌سازد',
+         strpos($selfSrc,"'trigger'=>'cell_equalize'")!==false
+      && strpos($selfSrc,"'send_queue_ids'=>\$queueIds")!==false
+      && strpos($selfSrc,'function syncCellEqualizeReconcile():array')!==false
+      && strpos($selfSrc,"\$GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();")!==false);
+    $add('10.429', 'مودال متفرقه با delegation پایدار کلیک باز می‌شود',
+         strpos($selfSrc,'data-misc-destination=')!==false
+      && strpos($selfSrc,"body.onclick=e=>{const cell=e.target.closest('[data-misc-destination]')")!==false
+      && strpos($selfSrc,"{v:'10." . "429'")!==false
+      && version_compare(APP_VERSION,'10.429','>='));
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -50171,7 +50210,10 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
     $lf=@fopen(SYNC_PIPELINE_LOCK_FILE,'c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
     try{
         $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))$all=[];
-        $old=is_array($all[$profileKey]??null)?$all[$profileKey]:[];
+        /* Most pipelines are one row per profile. Cell equalization supplies a
+           stable profile+destination key so simultaneous cells remain distinct. */
+        $storageKey=trim((string)($extra['pipeline_key']??$profileKey));if($storageKey==='')$storageKey=$profileKey;
+        $old=is_array($all[$storageKey]??null)?$all[$storageKey]:[];
         /* A worker holding an older snapshot may report after Stop. Never let it
            resurrect this profile; only an explicit Continue (resume_control) can. */
         if((string)($old['stage']??'')==='stopped'&&empty($extra['resume_control']))return;
@@ -50181,8 +50223,8 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
            محصولات extraction را پاک کند و send نیز pricing را حفظ می‌کند. */
         if(is_array($extra['stage_details']??null))$extra['stage_details']=array_replace(
             is_array($old['stage_details']??null)?$old['stage_details']:[],$extra['stage_details']);
-        $all[$profileKey]=array_merge($old,$extra,[
-            'profile_key'=>$profileKey,'profile_name'=>$profileName?:$profileKey,
+        $all[$storageKey]=array_merge($old,$extra,[
+            'pipeline_key'=>$storageKey,'profile_key'=>$profileKey,'profile_name'=>$profileName?:$profileKey,
             'stage'=>$stage,'trigger'=>$trigger==='periodic'?'periodic':'manual',
             'started_at'=>$started,'updated_at'=>time(),
             'done'=>in_array($stage,['done','error','stopped'],true),
@@ -50245,6 +50287,26 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
         }
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     return$out;
+}
+/** Keep cell equalization visible until both its real send owner and targeted
+ * matrix correction reach terminal durable states. */
+function syncCellEqualizeReconcile():array{
+    $out=['checked'=>0,'done'=>0,'failed'=>0];$jobs=[];
+    foreach((array)(s4WorkerLoadQueue()['entries']??[])as$j)if(is_array($j)&&!empty($j['id']))$jobs[(string)$j['id']]=$j;
+    $send=[];foreach([bslReadQueue(),wooReadQueue()]as$q)foreach((array)($q['entries']??[])as$e)if(is_array($e)&&!empty($e['id']))$send[(string)$e['id']]=$e;
+    foreach(syncPipelineRows()as$row){if(!is_array($row)||!empty($row['done'])||(string)($row['operation']??'')!=='cell_equalize')continue;$out['checked']++;
+        $pk=(string)($row['profile_key']??'');$ids=array_values(array_filter(array_map('strval',(array)($row['send_queue_ids']??[]))));$fixId=(string)($row['matrix_fix_job_id']??'');
+        $sendTerminal=(bool)$ids;$sendFailed=false;$agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];
+        foreach($ids as$id){$e=$send[$id]??null;if(!$e){$sendTerminal=false;continue;}$st=(string)($e['status']??'');if(!in_array($st,['done','failed','cancelled'],true))$sendTerminal=false;if(in_array($st,['failed','cancelled'],true))$sendFailed=true;
+            $agg['queued']+=(int)($e['total']??0);$agg['sent']+=(int)($e['sent']??0);$agg['updated']+=(int)($e['updated']??0);$agg['failed']+=(int)($e['failed']??0);$agg['skipped']+=(int)($e['skipped']??0);}
+        $fix=$jobs[$fixId]??null;$fixStatus=(string)($fix['status']??'');$fixTerminal=$fixId!==''&&in_array($fixStatus,['done','failed','cancelled'],true);$fixFailed=in_array($fixStatus,['failed','cancelled'],true);
+        if(!$sendTerminal||!$fixTerminal)continue;$failed=$sendFailed||$fixFailed;
+        syncPipelineMark($pk,(string)($row['profile_name']??$pk),$failed?'error':'done','manual',[
+            'pipeline_key'=>(string)($row['pipeline_key']??('cell:'.$pk.':'.(string)($row['destination']??''))),
+            'operation'=>'cell_equalize','message'=>$failed?'برابر‌سازی با خطا پایان یافت':'برابر‌سازی مقصد کامل شد',
+            'stage_details'=>['send'=>syncSendStageDetails($agg+['message'=>$failed?'صف یا اصلاح هدفمند خطا داشت':'صف مقصد و اصلاح هدفمند کامل شدند'])]]);
+        $out[$failed?'failed':'done']++;
+    }return$out;
 }
 function syncPricingSnapshot(array $profile,array $cn):array{
     $products=profileOrderedProducts($profile);
@@ -51194,16 +51256,17 @@ function manualSyncProfileRunning(string $which, string $profileKey): bool {
     return false;
 }
 
-function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $exRes): array {
-    $out = ['log' => [], 'woo' => false, 'bsl' => false];
+function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $exRes, array $enqueueOpts=[]): array {
+    $out = ['log' => [], 'woo' => false, 'bsl' => false, 'queue_ids'=>[]];
     $syncCfg = is_array($profile['syncConfig'] ?? null) ? $profile['syncConfig'] : [];
-    $target = (string)($syncCfg['target'] ?? 'woo');
+    $target = (string)($enqueueOpts['target']??$syncCfg['target'] ?? 'woo');
     if (!in_array($target, ['woo', 'bsl', 'both', 'none'], true)) $target = 'woo';
     if ($target === 'none') {
         $out['log'][] = '⏭ مقصد none';
         return $out;
     }
-    $now = time();
+    $now = time();$queueTrigger=(string)($enqueueOpts['trigger']??'manual_sync');$replaceWaiting=!array_key_exists('replace_waiting',$enqueueOpts)||!empty($enqueueOpts['replace_waiting']);$allowParallel=!empty($enqueueOpts['allow_parallel']);
+    if($target==='bsl'&&isset($enqueueOpts['bsl_vendor_id']))$cn['basalam']['send_shop_ids']=[(int)$enqueueOpts['bsl_vendor_id']];
     /* Build product list from profile disk */
     $products = [];
     foreach (profileOrderedProducts($profile, null, true) as $entry) {
@@ -51246,7 +51309,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
     $stamp = date('Ymd_His');
     $safeKey = preg_replace('~[^a-zA-Z0-9_\-]+~', '_', $key);
 
-    if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue') && !manualSyncProfileRunning('woo', $key)) {
+    if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue') && ($allowParallel||!manualSyncProfileRunning('woo', $key))) {
         try {
             $wooSend = array_values($wooProducts);
             $wooQFile = $qDir . '/woo_queue_' . $safeKey . '_' . $stamp . '.json';
@@ -51257,6 +51320,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             if (!isset($wooQueue['entries']) || !is_array($wooQueue['entries'])) $wooQueue['entries'] = [];
             /* clear stale for this profile */
             foreach ($wooQueue['entries'] as &$we) {
+                if(!$replaceWaiting)break;
                 if (!is_array($we)) continue;
                 if ((string)($we['profile_key'] ?? '') !== $key) continue;
                 if (in_array((string)($we['status'] ?? ''), ['waiting', 'paused'], true)) {
@@ -51276,11 +51340,11 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0,
                 'started_at' => 0, 'done_at' => 0,
                 'profile_key' => $key, 'profile_name' => (string)($profile['name'] ?? $key),
-                'only_changed' => $wooOnlyChanged, 'trigger' => 'manual_sync',
+                'only_changed' => $wooOnlyChanged, 'trigger' => $queueTrigger, 'origin'=>'cell_equalize'===$queueTrigger?'cell_equalize':'manual',
                 'config' => ['title_suffix' => $wooSuffix, 'category_id' => $wooCatId, 'force_all' => true],
             ];
             wooWriteQueue($wooQueue);
-            $out['woo'] = true;
+            $out['woo'] = true;$out['woo_id']=$wooQueueId;$out['queue_ids'][]=$wooQueueId;
             $out['woo_total'] = count($wooSend);
             $out['log'][] = '🛒 ووکامرس: ' . count($wooSend) . ' در صف';
         } catch (Throwable $e) {
@@ -51288,7 +51352,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         }
     }
 
-    if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue') && !manualSyncProfileRunning('bsl', $key)) {
+    if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue') && ($allowParallel||!manualSyncProfileRunning('bsl', $key))) {
         try {
             $bslSend = array_values($bslProducts);
             $qFile = $qDir . '/bsl_queue_' . $safeKey . '_' . $stamp . '.json';
@@ -51298,6 +51362,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             $queue = bslReadQueue();
             if (!isset($queue['entries']) || !is_array($queue['entries'])) $queue['entries'] = [];
             foreach ($queue['entries'] as &$be) {
+                if(!$replaceWaiting)break;
                 if (!is_array($be)) continue;
                 if ((string)($be['profile_key'] ?? '') !== $key) continue;
                 if (in_array((string)($be['status'] ?? ''), ['waiting', 'paused'], true)) {
@@ -51314,33 +51379,33 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             $delayMs = (int)($cn['basalam']['delay_ms'] ?? 400);
             $retryDelayMs = (int)($cn['basalam']['retry_delay_ms'] ?? 1500);
             $allFallbackCats = is_array($profile['bslFallbackCatIds'] ?? null) ? $profile['bslFallbackCatIds'] : [];
-            $manualShops=is_array($cn['basalam']['send_shop_ids']??null)?bslFanoutShops($cn):[];
+            $manualShops=is_array($cn['basalam']['send_shop_ids']??null)?bslFanoutShops($cn):[];$createdBslIds=[];
             if($manualShops){
                 foreach($manualShops as $_msi=>$_msh){
-                    $_mvid=(int)$_msh['vendor_id'];$_mid=$_msi===0?$queueId:($queueId.'_s'.$_mvid);
+                    $_mvid=(int)$_msh['vendor_id'];$_mid=$_msi===0?$queueId:($queueId.'_s'.$_mvid);$createdBslIds[]=$_mid;
                     $queue['entries'][] = [
                         'id'=>$_mid,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
                         'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'done_at'=>0,'paused_at'=>0,
                         'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
                         'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'shop_is_default'=>!empty($_msh['is_default']),
-                        'batch_id'=>$queueId,'trigger'=>'manual_sync','auto_sync'=>true,
+                        'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
                         'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
                             'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>1,
                             'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'force_all'=>true],
                     ];
                 }
             }else{
-                $queue['entries'][] = [
+                $createdBslIds[]=$queueId;$queue['entries'][] = [
                     'id'=>$queueId,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
                     'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'done_at'=>0,'paused_at'=>0,
                     'only_changed'=>false,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,
                         'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,
                         'send_all_shops'=>!empty($cn['basalam']['send_all_shops']),'force_all'=>true],
-                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'trigger'=>'manual_sync','auto_sync'=>true,
+                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
                 ];
             }
             bslWriteQueue($queue);
-            $out['bsl'] = true;
+            $out['bsl'] = true;$out['bsl_ids']=$createdBslIds;$out['queue_ids']=array_values(array_merge($out['queue_ids'],$createdBslIds));
             $out['bsl_total'] = count($bslSend);
             $out['log'][] = '⭐ باسلام: ' . count($bslSend) . ' در صف';
         } catch (Throwable $e) {
@@ -73716,9 +73781,11 @@ function renderStartProfileBreakdown(d){
       '<td><div class="spb-coverage"><div class="spb-coverage-top"><b>'+spoNum(done)+' از '+spoNum(total)+'</b><span>'+spoNum(pct)+'٪</span></div><span class="spb-bar"><i style="width:'+pct+'%"></i></span></div></td></tr>';
   }).join('');
   const miscMap=mx.uncoded_products||{},miscTotal=dests.reduce((n,x)=>n+(x.type==='bsl'?(Array.isArray(miscMap[x.key])?miscMap[x.key].length:parseInt(x.uncoded||0)):0),0);
-  const miscCells=dests.map(x=>{const n=x.type==='bsl'?(Array.isArray(miscMap[x.key])?miscMap[x.key].length:parseInt(x.uncoded||0)):0;return '<td class="spb-misc-cell" onclick="event.stopPropagation();openStartMiscProducts(\''+esc(x.key||'')+'\')"><b>'+spoNum(n)+'</b><small>'+(x.type==='bsl'?'نمایش محصولات':'موردی ندارد')+'</small></td>';}).join('');
-  const miscHtml='<tr class="spb-misc-row" tabindex="0" role="button" onclick="openStartMiscProducts(\'all\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openStartMiscProducts(\'all\')}"><td><span class="spb-profile"><i></i><b>متفرقه‌های بدون کد</b></span></td><td class="spb-misc-cell"><b>'+spoNum(miscTotal)+'</b><small>جمع همهٔ غرفه‌ها</small></td>'+miscCells+'<td class="spb-misc-na">—</td><td class="spb-misc-na">—</td><td class="spb-misc-na">برای مشاهده کلیک کنید</td></tr>';
+  const miscCells=dests.map(x=>{const n=x.type==='bsl'?(Array.isArray(miscMap[x.key])?miscMap[x.key].length:parseInt(x.uncoded||0)):0;return '<td class="spb-misc-cell" data-misc-destination="'+esc(x.key||'')+'"><b>'+spoNum(n)+'</b><small>'+(x.type==='bsl'?'نمایش محصولات':'موردی ندارد')+'</small></td>';}).join('');
+  const miscHtml='<tr class="spb-misc-row" tabindex="0" role="button" data-misc-destination="all"><td><span class="spb-profile"><i></i><b>متفرقه‌های بدون کد</b></span></td><td class="spb-misc-cell"><b>'+spoNum(miscTotal)+'</b><small>جمع همهٔ غرفه‌ها</small></td>'+miscCells+'<td class="spb-misc-na">—</td><td class="spb-misc-na">—</td><td class="spb-misc-na">برای مشاهده کلیک کنید</td></tr>';
   body.innerHTML=profileHtml+miscHtml;
+  body.onclick=e=>{const cell=e.target.closest('[data-misc-destination]');if(cell&&body.contains(cell))openStartMiscProducts(cell.dataset.miscDestination||'all')};
+  body.onkeydown=e=>{if(e.key!=='Enter'&&e.key!==' ')return;const row=e.target.closest('.spb-misc-row');if(row){e.preventDefault();openStartMiscProducts('all')}};
   const pct=all?Math.round(detailed*100/all):0,destFoot=dests.map(x=>'<td><b class="spb-dest-num">'+spoNum(destTotals[x.key]||0)+'</b><small class="spb-dest-pct">موجود کددارِ پروفایل‌ها</small>'+(x.type==='bsl'?'<small class="spb-uncoded">متفرقه بدون کد: '+spoNum(x.uncoded||0)+'</small>':'')+'</td>').join('');
   foot.innerHTML='<tr><td>جمع '+spoNum(rows.length)+' پروفایل</td><td>'+spoNum(all)+'</td>'+destFoot+'<td>'+spoNum(enabled)+' پروفایل فعال</td><td>'+(enabled?'مرحلهٔ دوم فعال است':'مرحلهٔ دوم غیرفعال است')+'</td><td>'+spoNum(detailed)+' از '+spoNum(all)+' · '+spoNum(pct)+'٪</td></tr>';
 }
@@ -79367,6 +79434,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.429', t:'📨 برابر‌سازی با صف واقعی مقصد و اصلاح کلیک مودال', items:[
+    'هر برابر‌سازی اکنون علاوه بر build/fix هدفمند، یک ردیف واقعی waiting در صف ووکامرس یا همان غرفهٔ باسلام می‌سازد.',
+    'عملیات با queue_idهای مقصد در ردیف همگام‌سازی ثبت می‌شود و تا پایان هم صف ارسال و هم worker اصلاح، done نمی‌شود؛ توقف، ادامه، checkpoint و watchdog همان ارسال عادی را دارد.',
+    'ارسال یک غرفه با غرفهٔ دیگر تداخل ندارد و کلیک تکراری همان صف فعال را دوباره استفاده می‌کند، نه اینکه sender موازی بسازد.',
+    'بازشدن مودال متفرقه از inline onclick به event delegation پایدار منتقل شد تا کلیک همهٔ سلول‌ها قطعی کار کند.'
+  ]},
   {v:'10.428', t:'🧩 ردیف رنگی و مودال محصولات متفرقه', items:[
     'یک ردیف مستقل با پس‌زمینهٔ کهربایی برای محصولات متفرقهٔ بدون کد به جدول پروفایل‌های Start اضافه شد.',
     'جمع همهٔ غرفه‌ها و تعداد هر غرفه در سلول‌های قابل‌کلیک نمایش داده می‌شود؛ کلیک هر سلول مودال همان محدوده را باز می‌کند.',
