@@ -368,7 +368,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.418';
+const APP_VERSION = '10.419';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -22520,9 +22520,10 @@ function cronWatchdogs(array $cn): array {
                 $results['paused_rows_promoted'][$wq]=(int)$batchResume['promoted'];
             /* توقفِ صریحِ کاربر از مسیرِ خودکار عبور نمی‌کند؛ صفِ واجدشرایط
                در همان ردیف/چک‌پوینت ادامه می‌یابد و workerها آن را به‌ترتیب برمی‌دارند. */
-            /* Basalam is checked against its real last-product heartbeat on
-               every cron. One full minute without movement is enough; the
-               generic configurable threshold remains for WooCommerce. */
+            /* Basalam is checked on every cron. A running row with no backend
+               flock is resumed immediately on this pulse; 60 seconds remains
+               only the conservative threshold for an owner that still holds
+               the flock but has stopped producing product progress. */
             $queueStallAfter=$wq==='bsl'?BSL_SEND_STALL_SEC:$stallCfg;
             $w = queueStallRecover($wq, $queueStallAfter, false, 1500, true, false, true);
             if (!empty($w['stalled'])) {
@@ -45391,7 +45392,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, hex2bin('c399')) === false
       && strpos($selfSrc, "{v:'10." . "417'") !== false
       && version_compare(APP_VERSION, '10.' . '417', '>='));
-    $add('10.415', 'هر کران باسلام پس از ۶۰ ثانیه بی‌حرکتی همان checkpoint را ادامه می‌دهد',
+    $add('10.419', 'اولین کران ردیف running بدون مالک باسلام را فوری ادامه می‌دهد',
+         strpos($selfSrc, "if (\$isBsl && !\$lockFresh) {") !== false
+      && strpos($selfSrc, "'owner_absent'=>true") !== false
+      && strpos($selfSrc, "empty(\$chk['owner_absent'])") !== false
+      && strpos($selfSrc, "'resume' => '1', 'auto_resume'=>'1'") !== false
+      && strpos($selfSrc, "\$explicitSelected=\$explicitResume&&\$requestedBslQueueId!==''") !== false);
+    $add('10.419', 'کارت وظیفهٔ فعال زمان مورد انتظار تا اتمام را نشان می‌دهد',
+         strpos($selfSrc, '⏱ زمان مورد انتظار تا اتمام: حدود ') !== false
+      && strpos($selfSrc, 'parseInt(row.phase_total)') !== false
+      && strpos($selfSrc, 'const etaSec=') !== false
+      && strpos($selfSrc, "{v:'10." . "419'") !== false
+      && version_compare(APP_VERSION, '10.' . '419', '>='));
+    $add('10.415', 'ردیف دارای مالک زنده پس از ۶۰ ثانیه بی‌حرکتی برای بازیابی علامت می‌خورد',
          strpos($selfSrc, 'const BSL_SEND_STALL_SEC = 60;') !== false
       && strpos($selfSrc, 'const BSL_RESUME_COOLDOWN_SEC = 55;') !== false
       && strpos($selfSrc, "\$queueStallAfter=\$wq==='bsl'?BSL_SEND_STALL_SEC:\$stallCfg;") !== false
@@ -50008,7 +50021,21 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
            is released. Previously ['lock'=>$now] reset idle to zero forever. */
         $_iwS = queueRowIdle($which, $running, $prog, $now, [], $runningCount);
         $idle = (int)$_iwS['idle'];
-        if ($lockFresh && $idle < $staleAfter) {
+        /* v10.419: an unlocked backend is conclusive evidence that this running
+           row has no sender. Do not turn the heartbeat threshold into an extra
+           one-minute grace period: hand it to queueStallRecover on this cron.
+           The recovery path re-acquires this same flock before dispatch, so a
+           sender that starts during the probe loses the race safely instead of
+           becoming a duplicate owner. */
+        if ($isBsl && !$lockFresh) {
+            $stCur=(int)($running['current']??0);
+            if($progressOwned)$stCur=max($stCur,(int)($prog['current']??0));
+            return ['stalled'=>true,'kind'=>'running','idle'=>$idle,
+                'queue_id'=>$running['id']??'','lock_held'=>false,'owner_absent'=>true,
+                'beat_from'=>(string)$_iwS['why'],'current'=>$stCur,'resume_from'=>$stCur,
+                'total'=>(int)($running['total']??0)];
+        }
+        if ($idle < $staleAfter) {
             return ['stalled' => false, 'reason' => 'در حال اجرا', 'idle' => $idle];
         }
         if ($idle >= $staleAfter) {
@@ -50377,7 +50404,8 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
        product progress. Its cooldown therefore cannot retain the generic 90s
        delay; progress ownership and backend flock still prevent duplicates. */
     $resumeCooldown=$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_RESUME_COOLDOWN;
-    if (!$allowUserStopped && $lastAt > 0 && ($now - $lastAt) < $resumeCooldown && $tries > 0
+    if (!$allowUserStopped && empty($chk['owner_absent'])
+        && $lastAt > 0 && ($now - $lastAt) < $resumeCooldown && $tries > 0
         && !in_array((string)($book['status'] ?? ''), ['exhausted','awaiting_lock_release'], true)) {
         $chk['resumed'] = false;
         $chk['deferred'] = true;
@@ -78666,6 +78694,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.419', t:'⚡ ادامهٔ فوری ارسال مرده در اولین کران و بازگشت ETA', items:[
+    'اگر ردیف ارسال running باشد ولی flock بک‌اند آزاد باشد، نبودِ worker قطعی است و همان اولین کران بدون انتظار ۶۰ ثانیه آن را از checkpoint ادامه می‌دهد.',
+    'رزرو flock، queue_id دقیق و claim صریح resume همچنان اجازهٔ دو sender همزمان را نمی‌دهند؛ آستانهٔ ۶۰ ثانیه فقط برای مالک زنده‌ای می‌ماند که قفل را نگه داشته ولی پیشرفت ندارد.',
+    'جملهٔ «زمان مورد انتظار تا اتمام» به کارت وظیفهٔ فعال زیر کش کاتالوگ برگشت و برای صف‌های total=0 قدیمی از phase_total واقعی استفاده می‌کند.'
+  ]},
   {v:'10.418', t:'📦 تازه‌سازی بستهٔ نصب', items:[
     'بستهٔ کامل پس از cache قدیمی GitHub با شناسهٔ محتوای تازه منتشر شد؛ منطق عملیاتی 10.416 و آزمون اصلاح‌شدهٔ 10.417 بدون تغییر حفظ شده‌اند.'
   ]},
@@ -93858,7 +93891,10 @@ function renderBslActiveSendTask(q){
             .sort((a,b)=>rank[a.status]-rank[b.status]||Number(b.resume_requested_at||b.started_at||0)-Number(a.resume_requested_at||a.started_at||0))[0]||null;
     }
     if(!row){box.style.display='none';box.innerHTML='';return;}
-    const total=Math.max(0,parseInt(row.total)||0),current=Math.max(0,parseInt(row.current)||0);
+    /* Queue rows created before total was known keep total=0; the live phase
+       carries the real scope and must drive checkpoint, percentage and ETA. */
+    const total=Math.max(0,parseInt(row.total)||0,parseInt(row.phase_total)||0);
+    const current=Math.max(0,parseInt(row.current)||0,parseInt(row.phase_current)||0);
     const incomplete=row.status!=='done'&&(total<=0||current<total);
     const live=!!row._worker_live||!!(q&&q.active_send&&String(q.active_send.queue_id||'')===String(row.id||''));
     const canContinue=incomplete&&!live&&['running','paused','waiting','failed'].includes(String(row.status||''));
@@ -93866,6 +93902,10 @@ function renderBslActiveSendTask(q){
     const shop=String(row.shop_name||row.phase_shop_name||'غرفهٔ پیش‌فرض');
     const beat=parseInt(row.last_progress_ts||0),age=beat>0?Math.max(0,Math.floor(Date.now()/1000)-beat):null;
     const pct=total>0?Math.max(0,Math.min(100,Math.round(current*100/total))):0;
+    const started=parseInt(row.started_at||0),elapsed=started>0?Math.max(1,Math.floor(Date.now()/1000)-started):0;
+    const etaSec=live&&total>current&&current>0&&elapsed>0?Math.round((total-current)/(current/elapsed)):0;
+    const etaHuman=etaSec>0?(etaSec>=3600?(Math.floor(etaSec/3600)+' ساعت و '+Math.max(1,Math.round((etaSec%3600)/60))+' دقیقه'):(etaSec>=60?(Math.ceil(etaSec/60)+' دقیقه'):(etaSec+' ثانیه'))):'';
+    const etaLine=etaHuman?'⏱ زمان مورد انتظار تا اتمام: حدود '+toFa(etaHuman):'';
     const state=live?'🟢 در حال ارسال واقعی':(canContinue?'⚠ ارسال متوقف/گیرکرده':'⏳ در صف ارسال');
     box.style.display='block';
     box.innerHTML='<div style="padding:10px 12px;background:'+(live?'#052e164d':'#43140755')+';border:1px solid '+(live?'#22c55e88':'#f9731688')+';border-radius:10px">'
@@ -93874,6 +93914,7 @@ function renderBslActiveSendTask(q){
       +'<div style="margin-top:6px;color:#e2e8f0;font-size:11px;font-weight:700">👤 پروفایل ارسال: '+esc(profile)+'</div>'
       +'<div style="margin-top:3px;color:#94a3b8;font-size:10px">🏪 '+esc(shop)+' · checkpoint: '+toFa(current)+' از '+toFa(total)
       +(age===null?'':' · آخرین محصول: '+toFa(age)+' ثانیه پیش')+'</div>'
+      +(etaLine?'<div style="margin-top:4px;color:#67e8f9;font-size:10px;font-weight:700">'+etaLine+'</div>':'')
       +'<div style="height:5px;background:#0f172a;border-radius:99px;overflow:hidden;margin-top:7px"><i style="display:block;height:100%;width:'+pct+'%;background:'+(live?'#22c55e':'#f97316')+'"></i></div></div>';
 }
 function renderBslQueue(q){
