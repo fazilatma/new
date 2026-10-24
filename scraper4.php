@@ -3181,11 +3181,17 @@ function s4ExtractDetailNodeValue(string $field, DOMNodeList $ns, string $baseUr
     }
     $rows = s4ExtractSpecsRowsFromDom($ns);
     if ($field === 'weight' && function_exists('s4ParseWeightGrams') && function_exists('s4ClassifyWeightSpecLabel')) {
-        if ($rows && function_exists('s4ExtractWeightsFromSpecs')) {
-            $spW = s4ExtractWeightsFromSpecs(s4SpecsRowsToTableHtml($rows));
-            if (!empty($spW['raw']) && (($spW['net_g'] ?? 0) > 0 || ($spW['pkg_g'] ?? 0) > 0)) {
-                return trim((string)$spW['raw']);
+        if ($rows) {
+            $pkgFallback = '';
+            foreach ($rows as $rw) {
+                $rk = trim((string)($rw['k'] ?? ''));
+                $rv = trim((string)($rw['v'] ?? ''));
+                $rKind = s4ClassifyWeightSpecLabel($rk);
+                if ($rKind === '' || $rv === '' || s4ParseWeightGrams($rv) <= 0) continue;
+                if ($rKind === 'net') return $rv;
+                if ($pkgFallback === '') $pkgFallback = $rv;
             }
+            if ($pkgFallback !== '') return $pkgFallback;
         }
         $labeledMatch = '';
         $unitMatch = '';
@@ -12687,7 +12693,7 @@ function s4ParseWeightGrams($raw): int {
     if (preg_match('~(?:^|\s)یک\s*کیلو(?!\s*و)~u', $s) && !preg_match('~\d~', $s)) return 1000;
 
     /* در بازه‌ها مثل «800 تا 1000 گرم»، سقف بازه مبنای امن پست است */
-    $sRng = preg_replace('~(\d+(?:\.\d+)?)\s*(?:تا|الی|-|–|~)\s*(\d+(?:\.\d+)?)~u', '$2', $s) ?? $s;
+    $sRng = preg_replace('~(\d+(?:\.\d+)?)\s*(?:تا|الی|-|–|\~)\s*(\d+(?:\.\d+)?)~u', '$2', $s) ?? $s;
 
     /* اول کیلوگرم بررسی شود (چون کیلوگرم حاوی گرم و kg حاوی g است) */
     if (preg_match('~(\d+(?:\.\d+)?)\s*(?:کیلو\s*گرم|کیلوگرم|کیلو|ک\.گ|kilograms?|kilo|kg\b)~iu', $sRng, $mKg)) {
@@ -12804,18 +12810,22 @@ function s4AutoExtractWeightFromDetailDom(DOMXPath $xp, string $rawHtml = ''): a
     }
     /* بررسی جداول مشخصات فنی و لیست‌های dl در کل صفحهٔ جزئیات */
     $tblNodes = @$xp->query('//table[.//tr] | //dl[.//dt and .//dd]');
-    if ($tblNodes && $tblNodes->length && function_exists('s4ExtractSpecsRowsFromDom') && function_exists('s4SpecsRowsToTableHtml')) {
+    if ($tblNodes && $tblNodes->length && function_exists('s4ExtractSpecsRowsFromDom')) {
         foreach ($tblNodes as $tn) {
-            $subList = @$xp->query('self::*', $tn);
-            if (!$subList || !$subList->length) continue;
-            $rows = s4ExtractSpecsRowsFromDom($subList);
+            $rows = s4ExtractSpecsRowsFromDom($tn);
             if (!$rows) continue;
-            $spW = s4ExtractWeightsFromSpecs(s4SpecsRowsToTableHtml($rows));
-            if ($out['weight'] === '' && ($spW['net_g'] ?? 0) > 0 && !empty($spW['raw'])) {
-                $out['weight'] = trim((string)$spW['raw']);
-            }
-            if ($out['package_weight'] === '' && ($spW['pkg_g'] ?? 0) > 0) {
-                $out['package_weight'] = (int)$spW['pkg_g'] . ' گرم';
+            foreach ($rows as $rw) {
+                $rk = trim((string)($rw['k'] ?? ''));
+                $rv = trim((string)($rw['v'] ?? ''));
+                $rKind = s4ClassifyWeightSpecLabel($rk);
+                if ($rKind === '' || $rv === '') continue;
+                $rg = s4ParseWeightGrams($rv);
+                if ($rg <= 0) continue;
+                if ($rKind === 'package') {
+                    if ($out['package_weight'] === '') $out['package_weight'] = $rv;
+                } else {
+                    if ($out['weight'] === '') $out['weight'] = $rv;
+                }
             }
             if ($out['weight'] !== '' && $out['package_weight'] !== '') break;
         }
@@ -42425,6 +42435,7 @@ if (isset($_GET['queue_watchdog'])) {
  *  هر قابلیت را واقعاً در همین فایلِ در حال اجرا بررسی می‌کند.
  * ===================================================================== */
 if (isset($_GET['selftest'])) {
+    @set_time_limit(180);
     $wantJson = isset($_GET['json']);
     header('Content-Type: ' . ($wantJson ? 'application/json' : 'text/html') . '; charset=UTF-8');
     try {
