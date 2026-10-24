@@ -40916,6 +40916,7 @@ if (isset($_GET['queue_watchdog'])) {
 if (isset($_GET['selftest'])) {
     $wantJson = isset($_GET['json']);
     header('Content-Type: ' . ($wantJson ? 'application/json' : 'text/html') . '; charset=UTF-8');
+    try {
 
     $checks = [];
     $add = function (string $ver, string $name, bool $ok, string $detail = '') use (&$checks) {
@@ -54033,7 +54034,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     if ($wantJson) {
         echo json_encode(['ok' => $allOk, 'version' => APP_VERSION,
             'passed' => $okCount, 'total' => count($checks),
-            'checks' => $checks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE);
+            'checks' => $checks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
 
@@ -54081,6 +54082,9 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     echo '<div class="d">این صفحه فقط می‌خواند و چیزی را تغییر نمی‌دهد. '
        . 'برای خروجی ماشینی: <code>?selftest=1&amp;json=1</code></div>';
     echo '</div></body></html>';
+    } catch (Throwable $_stErr) {
+        echo json_encode(['ok' => false, 'selftest_exception' => $_stErr->getMessage(), 'line' => $_stErr->getLine()], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    }
     exit;
 }
 
