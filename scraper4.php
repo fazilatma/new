@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.457';
+const APP_VERSION = '10.458';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1127,18 +1127,20 @@ function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
     $hb = (int)($st['heartbeat'] ?? 0);$running=!empty($st['running']);
     if ($running && $hb > 0 && time() - $hb <= $staleSec) return true;
-    /* A PID can remain visible as a zombie after the daemon has exited. The
-       worker lock is authoritative for a long-running/blocking daemon. */
+    $pid=(int)($st['pid']??0);$age=$hb>0?time()-$hb:PHP_INT_MAX;
+    /* A PID can remain visible as a zombie after the daemon has exited, and an
+       exec child may inherit WORKER_LOCK_FILE's fd after the parent daemon dies.
+       Never treat an inherited lock as active once the daemon PID is dead and
+       its heartbeat has expired past the stale recovery window. */
     $fp = @fopen(WORKER_LOCK_FILE, 'c');$lockHeld=false;
     if ($fp) {
         $free = @flock($fp, LOCK_EX | LOCK_NB);$lockHeld=!$free;
         if ($free) @flock($fp, LOCK_UN);
         @fclose($fp);
     }
-    if($lockHeld)return true;
+    if ($lockHeld && ($pid <= 0 || s4WorkerPidAlive($pid) || $age <= max(120, $staleSec * 3))) return true;
     /* Without lock ownership, accept a living PID only for a short handoff
        window; never let a zombie suppress cron watchdog recovery forever. */
-    $pid=(int)($st['pid']??0);$age=$hb>0?time()-$hb:PHP_INT_MAX;
     return $running&&$age<=max(120,$staleSec*2)&&s4WorkerPidAlive($pid);
 }
 
@@ -1949,16 +1951,42 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
 function s4CliPhpBinary(): string {
     $env = trim((string)getenv('SCRAPER_PHP'));
     if ($env !== '') return $env;
-    if (defined('PHP_BINARY') && PHP_BINARY && stripos((string)PHP_BINARY, 'php-fpm') === false) return (string)PHP_BINARY;
+    $rawBin = defined('PHP_BINARY') ? trim((string)PHP_BINARY) : '';
+    /* v10.458: روی LiteSpeed/cPanel متغیر PHP_BINARY به lsphp اشاره می‌کند که وقتی
+       از داخل درخواست HTTP با exec احضار شود متغیرهای CGI را به ارث می‌برد و فوراً
+       خارج می‌شود. ابتدا باینری واقعی php-cli کنار همان نسخه (ea-php / alt-php) را می‌یابیم. */
+    if ($rawBin !== '') {
+        $base = strtolower(basename($rawBin));
+        if (str_contains($base, 'lsphp') || str_contains($base, 'php-fpm') || str_contains($base, 'php-cgi')) {
+            $dir = dirname($rawBin);
+            $cands = [
+                $dir . '/php',
+                dirname($dir) . '/bin/php',
+                defined('PHP_BINDIR') && PHP_BINDIR ? (rtrim((string)PHP_BINDIR, '/') . '/php') : '',
+                '/usr/local/bin/php',
+                '/usr/bin/php',
+            ];
+            foreach ($cands as $cand) {
+                if ($cand !== '' && @is_file($cand) && @is_executable($cand)) return $cand;
+            }
+        }
+        if (stripos($rawBin, 'php-fpm') === false) return $rawBin;
+    }
     if (defined('PHP_BINDIR') && PHP_BINDIR && is_file(PHP_BINDIR . '/php')) return PHP_BINDIR . '/php';
+    foreach (['/usr/local/bin/php', '/usr/bin/php'] as $fbPhp) {
+        if (@is_file($fbPhp) && @is_executable($fbPhp)) return $fbPhp;
+    }
     return 'php';
 }
 /** LiteSpeed در PHP_BINARY معمولاً lsphp می‌دهد؛ این binary با -d وارد LSAPI
- * mode و فقط Usage چاپ می‌کند. -q + script آن را صریحاً در CLI mode می‌برد. */
+ * mode و فقط Usage چاپ می‌کند، و اگر متغیرهای محیطی HTTP (مثل REQUEST_METHOD)
+ * از درخواست والد به ارث برسد بدون اجرای اسکریپت خارج می‌شود. env -u محیط را
+ * کاملاً از متغیرهای CGI پاک می‌کند تا هم php-cli و هم lsphp -q پایدار اجرا شوند. */
 function s4CliPhpCommand(string $php,string $mem='512M'): string {
+    $cleanEnv='env -u REQUEST_METHOD -u QUERY_STRING -u CONTENT_TYPE -u CONTENT_LENGTH -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u SCRIPT_NAME -u DOCUMENT_ROOT -u REDIRECT_STATUS -u SERVER_PROTOCOL -u HTTP_HOST S4_CLI_SPAWN=1 ';
     $base=strtolower(basename($php));
-    if(str_contains($base,'lsphp'))return escapeshellarg($php).' -q';
-    return escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
+    if(str_contains($base,'lsphp'))return $cleanEnv.escapeshellarg($php).' -q';
+    return $cleanEnv.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
 }
 
 /** v10.337: scheduler مشترک تمام build/fixهای ماتریس.
@@ -2830,7 +2858,7 @@ function extractMergeDetail(array $fresh, array $prev): array {
        تا ابد قیمتِ کهنه‌اش را نشان می‌داد و مقایسهٔ گران/ارزان هم دروغ
        می‌شد. محافظتِ «قیمتِ خالی چیزی را پاک نکند» جای دیگری اعمال شده:
        داخلِ فازِ جزئیات، جایی که می‌دانیم صفحهٔ محصول باز شده است. */
-    $carry = ['shortDesc', 'longDesc', 'sku', 'brand', 'weight', 'stock',
+    $carry = ['shortDesc', 'longDesc', 'specs', 'sku', 'brand', 'weight', 'stock',
               'category', 'tags', 'variations_text'];
     foreach ($carry as $f) {
         $new = $fresh[$f] ?? '';
@@ -2840,7 +2868,7 @@ function extractMergeDetail(array $fresh, array $prev): array {
         }
     }
     // فهرست‌ها: اگر اجرای تازه چیزی نگرفته، قبلی را نگه دار
-    foreach (['variations', 'variation_groups', 'variation_prices'] as $f) {
+    foreach (['variations', 'variation_groups', 'variation_prices', 'variation_combinations'] as $f) {
         if (empty($fresh[$f]) && !empty($prev[$f]) && is_array($prev[$f])) $fresh[$f] = $prev[$f];
     }
     // v8.81: بازهٔ قیمت تنوع‌ها هم نباید هر بار صفر شود
@@ -2931,6 +2959,231 @@ function detailCleanHtml(?DOMNode $node, string $baseUrl = ''): string {
        script بوده)، به متن خام برگرد تا فیلد خالی نماند. */
     if (trim(strip_tags($html)) === '') return trim($node->textContent);
     return $html;
+}
+
+/* =====================================================================
+ *  v10.458: موتور یکپارچهٔ استخراج، نرمال‌سازی و رندر جدول مشخصات فنی
+ *  (برای پروفایل‌های اسنپ‌شاپ و هر سایت فروشگاهی دیگر: table, dl, ul/li,
+ *   ردیف‌های ۲ستونی div مثل دیجی‌کالا/ترب، آرایهٔ JSON، یا متن کلید:مقدار)
+ * ===================================================================== */
+function s4SpecsRowsToTableHtml(array $rows): string {
+    $clean = [];
+    $seen = [];
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        $k = normalize_text((string)($r['k'] ?? ($r['title'] ?? ($r['name'] ?? ($r[0] ?? '')))));
+        $v = normalize_text((string)($r['v'] ?? ($r['value'] ?? ($r[1] ?? ''))));
+        $k = trim($k, " \t\n\r\0\x0B:：");
+        if ($k === '' || $v === '' || mb_strlen($k) > 120) continue;
+        $sig = mb_strtolower($k . '||' . $v, 'UTF-8');
+        if (isset($seen[$sig])) continue;
+        $seen[$sig] = true;
+        $clean[] = ['k' => $k, 'v' => $v];
+    }
+    if (!$clean) return '';
+    $tr = '';
+    foreach ($clean as $row) {
+        $tr .= '<tr><th>' . h($row['k']) . '</th><td>' . h($row['v']) . '</td></tr>';
+    }
+    return '<table class="s4-specs-table woocommerce-product-attributes shop_attributes" dir="rtl"><tbody>' . $tr . '</tbody></table>';
+}
+
+function s4ExtractSpecsRowsFromDom($nodesOrNode): array {
+    $nodes = [];
+    if ($nodesOrNode instanceof DOMNodeList) {
+        foreach ($nodesOrNode as $n) $nodes[] = $n;
+    } elseif ($nodesOrNode instanceof DOMNode) {
+        $nodes[] = $nodesOrNode;
+    }
+    if (!$nodes) return [];
+    $rows = [];
+    $extractFromSingle = static function (DOMNode $root) use (&$rows): void {
+        $doc = $root->ownerDocument;
+        if (!$doc) return;
+        $xp = new DOMXPath($doc);
+        $tag = strtolower($root->nodeName);
+        if ($tag === 'tr') {
+            $cells = @$xp->query('./th|./td', $root);
+            if ($cells && $cells->length >= 2) {
+                $k = normalize_text((string)$cells->item(0)->textContent);
+                $vals = [];
+                for ($i = 1; $i < $cells->length; $i++) {
+                    $cv = normalize_text((string)$cells->item($i)->textContent);
+                    if ($cv !== '') $vals[] = $cv;
+                }
+                if ($k !== '' && $vals) $rows[] = ['k' => $k, 'v' => implode(' ، ', $vals)];
+            }
+            return;
+        }
+        $trs = ($tag === 'table' || $tag === 'tbody' || $tag === 'thead') ? @$xp->query('.//tr', $root) : @$xp->query('.//table//tr', $root);
+        if ($trs && $trs->length > 0) {
+            foreach ($trs as $tr) {
+                $cells = @$xp->query('./th|./td', $tr);
+                if (!$cells || $cells->length < 2) continue;
+                $k = normalize_text((string)$cells->item(0)->textContent);
+                $vals = [];
+                for ($i = 1; $i < $cells->length; $i++) {
+                    $cv = normalize_text((string)$cells->item($i)->textContent);
+                    if ($cv !== '') $vals[] = $cv;
+                }
+                if ($k !== '' && $vals) $rows[] = ['k' => $k, 'v' => implode(' ، ', $vals)];
+            }
+            if ($rows) return;
+        }
+        $dts = ($tag === 'dl') ? @$xp->query('./dt', $root) : @$xp->query('.//dl/dt', $root);
+        if ($dts && $dts->length > 0) {
+            foreach ($dts as $dt) {
+                $dd = @$xp->query('following-sibling::dd[1]', $dt);
+                if ($dd && $dd->length > 0) {
+                    $k = normalize_text((string)$dt->textContent);
+                    $v = normalize_text((string)$dd->item(0)->textContent);
+                    if ($k !== '' && $v !== '') $rows[] = ['k' => $k, 'v' => $v];
+                }
+            }
+            if ($rows) return;
+        }
+        $items = ($tag === 'li') ? [$root] : [];
+        if (!$items) {
+            $liList = @$xp->query('.//li', $root);
+            if ($liList && $liList->length >= 2) {
+                foreach ($liList as $li) $items[] = $li;
+            } else {
+                $childEls = @$xp->query('./*[self::div or self::li or self::p or self::section]', $root);
+                if ($childEls && $childEls->length >= 2) {
+                    foreach ($childEls as $ce) $items[] = $ce;
+                } elseif ($tag === 'div' || $tag === 'p') {
+                    $sub2 = @$xp->query('./*', $root);
+                    if ($sub2 && $sub2->length === 2) $items[] = $root;
+                }
+            }
+        }
+        foreach ($items as $it) {
+            $sub = @$xp->query('./*', $it);
+            if ($sub && $sub->length === 2) {
+                $k = normalize_text((string)$sub->item(0)->textContent);
+                $v = normalize_text((string)$sub->item(1)->textContent);
+                if ($k !== '' && $v !== '' && mb_strlen($k) <= 80 && $k !== $v) {
+                    $rows[] = ['k' => $k, 'v' => $v];
+                    continue;
+                }
+            }
+            $txt = normalize_text((string)$it->textContent);
+            if ($txt !== '' && preg_match('~^([^:：]{1,70})\s*[:：]\s*(.+)$~u', $txt, $m)) {
+                $rows[] = ['k' => $m[1], 'v' => $m[2]];
+            }
+        }
+    };
+    foreach ($nodes as $n) $extractFromSingle($n);
+    return $rows;
+}
+
+function s4NormalizeSpecsToTableHtml($raw): string {
+    if ($raw === null || $raw === false || $raw === '') return '';
+    if (is_array($raw)) {
+        $rows = [];
+        foreach ($raw as $k => $v) {
+            if (is_array($v)) {
+                $rows[] = ['k' => $v['title'] ?? ($v['name'] ?? ($v['k'] ?? (is_string($k) ? $k : ''))), 'v' => $v['value'] ?? ($v['v'] ?? '')];
+            } elseif (is_string($k) && !ctype_digit((string)$k)) {
+                $rows[] = ['k' => $k, 'v' => (string)$v];
+            }
+        }
+        return s4SpecsRowsToTableHtml($rows);
+    }
+    $str = trim((string)$raw);
+    if ($str === '') return '';
+    if ($str[0] === '[' || $str[0] === '{') {
+        $dec = @json_decode($str, true);
+        if (is_array($dec)) {
+            $t = s4NormalizeSpecsToTableHtml($dec);
+            if ($t !== '') return $t;
+        }
+    }
+    if (stripos($str, '<') !== false && preg_match('~<(table|tr|dl|ul|ol|div)\b~i', $str)) {
+        [$domS, $xpS] = load_dom($str);
+        $bodyNodes = @$xpS->query('//body/*');
+        if ($bodyNodes && $bodyNodes->length > 0) {
+            $rows = s4ExtractSpecsRowsFromDom($bodyNodes);
+            if (count($rows) >= 1) return s4SpecsRowsToTableHtml($rows);
+        }
+        if (stripos($str, '<table') !== false) {
+            $tbl = @$xpS->query('//table');
+            if ($tbl && $tbl->length > 0) return detailCleanHtml($tbl->item(0));
+        }
+    }
+    $lines = preg_split('~\r?\n+~u', strip_tags($str)) ?: [];
+    $kvRows = [];
+    foreach ($lines as $ln) {
+        $ln = trim($ln);
+        if ($ln === '') continue;
+        if (preg_match('~^([^:：\t|]{1,70})\s*(?:[:：]|\t|\s+\|\s+)\s*(.+)$~u', $ln, $m)) {
+            $kvRows[] = ['k' => $m[1], 'v' => $m[2]];
+        }
+    }
+    if (count($kvRows) >= 2) return s4SpecsRowsToTableHtml($kvRows);
+    return '';
+}
+
+function s4ExtractDetailNodeValue(string $field, DOMNodeList $ns, string $baseUrl = ''): string {
+    if (!$ns || !$ns->length) return '';
+    $first = $ns->item(0);
+    if ($field === 'shortDesc' || $field === 'longDesc') {
+        $cleaned = detailCleanHtml($first, $baseUrl);
+        if ($field === 'longDesc' && stripos($cleaned, '<table') === false) {
+            $rows = s4ExtractSpecsRowsFromDom($ns);
+            if (count($rows) >= 2) {
+                $onlyKv = trim(strip_tags($cleaned));
+                $tbl = s4SpecsRowsToTableHtml($rows);
+                if ($tbl !== '') {
+                    $tag = strtolower($first->nodeName);
+                    if (in_array($tag, ['dl', 'ul', 'table', 'tbody'], true)) return $tbl;
+                }
+            }
+        }
+        return $cleaned;
+    }
+    $rows = s4ExtractSpecsRowsFromDom($ns);
+    if ($field === 'specs' || $field === 'specifications' || $field === 'attributes') {
+        if ($rows) return s4SpecsRowsToTableHtml($rows);
+        $cleaned = detailCleanHtml($first, $baseUrl);
+        $norm = s4NormalizeSpecsToTableHtml($cleaned);
+        return $norm !== '' ? $norm : $cleaned;
+    }
+    /* برای هر فیلد دیگر در هر پروفایل: اگر خروجی واقعاً ساختار جدولی داشت، جدول را حفظ کن */
+    if (count($rows) >= 2 && !in_array($field, ['price', 'oldPrice', 'sku', 'brand', 'weight', 'stock', 'category', 'tags', 'image'], true)) {
+        return s4SpecsRowsToTableHtml($rows);
+    }
+    return trim($first->textContent);
+}
+
+function s4MergeSpecsTableIntoHtml(string $descHtml, array $p): string {
+    $desc = trim($descHtml);
+    $specRaw = $p['specs'] ?? ($p['specifications'] ?? ($p['attributes_table'] ?? ''));
+    $specTable = s4NormalizeSpecsToTableHtml($specRaw);
+    if ($specTable === '' && $desc !== '' && stripos($desc, '<table') === false) {
+        $fromDesc = s4NormalizeSpecsToTableHtml($desc);
+        if ($fromDesc !== '' && stripos($desc, '<') === false) {
+            return $fromDesc;
+        }
+    }
+    if ($specTable === '') return $desc;
+    if ($desc === '') return $specTable;
+    if (stripos($desc, '<table') !== false) {
+        if (preg_match('~<th[^>]*>(.*?)</th>~isu', $specTable, $mTh)) {
+            $firstKey = trim(strip_tags((string)$mTh[1]));
+            if ($firstKey !== '' && mb_strpos($desc, $firstKey) !== false) {
+                return $desc;
+            }
+        } else {
+            return $desc;
+        }
+    }
+    $sep = (stripos($desc, '<') !== false) ? '<h4 dir="rtl">مشخصات فنی</h4>' : "<br><br><strong>مشخصات فنی:</strong><br>";
+    if (stripos($desc, '<') === false) {
+        $desc = '<p dir="rtl">' . nl2br(h($desc)) . '</p>';
+        $sep = '<h4 dir="rtl">مشخصات فنی</h4>';
+    }
+    return $desc . $sep . $specTable;
 }
 
 function extractNormalizeDetailSelectors($raw): array {
@@ -4375,6 +4628,7 @@ function taskMarkPartial(string $file, array $patch, array $cursor = []): void {
    تنظیم نشده باشد. */
 function isCliRun(): bool {
     if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') return true;
+    if ((string)getenv('S4_CLI_SPAWN') === '1') return true;
     return !isset($_SERVER['REQUEST_METHOD']) && !isset($_SERVER['HTTP_HOST']);
 }
 
@@ -11323,31 +11577,274 @@ function wooRemoteContent(array $ex): array {
 }
 
 /**
- * تنوع‌ها را به «ویژگی»های ووکامرس تبدیل می‌کند.
- * محصول ساده می‌ماند (تبدیل به variable کار سنگینی است و نیاز به ساختن
- * هر ترکیب دارد)، ولی گزینه‌ها روی صفحهٔ محصول دیده می‌شوند.
+ * v8.69 / v10.458: تنوع‌ها را هم به «ویژگی‌های قابل انتخاب متغیر ووکامرس»
+ * (variation=true برای محصولات variable) و هم به ماتریس کامل ترکیب‌های تنوع
+ * با قیمتِ تعدیل‌شده تبدیل می‌کند تا هم در ووکامرس (products/{id}/variations/batch)
+ * و هم در باسلام (آرایهٔ استاندارد variants در OpenAPI با fallback هوشمند) ارسال شوند.
  */
-function wooVariationAttributes(array $p): array {
+function wooVariationAttributes(array $p, bool $forVariable = true): array {
     $groups = $p['variation_groups'] ?? null;
     if (!is_array($groups) || !$groups) {
+        $combs = is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [];
+        if ($combs) {
+            $byAttr = [];
+            foreach ($combs as $cb) {
+                if (!is_array($cb)) continue;
+                foreach ((array)($cb['attributes'] ?? []) as $an => $av) {
+                    $an = trim((string)$an);
+                    $av = trim((string)$av);
+                    if ($an === '' || $av === '') continue;
+                    if (!isset($byAttr[$an])) $byAttr[$an] = [];
+                    if (!in_array($av, $byAttr[$an], true)) $byAttr[$an][] = $av;
+                }
+            }
+            if ($byAttr) {
+                $groups = [];
+                foreach ($byAttr as $an => $avs) $groups[] = ['name' => $an, 'values' => $avs];
+            }
+        }
+    }
+    if (!is_array($groups) || !$groups) {
         $vals = $p['variations'] ?? null;
-        if (is_string($vals)) $vals = array_filter(array_map('trim', explode('،', $vals)));
+        if (is_string($vals)) $vals = array_filter(array_map('trim', preg_split('~[،,|]+~u', $vals) ?: []));
+        if ((!is_array($vals) || !$vals) && !empty($p['variations_text'])) {
+            $vals = array_filter(array_map('trim', preg_split('~[،,|]+~u', (string)$p['variations_text']) ?: []));
+        }
         if (!is_array($vals) || !$vals) return [];
         $groups = [['name' => 'ویژگی', 'values' => array_values($vals)]];
     }
     $out = []; $pos = 0;
     foreach ($groups as $g) {
         if (!is_array($g)) continue;
-        $vals = array_values(array_filter(array_map(
-            fn($v) => trim((string)$v), (array)($g['values'] ?? []))));
+        $vals = array_values(array_unique(array_filter(array_map(
+            fn($v) => trim((string)$v), (array)($g['values'] ?? [])))));
         if (!$vals) continue;
         $name = trim((string)($g['name'] ?? ''));
         if ($name === '') $name = 'ویژگی ' . ($pos + 1);
         $out[] = ['name' => mb_substr($name, 0, 60), 'position' => $pos++,
-                  'visible' => true, 'variation' => false,
+                  'visible' => true, 'variation' => $forVariable,
                   'options' => array_slice($vals, 0, 30)];
     }
     return $out;
+}
+
+/**
+ * استخراج ماتریس ترکیب‌های تنوع یک محصول (حداکثر ۴۰ ترکیب) با محاسبهٔ دقیق
+ * نسبت تعدیل قیمت مقصد نسبت به قیمت خام مبدأ.
+ */
+function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaultStock = 10, bool $destIsRial = false): array {
+    $attrs = wooVariationAttributes($p, true);
+    if (!$attrs) return [];
+    $rawSrcStr = (string)($p['price'] ?? '');
+    $rawDigits = (int)preg_replace('/[^0-9]/', '', toEnDigits($rawSrcStr));
+    $srcUnitIsRial = (($p['price_unit'] ?? '') === 'rial') || mb_strpos($rawSrcStr, 'ریال') !== false || mb_strpos($rawSrcStr, 'ر.ی') !== false;
+    $rawBaseToman = $rawDigits > 0 ? ($srcUnitIsRial ? (int)round($rawDigits / 10) : $rawDigits) : 0;
+    $scalePrice = static function (int $srcOptionPriceToman) use ($rawBaseToman, $destBasePrice, $destIsRial): int {
+        if ($srcOptionPriceToman <= 0) return $destBasePrice;
+        if ($rawBaseToman > 0 && $destBasePrice > 0) {
+            $scaled = (int)round($destBasePrice * ($srcOptionPriceToman / $rawBaseToman));
+            return $scaled > 0 ? $scaled : $destBasePrice;
+        }
+        return $destIsRial ? ($srcOptionPriceToman * 10) : $srcOptionPriceToman;
+    };
+    $varPrices = is_array($p['variation_prices'] ?? null) ? $p['variation_prices'] : [];
+    $normPriceMap = [];
+    foreach ($varPrices as $lbl => $pv) {
+        $num = is_numeric($pv) ? (int)round((float)$pv) : (int)preg_replace('/[^0-9]/', '', toEnDigits((string)$pv));
+        if ($num > 0) {
+            $tomanVal = $srcUnitIsRial ? (int)round($num / 10) : $num;
+            $normPriceMap[mb_strtolower(trim((string)$lbl), 'UTF-8')] = $tomanVal;
+        }
+    }
+    $rows = [];
+    $combs = is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [];
+    if ($combs) {
+        foreach (array_slice($combs, 0, 40) as $cb) {
+            if (!is_array($cb) || empty($cb['attributes']) || !is_array($cb['attributes'])) continue;
+            $pairList = [];
+            $posIdx = 0;
+            foreach ($cb['attributes'] as $an => $av) {
+                $an = trim((string)$an);
+                $av = trim((string)$av);
+                if ($av === '') continue;
+                if ($an === '' || isset($attrs[$posIdx])) {
+                    $matched = false;
+                    foreach ($attrs as $atDef) {
+                        if ($atDef['name'] === $an || in_array($av, $atDef['options'], true)) {
+                            $an = $atDef['name'];
+                            $matched = true;
+                            break;
+                        }
+                    }
+                    if (!$matched && isset($attrs[$posIdx])) $an = $attrs[$posIdx]['name'];
+                }
+                if ($an === '') $an = 'ویژگی';
+                $pairList[] = ['name' => mb_substr($an, 0, 60), 'option' => mb_substr($av, 0, 80)];
+                $posIdx++;
+            }
+            if (!$pairList) continue;
+            $cPriceToman = (int)round((float)($cb['price'] ?? 0));
+            if ($srcUnitIsRial && $cPriceToman > 0) $cPriceToman = (int)round($cPriceToman / 10);
+            $inStk = !array_key_exists('in_stock', $cb) || !empty($cb['in_stock']);
+            $rows[] = [
+                'attributes' => $pairList,
+                'price'      => $scalePrice($cPriceToman),
+                'stock'      => $inStk ? max(1, $defaultStock) : 0,
+                'in_stock'   => $inStk,
+                'sku'        => trim((string)($cb['sku'] ?? '')),
+            ];
+        }
+        if ($rows) return $rows;
+    }
+    /* ساخت ضرب دکارتی محدود از گروه‌های تنوع */
+    $combos = [[]];
+    foreach (array_slice($attrs, 0, 3) as $atDef) {
+        $next = [];
+        foreach ($combos as $prefix) {
+            foreach (array_slice($atDef['options'], 0, 20) as $optVal) {
+                $next[] = array_merge($prefix, [['name' => $atDef['name'], 'option' => $optVal]]);
+                if (count($next) >= 40) break 2;
+            }
+        }
+        if ($next) $combos = $next;
+    }
+    foreach ($combos as $pairList) {
+        if (!$pairList) continue;
+        $optPriceToman = 0;
+        $labelJoined = mb_strtolower(implode(' / ', array_map(fn($x) => $x['option'], $pairList)), 'UTF-8');
+        if (isset($normPriceMap[$labelJoined])) {
+            $optPriceToman = $normPriceMap[$labelJoined];
+        } else {
+            foreach ($pairList as $pair) {
+                $ok = mb_strtolower(trim($pair['option']), 'UTF-8');
+                if (isset($normPriceMap[$ok]) && $normPriceMap[$ok] > $optPriceToman) {
+                    $optPriceToman = $normPriceMap[$ok];
+                }
+            }
+        }
+        $rows[] = [
+            'attributes' => $pairList,
+            'price'      => $scalePrice($optPriceToman),
+            'stock'      => max(0, $defaultStock),
+            'in_stock'   => $defaultStock > 0,
+            'sku'        => '',
+        ];
+    }
+    return $rows;
+}
+
+function wooBuildVariationPayloadRows(array $p, int $parentPriceNum, int $defaultStock, array $w = []): array {
+    if ($parentPriceNum <= 0) return [];
+    $matrix = s4BuildProductVariationMatrix($p, $parentPriceNum, $defaultStock, false);
+    if (!$matrix) return [];
+    $manageStock = !empty($w['manage_stock']);
+    $out = [];
+    foreach ($matrix as $row) {
+        $pr = max(1, (int)($row['price'] ?? $parentPriceNum));
+        $st = max(0, (int)($row['stock'] ?? $defaultStock));
+        $inStock = !empty($row['in_stock']) && $st > 0;
+        $item = [
+            'regular_price' => (string)$pr,
+            'manage_stock'  => $manageStock,
+            'stock_status'  => $inStock ? 'instock' : 'outofstock',
+            'attributes'    => $row['attributes'],
+        ];
+        if ($manageStock) $item['stock_quantity'] = $st;
+        if (!empty($row['sku'])) $item['sku'] = (string)$row['sku'];
+        $out[] = $item;
+    }
+    return $out;
+}
+
+function wooSyncProductVariations(array $w, int $productId, array $varRows): array {
+    if ($productId <= 0 || !$varRows) return ['ok' => true, 'synced' => 0];
+    if (empty($w['store_url']) || empty($w['consumer_key']) || empty($w['consumer_secret'])) {
+        return ['ok' => false, 'synced' => 0, 'error' => 'missing_woo_api_keys'];
+    }
+    $sigOf = static function (array $attrs): string {
+        $parts = [];
+        foreach ($attrs as $a) {
+            if (!is_array($a)) continue;
+            $nm = reconNormTitle((string)($a['name'] ?? ''));
+            $op = reconNormTitle((string)($a['option'] ?? ''));
+            if ($op !== '') $parts[] = ($nm !== '' ? $nm . '=' : '') . $op;
+        }
+        sort($parts);
+        return implode('|', $parts);
+    };
+    $existingBySig = [];
+    $exRes = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'GET', 'products/' . $productId . '/variations?per_page=100');
+    if (!empty($exRes['ok']) && is_array($exRes['body'])) {
+        foreach ($exRes['body'] as $ev) {
+            if (!is_array($ev) || empty($ev['id'])) continue;
+            $sig = $sigOf((array)($ev['attributes'] ?? []));
+            if ($sig !== '') $existingBySig[$sig] = (int)$ev['id'];
+        }
+    }
+    $toCreate = [];
+    $toUpdate = [];
+    foreach ($varRows as $vr) {
+        $sig = $sigOf((array)($vr['attributes'] ?? []));
+        if ($sig !== '' && isset($existingBySig[$sig])) {
+            $vr['id'] = $existingBySig[$sig];
+            unset($vr['sku']);
+            $toUpdate[] = $vr;
+        } else {
+            $toCreate[] = $vr;
+        }
+    }
+    $batchBody = [];
+    if ($toCreate) $batchBody['create'] = $toCreate;
+    if ($toUpdate) $batchBody['update'] = $toUpdate;
+    if (!$batchBody) return ['ok' => true, 'synced' => 0];
+    $br = wooReq($w['store_url'], $w['consumer_key'], $w['consumer_secret'], 'POST', 'products/' . $productId . '/variations/batch', $batchBody);
+    $createdN = is_array($br['body']['create'] ?? null) ? count($br['body']['create']) : 0;
+    $updatedN = is_array($br['body']['update'] ?? null) ? count($br['body']['update']) : 0;
+    return ['ok' => !empty($br['ok']), 'synced' => $createdN + $updatedN, 'created' => $createdN, 'updated' => $updatedN, 'code' => (int)($br['code'] ?? 0)];
+}
+
+function bslBuildVariantsPayload(array $p, int $defaultPriceRial, int $defaultStock): array {
+    if ($defaultPriceRial <= 0) return [];
+    $matrix = s4BuildProductVariationMatrix($p, $defaultPriceRial, $defaultStock, true);
+    if (count($matrix) < 1) return [];
+    $variants = [];
+    foreach (array_slice($matrix, 0, 35) as $row) {
+        $props = [];
+        foreach ((array)($row['attributes'] ?? []) as $attr) {
+            $aName = trim((string)($attr['name'] ?? ''));
+            $aOpt  = trim((string)($attr['option'] ?? ''));
+            if ($aOpt === '') continue;
+            if ($aName === '') $aName = 'مدل';
+            $props[] = [
+                'property' => ['title' => mb_substr($aName, 0, 50)],
+                'value'    => ['title' => mb_substr($aOpt, 0, 60), 'value' => mb_substr($aOpt, 0, 60)],
+            ];
+        }
+        if (!$props) continue;
+        $vPrice = max(10000, (int)($row['price'] ?? $defaultPriceRial));
+        $vStock = !empty($row['in_stock']) ? max(0, (int)($row['stock'] ?? $defaultStock)) : 0;
+        $vItem = [
+            'primary_price' => $vPrice,
+            'stock'         => $vStock,
+            'properties'    => $props,
+        ];
+        if (!empty($row['sku'])) $vItem['sku'] = mb_substr((string)$row['sku'], 0, 60);
+        $variants[] = $vItem;
+    }
+    return $variants;
+}
+
+function bslReqWithVariantsFallback(string $tk, string $method, string $ep, array &$payload): array {
+    $r = bslReq($tk, $method, $ep, $payload);
+    if (!empty($r['ok']) || empty($payload['variants'])) return $r;
+    $code = (int)($r['code'] ?? 0);
+    if ($code === 422 && !bslIsDuplicateName($r) && !bslIsCategoryError($r)) {
+        unset($payload['variants']);
+        $r2 = bslReq($tk, $method, $ep, $payload);
+        if (!empty($r2['ok']) || (int)($r2['code'] ?? 0) !== 422) return $r2;
+        return $r2;
+    }
+    return $r;
 }
 
 /**
@@ -11417,8 +11914,12 @@ function wooCategoryIds(array $w, $raw, bool $create = true): array {
 function bslApplyContent(array &$bu, array $p): void {
     $brief = trim(strip_tags((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? '')));
     $desc  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
-    // تنوع‌ها اگر باشند به انتهای توضیح اضافه می‌شوند؛ باسلام برای
-    // محصول ساده جای جداگانه‌ای برای گزینه‌ها ندارد.
+    /* v10.458: اگر محصول جدول مشخصات فنی دارد (در specs یا در خود توضیحات)،
+       به‌صورت جدول تمیز HTML در توضیحات ارسالی باسلام ادغام می‌شود. */
+    if (function_exists('s4MergeSpecsTableIntoHtml')) {
+        $desc = s4MergeSpecsTableIntoHtml($desc, $p);
+    }
+    // تنوع‌ها علاوه بر آرایهٔ variants، در توضیحات هم درج می‌شوند تا در دسته‌های بدون تنوع هم خوانا بماند.
     $varTxt = trim((string)($p['variations_text'] ?? ''));
     if ($varTxt === '' && !empty($p['variations']) && is_array($p['variations'])) {
         $varTxt = implode('، ', array_map('strval', $p['variations']));
@@ -14263,6 +14764,7 @@ const S4_SNAPP_APIX_STATE_FILE = __DIR__ . '/.s4-snapp-apix-state.json';
 
 function s4SnappApixDefaultState(): array {
     return [
+        'state_v'            => 2,
         'guest_token'        => '',
         'guest_token_exp'    => 0,
         'guest_token_at'     => 0,
@@ -14270,6 +14772,9 @@ function s4SnappApixDefaultState(): array {
         'last_plp_ms'        => 0,
         'pdp_cooldown_until' => 0,
         'pdp_429_streak'     => 0,
+        'pop_rr'             => 0,
+        'pop_cooldown'       => [],
+        'last_good_pop'      => '',
         'last_200_at'        => 0,
         'last_429_at'        => 0,
         'total_200'          => 0,
@@ -14277,12 +14782,37 @@ function s4SnappApixDefaultState(): array {
     ];
 }
 
-function s4SnappApixStateRead(): array {
+function snappshopApiEdgePool(): array {
+    return [
+        '185.143.232.5',
+        '185.143.233.5',
+        '185.143.234.5',
+        '185.143.235.5',
+        '185.143.233.104',
+        '185.143.234.104',
+        '',
+    ];
+}
+
+function s4SnappApixNormalizeState($dec): array {
     $def = s4SnappApixDefaultState();
-    if (!is_file(S4_SNAPP_APIX_STATE_FILE)) return $def;
+    if (!is_array($dec)) return $def;
+    $st = array_merge($def, $dec);
+    if ((int)($dec['state_v'] ?? 0) < 2) {
+        $st['state_v'] = 2;
+        $st['pdp_cooldown_until'] = 0;
+        $st['pdp_429_streak'] = 0;
+        $st['pop_cooldown'] = [];
+    }
+    if (!is_array($st['pop_cooldown'] ?? null)) $st['pop_cooldown'] = [];
+    return $st;
+}
+
+function s4SnappApixStateRead(): array {
+    if (!is_file(S4_SNAPP_APIX_STATE_FILE)) return s4SnappApixDefaultState();
     $raw = (string)@file_get_contents(S4_SNAPP_APIX_STATE_FILE);
     $dec = $raw !== '' ? @json_decode($raw, true) : null;
-    return is_array($dec) ? array_merge($def, $dec) : $def;
+    return s4SnappApixNormalizeState($dec);
 }
 
 function s4SnappApixStateWithLock(callable $fn): array {
@@ -14298,8 +14828,9 @@ function s4SnappApixStateWithLock(callable $fn): array {
     @rewind($fp);
     $raw = (string)stream_get_contents($fp);
     $dec = $raw !== '' ? @json_decode($raw, true) : null;
-    $st = is_array($dec) ? array_merge($def, $dec) : $def;
-    $dirty = false;
+    $prevV = is_array($dec) ? (int)($dec['state_v'] ?? 0) : 2;
+    $st = s4SnappApixNormalizeState($dec);
+    $dirty = ($prevV < 2);
     $res = $fn($st, $dirty);
     if ($dirty) {
         $enc = json_encode($st, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -14315,6 +14846,32 @@ function s4SnappApixStateWithLock(callable $fn): array {
     return is_array($res) ? $res : $st;
 }
 
+function s4SnappApixPickHealthyPops(): array {
+    $pool = snappshopApiEdgePool();
+    $n = count($pool);
+    $picked = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($pool, $n) {
+        $now = time();
+        $rr = max(0, (int)($st['pop_rr'] ?? 0));
+        $st['pop_rr'] = ($rr + 1) % max(1, $n);
+        $dirty = true;
+        $cds = is_array($st['pop_cooldown'] ?? null) ? $st['pop_cooldown'] : [];
+        foreach ($cds as $ipK => $untilTs) {
+            if ((int)$untilTs <= $now) unset($cds[$ipK]);
+        }
+        $st['pop_cooldown'] = $cds;
+        $healthy = [];
+        $cooled = [];
+        for ($i = 0; $i < $n; $i++) {
+            $ip = (string)$pool[($rr + $i) % $n];
+            $key = $ip !== '' ? $ip : 'default_dns';
+            if ((int)($cds[$key] ?? 0) <= $now) $healthy[] = $ip;
+            else $cooled[] = $ip;
+        }
+        return ['order' => array_merge($healthy, array_slice($cooled, 0, 1)), 'healthy_count' => count($healthy)];
+    });
+    return is_array($picked['order'] ?? null) && !empty($picked['order']) ? $picked['order'] : $pool;
+}
+
 function s4SnappApixEnsureGuestToken(int $timeout = 8, bool $forceRefresh = false): string {
     $now = time();
     if (!$forceRefresh) {
@@ -14327,32 +14884,39 @@ function s4SnappApixEnsureGuestToken(int $timeout = 8, bool $forceRefresh = fals
         }
     }
     if (!function_exists('curl_init')) return '';
-    $ch = curl_init('https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_MAXREDIRS      => 2,
-        CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_TIMEOUT        => max(5, min(12, $timeout)),
-        CURLOPT_ENCODING       => '',
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => 0,
-        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        CURLOPT_HTTPHEADER     => [
-            'Accept: application/json, text/plain, */*',
-            'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Origin: https://snappshop.ir',
-            'Referer: https://snappshop.ir/',
-            'X-Origin: https://snappshop.ir',
-            'x-origin: https://snappshop.ir',
-            's-device: DESKTOP',
-            's-device-source: shop',
-        ],
-    ]);
-    if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-    $raw = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
+    $tokPopOrder = $inSelfTest ?? false ? [''] : s4SnappApixPickHealthyPops();
+    $raw = false;
+    $code = 0;
+    foreach (array_slice($tokPopOrder, 0, 3) as $tPop) {
+        $ch = curl_init('https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 2,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT        => max(5, min(10, $timeout)),
+            CURLOPT_ENCODING       => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => [
+                'Accept: application/json, text/plain, */*',
+                'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Origin: https://snappshop.ir',
+                'Referer: https://snappshop.ir/',
+                'X-Origin: https://snappshop.ir',
+                'x-origin: https://snappshop.ir',
+                's-device: DESKTOP',
+                's-device-source: shop',
+            ],
+        ]);
+        if ($tPop !== '') curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . $tPop]);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        $raw = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($raw !== false && $code >= 200 && $code < 300) break;
+    }
     if ($raw === false || $code < 200 || $code >= 300) return '';
     $dec = @json_decode((string)$raw, true);
     $tok = trim((string)($dec['data']['token'] ?? ''));
@@ -14374,7 +14938,7 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
     $isProductDetailEndpoint = stripos($cleanEp, 'products/v2/') === 0;
     $isGuestTokenEndpoint = stripos($cleanEp, 'guest/v2/token') === 0;
     $boostGap = (float)($GLOBALS['_s4SnappApixGapBoostSec'] ?? 0.0);
-    $minGapSec = $isProductDetailEndpoint ? max(2.15, $boostGap) : max(0.22, $boostGap * 0.5);
+    $minGapSec = $isProductDetailEndpoint ? max(0.45, $boostGap) : max(0.20, $boostGap * 0.5);
     $inSelfTest = !empty($_GET['selftest']) || !empty($GLOBALS['_s4InSelfTest']);
     $isInteractiveHttp = !$inSelfTest
         && (!function_exists('isCliRun') || !isCliRun())
@@ -14386,14 +14950,14 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
         if ($isProductDetailEndpoint) {
             $resv = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($gapSec) {
                 $streak = (int)($st['pdp_429_streak'] ?? 0);
-                $effGapMs = (int)round(max($gapSec, $streak > 0 ? 2.85 : 2.15) * 1000);
+                $effGapMs = (int)round(max($gapSec, $streak > 0 ? 1.15 : 0.45) * 1000);
                 $nowMs = (int)round(microtime(true) * 1000);
                 $slotMs = max($nowMs, (int)($st['last_pdp_ms'] ?? 0) + $effGapMs);
                 $st['last_pdp_ms'] = $slotMs;
                 $dirty = true;
                 return ['wait_ms' => max(0, $slotMs - $nowMs)];
             });
-            $wMs = min(15000, max(0, (int)($resv['wait_ms'] ?? 0)));
+            $wMs = min(8000, max(0, (int)($resv['wait_ms'] ?? 0)));
             if ($wMs > 0) usleep($wMs * 1000);
             $GLOBALS['_s4SnappApixLastTs'] = microtime(true);
             return;
@@ -14498,19 +15062,21 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
            پنجرهٔ لغزندهٔ 429 را دو برابر می‌کند) یا worker خارجی (403 VPN) مضر است؛
            فقط اگر proxy واقعی با IP متفاوت تنظیم شده باشد اجازهٔ تلاش دارد. */
         if (($via === 'worker' || $via === 'doh') && $directReachedIran) continue;
-        $maxTries = (!$inSelfTest && !$isProductDetailEndpoint && in_array($via, ['direct', 'doh'], true)) ? 2 : 1;
+        $popCandidates = ($via === 'direct' && !$inSelfTest) ? s4SnappApixPickHealthyPops() : [''];
+        $maxTries = count($popCandidates);
         for ($attempt = 0; $attempt < $maxTries; $attempt++) {
-            if ($attempt > 0 && !$inSelfTest) {
-                usleep(2200000);
+            $curPopIp = (string)($popCandidates[$attempt] ?? '');
+            $curPopKey = $curPopIp !== '' ? $curPopIp : 'default_dns';
+            if ($attempt === 0) {
+                $paceFn($minGapSec);
             }
-            $paceFn($minGapSec);
             $reqUrl = $apiUrl;
             $ch = curl_init($apiUrl);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_MAXREDIRS      => 3,
-                CURLOPT_CONNECTTIMEOUT => 6,
+                CURLOPT_CONNECTTIMEOUT => 5,
                 CURLOPT_TIMEOUT        => $timeout,
                 CURLOPT_ENCODING       => '',
                 CURLOPT_SSL_VERIFYPEER => false,
@@ -14520,7 +15086,9 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
                 CURLOPT_HTTPHEADER     => $hdrs,
             ]);
             if ($encodedBody !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedBody);
-            if ($via === 'doh' && function_exists('aiDohResolve')) {
+            if ($via === 'direct' && $curPopIp !== '') {
+                curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . $curPopIp]);
+            } elseif ($via === 'doh' && function_exists('aiDohResolve')) {
                 $dr = aiDohResolve('apix.snappshop.ir', (string)($net['doh_url'] ?? ''), min(8, $timeout));
                 if (!empty($dr['ok']) && !empty($dr['ip'])) {
                     curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . (string)$dr['ip']]);
@@ -14554,17 +15122,22 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             }
             $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
             if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
-                if (!$inSelfTest && $isProductDetailEndpoint) {
-                    s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) {
-                        $st['pdp_429_streak'] = 0;
-                        $st['pdp_cooldown_until'] = 0;
+                if (!$inSelfTest && ($isProductDetailEndpoint || $via === 'direct')) {
+                    s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($curPopKey, $curPopIp, $isProductDetailEndpoint) {
+                        if ($isProductDetailEndpoint) {
+                            $st['pdp_429_streak'] = 0;
+                            $st['pdp_cooldown_until'] = 0;
+                        }
+                        if (isset($st['pop_cooldown'][$curPopKey])) unset($st['pop_cooldown'][$curPopKey]);
+                        if ($curPopIp !== '') $st['last_good_pop'] = $curPopIp;
                         $st['last_200_at'] = time();
                         $st['total_200'] = (int)($st['total_200'] ?? 0) + 1;
                         $dirty = true;
                         return $st;
                     });
                 }
-                return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
+                $viaLabel = ($via === 'direct' && $curPopIp !== '') ? ('direct@' . $curPopIp) : $via;
+                return ['ok' => true, 'code' => $code, 'via' => $viaLabel, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
             }
             if ($code >= 200 && $code < 300 && is_array($decoded) && array_key_exists('status', $decoded) && empty($decoded['status'])) {
                 return ['ok' => false, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'json_status_false' => true, 'error' => s4JinaFormatHttpError($code, $err, $rawStr)];
@@ -14572,26 +15145,37 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             $fmtErr = s4JinaFormatHttpError($code, $err, $rawStr);
             if ($fmtErr === '' && $code > 0) $fmtErr = 'HTTP ' . $code;
             $isVpnBlock = ($code === 403 && (stripos($rawStr, 'turn off your VPN') !== false || stripos($rawStr, 'Access Denied') !== false));
-            if (in_array($via, ['direct', 'doh'], true) && !$isVpnBlock && ($code === 429 || $code >= 500)) {
-                $directReachedIran = true;
-                if ($code === 429) {
-                    $GLOBALS['_s4SnappApixGapBoostSec'] = 2.85;
-                    $minGapSec = max($minGapSec, 2.85);
-                    if (!$inSelfTest && $isProductDetailEndpoint) {
-                        $cdInfo = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) {
+            if ($via === 'direct' && !$inSelfTest && ($code === 429 || $code === 0 || $code >= 500)) {
+                $isLastPop = ($attempt >= $maxTries - 1);
+                $cdInfo = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($curPopKey, $code, $isProductDetailEndpoint, $isLastPop) {
+                    $now = time();
+                    if (!is_array($st['pop_cooldown'] ?? null)) $st['pop_cooldown'] = [];
+                    $st['pop_cooldown'][$curPopKey] = $now + ($code === 429 ? 150 : 60);
+                    $cd = 0;
+                    if ($code === 429) {
+                        $st['last_429_at'] = $now;
+                        $st['total_429'] = (int)($st['total_429'] ?? 0) + 1;
+                        if ($isProductDetailEndpoint && $isLastPop) {
                             $streak = (int)($st['pdp_429_streak'] ?? 0) + 1;
-                            $cd = $streak === 1 ? 68 : ($streak === 2 ? 130 : ($streak === 3 ? 190 : 310));
+                            $cd = $streak === 1 ? 35 : ($streak === 2 ? 65 : 95);
                             $st['pdp_429_streak'] = $streak;
-                            $st['pdp_cooldown_until'] = max((int)($st['pdp_cooldown_until'] ?? 0), time() + $cd);
-                            $st['guest_token'] = '';
-                            $st['last_429_at'] = time();
-                            $st['total_429'] = (int)($st['total_429'] ?? 0) + 1;
-                            $dirty = true;
-                            return ['cd' => $cd, 'streak' => $streak];
-                        });
-                        $rateLimitedCd = (int)($cdInfo['cd'] ?? 68);
+                            $st['pdp_cooldown_until'] = max((int)($st['pdp_cooldown_until'] ?? 0), $now + $cd);
+                        }
                     }
+                    $dirty = true;
+                    return ['cd' => $cd];
+                });
+                if ($code === 429 || $code >= 500) $directReachedIran = true;
+                if (!$isLastPop) {
+                    /* Failover فوری روی نود لبهٔ بعدی Sotoon CDN بدون هیچ خواب طولانی */
+                    continue;
                 }
+                if ($code === 429) {
+                    $GLOBALS['_s4SnappApixGapBoostSec'] = 1.15;
+                    $rateLimitedCd = (int)($cdInfo['cd'] ?? 35);
+                }
+            } elseif ($via === 'doh' && !$isVpnBlock && ($code === 429 || $code >= 500)) {
+                $directReachedIran = true;
             }
             if ($primaryErr === '' && $fmtErr !== '' && !($via === 'worker' && $isVpnBlock)) {
                 $primaryErr = $fmtErr;
@@ -14772,6 +15356,7 @@ function snappshopFallbackSelectorForField(string $field): string {
         case 'weight':     return '.product_meta .product-weight';
         case 'shortDesc':  return '.product-short-description';
         case 'longDesc':   return '#tab-description';
+        case 'specs':      return 'table.shop_attributes, .woocommerce-product-attributes';
         case 'variations': return '.snappshop-variation-group';
         default:           return '';
     }
@@ -20907,7 +21492,22 @@ function variationsExtract(DOMXPath $xp, ?DOMNode $ctx, string $selStr, string $
             if (!isset($allPrices[$lbl])) $allPrices[$lbl] = $pv;
         }
     }
-    /* WooCommerce variation image from data-product_variations JSON */
+    /* WooCommerce variation image + structured combinations from data-product_variations JSON */
+    $combinations = [];
+    $attrIdToTitle = [];
+    $selNodes = @$xp->query('//select[@name and (@data-attribute_name or preceding-sibling::label)]');
+    if ($selNodes) {
+        foreach ($selNodes as $sn) {
+            if (!$sn instanceof DOMElement) continue;
+            $sName = strtolower(trim((string)$sn->getAttribute('name')));
+            $sLabel = trim((string)$sn->getAttribute('data-attribute_name'));
+            if ($sLabel === '') {
+                $lb = @$xp->query('preceding-sibling::label[1]', $sn);
+                if ($lb && $lb->length) $sLabel = normalize_text((string)$lb->item(0)->textContent);
+            }
+            if ($sName !== '' && $sLabel !== '') $attrIdToTitle[$sName] = $sLabel;
+        }
+    }
     $forms = @$xp->query('//*[@data-product_variations]');
     if ($forms) foreach ($forms as $f) {
         if (!$f instanceof DOMElement) continue;
@@ -20917,6 +21517,35 @@ function variationsExtract(DOMXPath $xp, ?DOMNode $ctx, string $selStr, string $
         if (!is_array($rows)) continue;
         foreach ($rows as $row) {
             if (!is_array($row)) continue;
+            $combAttrs = [];
+            foreach ((array)($row['attributes'] ?? []) as $ak => $av) {
+                $avStr = normalize_text((string)$av);
+                if ($avStr === '') continue;
+                $akLow = strtolower(trim((string)$ak));
+                $humanK = $attrIdToTitle[$akLow] ?? '';
+                if ($humanK === '') {
+                    $cleanK = preg_replace('~^attribute_(?:pa_)?~i', '', (string)$ak) ?? (string)$ak;
+                    $humanK = urldecode($cleanK);
+                    if (ctype_digit($humanK) && count($groups) === 1 && !empty($groups[0]['name'])) {
+                        $humanK = (string)$groups[0]['name'];
+                    } elseif (ctype_digit($humanK)) {
+                        $humanK = 'تنوع';
+                    }
+                }
+                $combAttrs[$humanK] = $avStr;
+            }
+            $dispPrice = (int)round((float)($row['display_price'] ?? 0));
+            $regPrice  = (int)round((float)($row['display_regular_price'] ?? $dispPrice));
+            $inStk     = !array_key_exists('is_in_stock', $row) || !empty($row['is_in_stock']);
+            if ($combAttrs) {
+                $combinations[] = [
+                    'attributes'    => $combAttrs,
+                    'price'         => $dispPrice,
+                    'regular_price' => $regPrice > 0 ? $regPrice : $dispPrice,
+                    'in_stock'      => $inStk,
+                    'sku'           => trim((string)($row['sku'] ?? '')),
+                ];
+            }
             $img = $row['image'] ?? null;
             $src = '';
             if (is_array($img)) {
@@ -20937,6 +21566,7 @@ function variationsExtract(DOMXPath $xp, ?DOMNode $ctx, string $selStr, string $
     }
     $res = ['groups' => $groups, 'values' => $flat, 'count' => count($flat),
             'images' => $images, 'images_count' => count($images)];
+    if ($combinations) $res['combinations'] = $combinations;
     if ($allPrices) {
         $pv = array_values($allPrices);
         $res['prices'] = $allPrices;
@@ -21879,6 +22509,9 @@ $extracted['price_min'] = $vr['price_min'];
 $extracted['price_max'] = $vr['price_max'];
 $extracted['price_varies'] = !empty($vr['price_varies']);
 }
+if (!empty($vr['combinations']) && is_array($vr['combinations'])) {
+$extracted['variation_combinations'] = $vr['combinations'];
+}
 }
 if (!empty($vr['images']) && is_array($vr['images'])) {
 $extracted['variation_images'] = $vr['images'];
@@ -21909,10 +22542,9 @@ if ((!$nodes || !$nodes->length) && $_streamSnappSynth && function_exists('snapp
 if (!$nodes && !$xpath) continue;
 if ($nodes && $nodes->length) {
 $node = $nodes->item(0);
-if (in_array($field, ['longDesc', 'shortDesc'])) {
-$value = trim(@$dom->saveHTML($node));
-$value = preg_replace('~\s+~', ' ', $value);
-$extracted[$field] = $value;
+if (in_array($field, ['longDesc', 'shortDesc', 'specs', 'specifications', 'attributes'])) {
+$value = s4ExtractDetailNodeValue((string)$field, $nodes, (string)($res['url'] ?? $productUrl));
+if ($value !== '') $extracted[$field] = $value;
 } elseif ($field === 'price') {
 /* v10.15: قیمتِ صفحهٔ محصول. متنِ خام به درد نمی‌خورد چون معمولاً هم قیمتِ
    خط‌خورده و هم قیمتِ باتخفیف و هم واحد کنار هم‌اند («۲۵۰,۰۰۰ تومان
@@ -21938,11 +22570,19 @@ $extracted[$field] = make_absolute_url(trim($textContent), $res['url']);
 }
 }
 } else {
-$value = normalize_text($node->textContent);
+$value = s4ExtractDetailNodeValue((string)$field, $nodes, (string)($res['url'] ?? $productUrl));
+if ($value === '') $value = normalize_text($node->textContent);
 $extracted[$field] = $value;
 }
 }
 
+}
+if ($_streamSnappSynth && empty($extracted['specs'])) {
+    $_snTblS = @$xp->query('//table[contains(@class,"shop_attributes")]');
+    if ($_snTblS && $_snTblS->length) {
+        $_snSpVal = s4ExtractDetailNodeValue('specs', $_snTblS, (string)($res['url'] ?? $productUrl));
+        if ($_snSpVal !== '') $extracted['specs'] = $_snSpVal;
+    }
 }
 
 if (!isset($extracted['image']) || $extracted['image'] === '') {
@@ -24466,6 +25106,9 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
                     $p['price_max'] = $vr['price_max'];
                     $p['price_varies'] = !empty($vr['price_varies']);
                 }
+                if (!empty($vr['combinations']) && is_array($vr['combinations'])) {
+                    $p['variation_combinations'] = $vr['combinations'];
+                }
             }
             /* تصاویر تنوع → گالری محصول */
             if (!empty($vr['images']) && is_array($vr['images'])) {
@@ -24491,12 +25134,17 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
                 $val = galleryImgFromNode($ns->item(0), $dr['url']);
             } elseif ($field === 'price') {
                 $val = extractPrice($ns->item(0)->textContent);
-            } elseif ($field === 'shortDesc' || $field === 'longDesc') {
-                $val = detailCleanHtml($ns->item(0), $dr['url']);
             } else {
-                $val = trim($ns->item(0)->textContent);
+                $val = s4ExtractDetailNodeValue((string)$field, $ns, (string)($dr['url'] ?? ''));
             }
             if ($val) { $p[$field] = $val; $fields++; }
+        }
+    }
+    if ($_inlineSnappSynth && empty($p['specs'])) {
+        $_snTblInl = @$xpInl->query('//table[contains(@class,"shop_attributes")]');
+        if ($_snTblInl && $_snTblInl->length) {
+            $_snSpInl = s4ExtractDetailNodeValue('specs', $_snTblInl, (string)($dr['url'] ?? ''));
+            if ($_snSpInl !== '') { $p['specs'] = $_snSpInl; $fields++; }
         }
     }
     if (empty($p['image'])) {
@@ -25703,6 +26351,9 @@ $allProducts[$key]['price_min']=$vr['price_min'];
 $allProducts[$key]['price_max']=$vr['price_max'];
 $allProducts[$key]['price_varies']=!empty($vr['price_varies']);
 }
+if(!empty($vr['combinations'])&&is_array($vr['combinations'])){
+$allProducts[$key]['variation_combinations']=$vr['combinations'];
+}
 }
 if(!empty($vr['images'])&&is_array($vr['images'])){
 $nImg=galleryApplyToProduct($allProducts[$key],$vr['images'],$_forceAll);
@@ -25732,22 +26383,20 @@ $val=galleryImgFromNode($ns->item(0),$dr['url']);
 }elseif($field==='price'){
 $val=extractPrice($ns->item(0)->textContent);
 $_freshPrice=(string)$val; // v10.21: حتی اگر خالی باشد، یعنی «این بار قیمتی نبود»
-}elseif($field==='shortDesc'||$field==='longDesc'){
-/* v9.19: توضیحات با ساختارشان برداشته می‌شوند، نه به‌صورت متن خام.
-
-   textContent همهٔ تگ‌ها را دور می‌ریخت و متنِ پاراگراف‌ها و آیتم‌های
-   فهرست به هم می‌چسبید: «پاراگراف اولویژگی یکویژگی دو». مقصد
-   (ووکامرس) خودش HTML را رندر می‌کند، پس نگه داشتن ساختار هم درست‌تر
-   است هم خواناتر.
-
-   ولی HTML خامِ سایت مبدأ را نمی‌شود مستقیم فرستاد: اسکریپت، استایل،
-   iframe و رویدادهای onclick باید بروند. detailCleanHtml همین کار را
-   می‌کند و اگر بعد از پاک‌سازی چیزی نماند، به متن خام برمی‌گردد. */
-$val=detailCleanHtml($ns->item(0),$dr['url']);
 }else{
-$val=trim($ns->item(0)->textContent);
+/* v9.19 / v10.458: توضیحات، مشخصات جدولی (specs) و هر گره دارای ساختار جدول
+   به‌جای textContent با ساختار تمیز HTML/Table حفظ می‌شوند تا در مودال تب نتایج
+   و در ارسال به باسلام و ووکامرس به‌صورت جدول رندر شوند. */
+$val=s4ExtractDetailNodeValue((string)$field,$ns,(string)$dr['url']);
 }
 if($val){$allProducts[$key][$field]=$val;$_gotFields++;if($field==='image')$imgMain++;}
+}
+}
+if($_isSnappSynth&&empty($allProducts[$key]['specs'])){
+$_snTblTwo=@$xp2->query('//table[contains(@class,"shop_attributes")]');
+if($_snTblTwo&&$_snTblTwo->length){
+$_snSpTwo=s4ExtractDetailNodeValue('specs',$_snTblTwo,(string)$dr['url']);
+if($_snSpTwo!==''){$allProducts[$key]['specs']=$_snSpTwo;$_gotFields++;}
 }
 }
 
@@ -26179,10 +26828,22 @@ if ($detailModeIn !== '' && $profileKey !== '') {
     }
 }
 
-/* v10.183: اگر worker دائمی سرور زنده است، درخواست وب فقط job می‌سازد.
+/* v10.458: بازیافت اسلات‌های قدیمی و قفل به ارث‌رسیدهٔ worker مرده پیش از صف‌گذاری،
+   تا استخراج تفصیلی هرگز پشت پردازش مرده یا خوابیدهٔ قدیمی منتظر نماند. */
+if (function_exists('s4RecycleOutdatedExtractSlotProcesses')) {
+    @s4RecycleOutdatedExtractSlotProcesses();
+}
+if (function_exists('s4WorkerRecoverStaleLockPath')) {
+    @s4WorkerRecoverStaleLockPath();
+}
+$_wkStNow = function_exists('s4WorkerStateLoad') ? s4WorkerStateLoad() : [];
+$_wkPidNow = (int)($_wkStNow['pid'] ?? 0);
+$_wkReallyAlive = s4WorkerIsActive() && ($_wkPidNow <= 0 || s4WorkerPidAlive($_wkPidNow));
+
+/* v10.183: اگر worker دائمی سرور واقعاً زنده است، درخواست وب فقط job می‌سازد.
    resume هم در خودِ همان worker رزرو می‌شود، چون flock/handle بین دو پردازه
-   قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر قدیمی مستقیم اجرا می‌شود. */
-if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
+   قابل انتقال نیست. اگر worker heartbeat ندارد، مسیر CLI child مستقیم اجرا می‌شود. */
+if (empty($_GET['direct']) && empty($_POST['direct']) && $_wkReallyAlive) {
     $enq = s4WorkerEnqueueBackendExtract($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $resumeQueueId, $resumeRequested, $detailModeIn);
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(array_merge(['ok'=>!empty($enq['ok']),'started'=>!empty($enq['ok']),
@@ -26195,6 +26856,7 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
    همان request اجرا نمی‌کند؛ یک CLI child جدا بالا می‌آید تا timeout وب‌سرور
    بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
 if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
+    if (function_exists('s4SpawnPersistentWorker')) @s4SpawnPersistentWorker();
     $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn);
     if (!empty($spawn['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
@@ -27022,9 +27684,11 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
                'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
         /* Existing-product PATCH must not include category_id; Basalam returns 422
            ("currently unable to change category") even when the ID is unchanged. */
-        bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
-        $r = bslReq($tk, 'PATCH', 'products/' . $exId, $bu);
-        if ($r['code'] === 404) $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        bslApplyContent($bu, $p); /* v10.98 / v10.458: توضیح + جدول مشخصات + تنوع */
+        $_bslShopVarsUpd = bslBuildVariantsPayload($p, $priceRial, $stock);
+        if ($_bslShopVarsUpd) $bu['variants'] = $_bslShopVarsUpd;
+        $r = bslReqWithVariantsFallback($tk, 'PATCH', 'products/' . $exId, $bu);
+        if ($r['code'] === 404) $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
             return ['ok' => true, 'id' => $exId, 'action' => 'updated', 'update_reason' => 'آپدیت قیمت/موجودی/محتوا', 'changes_detail' => 'PATCH محصول موجود'];
@@ -27087,8 +27751,10 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
            'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW,
            'is_wholesale' => false, 'category_id' => $catUsed, 'photo'=>$photoId,'photos'=>$photoIds,'status' => 3790];
     if (!empty($p['sku'])) $bp['sku'] = $p['sku'];
+    $_bslShopVarsNew = bslBuildVariantsPayload($p, $priceRial, $stock);
+    if ($_bslShopVarsNew) $bp['variants'] = $_bslShopVarsNew;
     $pRawKey = (string)($p['_key'] ?? ($p['key'] ?? ($p['link'] ?? '')));
-    $r = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+    $r = bslReqWithVariantsFallback($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
     if (!empty($r['ok']) && !empty($r['body']['id'])) {
         bslShopMapRecord($p, $shop, (int)$r['body']['id'], $title, $priceRial, $stock);
         bslClearAiCategoryFixPending($vid, $pRawKey, $title);
@@ -27285,13 +27951,19 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'images'      => productImageList($p),
         'sku'         => (string)($p['sku'] ?? ''),
         'short_desc'  => (string)($p['shortDesc'] ?? ($p['short_desc'] ?? '')),
-        'long_desc'   => (string)($p['longDesc'] ?? ($p['long_desc'] ?? '')),
+        'long_desc'   => s4MergeSpecsTableIntoHtml((string)($p['longDesc'] ?? ($p['long_desc'] ?? '')), $p),
+        'specs'       => (string)($p['specs'] ?? ''),
+        'brand'       => (string)($p['brand'] ?? ''),
+        'category'    => (string)($p['category'] ?? ''),
+        'stock'       => (string)($p['stock'] ?? ''),
         'weight'      => (string)($p['weight'] ?? ''),
         'link'        => (string)($p['link'] ?? ''),
         'orig_price'  => (string)($p['origPrice'] ?? ($p['originalPrice'] ?? '')),
-        // v8.69: تنوع‌ها هم باید به ارسال‌کننده برسند
-        'variations'       => is_array($p['variations'] ?? null) ? $p['variations'] : [],
-        'variation_groups' => is_array($p['variation_groups'] ?? null) ? $p['variation_groups'] : [],
+        // v8.69 / v10.458: تنوع‌ها + قیمت هر تنوع و ترکیب‌ها هم باید به ارسال‌کننده برسند
+        'variations'             => is_array($p['variations'] ?? null) ? $p['variations'] : [],
+        'variation_groups'       => is_array($p['variation_groups'] ?? null) ? $p['variation_groups'] : [],
+        'variation_prices'       => is_array($p['variation_prices'] ?? null) ? $p['variation_prices'] : [],
+        'variation_combinations' => is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [],
         'variations_text'  => (string)($p['variations_text']
                               ?? (is_array($p['variations'] ?? null) ? implode('، ', $p['variations']) : '')),
     ];
@@ -31206,10 +31878,28 @@ if (isset($_GET['sync_diagnose'])) {
     $msP = readProgress(MANUAL_SYNC_PROGRESS_FILE);
     if (!empty($msP['running']) && empty($msP['done'])) {
         $msIdleD = $dgNow - (int)($msP['last_progress_ts'] ?? ($msP['ts'] ?? 0));
-        $chk('manual_sync', $msIdleD <= $dgStall, $msIdleD <= $dgStall
-            ? 'یک همگام‌سازیِ دستی در جریان است (فاز: ' . (string)($msP['phase'] ?? '?') . '، آخرین پیشرفت ' . $msIdleD . ' ثانیه پیش).'
-            : 'اجرایِ دستی نیمه‌کاره مانده (' . $msIdleD . ' ثانیه بی‌حرکت). اولین بازدید از وضعیت، خودش را بسته و دکمه دوباره کار می‌کند.',
-            ['idle' => $msIdleD]);
+        $msLockP = @fopen(MANUAL_SYNC_LOCK_FILE, 'c');
+        $msHeld  = false;
+        if ($msLockP) {
+            $msFree = @flock($msLockP, LOCK_EX | LOCK_NB);
+            $msHeld = !$msFree;
+            if ($msFree) @flock($msLockP, LOCK_UN);
+            @fclose($msLockP);
+        }
+        if ($msIdleD > $dgStall && !$msHeld) {
+            $msP['running'] = false; $msP['done'] = true; $msP['stale'] = true;
+            $msP['partial'] = true;  $msP['resumable'] = true;
+            $msP['phase']   = 'نیمه‌کاره ماند';
+            $msP['error']   = 'اجرای قبلی پس از ' . $msIdleD . ' ثانیه بی‌حرکتی به صورت خودکار بسته شد.';
+            $msP['ts'] = $dgNow; $msP['last_progress_ts'] = $dgNow;
+            writeProgress(MANUAL_SYNC_PROGRESS_FILE, $msP);
+            $chk('manual_sync', true, 'همگام‌سازیِ دستی کهنه (' . $msIdleD . ' ثانیه بی‌حرکت) به‌صورت خودکار بسته و آزاد شد.', ['idle' => $msIdleD, 'auto_closed' => true]);
+        } else {
+            $chk('manual_sync', $msIdleD <= $dgStall || $msHeld, ($msIdleD <= $dgStall || $msHeld)
+                ? 'یک همگام‌سازیِ دستی در جریان است (فاز: ' . (string)($msP['phase'] ?? '?') . '، آخرین پیشرفت ' . $msIdleD . ' ثانیه پیش).'
+                : 'اجرایِ دستی نیمه‌کاره مانده (' . $msIdleD . ' ثانیه بی‌حرکت).',
+                ['idle' => $msIdleD, 'lock_held' => $msHeld]);
+        }
     } else {
         $chk('manual_sync', true, 'همگام‌سازیِ دستی آماده است.'
             . (!empty($msP['done']) && !empty($msP['error']) ? ' آخرین اجرا: ' . (string)$msP['error'] : ''));
@@ -51178,6 +51868,46 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snPools458 = function_exists('snappshopApiEdgePool') ? snappshopApiEdgePool() : [];
+    $_tblSpecs458 = function_exists('s4NormalizeSpecsToTableHtml')
+        ? s4NormalizeSpecsToTableHtml("جنس بدنه: استیل ضدزنگ\nظرفیت: ۲.۵ لیتر")
+        : '';
+    $_mergedSpecs458 = function_exists('s4MergeSpecsTableIntoHtml')
+        ? s4MergeSpecsTableIntoHtml('<p>توضیح تستی</p>', $_tblSpecs458)
+        : '';
+    $_varSample458 = [
+        'price' => '250000',
+        'variation_groups' => [['name' => 'رنگ', 'values' => ['مشکی', 'سفید']]],
+        'variation_combinations' => [
+            ['attributes' => ['رنگ' => 'مشکی'], 'price' => '250000', 'in_stock' => true],
+            ['attributes' => ['رنگ' => 'سفید'], 'price' => '270000', 'in_stock' => false],
+        ],
+    ];
+    $_wooVarRows458 = function_exists('wooBuildVariationPayloadRows') ? wooBuildVariationPayloadRows($_varSample458) : [];
+    $_bslVarRows458 = function_exists('bslBuildVariantsPayload') ? bslBuildVariantsPayload($_varSample458, 5) : [];
+    $_buTest458 = [];
+    if (function_exists('bslApplyContent')) {
+        bslApplyContent($_buTest458, ['long_desc' => 'متن کوتاه', 'specs' => $_tblSpecs458]);
+    }
+    $add('10.458', 'فیل‌اور چندنود Sotoon CDN، پیش‌نمایش عکس ویرایش‌شده در تب نتایج، رفع اسپاون CLI صف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها',
+         count($_snPools458) >= 6
+      && in_array('185.143.232.5', $_snPools458, true)
+      && strpos($_tblSpecs458, '<table class="s4-specs-table"') !== false
+      && strpos($_mergedSpecs458, '<table class="s4-specs-table"') !== false
+      && strpos((string)($_buTest458['description'] ?? ''), '<table class="s4-specs-table"') !== false
+      && count($_wooVarRows458) === 2
+      && ($_wooVarRows458[0]['regular_price'] ?? '') === '250000'
+      && ($_wooVarRows458[1]['stock_status'] ?? '') === 'outofstock'
+      && count($_bslVarRows458) === 2
+      && (int)($_bslVarRows458[0]['primary_price'] ?? 0) === 2500000
+      && (int)($_bslVarRows458[1]['stock'] ?? -1) === 0
+      && function_exists('wooSyncProductVariations')
+      && function_exists('bslReqWithVariantsFallback')
+      && strpos($selfSrc, 'S4_CLI_SPAWN=1') !== false
+      && strpos($selfSrc, 'function resultEditedImgUrl(') !== false
+      && strpos($selfSrc, 'function renderResultSpecsTableHtml(') !== false
+      && strpos($selfSrc, "{v:'10." . "458'") !== false
+      && version_compare(APP_VERSION, '10.458', '>='));
     $_snSt457 = s4SnappApixDefaultState();
     $add('10.457', 'احراز هویت guest/v2/token، قفل زمان‌بندی بین‌پردازشی apix، حذف تلاش مضاعف DoH روی 429 و سکوت هوشمند تخلیهٔ پنجرهٔ Sotoon CDN برای گالری فاز ۲ اسنپ‌شاپ',
          function_exists('s4SnappApixEnsureGuestToken')
@@ -65635,16 +66365,17 @@ send_sse('send_info',['msg'=>"[$n] ⏭ بدون قیمت — رد شد"]);
 continue;
 }
 send_sse('send_info',['msg'=>"[$n/$total] بررسی: ".mb_substr($pTitle,0,60)." | قیمت: $pPrice"]);
-$wp=['name'=>$pTitle,'type'=>'simple','regular_price'=>$pPrice,'status'=>$w['default_status']??'draft','manage_stock'=>!empty($w['manage_stock']),'stock_quantity'=>effectiveStock($p,(int)($w['stock_quantity']??10))];   // v10.21 (۳۴الف)
+$_wsDesc = s4MergeSpecsTableIntoHtml((string)($p['long_desc'] ?? ($p['longDesc'] ?? '')), $p);
+$_wsStock = effectiveStock($p,(int)($w['stock_quantity']??10));
+$_wsPriceInt = (int)preg_replace('/[^0-9]/','',$pPrice);
+$_atNew = wooVariationAttributes($p, true);
+$_wsVarRows = $_atNew ? wooBuildVariationPayloadRows($p, $_wsPriceInt, $_wsStock, $w) : [];
+$wp=['name'=>$pTitle,'type'=>$_wsVarRows?'variable':'simple','regular_price'=>$pPrice,'status'=>$w['default_status']??'draft','manage_stock'=>!empty($w['manage_stock']),'stock_quantity'=>$_wsStock];   // v10.21 (۳۴الف) / v10.458
 if(!empty($p['short_desc']))$wp['short_description']=$p['short_desc'];
-if(!empty($p['long_desc']))$wp['description']=$p['long_desc'];
+if($_wsDesc!=='')$wp['description']=$_wsDesc;
 if(!empty($p['sku']))$wp['sku']=$p['sku'];
 // v8.56: دستهٔ این پروفایل، وگرنه دستهٔ پیش‌فرض
 if($wooStreamCatId>0)$wp['categories']=[['id'=>$wooStreamCatId]];
-/* v8.85: تنوع‌ها موقع «ساخت» محصول هم بروند. تا حالا فقط در مسیر آپدیت
-   به‌عنوان attributes فرستاده می‌شدند، پس محصول تازه بدون رنگ و سایز
-   ساخته می‌شد و تنها با یک ارسال دوم تکمیل می‌شد. */
-$_atNew=wooVariationAttributes($p);
 if($_atNew)$wp['attributes']=$_atNew;
 /* v8.85: دستهٔ استخراج‌شده از صفحهٔ محصول، اگر باشد، بر دستهٔ ثابت
    پروفایل ارجح است — همان چیزی که کاربر خواسته. */
@@ -65753,8 +66484,13 @@ usleep(150000);continue;
 }
 send_sse('send_info',['msg'=>"[$n] 🆕 محصول جدید - ایجاد..."]);
 $r=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'POST','products',$wp);
+if(empty($r['ok'])&&($wp['type']??'')==='variable'){
+$wp['type']='simple';$wp['attributes']=wooVariationAttributes($p,false);$_wsVarRows=[];
+$r=wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'POST','products',$wp);
+}
 if($r['ok']&&!empty($r['body']['id'])){
 $newId=(int)$r['body']['id'];
+if($_wsVarRows){wooSyncProductVariations($w,$newId,$_wsVarRows);}
 // v8.63: تصویر با یک PUT جدا — همان روشی که در «عکس‌دار کردن» جواب می‌دهد
 if(!empty($wooStreamImgs)){
 $iu=wooEditProduct($w,$newId,['images'=>$wooStreamImgs]);
@@ -65817,12 +66553,16 @@ if (file_exists(WOO_STOP_FILE)) {
     @unlink(WOO_STOP_FILE);
 }
 
+if (!isCliRun()) {
 header('Content-Type: application/json; charset=UTF-8');
 header('Connection: close');
-header('Content-Length: '.strlen(json_encode(['ok'=>true,'msg'=>'woo_backend started'],JSON_UNESCAPED_UNICODE)));
-echo json_encode(['ok'=>true,'msg'=>'woo_backend started'],JSON_UNESCAPED_UNICODE);
+$_wooStartBody = json_encode(['ok'=>true,'msg'=>'woo_backend started'],JSON_UNESCAPED_UNICODE);
+header('Content-Length: '.strlen((string)$_wooStartBody));
+echo $_wooStartBody;
 @ob_flush(); @flush();
-if(function_exists('fastcgi_finish_request')){fastcgi_finish_request();}
+if(function_exists('litespeed_finish_request')){@litespeed_finish_request();}
+if(function_exists('fastcgi_finish_request')){@fastcgi_finish_request();}
+}
 
 $startedAt=time();$GLOBALS['startedAt']=$startedAt;
 $wooSentList=[];$wooUpdatedList=[];$wooSkippedList=[];$wooFailedList=[];$wooLog=[];
@@ -65894,14 +66634,23 @@ $pd=json_decode($raw?:'[]',true)?:[];
    فرایند)، از فایلِ اختصاصیِ ردیفِ در حالِ اجرا برگردان — وگرنه ادامه
    بلافاصله با «بدونِ محصول» تمام می‌شد. */
 if(empty($pd)){
-$__wq0=wooReadQueue();
-foreach($__wq0['entries'] as $__qe0){
-if(($__qe0['status']??'')==='running'){
+$__wq0=wooReadQueue();$__wq0Changed=false;
+foreach($__wq0['entries'] as &$__qe0){
+if(($__qe0['status']??'')==='running'||($__qe0['status']??'')==='waiting'){
 $__wf=__DIR__.'/woo_queue_products_'.(string)($__qe0['id']??'').'.json';
-if(file_exists($__wf)){$pd=json_decode((string)@file_get_contents($__wf)?:'[]',true)?:[];}
+if(file_exists($__wf)){
+$pd=json_decode((string)@file_get_contents($__wf)?:'[]',true)?:[];
+if(!empty($pd)){
+@copy($__wf,WOO_PRODUCTS_FILE);
+if(($__qe0['status']??'')==='waiting'){$__qe0['status']='running';$__qe0['started_at']=time();$__wq0Changed=true;}
+if((int)($__qe0['total']??0)<=0){$__qe0['total']=count($pd);$__wq0Changed=true;}
 break;
 }
 }
+}
+}
+unset($__qe0);
+if($__wq0Changed)wooWriteQueue($__wq0);
 }
 if(empty($pd)){
 writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ فایل محصولات خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
@@ -66033,14 +66782,17 @@ wooBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 continue;
 }
 
-$wp=['name'=>$pTitle,'type'=>'simple','regular_price'=>$pPrice,'status'=>$w['default_status']??'draft','manage_stock'=>!empty($w['manage_stock']),'stock_quantity'=>effectiveStock($p,(int)($w['stock_quantity']??10))];   // v10.21 (۳۴الف)
+$_wooDescMerged=s4MergeSpecsTableIntoHtml((string)($p['long_desc']??($p['longDesc']??'')),$p);
+$_wooBaseStock=effectiveStock($p,(int)($w['stock_quantity']??10));
+$_atNew=wooVariationAttributes($p,true);
+$_wooVarRows=$_atNew?wooBuildVariationPayloadRows($p,$pPriceNum,$_wooBaseStock,$w):[];
+$wp=['name'=>$pTitle,'type'=>$_wooVarRows?'variable':'simple','regular_price'=>$pPrice,'status'=>$w['default_status']??'draft','manage_stock'=>!empty($w['manage_stock']),'stock_quantity'=>$_wooBaseStock];   // v10.21 (۳۴الف) / v10.458
 if(!empty($p['short_desc']))$wp['short_description']=$p['short_desc'];
-if(!empty($p['long_desc']))$wp['description']=$p['long_desc'];
+if($_wooDescMerged!=='')$wp['description']=$_wooDescMerged;
 if(!empty($p['sku']))$wp['sku']=$p['sku'];
 // v8.56: دستهٔ همین پروفایل، نه فقط دستهٔ سراسری
 if($wooSendCatId>0)$wp['categories']=[['id'=>$wooSendCatId]];
 // v8.85: تنوع‌ها موقع ساخت محصول (نه فقط آپدیت)
-$_atNew=wooVariationAttributes($p);
 if($_atNew)$wp['attributes']=$_atNew;
 // v8.85: دستهٔ استخراج‌شده بر دستهٔ ثابت پروفایل ارجح است
 $_catNew=wooCategoryIds($w,$p['category']??'');
@@ -66120,17 +66872,22 @@ if($imgNote)wooBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr
 }
 
 $wpUpdate=['regular_price'=>$pPrice,'stock_quantity'=>$newStock];
+if($_wooVarRows)$wpUpdate['type']='variable';
 if(!empty($p['short_desc']))$wpUpdate['short_description']=$p['short_desc'];
-if(!empty($p['long_desc']))$wpUpdate['description']=$p['long_desc'];
+if($_wooDescMerged!=='')$wpUpdate['description']=$_wooDescMerged;
 if(!empty($wooUpdImgs))$wpUpdate['images']=$wooUpdImgs;
 if(!empty($p['sku']))$wpUpdate['sku']=$p['sku'];
-// v8.69: تنوع‌ها به‌صورت ویژگی محصول ووکامرس
-$wooAttrs=wooVariationAttributes($p);
+// v8.69 / v10.458: تنوع‌ها به‌صورت ویژگی متغیر و ترکیب‌های قیمت‌دار ووکامرس
+$wooAttrs=wooVariationAttributes($p,!empty($_wooVarRows));
 if($wooAttrs)$wpUpdate['attributes']=$wooAttrs;
 // v8.85: دستهٔ استخراج‌شده در آپدیت هم اعمال شود
 $_catUpd=wooCategoryIds($w,$p['category']??'');
 if($_catUpd)$wpUpdate['categories']=array_map(fn($i)=>['id'=>$i],$_catUpd);
 $r=function_exists('wooUpsertWithMode')?wooUpsertWithMode($w,$wpUpdate,['id'=>$exId],(string)$pKey):wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'PUT','products/'.$exId,$wpUpdate);
+if(!$r['ok']&&($wpUpdate['type']??'')==='variable'){
+unset($wpUpdate['type']);$wpUpdate['attributes']=wooVariationAttributes($p,false);$_wooVarRows=[];
+$r=function_exists('wooUpsertWithMode')?wooUpsertWithMode($w,$wpUpdate,['id'=>$exId],(string)$pKey):wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'PUT','products/'.$exId,$wpUpdate);
+}
 // v8.58: اگر فقط تصویر مقصر بود، بدون تصویر دوباره تلاش کن تا بقیهٔ
 // تغییرات (قیمت/موجودی) از دست نرود.
 if(!$r['ok']&&!empty($wpUpdate['images'])&&wooIsImageError($r)){
@@ -66139,6 +66896,7 @@ unset($wpUpdate['images']);
 $r=function_exists('wooUpsertWithMode')?wooUpsertWithMode($w,$wpUpdate,['id'=>$exId],(string)$pKey):wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'PUT','products/'.$exId,$wpUpdate);
 }
 if($r['ok']&&!empty($r['body']['id'])){
+if($_wooVarRows){wooSyncProductVariations($w,(int)$r['body']['id'],$_wooVarRows);}
 $updated++;$wooUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id'],'edit_url'=>$editUrl,'changes'=>'قیمت '.$exPrice.'→'.$pPrice,'update_reason'=>'تغییر قیمت: '.$exPrice.' → '.$pPrice],$card);
 wooBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت: ID#{$r['body']['id']}");
 }else{
@@ -66163,8 +66921,16 @@ if($imgNote)wooBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr
 
 // محصول اول بدون تصویر ساخته می‌شود تا هیچ‌وقت به‌خاطر تصویر رد نشود
 $r=function_exists('wooUpsertWithMode')?wooUpsertWithMode($w,$wp,null,(string)$pKey):wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'POST','products',$wp);
+if(!$r['ok']&&($wp['type']??'')==='variable'){
+$wp['type']='simple';$wp['attributes']=wooVariationAttributes($p,false);$_wooVarRows=[];
+$r=function_exists('wooUpsertWithMode')?wooUpsertWithMode($w,$wp,null,(string)$pKey):wooReq($w['store_url'],$w['consumer_key'],$w['consumer_secret'],'POST','products',$wp);
+}
 if($r['ok']&&!empty($r['body']['id'])){
 $newId=(int)$r['body']['id'];
+if($_wooVarRows){
+$_vSyncRes=wooSyncProductVariations($w,$newId,$_wooVarRows);
+if(!empty($_vSyncRes['synced']))wooBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🎨 ".(int)$_vSyncRes['synced']." تنوع ووکامرس ثبت شد");
+}
 $editUrl=rtrim($w['store_url'],'/').'/wp-admin/post.php?post='.$newId.'&action=edit';
 // حالا تصویر را جداگانه وصل کن — همان کاری که «عکس‌دار کردن» می‌کند
 $imgDone='';
@@ -66387,7 +67153,22 @@ function wooReadQueue(): array {
 clearstatcache(true,WOO_QUEUE_FILE);
 if(!file_exists(WOO_QUEUE_FILE)) return ['entries'=>[]];
 $d=@json_decode(@file_get_contents(WOO_QUEUE_FILE)?:'',true);
-return is_array($d)&&isset($d['entries'])?$d:['entries'=>[]];
+if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
+$fixed=false;
+foreach($d['entries'] as &$re){
+if(!is_array($re))continue;
+if((int)($re['total']??0)<=0&&in_array((string)($re['status']??''),['running','waiting','paused'],true)){
+$pf=(string)($re['products_file']??'');
+if($pf===''&&!empty($re['id']))$pf=__DIR__.'/woo_queue_products_'.basename((string)$re['id']).'.json';
+if($pf!==''&&is_file($pf)){
+$arr=@json_decode(@file_get_contents($pf)?:'[]',true);
+if(is_array($arr)&&count($arr)>0){$re['total']=count($arr);$re['products_file']=$pf;$fixed=true;}
+}
+}
+}
+unset($re);
+if($fixed)wooWriteQueue($d);
+return $d;
 }
 function wooWriteQueue(array $queue): void {
 sendQueueAtomicWrite(WOO_QUEUE_FILE,$queue);
@@ -66463,9 +67244,19 @@ $startImm=!empty($_POST['start_immediately']);
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $qFile=__DIR__.'/woo_queue_products_'.$queueId.'.json';
 if(!file_exists($qFile)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$_wooActualItems=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
+if($total<=0&&count($_wooActualItems)>0)$total=count($_wooActualItems);
 $queue=wooReadQueue();
-// v8.56: اگر ردیف دیگری در حال اجراست، این یکی باید منتظر بماند. وگرنه
-// فایل مشترک محصولات بازنویسی می‌شود و ارسال جاری نصفه‌کاره عوض می‌شود.
+$_wooProbeFp=queueBackendLock('woo');
+$_wooWorkerLive=!is_resource($_wooProbeFp);
+if(is_resource($_wooProbeFp))queueBackendUnlock($_wooProbeFp);
+if(!$_wooWorkerLive){
+foreach($queue['entries'] as &$qeOrph){
+if(($qeOrph['status']??'')==='running'){$qeOrph['status']='waiting';$qeOrph['resume_requested_at']=0;}
+}
+unset($qeOrph);
+}
+// v8.56: اگر ردیف دیگری واقعاً در حال اجراست، این یکی باید منتظر بماند.
 $wooBusyNow=false;
 foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'){$wooBusyNow=true;break;}}
 if($wooBusyNow)$startImm=false;
@@ -66504,7 +67295,11 @@ if($wooCatIn<=0)$wooCatIn=(int)(loadConnections()['woocommerce']['default_catego
 $entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?time():0,'done_at'=>0,'profile_key'=>$pKeyIn,'profile_name'=>$pNameIn,'config'=>['title_suffix'=>$wooTitleSuffix,'category_id'=>$wooCatIn]];
 $queue['entries'][]=$entry;
 wooWriteQueue($queue);
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_wooSpawnedPid=0;
+if($startImm&&function_exists('fireAndForgetCliQueueBackend')){
+$_wooSpawnedPid=fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+}
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'total'=>$total,'worker_pid'=>$_wooSpawnedPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -66618,13 +67413,19 @@ if($entry['status']!=='waiting'&&$entry['status']!=='running'){echo json_encode(
 @unlink(WOO_PRODUCTS_FILE);
 $copyOk=@copy($entry['products_file'],WOO_PRODUCTS_FILE);
 if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات'],JSON_UNESCAPED_UNICODE);exit;}
+if((int)($entry['total']??0)<=0){
+$_wProdsCnt=count(json_decode(@file_get_contents(WOO_PRODUCTS_FILE)?:'[]',true)?:[]);
+if($_wProdsCnt>0)$entry['total']=$_wProdsCnt;
+}
 $entry['status']='running';
 $entry['started_at']=time();
 $entry['resume_requested_at']=0;
 unset($entry['paused_by'],$entry['stopped_by_user']);
 wooWriteQueue($queue);
+queueBackendUnlock($__queueRouteFp);
+$_wooSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>(int)($entry['total']??0),'worker_pid'=>$_wooSrvPid,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -67650,7 +68451,22 @@ function bslReadQueue(): array {
 clearstatcache(true,BSL_QUEUE_FILE);
 if(!file_exists(BSL_QUEUE_FILE)) return ['entries'=>[]];
 $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
-return is_array($d)&&isset($d['entries'])?$d:['entries'=>[]];
+if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
+$fixed=false;
+foreach($d['entries'] as &$re){
+if(!is_array($re))continue;
+if((int)($re['total']??0)<=0&&in_array((string)($re['status']??''),['running','waiting','paused'],true)){
+$pf=(string)($re['products_file']??'');
+if($pf===''&&!empty($re['id']))$pf=__DIR__.'/bsl_queue_products_'.basename((string)$re['id']).'.json';
+if($pf!==''&&is_file($pf)){
+$arr=@json_decode(@file_get_contents($pf)?:'[]',true);
+if(is_array($arr)&&count($arr)>0){$re['total']=count($arr);$re['products_file']=$pf;$fixed=true;}
+}
+}
+}
+unset($re);
+if($fixed)bslWriteQueue($d);
+return $d;
 }
 function bslWriteQueue(array $queue): void {
 sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
@@ -68100,12 +68916,27 @@ $parallelAuto=isset($_POST['send_parallel_auto'])
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $qFile=__DIR__.'/bsl_queue_products_'.$queueId.'.json';
 if(!file_exists($qFile)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$_bslActualItems=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
+if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
 $queue=bslReadQueue();
 $startImm=!empty($_POST['start_immediately']);
-// v8.57: اگر ارسال دیگری در جریان است، این یکی باید در صف بماند.
-// قبلاً هر افزودنی «running» می‌شد و روی فایل مشترک محصولات می‌نوشت؛
-// نتیجه این بود که ارسال در حال اجرا وسط کار محصولات پروفایل تازه را
-// می‌فرستاد — دقیقاً همان «پروفایل دیگری می‌رود» که گزارش شده بود.
+$_bslProbeFp=queueBackendLock('bsl');
+$_bslWorkerLive=!is_resource($_bslProbeFp);
+if(is_resource($_bslProbeFp))queueBackendUnlock($_bslProbeFp);
+if(!$_bslWorkerLive){
+foreach($queue['entries'] as &$qeOrphB){
+if(($qeOrphB['status']??'')==='running'){
+if((int)($qeOrphB['total']??0)<=0&&!empty($qeOrphB['products_file'])&&is_file($qeOrphB['products_file'])){
+$_orphCnt=count(json_decode(@file_get_contents($qeOrphB['products_file'])?:'[]',true)?:[]);
+if($_orphCnt>0)$qeOrphB['total']=$_orphCnt;
+}
+$qeOrphB['status']='waiting';
+$qeOrphB['resume_requested_at']=0;
+}
+}
+unset($qeOrphB);
+}
+// v8.57: اگر ارسال دیگری واقعاً در جریان است، این یکی باید در صف بماند.
 $bslBusy=false;
 foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'){$bslBusy=true;break;}}
 if($bslBusy)$startImm=false;
@@ -68180,13 +69011,15 @@ $queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','pro
 $fanFirst=false;
 }
 bslWriteQueue($queue);
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 $entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?time():0,'done_at'=>0,'paused_at'=>0,'profile_key'=>$pKeyIn,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
 $queue['entries'][]=$entry;
 bslWriteQueue($queue);
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslAddPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -68378,10 +69211,14 @@ $productsFile=(string)($row['products_file']??'');
 if($productsFile===''||!is_file($productsFile)){
     queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات این ردیف یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
+if($total<=0){
+    $_resActual=json_decode((string)@file_get_contents($productsFile)?:'[]',true)?:[];
+    if(count($_resActual)>0)$total=count($_resActual);
+}
 /* A free flock proves every old running owner is dead. Keep their checkpoints
    but return them to waiting so the explicitly selected row is unambiguous. */
 $now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
-$row=&$queue['entries'][$idx];$row['status']='running';$row['started_at']=$now;$row['updated_at']=$now;$row['paused_at']=0;$row['done_at']=0;$row['resume_requested_at']=$now;$row['fail_reason']='';
+$row=&$queue['entries'][$idx];$row['total']=$total;$row['status']='running';$row['started_at']=$now;$row['updated_at']=$now;$row['paused_at']=0;$row['done_at']=0;$row['resume_requested_at']=$now;$row['fail_reason']='';
 unset($row['resume_exhausted'],$row['paused_by'],$row['stopped_by_user'],$row['error']);
 @unlink(BSL_PRODUCTS_FILE);if(!@copy($productsFile,BSL_PRODUCTS_FILE)){
     $row['status']='paused';$row['paused_by']='system';bslWriteQueue($queue);queueBackendUnlock($resumeFp);
@@ -68399,7 +69236,8 @@ writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'
     'sent_details'=>$row['sent_details']??[],'updated_details'=>$row['updated_details']??[],'skipped_details'=>$row['skipped_details']??[],'failed_details'=>$row['failed_details']??[],
     'checkpoint'=>['queue_id'=>$queueId,'current'=>$current,'total'=>$total,'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),'started_at'=>$now]]);
 bslWriteQueue($queue);queueResumeBook('bsl',$queueId,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'manual_continue']);queueBackendUnlock($resumeFp);
-echo json_encode(['ok'=>true,'dispatch_ready'=>true,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
+$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'dispatch_ready'=>true,'worker_pid'=>$_bslResPid,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_detail'])){
@@ -68483,20 +69321,24 @@ $queue=bslReadQueue();
 $entry=null;$entryIdx=null;
 foreach($queue['entries'] as $i=>$e){if($e['id']===$queueId){$entry=$e;$entryIdx=$i;break;}}
 if(!$entry){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-// v8.57: ردیف «paused» (نگه‌داشته‌شده با دکمهٔ توقف) هم باید قابل شروع باشد
-if($entry['status']!=='waiting'&&$entry['status']!=='paused'){echo json_encode(['ok'=>false,'error'=>'ورودی در وضعیت waiting نیست'],JSON_UNESCAPED_UNICODE);exit;}
-// v8.57: ارسال دیگری در جریان نباشد
-foreach($queue['entries'] as $qeR){if(($qeR['status']??'')==='running'){echo json_encode(['ok'=>false,'error'=>'یک ارسال دیگر در حال اجراست — اول آن را متوقف یا تمام کنید'],JSON_UNESCAPED_UNICODE);exit;}}
+// v8.57 / v10.458: چون قفل bsl_backend را در اختیار داریم، یعنی هیچ worker زنده‌ای نیست؛
+// ردیف‌های paused یا runningِ یتیم هر دو قابل شروع مجددند و ردیف‌های running دیگر به waiting برمی‌گردند.
+if($entry['status']!=='waiting'&&$entry['status']!=='paused'&&$entry['status']!=='running'){echo json_encode(['ok'=>false,'error'=>'ورودی در وضعیت waiting نیست'],JSON_UNESCAPED_UNICODE);exit;}
+foreach($queue['entries'] as $qiOther=>&$qeR){if($qiOther!==$entryIdx&&($qeR['status']??'')==='running'){$qeR['status']='waiting';$qeR['resume_requested_at']=0;}}unset($qeR);
 // شروع دستی یعنی کاربر واقعاً می‌خواهد؛ پس نگه‌داشتِ توقف برداشته می‌شود
 localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
 if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 @copy($entry['products_file'],BSL_PRODUCTS_FILE);
+$_bslSrvCnt=count(json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'[]',true)?:[]);
+if((int)($entry['total']??0)<=0&&$_bslSrvCnt>0){$entry['total']=$_bslSrvCnt;$queue['entries'][$entryIdx]['total']=$_bslSrvCnt;}
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
 unset($queue['entries'][$entryIdx]['paused_by'],$queue['entries'][$entryIdx]['stopped_by_user']);
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
+queueBackendUnlock($__queueRouteFp);
+$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total']],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslSrvPid],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_restart_server'])){
@@ -68511,7 +69353,7 @@ $queue=bslReadQueue();
 $entry=null;$entryIdx=null;
 foreach($queue['entries'] as $i=>$e){if($e['id']===$queueId){$entry=$e;$entryIdx=$i;break;}}
 if(!$entry){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-if($entry['status']!=='running'){echo json_encode(['ok'=>false,'error'=>'ورودی در وضعیت running نیست'],JSON_UNESCAPED_UNICODE);exit;}
+if($entry['status']!=='running'&&$entry['status']!=='waiting'&&$entry['status']!=='paused'){echo json_encode(['ok'=>false,'error'=>'ورودی در وضعیت running نیست'],JSON_UNESCAPED_UNICODE);exit;}
 
 $progress=readProgress(BSL_PROGRESS_FILE);
 $current=(int)($progress['current']??$entry['current']??0);
@@ -68519,8 +69361,14 @@ $sent=(int)($progress['sent']??$entry['sent']??0);$updated=(int)($progress['upda
 localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
 if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 @copy($entry['products_file'],BSL_PRODUCTS_FILE);
+$_bslRstCnt=count(json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'[]',true)?:[]);
+if((int)($entry['total']??0)<=0&&$_bslRstCnt>0){$entry['total']=$_bslRstCnt;$queue['entries'][$entryIdx]['total']=$_bslRstCnt;}
+$queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
+bslWriteQueue($queue);
+queueBackendUnlock($__queueRouteFp);
+$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslRstPid,'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
 }
 
 function bslFormatRemaining(int $seconds): string {
@@ -68937,6 +69785,13 @@ header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
+if((int)($queue['entries'][$nextIdx]['total']??0)<=0||((int)($queue['entries'][$nextIdx]['total']??0)!==count($verifyProducts)&&count($verifyProducts)>0)){
+$queue['entries'][$nextIdx]['total']=count($verifyProducts);
+$nextEntry['total']=count($verifyProducts);
+}
+if(!isCliRun()){
+finishRequestNow(json_encode(['ok'=>true,'started'=>true,'queue_id'=>$bslQueueId,'total'=>count($verifyProducts),'msg'=>'bsl_backend started'],JSON_UNESCAPED_UNICODE));
+}
 
 // v8.57: تنظیمات این ارسال فقط در حافظه اعمال می‌شود، نه روی فایل تنظیمات.
 // قبلاً همین‌جا دستهٔ پیش‌فرض کاربر، «دستهٔ خودکار» و پسوند عنوانِ عمومی با
@@ -69346,8 +70201,10 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
 if($newStock<=0)$bu['status']=3790;else $bu['status']=2976;
 // v10.392: دستهٔ محصول موجود را در PATCH عادی نفرست؛ باسلام آن را با 422 رد می‌کند.
-// v8.69: توضیحات و تنوع‌های تازه هم در همین آپدیت می‌روند
+// v8.69 / v10.458: توضیحات، جدول مشخصات و تنوع‌های تازه هم در همین آپدیت می‌روند
 bslApplyContent($bu,$p);
+$_bslVarsUpd=bslBuildVariantsPayload($p,$pn,$newStock);
+if($_bslVarsUpd)$bu['variants']=$_bslVarsUpd;
 // v10.234: آپلود عکس در آپدیت فقط وقتی اختلاف گالری گزارش شده باشد؛
 // قیمت/موجودی/توضیحات دیگر منتظر آپلود چند تصویر نمی‌مانند.
 $pid=null;$galU=[];$imgU=productImageList($p);$needsUpdateImage=false;
@@ -69355,7 +70212,7 @@ foreach((array)$bslContentDiff as $_cdImg){if(mb_strpos((string)$_cdImg,'گال�
 $updateImgNote=$imgU?($needsUpdateImage?'گالری تغییر کرده و آپلود شد':'تصویر/گالری مقصد حفظ شد'):'محصول مبدأ تصویر نداشت';
 if($needsUpdateImage&&$imgU){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photos']??10));if(!empty($umU2['ok'])){$pid=$umU2['main'];$galU=$umU2['ids'];$updateImgNote=$umU2['note']??'تصویر آپلود شد';}else{$updateImgNote='اختلاف گالری بود ولی آپلود تصویر ناموفق شد؛ ادامه بدون تغییر تصویر';}}
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
-$r=bslReq($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
+$r=bslReqWithVariantsFallback($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReqWithVariantsFallback($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
 if($r['ok']&&!empty($r['body']['id'])){ $updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$updateChanges);$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
 'changes'=>$__chg!==''?$__chg:'آپدیت','update_reason'=>$__chg!==''?$__chg:'آپدیت',
 'changes_detail'=>'قیمت '.($exPrice/10).'→'.($pn/10).' تومان؛ موجودی '.$exStock.'→'.$newStock.'؛ وضعیت '.$exStatusVal.'→'.($newStock<=0?3790:2976),
@@ -69423,10 +70280,16 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 }
 usleep($bslDelayMs*1000);continue;
 }
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
+$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=s4MergeSpecsTableIntoHtml(trim($p['long_desc']??''),$p);if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
+$_bslCntTmp=[];bslApplyContent($_bslCntTmp,array_merge($p,['short_desc'=>$bsBrief,'long_desc'=>$bsDesc]));
+if(!empty($_bslCntTmp['brief']))$bsBrief=(string)$_bslCntTmp['brief'];
+if(!empty($_bslCntTmp['description']))$bsDesc=(string)$_bslCntTmp['description'];
+$_bslCurStk=effectiveStock($p,(int)($cn['basalam']['stock']??10));
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
+$_bslVarsNew=bslBuildVariantsPayload($p,$pn,$_bslCurStk);
+if($_bslVarsNew)$bp['variants']=$_bslVarsNew;
 if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;if(!empty($p['sku']))$bp['sku']=$p['sku'];
-$r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
+$r=bslReqWithVariantsFallback($tk,'POST','vendors/'.$vid.'/products',$bp);
 if($r['ok']&&!empty($r['body']['id'])){ bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id']],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ #{$r['body']['id']}");
 }else{
 $em=bslErrText($r);
@@ -80022,6 +80885,7 @@ const DETAIL_FIELDS = [
     {key:'price',     label:'قیمت',            icon:'💰'},
     {key:'shortDesc', label:'توضیحات کوتاه', icon:'📝'},
     {key:'longDesc',  label:'توضیحات بلند',   icon:'📄'},
+    {key:'specs',     label:'مشخصات فنی (جدول)', icon:'📋'},
     {key:'sku',       label:'SKU',             icon:'🏷️'},
     {key:'category',  label:'دسته‌بندی',      icon:'📂'},
     {key:'tags',      label:'برچسب‌ها',        icon:'🔖'},
@@ -81264,7 +82128,7 @@ function galModeChanged(silent) {
     if (!silent) galChanged();
 }
 
-function galChanged() { markDirty(); scheduleSave(); }
+function galChanged() { markDirty(); scheduleSave(); if (typeof rvRebuildVisible === 'function') rvRebuildVisible(); }
 
 /** آدرس یک محصول نمونه از نتایج فعلی */
 function galSampleUrl() { return detailSampleUrl(); }
@@ -83992,6 +84856,129 @@ function ensureKey(p,fallback){
 /* v10.31 (۴۴): بدنهٔ کارت جدا شد تا رندرِ انبوه بتواند بدون جست‌وجوی DOM
    و بدون appendChildِ تک‌تک، رشته بسازد. renderCard خودش دست‌نخورده
    می‌ماند و همان رفتار قبلی را دارد. */
+function s4ImgCfgIsActiveJs(cfg){
+  if(!cfg||typeof cfg!=='object')return false;
+  const m=s4InferImgEditModeJs(cfg);
+  if(m==='crop')return (parseInt(cfg.crop_bottom_pct||0)||0)>0||(parseInt(cfg.crop_bottom_px||0)||0)>0;
+  return (parseInt(cfg.square_pct||0)||0)>0||(parseInt(cfg.square_px||0)||0)>0;
+}
+function resultEditedImgUrl(imgUrl,p,role){
+  if(!imgUrl)return '';
+  const r=(role==='gallery')?'gallery':'list';
+  let lc=(typeof listImgEditCollect==='function')?listImgEditCollect():{};
+  let gc=(typeof galCollect==='function')?galCollect():{};
+  const prof=(typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null;
+  if(!s4ImgCfgIsActiveJs(lc)&&prof&&prof.listImageEdit&&s4ImgCfgIsActiveJs(prof.listImageEdit))lc=prof.listImageEdit;
+  if(!s4ImgCfgIsActiveJs(gc)&&prof&&prof.gallery&&s4ImgCfgIsActiveJs(prof.gallery))gc=prof.gallery;
+  const lcOn=s4ImgCfgIsActiveJs(lc),gcOn=s4ImgCfgIsActiveJs(gc);
+  const chosen=(r==='gallery')?(gcOn?gc:(lcOn?lc:null)):(lcOn?lc:(gcOn?gc:null));
+  const prodUrl=(p&&p.link)||currentProfileUrl||'';
+  let url='?image_proxy='+encodeURIComponent(imgUrl)+'&img_role='+encodeURIComponent(r);
+  if(prodUrl)url+='&product_url='+encodeURIComponent(prodUrl);
+  if(chosen){url+=s4BuildImgEditPreviewQuery(chosen);}
+  return url;
+}
+function sanitizeResultRichHtml(raw){
+  if(!raw)return '';
+  const s=String(raw).trim();
+  if(!s)return '';
+  if(!s.includes('<'))return '<div style="white-space:pre-wrap;line-height:1.9">'+esc(s)+'</div>';
+  const doc=new DOMParser().parseFromString(s,'text/html');
+  const allowed=new Set(['TABLE','THEAD','TBODY','TFOOT','TR','TH','TD','P','BR','UL','OL','LI','STRONG','B','EM','I','H3','H4','H5','DIV','SPAN']);
+  const cleanNode=(node)=>{
+    Array.from(node.childNodes).forEach(ch=>{
+      if(ch.nodeType===1){
+        const tag=ch.tagName.toUpperCase();
+        if(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','FORM','INPUT','BUTTON','SVG'].includes(tag)){ch.remove();return;}
+        if(!allowed.has(tag)){
+          while(ch.firstChild)node.insertBefore(ch.firstChild,ch);
+          ch.remove();return;
+        }
+        Array.from(ch.attributes).forEach(at=>{
+          const an=at.name.toLowerCase();
+          if(an!=='colspan'&&an!=='rowspan'&&an!=='dir')ch.removeAttribute(at.name);
+        });
+        if(tag==='TABLE'){ch.style.cssText='width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;background:#0b1220;border:1px solid #334155;border-radius:8px;overflow:hidden';}
+        else if(tag==='TH'){ch.style.cssText='border:1px solid #334155;padding:7px 10px;background:#1e293b;color:#93c5fd;text-align:right;width:34%;font-weight:700';}
+        else if(tag==='TD'){ch.style.cssText='border:1px solid #334155;padding:7px 10px;color:#e2e8f0;text-align:right';}
+        cleanNode(ch);
+      }
+    });
+  };
+  cleanNode(doc.body);
+  return doc.body.innerHTML;
+}
+function extractSpecsPairsJs(raw){
+  if(!raw)return [];
+  const pairs=[];
+  const pushPair=(k,v)=>{k=String(k||'').replace(/[:：]+$/,'').trim();v=String(v||'').trim();if(k&&v&&k.length<=120)pairs.push([k,v]);};
+  if(Array.isArray(raw)){
+    raw.forEach(r=>{if(r&&typeof r==='object')pushPair(r.k||r.title||r.name||r[0],r.v||r.value||r[1]);});
+    return pairs;
+  }
+  if(typeof raw==='object'){
+    Object.entries(raw).forEach(([k,v])=>pushPair(k,typeof v==='object'?JSON.stringify(v):v));
+    return pairs;
+  }
+  const str=String(raw).trim();
+  if(!str)return [];
+  if(str.includes('<')){
+    const doc=new DOMParser().parseFromString(str,'text/html');
+    doc.querySelectorAll('tr').forEach(tr=>{
+      const cells=Array.from(tr.querySelectorAll('th,td'));
+      if(cells.length>=2)pushPair(cells[0].textContent,cells.slice(1).map(c=>c.textContent.trim()).filter(Boolean).join(' ، '));
+    });
+    if(pairs.length)return pairs;
+    doc.querySelectorAll('dl dt').forEach(dt=>{
+      const dd=dt.nextElementSibling;
+      if(dd&&dd.tagName==='DD')pushPair(dt.textContent,dd.textContent);
+    });
+    if(pairs.length)return pairs;
+    doc.querySelectorAll('li').forEach(li=>{
+      const m=li.textContent.trim().match(/^([^:：]{1,70})\s*[:：]\s*(.+)$/);
+      if(m)pushPair(m[1],m[2]);
+    });
+    if(pairs.length)return pairs;
+  }
+  str.replace(/<[^>]+>/g,'\n').split(/\r?\n+/).forEach(ln=>{
+    const m=ln.trim().match(/^([^:：\t|]{1,70})\s*(?:[:：]|\t|\s+\|\s+)\s*(.+)$/);
+    if(m)pushPair(m[1],m[2]);
+  });
+  return pairs;
+}
+function renderResultSpecsTableHtml(p){
+  const raw=p&&(p.specs||p.specifications||p.attributes_table||'');
+  const pairs=extractSpecsPairsJs(raw);
+  if(!pairs.length)return '';
+  let h='<table style="width:100%;border-collapse:collapse;font-size:12px;background:#111827;border:1px solid #334155;border-radius:10px;overflow:hidden"><tbody>';
+  pairs.forEach(([k,v])=>{h+='<tr><th style="border:1px solid #334155;padding:7px 10px;background:#1e293b;color:#93c5fd;text-align:right;width:34%">'+esc(k)+'</th><td style="border:1px solid #334155;padding:7px 10px;color:#e2e8f0">'+esc(v)+'</td></tr>';});
+  return h+'</tbody></table>';
+}
+function renderResultVariationsTableHtml(p){
+  if(!p)return '';
+  const combs=Array.isArray(p.variation_combinations)?p.variation_combinations:[];
+  const groups=Array.isArray(p.variation_groups)?p.variation_groups:[];
+  const prices=(p.variation_prices&&typeof p.variation_prices==='object')?p.variation_prices:{};
+  if(combs.length){
+    let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px;background:#111827;border:1px solid #334155;border-radius:10px;overflow:hidden"><thead><tr style="background:#1e293b;color:#f9a8d4"><th style="padding:7px;border:1px solid #334155;text-align:right">ترکیب تنوع</th><th style="padding:7px;border:1px solid #334155;text-align:right">قیمت مبدأ</th><th style="padding:7px;border:1px solid #334155;text-align:right">وضعیت</th></tr></thead><tbody>';
+    combs.slice(0,30).forEach(c=>{
+      const lbl=Object.entries(c.attributes||{}).map(([ak,av])=>(ak?ak+': ':'')+av).join(' · ');
+      const st=(c.in_stock===false)?'<span style="color:#f87171">ناموجود</span>':'<span style="color:#4ade80">موجود</span>';
+      h+='<tr><td style="padding:6px 9px;border:1px solid #334155">'+esc(lbl)+'</td><td style="padding:6px 9px;border:1px solid #334155;color:#86efac">'+resultMoney(c.price)+'</td><td style="padding:6px 9px;border:1px solid #334155">'+st+'</td></tr>';
+    });
+    return h+'</tbody></table>';
+  }
+  if(groups.length){
+    let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px;background:#111827;border:1px solid #334155;border-radius:10px;overflow:hidden"><tbody>';
+    groups.forEach(g=>{
+      const vals=(g.values||[]).map(v=>{const pv=prices[v];return esc(v)+(pv?' ('+resultMoney(pv)+')':'');}).join(' ، ');
+      h+='<tr><th style="border:1px solid #334155;padding:7px 10px;background:#1e293b;color:#f9a8d4;text-align:right;width:30%">'+esc(g.name||'تنوع')+'</th><td style="border:1px solid #334155;padding:7px 10px">'+vals+'</td></tr>';
+    });
+    return h+'</tbody></table>';
+  }
+  return '';
+}
+
 function cardHtml(p,_k){
   let title = getFinalTitle(p.title);
   const origPrice = getOriginalPrice(p&&p.price);
@@ -84007,7 +84994,8 @@ function cardHtml(p,_k){
   const _qb=resultPriceBreakdown(p);
   const _destMini=(_qb&&Array.isArray(_qb.dests)&&_qb.dests.some(d=>d.price>0&&d.price!==_qb.profilePrice))
     ?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${_qb.dests.filter(d=>d.price>0).map(d=>`<span style="font-size:9px;background:#0f172a;border:1px solid #334155;border-radius:5px;padding:1px 5px;color:#86efac" title="${esc(d.label||'')}">${esc(d.name)}: ${resultMoney(d.price)}</span>`).join('')}</div>`:'';
-  return `<div class="thumb" style="position:relative;cursor:pointer" onclick="resultProductOpen('${resultKeyArg(_k)}')">${p.image?`<img class="lazy-img" data-src="?image_proxy=${encodeURIComponent(p.image)}" loading="lazy">`:'<div class="noimg">بدون تصویر</div>'}${_galBadge}</div>
+  const _mainImgSrc=p.image?resultEditedImgUrl(p.image,p,'list'):'';
+  return `<div class="thumb" style="position:relative;cursor:pointer" onclick="resultProductOpen('${resultKeyArg(_k)}')">${_mainImgSrc?`<img class="lazy-img" data-src="${esc(_mainImgSrc)}" loading="lazy">`:'<div class="noimg">بدون تصویر</div>'}${_galBadge}</div>
   <div class="pbody"><div class="ptitle" style="cursor:pointer" onclick="resultProductOpen('${resultKeyArg(_k)}')">${statusBadge(_st)}${esc(title||'بدون عنوان')}</div>
   ${shortDesc ? `<div class="pdetail-short">${esc(shortDesc)}</div>` : ''}
   ${origDiffers ? `<span class="price-orig">${esc(origPrice)}</span>` : ''}
@@ -84139,17 +85127,24 @@ function resultProductOpen(encodedKey){
   let m=document.getElementById('resultProductModal');if(!m){m=document.createElement('div');m.id='resultProductModal';m.onclick=e=>{if(e.target===m)resultProductClose();};document.body.appendChild(m);}
   m.style.cssText='position:fixed;inset:0;z-index:100050;background:rgba(2,6,23,.86);display:flex;align-items:center;justify-content:center;padding:12px;direction:rtl';
   const q=resultPriceBreakdown(p),imgs=Array.from(new Set([p.image].concat(Array.isArray(p.images)?p.images:[]).filter(Boolean)));
-  const image=imgs[0]||'';const short=stripHtml(p.shortDesc||p.short_desc||p.brief||'');const long=stripHtml(p.longDesc||p.long_desc||p.description||'');
+  const image=imgs[0]||'';
+  const short=stripHtml(p.shortDesc||p.short_desc||p.brief||'');
+  const rawLong=String(p.longDesc||p.long_desc||p.description||'');
+  const richLongHtml=sanitizeResultRichHtml(rawLong);
+  const specsTableHtml=renderResultSpecsTableHtml(p);
+  const showSeparateSpecs=specsTableHtml&&(!richLongHtml.toLowerCase().includes('<table'));
+  const varsTableHtml=renderResultVariationsTableHtml(p);
   let pricing='<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr><th style="padding:7px">مرحله/مقصد</th><th>تعدیل</th><th>قیمت نهایی</th></tr></thead><tbody>';
   pricing+='<tr><td style="padding:7px">مبدأ</td><td>—</td><td>'+resultMoney(q.raw)+'</td></tr><tr><td style="padding:7px">پروفایل</td><td>'+esc(resultAdjLabel(q.profileMode,q.profileVal,q.profileRound))+'</td><td>'+resultMoney(q.profilePrice)+'</td></tr>';
   q.dests.forEach(d=>{pricing+='<tr><td style="padding:7px">'+esc(d.name)+'</td><td>'+esc(d.label||resultAdjLabel(d.mode,d.val))+'</td><td style="color:#86efac;font-weight:900">'+resultMoney(d.price)+'</td></tr>';});pricing+='</tbody></table>';
-  const known=['title','price','link','image','images','shortDesc','short_desc','brief','longDesc','long_desc','description','key'];let fields='';
-  Object.keys(p).filter(x=>!known.includes(x)&&p[x]!==''&&p[x]!=null).forEach(x=>{let v=p[x];if(typeof v==='object')v=JSON.stringify(v);fields+='<div style="padding:7px;border:1px solid #334155;border-radius:7px"><b style="color:#93c5fd">'+esc(x)+'</b><div style="margin-top:3px;white-space:pre-wrap;word-break:break-word">'+esc(String(v))+'</div></div>';});
-  const gallery=imgs.map(u=>'<img src="?image_proxy='+encodeURIComponent(u)+'" loading="lazy" style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #475569">').join('');
+  const known=['title','price','link','image','images','shortDesc','short_desc','brief','longDesc','long_desc','description','specs','specifications','attributes_table','variation_combinations','variation_groups','variation_prices','variations','key'];let fields='';
+  Object.keys(p).filter(x=>!known.includes(x)&&!x.startsWith('_')&&p[x]!==''&&p[x]!=null).forEach(x=>{let v=p[x];if(typeof v==='object')v=JSON.stringify(v);fields+='<div style="padding:7px;border:1px solid #334155;border-radius:7px"><b style="color:#93c5fd">'+esc(x)+'</b><div style="margin-top:3px;white-space:pre-wrap;word-break:break-word">'+esc(String(v))+'</div></div>';});
+  const mainEditedSrc=image?resultEditedImgUrl(image,p,'list'):'';
+  const gallery=imgs.map((u,idx)=>{const esrc=resultEditedImgUrl(u,p,idx===0?'list':'gallery');return '<img src="'+esc(esrc)+'" onclick="const mi=document.getElementById(\'resultModalMainImg\');if(mi)mi.src=this.src;" loading="lazy" style="width:74px;height:74px;object-fit:cover;border-radius:8px;border:1px solid #475569;cursor:pointer" title="کلیک برای بزرگ‌نمایی تصویر ویرایش‌شده">';}).join('');
   m.innerHTML='<article style="width:min(1050px,97vw);max-height:calc(100dvh - 24px);overflow:auto;overscroll-behavior:contain;background:#0f172a;border:1px solid #475569;border-radius:14px;color:#e2e8f0;box-shadow:0 20px 70px #000;padding:14px">'
     +'<header style="display:flex;justify-content:space-between;gap:10px;align-items:start"><div><div style="font-size:16px;font-weight:900">'+esc(getFinalTitle(p.title)||'بدون عنوان')+'</div><div style="color:#86efac;font-size:18px;font-weight:900;margin-top:5px">'+resultMoney(q.profilePrice)+'</div></div><button class="btn btn-gray" onclick="resultProductClose()">✕</button></header>'
-    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:12px"><div>'+(image?'<img src="?image_proxy='+encodeURIComponent(image)+'" style="width:100%;max-height:320px;object-fit:contain;background:#fff;border-radius:10px">':'<div style="padding:60px 10px;text-align:center;background:#1e293b;border-radius:10px">بدون تصویر</div>')+'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+gallery+'</div></div>'
-    +'<div><div style="background:#111827;border:1px solid #334155;border-radius:10px;overflow:auto">'+pricing+'</div>'+(short?'<h4 style="color:#fbbf24">توضیح کوتاه</h4><p style="line-height:1.9">'+esc(short)+'</p>':'')+(long?'<h4 style="color:#fbbf24">توضیحات محصول</h4><p style="line-height:1.9;white-space:pre-wrap">'+esc(long)+'</p>':'')+(p.link?'<a href="'+esc(p.link)+'" target="_blank" class="btn btn-blue" onclick="event.stopPropagation()">مشاهده صفحه مبدأ</a>':'')+'</div></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:12px"><div>'+(mainEditedSrc?'<img id="resultModalMainImg" src="'+esc(mainEditedSrc)+'" style="width:100%;max-height:320px;object-fit:contain;background:#fff;border-radius:10px">':'<div style="padding:60px 10px;text-align:center;background:#1e293b;border-radius:10px">بدون تصویر</div>')+'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">'+gallery+'</div></div>'
+    +'<div><div style="background:#111827;border:1px solid #334155;border-radius:10px;overflow:auto">'+pricing+'</div>'+(varsTableHtml?'<h4 style="color:#f9a8d4;margin:12px 0 6px">🎨 تنوع‌های محصول</h4>'+varsTableHtml:'')+(short?'<h4 style="color:#fbbf24;margin:12px 0 6px">توضیح کوتاه</h4><p style="line-height:1.9">'+esc(short)+'</p>':'')+(richLongHtml?'<h4 style="color:#fbbf24;margin:12px 0 6px">توضیحات محصول</h4><div style="line-height:1.9">'+richLongHtml+'</div>':'')+(showSeparateSpecs?'<h4 style="color:#38bdf8;margin:12px 0 6px">📋 جدول مشخصات فنی</h4>'+specsTableHtml:'')+(p.link?'<div style="margin-top:10px"><a href="'+esc(p.link)+'" target="_blank" class="btn btn-blue" onclick="event.stopPropagation()">مشاهده صفحه مبدأ</a></div>':'')+'</div></div>'
     +(fields?'<h4 style="color:#c4b5fd">همهٔ فیلدهای محصول</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px">'+fields+'</div>':'')+'</article>';
 }
 
@@ -84162,7 +85157,7 @@ function rowHtml(p,i){
   enabledFields.forEach(f => {
       const val = p[f.key] || '';
       let display = val;
-      if (f.key === 'shortDesc' || f.key === 'longDesc') {
+      if (f.key === 'shortDesc' || f.key === 'longDesc' || f.key === 'specs') {
           display = shortText(stripHtml(val), 60);
       }
       detailTds += `<td class="td-detail" title="${esc(stripHtml(val))}">${esc(display) || '-'}</td>`;
@@ -84172,8 +85167,8 @@ function rowHtml(p,i){
   const _n=_imgs.length;
   let galTd;
   if(_n>1){
-      const thumbs=_imgs.slice(0,4).map(u=>
-          `<img src="?image_proxy=${encodeURIComponent(u)}" loading="lazy" `
+      const thumbs=_imgs.slice(0,4).map((u,idx)=>
+          `<img src="${esc(resultEditedImgUrl(u,p,idx===0?'list':'gallery'))}" loading="lazy" `
         + `style="width:22px;height:22px;object-fit:cover;border-radius:3px;border:1px solid #334155">`).join('');
       galTd=`<td class="td-gal" title="${esc(_imgs.join('\n'))}">`
           + `<div style="display:flex;gap:2px;align-items:center">`
@@ -84183,8 +85178,11 @@ function rowHtml(p,i){
   }else{
       galTd=`<td class="td-gal" style="color:#64748b;font-size:10px">${_n===1?'۱ عکس':'—'}</td>`;
   }
+  const _mainThumbTd=p.image
+      ?`<td title="${esc(p.image)}"><div style="display:flex;align-items:center;gap:5px"><img src="${esc(resultEditedImgUrl(p.image,p,'list'))}" loading="lazy" style="width:28px;height:28px;object-fit:cover;border-radius:4px;border:1px solid #334155;background:#fff"><span style="direction:ltr;font-size:9px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.image)}</span></div></td>`
+      :`<td style="color:#64748b;font-size:10px">-</td>`;
   return `<td>${toFa(i)}</td><td>${statusBadge(_st)}${esc(title)}</td>${resultPricingCells(p)}
-  <td>${p.link?`<a href="${esc(p.link)}" target="_blank" onclick="event.stopPropagation()">لینک</a>`:'-'}</td><td style="direction:ltr;text-align:left;font-size:9px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.image||'')}">${esc(p.image||'-')}</td>${galTd}${detailTds}${customTd}`;
+  <td>${p.link?`<a href="${esc(p.link)}" target="_blank" onclick="event.stopPropagation()">لینک</a>`:'-'}</td>${_mainThumbTd}${galTd}${detailTds}${customTd}`;
 }
 
 function renderRow(p,i,k){
@@ -84502,7 +85500,9 @@ function backendExtractFor(url,panelTitle,phase){
             return;
         }
         openExtractPanel(panelTitle||'⚡ استخراج سریع فهرست — پیشرفت زنده');
-        const galOn=((prof.gallery||{}).mode||'off')!=='off';
+        const galObj=prof.gallery||{};
+        const isSnappUrl=/snappshop\.ir/i.test(String(prof.url||url||''));
+        const galOn=(galObj.mode||'off')!=='off'||isSnappUrl||!!(galObj.box||'').trim()||!!(galObj.selectors||'').trim();
         const nDet=Object.entries(prof.detailSelectors||{}).filter(([,v])=>v&&(typeof v==='string'?v.trim()!=='':(v.enabled&&String(v.selector||'').trim()!==''))).length;
         const detailMode=normalizeDetailExtractModeJs(($('detailExtractMode')&&$('detailExtractMode').value)||prof.detailExtractMode||'two_stage');
         if(ph==='detail'){
@@ -84519,37 +85519,23 @@ function backendExtractFor(url,panelTitle,phase){
                 showToast('⚡ استخراج دو مرحله‌ای شروع شد — اول لیست ← ذخیره در تب نتایج ← مرحلهٔ دوم ('+toFa(nDet)+' فیلد جزئیات'+(galOn?' + گالری':'')+')');
             }
         }
-        // Trigger backend extract endpoint (fire-and-forget)
+        // Trigger backend extract endpoint
         const serverProfileKey = (d.key || prof.key || profileKey(prof.url || url) || profileKey(url));
         const pageTarget=(prof.pages===0||prof.pages==='0')?0:Math.max(1,parseInt(prof.pages)||10);
         showToast(pageTarget===0?'📄 هدف تأییدشده: تشخیص خودکار آخرین صفحه':'📄 هدف تأییدشدهٔ این اجرا: '+toFa(pageTarget)+' صفحه');
         fetch('?action=backend_extract&phase='+encodeURIComponent(ph)
               +'&detail_mode='+encodeURIComponent(detailMode)
               +'&profile_key='+encodeURIComponent(serverProfileKey)
-              +'&pages='+encodeURIComponent(pageTarget),{method:'GET'}).catch(()=>{});
+              +'&pages='+encodeURIComponent(pageTarget),{method:'GET'})
+            .then(r=>r.json()).then(exResp=>{
+                if(exResp&&exResp.ok===false&&exResp.error){
+                    showToast('⚠️ '+exResp.error,1);
+                }
+            }).catch(()=>{});
         watchExtractProgress();
     }).catch(()=>{showToast('خطا شبکه',1);});
 }
 
-/**
- * v9.07: «استخراج تفصیلی» روی سرور اجرا می‌شود، نه در مرورگر.
- *
- * تشخیص کاربر درست بود: این دکمه سرورساید نبود. تا ۹.۰۶ یک استریم SSE
- * باز می‌کرد (detail_stream) و نتیجهٔ هر محصول را فقط داخل products
- * مرورگر می‌نوشت. دو پیامد داشت:
- *
- *   ۱) با ریفرش، بستن تب، خواب گوشی یا قطع لحظه‌ای شبکه، کل کار قطع
- *      می‌شد — چون هیچ پردازه‌ای روی سرور مالکِ کار نبود.
- *   ۲) خودِ detail_stream هیچ‌وقت روی دیسک چیزی نمی‌نوشت. ذخیره فقط
- *      وقتی اتفاق می‌افتاد که بعداً saveProfileSilent صدا زده شود، و
- *      finishDetailExtraction آن را صدا نمی‌زد. یعنی گالری‌ها تا وقتی
- *      تب باز بود دیده می‌شدند ولی روی سرور نبودند — و کران‌جاب که
- *      محصولات را از دیسک می‌خواند، طبیعتاً چیزی پیدا نمی‌کرد.
- *
- * حالا همان موتوری اجرا می‌شود که کران استفاده می‌کند (phase=detail):
- * روی سرور، جدا از مرورگر، با ذخیره بعد از هر محصول. بستن صفحه کار را
- * قطع نمی‌کند و پیشرفت از فایل خوانده می‌شود.
- */
 function startDetailExtractionServer(){
     const url=($('url')&&$('url').value.trim())
               ||($('profileSelect')&&$('profileSelect').value.trim())||'';
@@ -84558,11 +85544,17 @@ function startDetailExtractionServer(){
         switchMainTab('profiles');
         return;
     }
-    const go=()=>backendExtractFor(url,'🔍 استخراج تفصیلی (سرور) — پیشرفت زنده','detail');
-    /* موتور سرور محصولات و سلکتورها را از دیسک می‌خواند. اگر چیزی در
-       مرورگر تغییر کرده یا محصولات هنوز ذخیره نشده‌اند، اول بنشیند. */
+    const go=()=>{
+        window._extractAfterSave=true;
+        try{backendExtractFor(url,'🔍 استخراج تفصیلی (سرور) — پیشرفت زنده','detail');}
+        finally{window._extractAfterSave=false;}
+    };
+    /* v10.458: فقط اگر فرم واقعاً تغییر ذخیره نشده دارد (isDirty) یا پروفایل تازه در مرورگر است،
+       ذخیره کن؛ وگرنه آپلود تکراری ۵ مگابایتی هزاران محصول مانع شروع فوری استخراج می‌شد. */
+    const profMeta=(typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null;
+    const serverHasProducts=!!(profMeta&&(profMeta.productCount>0||(Array.isArray(profMeta.products)&&profMeta.products.length>0)));
     const needSave=(typeof isDirty!=='undefined'&&isDirty)
-                   ||(typeof products!=='undefined'&&products.size>0);
+                   ||(!serverHasProducts&&typeof products!=='undefined'&&products.size>0);
     if(needSave&&typeof saveProfileSilent==='function'){
         if(typeof saveTimer!=='undefined')clearTimeout(saveTimer);
         showToast('💾 ذخیره روی سرور — پس از تأیید، استخراج تفصیلی شروع می‌شود…');
@@ -86280,6 +87272,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.458', t:'🚀 سوئیچ چندنود Sotoon CDN برای شروع فوری جزئیات، پیش‌نمایش تصاویر ویرایش‌شده در تب نتایج، رفع توقف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها', items:[
+    'شروع فوری و بدون قفل استخراج جزئیات (فاز ۲): ۱) اتصال مستقیم CURLOPT_RESOLVE به استخر ۶ نود سالم Sotoon CDN (185.143.232.5 تا 185.143.235.5 و 185.143.233.104/.234.104) با failover آنی روی خطای ۴۲۹/تایم‌اوت، ۲) رفع قفل ارث‌بری‌شدهٔ پردازش‌های فرزند در s4WorkerIsActive، و ۳) حذف ذخیرهٔ تکراری چندمگابایتی در startDetailExtractionServer.',
+    'نمایش تصاویر ویرایش‌شده در تب نتایج و مودال کلیک محصول: تمام عکس‌های شاخص و گالری در کارت‌ها، جدول نتایج و مودال جزئیات محصول از طریق resultEditedImgUrl با اعمال برش پایین یا مربع سفید گوشه نمایش داده می‌شوند و با تغییر اسلایدرها زنده به‌روز می‌شوند.',
+    'رفع کامل گیر کردن شروع ارسال به باسلام و ووکامرس: ۱) انتخاب باینری واقعی PHP CLI به‌جای lsphp CGI و پاک‌سازی متغیرهای محیطی CGI در s4CliPhpCommand + افزایش سقف حافظه به ۱۰۲۴ مگابایت، ۲) ترمیم خودکار total:0 از روی فایل محصولات صف در bslReadQueue / wooReadQueue و مسیرهای شروع، و ۳) بازگرداندن ردیف‌های یتیم running و بستن خودکار manual_sync کهنه.',
+    'پشتیبانی سرتاسری جدول مشخصات فنی (HTML Table): استخراج خودکار ساختارهای جدولی (<table>، <dl>، لیست‌های کلید:مقدار) در اسنپ‌شاپ و تمام پروفایل‌ها با s4NormalizeSpecsToTableHtml، نمایش جدول استاندارد در مودال کلیک محصول در تب نتایج، و ارسال جدول مشخصات در توضیحات باسلام و ووکامرس.',
+    'ارسال ساختاریافتهٔ تنوع‌های محصول به باسلام و ووکامرس: استخراج ماتریس ترکیب‌ها، قیمت و موجودی هر تنوع (s4BuildProductVariationMatrix) با اعمال ضرایب قیمت پروفایل و مقصد، ارسال در قالب استاندارد variants باسلام (با fallback امن روی خطای ۴۲۲) و تبدیل خودکار به محصول متغیر (type=variable) به‌همراه همگام‌سازی بچ محصولات متغیر (products/{id}/variations/batch) در ووکامرس.'
+  ]},
   {v:'10.457', t:'🔑 توکن مهمان (guest/v2/token)، زمان‌بندی بین‌پردازشی و سپر سکوت ضد محدودیت ۴۲۹ Sotoon CDN برای گالری و جزئیات فاز ۲ اسنپ‌شاپ', items:[
     'دریافت، کش و چرخش خودکار JWT مهمان از اندپوینت apix.snappshop.ir/guest/v2/token و ارسال هدرهای استاندارد کلاینت وب اسنپ‌شاپ (Authorization: Bearer، X-Origin و s-device) روی درخواست‌های products/v2 برای دریافت کامل تصاویر گالری و جزئیات فاز ۲.',
     'حذف تشدید ۶ برابری خطای ۴۲۹ روی Sotoon CDN: ۱) حذف تلاش تکراری DoH پس از پاسخ مستقیم ایران (که با همان IP سرور پنجرهٔ لغزندهٔ ۴۲۹ را دائماً ریست می‌کرد)، ۲) زمان‌بندی مشترک بین تمام اسلات‌های موازی استخراج با قفل فایل (.s4-snapp-apix-state.json)، و ۳) سپر سکوت هوشمند ۶۸ تا ۱۳۰ ثانیه‌ای هنگام برخورد با ۴۲۹ در فاز ۲ بدون سوزاندن یا ناموجود کردن کالاهای بعدی.',
@@ -100682,7 +101681,7 @@ const d=[];order.forEach(k=>{
     // v7.82: Detect price unit (Rial vs Toman) from original price string
     const priceStr=(p.price||'').toString();
     const priceUnit=priceStr.includes('ریال')||priceStr.includes('ر.ی')?'rial':'toman';
-    d.push({key:k,title:getFinalTitle(rawTitle),price:String(p.price||''),final_price:String(fp),price_unit:priceUnit,image:p.image||'',images:p.images||[],sku:p.sku||'',short_desc:p.shortDesc||'',long_desc:p.longDesc||'',weight:p.weight||'',link:p.link||'',orig_price:p.origPrice||p.originalPrice||'',variations:p.variations||[],variation_groups:p.variation_groups||[],variations_text:p.variations_text||''});
+    d.push({key:k,title:getFinalTitle(rawTitle),price:String(p.price||''),final_price:String(fp),price_unit:priceUnit,image:p.image||'',images:p.images||[],sku:p.sku||'',short_desc:p.shortDesc||'',long_desc:p.longDesc||'',specs:p.specs||'',brand:p.brand||'',category:p.category||'',stock:p.stock||'',weight:p.weight||'',link:p.link||'',orig_price:p.origPrice||p.originalPrice||'',variations:p.variations||[],variation_groups:p.variation_groups||[],variation_prices:p.variation_prices||{},variation_combinations:p.variation_combinations||[],variations_text:p.variations_text||''});
 });
 return d;
 }
@@ -100691,7 +101690,7 @@ function pSSE(ev){if(!ev.trim())return null;let t='',d='';ev.split('\n').forEach
 function queueWooSend(ps){
     const qid='wq_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
     $('wSS').textContent='ذخیره محصولات در صف...';
-    const CHUNK_SIZE=50;const chunks=[];
+    const CHUNK_SIZE=300;const chunks=[];
     for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
     let savedChunks=0,totalSaved=0;
     function saveNextWooQueueChunk(){
@@ -101216,7 +102215,7 @@ function queueBslSend(ps,catId){
     // 3. Trigger bsl_backend (PHP background — continues after browser closes!)
     // 4. Start polling to display live progress
     $('bSS').textContent='\u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0631 \u0635\u0641 \u0648 \u0634\u0631\u0648\u0639 \u0627\u0631\u0633\u0627\u0644...';
-    const CHUNK_SIZE=50;const chunks=[];
+    const CHUNK_SIZE=300;const chunks=[];
     for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
     let savedChunks=0,totalSaved=0;
     function saveNextQueueChunk(){
