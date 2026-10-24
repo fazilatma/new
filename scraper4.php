@@ -2003,7 +2003,23 @@ function s4CliPhpCommand(string $php,string $mem='512M'): string {
     $cleanEnv='env -u REQUEST_METHOD -u QUERY_STRING -u CONTENT_TYPE -u CONTENT_LENGTH -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u SCRIPT_NAME -u DOCUMENT_ROOT -u REDIRECT_STATUS -u SERVER_PROTOCOL -u HTTP_HOST S4_CLI_SPAWN=1 ';
     $base=strtolower(basename($php));
     if(str_contains($base,'lsphp'))return $cleanEnv.escapeshellarg($php).' -q';
-    return $cleanEnv.escapeshellarg($php).' -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
+    return $cleanEnv.escapeshellarg($php).' -d register_argc_argv=1 -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
+}
+function s4CliFallbackArgv(array $argv = []): array {
+    if ($argv) return $argv;
+    if (!@is_readable('/proc/self/cmdline')) return [];
+    $raw = (string)@file_get_contents('/proc/self/cmdline');
+    if ($raw === '') return [];
+    $parts = explode("\0", rtrim($raw, "\0"));
+    $selfBase = basename(__FILE__);
+    $selfReal = @realpath(__FILE__) ?: __FILE__;
+    foreach ($parts as $idx => $pt) {
+        if ($pt === '') continue;
+        if ($pt === __FILE__ || (@realpath($pt) === $selfReal) || basename($pt) === $selfBase) {
+            return array_slice($parts, $idx);
+        }
+    }
+    return [];
 }
 
 /** v10.337: scheduler مشترک تمام build/fixهای ماتریس.
@@ -2415,6 +2431,7 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
 function s4WorkerLoopFromCli(): void {
     @set_time_limit(0); @ignore_user_abort(true);
     $argv = (array)($GLOBALS['argv'] ?? $_SERVER['argv'] ?? []);
+    if (!$argv && function_exists('s4CliFallbackArgv')) $argv = s4CliFallbackArgv($argv);
     $tick = 60; $idle = 2; $once = !empty($_GET['worker_once']); $stopFile = '';
     foreach ($argv as $a) {
         $a = (string)$a;
@@ -29784,6 +29801,7 @@ if (isCliRun()) {
     /* $argv در همهٔ پیکربندی‌ها تعریف نمی‌شود (register_argc_argv=Off)،
        پس $_SERVER['argv'] هم بررسی می‌شود. */
     $_cliArgv = (array)($GLOBALS['argv'] ?? $_SERVER['argv'] ?? []);
+    if (!$_cliArgv && function_exists('s4CliFallbackArgv')) $_cliArgv = s4CliFallbackArgv($_cliArgv);
     $_cliArgs = array_slice($_cliArgv, 1);
     $_cliCmd  = strtolower(trim((string)($_cliArgs[0] ?? 'cron_run')));
     $_cliCmd  = preg_replace('~^-+~', '', $_cliCmd);          // --cron_run هم قبول
@@ -87665,7 +87683,7 @@ const CHANGELOG = [
     'تشخیص دقیق خطاهای مدت زمان آماده‌سازی باسلام (bslIsPreparationDaysError) در تمام ساختارهای پاسخ ۴۲۲ و ۴۰۰ (از جمله fields:["preparation_days"]، کلیدهای آرایه‌ای data.*.preparation_days در آپدیت دسته‌ای، errors.preparation_days و پیام‌های فارسی/انگلیسی مشابه «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»).',
     'کاهش خودکار ۱ روزه در هر تلاش (bslStepDownPreparationDays / bslRunPreparationDaysRetryLoop) در تمام مسیرهای تک‌درخواستی (bslReq)، موازی چندغرفه‌ای (bslReqMulti)، ارسال با تنوع (bslReqWithVariantsFallback) و آپدیت دسته‌ای (batch-updates) تا زمانی که باسلام درخواست را تایید کند (تا کف ۰ روز)؛ حتی اگر در PATCH اولیه فیلد preparation_days ارسال نشده باشد.',
     'رفع تداخل تشخیص خطای دسته‌بندی و حفظ جدول HTML مشخصات: ۱) در bslIsCategoryError پیام‌هایی که صریحاً روی فیلد غیر دسته‌بندی مثل preparation_days هستند دیگر به‌خاطر وجود عبارت «برای این دسته بندی» به‌اشتباه خطای دسته‌بندی تشخیص داده نمی‌شوند، و ۲) در bslRepairValidationPayload هنگام خطای فیلدهای غیرمتنی، تگ‌های جدول مشخصات فنی (<table>) از توضیحات حذف نمی‌شوند.',
-    'حذف تداخل قفل پروب وضعیت صف (bsl_queue_status / woo_queue_status) با اسپاون پردازنده‌های پس‌زمینه و جلوگیری از صفر شدن total/current هنگام خالی بودن فایل progress.'
+    'حذف تداخل قفل پروب وضعیت صف (bsl_queue_status / woo_queue_status) با اسپاون پردازنده‌های پس‌زمینه، جلوگیری از صفر شدن total/current هنگام خالی بودن فایل progress، و بازیابی آرگومان‌های CLI از register_argc_argv=1 و /proc/self/cmdline روی cPanel.'
   ]},
   {v:'10.458', t:'🚀 سوئیچ چندنود Sotoon CDN برای شروع فوری جزئیات، پیش‌نمایش تصاویر ویرایش‌شده در تب نتایج، رفع توقف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها', items:[
     'شروع فوری و بدون قفل استخراج جزئیات (فاز ۲): ۱) اتصال مستقیم CURLOPT_RESOLVE به استخر ۶ نود سالم Sotoon CDN (185.143.232.5 تا 185.143.235.5 و 185.143.233.104/.234.104) با failover آنی روی خطای ۴۲۹/تایم‌اوت، ۲) رفع قفل ارث‌بری‌شدهٔ پردازش‌های فرزند در s4WorkerIsActive، و ۳) حذف ذخیرهٔ تکراری چندمگابایتی در startDetailExtractionServer.',
