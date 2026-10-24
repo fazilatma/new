@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.467';
+const APP_VERSION = '10.468';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -54705,6 +54705,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.468', 'حذف بارگذاری سه‌بارهٔ profiles.json در catfixRun + سقف بودجهٔ زمانی LSAPI و جهش هوشمند زنجیرهٔ پشتیبان AI روی خطای ۴۲۹/تایم‌اوت',
+         strpos($selfSrc, "catProfileResolver('bsl', \$rawLoadedProfiles)") !== false
+      && strpos($selfSrc, '$maxFbTries = 5') !== false
+      && strpos($selfSrc, '$skipProvThisItem[$fcProv] = true') !== false
+      && strpos($selfSrc, '(microtime(true) - $sliceWallStart) >= 34.0') !== false
+      && strpos($selfSrc, "{v:'10." . "468'") !== false
+      && version_compare(APP_VERSION, '10.468', '>='));
     $add('10.467', 'واکشی برش‌محور ضد-OOM در اصلاح نامحدود محصولات ردشده باسلام + زنجیره‌سازی خودکار برش‌ها و ترمیم عناوین آسیب‌دیده',
          function_exists('catfixFetchRejectedSlice')
       && function_exists('bslRetired3567Load')
@@ -62435,9 +62442,10 @@ function reconNormTitle(string $t): string {
  * ===================================================================== */
 
 /** پسوند هر پروفایل، فقط آن‌هایی که پسوند دارند */
-function suffixProfiles(): array {
+function suffixProfiles(?array $preloadedProfiles = null): array {
     $out = [];
-    foreach (loadProfiles() as $key => $p) {
+    $src = is_array($preloadedProfiles) ? $preloadedProfiles : loadProfiles();
+    foreach ($src as $key => $p) {
         $sfx = trim((string)($p['titleSuffix'] ?? ''));
         if ($sfx === '') continue;
         $out[] = ['key' => $key, 'name' => (string)($p['name'] ?? $key),
@@ -62460,7 +62468,7 @@ function suffixProfiles(): array {
  *  خروجی یک کلوژر است تا دفترچه و فهرستِ پروفایل‌ها فقط یک بار خوانده
  *  شوند؛ صدا زدنش برای هر محصول در حلقه هیچ ورودی/خروجی‌ای ندارد.
  * ===================================================================== */
-function catProfileResolver(string $target = 'bsl'): callable {
+function catProfileResolver(string $target = 'bsl', ?array $preloadedProfiles = null): callable {
     $byId = [];
     $profiles = [];
     if (function_exists('remoteMapLoad')) {
@@ -62470,10 +62478,11 @@ function catProfileResolver(string $target = 'bsl'): callable {
             if ($id > 0 && $pk !== '') $byId[$id] = $pk;
         }
     }
-    foreach (loadProfiles() as $key => $p) {
+    $src = is_array($preloadedProfiles) ? $preloadedProfiles : loadProfiles();
+    foreach ($src as $key => $p) {
         $profiles[$key] = trim((string)($p['name'] ?? $key));
     }
-    $sfx = suffixProfiles();
+    $sfx = suffixProfiles($src);
     /* پسوندِ بلندتر اول سنجیده شود: اگر «فروشگاه الف» و «الف» هر دو پسوند
        باشند، عنوانی که هر دو را دارد باید به بلندتر نسبت داده شود. */
     usort($sfx, function ($a, $b) {
@@ -77794,6 +77803,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 return ['ok' => false, 'error' => 'ارائه‌دهندهٔ مدل مستر یافت نشد'];
             }
             $net = aiNetCfg();
+            $net['timeout'] = min(14, max(8, (int)($net['timeout'] ?? 12)));
             $candKeys = array_map(function ($c) { return $c['key']; }, $cands);
             $quorum = max(1, min(count($cands), (int)($opts['quorum'] ?? 2)));
             if (in_array($mode, ['master', 'quorum', 'fallback'], true)) {
@@ -77976,13 +77986,11 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $stopped = false;
     $fbRescued = 0;   // v10.71 (85): چند محصول با زنجیرهٔ پشتیبان نجات یافت
     $cpStartedAt = (is_array($cp) ? (int)($cp['started_at'] ?? 0) : 0);
-    /* v10.36 (۴۹ه): نامِ پروفایلِ هر محصول به‌عنوان بافت به مدل داده می‌شود.
-       یک بار ساخته می‌شود و در حلقه هزینه‌ای ندارد. */
-    $profOf = catProfileResolver('bsl');
-    $profHits = (int)($cp['prof_hits'] ?? 0);
-
     $allKnownShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $rawLoadedProfiles = function_exists('loadProfiles') ? loadProfiles() : [];
+    /* v10.468: بازیافتِ همان بارگذاریِ واحدِ پروفایل‌ها برای catProfileResolver و ایندکس محلی (حذف ۳ بار json_decode سنگین در RAM) */
+    $profOf = catProfileResolver('bsl', $rawLoadedProfiles);
+    $profHits = (int)($cp['prof_hits'] ?? 0);
     $allLoadedProfiles = [];
     foreach ($rawLoadedProfiles as $_pkM => $_prM) {
         if (!is_array($_prM)) continue;
@@ -77994,6 +78002,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     unset($rawLoadedProfiles);
     if (function_exists('gc_collect_cycles')) gc_collect_cycles();
     $deadProviders401 = [];
+    $sliceWallStart = microtime(true);
+    $processedInSlice = 0;
     $cpSave = function () use (&$cpDoneIds, &$fixed, &$failed, &$noAi, &$noCat,
         &$skipSame, &$skipTried, &$asked, &$cacheHits, &$learnedHits, &$profHits,
         &$idx, &$items, $cpStartedAt, $opts, &$curScanPageForCp) {
@@ -78012,6 +78022,12 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     };
 
     foreach ($products as $p) {
+        if ($processedInSlice >= 1 && (microtime(true) - $sliceWallStart) >= 34.0) {
+            $hasMoreSlices = true;
+            $nextScanPage = $curScanPageForCp;
+            catfixProgress(['log_add' => ['⏱ بودجهٔ زمانی برش جاری کامل شد (' . aiFaNum($processedInSlice) . ' محصول در این برش) — ادامهٔ خودکار در برش بعدی...']]);
+            break;
+        }
         $idx++;
         if (catfixStopRequested()) {
             $stopped = true;
@@ -78022,6 +78038,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         $pId   = (int)($p['id'] ?? 0);
         $doneToken = $isPendingCreate ? trim((string)($p['_queue_id'] ?? '')) : ($pId > 0 ? (string)$pId : '');
         if ($doneToken !== '' && isset($cpDoneSet[$doneToken])) continue;
+        $processedInSlice++;
         $pName = trim((string)($p['title'] ?? ($p['name'] ?? '')));
         $rev   = $p['revision'] ?? [];
         $pSku  = trim((string)($p['sku'] ?? ($rev['data']['sku'] ?? '')));
@@ -78242,17 +78259,19 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                         . ($pProf !== '' ? ' · بافت: ' . $pProf : '')]]);
                 }
             } elseif ($itemMode === 'fallback' || $itemMode === 'master') {
+                $catListPrompt = aiCatListBuild($leafCats, $exclude, 24000, $pName);
                 $masterProvId = (string)($master['provider'] ?? '');
                 if ($mp !== null && empty($deadProviders401[$masterProvId])) {
+                    catfixProgress([]);
                     $res = aiCandidateCategory($mp, $master['model'], $pName, $cats, $leafCats,
-                        aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
+                        $catListPrompt, $net, $exclude, $triedInfo, $pHint);
                     $asked++;
                     $catId   = (int)($res['category_id'] ?? 0);
                     $catName = (string)($res['category_name'] ?? '');
                     $ok      = !empty($res['ok']);
                     $err     = (string)($res['error'] ?? '');
                     $winKeys = [$masterKey];
-                    if (!$ok && preg_match('/401|403|Unauthorized|invalid_api_key/i', $err)) {
+                    if (!$ok && preg_match('/401|402|403|Unauthorized|invalid_api_key|insufficient_quota|billing/i', $err)) {
                         $deadProviders401[$masterProvId] = true;
                         catfixProgress(['log_add' => ['⚡ کلیدِ ارائه‌دهندهٔ «' . ($master['providerName'] ?? $masterProvId) . '» خطای احراز هویت داد — سوئیچ خودکار به کاندیدهای دیگر']]);
                     }
@@ -78261,18 +78280,28 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 }
                 if ((!$ok || $catId <= 0) && count($cands) > 1) {
                     $fbChain = '🛟 زنجیرهٔ پشتیبان — مستر: ' . ($err !== '' ? $err : 'دستهٔ معتبر نداد');
+                    $fbTries = 0;
+                    $maxFbTries = 5;
+                    $skipProvThisItem = [];
                     foreach ($cands as $fc) {
-                        if (catfixStopRequested()) break;
+                        if (catfixStopRequested() || $fbTries >= $maxFbTries) break;
+                        if ($fbTries >= 1 && (microtime(true) - $sliceWallStart) >= 42.0) break;
                         $fcProv = (string)($fc['provider'] ?? '');
-                        if (($fc['key'] ?? '') === $masterKey || !empty($deadProviders401[$fcProv])) continue;
+                        if (($fc['key'] ?? '') === $masterKey || !empty($deadProviders401[$fcProv]) || !empty($skipProvThisItem[$fcProv])) continue;
                         $fcp = $providers[$fcProv] ?? null;
                         if ($fcp === null) continue;
+                        $fbTries++;
+                        catfixProgress([]);
                         $fres = aiCandidateCategory($fcp, $fc['model'], $pName, $cats, $leafCats,
-                            aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
+                            $catListPrompt, $net, $exclude, $triedInfo, $pHint);
                         $asked++;
                         $fErr = (string)($fres['error'] ?? '');
-                        if (empty($fres['ok']) && preg_match('/401|403|Unauthorized|invalid_api_key/i', $fErr)) {
-                            $deadProviders401[$fcProv] = true;
+                        if (empty($fres['ok'])) {
+                            if (preg_match('/401|402|403|Unauthorized|invalid_api_key|insufficient_quota|billing/i', $fErr)) {
+                                $deadProviders401[$fcProv] = true;
+                            } elseif (preg_match('/429|rate|quota|timeout|timed out|502|503|504|connect/i', $fErr)) {
+                                $skipProvThisItem[$fcProv] = true;
+                            }
                         }
                         if (!empty($fres['ok']) && (int)($fres['category_id'] ?? 0) > 0) {
                             $catId   = (int)$fres['category_id'];
@@ -92315,6 +92344,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.468', t:'🛡️ پایداری صددرصدی اصلاح پس‌زمینه در CloudLinux/LSAPI (حذف بارگذاری ۳بارهٔ پروفایل‌ها، بودجهٔ زمانی برش و جهش زنجیرهٔ AI)', items:[
+    'حذف بارگذاری سه‌بارهٔ profiles.json در هر برش catfixRun (بازیافت بارگذاری واحد در catProfileResolver، suffixProfiles و ایندکس محلی + آزادسازی فوری RAM) برای جلوگیری از سرریز سقف حافظهٔ مشترک LVE.',
+    'سقف بودجهٔ زمانی ۳۴ ثانیه‌ای در هر برش برای پیشگیری از قطع ناگهانی کارگر پس‌زمینه توسط LiteSpeed LSAPI؛ در پایان بودجه، چک‌پوینت دقیق ذخیره شده و برش بعدی بلافاصله به‌صورت خودکار زنجیر می‌شود.',
+    'مهار زنجیرهٔ پشتیبان AI (سقف ۵ کاندید به‌ازای هر محصول، تایم‌اوت ۱۴ ثانیه، محاسبهٔ یک‌بارهٔ پرامپت دسته‌ها، و پرش فوری از ارائه‌دهندهٔ دارای خطای ۴۲۹/تایم‌اوت به ارائه‌دهندهٔ بعدی + تطبیقگر برگ معنایی).'
+  ]},
   {v:'10.467', t:'⚡ رفع توقف/OOM در اصلاح نامحدود همهٔ محصولات ردشده باسلام (واکشی برش‌محور ۲۰تایی + زنجیره‌سازی خودکار برش‌ها)', items:[
     'رفع گیرکردن روی «دریافتِ محصولاتِ ردشده (وضعیت ۳۵۶۷)...» در غرفه‌های بزرگ: به‌جای بارگذاری یک‌جای ۱,۰۰۰+ محصول ردشده با revision سنگین در RAM پیش از شروع اصلاح (که در CloudLinux LVE باعث اتمام حافظه می‌شد)، موتور catfixFetchRejectedSlice هر بار فقط ۲۰ محصول تازه و پردازش‌نشده را با per_page=30 واکشی کرده و در کمتر از ۱ ثانیه اصلاح را آغاز می‌کند.',
     'زنجیره‌سازی خودکار برش‌ها تا پایان کامل همهٔ غرفه‌ها: پس از اتمام هر برش ۲۰تایی، scan_page و done_ids در چک‌پوینت ذخیره شده، قفل آزاد می‌شود و برش بعدی بلافاصله به‌صورت خودکار (و با پشتیبانی نگهبان کران) ادامه می‌یابد تا تمام محصولات ردشدهٔ غرفه‌های فعال بدون خطای حافظه یا تایم‌اوت تعیین‌تکلیف شوند.',
