@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.468';
+const APP_VERSION = '10.469';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -66282,6 +66282,134 @@ if (isset($_GET['notif_test'])) {
  *  می‌گیرد چه چیزی به پیام‌رسان‌ها برود.
  * ===================================================================== */
 
+if (isset($_GET['s4_diag_orders_ai'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(60);
+    $cn = loadConnections();
+    $netBsl = function_exists('bslNetCfg') ? bslNetCfg($cn) : ['indirect' => false, 'mode' => 'direct', 'fallback' => false];
+    $shopsOut = [];
+    $allShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+    foreach ($allShops as $idxS => $sh) {
+        $tk = trim((string)($sh['token'] ?? ''));
+        $vid = (int)($sh['vendor_id'] ?? 0);
+        if ($tk === '' || $vid <= 0) continue;
+        $jwtInfo = ['is_jwt' => false];
+        $parts = explode('.', $tk);
+        if (count($parts) === 3) {
+            $b64 = strtr($parts[1], '-_', '+/');
+            $pad = strlen($b64) % 4;
+            if ($pad > 0) $b64 .= str_repeat('=', 4 - $pad);
+            $pl = @json_decode((string)@base64_decode($b64), true);
+            if (is_array($pl)) {
+                $jwtInfo = [
+                    'is_jwt' => true,
+                    'scopes' => $pl['scopes'] ?? ($pl['scope'] ?? null),
+                    'aud'    => $pl['aud'] ?? null,
+                    'iss'    => $pl['iss'] ?? null,
+                    'sub'    => $pl['sub'] ?? null,
+                    'exp'    => $pl['exp'] ?? null,
+                    'keys'   => array_keys($pl),
+                ];
+            }
+        }
+        $probes = [];
+        if ($idxS === 0 || $vid === 1093225 || $vid === 710223) {
+            $candUrls = [
+                'openapi_v1_items_vid' => 'https://openapi.basalam.com/v1/vendor-parcels?items.vendor_ids=' . $vid . '&per_page=5',
+                'openapi_v1_plain'     => 'https://openapi.basalam.com/v1/vendor-parcels?per_page=5',
+                'openapi_v1_vid_param' => 'https://openapi.basalam.com/v1/vendor-parcels?vendor_id=' . $vid . '&per_page=5',
+                'openapi_v1_vendors_p' => 'https://openapi.basalam.com/v1/vendors/' . $vid . '/parcels?per_page=5',
+                'orderproc_v1_items'   => 'https://order-processing.basalam.com/v1/vendor-parcels?items.vendor_ids=' . $vid . '&per_page=5',
+                'orderproc_v1_plain'   => 'https://order-processing.basalam.com/v1/vendor-parcels?per_page=5',
+                'orderproc_v2_plain'   => 'https://order-processing.basalam.com/v2/vendor-parcels?per_page=5',
+                'orderproc_v3_plain'   => 'https://order-processing.basalam.com/v3/vendor-parcels?per_page=5',
+                'orderproc_data'       => 'https://order-processing.basalam.com/data/vendor-parcels?per_page=5',
+                'core_v1_parcels'      => 'https://core.basalam.com/api_v2/parcel/list?per_page=5',
+                'core_v3_parcels'      => 'https://core.basalam.com/v3/vendor-parcels?per_page=5',
+            ];
+            $mh = curl_multi_init();
+            $chs = [];
+            foreach ($candUrls as $kUrl => $uTest) {
+                $opt = bslCurlOpts($uTest, $tk, 'GET', null, false, $netBsl, 'direct');
+                $opt[CURLOPT_TIMEOUT] = 6;
+                $opt[CURLOPT_CONNECTTIMEOUT] = 4;
+                $ch = curl_init();
+                curl_setopt_array($ch, $opt);
+                curl_multi_add_handle($mh, $ch);
+                $chs[$kUrl] = $ch;
+            }
+            $runningMh = null;
+            do {
+                curl_multi_exec($mh, $runningMh);
+                if ($runningMh > 0) curl_multi_select($mh, 0.2);
+            } while ($runningMh > 0);
+            foreach ($chs as $kUrl => $ch) {
+                $rawB = (string)curl_multi_getcontent($ch);
+                $cCode = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+                $cErr = curl_error($ch);
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+                $decB = @json_decode($rawB, true);
+                $probes[$kUrl] = [
+                    'code' => $cCode,
+                    'err'  => $cErr,
+                    'cnt'  => is_array($decB['data'] ?? null) ? count($decB['data']) : null,
+                    'snip' => mb_substr(preg_replace('/\s+/u', ' ', $rawB), 0, 220, 'UTF-8'),
+                ];
+            }
+            curl_multi_close($mh);
+        }
+        $shopsOut[] = [
+            'vendor_id' => $vid,
+            'shop_name' => (string)($sh['shop_name'] ?? ''),
+            'jwt'       => $jwtInfo,
+            'probes'    => $probes,
+        ];
+    }
+    $aiProvs = aiProvidersLoad();
+    $keyState = aiKeyStateLoad();
+    $aiOut = [];
+    foreach ($aiProvs as $pid => $p) {
+        if (!is_array($p)) continue;
+        $sampleFails = [];
+        $okModels = [];
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (!is_array($m)) continue;
+            if (!empty($m['available'])) {
+                if (count($okModels) < 3) $okModels[] = (string)($m['id'] ?? '');
+            } elseif (!empty($m['tested']) && count($sampleFails) < 3) {
+                $td = is_array($m['testDetails'] ?? null) ? $m['testDetails'] : [];
+                $sampleFails[] = [
+                    'id'     => (string)($m['id'] ?? ''),
+                    'status' => (int)($td['status'] ?? 0),
+                    'via'    => (string)($td['via'] ?? ''),
+                    'err'    => mb_substr((string)($td['error'] ?? ''), 0, 160, 'UTF-8'),
+                    'bill'   => (string)($m['billingIssue'] ?? ''),
+                ];
+            }
+        }
+        $ksRows = [];
+        foreach (aiProviderKeys($p) as $kr) {
+            $kid = (string)($kr['id'] ?? '');
+            $ksRows[] = [
+                'id'      => $kid,
+                'preview' => aiKeyPreview((string)($kr['key'] ?? '')),
+                'enabled' => !empty($kr['enabled']),
+                'state'   => $keyState[$pid . '|' . $kid] ?? null,
+            ];
+        }
+        $aiOut[$pid] = [
+            'url'     => (string)($p['url'] ?? ''),
+            'enabled' => ($p['enabled'] ?? true) !== false,
+            'keys'    => $ksRows,
+            'ok_sample'   => $okModels,
+            'fail_sample' => $sampleFails,
+        ];
+    }
+    echo json_encode(['ok' => true, 'basalam_shops' => $shopsOut, 'ai_net' => aiNetPublic(aiNetCfg($cn)), 'ai_providers' => $aiOut], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /** لیست سفارش‌های غرفه — برای مودال */
 if (isset($_GET['bsl_orders_list'])) {
     header('Content-Type: application/json; charset=UTF-8');
@@ -92344,6 +92472,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.469', t:'🛒 رفع خطای کاذب ۴۰۳ اسکوپ سفارش‌های باسلام (چندمسیره + چندغرفه‌ای) و اصلاح تشخیص اعتبار/کلید در پروایدرهای هوش مصنوعی (Mistral و سایرین)', items:[
+    'رفع خطای کاذب «توکن دسترسی لازم را ندارد (۴۰۳) · اسکوپ موردنیاز: vendor.parcel.read» در استعلام سفارش‌ها و اعلان‌ها با پشتیبانی خودکار از مسیرهای مستقیم و چندغرفه‌ای سفارش‌های باسلام.',
+    'رفع برچسب کاذب «💳 اعتبار تمام» روی کلیدهای سالم (مانند Mistral در مدل‌های خارج از سطح اشتراک رایگان، مدل‌های Labs یا مدل‌های پولی OpenRouter): خطاهای سطح مدل (tier/plan/labs) دیگر کل کلید یا حساب را مسدود نمی‌کنند.',
+    'اصلاح ترتیب تشخیص بلاک جغرافیایی/WAF پیش از خروج حلقهٔ شبکه در aiProviderCallOnce و aiNativeHttpModes + انتخاب مدل سازگار هنگام تست تکی کلید (ai_keys_test) و پاک‌سازی خودکار قفل‌های کاذب قبلی.'
+  ]},
   {v:'10.468', t:'🛡️ پایداری صددرصدی اصلاح پس‌زمینه در CloudLinux/LSAPI (حذف بارگذاری ۳بارهٔ پروفایل‌ها، بودجهٔ زمانی برش و جهش زنجیرهٔ AI)', items:[
     'حذف بارگذاری سه‌بارهٔ profiles.json در هر برش catfixRun (بازیافت بارگذاری واحد در catProfileResolver، suffixProfiles و ایندکس محلی + آزادسازی فوری RAM) برای جلوگیری از سرریز سقف حافظهٔ مشترک LVE.',
     'سقف بودجهٔ زمانی ۳۴ ثانیه‌ای در هر برش برای پیشگیری از قطع ناگهانی کارگر پس‌زمینه توسط LiteSpeed LSAPI؛ در پایان بودجه، چک‌پوینت دقیق ذخیره شده و برش بعدی بلافاصله به‌صورت خودکار زنجیر می‌شود.',
