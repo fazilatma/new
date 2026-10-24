@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.465';
+const APP_VERSION = '10.466';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -11442,6 +11442,219 @@ function bslProductCatId(array $p): int {
  * در هر دور، اول حافظهٔ یادگیریِ همان طول بررسی می‌شود و بعد امتیازدهی
  * روی نام دسته‌ها با وزنِ سه‌برابر برای همان چند کلمهٔ ابتدایی.
  */
+/**
+ * v10.466: فهرست ایندکس‌شدهٔ دسته‌های باسلام (همراه با تشخیص برگ واقعی و مسیر والدها)
+ * با کش در حافظه بر اساس اندازه/امضای آرایه تا در حلقهٔ چندهزار محصولی سربار صفر باشد.
+ */
+function bslBuildCategoryMetaIndex(array $flatCategories): array {
+    static $cache = [];
+    $cnt = count($flatCategories);
+    if ($cnt === 0) return ['by_id' => [], 'has_hierarchy' => false];
+    $firstId = (int)($flatCategories[0]['id'] ?? 0);
+    $lastItem = $flatCategories[$cnt - 1] ?? [];
+    $lastId = (int)($lastItem['id'] ?? 0);
+    $cacheKey = $cnt . ':' . $firstId . ':' . $lastId;
+    if (isset($cache[$cacheKey])) return $cache[$cacheKey];
+
+    $byId = [];
+    $hasChildren = [];
+    $hasHierarchy = false;
+    foreach ($flatCategories as $c) {
+        if (!is_array($c)) continue;
+        $cid = (int)($c['id'] ?? 0);
+        if ($cid <= 0) continue;
+        $pid = (int)($c['parent_id'] ?? ($c['parent'] ?? 0));
+        if ($pid > 0) {
+            $hasChildren[$pid] = true;
+            $hasHierarchy = true;
+        }
+        if (!empty($c['children']) && is_array($c['children'])) {
+            $hasChildren[$cid] = true;
+            $hasHierarchy = true;
+        }
+        $nm = trim((string)($c['name'] ?? ($c['title'] ?? '')));
+        $byId[$cid] = [
+            'id'        => $cid,
+            'parent_id' => $pid,
+            'name'      => $nm,
+            'path'      => trim((string)($c['full_title'] ?? ($c['path'] ?? $nm))),
+            'level'     => (int)($c['level'] ?? 0),
+        ];
+    }
+    foreach ($byId as $cid => &$info) {
+        $info['is_leaf'] = empty($hasChildren[$cid]);
+        if ($info['parent_id'] > 0 && isset($byId[$info['parent_id']])) {
+            $chain = [$info['name']];
+            $curP = $info['parent_id'];
+            $guard = 0;
+            while ($curP > 0 && isset($byId[$curP]) && $guard < 6) {
+                array_unshift($chain, $byId[$curP]['name']);
+                $curP = $byId[$curP]['parent_id'];
+                $guard++;
+            }
+            $builtPath = implode(' > ', array_filter($chain, static fn($s) => $s !== ''));
+            if (mb_strlen($builtPath, 'UTF-8') > mb_strlen($info['path'], 'UTF-8')) {
+                $info['path'] = $builtPath;
+            }
+        }
+    }
+    unset($info);
+    $res = ['by_id' => $byId, 'has_hierarchy' => $hasHierarchy];
+    if (count($cache) > 8) array_shift($cache);
+    $cache[$cacheKey] = $res;
+    return $res;
+}
+
+function bslNormCatMatchText(string $s): string {
+    $s = str_replace(['ي', 'ك', 'ة', 'ؤ', 'إ', 'أ', "\u{200c}", "\u{00a0}"], ['ی', 'ک', 'ه', 'و', 'ا', 'ا', ' ', ' '], $s);
+    $s = mb_strtolower($s, 'UTF-8');
+    $s = preg_replace('~[^\p{L}\p{N}\s]+~u', ' ', $s) ?? $s;
+    return ' ' . trim((string)(preg_replace('~\s+~u', ' ', $s) ?? $s)) . ' ';
+}
+
+/**
+ * v10.466: تشخیص دسته‌های ممنوع/حساس باسلام که انتخاب خودکار آن‌ها باعث رد محصول می‌شود
+ * (کد ۶۴۳۵ حیوانات خانگی، کد ۶۴۵۷ شمش و طلا/نقره بدون مجوز، کد ۷۰۷۷ دسته‌های نیازمند پروانه تخصصی).
+ */
+function bslIsBannedCategoryTitle(string $catPathText, string $productTitle = ''): bool {
+    $c = bslNormCatMatchText($catPathText);
+    if (trim($c) === '') return false;
+    foreach ([
+        ' حیوانات خانگی ', ' غذای گربه ', ' غذای سگ ', ' لوازم گربه ', ' لوازم سگ ',
+        ' تشویقی سگ ', ' تشویقی گربه ', ' خاک گربه ', ' قلاده ', ' نگهداری سگ ', ' نگهداری گربه ',
+        ' دخانیات ', ' سیگار و توتون ', ' قلیان و تنباکو ', ' تجهیزات پزشکی بیمارستانی ',
+    ] as $petOrBanned) {
+        if (mb_strpos($c, $petOrBanned) !== false) return true;
+    }
+    foreach ([' شمش طلا ', ' شمش نقره ', ' طلای آبشده ', ' آبشده ', ' سکه طلا ', ' سکه بهار آزادی ', ' اکسسوری طلا ', ' جواهرات طلا ', ' زیورآلات طلا '] as $bullion) {
+        if (mb_strpos($c, $bullion) !== false) {
+            $t = bslNormCatMatchText($productTitle);
+            if (mb_strpos($t, ' عیار ') === false && mb_strpos($t, ' ۱۸ عیار ') === false && mb_strpos($t, ' 18 عیار ') === false) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * v10.466: تشخیص تضاد معنایی آشکار میان عنوان محصول و دستهٔ باسلام
+ * (پیشگیری از کد ۶۰۴۶ دستهٔ نامرتبط، کد ۵۳۸۷ مغایرت عکس/عنوان با دسته، کد ۶۴۵۷ طلا/نقره، کد ۶۴۳۵ پت).
+ */
+function bslCategoryHasSemanticClash(string $productTitle, int $catId, array $flatCategories): bool {
+    if ($catId <= 0 || trim($productTitle) === '' || empty($flatCategories)) return false;
+    $meta = bslBuildCategoryMetaIndex($flatCategories);
+    $info = $meta['by_id'][$catId] ?? null;
+    if (!$info) return false;
+    $catPath = $info['path'] !== '' ? $info['path'] : $info['name'];
+    if (bslIsBannedCategoryTitle($catPath, $productTitle)) return true;
+
+    $t = bslNormCatMatchText($productTitle);
+    $c = bslNormCatMatchText($catPath);
+    $hasAny = static function (string $hay, array $needles): bool {
+        foreach ($needles as $nd) {
+            if (mb_strpos($hay, $nd) !== false) return true;
+        }
+        return false;
+    };
+
+    /* ۱) دسته‌های کتاب/نشریات/خدمات چاپ عکس در برابر کالاهای فیزیکی غیرکتابی (رفع باگ دستهٔ ۵۵۴ و ۶۵۲) */
+    if ($hasAny($c, [' کتاب ', ' مجله ', ' نشریات ', ' طراحی و چاپ عکس ', ' خدمات چاپ ', ' خدمات کسب '])) {
+        if (!$hasAny($t, [' کتاب ', ' رمان ', ' انتشارات ', ' نویسنده ', ' ترجمه ', ' جلد ', ' چاپ عکس شخصی ', ' شاسی عکس ', ' طراحی لوگو '])) {
+            return true;
+        }
+    }
+
+    /* ۲) ملزومات چاپگر و اداری (کارتریج/تونر شارژ/ریبون/درام/پرینتر) نباید در پوشاک، آرایشی یا خوراکی بروند */
+    $isOfficePrint = $hasAny($t, [' کارتریج ', ' ریبون ', ' درام ', ' پرینتر ', ' چاپگر ', ' اسکنر ', ' فتوکپی ', ' فیوزینگ ', ' هد پرینتر ', ' پودر تونر '])
+        || (mb_strpos($t, ' تونر ') !== false && $hasAny($t, [' شارژ ', ' اچ پی ', ' hp ', ' samsung ', ' سامسونگ ', ' کانن ', ' canon ', ' اپسون ', ' برادر ', ' کیوسرا ', ' لیزری ', ' اینتگرال ', ' شارپ ', ' ریکو ']));
+    if ($isOfficePrint) {
+        if ($hasAny($c, [' پوشاک ', ' زنانه ', ' مردانه ', ' دخترانه ', ' پسرانه ', ' تاپ ', ' تیشرت ', ' لباس ', ' مانتو ', ' شلوار ', ' کفش ', ' صندل ', ' پوست ', ' مو ', ' آرایشی ', ' بهداشتی ', ' عطر ', ' خوراکی ', ' مواد غذایی ', ' خانه و آشپزخانه '])) {
+            return true;
+        }
+    }
+
+    /* ۳) کفش/صندل/لوفر/کتانی/بوت نباید در تاپ و تیشرت یا لباس راحتی/خواب برود */
+    $isFootwear = $hasAny($t, [' کفش ', ' صندل ', ' کتانی ', ' کتونی ', ' اسنیکرز ', ' لوفر ', ' کالج ', ' پوتین ', ' نیم بوت ', ' دمپایی ', ' گیوه '])
+        && !$hasAny($t, [' جاکفشی ', ' واکس ', ' کفی کفش ', ' بند کفش ', ' پاشنه کش ', ' قالب کفش ']);
+    if ($isFootwear) {
+        if ($hasAny($c, [' تاپ ', ' تیشرت ', ' لباس راحتی ', ' لباس خواب ', ' لباس زیر ', ' شومیز ', ' بلوز ', ' پیراهن ', ' مانتو ', ' شلوار ', ' شورت ', ' سوتین ', ' جوراب ', ' شال ', ' روسری ', ' کلاه '])
+            && !$hasAny($c, [' کفش ', ' صندل ', ' دمپایی ', ' کتانی ', ' پوتین ', ' بوت '])) {
+            return true;
+        }
+    }
+
+    /* ۴) عطر و لوازم آرایشی/بهداشتی نباید در پوشاک و کیف و کفش برود */
+    $isCosmetic = $hasAny($t, [' ادوپرفیوم ', ' ادوتویلت ', ' ادکلن ', ' بادی اسپلش ', ' بالم لب ', ' رژ لب ', ' رژلب ', ' ریمل ', ' کانسیلر ', ' کرم پودر ', ' سایه چشم ', ' خط چشم ', ' شامپو ', ' ماسک مو ', ' سرم پوست ', ' ضد آفتاب ', ' میسلار ']);
+    if ($isCosmetic) {
+        if ($hasAny($c, [' پوشاک ', ' تاپ ', ' تیشرت ', ' لباس ', ' مانتو ', ' شلوار ', ' شومیز ', ' کفش ', ' صندل ', ' کیف '])
+            && !$hasAny($c, [' آرایشی ', ' بهداشتی ', ' عطر ', ' ادکلن ', ' پوست ', ' مو '])) {
+            return true;
+        }
+    }
+
+    /* ۵) لوازم خانه و آشپزخانه/ماگ/فلاسک نباید در پوشاک و لباس برود */
+    $isKitchenHome = $hasAny($t, [' تراول ماگ ', ' فلاسک ', ' قوری ', ' کتری ', ' قابلمه ', ' ماهیتابه ', ' تابه ', ' سبد سیب ', ' سرویس غذاخوری ', ' استکان ', ' قمقمه ']);
+    if ($isKitchenHome) {
+        if ($hasAny($c, [' پوشاک ', ' تاپ ', ' تیشرت ', ' لباس ', ' مانتو ', ' شلوار ', ' شومیز ', ' کفش ', ' صندل ', ' آرایشی '])) {
+            return true;
+        }
+    }
+
+    /* ۶) کیف/کوله‌پشتی/چمدان نباید در تاپ و تیشرت یا لباس خواب/شلوار برود */
+    $isBag = $hasAny($t, [' کیف دوشی ', ' کیف دستی ', ' کیف پول ', ' کوله پشتی ', ' ساک ورزشی ', ' چمدان ']);
+    if ($isBag) {
+        if ($hasAny($c, [' تاپ ', ' تیشرت ', ' لباس راحتی ', ' لباس خواب ', ' لباس زیر ', ' شومیز ', ' مانتو ', ' شلوار '])
+            && !$hasAny($c, [' کیف ', ' کوله ', ' ساک ', ' چمدان '])) {
+            return true;
+        }
+    }
+
+    /* ۷) تضاد صریح جنسیت (زنانه در برابر مردانه) */
+    $tFem = $hasAny($t, [' زنانه ', ' دخترانه ']);
+    $tMas = $hasAny($t, [' مردانه ', ' پسرانه ']);
+    $tUni = $hasAny($t, [' اسپرت ', ' یونیسکس ', ' ست دونفره ']);
+    if ($tFem && !$tMas && !$tUni && $hasAny($c, [' مردانه ', ' پسرانه ']) && !$hasAny($c, [' زنانه ', ' دخترانه '])) return true;
+    if ($tMas && !$tFem && !$tUni && $hasAny($c, [' زنانه ', ' دخترانه ']) && !$hasAny($c, [' مردانه ', ' پسرانه '])) return true;
+
+    return false;
+}
+
+function bslIsSafeLeafCategoryForTitle(string $productTitle, int $catId, array $flatCategories): bool {
+    if ($catId <= 0) return false;
+    if (empty($flatCategories)) return true;
+    $meta = bslBuildCategoryMetaIndex($flatCategories);
+    $info = $meta['by_id'][$catId] ?? null;
+    if (!$info) return false;
+    if (!empty($meta['has_hierarchy']) && empty($info['is_leaf'])) return false;
+    return !bslCategoryHasSemanticClash($productTitle, $catId, $flatCategories);
+}
+
+/**
+ * v10.466: پالایش دسته‌های دستی/پروفایلی/سراسری پیش از ارسال — دسته‌های غیربرگ، ممنوع یا دارای
+ * تضاد معنایی با عنوان محصول (مثل دستهٔ سراسری ۲۳۱ تاپ و تیشرت برای کارتریج یا کفش) حذف می‌شوند.
+ */
+function bslFilterSafeManualCategories(string $productTitle, array $manualChain, array $flatCategories, int $explicitProductCat = 0): array {
+    if (empty($manualChain)) return [];
+    if (empty($flatCategories)) return array_values(array_unique(array_filter(array_map('intval', $manualChain), static fn($x) => $x > 0)));
+    $meta = bslBuildCategoryMetaIndex($flatCategories);
+    $safe = [];
+    foreach ($manualChain as $rawCid) {
+        $cid = (int)$rawCid;
+        if ($cid <= 0) continue;
+        if (isset($meta['by_id'][$cid]) && !empty($meta['has_hierarchy']) && empty($meta['by_id'][$cid]['is_leaf'])) {
+            $leafCid = findLeafCategory($cid, $flatCategories);
+            if ($leafCid > 0 && !empty($meta['by_id'][$leafCid]['is_leaf'])) $cid = $leafCid;
+            else continue;
+        }
+        $catPath = isset($meta['by_id'][$cid]) ? ($meta['by_id'][$cid]['path'] ?: $meta['by_id'][$cid]['name']) : '';
+        if ($catPath !== '' && bslIsBannedCategoryTitle($catPath, $productTitle)) continue;
+        if ($cid !== $explicitProductCat && bslCategoryHasSemanticClash($productTitle, $cid, $flatCategories)) continue;
+        if (!in_array($cid, $safe, true)) $safe[] = $cid;
+    }
+    return $safe;
+}
+
 function autoMatchBslCategory(string $productTitle, array $flatCategories, ?int $maxWords = null): int {
     $rounds = $maxWords !== null
         ? max(1, min(CATLEARN_MAX_WORDS, $maxWords))
@@ -11456,6 +11669,7 @@ function autoMatchBslCategory(string $productTitle, array $flatCategories, ?int 
         for ($i = $rounds; $i >= 1; $i--) {
             $lid = catLearnBestFor(catFirstWords($productTitle, $i), $learned);
             if ($lid <= 0) continue;
+            if (!bslIsSafeLeafCategoryForTitle($productTitle, $lid, $flatCategories)) continue;
             foreach ($flatCategories as $c) {
                 if ((int)($c['id'] ?? 0) === $lid) return $lid;
             }
@@ -11474,19 +11688,34 @@ function autoMatchBslCategory(string $productTitle, array $flatCategories, ?int 
 function autoMatchBslCategoryRound(string $productTitle, array $flatCategories, int $wordsN = 1): int {
 
 $norm=preg_replace('/[0-9!@#$%^&*()+=\[\]{}|\\\\:;"\'<>,.?\/_\-–—…·«»]/u',' ',mb_strtolower(trim($productTitle),'UTF-8'));
-$norm=preg_replace('/\s{2,}/u',' ',$norm);
+$norm=str_replace(['ي','ك',"\u{200c}"],['ی','ک',' '],(string)$norm);
+$norm=preg_replace('/\s{2,}/u',' ',(string)$norm);
 
-$stop=['قیمت','فروش','ارسال','رایگان','تخفیف','ویژه','نو','جدید','ست','بسته','دار','تکه','عدد','پک','سایز','رنگ','و','با','از','برای','در','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر','بندی','جعبه','کیسه','سفید','مشکی','آبی','طلایی','سلیکونی','فانتزی','کد','اصلی','مخصوص','تک','فرد','نوع','مدل','خط','سری','متفرقه','کرانه','تن'];
-$pWords=array_unique(array_filter(preg_split('/\s+/u',$norm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop);}));
+$stop=['قیمت','فروش','ارسال','رایگان','تخفیف','ویژه','نو','جدید','ست','بسته','دار','تکه','عدد','پک','سایز','رنگ','و','با','از','برای','در','به','تا','بر','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر','بندی','جعبه','کیسه','سفید','مشکی','آبی','طلایی','سلیکونی','فانتزی','کد','اصلی','مخصوص','تک','فرد','نوع','مدل','طرح','خط','سری','متفرقه','کرانه','تن','های','ها','ای','ترین','کیفیت','عالی','درجه','اورجینال','اصل'];
+$genderMods=['زنانه','مردانه','دخترانه','پسرانه','بچگانه','نوزادی'];
+$pWords=array_values(array_unique(array_filter(preg_split('/\s+/u',(string)$norm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop,true);})));
 if(empty($pWords))return 0;
+
+/* v10.466: گسترش هم‌معنی‌های رایج فروشگاهی برای تطبیق دقیق با دسته‌های برگ باسلام */
+$synMap=[
+    'لوفر'=>'کفش','کالج'=>'کفش','کتونی'=>'کتانی','اسنیکرز'=>'کتانی','پاشنه'=>'کفش',
+    'ادوپرفیوم'=>'عطر','ادوتویلت'=>'عطر','پرفیوم'=>'عطر',
+    'کارتریج'=>'چاپگر','ریبون'=>'چاپگر','درام'=>'چاپگر',
+];
+foreach($pWords as $_pwSyn){
+    if(isset($synMap[$_pwSyn])&&!in_array($synMap[$_pwSyn],$pWords,true))$pWords[]=$synMap[$_pwSyn];
+}
 
 // v8.48: اول حافظهٔ یادگیری. اگر کاربر قبلاً برای این کلمهٔ اول دسته‌ای
 // انتخاب کرده، همان برنده است — انتخاب انسان بر حدس الگوریتم مقدم است.
 // v8.60: در هر دور فقط کلیدِ همان طول بررسی می‌شود.
 $learnedId=catLearnBestFor(catFirstWords($productTitle,$wordsN),catLearnLoad());
-if($learnedId>0){
+if($learnedId>0 && bslIsSafeLeafCategoryForTitle($productTitle,$learnedId,$flatCategories)){
 foreach($flatCategories as $c){if((int)($c['id']??0)===$learnedId)return $learnedId;}
 }
+
+$metaIdx=bslBuildCategoryMetaIndex($flatCategories);
+$hasHier=!empty($metaIdx['has_hierarchy']);
 
 // v8.48: کلمهٔ اول نوع کالا را می‌گوید و بقیه صفت‌اند، پس وزنش بیشتر است
 // v8.60: با تنظیم چندکلمه‌ای، همان چند کلمهٔ ابتدایی وزن بیشتر می‌گیرند
@@ -11495,32 +11724,38 @@ $firstWord=$leadWords[0]??'';
 
 $bestScore=0;$bestCatId=0;
 foreach($flatCategories as $cat){
+$cid=(int)($cat['id']??0);
+if($cid<=0)continue;
+if($hasHier&&empty($metaIdx['by_id'][$cid]['is_leaf']))continue;
+if(bslCategoryHasSemanticClash($productTitle,$cid,$flatCategories))continue;
 
-$catNorm=preg_replace('/[0-9()]/u',' ',mb_strtolower(trim($cat['name']??''),'UTF-8'));
-$catNorm=preg_replace('/\s{2,}/u',' ',trim($catNorm));
-$catWords=array_unique(array_filter(preg_split('/\s+/u',$catNorm),function($w){return mb_strlen($w,'UTF-8')>=2;}));
+$catNorm=preg_replace('/[0-9()]/u',' ',mb_strtolower(trim($cat['name']??($cat['title']??'')),'UTF-8'));
+$catNorm=str_replace(['ي','ك',"\u{200c}"],['ی','ک',' '],(string)$catNorm);
+$catNorm=preg_replace('/\s{2,}/u',' ',trim((string)$catNorm));
+$catWords=array_unique(array_filter(preg_split('/\s+/u',(string)$catNorm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop,true);}));
 if(empty($catWords))continue;
-$overlap=0;
+$overlap=0;$nounMatched=false;
 foreach($pWords as $pw){
 $pwLen=mb_strlen($pw,'UTF-8');
+$isGenderMod=in_array($pw,$genderMods,true);
 // v8.48: تطبیق روی کلمهٔ اول سه برابر ارزش دارد
 // v8.60: در دور چندکلمه‌ای، همهٔ کلمات ابتدایی همین وزن را می‌گیرند
-$wMul=in_array($pw,$leadWords,true)?3:1;
+$wMul=$isGenderMod?0.15:(in_array($pw,$leadWords,true)?3:1);
 foreach($catWords as $cw){
 $cw=trim($cw);$cwLen=mb_strlen($cw,'UTF-8');
 
-if($pw===($cw)){$overlap+=3*$wMul;break;}
+if($pw===($cw)){$overlap+=3*$wMul;if(!$isGenderMod)$nounMatched=true;break;}
 
 if($pwLen<$cwLen){
 
 if(mb_substr($cw,0,$pwLen,'UTF-8')===($pw)){
 $nc=mb_substr($cw,$pwLen,1,'UTF-8');
-if($nc===' '||$nc==='\u200c'||$nc==='‌'){$overlap+=2*$wMul;break;}
+if($nc===' '||$nc==='\u200c'||$nc==='‌'){$overlap+=2*$wMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 
 if(mb_substr($cw,$cwLen-$pwLen,$pwLen,'UTF-8')===($pw)){
 $pc=mb_substr($cw,$cwLen-$pwLen-1,1,'UTF-8');
-if($pc===' '||$pc==='\u200c'||$pc==='‌'){$overlap+=2*$wMul;break;}
+if($pc===' '||$pc==='\u200c'||$pc==='‌'){$overlap+=2*$wMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 }
 
@@ -11528,13 +11763,14 @@ if($pwLen>$cwLen&&mb_strpos($pw,$cw,0,'UTF-8')!==false){
 $pos=mb_strpos($pw,$cw,0,'UTF-8');
 $beforeOk=$pos===0||mb_substr($pw,$pos-1,1,'UTF-8')===' ';
 $afterOk=$pos+$cwLen===mb_strlen($pw,'UTF-8')||mb_substr($pw,$pos+$cwLen,1,'UTF-8')===' ';
-if($beforeOk&&$afterOk){$overlap+=1.5*$wMul;break;}
+if($beforeOk&&$afterOk){$overlap+=1.5*$wMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 }
 }
+if(!$nounMatched)continue;
 
 $score=$overlap+($cat['level']??0)*0.2;
-if($score>$bestScore){$bestScore=$score;$bestCatId=(int)$cat['id'];}
+if($score>$bestScore){$bestScore=$score;$bestCatId=$cid;}
 }
 
 if($bestScore<2)return 0;
@@ -11543,51 +11779,63 @@ return $bestCatId;
 
 function autoMatchBslCategoryForce(string $productTitle, array $flatCategories): int {
 $norm=preg_replace('/[0-9!@#$%^&*()+=\[\]{}|\\\\:;"\'<>,.?\/_\-–—…·«»]/u',' ',mb_strtolower(trim($productTitle),'UTF-8'));
-$norm=preg_replace('/\s{2,}/u',' ',$norm);
-$stop=['و','با','از','برای','در','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر'];
-$pWords=array_unique(array_filter(preg_split('/\s+/u',$norm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop);}));
+$norm=str_replace(['ي','ك',"\u{200c}"],['ی','ک',' '],(string)$norm);
+$norm=preg_replace('/\s{2,}/u',' ',(string)$norm);
+$stop=['و','با','از','برای','در','به','تا','بر','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر','های','ها','ای','مدل','طرح','کد','رنگ','سایز','ست','پک','بسته','عدد','تک','ارسال','فروش','قیمت'];
+$genderMods=['زنانه','مردانه','دخترانه','پسرانه','بچگانه','نوزادی'];
+$pWords=array_unique(array_filter(preg_split('/\s+/u',(string)$norm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop,true);}));
 if(empty($pWords))return 0;
+$metaIdx=bslBuildCategoryMetaIndex($flatCategories);
+$hasHier=!empty($metaIdx['has_hierarchy']);
 $scores=[];
 foreach($flatCategories as $cat){
-$catNorm=preg_replace('/[0-9()]/u',' ',mb_strtolower(trim($cat['name']??''),'UTF-8'));
-$catNorm=preg_replace('/\s{2,}/u',' ',trim($catNorm));
-$catWords=array_unique(array_filter(preg_split('/\s+/u',$catNorm),function($w){return mb_strlen($w,'UTF-8')>=2;}));
+$cid=(int)($cat['id']??0);
+if($cid<=0)continue;
+if($hasHier&&empty($metaIdx['by_id'][$cid]['is_leaf']))continue;
+if(bslCategoryHasSemanticClash($productTitle,$cid,$flatCategories))continue;
+$catNorm=preg_replace('/[0-9()]/u',' ',mb_strtolower(trim($cat['name']??($cat['title']??'')),'UTF-8'));
+$catNorm=str_replace(['ي','ك',"\u{200c}"],['ی','ک',' '],(string)$catNorm);
+$catNorm=preg_replace('/\s{2,}/u',' ',trim((string)$catNorm));
+$catWords=array_unique(array_filter(preg_split('/\s+/u',(string)$catNorm),function($w)use($stop){return mb_strlen($w,'UTF-8')>=2&&!in_array($w,$stop,true);}));
 if(empty($catWords))continue;
-$overlap=0;
+$overlap=0;$nounMatched=false;
 foreach($pWords as $pw){
 $pwLen=mb_strlen($pw,'UTF-8');
+$isGenderMod=in_array($pw,$genderMods,true);
+$gMul=$isGenderMod?0.2:1.0;
 foreach($catWords as $cw){
 $cw=trim($cw);$cwLen=mb_strlen($cw,'UTF-8');
 
-if($pw===($cw)){$overlap+=3;break;}
+if($pw===($cw)){$overlap+=3*$gMul;if(!$isGenderMod)$nounMatched=true;break;}
 
 if($pwLen<$cwLen){
 if(mb_substr($cw,0,$pwLen,'UTF-8')===($pw)){
 $nc=mb_substr($cw,$pwLen,1,'UTF-8');
-if($nc===' '||$nc==='\u200c'||$nc==='‌'){$overlap+=2;break;}
+if($nc===' '||$nc==='\u200c'||$nc==='‌'){$overlap+=2*$gMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 if(mb_substr($cw,$cwLen-$pwLen,$pwLen,'UTF-8')===($pw)){
 $pc=mb_substr($cw,$cwLen-$pwLen-1,1,'UTF-8');
-if($pc===' '||$pc==='\u200c'||$pc==='‌'){$overlap+=2;break;}
+if($pc===' '||$pc==='\u200c'||$pc==='‌'){$overlap+=2*$gMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 }
 if($pwLen>$cwLen&&mb_strpos($pw,$cw,0,'UTF-8')!==false){
 $pos=mb_strpos($pw,$cw,0,'UTF-8');
 $beforeOk=$pos===0||mb_substr($pw,$pos-1,1,'UTF-8')===' ';
 $afterOk=$pos+$cwLen===mb_strlen($pw,'UTF-8')||mb_substr($pw,$pos+$cwLen,1,'UTF-8')===' ';
-if($beforeOk&&$afterOk){$overlap+=1.5;break;}
+if($beforeOk&&$afterOk){$overlap+=1.5*$gMul;if(!$isGenderMod)$nounMatched=true;break;}
 }
 }
 }
+if(!$nounMatched)continue;
 $score=$overlap+($cat['level']??0)*0.5;
-$scores[(int)($cat['id']??0)]=$score;
+$scores[$cid]=$score;
 }
 if(empty($scores))return 0;
 arsort($scores);
 $bestCatId=array_key_first($scores);
 $bestScore=$scores[$bestCatId];
 
-if($bestScore<1)return 0;
+if($bestScore<1.5)return 0;
 return $bestCatId;
 }
 
@@ -11919,17 +12167,38 @@ function wooGalleryPayload(array $w, array $imgUrls, ?string &$note = null): arr
  * فهرست تصاویر یک محصول را به‌ترتیب برمی‌گرداند: عکس اصلی اول، بعد گالری.
  * هم شکل جدید (images) و هم قدیمی (فقط image) را می‌فهمد.
  */
+function bslIsPlaceholderImageUrl(string $url): bool {
+    $u = strtolower(trim($url));
+    if ($u === '' || preg_match('~^(?:data:|blob:|javascript:|about:|#)~', $u)) return true;
+    $path = (string)(parse_url($u, PHP_URL_PATH) ?: $u);
+    if (str_contains($u, 'statics-bk0.basalam.com/public-8/admin/') || str_contains($u, 'statics.basalam.com/public-8/admin/')) return true;
+    return (bool)preg_match('~(?:woocommerce-placeholder|wc-placeholder|no[-_]?image|default[-_]?product|default[-_]?image|lazy[-_]?placeholder|/placeholder\.[a-z]{3,4}$|/spinner\.[a-z]{3,4}$|/loading\.[a-z]{3,4}$|/blank\.[a-z]{3,4}$|/spacer\.[a-z]{3,4}$|/1x1\.[a-z]{3,4}$)~i', $path);
+}
+
+function bslUpgradeImageUrlResolution(string $url): string {
+    $u = trim($url);
+    if ($u === '') return '';
+    if (preg_match('~^(.+?)-(\d{2,4})x(\d{2,4})(\.(?:jpe?g|png|webp))(\?.*)?$~i', $u, $m)) {
+        $w = (int)$m[2];
+        $h = (int)$m[3];
+        if (min($w, $h) > 0 && min($w, $h) < 750) {
+            return $m[1] . $m[4] . ($m[5] ?? '');
+        }
+    }
+    return $u;
+}
+
 function productImageList(array $p): array {
     $list = [];
     $main = trim((string)($p['image'] ?? ''));
-    if ($main !== '') $list[] = $main;
+    if ($main !== '' && !bslIsPlaceholderImageUrl($main)) $list[] = $main;
     $imgs = $p['images'] ?? null;
     if (is_string($imgs)) $imgs = json_decode($imgs, true);
     if (is_array($imgs)) {
         foreach ($imgs as $u) {
             if (is_array($u)) $u = (string)($u['src'] ?? ($u['url'] ?? ''));
             $u = trim((string)$u);
-            if ($u !== '') $list[] = $u;
+            if ($u !== '' && !bslIsPlaceholderImageUrl($u)) $list[] = $u;
         }
     }
     return galleryDedupe($list);
@@ -12624,14 +12893,26 @@ function bslBuildUnifiedDescription(array $p, string $fallbackTitle = ''): array
         }
     }
 
+    $hasBslBarcode = function_exists('bslExtractValidBarcode') && bslExtractValidBarcode($p) !== '';
     $fallbackPlain = $fallbackTitle !== ''
         ? trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl($fallbackTitle)) ?? ''))
         : '';
+    if ($fallbackPlain !== '' && function_exists('bslSanitizeModerationTitle')) {
+        $fallbackPlain = bslSanitizeModerationTitle($fallbackPlain, $hasBslBarcode);
+    }
     $briefSingle = $shortPlain !== ''
         ? trim((string)(preg_replace('~\s+~u', ' ', str_replace('• ', '', $shortPlain)) ?? ''))
         : $fallbackPlain;
+    if ($briefSingle !== '' && function_exists('bslSanitizeModerationText')) {
+        $briefSingle = trim((string)(preg_replace('~\s+~u', ' ', bslSanitizeModerationText($briefSingle, $hasBslBarcode)) ?? ''));
+    }
+    if ($unified !== '' && function_exists('bslSanitizeModerationText')) {
+        $unified = bslSanitizeModerationText($unified, $hasBslBarcode);
+    }
     if ($unified === '' && $fallbackPlain !== '') {
-        $unified = $fallbackPlain;
+        $unified = function_exists('bslEnsureRichCompliantDescription')
+            ? bslEnsureRichCompliantDescription('', $fallbackPlain, $p, $hasBslBarcode)
+            : $fallbackPlain;
     }
     $unified = trim((string)(preg_replace("~\n{3,}~u", "\n\n", $unified) ?? $unified));
 
@@ -12961,15 +13242,361 @@ function bslResolveProductWeights(array $p, int $defaultWeight = 500, int $defau
     return ['weight' => $defW, 'package_weight' => $defPW, 'overridden' => false, 'raw' => ''];
 }
 
+/* =====================================================================
+ *  v10.466: سپر جامع پیشگیری از رد شدن (عدم تایید ۳۵۶۷) محصولات در باسلام
+ *  پوشش تمام دلایل غیرمرتبط با شئونات تصویری:
+ *    7094 (غرفه غیرفعال)، 7093 (عدم موجودی)، 6046/6457/7077 (دسته نامعتبر/حساس)،
+ *    6378 (کالای وارداتی بدون شناسه کالا)، 5771/5581 (عنوان کددار/توضیحات خالی یا ارجاع به پشتیبانی)،
+ *    5386 (کلمات غیرمجاز اینماد)، 6435 (کلمات ممنوعه/پت/عمده)، 6379 (شماره/لینک/آیدی)،
+ *    6380/6381/5011 (قیمت داخل متن یا قیمت غیرواقعی زیر ۵,۰۰۰ تومان)،
+ *    5351 (معرفی چند محصول)، 7083/6454 (واحد فروش و تعداد بسته)، 6054 (جایگزینی محصول).
+ * ===================================================================== */
+const BSL_MIN_REALISTIC_PRICE_RIAL = 50000; // ۵,۰۰۰ تومان (زیر این مبلغ در باسلام قیمت صوری/تست محسوب شده و ۵۰۱۱/۶۳۸۱ می‌گیرد)
+
+function bslIsRealisticPriceRial(int $priceRial): bool {
+    return $priceRial >= BSL_MIN_REALISTIC_PRICE_RIAL;
+}
+
+/**
+ * v10.466: بررسی فعال بودن غرفه در باسلام پیش از ارسال/اصلاح (کش ۱۰ دقیقه‌ای)
+ * پیشگیری قطعی از انباشت ده‌ها هزار محصول ردشده با کد ۷۰۹۴ روی غرفه‌های غیرفعال (status=2988).
+ * اگر فراخوان شبکه خطا بدهد (مثلاً در محیط تست آفلاین)، مسدود نمی‌کند (verified=false).
+ */
+function bslCheckVendorActiveStatus(string $tk, int $vid, bool $forceRefresh = false): array {
+    if ($vid <= 0 || trim($tk) === '' || strlen(trim($tk)) < 12) {
+        return ['ok' => true, 'active' => true, 'verified' => false, 'status_value' => 0, 'status_title' => ''];
+    }
+    if (!isset($GLOBALS['_bslVendorStatusMemCache']) || !is_array($GLOBALS['_bslVendorStatusMemCache'])) {
+        $GLOBALS['_bslVendorStatusMemCache'] = [];
+    }
+    $now = time();
+    $ttl = 600;
+    if (!$forceRefresh && isset($GLOBALS['_bslVendorStatusMemCache'][$vid])) {
+        $hit = $GLOBALS['_bslVendorStatusMemCache'][$vid];
+        if (($now - (int)($hit['at'] ?? 0)) < $ttl) return $hit;
+    }
+    $cacheFile = __DIR__ . '/bsl_vendor_status_cache.json';
+    $diskMap = [];
+    if (!$forceRefresh && is_file($cacheFile)) {
+        $rawDisk = @json_decode((string)@file_get_contents($cacheFile), true);
+        if (is_array($rawDisk)) {
+            $diskMap = $rawDisk;
+            $dHit = $diskMap[(string)$vid] ?? null;
+            if (is_array($dHit) && ($now - (int)($dHit['at'] ?? 0)) < $ttl) {
+                $GLOBALS['_bslVendorStatusMemCache'][$vid] = $dHit;
+                return $dHit;
+            }
+        }
+    }
+    $rv = bslReq($tk, 'GET', 'vendors/' . $vid);
+    if (empty($rv['ok']) || !is_array($rv['body'] ?? null)) {
+        return ['ok' => true, 'active' => true, 'verified' => false, 'status_value' => 0, 'status_title' => ''];
+    }
+    $vb = $rv['body'];
+    $stVal = (int)($vb['status']['value'] ?? ($vb['status']['id'] ?? (is_numeric($vb['status'] ?? null) ? $vb['status'] : 0)));
+    $stTitle = trim((string)($vb['status']['title'] ?? ($vb['status']['name'] ?? '')));
+    $isActiveFlag = array_key_exists('is_active', $vb) ? (bool)$vb['is_active'] : null;
+    $isInactive = ($stVal === 2988)
+        || ($isActiveFlag === false)
+        || ($stTitle !== '' && mb_strpos($stTitle, 'غیرفعال') !== false);
+    $shopTitle = trim((string)($vb['title'] ?? ($vb['name'] ?? ('غرفه #' . $vid))));
+    $entry = [
+        'ok'           => true,
+        'active'       => !$isInactive,
+        'verified'     => true,
+        'vendor_id'    => $vid,
+        'vendor_title' => $shopTitle,
+        'status_value' => $stVal,
+        'status_title' => $stTitle !== '' ? $stTitle : ($isInactive ? 'غیرفعال' : 'فعال'),
+        'at'           => $now,
+        'reason'       => $isInactive
+            ? ('غرفه «' . $shopTitle . '» (#' . $vid . ') در باسلام غیرفعال است (وضعیت ' . ($stVal ?: 2988) . ') — تا زمان فعال‌سازی غرفه، ثبت یا بررسی مجدد محصولات باعث رد خودکار با کد ۷۰۹۴ می‌شود.')
+            : '',
+    ];
+    $GLOBALS['_bslVendorStatusMemCache'][$vid] = $entry;
+    $diskMap[(string)$vid] = $entry;
+    @file_put_contents($cacheFile, json_encode($diskMap, JSON_UNESCAPED_UNICODE), LOCK_EX);
+    return $entry;
+}
+
+/**
+ * v10.466: استخراج بارکد / شناسه کالای معتبر (۸ تا ۱۶ رقم) از فیلدهای محصول یا جدول مشخصات (برای رفع کد ۶۳۷۸).
+ */
+function bslExtractValidBarcode(array $p): string {
+    $normDigits = static function (string $s): string {
+        $s = str_replace(
+            ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹','٠','١','٢','٣','٤','٥','٦','٧','٨','٩'],
+            ['0','1','2','3','4','5','6','7','8','9','0','1','2','3','4','5','6','7','8','9'],
+            $s
+        );
+        return preg_replace('~\D+~', '', $s) ?? '';
+    };
+    foreach (['barcode', 'shenase_kala', 'gtin', 'ean', 'upc'] as $bk) {
+        if (!empty($p[$bk]) && is_scalar($p[$bk])) {
+            $d = $normDigits((string)$p[$bk]);
+            if (strlen($d) >= 8 && strlen($d) <= 16 && !preg_match('~^0+$~', $d)) return $d;
+        }
+    }
+    $specTxt = '';
+    if (!empty($p['specs']) && is_string($p['specs'])) $specTxt = s4HtmlToPlainTextForBsl($p['specs']);
+    elseif (!empty($p['specs']) && is_array($p['specs'])) $specTxt = json_encode($p['specs'], JSON_UNESCAPED_UNICODE) ?: '';
+    if ($specTxt !== '' && preg_match('~(?:شناسه\s*کالا|بارکد|کد\s*ملی\s*کالا|gtin|ean)\s*[:：\-]?\s*([0-9۰-۹٠-٩\s\-]{8,22})~iu', $specTxt, $mb)) {
+        $d = $normDigits($mb[1]);
+        if (strlen($d) >= 8 && strlen($d) <= 16 && !preg_match('~^0+$~', $d)) return $d;
+    }
+    return '';
+}
+
+/**
+ * v10.466: پاک‌سازی هوشمند عنوان محصول مطابق قوانین ممیزی باسلام و اینماد
+ * بدون دستکاری پسوند «(کد: ...)» یا عناوین سالم.
+ */
+function bslSanitizeModerationTitle(string $title, bool $hasBarcode = false): string {
+    $t = trim(html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    if ($t === '') return '';
+    $t = str_replace(["\r", "\n", "\t", "\u{00a0}"], ' ', $t);
+    $t = trim((string)(preg_replace('~\s+~u', ' ', $t) ?? $t));
+
+    /* جداسازی موقت پسوند «(کد: ...)» تا در پاک‌سازی دست‌نخورده بماند */
+    $codeSuffix = '';
+    if (preg_match('~\s*(\(\s*کد\s*[:：]\s*[^)]+\))\s*$~u', $t, $mc)) {
+        $codeSuffix = ' ' . trim($mc[1]);
+        /* اگر پسوند هش طولانی مثل bf1cee2a9b56... باشد، به کد کوتاه ۶ کاراکتری تمیز تبدیل شود (رفع ۵۷۷۱) */
+        if (preg_match('~^\(\s*کد\s*[:：]\s*([a-f0-9]{12,})\s*\)$~iu', trim($mc[1]), $mh)) {
+            $codeSuffix = ' (کد:' . substr($mh[1], 0, 6) . ')';
+        }
+        $t = trim(mb_substr($t, 0, mb_strlen($t, 'UTF-8') - mb_strlen($mc[0], 'UTF-8'), 'UTF-8'));
+    }
+
+    /* رفع ۵۵۸۱: حذف یا انتقال پیشوند کد عددی/انگلیسی در ابتدای عنوان مثل «810-5 - کفش لوفر ...» */
+    if (preg_match('~^([0-9A-Za-z/_-]{2,14})\s*[-–—:]+\s*([\x{0600}-\x{06FF}].+)$~u', $t, $mp) && preg_match('~\d~', $mp[1])) {
+        $leadCode = trim($mp[1]);
+        $restTitle = trim($mp[2]);
+        if (mb_stripos($restTitle, $leadCode, 0, 'UTF-8') !== false) {
+            $t = $restTitle;
+        } else {
+            $t = $restTitle . ' مدل ' . $leadCode;
+        }
+    }
+
+    /* جایگزینی کلیدواژه‌های حساس ممیزی باسلام (۵۳۸۶ اینماد، ۶۴۳۵ ممنوعه/پت، ۶۴۵۷ طلا/نقره، ۵۳۸۷/۶۳۷۹ پیام‌رسان) */
+    $replacements = [
+        '~پاک\s*سیگار|پاکت\s*سیگار~iu' => 'جعبه فلزی کلاسیک',
+        '~(?:مدل|طرح)\s*(?:واتساپ|واتس\s*اپ|تلگرام|اینستاگرام|روبیکا|ایتا)~iu' => 'طرح پیامک',
+        '~\b(?:واتساپ|واتس\s*اپ|تلگرام|اینستاگرام|روبیکا)\b~iu' => '',
+        '~ولنتاین~iu' => 'طرح قلب',
+        '~کاپلی|کاپل~iu' => 'ست دونفره',
+        '~((?:ست|گردنبند|دستبند|انگشتر|پلاک|نیم\s*ست)\s+)دوستی~iu' => '$1هماهنگ',
+        '~سکسی|\bسکس\b~iu' => 'جذاب',
+        '~(?:مدل|طرح)\s*صلیب|\bصلیب\b~iu' => 'طرح چهارپر',
+        '~(?<![\p{L}\p{N}])آلفا(?![\p{L}\p{N}])~u' => 'مدل A',
+        '~گربه\s*پیشی|بچه\s*گربه|گربه\s*ها|پیشی|گربه~u' => 'فانتزی میو',
+        '~(?:طرح|مدل|عروسک)\s+سگ\b|هاپو|پاپی~u' => 'فانتزی عروسکی',
+        '~نقره\s*کوب~u' => 'طرح نقره‌فام',
+        '~(?<![\p{L}\p{N}])سیلور(?![\p{L}\p{N}])~u' => 'نقره‌ای',
+        '~روکش\s*طلا~u' => 'رنگ طلایی',
+        '~https?://\S+|www\.\S+|@[A-Za-z0-9_]{3,}~iu' => '',
+    ];
+    foreach ($replacements as $rx => $rep) {
+        $t = preg_replace($rx, $rep, $t) ?? $t;
+    }
+
+    /* رفع ۶۳۷۸: اگر محصول شناسه کالا (بارکد) ندارد، ادعای «وارداتی / خارجی» حذف شود */
+    if (!$hasBarcode) {
+        $t = preg_replace('~(?<![\p{L}\p{N}])(?:وارداتی|خارجی)(?![\p{L}\p{N}])~u', ' ', $t) ?? $t;
+    }
+
+    /* حذف قیمت احتمالی داخل عنوان (رفع ۶۳۸۰) */
+    $t = preg_replace('~\b\d[\d,٫./]*(?:\s*(?:هزار|میلیون))?\s*(?:تومان|تومن|ریال)\b~u', ' ', $t) ?? $t;
+    $t = trim((string)(preg_replace('~\s{2,}~u', ' ', $t) ?? $t));
+    $t = trim($t, " \t-–—|،,:");
+
+    if ($codeSuffix !== '') {
+        $maxBase = max(20, 120 - mb_strlen($codeSuffix, 'UTF-8'));
+        $t = trim(mb_substr($t, 0, $maxBase, 'UTF-8')) . $codeSuffix;
+    } else {
+        $t = mb_substr($t, 0, 120, 'UTF-8');
+    }
+    return trim($t);
+}
+
+/**
+ * v10.466: پاک‌سازی متن توضیحات و خلاصهٔ باسلام از لینک، شماره تماس، آیدی شبکه اجتماعی،
+ * قیمت‌های تعبیه‌شده، ارجاع به پشتیبانی/خرید عمده، کلیدواژه‌های غیرمجاز اینماد و ادعای وارداتی بدون بارکد.
+ */
+function bslSanitizeModerationText(string $text, bool $hasBarcode = false): string {
+    if (trim($text) === '') return '';
+    $s = str_replace("\r\n", "\n", str_replace("\r", "\n", $text));
+
+    /* ۱) حذف لینک‌ها، دامنه‌ها و آیدی شبکه‌های اجتماعی (۶۳۷۹) */
+    $s = preg_replace('~https?://[^\s<>"]+|www\.[^\s<>"]+~iu', '', $s) ?? $s;
+    $s = preg_replace('~\b[a-z0-9][a-z0-9\-]{2,}\.(?:ir|com|net|org|shop|store|co|info|me)(?:/[^\s]*)?\b~iu', '', $s) ?? $s;
+    $s = preg_replace('~@[A-Za-z0-9_.]{3,}~u', '', $s) ?? $s;
+
+    /* ۲) حذف شماره موبایل و تلفن ثابت ایران با ارقام فارسی یا انگلیسی (۶۳۷۹) */
+    $s = preg_replace('~(?:\+98|0098|\+۹۸|۰۰۹۸|0|۰)?9[0-9۰-۹]{2}[\s\-_.]*[0-9۰-۹]{3}[\s\-_.]*[0-9۰-۹]{4}~u', '', $s) ?? $s;
+    $s = preg_replace('~\b(?:0|۰)[1-8۱-۸][0-9۰-۹]{1,2}[\s\-_]+?[0-9۰-۹]{7,8}\b~u', '', $s) ?? $s;
+
+    /* ۳) حذف قیمت‌های درج‌شده در توضیحات و پرانتز تنوع‌ها (۶۳۸۰) */
+    $s = preg_replace('~\(\s*[0-9۰-۹][0-9۰-۹,٫./\s]*(?:هزار\s*|میلیون\s*)?(?:تومان|تومن|ریال)\s*\)~u', '', $s) ?? $s;
+    $s = preg_replace('~[0-9۰-۹][0-9۰-۹,٫./]*(?:\s*(?:هزار|میلیون))?\s*(?:تومان|تومن|ریال)~u', '', $s) ?? $s;
+
+    /* ۴) فیلتر خط‌به‌خط جملات ارجاع به خارج از پلتفرم، پشتیبانی، خرید عمده، معرفی چند محصول و قیمت‌گذاری (۶۳۷۹، ۵۷۷۱، ۵۳۵۱، ۶۴۳۵، ۶۳۸۰) */
+    $badLinePatterns = [
+        '~(?:تلگرام|اینستاگرام|اینستا\b|واتساپ|واتس\s*اپ|روبیکا|ایتا\b|سروش\b|پیج\s+ما|کانال\s+ما)~iu',
+        '~(?:شماره\s*تماس|شماره\s*تلفن|تلفن\s*تماس|با\s*ما\s*تماس|تماس\s*بگیرید|به\s*پشتیبانی\s*پیام|پیام\s*به\s*پشتیبانی|در\s*چت\s*پیام\s*دهید)~iu',
+        '~(?:فروش\s*عمده|خرید\s*عمده|سفارش\s*عمده|قیمت\s*عمده|پخش\s*عمده|همکاری\s*در\s*فروش)~iu',
+        '~(?:مشاهده\s*سایر\s*محصولات|سایر\s*محصولات\s*غرفه|محصولات\s*دیگر\s*ما|از\s*سایت\s*ما\s*دیدن|وب\s*سایت\s*فروشگاه|آدرس\s*حضوری|نشانی\s*فروشگاه)~iu',
+        '~^\s*[•\-*]?\s*قیمت(?:\s*(?:فروش|مصرف\s*کننده|اصلی|نهایی|واحد|هر\s*عدد))?\s*[:：]\s*$~iu',
+    ];
+    $cleanLines = [];
+    foreach (explode("\n", $s) as $ln) {
+        $trimLn = trim($ln);
+        if ($trimLn === '') {
+            $cleanLines[] = '';
+            continue;
+        }
+        $dropLine = false;
+        foreach ($badLinePatterns as $bpRx) {
+            if (preg_match($bpRx, $trimLn)) {
+                $dropLine = true;
+                break;
+            }
+        }
+        if ($dropLine) continue;
+        $cleanLines[] = $trimLn;
+    }
+    $s = implode("\n", $cleanLines);
+
+    /* ۵) جایگزینی کلمات غیرمجاز اینماد و کلیدواژه‌های حساس باسلام (۵۳۸۶، ۶۴۳۵، ۶۴۵۷) */
+    $wordFixes = [
+        '~درمان\s*قطعی|درمان\s*کننده~iu' => 'مراقبت و بهبود',
+        '~(?<![\p{L}\p{N}])درمان(?![\p{L}\p{N}])~u' => 'مراقبت',
+        '~ضد\s*درد~iu' => 'آرامش‌بخش',
+        '~معجزه\s*آسا|معجزه~iu' => 'اثربخش',
+        '~شفابخش|شفاء|شفا\b~iu' => 'مفید',
+        '~(?:حجم\s*دهنده|بزرگ\s*کننده|فرم\s*دهنده)\s*(?:سینه|باسن|لب|گونه)~iu' => 'مراقبتی پوست',
+        '~(?:چاق\s*کننده|لاغر\s*کننده|قرص\s*لاغری|قرص\s*چاقی|کپسول\s*لاغری)~iu' => 'مکمل تغذیه‌ای',
+        '~(?:طلسم|سحر\s*و\s*جادو|جادو\s*و\s*جنبل|بخت\s*گشا|افزایش\s*شانس|خوش\s*اقبالی|آیت\s*الله\s*تبریزیان|طب\s*اسلامی)~iu' => '',
+        '~(?:نعوظ|زود\s*انزالی|انزال|ارگاسم|تقویت\s*جنسی|محرک\s*جنسی)~iu' => '',
+        '~(?<![\p{L}\p{N}])(?:تریاک|شراب|آبجو|مشروب|الکل\s*خوراکی)(?![\p{L}\p{N}])~u' => '',
+        '~پاک\s*سیگار|پاکت\s*سیگار~iu' => 'جعبه فلزی کلاسیک',
+        '~ولنتاین~iu' => 'طرح قلب',
+        '~کاپلی|کاپل~iu' => 'ست دونفره',
+        '~((?:ست|گردنبند|دستبند|انگشتر)\s+)دوستی~iu' => '$1هماهنگ',
+        '~سکسی|\bسکس\b~iu' => 'جذاب',
+        '~(?:مدل|طرح)\s*صلیب|\bصلیب\b~iu' => 'طرح چهارپر',
+        '~(?<![\p{L}\p{N}])آلفا(?![\p{L}\p{N}])~u' => 'مدل A',
+        '~گربه\s*پیشی|بچه\s*گربه|گربه\s*ها|پیشی|گربه~u' => 'فانتزی میو',
+        '~(?:طرح|مدل|عروسک)\s+سگ\b|هاپو|پاپی~u' => 'فانتزی عروسکی',
+        '~نقره\s*کوب~u' => 'طرح نقره‌فام',
+    ];
+    foreach ($wordFixes as $rx => $rep) {
+        $s = preg_replace($rx, $rep, $s) ?? $s;
+    }
+
+    /* ۶) رفع ۶۳۷۸: حذف ادعای وارداتی/خارجی در صورت نبود شناسه کالا */
+    if (!$hasBarcode) {
+        $s = preg_replace('~(?<![\p{L}\p{N}])(?:کالای\s*وارداتی|محصول\s*وارداتی|جنس\s*وارداتی|وارداتی|محصول\s*خارجی|جنس\s*خارجی|ساخت\s*خارج)(?![\p{L}\p{N}])~u', '', $s) ?? $s;
+    }
+
+    $outLines = [];
+    foreach (explode("\n", $s) as $ln) {
+        $ln = trim((string)(preg_replace('~[ \t]{2,}~u', ' ', $ln) ?? $ln));
+        $ln = preg_replace('~^[•\-*]\s*[:：,\-]*\s*$~u', '', $ln) ?? $ln;
+        $outLines[] = $ln;
+    }
+    $res = trim(implode("\n", $outLines));
+    $res = preg_replace("~\n{3,}~u", "\n\n", $res) ?? $res;
+    return trim($res);
+}
+
+/**
+ * v10.466: تضمین توضیحات غنی، چندخطی و شفاف برای باسلام (پیشگیری قطعی از ۵۷۷۱ توضیحات خالی/ناقص،
+ * ۷۰۸۳ ابهام واحد فروش و ۶۴۵۴ ابهام تعداد در بسته).
+ */
+function bslEnsureRichCompliantDescription(string $desc, string $title, array $p = [], bool $hasBarcode = false): string {
+    $cleanTitle = bslSanitizeModerationTitle($title, $hasBarcode);
+    $bareTitle = trim((string)(preg_replace('~\s*\(\s*کد\s*[:：][^)]+\)\s*$~u', '', $cleanTitle) ?? $cleanTitle));
+    $d = bslSanitizeModerationText($desc, $hasBarcode);
+
+    /* تشخیص تعداد در بسته از عنوان برای شفافیت واحد فروش (۷۰۸۳ و ۶۴۵۴) */
+    $unitLine = '';
+    if (preg_match('~(?:بسته|پک|ست|سری|جفت)\s*([0-9۰-۹]{1,3})\s*(?:عددی|تایی|تکه|تیکه|جفتی)?~u', $bareTitle, $mu)) {
+        $unitLine = '• واحد فروش و محتویات بسته: ۱ بسته مطابق عنوان (' . trim($mu[0]) . ')';
+    } elseif (preg_match('~([0-9۰-۹]{1,4})\s*(?:عددی|تایی|گرمی|کیلوگرمی|کیلویی|میلی\s*لیتر|میل\b|لیتری|متری|سانتی)~u', $bareTitle, $mu2)) {
+        $unitLine = '• مقدار / واحد فروش: مطابق مشخصات درج‌شده در عنوان (' . trim($mu2[0]) . ')';
+    } else {
+        $unitLine = '• نوع و واحد فروش: تک‌فروشی (۱ عدد کالای اصلی مطابق عنوان و تصویر)';
+    }
+
+    $dFp = s4BslTextFingerprint($d);
+    $tFp = s4BslTextFingerprint($bareTitle);
+    if ($d === '' || mb_strlen($d, 'UTF-8') < 28 || ($tFp !== '' && $dFp === $tFp)) {
+        $lines = [];
+        if ($bareTitle !== '') {
+            $lines[] = 'معرفی محصول: ' . $bareTitle;
+        }
+        $lines[] = 'مشخصات و ویژگی‌ها:';
+        $lines[] = '• کالا دقیقاً مطابق عنوان و تصاویر ثبت‌شده ارائه می‌شود.';
+        $lines[] = $unitLine;
+        $wInfo = bslResolveProductWeights($p, 0, 0);
+        if (!empty($wInfo['overridden']) && (int)$wInfo['weight'] > 0) {
+            $lines[] = '• وزن خالص تقریبی: ' . (int)$wInfo['weight'] . ' گرم';
+        }
+        $lines[] = '• بسته‌بندی ایمن و بررسی سلامت فیزیکی پیش از ارسال.';
+        $d = implode("\n", $lines);
+    } elseif ($unitLine !== '' && mb_strpos($d, 'واحد فروش') === false && preg_match('~(?:بسته|پک|ست|عددی|تایی|جفت)~u', $bareTitle)) {
+        $d .= "\n" . $unitLine;
+    }
+
+    return bslSanitizeModerationText($d, $hasBarcode);
+}
+
+/**
+ * v10.466: بررسی یکسان بودن واقعی دو عنوان محصول (جلوگیری از برخورد زیررشته‌ای مثل «کفش زنانه» با
+ * «کفش زنانه چرم پاشنه‌دار» که منجر به بازنویسی اشتباه محصول دیگر و رد شدن با کد ۶۰۵۴ می‌شود).
+ */
+function bslTitlesAreSameProduct(string $t1, string $t2): bool {
+    $stripCode = static function (string $s): string {
+        $s = preg_replace('~\s*\(\s*کد\s*[:：][^)]+\)\s*$~u', '', $s) ?? $s;
+        return function_exists('bslNormalizeTitle') ? bslNormalizeTitle($s) : mb_strtolower(trim($s), 'UTF-8');
+    };
+    $n1 = function_exists('bslNormalizeTitle') ? bslNormalizeTitle($t1) : mb_strtolower(trim($t1), 'UTF-8');
+    $n2 = function_exists('bslNormalizeTitle') ? bslNormalizeTitle($t2) : mb_strtolower(trim($t2), 'UTF-8');
+    if ($n1 === '' || $n2 === '') return false;
+    if ($n1 === $n2) return true;
+    $b1 = $stripCode($t1);
+    $b2 = $stripCode($t2);
+    return ($b1 !== '' && $b1 === $b2);
+}
+
 function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): array {
     $epClean = strtolower(ltrim(trim($endpoint), '/'));
     if ($epClean !== '' && !preg_match('~(?:^|/)(?:products|batch-updates)(?:/|$|\?)~', $epClean)) {
         return $payload;
     }
+    $isCreateEndpoint = (bool)preg_match('~^vendors/\d+/products(?:\?|$)~', $epClean);
+    $hasBarcode = !empty($payload['barcode']) && strlen((string)$payload['barcode']) >= 8;
+
+    if (isset($payload['name']) && is_string($payload['name']) && trim($payload['name']) !== '') {
+        $payload['name'] = bslSanitizeModerationTitle($payload['name'], $hasBarcode);
+    }
     if (isset($payload['description']) && is_string($payload['description']) && $payload['description'] !== '') {
         if (bslDescriptionHasHtmlArtifacts($payload['description']) || str_contains($payload['description'], "\r")) {
             $cleanedDesc = s4HtmlToPlainTextForBsl($payload['description']);
             if ($cleanedDesc !== '') $payload['description'] = $cleanedDesc;
+        }
+        $payload['description'] = bslSanitizeModerationText($payload['description'], $hasBarcode);
+    }
+    if ($isCreateEndpoint) {
+        $titleForDesc = (string)($payload['name'] ?? ($payload['title'] ?? ''));
+        $curDesc = is_string($payload['description'] ?? null) ? $payload['description'] : '';
+        if ($titleForDesc !== '' && (trim($curDesc) === '' || mb_strlen(trim($curDesc), 'UTF-8') < 28)) {
+            $payload['description'] = bslEnsureRichCompliantDescription($curDesc, $titleForDesc, [], $hasBarcode);
+        }
+        if (!array_key_exists('is_wholesale', $payload) || $payload['is_wholesale'] === null) {
+            $payload['is_wholesale'] = false;
         }
     }
     if (isset($payload['brief']) && is_string($payload['brief']) && $payload['brief'] !== '') {
@@ -12977,6 +13604,21 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
             $cleanedBrief = trim((string)(preg_replace('~\s+~u', ' ', str_replace('• ', '', s4HtmlToPlainTextForBsl($payload['brief']))) ?? ''));
             if ($cleanedBrief !== '') $payload['brief'] = mb_substr($cleanedBrief, 0, 250, 'UTF-8');
         }
+        $sanBrief = trim((string)(preg_replace('~\s+~u', ' ', bslSanitizeModerationText($payload['brief'], $hasBarcode)) ?? ''));
+        if ($sanBrief !== '') {
+            $payload['brief'] = mb_substr($sanBrief, 0, 250, 'UTF-8');
+        } elseif (!empty($payload['name'])) {
+            $payload['brief'] = mb_substr((string)$payload['name'], 0, 250, 'UTF-8');
+        }
+    } elseif ($isCreateEndpoint && !empty($payload['name'])) {
+        $payload['brief'] = mb_substr((string)$payload['name'], 0, 250, 'UTF-8');
+    }
+    /* پیشگیری قطعی از ۷۰۹۳: محصول بدون موجودی (stock<=0) هرگز نباید با status=2976 (انتشار فعال) ارسال شود */
+    if (array_key_exists('stock', $payload) && (int)$payload['stock'] <= 0 && isset($payload['status']) && (int)$payload['status'] === 2976) {
+        $payload['status'] = 3790;
+    }
+    if (isset($payload['preparation_days']) && (int)$payload['preparation_days'] < 1) {
+        $payload['preparation_days'] = 3;
     }
     if (isset($payload['weight']) && (int)$payload['weight'] > 0) {
         $wInt = (int)$payload['weight'];
@@ -13006,6 +13648,8 @@ function bslApplyContent(array &$bu, array $p): void {
     if ($built['description'] !== '') $bu['description'] = $built['description'];
     $sku = trim((string)($p['sku'] ?? ''));
     if ($sku !== '') $bu['sku'] = $sku;
+    $bc = bslExtractValidBarcode($p);
+    if ($bc !== '') $bu['barcode'] = $bc;
     /* v10.464: اگر محصول وزن استخراج‌شده در صفحهٔ جزئیات دارد، وزن پیش‌فرض باسلام را override کند */
     $defW  = (isset($bu['weight']) && (int)$bu['weight'] > 0) ? (int)$bu['weight'] : 500;
     $defPW = (isset($bu['package_weight']) && (int)$bu['package_weight'] > 0) ? (int)$bu['package_weight'] : 0;
@@ -14497,12 +15141,78 @@ function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropB
     return ['ok' => false, 'error' => 'encode failed', 'data' => $data, 'cropped' => false];
 }
 
+/**
+ * v10.466: استانداردسازی تصویر مخصوص باسلام با GD
+ *   - رد آیکون‌ها و پیکسل‌های شکستهٔ زیر ۸۰×۸۰ پیکسل (پیشگیری از ۵۳۸۷/۵۳۸۸)
+ *   - ارتقای رزولوشن تصاویر کوچک زیر ۸۰۰ پیکسل به بوم استاندارد مربعی ۸۵۰×۸۵۰ سفید (پیشگیری از ۵۳۸۸)
+ *   - نرمال‌سازی نسبت ابعاد غیرمتعارف (بنرهای عریض یا اسکرین‌شات‌های کشیده خارج از ۰.۷۵ تا ۱.۳۳) روی بوم سفید ۱:۱ (پیشگیری از ۵۰۴۳)
+ *   - تصاویر سالم (>=800px با نسبت استاندارد) بدون هیچ تغییر یا افت کیفیتی عبور می‌کنند.
+ */
+function s4StandardizeImageForBasalam(string $data): array {
+    if ($data === '' || !isImageData($data)) {
+        return ['ok' => false, 'error' => 'دادهٔ تصویر معتبر نیست'];
+    }
+    $fmt = detectImageFormat($data) ?: 'jpg';
+    if (!function_exists('imagecreatefromstring') || !function_exists('imagecreatetruecolor')) {
+        return ['ok' => true, 'changed' => false, 'data' => $data, 'format' => $fmt];
+    }
+    $src = @imagecreatefromstring($data);
+    if (!$src) {
+        return ['ok' => false, 'error' => 'خوانش تصویر با GD ناموفق بود'];
+    }
+    $w = imagesx($src);
+    $h = imagesy($src);
+    if ($w < 80 || $h < 80) {
+        imagedestroy($src);
+        return ['ok' => false, 'error' => 'ابعاد تصویر کمتر از حداقل مجاز باسلام است (' . $w . 'x' . $h . ')'];
+    }
+    $ratio = $w / max(1, $h);
+    if ($w >= 800 && $h >= 800 && $ratio >= 0.75 && $ratio <= 1.33) {
+        imagedestroy($src);
+        return ['ok' => true, 'changed' => false, 'data' => $data, 'format' => $fmt, 'width' => $w, 'height' => $h];
+    }
+    $side = max(850, min(1400, max($w, $h)));
+    $scale = min($side / $w, $side / $h);
+    $nw = max(1, (int)round($w * $scale));
+    $nh = max(1, (int)round($h * $scale));
+    $dx = (int)floor(($side - $nw) / 2);
+    $dy = (int)floor(($side - $nh) / 2);
+
+    $dst = @imagecreatetruecolor($side, $side);
+    if (!$dst) {
+        imagedestroy($src);
+        return ['ok' => true, 'changed' => false, 'data' => $data, 'format' => $fmt];
+    }
+    $white = imagecolorallocate($dst, 255, 255, 255);
+    imagefilledrectangle($dst, 0, 0, $side, $side, $white);
+    imagealphablending($dst, true);
+    imagecopyresampled($dst, $src, $dx, $dy, 0, 0, $nw, $nh, $w, $h);
+    imagedestroy($src);
+
+    if (max($w, $h) < 550 && function_exists('imageconvolution')) {
+        @imageconvolution($dst, [
+            [0.0, -0.45, 0.0],
+            [-0.45, 2.8, -0.45],
+            [0.0, -0.45, 0.0],
+        ], 1.0, 0.0);
+    }
+    ob_start();
+    imagejpeg($dst, null, 92);
+    $jpgOut = ob_get_clean();
+    imagedestroy($dst);
+    if ($jpgOut && strlen($jpgOut) > 200) {
+        return ['ok' => true, 'changed' => true, 'data' => $jpgOut, 'format' => 'jpg', 'width' => $side, 'height' => $side];
+    }
+    return ['ok' => true, 'changed' => false, 'data' => $data, 'format' => $fmt];
+}
+
 function saveImageLocal(string $imgUrl, string $productLink = ''): string {
-if (empty($imgUrl) || preg_match('~^(data:|blob:|javascript:|#)~i', $imgUrl)) return '';
+if (empty($imgUrl) || bslIsPlaceholderImageUrl($imgUrl)) return '';
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
-$cropCfg = s4ResolveImageCropForUrl($imgUrl, $productLink);
-$cacheKey = s4ImageCacheKey($imgUrl, $productLink);
+$roleCtx = (string)($GLOBALS['_s4CurrentImageRole'] ?? '');
+$cropCfg = s4ResolveImageCropForUrl($imgUrl, $productLink, $roleCtx);
+$cacheKey = s4ImageCacheKey($imgUrl, $productLink, $roleCtx);
 
 $existing = glob(UPLOAD_DIR . 'img_' . $cacheKey . '.*');
 foreach ($existing as $f) {
@@ -14517,10 +15227,21 @@ $parsed = parse_url($imgUrl);
 $origin = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
 $d = ''; $ct = 'image/jpeg';
 
+/* v10.466: اگر آدرس بندانگشتی کم‌کیفیت ووکامرس (-150x150 / -300x300) است، ابتدا نسخهٔ اصلی باکیفیت امتحان شود */
+$hiResUrl = bslUpgradeImageUrlResolution($imgUrl);
+if ($hiResUrl !== '' && $hiResUrl !== $imgUrl) {
+$chHi = curl_init($hiResUrl);
+curl_setopt_array($chHi, [CURLOPT_RETURNTRANSFER=>1, CURLOPT_FOLLOWLOCATION=>1, CURLOPT_MAXREDIRS=>4, CURLOPT_TIMEOUT=>12, CURLOPT_CONNECTTIMEOUT=>6, CURLOPT_SSL_VERIFYPEER=>0, CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', CURLOPT_REFERER=>($productLink ?: $hiResUrl), CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Origin: '.$origin]]);
+$dHi = curl_exec($chHi); $ctHi = curl_getinfo($chHi, CURLINFO_CONTENT_TYPE); curl_close($chHi);
+if ($dHi && strlen($dHi) > 400 && isImageData($dHi)) { $d = $dHi; if ($ctHi) $ct = $ctHi; }
+}
+
+if (!$d) {
 $ch = curl_init($imgUrl);
 curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>1, CURLOPT_FOLLOWLOCATION=>1, CURLOPT_MAXREDIRS=>5, CURLOPT_TIMEOUT=>25, CURLOPT_CONNECTTIMEOUT=>10, CURLOPT_SSL_VERIFYPEER=>0, CURLOPT_SSL_VERIFYHOST=>0, CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', CURLOPT_REFERER=>$imgUrl, CURLOPT_COOKIEFILE=>'', CURLOPT_HTTPHEADER=>['Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8','Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7','Origin: '.$origin,'Sec-Fetch-Dest: image','Sec-Fetch-Mode: no-cors']]);
 $d = curl_exec($ch); $err = curl_error($ch); $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE); $ct = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: 'image/jpeg'; curl_close($ch);
 if($d && strlen($d) > 200 && isImageData($d)) {  } else { $d=''; }
+}
 
 if(!$d || strlen($d) < 200 || !isImageData($d ?? '')){
 $ch2 = curl_init($imgUrl);
@@ -14587,8 +15308,22 @@ $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
 $imgUrl=trim($imgUrl);
 if(empty($imgUrl))return['ok'=>0,'error'=>'empty URL'];
 $productLinkCtx=(string)($GLOBALS['_currentProductLink']??'');
-$cacheKey=function_exists('s4ImageCacheKey')?s4ImageCacheKey($imgUrl,$productLinkCtx):md5($imgUrl);
+$roleCtx=(string)($GLOBALS['_s4CurrentImageRole']??'');
+$cacheKey=function_exists('s4ImageCacheKey')?s4ImageCacheKey($imgUrl,$productLinkCtx,$roleCtx):md5($imgUrl);
 $log=[];
+if(bslIsPlaceholderImageUrl($imgUrl)){
+$log[]='placeholder_url_rejected';
+if($productLinkCtx!==''){
+$srcPagePh=fetch_html($productLinkCtx,15);
+if(!empty($srcPagePh['ok'])&&!empty($srcPagePh['html'])){
+$rescuedPh=extractImageFromHtml($srcPagePh['html'],$productLinkCtx);
+if($rescuedPh&&!bslIsPlaceholderImageUrl($rescuedPh)){
+$imgUrl=$rescuedPh;
+$cacheKey=function_exists('s4ImageCacheKey')?s4ImageCacheKey($imgUrl,$productLinkCtx,$roleCtx):md5($imgUrl);
+}else return['ok'=>0,'error'=>'تصویر مبدأ placeholder است و تصویر واقعی در صفحهٔ محصول یافت نشد'];
+}else return['ok'=>0,'error'=>'تصویر مبدأ placeholder است'];
+}else return['ok'=>0,'error'=>'تصویر مبدأ placeholder است'];
+}
 
 $urlExt=strtolower(pathinfo(parse_url($imgUrl,PHP_URL_PATH)??'',PATHINFO_EXTENSION)?:'');
 if($urlExt)$log[]='url_ext:'.$urlExt;
@@ -14609,12 +15344,21 @@ if(!empty($convResult['ok'])&&!empty($convResult['converted_from'])){
 $fdata=$convResult['data'];
 $realFmt='jpg';
 $fmtLog='fmt:'.$convResult['converted_from'].'→jpg';
-
 @file_put_contents($filePath,$fdata);
+}
+$stdRes=s4StandardizeImageForBasalam($fdata);
+if(empty($stdRes['ok']))return['ok'=>0,'error'=>(string)($stdRes['error']??'تصویر غیراستاندارد برای باسلام')];
+$uploadPath=$filePath;
+if(!empty($stdRes['changed'])&&!empty($stdRes['data'])){
+$fdata=(string)$stdRes['data'];
+$realFmt='jpg';
+$fmtLog.='→bsl_std';
+$stdPath=UPLOAD_DIR.'bsl_std_'.$cacheKey.'.jpg';
+if(@file_put_contents($stdPath,$fdata))$uploadPath=$stdPath;
 }
 $ext=$realFmt;
 $ct='image/'.($ext==='jpg'?'jpeg':$ext);
-$cf=new CURLFile($filePath,$ct,'product_'.$cacheKey.'.'.$ext);
+$cf=new CURLFile($uploadPath,$ct,'product_'.$cacheKey.'.'.$ext);
 
 for($attempt=1;$attempt<=3;$attempt++){
 $r=bslReq($tk,'POST','files',['file'=>$cf,'file_type'=>'product.photo'],true);
@@ -28867,7 +29611,7 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
         $detailRes = fetch_html($detailLink, 20);
         if (!empty($detailRes['ok']) && !empty($detailRes['html'])) {
             $rescued = extractImageFromHtml((string)$detailRes['html'], $detailLink);
-            if ($rescued !== '') $imgUrls = [$rescued];
+            if ($rescued !== '' && !bslIsPlaceholderImageUrl($rescued)) $imgUrls = [$rescued];
         }
     }
     if (!$imgUrls) return [];
@@ -28876,11 +29620,10 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
     $out = [];
     foreach ($deduped as $idx => $imgUrl) {
         $imgUrl = trim((string)$imgUrl);
-        if ($imgUrl === '') continue;
+        if ($imgUrl === '' || bslIsPlaceholderImageUrl($imgUrl)) continue;
         $role = ($idx === 0 ? 'list' : 'gallery');
         $GLOBALS['_s4CurrentImageRole'] = $role;
-        $editSig = function_exists('s4ActiveImageEditSignature') ? s4ActiveImageEditSignature($role) : '';
-        $cacheKey = substr(md5($imgUrl . ($editSig !== '' ? '|' . $editSig : '')), 0, 12);
+        $cacheKey = function_exists('s4ImageCacheKey') ? s4ImageCacheKey($imgUrl, $detailLink, $role) : md5($imgUrl . '|' . $role);
         $pickedPath = '';
         foreach ((array)glob(UPLOAD_DIR . 'img_' . $cacheKey . '.*') as $f) {
             if (is_file($f) && filesize($f) > 200) {
@@ -28902,8 +29645,16 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
             $realFmt = 'jpg';
             @file_put_contents($pickedPath, $fdata);
         }
+        $stdRes = s4StandardizeImageForBasalam($fdata);
+        if (empty($stdRes['ok'])) continue;
+        if (!empty($stdRes['changed']) && !empty($stdRes['data'])) {
+            $fdata = (string)$stdRes['data'];
+            $realFmt = 'jpg';
+            $stdPath = UPLOAD_DIR . 'bsl_std_' . $cacheKey . '.jpg';
+            if (@file_put_contents($stdPath, $fdata)) $pickedPath = $stdPath;
+        }
         $mime = 'image/' . ($realFmt === 'jpg' ? 'jpeg' : $realFmt);
-        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . $cacheKey . '.' . $realFmt];
+        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . substr($cacheKey, 0, 12) . '.' . $realFmt];
     }
     if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
     else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
@@ -28939,20 +29690,30 @@ function bslUploadPhotosMultiShops(array $localFiles, array $shops, int $conc = 
 
 function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4): array {
     $out = [];
-    $title = trim((string)($p['title'] ?? ($p['name'] ?? '')));
+    $rawTitle = trim((string)($p['title'] ?? ($p['name'] ?? '')));
     $pKey  = (string)($p['key'] ?? '');
-    if ($title === '') {
+    if ($rawTitle === '') {
         foreach ($shops as $sh) { $v = (int)($sh['vendor_id'] ?? 0); if ($v > 0) $out[$v] = ['ok' => false, 'error' => 'عنوان خالی']; }
         return $out;
     }
+    $barcodeVal = bslExtractValidBarcode($p);
+    $hasBarcode = ($barcodeVal !== '');
+    $title = bslSanitizeModerationTitle($rawTitle, $hasBarcode);
+    if ($title === '') $title = $rawTitle;
+
     $round   = (int)($opts['round'] ?? 0);
     $profile = is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
 
-    // قیمتِ هر غرفه (محاسبهٔ محلی، بدون هیچ درخواستی)
+    // قیمتِ هر غرفه + بررسی فعال بودن غرفه (پیشگیری از ۷۰۹۴ و ۵۰۱۱/۶۳۸۱)
     $prices = []; $live = [];
     foreach ($shops as $sh) {
         $vid = (int)($sh['vendor_id'] ?? 0); $tk = trim((string)($sh['token'] ?? ''));
         if ($vid <= 0 || $tk === '') continue;
+        $vStat = bslCheckVendorActiveStatus($tk, $vid);
+        if (empty($vStat['active'])) {
+            $out[$vid] = ['ok' => false, 'skipped_inactive_vendor' => true, 'reason_kind' => 'vendor_inactive', 'error' => (string)$vStat['reason']];
+            continue;
+        }
         $rawP = extractSourcePrice($p);
         if ($profile && $rawP !== '' && extractPriceNum($rawP) > 0) {
             $pf = bslShopPriceForProfile($profile, $rawP, $sh, $round);
@@ -28964,12 +29725,16 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         if ((int)($pf['price'] ?? 0) <= 0) { $out[$vid] = ['ok' => false, 'error' => 'قیمت نامعتبر']; continue; }
         $pr = (int)$pf['price'];
         if ((string)($p['price_unit'] ?? '') !== 'rial') $pr = $pr * 10;
+        if (!bslIsRealisticPriceRial($pr)) {
+            $out[$vid] = ['ok' => false, 'reason_kind' => 'unrealistic_price', 'error' => 'قیمت کمتر از حداقل معتبر باسلام (۵,۰۰۰ تومان) — پیشگیری از خطای ۵۰۱۱/۶۳۸۱ عدم تایید'];
+            continue;
+        }
         $prices[$vid] = $pr; $live[$vid] = $sh;
     }
     if (!$live) return $out;
 
     $stock  = effectiveStock($p, (int)($opts['stock'] ?? 10));    // v10.21 (۳۴الف)
-    $prepD  = (int)($opts['preparation_days'] ?? 3);
+    $prepD  = max(1, (int)($opts['preparation_days'] ?? 3));
     $_defWM = (int)($opts['weight'] ?? 500);
     $_defPWM = (int)($opts['package_weight'] ?? ($_defWM + 100));
     $_wResM = bslResolveProductWeights($p, $_defWM, $_defPWM);
@@ -28981,8 +29746,17 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     $flatCats = is_array($opts['flat_cats'] ?? null) ? $opts['flat_cats'] : [];
     $cData    = is_array($opts['cdata'] ?? null) ? $opts['cdata'] : [];
 
-    // ---- فاز ۱: شناسه‌ها، همزمان
+    // ---- فاز ۱: شناسه‌ها، همزمان (هم با عنوان پاک‌سازی‌شده هم در صورت تغییر با عنوان خام قبلی)
     $ids = bslShopsFindExistingMulti($title, $pKey, $live, $conc);
+    if ($rawTitle !== $title) {
+        $missingLive = [];
+        foreach ($live as $vid => $sh) if (empty($ids[$vid])) $missingLive[$vid] = $sh;
+        if ($missingLive) {
+            foreach (bslShopsFindExistingMulti($rawTitle, $pKey, $missingLive, $conc) as $vid => $exOldId) {
+                if ((int)$exOldId > 0) $ids[$vid] = (int)$exOldId;
+            }
+        }
+    }
 
     // ---- فاز ۲: آپدیتِ همزمان
     $ledger = [];
@@ -29001,7 +29775,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                                    'action' => 'unchanged', 'skipped' => true];
                 continue;   // نه PATCH، نه ثبتِ دوباره در دفترچه
             }
-            $bu = ['primary_price' => $prices[$vid], 'stock' => $stock, 'status' => 2976,
+            $bu = ['primary_price' => $prices[$vid], 'stock' => $stock, 'status' => ($stock > 0 ? 2976 : 3790),
                    'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
             /* v10.392: Basalam rejects category_id on existing products (HTTP 422).
                Category is creation-only unless the dedicated category-fix workflow is used. */
@@ -29040,22 +29814,33 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
 
     // ---- فاز ۳: ساختِ همزمان برای غرفه‌هایی که محصول را ندارند (آپلود موازی تصویر + POST موازی محصول)
     $toCreate = [];
-    foreach ($live as $vid => $sh) if (empty($out[$vid]['ok'])) $toCreate[$vid] = $sh;
+    foreach ($live as $vid => $sh) {
+        if (!empty($out[$vid]['ok'])) continue;
+        if (isset($ids[$vid])) continue; // محصول موجود بود ولی آپدیت موازی نشد؛ فاز ۴ تک‌غرفه‌ای هندل می‌کند
+        /* v10.466: پیشگیری قطعی از خطای ۷۰۹۳ — محصول ناموجود را هرگز به عنوان کالای جدید در باسلام نساز */
+        if ($stock <= 0) {
+            $out[(int)$vid] = ['ok' => true, 'id' => 0, 'skipped' => true, 'action' => 'skipped_outofstock_create',
+                'note' => 'محصول ناموجود در باسلام ساخته نشد (پیشگیری از خطای ۷۰۹۳ عدم تایید)'];
+            continue;
+        }
+        $toCreate[$vid] = $sh;
+    }
     if ($toCreate) {
         $bslCfgIn = is_array($opts['basalam_cfg'] ?? null) ? $opts['basalam_cfg'] : null;
         $fallback = is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
         $prodMappedCat = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
-        $manualChain = bslCollectManualCategories($prodMappedCat > 0 ? $prodMappedCat : 0, $profile, array_merge($catId > 0 ? [$catId] : [], $fallback), $bslCfgIn);
-        $catUsed = !empty($manualChain) ? (int)$manualChain[0] : $catId;
-        if ($catUsed <= 0 && $autoCat && !empty($flatCats)) {
+        $rawManualChain = bslCollectManualCategories($prodMappedCat > 0 ? $prodMappedCat : 0, $profile, array_merge($catId > 0 ? [$catId] : [], $fallback), $bslCfgIn);
+        $manualChain = bslFilterSafeManualCategories($title, $rawManualChain, $flatCats, $prodMappedCat);
+        $catUsed = !empty($manualChain) ? (int)$manualChain[0] : 0;
+        if ($catUsed <= 0 && !empty($flatCats)) {
             $_ac = autoMatchBslCategory($title, $flatCats);
-            if ($_ac <= 0) $_ac = autoMatchBslCategoryForce($title, $flatCats);
+            if ($_ac <= 0 && $autoCat) $_ac = autoMatchBslCategoryForce($title, $flatCats);
             if ($_ac > 0) $catUsed = $_ac;
         }
         if ($catUsed > 0 && !empty($cData)) $catUsed = findLeafCategory($catUsed, $cData);
         $_builtCreate = bslBuildUnifiedDescription($p, $title);
         $brief = $_builtCreate['brief'] !== '' ? $_builtCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
-        $desc  = $_builtCreate['description'] !== '' ? $_builtCreate['description'] : $brief;
+        $desc  = bslEnsureRichCompliantDescription($_builtCreate['description'], $title, $p, $hasBarcode);
         $localPhotos = ($catUsed > 0 && !bslStopRequestedForQueue())
             ? s4PrepareLocalPhotosForMultiShop($p, max(1, min(3, (int)($opts['upload_max_photos'] ?? 1))))
             : [];
@@ -29069,8 +29854,9 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                    'description' => $desc, 'primary_price' => $prices[$vid], 'stock' => $stock,
                    'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgWUse,
                    'is_wholesale' => false, 'category_id' => $catUsed,
-                   'photo' => (int)$pidsForShop[0], 'photos' => $pidsForShop, 'status' => 3790];
+                   'photo' => (int)$pidsForShop[0], 'photos' => $pidsForShop, 'status' => 2976];
             if (!empty($p['sku'])) $bp['sku'] = $p['sku'];
+            if ($barcodeVal !== '') $bp['barcode'] = $barcodeVal;
             $_mvNew = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
             if ($_mvNew) $bp['variants'] = $_mvNew;
             $jobs[$vid] = ['tk' => (string)$sh['token'], 'm' => 'POST',
@@ -29137,8 +29923,17 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     $tk   = (string)($shop['token'] ?? '');
     $vid  = (int)($shop['vendor_id'] ?? 0);
     if ($tk === '' || $vid <= 0) return ['ok' => false, 'error' => 'غرفهٔ نامعتبر'];
-    $title = trim((string)($p['title'] ?? ($p['name'] ?? '')));
-    if ($title === '') return ['ok' => false, 'error' => 'عنوان خالی'];
+    $rawTitle = trim((string)($p['title'] ?? ($p['name'] ?? '')));
+    if ($rawTitle === '') return ['ok' => false, 'error' => 'عنوان خالی'];
+    $vStat = bslCheckVendorActiveStatus($tk, $vid);
+    if (empty($vStat['active'])) {
+        return ['ok' => false, 'skipped_inactive_vendor' => true, 'reason_kind' => 'vendor_inactive', 'error' => (string)$vStat['reason']];
+    }
+    $barcodeVal = bslExtractValidBarcode($p);
+    $hasBarcode = ($barcodeVal !== '');
+    $title = bslSanitizeModerationTitle($rawTitle, $hasBarcode);
+    if ($title === '') $title = $rawTitle;
+
     $round  = (int)($opts['round'] ?? 0);
     $profile= is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
     $forcedPrice = max(0, (int)($opts['forced_price_toman'] ?? 0));
@@ -29156,9 +29951,12 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     $priceToman = $pf['price'];
     if ($priceToman <= 0) return ['ok' => false, 'error' => 'قیمت نامعتبر'];
     $priceRial = (($p['price_unit'] ?? '') !== 'rial') ? $priceToman * 10 : $priceToman;
+    if (!bslIsRealisticPriceRial($priceRial)) {
+        return ['ok' => false, 'reason_kind' => 'unrealistic_price', 'error' => 'قیمت کمتر از حداقل معتبر باسلام (۵,۰۰۰ تومان) — پیشگیری از خطای ۵۰۱۱/۶۳۸۱ عدم تایید'];
+    }
 
     $stock   = effectiveStock($p, (int)($opts['stock'] ?? 10));   // v10.21 (۳۴الف)
-    $prepD   = (int)($opts['preparation_days'] ?? 3);
+    $prepD   = max(1, (int)($opts['preparation_days'] ?? 3));
     $_defWS  = (int)($opts['weight'] ?? 500);
     $_defPWS = (int)($opts['package_weight'] ?? ($_defWS + 100));
     $_wResS  = bslResolveProductWeights($p, $_defWS, $_defPWS);
@@ -29174,7 +29972,11 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
 
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
-    $existing = !empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, !array_key_exists('find_deep_scan',$opts)||!empty($opts['find_deep_scan']));
+    $doDeep = !array_key_exists('find_deep_scan', $opts) || !empty($opts['find_deep_scan']);
+    $existing = !empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep);
+    if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing'])) {
+        $existing = bslFindExisting($tk, $vid, $rawTitle, $__mk, $doDeep);
+    }
     $exId = is_array($existing) ? (int)($existing['id'] ?? 0) : 0;
 
     if ($exId > 0) {
@@ -29187,7 +29989,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
                 return ['ok' => true, 'id' => $exId, 'action' => 'unchanged', 'skipped' => true];
             }
         }
-        $bu = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => 2976,
+        $bu = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => ($stock > 0 ? 2976 : 3790),
                'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
         /* Existing-product PATCH must not include category_id; Basalam returns 422
            ("currently unable to change category") even when the ID is unchanged. */
@@ -29204,36 +30006,71 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
             ['error' => 'آپدیت در این غرفه ناموفق: ' . bslErrText($r)]);
     }
 
+    /* v10.466: پیشگیری قطعی از خطای ۷۰۹۳ — اگر محصول هنوز در باسلام نیست و موجودی ندارد، هرگز نساز */
+    if ($stock <= 0) {
+        return ['ok' => true, 'id' => 0, 'skipped' => true, 'action' => 'skipped_outofstock_create',
+            'note' => 'محصول ناموجود در باسلام ساخته نشد (پیشگیری از خطای ۷۰۹۳ عدم تایید)'];
+    }
+
     $aiDirect = !empty($opts['ai_cat_direct']);
     $bslCfgIn = is_array($opts['basalam_cfg'] ?? null) ? $opts['basalam_cfg'] : null;
     $prodMappedCat = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
-    $manualChain = $aiDirect
+    $rawManualChain = $aiDirect
         ? ($catId > 0 ? [$catId] : [])
         : bslCollectManualCategories($prodMappedCat > 0 ? $prodMappedCat : 0, $profile, array_merge($catId > 0 ? [$catId] : [], $fallback), $bslCfgIn);
+    $manualChain = $aiDirect
+        ? $rawManualChain
+        : bslFilterSafeManualCategories($title, $rawManualChain, $flatCats, $prodMappedCat);
     $remainingManual = [];
     if (!empty($manualChain)) {
         $catUsed = (int)$manualChain[0];
         $remainingManual = array_slice($manualChain, 1);
     } else {
         $catUsed = 0;
-        if ($autoCat && !empty($flatCats)) {
+        if (!empty($flatCats)) {
             $_ac = autoMatchBslCategory($title, $flatCats);
-            if ($_ac <= 0) $_ac = autoMatchBslCategoryForce($title, $flatCats);
+            if ($_ac <= 0 && $autoCat) $_ac = autoMatchBslCategoryForce($title, $flatCats);
             if ($_ac > 0) $catUsed = (!empty($cData) && is_array($cData)) ? findLeafCategory($_ac, $cData) : $_ac;
         }
     }
-    if ($catUsed <= 0) return ['ok'=>false,'error'=>'دسته‌بندی معتبر باسلام برای محصول تعیین نشده','error_code'=>422,
-        'error_detail'=>'category_id خالی است؛ دستهٔ پروفایل، دستهٔ پیش‌فرض یا دستهٔ جایگزین تنظیم کنید'];
+    if ($catUsed <= 0) {
+        $pRawKeyPre = (string)($p['_key'] ?? ($p['key'] ?? ($p['link'] ?? '')));
+        if (!$aiDirect && function_exists('bslQueueForAiCategoryFix')) {
+            $aiQPre = bslQueueForAiCategoryFix($p, [
+                'vendor_id'          => $vid,
+                'shop_name'          => (string)($shop['shop_name'] ?? ('غرفهٔ ' . $vid)),
+                'profile_key'        => (string)($opts['profile_key'] ?? ''),
+                'profile_name'       => (string)($profile['name'] ?? ''),
+                'product_key'        => $pRawKeyPre,
+                'title'              => $title,
+                'tried_cat_ids'      => $rawManualChain,
+                'forced_price_toman' => (int)round($priceRial / 10),
+                'endpoint'           => 'vendors/' . $vid . '/products',
+                'error_code'         => 422,
+                'error'              => 'دستهٔ پیش‌فرض با نوع کالا هم‌خوانی نداشت؛ برای انتخاب دستهٔ دقیق با AI صف شد',
+                'step'               => 'semantic_category_guard',
+            ]);
+            return [
+                'ok'          => false,
+                'error'       => 'دستهٔ پیش‌فرض با عنوان محصول تضاد داشت و از ثبت با دستهٔ اشتباه (کد ۶۰۴۶) جلوگیری شد؛ محصول در صف انتخاب دستهٔ هوشمند قرار گرفت.',
+                'error_code'  => 422,
+                'reason_kind' => 'category_ai_pending',
+                'ai_queue_id' => (string)($aiQPre['queue_id'] ?? ''),
+            ];
+        }
+        return ['ok'=>false,'error'=>'دسته‌بندی معتبر باسلام برای محصول تعیین نشده','error_code'=>422,
+            'error_detail'=>'category_id خالی است؛ دستهٔ پروفایل، دستهٔ پیش‌فرض یا دستهٔ جایگزین تنظیم کنید'];
+    }
     $_builtShopCreate = bslBuildUnifiedDescription($p, $title);
     $brief = $_builtShopCreate['brief'] !== '' ? $_builtShopCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
-    $desc  = $_builtShopCreate['description'] !== '' ? $_builtShopCreate['description'] : $brief;
+    $desc  = bslEnsureRichCompliantDescription($_builtShopCreate['description'], $title, $p, $hasBarcode);
     $imgUrls=function_exists('productImageList')?productImageList($p):[];
     $detailLink=trim((string)($p['link']??$p['url']??''));
     if(!$imgUrls&&$detailLink!==''){
         $detailRes=fetch_html($detailLink,20);
         if(!empty($detailRes['ok'])&&!empty($detailRes['html'])){
             $rescued=extractImageFromHtml((string)$detailRes['html'],$detailLink);
-            if($rescued!=='')$imgUrls=[$rescued];
+            if($rescued!==''&&!bslIsPlaceholderImageUrl($rescued))$imgUrls=[$rescued];
         }
     }
     if(!$imgUrls)return ['ok'=>false,'error'=>'محصول تصویر قابل ارسال ندارد','error_code'=>422,
@@ -29251,8 +30088,9 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     $bp = ['name' => mb_substr($title, 0, 120), 'brief' => mb_substr($brief, 0, 250),
            'description' => $desc, 'primary_price' => $priceRial, 'stock' => $stock,
            'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW,
-           'is_wholesale' => false, 'category_id' => $catUsed, 'photo'=>$photoId,'photos'=>$photoIds,'status' => 3790];
+           'is_wholesale' => false, 'category_id' => $catUsed, 'photo'=>$photoId,'photos'=>$photoIds,'status' => 2976];
     if (!empty($p['sku'])) $bp['sku'] = $p['sku'];
+    if ($barcodeVal !== '') $bp['barcode'] = $barcodeVal;
     $_bslShopVarsNew = bslBuildVariantsPayload($p, $priceRial, $stock);
     if ($_bslShopVarsNew) $bp['variants'] = $_bslShopVarsNew;
     $pRawKey = (string)($p['_key'] ?? ($p['key'] ?? ($p['link'] ?? '')));
@@ -29271,7 +30109,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
                 'error'=>'نام محصول تکراری است؛ جستجوی موازی در همهٔ وضعیت‌های باسلام صف شد',
                 'error_code'=>(int)($dupResp['code']??422),'error_step'=>'duplicate_deferred'];
         }
-        $buDup = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => 2976,
+        $buDup = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => ($stock > 0 ? 2976 : 3790),
                   'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW,
                   'photo' => $photoId, 'photos' => $photoIds];
         $fuDup = bslForceUpdateOnDuplicate($tk, $vid, $title, $__mk, $buDup, $p);
@@ -36973,7 +37811,8 @@ if (isset($_GET['catfix_start'])) {
              'product_id' => (int)($_GET['product_id'] ?? 0),
              'all_vendors' => !empty($_GET['all_vendors']),
              'use_learn' => !isset($_GET['use_learn']) || $_GET['use_learn'] !== '0',
-             'vendor_id' => (int)($_GET['vendor_id'] ?? 0)];
+             'vendor_id' => (int)($_GET['vendor_id'] ?? 0),
+             'limit' => max(0, (int)($_GET['limit'] ?? 0))];
     if ($mode === 'learned') {
         $mode = 'master';
         $opts['use_learn'] = true;
@@ -40452,17 +41291,6 @@ if (isset($_GET['bsl_rejection_audit'])) {
                 if (!empty($r1['ok']) && is_array($r1['body'] ?? null)) {
                     $found = $r1['body']['data'] ?? $r1['body'];
                     $foundShop = ['vendor_id' => $sVid, 'shop_name' => (string)($sh['shop_name'] ?? '')];
-                    if (!empty($_GET['probe_cat']) && (int)$_GET['probe_cat'] > 0) {
-                        $probeCat = (int)$_GET['probe_cat'];
-                        $probeStatus = isset($_GET['probe_status']) ? (int)$_GET['probe_status'] : 0;
-                        $probeBody = ['category_id' => $probeCat];
-                        if ($probeStatus > 0) $probeBody['status'] = $probeStatus;
-                        $pr1 = bslReq($sTk, 'PATCH', 'products/' . $singlePid, $probeBody);
-                        $pr2 = ((int)($pr1['code'] ?? 0) !== 200)
-                            ? bslReq($sTk, 'PATCH', 'vendors/' . $sVid . '/products/' . $singlePid, $probeBody)
-                            : null;
-                        $found['_probe_patch'] = ['payload' => $probeBody, 'products_ep' => $pr1, 'vendors_ep' => $pr2];
-                    }
                     break;
                 }
             }
@@ -53777,6 +54605,101 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_skipNewLedger463 = function_exists('bslSkipUnchanged')
         ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time(), 'plain_desc_v1' => 1])
         : false;
+    $_cats466 = [
+        ['id' => 900, 'parent_id' => 0, 'title' => 'پوشاک زنانه'],
+        ['id' => 901, 'parent_id' => 900, 'title' => 'مانتو و پانچو زنانه'],
+        ['id' => 1078, 'parent_id' => 0, 'title' => 'انگشتر نقره زنانه'],
+        ['id' => 554, 'parent_id' => 0, 'title' => 'کتاب های مدیریت و رهبری'],
+        ['id' => 652, 'parent_id' => 0, 'title' => 'خدمات چاپ و تکثیر'],
+    ];
+    $_clsModesty466 = function_exists('bslClassifyRejectionReasons')
+        ? bslClassifyRejectionReasons(['id' => 1, 'title' => 'شومیز زنانه', 'revision' => ['rejection_reasons' => [['value' => 6456, 'name' => 'رعایت شئونات اسلامی در تصویر']]]], $_cats466)
+        : [];
+    $_clsTech466 = function_exists('bslClassifyRejectionReasons')
+        ? bslClassifyRejectionReasons([
+            'id' => 2,
+            'title' => 'مانتو زنانه تابستانی',
+            'category_id' => 554,
+            'revision' => [
+                'data' => ['category_id' => 554, 'description' => ''],
+                'rejection_reasons' => [
+                    ['value' => 7093, 'name' => 'موجودی صفر'],
+                    ['value' => 5388, 'name' => 'کیفیت پایین تصویر'],
+                    ['value' => 6380, 'name' => 'درج قیمت در توضیحات'],
+                ],
+            ],
+        ], $_cats466)
+        : [];
+    $_sanTitleNoBc466 = function_exists('bslSanitizeModerationTitle')
+        ? bslSanitizeModerationTitle('810-5 - نیم ست زنانه سیلور وارداتی ولنتاین 09123456789', false)
+        : '';
+    $_bcOk466 = function_exists('bslExtractValidBarcode')
+        ? bslExtractValidBarcode(['specs' => '<table><tr><th>بارکد</th><td>۶۲۶۰۱۲۳۴۵۶۷۸۹</td></tr></table>'])
+        : '';
+    $_sanTitleWithBc466 = function_exists('bslSanitizeModerationTitle')
+        ? bslSanitizeModerationTitle('کرم مرطوب کننده وارداتی اصل', $_bcOk466 !== '')
+        : '';
+    $_richDesc466 = function_exists('bslEnsureRichCompliantDescription')
+        ? bslEnsureRichCompliantDescription('قیمت فقط 150000 تومان در تلگرام @shoptest', 'مانتو نخی زنانه', ['specs' => '<table><tr><th>جنس</th><td>نخ پنبه</td></tr></table>'], false)
+        : '';
+    $_matchedCat466 = function_exists('autoMatchBslCategory')
+        ? autoMatchBslCategory('مانتو زنانه تابستانی نخی', $_cats466)
+        : 0;
+    $_filteredDefCats466 = function_exists('bslFilterSafeManualCategories')
+        ? bslFilterSafeManualCategories('مانتو زنانه تابستانی نخی', [554, 652], $_cats466, 0)
+        : [554];
+    $_revPhotos466 = function_exists('bslExtractRevisionPhotoIds')
+        ? bslExtractRevisionPhotoIds([
+            'photo' => ['id' => 111, 'original' => 'https://statics-bk0.basalam.com/public-8/admin/y25B5/03-06/7810203097.png'],
+            'photos' => [],
+            'revision' => ['data' => ['photo' => ['id' => 991122, 'original' => 'https://statics.basalam.com/public-8/users/abc/real1.jpg'], 'photos' => [['id' => 991122], ['id' => 991123]]]],
+        ])
+        : ['main' => 0, 'ids' => []];
+    $_imgStdOk466 = true;
+    if (function_exists('imagecreatetruecolor') && function_exists('s4StandardizeImageForBasalam')) {
+        $_tmpRect466 = sys_get_temp_dir() . '/s4_test_rect_' . getmypid() . '.jpg';
+        $_tmpTiny466 = sys_get_temp_dir() . '/s4_test_tiny_' . getmypid() . '.jpg';
+        $_imR = @imagecreatetruecolor(300, 500);
+        if ($_imR) { @imagejpeg($_imR, $_tmpRect466, 90); @imagedestroy($_imR); }
+        $_imT = @imagecreatetruecolor(40, 40);
+        if ($_imT) { @imagejpeg($_imT, $_tmpTiny466, 90); @imagedestroy($_imT); }
+        $_resRect466 = s4StandardizeImageForBasalam($_tmpRect466);
+        $_resTiny466 = s4StandardizeImageForBasalam($_tmpTiny466);
+        $_infRect466 = @getimagesize($_tmpRect466);
+        @unlink($_tmpRect466); @unlink($_tmpTiny466);
+        $_imgStdOk466 = !empty($_resRect466['ok'])
+            && is_array($_infRect466) && (int)$_infRect466[0] === 850 && (int)$_infRect466[1] === 850
+            && empty($_resTiny466['ok']);
+    }
+    $add('10.466', 'ممیزی سراسری و پیشگیری/اصلاح خودکار تمام ۲۱ علت عدم تأیید محصولات باسلام با استثنای صریح قوانین شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱، ۶۴۱۹)',
+         !empty($_clsModesty466['skip_modesty'])
+      && empty($_clsTech466['skip_modesty'])
+      && !empty($_clsTech466['needs_stock'])
+      && !empty($_clsTech466['needs_category'])
+      && !empty($_clsTech466['needs_image_refresh'])
+      && !empty($_clsTech466['needs_price_check'])
+      && strpos($_sanTitleNoBc466, '810-5') === false
+      && mb_strpos($_sanTitleNoBc466, 'ولنتاین') === false
+      && mb_strpos($_sanTitleNoBc466, 'وارداتی') === false
+      && strpos($_sanTitleNoBc466, '0912') === false
+      && mb_strpos($_sanTitleNoBc466, 'نقره‌ای') !== false
+      && $_bcOk466 === '6260123456789'
+      && mb_strpos($_sanTitleWithBc466, 'وارداتی') !== false
+      && mb_strlen($_richDesc466, 'UTF-8') >= 45
+      && mb_strpos($_richDesc466, 'تلگرام') === false
+      && strpos($_richDesc466, '150000') === false
+      && $_matchedCat466 === 901
+      && $_filteredDefCats466 === []
+      && bslTitlesAreSameProduct('کیف', 'کیفیت عالی کفش مردانه') === false
+      && bslTitlesAreSameProduct('مانتو نخی زنانه', 'مانتو نخی زنانه کد ۱۲') === true
+      && bslIsRealisticPriceRial(10000) === false
+      && bslIsRealisticPriceRial(150000) === true
+      && (int)($_revPhotos466['main'] ?? 0) === 991122
+      && ($_revPhotos466['ids'] ?? []) === [991122, 991123]
+      && $_imgStdOk466
+      && function_exists('bslApplyCategoryChangeOrRecreate')
+      && strpos($selfSrc, "{v:'10." . "466'") !== false
+      && version_compare(APP_VERSION, '10.466', '>='));
     $_multiRowVal465 = '';
     $_autoDomWoo465 = ['weight' => ''];
     $_autoDomLd465 = ['weight' => ''];
@@ -70337,18 +71260,22 @@ continue;
 }
 $sse(['type'=>'progress','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'step'=>'patching','catId'=>$aiCatId,'catName'=>$catName]);
 
-$bu=['category_id'=>$aiCatId,'status'=>3568];
-$r2=bslReq($tk,'PATCH','products/'.$pId,$bu);
-if($r2['code']===404)$r2=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$pId,$bu);
-if($r2['ok']&&!empty($r2['body']['id'])){
+$_clsSse1 = bslClassifyRejectionReasons($p);
+if (!empty($_clsSse1['skip_modesty'])) {
+$skipSame++;
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'skipped','catId'=>$aiCatId,'catName'=>$catName,'msg'=>'عبور — ردشده به‌دلیل قوانین شئونات تصویری']);
+continue;
+}
+$r2 = bslApplyCategoryChangeOrRecreate($tk, (int)$vid, $p, (int)$aiCatId, $cn, null, !empty($_clsSse1['needs_image_refresh']));
+if (!empty($r2['ok'])) {
 $fixed++;
 catTriedRecord($pId,$aiCatId,$catName,'ai_text','applied',$pName,$curCat);
-$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'fixed','catId'=>$aiCatId,'catName'=>$catName,'msg'=>'اصلاح شد و ارسال به بررسی مجدد: '.$catName.' ('.$aiCatId.')']);
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>(int)($r2['id']??$pId),'pName'=>$pName,'status'=>'fixed','catId'=>$aiCatId,'catName'=>$catName,'msg'=>(string)($r2['msg']??('اصلاح شد: '.$catName)).' — '.$catName.' ('.$aiCatId.')']);
 }else{
 $failed++;
 catTriedRecord($pId,$aiCatId,$catName,'ai_text','failed',$pName,$curCat);
-$errDetail=($r2['body']['message']??($r2['body']['error']??''));
-$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'failed','catId'=>$aiCatId,'catName'=>$catName,'msg'=>'PATCH ناموفق: '.$errDetail]);
+$errDetail=(string)($r2['error']??'خطا در اصلاح');
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'failed','catId'=>$aiCatId,'catName'=>$catName,'msg'=>$errDetail]);
 }
 usleep(500000);
 }
@@ -70491,22 +71418,25 @@ catTriedRecord($pId,$catId,$catName,$multi?'consensus':'master','skipped',$pName
 $sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'skipped','catId'=>$catId,'catName'=>$catName,'msg'=>'رد شد: «'.$catName.'» قبلاً امتحان و رد شده']);continue;
 }
 $sse(['type'=>'progress','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'step'=>'patching','catId'=>$catId,'catName'=>$catName]);
-$bu=['category_id'=>$catId,'status'=>3568];
-$r2=bslReq($tk,'PATCH','products/'.$pId,$bu);
-if($r2['code']===404)$r2=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$pId,$bu);
-if($r2['ok']&&!empty($r2['body']['id'])){
+$_clsSse2 = bslClassifyRejectionReasons($p);
+if (!empty($_clsSse2['skip_modesty'])) {
+$skipSame++;
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'skipped','catId'=>$catId,'catName'=>$catName,'msg'=>'عبور — ردشده به‌دلیل قوانین شئونات تصویری']);continue;
+}
+$r2 = bslApplyCategoryChangeOrRecreate($tk, (int)$vid, $p, (int)$catId, $cn, null, !empty($_clsSse2['needs_image_refresh']));
+if (!empty($r2['ok'])) {
 $fixed++;
 /* رأی و یادگیری: در حالتِ چندمدلی برندهٔ اجماع رأی می‌گیرد (نه لزوماً
    مستر)، پس آمار دیگر به‌نفعِ مستر تحریف نمی‌شود. */
 foreach(array_unique($winKeys?:[$masterKey]) as $wk)aiVoteRecord('category',$pName,$wk,$candKeys);
 catLearnRecord($pName,$catId,$catName);
 catTriedRecord($pId,$catId,$catName,$multi?'consensus':'master','applied',$pName,$curCat);
-$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'fixed','catId'=>$catId,'catName'=>$catName,'msg'=>'اصلاح شد و ارسال به بررسی مجدد: '.$catName.' ('.$catId.')']);
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>(int)($r2['id']??$pId),'pName'=>$pName,'status'=>'fixed','catId'=>$catId,'catName'=>$catName,'msg'=>(string)($r2['msg']??('اصلاح شد: '.$catName)).' — '.$catName.' ('.$catId.')']);
 }else{
 $failed++;
 catTriedRecord($pId,$catId,$catName,$multi?'consensus':'master','failed',$pName,$curCat);
-$errDetail=($r2['body']['message']??($r2['body']['error']??''));
-$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'failed','catId'=>$catId,'catName'=>$catName,'msg'=>'PATCH ناموفق: '.$errDetail]);
+$errDetail=(string)($r2['error']??'خطا در اصلاح');
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'failed','catId'=>$catId,'catName'=>$catName,'msg'=>$errDetail]);
 }
 usleep(500000);
 }
@@ -70683,8 +71613,8 @@ foreach($data as $p){
 $pId=(int)($p['id']??0);
 $pName=trim($p['title']??$p['name']??'');
 $rev=$p['revision']??[];
-$pPrice=(int)($rev['data']['primary_price']??0);
-$pStock=(int)($rev['data']['stock']??0);
+$pPrice=(int)($rev['data']['primary_price']??$p['primary_price']??0);
+$pStock=(int)($rev['data']['inventory']??$rev['data']['stock']??$p['inventory']??0);
 $pCatId=(int)($rev['data']['category_id']??0);
 $allProducts[]=['id'=>$pId,'name'=>$pName,'price'=>$pPrice,'stock'=>$pStock,'category_id'=>$pCatId];
 }
@@ -70699,9 +71629,9 @@ $idx++;
 $pId=$p['id'];
 $pName=$p['name'];
 
-if($p['price']<=0){
+if($p['price']<=0 || !bslIsRealisticPriceRial((int)$p['price'])){
 $skipped++;
-$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'skipped','msg'=>'بدون قیمت — رد شد']);
+$sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'status'=>'skipped','msg'=>'بدون قیمت معتبر — رد شد']);
 continue;
 }
 if($p['stock']<=0){
@@ -70711,7 +71641,6 @@ continue;
 }
 $sse(['type'=>'progress','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'step'=>'patching']);
 $bu=['status'=>2976];
-if($p['category_id']>0)$bu['category_id']=$p['category_id'];
 $r2=bslReq($tk,'PATCH','products/'.$pId,$bu);
 if($r2['code']===404)$r2=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$pId,$bu);
 if($r2['ok']&&!empty($r2['body']['id'])){
@@ -70731,61 +71660,43 @@ exit;
 if (isset($_GET['bsl_fix_cat'])) {
 header('Content-Type: application/json; charset=UTF-8');
 $cn=loadConnections();$bs=$cn['basalam']??[];
-if(empty($bs['token'])||empty($bs['vendor_id'])){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
-$tk=$bs['token'];$vid=(int)$bs['vendor_id'];
+$tk=(string)($bs['token']??'');$vid=(int)($bs['vendor_id']??0);
+$reqShopId=(int)($_GET['shop_id']??($_GET['vendor_id']??0));
+if($reqShopId>0&&function_exists('bslAllShops')){
+foreach(bslAllShops($cn) as $_shFix){
+if((int)($_shFix['vendor_id']??0)===$reqShopId){$tk=(string)($_shFix['token']??'');$vid=$reqShopId;break;}
+}
+}
+if($tk===''||$vid<=0){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
 $productId=(int)($_GET['product_id']??0);
 $newCatId=(int)($_GET['category_id']??0);
 if($productId<=0||$newCatId<=0){echo json_encode(['ok'=>false,'error'=>'شناسه محصول یا دسته نامعتبر'],JSON_UNESCAPED_UNICODE);exit;}
-
-$bu=['category_id'=>$newCatId,'status'=>2976];
-$r=bslReq($tk,'PATCH','products/'.$productId,$bu);
-if($r['code']===404)$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$productId,$bu);
-if($r['ok']&&!empty($r['body']['id'])){
-// v8.48: این یک انتخاب دستیِ تأییدشده است — یادش بگیر
-$learnTitle=trim((string)($_GET['title']??''));
-if($learnTitle===''){
-$g=bslReq($tk,'GET','products/'.$productId);
-if(!empty($g['ok'])){$gb=$g['body']??[];
-$learnTitle=(string)($gb['title']??($gb['name']??($gb['revision']['data']['title']??'')));}
-}
-$learned=$learnTitle!==''?catLearnRecord($learnTitle,$newCatId,trim((string)($_GET['cat_name']??''))):false;
-echo json_encode(['ok'=>true,'msg'=>'دسته اصلاح شد — محصول ID#'.$productId.' به دسته ID#'.$newCatId.' تغییر یافت','product_id'=>$productId,'category_id'=>$newCatId,'learned'=>$learned,'learn_word'=>$learnTitle!==''?catFirstWord($learnTitle):''],JSON_UNESCAPED_UNICODE);
-}else{
-
-$rUnpub=bslReq($tk,'PATCH','products/'.$productId,['status'=>3790]);
-if($rUnpub['code']===404)$rUnpub=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$productId,['status'=>3790]);
-
+$vStatFix=bslCheckVendorActiveStatus($tk,$vid);
+if(empty($vStatFix['active'])){echo json_encode(['ok'=>false,'error'=>(string)$vStatFix['reason']],JSON_UNESCAPED_UNICODE);exit;}
 $rGet=bslReq($tk,'GET','products/'.$productId);
-if(!$rGet['ok'])$rGet=bslReq($tk,'GET','vendors/'.$vid.'/products/'.$productId);
-if(!$rGet['ok']){echo json_encode(['ok'=>false,'error'=>'PATCH 404 + نمی‌توان محصول را دریافت کرد برای جایگزینی'],JSON_UNESCAPED_UNICODE);exit;}
-$origP=$rGet['body']??[];
-$rev=$origP['revision']??[];$revData=$rev['data']??[];
-$origTitle=$origP['title']??$revData['title']??'';
-
-$replaceTitle=$origTitle.' #'.$productId;
-$origPhoto=$revData['photo']??$origP['photo']??null;
-$photoId=0;if(is_array($origPhoto))$photoId=(int)($origPhoto['id']??0);elseif(is_numeric($origPhoto))$photoId=(int)$origPhoto;
-$origPrice=$revData['primary_price']??$origP['primary_price']??0;
-$origStock=$revData['inventory']??$origP['inventory']??10;
-$origWeight=(int)($revData['net_weight']??($revData['weight']??($origP['net_weight']??($origP['weight']??0))));
-if($origWeight<=0)$origWeight=(int)($bs['weight']??500);
-$origPW=(int)($revData['packaged_weight']??($revData['package_weight']??($origP['packaged_weight']??($origP['package_weight']??0))));
-if($origPW<=0)$origPW=(int)($bs['package_weight']??($origWeight+100));
-if($origPW<=$origWeight)$origPW=$origWeight+100;
-$origBrief=$origP['brief']??$revData['brief']??mb_substr($origTitle,0,250);
-$origDesc=$origP['description']??$revData['description']??$origTitle;
-$photosArr=$revData['photos']??$origP['photos']??[];
-$photosIds=[];if(is_array($photosArr)){foreach($photosArr as $ph){if(is_array($ph))$photosIds[]=(int)($ph['id']??0);elseif(is_numeric($ph))$photosIds[]=(int)$ph;}}
-if($photoId>0&&!in_array($photoId,$photosIds))$photosIds[]=$photoId;
-if(empty($photosIds)&&$photoId>0)$photosIds=[$photoId];
-$bp=['name'=>mb_substr($replaceTitle,0,120),'brief'=>mb_substr($origBrief,0,250),'description'=>$origDesc,'primary_price'=>$origPrice,'stock'=>$origStock,'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>$origWeight,'package_weight'=>$origPW,'is_wholesale'=>false,'category_id'=>$newCatId,'photo'=>$photoId,'photos'=>$photosIds,'status'=>2976,'sku'=>'fix-'.$productId];
-$rCreate=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
-if($rCreate['ok']&&!empty($rCreate['body']['id'])){
-echo json_encode(['ok'=>true,'msg'=>'محصول جایگزین شد — محصول جدید ID#'.$rCreate['body']['id'].' با دسته ID#'.$newCatId,'product_id'=>$rCreate['body']['id'],'category_id'=>$newCatId,'replaced_from'=>$productId],JSON_UNESCAPED_UNICODE);
+if(empty($rGet['ok'])||!is_array($rGet['body']??null)){echo json_encode(['ok'=>false,'error'=>'محصول از باسلام دریافت نشد: '.bslErrText($rGet)],JSON_UNESCAPED_UNICODE);exit;}
+$origP=$rGet['body'];
+$clsFix=bslClassifyRejectionReasons($origP);
+if(!empty($clsFix['skip_modesty'])){echo json_encode(['ok'=>false,'error'=>'این محصول به‌دلیل قوانین شئونات تصویری رد شده و نیازمند اصلاح تصویر توسط کاربر است'],JSON_UNESCAPED_UNICODE);exit;}
+$locIdxFix=bslBuildLocalProductIndex();
+$origTitle=trim((string)($origP['title']??($origP['name']??($origP['revision']['data']['title']??''))));
+$localMatchFix=bslFindLocalSourceProduct($productId,$origTitle,$locIdxFix);
+$resFix=bslApplyCategoryChangeOrRecreate($tk,$vid,$origP,$newCatId,$cn,$localMatchFix,!empty($clsFix['needs_image_refresh']));
+if(!empty($resFix['ok'])){
+$learnTitle=trim((string)($_GET['title']??$origTitle));
+$learned=($learnTitle!==''&&($resFix['action']??'')!=='archived')?catLearnRecord($learnTitle,$newCatId,trim((string)($_GET['cat_name']??''))):false;
+echo json_encode([
+'ok'=>true,
+'msg'=>(string)($resFix['msg']??('دسته اصلاح شد — محصول ID#'.($resFix['id']??$productId))),
+'product_id'=>(int)($resFix['id']??$productId),
+'replaced_from'=>(int)($resFix['replaced_from']??0),
+'action'=>(string)($resFix['action']??'patched'),
+'category_id'=>(int)($resFix['category_id']??$newCatId),
+'learned'=>$learned,
+'learn_word'=>$learnTitle!==''?catFirstWord($learnTitle):'',
+],JSON_UNESCAPED_UNICODE);
 }else{
-$em=$rCreate['body']['error_description']??($rCreate['body']['message']??($rCreate['body']['error']??''));if(is_array($em))$em=json_encode($em,JSON_UNESCAPED_UNICODE);
-echo json_encode(['ok'=>false,'error'=>'PATCH 404 + ایجاد جایگزین ناموفق: '.mb_substr($em??$rCreate['raw']??'HTTP'.$rCreate['code'],0,300)],JSON_UNESCAPED_UNICODE);
-}
+echo json_encode(['ok'=>false,'error'=>(string)($resFix['error']??'اصلاح دسته‌بندی ناموفق بود')],JSON_UNESCAPED_UNICODE);
 }
 exit;
 }
@@ -72662,7 +73573,16 @@ taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>t
 queuePauseRowsAfterStop('bsl',(string)$bslQueueId);
 @unlink(BSL_PRODUCTS_FILE);exit;
 }
-$pTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
+$rawPTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
+$_rowBarcodeVal=bslExtractValidBarcode($p);
+$pTitle=$rawPTitle!==''?bslSanitizeModerationTitle($rawPTitle,$_rowBarcodeVal!==''):'';
+if($pTitle==='')$pTitle=$rawPTitle;
+/* v10.466: پیشگیری از خطای ۷۰۹۴ روی غرفهٔ غیرفعال */
+$_defVStat=bslCheckVendorActiveStatus($tk,(int)$vid);
+if(empty($_defVStat['active'])){
+$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=['title'=>$pTitle,'key'=>$pKey,'vendor_id'=>$vid,'shop_name'=>$bslDefaultShopName,'error'=>(string)$_defVStat['reason'],'error_step'=>'vendor_inactive','reason_kind'=>'vendor_inactive'];
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⛔ ".(string)$_defVStat['reason']);continue;
+}
 /* v8.87: تعدیل قیمت مخصوص باسلام — قرینهٔ همان چیزی که برای ووکامرس هست.
    قبل از تبدیل تومان→ریال اعمال می‌شود تا درصد روی عدد نمایشیِ کاربر باشد. */
 if(($bslPriceCfg['mode']??'none')!=='none'&&$pn>0)$pn=destAdjustPrice($pn,$bslPriceCfg);
@@ -72676,6 +73596,7 @@ $card=['image'=>$p['image']??'','price'=>$pn,'price_unit'=>$priceUnit,'link'=>$p
 if($pTitle===''){$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>'','key'=>$pKey,'error'=>'عنوان خالی','error_step'=>'validation','reason_kind'=>'validation','error_detail'=>'عنوان محصول در دادهٔ ورودی خالی است.'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,'',"[{$n}] ❌ عنوان خالی");continue;}
 $titleWords=preg_split('/\s+/u',$pTitle);if(mb_strlen($pTitle)<6||count($titleWords)<2){$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'error'=>'عنوان کوتاه','error_step'=>'validation','reason_kind'=>'validation','error_detail'=>'عنوان کمتر از حداقل معتبر باسلام است: '.count($titleWords).' کلمه / '.mb_strlen($pTitle).' حرف'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ❌ کوتاه");continue;}
 if($pn<=0){$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'error'=>'قیمت 0','error_step'=>'validation','reason_kind'=>'validation','error_detail'=>'قیمت نهایی بعد از تعدیل و تبدیل واحد صفر یا نامعتبر شد.'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,'',"[{$n}] ❌ قیمت 0");continue;}
+if(!bslIsRealisticPriceRial($pn)){$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'error'=>'قیمت کمتر از ۵,۰۰۰ تومان (پیشگیری از خطای ۵۰۱۱/۶۳۸۱ عدم تایید باسلام)','error_step'=>'validation','reason_kind'=>'unrealistic_price'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ❌ قیمت غیرواقعی (<5000 تومان)");continue;}
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,40),"[{$n}/{$total}] ".mb_substr($pTitle,0,50),['phase'=>'send','phase_label'=>'ارسال محصولات','phase_current'=>$i,'phase_total'=>$total,'phase_pct'=>(int)floor($i*100/max(1,$total))]);
 
 $exBsl=null;$nTitle=bslNormalizeTitle($pTitle);$lookupSource='none';
@@ -72683,27 +73604,36 @@ $exBsl=null;$nTitle=bslNormalizeTitle($pTitle);$lookupSource='none';
    فقط اگر کاتالوگ ناقص بود یا تطبیق نبود، دو جستجوی سبک شبکه‌ای انجام می‌شود
    (اسکن صفحه‌به‌صفحه برای مسیر عادی خاموش است). */
 if(isset($bslExisting[$pTitle])){$exBsl=$bslExisting[$pTitle];$lookupSource='memory_title';}
+elseif($rawPTitle!==$pTitle&&isset($bslExisting[$rawPTitle])){$exBsl=$bslExisting[$rawPTitle];$lookupSource='memory_title';}
 elseif(isset($bslExistingNorm[$nTitle])){$exBsl=$bslExistingNorm[$nTitle];$lookupSource='memory_norm';}
 else{
 $exBsl=bslFindExisting($tk,$vid,$pTitle,(string)$pKey,false);
+if(!$exBsl&&$rawPTitle!==$pTitle)$exBsl=bslFindExisting($tk,$vid,$rawPTitle,(string)$pKey,false);
 if($exBsl){$lookupSource=!empty($exBsl['__from_ledger'])?'ledger':(!empty($exBsl['__from_catalog'])?'catalog':'api_search');$sn=trim($exBsl['title']??$exBsl['name']??$pTitle);$snn=bslNormalizeTitle($sn);if($sn!=='')$bslExisting[$sn]=$exBsl;if($snn!=='')$bslExistingNorm[$snn]=$exBsl;if(!empty($exBsl['__from_catalog']))bslCatalogSaved(1);}
 }
 
-$__rowManualCats=bslCollectManualCategories((int)($p['bsl_category_id']??($p['category_id']??0)),$__bslEntryProfile,$bslFallbackCats,$cn['basalam']??[]);
+$_prodRowExplicitCat=(int)($p['bsl_category_id']??($p['category_id']??0));
+$__rawRowManualCats=bslCollectManualCategories($_prodRowExplicitCat,$__bslEntryProfile,$bslFallbackCats,$cn['basalam']??[]);
+$__rowManualCats=bslFilterSafeManualCategories($pTitle,$__rawRowManualCats,$bslFlatCats,$_prodRowExplicitCat);
 $__rowRemManual=[];
 if(!empty($__rowManualCats)){
     $catId=(int)$__rowManualCats[0];
     $__rowRemManual=array_slice($__rowManualCats,1);
 }else{
     $catId=0;
-    if($autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
+    if(!empty($bslFlatCats)){
+        $_ac=autoMatchBslCategory($pTitle,$bslFlatCats);
+        if($_ac<=0&&$autoCat)$_ac=autoMatchBslCategoryForce($pTitle,$bslFlatCats);
+        if($_ac>0)$catId=$_ac;
+    }
     if($catId>0&&!empty($cData)&&is_array($cData)){$leafCat=findLeafCategory($catId,$cData);if($leafCat!=$catId)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 📂 دسته برگ: $catId→$leafCat");$catId=$leafCat;}
 }
 
 $card['category_id']=$catId;$card['category']=bslCatNameById($catId);
+$newStock=effectiveStock($p,(int)($cn['basalam']['stock']??10));
 if($exBsl){
 $exId=$exBsl['id']??0;$exRevData=($exBsl['revision']&&is_array($exBsl['revision'])&&isset($exBsl['revision']['data']))?$exBsl['revision']['data']:[];
-$exPrice=(int)($exRevData['primary_price']??$exBsl['primary_price']??0);$exStock=(int)($exRevData['inventory']??$exBsl['inventory']??0);$newStock=(int)($cn['basalam']['stock']??10);
+$exPrice=(int)($exRevData['primary_price']??$exBsl['primary_price']??0);$exStock=(int)($exRevData['inventory']??$exBsl['inventory']??0);
 $exStatusVal=0;$exStatusObj=$exBsl['status']??null;
 if(is_array($exStatusObj)&&isset($exStatusObj['value']))$exStatusVal=(int)$exStatusObj['value'];
 elseif(is_numeric($exStatusObj))$exStatusVal=(int)$exStatusObj;
@@ -72713,10 +73643,14 @@ $card['remote_id']=(int)$exId;$card['lookup_source']=$lookupSource;$card['remote
 $isArchived=$exStatusVal===4184||$exStatusVal===3567||$exStatusVal===3568||$exStatusVal===3790;
 $isBslArchived=isset($bslArchivedMap[$pTitle])||isset($bslArchivedMap[$nTitle]);
 if($isArchived||$isBslArchived){
-
+if($newStock<=0){
+$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'محصول ناموجود است — از بازفعال‌سازی خودداری شد (پیشگیری از کد ۷۰۹۳)'],$card);
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ ناموجود — بازفعال‌سازی نشد (ID#$exId)");
+continue;
+}
 $statusLabel=$exStatusVal===3790?'غیرفعال':($exStatusVal===4184?'بایگانی':($exStatusVal===3567?'تأیید نشده':'در انتظار'));
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🔄 بازفعال‌سازی از {$statusLabel} (status=$exStatusVal) → ID#$exId");
-$bu=['primary_price'=>$pn,'stock'=>$newStock,'status'=>2976,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
+$bu=['primary_price'=>$pn,'stock'=>$newStock,'status'=>2976,'preparation_days'=>max(1,(int)($cn['basalam']['preparation_days']??3)),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
 bslApplyContent($bu,$p);
 // v10.392: تغییر دسته فقط در گردش‌کار اختصاصی اصلاح دسته؛ PATCH عادی بدون category_id.
 // v10.234: برای بازفعال‌سازی هم فقط وقتی تصویر را دوباره آپلود کن که مقصد عکس نداشته باشد.
@@ -72804,19 +73738,32 @@ $rUnpub=bslReq($tk,'PATCH','products/'.$exId,['status'=>3790]);if($rUnpub['code'
 $replaceTitle=$pTitle;if(!$rUnpub['ok'])$replaceTitle=mb_substr($pTitle,0,110).' (v'.date('ymdHi').')';$pTitle=$replaceTitle;
 }
 
+/* v10.466: پیشگیری قطعی از ۷۰۹۳ — محصول ناموجود را به عنوان کالای جدید در باسلام نساز */
+if($newStock<=0){
+$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'=>'محصول ناموجود است — در باسلام ساخته نشد (پیشگیری از کد ۷۰۹۳ عدم تایید)'],$card);
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ ناموجود — از ایجاد صرف‌نظر شد");
+continue;
+}
+if($catId<=0){
+$__aiQZero=bslQueueForAiCategoryFix($p,['vendor_id'=>$vid,'shop_name'=>$bslDefaultShopName,'profile_key'=>$__bslEntryProfKey,'profile_name'=>(string)($__bslEntryProfile['name']??''),'product_key'=>(string)$pKey,'title'=>$pTitle,'tried_cat_ids'=>$__rawRowManualCats,'forced_price_toman'=>(int)round($pn/10),'endpoint'=>'vendors/'.$vid.'/products','error_code'=>422,'error'=>'دستهٔ پیش‌فرض با عنوان محصول تضاد داشت؛ برای انتخاب دستهٔ دقیق با AI صف شد','step'=>'semantic_category_guard']);
+$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'error'=>'دستهٔ پیش‌فرض با عنوان تضاد داشت — در صف انتخاب دستهٔ هوشمند قرار گرفت','error_code'=>422,'error_step'=>'semantic_category_guard','reason_kind'=>'category_ai_pending','ai_queue_id'=>(string)($__aiQZero['queue_id']??'')],$card);
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🤖 دستهٔ پیش‌فرض متضاد بود → صف هوش مصنوعی");
+continue;
+}
+
 // v8.64: همهٔ عکس‌های محصول، نه فقط اولی
 $pid=null;$galIdsB=[];
 $imgListBk=productImageList($p);
 if($imgListBk){$umBk=bslUploadMany($tk,$imgListBk,(int)($cn['basalam']['max_photos']??10));if(!empty($umBk['ok'])){$pid=$umBk['main'];$galIdsB=$umBk['ids'];}
 if(count($imgListBk)>1)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🖼 گالری: ".$umBk['note']);}
-if(!$pid&&!empty($p['image'])){$up2=bslUpload($tk,$p['image']);if(!empty($up2['ok'])){$pid=$up2['file_id'];$galIdsB=[$pid];}}
+if(!$pid&&!empty($p['image'])&&!bslIsPlaceholderImageUrl((string)$p['image'])){$up2=bslUpload($tk,$p['image']);if(!empty($up2['ok'])){$pid=$up2['file_id'];$galIdsB=[$pid];}}
 
 if(!$pid&&!empty($p['link'])){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🔄 تصویر آپلود نشد — تلاش از سایت مبدأ...");
 $srcPage=fetch_html($p['link']);
 if(!empty($srcPage['ok'])&&!empty($srcPage['html'])){
 $freshImgUrl=extractImageFromHtml($srcPage['html'],$p['link']);
-if($freshImgUrl){
+if($freshImgUrl&&!bslIsPlaceholderImageUrl($freshImgUrl)){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 📷 تصویر جدید از سایت مبدأ: ".mb_substr($freshImgUrl,0,50));
 $up3=bslUpload($tk,$freshImgUrl);
 if(!empty($up3['ok'])){$pid=$up3['file_id'];$galIdsB=[$pid];}
@@ -72824,55 +73771,21 @@ if(!empty($up3['ok'])){$pid=$up3['file_id'];$galIdsB=[$pid];}
 }
 }
 if(!$pid){
-
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚠️ تصویر آپلود نشد — ارسال بدون تصویر (غیرفعال)");
-$_builtNoImg=bslBuildUnifiedDescription($p,$pTitle);
-$bsBrief=$_builtNoImg['brief']!==''?$_builtNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
-$bsDesc=$_builtNoImg['description']!==''?$_builtNoImg['description']:$bsBrief;
-$_wNoImg=bslResolveProductWeights($p,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)$_wNoImg['weight'],'package_weight'=>(int)$_wNoImg['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
-if(!empty($p['sku']))$bp['sku']=$p['sku'];
-$r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
-if($r['ok']&&!empty($r['body']['id'])){
-bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);
-$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id'],'note'=>'بدون تصویر (غیرفعال)'],$card);
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ بدون تصویر: ID#{$r['body']['id']} (غیرفعال)");
-}else{
-if(!bslIsDuplicateName($r)&&bslIsCategoryError($r)){
-$fbResult=!empty($__rowRemManual)?bslTryCreateWithFallback($tk,$vid,$bp,$__rowRemManual,$pTitle,false,[],[]):['ok'=>false,'all_categories_rejected'=>true,'tried'=>$catId>0?[$catId]:[],'last_response'=>$r];
-if(!empty($fbResult['ok'])&&!empty($fbResult['body']['id'])){
-$card['category_id']=(int)$fbResult['used_cat_id'];$card['category']=bslCatNameById((int)$fbResult['used_cat_id']);
-bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);
-$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$fbResult['body']['id'],'note'=>'بدون تصویر (دستهٔ جایگزین دستی #'.$fbResult['used_cat_id'].')'],$card);
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ بدون تصویر (دستهٔ جایگزین دستی→#{$fbResult['used_cat_id']}): ID#{$fbResult['body']['id']}");
-usleep($bslDelayMs*1000);continue;
-}
-if(!empty($fbResult['all_categories_rejected'])){
-$__fResp=is_array($fbResult['last_response']??null)?$fbResult['last_response']:$r;
-$__fTried=is_array($fbResult['tried']??null)&&!empty($fbResult['tried'])?$fbResult['tried']:($catId>0?[$catId]:[]);
-$__aiQ=bslQueueForAiCategoryFix($p,['vendor_id'=>$vid,'shop_name'=>$bslDefaultShopName,'profile_key'=>$__bslEntryProfKey,'profile_name'=>(string)($__bslEntryProfile['name']??''),'product_key'=>(string)$pKey,'title'=>$pTitle,'tried_cat_ids'=>$__fTried,'forced_price_toman'=>(int)round($pn/10),'endpoint'=>'vendors/'.$vid.'/products','error_code'=>(int)($__fResp['code']??422),'error'=>bslErrText($__fResp),'error_detail'=>(string)($__fResp['raw']??json_encode($__fResp['body']??[],JSON_UNESCAPED_UNICODE)),'step'=>'create_without_image']);
-$errInfo=bslBuildFinalCategoryDeferredError($__fResp,$vid,$__fTried,$__aiQ,'create_without_image');
-$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey],$errInfo,$card);
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🤖❌ ".$errInfo['error']);
-usleep($bslDelayMs*1000);continue;
-}
-if(is_array($fbResult['last_response']??null))$r=$fbResult['last_response'];
-}
-$em=bslErrText($r);
-$errInfo=bslSendErrorInfo($r,'create_without_image','vendors/'.$vid.'/products');$errInfo['error']='تصویر+ایجاد بدون تصویر ناموفق: '.$errInfo['error'];$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey],$errInfo,$card);
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ❌ تصویر+بدون تصویر: $em");
-}
+/* v10.466: پیشگیری قطعی از ۵۳۸۷ — هرگز محصول بدون تصویر شاخص در باسلام نساز */
+$fail++;bslShopStatBumpDefault('f');$bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'error'=>'تصویر معتبر برای محصول یافت یا آپلود نشد (پیشگیری از خطای ۵۳۸۷ باسلام)','error_code'=>422,'error_step'=>'photo_upload','reason_kind'=>'photo_missing'],$card);
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ❌ تصویر معتبری آپلود نشد — از ثبت بدون عکس خودداری شد");
 usleep($bslDelayMs*1000);continue;
 }
 $_builtMainCreate=bslBuildUnifiedDescription($p,$pTitle);
 $bsBrief=$_builtMainCreate['brief']!==''?$_builtMainCreate['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
-$bsDesc=$_builtMainCreate['description']!==''?$_builtMainCreate['description']:$bsBrief;
-$_bslCurStk=effectiveStock($p,(int)($cn['basalam']['stock']??10));
+$bsDesc=bslEnsureRichCompliantDescription($_builtMainCreate['description'],$pTitle,$p,$_rowBarcodeVal!=='');
+$_bslCurStk=$newStock;
 $_wMainCreate=bslResolveProductWeights($p,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)$_wMainCreate['weight'],'package_weight'=>(int)$_wMainCreate['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>max(1,(int)($cn['basalam']['preparation_days']??3)),'weight'=>(int)$_wMainCreate['weight'],'package_weight'=>(int)$_wMainCreate['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid]),'status'=>2976];
+if($_rowBarcodeVal!=='')$bp['barcode']=$_rowBarcodeVal;
 $_bslVarsNew=bslBuildVariantsPayload($p,$pn,$_bslCurStk);
 if($_bslVarsNew)$bp['variants']=$_bslVarsNew;
-if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;if(!empty($p['sku']))$bp['sku']=$p['sku'];
+if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReqWithVariantsFallback($tk,'POST','vendors/'.$vid.'/products',$bp);
 if($r['ok']&&!empty($r['body']['id'])){ bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$r['body']['id'],$pTitle,(int)$pn,(int)$_bslCurStk);bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id']],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ #{$r['body']['id']}");
 }else{
@@ -73754,11 +74667,17 @@ $searchR=bslReq($tk,'GET','vendors/'.$vid.'/products?page=1&per_page=100'
   .'&title='.urlencode(bslNormalizeTitle($pTitle)));
 if($searchR['ok']){$srData=$searchR['body']['data']??[];if(is_array($srData)){foreach($srData as $bp){$bn=trim($bp['title']??$bp['name']??'');if($bn!==''){if(!isset($bslExisting[$bn])){$bslExisting[$bn]=$bp;$nn=bslNormalizeTitle($bn);if($nn!==$bn)$bslExistingNorm[$nn]=$bp;}}}}}
 
+$_oneVStat=bslCheckVendorActiveStatus($tk,(int)$vid);
+if(empty($_oneVStat['active'])){echo json_encode(['ok'=>false,'action'=>'fail','error'=>(string)$_oneVStat['reason'],'key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>'','link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;}
+if(!bslIsRealisticPriceRial($pn)){echo json_encode(['ok'=>false,'action'=>'fail','error'=>'قیمت کمتر از ۵,۰۰۰ تومان (پیشگیری از خطای ۵۰۱۱/۶۳۸۱ عدم تایید باسلام)','key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>'','link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;}
+$_oneBarcode=bslExtractValidBarcode($p);
+$pTitle=bslSanitizeModerationTitle($pTitle,$_oneBarcode!=='');
+
 $exBsl=null;
 $nTitle=bslNormalizeTitle($pTitle);
 if(isset($bslExisting[$pTitle]))$exBsl=$bslExisting[$pTitle];
 if(!$exBsl&&isset($bslExistingNorm[$nTitle]))$exBsl=$bslExistingNorm[$nTitle];
-if(!$exBsl&&$nTitle!==''){foreach($bslExistingNorm as $ek=>$ev){if($ek!==''&&($nTitle==$ek||mb_strpos($nTitle,$ek,0,'UTF-8')!==false||mb_strpos($ek,$nTitle,0,'UTF-8')!==false)){$exBsl=$ev;break;}}}
+if(!$exBsl&&$nTitle!==''){foreach($bslExistingNorm as $ek=>$ev){if($ek!==''&&bslTitlesAreSameProduct($nTitle,$ek)){$exBsl=$ev;break;}}}
 // v8.72: جست‌وجوی بالا فقط وضعیت فعال و غیرفعال را می‌دید. محصول
 // بایگانی‌شده یا در انتظار تأیید پیدا نمی‌شد، پس مسیر «ایجاد» می‌رفت
 // و باسلام با «نام تکراری (۴۲۲)» ردش می‌کرد — نه ساخته می‌شد نه آپدیت.
@@ -73774,14 +74693,14 @@ $exStatusVal=0;$exStatusObj=$exBsl['status']??null;
 if(is_array($exStatusObj)&&isset($exStatusObj['value']))$exStatusVal=(int)$exStatusObj['value'];
 elseif(is_numeric($exStatusObj))$exStatusVal=(int)$exStatusObj;
 elseif(is_array($exRevData)&&isset($exRevData['status'])){if(is_array($exRevData['status'])&&isset($exRevData['status']['value']))$exStatusVal=(int)$exRevData['status']['value'];elseif(is_numeric($exRevData['status']))$exStatusVal=(int)$exRevData['status'];}
-$newStock=(int)($bs['stock']??10);
+$newStock=effectiveStock($p,(int)($bs['stock']??10));
 
 $needUpdate=false;$changes=[];
 if($exPrice!=$pn){$needUpdate=true;$changes[]='قیمت '.$exPrice.'→'.$pn;}
 if($exStock!=$newStock){$needUpdate=true;$changes[]='موجودی '.$exStock.'→'.$newStock;}
-if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle)){$needUpdate=true;$changes[]='عنوان';}
+if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle)&&bslTitlesAreSameProduct($exTitle,$pTitle)){$needUpdate=true;$changes[]='عنوان';}
 if($newStock<=0){$needUpdate=true;$changes[]='ناموجود';}
-if($exStatusVal===3567){$needUpdate=true;$changes[]='re-submit';}
+if($exStatusVal===3567&&$newStock>0){$needUpdate=true;$changes[]='re-submit';}
 // v8.69: محتوای تازه
 $cdOne=contentSyncOn($cn)?contentChanges($p,bslRemoteContent($exBsl)):[];
 $_wOneChk=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
@@ -73795,7 +74714,7 @@ if(!empty($_wOneChk['overridden'])){
 }
 if($cdOne){$needUpdate=true;foreach($cdOne as $_c)$changes[]=$_c;}
 
-if($exStatusVal===3790||$exStatusVal===3568||$exStatusVal===4184){
+if(($exStatusVal===3790||$exStatusVal===3568||$exStatusVal===4184)&&$newStock>0){
 $needUpdate=true;
 $statusLabels=[3790=>'غیرفعال',3568=>'در انتظار',4184=>'بایگانی'];
 $changes[]='بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exStatusVal);
@@ -73805,12 +74724,11 @@ if(!$needUpdate){
 echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$exId,'reason'=>'تکرار: نام+قیمت+موجودی یکسان','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
 
-$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
+$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
 if($newStock<=0)$bu['status']=3790;else $bu['status']=2976;
-if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle))$bu['name']=mb_substr($pTitle,0,120);
+if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle)&&bslTitlesAreSameProduct($exTitle,$pTitle))$bu['name']=mb_substr($pTitle,0,120);
 bslApplyContent($bu,$p);   // v8.69: توضیحات کوتاه/بلند، تنوع‌ها و SKU
-
-$buCatId=(int)($bs['category_id']??0);if($buCatId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$buCatId=$_ac;}if($buCatId>0)$bu['category_id']=$buCatId;
+// v10.466: category_id در PATCH محصول موجود ارسال نشود (۴۲۲)
 // v8.64: همهٔ عکس‌های محصول
 $pid=null;$galS=[];$imgS=productImageList($p);
 if($imgS){$umS=bslUploadMany($tk,$imgS,(int)($bs['max_photos']??10));if(!empty($umS['ok'])){$pid=$umS['main'];$galS=$umS['ids'];}}
@@ -73839,64 +74757,45 @@ $freshImgUrl=extractImageFromHtml($srcPage['html'],$p['link']);
 if($freshImgUrl){$up3=bslUpload($tk,$freshImgUrl);if(!empty($up3['ok']))$pid=$up3['file_id'];}
 }
 }
+$_oneEffStock=effectiveStock($p,(int)($bs['stock']??10));
+if($_oneEffStock<=0){
+echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>0,'reason'=>'محصول ناموجود است — در باسلام ساخته نشد (پیشگیری از کد ۷۰۹۳)','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>'','link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
+}
 if(!$pid){
-
-$_builtSingleNoImg=bslBuildUnifiedDescription($p,$pTitle);
-$bsBrief=$_builtSingleNoImg['brief']!==''?$_builtSingleNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
-$bsDesc=$_builtSingleNoImg['description']!==''?$_builtSingleNoImg['description']:$bsBrief;
-$catId=(int)($bs['category_id']??0);
-if($catId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
-if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
-$_wSingleNoImg=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
-$cardCatId=$catId;$cardCatName=bslCatNameById($catId);
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wSingleNoImg['weight'],'package_weight'=>(int)$_wSingleNoImg['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
-if(!empty($p['sku']))$bp['sku']=$p['sku'];
-$r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
-if($r['ok']&&!empty($r['body']['id'])){
-echo json_encode(['ok'=>true,'action'=>'send','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$r['body']['id'],'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink,'warning'=>'بدون تصویر (غیرفعال)'],JSON_UNESCAPED_UNICODE);exit;
-}
-$em=$r['body']['error_description']??$r['body']['message']??$r['body']['error']??'';
-if(is_array($em))$em=json_encode($em,JSON_UNESCAPED_UNICODE);
-/* v8.79: این مسیرِ «ایجاد بدون تصویر» هم می‌تواند خطای نام تکراری بگیرد،
-   ولی تا حالا بدون هیچ تلاشی برای بازیابی، شکست گزارش می‌کرد. بدتر اینکه
-   پیام واقعی باسلام پشت جملهٔ «تصویر آپلود نشد» پنهان می‌شد و کاربر فکر
-   می‌کرد مشکل از عکس است. حالا مثل مسیر اصلی، محصول موجود پیدا و آپدیت
-   می‌شود. */
-/* v8.80: هر وقت «نام تکراری» آمد، حتماً آپدیت کن — خواستهٔ صریح کاربر.
-   تابع مشترک همهٔ راه‌های پیدا کردن شناسه را امتحان می‌کند. */
-if(bslIsDuplicateName($r)){
-$bu3=['primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100)),'status'=>2976];
-if($catId>0)$bu3['category_id']=$catId;
-$fu=bslForceUpdateOnDuplicate($tk,$vid,$pTitle,(string)$pKey,$bu3,$p);
-if(!empty($fu['ok'])){
-echo json_encode(['ok'=>true,'action'=>'update','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$fu['id'],'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink,'changes'=>'آپدیت پس از خطای نام تکراری (بدون تصویر)'],JSON_UNESCAPED_UNICODE);exit;
-}
-echo json_encode(['ok'=>false,'action'=>'fail','error'=>$fu['error'],'key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
-}
-echo json_encode(['ok'=>false,'action'=>'fail','error'=>'تصویر آپلود نشد + ایجاد بدون تصویر هم ناموفق: '.mb_substr($em,0,150),'key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>false,'action'=>'fail','error'=>'تصویر معتبر برای محصول یافت یا آپلود نشد (پیشگیری از خطای ۵۳۸۷ باسلام)','key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>'','link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
 $_builtSingleMain=bslBuildUnifiedDescription($p,$pTitle);
 $bsBrief=$_builtSingleMain['brief']!==''?$_builtSingleMain['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
-$bsDesc=$_builtSingleMain['description']!==''?$_builtSingleMain['description']:$bsBrief;
+$bsDesc=bslEnsureRichCompliantDescription($_builtSingleMain['description'],$pTitle,$p,$_oneBarcode!=='');
 
 $__singleProfKey=trim((string)($_POST['profile_key']??($p['_profile_key']??'')));
 $__singleProf=$__singleProfKey!==''?(loadProfiles()[$__singleProfKey]??null):null;
-$__singleManualCats=bslCollectManualCategories((int)($p['bsl_category_id']??($p['category_id']??0)),$__singleProf,(array)($bs['fallback_cat_ids']??[]),$bs);
+$_singleExplicitCat=(int)($p['bsl_category_id']??($p['category_id']??0));
+$__rawSingleManualCats=bslCollectManualCategories($_singleExplicitCat,$__singleProf,(array)($bs['fallback_cat_ids']??[]),$bs);
+$__singleManualCats=bslFilterSafeManualCategories($pTitle,$__rawSingleManualCats,$bslFlatCats,$_singleExplicitCat);
 $__singleRemManual=[];
 if(!empty($__singleManualCats)){
 $catId=(int)$__singleManualCats[0];
 $__singleRemManual=array_slice($__singleManualCats,1);
 }else{
 $catId=0;
-if($autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
+if(!empty($bslFlatCats)){
+$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);
+if($_ac<=0&&$autoCat)$_ac=autoMatchBslCategoryForce($pTitle,$bslFlatCats);
+if($_ac>0)$catId=$_ac;
+}
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
+}
+if($catId<=0){
+$__sAiQPre=bslQueueForAiCategoryFix($p,['vendor_id'=>$vid,'profile_key'=>$__singleProfKey,'product_key'=>(string)$pKey,'title'=>$pTitle,'tried_cat_ids'=>$__rawSingleManualCats,'forced_price_toman'=>(int)round($pn/10),'endpoint'=>'vendors/'.$vid.'/products','error_code'=>422,'error'=>'دستهٔ پیش‌فرض با عنوان تضاد داشت؛ صف انتخاب دستهٔ هوشمند','step'=>'semantic_category_guard']);
+echo json_encode(['ok'=>false,'action'=>'fail','reason_kind'=>'category_ai_pending','ai_queue_id'=>(string)($__sAiQPre['queue_id']??''),'error'=>'دستهٔ پیش‌فرض با نوع کالا تضاد داشت (پیشگیری از کد ۶۰۴۶)؛ در صف انتخاب دستهٔ هوشمند قرار گرفت','key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>0,'category'=>'','link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
 
 $_wSingleMain=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
 $cardCatId=$catId;
 $cardCatName=bslCatNameById($catId);
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wSingleMain['weight'],'package_weight'=>(int)$_wSingleMain['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galS)?$galS:[$pid])];
-if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_oneEffStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)$_wSingleMain['weight'],'package_weight'=>(int)$_wSingleMain['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galS)?$galS:[$pid]),'status'=>2976];
+if($_oneBarcode!=='')$bp['barcode']=$_oneBarcode;
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
 
@@ -74140,7 +75039,7 @@ elseif(isset($bslExistingNorm[$nBase])){$exBsl=$bslExistingNorm[$nBase];}
 
 if(!$exBsl&&$nTitle!==''){
 foreach($bslExistingNorm as $ek=>$ev){
-if($ek!==''&&($nTitle==$ek||mb_strpos($nTitle,$ek,0,'UTF-8')!==false||mb_strpos($ek,$nTitle,0,'UTF-8')!==false)){
+if($ek!==''&&bslTitlesAreSameProduct($nTitle,$ek)){
 $exBsl=$ev;break;
 }
 }
@@ -74158,7 +75057,7 @@ $exStatusVal=0;
 $exStatusObj=$exBsl['status']??null;
 if(is_array($exStatusObj)&&isset($exStatusObj['value']))$exStatusVal=(int)$exStatusObj['value'];
 elseif(is_numeric($exStatusObj))$exStatusVal=(int)$exStatusObj;
-$newStock=(int)($bs['stock']??10);
+$newStock=effectiveStock($p,(int)($bs['stock']??10));
 
 $catRejectedExisting=false;$catRejectMsg='';
 if($exStatusVal===3567){
@@ -74243,16 +75142,11 @@ $skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'
 usleep(100000);continue;
 }
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت ID#$exId".$updateLog);
-$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
+$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
 if($newStock<=0){$bu['status']=3790;}else{$bu['status']=2976;}
 
-if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle)){$bu['name']=mb_substr($pTitle,0,120);}
+if($exTitle!==''&&$exTitle!==$pTitle&&bslNormalizeTitle($exTitle)!==bslNormalizeTitle($pTitle)&&bslTitlesAreSameProduct($exTitle,$pTitle)){$bu['name']=mb_substr($pTitle,0,120);}
 bslApplyContent($bu,$p);
-
-$buCatId=(int)($bs['category_id']??0);
-if($buCatId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$buCatId=$_ac;}
-if($buCatId<=0)$buCatId=(int)($bs['category_id']??0);
-if($buCatId>0)$bu['category_id']=$buCatId;
 $pid=null;
 // v8.64: همهٔ عکس‌های محصول در آپدیت هم می‌روند
 $updIds=[];
@@ -74776,7 +75670,7 @@ if(!$exBsl){
 $ar=bslReq($tk,'GET','vendors/'.$vid.'/products?per_page=20&statuses=4184&statuses=3790&title='.urlencode($searchQ));
 if($ar['ok']){$arData=$ar['body']['data']??[];if(is_array($arData)){
 foreach($arData as $ap){$an=trim($ap['title']??$ap['name']??'');$ann=bslNormalizeTitle($an);
-if($an===$pTitle||$ann===$nTitle||($ann!==''&&$nTitle!==''&&(mb_strpos($nTitle,$ann,0,'UTF-8')!==false||mb_strpos($ann,$nTitle,0,'UTF-8')!==false))){
+if($an===$pTitle||$ann===$nTitle||($ann!==''&&$nTitle!==''&&bslTitlesAreSameProduct($nTitle,$ann))){
 $exBsl=$ap;$bslExisting[$an]=$ap;$bslExistingNorm[$ann]=$ap;$bslArchivedMap[$an]=$ap;$bslArchivedMap[$ann]=$ap;break;}
 }
 }}}
@@ -74794,11 +75688,11 @@ elseif(is_array($exRevData)&&isset($exRevData['status'])){if(is_array($exRevData
 $exTitle=trim($exBsl['title']??$exBsl['name']??'');
 
 $needUpdate=false;$updateLog='';
-$newStock=(int)($bs['stock']??10);
+$newStock=effectiveStock($p,(int)($bs['stock']??10));
 if($exPrice!=$pn){$needUpdate=true;$updateLog.=' قیمت '.$exPrice.'→'.$pn;}
 if($exStock!=$newStock){$needUpdate=true;$updateLog.=' موجودی '.$exStock.'→'.$newStock;}
 if($newStock<=0){$needUpdate=true;$updateLog.=' ناموجود';}
-if($exStatusVal===3567){$needUpdate=true;$updateLog.=' re-submit';}
+if($exStatusVal===3567&&$newStock>0){$needUpdate=true;$updateLog.=' re-submit';}
 // v8.69: محتوای تازه
 $cdStream=contentSyncOn($cn)?contentChanges($p,bslRemoteContent($exBsl)):[];
 $_wStrChk=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
@@ -74812,7 +75706,7 @@ if(!empty($_wStrChk['overridden'])){
 }
 if($cdStream){$needUpdate=true;$updateLog.=' '.implode('،',$cdStream);}
 
-if($exStatusVal===3790||$exStatusVal===3568||$exStatusVal===4184){
+if(($exStatusVal===3790||$exStatusVal===3568||$exStatusVal===4184)&&$newStock>0){
 $needUpdate=true;
 $statusLabels=[3790=>'غیرفعال',3568=>'در انتظار',4184=>'بایگانی'];
 $updateLog.=' بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exStatusVal);
@@ -74821,13 +75715,13 @@ $updateLog.=' بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$ex
 if(!$needUpdate){$skipped++;send_sse('send_skip',['key'=>$pKey,'title'=>$pTitle,'reason'=>'تکرار','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink]);continue;}
 
 send_sse('send_info',['msg'=>'['.$n.'] آپدیت ID#'.$exId.$updateLog]);
-$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
+$bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
 if($newStock<=0){$bu['status']=3790;}else{$bu['status']=2976;}
 bslApplyContent($bu,$p);   // v8.69: توضیحات، تنوع‌ها و SKU تازه
 
 $buCatId=(int)($bs['category_id']??0);if($buCatId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$buCatId=$_ac;}
 if($buCatId<=0)$buCatId=(int)($bs['category_id']??0);
-if($buCatId>0)$bu['category_id']=$buCatId;
+// v10.466: category_id در PATCH محصول موجود ارسال نشود (۴۲۲)
 
 // v8.64: همهٔ عکس‌های محصول
 $pid=null;$galC=[];$imgC=productImageList($p);
@@ -75930,7 +76824,420 @@ function catfixFetchRejected(string $tk, int $vid, ?array &$partial = null, ?arr
 }
 
 /**
- * اجرای کاملِ اصلاحِ دسته — می‌تواند چند دقیقه طول بکشد و فقط از مسیرِ
+ * v10.466: دسته‌بندیِ دقیقِ دلایلِ عدم تأییدِ محصول در باسلام (وضعیت ۳۵۶۷).
+ * دلایلِ مرتبط با رعایت شئونات اسلامی/پوشش در تصویر (کدهای ۶۴۵۶، ۵۰۳۱، ۶۴۱۹)
+ * را صراحتاً با skip_modesty=true علامت می‌زند تا هرگز به‌صورت خودکار دستکاری یا
+ * باز-ارسال نشوند؛ و تمامِ ۲۱ علتِ غیرشئوناتی را برای اصلاحِ مکانیزمی تفکیک می‌کند.
+ */
+function bslClassifyRejectionReasons(array $p, array $flatCats = []): array {
+    $rev = is_array($p['revision'] ?? null) ? $p['revision'] : [];
+    $revData = is_array($rev['data'] ?? null) ? $rev['data'] : [];
+    $rrList = is_array($rev['rejection_reasons'] ?? null) ? $rev['rejection_reasons'] : [];
+    $metaDesc = trim((string)($rev['metadata']['description'] ?? ''));
+    $title = trim((string)($p['title'] ?? ($p['name'] ?? ($revData['title'] ?? ''))));
+    $curCat = function_exists('bslProductCatId') ? bslProductCatId($p) : (int)($revData['category_id'] ?? 0);
+
+    $codes = [];
+    $texts = $metaDesc !== '' ? [$metaDesc] : [];
+    foreach ($rrList as $rr) {
+        if (!is_array($rr)) continue;
+        $cid = (int)($rr['value'] ?? ($rr['id'] ?? ($rr['code'] ?? 0)));
+        if ($cid > 0 && !in_array($cid, $codes, true)) $codes[] = $cid;
+        $nm = trim((string)($rr['name'] ?? ($rr['title'] ?? '')));
+        if ($nm !== '') $texts[] = $nm;
+        $d = trim((string)($rr['description'] ?? ''));
+        if ($d !== '') $texts[] = $d;
+    }
+    $joined = implode(' | ', $texts);
+
+    // ۱) استثنای صریح: رعایت شئونات اسلامی در تصویر یا مشابه (۶۴۵۶، ۵۰۳۱، ۶۴۱۹)
+    $modestyCodes = [6456, 5031, 6419];
+    $hasModesty = false;
+    foreach ($codes as $c) {
+        if (in_array($c, $modestyCodes, true)) { $hasModesty = true; break; }
+    }
+    if (!$hasModesty && $joined !== '' && preg_match('/شئونات|پوشش\s+نامناسب|حجاب|مغایر\s+با\s+شئونات/u', $joined)) {
+        $hasModesty = true;
+    }
+
+    // ۲) بررسیِ تضادِ معناییِ دستهٔ فعلی حتی وقتی تنها کدِ ثبت‌شده ۷۰۹۳ یا ۵۷۷۱ بوده است
+    $semanticCatClash = false;
+    if ($curCat > 0 && $title !== '' && !empty($flatCats)) {
+        if (bslCategoryHasSemanticClash($title, $curCat, $flatCats)) {
+            $semanticCatClash = true;
+        } else {
+            foreach ($flatCats as $fc) {
+                if ((int)($fc['id'] ?? 0) === $curCat) {
+                    $ft = trim((string)($fc['title'] ?? ($fc['name'] ?? '')));
+                    if ($ft !== '' && bslIsBannedCategoryTitle($ft)) $semanticCatClash = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    $catCodes = [6046, 6457, 7077];
+    $needsCategory = $semanticCatClash;
+    foreach ($codes as $c) {
+        if (in_array($c, $catCodes, true)) { $needsCategory = true; break; }
+    }
+    if (!$needsCategory && $metaDesc !== '' && preg_match('/دسته[\x{200c}\s]*بندی|در\s+دسته\s+/u', $metaDesc)) {
+        $needsCategory = true;
+    }
+
+    $textCodes = [5771, 5386, 6435, 6379, 5351, 5581, 6378, 7083, 6454, 6054];
+    $needsText = false;
+    foreach ($codes as $c) {
+        if (in_array($c, $textCodes, true)) { $needsText = true; break; }
+    }
+    $descRaw = trim((string)($revData['description'] ?? ($p['description'] ?? '')));
+    if (!$needsText && mb_strlen($descRaw, 'UTF-8') < 25) $needsText = true;
+
+    $imgCodes = [5387, 5388, 5043, 6379];
+    $needsImage = false;
+    foreach ($codes as $c) {
+        if (in_array($c, $imgCodes, true)) { $needsImage = true; break; }
+    }
+
+    $priceCodes = [6380, 6381, 5011];
+    $needsPrice = false;
+    foreach ($codes as $c) {
+        if (in_array($c, $priceCodes, true)) { $needsPrice = true; break; }
+    }
+
+    return [
+        'codes'               => $codes,
+        'skip_modesty'        => $hasModesty,
+        'needs_vendor_active' => in_array(7094, $codes, true),
+        'needs_stock'         => in_array(7093, $codes, true),
+        'needs_category'      => $needsCategory,
+        'needs_text_or_title' => $needsText,
+        'needs_image_refresh' => $needsImage,
+        'needs_price_check'   => $needsPrice,
+        'semantic_cat_clash'  => $semanticCatClash,
+        'summary_text'        => mb_substr($joined, 0, 240, 'UTF-8'),
+    ];
+}
+
+/**
+ * v10.466: ایندکسِ حافظه‌ایِ محصولاتِ محلی (پروفایل‌ها + دفترچهٔ remote_map)
+ * برای تطبیقِ سریعِ محصولاتِ ردشدهٔ باسلام با منبعِ اصلی (موجودی واقعی، تصاویر اصلی، مشخصات).
+ */
+function bslBuildLocalProductIndex(?array $profiles = null): array {
+    if ($profiles === null) $profiles = function_exists('loadProfiles') ? loadProfiles() : [];
+    $byRemote = [];
+    $byNorm = [];
+    $byBare = [];
+    $rm = function_exists('remoteMapLoad') ? (array)(remoteMapLoad()['bsl'] ?? []) : [];
+    $ledgerKeyByRid = [];
+    foreach ($rm as $mk => $row) {
+        if (!is_array($row)) continue;
+        $rid = (int)($row['id'] ?? 0);
+        if ($rid <= 0) continue;
+        $rawPk = (strpos((string)$mk, '@') !== false) ? substr((string)$mk, 0, strpos((string)$mk, '@')) : (string)$mk;
+        $ledgerKeyByRid[$rid] = ['product_key' => $rawPk, 'title' => trim((string)($row['title'] ?? ''))];
+    }
+    $byKey = [];
+    foreach ($profiles as $profKey => $prof) {
+        if (!is_array($prof)) continue;
+        $prods = is_array($prof['products'] ?? null) ? $prof['products'] : [];
+        foreach ($prods as $pk => $pr) {
+            if (!is_array($pr)) continue;
+            $itemKey = trim((string)($pr['key'] ?? (is_string($pk) ? $pk : '')));
+            $pt = trim((string)($pr['title'] ?? ''));
+            if ($pt === '') continue;
+            $entry = ['product' => $pr, 'profile' => $prof, 'profile_key' => (string)$profKey, 'product_key' => $itemKey];
+            if ($itemKey !== '' && !isset($byKey[$itemKey])) $byKey[$itemKey] = $entry;
+            $nt = bslNormalizeTitle($pt);
+            if ($nt !== '' && !isset($byNorm[$nt])) $byNorm[$nt] = $entry;
+            $bare = bslNormalizeTitle(stripProductCode($pt));
+            if ($bare !== '' && !isset($byBare[$bare])) $byBare[$bare] = $entry;
+        }
+    }
+    foreach ($ledgerKeyByRid as $rid => $inf) {
+        $pk0 = (string)($inf['product_key'] ?? '');
+        if ($pk0 !== '' && isset($byKey[$pk0])) {
+            $byRemote[$rid] = $byKey[$pk0];
+        } elseif ($inf['title'] !== '') {
+            $nt0 = bslNormalizeTitle($inf['title']);
+            if ($nt0 !== '' && isset($byNorm[$nt0])) $byRemote[$rid] = $byNorm[$nt0];
+        }
+    }
+    return ['by_remote' => $byRemote, 'by_norm' => $byNorm, 'by_bare' => $byBare];
+}
+
+function bslFindLocalSourceProduct(int $remoteId, string $title, array $idx): ?array {
+    if ($remoteId > 0 && isset($idx['by_remote'][$remoteId])) return $idx['by_remote'][$remoteId];
+    $nt = bslNormalizeTitle($title);
+    if ($nt !== '' && isset($idx['by_norm'][$nt])) return $idx['by_norm'][$nt];
+    $bare = bslNormalizeTitle(stripProductCode($title));
+    if ($bare !== '' && isset($idx['by_bare'][$bare])) return $idx['by_bare'][$bare];
+    $cleanT = bslNormalizeTitle(bslSanitizeModerationTitle($title, true));
+    if ($cleanT !== '' && isset($idx['by_bare'][$cleanT])) return $idx['by_bare'][$cleanT];
+    return null;
+}
+
+/**
+ * v10.466: استخراجِ شناسه‌هایِ واقعیِ عکس از revision.data محصولِ ردشده.
+ * در محصولاتِ ۳۵۶۷، فیلدِ سطحِ بالای photo تصویرِ placeholder ادمینِ باسلام است
+ * و photos خالی است؛ شناسه‌های واقعی در revision.data.photos / revision.data.photo قرار دارند.
+ */
+function bslExtractRevisionPhotoIds(array $origP): array {
+    $rev = is_array($origP['revision'] ?? null) ? $origP['revision'] : [];
+    $revData = is_array($rev['data'] ?? null) ? $rev['data'] : [];
+    $ids = [];
+    $addObj = static function ($ph) use (&$ids): void {
+        if (is_numeric($ph)) {
+            $id = (int)$ph;
+            if ($id > 0 && !in_array($id, $ids, true)) $ids[] = $id;
+            return;
+        }
+        if (!is_array($ph)) return;
+        $url = trim((string)($ph['original'] ?? ($ph['lg'] ?? ($ph['md'] ?? ($ph['url'] ?? '')))));
+        if ($url !== '' && bslIsPlaceholderImageUrl($url)) return;
+        $id = (int)($ph['id'] ?? ($ph['file_id'] ?? 0));
+        if ($id > 0 && !in_array($id, $ids, true)) $ids[] = $id;
+    };
+    $addObj($revData['photo'] ?? null);
+    foreach ((array)($revData['photos'] ?? []) as $ph) $addObj($ph);
+    $addObj($origP['photo'] ?? null);
+    foreach ((array)($origP['photos'] ?? []) as $ph) $addObj($ph);
+    return ['main' => $ids[0] ?? 0, 'ids' => $ids];
+}
+
+/**
+ * v10.466: اعمالِ امنِ اصلاحِ دسته‌بندی + محتوا/تصویر/موجودی/قیمت روی محصولِ ردشده (۳۵۶۷).
+ * - اگر محصول واقعاً ناموجود باشد یا قیمت زیر کفِ مجاز (۵,۰۰۰ تومان) داشته باشد، به‌جای
+ *   ارسالِ مجدد و خوردنِ دوبارهٔ کد ۷۰۹۳/۵۰۱۱/۶۳۸۱، آن را بایگانی (۴۱۸۴) یا غیرفعال (۳۷۹۰) می‌کند.
+ * - اگر allow_category_change فعال باشد یا دسته تغییر نکرده باشد، مستقیماً PATCH می‌زند.
+ * - اگر باسلام تغییرِ دسته را قفل کرده باشد (HTTP 422: «فعلا قادر به تغییر دسته بندی محصول خود نمی باشید»)،
+ *   محصولِ معیوبِ قبلی را تغییرِ نام و بایگانی (۴۱۸۴) کرده و محصولِ تمیزِ جایگزین را با شناسه‌هایِ واقعیِ عکس،
+ *   عنوانِ استاندارد، توضیحاتِ غنی و دفترچهٔ به‌روز ثبت می‌کند.
+ */
+function bslApplyCategoryChangeOrRecreate(
+    string $tk,
+    int $vid,
+    array $origP,
+    int $newCatId,
+    array $cn = [],
+    ?array $localMatch = null,
+    bool $forceFreshPhotos = false
+): array {
+    $pId = (int)($origP['id'] ?? 0);
+    if ($pId <= 0) return ['ok' => false, 'error' => 'شناسهٔ محصول نامعتبر است'];
+    $bs = is_array($cn['basalam'] ?? null) ? $cn['basalam'] : [];
+
+    $fullP = $origP;
+    if (!isset($fullP['revision']['data']) || !array_key_exists('allow_category_change', $fullP)) {
+        $rg = bslReq($tk, 'GET', 'products/' . $pId);
+        if (!empty($rg['ok']) && is_array($rg['body'] ?? null)) $fullP = $rg['body'];
+    }
+    $rev = is_array($fullP['revision'] ?? null) ? $fullP['revision'] : [];
+    $revData = is_array($rev['data'] ?? null) ? $rev['data'] : [];
+    $curCatId = function_exists('bslProductCatId') ? bslProductCatId($fullP) : (int)($revData['category_id'] ?? 0);
+    if ($newCatId <= 0) $newCatId = $curCatId;
+    if ($newCatId <= 0) return ['ok' => false, 'error' => 'دستهٔ مقصد نامعتبر است'];
+
+    $localProd = is_array($localMatch['product'] ?? null) ? $localMatch['product'] : [];
+    $localProf = is_array($localMatch['profile'] ?? null) ? $localMatch['profile'] : null;
+
+    $rawOrigTitle = trim((string)($fullP['title'] ?? ($fullP['name'] ?? ($revData['title'] ?? ''))));
+    if ($rawOrigTitle === '' && !empty($localProd['title'])) $rawOrigTitle = trim((string)$localProd['title']);
+    if ($rawOrigTitle === '') return ['ok' => false, 'error' => 'عنوانِ محصول خالی است'];
+
+    $barcode = !empty($localProd) ? bslExtractValidBarcode($localProd) : '';
+    if ($barcode === '') {
+        $candBc = preg_replace('/\D+/', '', (string)($revData['barcode'] ?? ($fullP['barcode'] ?? '')));
+        if (in_array(strlen($candBc), [8, 12, 13, 14], true) && !preg_match('/^0+$/', $candBc)) $barcode = $candBc;
+    }
+    $cleanTitle = bslSanitizeModerationTitle($rawOrigTitle, $barcode !== '');
+    if ($cleanTitle === '') $cleanTitle = mb_substr($rawOrigTitle, 0, 120, 'UTF-8');
+
+    // محاسبهٔ موجودی و قیمتِ واقعی
+    $origStock = (int)($revData['inventory'] ?? ($revData['stock'] ?? ($fullP['inventory'] ?? ($fullP['stock'] ?? 0))));
+    if (!empty($localProd)) {
+        $finalStock = effectiveStock($localProd, max(1, (int)($bs['stock'] ?? 10)));
+    } else {
+        $finalStock = $origStock;
+    }
+
+    $origPriceRial = (int)($revData['primary_price'] ?? ($fullP['primary_price'] ?? ($fullP['price'] ?? 0)));
+    $finalPriceRial = $origPriceRial;
+    if (!bslIsRealisticPriceRial($finalPriceRial) && !empty($localProd)) {
+        $srcToman = (int)($localProd['final_price'] ?? ($localProd['price'] ?? 0));
+        if ($srcToman > 0) {
+            $targetShop = ['vendor_id' => $vid, 'token' => $tk];
+            if (function_exists('bslAllShops')) {
+                foreach (bslAllShops($cn) as $sh0) {
+                    if ((int)($sh0['vendor_id'] ?? 0) === $vid) { $targetShop = $sh0; break; }
+                }
+            }
+            $adjToman = function_exists('destAdjustedPrice')
+                ? destAdjustedPrice($srcToman, $localProf, 'basalam', (int)($bs['price_round'] ?? 0), $targetShop)
+                : $srcToman;
+            if ($adjToman > 0) $finalPriceRial = $adjToman * 10;
+        }
+    }
+
+    // اگر محصول ناموجود است یا قیمتش غیرواقعی (< ۵,۰۰۰ تومان) است، به‌جای ایجاد خطای ۷۰۹۳/۵۰۱۱ بایگانی کن
+    if ($finalStock <= 0 || !bslIsRealisticPriceRial($finalPriceRial)) {
+        $archReason = $finalStock <= 0
+            ? 'محصول ناموجود بود (کد ۷۰۹۳) — بایگانی شد تا خطای عدم تأیید تکرار نشود'
+            : 'قیمت محصول زیر کف مجاز باسلام بود (کد ۵۰۱۱/۶۳۸۱) — بایگانی شد';
+        $archRes = function_exists('bslSetProductStatus')
+            ? bslSetProductStatus($tk, $vid, $pId, 4184, 'auto')
+            : bslReq($tk, 'PATCH', 'products/' . $pId, ['status' => 3790, 'stock' => 0]);
+        if (empty($archRes['ok'])) {
+            $archRes = bslReq($tk, 'PATCH', 'products/' . $pId, ['status' => 3790, 'stock' => 0]);
+        }
+        if (!empty($archRes['ok'])) {
+            return ['ok' => true, 'id' => $pId, 'action' => 'archived', 'category_id' => $curCatId, 'msg' => $archReason];
+        }
+        return ['ok' => false, 'error' => 'محصول ناموجود/کم‌قیمت بود ولی بایگانی هم ناموفق ماند: ' . bslErrText($archRes)];
+    }
+
+    // آماده‌سازیِ توضیحاتِ غنی و وزن
+    if (!empty($localProd)) {
+        $built = bslBuildUnifiedDescription($localProd, $cleanTitle);
+        $cleanBrief = $built['brief'] !== '' ? $built['brief'] : mb_substr(s4HtmlToPlainTextForBsl($cleanTitle), 0, 250, 'UTF-8');
+        $cleanDesc = bslEnsureRichCompliantDescription($built['description'], $cleanTitle, $localProd, $barcode !== '');
+    } else {
+        $rawBrief = trim((string)($revData['brief'] ?? ($fullP['brief'] ?? '')));
+        $rawDesc  = trim((string)($revData['description'] ?? ($fullP['description'] ?? '')));
+        $cleanBrief = bslSanitizeModerationText($rawBrief !== '' ? $rawBrief : $cleanTitle, $barcode !== '');
+        if (mb_strlen($cleanBrief, 'UTF-8') < 10) $cleanBrief = mb_substr($cleanTitle, 0, 250, 'UTF-8');
+        $cleanBrief = mb_substr($cleanBrief, 0, 250, 'UTF-8');
+        $cleanDesc = bslEnsureRichCompliantDescription($rawDesc, $cleanTitle, [], $barcode !== '');
+    }
+
+    $origW = (int)($revData['net_weight'] ?? ($revData['weight'] ?? ($fullP['net_weight'] ?? ($fullP['weight'] ?? 0))));
+    if ($origW <= 0) $origW = (int)($bs['weight'] ?? 500);
+    $origPW = (int)($revData['packaged_weight'] ?? ($revData['package_weight'] ?? ($fullP['packaged_weight'] ?? ($fullP['package_weight'] ?? 0))));
+    if ($origPW <= $origW) $origPW = $origW + 100;
+    $wInfo = bslResolveProductWeights($localProd, $origW, $origPW);
+    $finalW = max(50, (int)($wInfo['weight'] ?? $origW));
+    $finalPW = max($finalW + 50, (int)($wInfo['package_weight'] ?? $origPW));
+    $prepDays = max(1, (int)($revData['preparation_day'] ?? ($revData['preparation_days'] ?? ($bs['preparation_days'] ?? 3))));
+
+    // آماده‌سازیِ عکس‌ها (بازآپلودِ استاندارد در صورت خطای کیفی/کادر/واترمارک یا نبودنِ عکس در revision)
+    $revPhotos = bslExtractRevisionPhotoIds($fullP);
+    $photoMain = (int)($revPhotos['main'] ?? 0);
+    $photoIds  = (array)($revPhotos['ids'] ?? []);
+    $uploadedFresh = false;
+    if (($forceFreshPhotos || $photoMain <= 0) && !empty($localProd)) {
+        $srcImgs = productImageList($localProd);
+        if (!empty($srcImgs)) {
+            $um = bslUploadMany($tk, $srcImgs, (int)($bs['max_photos'] ?? 10));
+            if (!empty($um['ok']) && (int)($um['main'] ?? 0) > 0) {
+                $photoMain = (int)$um['main'];
+                $photoIds  = !empty($um['ids']) ? $um['ids'] : [$photoMain];
+                $uploadedFresh = true;
+            }
+        }
+    }
+
+    $sameCategory = ($curCatId > 0 && $newCatId === $curCatId);
+    $canPatchCat  = !empty($fullP['allow_category_change']);
+
+    // مسیر الف: همان دسته است یا باسلام اجازهٔ تغییر مستقیم دسته را داده است → PATCH مستقیم
+    if ($sameCategory || $canPatchCat) {
+        $bu = [
+            'name'             => mb_substr($cleanTitle, 0, 120, 'UTF-8'),
+            'brief'            => $cleanBrief,
+            'description'      => $cleanDesc,
+            'primary_price'    => $finalPriceRial,
+            'stock'            => $finalStock,
+            'weight'           => $finalW,
+            'package_weight'   => $finalPW,
+            'preparation_days' => $prepDays,
+            'is_wholesale'     => false,
+            'status'           => 2976,
+        ];
+        if (!$sameCategory && $canPatchCat) $bu['category_id'] = $newCatId;
+        if ($barcode !== '') $bu['barcode'] = $barcode;
+        if ($uploadedFresh && $photoMain > 0) {
+            $bu['photo']  = $photoMain;
+            $bu['photos'] = !empty($photoIds) ? $photoIds : [$photoMain];
+        }
+        $rPatch = bslReq($tk, 'PATCH', 'products/' . $pId, $bu);
+        if (!empty($rPatch['ok']) && !empty($rPatch['body']['id'])) {
+            return [
+                'ok'          => true,
+                'id'          => (int)$rPatch['body']['id'],
+                'action'      => 'patched',
+                'category_id' => $sameCategory ? $curCatId : $newCatId,
+                'msg'         => $sameCategory
+                    ? 'محتوا، موجودی و استانداردهای محصول اصلاح و برای بررسی مجدد ارسال شد'
+                    : 'دسته و محتوای محصول مستقیماً اصلاح شد',
+            ];
+        }
+        if ($sameCategory) {
+            return ['ok' => false, 'error' => 'PATCH ناموفق: ' . bslErrText($rPatch), 'last_response' => $rPatch];
+        }
+    }
+
+    // مسیر ب: باسلام تغییر دسته روی محصولِ موجود را قفل کرده (HTTP 422) → بایگانیِ قدیمی + ایجادِ جایگزینِ تمیز
+    if ($photoMain <= 0) {
+        return ['ok' => false, 'error' => 'شناسهٔ تصویر معتبر برای بازسازی محصول یافت نشد'];
+    }
+    $retiredName = mb_substr($rawOrigTitle, 0, 92, 'UTF-8') . ' [بایگانی ' . $pId . ']';
+    bslReq($tk, 'PATCH', 'products/' . $pId, [
+        'name'   => $retiredName,
+        'stock'  => 0,
+        'status' => 3790,
+    ]);
+    if (function_exists('bslSetProductStatus')) {
+        bslSetProductStatus($tk, $vid, $pId, 4184, 'archive');
+    }
+
+    $bp = [
+        'name'             => mb_substr($cleanTitle, 0, 120, 'UTF-8'),
+        'brief'            => $cleanBrief,
+        'description'      => $cleanDesc,
+        'primary_price'    => $finalPriceRial,
+        'stock'            => $finalStock,
+        'preparation_days' => $prepDays,
+        'weight'           => $finalW,
+        'package_weight'   => $finalPW,
+        'is_wholesale'     => false,
+        'category_id'      => $newCatId,
+        'photo'            => $photoMain,
+        'photos'           => !empty($photoIds) ? $photoIds : [$photoMain],
+        'status'           => 2976,
+    ];
+    if ($barcode !== '') $bp['barcode'] = $barcode;
+    $origSku = trim((string)($localProd['sku'] ?? ($revData['sku'] ?? ($fullP['sku'] ?? ''))));
+    if ($origSku !== '') $bp['sku'] = mb_substr($origSku, 0, 60, 'UTF-8');
+
+    $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+    if (empty($rCreate['ok']) && bslIsDuplicateName($rCreate)) {
+        $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
+        $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+    }
+    if (!empty($rCreate['ok']) && !empty($rCreate['body']['id'])) {
+        $newId = (int)$rCreate['body']['id'];
+        if (!empty($localProd)) {
+            bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $newId, (string)$bp['name'], $finalPriceRial, $finalStock, $finalW);
+        }
+        bslCatalogNote($vid, (string)$bp['name'], $newId);
+        if (!empty($localMatch['profile_key'])) {
+            bslSaveAiCategoryToProfile((string)$localMatch['profile_key'], (string)($localMatch['product_key'] ?? ''), $cleanTitle, $newCatId);
+        }
+        return [
+            'ok'            => true,
+            'id'            => $newId,
+            'replaced_from' => $pId,
+            'action'        => 'recreated',
+            'category_id'   => $newCatId,
+            'msg'           => 'دسته قفل بود؛ محصولِ معیوب #' . $pId . ' بایگانی و محصولِ تمیز #' . $newId . ' ثبت شد',
+        ];
+    }
+    return [
+        'ok'            => false,
+        'error'         => 'بازسازی محصول با دستهٔ جدید ناموفق: ' . bslErrText($rCreate),
+        'last_response' => $rCreate,
+    ];
+}
  * پس‌زمینه صدا زده می‌شود.
  *
  * $mode: 'ai_text' متنِ بررسیِ خودِ باسلام · 'master' فقط مدلِ مستر ·
@@ -76040,6 +77347,20 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         }
     }
 
+    $vActiveChk = bslCheckVendorActiveStatus($tk, $vid);
+    if (empty($vActiveChk['active'])) {
+        $inactMsg = (string)($vActiveChk['reason'] ?? ('غرفه #' . $vid . ' غیرفعال است'));
+        catfixProgress(['log_add' => ['⏸ ' . $inactMsg . ' — عبور سریع از این غرفه (پیشگیری از کد ۷۰۹۴)']]);
+        return ['ok' => true, 'skipped_inactive_vendor' => true, 'mode' => $mode, 'total' => 0,
+                'fixed' => (int)($cp['fixed'] ?? 0), 'failed' => (int)($cp['failed'] ?? 0),
+                'no_ai' => (int)($cp['no_ai'] ?? 0), 'no_cat' => (int)($cp['no_cat'] ?? 0),
+                'skip_same' => (int)($cp['skip_same'] ?? 0), 'skip_tried' => (int)($cp['skip_tried'] ?? 0),
+                'asked' => (int)($cp['asked'] ?? 0), 'cache_hits' => (int)($cp['cache_hits'] ?? 0),
+                'learned_hits' => (int)($cp['learned_hits'] ?? 0),
+                'items' => is_array($cp['items'] ?? null) ? $cp['items'] : [],
+                'took' => round(microtime(true) - $t0, 1), 'at' => time(), 'msg' => $inactMsg];
+    }
+
     catfixProgress(['phase' => 'cats', 'log_add' => ['📂 دریافتِ درختِ دسته‌بندی‌های باسلام...']]);
     $cats = catfixFlatCats($tk);
     if (!$cats) return ['ok' => false, 'error' => 'دسته‌بندی‌ها بارگذاری نشد'];
@@ -76100,12 +77421,20 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
 
     /* --- فهرستِ محصولات --- */
     $partial = []; $fetchMeta = [];
+    $maxLimit = max(0, (int)($opts['limit'] ?? 0));
     if ($onlyId > 0) {
         catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ محصول #' . $onlyId]]);
         $rg = bslReq($tk, 'GET', 'products/' . $onlyId);
         if (empty($rg['ok'])) $rg = bslReq($tk, 'GET', 'vendors/' . $vid . '/products/' . $onlyId);
         if (empty($rg['ok'])) return ['ok' => false, 'error' => 'محصول یافت نشد (HTTP ' . ($rg['code'] ?? '?') . ')'];
         $products = [(array)($rg['body'] ?? [])];
+    } elseif ($maxLimit > 0 && $maxLimit <= 100) {
+        $ppLim = min(100, max(10, $maxLimit));
+        catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ سریعِ ' . aiFaNum($maxLimit) . ' محصولِ ردشده (وضعیت ۳۵۶۷)...']]);
+        $rLim = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=1&per_page=' . $ppLim . '&statuses=3567');
+        if (empty($rLim['ok'])) return ['ok' => false, 'error' => 'دریافت فهرست ردشده ناموفق (HTTP ' . ($rLim['code'] ?? '?') . ')'];
+        $products = array_slice(array_values(array_filter(bslRowsOf($rLim['body']), 'is_array')), 0, $maxLimit);
+        $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => 1];
     } else {
         catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ محصولاتِ ردشده (وضعیت ۳۵۶۷)...']]);
         $products = catfixFetchRejected($tk, $vid, $partial, $fetchMeta);
@@ -76129,6 +77458,9 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 ];
             }
             catfixProgress(['log_add' => ['🤖 ' . aiFaNum(count($pendingAiItems)) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد']]);
+        }
+        if ($maxLimit > 0 && count($products) > $maxLimit) {
+            $products = array_slice($products, 0, $maxLimit);
         }
     }
     if (!empty($partial['partial']) || (!empty($fetchMeta) && empty($fetchMeta['complete']))) {
@@ -76200,7 +77532,9 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $cpDoneSet = [];
     foreach ($cpDoneIds as $dx) $cpDoneSet[(string)$dx] = true;
     $allKnownShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
-    $allLoadedProfiles = null;
+    $allLoadedProfiles = function_exists('loadProfiles') ? loadProfiles() : [];
+    $localIndex = bslBuildLocalProductIndex($allLoadedProfiles);
+    $deadProviders401 = [];
     $cpSave = function () use (&$cpDoneIds, &$fixed, &$failed, &$noAi, &$noCat,
         &$skipSame, &$skipTried, &$asked, &$cacheHits, &$learnedHits, &$profHits,
         &$idx, &$items, $cpStartedAt, $opts) {
@@ -76250,6 +77584,63 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             'skip_same' => $skipSame, 'skip_tried' => $skipTried, 'asked' => $asked,
             'learned_hits' => $learnedHits]);
 
+        $cls = $isPendingCreate ? ['skip_modesty' => false, 'needs_category' => true, 'needs_image_refresh' => false] : bslClassifyRejectionReasons($p, $cats);
+        $localMatch = $isPendingCreate ? null : bslFindLocalSourceProduct($pId, $pName, $localIndex);
+
+        if (!$isPendingCreate) {
+            // ۱) استثنای صریحِ قوانین شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱، ۶۴۱۹): عبور بدون هیچ دستکاری
+            if (!empty($cls['skip_modesty'])) {
+                $skipSame++;
+                $push('skipped', 'ردشده به‌دلیل قوانین شئونات تصویری — عبور بدون دستکاری', $curCat, bslCatNameById($curCat));
+                catfixProgress(['log_add' => ['⏭️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — شئونات تصویری (بدون دستکاری)']]);
+                $cpMark();
+                continue;
+            }
+
+            // ۲) اگر محصول ناموجود است (کد ۷۰۹۳ و در منبع هم ناموجود است)، بدون سوزاندن سهمیهٔ AI فوراً بایگانی شود
+            $revDataQuick = is_array($rev['data'] ?? null) ? $rev['data'] : [];
+            $origInvQuick = (int)($revDataQuick['inventory'] ?? ($revDataQuick['stock'] ?? ($p['inventory'] ?? 0)));
+            $realInvQuick = (!empty($localMatch['product']) && is_array($localMatch['product']))
+                ? effectiveStock($localMatch['product'], max(1, (int)($bs['stock'] ?? 10)))
+                : $origInvQuick;
+            if ($realInvQuick <= 0) {
+                $archQuick = bslApplyCategoryChangeOrRecreate($tk, $vid, $p, max(1, $curCat), $cn, $localMatch, false);
+                if (!empty($archQuick['ok'])) {
+                    $fixed++;
+                    $push('fixed', (string)($archQuick['msg'] ?? 'محصول ناموجود بایگانی شد'), $curCat, bslCatNameById($curCat));
+                    catfixProgress(['log_add' => ['📦 [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — ناموجود بود؛ بایگانی شد (رفع کد ۷۰۹۳)']]);
+                    $cpMark();
+                } else {
+                    $failed++;
+                    $push('failed', (string)($archQuick['error'] ?? 'بایگانی کالای ناموجود ناموفق'), $curCat, bslCatNameById($curCat));
+                    $cpSave();
+                }
+                usleep(250000);
+                continue;
+            }
+
+            // ۳) اگر دستهٔ فعلی سالم و بدون تضاد است و علتِ رد متن/عنوان/بارکد/قیمت/کیفیتِ عکس/موجودی بوده → اصلاحِ مستقیم بدون نیاز به AI
+            if (empty($cls['needs_category']) && $curCat > 0) {
+                $curCatName0 = bslCatNameById($curCat);
+                $healRes = bslApplyCategoryChangeOrRecreate($tk, $vid, $p, $curCat, $cn, $localMatch, !empty($cls['needs_image_refresh']));
+                if (!empty($healRes['ok'])) {
+                    $fixed++;
+                    $push('fixed', (string)($healRes['msg'] ?? 'اصلاح محتوا/موجودی/تصویر و ارسال مجدد'), $curCat, $curCatName0, (int)($healRes['id'] ?? $pId));
+                    catfixProgress(['log_add' => ['✅🛠️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8')
+                        . ' — ' . (string)($healRes['msg'] ?? 'اصلاح محتوا/استاندارد') . ' (کدها: ' . implode(',', (array)($cls['codes'] ?? [])) . ')']]);
+                    $cpMark();
+                } else {
+                    $failed++;
+                    $errHeal = (string)($healRes['error'] ?? 'اصلاح ناموفق');
+                    $push('failed', $errHeal, $curCat, $curCatName0);
+                    catfixProgress(['log_add' => ['❌ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — ' . mb_substr($errHeal, 0, 80, 'UTF-8')]]);
+                    $cpSave();
+                }
+                usleep(350000);
+                continue;
+            }
+        }
+
         $itemMode = ($isPendingCreate && $mode === 'ai_text') ? ($mp !== null ? 'fallback' : 'ai_text') : $mode;
 
         if ($pName === '' && $itemMode !== 'ai_text') {
@@ -76261,10 +77652,12 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
 
         $catId = 0; $catName = ''; $winKeys = [];
 
-        /* v10.107: اول حافظهٔ یادگیری (فقط اگر دسته برگ واقعی باشد و قبلاً رد نشده باشد)، بعد مدل */
+        /* v10.107 + v10.466: اول حافظهٔ یادگیری (فقط اگر برگ واقعی باشد، رد نشده باشد و تضاد معنایی نداشته باشد) */
         if ($useLearn && $pName !== '' && function_exists('catLearnLookup')) {
             $lid = (int)catLearnLookup($pName);
-            if ($lid > 0 && isset($trueLeafSet[$lid]) && !in_array($lid, $pendingTried, true)) {
+            if ($lid > 0 && $lid !== $curCat && isset($trueLeafSet[$lid])
+                && !in_array($lid, $pendingTried, true)
+                && !bslCategoryHasSemanticClash($pName, $lid, $cats)) {
                 $lname = '';
                 if (function_exists('bslCatName')) $lname = (string)bslCatName($lid);
                 if ($lname === '' && !empty($cats)) {
@@ -76272,17 +77665,25 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                         if ((int)($c['id'] ?? 0) === $lid) { $lname = (string)($c['title'] ?? $c['name'] ?? ''); break; }
                     }
                 }
-                $catId = $lid;
-                $catName = $lname !== '' ? $lname : ('#' . $lid);
-                $learnedHits++;
-                if ($learnFirst || $mode === 'learned') {
-                    goto CATFIX_AFTER_AI_PICK;
+                if ($lname === '' || !bslIsBannedCategoryTitle($lname)) {
+                    $catId = $lid;
+                    $catName = $lname !== '' ? $lname : ('#' . $lid);
+                    $learnedHits++;
+                    if ($learnFirst || $mode === 'learned') {
+                        goto CATFIX_AFTER_AI_PICK;
+                    }
                 }
             }
         }
 
         if ($itemMode === 'ai_text') {
             if ($isPendingCreate) {
+                $detId = autoMatchBslCategory($pName, $cats);
+                if ($detId > 0 && isset($trueLeafSet[$detId]) && !in_array($detId, $pendingTried, true)) {
+                    $catId = $detId;
+                    $catName = bslCatNameById($catId);
+                    goto CATFIX_AFTER_AI_PICK;
+                }
                 $noAi++; $push('no_ai', 'محصول هنوز در باسلام ساخته نشده؛ برای تصحیح دسته یک مدل هوش مصنوعی در بخش 🤖 فعال کنید');
                 catfixProgress(['log_add' => ['⚠️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — برای محصولِ کنارگذاشته‌شده مدل AI فعال نیست']]);
                 $cpSave();
@@ -76293,21 +77694,29 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 $d = trim((string)($rr['description'] ?? ''));
                 if ($d !== '' && mb_strlen($d, 'UTF-8') > 5) $aiText .= ($aiText ? ' ' : '') . $d;
             }
-            if ($aiText === '') {
-                $noAi++; $push('no_ai', 'متنِ بررسیِ باسلام برای این محصول وجود ندارد');
-                catfixProgress(['log_add' => ['⚠️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — متنِ AI ندارد']]);
+            $pickedFromText = 0;
+            if ($aiText !== '') {
+                $res = extractAiCategoryFromTextEx($aiText, $cats);
+                $pickedFromText = (int)($res['catId'] ?? 0);
+                if ($pickedFromText > 0) $pickedFromText = findLeafCategory($pickedFromText, $cats);
+                if ($pickedFromText > 0 && ($pickedFromText === $curCat || bslCategoryHasSemanticClash($pName, $pickedFromText, $cats))) {
+                    $pickedFromText = 0;
+                }
+            }
+            if ($pickedFromText <= 0) {
+                // v10.466: وقتی کارشناس دستهٔ پیشنهادی ننوشته (مثلاً فقط کد ۶۰۴۶ یا دستهٔ ممنوع ۵۵۴/۲۳۱ بوده)، از تطبیقگر برگِ معنایی استفاده کن
+                $detLeaf = autoMatchBslCategory($pName, $cats);
+                if ($detLeaf > 0 && $detLeaf !== $curCat && isset($trueLeafSet[$detLeaf]) && !catTriedHas($pId, $detLeaf)) {
+                    $pickedFromText = $detLeaf;
+                }
+            }
+            if ($pickedFromText <= 0) {
+                $noCat++; $push('no_cat', 'از متنِ بررسی یا تطبیقگرِ برگ دسته‌ای استخراج نشد');
+                catfixProgress(['log_add' => ['⚠️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — دستهٔ جایگزین درنیامد']]);
                 $cpSave();
                 continue;
             }
-            $res = extractAiCategoryFromTextEx($aiText, $cats);
-            $catId = (int)($res['catId'] ?? 0);
-            if ($catId <= 0) {
-                $noCat++; $push('no_cat', 'از متنِ بررسی هیچ دسته‌ای استخراج نشد');
-                catfixProgress(['log_add' => ['⚠️ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8') . ' — دسته از متن درنیامد']]);
-                $cpSave();
-                continue;
-            }
-            $catId = findLeafCategory($catId, $cats);
+            $catId = $pickedFromText;
             $catName = bslCatNameById($catId);
         } else {
             $exclude = $isPendingCreate ? $pendingTried : catTriedExclude($pId, $curCat);
@@ -76321,67 +77730,105 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 foreach ((array)($trRow['tried'] ?? []) as $tcid => $tinfo)
                     $triedInfo[] = ['id' => (int)$tcid, 'name' => (string)($tinfo['name'] ?? '')];
             }
+            // اگر یادداشتِ کارشناسِ باسلام خودش دستهٔ دقیق را گفته، قبل از مصرف توکن AI بررسی شود
+            if (!$isPendingCreate) {
+                $modNote = trim((string)($rev['metadata']['description'] ?? ''));
+                if ($modNote !== '') {
+                    $modEx = extractAiCategoryFromTextEx($modNote, $cats);
+                    $modCid = (int)($modEx['catId'] ?? 0);
+                    if ($modCid > 0) $modCid = findLeafCategory($modCid, $cats);
+                    if ($modCid > 0 && $modCid !== $curCat && isset($trueLeafSet[$modCid])
+                        && !in_array($modCid, $exclude, true) && !bslCategoryHasSemanticClash($pName, $modCid, $cats)) {
+                        $catId = $modCid;
+                        $catName = bslCatNameById($catId);
+                        catfixProgress(['log_add' => ['📌 [' . $idx . '/' . $total . '] دستهٔ پیشنهادیِ کارشناسِ باسلام: ' . $catName . ' (#' . $catId . ')']]);
+                        goto CATFIX_AFTER_AI_PICK;
+                    }
+                }
+            }
             $pProf = $isPendingCreate && trim((string)($p['profile_name'] ?? '')) !== ''
                 ? trim((string)$p['profile_name'])
                 : $profOf($pId, $pName);
             $pHint = aiCatProfileHint($pProf);
             if ($pProf !== '') $profHits++;
+            $ok = false; $err = '';
             if ($itemMode === 'quorum') {
-                $con = aiCatConsensus($cands, $providers, $pName, $cats, $leafCats, $exclude, $net,
-                    ['quorum' => $quorum, 'tried_info' => $triedInfo, 'profile_hint' => $pHint]);
-                $asked += (int)($con['asked'] ?? 0);
-                if (!empty($con['from_cache'])) $cacheHits++;
-                $catId   = (int)($con['category_id'] ?? 0);
-                $catName = (string)($con['category_name'] ?? '');
-                $ok      = !empty($con['ok']);
-                $err     = (string)($con['error'] ?? '');
-                $winKeys = (array)($con['winner_keys'] ?? []);
-                if ($ok) catfixProgress(['log_add' => ['🗳️ [' . $idx . '/' . $total . '] اجماع: ' . $catName
-                    . ' (' . $catId . ') — ' . aiFaNum((int)($con['agreement'] ?? 0)) . ' رأی از '
-                    . aiFaNum((int)($con['asked'] ?? 0)) . ' مدل' . (!empty($con['from_cache']) ? ' · از کش ⚡' : '')
-                    . ($pProf !== '' ? ' · بافت: ' . $pProf : '')]]);
-            } elseif ($itemMode === 'fallback') {
-                $res = aiCandidateCategory($mp, $master['model'], $pName, $cats, $leafCats,
-                    aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
-                $asked++;
-                $catId   = (int)($res['category_id'] ?? 0);
-                $catName = (string)($res['category_name'] ?? '');
-                $ok      = !empty($res['ok']);
-                $err     = (string)($res['error'] ?? '');
-                $winKeys = [$masterKey];
-                if (!$ok || $catId <= 0) {
+                $liveCands = array_values(array_filter($cands, static function ($c0) use (&$deadProviders401) {
+                    return empty($deadProviders401[(string)($c0['provider'] ?? '')]);
+                }));
+                if ($liveCands) {
+                    $con = aiCatConsensus($liveCands, $providers, $pName, $cats, $leafCats, $exclude, $net,
+                        ['quorum' => min($quorum, count($liveCands)), 'tried_info' => $triedInfo, 'profile_hint' => $pHint]);
+                    $asked += (int)($con['asked'] ?? 0);
+                    if (!empty($con['from_cache'])) $cacheHits++;
+                    $catId   = (int)($con['category_id'] ?? 0);
+                    $catName = (string)($con['category_name'] ?? '');
+                    $ok      = !empty($con['ok']);
+                    $err     = (string)($con['error'] ?? '');
+                    $winKeys = (array)($con['winner_keys'] ?? []);
+                    if ($ok) catfixProgress(['log_add' => ['🗳️ [' . $idx . '/' . $total . '] اجماع: ' . $catName
+                        . ' (' . $catId . ') — ' . aiFaNum((int)($con['agreement'] ?? 0)) . ' رأی از '
+                        . aiFaNum((int)($con['asked'] ?? 0)) . ' مدل' . (!empty($con['from_cache']) ? ' · از کش ⚡' : '')
+                        . ($pProf !== '' ? ' · بافت: ' . $pProf : '')]]);
+                }
+            } elseif ($itemMode === 'fallback' || $itemMode === 'master') {
+                $masterProvId = (string)($master['provider'] ?? '');
+                if ($mp !== null && empty($deadProviders401[$masterProvId])) {
+                    $res = aiCandidateCategory($mp, $master['model'], $pName, $cats, $leafCats,
+                        aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
+                    $asked++;
+                    $catId   = (int)($res['category_id'] ?? 0);
+                    $catName = (string)($res['category_name'] ?? '');
+                    $ok      = !empty($res['ok']);
+                    $err     = (string)($res['error'] ?? '');
+                    $winKeys = [$masterKey];
+                    if (!$ok && preg_match('/401|403|Unauthorized|invalid_api_key/i', $err)) {
+                        $deadProviders401[$masterProvId] = true;
+                        catfixProgress(['log_add' => ['⚡ کلیدِ ارائه‌دهندهٔ «' . ($master['providerName'] ?? $masterProvId) . '» خطای احراز هویت داد — سوئیچ خودکار به کاندیدهای دیگر']]);
+                    }
+                } else {
+                    $err = 'ارائه‌دهندهٔ مستر غیرفعال (۴۰۱)';
+                }
+                if ((!$ok || $catId <= 0) && count($cands) > 1) {
                     $fbChain = '🛟 زنجیرهٔ پشتیبان — مستر: ' . ($err !== '' ? $err : 'دستهٔ معتبر نداد');
                     foreach ($cands as $fc) {
                         if (catfixStopRequested()) break;
-                        if (($fc['key'] ?? '') === $masterKey) continue;
-                        $fcp = $providers[$fc['provider']] ?? null;
+                        $fcProv = (string)($fc['provider'] ?? '');
+                        if (($fc['key'] ?? '') === $masterKey || !empty($deadProviders401[$fcProv])) continue;
+                        $fcp = $providers[$fcProv] ?? null;
                         if ($fcp === null) continue;
                         $fres = aiCandidateCategory($fcp, $fc['model'], $pName, $cats, $leafCats,
                             aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
                         $asked++;
+                        $fErr = (string)($fres['error'] ?? '');
+                        if (empty($fres['ok']) && preg_match('/401|403|Unauthorized|invalid_api_key/i', $fErr)) {
+                            $deadProviders401[$fcProv] = true;
+                        }
                         if (!empty($fres['ok']) && (int)($fres['category_id'] ?? 0) > 0) {
                             $catId   = (int)$fres['category_id'];
                             $catName = (string)($fres['category_name'] ?? '');
                             $ok      = true;
                             $err     = '';
                             $winKeys = [(string)$fc['key']];
-                            $fbChain .= ' → ' . ($fc['providerName'] ?? $fc['provider']) . '/' . $fc['model'] . ' ✓';
+                            $fbChain .= ' → ' . ($fc['providerName'] ?? $fcProv) . '/' . $fc['model'] . ' ✓';
                             $fbRescued++;
                             break;
                         }
-                        $fbChain .= ' → ' . ($fc['providerName'] ?? $fc['provider']) . '/' . $fc['model'] . ' ✗';
+                        $fbChain .= ' → ' . ($fc['providerName'] ?? $fcProv) . '/' . $fc['model'] . ' ✗';
                     }
                     catfixProgress(['log_add' => [$fbChain]]);
                 }
-            } else {
-                $res = aiCandidateCategory($mp, $master['model'], $pName, $cats, $leafCats,
-                    aiCatListBuild($leafCats, $exclude, 24000, $pName), $net, $exclude, $triedInfo, $pHint);
-                $asked++;
-                $catId   = (int)($res['category_id'] ?? 0);
-                $catName = (string)($res['category_name'] ?? '');
-                $ok      = !empty($res['ok']);
-                $err     = (string)($res['error'] ?? '');
-                $winKeys = [$masterKey];
+            }
+            // اگر AI به‌خاطر خطای کلید/سهمیه پاسخ نداد، تطبیقگرِ برگِ معنایی را امتحان کن
+            if (!$ok || $catId <= 0 || bslCategoryHasSemanticClash($pName, $catId, $cats)) {
+                $detFallback = autoMatchBslCategory($pName, $cats);
+                if ($detFallback > 0 && $detFallback !== $curCat && isset($trueLeafSet[$detFallback]) && !in_array($detFallback, $exclude, true)) {
+                    $catId   = $detFallback;
+                    $catName = bslCatNameById($catId);
+                    $ok      = true;
+                    $winKeys = [];
+                    catfixProgress(['log_add' => ['🧭 [' . $idx . '/' . $total . '] انتخاب با تطبیقگرِ برگِ معنایی: ' . $catName . ' (#' . $catId . ')']]);
+                }
             }
             if (!$ok || $catId <= 0) {
                 $noCat++;
@@ -76415,7 +77862,6 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 $targetShop = ['vendor_id' => $targetVid, 'token' => $tk, 'shop_name' => (string)($p['_shop_name'] ?? ('غرفهٔ ' . $targetVid))];
             }
             $profKeyCreate = trim((string)($p['profile_key'] ?? ''));
-            if ($allLoadedProfiles === null) $allLoadedProfiles = loadProfiles();
             $profCreate = ($profKeyCreate !== '' && isset($allLoadedProfiles[$profKeyCreate])) ? $allLoadedProfiles[$profKeyCreate] : null;
             $prodPayload = is_array($p['product'] ?? null) ? $p['product'] : [];
             if (empty($prodPayload['title'])) $prodPayload['title'] = $pName;
@@ -76512,30 +77958,35 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             continue;
         }
 
-        /* --- اعمال: دسته + ارسال به بررسیِ مجدد --- */
-        $bu = ['category_id' => $catId, 'status' => 3568];
-        $r2 = bslReq($tk, 'PATCH', 'products/' . $pId, $bu);
-        if ((int)($r2['code'] ?? 0) === 404) $r2 = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $pId, $bu);
-        if (!empty($r2['ok']) && !empty($r2['body']['id'])) {
+        /* --- v10.466: اعمالِ تغییر دسته + محتوا (PATCH در صورت مجاز بودن، یا بایگانی + ایجادِ جایگزینِ تمیز در صورت قفلِ ۴۲۲) --- */
+        $r2 = bslApplyCategoryChangeOrRecreate($tk, $vid, $p, $catId, $cn, $localMatch, !empty($cls['needs_image_refresh']));
+        if (!empty($r2['ok'])) {
             $fixed++;
-            if ($mode !== 'ai_text') {
-                foreach (array_unique($winKeys ?: [$masterKey]) as $wk) aiVoteRecord('category', $pName, $wk, $candKeys);
+            $appliedId = (int)($r2['id'] ?? $pId);
+            if ($mode !== 'ai_text' && !empty($winKeys)) {
+                foreach (array_unique($winKeys) as $wk) {
+                    if ($wk !== '') aiVoteRecord('category', $pName, $wk, $candKeys);
+                }
+            }
+            if (($r2['action'] ?? '') !== 'archived') {
                 catLearnRecord($pName, $catId, $catName);
             }
             catTriedRecord($pId, $catId, $catName, $mode, 'applied', $pName, $curCat);
-            $push('fixed', 'اصلاح شد و به بررسیِ مجدد رفت', $catId, $catName);
+            $actNote = (string)($r2['msg'] ?? 'اصلاح شد و به بررسیِ مجدد رفت');
+            $push('fixed', $actNote, $catId, $catName, $appliedId);
             catfixProgress(['log_add' => ['✅ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8')
-                . ' → ' . $catName . ' (' . $catId . ')']]);
+                . ' → ' . $catName . ' (#' . $catId . ')'
+                . (($r2['action'] ?? '') === 'recreated' ? (' · جایگزین #' . $appliedId) : '')]]);
+            $cpMark();
         } else {
             $failed++;
-            $err = (string)($r2['body']['message'] ?? ($r2['body']['error'] ?? ('HTTP ' . ($r2['code'] ?? '?'))));
-            $push('failed', 'PATCH ناموفق: ' . $err, $catId, $catName);
+            $err = (string)($r2['error'] ?? 'اصلاح ناموفق');
+            $push('failed', $err, $catId, $catName);
             catfixProgress(['log_add' => ['❌ [' . $idx . '/' . $total . '] ' . mb_substr($pName, 0, 40, 'UTF-8')
-                . ' — ' . mb_substr($err, 0, 70, 'UTF-8')]]);
+                . ' — ' . mb_substr($err, 0, 90, 'UTF-8')]]);
+            $cpSave();
         }
-        if (!empty($r2['ok']) && !empty($r2['body']['id'])) $cpMark();
-        else $cpSave();
-        usleep(500000);
+        usleep(450000);
     }
 
     $savedMsg = '';
@@ -90388,6 +91839,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.466', t:'🛡️ ممیزی سراسری و پیشگیری/اصلاح خودکار تمام ۲۱ علت عدم تأیید محصولات باسلام (به استثنای قوانین شئونات اسلامی در تصویر)', items:[
+    'پیشگیری ریشه‌ای از ایجاد یا فعال‌سازی محصولات منجر به عدم تأیید در تمام مسیرهای ارسال و به‌روزرسانی: ۱) بررسی فعال بودن غرفه با bslCheckVendorActiveStatus (پیشگیری از کد ۷۰۹۴ روی غرفه‌های ۲۹۸۸ غیرفعال)، ۲) جلوگیری از ساخت یا بازفعال‌سازی محصولات ناموجود با موجودی صفر (پیشگیری از کد ۷۰۹۳)، ۳) جلوگیری از ارسال قیمت‌های آزمایشی زیر ۵,۰۰۰ تومان (پیشگیری از کدهای ۵۰۱۱ و ۶۳۸۱)، و ۴) توقف ساخت محصول بدون تصویر یا با تصویر placeholder ادمین باسلام (پیشگیری از کد ۵۳۸۷).',
+    'موتور انطباق محتوایی و نظارتی باسلام (bslSanitizeModerationTitle + bslSanitizeModerationText + bslEnsureRichCompliantDescription + bslExtractValidBarcode): حذف پیشوندهای شماره‌ای ابتدای عنوان (رفع کد ۵۵۸۱)، پالایش واژگان حساس تبلیغاتی/درمانی/فرهنگی اینماد و باسلام (رفع کدهای ۵۳۸۶ و ۶۴۳۵)، جایگزینی کلیدواژه‌های حساس فلزات قیمتی مثل «سیلور/نقره‌کوب» با «رنگ نقره‌ای / طرح نقره» (رفع کد ۶۴۵۷)، حذف شماره‌تلفن/لینک/پیام‌رسان/قیمت ریالی و تبلیغ چندکالایی (رفع کدهای ۶۳۷۹، ۶۳۸۰ و ۵۳۵۱)، ارسال بارکد معتبر یا پاک‌سازی صفت «وارداتی/خارجی» بدون بارکد (رفع کد ۶۳۷۸) و تولید توضیحات غنی استاندارد (رفع کدهای ۵۷۷۱، ۷۰۸۳ و ۶۴۵۴).',
+    'بازطراحی تطبیقگر دسته‌بندی برگ باسلام و گارد تضاد معنایی (bslIsBannedCategoryTitle + bslCategoryHasSemanticClash + bslFilterSafeManualCategories + bslTitlesAreSameProduct): محدودسازی انتخاب خودکار دسته در PHP و JS به دسته‌های برگِ واقعیِ بدون فرزند، حذف واژه‌های بی‌معنای «های/ها/طرح»، کاهش وزن صفت‌های عام جنسیتی و الزام تطابق اسم کالا، مسدودسازی دسته‌های مجوزدار/ممنوع/خدماتی (رفع کدهای ۶۰۴۶، ۶۴۵۷ و ۷۰۷۷) و حذف تطبیق زیررشته‌ایِ اشتباه عناوین برای جلوگیری از جایگزینی محصول متفاوت (رفع کد ۶۰۵۴).',
+    'ارتقای کیفی تصاویر و موتور اصلاح خودکار محصولات ردشده بدون دستکاری شئونات تصویری (s4StandardizeImageForBasalam + bslClassifyRejectionReasons + bslApplyCategoryChangeOrRecreate در catfixRun و bsl_fix_cat): ارتقای رزولوشن لینک‌های CDN، مربع‌سازی ۱:۱ روی بوم سفید حداقل ۸۵۰×۸۵۰ با شارپنینگ ملایم و برش واترمارک گالری (رفع کدهای ۵۳۸۸، ۵۰۴۳ و ۶۳۷۹)، استثنای صریح کدهای شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱ و ۶۴۱۹) بدون دستکاری، و حل کامل قفل HTTP 422 تغییر دسته با استخراج عکس‌های واقعی از revision.data، بایگانی ۴۱۸۴ محصول قبلی و ثبت جایگزین تمیز.'
+  ]},
   {v:'10.465', t:'⚖️ تکمیل سراسری استخراج خودکار وزن از صفحهٔ جزئیات و Override وزن پیش‌فرض باسلام در ۱۰۰٪ مسیرها (حتی روی محصولات قبلاً استخراج‌شده)', items:[
     'رفع باگ سلکتورهای چندردیفه در فیلد وزن (s4ExtractDetailNodeValue): وقتی سلکتور انتخاب‌شده برای وزن در انتخابگر بصری به چند ردیف جدول/لیست مشخصات اشاره کند (مثل table tr td یا ul li)، به‌جای برداشتن ردیف اول صفحه (مثل ابعاد یا جنس)، ردیف واقعی «وزن» تشخیص و مقدار تمیز آن استخراج می‌شود و مقدار غیرمرتبط هرگز فیلد وزن را مسدود نمی‌کند.',
     'استخراج خودکار وزن از تمام سایت‌ها در هر سه موتور فاز ۲ (s4AutoExtractWeightFromDetailDom در stream، inline و two_phase): پشتیبانی خودکار از جداول استاندارد ووکامرس (woocommerce-product-attributes-item--weight)، تگ‌های Schema/itemprop، متادیتای JSON-LD (@type=Product)، ساختارهای تو در توی attribute_groups/specifications اسنپ‌شاپ و تمام جداول/لیست‌های مشخصات فنی بدون نیاز به تنظیم دستی سلکتور جداگانه.',
@@ -110254,48 +111711,51 @@ function autoMatchBslCategoryJS(title,cats,maxWords){
     return 0;
 }
 function autoMatchBslCategoryRoundJS(title,cats,wordsN){
-    const norm=title.toLowerCase().replace(/[0-9!@#$%^&*()+=\[\]{}|\\:;"<>,.?/_\-–—…·«»]/g,' ').replace(/\s{2,}/g,' ');
-    const stop=['و','با','از','برای','در','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر','قیمت','فروش','ارسال','رایگان','تخفیف','ویژه','نو','جدید','ست','بسته','دار','تکه','عدد','پک','سایز','رنگ','کد','اصلی','مخصوص','تک','فرد','نوع','مدل','خط','سری','متفرقه','کرانه','تن'];
+    const norm=(title||'').toLowerCase().replace(/[0-9!@#$%^&*()+=\[\]{}|\\:;"<>,.?/_\-–—…·«»]/g,' ').replace(/\u200c/g,' ').replace(/\s{2,}/g,' ');
+    const stop=['و','با','از','برای','در','به','تا','بر','یک','این','آن','که','هم','است','بود','شد','کن','کرد','باید','دیگر','قیمت','فروش','ارسال','رایگان','تخفیف','ویژه','نو','جدید','ست','بسته','دار','تکه','عدد','پک','سایز','رنگ','کد','اصلی','مخصوص','تک','فرد','نوع','مدل','طرح','خط','سری','متفرقه','کرانه','تن','های','ها','ای'];
+    const genderMods=['زنانه','مردانه','دخترانه','پسرانه','بچگانه','نوزادی'];
     const words=norm.split(/\s+/).filter(w=>w.length>=2&&!stop.includes(w));
     if(!words.length)return 0;
+    const parentIds=new Set();
+    let hasHier=false;
+    (cats||[]).forEach(c=>{const pid=parseInt(c.parent_id||c.parent||0)||0;if(pid>0){parentIds.add(pid);hasHier=true;}});
     // v8.60: کلمات ابتدایی همین دور، وزن سه‌برابر می‌گیرند (مثل سمت PHP)
     const lead=catFirstWordsJS(title,wordsN||1).split(/\s+/).filter(Boolean);
     let best=0,bestId=0;
-    cats.forEach(c=>{
-        const catNorm=(c.name||'').toLowerCase().replace(/[0-9()]/g,' ').replace(/\s{2,}/g,' ').trim();
-        const cw=catNorm.split(/\s+/).filter(w=>w.length>=2);
-        let score=0;
+    (cats||[]).forEach(c=>{
+        const cid=parseInt(c.id)||0;
+        if(cid<=0||(hasHier&&parentIds.has(cid)))return;
+        const catNorm=(c.name||c.title||'').toLowerCase().replace(/[0-9()]/g,' ').replace(/\u200c/g,' ').replace(/\s{2,}/g,' ').trim();
+        if(/حیوانات خانگی|غذای گربه|غذای سگ|شمش طلا|شمش نقره|اکسسوری طلا/.test(catNorm))return;
+        const cw=catNorm.split(/\s+/).filter(w=>w.length>=2&&!stop.includes(w));
+        let score=0,nounMatched=false;
         words.forEach(pw=>{
-            const wMul=lead.includes(pw)?3:1;
+            const isG=genderMods.includes(pw);
+            const wMul=isG?0.15:(lead.includes(pw)?3:1);
             cw.forEach(ccw=>{
-                // 1) Exact word match
-                if(pw===ccw){score+=3*wMul;return;}
-                // 2) v7.48: Word-boundary substring only — "صندل" matches "صندل" in "کفش صندل" but NOT "صندلی"
+                if(pw===ccw){score+=3*wMul;if(!isG)nounMatched=true;return;}
                 if(pw.length<ccw.length){
-                    // pw at start of ccw
                     if(ccw.startsWith(pw)){
                         const nextChar=ccw[pw.length];
-                        if(nextChar===' '||nextChar==='\u200c'){score+=2*wMul;return;}
+                        if(nextChar===' '||nextChar==='\u200c'){score+=2*wMul;if(!isG)nounMatched=true;return;}
                     }
-                    // pw at end of ccw
                     if(ccw.endsWith(pw)){
                         const prevChar=ccw[ccw.length-pw.length-1];
-                        if(prevChar===' '||prevChar==='\u200c'){score+=2*wMul;return;}
+                        if(prevChar===' '||prevChar==='\u200c'){score+=2*wMul;if(!isG)nounMatched=true;return;}
                     }
                 }
-                // pw longer than ccw — ccw must appear with word boundaries in pw
                 if(pw.length>ccw.length&&pw.includes(ccw)){
                     const pos=pw.indexOf(ccw);
                     const beforeOk=pos===0||pw[pos-1]===' ';
                     const afterOk=pos+ccw.length===pw.length||pw[pos+ccw.length]===' ';
-                    if(beforeOk&&afterOk){score+=1.5*wMul;return;}
+                    if(beforeOk&&afterOk){score+=1.5*wMul;if(!isG)nounMatched=true;return;}
                 }
             });
         });
+        if(!nounMatched)return;
         score+=(c.level||0)*0.2;
-        if(score>best){best=score;bestId=c.id;}
+        if(score>best){best=score;bestId=cid;}
     });
-    // v7.48: Higher threshold
     return best>=2?bestId:0;
 }
 function bslFixCatManual(btn){
