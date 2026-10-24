@@ -17101,7 +17101,7 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
             CURLOPT_HTTPHEADER     => $hdrs,
         ]);
         if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURL_IPRESOLVE_V4);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
         $raw = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $err = curl_error($ch);
