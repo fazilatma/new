@@ -8749,11 +8749,15 @@ function aiCatParse(array $r, string $title, array $cats, string $model, int $la
        ردشده را برگرداند، اینجا مردود می‌شود. بدونِ این بررسی، حلقهٔ
        «پیشنهاد ⇒ رد ⇒ همان پیشنهاد» دوباره بسته می‌شد. */
     $repeat = false;
+    $clash = false;
     if ($valid && $exclude && in_array($id, array_map('intval', $exclude), true)) {
         $repeat = true; $valid = false;
     }
+    if ($valid && function_exists('bslCategoryHasSemanticClash') && bslCategoryHasSemanticClash($title, $id, $cats)) {
+        $clash = true; $valid = false;
+    }
     return ['ok' => $valid, 'category_id' => $id, 'category_name' => $name,
-            'ai_text' => $text, 'error' => $repeat ? 'دستهٔ تکراری (قبلاً امتحان شده)' : '',
+            'ai_text' => $text, 'error' => $repeat ? 'دستهٔ تکراری (قبلاً امتحان شده)' : ($clash ? 'تضاد معنایی دسته با عنوان محصول' : ''),
             'repeat' => $repeat, 'latency' => $lat, 'model' => $model,
             'raw' => $rawCat, 'status' => (int)$r['code'], 'via' => (string)($r['via'] ?? '')];
 }
@@ -11381,9 +11385,28 @@ function aiCatRank(string $title, array $cats): array {
     };
     $tw = $norm($title);
     if (!$tw) return $cats;
-    /* وزنِ کلمه: اولی ۳، دومی ۲، بقیه ۱ */
+    /* وزنِ کلمه: اولی ۳، دومی ۲، بقیه ۱ + بسطِ مترادف‌های رایج سرعنوان برای تطبیق دقیق با عنوان برگ‌های باسلام */
     $wt = [];
     foreach ($tw as $i => $w) $wt[$w] = max($wt[$w] ?? 0, $i === 0 ? 3 : ($i === 1 ? 2 : 1));
+    static $synMap = [
+        'تابه'    => ['پخت', 'پز', 'آشپزخانه'],
+        'قابلمه'  => ['پخت', 'پز', 'آشپزخانه'],
+        'زودپز'   => ['پخت', 'پز', 'آرام'],
+        'شیرجوش'  => ['پخت', 'پز', 'چای'],
+        'کتری'    => ['چای', 'قهوه', 'سرو'],
+        'قوری'    => ['چای', 'قهوه', 'سرو'],
+        'سماور'   => ['چای', 'سرو'],
+        'فلاسک'   => ['چای', 'فلاسک', 'قمقمه'],
+        'صندل'    => ['کفش', 'دمپایی', 'صندل'],
+        'شومیز'   => ['بلوز', 'پیراهن', 'شومیز'],
+        'برس'     => ['نظافت', 'شستشو', 'براش'],
+        'فرچه'    => ['نظافت', 'شستشو'],
+    ];
+    if (isset($tw[0], $synMap[$tw[0]])) {
+        foreach ($synMap[$tw[0]] as $sw) {
+            $wt[$sw] = max($wt[$sw] ?? 0, 2.5);
+        }
+    }
 
     $scored = [];
     foreach ($cats as $i => $c) {
@@ -11392,10 +11415,10 @@ function aiCatRank(string $title, array $cats): array {
         foreach ($cw as $x) {
             foreach ($wt as $w => $weight) {
                 if ($x === $w) { $sc += 3 * $weight; continue; }
-                /* پیشوند/پسوندِ کامل — «کفش» در «کفشِ ورزشی» */
+                /* پیشوند/پسوندِ کامل (حداقل ۳ حرف تا «رژ» داخل «رژیمی» یا «ست» داخل «دسته» خطا نزند) */
                 $lx = mb_strlen($x, 'UTF-8'); $lw = mb_strlen($w, 'UTF-8');
-                if ($lx > $lw && mb_strpos($x, $w, 0, 'UTF-8') !== false) $sc += 1.5 * $weight;
-                elseif ($lw > $lx && mb_strpos($w, $x, 0, 'UTF-8') !== false) $sc += 1.0 * $weight;
+                if ($lx > $lw && $lw >= 3 && mb_strpos($x, $w, 0, 'UTF-8') !== false) $sc += 1.5 * $weight;
+                elseif ($lw > $lx && $lx >= 3 && mb_strpos($w, $x, 0, 'UTF-8') !== false) $sc += 1.0 * $weight;
             }
         }
         /* دستهٔ عمیق‌تر مشخص‌تر است و معمولاً انتخابِ درست‌تری است */
@@ -11593,10 +11616,10 @@ function bslCategoryHasSemanticClash(string $productTitle, int $catId, array $fl
         }
     }
 
-    /* ۵) لوازم خانه و آشپزخانه/ماگ/فلاسک نباید در پوشاک و لباس برود */
-    $isKitchenHome = $hasAny($t, [' تراول ماگ ', ' فلاسک ', ' قوری ', ' کتری ', ' قابلمه ', ' ماهیتابه ', ' تابه ', ' سبد سیب ', ' سرویس غذاخوری ', ' استکان ', ' قمقمه ']);
+    /* ۵) لوازم خانه و آشپزخانه/ماگ/فلاسک/تابه نباید در پوشاک، آرایشی یا درب ساختمانی برود */
+    $isKitchenHome = $hasAny($t, [' تراول ماگ ', ' فلاسک ', ' قوری ', ' کتری ', ' قابلمه ', ' ماهیتابه ', ' تابه ', ' زودپز ', ' شیرجوش ', ' سماور ', ' سبد سیب ', ' سرویس غذاخوری ', ' سرویس پخت ', ' استکان ', ' قمقمه ']);
     if ($isKitchenHome) {
-        if ($hasAny($c, [' پوشاک ', ' تاپ ', ' تیشرت ', ' لباس ', ' مانتو ', ' شلوار ', ' شومیز ', ' کفش ', ' صندل ', ' آرایشی '])) {
+        if ($hasAny($c, [' پوشاک ', ' تاپ ', ' تیشرت ', ' لباس ', ' مانتو ', ' شلوار ', ' شومیز ', ' کفش ', ' صندل ', ' آرایشی ', ' رژ لب ', ' درب ورودی ', ' دستگیره درب '])) {
             return true;
         }
     }
