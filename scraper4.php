@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.466';
+const APP_VERSION = '10.467';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -37915,6 +37915,7 @@ if (isset($_GET['catfix_start'])) {
     $stopped = catfixStopRequested();
     $catLastState = is_file(CATFIX_PROGRESS_FILE)
         ? json_decode((string)@file_get_contents(CATFIX_PROGRESS_FILE), true) : [];
+    $hasMoreSlicesNext = !$stopped && !empty($rep['has_more_slices']);
     $catKeepCp = $stopped || !empty($rep['partial']) || !empty($rep['stopped']) || empty($rep['ok']);
     if (!$catKeepCp) @unlink(CATFIX_FETCH_CURSOR_FILE);
     catfixClearStop();
@@ -37928,8 +37929,19 @@ if (isset($_GET['catfix_start'])) {
             ? $catLastState['checkpoint'] : null,
         'log_add' => [empty($rep['ok'])
             ? ('❌ ' . ($rep['error'] ?? 'ناموفق'))
-            : ($catKeepCp ? ('⏸ متوقف شد؛ checkpoint حفظ شد — ' . ($rep['msg'] ?? ''))
-                           : ('🏁 پایان در ' . $rep['took'] . ' ثانیه — ' . $rep['msg']))]]);
+            : ($hasMoreSlicesNext ? ('⏭ برش جاری تمام شد — ادامهٔ خودکارِ برش بعدی · ' . ($rep['msg'] ?? ''))
+                : ($catKeepCp ? ('⏸ متوقف شد؛ checkpoint حفظ شد — ' . ($rep['msg'] ?? ''))
+                               : ('🏁 پایان در ' . $rep['took'] . ' ثانیه — ' . $rep['msg'])))]]);
+    @flock($lockFp, LOCK_UN);
+    @fclose($lockFp);
+    if ($hasMoreSlicesNext && function_exists('fireAndForget')) {
+        $nextQ = 'catfix_start=1&resume=1&mode=' . urlencode($mode)
+            . '&quorum=' . (int)$opts['quorum']
+            . '&use_learn=' . (!empty($opts['use_learn']) ? '1' : '0')
+            . (!empty($opts['all_vendors']) ? '&all_vendors=1' : '')
+            . ((int)$opts['vendor_id'] > 0 ? ('&vendor_id=' . (int)$opts['vendor_id']) : '');
+        fireAndForget($nextQ, 2500);
+    }
     exit;
 }
 
@@ -54693,6 +54705,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.467', 'واکشی برش‌محور ضد-OOM در اصلاح نامحدود محصولات ردشده باسلام + زنجیره‌سازی خودکار برش‌ها و ترمیم عناوین آسیب‌دیده',
+         function_exists('catfixFetchRejectedSlice')
+      && function_exists('bslRetired3567Load')
+      && function_exists('bslHealCorruptedLeadingQuestionTitle')
+      && bslHealCorruptedLeadingQuestionTitle('?ابه تک دسته زرساب (کد:10)', null) === 'تابه تک دسته زرساب (کد:10)'
+      && bslHealCorruptedLeadingQuestionTitle('?رویس پخت و پز ترخان', null) === 'سرویس پخت و پز ترخان'
+      && strpos($selfSrc, "'has_more_slices' => (!\$stopped && \$hasMoreSlices)") !== false
+      && strpos($selfSrc, "strpos(\$selfSrc, \"{v:'10.\" . \"467'\")") !== false
+      && strpos($selfSrc, "{v:'10." . "467'") !== false
+      && version_compare(APP_VERSION, '10.467', '>='));
     $add('10.466', 'ممیزی سراسری و پیشگیری/اصلاح خودکار تمام ۲۱ علت عدم تأیید محصولات باسلام با استثنای صریح قوانین شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱، ۶۴۱۹)',
          !empty($_clsModesty466['skip_modesty'])
       && empty($_clsTech466['skip_modesty'])
@@ -76802,7 +76824,13 @@ function catfixCursorLoad(int $vid): array {
     $rows = []; $page = 0;
     $fp = @fopen(CATFIX_FETCH_CURSOR_FILE, 'rb');
     if (!is_resource($fp)) return ['rows' => [], 'page' => 0];
+    $vidNeedle1 = '"vid":' . $vid . ',';
+    $vidNeedle2 = '"vid": ' . $vid;
     while (($line = fgets($fp)) !== false) {
+        if (strpos($line, $vidNeedle1) === false && strpos($line, $vidNeedle2) === false) {
+            unset($line);
+            continue;
+        }
         $d = json_decode($line, true);
         unset($line);
         if (!is_array($d) || (int)($d['vid'] ?? 0) !== $vid) continue;
@@ -76872,6 +76900,90 @@ function catfixFetchRejected(string $tk, int $vid, ?array &$partial = null, ?arr
         catfixProgress(['log_add' => ['⚠️ سقفِ برداشت رسید — checkpoint صفحهٔ ' . $meta['page'] . ' حفظ شد']]);
     }
     return $all;
+}
+
+/**
+ * v10.467: واکشیِ برش‌محور (Streaming Slice) برای اجرای نامحدودِ اصلاحِ دسته بدون OOM در CloudLinux LVE.
+ * به‌جای بارگذاریِ یک‌جای ۱,۰۰۰+ محصولِ ردشده در RAM پیش از اصلاحِ اولین محصول، هر نوبت حداکثر
+ * $sliceSize محصولِ تازهٔ پردازش‌نشده و بایگانی‌نشده را با per_page=30 می‌خواند، بلافاصله اصلاح می‌کند،
+ * و در صورت باقی‌ماندنِ صفحاتِ بعدی، از همان صفحهٔ دقیق زنجیرهٔ نوبتِ بعد را ادامه می‌دهد.
+ */
+function catfixFetchRejectedSlice(
+    string $tk,
+    int $vid,
+    int $sliceSize = 20,
+    int $startPage = 1,
+    array $skipDoneSet = [],
+    array $retired3567 = [],
+    ?array &$sliceMeta = null
+): array {
+    $sliceSize = max(1, min(50, $sliceSize));
+    $startPage = max(1, $startPage);
+    $pp = 30;
+    $out = [];
+    $sliceMeta = [
+        'ok'          => true,
+        'stopped'     => false,
+        'http_error'  => false,
+        'code'        => 200,
+        'has_more'    => false,
+        'next_page'   => $startPage,
+        'total_pages' => 0,
+    ];
+    for ($pg = $startPage; $pg < $startPage + 35; $pg++) {
+        if (catfixStopRequested()) {
+            $sliceMeta['stopped'] = true;
+            $sliceMeta['has_more'] = true;
+            $sliceMeta['next_page'] = $pg;
+            break;
+        }
+        $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $pg . '&per_page=' . $pp . '&statuses=3567');
+        if (empty($r['ok'])) {
+            $sliceMeta['ok'] = !empty($out);
+            $sliceMeta['http_error'] = true;
+            $sliceMeta['code'] = (int)($r['code'] ?? 0);
+            $sliceMeta['has_more'] = true;
+            $sliceMeta['next_page'] = $pg;
+            break;
+        }
+        $data = bslRowsOf($r['body']);
+        $tp = bslMetaInt($r['body'], 'total_page', 0);
+        if ($tp > 0) $sliceMeta['total_pages'] = $tp;
+        if (!$data) {
+            $sliceMeta['has_more'] = false;
+            $sliceMeta['next_page'] = $pg;
+            break;
+        }
+        $leftoverOnPage = false;
+        foreach ($data as $item) {
+            if (!is_array($item)) continue;
+            $rwId = (int)($item['id'] ?? 0);
+            if ($rwId > 0) {
+                if (isset($retired3567[$vid . ':' . $rwId]) || isset($skipDoneSet[(string)$rwId])) continue;
+            }
+            if (count($out) >= $sliceSize) {
+                $leftoverOnPage = true;
+                break;
+            }
+            unset($item['vendor'], $item['category_list']);
+            if (isset($item['revision']['data']['category_list'])) unset($item['revision']['data']['category_list']);
+            $out[] = $item;
+        }
+        $morePagesAfter = (count($data) >= $pp) && ($tp <= 0 || $pg < $tp);
+        if (count($out) >= $sliceSize) {
+            $sliceMeta['has_more'] = $leftoverOnPage || $morePagesAfter;
+            $sliceMeta['next_page'] = $leftoverOnPage ? $pg : ($pg + 1);
+            break;
+        }
+        if (!$morePagesAfter) {
+            $sliceMeta['has_more'] = false;
+            $sliceMeta['next_page'] = $pg;
+            break;
+        }
+        $sliceMeta['next_page'] = $pg + 1;
+        usleep(80000);
+    }
+    return $out;
 }
 
 /**
@@ -77605,6 +77717,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                         'summary' => ['total' => (int)($one['total'] ?? 0), 'fixed' => (int)($one['fixed'] ?? 0),
                             'failed' => (int)($one['failed'] ?? 0)]];
                     $agg['partial'] = true;
+                    $agg['has_more_slices'] = !empty($one['has_more_slices']);
                     $agg['stopped'] = !empty($one['stopped']);
                     break;
                 }
@@ -77701,8 +77814,23 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         }
     }
 
+    /* v10.126: شناسه‌هایِ ازقبل‌پردازش‌شده برای رد شدن در واکشی/حلقه + ثبتِ چک‌پوینت */
+    $cpDoneIds = [];
+    if (is_array($cp)) {
+        foreach ((array)($cp['done_ids'] ?? []) as $dx) {
+            $dxs = trim((string)$dx);
+            if ($dxs !== '' && $dxs !== '0') $cpDoneIds[] = is_numeric($dxs) ? (int)$dxs : $dxs;
+        }
+    }
+    $cpDoneSet = [];
+    foreach ($cpDoneIds as $dx) $cpDoneSet[(string)$dx] = true;
+
     /* --- فهرستِ محصولات --- */
     $partial = []; $fetchMeta = [];
+    $hasMoreSlices = false;
+    $startScanPage = max(1, (int)($cp['scan_page'] ?? 1));
+    $curScanPageForCp = $startScanPage;
+    $nextScanPage = $startScanPage;
     $maxLimit = max(0, (int)($opts['limit'] ?? 0));
     if ($onlyId > 0) {
         catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ محصول #' . $onlyId]]);
@@ -77725,7 +77853,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             if (!$rowsLim) break;
             foreach ($rowsLim as $rwL) {
                 $rwId = (int)($rwL['id'] ?? 0);
-                if ($rwId > 0 && isset($retired3567[$vid . ':' . $rwId])) continue;
+                if ($rwId > 0 && (isset($retired3567[$vid . ':' . $rwId]) || isset($cpDoneSet[(string)$rwId]))) continue;
+                unset($rwL['vendor'], $rwL['category_list']);
                 $products[] = $rwL;
                 if (count($products) >= $maxLimit) break;
             }
@@ -77733,23 +77862,39 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         }
         $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => 1];
     } else {
+        /* v10.467: واکشیِ برش‌محورِ ۲۰تایی (Streaming Slice) برای جلوگیری کامل از OOM در اجرای نامحدود */
         $retired3567 = function_exists('bslRetired3567Load') ? bslRetired3567Load() : [];
-        catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ محصولاتِ ردشده (وضعیت ۳۵۶۷)...']]);
-        $rawRejProducts = catfixFetchRejected($tk, $vid, $partial, $fetchMeta);
-        $products = [];
-        foreach ($rawRejProducts as $rwR) {
-            if (!is_array($rwR)) continue;
-            $rwId = (int)($rwR['id'] ?? 0);
-            if ($rwId > 0 && isset($retired3567[$vid . ':' . $rwId])) continue;
-            $products[] = $rwR;
+        $sliceSize = ($maxLimit > 100) ? min(30, $maxLimit) : 20;
+        catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ برشِ جاریِ محصولاتِ ردشده (از صفحهٔ ' . aiFaNum($startScanPage) . ')...']]);
+        $sliceMeta = [];
+        $products = catfixFetchRejectedSlice($tk, $vid, $sliceSize, $startScanPage, $cpDoneSet, $retired3567, $sliceMeta);
+        if (empty($products) && $startScanPage > 1 && empty($sliceMeta['stopped']) && empty($sliceMeta['http_error'])) {
+            $startScanPage = 1;
+            $curScanPageForCp = 1;
+            $products = catfixFetchRejectedSlice($tk, $vid, $sliceSize, 1, $cpDoneSet, $retired3567, $sliceMeta);
         }
-        if (!empty($pendingAiItems)) {
+        $hasMoreSlices = !empty($sliceMeta['has_more']);
+        $nextScanPage = max(1, (int)($sliceMeta['next_page'] ?? $startScanPage));
+        if (!empty($sliceMeta['stopped'])) {
+            $partial = ['partial' => true, 'reason' => 'stopped', 'page' => $nextScanPage];
+            $fetchMeta = ['complete' => false, 'partial' => true, 'stopped' => true, 'page' => $nextScanPage];
+        } elseif (!empty($sliceMeta['http_error']) && empty($products)) {
+            $partial = ['partial' => true, 'reason' => 'http', 'page' => $nextScanPage, 'code' => (int)($sliceMeta['code'] ?? 0)];
+            $fetchMeta = ['complete' => false, 'partial' => true, 'stopped' => false, 'reason' => 'http', 'page' => $nextScanPage];
+        } else {
+            $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => $nextScanPage];
+        }
+        if (!empty($pendingAiItems) && !$hasMoreSlices) {
+            $addedPending = 0;
             foreach ($pendingAiItems as $pq) {
                 if (!is_array($pq)) continue;
+                $qTok = trim((string)($pq['queue_id'] ?? ''));
+                if ($qTok !== '' && isset($cpDoneSet[$qTok])) continue;
+                if ($addedPending >= 20) { $hasMoreSlices = true; break; }
                 $products[] = [
                     'id'                  => 0,
                     '_pending_ai_create'  => true,
-                    '_queue_id'           => (string)($pq['queue_id'] ?? ''),
+                    '_queue_id'           => $qTok,
                     '_vendor_id'          => (int)($pq['vendor_id'] ?? $vid),
                     '_shop_name'          => (string)($pq['shop_name'] ?? ''),
                     'title'               => (string)($pq['title'] ?? ''),
@@ -77761,17 +77906,22 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                     'forced_price_toman'  => (int)($pq['forced_price_toman'] ?? 0),
                     'product'             => is_array($pq['product'] ?? null) ? $pq['product'] : [],
                 ];
+                $addedPending++;
             }
-            catfixProgress(['log_add' => ['🤖 ' . aiFaNum(count($pendingAiItems)) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد']]);
+            if ($addedPending > 0) {
+                catfixProgress(['log_add' => ['🤖 ' . aiFaNum($addedPending) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد']]);
+            }
         }
         if ($maxLimit > 0 && count($products) > $maxLimit) {
             $products = array_slice($products, 0, $maxLimit);
+            $hasMoreSlices = false;
         }
     }
     if (!empty($partial['partial']) || (!empty($fetchMeta) && empty($fetchMeta['complete']))) {
-        $fetchCp = ['phase' => 'fetch', 'vendor_id' => $vid, 'fetch_page' => (int)($fetchMeta['page'] ?? ($partial['page'] ?? 0)),
+        $fetchCp = ['phase' => 'fetch', 'vendor_id' => $vid, 'scan_page' => $nextScanPage,
+            'fetch_page' => (int)($fetchMeta['page'] ?? ($partial['page'] ?? 0)),
             'fetch_reason' => (string)($fetchMeta['reason'] ?? ($partial['reason'] ?? 'http')),
-            'done_ids' => (array)($cp['done_ids'] ?? []), 'fixed' => (int)($cp['fixed'] ?? 0),
+            'done_ids' => $cpDoneIds, 'fixed' => (int)($cp['fixed'] ?? 0),
             'failed' => (int)($cp['failed'] ?? 0), 'no_ai' => (int)($cp['no_ai'] ?? 0),
             'no_cat' => (int)($cp['no_cat'] ?? 0), 'skip_same' => (int)($cp['skip_same'] ?? 0),
             'skip_tried' => (int)($cp['skip_tried'] ?? 0), 'asked' => (int)($cp['asked'] ?? 0),
@@ -77789,22 +77939,27 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             'mode' => $mode, 'total' => count($products), 'fixed' => (int)($cp['fixed'] ?? 0),
             'failed' => (int)($cp['failed'] ?? 0), 'items' => is_array($cp['items'] ?? null) ? $cp['items'] : []];
     }
-    $total = count($products);
-    if ($total === 0) {
+    $priorIdx = (int)($cp['idx'] ?? 0);
+    $sliceCount = count($products);
+    if ($sliceCount === 0) {
         /* v10.126: در ادامهٔ چک‌پوینت، جمعِ قبلی حفظ می‌شود (نه صفر) */
-        return ['ok' => true, 'mode' => $mode, 'total' => 0,
+        return ['ok' => true, 'mode' => $mode, 'total' => $priorIdx,
                 'fixed' => (int)($cp['fixed'] ?? 0), 'failed' => (int)($cp['failed'] ?? 0),
                 'no_ai' => (int)($cp['no_ai'] ?? 0), 'no_cat' => (int)($cp['no_cat'] ?? 0),
                 'skip_same' => (int)($cp['skip_same'] ?? 0), 'skip_tried' => (int)($cp['skip_tried'] ?? 0),
                 'asked' => (int)($cp['asked'] ?? 0), 'cache_hits' => (int)($cp['cache_hits'] ?? 0),
                 'learned_hits' => (int)($cp['learned_hits'] ?? 0),
                 'items' => is_array($cp['items'] ?? null) ? $cp['items'] : [],
-                'partial' => !empty($partial['partial']),
+                'partial' => false,
                 'took' => round(microtime(true) - $t0, 1), 'at' => time(),
-                'msg' => 'هیچ محصولِ ردشده‌ای پیدا نشد'];
+                'msg' => $priorIdx > 0 ? ('همهٔ برش‌های این غرفه کامل شد (' . $priorIdx . ' مورد)') : 'هیچ محصولِ ردشده‌ای پیدا نشد'];
     }
-    catfixProgress(['phase' => 'run', 'total' => $total, 'current' => 0,
-        'log_add' => ['🚀 شروعِ اصلاح — ' . aiFaNum($total) . ' محصول · روش: ' . catfixModeLabel($mode)]]);
+    $total = $priorIdx + $sliceCount;
+    catfixProgress(['phase' => 'run', 'total' => $total, 'current' => $priorIdx,
+        'log_add' => ['🚀 شروعِ اصلاحِ برشِ جاری — ' . aiFaNum($sliceCount) . ' محصول'
+            . ($priorIdx > 0 ? (' (انجام‌شدهٔ قبلی: ' . aiFaNum($priorIdx) . ')') : '')
+            . ($hasMoreSlices ? ' · ادامه‌دار در برش‌های بعدی' : '')
+            . ' · روش: ' . catfixModeLabel($mode)]]);
 
     /* v10.126: ادامهٔ واقعی — شمارنده‌ها و اقلامِ گزارش از چک‌پوینت می‌آیند */
     $fixed = (int)($cp['fixed'] ?? 0);
@@ -77815,7 +77970,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $skipTried = (int)($cp['skip_tried'] ?? 0);
     $asked = (int)($cp['asked'] ?? 0);
     $cacheHits = (int)($cp['cache_hits'] ?? 0);
-    $idx = (int)($cp['idx'] ?? 0);
+    $idx = $priorIdx;
     $items = is_array($cp['items'] ?? null) ? $cp['items'] : [];
     $learnedHits = (int)($cp['learned_hits'] ?? 0);
     $stopped = false;
@@ -77826,16 +77981,6 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $profOf = catProfileResolver('bsl');
     $profHits = (int)($cp['prof_hits'] ?? 0);
 
-    /* v10.126: شناسه‌هایِ ازقبل‌پردازش‌شده برای رد شدن در حلقه + ثبتِ چک‌پوینت */
-    $cpDoneIds = [];
-    if (is_array($cp)) {
-        foreach ((array)($cp['done_ids'] ?? []) as $dx) {
-            $dxs = trim((string)$dx);
-            if ($dxs !== '' && $dxs !== '0') $cpDoneIds[] = is_numeric($dxs) ? (int)$dxs : $dxs;
-        }
-    }
-    $cpDoneSet = [];
-    foreach ($cpDoneIds as $dx) $cpDoneSet[(string)$dx] = true;
     $allKnownShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
     $rawLoadedProfiles = function_exists('loadProfiles') ? loadProfiles() : [];
     $allLoadedProfiles = [];
@@ -77851,9 +77996,11 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $deadProviders401 = [];
     $cpSave = function () use (&$cpDoneIds, &$fixed, &$failed, &$noAi, &$noCat,
         &$skipSame, &$skipTried, &$asked, &$cacheHits, &$learnedHits, &$profHits,
-        &$idx, &$items, $cpStartedAt, $opts) {
+        &$idx, &$items, $cpStartedAt, $opts, &$curScanPageForCp) {
+        if (count($cpDoneIds) > 4000) $cpDoneIds = array_slice($cpDoneIds, -3000);
         catfixProgress(['checkpoint' => [
-            'done_ids' => $cpDoneIds, 'fixed' => $fixed, 'failed' => $failed,
+            'done_ids' => $cpDoneIds, 'scan_page' => $curScanPageForCp,
+            'fixed' => $fixed, 'failed' => $failed,
             'no_ai' => $noAi, 'no_cat' => $noCat, 'skip_same' => $skipSame,
             'skip_tried' => $skipTried, 'asked' => $asked, 'cache_hits' => $cacheHits,
             'learned_hits' => $learnedHits, 'prof_hits' => $profHits, 'idx' => $idx,
@@ -78312,6 +78459,11 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         usleep(450000);
     }
 
+    if (!$stopped && $hasMoreSlices) {
+        $curScanPageForCp = $nextScanPage;
+        $cpSave();
+    }
+
     $savedMsg = '';
     if ($mode === 'quorum' && $total > 0 && $cands) {
         $maxCalls = $total * count($cands);
@@ -78332,7 +78484,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             'fixed' => $fixed, 'failed' => $failed, 'no_ai' => $noAi, 'no_cat' => $noCat,
             'skip_same' => $skipSame, 'skip_tried' => $skipTried,
             'skipped' => $skipSame + $skipTried, 'asked' => $asked, 'cache_hits' => $cacheHits, 'learned_hits' => $learnedHits,
-            'stopped' => $stopped, 'partial' => !empty($partial['partial']),
+            'stopped' => $stopped, 'partial' => (!empty($partial['partial']) || (!$stopped && $hasMoreSlices)),
+            'has_more_slices' => (!$stopped && $hasMoreSlices),
             /* v10.36 (۴۹ه): چند محصول توانستند بافتِ پروفایل بگیرند — اگر
                این عدد صفر باشد یعنی نه دفترچه شناسه‌ای دارد نه پسوندی
                تعریف شده، و کاربر باید بداند چرا بافت اثری نداشته. */
@@ -92162,6 +92315,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.467', t:'⚡ رفع توقف/OOM در اصلاح نامحدود همهٔ محصولات ردشده باسلام (واکشی برش‌محور ۲۰تایی + زنجیره‌سازی خودکار برش‌ها)', items:[
+    'رفع گیرکردن روی «دریافتِ محصولاتِ ردشده (وضعیت ۳۵۶۷)...» در غرفه‌های بزرگ: به‌جای بارگذاری یک‌جای ۱,۰۰۰+ محصول ردشده با revision سنگین در RAM پیش از شروع اصلاح (که در CloudLinux LVE باعث اتمام حافظه می‌شد)، موتور catfixFetchRejectedSlice هر بار فقط ۲۰ محصول تازه و پردازش‌نشده را با per_page=30 واکشی کرده و در کمتر از ۱ ثانیه اصلاح را آغاز می‌کند.',
+    'زنجیره‌سازی خودکار برش‌ها تا پایان کامل همهٔ غرفه‌ها: پس از اتمام هر برش ۲۰تایی، scan_page و done_ids در چک‌پوینت ذخیره شده، قفل آزاد می‌شود و برش بعدی بلافاصله به‌صورت خودکار (و با پشتیبانی نگهبان کران) ادامه می‌یابد تا تمام محصولات ردشدهٔ غرفه‌های فعال بدون خطای حافظه یا تایم‌اوت تعیین‌تکلیف شوند.',
+    'بهینه‌سازی سرعت و حافظه در catfixCursorLoad و bslBuildLocalProductIndex (پیش‌فیلتر رشته‌ای غرفه قبل از json_decode و حذف کامل regexهای اضافی در حلقهٔ داخلی پروفایل‌ها) + ثبت دفترچهٔ bsl_retired_3567.json و ترمیم خودکار عناوین دارای کاراکتر «?» ابتدایی.'
+  ]},
   {v:'10.466', t:'🛡️ ممیزی سراسری و پیشگیری/اصلاح خودکار تمام ۲۱ علت عدم تأیید محصولات باسلام (به استثنای قوانین شئونات اسلامی در تصویر)', items:[
     'پیشگیری ریشه‌ای از ایجاد یا فعال‌سازی محصولات منجر به عدم تأیید در تمام مسیرهای ارسال و به‌روزرسانی: ۱) بررسی فعال بودن غرفه با bslCheckVendorActiveStatus (پیشگیری از کد ۷۰۹۴ روی غرفه‌های ۲۹۸۸ غیرفعال)، ۲) جلوگیری از ساخت یا بازفعال‌سازی محصولات ناموجود با موجودی صفر (پیشگیری از کد ۷۰۹۳)، ۳) جلوگیری از ارسال قیمت‌های آزمایشی زیر ۵,۰۰۰ تومان (پیشگیری از کدهای ۵۰۱۱ و ۶۳۸۱)، و ۴) توقف ساخت محصول بدون تصویر یا با تصویر placeholder ادمین باسلام (پیشگیری از کد ۵۳۸۷).',
     'موتور انطباق محتوایی و نظارتی باسلام (bslSanitizeModerationTitle + bslSanitizeModerationText + bslEnsureRichCompliantDescription + bslExtractValidBarcode): حذف پیشوندهای شماره‌ای ابتدای عنوان (رفع کد ۵۵۸۱)، پالایش واژگان حساس تبلیغاتی/درمانی/فرهنگی اینماد و باسلام (رفع کدهای ۵۳۸۶ و ۶۴۳۵)، جایگزینی کلیدواژه‌های حساس فلزات قیمتی مثل «سیلور/نقره‌کوب» با «رنگ نقره‌ای / طرح نقره» (رفع کد ۶۴۵۷)، حذف شماره‌تلفن/لینک/پیام‌رسان/قیمت ریالی و تبلیغ چندکالایی (رفع کدهای ۶۳۷۹، ۶۳۸۰ و ۵۳۵۱)، ارسال بارکد معتبر یا پاک‌سازی صفت «وارداتی/خارجی» بدون بارکد (رفع کد ۶۳۷۸) و تولید توضیحات غنی استاندارد (رفع کدهای ۵۷۷۱، ۷۰۸۳ و ۶۴۵۴).',
