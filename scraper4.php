@@ -54036,9 +54036,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $allOk = $okCount === count($checks);
 
     if ($wantJson) {
-        echo json_encode(['ok' => $allOk, 'version' => APP_VERSION,
-            'passed' => $okCount, 'total' => count($checks),
-            'checks' => $checks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        $outChecks = $checks;
+        if (!empty($_GET['ver'])) {
+            $vf = trim((string)$_GET['ver']);
+            $outChecks = array_values(array_filter($checks, static fn($c) => strpos((string)($c['ver'] ?? ''), $vf) === 0));
+        }
+        $outPassed = count(array_filter($outChecks, static fn($c) => !empty($c['ok'])));
+        echo json_encode(['ok' => $outPassed === count($outChecks), 'version' => APP_VERSION,
+            'passed' => $outPassed, 'total' => count($outChecks),
+            'checks' => $outChecks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
 
