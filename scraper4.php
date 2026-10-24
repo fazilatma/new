@@ -50224,8 +50224,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && (int)($_snMeta451['total_pages'] ?? 0) === 500
       && !empty($_snMeta451['exceeded_total_pages'])
       && strpos($selfSrc, "'snappshop_end_of_pages' => true") !== false
-      && strpos($selfSrc, "!empty($apiFallback['snappshop_end_of_pages'])") !== false
-      && strpos($selfSrc, "$GLOBALS['_s4JinaSnappBlocked']") !== false
+      && strpos($selfSrc, "!empty(\$apiFallback['snappshop_end_of_pages'])") !== false
+      && strpos($selfSrc, "\$GLOBALS['_s4JinaSnappBlocked']") !== false
       && strpos($selfSrc, "{v:'10." . "451'") !== false
       && version_compare(APP_VERSION, '10.451', '>='));
     $_slimState450 = localTaskDbCompactState(['running'=>true,'sent'=>5,'sent_details'=>[['id'=>1]],'rows'=>[['id'=>2]],'log'=>range(1,40),'checkpoint'=>['page'=>7,'woo_rows'=>[['id'=>9]]]]);
