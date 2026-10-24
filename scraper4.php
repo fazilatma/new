@@ -17075,42 +17075,8 @@ $kind = trim((string)$_GET['s4_feedback']);
 if (strtolower($kind) === 'snappshop_pdp_probe') {
     $pid = preg_replace('~[^0-9]~', '', (string)($_GET['id'] ?? '1784183539'));
     if ($pid === '') $pid = '1784183539';
+    $sub = strtolower(trim((string)($_GET['sub'] ?? 'guest')));
     $pdpUrl = 'https://snappshop.ir/product/snp-' . $pid;
-    $quickCurl = static function(string $method, string $u, array $hdrs = [], ?string $body = null): array {
-        $respHdrs = [];
-        $ch = curl_init($u);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT        => 7,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_CUSTOMREQUEST  => $method,
-            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            CURLOPT_HTTPHEADER     => $hdrs,
-            CURLOPT_HEADERFUNCTION => static function($c, $hLine) use (&$respHdrs) {
-                $p = explode(':', $hLine, 2);
-                if (count($p) === 2) {
-                    $k = strtolower(trim($p[0]));
-                    if (in_array($k, ['retry-after','x-ratelimit-limit','x-ratelimit-remaining','x-ratelimit-reset','cf-ray','ar-sid','server','content-type','set-cookie'], true)) {
-                        $respHdrs[$k] = trim($p[1]);
-                    }
-                }
-                return strlen($hLine);
-            },
-        ]);
-        if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-        $raw = curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-        $s = $raw === false ? '' : (string)$raw;
-        $safeSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($s, 0, 400));
-        return ['code' => $code, 'bytes' => strlen($s), 'headers' => $respHdrs, 'err' => $err, 'sample' => $safeSample, 'raw' => $s];
-    };
     $snHdrs = [
         'Accept: application/json, text/plain, */*',
         'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -17120,135 +17086,92 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         's-device: DESKTOP',
         's-device-source: shop',
     ];
-    $webRes = $quickCurl('GET', $pdpUrl, ['Accept: text/html,application/xhtml+xml,*/*']);
-    $webHtml = (string)$webRes['raw'];
-    unset($webRes['raw']);
-    $cdnUrlsInHtml = [];
-    if (preg_match_all('~https?:\\\\?/\\\\?/cdn\.snappshop\.ir\\\\?/[^\s"\'<>\\\\]+~i', $webHtml, $cm)) {
-        foreach ($cm[0] as $cu) {
-            $cuClean = str_replace('\\/', '/', $cu);
-            if (!in_array($cuClean, $cdnUrlsInHtml, true)) $cdnUrlsInHtml[] = $cuClean;
-        }
-    }
-    $nextFPushCount = preg_match_all('~__next_f\.push~', $webHtml);
-    $hasNextData = strpos($webHtml, '__NEXT_DATA__') !== false;
-    $nextDataSample = '';
-    if (preg_match('~<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>~isu', $webHtml, $ndm)) {
-        $nextDataSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($ndm[1], 0, 2500));
-    }
-    $nextFChunks = [];
-    if (preg_match_all('~self\.__next_f\.push\(\[(.*?)\]\)</script>~isu', $webHtml, $nfm)) {
-        foreach ($nfm[1] as $idxNf => $nfBody) {
-            if (strlen($nfBody) > 300) {
-                $nextFChunks['chunk_' . $idxNf . '_len_' . strlen($nfBody)] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($nfBody, 0, 1500));
-            }
-        }
-    }
-    $scripts = [];
-    if (preg_match_all('~src=["\']([^"\']*?_next/static/[^"\']+\.js)["\']~i', $webHtml, $sm)) {
-        $scripts = array_values(array_unique($sm[1]));
-    }
-    $ldMatches = [];
-    if (preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~isu', $webHtml, $lm)) {
-        foreach ($lm[1] as $lb) $ldMatches[] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(trim($lb), 0, 1200));
-    }
-    $metaTags = [];
-    if (preg_match_all('~<meta[^>]+(?:property|name)=["\']([^"\']+)["\'][^>]+content=["\']([^"\']*)["\']~i', $webHtml, $mm, PREG_SET_ORDER)) {
-        foreach (array_slice($mm, 0, 20) as $mr) $metaTags[$mr[1]] = mb_substr($mr[2], 0, 200);
-    }
-    $bundleEndpoints = [];
-    $apiProbes = [];
-    foreach ([
-        'v2_num' => ['GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', null],
-        'v2_snp' => ['GET', 'https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', null],
-        'v1_num' => ['GET', 'https://apix.snappshop.ir/products/v1/' . $pid . '?lat=35.77331&lng=51.418591', null],
-        'v3_num' => ['GET', 'https://apix.snappshop.ir/products/v3/' . $pid . '?lat=35.77331&lng=51.418591', null],
-        'v2_post' => ['POST', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', '{}'],
-        'landing_product' => ['POST', 'https://apix.snappshop.ir/landing/v2?lat=35.77331&lng=51.418591', json_encode(['page_type' => 'product', 'slug' => 'snp-' . $pid, 'render' => 4, 'skip' => 0])],
-    ] as $pkName => [$mth, $au, $bd]) {
-        $h = $snHdrs;
-        if ($bd !== null) $h[] = 'Content-Type: application/json';
-        $pr = $quickCurl($mth, $au, $h, $bd);
-        unset($pr['raw']);
-        $apiProbes[$pkName] = $pr;
-    }
-    $jsContexts = [];
-    foreach ([
-        '_app' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js',
-        'c6666' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js',
-        'c516' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js',
-        'pdp' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js',
-    ] as $bKey => $bUrl) {
-        $bR = $quickCurl('GET', $bUrl);
-        $bT = (string)$bR['raw'];
-        foreach (['guest/v2/token', 'products/v2', 'products/v', 'productData', 's-device', 'Authorization'] as $needle) {
-            $pos = strpos($bT, $needle);
-            if ($pos !== false) {
-                $snip = substr($bT, max(0, $pos - 180), 420);
-                $jsContexts[$bKey . ':' . $needle] = str_replace(['<', '>'], ['[lt]', '[gt]'], $snip);
-            }
-        }
-    }
-    $botProbes = [];
-    foreach ([
-        'googlebot' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-        'telegrambot' => 'TelegramBot (like TwitterBot)',
-    ] as $botName => $botUa) {
-        $chB = curl_init($pdpUrl);
-        curl_setopt_array($chB, [
+    $quickGet = static function(string $method, string $u, array $hdrs = [], ?string $body = null, string $ua = ''): array {
+        $ch = curl_init($u);
+        curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT        => 6,
             CURLOPT_ENCODING       => '',
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_USERAGENT      => $botUa,
-            CURLOPT_HTTPHEADER     => ['Accept: text/html,application/xhtml+xml,*/*'],
+            CURLOPT_CUSTOMREQUEST  => $method,
+            CURLOPT_USERAGENT      => $ua !== '' ? $ua : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => $hdrs,
         ]);
-        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($chB, CURL_IPRESOLVE_V4);
-        $bRaw = (string)(curl_exec($chB) ?: '');
-        $bCode = (int)curl_getinfo($chB, CURLINFO_RESPONSE_CODE);
-        curl_close($chB);
-        $bNdKeys = [];
-        $bPagePropsSample = '';
-        if (preg_match('~<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>~isu', $bRaw, $bnd)) {
-            $bj = @json_decode($bnd[1], true);
-            $pp = is_array($bj['props']['pageProps'] ?? null) ? $bj['props']['pageProps'] : [];
-            $bNdKeys = array_keys($pp);
-            $bPagePropsSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(json_encode($pp, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 0, 1800));
+        if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURL_IPRESOLVE_V4);
+        $raw = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        $str = $raw === false ? '' : (string)$raw;
+        return ['code' => $code, 'bytes' => strlen($str), 'err' => $err, 'raw' => $str, 'sample' => str_replace(['<', '>'], ['[lt]', '[gt]'], substr($str, 0, 500))];
+    };
+    if ($sub === 'bot') {
+        $botProbes = [];
+        foreach ([
+            'googlebot' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+            'telegrambot' => 'TelegramBot (like TwitterBot)',
+        ] as $botName => $botUa) {
+            $br = $quickGet('GET', $pdpUrl, ['Accept: text/html,application/xhtml+xml,*/*'], null, $botUa);
+            $bHtml = $br['raw'];
+            $p0 = strpos($bHtml, '__NEXT_DATA__');
+            $p1 = $p0 !== false ? strpos($bHtml, '>', $p0) : false;
+            $p2 = $p1 !== false ? strpos($bHtml, '</script>', $p1 + 1) : false;
+            $ndSample = '';
+            $ppKeys = [];
+            if ($p1 !== false && $p2 !== false) {
+                $jsn = substr($bHtml, $p1 + 1, $p2 - $p1 - 1);
+                $j = @json_decode($jsn, true);
+                $pp = is_array($j['props']['pageProps'] ?? null) ? $j['props']['pageProps'] : [];
+                $ppKeys = array_keys($pp);
+                $ndSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($jsn, 0, 2200));
+            }
+            $lp0 = stripos($bHtml, 'application/ld+json');
+            $lp1 = $lp0 !== false ? strpos($bHtml, '>', $lp0) : false;
+            $lp2 = $lp1 !== false ? strpos($bHtml, '</script>', $lp1 + 1) : false;
+            $ldSample = ($lp1 !== false && $lp2 !== false) ? str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(substr($bHtml, $lp1 + 1, $lp2 - $lp1 - 1), 0, 2200)) : '';
+            $botProbes[$botName] = ['code' => $br['code'], 'bytes' => $br['bytes'], 'pageProps_keys' => $ppKeys, 'ld_sample' => $ldSample, 'nd_sample' => $ndSample];
         }
-        $bLd = [];
-        if (preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~isu', $bRaw, $blm)) {
-            foreach ($blm[1] as $blb) $bLd[] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(trim($blb), 0, 900));
-        }
-        $botProbes[$botName] = ['code' => $bCode, 'bytes' => strlen($bRaw), 'pageProps_keys' => $bNdKeys, 'ld_json' => $bLd, 'pageProps_sample' => $bPagePropsSample];
+        echo json_encode(['ok' => true, 'sub' => 'bot', 'bot_probes' => $botProbes], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
     }
-    $guestGet = $quickCurl('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
-    unset($guestGet['raw']);
-    $guestPost = $quickCurl('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
-    $guestPostRaw = (string)($guestPost['sample'] ?? '');
-    unset($guestPost['raw']);
+    if ($sub === 'js') {
+        $jsContexts = [];
+        foreach ([
+            '_app' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js',
+            'c6666' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js',
+            'c516' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js',
+        ] as $bKey => $bUrl) {
+            $bR = $quickGet('GET', $bUrl);
+            $bT = $bR['raw'];
+            foreach (['guest/v2/token', 'products/v2', 'productData', 'Authorization'] as $needle) {
+                $pos = strpos($bT, $needle);
+                if ($pos !== false) {
+                    $jsContexts[$bKey . ':' . $needle] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($bT, max(0, $pos - 180), 420));
+                }
+            }
+        }
+        echo json_encode(['ok' => true, 'sub' => 'js', 'js_contexts' => $jsContexts], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
+    $guestGet = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
+    $guestGetRaw = $guestGet['raw']; unset($guestGet['raw']);
+    $guestPost = $quickGet('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
+    $guestPostRaw = $guestPost['raw']; unset($guestPost['raw']);
     $tokenTry = null;
-    foreach ([$guestPost, $guestGet] as $gCand) {
-        if (preg_match('~"((?:access_)?token|jwt)"\s*:\s*"([^"]+)"~i', (string)($gCand['sample'] ?? ''), $tm)) {
+    foreach ([$guestPostRaw, $guestGetRaw] as $gRawStr) {
+        if (preg_match('~"((?:access_)?token|jwt)"\s*:\s*"([^"]+)"~i', (string)$gRawStr, $tm)) {
             $tok = $tm[2];
-            $tRes = $quickCurl('GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok]));
+            $tRes = $quickGet('GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok]));
             unset($tRes['raw']);
-            $tokenTry = ['token_field' => $tm[1], 'pdp_res' => $tRes];
+            $tokenTry = ['token_field' => $tm[1], 'token_len' => strlen($tok), 'pdp_res' => $tRes];
             break;
         }
     }
-    echo json_encode([
-        'ok' => true,
-        'version' => APP_VERSION,
-        'bot_probes' => $botProbes,
-        'guest_get' => $guestGet,
-        'guest_post' => $guestPost,
-        'token_try' => $tokenTry,
-        'js_contexts' => $jsContexts,
-        'api_probes' => $apiProbes,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo json_encode(['ok' => true, 'sub' => 'guest', 'guest_get' => $guestGet, 'guest_post' => $guestPost, 'token_try' => $tokenTry], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
