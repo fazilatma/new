@@ -77114,6 +77114,7 @@ function bslApplyCategoryChangeOrRecreate(
     $localProf = is_array($localMatch['profile'] ?? null) ? $localMatch['profile'] : null;
 
     $rawOrigTitle = trim((string)($fullP['title'] ?? ($fullP['name'] ?? ($revData['title'] ?? ''))));
+    $rawOrigTitle = trim((string)(preg_replace('/\s*\[بایگانی\s+\d+\]\s*$/u', '', $rawOrigTitle) ?? $rawOrigTitle));
     if ($rawOrigTitle === '' && !empty($localProd['title'])) $rawOrigTitle = trim((string)$localProd['title']);
     if ($rawOrigTitle === '') return ['ok' => false, 'error' => 'عنوانِ محصول خالی است'];
 
@@ -77248,19 +77249,20 @@ function bslApplyCategoryChangeOrRecreate(
         }
     }
 
-    // مسیر ب: باسلام تغییر دسته روی محصولِ موجود را قفل کرده (HTTP 422) → بایگانیِ قدیمی + ایجادِ جایگزینِ تمیز
+    // مسیر ب: باسلام تغییر دسته روی محصولِ موجود را قفل کرده (HTTP 422) → آزادسازی نام/SKU، ایجادِ جایگزینِ تمیز و سپس بایگانیِ قدیمی
     if ($photoMain <= 0) {
         return ['ok' => false, 'error' => 'شناسهٔ تصویر معتبر برای بازسازی محصول یافت نشد'];
     }
+    $origSku = trim((string)($localProd['sku'] ?? ($revData['sku'] ?? ($fullP['sku'] ?? ''))));
+    if (strpos($origSku, 'ret-') === 0) $origSku = '';
     $retiredName = mb_substr($rawOrigTitle, 0, 92, 'UTF-8') . ' [بایگانی ' . $pId . ']';
-    bslReq($tk, 'PATCH', 'products/' . $pId, [
+    $retirePatch = [
         'name'   => $retiredName,
         'stock'  => 0,
         'status' => 3790,
-    ]);
-    if (function_exists('bslSetProductStatus')) {
-        bslSetProductStatus($tk, $vid, $pId, 4184, 'archive');
-    }
+        'sku'    => 'ret-' . $pId,
+    ];
+    bslReq($tk, 'PATCH', 'products/' . $pId, $retirePatch);
 
     $bp = [
         'name'             => mb_substr($cleanTitle, 0, 120, 'UTF-8'),
@@ -77278,16 +77280,29 @@ function bslApplyCategoryChangeOrRecreate(
         'status'           => 2976,
     ];
     if ($barcode !== '') $bp['barcode'] = $barcode;
-    $origSku = trim((string)($localProd['sku'] ?? ($revData['sku'] ?? ($fullP['sku'] ?? ''))));
     if ($origSku !== '') $bp['sku'] = mb_substr($origSku, 0, 60, 'UTF-8');
 
     $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+    if (empty($rCreate['ok'])) {
+        $errCreateTxt = bslErrText($rCreate);
+        if (stripos($errCreateTxt, 'sku') !== false || isset($rCreate['body']['messages']['sku'])) {
+            unset($bp['sku']);
+            $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+        }
+    }
     if (empty($rCreate['ok']) && bslIsDuplicateName($rCreate)) {
         $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
         $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
     }
+    if (empty($rCreate['ok']) && function_exists('bslIsPrepDaysError') && bslIsPrepDaysError($rCreate) && (int)$bp['preparation_days'] > 1) {
+        $bp['preparation_days'] = 1;
+        $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+    }
     if (!empty($rCreate['ok']) && !empty($rCreate['body']['id'])) {
         $newId = (int)$rCreate['body']['id'];
+        if (function_exists('bslSetProductStatus')) {
+            bslSetProductStatus($tk, $vid, $pId, 4184, 'archive');
+        }
         if (!empty($localProd)) {
             bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $newId, (string)$bp['name'], $finalPriceRial, $finalStock, $finalW);
         }
@@ -77304,6 +77319,10 @@ function bslApplyCategoryChangeOrRecreate(
             'msg'           => 'دسته قفل بود؛ محصولِ معیوب #' . $pId . ' بایگانی و محصولِ تمیز #' . $newId . ' ثبت شد',
         ];
     }
+    // در صورت شکست ایجاد، نام اصلی روی محصول قدیمی برگردانده شود
+    $rollbackPatch = ['name' => mb_substr($rawOrigTitle, 0, 120, 'UTF-8')];
+    if ($origSku !== '') $rollbackPatch['sku'] = mb_substr($origSku, 0, 60, 'UTF-8');
+    bslReq($tk, 'PATCH', 'products/' . $pId, $rollbackPatch);
     return [
         'ok'            => false,
         'error'         => 'بازسازی محصول با دستهٔ جدید ناموفق: ' . bslErrText($rCreate),
