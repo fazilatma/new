@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.453';
+const APP_VERSION = '10.454';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2515,6 +2515,7 @@ function extractLockAcquire(string $queueId, string $profileKey): array {
     } catch (Throwable $e) { /* metadata is best-effort */ }
     $meta = ['queue_id' => $queueId, 'profile_key' => $profileKey,
         'profile_name' => $profileName, 'pid' => (int)@getmypid(), 'at' => $now,
+        'code_version' => APP_VERSION,
         'slot'=>$slot,'limit'=>extractTaskConcurrency()];
     if (!extractLockWriteMeta($fp, $meta)) {
         @flock($fp, LOCK_UN); @fclose($fp);
@@ -14261,7 +14262,8 @@ function snappshopBuildLandingPayload(array $route): array {
 function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonBody = null, int $timeout = 20): array {
     $timeout = max(6, min(45, $timeout));
     $isProductDetailEndpoint = stripos(ltrim($endpoint, '/'), 'products/v2/') === 0;
-    $minGapSec = $isProductDetailEndpoint ? 0.34 : 0.16;
+    $boostGap = (float)($GLOBALS['_s4SnappApixGapBoostSec'] ?? 0.0);
+    $minGapSec = $isProductDetailEndpoint ? max(0.55, $boostGap) : max(0.18, $boostGap * 0.5);
     $inSelfTest = !empty($_GET['selftest']) || !empty($GLOBALS['_s4InSelfTest']);
     $paceFn = static function(float $gapSec) use ($inSelfTest): void {
         if ($inSelfTest || $gapSec <= 0) return;
@@ -14308,7 +14310,7 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
         $maxTries = (!$inSelfTest && in_array($via, ['direct', 'doh'], true)) ? 3 : 1;
         for ($attempt = 0; $attempt < $maxTries; $attempt++) {
             if ($attempt > 0 && !$inSelfTest) {
-                usleep($attempt === 1 ? 1200000 : 2500000);
+                usleep($attempt === 1 ? 2800000 : 5500000);
             }
             $paceFn($minGapSec);
             $reqUrl = $apiUrl;
@@ -14362,6 +14364,10 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             $isVpnBlock = ($code === 403 && (stripos($rawStr, 'turn off your VPN') !== false || stripos($rawStr, 'Access Denied') !== false));
             if (in_array($via, ['direct', 'doh'], true) && !$isVpnBlock && ($code === 429 || $code >= 500)) {
                 $directReachedIran = true;
+                if ($code === 429) {
+                    $GLOBALS['_s4SnappApixGapBoostSec'] = 0.95;
+                    $minGapSec = max($minGapSec, 0.95);
+                }
             }
             if ($primaryErr === '' && $fmtErr !== '' && !($via === 'worker' && $isVpnBlock)) {
                 $primaryErr = $fmtErr;
@@ -14535,6 +14541,91 @@ function snappshopFallbackSelectorForField(string $field): string {
         case 'variations': return '.snappshop-variation-group';
         default:           return '';
     }
+}
+
+function snappshopDetailFromSeoHtml(string $rawHtml, string $sourceUrl): string {
+    if (trim($rawHtml) === '') return '';
+    [$dom, $xp] = load_dom($rawHtml);
+    $prod = null;
+    $crumbs = [];
+    $ldNodes = @$xp->query("//script[translate(@type,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='application/ld+json']");
+    if ($ldNodes && $ldNodes->length) {
+        foreach ($ldNodes as $ln) {
+            $raw = trim((string)($ln->textContent ?? ''));
+            if ($raw === '') continue;
+            $j = @json_decode($raw, true);
+            if (!is_array($j)) continue;
+            $items = isset($j['@graph']) && is_array($j['@graph']) ? $j['@graph'] : [$j];
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $tp = $it['@type'] ?? '';
+                $isProd = is_array($tp) ? in_array('Product', $tp, true) : (stripos((string)$tp, 'Product') !== false);
+                $isBread = is_array($tp) ? in_array('BreadcrumbList', $tp, true) : (stripos((string)$tp, 'BreadcrumbList') !== false);
+                if ($isProd && $prod === null) $prod = $it;
+                elseif ($isBread && !empty($it['itemListElement']) && is_array($it['itemListElement'])) {
+                    foreach ($it['itemListElement'] as $be) {
+                        $bn = normalize_text((string)($be['name'] ?? ($be['item']['name'] ?? '')));
+                        if ($bn !== '') $crumbs[] = ['title' => $bn];
+                    }
+                }
+            }
+        }
+    }
+    if (!is_array($prod)) return '';
+    $title = normalize_text((string)($prod['name'] ?? ''));
+    if ($title === '') return '';
+    $offersRaw = $prod['offers'] ?? [];
+    $offerList = isset($offersRaw[0]) ? $offersRaw : (is_array($offersRaw) && !empty($offersRaw) ? [$offersRaw] : []);
+    $bestPrice = 0;
+    $inStock = false;
+    foreach ($offerList as $of) {
+        if (!is_array($of)) continue;
+        $pNum = (int)round((float)($of['price'] ?? ($of['lowPrice'] ?? 0)));
+        $cur = strtoupper(trim((string)($of['priceCurrency'] ?? 'IRT')));
+        if ($cur === 'IRR' && $pNum >= 10) $pNum = (int)round($pNum / 10);
+        $avail = strtolower((string)($of['availability'] ?? ''));
+        $avOk = ($avail === '' || strpos($avail, 'instock') !== false || strpos($avail, 'in_stock') !== false);
+        if ($avOk && $pNum > 0) {
+            $inStock = true;
+            if ($bestPrice <= 0 || $pNum < $bestPrice) $bestPrice = $pNum;
+        }
+    }
+    $metaPriceNodes = @$xp->query("//meta[@property='product:price:amount']/@content");
+    if ($bestPrice <= 0 && $metaPriceNodes && $metaPriceNodes->length) {
+        $mp = (int)round((float)$metaPriceNodes->item(0)->nodeValue);
+        if ($mp > 0) $bestPrice = $mp;
+    }
+    $metaAvailNodes = @$xp->query("//meta[@property='product:availability']/@content");
+    if ($metaAvailNodes && $metaAvailNodes->length) {
+        $ma = strtolower(trim((string)$metaAvailNodes->item(0)->nodeValue));
+        if ($ma === 'in stock' && $bestPrice > 0) $inStock = true;
+        elseif ($ma === 'out of stock') $inStock = false;
+    }
+    $extraMeta = [];
+    $ogImgNodes = @$xp->query("//meta[@property='og:image']/@content");
+    if ($ogImgNodes && $ogImgNodes->length) {
+        $extraMeta[] = ['property' => 'og:image', 'content' => trim((string)$ogImgNodes->item(0)->nodeValue)];
+    }
+    $imgsRaw = $prod['image'] ?? [];
+    if (is_string($imgsRaw)) $imgsRaw = [$imgsRaw];
+    if ($bestPrice <= 0 && empty($imgsRaw) && empty($extraMeta)) return '';
+    $brandName = is_array($prod['brand'] ?? null) ? (string)($prod['brand']['name'] ?? '') : (string)($prod['brand'] ?? '');
+    $synthData = [
+        'title' => $title,
+        'brand' => ['title' => normalize_text($brandName)],
+        'description' => (string)($prod['description'] ?? ''),
+        'images' => is_array($imgsRaw) ? $imgsRaw : [],
+        'categories' => $crumbs,
+        'vendors' => $bestPrice > 0 ? [[
+            'title' => 'اسنپ‌شاپ',
+            'stock' => $inStock ? 1 : 0,
+            'price' => $bestPrice,
+            'special_price' => $bestPrice,
+            'is_available_in_shop' => $inStock,
+        ]] : [],
+        'page' => ['extra_meta' => $extraMeta],
+    ];
+    return snappshopDetailSyntheticHtml($synthData, $sourceUrl);
 }
 
 function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
@@ -14958,6 +15049,17 @@ function fetch_html(string $url, int $timeout = 25): array {
         if (($__snFastRoute['kind'] ?? '') === 'product') {
             $__snDirectPdp = fetch_html_snappshop_api($url, $timeout, []);
             if (!empty($__snDirectPdp['ok'])) return $__snDirectPdp;
+            /* v10.454: اگر سطل نرخ apix موقتاً 429 برگرداند، سطل جداگانهٔ snappshop.ir
+               را برای متادیتای SEO / JSON-LD بررسی کن؛ فقط اگر دادهٔ واقعی محصول (قیمت/گالری)
+               در JSON-LD بود ok=true بده و هرگز پوستهٔ خالی را بازنگردان. */
+            $__seoNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','ipv4'=>true];
+            $__seoRaw = srcNetFetchAttempt($url, min(12, $timeout), $__seoNet, 'direct');
+            if (!empty($__seoRaw['ok']) && !empty($__seoRaw['html']) && function_exists('snappshopDetailFromSeoHtml')) {
+                $__seoSynth = snappshopDetailFromSeoHtml((string)$__seoRaw['html'], $url);
+                if ($__seoSynth !== '') {
+                    return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $url, 'html' => $__seoSynth, 'mode' => 'snappshop-seo-ldjson'];
+                }
+            }
             return ['ok' => false,
                     'error' => trim((string)($__snDirectPdp['error'] ?? '')) !== '' ? (string)$__snDirectPdp['error'] : 'SnappShop apix PDP failed',
                     'code' => (int)($__snDirectPdp['code'] ?? 0),
@@ -15761,24 +15863,50 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
             $cfg['branch']=$sourceBranch;$cfg['pinned_branch']='';$cfg['pinned_at']=0;$cfg['pinned_max_unix']=0;vc_save($cfg);
         }
         s4SyncAutoUpdateStateToDisk($sourceBranch,false);
-        $recycledExtractPids=[];
-        if(function_exists('posix_kill')&&function_exists('s4WorkerLoadQueue')){
-            $_pgUp=function_exists('readProgress')?readProgress(EXTRACT_PROGRESS_FILE):[];
-            if(!empty($_pgUp['error'])&&empty($_pgUp['done'])){
-                foreach((array)(s4WorkerLoadQueue()['entries']??[]) as $_weUp){
-                    if(!is_array($_weUp)||($_weUp['type']??'')!=='backend_extract'||($_weUp['status']??'')!=='running')continue;
-                    $_wpid=(int)($_weUp['worker_pid']??0);
-                    if($_wpid>0&&@posix_kill($_wpid,defined('SIGTERM')?SIGTERM:15))$recycledExtractPids[]=$_wpid;
-                }
-            }
-        }
+        $recycledExtractPids=function_exists('s4RecycleOutdatedExtractSlotProcesses')?s4RecycleOutdatedExtractSlotProcesses($remoteVersion):[];
         $worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد','recycled_extract_pids'=>$recycledExtractPids];
         return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'disk_version'=>$remoteVersion,'disk_sha'=>substr($remoteSha,0,12),'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
             'source'=>S4_CODE_UPDATE_REPO.'@'.$sourceBranch.':'.S4_CODE_UPDATE_PATH,'branch'=>$sourceBranch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
 }
-/** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
+function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): array {
+    $expected = $expectedVer !== null && $expectedVer !== '' ? $expectedVer : (function_exists('s4DiskCodeMeta') ? (string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) : APP_VERSION);
+    $recycled = [];
+    if (!function_exists('posix_kill')) return $recycled;
+    $sig = defined('SIGTERM') ? SIGTERM : 15;
+    $myPid = (int)@getmypid();
+    if (function_exists('extractLockKnownSlotFiles')) {
+        foreach (extractLockKnownSlotFiles() as $slotFile) {
+            if (!is_file($slotFile)) continue;
+            $fp = @fopen($slotFile, 'c');
+            if (!$fp) continue;
+            $held = !@flock($fp, LOCK_EX | LOCK_NB);
+            if (!$held) { @flock($fp, LOCK_UN); @fclose($fp); continue; }
+            $meta = @json_decode((string)@file_get_contents($slotFile), true);
+            @fclose($fp);
+            if (!is_array($meta)) continue;
+            $slotVer = trim((string)($meta['code_version'] ?? ''));
+            $spid = (int)($meta['pid'] ?? 0);
+            if ($spid > 0 && $spid !== $myPid && $slotVer !== $expected && !in_array($spid, $recycled, true)) {
+                if (@posix_kill($spid, $sig)) $recycled[] = $spid;
+            }
+        }
+    }
+    if (function_exists('s4WorkerLoadQueue')) {
+        $_pgUp = function_exists('readProgress') ? readProgress(EXTRACT_PROGRESS_FILE) : [];
+        if (!empty($_pgUp['error']) && empty($_pgUp['done'])) {
+            foreach ((array)(s4WorkerLoadQueue()['entries'] ?? []) as $_weUp) {
+                if (!is_array($_weUp) || ($_weUp['type'] ?? '') !== 'backend_extract' || ($_weUp['status'] ?? '') !== 'running') continue;
+                $_wpid = (int)($_weUp['worker_pid'] ?? 0);
+                if ($_wpid > 0 && $_wpid !== $myPid && !in_array($_wpid, $recycled, true) && @posix_kill($_wpid, $sig)) {
+                    $recycled[] = $_wpid;
+                }
+            }
+        }
+    }
+    return $recycled;
+}
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
     $now=time();$disk=s4DiskCodeMeta();$diskVer=$disk['version'];$diskSha=$disk['sha'];
@@ -15817,7 +15945,10 @@ function s4AutoCodeUpdateTick(bool $force=false):array{
  * اجرا می‌کند. requestهای عادی هرگز منتظر شبکهٔ GitHub نمی‌مانند. */
 if(isset($_GET['code_auto_update'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
-    echo json_encode(s4AutoCodeUpdateTick(!empty($_GET['force']??$_POST['force']??null)),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    $_tickRes=s4AutoCodeUpdateTick(!empty($_GET['force']??$_POST['force']??null));
+    $_slotRecycled=function_exists('s4RecycleOutdatedExtractSlotProcesses')?s4RecycleOutdatedExtractSlotProcesses((string)($_tickRes['disk_version']??APP_VERSION)):[];
+    if($_slotRecycled)$_tickRes['recycled_extract_slot_pids']=$_slotRecycled;
+    echo json_encode($_tickRes,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 if(isset($_GET['code_update_sync_state'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
@@ -25066,6 +25197,7 @@ foreach($needDetail as $key=>$p){
    v8.98: ولی حداقل چند محصول باید انجام شود، وگرنه پیشرفتی حاصل نمی‌شود
    و هر نوبت دقیقاً از همان جای قبل شروع می‌کند. */
 if($detailDone>=$_minPerRun&&time()>=$_deadline){$_ranOut=true;break;}
+if($detailDone>0&&(($detailDone&7)===0)&&function_exists('s4DiskCodeMeta')&&(s4DiskCodeMeta()['version']??APP_VERSION)!==APP_VERSION){$_ranOut=true;break;}
 /* Each parallel row consumes only its own stop signal. */
 if(extractStopRequestedForQueue($queueId,true)){
 extractCheckpoint($pkFinal,$allProducts,
@@ -50593,6 +50725,25 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snSeoHtml454 = snappshopDetailFromSeoHtml(
+        '<!doctype html><html><head>'
+        . '<meta property="og:image" content="/products/seo-og.webp">'
+        . '<meta property="product:availability" content="in stock">'
+        . '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"تابه چدن تست SEO","image":["/products/seo-1.jpg","https://cdn.snappshop.ir/products/seo-2.jpg"],"offers":{"@type":"Offer","price":"385000","priceCurrency":"IRT","availability":"https://schema.org/InStock"}}</script>'
+        . '</head><body><div id="__next"></div></body></html>',
+        'https://snappshop.ir/product/snp-999111'
+    );
+    [$_snSeoDom454, $_snSeoXp454] = load_dom($_snSeoHtml454);
+    $_snSeoGal454 = galleryExtract($_snSeoXp454, null, 'https://snappshop.ir/product/snp-999111', ['mode' => 'off', 'box' => 'div.image-thumbnail']);
+    $add('10.454', 'بازیافت خودکار اسلات‌های استخراج نسخهٔ قدیمی، پشتیبان SEO/JSON-LD اسنپ‌شاپ هنگام 429 موقت apix و مکث تطبیقی ضد بلاک',
+         function_exists('snappshopDetailFromSeoHtml')
+      && function_exists('s4RecycleOutdatedExtractSlotProcesses')
+      && count($_snSeoGal454['images'] ?? []) === 3
+      && extractPrice(queryFirstText($_snSeoXp454, null, '.text-bold')) !== ''
+      && strpos($selfSrc, "'code_version' => APP_VERSION") !== false
+      && strpos($selfSrc, '_s4SnappApixGapBoostSec') !== false
+      && strpos($selfSrc, "{v:'10." . "454'") !== false
+      && version_compare(APP_VERSION, '10.454', '>='));
     $_snSynth453 = snappshopDetailSyntheticHtml([
         'title' => 'سرویس پخت‌وپز تست گالری اسنپ‌شاپ',
         'brand' => ['title' => 'تفال'],
@@ -85662,6 +85813,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.454', t:'🛡️ مکث تطبیقی ضد ۴۲۹، پشتیبان SEO/JSON-LD صفحات محصول اسنپ‌شاپ و بازیافت خودکار اسلات‌های استخراج نسخهٔ قدیم', items:[
+    'هنگامی که سطل نرخ apix.snappshop.ir موقتاً پاسخ HTTP 429 برگرداند، تابع snappshopDetailFromSeoHtml از سطل جداگانهٔ snappshop.ir متادیتای JSON-LD (@type=Product) و تگ‌های OpenGraph را می‌خواند و فقط در صورت وجود دادهٔ معتبر محصول، صفحهٔ سنتزی کامل (شامل گالری، قیمت و موجودی) می‌سازد و هرگز پوستهٔ خالی برنمی‌گرداند.',
+    'مکث تطبیقی (_s4SnappApixGapBoostSec) و backoff پلکانی روی درخواست‌های products/v2 اسنپ‌شاپ اضافه شد تا سرعت فاز ۲ زیر آستانهٔ فایروال ArvanCloud بماند.',
+    'ثبت code_version در فایل قفل اسلات‌های استخراج (.extract.lock) و تابع s4RecycleOutdatedExtractSlotProcesses اضافه شد تا پس از آپدیت کد، پردازش‌های ۱۵ دقیقه‌ای فاز ۲ که با کد قدیمی در حال اجرا هستند بلافاصله و تمیز به کد جدید منتقل شوند.'
+  ]},
   {v:'10.453', t:'🖼️ رفع ریشه‌ای عدم استخراج تصاویر گالری در فاز ۲ پروفایل‌های اسنپ‌شاپ + مهار خطای 429/Empty و ناموجودی کاذب جزئیات', items:[
     'علت‌های ترکیبی صفر ماندن گالری اسنپ‌شاپ در فاز ۲ شناسایی و به‌صورت کامل برطرف شد: ۱) DOM سنتزی جزئیات اسنپ‌شاپ (snappshopDetailSyntheticHtml) اکنون هر تصویر را داخل ظرف <div class="image-thumbnail gallery-item"> و .product-gallery.images-box قرار می‌دهد، تمام کلیدهای تصویر (image، images، content.images، gallery، media، variants و og:image) را جمع‌آوری و مسیرهای نسبی را به https://cdn.snappshop.ir تبدیل می‌کند، و حتی در صورت عدم تطابق سلکتور کادر، از ساختار apix و JSON-LD (@type=Product) گالری کامل را بیرون می‌کشد.',
     'فعال‌سازی هوشمند گالری در پروفایل‌های اسنپ‌شاپ (galleryEffectiveCfgForUrl) اضافه شد: اگر کاربر کادر/سلکتور گالری (مانند div.image-thumbnail) را تنظیم کرده باشد ولی ذخیره‌سازی قدیمی حالت را روی off نگه داشته باشد، در تمام مسیرهای فاز ۲ (دو مرحله‌ای، درجا، استریم و تست گالری) و فرم رابط کاربری به‌طور خودکار فعال می‌شود.',
