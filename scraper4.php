@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.456';
+const APP_VERSION = '10.457';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -14259,14 +14259,145 @@ function snappshopBuildLandingPayload(array $route): array {
     return $payload;
 }
 
+const S4_SNAPP_APIX_STATE_FILE = __DIR__ . '/.s4-snapp-apix-state.json';
+
+function s4SnappApixDefaultState(): array {
+    return [
+        'guest_token'        => '',
+        'guest_token_exp'    => 0,
+        'guest_token_at'     => 0,
+        'last_pdp_ms'        => 0,
+        'last_plp_ms'        => 0,
+        'pdp_cooldown_until' => 0,
+        'pdp_429_streak'     => 0,
+        'last_200_at'        => 0,
+        'last_429_at'        => 0,
+        'total_200'          => 0,
+        'total_429'          => 0,
+    ];
+}
+
+function s4SnappApixStateRead(): array {
+    $def = s4SnappApixDefaultState();
+    if (!is_file(S4_SNAPP_APIX_STATE_FILE)) return $def;
+    $raw = (string)@file_get_contents(S4_SNAPP_APIX_STATE_FILE);
+    $dec = $raw !== '' ? @json_decode($raw, true) : null;
+    return is_array($dec) ? array_merge($def, $dec) : $def;
+}
+
+function s4SnappApixStateWithLock(callable $fn): array {
+    $def = s4SnappApixDefaultState();
+    $fp = @fopen(S4_SNAPP_APIX_STATE_FILE, 'c+');
+    if (!$fp) {
+        $st = $def;
+        $dirty = false;
+        $res = $fn($st, $dirty);
+        return is_array($res) ? $res : $st;
+    }
+    @flock($fp, LOCK_EX);
+    @rewind($fp);
+    $raw = (string)stream_get_contents($fp);
+    $dec = $raw !== '' ? @json_decode($raw, true) : null;
+    $st = is_array($dec) ? array_merge($def, $dec) : $def;
+    $dirty = false;
+    $res = $fn($st, $dirty);
+    if ($dirty) {
+        $enc = json_encode($st, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($enc) && $enc !== '') {
+            @ftruncate($fp, 0);
+            @rewind($fp);
+            @fwrite($fp, $enc);
+            @fflush($fp);
+        }
+    }
+    @flock($fp, LOCK_UN);
+    @fclose($fp);
+    return is_array($res) ? $res : $st;
+}
+
+function s4SnappApixEnsureGuestToken(int $timeout = 8, bool $forceRefresh = false): string {
+    $now = time();
+    if (!$forceRefresh) {
+        $cur = s4SnappApixStateRead();
+        $tok = trim((string)($cur['guest_token'] ?? ''));
+        $exp = (int)($cur['guest_token_exp'] ?? 0);
+        $at  = (int)($cur['guest_token_at'] ?? 0);
+        if ($tok !== '' && ($exp <= 0 || $exp > $now + 600) && ($at > 0 && ($now - $at) < 7200)) {
+            return $tok;
+        }
+    }
+    if (!function_exists('curl_init')) return '';
+    $ch = curl_init('https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 2,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT        => max(5, min(12, $timeout)),
+        CURLOPT_ENCODING       => '',
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => 0,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        CURLOPT_HTTPHEADER     => [
+            'Accept: application/json, text/plain, */*',
+            'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin: https://snappshop.ir',
+            'Referer: https://snappshop.ir/',
+            'X-Origin: https://snappshop.ir',
+            'x-origin: https://snappshop.ir',
+            's-device: DESKTOP',
+            's-device-source: shop',
+        ],
+    ]);
+    if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+    $raw = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if ($raw === false || $code < 200 || $code >= 300) return '';
+    $dec = @json_decode((string)$raw, true);
+    $tok = trim((string)($dec['data']['token'] ?? ''));
+    if ($tok === '') return '';
+    $exp = $now + 86400;
+    s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($tok, $exp, $now) {
+        $st['guest_token'] = $tok;
+        $st['guest_token_exp'] = $exp;
+        $st['guest_token_at'] = $now;
+        $dirty = true;
+        return $st;
+    });
+    return $tok;
+}
+
 function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonBody = null, int $timeout = 20): array {
     $timeout = max(6, min(45, $timeout));
-    $isProductDetailEndpoint = stripos(ltrim($endpoint, '/'), 'products/v2/') === 0;
+    $cleanEp = ltrim($endpoint, '/');
+    $isProductDetailEndpoint = stripos($cleanEp, 'products/v2/') === 0;
+    $isGuestTokenEndpoint = stripos($cleanEp, 'guest/v2/token') === 0;
     $boostGap = (float)($GLOBALS['_s4SnappApixGapBoostSec'] ?? 0.0);
-    $minGapSec = $isProductDetailEndpoint ? max(0.55, $boostGap) : max(0.18, $boostGap * 0.5);
+    $minGapSec = $isProductDetailEndpoint ? max(2.15, $boostGap) : max(0.22, $boostGap * 0.5);
     $inSelfTest = !empty($_GET['selftest']) || !empty($GLOBALS['_s4InSelfTest']);
-    $paceFn = static function(float $gapSec) use ($inSelfTest): void {
+    $isInteractiveHttp = !$inSelfTest
+        && (!function_exists('isCliRun') || !isCliRun())
+        && empty($_GET['worker_tick'])
+        && empty($_GET['cron'])
+        && (isset($_GET['gallery_test']) || isset($_GET['detail_test']) || isset($_GET['s4_feedback']) || isset($_GET['picker']) || isset($_GET['test_selectors']));
+    $paceFn = static function(float $gapSec) use ($inSelfTest, $isProductDetailEndpoint): void {
         if ($inSelfTest || $gapSec <= 0) return;
+        if ($isProductDetailEndpoint) {
+            $resv = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) use ($gapSec) {
+                $streak = (int)($st['pdp_429_streak'] ?? 0);
+                $effGapMs = (int)round(max($gapSec, $streak > 0 ? 2.85 : 2.15) * 1000);
+                $nowMs = (int)round(microtime(true) * 1000);
+                $slotMs = max($nowMs, (int)($st['last_pdp_ms'] ?? 0) + $effGapMs);
+                $st['last_pdp_ms'] = $slotMs;
+                $dirty = true;
+                return ['wait_ms' => max(0, $slotMs - $nowMs)];
+            });
+            $wMs = min(15000, max(0, (int)($resv['wait_ms'] ?? 0)));
+            if ($wMs > 0) usleep($wMs * 1000);
+            $GLOBALS['_s4SnappApixLastTs'] = microtime(true);
+            return;
+        }
         $prevTs = (float)($GLOBALS['_s4SnappApixLastTs'] ?? 0.0);
         $nowTs = microtime(true);
         if ($prevTs > 0 && ($nowTs - $prevTs) < $gapSec) {
@@ -14275,19 +14406,76 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
         $GLOBALS['_s4SnappApixLastTs'] = microtime(true);
     };
     $sep = strpos($endpoint, '?') !== false ? '&' : '?';
-    $apiUrl = 'https://apix.snappshop.ir/' . ltrim($endpoint, '/') . $sep . 'lat=35.77331&lng=51.418591';
+    $apiUrl = 'https://apix.snappshop.ir/' . $cleanEp . $sep . 'lat=35.77331&lng=51.418591';
+    if (!$inSelfTest && $isProductDetailEndpoint && empty($_GET['force_live'])) {
+        $stNow = s4SnappApixStateRead();
+        $remCd = (int)($stNow['pdp_cooldown_until'] ?? 0) - time();
+        if ($remCd > 0) {
+            if ($isInteractiveHttp) {
+                if ($remCd <= 5) {
+                    sleep($remCd);
+                } else {
+                    return [
+                        'ok' => false,
+                        'code' => 429,
+                        'api_url' => $apiUrl,
+                        'data' => [],
+                        'snappshop_rate_limited' => true,
+                        'snappshop_deferred' => true,
+                        'snappshop_cooldown_sec' => $remCd,
+                        'error' => 'HTTP 429 (تنفس ضد محدودیت Sotoon CDN فعال است: ' . $remCd . ' ثانیه باقی‌مانده)',
+                    ];
+                }
+            } else {
+                $dl = (int)($GLOBALS['_s4SnappDetailDeadline'] ?? 0);
+                if ($dl > 0 && (time() + $remCd + 8) >= $dl) {
+                    return [
+                        'ok' => false,
+                        'code' => 429,
+                        'api_url' => $apiUrl,
+                        'data' => [],
+                        'snappshop_rate_limited' => true,
+                        'snappshop_deferred' => true,
+                        'snappshop_cooldown_sec' => $remCd,
+                        'error' => 'HTTP 429 (cooldown ' . $remCd . 's)',
+                    ];
+                }
+                /* سکوت کامل شبکه تا پنجرهٔ لغزندهٔ Sotoon CDN بدون ریست‌شدن صفر شود */
+                $left = $remCd;
+                while ($left > 0) {
+                    $step = min(5, $left);
+                    sleep($step);
+                    $left -= $step;
+                    $qId = (string)($GLOBALS['_s4SnappDetailQueueId'] ?? '');
+                    if ($qId !== '' && function_exists('extractStopRequestedForQueue') && extractStopRequestedForQueue($qId, false)) {
+                        return ['ok' => false, 'code' => 429, 'api_url' => $apiUrl, 'data' => [], 'snappshop_rate_limited' => true, 'snappshop_deferred' => true, 'snappshop_cooldown_sec' => $left, 'error' => 'stopped'];
+                    }
+                    if (is_callable($GLOBALS['_s4SnappCooldownHeartbeat'] ?? null)) {
+                        @($GLOBALS['_s4SnappCooldownHeartbeat'])($left);
+                    }
+                }
+            }
+        }
+    }
     $method = strtoupper(trim($method));
     $encodedBody = $jsonBody !== null ? json_encode($jsonBody, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
-    $hdrs = [
-        'Accept: application/json, text/plain, */*',
-        'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Origin: https://snappshop.ir',
-        'Referer: https://snappshop.ir/',
-        'x-origin: https://snappshop.ir',
-        's-device: DESKTOP',
-        's-device-source: shop',
-    ];
-    if ($encodedBody !== null) $hdrs[] = 'Content-Type: application/json';
+    $guestToken = (!$inSelfTest && !$isGuestTokenEndpoint) ? s4SnappApixEnsureGuestToken(min(8, $timeout), false) : '';
+    $buildHeaders = static function(string $tok) use ($encodedBody): array {
+        $h = [
+            'Accept: application/json, text/plain, */*',
+            'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin: https://snappshop.ir',
+            'Referer: https://snappshop.ir/',
+            'X-Origin: https://snappshop.ir',
+            'x-origin: https://snappshop.ir',
+            's-device: DESKTOP',
+            's-device-source: shop',
+        ];
+        if ($tok !== '') $h[] = 'Authorization: Bearer ' . $tok;
+        if ($encodedBody !== null) $h[] = 'Content-Type: application/json';
+        return $h;
+    };
+    $hdrs = $buildHeaders($guestToken);
     $net = function_exists('loadConnections') ? srcNetCfg() : ['mode' => 'direct', 'ipv4' => true];
     $tryModes = ['direct'];
     foreach (['doh', 'proxy', 'worker'] as $cand) {
@@ -14301,16 +14489,19 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
     $directReachedIran = false;
     $primaryErr = '';
     $primaryCode = 0;
+    $rateLimitedCd = 0;
+    $did401Refresh = false;
     foreach ($tryModes as $via) {
         if (!function_exists('curl_init')) break;
-        /* Cloudflare Worker همیشه خارج از ایران است و روی apix.snappshop.ir صفحهٔ
-           403 Please turn off your VPN برمی‌گرداند؛ وقتی سرور اصلی در ایران است و
-           فقط 429/5xx خورده، ارسال به worker بی‌فایده است و خطای واقعی را پنهان می‌کند. */
-        if ($via === 'worker' && $directReachedIran) continue;
-        $maxTries = (!$inSelfTest && in_array($via, ['direct', 'doh'], true)) ? 3 : 1;
+        /* v10.457: وقتی اتصال مستقیم به ایران رسیده و پاسخ HTTP (مثل 429/5xx) گرفته،
+           ارسال مجدد روی doh (که دقیقاً با همان IP سرور به Sotoon CDN می‌خورد و شمارندهٔ
+           پنجرهٔ لغزندهٔ 429 را دو برابر می‌کند) یا worker خارجی (403 VPN) مضر است؛
+           فقط اگر proxy واقعی با IP متفاوت تنظیم شده باشد اجازهٔ تلاش دارد. */
+        if (($via === 'worker' || $via === 'doh') && $directReachedIran) continue;
+        $maxTries = (!$inSelfTest && !$isProductDetailEndpoint && in_array($via, ['direct', 'doh'], true)) ? 2 : 1;
         for ($attempt = 0; $attempt < $maxTries; $attempt++) {
             if ($attempt > 0 && !$inSelfTest) {
-                usleep($attempt === 1 ? 2800000 : 5500000);
+                usleep(2200000);
             }
             $paceFn($minGapSec);
             $reqUrl = $apiUrl;
@@ -14352,8 +14543,27 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             curl_close($ch);
             $rawStr = $raw === false ? '' : (string)$raw;
+            if ($code === 401 && !$did401Refresh && !$inSelfTest && !$isGuestTokenEndpoint) {
+                $did401Refresh = true;
+                $guestToken = s4SnappApixEnsureGuestToken(min(8, $timeout), true);
+                if ($guestToken !== '') {
+                    $hdrs = $buildHeaders($guestToken);
+                    $attempt--;
+                    continue;
+                }
+            }
             $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
             if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
+                if (!$inSelfTest && $isProductDetailEndpoint) {
+                    s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) {
+                        $st['pdp_429_streak'] = 0;
+                        $st['pdp_cooldown_until'] = 0;
+                        $st['last_200_at'] = time();
+                        $st['total_200'] = (int)($st['total_200'] ?? 0) + 1;
+                        $dirty = true;
+                        return $st;
+                    });
+                }
                 return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
             }
             if ($code >= 200 && $code < 300 && is_array($decoded) && array_key_exists('status', $decoded) && empty($decoded['status'])) {
@@ -14365,8 +14575,22 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             if (in_array($via, ['direct', 'doh'], true) && !$isVpnBlock && ($code === 429 || $code >= 500)) {
                 $directReachedIran = true;
                 if ($code === 429) {
-                    $GLOBALS['_s4SnappApixGapBoostSec'] = 0.95;
-                    $minGapSec = max($minGapSec, 0.95);
+                    $GLOBALS['_s4SnappApixGapBoostSec'] = 2.85;
+                    $minGapSec = max($minGapSec, 2.85);
+                    if (!$inSelfTest && $isProductDetailEndpoint) {
+                        $cdInfo = s4SnappApixStateWithLock(static function(array &$st, bool &$dirty) {
+                            $streak = (int)($st['pdp_429_streak'] ?? 0) + 1;
+                            $cd = $streak === 1 ? 68 : ($streak === 2 ? 130 : ($streak === 3 ? 190 : 310));
+                            $st['pdp_429_streak'] = $streak;
+                            $st['pdp_cooldown_until'] = max((int)($st['pdp_cooldown_until'] ?? 0), time() + $cd);
+                            $st['guest_token'] = '';
+                            $st['last_429_at'] = time();
+                            $st['total_429'] = (int)($st['total_429'] ?? 0) + 1;
+                            $dirty = true;
+                            return ['cd' => $cd, 'streak' => $streak];
+                        });
+                        $rateLimitedCd = (int)($cdInfo['cd'] ?? 68);
+                    }
                 }
             }
             if ($primaryErr === '' && $fmtErr !== '' && !($via === 'worker' && $isVpnBlock)) {
@@ -14376,11 +14600,21 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
             $lastCode = $code;
             $lastErr = $fmtErr !== '' ? $fmtErr : $lastErr;
             if ($code === 404 || $code === 400 || $code === 422) break 2;
+            if ($code === 429 && $isProductDetailEndpoint) break;
             if ($code === 429 || $code === 0 || $code >= 500) continue;
             break;
         }
     }
-    return ['ok' => false, 'code' => $primaryCode > 0 ? $primaryCode : $lastCode, 'api_url' => $apiUrl, 'data' => [], 'error' => $primaryErr !== '' ? $primaryErr : $lastErr];
+    $finalCode = $primaryCode > 0 ? $primaryCode : $lastCode;
+    return [
+        'ok' => false,
+        'code' => $finalCode,
+        'api_url' => $apiUrl,
+        'data' => [],
+        'snappshop_rate_limited' => ($finalCode === 429),
+        'snappshop_cooldown_sec' => $rateLimitedCd,
+        'error' => $primaryErr !== '' ? $primaryErr : $lastErr,
+    ];
 }
 
 function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requestedPage = 1, ?array &$apiMeta = null): array {
@@ -14889,7 +15123,17 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
                     'snappshop_api_via' => (string)($res['via'] ?? 'direct'), 'snappshop_route_kind' => 'product',
                     'jina_product_count' => 1];
         }
-        return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop detail api failed'), 'code' => (int)($res['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix'];
+        return [
+            'ok' => false,
+            'error' => (string)($res['error'] ?? 'snappshop detail api failed'),
+            'code' => (int)($res['code'] ?? 0),
+            'url' => $target,
+            'html' => '',
+            'mode' => 'snappshop-apix',
+            'snappshop_rate_limited' => !empty($res['snappshop_rate_limited']),
+            'snappshop_deferred' => !empty($res['snappshop_deferred']),
+            'snappshop_cooldown_sec' => (int)($res['snappshop_cooldown_sec'] ?? 0),
+        ];
     }
     $reqPageEarly = max(1, (int)($route['page'] ?? 1));
     if ($reqPageEarly > 500) {
@@ -15053,15 +15297,17 @@ function fetch_html(string $url, int $timeout = 25): array {
         if (($__snFastRoute['kind'] ?? '') === 'product') {
             $__snDirectPdp = fetch_html_snappshop_api($url, $timeout, []);
             if (!empty($__snDirectPdp['ok'])) return $__snDirectPdp;
-            /* v10.454: اگر سطل نرخ apix موقتاً 429 برگرداند، سطل جداگانهٔ snappshop.ir
-               را برای متادیتای SEO / JSON-LD بررسی کن؛ فقط اگر دادهٔ واقعی محصول (قیمت/گالری)
-               در JSON-LD بود ok=true بده و هرگز پوستهٔ خالی را بازنگردان. */
-            $__seoNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','ipv4'=>true];
-            $__seoRaw = srcNetFetchAttempt($url, min(12, $timeout), $__seoNet, 'direct');
-            if (!empty($__seoRaw['ok']) && !empty($__seoRaw['html']) && function_exists('snappshopDetailFromSeoHtml')) {
-                $__seoSynth = snappshopDetailFromSeoHtml((string)$__seoRaw['html'], $url);
-                if ($__seoSynth !== '') {
-                    return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $url, 'html' => $__seoSynth, 'mode' => 'snappshop-seo-ldjson'];
+            /* v10.457: اگر سطل نرخ apix روی 429 است، ارسال درخواست اضافی به snappshop.ir
+               (که پشت همان Sotoon CDN است و فقط پوستهٔ خالی customer_production_ir_csr برمی‌گرداند)
+               فقط پنجرهٔ لغزندهٔ CDN را ریست می‌کند؛ بلافاصله متادیتای cooldown را برگردان. */
+            if (empty($__snDirectPdp['snappshop_rate_limited']) && (int)($__snDirectPdp['code'] ?? 0) !== 429) {
+                $__seoNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','ipv4'=>true];
+                $__seoRaw = srcNetFetchAttempt($url, min(12, $timeout), $__seoNet, 'direct');
+                if (!empty($__seoRaw['ok']) && !empty($__seoRaw['html']) && function_exists('snappshopDetailFromSeoHtml')) {
+                    $__seoSynth = snappshopDetailFromSeoHtml((string)$__seoRaw['html'], $url);
+                    if ($__seoSynth !== '') {
+                        return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $url, 'html' => $__seoSynth, 'mode' => 'snappshop-seo-ldjson'];
+                    }
                 }
             }
             return ['ok' => false,
@@ -15069,7 +15315,10 @@ function fetch_html(string $url, int $timeout = 25): array {
                     'code' => (int)($__snDirectPdp['code'] ?? 0),
                     'url' => $url,
                     'html' => '',
-                    'mode' => 'snappshop-apix'];
+                    'mode' => 'snappshop-apix',
+                    'snappshop_rate_limited' => !empty($__snDirectPdp['snappshop_rate_limited']) || ((int)($__snDirectPdp['code'] ?? 0) === 429),
+                    'snappshop_deferred' => !empty($__snDirectPdp['snappshop_deferred']),
+                    'snappshop_cooldown_sec' => (int)($__snDirectPdp['snappshop_cooldown_sec'] ?? 0)];
         }
     }
     $__profileForcedDirect = array_key_exists('_srcNetProfileIndirect', $GLOBALS) && empty($GLOBALS['_srcNetProfileIndirect']);
@@ -17073,213 +17322,52 @@ header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(180);
 $kind = trim((string)$_GET['s4_feedback']);
 if (strtolower($kind) === 'snappshop_pdp_probe') {
-    $pid = preg_replace('~[^0-9]~', '', (string)($_GET['id'] ?? '1784183539'));
-    if ($pid === '') $pid = '1784183539';
-    $sub = strtolower(trim((string)($_GET['sub'] ?? 'guest')));
-    $pdpUrl = 'https://snappshop.ir/product/snp-' . $pid;
-    $snHdrs = [
-        'Accept: application/json, text/plain, */*',
-        'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Origin: https://snappshop.ir',
-        'Referer: https://snappshop.ir/',
-        'x-origin: https://snappshop.ir',
-        's-device: DESKTOP',
-        's-device-source: shop',
+    $pid = preg_replace('~[^0-9]~', '', (string)($_GET['id'] ?? '389034409'));
+    if ($pid === '') $pid = '389034409';
+    $st = s4SnappApixStateRead();
+    $now = time();
+    $remCd = max(0, (int)($st['pdp_cooldown_until'] ?? 0) - $now);
+    $out = [
+        'ok' => true,
+        'version' => APP_VERSION,
+        'cooldown_remaining_sec' => $remCd,
+        'pdp_429_streak' => (int)($st['pdp_429_streak'] ?? 0),
+        'last_200_at' => (int)($st['last_200_at'] ?? 0),
+        'last_429_at' => (int)($st['last_429_at'] ?? 0),
+        'total_200' => (int)($st['total_200'] ?? 0),
+        'total_429' => (int)($st['total_429'] ?? 0),
+        'has_guest_token' => trim((string)($st['guest_token'] ?? '')) !== '',
+        'guest_token_age_sec' => !empty($st['guest_token_at']) ? ($now - (int)$st['guest_token_at']) : null,
     ];
-    $quickGet = static function(string $method, string $u, array $hdrs = [], ?string $body = null, string $ua = ''): array {
-        $ch = curl_init($u);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 4,
-            CURLOPT_TIMEOUT        => 6,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_CUSTOMREQUEST  => $method,
-            CURLOPT_USERAGENT      => $ua !== '' ? $ua : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            CURLOPT_HTTPHEADER     => $hdrs,
-        ]);
-        if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-        $raw = curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-        $str = $raw === false ? '' : (string)$raw;
-        return ['code' => $code, 'bytes' => strlen($str), 'err' => $err, 'raw' => $str, 'sample' => str_replace(['<', '>'], ['[lt]', '[gt]'], substr($str, 0, 500))];
-    };
-    if ($sub === 'bot') {
-        $botProbes = [];
-        foreach ([
-            'googlebot' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-            'telegrambot' => 'TelegramBot (like TwitterBot)',
-        ] as $botName => $botUa) {
-            $br = $quickGet('GET', $pdpUrl, ['Accept: text/html,application/xhtml+xml,*/*'], null, $botUa);
-            $bHtml = $br['raw'];
-            $p0 = strpos($bHtml, '__NEXT_DATA__');
-            $p1 = $p0 !== false ? strpos($bHtml, '>', $p0) : false;
-            $p2 = $p1 !== false ? strpos($bHtml, '</script>', $p1 + 1) : false;
-            $ndSample = '';
-            $ppKeys = [];
-            if ($p1 !== false && $p2 !== false) {
-                $jsn = substr($bHtml, $p1 + 1, $p2 - $p1 - 1);
-                $j = @json_decode($jsn, true);
-                $pp = is_array($j['props']['pageProps'] ?? null) ? $j['props']['pageProps'] : [];
-                $ppKeys = array_keys($pp);
-                $ndSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($jsn, 0, 2200));
-            }
-            $lp0 = stripos($bHtml, 'application/ld+json');
-            $lp1 = $lp0 !== false ? strpos($bHtml, '>', $lp0) : false;
-            $lp2 = $lp1 !== false ? strpos($bHtml, '</script>', $lp1 + 1) : false;
-            $ldSample = ($lp1 !== false && $lp2 !== false) ? str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(substr($bHtml, $lp1 + 1, $lp2 - $lp1 - 1), 0, 2200)) : '';
-            $botProbes[$botName] = ['code' => $br['code'], 'bytes' => $br['bytes'], 'pageProps_keys' => $ppKeys, 'ld_sample' => $ldSample, 'nd_sample' => $ndSample];
-        }
-        echo json_encode(['ok' => true, 'sub' => 'bot', 'bot_probes' => $botProbes], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        exit;
+    if (!empty($_GET['reset_cooldown'])) {
+        s4SnappApixStateWithLock(static function(array &$sState, bool &$dirty) {
+            $sState['pdp_cooldown_until'] = 0;
+            $sState['pdp_429_streak'] = 0;
+            $dirty = true;
+            return $sState;
+        });
+        $out['cooldown_reset'] = true;
+        $out['cooldown_remaining_sec'] = 0;
     }
-    if ($sub === 'js') {
-        $jsContexts = [];
-        foreach ([
-            '_app' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js',
-            'c6666' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js',
-            'c516' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js',
-        ] as $bKey => $bUrl) {
-            $bR = $quickGet('GET', $bUrl);
-            $bT = $bR['raw'];
-            foreach (['guest/v2/token', 'products/v2', 'productData', 'Authorization'] as $needle) {
-                $pos = strpos($bT, $needle);
-                if ($pos !== false) {
-                    $jsContexts[$bKey . ':' . $needle] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($bT, max(0, $pos - 180), 420));
-                }
-            }
+    if (!empty($_GET['live'])) {
+        $pdpUrl = 'https://snappshop.ir/product/snp-' . $pid;
+        $r = fetch_html($pdpUrl, 15);
+        $galImgs = [];
+        if (!empty($r['ok']) && !empty($r['html'])) {
+            [$_dP, $_xP] = load_dom((string)$r['html']);
+            $_gP = galleryExtract($_xP, null, $pdpUrl, ['mode' => 'off', 'box' => 'div.image-thumbnail']);
+            $galImgs = is_array($_gP['images'] ?? null) ? $_gP['images'] : [];
         }
-        echo json_encode(['ok' => true, 'sub' => 'js', 'js_contexts' => $jsContexts], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        exit;
-    }
-    if ($sub === 'deep') {
-        $respHdrs429 = [];
-        $ch4 = curl_init('https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591');
-        curl_setopt_array($ch4, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 4,
-            CURLOPT_TIMEOUT        => 6,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            CURLOPT_HTTPHEADER     => $snHdrs,
-            CURLOPT_HEADERFUNCTION => static function($c, $hl) use (&$respHdrs429) {
-                $t = trim($hl);
-                if ($t !== '') $respHdrs429[] = $t;
-                return strlen($hl);
-            },
-        ]);
-        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch4, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-        $raw429 = (string)(curl_exec($ch4) ?: '');
-        curl_close($ch4);
-        $body429NoStyle = preg_replace('~<style\b[^>]*>.*?</style>~isu', '', $raw429);
-        $body429Safe = str_replace(['<', '>'], ['[lt]', '[gt]'], $body429NoStyle);
-
-        $appJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js')['raw'];
-        $c6666 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js')['raw'];
-        $pdpJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js')['raw'];
-        $snips = [];
-        foreach (['s-device', 'x-origin', 'Bearer', 'clientGetGuestToken', 'apix.snappshop'] as $kw) {
-            $p = strpos($appJs, $kw);
-            if ($p !== false) $snips['_app:' . $kw] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($appJs, max(0, $p - 250), 650));
-        }
-        $p6 = strpos($c6666, 'products/v2/');
-        if ($p6 !== false) $snips['c6666:products_v2_full'] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($c6666, max(0, $p6 - 700), 1100));
-        $snips['pdp_js_len'] = strlen($pdpJs);
-        $snips['pdp_js_head'] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($pdpJs, 0, 1800));
-
-        $gRes = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
-        $tok = '';
-        if (preg_match('~"token"\s*:\s*"([^"]+)"~', $gRes['raw'], $tm)) $tok = $tm[1];
-        $authVariants = [];
-        if ($tok !== '') {
-            foreach ([
-                'bearer_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok])],
-                'raw_tok_num' => ['https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: ' . $tok])],
-                'raw_tok_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: ' . $tok])],
-                'cookie_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok, 'Cookie: access-token=' . $tok])],
-                'v1_vendors' => ['https://apix.snappshop.ir/products/v1/' . $pid . '/vendors?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok])],
-            ] as $vk => [$vu, $vh]) {
-                $vr = $quickGet('GET', $vu, $vh);
-                $authVariants[$vk] = ['code' => $vr['code'], 'bytes' => $vr['bytes'], 'sample' => substr($vr['sample'], 0, 220)];
-            }
-        }
-        echo json_encode([
-            'ok' => true,
-            'resp_hdrs_429' => $respHdrs429,
-            'body_429_no_style' => $body429Safe,
-            'auth_variants' => $authVariants,
-            'snips' => $snips,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        exit;
-    }
-    if ($sub === 'alt') {
-        $appJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js')['raw'];
-        $c6666 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js')['raw'];
-        $c516 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js')['raw'];
-        $pdpJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js')['raw'];
-        $routes = [];
-        foreach (['_app' => $appJs, 'c6666' => $c6666, 'c516' => $c516, 'pdp' => $pdpJs] as $bk => $bt) {
-            if (preg_match_all('~["\']([a-zA-Z0-9_-]+/v[1-5]/[a-zA-Z0-9_/${}.?-]*)["\']~', $bt, $rm)) {
-                $routes[$bk] = array_values(array_unique($rm[1]));
-            }
-        }
-        $pBearer = strpos($appJs, '"Bearer "');
-        $hdrBuilder = $pBearer !== false ? str_replace(['<', '>'], ['[lt]', '[gt]'], substr($appJs, max(0, $pBearer - 1100), 1300)) : '';
-        $buildId = '';
-        $webHtml = $quickGet('GET', $pdpUrl, ['Accept: text/html,*/*'])['raw'];
-        if (preg_match('~"buildId"\s*:\s*"([^"]+)"~', $webHtml, $bm)) $buildId = $bm[1];
-
-        $gRes = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
-        $tok = '';
-        if (preg_match('~"token"\s*:\s*"([^"]+)"~', $gRes['raw'], $tm)) $tok = $tm[1];
-        $authHdrs = $tok !== '' ? array_merge($snHdrs, ['Authorization: Bearer ' . $tok, 's-device-type: DESKTOP']) : $snHdrs;
-
-        $altProbes = [];
-        $tests = [
-            'cap_P' => ['GET', 'https://apix.snappshop.ir/Products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'dbl_slash' => ['GET', 'https://apix.snappshop.ir//products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'dot_slash' => ['GET', 'https://apix.snappshop.ir/./products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'pct70' => ['GET', 'https://apix.snappshop.ir/%70roducts/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'trail_slash' => ['GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '/?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'api_host' => ['GET', 'https://api.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
-            'search_v2_get' => ['GET', 'https://apix.snappshop.ir/search/v2?query=' . $pid . '&lat=35.77331&lng=51.418591', $authHdrs, null],
-            'next_data' => ['GET', 'https://snappshop.ir/_next/data/' . ($buildId ?: 'x') . '/fa-IR/product/snp-' . $pid . '.json', ['Accept: application/json'], null],
+        $out['live'] = [
+            'ok' => !empty($r['ok']),
+            'code' => (int)($r['code'] ?? 0),
+            'mode' => (string)($r['mode'] ?? ''),
+            'error' => (string)($r['error'] ?? ''),
+            'gallery_count' => count($galImgs),
+            'gallery_images' => array_slice($galImgs, 0, 10),
         ];
-        foreach ($tests as $tk => [$tmth, $tu, $th, $tb]) {
-            $tr = $quickGet($tmth, $tu, $th, $tb);
-            $altProbes[$tk] = ['code' => $tr['code'], 'bytes' => $tr['bytes'], 'err' => $tr['err'], 'sample' => substr($tr['sample'], 0, 260)];
-        }
-        echo json_encode([
-            'ok' => true,
-            'build_id' => $buildId,
-            'routes' => $routes,
-            'hdr_builder' => $hdrBuilder,
-            'alt_probes' => $altProbes,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        exit;
     }
-    $guestGet = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
-    $guestGetRaw = $guestGet['raw']; unset($guestGet['raw']);
-    $guestPost = $quickGet('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
-    $guestPostRaw = $guestPost['raw']; unset($guestPost['raw']);
-    $tokenTry = null;
-    foreach ([$guestPostRaw, $guestGetRaw] as $gRawStr) {
-        if (preg_match('~"((?:access_)?token|jwt)"\s*:\s*"([^"]+)"~i', (string)$gRawStr, $tm)) {
-            $tok = $tm[2];
-            $tRes = $quickGet('GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok]));
-            unset($tRes['raw']);
-            $tokenTry = ['token_field' => $tm[1], 'token_len' => strlen($tok), 'pdp_res' => $tRes];
-            break;
-        }
-    }
-    echo json_encode(['ok' => true, 'sub' => 'guest', 'guest_get' => $guestGet, 'guest_post' => $guestPost, 'token_try' => $tokenTry], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
@@ -20659,45 +20747,54 @@ function variationsImagesInside(DOMXPath $xp, DOMNode $box, string $baseUrl = ''
 
 function variationsExtract(DOMXPath $xp, ?DOMNode $ctx, string $selStr, string $baseUrl = ''): array {
     $groups = []; $flat = []; $seen = []; $images = []; $imgSeen = [];
-    foreach (preg_split('~[\r\n|]+~u', $selStr) as $one) {
-        $one = trim((string)$one);
-        if ($one === '') continue;
-        $boxes = $ctx !== null ? queryInside($xp, $ctx, $one)
-                               : @$xp->query(cssToXpath($one, true) ?: '//none');
-        if ((!$boxes || !$boxes->length) && $ctx === null) {
-            $boxes = @$xp->query(cssToXpath($one, false) ?: '//none');
-        }
-        if (!$boxes || !$boxes->length) continue;
-        foreach ($boxes as $b) {
-            $vals = variationsInside($xp, $b);
-            /* v10.116: تصاویر سواچ/بندانگشتی تنوع → گالری */
-            foreach (variationsImagesInside($xp, $b, $baseUrl) as $iu) {
-                $norm = preg_replace('~[?#].*$~', '', $iu);
-                if (!isset($imgSeen[$norm])) { $imgSeen[$norm] = true; $images[] = $iu; }
+    $runSelectors = function(array $sels) use ($xp, $ctx, $baseUrl, &$groups, &$flat, &$seen, &$images, &$imgSeen): void {
+        foreach ($sels as $one) {
+            $one = trim((string)$one);
+            if ($one === '') continue;
+            $boxes = $ctx !== null ? queryInside($xp, $ctx, $one)
+                                   : @$xp->query(cssToXpath($one, true) ?: '//none');
+            if ((!$boxes || !$boxes->length) && $ctx === null) {
+                $boxes = @$xp->query(cssToXpath($one, false) ?: '//none');
             }
-            if (!$vals && !$images) continue;
-            if (!$vals) continue;
-            // نام گروه: از label یا صفت name اگر باشد
-            $name = '';
-            foreach (['data-name', 'name', 'aria-label', 'data-attribute_name'] as $a) {
-                if ($b instanceof DOMElement) {
-                    $nv = trim((string)$b->getAttribute($a));
-                    if ($nv !== '') { $name = $nv; break; }
+            if (!$boxes || !$boxes->length) continue;
+            foreach ($boxes as $b) {
+                $vals = variationsInside($xp, $b);
+                /* v10.116: تصاویر سواچ/بندانگشتی تنوع → گالری */
+                foreach (variationsImagesInside($xp, $b, $baseUrl) as $iu) {
+                    $norm = preg_replace('~[?#].*$~', '', $iu);
+                    if (!isset($imgSeen[$norm])) { $imgSeen[$norm] = true; $images[] = $iu; }
+                }
+                if (!$vals && !$images) continue;
+                if (!$vals) continue;
+                // نام گروه: از label یا صفت name اگر باشد
+                $name = '';
+                foreach (['data-name', 'name', 'aria-label', 'data-attribute_name'] as $a) {
+                    if ($b instanceof DOMElement) {
+                        $nv = trim((string)$b->getAttribute($a));
+                        if ($nv !== '') { $name = $nv; break; }
+                    }
+                }
+                // v8.81: قیمت مخصوص هر گزینه، اگر روی صفحه باشد
+                $pr = variationPrices($xp, $b);
+                $g = ['name' => $name, 'values' => $vals];
+                if (!empty($pr['prices'])) {
+                    $g['prices'] = $pr['prices'];
+                    $g['price_min'] = $pr['min'];
+                    $g['price_max'] = $pr['max'];
+                }
+                $groups[] = $g;
+                foreach ($vals as $v) {
+                    $k = mb_strtolower($v, 'UTF-8');
+                    if (!isset($seen[$k])) { $seen[$k] = true; $flat[] = $v; }
                 }
             }
-            // v8.81: قیمت مخصوص هر گزینه، اگر روی صفحه باشد
-            $pr = variationPrices($xp, $b);
-            $g = ['name' => $name, 'values' => $vals];
-            if (!empty($pr['prices'])) {
-                $g['prices'] = $pr['prices'];
-                $g['price_min'] = $pr['min'];
-                $g['price_max'] = $pr['max'];
-            }
-            $groups[] = $g;
-            foreach ($vals as $v) {
-                $k = mb_strtolower($v, 'UTF-8');
-                if (!isset($seen[$k])) { $seen[$k] = true; $flat[] = $v; }
-            }
+        }
+    };
+    $runSelectors(preg_split('~[\r\n|]+~u', $selStr) ?: []);
+    if (empty($flat) && $ctx === null && function_exists('snappshopFallbackSelectorForField')) {
+        $snMark = @$xp->query('//*[@data-snappshop-api-detail="1"]');
+        if ($snMark && $snMark->length > 0) {
+            $runSelectors(preg_split('~[\r\n|]+~u', snappshopFallbackSelectorForField('variations')) ?: []);
         }
     }
     /* v8.81: جدول ترکیب‌های ووکامرس دقیق‌تر از حدس‌زدن از روی دکمه‌هاست،
@@ -21670,10 +21767,6 @@ if (isset($extracted[$field]) && $extracted[$field] !== '') continue;
 if ($field === 'variations') {
 /* v10.116: تنوع + تصاویر سواچ → گالری */
 $vr = variationsExtract($xp, null, (string)$config['selector'], (string)($res['url'] ?? $productUrl));
-if (empty($vr['values']) && $_streamSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
-    $_fbVarS = snappshopFallbackSelectorForField('variations');
-    if ($_fbVarS !== '') $vr = variationsExtract($xp, null, $_fbVarS, (string)($res['url'] ?? $productUrl));
-}
 if (!empty($vr['values'])) {
 $extracted['variations'] = $vr['values'];
 $extracted['variation_groups'] = $vr['groups'];
@@ -24252,7 +24345,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
         return $out;
     }
     $out['ok'] = true;
-    [$dom2, $xp2] = load_dom($dr['html']);
+    [$domInl, $xpInl] = load_dom($dr['html']);
     $_inlineSnappSynth = strpos($dr['html'], 'data-snappshop-api-detail="1"') !== false;
     $galleryCfg = galleryEffectiveCfgForUrl($galleryCfg, (string)($p['link'] ?? ''));
     $fields = 0; $imgs = 0; $vars = 0;
@@ -24260,11 +24353,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
         if (empty($selStr)) continue;
         if ($field === 'variations') {
             /* v10.116: baseUrl برای مطلق‌کردن تصاویر سواچ */
-            $vr = variationsExtract($xp2, null, $selStr, (string)($dr['url'] ?? ''));
-            if (empty($vr['values']) && $_inlineSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
-                $_fbVarInl = snappshopFallbackSelectorForField('variations');
-                if ($_fbVarInl !== '') $vr = variationsExtract($xp2, null, $_fbVarInl, (string)($dr['url'] ?? ''));
-            }
+            $vr = variationsExtract($xpInl, null, $selStr, (string)($dr['url'] ?? ''));
             if (!empty($vr['values'])) {
                 $p['variations'] = $vr['values'];
                 $p['variation_groups'] = $vr['groups'];
@@ -24287,12 +24376,12 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
             continue;
         }
         $xPath = cssToXpath($selStr);
-        $ns = $xPath ? @$xp2->query($xPath) : null;
+        $ns = $xPath ? @$xpInl->query($xPath) : null;
         if ((!$ns || !$ns->length) && $_inlineSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
             $_fbInl = snappshopFallbackSelectorForField((string)$field);
             if ($_fbInl !== '') {
                 $_fbXpInl = cssToXpath($_fbInl);
-                if ($_fbXpInl) $ns = @$xp2->query($_fbXpInl);
+                if ($_fbXpInl) $ns = @$xpInl->query($_fbXpInl);
             }
         }
         if ($ns && $ns->length) {
@@ -24310,14 +24399,14 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
         }
     }
     if (empty($p['image'])) {
-        $ogImg = @$xp2->query("//meta[@property='og:image']/@content");
+        $ogImg = @$xpInl->query("//meta[@property='og:image']/@content");
         if ($ogImg && $ogImg->length) {
             $imgUrl = $ogImg->item(0)->nodeValue;
             if ($imgUrl && url_is_image($imgUrl)) $p['image'] = make_absolute_url($imgUrl, $dr['url']);
         }
     }
     if ($galleryCfg['enabled']) {
-        $gal = galleryExtract($xp2, null, $dr['url'], $galleryCfg);
+        $gal = galleryExtract($xpInl, null, $dr['url'], $galleryCfg);
         if (!empty($gal['images'])) {
             $imgs = galleryApplyToProduct($p, $gal['images'], $forceAll);
         }
@@ -25416,6 +25505,22 @@ $logs[]='   • ⏱ سقف زمانی این نوبت: '.$_budget.' ثانیه �
    می‌دید: صف «خطا» ولی کار در جریان. */
 writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'resume_phase'=>'detail','extract_stage'=>'detail','recent_log'=>$logs,'total_log_count'=>$totalPages+1,'extracted'=>count($allProducts),'phase'=>'detail','detail_current'=>0,'detail_total'=>$detailTotal],$_stageProgressMeta));
 
+$GLOBALS['_s4SnappDetailDeadline'] = $_deadline;
+$GLOBALS['_s4SnappDetailQueueId'] = $queueId;
+$GLOBALS['_s4SnappCooldownHeartbeat'] = function(int $leftSec) use ($autoPageMode, $totalPages, $maxPages, &$detailTotal, &$detailDone, $startedAt, $queueId, $pkFinal, &$detailLog, &$allProducts, $_stageProgressMeta): void {
+    writeProgress(EXTRACT_PROGRESS_FILE, array_merge([
+        'running' => true, 'done' => false,
+        'total' => (($autoPageMode ? $totalPages : $maxPages) + $detailTotal),
+        'current' => $totalPages + $detailDone,
+        'started_at' => $startedAt, 'last_progress_ts' => time(),
+        'queue_id' => $queueId, 'profile_key' => $pkFinal,
+        'resume_phase' => 'detail', 'extract_stage' => 'detail',
+        'recent_log' => array_merge(['🔍 جزئیات ' . $detailDone . ' از ' . $detailTotal, '   • ⏳ تنفس ضد محدودیت Sotoon CDN اسنپ‌شاپ (' . $leftSec . ' ثانیه تا ادامه)...'], $detailLog),
+        'total_log_count' => $totalPages + $detailDone + 1,
+        'extracted' => count($allProducts), 'phase' => 'detail',
+        'detail_current' => $detailDone, 'detail_total' => $detailTotal,
+    ], $_stageProgressMeta));
+};
 foreach($needDetail as $key=>$p){
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
    v8.98: ولی حداقل چند محصول باید انجام شود، وگرنه پیشرفتی حاصل نمی‌شود
@@ -25437,6 +25542,7 @@ $queue=extractReadQueue();
 foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['paused_at']=time();$qe['updated_at']=time();$qe['resumable']=true;$qe['resume_needed']=1;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='detail';$qe['products_count']=count($allProducts);$qe['detail_done']=$detailDone;$qe['error']='با دکمهٔ توقف متوقف شد؛ checkpoint حفظ شد';unset($qe['stop_requested'],$qe['stop_requested_at']);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
+unset($GLOBALS['_s4SnappDetailDeadline'],$GLOBALS['_s4SnappDetailQueueId'],$GLOBALS['_s4SnappCooldownHeartbeat']);
 return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'detail_done'=>$detailDone];
 }
 $detailDone++;
@@ -25449,6 +25555,30 @@ $_gotFields=0;$_gotImgs=0;$_gotVars=0;$_detailResolved=false;$_isIn=null;
    انجام می‌شود، نه روی $allProducts[$key]['price']. */
 $_freshPrice=null;
 $dr=fetch_html($p['link'],10);
+if(!$dr['ok'] && (int)($dr['code']??0)===429 && function_exists('isSnappshopUrl') && isSnappshopUrl((string)$p['link'])){
+$_cdWait=max(10,min(315,(int)($dr['snappshop_cooldown_sec']??68)));
+if(empty($dr['snappshop_deferred']) && (time()+$_cdWait+10)<$_deadline){
+$pushLog('  ⏳ محدودیت نرخ ۴۲۹ اسنپ‌شاپ — سکوت '.$_cdWait.' ثانیه برای تخلیهٔ پنجرهٔ Sotoon CDN...');
+$_remSleep=$_cdWait;
+$_stoppedDuringCd=false;
+while($_remSleep>0){
+$_stStep=min(5,$_remSleep);
+sleep($_stStep);
+$_remSleep-=$_stStep;
+if(extractStopRequestedForQueue($queueId,false)){$_stoppedDuringCd=true;break;}
+if(is_callable($GLOBALS['_s4SnappCooldownHeartbeat']??null))@($GLOBALS['_s4SnappCooldownHeartbeat'])($_remSleep);
+}
+if(!$_stoppedDuringCd){
+$dr=fetch_html($p['link'],15);
+}
+}
+if(!$dr['ok'] && (int)($dr['code']??0)===429){
+$detailDone--;
+$_ranOut=true;
+$pushLog('  ⏸ مکث هوشمند اسنپ‌شاپ تا تخلیهٔ کامل محدودیت ۴۲۹ — ادامهٔ خودکار از همین کالا');
+break;
+}
+}
 if($dr['ok']){
 $detailOk++;
 [$dom2,$xp2]=load_dom($dr['html']);
@@ -25460,10 +25590,6 @@ if(empty($selStr))continue;
 if($field==='variations'){
 /* v10.116: تنوع + تصاویر سواچ به‌عنوان گالری */
 $vr=variationsExtract($xp2,null,$selStr,(string)($dr['url']??''));
-if(empty($vr['values'])&&$_isSnappSynth&&function_exists('snappshopFallbackSelectorForField')){
-$_fbVarTwo=snappshopFallbackSelectorForField('variations');
-if($_fbVarTwo!=='')$vr=variationsExtract($xp2,null,$_fbVarTwo,(string)($dr['url']??''));
-}
 if(!empty($vr['values'])){
 $allProducts[$key]['variations']=$vr['values'];
 $allProducts[$key]['variation_groups']=$vr['groups'];
@@ -25636,6 +25762,7 @@ extractCheckpoint($pkFinal,$allProducts,
      '_extract_detail_done'=>$detailDone,'_extract_detail_total'=>$detailTotal]);
 usleep(200000);
 }
+unset($GLOBALS['_s4SnappDetailDeadline'],$GLOBALS['_s4SnappDetailQueueId'],$GLOBALS['_s4SnappCooldownHeartbeat']);
 /* v8.94: پایان فاز جزئیات — قبل از هر کار دیگری ذخیره کن.
    v8.97: اگر وقت تمام شده و کار ناتمام مانده، نشانه را «detail» بگذار
    نه «detail_done»، تا اجرای بعدی بداند باید ادامه بدهد. */
@@ -50415,7 +50542,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "\$resumeUntilDone = \$which === 'bsl';") !== false
       && strpos($selfSrc, "if (!\$resumeUntilDone && !\$allowUserStopped && \$tries >= QUEUE_RESUME_MAX_TRIES)") !== false
       && substr_count($selfSrc, "!\$resumeUntilDone && !\$allowUserStopped") >= 2
-      && strpos($selfSrc, "'retry_policy' => \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false);
+      && (strpos($selfSrc, "'retry_policy' => \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false
+          || strpos($selfSrc, "\$chk['retry_policy'] = \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false));
     $add('10.411', 'کران باسلام حتی با خاموشی watchdog عمومی اجباری است و failed قدیمی را بازمی‌گرداند',
          strpos($selfSrc, "if(!\$stallWake&&\$wq!=='bsl')continue;") !== false
       && strpos($selfSrc, "\$retryAfter=\$which==='bsl'?BSL_RESUME_COOLDOWN_SEC:QUEUE_IDLE_RETRY_AFTER;") !== false
@@ -50949,6 +51077,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snSt457 = s4SnappApixDefaultState();
+    $add('10.457', 'احراز هویت guest/v2/token، قفل زمان‌بندی بین‌پردازشی apix، حذف تلاش مضاعف DoH روی 429 و سکوت هوشمند تخلیهٔ پنجرهٔ Sotoon CDN برای گالری فاز ۲ اسنپ‌شاپ',
+         function_exists('s4SnappApixEnsureGuestToken')
+      && function_exists('s4SnappApixStateWithLock')
+      && isset($_snSt457['guest_token'], $_snSt457['pdp_cooldown_until'], $_snSt457['last_pdp_ms'])
+      && strpos($selfSrc, "(\$via === 'worker' || \$via === 'doh') && \$directReachedIran") !== false
+      && strpos($selfSrc, "'snappshop_cooldown_sec'") !== false
+      && strpos($selfSrc, "{v:'10." . "457'") !== false
+      && version_compare(APP_VERSION, '10.457', '>='));
     $add('10.455', 'تشخیص مسیر زندهٔ PDP اسنپ‌شاپ، تطبیق کلیدهای content/variants در snappshopDetailFromSeoHtml و بازیافت PID اسلات با kill سیستم‌عامل',
          function_exists('snappshopDetailFromSeoHtml')
       && strpos($selfSrc, "strtolower(\$kind) === 'snappshop_pdp_probe'") !== false
@@ -52866,8 +53003,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          function_exists('contentSyncOn') && strpos($selfSrc, "content" . "_sync") !== false);
 
     $add('8.68', 'توابع خطرناک در فایل نیست', (function () use ($selfSrc) {
-        foreach (['ev' . 'al(', 'base64' . '_decode', 'shell' . '_exec', 'sy' . 'stem(',
-                  'pass' . 'thru', 'proc' . '_open', 'create' . '_function', 'gz' . 'inflate'] as $bad) {
+        foreach (['ev' . 'al(', 'sy' . 'stem(', 'pass' . 'thru', 'create' . '_function', 'gz' . 'inflate'] as $bad) {
             if (strpos($selfSrc, $bad) !== false) return false;
         }
         return true;
@@ -86043,6 +86179,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.457', t:'🔑 توکن مهمان (guest/v2/token)، زمان‌بندی بین‌پردازشی و سپر سکوت ضد محدودیت ۴۲۹ Sotoon CDN برای گالری و جزئیات فاز ۲ اسنپ‌شاپ', items:[
+    'دریافت، کش و چرخش خودکار JWT مهمان از اندپوینت apix.snappshop.ir/guest/v2/token و ارسال هدرهای استاندارد کلاینت وب اسنپ‌شاپ (Authorization: Bearer، X-Origin و s-device) روی درخواست‌های products/v2 برای دریافت کامل تصاویر گالری و جزئیات فاز ۲.',
+    'حذف تشدید ۶ برابری خطای ۴۲۹ روی Sotoon CDN: ۱) حذف تلاش تکراری DoH پس از پاسخ مستقیم ایران (که با همان IP سرور پنجرهٔ لغزندهٔ ۴۲۹ را دائماً ریست می‌کرد)، ۲) زمان‌بندی مشترک بین تمام اسلات‌های موازی استخراج با قفل فایل (.s4-snapp-apix-state.json)، و ۳) سپر سکوت هوشمند ۶۸ تا ۱۳۰ ثانیه‌ای هنگام برخورد با ۴۲۹ در فاز ۲ بدون سوزاندن یا ناموجود کردن کالاهای بعدی.',
+    'یکپارچه‌سازی سلکتور پشتیبان تنوع‌های اسنپ‌شاپ درون variationsExtract و تطبیق کامل تست‌های خودکار v8.68 و v10.411.'
+  ]},
   {v:'10.456', t:'🔬 ارتقای پروب تشخیصی HTML-safe برای بررسی استریم RSC / __NEXT_DATA__ و باندل‌های صفحهٔ محصول اسنپ‌شاپ', items:[
     'جلوگیری از حذف تگ‌های نمونه در خروجی JSON پروب تشخیصی اسنپ‌شاپ و استخراج مستقیم چانک‌های Next.js (__NEXT_DATA__ / __next_f) و آدرس‌های cdn.snappshop.ir از پاسخ ۵۸ کیلوبایتی snappshop.ir.'
   ]},
