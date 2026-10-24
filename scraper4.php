@@ -71536,6 +71536,8 @@ header('Content-Type: application/json; charset=UTF-8');
 $cn=loadConnections();$bs=$cn['basalam']??[];
 if(empty($bs['token'])||empty($bs['vendor_id'])){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
 $tk=$bs['token'];$vid=(int)$bs['vendor_id'];
+$_delShopId=(int)($_GET['shop_id']??0);
+if($_delShopId>0&&function_exists('bslShopById')){$_delSh=bslShopById($cn,$_delShopId);if($_delSh&&!empty($_delSh['token'])){$tk=(string)$_delSh['token'];$vid=(int)$_delSh['vendor_id'];}}
 $productId=(int)($_GET['product_id']??0);
 if($productId<=0){echo json_encode(['ok'=>false,'error'=>'شناسه محصول نامعتبر'],JSON_UNESCAPED_UNICODE);exit;}
 // v8.62: باسلام متد DELETE برای محصول ندارد. تا امروز این کد به اندپوینتی
@@ -77081,6 +77083,22 @@ function bslExtractRevisionPhotoIds(array $origP): array {
     return ['main' => $ids[0] ?? 0, 'ids' => $ids];
 }
 
+function bslRetired3567Load(): array {
+    $f = __DIR__ . '/bsl_retired_3567.json';
+    if (!is_file($f)) return [];
+    $d = json_decode((string)@file_get_contents($f), true);
+    return is_array($d) ? $d : [];
+}
+
+function bslRetired3567Record(int $vid, int $pId, string $action, int $newId = 0): void {
+    if ($vid <= 0 || $pId <= 0) return;
+    $f = __DIR__ . '/bsl_retired_3567.json';
+    $d = bslRetired3567Load();
+    $d[$vid . ':' . $pId] = ['action' => $action, 'new_id' => $newId, 'at' => time()];
+    if (count($d) > 25000) $d = array_slice($d, -20000, null, true);
+    @file_put_contents($f, json_encode($d, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
 /**
  * v10.466: اعمالِ امنِ اصلاحِ دسته‌بندی + محتوا/تصویر/موجودی/قیمت روی محصولِ ردشده (۳۵۶۷).
  * - اگر محصول واقعاً ناموجود باشد یا قیمت زیر کفِ مجاز (۵,۰۰۰ تومان) داشته باشد، به‌جای
@@ -77102,6 +77120,18 @@ function bslApplyCategoryChangeOrRecreate(
     $pId = (int)($origP['id'] ?? 0);
     if ($pId <= 0) return ['ok' => false, 'error' => 'شناسهٔ محصول نامعتبر است'];
     $bs = is_array($cn['basalam'] ?? null) ? $cn['basalam'] : [];
+    $retMap = bslRetired3567Load();
+    $retEntry = $retMap[$vid . ':' . $pId] ?? null;
+    if (is_array($retEntry) && (int)($retEntry['new_id'] ?? 0) > 0 && (int)$retEntry['new_id'] !== $pId) {
+        return [
+            'ok'            => true,
+            'id'            => (int)$retEntry['new_id'],
+            'replaced_from' => $pId,
+            'action'        => 'already_replaced',
+            'category_id'   => $newCatId,
+            'msg'           => 'نسخهٔ جایگزین #' . (int)$retEntry['new_id'] . ' از قبل ثبت شده بود',
+        ];
+    }
 
     $fullP = $origP;
     if (!isset($fullP['revision']['data']) || !array_key_exists('allow_category_change', $fullP)) {
@@ -77168,6 +77198,7 @@ function bslApplyCategoryChangeOrRecreate(
             $archRes = bslReq($tk, 'PATCH', 'products/' . $pId, ['status' => 3790, 'stock' => 0]);
         }
         if (!empty($archRes['ok'])) {
+            bslRetired3567Record($vid, $pId, 'archived', 0);
             return ['ok' => true, 'id' => $pId, 'action' => 'archived', 'category_id' => $curCatId, 'msg' => $archReason];
         }
         return ['ok' => false, 'error' => 'محصول ناموجود/کم‌قیمت بود ولی بایگانی هم ناموفق ماند: ' . bslErrText($archRes)];
@@ -77242,6 +77273,7 @@ function bslApplyCategoryChangeOrRecreate(
             $rPatch = bslReq($tk, 'PATCH', 'products/' . $pId, $bu);
         }
         if (!empty($rPatch['ok']) && !empty($rPatch['body']['id'])) {
+            if (function_exists('bslCatalogNote')) bslCatalogNote($vid, (string)$bu['name'], (int)$rPatch['body']['id']);
             return [
                 'ok'          => true,
                 'id'          => (int)$rPatch['body']['id'],
@@ -77276,6 +77308,7 @@ function bslApplyCategoryChangeOrRecreate(
                 if (function_exists('bslSetProductStatus')) {
                     bslSetProductStatus($tk, $vid, $pId, 4184, 'auto');
                 }
+                bslRetired3567Record($vid, $pId, 'already_replaced', $existingReplId);
                 if (!empty($localProd)) {
                     bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $existingReplId, $cleanTitle, $finalPriceRial, $finalStock, $finalW);
                 }
@@ -77342,6 +77375,7 @@ function bslApplyCategoryChangeOrRecreate(
         if (function_exists('bslSetProductStatus')) {
             bslSetProductStatus($tk, $vid, $pId, 4184, 'auto');
         }
+        bslRetired3567Record($vid, $pId, 'recreated', $newId);
         if (!empty($localProd)) {
             bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $newId, (string)$bp['name'], $finalPriceRial, $finalStock, $finalW);
         }
@@ -77563,15 +77597,38 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         if (empty($rg['ok'])) return ['ok' => false, 'error' => 'محصول یافت نشد (HTTP ' . ($rg['code'] ?? '?') . ')'];
         $products = [(array)($rg['body'] ?? [])];
     } elseif ($maxLimit > 0 && $maxLimit <= 100) {
-        $ppLim = min(100, max(10, $maxLimit));
-        catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ سریعِ ' . aiFaNum($maxLimit) . ' محصولِ ردشده (وضعیت ۳۵۶۷)...']]);
-        $rLim = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=1&per_page=' . $ppLim . '&statuses=3567');
-        if (empty($rLim['ok'])) return ['ok' => false, 'error' => 'دریافت فهرست ردشده ناموفق (HTTP ' . ($rLim['code'] ?? '?') . ')'];
-        $products = array_slice(array_values(array_filter(bslRowsOf($rLim['body']), 'is_array')), 0, $maxLimit);
+        $ppLim = min(100, max(50, $maxLimit));
+        $retired3567 = function_exists('bslRetired3567Load') ? bslRetired3567Load() : [];
+        catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ سریعِ ' . aiFaNum($maxLimit) . ' محصولِ ردشدهٔ تازه (وضعیت ۳۵۶۷)...']]);
+        $products = [];
+        for ($pgLim = 1; $pgLim <= 10 && count($products) < $maxLimit; $pgLim++) {
+            $rLim = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $pgLim . '&per_page=' . $ppLim . '&statuses=3567');
+            if (empty($rLim['ok'])) {
+                if ($pgLim === 1) return ['ok' => false, 'error' => 'دریافت فهرست ردشده ناموفق (HTTP ' . ($rLim['code'] ?? '?') . ')'];
+                break;
+            }
+            $rowsLim = array_values(array_filter(bslRowsOf($rLim['body']), 'is_array'));
+            if (!$rowsLim) break;
+            foreach ($rowsLim as $rwL) {
+                $rwId = (int)($rwL['id'] ?? 0);
+                if ($rwId > 0 && isset($retired3567[$vid . ':' . $rwId])) continue;
+                $products[] = $rwL;
+                if (count($products) >= $maxLimit) break;
+            }
+            if (count($rowsLim) < $ppLim) break;
+        }
         $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => 1];
     } else {
+        $retired3567 = function_exists('bslRetired3567Load') ? bslRetired3567Load() : [];
         catfixProgress(['phase' => 'fetch', 'log_add' => ['🔎 دریافتِ محصولاتِ ردشده (وضعیت ۳۵۶۷)...']]);
-        $products = catfixFetchRejected($tk, $vid, $partial, $fetchMeta);
+        $rawRejProducts = catfixFetchRejected($tk, $vid, $partial, $fetchMeta);
+        $products = [];
+        foreach ($rawRejProducts as $rwR) {
+            if (!is_array($rwR)) continue;
+            $rwId = (int)($rwR['id'] ?? 0);
+            if ($rwId > 0 && isset($retired3567[$vid . ':' . $rwId])) continue;
+            $products[] = $rwR;
+        }
         if (!empty($pendingAiItems)) {
             foreach ($pendingAiItems as $pq) {
                 if (!is_array($pq)) continue;
