@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.461';
+const APP_VERSION = '10.462';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -3680,6 +3680,112 @@ function s4StripDeletedProfiles(array $profiles): array {
         if (isset($profiles[$dk])) unset($profiles[$dk]);
     }
     return $profiles;
+}
+
+/**
+ * v10.462: تعیین کلید هدف هنگام ذخیرهٔ پروفایل (save_profile).
+ * اگر کاربر پروفایلی را باز کرده باشد ($targetKeyIn معتبر در $profiles)، با تغییر لینک آدرس (URL)
+ * اطلاعات مستقیماً روی همان پروفایل ذخیره می‌شود و پروفایل خالی جدید ساخته نمی‌شود.
+ */
+function s4ResolveSaveProfileTargetKey(string $url, string $targetKeyIn, array $profiles): string {
+    $targetKeyIn = trim($targetKeyIn);
+    if ($targetKeyIn !== '' && isset($profiles[$targetKeyIn])) {
+        return $targetKeyIn;
+    }
+    return profileResolveKey($url, $profiles) ?: (strpos($url, '://') !== false ? profileKey($url) : $targetKeyIn);
+}
+
+/**
+ * v10.462: داپلیکیت (کپی کامل یا بدون محصولات) یک پروفایل در آرایهٔ $profiles با کلید یکتای پایدار.
+ */
+function s4DuplicateProfileOnDisk(array &$profiles, string $sourceRef, array $opts = []): array {
+    $srcRef = trim($sourceRef);
+    if ($srcRef === '') {
+        return ['ok' => false, 'error' => 'کلید یا آدرس پروفایل مبدأ مشخص نشده است'];
+    }
+    $srcKey = isset($profiles[$srcRef]) ? $srcRef : (profileResolveKey($srcRef, $profiles) ?: '');
+    if ($srcKey === '' || !is_array($profiles[$srcKey] ?? null)) {
+        return ['ok' => false, 'error' => 'پروفایل مبدأ یافت نشد'];
+    }
+    $src = $profiles[$srcKey];
+    $rawUrl = trim((string)($opts['url'] ?? ''));
+    $srcUrl = trim((string)($src['url'] ?? ''));
+    $newUrl = $rawUrl !== '' ? (function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($rawUrl) : $rawUrl) : $srcUrl;
+    if ($newUrl === '' || !filter_var($newUrl, FILTER_VALIDATE_URL)) {
+        return ['ok' => false, 'error' => 'لینک آدرس پروفایل معتبر نیست'];
+    }
+    $urlKey = strpos($newUrl, '://') !== false ? profileKey($newUrl) : '';
+    if ($urlKey !== '' && $urlKey !== $srcKey && !isset($profiles[$urlKey]) && !s4IsProfileDeletedTombstone($urlKey)) {
+        $newKey = $urlKey;
+    } else {
+        $baseKey = $urlKey !== '' ? $urlKey : $srcKey;
+        $baseKey = preg_replace('~_copy_[a-f0-9]{4,12}$~i', '', $baseKey) ?: $srcKey;
+        $newKey = '';
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $suffix = function_exists('random_bytes')
+                ? substr(bin2hex(random_bytes(3)), 0, 6)
+                : substr(md5(uniqid((string)mt_rand(), true)), 0, 6);
+            $cand = $baseKey . '_copy_' . $suffix;
+            if (!isset($profiles[$cand]) && !s4IsProfileDeletedTombstone($cand)) {
+                $newKey = $cand;
+                break;
+            }
+        }
+        if ($newKey === '') {
+            $newKey = $baseKey . '_copy_' . time();
+        }
+    }
+    $existingNames = [];
+    foreach ($profiles as $pf) {
+        if (is_array($pf) && trim((string)($pf['name'] ?? '')) !== '') {
+            $existingNames[trim((string)$pf['name'])] = true;
+        }
+    }
+    $reqName = trim((string)($opts['name'] ?? ''));
+    if ($reqName !== '' && !isset($existingNames[$reqName])) {
+        $newName = $reqName;
+    } else {
+        $seedName = $reqName !== '' ? $reqName : (trim((string)($src['name'] ?? '')) ?: ((string)parse_url($newUrl, PHP_URL_HOST) ?: $srcKey));
+        $baseClean = preg_replace('/\s*\(کپی(?:\s*[^\)]*)?\)\s*$/u', '', $seedName) ?: $seedName;
+        $newName = $baseClean . ' (کپی)';
+        $n = 2;
+        while (isset($existingNames[$newName]) && $n < 200) {
+            $faNum = str_replace(['0','1','2','3','4','5','6','7','8','9'], ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'], (string)$n);
+            $newName = $baseClean . ' (کپی ' . $faNum . ')';
+            $n++;
+        }
+    }
+    $includeProducts = array_key_exists('include_products', $opts) ? !empty($opts['include_products']) : true;
+    $clone = $src;
+    $clone['url'] = $newUrl;
+    $clone['name'] = $newName;
+    $clone['updatedAt'] = max(time(), ((int)($src['updatedAt'] ?? 0)) + 1);
+    if (!$includeProducts) {
+        $clone['products'] = [];
+        $clone['productsOrder'] = [];
+    } else {
+        $clone['products'] = is_array($src['products'] ?? null) ? $src['products'] : [];
+        $clone['productsOrder'] = is_array($src['productsOrder'] ?? null) ? $src['productsOrder'] : [];
+    }
+    unset($clone['lastExtractAt'], $clone['lastSyncAt'], $clone['extractCheckpoint']);
+    if (is_array($clone['syncConfig'] ?? null)) {
+        unset($clone['syncConfig']['lastRun'], $clone['syncConfig']['lastStatus']);
+    }
+    $profiles[$newKey] = $clone;
+    $prodCount = is_array($clone['products'] ?? null) ? count($clone['products']) : 0;
+    return [
+        'ok' => true,
+        'source_key' => $srcKey,
+        'key' => $newKey,
+        'profile_summary' => [
+            'key' => $newKey,
+            'name' => $newName,
+            'url' => $newUrl,
+            'updatedAt' => (int)$clone['updatedAt'],
+            'productCount' => $prodCount,
+        ],
+        'profile' => $clone,
+    ];
 }
 
 function s4CleanupDeletedProfileArtifacts(string $key, string $url = ''): void {
@@ -17808,9 +17914,12 @@ if (isset($_GET['start_product_stats'])) {
 
 if (!empty($_GET['load_profile'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$url = s4NormalizeInputUrl((string)($_GET['load_profile'] ?? ''));
+$rawLoad = trim((string)($_GET['load_profile'] ?? ''));
+$url = s4NormalizeInputUrl($rawLoad);
 $profiles = loadProfiles();
-$key = profileResolveKey($url, $profiles) ?: profileKey($url);
+$key = ($rawLoad !== '' && isset($profiles[$rawLoad]))
+    ? $rawLoad
+    : (profileResolveKey($url, $profiles) ?: (strpos($url, '://') !== false ? profileKey($url) : $rawLoad));
 if (isset($profiles[$key])) {
 echo json_encode(['ok' => true, 'key' => $key, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
@@ -17827,7 +17936,8 @@ echo json_encode(['ok' => false, 'error' => 'Invalid URL']);
 exit;
 }
 $profiles = loadProfiles();
-$key = profileResolveKey($url, $profiles) ?: profileKey($url);
+$targetKeyIn = trim((string)($_POST['target_key'] ?? ''));
+$key = s4ResolveSaveProfileTargetKey($url, $targetKeyIn, $profiles);
 $existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : [];
 /* v10.336 + v10.439: autosave یک تب قدیمی، فرمی که هنوز profile را نگرفته،
    یا پروفایلی که تازه حذف شده است هرگز نباید روی سرور دوباره ساخته شود. */
@@ -17990,8 +18100,12 @@ $profilePatch = [
 'customColName' => array_key_exists('customColName', $_POST) ? (string)$_POST['customColName'] : (string)($existingProfile['customColName'] ?? ''),
 'customColVal' => array_key_exists('customColVal', $_POST) ? (string)$_POST['customColVal'] : (string)($existingProfile['customColVal'] ?? ''),
 'iframeHeight' => array_key_exists('iframeHeight', $_POST) ? max(200, (int)$_POST['iframeHeight']) : (int)($existingProfile['iframeHeight'] ?? 600),
-'products' => array_key_exists('products', $_POST) ? $productsData : (array)($existingProfile['products'] ?? []),
-'productsOrder' => array_key_exists('productsOrder', $_POST) ? $productsOrder : (array)($existingProfile['productsOrder'] ?? []),
+'products' => (!array_key_exists('products', $_POST) || (empty($productsData) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])))
+    ? (array)($existingProfile['products'] ?? [])
+    : $productsData,
+'productsOrder' => (!array_key_exists('productsOrder', $_POST) || (empty($productsData) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])))
+    ? (array)($existingProfile['productsOrder'] ?? [])
+    : $productsOrder,
 'syncConfig' => $syncConfig,
 // v8.43: اگر این فیلدها در درخواست نباشند، مقدار قبلی حفظ شود.
 // قبلاً هر ذخیره‌ای که آن‌ها را نمی‌فرستاد، دستهٔ پروفایل را صفر می‌کرد.
@@ -18020,22 +18134,83 @@ $profilePatch = [
 'detailExtractMode' => normalizeDetailExtractMode($_POST['detailExtractMode'] ?? ($profiles[$key]['detailExtractMode'] ?? 'two_stage')),
 'updatedAt' => time()
 ];
+if (!empty($_POST['partial_meta_only']) && !empty($existingProfile)) {
+    $profilePatch = [
+        'url' => $url,
+        'updatedAt' => time(),
+    ];
+    if (!$isAutosave && trim((string)($_POST['name'] ?? '')) !== '') {
+        $profilePatch['name'] = trim((string)$_POST['name']);
+    }
+}
 /* metadataهای lifecycle/extraction که save_profile مالکشان نیست حفظ شوند. */
 $lfSave = @fopen(PROFILES_FILE . '.extract.lock', 'c');
 if ($lfSave && !@flock($lfSave, LOCK_EX)) { @fclose($lfSave); $lfSave = null; }
 $profiles = s4StripDeletedProfiles(loadProfiles());
+$key = s4ResolveSaveProfileTargetKey($url, $targetKeyIn, $profiles);
 $existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : $existingProfile;
+if (empty($_POST['partial_meta_only']) && empty($productsData) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])) {
+    $profilePatch['products'] = (array)$existingProfile['products'];
+    $profilePatch['productsOrder'] = (array)($existingProfile['productsOrder'] ?? []);
+}
 $profiles[$key] = array_merge($existingProfile, $profilePatch);
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($lfSave) { @flock($lfSave, LOCK_UN); @fclose($lfSave); }
 if ($_saved['ok']) {
 $newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
 $mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
-echo json_encode(['ok' => true, 'key' => $key, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])]);
+$savedProdCount = is_array($profiles[$key]['products'] ?? null) ? count($profiles[$key]['products']) : 0;
+echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
 }
+exit;
+}
+
+if (($_POST['action'] ?? '') === 'duplicate_profile') {
+header('Content-Type: application/json; charset=UTF-8');
+$sourceRef = trim((string)($_POST['source_key'] ?? ($_POST['key'] ?? ($_POST['url'] ?? ''))));
+if ($sourceRef === '') {
+    echo json_encode(['ok' => false, 'error' => 'پروفایل مبدأ مشخص نشده است'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$reqName = trim((string)($_POST['name'] ?? ''));
+$reqUrl = trim((string)($_POST['new_url'] ?? ''));
+$incProds = !isset($_POST['include_products']) || !in_array((string)$_POST['include_products'], ['0', 'false', 'off'], true);
+$returnFull = !isset($_POST['return_full']) || !in_array((string)$_POST['return_full'], ['0', 'false', 'off'], true);
+$lfDup = @fopen(PROFILES_FILE . '.extract.lock', 'c');
+if ($lfDup && !@flock($lfDup, LOCK_EX)) { @fclose($lfDup); $lfDup = null; }
+$profiles = s4StripDeletedProfiles(loadProfiles());
+$dupRes = s4DuplicateProfileOnDisk($profiles, $sourceRef, [
+    'name' => $reqName,
+    'url' => $reqUrl,
+    'include_products' => $incProds,
+]);
+if (empty($dupRes['ok'])) {
+    if ($lfDup) { @flock($lfDup, LOCK_UN); @fclose($lfDup); }
+    echo json_encode(['ok' => false, 'error' => (string)($dupRes['error'] ?? 'خطا در داپلیکیت پروفایل')], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$newKey = (string)$dupRes['key'];
+s4ClearProfileDeletedTombstone($newKey, '');
+$savedDup = writeJsonFile(PROFILES_FILE, $profiles);
+if ($lfDup) { @flock($lfDup, LOCK_UN); @fclose($lfDup); }
+if (!$savedDup['ok']) {
+    echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل پروفایل: ' . ($savedDup['error'] ?? 'نامشخص')], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+$outDup = [
+    'ok' => true,
+    'source_key' => (string)$dupRes['source_key'],
+    'key' => $newKey,
+    'profile_summary' => $dupRes['profile_summary'],
+    'message' => 'کپی پروفایل ساخته شد',
+];
+if ($returnFull) {
+    $outDup['profile'] = $dupRes['profile'];
+}
+echo json_encode($outDup, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -18057,25 +18232,41 @@ if ($keyIn !== '' && isset($profiles[$keyIn])) {
     $key = profileResolveKey($keyIn, $profiles) ?: '';
 }
 if ($key === '' && $url !== '') {
-    $key = profileResolveKey($url, $profiles) ?: profileKey($url);
+    $key = profileResolveKey($url, $profiles) ?: (strpos($url, '://') !== false ? profileKey($url) : '');
 }
 if ($key !== '' && isset($profiles[$key])) {
 $removedUrl = (string)($profiles[$key]['url'] ?? $url);
-s4MarkProfileDeletedTombstone($key, $removedUrl);
 unset($profiles[$key]);
+$normRemovedKey = ($removedUrl !== '' && strpos($removedUrl, '://') !== false) ? profileKey(s4NormalizeInputUrl($removedUrl)) : '';
+$siblingSharesUrl = false;
+foreach ($profiles as $remK => $remP) {
+    if (!is_array($remP)) continue;
+    if (($normRemovedKey !== '' && (string)$remK === $normRemovedKey) || ($removedUrl !== '' && trim((string)($remP['url'] ?? '')) === trim($removedUrl))) {
+        $siblingSharesUrl = true;
+        break;
+    }
+}
+s4MarkProfileDeletedTombstone($key, $siblingSharesUrl ? '' : $removedUrl);
 // v9.92: حذفِ صریحِ کاربر — محافظِ ضدِ حذفِ ناخواسته باید کنار برود
 $delOk = saveProfiles($profiles, true);
 if ($lfDel) { @flock($lfDel, LOCK_UN); @fclose($lfDel); }
 if ($delOk) {
-    s4CleanupDeletedProfileArtifacts($key, $removedUrl);
-    echo json_encode(['ok' => true, 'key' => $key, 'url' => $removedUrl, 'remaining' => count($profiles), 'message' => 'پروفایل حذف شد'], JSON_UNESCAPED_UNICODE);
+    s4CleanupDeletedProfileArtifacts($key, $siblingSharesUrl ? '' : $removedUrl);
+    echo json_encode(['ok' => true, 'key' => $key, 'url' => $removedUrl, 'sibling_preserved' => $siblingSharesUrl, 'remaining' => count($profiles), 'message' => 'پروفایل حذف شد'], JSON_UNESCAPED_UNICODE);
 } else {
     echo json_encode(['ok' => false, 'error' => 'خطا در ذخیرهٔ حذف پروفایل'], JSON_UNESCAPED_UNICODE);
 }
 } else {
-if ($keyIn !== '' || $url !== '') s4MarkProfileDeletedTombstone($keyIn !== '' ? $keyIn : profileKey($url), $url);
+$fallbackDelKey = $keyIn !== '' ? $keyIn : (($url !== '' && strpos($url, '://') !== false) ? profileKey($url) : '');
+$siblingHasUrl = false;
+if ($url !== '') {
+    foreach ($profiles as $remP) {
+        if (is_array($remP) && trim((string)($remP['url'] ?? '')) === trim($url)) { $siblingHasUrl = true; break; }
+    }
+}
+if ($fallbackDelKey !== '' || $url !== '') s4MarkProfileDeletedTombstone($fallbackDelKey, $siblingHasUrl ? '' : $url);
 if ($lfDel) { @flock($lfDel, LOCK_UN); @fclose($lfDel); }
-echo json_encode(['ok' => true, 'key' => $keyIn !== '' ? $keyIn : ($url !== '' ? profileKey($url) : ''), 'already_deleted' => true, 'message' => 'پروفایل از قبل حذف شده بود'], JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok' => true, 'key' => $fallbackDelKey, 'already_deleted' => true, 'message' => 'پروفایل از قبل حذف شده بود'], JSON_UNESCAPED_UNICODE);
 }
 exit;
 }
@@ -52477,6 +52668,66 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_POST['products_b64'] = base64_encode(json_encode([['key' => 'p1', 'title' => 'قابلمه گرانیتی', 'specs' => '<table class="s4-specs-table"><tr><th>سایز</th><td>۲۸</td></tr></table>']], JSON_UNESCAPED_UNICODE));
     $_decodedB64_460 = function_exists('s4DecodePostedProductsPayload') ? s4DecodePostedProductsPayload() : [];
     if ($_prevPostB64_460 === null) unset($_POST['products_b64']); else $_POST['products_b64'] = $_prevPostB64_460;
+    $_profs462 = [
+        'snappshop.ir_kitchen' => [
+            'url' => 'https://snappshop.ir/category/kitchen',
+            'name' => 'اسنپ شاپ - آشپزخانه',
+            'pages' => 15,
+            'selectors' => ['container' => '.product-card', 'title' => 'h3'],
+            'detailSelectors' => ['price' => ['enabled' => true, 'selector' => '.price']],
+            'gallery' => ['enabled' => true, 'mode' => 'auto'],
+            'listImageEdit' => ['crop_bottom_pct' => 8],
+            'bslCategoryId' => 412,
+            'bslFallbackCatIds' => [413, 414],
+            'wooCategoryId' => 99,
+            'priceMode' => 'percent',
+            'priceVal' => 25,
+            'products' => [['k1', ['key' => 'k1', 'title' => 'سرویس قابلمه']], ['k2', ['key' => 'k2', 'title' => 'کتری و قوری']]],
+            'productsOrder' => ['k1', 'k2'],
+            'syncConfig' => ['enabled' => true, 'interval' => 3600, 'lastRun' => 12345],
+            'lastExtractAt' => 99999,
+            'updatedAt' => 1700000000,
+        ],
+    ];
+    $_resolvedSameKey462 = function_exists('s4ResolveSaveProfileTargetKey')
+        ? s4ResolveSaveProfileTargetKey('https://snappshop.ir/category/home-appliances', 'snappshop.ir_kitchen', $_profs462)
+        : '';
+    $_resolvedNewKey462 = function_exists('s4ResolveSaveProfileTargetKey')
+        ? s4ResolveSaveProfileTargetKey('https://snappshop.ir/category/home-appliances', '', $_profs462)
+        : '';
+    $_dupFull462 = function_exists('s4DuplicateProfileOnDisk')
+        ? s4DuplicateProfileOnDisk($_profs462, 'snappshop.ir_kitchen', ['include_products' => true])
+        : ['ok' => false];
+    $_dupClean462 = function_exists('s4DuplicateProfileOnDisk')
+        ? s4DuplicateProfileOnDisk($_profs462, 'snappshop.ir_kitchen', ['include_products' => false, 'url' => 'https://snappshop.ir/category/blenders'])
+        : ['ok' => false];
+    $add('10.462', 'داپلیکیت پروفایل‌ها و ذخیرهٔ تغییرات لینک آدرس مستقیماً روی همان پروفایل فعال بدون ساخت پروفایل خالی جدید',
+         function_exists('s4ResolveSaveProfileTargetKey')
+      && function_exists('s4DuplicateProfileOnDisk')
+      && $_resolvedSameKey462 === 'snappshop.ir_kitchen'
+      && $_resolvedNewKey462 === 'snappshop.ir_category_home_appliances'
+      && !empty($_dupFull462['ok'])
+      && $_dupFull462['key'] !== 'snappshop.ir_kitchen'
+      && isset($_profs462[$_dupFull462['key']])
+      && count((array)($_profs462[$_dupFull462['key']]['products'] ?? [])) === 2
+      && (int)($_profs462[$_dupFull462['key']]['bslCategoryId'] ?? 0) === 412
+      && !isset($_profs462[$_dupFull462['key']]['lastExtractAt'])
+      && !isset($_profs462[$_dupFull462['key']]['syncConfig']['lastRun'])
+      && !empty($_dupClean462['ok'])
+      && $_dupClean462['key'] === 'snappshop.ir_category_blenders'
+      && count((array)($_profs462[$_dupClean462['key']]['products'] ?? [])) === 0
+      && (string)($_profs462[$_dupClean462['key']]['selectors']['container'] ?? '') === '.product-card'
+      && strpos($selfSrc, "(\$_POST['action'] ?? '') === 'duplicate_profile'") !== false
+      && strpos($selfSrc, "fd.append('target_key', currentProfileKey)") !== false
+      && strpos($selfSrc, 'id="btnDuplicateProfile"') !== false
+      && strpos($selfSrc, 'id="btnNewBlankProfile"') !== false
+      && strpos($selfSrc, 'id="dupProfileModal"') !== false
+      && strpos($selfSrc, 'function openDuplicateProfileModal(') !== false
+      && strpos($selfSrc, 'function confirmDuplicateProfile()') !== false
+      && strpos($selfSrc, 'function duplicateStartBreakdownProfile(') !== false
+      && strpos($selfSrc, 'function newBlankProfile(') !== false
+      && strpos($selfSrc, "{v:'10." . "462'") !== false
+      && version_compare(APP_VERSION, '10.462', '>='));
     $_qPar461 = ['entries' => [
         ['id' => 'qp_1', 'status' => 'running', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223]]],
         ['id' => 'qp_2', 'status' => 'waiting', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728]]],
@@ -77307,7 +77558,8 @@ $initialProfiles[] = [
 'key' => $key,
 'name' => $p['name'] ?? $key,
 'url' => $p['url'] ?? '',
-'updatedAt' => $p['updatedAt'] ?? 0
+'updatedAt' => $p['updatedAt'] ?? 0,
+'productCount' => is_array($p['products'] ?? null) ? count($p['products']) : 0,
 ];
 }
 usort($initialProfiles, fn($a, $b) => ($b['updatedAt'] ?? 0) <=> ($a['updatedAt'] ?? 0));
@@ -80484,8 +80736,43 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <option value="">-- انتخاب سایت ذخیره شده --</option>
             </select>
             <input type="text" id="profileName" placeholder="🏷️ نام دلخواه" oninput="scheduleSave()">
-            <button class="btn btn-cyan" onclick="saveProfile()">💾</button>
-            <button class="btn btn-red" onclick="deleteProfile()">🗑️</button>
+            <button class="btn btn-cyan" onclick="saveProfile()" title="ذخیره روی پروفایل فعلی">💾</button>
+            <button class="btn btn-purple" id="btnDuplicateProfile" onclick="openDuplicateProfileModal()" title="داپلیکیت (کپی) از این پروفایل">📋 کپی</button>
+            <button class="btn btn-gray" id="btnNewBlankProfile" onclick="newBlankProfile()" title="ساخت پروفایل جدید خالی">➕ جدید</button>
+            <button class="btn btn-red" onclick="deleteProfile()" title="حذف پروفایل فعلی">🗑️</button>
+        </div>
+
+        <div id="dupProfileModal" style="display:none;position:fixed;inset:0;z-index:10050;background:rgba(2,6,23,.78);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:14px" onclick="if(event.target===this)closeDuplicateProfileModal()">
+            <div style="width:100%;max-width:460px;background:#0f172a;border:1px solid #334155;border-radius:14px;padding:16px;box-shadow:0 20px 45px rgba(0,0,0,.65)">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                    <h3 style="margin:0;font-size:14px;color:#e9d5ff">📋 داپلیکیت (کپی) پروفایل</h3>
+                    <button type="button" class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="closeDuplicateProfileModal()">✕</button>
+                </div>
+                <div id="dupProfileSourceBadge" style="font-size:11px;color:#93c5fd;background:#172554;border:1px solid #1d4ed8;border-radius:8px;padding:7px 10px;margin-bottom:10px"></div>
+                <div style="margin-bottom:10px">
+                    <label style="display:block;font-size:11px;color:#cbd5e1;margin-bottom:4px">🏷️ نام پروفایل جدید:</label>
+                    <input type="text" id="dupProfileName" placeholder="نام پروفایل جدید..." style="width:100%" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmDuplicateProfile();}">
+                </div>
+                <div style="margin-bottom:10px">
+                    <label style="display:block;font-size:11px;color:#cbd5e1;margin-bottom:4px">🔗 لینک آدرس پروفایل جدید (اختیاری — قابل تغییر در همینجا یا بعداً):</label>
+                    <input type="url" id="dupProfileUrl" dir="ltr" placeholder="https://..." style="width:100%;text-align:left" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmDuplicateProfile();}">
+                </div>
+                <label style="display:flex;align-items:flex-start;gap:7px;padding:9px 10px;background:#1e293b;border:1px solid #334155;border-radius:9px;cursor:pointer;margin-bottom:8px">
+                    <input type="checkbox" id="dupIncludeProducts" checked style="margin-top:3px">
+                    <span style="font-size:11px;color:#e2e8f0;line-height:1.7">
+                        <b>📦 کپی محصولات استخراج‌شده همراه پروفایل</b> <span id="dupProductsCountHint" style="color:#67e8f9"></span><br>
+                        <small style="color:#94a3b8;font-size:9.5px">تمام سلکتورها، دسته‌بندی‌ها، ویرایش تصاویر، گالری و ضرایب قیمت همیشه کپی می‌شوند. اگر پروفایل را برای دسته‌بندی/لینک جدید می‌خواهید، برداشتن این تیک کپی تمیز و بدون محصولات قبلی می‌سازد.</small>
+                    </span>
+                </label>
+                <label style="display:flex;align-items:center;gap:7px;padding:6px 4px;cursor:pointer;margin-bottom:12px;font-size:11px;color:#cbd5e1">
+                    <input type="checkbox" id="dupSelectAfterCreate" checked>
+                    <span>باز کردن و انتخاب فوری پروفایل جدید پس از ساخت</span>
+                </label>
+                <div style="display:flex;gap:8px;justify-content:flex-end">
+                    <button type="button" class="btn btn-gray" onclick="closeDuplicateProfileModal()">انصراف</button>
+                    <button type="button" class="btn btn-purple" id="dupConfirmBtn" onclick="confirmDuplicateProfile()">📋 ایجاد کپی پروفایل</button>
+                </div>
+            </div>
         </div>
 
         <div style="margin-top:10px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:8px">
@@ -80658,7 +80945,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <datalist id="pagesPresets"><option value="0" label="خودکار تا آخرین صفحه"><option value="1"><option value="5"><option value="10"><option value="20"><option value="50"><option value="100"><option value="200"><option value="500"><option value="1000"></datalist>
             </div>
         </div>
-        <div style="font-size:10px;color:#7dd3fc;margin:-4px 2px 8px">عدد ۰ = ادامهٔ خودکار تا تشخیص آخرین صفحه</div>
+        <div style="font-size:10px;color:#7dd3fc;margin:-4px 2px 4px">عدد ۰ = ادامهٔ خودکار تا تشخیص آخرین صفحه</div>
+        <div id="urlTargetProfileHint" style="font-size:10px;color:#94a3b8;margin:0 2px 8px;line-height:1.6">با انتخاب هر پروفایل، تغییر آدرس بالا مستقیم روی همان پروفایل ذخیره می‌شود (برای پروفایل تازه از «➕ جدید» یا «📋 کپی» استفاده کنید).</div>
 
         <div class="row" style="align-items:center;margin-top:6px">
             <label>موتور استخراج:</label>
@@ -80864,6 +81152,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         <style>
           .start-profile-breakdown{margin-top:12px}.spb-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.spb-head>div{flex:1}.spb-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.spb-head p,.spb-note{font-size:9.5px;color:#64748b;margin:0;line-height:1.8}.spb-scroll{overflow-x:auto;border:1px solid #334155;border-radius:12px}.spb-table{width:100%;border-collapse:collapse;min-width:650px;font-size:10.5px}.spb-table th{position:sticky;top:0;background:#172033;color:#94a3b8;text-align:right;padding:9px 10px;white-space:nowrap}.spb-table td{padding:9px 10px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-table tbody tr:hover{background:#111c31}.spb-profile{display:flex;align-items:center;gap:7px;min-width:150px}.spb-profile i{width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf888;flex:0 0 auto}.spb-profile b{color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px;flex:1}.spb-del-btn{padding:2px 6px;border:1px solid #7f1d1d;border-radius:6px;background:#3f1218;color:#fca5a5;font:700 9px var(--app-font);cursor:pointer;flex:0 0 auto;opacity:.82;transition:.15s}.spb-del-btn:hover{opacity:1;background:#7f1d1d;color:#fff}.spb-num{font-size:12px;color:#f8fafc;font-weight:900}.spb-dest-num{display:block;font-size:13px;color:#7dd3fc;font-weight:900}.spb-dest-pct{display:block;margin-top:2px;font-size:8px;color:#64748b;white-space:nowrap}.spb-price-mismatch{display:block;margin-top:3px;font-size:7.5px;line-height:1.35;color:#facc15;font-weight:700;white-space:nowrap}.spb-uncoded{display:block;margin-top:4px;color:#fbbf24;font-size:8px;font-weight:700}.spb-equalize{display:block;margin-top:5px;padding:3px 7px;border:1px solid #0e7490;border-radius:7px;background:#083344;color:#a5f3fc;font:700 8px var(--app-font);cursor:pointer;white-space:nowrap}.spb-equalize:hover{background:#155e75}.spb-equalize:disabled{opacity:.55;cursor:wait}.spb-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;font-size:9px;font-weight:800;white-space:nowrap}.spb-badge.on{background:#064e3b;color:#a7f3d0;border:1px solid #059669}.spb-badge.off{background:#3f1d25;color:#fecaca;border:1px solid #991b1b}.spb-coverage{min-width:125px}.spb-coverage-top{display:flex;justify-content:space-between;gap:6px;margin-bottom:4px}.spb-bar{height:5px;background:#1e293b;border-radius:999px;overflow:hidden}.spb-bar i{display:block;height:100%;background:linear-gradient(90deg,#7c3aed,#22d3ee);border-radius:inherit}.spb-table tfoot td{padding:10px;background:#0b1324;border-top:1px solid #475569;font-weight:800;color:#e2e8f0}.spb-empty{text-align:center!important;padding:22px!important;color:#64748b!important}.spb-note{margin-top:7px}.spb-misc-row{background:linear-gradient(90deg,#3b220f,#422006)!important;cursor:pointer;outline:none}.spb-misc-row:hover,.spb-misc-row:focus{background:linear-gradient(90deg,#573015,#4b2809)!important;box-shadow:inset 0 0 0 1px #f59e0b}.spb-misc-row .spb-profile i{background:#f59e0b;box-shadow:0 0 9px #f59e0baa}.spb-misc-row td{border-top-color:#92400e;color:#fde68a}.spb-misc-cell{text-align:right;cursor:pointer}.spb-misc-cell:hover{background:#78350f}.spb-misc-cell .spb-dest-num{color:#fef3c7}.spb-misc-cell .spb-dest-pct{color:#fbbf24}.spb-misc-na{text-align:right;color:#d97706!important}.spb-misc-toolbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:9px;margin-bottom:8px;background:#111827f5;border:1px solid #334155;border-radius:11px}.spb-misc-toolbar label{display:flex;align-items:center;gap:5px;color:#cbd5e1;font-size:10px}.spb-misc-toolbar .btn{font-size:9px;padding:6px 9px}.spb-misc-selected{margin-inline-start:auto;color:#67e8f9;font-size:9.5px}.spb-misc-progress{width:100%;font-size:9px;color:#94a3b8;min-height:14px}.spb-misc-modal-scroll{overflow:auto;max-height:62vh;border:1px solid #334155;border-radius:11px}.spb-misc-table{width:100%;border-collapse:collapse;min-width:850px;font-size:9.5px}.spb-misc-table th{position:sticky;top:0;z-index:1;background:#172033;color:#94a3b8;padding:8px;text-align:right;white-space:nowrap}.spb-misc-table td{padding:8px;border-top:1px solid #1e293b;color:#cbd5e1;vertical-align:middle}.spb-misc-table tbody tr:hover{background:#172033}.spb-misc-table tr.is-selected{background:#082f49}.spb-misc-table tr.is-ok{opacity:.5}.spb-misc-table tr.is-failed{background:#3f1218}.spb-misc-table b{color:#e2e8f0}.spb-misc-table code{color:#fbbf24}.spb-misc-table a{color:#7dd3fc;white-space:nowrap}.spb-misc-title-input{width:100%;min-width:240px;padding:6px 7px;font:inherit;color:#e2e8f0;background:#020617;border:1px solid #0e7490;border-radius:7px}.spb-misc-result{display:block;margin-top:3px;font-size:8px;color:#94a3b8;max-width:250px}.spb-misc-result.err{color:#fca5a5}
           @media(max-width:600px){.start-profile-breakdown{padding:10px}.spb-head h3{font-size:12px}.spb-head p{font-size:9px}.spb-table{min-width:610px}.spb-table th,.spb-table td{padding:8px}.spb-profile b{max-width:180px}}
+          .spb-dup-btn{padding:2px 6px;border:1px solid #6d28d9;border-radius:6px;background:#2e1065;color:#e9d5ff;font:700 9px var(--app-font);cursor:pointer;flex:0 0 auto;opacity:.85;transition:.15s}
+          .spb-dup-btn:hover{opacity:1;background:#6d28d9;color:#fff}
         </style>
     </section>
 </div>
@@ -82174,7 +82464,7 @@ function renderStartProfileBreakdown(d){
   let all=0,detailed=0,enabled=0;const destTotals={};dests.forEach(x=>destTotals[x.key]=0);
   const profileHtml=rows.map(row=>{const counts=row.counts||{},det=row.detail||{},dc=row.destinations||{},pm=row.price_mismatches||{},total=parseInt(counts.total||det.total||0),done=Math.min(total,parseInt(det.detailed||0)),on=!!det.enabled,nsel=parseInt(det.selector_count||0),pct=total?Math.round(done*100/total):0;all+=total;detailed+=done;if(on)enabled++;
     const destCells=dests.map(x=>{const n=parseInt(dc[x.key]||0),mis=parseInt(pm[x.key]||0),dp=total?Math.round(n*100/total):0,pending=startDestinationEqualizePending.has(String(row.key||'')+'|'+String(x.key||''));destTotals[x.key]=(destTotals[x.key]||0)+n;return '<td><span class="spb-dest-num">'+spoNum(n)+'</span><small class="spb-dest-pct">'+spoNum(dp)+'٪ از پروفایل</small><small class="spb-price-mismatch" title="بر پایهٔ قیمت مورد انتظار پس از اعمال ضرایب تعدیل کلی">⚠ مغایرت قیمت: '+spoNum(mis)+'</small><button type="button" class="spb-equalize" data-profile="'+esc(row.key||'')+'" data-destination="'+esc(x.key||'')+'" onclick="equalizeStartDestination(this)" '+(pending?'disabled':'')+'>'+(pending?'⏳ صف مستقیم فعال…':'⚖️ برابر‌سازی')+'</button></td>';}).join('');
-    return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b><button type="button" class="spb-del-btn" data-del-profile="'+esc(row.key||'')+'" data-del-name="'+esc(row.name||row.key||'')+'" onclick="deleteStartBreakdownProfile(this)" title="حذف کامل این پروفایل">🗑</button></span></td>'+
+    return '<tr data-profile-key="'+esc(row.key||'')+'"><td><span class="spb-profile"><i></i><b title="'+esc(row.name||row.key||'')+'">'+esc(row.name||row.key||'—')+'</b><button type="button" class="spb-dup-btn" data-dup-profile="'+esc(row.key||'')+'" data-dup-name="'+esc(row.name||row.key||'')+'" data-dup-count="'+esc(String(total))+'" onclick="duplicateStartBreakdownProfile(this)" title="داپلیکیت (کپی) از این پروفایل">📋</button><button type="button" class="spb-del-btn" data-del-profile="'+esc(row.key||'')+'" data-del-name="'+esc(row.name||row.key||'')+'" onclick="deleteStartBreakdownProfile(this)" title="حذف کامل این پروفایل">🗑</button></span></td>'+
       '<td><span class="spb-num">'+spoNum(total)+'</span></td>'+destCells+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?('✓ فعال · '+spoNum(nsel)+' سلکتور'):'✕ غیرفعال')+'</span></td>'+
       '<td><span class="spb-badge '+(on?'on':'off')+'">'+(on?'▶ اجرا می‌شود':'— اجرا نمی‌شود')+'</span></td>'+
@@ -83887,28 +84177,85 @@ function renderEngineBenchmark(rep){
     box.innerHTML=h;
 }
 
+function findProfileEntryJs(ref) {
+    if (!ref || !Array.isArray(profiles)) return null;
+    const s = String(ref).trim();
+    if (!s) return null;
+    return profiles.find(p => p && p.key === s)
+        || profiles.find(p => p && p.url === s)
+        || null;
+}
+
+function updateUrlTargetProfileHint() {
+    const el = $('urlTargetProfileHint');
+    if (!el) return;
+    const active = currentProfileKey ? findProfileEntryJs(currentProfileKey) : null;
+    if (active) {
+        const curUrl = (($('url') || {}).value || '').trim();
+        const urlChanged = !!(curUrl && active.url && curUrl !== active.url);
+        el.style.color = urlChanged ? '#fbbf24' : '#86efac';
+        el.innerHTML = '📌 پروفایل فعال: <b style="color:#f8fafc">' + esc(active.name || active.key) + '</b> — '
+            + (urlChanged
+                ? 'آدرس جدید مستقیماً روی <b>همین پروفایل</b> ذخیره می‌شود (پروفایل جدید ساخته نمی‌شود).'
+                : 'تغییر آدرس بالا مستقیماً روی همین پروفایل ذخیره می‌شود (برای ساخت پروفایل مجزا از «📋 کپی» یا «➕ جدید» استفاده کنید).');
+    } else {
+        el.style.color = '#94a3b8';
+        el.textContent = 'حالت پروفایل جدید فعال است — با زدن 💾 پروفایل جدید ساخته می‌شود.';
+    }
+}
+
 function onUrlChange() {
-    profileLoadSeq++;profileFormReady=false;clearTimeout(saveTimer);
+    clearTimeout(saveTimer);
     clearTimeout(urlChangeTimer);
+    const active = currentProfileKey ? findProfileEntryJs(currentProfileKey) : null;
+    if (active) {
+        /* v10.462: وقتی پروفایل فعالی باز است، تغییر لینک آدرس نباید currentProfileKey یا نام پروفایل را پاک کند
+           یا پروفایل خالی جدید بسازد؛ بلکه تغییر روی همان پروفایل فعال ذخیره می‌شود. */
+        if (!profileFormReady) {
+            window._pendingEditedUrlForSeq = { seq: profileLoadSeq, url: (($('url') && $('url').value) || '').trim() };
+        }
+        markDirty();
+        updateUrlTargetProfileHint();
+        urlChangeTimer = setTimeout(() => {
+            const url = ($('url') && $('url').value || '').trim();
+            if (/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(url) && profileFormReady) {
+                scheduleSave();
+            }
+        }, 600);
+        return;
+    }
+    profileLoadSeq++;profileFormReady=false;
     urlChangeTimer = setTimeout(() => {
         const url = $('url').value.trim();
-        if (!url) return;
-        const match = profiles.find(p => p.url === url);
-        if (match) {
-            loadProfileFromServer(url);
+        if (!url) { updateUrlTargetProfileHint(); return; }
+        const matches = Array.isArray(profiles) ? profiles.filter(p => p && p.url === url) : [];
+        if (matches.length === 1) {
+            loadProfileFromServer(matches[0].key || url);
         } else {
             currentProfileKey = null;
             const s = $('profileStatus');
-            s.textContent = 'جدید';
-            s.className = 'profile-indicator unsaved';
+            if (s) {
+                s.textContent = 'جدید';
+                s.className = 'profile-indicator unsaved';
+            }
             $('profileName').value = '';
             setProfileSelectValue('');
+            updateUrlTargetProfileHint();
         }
     }, 500);
 }
 
 function setProfileSelectValue(url) {
-    ['profileSelect','hdrProfileSelect'].forEach(id => { const el=$(id); if(el) el.value = url || ''; });
+    let resolved = url || '';
+    if (resolved && Array.isArray(profiles)) {
+        if (!profiles.some(p => p && p.key === resolved)) {
+            const byActive = currentProfileKey ? profiles.find(p => p && p.key === currentProfileKey && p.url === resolved) : null;
+            const byUrl = byActive || profiles.find(p => p && p.url === resolved);
+            if (byUrl && byUrl.key) resolved = byUrl.key;
+        }
+    }
+    ['profileSelect','hdrProfileSelect'].forEach(id => { const el=$(id); if(el) el.value = resolved || ''; });
+    updateUrlTargetProfileHint();
 }
 
 function renderProfileDropdown() {
@@ -83923,22 +84270,28 @@ function renderProfileDropdown() {
         first.textContent = label;
         el.appendChild(first);
         profiles.forEach(p => {
+            if (!p) return;
             const opt = document.createElement('option');
-            opt.value = p.url;
+            opt.value = p.key || p.url || '';
+            if (p.url) opt.dataset.url = p.url;
             opt.textContent = p.name || p.url || p.key;
-            opt.title = p.url || p.name || p.key || '';
+            opt.title = (p.name ? (p.name + ' — ') : '') + (p.url || p.key || '');
             el.appendChild(opt);
         });
     };
     fill($('profileSelect'), '-- انتخاب سایت (' + profiles.length + ') --');
     fill($('hdrProfileSelect'), 'پروفایل (' + profiles.length + ')');
-    const cur = (($('url')||{}).value || '').trim();
-    if (cur && profiles.some(p => p.url === cur)) setProfileSelectValue(cur);
+    if (currentProfileKey && profiles.some(p => p && p.key === currentProfileKey)) {
+        setProfileSelectValue(currentProfileKey);
+    } else {
+        const cur = (($('url')||{}).value || '').trim();
+        if (cur && profiles.some(p => p && p.url === cur)) setProfileSelectValue(cur);
+    }
     // v8.62: همان فهرست برای «عکس‌دار کردن» — آنجا کلید پروفایل لازم است نه URL
     const ph = $('photoProfile');
     if (ph) {
         let h = '<option value="">همهٔ پروفایل‌ها</option>';
-        profiles.forEach(p => { h += '<option value="' + esc(p.key) + '">' + esc(p.name) + '</option>'; });
+        profiles.forEach(p => { if (p) h += '<option value="' + esc(p.key) + '">' + esc(p.name) + '</option>'; });
         ph.innerHTML = h;
     }
 }
@@ -83983,25 +84336,62 @@ function lastProfileUrl() {
 function restoreLastProfile() {
     let url = lastProfileUrl();
     let key='';try{key=localStorage.getItem(LAST_PROFILE_ID_KEY)||'';}catch(e){}
-    const found=(key&&profiles.find(p=>p.key===key)) || (url&&profiles.find(p=>p.url===url));
-    if (!found) { if(url||key)forgetProfile(); return; }
+    const found=(key&&profiles.find(p=>p&&p.key===key)) || (url&&profiles.find(p=>p&&p.url===url));
+    if (!found) { if(url||key)forgetProfile(); updateUrlTargetProfileHint(); return; }
     url=found.url||url;if(!url)return;
+    const targetRef = found.key || key || url;
+    currentProfileKey = found.key || key || null;
     rememberProfile(url,found.key||key);
-    setProfileSelectValue(url);
+    setProfileSelectValue(targetRef);
     $('url').value = url;
-    loadProfileFromServer(url, true);
+    loadProfileFromServer(targetRef, true);
+}
+
+function newBlankProfile(silentToast) {
+    clearTimeout(saveTimer);
+    clearTimeout(urlChangeTimer);
+    profileLoadSeq++;
+    profileFormReady = false;
+    isDirty = false;
+    window._userClearedProducts = false;
+    currentProfileKey = null;
+    currentProfileUrl = '';
+    currentProfileUpdatedAt = 0;
+    if ($('url')) $('url').value = '';
+    if ($('profileName')) $('profileName').value = '';
+    resetResultFilter();
+    products.clear();
+    order = [];
+    try { listImgEditApply({}); galApply({}); } catch (e) {}
+    try { refreshViews(); update(); } catch (e) {}
+    setProfileSelectValue('');
+    const s = $('profileStatus');
+    if (s) {
+        s.textContent = 'جدید';
+        s.className = 'profile-indicator unsaved';
+    }
+    updateUrlTargetProfileHint();
+    if (!silentToast) {
+        showToast('➕ فرم پروفایل جدید آماده شد — نام و آدرس را وارد کرده و 💾 بزنید');
+        if ($('profileName')) $('profileName').focus();
+    }
 }
 
 function selectProfile(url) {
-    if (!url) return;
+    if (!url) { newBlankProfile(true); return; }
     clearTimeout(saveTimer); profileFormReady=false; profileLoadSeq++;
-    setProfileSelectValue(url);
-    $('url').value = url;
-    rememberProfile(url);
-    loadProfileFromServer(url);
+    const hit = findProfileEntryJs(url);
+    const resolvedKey = (hit && hit.key) ? hit.key : (String(url).indexOf('://') === -1 ? url : '');
+    const resolvedUrl = (hit && hit.url) ? hit.url : (String(url).indexOf('://') !== -1 ? url : '');
+    if (resolvedKey) currentProfileKey = resolvedKey;
+    setProfileSelectValue(resolvedKey || url);
+    if (resolvedUrl && $('url')) $('url').value = resolvedUrl;
+    if (hit && hit.name && $('profileName')) $('profileName').value = hit.name;
+    rememberProfile(resolvedUrl || url, resolvedKey);
+    loadProfileFromServer(resolvedKey || url);
 }
 function selectHeaderProfile(url) {
-    if (!url) { setProfileSelectValue(''); return; }
+    if (!url) { newBlankProfile(true); return; }
     selectProfile(url);
 }
 
@@ -84136,21 +84526,40 @@ function ghImportProducts(){
 function loadProfileFromServer(url, silent) {
     const seq=++profileLoadSeq;
     clearTimeout(saveTimer); profileFormReady=false;
+    window._pendingEditedUrlForSeq = null;
+    const isUrlRef = String(url || '').indexOf('://') !== -1;
     fetch('?load_profile=' + encodeURIComponent(url))
         .then(r => r.json())
         .then(d => {
             /* پاسخ دیررس پروفایل قبلی نباید انتخاب تازه‌تر را برگرداند. */
-            if(seq!==profileLoadSeq || $('url').value.trim()!==url)return;
+            if(seq!==profileLoadSeq || (isUrlRef && !window._pendingEditedUrlForSeq && $('url').value.trim()!==url))return;
             if (d.ok && d.profile) {
+                const pendingEdited = (window._pendingEditedUrlForSeq && window._pendingEditedUrlForSeq.seq === seq)
+                    ? window._pendingEditedUrlForSeq.url : '';
+                window._pendingEditedUrlForSeq = null;
+                window._applyingProfileKey = d.key || (isUrlRef ? '' : String(url || ''));
                 /* v9.91: در بازیابیِ خودکارِ بعد از رفرش (silent) نباید تبِ کاربر
                    عوض شود. قبلاً applyProfile در پایانش به «نتایج» می‌پرید و
                    همان علتِ اصلیِ «هر رفرش، تبِ من عوض می‌شود» بود. */
-                applyProfile(d.profile, !!silent);
+                try {
+                    applyProfile(d.profile, !!silent);
+                } finally {
+                    window._applyingProfileKey = '';
+                }
                 currentProfileKey=d.key||currentProfileKey;
                 currentProfileUrl=d.profile.url||url;
                 currentProfileUpdatedAt=parseInt(d.profile.updatedAt||0)||0;
                 profileFormReady=true;
+                setProfileSelectValue(currentProfileKey || currentProfileUrl);
                 rememberProfile(currentProfileUrl,currentProfileKey);
+                if (pendingEdited && pendingEdited !== currentProfileUrl) {
+                    if ($('url')) $('url').value = pendingEdited;
+                    markDirty();
+                    updateUrlTargetProfileHint();
+                    if (/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(pendingEdited)) scheduleSave();
+                } else {
+                    updateUrlTargetProfileHint();
+                }
                 if (silent) showToast('↩ آخرین پروفایل بازیابی شد: ' + (d.profile.name || url));
             } else if (!silent) {
                 showToast('پروفایل یافت نشد', true);
@@ -84242,25 +84651,35 @@ function applyProfile(p, keepTab) {
            روی تب می‌زند و همان لحظه ساخته می‌شود. پارامترِ keepTab برای
            سازگاریِ امضای تابع می‌ماند. */
         void keepTab;
+        window._userClearedProducts = false;
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد (' + toFa(products.size) + ' محصول)');
     } else {
+        resetResultFilter();
+        products.clear();
+        order = [];
+        window._userClearedProducts = false;
         refreshViews();
+        try { update(); } catch (e) {}
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد');
     }
 
-    try {
-        const u = new URL(p.url);
-        let path = u.pathname.replace(/\/$/, '');
-        path = path.replace(/\/page\/\d+\/?$/i, '');
-        path = path.replace(/\.(html|htm|php)$/i, '');
-        let key = u.host.toLowerCase() + (path ? '_' + path.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') : '');
-        currentProfileKey = key;
-    } catch(e) {
-        currentProfileKey = null;
+    if (window._applyingProfileKey) {
+        currentProfileKey = window._applyingProfileKey;
+    } else {
+        try {
+            const u = new URL(p.url);
+            let path = u.pathname.replace(/\/$/, '');
+            path = path.replace(/\/page\/\d+\/?$/i, '');
+            path = path.replace(/\.(html|htm|php)$/i, '');
+            let key = u.host.toLowerCase() + (path ? '_' + path.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') : '');
+            currentProfileKey = key;
+        } catch(e) {
+            currentProfileKey = null;
+        }
     }
 
     markClean(currentProfileKey);
-    setProfileSelectValue(p.url || '');
+    setProfileSelectValue(currentProfileKey || p.url || '');
     // v8.06: Restore per-profile BaSalam category
     if(p.bslCategoryId && p.bslCategoryId>0){
         bslSelectedCatId=p.bslCategoryId;
@@ -84421,14 +84840,18 @@ function collectProfileData() {
 
 function saveProfileSilent() {
     const data = collectProfileData();
+    const hasActiveKey = !!(currentProfileKey && Array.isArray(profiles) && profiles.some(p => p && p.key === currentProfileKey));
+    const validHttpUrl = /^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(String(data.url || '').trim());
     /* فرمِ بین دو profile، پاسخ دیررس، یا snapshot بی‌نسخه هرگز autosave نشود. */
-    if (!data.url || !profileFormReady || data.url!==currentProfileUrl || currentProfileUpdatedAt<=0)
+    if (!data.url || !validHttpUrl || !profileFormReady || (!hasActiveKey && data.url!==currentProfileUrl) || currentProfileUpdatedAt<=0)
         return Promise.resolve({ok:false,error:'profile_form_not_ready'});
 
     const fd = new FormData();
     fd.append('action', 'save_profile');
     fd.append('autosave','1');
     fd.append('loaded_updated_at',String(currentProfileUpdatedAt));
+    if (hasActiveKey) fd.append('target_key', currentProfileKey);
+    if (window._userClearedProducts) fd.append('allow_empty_products', '1');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
@@ -84443,19 +84866,22 @@ function saveProfileSilent() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
+                window._userClearedProducts = false;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 currentProfileUrl=data.url;profileFormReady=true;
+                rememberProfile(data.url, d.key);
                 if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
-                const existingIdx = profiles.findIndex(p => p.url === data.url);
+                const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
-                const entry = {key: d.key, name: oldEntry.name || data.name || parseUrlHost(data.url), url: data.url, updatedAt: currentProfileUpdatedAt};
+                const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldEntry.productCount || products.size || 0);
+                const entry = {key: d.key, name: oldEntry.name || data.name || parseUrlHost(data.url), url: data.url, updatedAt: currentProfileUpdatedAt, productCount: pCount};
                 if (existingIdx >= 0) {
                     profiles[existingIdx] = entry;
                 } else {
                     profiles.unshift(entry);
                 }
                 renderProfileDropdown();
-                setProfileSelectValue(data.url);
+                setProfileSelectValue(d.key);
                 scheduleStartBreakdownRefresh();
             } else if(d.error==='stale_profile') {
                 profileFormReady=false;
@@ -84478,13 +84904,25 @@ function saveProfile() {
         return;
     }
 
+    const activeEntry = (currentProfileKey && Array.isArray(profiles)) ? profiles.find(p => p && p.key === currentProfileKey) : null;
+    const hasActiveKey = !!activeEntry;
+
     if (!data.name) {
-        data.name = parseUrlHost(data.url);
+        data.name = (activeEntry && activeEntry.name) ? activeEntry.name : parseUrlHost(data.url);
         $('profileName').value = data.name;
     }
 
     const fd = new FormData();
     fd.append('action', 'save_profile');
+    if (hasActiveKey) {
+        fd.append('target_key', currentProfileKey);
+        if (!profileFormReady) {
+            fd.append('partial_meta_only', '1');
+        }
+    }
+    if (window._userClearedProducts) {
+        fd.append('allow_empty_products', '1');
+    }
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise "[object Object]"
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
@@ -84498,26 +84936,34 @@ function saveProfile() {
         .then(r => r.json())
         .then(d => {
             if (d.ok) {
+                const wasPartialOnly = hasActiveKey && !profileFormReady;
                 markClean(d.key);
+                window._userClearedProducts = false;
                 currentProfileUrl=data.url;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
-                profileFormReady=true;rememberProfile(data.url,d.key);
+                if (!wasPartialOnly) profileFormReady=true;
+                rememberProfile(data.url,d.key);
                 if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
-                const existingIdx = profiles.findIndex(p => p.url === data.url);
-                const entry = {key: d.key, name: data.name, url: data.url, updatedAt: currentProfileUpdatedAt};
+                const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
+                const oldP = existingIdx >= 0 ? profiles[existingIdx] : {};
+                const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldP.productCount || products.size || 0);
+                const entry = {key: d.key, name: d.name || data.name, url: data.url, updatedAt: currentProfileUpdatedAt, productCount: pCount};
                 if (existingIdx >= 0) {
                     profiles[existingIdx] = entry;
                 } else {
                     profiles.unshift(entry);
                 }
                 renderProfileDropdown();
-                setProfileSelectValue(data.url);
+                setProfileSelectValue(d.key);
                 scheduleStartBreakdownRefresh();
+                if (wasPartialOnly) {
+                    loadProfileFromServer(d.key, true);
+                }
                 // v7.66: Show selector status after save
-                if(data.selectors && data.selectors.container){
-                    showToast('✓ ذخیره شد — سلکتورها: '+data.selectors.container+' ✓');
+                if(d.has_selectors || (data.selectors && data.selectors.container)){
+                    showToast('✓ روی همین پروفایل ذخیره شد — سلکتورها فعال ✓');
                 }else{
-                    showToast('✓ ذخیره شد — بدون سلکتورها (استخراج اتوماتیک غیرفعال)');
+                    showToast('✓ روی پروفایل ذخیره شد');
                 }
                 fxOkFlash('profileName');     // v10.07: تأییدِ دیداریِ ذخیره
             } else {
@@ -84528,16 +84974,164 @@ function saveProfile() {
         .catch(() => showToast('خطا در ارتباط', true));
 }
 
+let _dupSourceProfileKey = '';
+function suggestDuplicateProfileNameJs(srcName) {
+    const clean = String(srcName || 'پروفایل').replace(/\s*\(کپی(?:\s*[^\)]*)?\)\s*$/u, '').trim() || 'پروفایل';
+    const existing = new Set((Array.isArray(profiles) ? profiles : []).map(p => String((p && p.name) || '').trim()).filter(Boolean));
+    let cand = clean + ' (کپی)';
+    let n = 2;
+    while (existing.has(cand) && n < 200) {
+        cand = clean + ' (کپی ' + toFa(n) + ')';
+        n++;
+    }
+    return cand;
+}
+
+function openDuplicateProfileModal(explicitKey, selectAfterDefault) {
+    const selVal = (($('profileSelect') || {}).value || '').trim();
+    const targetRef = explicitKey || currentProfileKey || selVal || (($('url') || {}).value || '').trim();
+    const src = findProfileEntryJs(targetRef);
+    if (!src || !src.key) {
+        showToast('⚠️ ابتدا یک پروفایل ذخیره‌شده را انتخاب کنید تا از آن کپی ساخته شود', true);
+        return;
+    }
+    _dupSourceProfileKey = src.key;
+    const modal = $('dupProfileModal');
+    if (!modal) return;
+    let pCount = parseInt(src.productCount || 0) || 0;
+    if (!pCount && currentProfileKey === src.key && products && products.size > 0) pCount = products.size;
+    if (!pCount && startProductOverviewData && Array.isArray(startProductOverviewData.by_profile)) {
+        const ovRow = startProductOverviewData.by_profile.find(r => r && r.key === src.key);
+        if (ovRow && ovRow.counts) pCount = parseInt(ovRow.counts.total || 0) || 0;
+    }
+    const badge = $('dupProfileSourceBadge');
+    if (badge) {
+        badge.innerHTML = 'پروفایل مبدأ: <b style="color:#fff">' + esc(src.name || src.key) + '</b>'
+            + (src.url ? ' <span dir="ltr" style="color:#94a3b8;font-size:10px">(' + esc(src.url) + ')</span>' : '');
+    }
+    const nameEl = $('dupProfileName');
+    const urlEl = $('dupProfileUrl');
+    const incEl = $('dupIncludeProducts');
+    const cntHint = $('dupProductsCountHint');
+    const selAfterEl = $('dupSelectAfterCreate');
+    if (nameEl) nameEl.value = suggestDuplicateProfileNameJs(src.name || src.key);
+    if (urlEl) urlEl.value = src.url || '';
+    if (incEl) incEl.checked = true;
+    if (cntHint) cntHint.textContent = pCount > 0 ? ('(' + toFa(pCount) + ' محصول فعلی)') : '(بدون محصول ذخیره‌شده)';
+    if (selAfterEl) selAfterEl.checked = (selectAfterDefault === undefined ? true : !!selectAfterDefault);
+    modal.style.display = 'flex';
+    setTimeout(() => { if (nameEl) { nameEl.focus(); nameEl.select(); } }, 40);
+}
+
+function closeDuplicateProfileModal() {
+    const modal = $('dupProfileModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function duplicateStartBreakdownProfile(btn) {
+    const key = String((btn && btn.dataset.dupProfile) || '').trim();
+    if (!key) return;
+    openDuplicateProfileModal(key, true);
+}
+
+function confirmDuplicateProfile() {
+    if (!_dupSourceProfileKey) { closeDuplicateProfileModal(); return; }
+    const btn = $('dupConfirmBtn');
+    const newName = (($('dupProfileName') || {}).value || '').trim();
+    const newUrl = (($('dupProfileUrl') || {}).value || '').trim();
+    const incProds = !($('dupIncludeProducts')) || !!$('dupIncludeProducts').checked;
+    const selectAfter = !($('dupSelectAfterCreate')) || !!$('dupSelectAfterCreate').checked;
+    if (newUrl && !/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(newUrl)) {
+        showToast('⚠️ لینک آدرس واردشده معتبر نیست (با http:// یا https:// شروع شود)', true);
+        return;
+    }
+    const executeDup = () => {
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال ساخت کپی…'; }
+        const fd = new FormData();
+        fd.append('action', 'duplicate_profile');
+        fd.append('source_key', _dupSourceProfileKey);
+        if (newName) fd.append('name', newName);
+        if (newUrl) fd.append('new_url', newUrl);
+        fd.append('include_products', incProds ? '1' : '0');
+        fd.append('return_full', selectAfter ? '1' : '0');
+        fetch('', { method: 'POST', body: fd, cache: 'no-store' })
+            .then(r => r.json())
+            .then(d => {
+                if (!d || !d.ok || !d.key) {
+                    showToast('خطا در داپلیکیت پروفایل: ' + ((d && d.error) || 'نامشخص'), true);
+                    return;
+                }
+                const sum = d.profile_summary || {};
+                const entry = {
+                    key: d.key,
+                    name: sum.name || newName || d.key,
+                    url: sum.url || newUrl || '',
+                    updatedAt: parseInt(sum.updatedAt || 0) || Math.floor(Date.now() / 1000),
+                    productCount: parseInt(sum.productCount || 0) || 0,
+                };
+                const idx = profiles.findIndex(p => p && p.key === d.key);
+                if (idx >= 0) profiles[idx] = entry;
+                else profiles.unshift(entry);
+                closeDuplicateProfileModal();
+                renderProfileDropdown();
+                if (selectAfter) {
+                    if (d.profile) {
+                        clearTimeout(saveTimer);
+                        profileLoadSeq++;
+                        window._applyingProfileKey = d.key;
+                        try {
+                            applyProfile(d.profile, true);
+                        } finally {
+                            window._applyingProfileKey = '';
+                        }
+                        currentProfileKey = d.key;
+                        currentProfileUrl = d.profile.url || entry.url || '';
+                        currentProfileUpdatedAt = parseInt(d.profile.updatedAt || entry.updatedAt || 0) || Math.floor(Date.now() / 1000);
+                        profileFormReady = true;
+                        setProfileSelectValue(d.key);
+                        rememberProfile(currentProfileUrl, d.key);
+                        updateUrlTargetProfileHint();
+                    } else {
+                        selectProfile(d.key);
+                    }
+                }
+                clearTimeout(startBreakdownRefreshTimer);
+                startProductOverviewBusy = false;
+                loadStartProductOverview(true);
+                showToast('✓ کپی پروفایل «' + entry.name + '» با موفقیت ساخته شد');
+            })
+            .catch(() => showToast('خطا در ارتباط هنگام ساخت کپی پروفایل', true))
+            .finally(() => {
+                if (btn) { btn.disabled = false; btn.textContent = '📋 ایجاد کپی پروفایل'; }
+            });
+    };
+    if (isDirty && currentProfileKey === _dupSourceProfileKey && typeof saveProfileSilent === 'function' && profileFormReady) {
+        clearTimeout(saveTimer);
+        saveProfileSilent().finally(executeDup);
+    } else {
+        executeDup();
+    }
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        const m = $('dupProfileModal');
+        if (m && m.style.display !== 'none') closeDuplicateProfileModal();
+    }
+});
+
 function purgeDeletedProfileClientState(deletedKey, deletedUrl) {
     clearTimeout(saveTimer);
     profiles = profiles.filter(p => {
-        if (deletedKey && p.key === deletedKey) return false;
+        if (!p) return false;
+        if (deletedKey) return p.key !== deletedKey;
         if (deletedUrl && p.url === deletedUrl) return false;
         return true;
     });
     const curUrl = (($('url')||{}).value || '').trim();
-    const isActiveProfile = (deletedKey && currentProfileKey === deletedKey)
-        || (deletedUrl && (curUrl === deletedUrl || currentProfileUrl === deletedUrl));
+    const isActiveProfile = deletedKey
+        ? (currentProfileKey === deletedKey)
+        : !!(deletedUrl && (curUrl === deletedUrl || currentProfileUrl === deletedUrl));
     if (isActiveProfile) {
         profileFormReady = false;
         isDirty = false;
@@ -84553,8 +85147,10 @@ function purgeDeletedProfileClientState(deletedKey, deletedUrl) {
         setProfileSelectValue('');
         const s = $('profileStatus');
         if (s) { s.textContent = 'جدید'; s.className = 'profile-indicator unsaved'; }
+        updateUrlTargetProfileHint();
     }
-    if ((deletedUrl && lastProfileUrl() === deletedUrl) || isActiveProfile) forgetProfile();
+    const stillHasUrl = deletedUrl && profiles.some(p => p && p.url === deletedUrl);
+    if ((!stillHasUrl && deletedUrl && lastProfileUrl() === deletedUrl) || isActiveProfile) forgetProfile();
     renderProfileDropdown();
     if (startProductOverviewData && Array.isArray(startProductOverviewData.by_profile)) {
         startProductOverviewData.by_profile = startProductOverviewData.by_profile.filter(r => r && r.key !== deletedKey);
@@ -86087,7 +86683,7 @@ function resultEditedImgUrl(imgUrl,p,role){
   const r=(role==='gallery')?'gallery':'list';
   let lc=(typeof listImgEditCollect==='function')?listImgEditCollect():{};
   let gc=(typeof galCollect==='function')?galCollect():{};
-  const prof=(typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null;
+  const prof=(typeof findProfileEntryJs==='function'&&currentProfileKey)?findProfileEntryJs(currentProfileKey):((typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null);
   if(!s4ImgCfgIsActiveJs(lc)&&prof&&prof.listImageEdit&&s4ImgCfgIsActiveJs(prof.listImageEdit))lc=prof.listImageEdit;
   if(!s4ImgCfgIsActiveJs(gc)&&prof&&prof.gallery&&s4ImgCfgIsActiveJs(prof.gallery))gc=prof.gallery;
   const lcOn=s4ImgCfgIsActiveJs(lc),gcOn=s4ImgCfgIsActiveJs(gc);
@@ -86696,12 +87292,13 @@ function backendExtractFor(url,panelTitle,phase){
     if(!url){showToast('URL وارد کنید',1);return;}
     /* Persist the current page limit/selectors first. In particular, numeric
        zero is a real auto-until-last-page value and must not race an older 10. */
-    if(!window._extractAfterSave&&profileFormReady&&url===currentProfileUrl){
-        saveProfileSilent().then(d=>{if(!d||!d.ok){showToast('تنظیمات پروفایل ذخیره نشد؛ استخراج شروع نشد',1);return;}window._extractAfterSave=true;try{backendExtractFor(url,panelTitle,phase);}finally{window._extractAfterSave=false;}});return;
+    if(!window._extractAfterSave&&profileFormReady&&(url===currentProfileUrl||url===currentProfileKey)){
+        saveProfileSilent().then(d=>{if(!d||!d.ok){showToast('تنظیمات پروفایل ذخیره نشد؛ استخراج شروع نشد',1);return;}window._extractAfterSave=true;try{backendExtractFor(d.key||currentProfileKey||url,panelTitle,phase);}finally{window._extractAfterSave=false;}});return;
     }
     // سلکتورها از روی نسخهٔ ذخیره‌شده بررسی می‌شوند، چون موتور بک‌اند
     // هم دقیقاً همان را می‌خواند — نه چیزی که در فرم باز است.
-    fetch('?load_profile='+encodeURIComponent(url)).then(r=>r.json()).then(d=>{
+    const _loadTarget=(currentProfileKey&&(url===currentProfileKey||(currentProfileUrl&&url===currentProfileUrl)))?currentProfileKey:url;
+    fetch('?load_profile='+encodeURIComponent(_loadTarget)).then(r=>r.json()).then(d=>{
         if(!d.ok||!d.profile){showToast('خطا: پروفایل یافت نشد — اول ذخیره کنید',1);return;}
         const prof=d.profile||{};
         const sels=prof.selectors||{};
@@ -86771,7 +87368,7 @@ function startDetailExtractionServer(){
     };
     /* v10.458: فقط اگر فرم واقعاً تغییر ذخیره نشده دارد (isDirty) یا پروفایل تازه در مرورگر است،
        ذخیره کن؛ وگرنه آپلود تکراری ۵ مگابایتی هزاران محصول مانع شروع فوری استخراج می‌شد. */
-    const profMeta=(typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null;
+    const profMeta=(typeof findProfileEntryJs==='function'&&currentProfileKey)?findProfileEntryJs(currentProfileKey):((typeof profiles!=='undefined'&&currentProfileKey&&profiles[currentProfileKey])?profiles[currentProfileKey]:null);
     const serverHasProducts=!!(profMeta&&(profMeta.productCount>0||(Array.isArray(profMeta.products)&&profMeta.products.length>0)));
     const needSave=(typeof isDirty!=='undefined'&&isDirty)
                    ||(!serverHasProducts&&typeof products!=='undefined'&&products.size>0);
@@ -88065,6 +88662,9 @@ function loadBackendExtractResults(key, opts){
 }
 // Helper: profileKey from URL — mirrors PHP profileKey()
 function profileKey(url){
+    if(url && String(url).indexOf('://')===-1 && Array.isArray(profiles) && profiles.some(p=>p&&p.key===String(url).trim())){
+        return String(url).trim();
+    }
     // v10.67 (81): فرمولِ سمتِ سرور (PHP) مسیرِ URL را «بدونِ دیکُدِ percent»
     // می‌خواند، ولی new URL(url).pathname کاراکترهای %XX را دیکُد می‌کند؛
     // برای لینک‌های دارایِ کاراکترِ فارسی/percent-encoded کلیدِ مرورگر با
@@ -88344,6 +88944,7 @@ function finishDetailExtraction(){
 function clearResults(){
   if(!confirm('پاک کردن همه نتایج؟ (تنظیمات و سلکتورها حفظ می‌شوند)')) return;
   resetResultFilter();
+  window._userClearedProducts = true;
   products.clear();order=[];pages=0;details=0;extractSpeedStartMs=0;updateSpeedCard(0,0);
   $('vGrid').innerHTML='<div class="empty-state" id="emptyState"><div class="icon">📭</div><p>هنوز محصولی اسکرپ نشده است.</p></div>';
   $('tBody').innerHTML='';$('txtContent').textContent='';
@@ -88492,6 +89093,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.462', t:'📋 افزودن قابلیت داپلیکیت (کپی) پروفایل‌ها + ذخیرهٔ تغییر لینک آدرس مستقیماً روی همان پروفایل فعال', items:[
+    'داپلیکیت سرورساید و آنی پروفایل‌ها (action=duplicate_profile + s4DuplicateProfileOnDisk) همراه با دکمهٔ «📋 کپی» در نوار پروفایل و دکمهٔ «📋» در جدول تفکیک پروفایل‌های تب شروع: کپی کاملِ تمام سلکتورهای فهرست و جزئیات، تنظیمات گالری و ویرایش تصاویر، دسته‌بندی‌های باسلام/ووکامرس، ضرایب قیمت و همگام‌سازی دوره‌ای با نام شماره‌گذاری‌شدهٔ خودکار و امکان انتخاب کپی با محصولات یا بدون محصولات.',
+    'ذخیرهٔ تغییر لینک آدرس (URL) روی همان پروفایل فعال به‌جای ساخت پروفایل خالی جدید (s4ResolveSaveProfileTargetKey + target_key): ویرایش فیلد آدرس در پروفایل انتخاب‌شده دیگر کلید و نام پروفایل را پاک نمی‌کند و هم در ذخیرهٔ دستی (💾) و هم در ذخیرهٔ خودکار، لینک جدید مستقیماً روی همان پروفایل با حفظ کامل محصولات و تنظیمات ذخیره می‌شود.',
+    'افزودن دکمهٔ «➕ جدید» (newBlankProfile) برای ساخت صریح پروفایل خالی جدید در هر زمان، به‌همراه راهنمای زندهٔ پروفایل هدف زیر فیلد آدرس (#urlTargetProfileHint) و تفکیک یکتای پروفایل‌های کپی‌شده با کلید اختصاصی در منوهای کشویی (#profileSelect / #hdrProfileSelect) و محافظت از پروفایل‌های هم‌آدرس هنگام حذف.'
+  ]},
   {v:'10.461', t:'🔀 افزودن قابلیت و دراپ‌داون «ارسال سری و موازی به غرفه‌ها» در تب ارسال باسلام + آپلود موازی تصاویر چندغرفه‌ای', items:[
     'دراپ‌داون انتخاب شیوهٔ ارسال به غرفه‌ها (#bsShopSendMode) در تب ارسال باسلام کنار انتخابگر غرفه‌ها با دو حالت: ۱) «📋 سری (نوبتی — غرفه به غرفه)» که برای هر غرفه یک وظیفهٔ مستقل در صف می‌سازد و نوبتی ارسال می‌کند، و ۲) «⚡ موازی (همزمان به همهٔ غرفه‌ها)» که هر محصول را همزمان با curl_multi به همهٔ غرفه‌های انتخابی ارسال می‌کند؛ انتخاب کاربر به‌صورت خودکار در تنظیمات (shop_send_mode) ذخیره و بازیابی می‌شود.',
     'پیاده‌سازی حلقهٔ ارسال موازی چندغرفه‌ای در bsl_backend (فاز parallel_shops) در یک ردیف یکپارچهٔ صف، همراه با آمار زندهٔ تفکیک‌شدهٔ هر غرفه (bslShopStatsHtml)، اعمال سه‌لایهٔ تعدیل قیمت اختصاصی هر غرفه، ذخیرهٔ چک‌پوینت دقیق پس از هر محصول و ادامه از همان نقطه هنگام توقف/ادامه.',
@@ -106068,8 +106674,12 @@ function srcNetCollect(){
 /* v9.00: آزمایش اتصال به سایت مبدأ با تنظیمات فعلی */
 function srcNetTest(){
     const box=$('srcNetResult'); if(!box)return;
-    const url=($('url')&&$('url').value.trim())
+    let url=($('url')&&$('url').value.trim())
             ||($('profileSelect')&&$('profileSelect').value.trim())||'';
+    if(url && url.indexOf('://')===-1 && typeof findProfileEntryJs==='function'){
+        const hit=findProfileEntryJs(url);
+        if(hit&&hit.url)url=hit.url;
+    }
     if(!url){box.innerHTML='<span style="color:#f87171">اول آدرس پروفایل را وارد کنید</span>';return;}
     box.innerHTML='<span style="color:#94a3b8">⏳ در حال آزمایش...</span>';
     // اول تنظیمات را ذخیره کن تا آزمایش با همین مقادیر انجام شود
