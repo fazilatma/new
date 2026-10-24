@@ -42438,6 +42438,15 @@ if (isset($_GET['selftest'])) {
     @set_time_limit(180);
     $wantJson = isset($_GET['json']);
     header('Content-Type: ' . ($wantJson ? 'application/json' : 'text/html') . '; charset=UTF-8');
+    $__selftestFinished = false;
+    register_shutdown_function(static function () use (&$__selftestFinished, $wantJson): void {
+        if ($__selftestFinished) return;
+        $err = error_get_last();
+        @http_response_code(200);
+        if ($wantJson) {
+            echo json_encode(['ok' => false, 'selftest_fatal' => $err], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        }
+    });
     try {
 
     $checks = [];
@@ -55957,6 +55966,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             $outChecks = array_values(array_filter($checks, static fn($c) => strpos((string)($c['ver'] ?? ''), $vf) === 0));
         }
         $outPassed = count(array_filter($outChecks, static fn($c) => !empty($c['ok'])));
+        $__selftestFinished = true;
         echo json_encode(['ok' => $outPassed === count($outChecks), 'version' => APP_VERSION,
             'passed' => $outPassed, 'total' => count($outChecks),
             'checks' => $outChecks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
@@ -56010,6 +56020,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     } catch (Throwable $_stErr) {
         echo json_encode(['ok' => false, 'selftest_exception' => $_stErr->getMessage(), 'line' => $_stErr->getLine()], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     }
+    $__selftestFinished = true;
     exit;
 }
 
