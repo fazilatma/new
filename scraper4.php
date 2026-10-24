@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.462';
+const APP_VERSION = '10.463';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2988,10 +2988,13 @@ function detailCleanHtml(?DOMNode $node, string $baseUrl = ''): string {
     foreach ($tmp->documentElement ? [$tmp->documentElement] : [] as $root) {
         foreach ($root->childNodes as $child) $html .= $tmp->saveHTML($child);
     }
+    /* v10.463: حذف کامل &#13; / \r که از DOMDocument::saveHTML روی متن‌های CRLF تولید می‌شود */
+    $html = preg_replace('~(?:&amp;)*&#(?:0*13|x0*d);?~iu', '', $html) ?? $html;
+    $html = str_replace("\r", '', $html);
     $html = trim(preg_replace('~\s+~u', ' ', $html));
     /* اگر بعد از پاک‌سازی چیز معناداری نماند (مثلاً کل محتوا داخل یک
        script بوده)، به متن خام برگرد تا فیلد خالی نماند. */
-    if (trim(strip_tags($html)) === '') return trim($node->textContent);
+    if (trim(strip_tags($html)) === '') return trim(str_replace("\r", '', (string)$node->textContent));
     return $html;
 }
 
@@ -10509,7 +10512,13 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
             // همان روشِ اتصالی که کاربر انتخاب کرده؛ زنجیرهٔ جایگزین اینجا اجرا
             // نمی‌شود (آن کار برای مسیرِ تک‌درخواستیِ bslReq است)
             $mmode = !empty($net['indirect']) ? (string)($net['mode'] ?? 'direct') : 'direct';
-            $opt = bslCurlOpts($url, $tk, (string)($j['m'] ?? 'GET'), $j['d'] ?? null, !empty($j['mp']), $net, $mmode);
+            $mVerb = strtoupper(trim((string)($j['m'] ?? 'GET')));
+            $dBody = $j['d'] ?? null;
+            if (empty($j['mp']) && is_array($dBody) && in_array($mVerb, ['POST', 'PATCH', 'PUT'], true)
+                && function_exists('bslSanitizeProductWritePayload')) {
+                $dBody = bslSanitizeProductWritePayload($dBody, (string)($j['ep'] ?? ''));
+            }
+            $opt = bslCurlOpts($url, $tk, (string)($j['m'] ?? 'GET'), $dBody, !empty($j['mp']), $net, $mmode);
             $ch  = curl_init();
             curl_setopt_array($ch, $opt);
             curl_multi_add_handle($mh, $ch);
@@ -10805,6 +10814,10 @@ function bslRepairValidationPayload(array $r,array $payload):array{
 }
 
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
+if (!$mp && is_array($d) && in_array(strtoupper(trim($m)), ['POST', 'PATCH', 'PUT'], true)
+    && function_exists('bslSanitizeProductWritePayload')) {
+    $d = bslSanitizeProductWritePayload($d, $ep);
+}
 $url=bslApiBase().ltrim($ep,'/');
 $traceReturn=function(array $response)use($m,$ep,&$d){if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
 if($net===null)$net = function_exists('bslNetCfg') ? bslNetCfg() : ['indirect'=>false,'mode'=>'direct','fallback'=>false];
@@ -11901,14 +11914,25 @@ function contentSyncOn(?array $cn = null): bool {
 function contentChanges(array $p, array $remote): array {
     $out = [];
 
-    $srcShort = contentNorm((string)($p['short_desc'] ?? ''));
-    if ($srcShort !== '' && array_key_exists('short_desc', $remote)) {
-        if (contentNorm((string)$remote['short_desc']) !== $srcShort) $out[] = 'توضیح کوتاه';
-    }
+    if (!empty($remote['__bsl_remote'])) {
+        if (!empty($remote['__has_html_artifacts'])) {
+            $out[] = 'توضیح بلند';
+        } elseif (array_key_exists('long_desc', $remote) && function_exists('bslBuildUnifiedDescription')) {
+            $wantBslDesc = contentNorm((string)(bslBuildUnifiedDescription($p)['description'] ?? ''));
+            if ($wantBslDesc !== '' && contentNorm((string)$remote['long_desc']) !== $wantBslDesc) {
+                $out[] = 'توضیح بلند';
+            }
+        }
+    } else {
+        $srcShort = contentNorm((string)($p['short_desc'] ?? ''));
+        if ($srcShort !== '' && array_key_exists('short_desc', $remote)) {
+            if (contentNorm((string)$remote['short_desc']) !== $srcShort) $out[] = 'توضیح کوتاه';
+        }
 
-    $srcLong = contentNorm((string)($p['long_desc'] ?? ''));
-    if ($srcLong !== '' && array_key_exists('long_desc', $remote)) {
-        if (contentNorm((string)$remote['long_desc']) !== $srcLong) $out[] = 'توضیح بلند';
+        $srcLong = contentNorm((string)($p['long_desc'] ?? ''));
+        if ($srcLong !== '' && array_key_exists('long_desc', $remote)) {
+            if (contentNorm((string)$remote['long_desc']) !== $srcLong) $out[] = 'توضیح بلند';
+        }
     }
 
     // گالری: فقط وقتی مبدأ عکسِ بیشتری دارد. کمتر بودن دلیل آپدیت نیست،
@@ -12285,38 +12309,302 @@ function wooCategoryIds(array $w, $raw, bool $create = true): array {
     return array_values(array_unique(array_filter($ids)));
 }
 
+/* =====================================================================
+ *  v10.463: موتور یکپارچهٔ تبدیل و ترکیب توضیحات باسلام به متن روان و خوانا
+ *
+ *  اپلیکیشن و وب‌سایت باسلام در صفحهٔ محصول فقط «یک فیلد توضیحات واحد» دارد
+ *  و کدهای HTML (مثل <div>, <br>, &#13;, <table><tr><th><td>, <p><strong>) را
+ *  رندر نمی‌کند بلکه به‌صورت تگ‌های خام یا entity-escaped (div&gt;...&lt;br&gt;)
+ *  نمایش می‌دهد. این توابع هرگونه HTML، جدول مشخصات، entityهای چندلایه و تگ‌های
+ *  ناقص را به متن فارسی روان، مرتب و بدون تکراری تبدیل و در فیلد واحد ادغام می‌کنند،
+ *  در حالی که جدول HTML برای ووکامرس و تب نتایج کاملاً حفظ می‌شود.
+ * ===================================================================== */
+function bslDescriptionHasHtmlArtifacts(string $raw): bool {
+    $s = trim($raw);
+    if ($s === '') return false;
+    if (preg_match('~&(?:lt|gt|nbsp|quot|apos|#0*13|#x0*d);|&amp;(?:#|lt|gt|nbsp|quot)~iu', $s)) return true;
+    if (preg_match('~</?(?:div|span|p|br|table|thead|tbody|tfoot|tr|th|td|ul|ol|li|strong|b|em|i|h[1-6]|section|article|dl|dt|dd|hr|a|img)\b[^>]*>~iu', $s)) return true;
+    if (preg_match('~^\s*(?:div|span|p|table|tbody|tr|td|th|ul|ol|li)\b[^>]*>~iu', $s)) return true;
+    return false;
+}
+
+function s4IsExternalSellerSpecLabel(string $label): bool {
+    $norm = trim((string)(preg_replace('~[\s:：•\-–—▪●*]+~u', ' ', str_replace(['ي', 'ك'], ['ی', 'ک'], $label)) ?? $label));
+    $norm = mb_strtolower($norm, 'UTF-8');
+    return in_array($norm, ['فروشنده', 'نام فروشنده', 'فروشندگان', 'نام غرفه', 'seller', 'vendor'], true);
+}
+
+function s4HtmlToPlainTextForBsl(string $raw): string {
+    $s = trim($raw);
+    if ($s === '') return '';
+
+    for ($pass = 0; $pass < 4; $pass++) {
+        $dec = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($dec === $s) break;
+        $s = $dec;
+    }
+    $s = preg_replace('~(?:&amp;)*&#(?:0*13|x0*d);?~iu', '', $s) ?? $s;
+    $s = str_replace(["\r\n", "\r"], "\n", $s);
+    $s = preg_replace('~\x{00A0}~u', ' ', $s) ?? $s;
+
+    /* حذف تگ‌های ناقص ابتدا یا انتهای رشته (مثل div> در ابتدای متن بریده‌شده) */
+    $s = preg_replace('~^\s*(?:div|span|p|section|article|table|tbody|tr|td|th|ul|ol|li|strong|b|em|i|h[1-6])\b[^>]*>~iu', '', $s) ?? $s;
+    $s = preg_replace('~</?[a-z][a-z0-9]*(?:\s+[^>]*)?\s*$~iu', '', $s) ?? $s;
+
+    /* حذف کامنت‌ها و بلوک‌های غیرمتنی */
+    $s = preg_replace('~<!--[\s\S]*?-->~u', '', $s) ?? $s;
+    $s = preg_replace('~<(?:script|style|noscript)\b[^>]*>[\s\S]*?</(?:script|style|noscript)>~iu', '', $s) ?? $s;
+
+    /* تبدیل جداول HTML مشخصات به فهرست خوانای «• کلید: مقدار» */
+    if (stripos($s, '<table') !== false || stripos($s, '<tr') !== false) {
+        $s = preg_replace_callback('~<table\b[^>]*>([\s\S]*?)</table>~iu', static function (array $m): string {
+            $lines = [];
+            if (preg_match_all('~<tr\b[^>]*>([\s\S]*?)</tr>~iu', $m[1], $trMatches)) {
+                foreach ($trMatches[1] as $trInner) {
+                    if (!preg_match_all('~<t[hd]\b[^>]*>([\s\S]*?)</t[hd]>~iu', $trInner, $cellMatches)) continue;
+                    $cells = [];
+                    foreach ($cellMatches[1] as $cHtml) {
+                        $cTxt = preg_replace('~<br\s*/?>~iu', ' / ', $cHtml) ?? $cHtml;
+                        $cTxt = strip_tags($cTxt);
+                        $cTxt = html_entity_decode($cTxt, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                        $cTxt = trim((string)(preg_replace('~\s+~u', ' ', $cTxt) ?? $cTxt));
+                        if ($cTxt !== '') $cells[] = $cTxt;
+                    }
+                    if (!$cells) continue;
+                    if (count($cells) >= 2) {
+                        $k = rtrim($cells[0], ":： \t");
+                        $v = implode(' — ', array_slice($cells, 1));
+                        if ($k === '' || $v === '') continue;
+                        if (in_array($k, ['مشخصه', 'ویژگی', 'عنوان'], true) && in_array($v, ['مقدار', 'توضیحات', 'شرح'], true)) continue;
+                        if (s4IsExternalSellerSpecLabel($k)) continue;
+                        $lines[] = '• ' . $k . ': ' . $v;
+                    } else {
+                        $lines[] = '• ' . $cells[0];
+                    }
+                }
+            }
+            if (!$lines) return "\n";
+            return "\n\nمشخصات فنی:\n" . implode("\n", $lines) . "\n\n";
+        }, $s) ?? $s;
+    }
+
+    /* تبدیل فهرست‌های تعریفی <dl><dt><dd> */
+    if (stripos($s, '<dl') !== false) {
+        $s = preg_replace_callback('~<dl\b[^>]*>([\s\S]*?)</dl>~iu', static function (array $m): string {
+            $lines = [];
+            if (preg_match_all('~<dt\b[^>]*>([\s\S]*?)</dt>\s*<dd\b[^>]*>([\s\S]*?)</dd>~iu', $m[1], $dm, PREG_SET_ORDER)) {
+                foreach ($dm as $pair) {
+                    $k = rtrim(trim((string)(preg_replace('~\s+~u', ' ', strip_tags($pair[1])) ?? '')), ":： \t");
+                    $v = trim((string)(preg_replace('~\s+~u', ' ', strip_tags($pair[2])) ?? ''));
+                    if ($k === '' || $v === '' || s4IsExternalSellerSpecLabel($k)) continue;
+                    $lines[] = '• ' . $k . ': ' . $v;
+                }
+            }
+            return $lines ? ("\n\nمشخصات فنی:\n" . implode("\n", $lines) . "\n\n") : "\n";
+        }, $s) ?? $s;
+    }
+
+    /* تبدیل تیترها، شکست خط‌ها (از جمله nl2br که <br>\n می‌سازد)، لیست‌ها و پاراگراف‌ها */
+    $s = preg_replace_callback('~<h[1-6]\b[^>]*>([\s\S]*?)</h[1-6]>~iu', static function (array $m): string {
+        $h = trim((string)(preg_replace('~\s+~u', ' ', strip_tags($m[1])) ?? ''));
+        return $h !== '' ? ("\n\n" . $h . "\n") : "\n";
+    }, $s) ?? $s;
+    $s = preg_replace('~<br\s*/?>[ \t]*\n~iu', "\n", $s) ?? $s;
+    $s = preg_replace('~<br\s*/?>~iu', "\n", $s) ?? $s;
+    $s = preg_replace('~<hr\s*/?>~iu', "\n\n", $s) ?? $s;
+    $s = preg_replace('~<li\b[^>]*>\s*~iu', "\n• ", $s) ?? $s;
+    $s = preg_replace('~</li>~iu', "\n", $s) ?? $s;
+    $s = preg_replace('~</(?:p|div|section|article|blockquote|ul|ol|tr|table)>~iu', "\n\n", $s) ?? $s;
+    $s = preg_replace('~<(?:p|div|section|article|blockquote|ul|ol)\b[^>]*>~iu', "\n", $s) ?? $s;
+
+    /* حذف تمام تگ‌های باقی‌مانده و کاراکترهای کنترلی مزاحم با حفظ نیم‌فاصله فارسی (\u200C) */
+    $s = strip_tags($s);
+    $s = preg_replace('~</?[a-z][a-z0-9]*(?:\s+[^<>]*)?>~iu', '', $s) ?? $s;
+    $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $s = str_replace(["\r\n", "\r", "\x00"], ["\n", "\n", ''], $s);
+    $s = preg_replace('~[\x00-\x08\x0B\x0C\x0E-\x1F]+~u', '', $s) ?? $s;
+
+    /* پاک‌سازی سطربه‌سطر، حذف بولت‌های تکراری و ادغام تیترهای تکراری مشخصات فنی */
+    $rawLines = explode("\n", $s);
+    $cleanLines = [];
+    $prevWasSpecHeader = false;
+    foreach ($rawLines as $ln) {
+        $ln = preg_replace('~[ \t\x{00A0}]+~u', ' ', $ln) ?? $ln;
+        $ln = trim($ln);
+        if ($ln === '') {
+            $cleanLines[] = '';
+            continue;
+        }
+        $ln = preg_replace('~^•\s*(?:[•▪●◦*\-–—]+\s*)+~u', '• ', $ln) ?? $ln;
+        if (preg_match('~^•\s*([^:：]{1,40})\s*[:：]~u', $ln, $km) && s4IsExternalSellerSpecLabel($km[1])) {
+            continue;
+        }
+        $hdrProbe = rtrim($ln, ":： \t");
+        $isSpecHeader = in_array($hdrProbe, ['مشخصات فنی', 'مشخصات محصول', 'ویژگی‌های محصول', 'ویژگی ها'], true);
+        if ($isSpecHeader) {
+            if ($prevWasSpecHeader) continue;
+            $prevWasSpecHeader = true;
+            $cleanLines[] = $hdrProbe . ':';
+            continue;
+        }
+        $prevWasSpecHeader = false;
+        $cleanLines[] = $ln;
+    }
+
+    $out = implode("\n", $cleanLines);
+    $out = preg_replace("~\n{3,}~u", "\n\n", $out) ?? $out;
+    return trim($out);
+}
+
+function s4BslTextFingerprint(string $s): string {
+    if ($s === '') return '';
+    $s = str_replace(['ي', 'ك', 'ة', '٠','١','٢','٣','٤','٥','٦','٧','٨','٩','۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'],
+                     ['ی', 'ک', 'ه', '0','1','2','3','4','5','6','7','8','9','0','1','2','3','4','5','6','7','8','9'], $s);
+    $s = preg_replace('~[\s\x{200c}\x{200f}\x{00a0}:：•▪●◦*\-–—،,.;؛/\\\\()\[\]"\'«»]+~u', '', $s) ?? $s;
+    return mb_strtolower($s, 'UTF-8');
+}
+
+function bslBuildUnifiedDescription(array $p, string $fallbackTitle = ''): array {
+    $shortRaw = trim((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? ''));
+    $longRaw  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
+
+    $shortPlain = $shortRaw !== '' ? s4HtmlToPlainTextForBsl($shortRaw) : '';
+    $longPlain  = $longRaw !== '' ? s4HtmlToPlainTextForBsl($longRaw) : '';
+
+    /* ادغام مشخصات ساختاریافتهٔ محصول (specs / specifications / attributes_table) بدون تکرار */
+    $specSource = $p['specs'] ?? ($p['specifications'] ?? ($p['attributes_table'] ?? ($p['attributes_html'] ?? '')));
+    $specRows = ($specSource !== '' && $specSource !== [] && $specSource !== null && function_exists('s4NormalizeSpecsInput'))
+        ? s4NormalizeSpecsInput($specSource)
+        : [];
+    if ($specRows) {
+        $longFp = s4BslTextFingerprint($longPlain);
+        $extraSpecLines = [];
+        foreach ($specRows as $sr) {
+            if (!is_array($sr)) continue;
+            $k = rtrim(s4HtmlToPlainTextForBsl((string)($sr['key'] ?? '')), ":： \t\n");
+            $v = trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl((string)($sr['value'] ?? ''))) ?? ''));
+            if ($k === '' || $v === '' || s4IsExternalSellerSpecLabel($k)) continue;
+            $line = '• ' . $k . ': ' . $v;
+            $pairFp = s4BslTextFingerprint($k . $v);
+            if ($pairFp !== '' && $longFp !== '' && mb_strpos($longFp, $pairFp) !== false) continue;
+            $extraSpecLines[] = $line;
+        }
+        if ($extraSpecLines) {
+            $hasSpecHeading = ($longPlain !== '' && (mb_strpos($longPlain, 'مشخصات فنی') !== false || mb_strpos($longPlain, 'مشخصات محصول') !== false));
+            $specBlock = ($hasSpecHeading ? '' : "مشخصات فنی:\n") . implode("\n", $extraSpecLines);
+            $longPlain = $longPlain !== '' ? ($longPlain . "\n\n" . $specBlock) : $specBlock;
+        }
+    }
+
+    /* ترکیب هوشمند short_desc و long_desc در فیلد واحد توضیحات باسلام بدون تکرار عنوان یا سطرهای تکراری */
+    $titleCandidate = trim($fallbackTitle !== '' ? $fallbackTitle : (string)($p['title'] ?? $p['name'] ?? ''));
+    $titleFp = $titleCandidate !== '' ? s4BslTextFingerprint(s4HtmlToPlainTextForBsl($titleCandidate)) : '';
+    $longFpAll = s4BslTextFingerprint($longPlain);
+
+    $uniqueShortLines = [];
+    if ($shortPlain !== '') {
+        $seenShortFp = [];
+        foreach (explode("\n", $shortPlain) as $sln) {
+            $slnTrim = trim($sln);
+            if ($slnTrim === '') continue;
+            $sfp = s4BslTextFingerprint($slnTrim);
+            if ($sfp === '' || isset($seenShortFp[$sfp])) continue;
+            if ($titleFp !== '' && $sfp === $titleFp && $longPlain !== '') continue;
+            if ($longFpAll !== '' && mb_strpos($longFpAll, $sfp) !== false) continue;
+            $seenShortFp[$sfp] = true;
+            $uniqueShortLines[] = $slnTrim;
+        }
+    }
+
+    $parts = [];
+    if ($uniqueShortLines) $parts[] = implode("\n", $uniqueShortLines);
+    if ($longPlain !== '')  $parts[] = $longPlain;
+    $unified = implode("\n\n", $parts);
+
+    /* درج تنوع‌ها به‌صورت متن ساده و خوانا (بدون هیچ تگ HTML) */
+    $varTxt = trim((string)($p['variations_text'] ?? ''));
+    if ($varTxt === '' && !empty($p['variations']) && is_array($p['variations'])) {
+        $flatVars = [];
+        foreach ($p['variations'] as $vr) {
+            if (is_scalar($vr)) {
+                $vt = trim((string)$vr);
+                if ($vt !== '') $flatVars[] = $vt;
+            } elseif (is_array($vr)) {
+                $vt = trim((string)($vr['label'] ?? $vr['title'] ?? $vr['value'] ?? $vr['name'] ?? ''));
+                if ($vt !== '') $flatVars[] = $vt;
+            }
+        }
+        if ($flatVars) $varTxt = implode('، ', array_values(array_unique($flatVars)));
+    }
+    if ($varTxt === '' && !empty($p['variation_groups']) && is_array($p['variation_groups'])) {
+        $nv = function_exists('aiNormalizeVariations') ? aiNormalizeVariations($p['variation_groups']) : ['text' => ''];
+        $varTxt = trim((string)($nv['text'] ?? ''));
+    }
+    if ($varTxt !== '') {
+        $varTxt = trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl($varTxt)) ?? $varTxt));
+    }
+    if ($varTxt !== '') {
+        $varLine = 'گزینه‌های موجود: ' . $varTxt;
+        if ($unified !== '' && mb_strpos($unified, $varTxt) === false && mb_strpos($unified, 'گزینه‌های موجود') === false) {
+            $unified .= "\n\n" . $varLine;
+        } elseif ($unified === '') {
+            $unified = $varLine;
+        }
+    }
+
+    $fallbackPlain = $fallbackTitle !== ''
+        ? trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl($fallbackTitle)) ?? ''))
+        : '';
+    $briefSingle = $shortPlain !== ''
+        ? trim((string)(preg_replace('~\s+~u', ' ', str_replace('• ', '', $shortPlain)) ?? ''))
+        : $fallbackPlain;
+    if ($unified === '' && $fallbackPlain !== '') {
+        $unified = $fallbackPlain;
+    }
+    $unified = trim((string)(preg_replace("~\n{3,}~u", "\n\n", $unified) ?? $unified));
+
+    return [
+        'brief'       => $briefSingle !== '' ? mb_substr($briefSingle, 0, 250, 'UTF-8') : '',
+        'description' => $unified,
+    ];
+}
+
+function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): array {
+    $epClean = strtolower(ltrim(trim($endpoint), '/'));
+    if ($epClean !== '' && !preg_match('~(?:^|/)(?:products|batch-updates)(?:/|$|\?)~', $epClean)) {
+        return $payload;
+    }
+    if (isset($payload['description']) && is_string($payload['description']) && $payload['description'] !== '') {
+        if (bslDescriptionHasHtmlArtifacts($payload['description']) || str_contains($payload['description'], "\r")) {
+            $cleanedDesc = s4HtmlToPlainTextForBsl($payload['description']);
+            if ($cleanedDesc !== '') $payload['description'] = $cleanedDesc;
+        }
+    }
+    if (isset($payload['brief']) && is_string($payload['brief']) && $payload['brief'] !== '') {
+        if (bslDescriptionHasHtmlArtifacts($payload['brief']) || str_contains($payload['brief'], "\n") || str_contains($payload['brief'], "\r")) {
+            $cleanedBrief = trim((string)(preg_replace('~\s+~u', ' ', str_replace('• ', '', s4HtmlToPlainTextForBsl($payload['brief']))) ?? ''));
+            if ($cleanedBrief !== '') $payload['brief'] = mb_substr($cleanedBrief, 0, 250, 'UTF-8');
+        }
+    }
+    if (!empty($payload['data']) && is_array($payload['data'])) {
+        foreach ($payload['data'] as $idx => $item) {
+            if (is_array($item)) {
+                $payload['data'][$idx] = bslSanitizeProductWritePayload($item, 'products');
+            }
+        }
+    }
+    return $payload;
+}
+
 /**
  * توضیحات و تنوع‌های تازه را روی بستهٔ آپدیت باسلام می‌نشاند.
  * فقط چیزی که در مبدأ مقدار دارد نوشته می‌شود، تا آپدیت هیچ‌وقت
  * توضیحات موجود مقصد را با رشتهٔ خالی پاک نکند.
  */
 function bslApplyContent(array &$bu, array $p): void {
-    $brief = trim(strip_tags((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? '')));
-    $desc  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
-    /* v10.458: اگر محصول جدول مشخصات فنی دارد (در specs یا در خود توضیحات)،
-       به‌صورت جدول تمیز HTML در توضیحات ارسالی باسلام ادغام می‌شود. */
-    if (function_exists('s4MergeSpecsTableIntoHtml')) {
-        $desc = s4MergeSpecsTableIntoHtml($desc, $p);
-    }
-    // تنوع‌ها علاوه بر آرایهٔ variants، در توضیحات هم درج می‌شوند تا در دسته‌های بدون تنوع هم خوانا بماند.
-    $varTxt = trim((string)($p['variations_text'] ?? ''));
-    if ($varTxt === '' && !empty($p['variations']) && is_array($p['variations'])) {
-        $varTxt = implode('، ', array_map('strval', $p['variations']));
-    }
-    if ($varTxt === '' && !empty($p['variation_groups']) && is_array($p['variation_groups'])) {
-        $nv = function_exists('aiNormalizeVariations') ? aiNormalizeVariations($p['variation_groups']) : ['text'=>''];
-        $varTxt = (string)($nv['text'] ?? '');
-    }
-    if ($varTxt !== '') {
-        $line = 'گزینه‌های موجود: ' . $varTxt;
-        if ($desc !== '' && mb_strpos($desc, $varTxt) === false && mb_strpos($desc, 'گزینه‌های موجود') === false) {
-            $desc .= (str_contains($desc, '<') ? '<p><strong>گزینه‌های موجود:</strong> ' . htmlspecialchars($varTxt, ENT_QUOTES, 'UTF-8') . '</p>' : "\n" . $line);
-        } elseif ($desc === '') {
-            $desc = $line;
-        }
-    }
-    if ($brief !== '') $bu['brief'] = mb_substr($brief, 0, 250);
-    if ($desc !== '')  $bu['description'] = $desc;
+    $built = bslBuildUnifiedDescription($p);
+    if ($built['brief'] !== '')       $bu['brief']       = $built['brief'];
+    if ($built['description'] !== '') $bu['description'] = $built['description'];
     $sku = trim((string)($p['sku'] ?? ''));
     if ($sku !== '') $bu['sku'] = $sku;
 }
@@ -12328,15 +12616,27 @@ function bslRemoteContent(array $ex): array {
     $photos = $rev['photos'] ?? ($ex['photos'] ?? []);
     $nPhotos = is_array($photos) ? count($photos) : 0;
     if ($nPhotos === 0 && !empty($rev['photo'] ?? ($ex['photo'] ?? null))) $nPhotos = 1;
+    $rawBrief = (string)($rev['brief'] ?? ($ex['brief'] ?? ''));
+    $rawDesc  = (string)($rev['description'] ?? ($ex['description'] ?? ''));
     $out = [
-        'short_desc'   => (string)($rev['brief'] ?? ($ex['brief'] ?? '')),
-        'long_desc'    => (string)($rev['description'] ?? ($ex['description'] ?? '')),
+        'short_desc'   => $rawBrief,
+        'long_desc'    => $rawDesc,
         'images_count' => $nPhotos,
         'sku'          => (string)($rev['sku'] ?? ($ex['sku'] ?? '')),
+        '__bsl_remote' => true,
     ];
-    /* v10.234: ردیف کاتالوگ معمولاً شمارۀ عکس ندارد؛ آن را «۰ عکس» فرض نکن
-       تا آپدیتِ قیمت/موجودی بی‌دلیل گالری را دوباره آپلود نکند. */
-    if (!empty($ex['__from_catalog']) && $nPhotos === 0) unset($out['images_count']);
+    if ($rawDesc !== '' && bslDescriptionHasHtmlArtifacts($rawDesc)) {
+        $out['__has_html_artifacts'] = true;
+    }
+    /* v10.234 / v10.463: ردیف کاتالوگ سبک شمارۀ عکس و متن توضیحات را ندارد؛ آن‌ها را خالی فرض نکن */
+    if (!empty($ex['__from_catalog'])) {
+        if ($nPhotos === 0) unset($out['images_count']);
+        if (!array_key_exists('brief', $ex) && !array_key_exists('brief', $rev)) unset($out['short_desc']);
+        if (!array_key_exists('description', $ex) && !array_key_exists('description', $rev)) unset($out['long_desc']);
+        if (!array_key_exists('sku', $ex) && !array_key_exists('sku', $rev)) unset($out['sku']);
+    } elseif ($rawBrief === '' && $rawDesc !== '') {
+        unset($out['short_desc']);
+    }
     return $out;
 }
 
@@ -16018,7 +16318,8 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     if ($brand !== '') $tagItems[] = '<a href="#">' . h($brand) . '</a>';
     foreach (array_slice($cats, -2) as $cTag) $tagItems[] = '<a href="#">' . h($cTag) . '</a>';
     $specHtml = $attrRows !== '' ? ('<table class="woocommerce-product-attributes shop_attributes"><tbody>' . $attrRows . '</tbody></table>') : '';
-    $longInner = ($descRaw !== '' ? ('<div class="snappshop-desc-text">' . nl2br(h($descRaw)) . '</div>') : '') . $specHtml;
+    $descNorm = $descRaw !== '' ? str_replace(["\r\n", "\r"], "\n", $descRaw) : '';
+    $longInner = ($descNorm !== '' ? ('<div class="snappshop-desc-text">' . nl2br(h($descNorm), false) . '</div>') : '') . $specHtml;
     $descHtml = $longInner !== '' ? ('<div id="tab-description" class="product-description entry-content woocommerce-Tabs-panel--description">' . $longInner . '</div>') : '';
     $shortHtml = $shortItems !== '' ? ('<div class="short-description product-short-description woocommerce-product-details__short-description"><ul>' . $shortItems . '</ul></div>') : '';
     $metaHtml = '<div class="product_meta">'
@@ -27935,6 +28236,9 @@ function bslSkipUnchanged(string $mapKey, int $exId, int $priceRial, int $stock,
     /* نبودِ قیمت در دفترچه یعنی ردیفِ قدیمیِ پیش از v10.33 — دربارهٔ آن
        چیزی نمی‌دانیم، پس محافظه‌کارانه آپدیت می‌کنیم تا ردیف تازه شود. */
     if (!isset($ledgerRow['price_rial'])) return false;
+    /* v10.463: محصولات ارسال‌شدهٔ پیش از v10.463 ممکن است در باسلام توضیحات HTML خام/اسکیپ‌شده
+       داشته باشند؛ یک‌بار پرش را لغو کن تا با متن ساده و خوانای جدید آپدیت شوند. */
+    if (empty($ledgerRow['plain_desc_v1'])) return false;
     if ((int)$ledgerRow['price_rial'] !== $priceRial) return false;
     if (isset($ledgerRow['stock']) && (int)$ledgerRow['stock'] !== $stock) return false;
     $at = (int)($ledgerRow['at'] ?? 0);
@@ -28203,15 +28507,9 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             if ($_ac > 0) $catUsed = $_ac;
         }
         if ($catUsed > 0 && !empty($cData)) $catUsed = findLeafCategory($catUsed, $cData);
-        $brief = trim(strip_tags((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? '')));
-        $desc  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
-        if ($brief === '') $brief = trim(strip_tags($title));
-        if ($desc === '')  $desc  = $brief;
-        /* v10.98: تنوع‌ها در توضیح ساخت */
-        $_buTmp = [];
-        bslApplyContent($_buTmp, array_merge($p, ['short_desc' => $brief, 'long_desc' => $desc]));
-        if (!empty($_buTmp['brief'])) $brief = (string)$_buTmp['brief'];
-        if (!empty($_buTmp['description'])) $desc = (string)$_buTmp['description'];
+        $_builtCreate = bslBuildUnifiedDescription($p, $title);
+        $brief = $_builtCreate['brief'] !== '' ? $_builtCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
+        $desc  = $_builtCreate['description'] !== '' ? $_builtCreate['description'] : $brief;
         $localPhotos = ($catUsed > 0 && !bslStopRequestedForQueue())
             ? s4PrepareLocalPhotosForMultiShop($p, max(1, min(3, (int)($opts['upload_max_photos'] ?? 1))))
             : [];
@@ -28369,14 +28667,9 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     }
     if ($catUsed <= 0) return ['ok'=>false,'error'=>'دسته‌بندی معتبر باسلام برای محصول تعیین نشده','error_code'=>422,
         'error_detail'=>'category_id خالی است؛ دستهٔ پروفایل، دستهٔ پیش‌فرض یا دستهٔ جایگزین تنظیم کنید'];
-    $brief = trim(strip_tags((string)($p['short_desc'] ?? $p['shortDesc'] ?? $p['brief'] ?? '')));
-    $desc  = trim((string)($p['long_desc'] ?? $p['longDesc'] ?? $p['description'] ?? ''));
-    if ($brief === '') $brief = trim(strip_tags($title));
-    if ($desc === '')  $desc  = $brief;
-    $_buTmp = [];
-    bslApplyContent($_buTmp, array_merge($p, ['short_desc' => $brief, 'long_desc' => $desc]));
-    if (!empty($_buTmp['brief'])) $brief = (string)$_buTmp['brief'];
-    if (!empty($_buTmp['description'])) $desc = (string)$_buTmp['description'];
+    $_builtShopCreate = bslBuildUnifiedDescription($p, $title);
+    $brief = $_builtShopCreate['brief'] !== '' ? $_builtShopCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
+    $desc  = $_builtShopCreate['description'] !== '' ? $_builtShopCreate['description'] : $brief;
     $imgUrls=function_exists('productImageList')?productImageList($p):[];
     $detailLink=trim((string)($p['link']??$p['url']??''));
     if(!$imgUrls&&$detailLink!==''){
@@ -52701,6 +52994,66 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_dupClean462 = function_exists('s4DuplicateProfileOnDisk')
         ? s4DuplicateProfileOnDisk($_profs462, 'snappshop.ir_kitchen', ['include_products' => false, 'url' => 'https://snappshop.ir/category/blenders'])
         : ['ok' => false];
+    $_rawSample463 = 'div&gt;سبد سیب زمینی و پیاز مدل 3M4033&lt;br&gt;&amp;#13;' . "\n"
+        . '• جنس بدنه با کیفیت و مقاومت بالا&lt;br&gt;&amp;#13;' . "\n"
+        . '• طراحی مشبک جهت گردش هوا&lt;/div&gt;&lt;table&gt;&lt;tbody&gt;'
+        . '&lt;tr&gt;&lt;th&gt;طول&lt;/th&gt;&lt;td&gt;34 سانتی متر&lt;/td&gt;&lt;/tr&gt;'
+        . '&lt;tr&gt;&lt;th&gt;فروشنده&lt;/th&gt;&lt;td&gt;رینو شاپ، مکاما&lt;/td&gt;&lt;/tr&gt;'
+        . '&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;&lt;strong&gt;گزینه‌های موجود:&lt;/strong&gt; دوطبقه رنگبندی، سه طبقه رنگبندی&lt;/p&gt;';
+    $_plainSample463 = function_exists('s4HtmlToPlainTextForBsl') ? s4HtmlToPlainTextForBsl($_rawSample463) : '';
+    $_prod463 = [
+        'title'           => 'سبد سیب زمینی و پیاز مدل 3M4033',
+        'short_desc'      => '<ul><li>ارسال فوری با بسته‌بندی محکم</li><li>طول : 34 سانتی متر</li></ul>',
+        'long_desc'       => '<div class="snappshop-desc-text">سبد سیب‌زمینی با بدنه مقاوم<br>&#13;' . "\n" . '• گردش هوای عالی</div>',
+        'specs'           => '<table class="s4-specs-table"><tbody><tr><th>طول</th><td>34 سانتی متر</td></tr><tr><th>تعداد طبقات</th><td>3</td></tr><tr><th>فروشنده</th><td>رینو شاپ</td></tr></tbody></table>',
+        'variations_text' => 'دوطبقه، سه طبقه',
+    ];
+    $_unified463 = function_exists('bslBuildUnifiedDescription') ? bslBuildUnifiedDescription($_prod463, 'سبد سیب زمینی و پیاز مدل 3M4033') : ['brief' => '', 'description' => ''];
+    $_sanBatch463 = function_exists('bslSanitizeProductWritePayload')
+        ? bslSanitizeProductWritePayload(['data' => [['id' => 10, 'description' => $_rawSample463, 'brief' => '<p>خلاصه<br>تست</p>']]], 'batch-updates')
+        : [];
+    $_pollutedEx463 = ['id' => 77, 'description' => '<div class="snappshop-desc-text">سبد سیب‌زمینی با بدنه مقاوم</div>'];
+    $_cleanEx463 = ['id' => 77, 'description' => $_unified463['description']];
+    $_diffPolluted463 = (function_exists('contentChanges') && function_exists('bslRemoteContent'))
+        ? contentChanges($_prod463, bslRemoteContent($_pollutedEx463))
+        : [];
+    $_diffClean463 = (function_exists('contentChanges') && function_exists('bslRemoteContent'))
+        ? contentChanges($_prod463, bslRemoteContent($_cleanEx463))
+        : ['err'];
+    $_skipOldLedger463 = function_exists('bslSkipUnchanged')
+        ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time()])
+        : true;
+    $_skipNewLedger463 = function_exists('bslSkipUnchanged')
+        ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time(), 'plain_desc_v1' => 1])
+        : false;
+    $add('10.463', 'پاک‌سازی کامل تگ‌ها و entityهای HTML و ترکیب هوشمند توضیحات کوتاه، بلند، جدول مشخصات و تنوع‌ها به متن روان و خوانا در فیلد واحد توضیحات باسلام + اصلاح خودکار محصولات قبلی',
+         function_exists('s4HtmlToPlainTextForBsl')
+      && function_exists('bslDescriptionHasHtmlArtifacts')
+      && function_exists('bslBuildUnifiedDescription')
+      && function_exists('bslSanitizeProductWritePayload')
+      && bslDescriptionHasHtmlArtifacts($_rawSample463) === true
+      && bslDescriptionHasHtmlArtifacts($_plainSample463) === false
+      && strpos($_plainSample463, 'div>') === false
+      && strpos($_plainSample463, '<') === false
+      && strpos($_plainSample463, '&lt;') === false
+      && strpos($_plainSample463, '&#13;') === false
+      && strpos($_plainSample463, '• طول: 34 سانتی متر') !== false
+      && strpos($_plainSample463, 'رینو شاپ') === false
+      && strpos($_plainSample463, 'گزینه‌های موجود: دوطبقه رنگبندی، سه طبقه رنگبندی') !== false
+      && strpos($_unified463['description'], 'ارسال فوری با بسته‌بندی محکم') !== false
+      && strpos($_unified463['description'], "سیب\u{200c}زمینی") !== false
+      && substr_count($_unified463['description'], '34 سانتی متر') === 1
+      && strpos($_unified463['description'], '• تعداد طبقات: 3') !== false
+      && strpos($_unified463['description'], 'رینو شاپ') === false
+      && strpos($_unified463['description'], 'گزینه‌های موجود: دوطبقه، سه طبقه') !== false
+      && strpos((string)($_sanBatch463['data'][0]['description'] ?? ''), '<table') === false
+      && (string)($_sanBatch463['data'][0]['brief'] ?? '') === 'خلاصه تست'
+      && in_array('توضیح بلند', $_diffPolluted463, true)
+      && $_diffClean463 === []
+      && $_skipOldLedger463 === false
+      && $_skipNewLedger463 === true
+      && strpos($selfSrc, "{v:'10." . "463'") !== false
+      && version_compare(APP_VERSION, '10.463', '>='));
     $add('10.462', 'داپلیکیت پروفایل‌ها و ذخیرهٔ تغییرات لینک آدرس مستقیماً روی همان پروفایل فعال بدون ساخت پروفایل خالی جدید',
          function_exists('s4ResolveSaveProfileTargetKey')
       && function_exists('s4DuplicateProfileOnDisk')
@@ -52822,7 +53175,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && in_array('185.143.232.5', $_snPools458, true)
       && strpos($_tblSpecs458, '<table class="s4-specs-table') !== false
       && strpos($_mergedSpecs458, '<table class="s4-specs-table') !== false
-      && strpos((string)($_buTest458['description'] ?? ''), '<table class="s4-specs-table') !== false
+      && strpos((string)($_buTest458['description'] ?? ''), 'جنس بدنه: استیل ضدزنگ') !== false
+      && strpos((string)($_buTest458['description'] ?? ''), '<table') === false
       && count($_wooVarRows458) === 2
       && ($_wooVarRows458[0]['regular_price'] ?? '') === '250000'
       && ($_wooVarRows458[1]['stock_status'] ?? '') === 'outofstock'
@@ -60200,6 +60554,7 @@ function remoteMapRecord(string $target, array $rows, string $profileKey = ''): 
            هر دو اختیاری‌اند تا فراخوان‌های قدیمی دست‌نخورده کار کنند. */
         if (isset($r['price_rial']) && (int)$r['price_rial'] > 0) $add[$k]['price_rial'] = (int)$r['price_rial'];
         if (isset($r['stock']) && (int)$r['stock'] >= 0)          $add[$k]['stock']      = (int)$r['stock'];
+        if ($target === 'bsl') $add[$k]['plain_desc_v1'] = 1;
     }
     if (!$add) return 0;
     remoteMapMigrateLegacy();          // پیش از هر نوشتنی، ردیف‌های قدیمی سرِ جایشان
@@ -71337,6 +71692,7 @@ $GLOBALS['_bslBatchDoneIndices']=array_values(array_map('intval',array_keys($bsl
    پیچیده همچنان در حلقهٔ مطمئنِ قدیمی انجام می‌شود. */
 if(!$__scopeShop && !$__isParallelShopsRow && $bslParallelN>1 && $total>=3 && $bslResumeStart<=1){
 $__fastItems=[];$__fastMeta=[];$__fastSkipped=[];$__defaultShop=['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName];
+$__fastBslLedger=remoteMapLoad()['bsl']??[];
 $__fastStarted=microtime(true);$__fastScanned=0;$__fastBudget=20.0;
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['🔍 بررسی سریع محصولات موجود آغاز شد'],['phase'=>'existing_scan','phase_label'=>'بررسی محصولات موجود','phase_current'=>0,'phase_total'=>$total,'phase_pct'=>0]);
 foreach($pd as $__fi=>$__fp){
@@ -71363,6 +71719,12 @@ if(!empty($bslForceAllRun)){$__need=true;$__changes[]='ارسال کامل (گر
 if($__exPrice!=$__pn){$__need=true;$__changes[]='قیمت '.($__exPrice/10).'→'.($__pn/10).' تومان';}
 if($__exStock!=$__newStock){$__need=true;$__changes[]='موجودی '.$__exStock.'→'.$__newStock;}
 $__diff=contentSyncOn($cn)?contentChanges($__fp,bslRemoteContent($__ex)):[];
+if(contentSyncOn($cn)&&empty($__diff)){
+    $__fastMapKey=bslShopMapKey((string)$__fk,$__defaultShop);
+    if($__fastMapKey!==''&&empty($__fastBslLedger[$__fastMapKey]['plain_desc_v1'])&&bslBuildUnifiedDescription($__fp)['description']!==''){
+        $__diff[]='توضیح بلند';
+    }
+}
 $__needsImg=false;foreach($__diff as $__d){if(mb_strpos((string)$__d,'گالری',0,'UTF-8')!==false||mb_stripos((string)$__d,'image',0,'UTF-8')!==false){$__needsImg=true;break;}}
 if($__needsImg)continue;
 if($__diff){$__need=true;foreach($__diff as $__d)$__changes[]=$__d;}
@@ -71487,6 +71849,7 @@ if($isArchived||$isBslArchived){
 $statusLabel=$exStatusVal===3790?'غیرفعال':($exStatusVal===4184?'بایگانی':($exStatusVal===3567?'تأیید نشده':'در انتظار'));
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🔄 بازفعال‌سازی از {$statusLabel} (status=$exStatusVal) → ID#$exId");
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'status'=>2976,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
+bslApplyContent($bu,$p);
 // v10.392: تغییر دسته فقط در گردش‌کار اختصاصی اصلاح دسته؛ PATCH عادی بدون category_id.
 // v10.234: برای بازفعال‌سازی هم فقط وقتی تصویر را دوباره آپلود کن که مقصد عکس نداشته باشد.
 $pid=null;$galU=[];$imgU=productImageList($p);$reactRemote=bslRemoteContent($exBsl);
@@ -71496,6 +71859,7 @@ if($needsReactImg){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photo
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
 $r=bslReq($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
 if($r['ok']&&!empty($r['body']['id'])){
+bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);
 $updated++;bslShopStatBumpDefault('u');$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
 'changes'=>'بازفعال‌سازی از '.$statusLabel,'update_reason'=>'بازفعال‌سازی (status='.$exStatusVal.'→2976)',
 'changes_detail'=>'وضعیت '.$statusLabel.' به فعال، قیمت '.($exPrice/10).'→'.($pn/10).' تومان، موجودی '.$exStock.'→'.$newStock,
@@ -71526,6 +71890,13 @@ if($exPrice!=$pn){$needUpdate=true;$updateChanges[]='قیمت '.($exPrice/10).'�
 if($exStock!=$newStock){$needUpdate=true;$updateChanges[]='موجودی';}
 // v8.69: محتوای تازه (توضیحات، گالری، تنوع، SKU) هم آپدیت می‌خواهد
 $bslContentDiff=contentSyncOn($cn)?contentChanges($p,bslRemoteContent($exBsl)):[];
+if(contentSyncOn($cn)&&empty($bslContentDiff)&&(!empty($exBsl['__from_catalog'])||!empty($exBsl['__from_ledger']))){
+    $_defMk=bslShopMapKey((string)$pKey,['vendor_id'=>$vid]);
+    $_defLedgerRow=$_defMk!==''?(remoteMapLoad()['bsl'][$_defMk]??null):null;
+    if(empty($_defLedgerRow['plain_desc_v1'])&&bslBuildUnifiedDescription($p)['description']!==''){
+        $bslContentDiff[]='توضیح بلند';
+    }
+}
 if($bslContentDiff){$needUpdate=true;foreach($bslContentDiff as $_cd)$updateChanges[]=$_cd;}
 
 if(!$needUpdate){$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'تکرار (قیمت+موجودی+محتوا یکسان)'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ تکرار (یکسان)");continue;}
@@ -71534,7 +71905,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
 if($newStock<=0)$bu['status']=3790;else $bu['status']=2976;
 // v10.392: دستهٔ محصول موجود را در PATCH عادی نفرست؛ باسلام آن را با 422 رد می‌کند.
-// v8.69 / v10.458: توضیحات، جدول مشخصات و تنوع‌های تازه هم در همین آپدیت می‌روند
+// v8.69 / v10.463: توضیحات یکپارچهٔ متن روان، مشخصات و تنوع‌های تازه هم در همین آپدیت می‌روند
 bslApplyContent($bu,$p);
 $_bslVarsUpd=bslBuildVariantsPayload($p,$pn,$newStock);
 if($_bslVarsUpd)$bu['variants']=$_bslVarsUpd;
@@ -71546,7 +71917,7 @@ $updateImgNote=$imgU?($needsUpdateImage?'گالری تغییر کرده و آپ�
 if($needsUpdateImage&&$imgU){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photos']??10));if(!empty($umU2['ok'])){$pid=$umU2['main'];$galU=$umU2['ids'];$updateImgNote=$umU2['note']??'تصویر آپلود شد';}else{$updateImgNote='اختلاف گالری بود ولی آپلود تصویر ناموفق شد؛ ادامه بدون تغییر تصویر';}}
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
 $r=bslReqWithVariantsFallback($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReqWithVariantsFallback($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
-if($r['ok']&&!empty($r['body']['id'])){ $updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$updateChanges);$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
+if($r['ok']&&!empty($r['body']['id'])){ bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);$updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$updateChanges);$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
 'changes'=>$__chg!==''?$__chg:'آپدیت','update_reason'=>$__chg!==''?$__chg:'آپدیت',
 'changes_detail'=>'قیمت '.($exPrice/10).'→'.($pn/10).' تومان؛ موجودی '.$exStock.'→'.$newStock.'؛ وضعیت '.$exStatusVal.'→'.($newStock<=0?3790:2976),
 'before_price_toman'=>$exPrice/10,'after_price_toman'=>$pn/10,'before_stock'=>$exStock,'after_stock'=>$newStock,
@@ -71578,7 +71949,9 @@ if(!empty($up3['ok'])){$pid=$up3['file_id'];$galIdsB=[$pid];}
 if(!$pid){
 
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚠️ تصویر آپلود نشد — ارسال بدون تصویر (غیرفعال)");
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
+$_builtNoImg=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtNoImg['brief']!==''?$_builtNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtNoImg['description']!==''?$_builtNoImg['description']:$bsBrief;
 $bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
@@ -71613,17 +71986,16 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 }
 usleep($bslDelayMs*1000);continue;
 }
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=s4MergeSpecsTableIntoHtml(trim($p['long_desc']??''),$p);if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
-$_bslCntTmp=[];bslApplyContent($_bslCntTmp,array_merge($p,['short_desc'=>$bsBrief,'long_desc'=>$bsDesc]));
-if(!empty($_bslCntTmp['brief']))$bsBrief=(string)$_bslCntTmp['brief'];
-if(!empty($_bslCntTmp['description']))$bsDesc=(string)$_bslCntTmp['description'];
+$_builtMainCreate=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtMainCreate['brief']!==''?$_builtMainCreate['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtMainCreate['description']!==''?$_builtMainCreate['description']:$bsBrief;
 $_bslCurStk=effectiveStock($p,(int)($cn['basalam']['stock']??10));
 $bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
 $_bslVarsNew=bslBuildVariantsPayload($p,$pn,$_bslCurStk);
 if($_bslVarsNew)$bp['variants']=$_bslVarsNew;
 if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReqWithVariantsFallback($tk,'POST','vendors/'.$vid.'/products',$bp);
-if($r['ok']&&!empty($r['body']['id'])){ bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id']],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ #{$r['body']['id']}");
+if($r['ok']&&!empty($r['body']['id'])){ bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$r['body']['id'],$pTitle,(int)$pn,(int)$_bslCurStk);bslClearAiCategoryFixPending($vid,(string)$pKey,$pTitle);$sent++;bslShopStatBumpDefault('c');$bslSentList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$r['body']['id']],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ✅ #{$r['body']['id']}");
 }else{
 $em=bslErrText($r);
 $dupName=bslIsDuplicateName($r);
@@ -72580,8 +72952,9 @@ if($freshImgUrl){$up3=bslUpload($tk,$freshImgUrl);if(!empty($up3['ok']))$pid=$up
 }
 if(!$pid){
 
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');
-if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
+$_builtSingleNoImg=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtSingleNoImg['brief']!==''?$_builtSingleNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtSingleNoImg['description']!==''?$_builtSingleNoImg['description']:$bsBrief;
 $catId=(int)($bs['category_id']??0);
 if($catId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
@@ -72612,8 +72985,9 @@ echo json_encode(['ok'=>false,'action'=>'fail','error'=>$fu['error'],'key'=>$pKe
 }
 echo json_encode(['ok'=>false,'action'=>'fail','error'=>'تصویر آپلود نشد + ایجاد بدون تصویر هم ناموفق: '.mb_substr($em,0,150),'key'=>$pKey,'title'=>$pTitle,'image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');
-if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
+$_builtSingleMain=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtSingleMain['brief']!==''?$_builtSingleMain['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtSingleMain['description']!==''?$_builtSingleMain['description']:$bsBrief;
 
 $__singleProfKey=trim((string)($_POST['profile_key']??($p['_profile_key']??'')));
 $__singleProf=$__singleProfKey!==''?(loadProfiles()[$__singleProfKey]??null):null;
@@ -73584,8 +73958,9 @@ if($imgC){send_sse('send_info',['msg'=>'['.$n.'] آپلود '.count($imgC).' ت�
 if(!$pid){
 
 send_sse('send_info',['msg'=>'['.$n.'] ⚠️ تصویر آپلود نشد — ارسال بدون تصویر (غیرفعال)']);
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');
-if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));if($bsDesc==='')$bsDesc=$bsBrief;
+$_builtStreamNoImg=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtStreamNoImg['brief']!==''?$_builtStreamNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtStreamNoImg['description']!==''?$_builtStreamNoImg['description']:$bsBrief;
 $catId=(int)($bs['category_id']??0);
 if($catId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
@@ -73610,9 +73985,9 @@ $fail++;send_sse('send_fail',['key'=>$pKey,'error'=>'تصویر+ایجاد بد�
 usleep($bslDelayMs*1000);continue;
 }
 
-$bsBrief=trim(strip_tags($p['short_desc']??''));$bsDesc=trim($p['long_desc']??'');
-if($bsBrief==='')$bsBrief=trim(strip_tags($pTitle));
-if($bsDesc==='')$bsDesc=$bsBrief;
+$_builtStreamMain=bslBuildUnifiedDescription($p,$pTitle);
+$bsBrief=$_builtStreamMain['brief']!==''?$_builtStreamMain['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
+$bsDesc=$_builtStreamMain['description']!==''?$_builtStreamMain['description']:$bsBrief;
 
 $__sseManualCats=bslCollectManualCategories((int)($p['bsl_category_id']??($p['category_id']??0)),null,(array)($bs['fallback_cat_ids']??[]),$bs);
 $__sseRemManual=[];
@@ -89093,6 +89468,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.463', t:'📝 اصلاح کامل نمایش توضیحات محصولات در باسلام: تبدیل تمام تگ‌ها، entityها و جداول HTML به متن فارسی روان و ترکیب در فیلد واحد توضیحات + پاک‌سازی خودکار محصولات قبلی', items:[
+    'موتور اختصاصی پاک‌سازی و تبدیل HTML به متن فارسی روان برای باسلام (s4HtmlToPlainTextForBsl + bslBuildUnifiedDescription): رمزگشایی چندلایهٔ entityها (&amp;#13;، &#13;، &lt;، &gt;، &nbsp;)، حذف تگ‌های ناقص ابتدای متن (مثل div>)، تبدیل جداول مشخصات فنی (<table><tr><th><td> و <dl>) به فهرست خوانای «مشخصات فنی: • ویژگی: مقدار»، حفظ نیم‌فاصلهٔ فارسی و خط‌شکنی‌های طبیعی بدون ایجاد خطوط خالی اضافه روی <br>، و حذف خودکار ردیف نام فروشندگان مبدأ (فروشنده) در ارسال به باسلام در حالی که جداول HTML برای ووکامرس و تب نتایج کاملاً حفظ می‌شوند.',
+    'ادغام هوشمند در فیلد واحد توضیحات باسلام بدون تکرار: با توجه به تک‌فیلدی بودن توضیحات در اپلیکیشن باسلام، نکات غیرتکراری توضیح کوتاه (short_desc)، توضیح بلند (long_desc)، جدول مشخصات فنی (specs) و «گزینه‌های موجود» بدون تکرار عنوان یا سطرهای تکراری در یک متن یکپارچه و مرتب ترکیب می‌شوند و از افزودن تگ‌های <p><strong> روی گزینه‌ها جلوگیری می‌شود.',
+    'صافی دفاعی درگاه API باسلام (bslSanitizeProductWritePayload در bslReq و bslReqMulti) + اصلاح خودکار محصولات آلودهٔ قبلی: تمام مسیرهای ساخت، آپدیت تکی، آپدیت گروهی (batch-updates)، ارسال موازی چندغرفه‌ای و بازیابی تکراری تضمین می‌کنند هیچ کد HTML به باسلام نرود؛ همچنین محصولات ارسال‌شدهٔ قبلی که دارای تگ/entity خام هستند در اولین ارسال یا یکسان‌سازی بعدی به‌طور خودکار شناسایی (bslDescriptionHasHtmlArtifacts + plain_desc_v1) و با متن تمیز آپدیت می‌شوند.'
+  ]},
   {v:'10.462', t:'📋 افزودن قابلیت داپلیکیت (کپی) پروفایل‌ها + ذخیرهٔ تغییر لینک آدرس مستقیماً روی همان پروفایل فعال', items:[
     'داپلیکیت سرورساید و آنی پروفایل‌ها (action=duplicate_profile + s4DuplicateProfileOnDisk) همراه با دکمهٔ «📋 کپی» در نوار پروفایل و دکمهٔ «📋» در جدول تفکیک پروفایل‌های تب شروع: کپی کاملِ تمام سلکتورهای فهرست و جزئیات، تنظیمات گالری و ویرایش تصاویر، دسته‌بندی‌های باسلام/ووکامرس، ضرایب قیمت و همگام‌سازی دوره‌ای با نام شماره‌گذاری‌شدهٔ خودکار و امکان انتخاب کپی با محصولات یا بدون محصولات.',
     'ذخیرهٔ تغییر لینک آدرس (URL) روی همان پروفایل فعال به‌جای ساخت پروفایل خالی جدید (s4ResolveSaveProfileTargetKey + target_key): ویرایش فیلد آدرس در پروفایل انتخاب‌شده دیگر کلید و نام پروفایل را پاک نمی‌کند و هم در ذخیرهٔ دستی (💾) و هم در ذخیرهٔ خودکار، لینک جدید مستقیماً روی همان پروفایل با حفظ کامل محصولات و تنظیمات ذخیره می‌شود.',
