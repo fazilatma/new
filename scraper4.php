@@ -27979,6 +27979,15 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             }
         }
         if ($again) foreach (bslReqMulti($again, $conc) as $vid => $r2) $rs[$vid] = $r2;
+        $againNoVar = [];
+        foreach ($rs as $vid => $r) {
+            if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [400, 422], true) && !empty($jobs[$vid]['d']['variants']) && !bslIsCategoryError($r)) {
+                $dNoVar = $jobs[$vid]['d'];
+                unset($dNoVar['variants']);
+                $againNoVar[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH', 'ep' => 'products/' . $ids[$vid], 'd' => $dNoVar];
+            }
+        }
+        if ($againNoVar) foreach (bslReqMulti($againNoVar, $conc) as $vid => $r3) $rs[$vid] = $r3;
         foreach ($rs as $vid => $r) {
             if (!empty($r['ok']) && !empty($r['body']['id'])) {
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$ids[$vid], 'action' => 'updated', 'update_reason' => 'آپدیت همزمان قیمت/موجودی/محتوا', 'changes_detail' => 'PATCH همزمان روی محصول موجود'];
@@ -28031,7 +28040,17 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             $jobs[$vid] = ['tk' => (string)$sh['token'], 'm' => 'POST',
                            'ep' => 'vendors/' . $vid . '/products', 'd' => $bp];
         }
-        foreach (bslReqMulti($jobs, $conc) as $vid => $r) {
+        $rsCreate = bslReqMulti($jobs, $conc);
+        $retryNoVarCreate = [];
+        foreach ($rsCreate as $vid => $r) {
+            if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [400, 422], true) && !empty($jobs[$vid]['d']['variants']) && !bslIsDuplicateName($r) && !bslIsCategoryError($r)) {
+                $dNoVarC = $jobs[$vid]['d'];
+                unset($dNoVarC['variants']);
+                $retryNoVarCreate[$vid] = ['tk' => (string)$toCreate[$vid]['token'], 'm' => 'POST', 'ep' => 'vendors/' . $vid . '/products', 'd' => $dNoVarC];
+            }
+        }
+        if ($retryNoVarCreate) foreach (bslReqMulti($retryNoVarCreate, $conc) as $vid => $rnv) $rsCreate[$vid] = $rnv;
+        foreach ($rsCreate as $vid => $r) {
             if (!empty($r['ok']) && !empty($r['body']['id'])) {
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'used_cat_id' => $catUsed, 'update_reason' => 'ایجاد موازی در غرفه'];
                 $ledger[(int)$vid] = (int)$r['body']['id'];
@@ -52461,7 +52480,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
         ['id' => 'qp_1', 'status' => 'running', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223]]],
         ['id' => 'qp_2', 'status' => 'waiting', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728]]],
     ]];
-    $_cnPar461 = ['basalam' => ['vendor_id' => 1211728, 'send_shop_ids' => [710223], 'send_shop_ids_at' => 2000, 'shop_send_mode' => 'parallel']];
+    $_cnPar461 = ['basalam' => [
+        'enabled' => true, 'vendor_id' => 1211728, 'token' => 'tk_def',
+        'vendors' => [
+            ['vendor_id' => 1093225, 'token' => 'tk_1', 'shop_name' => 'غرفه ۱'],
+            ['vendor_id' => 710223, 'token' => 'tk_2', 'shop_name' => 'غرفه ۲'],
+        ],
+        'send_shop_ids' => [710223], 'send_shop_ids_at' => 2000, 'shop_send_mode' => 'parallel',
+    ]];
     $_disPar461 = function_exists('bslQueueApplyCurrentShopSelection') ? bslQueueApplyCurrentShopSelection($_qPar461, $_cnPar461) : [];
     $add('10.461', 'دراپ‌داون و قابلیت ارسال سری و موازی به غرفه‌ها در تب ارسال باسلام + آپلود موازی تصاویر و حفظ غرفه‌های فعال',
          function_exists('bslNormalizeShopSendMode')
