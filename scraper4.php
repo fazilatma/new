@@ -58160,12 +58160,13 @@ function notifSourceIdentity(array $cn = []): array {
 
 function notifAutoDedupFingerprint(string $coreMsg, ?string $feed): string {
     $norm = trim($coreMsg);
+    $norm = (string)preg_replace('~^🔁\s*یادآوری\s*#\d+\s*(?:[—\-]\s*)?~u', '', $norm);
     if ($feed === 'error') {
         $norm = (string)preg_replace('~\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}(:\d{2})?~u', '', $norm);
         $norm = (string)preg_replace('~\b\d+\s*ثانیه~u', 'N ثانیه', $norm);
     }
     $norm = (string)preg_replace('~\s+~u', ' ', trim($norm));
-    return ($feed !== null && $feed !== '' ? $feed : 'auto') . ':' . sha1($norm);
+    return ($feed === 'error' ? 'error' : 'event') . ':' . sha1($norm);
 }
 
 function notifShouldSuppressAutoDuplicate(array $cn, string $coreMsg, ?string $feed): bool {
