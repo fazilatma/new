@@ -11646,8 +11646,12 @@ function wooVariationAttributes(array $p, bool $forVariable = true): array {
 function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaultStock = 10, bool $destIsRial = false): array {
     $attrs = wooVariationAttributes($p, true);
     if (!$attrs) return [];
+    $toEn = static fn(string $s): string => strtr($s, [
+        '۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9',
+        '٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9',
+    ]);
     $rawSrcStr = (string)($p['price'] ?? '');
-    $rawDigits = (int)preg_replace('/[^0-9]/', '', toEnDigits($rawSrcStr));
+    $rawDigits = (int)preg_replace('/[^0-9]/', '', $toEn($rawSrcStr));
     $srcUnitIsRial = (($p['price_unit'] ?? '') === 'rial') || mb_strpos($rawSrcStr, 'ریال') !== false || mb_strpos($rawSrcStr, 'ر.ی') !== false;
     $rawBaseToman = $rawDigits > 0 ? ($srcUnitIsRial ? (int)round($rawDigits / 10) : $rawDigits) : 0;
     $scalePrice = static function (int $srcOptionPriceToman) use ($rawBaseToman, $destBasePrice, $destIsRial): int {
@@ -11661,7 +11665,7 @@ function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaul
     $varPrices = is_array($p['variation_prices'] ?? null) ? $p['variation_prices'] : [];
     $normPriceMap = [];
     foreach ($varPrices as $lbl => $pv) {
-        $num = is_numeric($pv) ? (int)round((float)$pv) : (int)preg_replace('/[^0-9]/', '', toEnDigits((string)$pv));
+        $num = is_numeric($pv) ? (int)round((float)$pv) : (int)preg_replace('/[^0-9]/', '', $toEn((string)$pv));
         if ($num > 0) {
             $tomanVal = $srcUnitIsRial ? (int)round($num / 10) : $num;
             $normPriceMap[mb_strtolower(trim((string)$lbl), 'UTF-8')] = $tomanVal;
