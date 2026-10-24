@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.450';
+const APP_VERSION = '10.451';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13979,51 +13979,68 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
     $plan = s4JinaFetchPlan();
     $jinaModes = is_array($plan['modes'] ?? null) ? $plan['modes'] : ['direct'];
     $jinaNet = is_array($plan['net'] ?? null) ? $plan['net'] : s4JinaIndirectNet();
-    foreach ($jinaModes as $via) {
-        foreach ($readerVariants as $variant) {
-            $readerUrl = (string)($variant['url'] ?? '');
-            if ($readerUrl === '') continue;
-            $kind = (string)($variant['kind'] ?? 'reader');
-            $r = s4JinaFetchAttempt($readerUrl, $timeout, (string)$via, $jinaNet);
-            $r['jina_reader'] = $readerUrl;
-            $body = (string)($r['html'] ?? '');
-            $ps = trim($body) !== '' ? s4JinaProductsFromReaderText($body, $target) : [];
-            $r['jina_product_count'] = count($ps);
-            $trace[] = s4JinaReaderTraceEntry($via, $kind, $readerUrl, $r, $target);
-            if (!empty($r['ok']) && trim($body) !== '') {
-                if (!empty($ps)) {
-                    return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $target,
-                            'html' => s4JinaSyntheticHtml($ps, $target, 'Reader URL: ' . $readerUrl . ' · via ' . $via),
-                            'mode' => 'jina-reader', 'jina_reader' => $readerUrl, 'jina_reader_via' => $via,
-                            'jina_product_count' => count($ps), 'jina_reader_trace' => $trace,
-                            'jina_reader_modes' => $jinaModes, 'source_error' => (string)($prev['error'] ?? '')];
+    $isSnappTarget = function_exists('isSnappshopUrl') && isSnappshopUrl($target);
+    $skipBlockedJina = $isSnappTarget && !empty($GLOBALS['_s4JinaSnappBlocked']);
+    if ($skipBlockedJina) {
+        $last['code'] = 451;
+        $last['error'] = (string)$GLOBALS['_s4JinaSnappBlocked'];
+    } else {
+        foreach ($jinaModes as $via) {
+            foreach ($readerVariants as $variant) {
+                $readerUrl = (string)($variant['url'] ?? '');
+                if ($readerUrl === '') continue;
+                $kind = (string)($variant['kind'] ?? 'reader');
+                $r = s4JinaFetchAttempt($readerUrl, $timeout, (string)$via, $jinaNet);
+                $r['jina_reader'] = $readerUrl;
+                $body = (string)($r['html'] ?? '');
+                $ps = trim($body) !== '' ? s4JinaProductsFromReaderText($body, $target) : [];
+                $r['jina_product_count'] = count($ps);
+                $trace[] = s4JinaReaderTraceEntry($via, $kind, $readerUrl, $r, $target);
+                if (!empty($r['ok']) && trim($body) !== '') {
+                    if (!empty($ps)) {
+                        return ['ok' => true, 'error' => '', 'code' => (int)($r['code'] ?? 200), 'url' => $target,
+                                'html' => s4JinaSyntheticHtml($ps, $target, 'Reader URL: ' . $readerUrl . ' · via ' . $via),
+                                'mode' => 'jina-reader', 'jina_reader' => $readerUrl, 'jina_reader_via' => $via,
+                                'jina_product_count' => count($ps), 'jina_reader_trace' => $trace,
+                                'jina_reader_modes' => $jinaModes, 'source_error' => (string)($prev['error'] ?? '')];
+                    }
+                    if ($firstText === null) {
+                        $firstText = $r + $last;
+                        $firstText['url'] = $target;
+                        $firstText['mode'] = 'jina-reader-text';
+                        $firstText['html'] = '<!doctype html><html lang="fa" dir="rtl"><meta charset="UTF-8"><body><pre data-jina-reader="1" style="white-space:pre-wrap;font-family:tahoma,sans-serif;line-height:1.8">' . h($body) . '</pre></body></html>';
+                        $firstText['ok'] = true;
+                    }
+                    continue;
                 }
-                if ($firstText === null) {
-                    $firstText = $r + $last;
-                    $firstText['url'] = $target;
-                    $firstText['mode'] = 'jina-reader-text';
-                    $firstText['html'] = '<!doctype html><html lang="fa" dir="rtl"><meta charset="UTF-8"><body><pre data-jina-reader="1" style="white-space:pre-wrap;font-family:tahoma,sans-serif;line-height:1.8">' . h($body) . '</pre></body></html>';
-                    $firstText['ok'] = true;
-                }
-                continue;
+                $last = $r + $last;
+                /* v10.437: اگر همان مسیر شبکه با بلاک منطقه‌ای/احراز هویت/سقف نرخ Jina
+                   (451/401/403/429) رد شد، تکرار bridge و nested روی همان مسیر فقط درخواست
+                   سوخته و تشدید 429 می‌سازد؛ بلافاصله سراغ مسیر بعدی برو. */
+                if (in_array((int)($r['code'] ?? 0), [401, 403, 429, 451], true)) break;
             }
-            $last = $r + $last;
-            /* v10.437: اگر همان مسیر شبکه با بلاک منطقه‌ای/احراز هویت/سقف نرخ Jina
-               (451/401/403/429) رد شد، تکرار bridge و nested روی همان مسیر فقط درخواست
-               سوخته و تشدید 429 می‌سازد؛ بلافاصله سراغ مسیر بعدی برو. */
-            if (in_array((int)($r['code'] ?? 0), [401, 403, 429, 451], true)) break;
+        }
+        if ($isSnappTarget && in_array((int)($last['code'] ?? 0), [403, 451], true)) {
+            $GLOBALS['_s4JinaSnappBlocked'] = (string)($last['error'] ?? 'HTTP 451: Unavailable For Legal Reasons');
         }
     }
-    /* v10.437: روی سرورهای ایران r.jina.ai با HTTP 451 (و روی Worker اشتراکی با 451/429)
+    /* v10.437 / v10.451: روی سرورهای ایران r.jina.ai با HTTP 451 (و روی Worker اشتراکی با 451/429)
        رد می‌شود، در حالی که API عمومی خودِ اسنپ‌شاپ (apix.snappshop.ir) مستقیم و سریع پاسخ
-       ساختاریافتهٔ JSON می‌دهد. پس از ثبت کامل trace جینا، برای URLهای اسنپ‌شاپ به apix برگرد. */
-    if (function_exists('isSnappshopUrl') && isSnappshopUrl($target) && function_exists('fetch_html_snappshop_api')) {
+       ساختاریافتهٔ JSON می‌دهد. در صفحهٔ پایانی دسته‌بندی (مثلاً صفحهٔ ۵۰۱ پس از سقف ۵۰۰ صفحهٔ
+       Elasticsearch اسنپ‌شاپ) نیز پاسخ معتبر پایان صفحه‌بندی apix را برگردان تا خطای 451 جینا
+       جای پایان طبیعی لیست را نگیرد و استخراج متوقف نشود. */
+    if ($isSnappTarget && function_exists('fetch_html_snappshop_api')) {
         $apiFallback = fetch_html_snappshop_api($target, $timeout, is_array($last) ? $last : $prev);
-        if (!empty($apiFallback['ok']) && ((int)($apiFallback['jina_product_count'] ?? 0) > 0 || ($apiFallback['snappshop_route_kind'] ?? '') === 'product')) {
+        if (!empty($apiFallback['ok']) && ((int)($apiFallback['jina_product_count'] ?? 0) > 0 || !empty($apiFallback['snappshop_end_of_pages']) || ($apiFallback['snappshop_route_kind'] ?? '') === 'product')) {
             $apiFallback['jina_reader_trace'] = $trace;
             $apiFallback['jina_reader_modes'] = $jinaModes;
             $apiFallback['jina_reader_via'] = 'snappshop-apix';
             $apiFallback['jina_error_before_apix'] = (string)($last['error'] ?? '');
+            return $apiFallback;
+        }
+        if (in_array((int)($apiFallback['code'] ?? 0), [404, 410], true)) {
+            $apiFallback['jina_reader_trace'] = $trace;
+            $apiFallback['jina_reader_modes'] = $jinaModes;
             return $apiFallback;
         }
     }
@@ -14304,23 +14321,36 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
     return ['ok' => false, 'code' => $lastCode, 'api_url' => $apiUrl, 'data' => [], 'error' => $lastErr];
 }
 
-function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requestedPage = 1): array {
+function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requestedPage = 1, ?array &$apiMeta = null): array {
     $data = is_array($json['data'] ?? null) ? $json['data'] : $json;
     $structure = is_array($data['structure'] ?? null) ? $data['structure'] : [];
     $products = [];
     $sections = [];
+    $topPg = is_array($data['pagination'] ?? null) ? $data['pagination'] : [];
+    $maxTotalPages = max(0, (int)($topPg['total_pages'] ?? ($topPg['last_page'] ?? 0)));
     foreach ($structure as $sec) {
-        if (!is_array($sec) || empty($sec['items']) || !is_array($sec['items'])) continue;
+        if (!is_array($sec)) continue;
+        $secPg = is_array($sec['pagination'] ?? null) ? $sec['pagination'] : [];
+        $secTot = (int)($secPg['total_pages'] ?? ($secPg['last_page'] ?? 0));
+        if ($secTot > $maxTotalPages) $maxTotalPages = $secTot;
+        if (empty($sec['items']) || !is_array($sec['items'])) continue;
         if (($sec['section_type'] ?? '') === 'plp') array_unshift($sections, $sec);
         else $sections[] = $sec;
     }
     if (!$sections && !empty($data['items']) && is_array($data['items'])) {
-        $sections[] = ['section_type' => 'plp', 'items' => $data['items'], 'pagination' => $data['pagination'] ?? []];
+        $sections[] = ['section_type' => 'plp', 'items' => $data['items'], 'pagination' => $topPg];
+    }
+    $apiMeta = ['total_pages' => $maxTotalPages, 'exceeded_total_pages' => false];
+    if ($requestedPage > 1 && $maxTotalPages > 0 && $requestedPage > $maxTotalPages) {
+        $apiMeta['exceeded_total_pages'] = true;
+        return [];
     }
     foreach ($sections as $sec) {
         $pg = is_array($sec['pagination'] ?? null) ? $sec['pagination'] : [];
-        $totalPages = (int)($pg['total_pages'] ?? 0);
+        $totalPages = (int)($pg['total_pages'] ?? ($pg['last_page'] ?? 0));
+        if ($totalPages > $apiMeta['total_pages']) $apiMeta['total_pages'] = $totalPages;
         if ($requestedPage > 1 && $totalPages > 0 && $requestedPage > $totalPages) {
+            $apiMeta['exceeded_total_pages'] = true;
             return [];
         }
         foreach ((array)$sec['items'] as $item) {
@@ -14639,21 +14669,49 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
             if (!empty($resAlt['ok'])) { $res = $resAlt; break; }
         }
     }
+    $reqPage = max(1, (int)($route['page'] ?? 1));
     if (!empty($res['ok']) && is_array($res['data'] ?? null)) {
-        $ps = snappshopProductsFromApiPayload($res['data'], $target, (int)($route['page'] ?? 1));
+        $apiMeta = [];
+        $ps = snappshopProductsFromApiPayload($res['data'], $target, $reqPage, $apiMeta);
+        $totPages = (int)($apiMeta['total_pages'] ?? 0);
         if (!empty($ps)) {
             $note = 'SnappShop API (' . $endpoint . ' · via ' . (string)($res['via'] ?? 'direct') . ')';
             return ['ok' => true, 'error' => '', 'code' => (int)($res['code'] ?? 200), 'url' => $target,
                     'html' => s4JinaSyntheticHtml($ps, $target, $note), 'mode' => 'snappshop-apix',
                     'snappshop_api' => (string)($res['api_url'] ?? ''), 'snappshop_api_via' => (string)($res['via'] ?? 'direct'),
                     'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                    'snappshop_total_pages' => $totPages,
                     'jina_product_count' => count($ps), 'source_error' => (string)($prev['error'] ?? '')];
         }
-        return ['ok' => false, 'error' => 'SnappShop API returned 0 products for page ' . (int)($route['page'] ?? 1),
+        /* v10.451: در صفحهٔ ۲ به بالا، پاسخ ۲۰۰ سالمِ apix با صفر کالا (یا عبور از total_pages)
+           یعنی پایان طبیعی صفحه‌بندی دسته‌بندی؛ نباید ok=false برگردد که به خطای HTTP 451 جینا سقوط کند. */
+        if ($reqPage > 1) {
+            $endPages = $totPages > 0 ? $totPages : max(1, $reqPage - 1);
+            return ['ok' => true, 'error' => '', 'code' => (int)($res['code'] ?? 200), 'url' => $target,
+                    'html' => snappshopSyntheticHtml([], $target, 'پایان صفحه‌بندی اسنپ‌شاپ در صفحهٔ ' . $endPages),
+                    'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
+                    'snappshop_api_via' => (string)($res['via'] ?? 'direct'),
+                    'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                    'snappshop_end_of_pages' => true, 'snappshop_total_pages' => $endPages,
+                    'jina_product_count' => 0, 'source_error' => (string)($prev['error'] ?? '')];
+        }
+        return ['ok' => false, 'error' => 'SnappShop API returned 0 products for page ' . $reqPage,
                 'code' => (int)($res['code'] ?? 200), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix',
                 'jina_product_count' => 0];
     }
-    return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop api failed'), 'code' => (int)($res['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix', 'jina_product_count' => 0];
+    /* v10.451: موتور جستجوی Elasticsearch اسنپ‌شاپ در apix سقف سخت ۵۰۰ صفحه (۱۰,۰۰۰ کالا، skip=500) دارد
+       و در صفحهٔ ۵۰۱+ با خطای ۴۰۰/۴۲۲/۵۰۰ پاسخ می‌دهد؛ این حالت پس از ۵۰۰ صفحه، پایان طبیعی لیست است. */
+    $resCode = (int)($res['code'] ?? 0);
+    if ($reqPage > 500 && in_array($resCode, [400, 404, 410, 422, 500], true)) {
+        return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $target,
+                'html' => snappshopSyntheticHtml([], $target, 'سقف ۵۰۰ صفحهٔ API اسنپ‌شاپ (۱۰,۰۰۰ کالا)'),
+                'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
+                'snappshop_api_via' => (string)($res['via'] ?? 'direct'),
+                'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                'snappshop_end_of_pages' => true, 'snappshop_total_pages' => 500,
+                'jina_product_count' => 0, 'source_error' => (string)($prev['error'] ?? '')];
+    }
+    return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop api failed'), 'code' => $resCode, 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix', 'jina_product_count' => 0];
 }
 
 function snappshopNeedsApiFallback(string $url, string $html): bool {
@@ -14705,7 +14763,7 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
                     'jina_reader_modes' => is_array($jr['jina_reader_modes'] ?? null) ? $jr['jina_reader_modes'] : [],
                     'source_error' => (string)($prev['error'] ?? '')];
         }
-        if (stripos($body, 'data-snappshop-api-detail="1"') !== false) {
+        if (stripos($body, 'data-snappshop-api-detail="1"') !== false || !empty($jr['snappshop_end_of_pages'])) {
             return $jr;
         }
     }
@@ -24074,7 +24132,21 @@ if($_pageFailStreak>=2 && count($allProducts)>0){
 continue;
 }
 $_pageFailStreak=0;
-
+/* v10.451: تشخیص فوری پایان صفحه‌بندی API اسنپ‌شاپ (عبور از total_pages یا سقف ۵۰۰ صفحهٔ apix)
+   بدون ثبت خطای کاذب HTTP 451 جینا یا ۳ صفحه تلاش اضافی، تا مستقیماً ذخیرهٔ نهایی و فاز ۲ اجرا شود. */
+if($page>1 && count($allProducts)>0 && !empty($res['snappshop_end_of_pages']) && (int)($res['jina_product_count']??0)===0){
+    $totalPages=max(1,$page-1);
+    $_snLim=(int)($res['snappshop_total_pages']??$totalPages);
+    $logs[]='🏁 پایان طبیعی صفحه‌بندی اسنپ‌شاپ در صفحهٔ '.$totalPages.($_snLim>0?' (سقف دسته‌بندی: '.$_snLim.' صفحه)':'').' — استخراج لیست کامل شد.';
+    $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
+        $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی اسنپ‌شاپ در صفحهٔ '.$totalPages;
+        $_qeEnd['pag_stop_url']=$pageUrl;$_qeEnd['resumable']=false;$_qeEnd['resume_page']=0;break;}unset($_qeEnd);extractWriteQueue($_qEnd);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$totalPages,
+        'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
+        'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$totalPages,'page_ok'=>true,
+        'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
+    unset($_qEnd,$_snLim);break;
+}
 
 $_usedEngine='';
 $pageProducts=parse_list_by_engine($res['html'],$res['url'],$selectors,$extractEngine,$_usedEngine);
@@ -24253,6 +24325,19 @@ foreach($_qLive['entries'] as &$_qeL){
     }
 }unset($_qeL);
 extractWriteQueue($_qLive);
+if(count($allProducts)>0 && (int)($res['snappshop_total_pages']??0)>0 && $page>=(int)$res['snappshop_total_pages'] && $page<$maxPages){
+    $_snTotP=(int)$res['snappshop_total_pages'];
+    $totalPages=$page;
+    $logs[]='🏁 آخرین صفحهٔ دسته‌بندی اسنپ‌شاپ (صفحهٔ '.$page.' از '.$_snTotP.') کامل شد — ورود به مرحلهٔ بعد.';
+    $_qEnd2=extractReadQueue();foreach($_qEnd2['entries'] as &$_qeEnd2){if(($_qeEnd2['id']??'')!==$queueId)continue;
+        $_qeEnd2['pag_stop_reason']='آخرین صفحهٔ دسته‌بندی اسنپ‌شاپ (صفحهٔ '.$page.' از '.$_snTotP.')';
+        $_qeEnd2['pag_stop_url']=$pageUrl;$_qeEnd2['resumable']=false;$_qeEnd2['resume_page']=0;break;}unset($_qeEnd2);extractWriteQueue($_qEnd2);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,
+        'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
+        'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,
+        'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
+    unset($_qEnd2,$_snTotP);break;
+}
 $_noFreshStreak=$newCount===0?($_noFreshStreak+1):0;
 /* v10.177: توقفِ صفحه‌بندی به‌خاطر «صفرِ تازه» دیگر خاموش نیست — علت و نشانی
    ثبت می‌شود تا معلوم شود سرور نشانه را نادیده گرفت/چالش داد/فهرست تمام شد.
@@ -50127,6 +50212,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snMeta451 = [];
+    $_snRows451 = snappshopProductsFromApiPayload([
+        'status' => true,
+        'data' => ['structure' => [['section_type' => 'plp', 'pagination' => ['total_pages' => 500], 'items' => [
+            ['product_id' => '12345', 'title' => 'تست اسنپ‌شاپ', 'href' => '/product/snp-12345', 'price' => ['price' => 150000]]
+        ]]]]
+    ], 'https://snappshop.ir/category/kitchen-appliances', 501, $_snMeta451);
+    $add('10.451', 'حذف توقف کاذب HTTP 451 جینا در صفحهٔ ۵۰۱+ اسنپ‌شاپ و تشخیص پایان طبیعی صفحه‌بندی apix برای ورود خودکار به فاز ۲',
+         $_snRows451 === []
+      && (int)($_snMeta451['total_pages'] ?? 0) === 500
+      && !empty($_snMeta451['exceeded_total_pages'])
+      && strpos($selfSrc, "'snappshop_end_of_pages' => true") !== false
+      && strpos($selfSrc, "!empty($apiFallback['snappshop_end_of_pages'])") !== false
+      && strpos($selfSrc, "$GLOBALS['_s4JinaSnappBlocked']") !== false
+      && strpos($selfSrc, "{v:'10." . "451'") !== false
+      && version_compare(APP_VERSION, '10.451', '>='));
     $_slimState450 = localTaskDbCompactState(['running'=>true,'sent'=>5,'sent_details'=>[['id'=>1]],'rows'=>[['id'=>2]],'log'=>range(1,40),'checkpoint'=>['page'=>7,'woo_rows'=>[['id'=>9]]]]);
     $add('10.450', 'مهار قطعی تورم ۴۰ گیگابایتی scraper_tasks.sqlite3 با حذف مسیر ../scraper_tasks.sqlite3، سقف سخت max_page_count، حذف WAL و فشرده‌سازی state',
          function_exists('s4PurgeOrCompactTaskDb')
@@ -85117,6 +85218,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.451', t:'🏁 رفع توقف کاذب استخراج اسنپ‌شاپ با خطای HTTP 451 (Unavailable For Legal Reasons) در پایان صفحات لیست و ورود خودکار به فاز ۲', items:[
+    'علت دقیق خطای HTTP 451 در صفحهٔ ۵۰۱ پروفایل اسنپ‌شاپ شناسایی و برطرف شد: سرویس آمریکایی r.jina.ai دامنه‌های .ir و آی‌پی‌های ایران را با کد قانونی HTTP 451 مسدود می‌کند؛ در صفحات ۱ تا ۵۰۰ fallback خودکار به apix.snappshop.ir کالاها را برمی‌گرداند، اما در صفحهٔ ۵۰۱ (عبور از سقف ۵۰۰ صفحه / ۱۰,۰۰۰ کالای Elasticsearch اسنپ‌شاپ) به دلیل صفر شدن خروجی apix، تابع fetch_html_jina_reader پاسخ apix را رد می‌کرد و خطای قدیمی HTTP 451 جینا را به‌عنوان خطای شبکهٔ صفحهٔ ۵۰۱ و ۵۰۲ ثبت و استخراج را متوقف می‌کرد.',
+    'تشخیص هوشمند پایان صفحه‌بندی اسنپ‌شاپ (snappshop_end_of_pages + snappshop_total_pages) در snappshopProductsFromApiPayload، fetch_html_snappshop_api و حلقهٔ استخراج لیست اضافه شد: هم در رسیدن به آخرین صفحهٔ اعلامی (total_pages) و هم در عبور از مرز ۵۰۰ صفحهٔ API اسنپ‌شاپ، لیست بدون خطای کاذب ۴۵۱ پایان طبیعی اعلام شده، تمام محصولات در پروفایل ذخیره می‌شوند و استخراج بلافاصله وارد فاز ۲ (جزئیات) می‌شود.',
+    'کش درون‌پردازه‌ای تشخیص مسدودیت جینا روی اسنپ‌شاپ (_s4JinaSnappBlocked) اضافه شد تا پس از اولین پاسخ ۴۵۱/۴۰۳ از r.jina.ai، در صفحات ۲ تا ۵۰۰ لیست دیگر در هر صفحه درخواست سوخته به جینا ارسال نشود و سرعت استخراج اسنپ‌شاپ چندین برابر افزایش یابد.'
+  ]},
   {v:'10.450', t:'🗄️ رفع ریشه‌ای تورم ۴۰ گیگابایتی دیتابیس scraper_tasks.sqlite3 در پوشهٔ plugins و پاک‌سازی خودکار آن', items:[
     'علت اصلی پر شدن ۴۰ گیگابایتی هاست برطرف شد: تابع localTaskDbOpen فایل scraper_tasks.sqlite3 را در پوشهٔ بالاتر (wp-content/plugins/scraper_tasks.sqlite3) با حالت WAL و بدون auto_vacuum و بدون سقف صفحه ایجاد می‌کرد؛ همزمان باز ماندن اتصال در worker دائمی و خوانش SQLite در هر درخواست وضعیت باعث قفل شدن checkpoint فایل WAL و ذخیرهٔ مکرر آرایه‌های حجیم جزئیات/ردیف‌ها تا سقف ده‌ها گیگابایت می‌شد.',
     'حذف خودکار و فوری فایل قدیمی wp-content/plugins/scraper_tasks.sqlite3 (به‌همراه پسوندهای -wal، -shm و -journal) در s4PurgeOrCompactTaskDb اضافه شد تا بدون نیاز به فضای خالی اضافه (برخلاف VACUUM)، تمام فضای اشغال‌شده بلافاصله آزاد شود.',
