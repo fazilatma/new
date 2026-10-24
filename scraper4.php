@@ -28872,9 +28872,12 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if ($exId > 0) {
         /* v10.33 (۴۶): اگر قیمت و موجودی همانی است که خودمان آخرین بار
            فرستادیم، این PATCH هیچ کاری نمی‌کند جز مصرفِ یک درخواست. */
-        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, $_wantShopWG)) {
-            bslSkipCount(1);
-            return ['ok' => true, 'id' => $exId, 'action' => 'unchanged', 'skipped' => true];
+        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock)) {
+            $_oldSingleLedgerRow = $__mk !== '' ? (remoteMapLoad()['bsl'][$__mk] ?? null) : null;
+            if ($_wantShopWG <= 0 || (is_array($_oldSingleLedgerRow) && (int)($_oldSingleLedgerRow['weight_g'] ?? 0) === $_wantShopWG)) {
+                bslSkipCount(1);
+                return ['ok' => true, 'id' => $exId, 'action' => 'unchanged', 'skipped' => true];
+            }
         }
         $bu = ['primary_price' => $priceRial, 'stock' => $stock, 'status' => 2976,
                'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW];
