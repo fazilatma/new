@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.460';
+const APP_VERSION = '10.461';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -23195,7 +23195,27 @@ if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true
     if (!in_array($_wFb, ['api_then_direct', 'direct_then_api', 'none'], true)) $_wFb = 'api_then_direct';
     $conn['woocommerce'] = ['enabled'=>!empty($w['enabled']),'store_url'=>trim($w['store_url']??''),'consumer_key'=>trim($w['consumer_key']??''),'consumer_secret'=>trim($w['consumer_secret']??''),'default_category'=>(int)($w['default_category']??0),'default_status'=>$w['default_status']??'draft','stock_quantity'=>(int)($w['stock_quantity']??10),'manage_stock'=>!empty($w['manage_stock']),'price_mode'=>in_array(($w['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$w['price_mode']:'none','price_val'=>(float)($w['price_val']??0),'price_round'=>max(0,(int)($w['price_round']??0)),'sync_mode'=>$_wMode,'sync_fallback'=>$_wFb]; }
 
-if (isset($_POST['basalam'])) { $b = json_decode($_POST['basalam'], true) ?: []; $_prevBslCfg = is_array($conn['basalam'] ?? null) ? $conn['basalam'] : []; $fallbackCats=array_values(array_filter(array_map('intval',$b['fallback_cat_ids']??[]),function($v){return $v>0;})); $vendors=[]; if(!empty($b['vendors'])&&is_array($b['vendors'])){foreach($b['vendors'] as $v){$vid=(int)($v['vendor_id']??0);$vt=trim($v['token']??'');if($vid>0&&$vt!=='')$vendors[]=['vendor_id'=>$vid,'token'=>$vt,'name'=>trim($v['name']??''),'shop_name'=>trim($v['shop_name']??''),'price_mode'=>in_array(($v['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$v['price_mode']:'none','price_val'=>(float)($v['price_val']??0)];}} $_newSendShopIds = is_array($b['send_shop_ids']??null)?array_values(array_unique(array_filter(array_map('intval',$b['send_shop_ids']),function($v){return $v>0;}))):null; $_oldSendShopIds = is_array($_prevBslCfg['send_shop_ids']??null)?array_values(array_unique(array_filter(array_map('intval',$_prevBslCfg['send_shop_ids']),function($v){return $v>0;}))):null; $_sendShopIdsAt = ($_newSendShopIds !== $_oldSendShopIds) ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0); $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))]; }
+if (isset($_POST['basalam'])) {
+    $b = json_decode($_POST['basalam'], true) ?: [];
+    $_prevBslCfg = is_array($conn['basalam'] ?? null) ? $conn['basalam'] : [];
+    $fallbackCats = array_values(array_filter(array_map('intval', $b['fallback_cat_ids'] ?? []), function($v){ return $v > 0; }));
+    $vendors = [];
+    if (!empty($b['vendors']) && is_array($b['vendors'])) {
+        foreach ($b['vendors'] as $v) {
+            $vid = (int)($v['vendor_id'] ?? 0); $vt = trim($v['token'] ?? '');
+            if ($vid > 0 && $vt !== '') {
+                $vendors[] = ['vendor_id'=>$vid,'token'=>$vt,'name'=>trim($v['name']??''),'shop_name'=>trim($v['shop_name']??''),'price_mode'=>in_array(($v['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$v['price_mode']:'none','price_val'=>(float)($v['price_val']??0)];
+            }
+        }
+    }
+    $_newSendShopIds = is_array($b['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $b['send_shop_ids']), function($v){ return $v > 0; }))) : null;
+    $_oldSendShopIds = is_array($_prevBslCfg['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $_prevBslCfg['send_shop_ids']), function($v){ return $v > 0; }))) : null;
+    $_sendShopIdsAt = ($_newSendShopIds !== $_oldSendShopIds) ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0);
+    $_shopSendMode = in_array(($b['shop_send_mode'] ?? ''), ['serial', 'parallel'], true)
+        ? (string)$b['shop_send_mode']
+        : (in_array(($_prevBslCfg['shop_send_mode'] ?? ''), ['serial', 'parallel'], true) ? (string)$_prevBslCfg['shop_send_mode'] : 'serial');
+    $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'shop_send_mode'=>$_shopSendMode,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))];
+}
 
 
 if (isset($_POST['ai'])) { $a = json_decode($_POST['ai'], true) ?: []; $conn['ai'] = ['enabled'=>!empty($a['enabled']),'api_key'=>trim($a['api_key']??''),'base_url'=>trim($a['base_url']??'https://dashscope.aliyuncs.com/compatible-mode/v1'),'model'=>trim($a['model']??'qwen-plus'),'temperature'=>(float)($a['temperature']??0.1)]; }
@@ -27441,12 +27461,38 @@ function bslRowDisabledByShopPicker(array $row, array $cn, int $vid): bool {
     }
     return true;
 }
+function bslNormalizeShopSendMode($raw): string {
+    return ((string)$raw === 'parallel') ? 'parallel' : 'serial';
+}
+function bslEffectiveShopSendMode(?array $cn = null, ?array $overrideCfg = null): string {
+    if (is_array($overrideCfg) && isset($overrideCfg['shop_send_mode'])) {
+        return bslNormalizeShopSendMode($overrideCfg['shop_send_mode']);
+    }
+    if ($cn === null) $cn = loadConnections();
+    return bslNormalizeShopSendMode($cn['basalam']['shop_send_mode'] ?? 'serial');
+}
 /** Mark queued rows for newly disabled shops complete-without-sending. Running
  * workers also recheck the same predicate before every product. */
 function bslQueueApplyCurrentShopSelection(array &$queue,array $cn): array {
     $disabled=[];$defaultVid=(int)($cn['basalam']['vendor_id']??0);
     foreach((array)($queue['entries']??[]) as &$e){
         if(!is_array($e)||!in_array((string)($e['status']??''),['running','waiting','paused'],true))continue;
+        $parVids=array_values(array_filter(array_map('intval',(array)($e['config']['parallel_shop_vids']??$e['parallel_shop_vids']??[])),static fn($v)=>$v>0));
+        if(!empty($parVids)){
+            $keptVids=[];
+            foreach($parVids as $_pvid){if(!bslRowDisabledByShopPicker($e,$cn,$_pvid))$keptVids[]=$_pvid;}
+            if(!empty($keptVids)){
+                if(count($keptVids)!==count($parVids)){
+                    $e['parallel_shop_vids']=$keptVids;
+                    if(is_array($e['config']??null))$e['config']['parallel_shop_vids']=$keptVids;
+                }
+                continue;
+            }
+            $e['status']='done';$e['done_at']=time();$e['shop_disabled']=true;$e['disabled_at']=time();
+            $e['status_reason']='همهٔ غرفه‌های این ارسال موازی در تب ارسال غیرفعال شدند';
+            $disabled[]=['queue_id'=>(string)($e['id']??''),'vendor_id'=>(int)$parVids[0],'shop_name'=>(string)($e['shop_name']??'')];
+            continue;
+        }
         $vid=(int)($e['shop_vendor_id']??$e['config']['shop_vendor_id']??0);
         if($vid<=0&&empty($e['config']['fanout']))$vid=$defaultVid;
         if($vid<=0||!bslRowDisabledByShopPicker($e,$cn,$vid))continue;
@@ -27473,6 +27519,16 @@ function bslReconcileDisabledShopsNow(array $cn): array {
         $q=bslReadQueue();$signalled=[];
         foreach((array)($q['entries']??[]) as $e){
             if(!is_array($e)||(string)($e['status']??'')!=='running')continue;
+            $parVids=array_values(array_filter(array_map('intval',(array)($e['config']['parallel_shop_vids']??$e['parallel_shop_vids']??[])),static fn($v)=>$v>0));
+            if(!empty($parVids)){
+                $anyLive=false;
+                foreach($parVids as $_pv){if(bslShopSelectedForSend($cn,$_pv)){$anyLive=true;break;}}
+                if($anyLive)continue;
+                $qid=(string)($e['id']??'');
+                @file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'at'=>time(),'queue_id'=>$qid,
+                    'reason'=>'shop_disabled','vendor_id'=>(int)$parVids[0]],JSON_UNESCAPED_UNICODE),LOCK_EX);
+                $signalled[]=['queue_id'=>$qid,'vendor_id'=>(int)$parVids[0]];break;
+            }
             $vid=(int)($e['shop_vendor_id']??$e['config']['shop_vendor_id']??$cn['basalam']['vendor_id']??0);
             if($vid<=0||bslShopSelectedForSend($cn,$vid))continue;
             $qid=(string)($e['id']??'');
@@ -27762,6 +27818,87 @@ function bslShopsFindExistingMulti(string $title, string $productKey, array $sho
  *
  *  خروجی: [vendor_id => ['ok'=>bool,'id'=>int,'action'=>'created|updated','error'=>string]]
  * ===================================================================== */
+/**
+ * v10.461: آماده‌سازی یک‌بارهٔ فایل‌های محلی تصویر محصول از مبدأ و آپلود موازی (curl_multi)
+ * به همهٔ غرفه‌های باسلام بدون دانلود تکراری از سایت مبدأ.
+ */
+function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
+    $imgUrls = function_exists('productImageList') ? productImageList($p) : [];
+    $detailLink = trim((string)($p['link'] ?? $p['url'] ?? ''));
+    if (!$imgUrls && $detailLink !== '') {
+        $detailRes = fetch_html($detailLink, 20);
+        if (!empty($detailRes['ok']) && !empty($detailRes['html'])) {
+            $rescued = extractImageFromHtml((string)$detailRes['html'], $detailLink);
+            if ($rescued !== '') $imgUrls = [$rescued];
+        }
+    }
+    if (!$imgUrls) return [];
+    $deduped = array_values(galleryDedupe($imgUrls, max(1, min(3, $maxPhotos))));
+    $prevRole = $GLOBALS['_s4CurrentImageRole'] ?? null;
+    $out = [];
+    foreach ($deduped as $idx => $imgUrl) {
+        $imgUrl = trim((string)$imgUrl);
+        if ($imgUrl === '') continue;
+        $role = ($idx === 0 ? 'list' : 'gallery');
+        $GLOBALS['_s4CurrentImageRole'] = $role;
+        $editSig = function_exists('s4ActiveImageEditSignature') ? s4ActiveImageEditSignature($role) : '';
+        $cacheKey = substr(md5($imgUrl . ($editSig !== '' ? '|' . $editSig : '')), 0, 12);
+        $pickedPath = '';
+        foreach ((array)glob(UPLOAD_DIR . 'img_' . $cacheKey . '.*') as $f) {
+            if (is_file($f) && filesize($f) > 200) {
+                $fd = @file_get_contents($f);
+                if ($fd && isImageData($fd)) { $pickedPath = $f; break; }
+            }
+        }
+        if ($pickedPath === '') {
+            $saved = saveImageLocal($imgUrl, $detailLink);
+            if ($saved && is_file($saved) && filesize($saved) > 200) $pickedPath = $saved;
+        }
+        if ($pickedPath === '') continue;
+        $fdata = @file_get_contents($pickedPath);
+        if (!$fdata || !isImageData($fdata)) continue;
+        $realFmt = detectImageFormat($fdata) ?: 'jpg';
+        $conv = convertToSupportedFormat($fdata);
+        if (!empty($conv['ok']) && !empty($conv['converted_from'])) {
+            $fdata = $conv['data'];
+            $realFmt = 'jpg';
+            @file_put_contents($pickedPath, $fdata);
+        }
+        $mime = 'image/' . ($realFmt === 'jpg' ? 'jpeg' : $realFmt);
+        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . $cacheKey . '.' . $realFmt];
+    }
+    if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
+    else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
+    return $out;
+}
+function bslUploadPhotosMultiShops(array $localFiles, array $shops, int $conc = 4): array {
+    $perShopIds = [];
+    foreach ($shops as $vid => $_sh) $perShopIds[(int)$vid] = [];
+    foreach ($localFiles as $fileMeta) {
+        $path = (string)($fileMeta['path'] ?? '');
+        if ($path === '' || !is_file($path)) continue;
+        $mime = (string)($fileMeta['mime'] ?? 'image/jpeg');
+        $fname = (string)($fileMeta['name'] ?? 'product.jpg');
+        $jobs = [];
+        foreach ($shops as $vid => $sh) {
+            $vid = (int)$vid;
+            $tk = trim((string)($sh['token'] ?? ''));
+            if ($vid <= 0 || $tk === '') continue;
+            $jobs[$vid] = [
+                'tk' => $tk, 'm' => 'POST', 'ep' => 'files', 'mp' => true,
+                'd' => ['file' => new CURLFile($path, $mime, $fname), 'file_type' => 'product.photo'],
+            ];
+        }
+        if (!$jobs) continue;
+        foreach (bslReqMulti($jobs, $conc) as $vid => $r) {
+            if (!empty($r['ok']) && !empty($r['body']['id'])) {
+                $perShopIds[(int)$vid][] = (int)$r['body']['id'];
+            }
+        }
+    }
+    return $perShopIds;
+}
+
 function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4): array {
     $out = [];
     $title = trim((string)($p['title'] ?? ($p['name'] ?? '')));
@@ -27827,6 +27964,8 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             /* v10.392: Basalam rejects category_id on existing products (HTTP 422).
                Category is creation-only unless the dedicated category-fix workflow is used. */
             bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
+            $_mvUpd = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
+            if ($_mvUpd) $bu['variants'] = $_mvUpd;
             $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
                            'ep' => 'products/' . $exId, 'd' => $bu];
         }
@@ -27848,17 +27987,18 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         }
     }
 
-    // ---- فاز ۳: ساختِ همزمان برای غرفه‌هایی که محصول را ندارند
+    // ---- فاز ۳: ساختِ همزمان برای غرفه‌هایی که محصول را ندارند (آپلود موازی تصویر + POST موازی محصول)
     $toCreate = [];
     foreach ($live as $vid => $sh) if (empty($out[$vid]['ok'])) $toCreate[$vid] = $sh;
     if ($toCreate) {
-        $catUsed = $catId;
-        /* v10.83: اگر AI قبلاً دستهٔ باسلام را روی محصول نوشته، همان را بگیر */
-        if ($catUsed <= 0) {
-            $catUsed = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
-        }
+        $bslCfgIn = is_array($opts['basalam_cfg'] ?? null) ? $opts['basalam_cfg'] : null;
+        $fallback = is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
+        $prodMappedCat = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
+        $manualChain = bslCollectManualCategories($prodMappedCat > 0 ? $prodMappedCat : 0, $profile, array_merge($catId > 0 ? [$catId] : [], $fallback), $bslCfgIn);
+        $catUsed = !empty($manualChain) ? (int)$manualChain[0] : $catId;
         if ($catUsed <= 0 && $autoCat && !empty($flatCats)) {
             $_ac = autoMatchBslCategory($title, $flatCats);
+            if ($_ac <= 0) $_ac = autoMatchBslCategoryForce($title, $flatCats);
             if ($_ac > 0) $catUsed = $_ac;
         }
         if ($catUsed > 0 && !empty($cData)) $catUsed = findLeafCategory($catUsed, $cData);
@@ -27871,19 +28011,29 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         bslApplyContent($_buTmp, array_merge($p, ['short_desc' => $brief, 'long_desc' => $desc]));
         if (!empty($_buTmp['brief'])) $brief = (string)$_buTmp['brief'];
         if (!empty($_buTmp['description'])) $desc = (string)$_buTmp['description'];
+        $localPhotos = ($catUsed > 0 && !bslStopRequestedForQueue())
+            ? s4PrepareLocalPhotosForMultiShop($p, max(1, min(3, (int)($opts['upload_max_photos'] ?? 1))))
+            : [];
+        $shopPhotoMap = !empty($localPhotos) ? bslUploadPhotosMultiShops($localPhotos, $toCreate, $conc) : [];
         $jobs = [];
         foreach ($toCreate as $vid => $sh) {
+            $pidsForShop = array_values(array_filter(array_map('intval', (array)($shopPhotoMap[$vid] ?? [])), static fn($x) => $x > 0));
+            if ($catUsed <= 0 || empty($pidsForShop)) continue;
+            $pkgWUse = $pkgW > 0 ? $pkgW : max(1, $weight + 100);
             $bp = ['name' => mb_substr($title, 0, 120), 'brief' => mb_substr($brief, 0, 250),
                    'description' => $desc, 'primary_price' => $prices[$vid], 'stock' => $stock,
-                   'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgW,
-                   'is_wholesale' => false, 'category_id' => $catUsed, 'status' => 3790];
+                   'preparation_days' => $prepD, 'weight' => $weight, 'package_weight' => $pkgWUse,
+                   'is_wholesale' => false, 'category_id' => $catUsed,
+                   'photo' => (int)$pidsForShop[0], 'photos' => $pidsForShop, 'status' => 3790];
             if (!empty($p['sku'])) $bp['sku'] = $p['sku'];
+            $_mvNew = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
+            if ($_mvNew) $bp['variants'] = $_mvNew;
             $jobs[$vid] = ['tk' => (string)$sh['token'], 'm' => 'POST',
                            'ep' => 'vendors/' . $vid . '/products', 'd' => $bp];
         }
         foreach (bslReqMulti($jobs, $conc) as $vid => $r) {
             if (!empty($r['ok']) && !empty($r['body']['id'])) {
-                $out[(int)$vid] = ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'update_reason' => 'ایجاد در غرفهٔ اضافی'];
+                $out[(int)$vid] = ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'used_cat_id' => $catUsed, 'update_reason' => 'ایجاد موازی در غرفه'];
                 $ledger[(int)$vid] = (int)$r['body']['id'];
             } else {
                 $em = $r['body']['message'] ?? $r['body']['error'] ?? ($r['error'] ?? '؟');
@@ -31780,11 +31930,16 @@ if ($bslDup !== null) {
 /* v10.73 (87): همان fan-outِ مسیرِ دستی — هر غرفهٔ فعال یک ردیفِ مستقل.
    ردیفِ اول با شناسهٔ اصلی و بقیه با پسوند _s{vendor_id}؛ همه زیرِ batch_id. */
 $bslFanout=(!empty($cn['basalam']['send_all_shops'])||is_array($cn['basalam']['send_shop_ids']??null))?bslFanoutShops($cn):[];
-if (count($bslFanout) > 0) {
+$_cronShopMode = bslEffectiveShopSendMode($cn);
+if (count($bslFanout) > 1 && $_cronShopMode === 'parallel') {
+    $_cronParVids = array_values(array_map(static fn($x) => (int)$x['vendor_id'], $bslFanout));
+    $_cronParNames = array_values(array_map(static fn($x) => (string)$x['shop_name'], $bslFanout));
+    $queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'created_at' => $now, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'shop_name' => '⚡ موازی (' . count($bslFanout) . ' غرفه)', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 0, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'parallel_shop_names' => $_cronParNames, 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
+} elseif (count($bslFanout) > 0) {
     $__bfFirst=true;
     foreach ($bslFanout as $__bfSh) {
         $__bfVid=(int)$__bfSh['vendor_id'];
-        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
+        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'serial', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_send_mode' => 'serial', 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
         $__bfFirst=false;
     }
 } elseif(!is_array($cn['basalam']['send_shop_ids']??null)) {
@@ -52302,6 +52457,33 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_POST['products_b64'] = base64_encode(json_encode([['key' => 'p1', 'title' => 'قابلمه گرانیتی', 'specs' => '<table class="s4-specs-table"><tr><th>سایز</th><td>۲۸</td></tr></table>']], JSON_UNESCAPED_UNICODE));
     $_decodedB64_460 = function_exists('s4DecodePostedProductsPayload') ? s4DecodePostedProductsPayload() : [];
     if ($_prevPostB64_460 === null) unset($_POST['products_b64']); else $_POST['products_b64'] = $_prevPostB64_460;
+    $_qPar461 = ['entries' => [
+        ['id' => 'qp_1', 'status' => 'running', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1093225, 710223]]],
+        ['id' => 'qp_2', 'status' => 'waiting', 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728], 'created_at' => 1000, 'config' => ['shop_send_mode' => 'parallel', 'parallel_shop_vids' => [1211728]]],
+    ]];
+    $_cnPar461 = ['basalam' => ['vendor_id' => 1211728, 'send_shop_ids' => [710223], 'send_shop_ids_at' => 2000, 'shop_send_mode' => 'parallel']];
+    $_disPar461 = function_exists('bslQueueApplyCurrentShopSelection') ? bslQueueApplyCurrentShopSelection($_qPar461, $_cnPar461) : [];
+    $add('10.461', 'دراپ‌داون و قابلیت ارسال سری و موازی به غرفه‌ها در تب ارسال باسلام + آپلود موازی تصاویر و حفظ غرفه‌های فعال',
+         function_exists('bslNormalizeShopSendMode')
+      && function_exists('bslEffectiveShopSendMode')
+      && function_exists('s4PrepareLocalPhotosForMultiShop')
+      && function_exists('bslUploadPhotosMultiShops')
+      && bslNormalizeShopSendMode('parallel') === 'parallel'
+      && bslNormalizeShopSendMode('serial') === 'serial'
+      && bslNormalizeShopSendMode('invalid') === 'serial'
+      && bslEffectiveShopSendMode($_cnPar461) === 'parallel'
+      && bslEffectiveShopSendMode($_cnPar461, ['shop_send_mode' => 'serial']) === 'serial'
+      && ($_qPar461['entries'][0]['status'] ?? '') === 'running'
+      && ($_qPar461['entries'][0]['parallel_shop_vids'] ?? []) === [710223]
+      && ($_qPar461['entries'][1]['status'] ?? '') === 'done'
+      && !empty($_qPar461['entries'][1]['shop_disabled'])
+      && count($_disPar461) === 1
+      && strpos($selfSrc, 'id="bsShopSendMode"') !== false
+      && strpos($selfSrc, 'function bslGetShopSendMode()') !== false
+      && strpos($selfSrc, 'function bslOnShopSendModeChange()') !== false
+      && strpos($selfSrc, "'phase'=>'parallel_shops'") !== false
+      && strpos($selfSrc, "{v:'10." . "461'") !== false
+      && version_compare(APP_VERSION, '10.461', '>='));
     $add('10.460', 'رفع کامل عدم شروع ارسال‌های باسلام و ووکامرس: ساخت سرورساید از پروفایل بدون آپلود چندمگابایتی، حذف تداخل قفل HTTP/CLI، محافظت غرفهٔ هدف در یکسان‌سازی و زنجیره‌سازی صف ووکامرس',
          function_exists('s4BuildQueueProductsFromProfile')
       && function_exists('s4RecordCliQueueSpawn')
@@ -58188,7 +58370,22 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             $allFallbackCats = is_array($profile['bslFallbackCatIds'] ?? null) ? $profile['bslFallbackCatIds'] : [];
             $manualShops=is_array($cn['basalam']['send_shop_ids']??null)?bslFanoutShops($cn):[];$createdBslIds=[];
             $_explicitShopTarget=($queueTrigger==='cell_equalize'&&isset($enqueueOpts['bsl_vendor_id'])&&(int)$enqueueOpts['bsl_vendor_id']>0)?1:0;
-            if($manualShops){
+            $_manShopMode=bslEffectiveShopSendMode($cn, $enqueueOpts);
+            if(count($manualShops)>1&&$_manShopMode==='parallel'&&!$_explicitShopTarget){
+                $_manParVids=array_values(array_map(static fn($x)=>(int)$x['vendor_id'],$manualShops));
+                $_manParNames=array_values(array_map(static fn($x)=>(string)($x['shop_name']??''),$manualShops));
+                $createdBslIds[]=$queueId;
+                $queue['entries'][] = [
+                    'id'=>$queueId,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
+                    'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
+                    'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
+                    'shop_send_mode'=>'parallel','parallel_shop_vids'=>$_manParVids,'shop_name'=>'⚡ موازی ('.count($manualShops).' غرفه)',
+                    'explicit_shop_target'=>0,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
+                    'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
+                        'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>0,
+                        'shop_send_mode'=>'parallel','parallel_shop_vids'=>$_manParVids,'parallel_shop_names'=>$_manParNames,'force_all'=>true],
+                ];
+            }elseif($manualShops){
                 foreach($manualShops as $_msi=>$_msh){
                     $_mvid=(int)$_msh['vendor_id'];$_mid=$_msi===0?$queueId:($queueId.'_s'.$_mvid);$createdBslIds[]=$_mid;
                     $queue['entries'][] = [
@@ -58196,10 +58393,10 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                         'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
                         'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
                         'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'shop_is_default'=>!empty($_msh['is_default']),
-                        'explicit_shop_target'=>$_explicitShopTarget,
+                        'shop_send_mode'=>'serial','explicit_shop_target'=>$_explicitShopTarget,
                         'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
                         'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
-                            'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>1,
+                            'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial',
                             'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'force_all'=>true],
                     ];
                 }
@@ -69784,18 +69981,31 @@ if(is_array($_selectedVids)&&count($_selectedVids)>0&&count($fanoutShops)===0){
 }
 $_storeProfileKey=$_bslResolvedKey?:$pKeyIn;
 $_nowCreatedB=time();
+$_reqShopSendMode=isset($_POST['shop_send_mode'])
+    ?bslNormalizeShopSendMode($_POST['shop_send_mode'])
+    :bslEffectiveShopSendMode($cn);
+if(($cn['basalam']['shop_send_mode']??'serial')!==$_reqShopSendMode){
+    $cn['basalam']['shop_send_mode']=$_reqShopSendMode;
+    saveConnections($cn);
+}
 if(count($fanoutShops)>=1){
 $fanStatus=$startImm?'running':'waiting';
+if(count($fanoutShops)>1&&$_reqShopSendMode==='parallel'){
+$__parVids=array_values(array_map(static fn($__x)=>(int)$__x['vendor_id'],$fanoutShops));
+$__parNames=array_values(array_map(static fn($__x)=>(string)$__x['shop_name'],$fanoutShops));
+$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
+}else{
 $fanFirst=true;
 foreach($fanoutShops as $__fs){
 $__fsVid=(int)$__fs['vendor_id'];
 $__fsId=$fanFirst?$queueId:$queueId.'_s'.$__fsVid;
-$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
+$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
 $fanFirst=false;
+}
 }
 bslWriteQueue($queue);
 $_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 $entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
@@ -70652,6 +70862,28 @@ $__scopeVid=(int)($qCfg['shop_vendor_id']??0);
 $__scopeName=trim((string)($qCfg['shop_name']??''));
 $__isFanoutRow=!empty($qCfg['fanout']);
 $__scopeShop=null;
+$__parallelShopVids=array_values(array_filter(array_map('intval',(array)($qCfg['parallel_shop_vids']??$nextEntry['parallel_shop_vids']??[])),static fn($v)=>$v>0));
+$__parallelShops=[];
+if(!empty($__parallelShopVids)){
+foreach(bslAllShops($cn) as $__shPar){
+$__shParVid=(int)($__shPar['vendor_id']??0);
+if($__shParVid>0&&in_array($__shParVid,$__parallelShopVids,true)&&trim((string)($__shPar['token']??''))!==''){
+$__parallelShops[]=$__shPar;
+}
+}
+if(empty($__parallelShops)){
+$queue['entries'][$nextIdx]['status']='failed';
+$queue['entries'][$nextIdx]['done_at']=time();
+$queue['entries'][$nextIdx]['fail_reason']='غرفه‌های انتخابی برای ارسال موازی دیگر در تنظیمات نیستند یا توکنشان خالی است';
+bslWriteQueue($queue);
+writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه‌های هدف یافت نشدند'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink(BSL_PRODUCTS_FILE);
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode(['ok'=>false,'error'=>'غرفه‌های هدف یافت نشدند','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
+exit;
+}
+}
+$__isParallelShopsRow=!empty($__parallelShops);
 if($__scopeVid>0){
 foreach(bslAllShops($cn) as $__shScope){
 if((int)$__shScope['vendor_id']===$__scopeVid){$__scopeShop=$__shScope;break;}
@@ -70692,6 +70924,13 @@ $tk=trim((string)$__scopeShop['token']);
 $vid=$__scopeVid;
 $bslDefaultVid=$vid;
 $bslDefaultShopName=$__scopeName!==''?$__scopeName:(string)$__scopeShop['shop_name'];
+$cData=[];
+$catId=(int)($cn['basalam']['category_id']??0);
+}elseif($__isParallelShopsRow){
+$tk=trim((string)($__parallelShops[0]['token']??$tk));
+$vid=(int)($__parallelShops[0]['vendor_id']??$vid);
+$bslDefaultVid=0;
+$bslDefaultShopName='ارسال موازی به '.count($__parallelShops).' غرفه';
 $cData=[];
 $catId=(int)($cn['basalam']['category_id']??0);
 }
@@ -70759,9 +70998,9 @@ bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['🚀 شروع ارسا�
 $pd=$verifyProducts;$total=count($pd);$sent=0;$updated=0;$skipped=0;$fail=0;
 /* phase_current is a completed-item count. Resume after it for product phases;
    later phases skip the already-finished primary-shop sweep entirely. */
-if(in_array($bslResumePhase,['send','scope_shop'],true)&&array_key_exists('phase_current',$bslResumeSnapshot))
+if(in_array($bslResumePhase,['send','scope_shop','parallel_shops'],true)&&array_key_exists('phase_current',$bslResumeSnapshot))
     $bslResumeStart=max($bslResumeStart,min($total+1,max(1,$bslResumePhaseCurrent+1)));
-elseif(in_array($bslResumePhase,['multi_shop','multi_shop_done','extra_shop_price','extra_shop_price_done','scope_shop_done','category_retry','category_retry_done','image_retry','image_retry_done'],true))
+elseif(in_array($bslResumePhase,['multi_shop','multi_shop_done','extra_shop_price','extra_shop_price_done','scope_shop_done','parallel_shops_done','category_retry','category_retry_done','image_retry','image_retry_done'],true))
     $bslResumeStart=$total+1;
 /* v10.56 (۷۰): ادامه — شمارنده‌ها را از فایلِ پیشرفتِ قبلی برمی‌گردانیم
    (فایلِ محصولاتِ هر ردیفِ صف ثابت است، پس شمارشِ اجرأ قبلی معتبر است).
@@ -70805,7 +71044,7 @@ if($bslResumeStart>0){
     if($bslResumePhase!==''){
         $__resumePulseExtra=array_intersect_key($bslResumeSnapshot,array_flip(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','batch_done_indices']));
         $__resumePulseExtra['phase']=$bslResumePhase;
-        if(in_array($bslResumePhase,['send','scope_shop'],true))$__resumePulseExtra['phase_current']=min($total,max(0,$bslResumeStart-1));
+        if(in_array($bslResumePhase,['send','scope_shop','parallel_shops'],true))$__resumePulseExtra['phase_current']=min($total,max(0,$bslResumeStart-1));
         if(in_array($bslResumePhase,['existing_scan','existing_scan_done','batch_update','batch_update_accounted','send'],true))$__resumePulseExtra['batch_done_indices']=$GLOBALS['_bslBatchDoneIndices'];
     }
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['🔄 ادامه از محصول #'.$bslResumeStart.' — کارت‌های قبلی: '.(count($bslSentList)+count($bslUpdatedList)+count($bslSkippedList)+count($bslFailedList))],$__resumePulseExtra);
@@ -70818,7 +71057,7 @@ $GLOBALS['_bslBatchDoneIndices']=array_values(array_map('intval',array_keys($bsl
    می‌فرستیم. این مسیر فقط برای ردیف‌هایی فعال می‌شود که شناسه‌شان از کاتالوگ
    مشترک/دفترچه روشن است و به آپلود تصویر نیاز ندارند؛ ساخت محصول و خطاهای
    پیچیده همچنان در حلقهٔ مطمئنِ قدیمی انجام می‌شود. */
-if(!$__scopeShop && $bslParallelN>1 && $total>=3 && $bslResumeStart<=1){
+if(!$__scopeShop && !$__isParallelShopsRow && $bslParallelN>1 && $total>=3 && $bslResumeStart<=1){
 $__fastItems=[];$__fastMeta=[];$__fastSkipped=[];$__defaultShop=['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName];
 $__fastStarted=microtime(true);$__fastScanned=0;$__fastBudget=20.0;
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',['🔍 بررسی سریع محصولات موجود آغاز شد'],['phase'=>'existing_scan','phase_label'=>'بررسی محصولات موجود','phase_current'=>0,'phase_total'=>$total,'phase_pct'=>0]);
@@ -70891,6 +71130,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,
    لایهٔ دوم برای ردیف‌های گره‌خورده به غرفهٔ غیرپیش‌فرض رد می‌شود (کارِ
    آن‌ها را حلقهٔ تک‌غرفه‌ایِ بعد از این بلوک انجام می‌دهد). */
 if(!$__scopeShop){
+if(!$__isParallelShopsRow){
 foreach($pd as $i=>$p){
 /* v10.56 (۷۰): محصولاتِ قبلِ چک‌پوینت را رد کن (در اجرأ قبلی انجام شده‌اند). */
 if(($i+1)<$bslResumeStart)continue;
@@ -71384,6 +71624,7 @@ if(!$__sendAllShops&&!$__isFanoutRow&&!bslStopRequestedForQueue())
         ['phase'=>'extra_shop_price_done','phase_label'=>'تعدیل قیمت غرفه‌های اضافی تمام شد',
          'phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100]);
 
+} /* پایانِ حلقهٔ تک‌غرفهٔ پیش‌فرض */
 } /* v10.73 (87): پایانِ بلوکِ «غرفهٔ پیش‌فرض» */
 /* v10.73 (87): وظیفهٔ اختصاصیِ غرفهٔ غیرپیش‌فرض — دقیقاً همان منطقِ
    مسیرِ همزمانِ قبلی (bslUpsertManyShops با قیمتِ دولایه و کلیدِ
@@ -71462,8 +71703,116 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',['🏪 غرف�
      'phase_pct'=>100,'phase_shop_vendor_id'=>$__scopeVid,'phase_shop_name'=>$sShopName]);
 }
 }
+/* v10.461: ارسال موازی (همزمان به همهٔ غرفه‌های انتخابی) با curl_multi (bslUpsertManyShops)
+   در یک ردیف یکپارچه با آمار زندهٔ تفکیک‌شدهٔ هر غرفه و ذخیرهٔ چک‌پوینت پس از هر محصول. */
+if($__isParallelShopsRow){
+$__parProfKey=trim((string)($nextEntry['profile_key']??''));
+$__parAllProfs=$__parProfKey!==''?loadProfiles():[];
+$__parResKey=($__parProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__parProfKey,$__parAllProfs):null;
+$__parProf=($__parProfKey!==''&&isset($__parAllProfs[$__parProfKey]))
+    ?$__parAllProfs[$__parProfKey]
+    :(($__parResKey!==null&&isset($__parAllProfs[$__parResKey]))?$__parAllProfs[$__parResKey]:null);
+$__parOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>$__parProf,'profile_key'=>$__parProfKey,
+    'basalam_cfg'=>($cn['basalam']??[]),'stock'=>(int)($cn['basalam']['stock']??10),
+    'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),
+    'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),
+    'category_id'=>(int)($cn['basalam']['category_id']??0),'auto_category'=>$autoCat,
+    'fallback_cat_ids'=>bslCollectManualCategories(0,$__parProf,$bslFallbackCats,$cn['basalam']??[]),
+    'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[]),'find_deep_scan'=>false];
+foreach($__parallelShops as $__pShInit){
+    $__pInitVid=(int)($__pShInit['vendor_id']??0);
+    $__pInitName=trim((string)($__pShInit['shop_name']??''));
+    if($__pInitVid>0&&!isset($bslShopStats[$__pInitVid])){
+        bslShopStatSet($__pInitVid,$__pInitName!==''?$__pInitName:('غرفهٔ '.$__pInitVid),0,0,0,0);
+    }
+}
+$__parStop=false;$__parDone=max(0,$bslResumeStart-1);
+$__parStartMsg=$bslResumeStart>0
+    ?('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] ادامه از محصول #'.$bslResumeStart.' — '.$total.' محصول')
+    :('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] شروعِ ارسال همزمان — '.$total.' محصول — فاصله: '.$bslDelayMs.'ms');
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,max($bslResumeStart,0),'',[$__parStartMsg],
+    ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
+     'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+foreach($pd as $__pi=>$p){
+if(($__pi+1)<$bslResumeStart)continue;
+$__liveParCn=loadConnections();
+$__activeParShops=[];
+foreach($__parallelShops as $__pShChk){
+    $__pChkVid=(int)($__pShChk['vendor_id']??0);
+    if($__pChkVid<=0)continue;
+    if(!bslShopSelectedForSend($__liveParCn,$__pChkVid)&&bslRowDisabledByShopPicker($nextEntry,$__liveParCn,$__pChkVid))continue;
+    $__activeParShops[]=$__pShChk;
+}
+if(empty($__activeParShops)){
+    bslFinishDisabledShopRow((string)$bslQueueId,(int)($__parallelShops[0]['vendor_id']??0),'همهٔ غرفه‌های ارسال موازی',$__parDone,$total,$sent,$updated,$skipped,$fail);
+}
+clearstatcache(true,BSL_STOP_FILE);
+if(bslStopRequestedForQueue()){$__parStop=true;break;}
+$__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
+$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);
+$__pTitle=trim((string)($p['title']??$p['name']??''));
+$__pKey=(string)($p['key']??'');
+$__pRawP=extractSourcePrice($p);
+$__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
+foreach($__activeParShops as $__pShOne){
+    $__pVid=(int)($__pShOne['vendor_id']??0);
+    if(!isset($__parResAll[$__pVid]))continue;
+    $__pRes=$__parResAll[$__pVid];
+    $__pShopName=trim((string)($__pShOne['shop_name']??''));
+    if($__pShopName==='')$__pShopName='غرفهٔ '.$__pVid;
+    $__pShopPrice=($__parOpts['profile']&&$__pRawP!==''&&extractPriceNum($__pRawP)>0)
+        ?(int)(bslShopPriceForProfile($__parOpts['profile'],$__pRawP,$__pShOne,(int)($cn['basalam']['price_round']??0))['price']??0)
+        :($__pBasePrice>0?(int)(bslShopPriceFor($__pBasePrice,$__pShOne,(int)($cn['basalam']['price_round']??0))['price']??$__pBasePrice):0);
+    $__pCard=['image'=>$p['image']??'','price'=>(($p['price_unit']??'')==='rial'?$__pShopPrice:$__pShopPrice*10),
+        'link'=>$p['link']??'','vendor_id'=>$__pVid,'shop_name'=>$__pShopName];
+    if(!empty($__pRes['ok'])){
+        if(($__pRes['action']??'')==='created'){
+            $sent++;bslShopStatBump($__pVid,$__pShopName,'c');
+            $bslSentList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0)],$__pCard);
+        }elseif(!empty($__pRes['skipped'])){
+            $skipped++;bslShopStatBump($__pVid,$__pShopName,'s');
+            $bslSkippedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'reason'=>'بدون تغییر','remote_id'=>(int)($__pRes['id']??0)],$__pCard);
+        }else{
+            $updated++;bslShopStatBump($__pVid,$__pShopName,'u');
+            $bslUpdatedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0),
+                'changes'=>(string)($__pRes['update_reason']??'آپدیت موازی غرفه‌ها'),
+                'update_reason'=>(string)($__pRes['update_reason']??'آپدیت موازی غرفه‌ها'),
+                'changes_detail'=>(string)($__pRes['changes_detail']??('ارسال موازی؛ نتیجه: '.($__pRes['action']??''))),
+                'action'=>(string)($__pRes['action']??'parallel_shops')],$__pCard);
+        }
+    }else{
+        if(!empty($__pRes['stopped'])||($__pRes['error']??'')==='stopped'){$__parStop=true;break;}
+        $fail++;bslShopStatBump($__pVid,$__pShopName,'f');
+        $bslFailedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,
+            'error'=>mb_substr('غرفهٔ '.$__pShopName.': '.($__pRes['error']??'?'),0,260),
+            'error_code'=>(int)($__pRes['error_code']??$__pRes['code']??0),
+            'error_step'=>(string)($__pRes['error_step']??'parallel_shops'),
+            'endpoint'=>(string)($__pRes['endpoint']??''),'reason_kind'=>(string)($__pRes['reason_kind']??''),
+            'ai_cat_queued'=>!empty($__pRes['ai_cat_queued']),
+            'tried_cat_ids'=>array_values((array)($__pRes['tried_cat_ids']??[])),
+            'error_detail'=>(string)($__pRes['error_detail']??$__pRes['error']??'')],$__pCard);
+    }
+}
+if($__parStop)break;
+$__parDone=$__pi+1;
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),
+    '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
+    ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
+     'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+usleep($bslDelayMs*1000);
+}
+if($__parStop){
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',['⏹ ارسال موازی غرفه‌ها با سیگنال توقف متوقف شد'],
+    ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
+     'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+}else{
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',['⚡ ارسال موازی به '.count($__parallelShops).' غرفه تمام شد: '.$sent.' ساخته، '.$updated.' آپدیت، '.$skipped.' بی‌تغییر، '.$fail.' خطا'],
+    ['phase'=>'parallel_shops_done','phase_label'=>'ارسال موازی به غرفه‌ها تمام شد','phase_current'=>$total,
+     'phase_total'=>$total,'phase_pct'=>100]);
+}
+}
 $catFixed=0;$catRetryFailed=0;$catRejected=[];
-$__skipCategoryRetry=in_array($bslResumePhase,['category_retry_done','image_retry','image_retry_done'],true);
+$__skipCategoryRetry=$__isParallelShopsRow||in_array($bslResumePhase,['category_retry_done','image_retry','image_retry_done'],true);
 if(!$__skipCategoryRetry&&!empty($bslFlatCats)){
     $bslPage2=1;$bslMore2=true;
     while($bslMore2&&$bslPage2<=3){
@@ -71531,7 +71880,7 @@ elseif(!$__skipCategoryRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$t
      'phase_shop_vendor_id'=>$vid]);
 
 $imgRetryCount=0;$imgRetryFixed=0;$imgRetryFailed=0;$imgFailedEntries=[];
-$__skipImageRetry=$bslResumePhase==='image_retry_done';
+$__skipImageRetry=$__isParallelShopsRow||$bslResumePhase==='image_retry_done';
 if(!$__skipImageRetry){
     foreach($bslFailedList as $fEntry){
         if(($fEntry['error']??'')==='تصویر آپلود نشد'&&!empty($fEntry['link'])
@@ -81341,10 +81690,10 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 
 <details class="alert alert-info hint-collapse" style="margin-bottom:8px"><summary><span>💡 <b id="bsN">۰</b> محصول با قیمت از <span id="bsT2">۰</span> کل</span></summary><div class="hint-body" style="font-size:11px">فقط محصولاتِ دارای <b>قیمت</b> به باسلام فرستاده می‌شوند. با تیکِ «ارسال همزمان به همهٔ غرفه‌ها» هر غرفه قیمتِ خودش را می‌گیرد.</div></details>
-<!-- v10.88: multi-shop picker dropdown -->
-<div style="margin-bottom:8px" id="bsShopPickerWrap">
+<!-- v10.88 / v10.461: multi-shop picker dropdown + serial/parallel mode selector -->
+<div style="margin-bottom:8px;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:8px" id="bsShopPickerWrap">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-    <span style="font-size:11px;color:#c4b5fd;font-weight:600">🏪 ارسال به غرفه‌ها:</span>
+    <span style="font-size:11px;color:#c4b5fd;font-weight:700">🏪 ارسال به غرفه‌ها:</span>
     <div style="position:relative;display:inline-block" id="bsShopDropWrap">
       <button type="button" id="bsShopDropBtn"
         onclick="bslToggleShopDrop()"
@@ -81362,7 +81711,16 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
         </div>
       </div>
     </div>
-    <span id="bsShopsHint" style="font-size:10px;color:#67e8f9"></span>
+    <div style="display:inline-flex;align-items:center;gap:6px" id="bsShopModeWrap">
+      <label for="bsShopSendMode" style="font-size:11px;color:#93c5fd;font-weight:600;white-space:nowrap">🔀 شیوهٔ ارسال غرفه‌ها:</label>
+      <select id="bsShopSendMode" onchange="bslOnShopSendModeChange()"
+        style="padding:5px 9px;background:#1e293b;border:1px solid #475569;border-radius:7px;color:#e2e8f0;font-size:11px;cursor:pointer;min-width:190px;direction:rtl"
+        title="سری: هر غرفه یک وظیفهٔ مستقل در صف دارد و نوبتی ارسال می‌شود. موازی: هر محصول همزمان به همهٔ غرفه‌های انتخابی ارسال می‌شود.">
+        <option value="serial">📋 سری (نوبتی — غرفه به غرفه)</option>
+        <option value="parallel">⚡ موازی (همزمان به همهٔ غرفه‌ها)</option>
+      </select>
+    </div>
+    <span id="bsShopsHint" style="font-size:10.5px;color:#67e8f9"></span>
   </div>
 </div>
 <!-- hidden compat: keep bsSendAllShops for saveConn compatibility -->
@@ -82233,14 +82591,29 @@ function bslUpdateShopDropLabel(){
         lbl.textContent='\U0001f3ea '+names.join('، ')+(sel>2?'...':'');
     }
 }
+function bslGetShopSendMode(){
+    const el=$('bsShopSendMode');
+    return (el&&el.value==='parallel')?'parallel':'serial';
+}
+function bslOnShopSendModeChange(){
+    const m=bslGetShopSendMode();
+    if(cn&&cn.basalam)cn.basalam.shop_send_mode=m;
+    bslRenderShopsHint();
+    try{if(typeof scheduleConnSave==='function')scheduleConnSave();else saveConn();}catch(e){}
+}
 function bslRenderShopsHint(){
     const el=$('bsShopsHint'); if(!el)return;
     const shops=bslAllShopEntries(); const total=shops.length;
     const sel=(bslSelectedShopVids===null)?total:(bslSelectedShopVids||[]).length;
-    if(total===0){el.style.color='#fbbf24';el.textContent='\u26a0 \u063a\u0631\u0641\u0647\u0627\u06cc \u0641\u0639\u0627\u0644 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f';return;}
-    if(sel===0){el.style.color='#f87171';el.textContent='\u274c \u0647\u06cc\u0686 \u063a\u0631\u0641\u0647\u0627\u06cc \u0627\u0646\u062a\u062e\u0627\u0628 \u0646\u0634\u062f\u0647';return;}
-    if(sel===total){el.style.color='#67e8f9';el.textContent='\u2713 \u0647\u0645\u0647\u0654 '+toFa(total)+' \u063a\u0631\u0641\u0647 — \u0647\u0645\u0632\u0645\u0627\u0646 \u0627\u0631\u0633\u0627\u0644 \u0645\u06cc\u200c\u0634\u0648\u062f';}
-    else{el.style.color='#a78bfa';el.textContent='\u2713 '+toFa(sel)+' \u0627\u0632 '+toFa(total)+' \u063a\u0631\u0641\u0647 \u0627\u0646\u062a\u062e\u0627\u0628 \u0634\u062f\u0647';}
+    const modeWrap=$('bsShopModeWrap');
+    if(modeWrap)modeWrap.style.opacity=(sel>1?'1':'0.6');
+    if(total===0){el.style.color='#fbbf24';el.textContent='⚠ غرفه‌ای فعال یافت نشد';return;}
+    if(sel===0){el.style.color='#f87171';el.textContent='❌ هیچ غرفه‌ای انتخاب نشده';return;}
+    if(sel===1){el.style.color='#4ade80';el.textContent='✓ ۱ غرفه انتخاب شده — ارسال مستقیم';return;}
+    const isPar=(bslGetShopSendMode()==='parallel');
+    const modeTxt=isPar?'⚡ موازی (همزمان به همهٔ غرفه‌ها)':'📋 سری (نوبتی، هر غرفه جداگانه در صف)';
+    if(sel===total){el.style.color=isPar?'#67e8f9':'#c4b5fd';el.textContent='✓ همهٔ '+toFa(total)+' غرفه — '+modeTxt;}
+    else{el.style.color=isPar?'#38bdf8':'#a78bfa';el.textContent='✓ '+toFa(sel)+' از '+toFa(total)+' غرفه — '+modeTxt;}
 }
 function bslToggleAllShops(){bslRenderShopsHint();try{saveConn();}catch(e){}}
 // initialise hint after applyCn populates bslExtraVendors
@@ -88092,6 +88465,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.461', t:'🔀 افزودن قابلیت و دراپ‌داون «ارسال سری و موازی به غرفه‌ها» در تب ارسال باسلام + آپلود موازی تصاویر چندغرفه‌ای', items:[
+    'دراپ‌داون انتخاب شیوهٔ ارسال به غرفه‌ها (#bsShopSendMode) در تب ارسال باسلام کنار انتخابگر غرفه‌ها با دو حالت: ۱) «📋 سری (نوبتی — غرفه به غرفه)» که برای هر غرفه یک وظیفهٔ مستقل در صف می‌سازد و نوبتی ارسال می‌کند، و ۲) «⚡ موازی (همزمان به همهٔ غرفه‌ها)» که هر محصول را همزمان با curl_multi به همهٔ غرفه‌های انتخابی ارسال می‌کند؛ انتخاب کاربر به‌صورت خودکار در تنظیمات (shop_send_mode) ذخیره و بازیابی می‌شود.',
+    'پیاده‌سازی حلقهٔ ارسال موازی چندغرفه‌ای در bsl_backend (فاز parallel_shops) در یک ردیف یکپارچهٔ صف، همراه با آمار زندهٔ تفکیک‌شدهٔ هر غرفه (bslShopStatsHtml)، اعمال سه‌لایهٔ تعدیل قیمت اختصاصی هر غرفه، ذخیرهٔ چک‌پوینت دقیق پس از هر محصول و ادامه از همان نقطه هنگام توقف/ادامه.',
+    'آپلود موازی تصاویر محصول برای ساخت همزمان در چند غرفه (s4PrepareLocalPhotosForMultiShop + bslUploadPhotosMultiShops): فایل تصویر و گالری محصول فقط یک‌بار از مبدأ آماده/ویرایش می‌شود و همزمان با bslReqMulti به تمام غرفه‌های هدف آپلود می‌گردد و همراه با تنوع‌ها (variants) در POST موازی ثبت می‌شود.',
+    'پشتیبانی هوشمند انتخاب زندهٔ غرفه‌ها در حالت موازی (bslQueueApplyCurrentShopSelection + bslReconcileDisabledShopsNow): برداشتن تیک یک غرفه حین اجرا فقط همان غرفه را از ادامهٔ ارسال موازی حذف می‌کند و سایر غرفه‌های فعال بدون توقف ادامه می‌دهند، و تنها در صورت غیرفعال شدن تمام غرفه‌های هدف، ردیف متوقف می‌شود.'
+  ]},
   {v:'10.460', t:'🚀 رفع ریشه‌ای شروع نشدن ارسال‌های باسلام و ووکامرس (ساخت سرورساید آنی از پروفایل، حذف تداخل قفل HTTP/CLI، همگام‌سازی غرفه‌ها و زنجیره‌سازی صف ووکامرس)', items:[
     'شروع آنی ارسال بدون آپلود چندمگابایتی از مرورگر (s4BuildQueueProductsFromProfile + from_profile=1): در پروفایل‌های سنگین (مثل پروفایل‌های ۴۳۰۰+ محصولی با جداول HTML مشخصات و گالری کامل ~۸.۵ مگابایت)، کلیک روی «ارسال به باسلام» یا «ارسال ووکامرس» دیگر معطل دانلود کامل load_profile یا آپلود ۱۵+ تکهٔ سنگین از مرورگر نمی‌ماند و مستقیماً روی سرور در کمتر از یک ثانیه لیست ارسال را با اعمال ضرایب قیمت و پسوند عنوان می‌سازد؛ در مسیر پشتیبان نیز تکه‌ها به ۸۰ محصول با کدگذاری Base64 (products_b64) تبدیل شدند تا توسط WAF/ModSecurity مسدود نشوند.',
     'رفع مسابقهٔ قفل (flock race) بین درخواست HTTP مرورگر و پردازش پس‌زمینهٔ CLI: ۱) ثبت نشانگر اسپاون CLI (s4RecordCliQueueSpawn / s4GetActiveCliQueueSpawn) تا درخواست HTTP موازی قفل bsl_backend.lock یا woo_backend.lock را از پردازش پایدار CLI ندزدد، ۲) عدم ارسال درخواست اضافی مرورگر وقتی سرور worker_pid زنده برگردانده است، و ۳) رفع رها شدن ردیف‌های running در bsl_backend هنگامی که قفل انحصاری در اختیار پردازش فعلی است یا بیش از یک ردیف running یتیم وجود دارد.',
@@ -97587,7 +97966,7 @@ try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto
 if(w.store_url&&$('wcUrl'))$('wcUrl').value=w.store_url;if(w.consumer_key&&$('wcCK'))$('wcCK').value=w.consumer_key;if(w.consumer_secret&&$('wcCS'))$('wcCS').value=w.consumer_secret;try{const sm=w.sync_mode||'api';if($('wcModeApi'))$('wcModeApi').checked=(sm!=='direct');if($('wcModeDirect'))$('wcModeDirect').checked=(sm==='direct');if($('wcSyncFallback'))$('wcSyncFallback').value=w.sync_fallback||'api_then_direct';}catch(e){}if(w.default_status&&$('wcSt'))$('wcSt').value=w.default_status;if(w.default_category&&$('wcCat'))$('wcCat').value=w.default_category;if($('wcMS'))$('wcMS').checked=!!w.manage_stock;if(w.stock_quantity&&$('wcSQ'))$('wcSQ').value=w.stock_quantity;if($('wcPMode'))$('wcPMode').value=w.price_mode||'none';if($('wcPVal'))$('wcPVal').value=(w.price_val!==undefined?w.price_val:0);if($('wcPRound'))$('wcPRound').value=String(w.price_round||0);try{syncWcPriceUi('main');}catch(e){}if($('bsPMode'))$('bsPMode').value=b.price_mode||'none';if($('bsPVal'))$('bsPVal').value=(b.price_val!==undefined?b.price_val:0);if($('bsPRound'))$('bsPRound').value=String(b.price_round||0);try{destPricePreview('wc');destPricePreview('bs');}catch(e){}if(b.token&&$('bsTk'))$('bsTk').value=b.token;if(b.vendor_id&&$('bsVid'))$('bsVid').value=b.vendor_id;if(b.preparation_days&&$('bsPD'))$('bsPD').value=b.preparation_days;if(b.weight&&$('bsW'))$('bsW').value=b.weight;if($('bsPW')&&b.package_weight)$('bsPW').value=b.package_weight;if(b.stock&&$('bsSt'))$('bsSt').value=b.stock;// v9.80: سوییچ «اتصال غیرمستقیم» باسلام
 if($('bsIndirect'))$('bsIndirect').checked=!!b.net_indirect;// v7.48: Restore category in searchable dropdown
 if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else{loadBslCats();}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
-if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
+if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
 // v8.17: Restore global fallback categories
 if(b.fallback_cat_ids&&Array.isArray(b.fallback_cat_ids)){renderBslFallbackCats(b.fallback_cat_ids);}
 // v8.17: Restore extra vendors
@@ -98392,7 +98771,7 @@ window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
 
-fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
+fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
@@ -103127,7 +103506,10 @@ function queueBslSend(ps,catId){
     s4ExpandQueuePanel('bsl');
     function finishBslQueueAdded(d,fallbackCount){
         const totalFinal=parseInt(d.total)||fallbackCount||0;
-        if(d.shop_count>1){showToast('📦 '+toFa(d.shop_count)+' غرفه — هرکدام یک وظیفهٔ جدا در صف',true);}
+        if(d.shop_count>1){
+            if(d.shop_send_mode==='parallel')showToast('⚡ ارسال موازی همزمان به '+toFa(d.shop_count)+' غرفه آغاز شد',true);
+            else showToast('📦 '+toFa(d.shop_count)+' غرفه — ارسال سری (هر غرفه، یک وظیفهٔ جدا در صف)',true);
+        }
         if(d.status==='waiting'){
             showToast('📋 ارسال دیگری در جریان است — «'+(($('profileName')&&$('profileName').value)||profKey||'این پروفایل')+'» در صف قرار گرفت');
             $('bSS').textContent='📋 در صف باسلام — بعد از پایان ارسال فعلی خودکار شروع می‌شود';
@@ -103180,6 +103562,7 @@ function queueBslSend(ps,catId){
         if(fromProfile)fd2.append('from_profile','1');
         const _sv=bslGetSelectedVids();
         fd2.append('send_all_shops',_sv===null||_sv.length>1?'1':'0');
+        fd2.append('shop_send_mode',typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial');
         if(_sv!==null){
             fd2.append('selected_shop_vids',JSON.stringify(_sv));
             fd2.append('shop_picker_sync','1');
@@ -103711,6 +104094,9 @@ function sendQueueVisualCard(e,opt){
     let chips='<span class="sendq-chip" style="color:var(--sq);font-weight:800">'+esc(opt.destination||'مقصد فروش')+'</span>';
     if(e._worker_live)chips+='<span class="sendq-chip" style="color:#86efac;background:#14532d">🟢 ارسال واقعی فعلی</span>';
     else if(staleRunning)chips+='<span class="sendq-chip" style="color:#fdba74;background:#7c2d12">⚠ worker متوقف</span>';
+    const _qMode=(e.shop_send_mode||(e.config&&e.config.shop_send_mode)||'');
+    if(_qMode==='parallel')chips+='<span class="sendq-chip" style="color:#67e8f9;background:#083344">⚡ ارسال موازی غرفه‌ها</span>';
+    else if(_qMode==='serial'||(e.batch_id&&e.shop_vendor_id))chips+='<span class="sendq-chip" style="color:#c4b5fd;background:#2e1065">📋 ارسال سری (نوبتی)</span>';
     if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
     const metric=(n,l,c,important)=>'<div class="sendq-metric'+(important?' sendq-metric-retired':'')+'"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
     const reason=e.fail_reason||e.error||'';
