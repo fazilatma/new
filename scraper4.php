@@ -77297,14 +77297,15 @@ function bslApplyCategoryChangeOrRecreate(
     if (strpos($origSku, 'ret-') === 0) $origSku = '';
 
     // اگر نسخهٔ سالمِ همین عنوان از قبل در دستهٔ جدید (یا وضعیت غیر ۳۵۶۷) فعال است، دوباره نساز و فقط این نسخهٔ ردشده را بایگانی کن
-    if (function_exists('bslFindExisting')) {
-        $existingReplId = (int)bslFindExisting($tk, $vid, $cleanTitle, '');
+    if (function_exists('bslFindExistingQuick')) {
+        $exRowQuick = bslFindExistingQuick($tk, $vid, $cleanTitle);
+        $existingReplId = is_array($exRowQuick) ? (int)($exRowQuick['id'] ?? 0) : 0;
         if ($existingReplId > 0 && $existingReplId !== $pId) {
             $rExRepl = bslReq($tk, 'GET', 'products/' . $existingReplId);
             $exBody = is_array($rExRepl['body'] ?? null) ? $rExRepl['body'] : [];
             $exCat = (int)($exBody['category']['id'] ?? ($exBody['category_id'] ?? 0));
             $exSt = is_array($exBody['status'] ?? null) ? (int)($exBody['status']['value'] ?? 0) : (int)($exBody['status'] ?? 0);
-            if ($exCat === $newCatId || ($exSt > 0 && $exSt !== 3567 && $exSt !== 4184)) {
+            if ($exCat === $newCatId || ($exSt > 0 && $exSt !== 3567 && $exSt !== 4184 && $exSt !== 3790)) {
                 if (function_exists('bslSetProductStatus')) {
                     bslSetProductStatus($tk, $vid, $pId, 4184, 'auto');
                 }
@@ -77352,19 +77353,29 @@ function bslApplyCategoryChangeOrRecreate(
     if ($origSku !== '') $bp['sku'] = mb_substr($origSku, 0, 60, 'UTF-8');
 
     $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
-    for ($createAtt = 0; $createAtt < 3 && empty($rCreate['ok']); $createAtt++) {
+    for ($createAtt = 0; $createAtt < 4 && empty($rCreate['ok']); $createAtt++) {
         $retriedThisRound = false;
         $errCreateTxt = bslErrText($rCreate);
         if (isset($bp['sku']) && (stripos($errCreateTxt, 'sku') !== false || isset($rCreate['body']['messages']['sku']))) {
             unset($bp['sku']);
             $retriedThisRound = true;
         }
-        if (bslIsDuplicateName($rCreate) && strpos((string)$bp['name'], ' کد ' . ($pId % 10000)) === false) {
-            $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
-            $retriedThisRound = true;
+        if (bslIsDuplicateName($rCreate)) {
+            $suf1 = ' کد ' . ($pId % 10000);
+            $suf2 = ' کد ' . $pId;
+            if (strpos((string)$bp['name'], $suf1) === false && strpos((string)$bp['name'], $suf2) === false) {
+                $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . $suf1;
+                $retriedThisRound = true;
+            } elseif (strpos((string)$bp['name'], $suf2) === false) {
+                $bp['name'] = mb_substr($cleanTitle, 0, 102, 'UTF-8') . $suf2;
+                $retriedThisRound = true;
+            }
         }
-        if (function_exists('bslIsPrepDaysError') && bslIsPrepDaysError($rCreate) && (int)$bp['preparation_days'] > 1) {
-            $bp['preparation_days'] = 1;
+        if (((function_exists('bslIsPreparationDaysError') && bslIsPreparationDaysError($rCreate))
+             || stripos($errCreateTxt, 'preparation_days') !== false)
+            && (int)$bp['preparation_days'] > 1
+        ) {
+            $bp['preparation_days'] = max(1, (int)$bp['preparation_days'] - 1);
             $retriedThisRound = true;
         }
         if (!$retriedThisRound) break;
