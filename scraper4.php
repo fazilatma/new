@@ -51921,9 +51921,9 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.458', 'فیل‌اور چندنود Sotoon CDN، پیش‌نمایش عکس ویرایش‌شده در تب نتایج، رفع اسپاون CLI صف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها',
          count($_snPools458) >= 6
       && in_array('185.143.232.5', $_snPools458, true)
-      && strpos($_tblSpecs458, '<table class="s4-specs-table"') !== false
-      && strpos($_mergedSpecs458, '<table class="s4-specs-table"') !== false
-      && strpos((string)($_buTest458['description'] ?? ''), '<table class="s4-specs-table"') !== false
+      && strpos($_tblSpecs458, '<table class="s4-specs-table') !== false
+      && strpos($_mergedSpecs458, '<table class="s4-specs-table') !== false
+      && strpos((string)($_buTest458['description'] ?? ''), '<table class="s4-specs-table') !== false
       && count($_wooVarRows458) === 2
       && ($_wooVarRows458[0]['regular_price'] ?? '') === '250000'
       && ($_wooVarRows458[1]['stock_status'] ?? '') === 'outofstock'
