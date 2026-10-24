@@ -12171,7 +12171,7 @@ function bslIsPlaceholderImageUrl(string $url): bool {
     $u = strtolower(trim($url));
     if ($u === '' || preg_match('~^(?:data:|blob:|javascript:|about:|#)~', $u)) return true;
     $path = (string)(parse_url($u, PHP_URL_PATH) ?: $u);
-    if (str_contains($u, 'statics-bk0.basalam.com/public-8/admin/') || str_contains($u, 'statics.basalam.com/public-8/admin/')) return true;
+    if (strpos($u, 'statics-bk0.basalam.com/public-8/admin/') !== false || strpos($u, 'statics.basalam.com/public-8/admin/') !== false) return true;
     return (bool)preg_match('~(?:woocommerce-placeholder|wc-placeholder|no[-_]?image|default[-_]?product|default[-_]?image|lazy[-_]?placeholder|/placeholder\.[a-z]{3,4}$|/spinner\.[a-z]{3,4}$|/loading\.[a-z]{3,4}$|/blank\.[a-z]{3,4}$|/spacer\.[a-z]{3,4}$|/1x1\.[a-z]{3,4}$)~i', $path);
 }
 
@@ -77238,6 +77238,9 @@ function bslApplyCategoryChangeOrRecreate(
         'last_response' => $rCreate,
     ];
 }
+
+/**
+ * اجرای کاملِ اصلاحِ دسته — می‌تواند چند دقیقه طول بکشد و فقط از مسیرِ
  * پس‌زمینه صدا زده می‌شود.
  *
  * $mode: 'ai_text' متنِ بررسیِ خودِ باسلام · 'master' فقط مدلِ مستر ·
