@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.454';
+const APP_VERSION = '10.455';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -14611,17 +14611,21 @@ function snappshopDetailFromSeoHtml(string $rawHtml, string $sourceUrl): string 
     if ($bestPrice <= 0 && empty($imgsRaw) && empty($extraMeta)) return '';
     $brandName = is_array($prod['brand'] ?? null) ? (string)($prod['brand']['name'] ?? '') : (string)($prod['brand'] ?? '');
     $synthData = [
-        'title' => $title,
-        'brand' => ['title' => normalize_text($brandName)],
-        'description' => (string)($prod['description'] ?? ''),
+        'content' => [
+            'title_fa' => $title,
+            'description' => (string)($prod['description'] ?? ''),
+        ],
+        'brand' => ['title_fa' => normalize_text($brandName)],
         'images' => is_array($imgsRaw) ? $imgsRaw : [],
         'categories' => $crumbs,
-        'vendors' => $bestPrice > 0 ? [[
-            'title' => 'اسنپ‌شاپ',
-            'stock' => $inStock ? 1 : 0,
-            'price' => $bestPrice,
-            'special_price' => $bestPrice,
-            'is_available_in_shop' => $inStock,
+        'variants' => $bestPrice > 0 ? [[
+            'vendor' => [[
+                'title' => 'اسنپ‌شاپ',
+                'stock' => $inStock ? 1 : 0,
+                'price' => $bestPrice,
+                'special_price' => $bestPrice,
+                'is_available_in_shop' => $inStock,
+            ]],
         ]] : [],
         'page' => ['extra_meta' => $extraMeta],
     ];
@@ -14631,9 +14635,9 @@ function snappshopDetailFromSeoHtml(string $rawHtml, string $sourceUrl): string 
 function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     $content = is_array($data['content'] ?? null) ? $data['content'] : [];
     $pageMeta = is_array($data['page'] ?? null) ? $data['page'] : [];
-    $title = normalize_text((string)($content['title_fa'] ?? ($pageMeta['title'] ?? '')));
-    $descRaw = trim((string)($content['description'] ?? ($pageMeta['description'] ?? '')));
-    $brand = normalize_text((string)($data['brand']['title_fa'] ?? ($data['brand']['title_en'] ?? '')));
+    $title = normalize_text((string)($content['title_fa'] ?? ($pageMeta['title'] ?? ($data['title'] ?? ''))));
+    $descRaw = trim((string)($content['description'] ?? ($pageMeta['description'] ?? ($data['description'] ?? ''))));
+    $brand = normalize_text((string)($data['brand']['title_fa'] ?? ($data['brand']['title_en'] ?? ($data['brand']['title'] ?? ''))));
     $defaultVendorInfoId = trim((string)($data['default_variant']['vendor_product_info_id'] ?? ''));
     $bestToman = 0;
     $origToman = 0;
@@ -15873,9 +15877,18 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
 function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): array {
     $expected = $expectedVer !== null && $expectedVer !== '' ? $expectedVer : (function_exists('s4DiskCodeMeta') ? (string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) : APP_VERSION);
     $recycled = [];
-    if (!function_exists('posix_kill')) return $recycled;
     $sig = defined('SIGTERM') ? SIGTERM : 15;
     $myPid = (int)@getmypid();
+    $killFn = static function(int $pid) use ($sig): bool {
+        if ($pid <= 0) return false;
+        if (function_exists('posix_kill') && @posix_kill($pid, $sig)) return true;
+        if (function_exists('exec')) {
+            $out = []; $rc = 1;
+            @exec('kill -TERM ' . (int)$pid . ' >/dev/null 2>&1', $out, $rc);
+            if ($rc === 0) return true;
+        }
+        return false;
+    };
     if (function_exists('extractLockKnownSlotFiles')) {
         foreach (extractLockKnownSlotFiles() as $slotFile) {
             if (!is_file($slotFile)) continue;
@@ -15889,7 +15902,7 @@ function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): arr
             $slotVer = trim((string)($meta['code_version'] ?? ''));
             $spid = (int)($meta['pid'] ?? 0);
             if ($spid > 0 && $spid !== $myPid && $slotVer !== $expected && !in_array($spid, $recycled, true)) {
-                if (@posix_kill($spid, $sig)) $recycled[] = $spid;
+                if ($killFn($spid)) $recycled[] = $spid;
             }
         }
     }
@@ -15899,7 +15912,7 @@ function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): arr
             foreach ((array)(s4WorkerLoadQueue()['entries'] ?? []) as $_weUp) {
                 if (!is_array($_weUp) || ($_weUp['type'] ?? '') !== 'backend_extract' || ($_weUp['status'] ?? '') !== 'running') continue;
                 $_wpid = (int)($_weUp['worker_pid'] ?? 0);
-                if ($_wpid > 0 && $_wpid !== $myPid && !in_array($_wpid, $recycled, true) && @posix_kill($_wpid, $sig)) {
+                if ($_wpid > 0 && $_wpid !== $myPid && !in_array($_wpid, $recycled, true) && $killFn($_wpid)) {
                     $recycled[] = $_wpid;
                 }
             }
@@ -17059,6 +17072,108 @@ if (isset($_GET['s4_feedback'])) {
 header('Content-Type: application/json; charset=UTF-8');
 @set_time_limit(180);
 $kind = trim((string)$_GET['s4_feedback']);
+if (strtolower($kind) === 'snappshop_pdp_probe') {
+    $pid = preg_replace('~[^0-9]~', '', (string)($_GET['id'] ?? '1784183539'));
+    if ($pid === '') $pid = '1784183539';
+    $pdpUrl = 'https://snappshop.ir/product/snp-' . $pid;
+    $quickCurl = static function(string $method, string $u, array $hdrs = [], ?string $body = null): array {
+        $respHdrs = [];
+        $ch = curl_init($u);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 7,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_CUSTOMREQUEST  => $method,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => $hdrs,
+            CURLOPT_HEADERFUNCTION => static function($c, $hLine) use (&$respHdrs) {
+                $p = explode(':', $hLine, 2);
+                if (count($p) === 2) {
+                    $k = strtolower(trim($p[0]));
+                    if (in_array($k, ['retry-after','x-ratelimit-limit','x-ratelimit-remaining','x-ratelimit-reset','cf-ray','ar-sid','server','content-type','set-cookie'], true)) {
+                        $respHdrs[$k] = trim($p[1]);
+                    }
+                }
+                return strlen($hLine);
+            },
+        ]);
+        if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        $raw = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        $s = $raw === false ? '' : (string)$raw;
+        return ['code' => $code, 'bytes' => strlen($s), 'headers' => $respHdrs, 'err' => $err, 'sample' => mb_substr($s, 0, 500), 'raw' => $s];
+    };
+    $snHdrs = [
+        'Accept: application/json, text/plain, */*',
+        'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Origin: https://snappshop.ir',
+        'Referer: https://snappshop.ir/',
+        'x-origin: https://snappshop.ir',
+        's-device: DESKTOP',
+        's-device-source: shop',
+    ];
+    $webRes = $quickCurl('GET', $pdpUrl, ['Accept: text/html,application/xhtml+xml,*/*']);
+    $webHtml = (string)$webRes['raw'];
+    unset($webRes['raw']);
+    $scripts = [];
+    if (preg_match_all('~src=["\']([^"\']*?_next/static/[^"\']+\.js)["\']~i', $webHtml, $sm)) {
+        $scripts = array_values(array_unique($sm[1]));
+    }
+    $ldMatches = [];
+    if (preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~isu', $webHtml, $lm)) {
+        foreach ($lm[1] as $lb) $ldMatches[] = mb_substr(trim($lb), 0, 600);
+    }
+    $metaTags = [];
+    if (preg_match_all('~<meta[^>]+(?:property|name)=["\']([^"\']+)["\'][^>]+content=["\']([^"\']*)["\']~i', $webHtml, $mm, PREG_SET_ORDER)) {
+        foreach (array_slice($mm, 0, 20) as $mr) $metaTags[$mr[1]] = mb_substr($mr[2], 0, 200);
+    }
+    $bundleEndpoints = [];
+    foreach ($scripts as $sc) {
+        if (stripos($sc, 'product') === false && stripos($sc, 'pages/_app') === false && count($bundleEndpoints) >= 8) continue;
+        $bRes = $quickCurl('GET', make_absolute_url($sc, 'https://snappshop.ir'));
+        $bTxt = (string)$bRes['raw'];
+        if (preg_match_all('~["\']([A-Za-z0-9_/-]*(?:product|pdp|detail|v1|v2|v3|v4)[A-Za-z0-9_/${}.?-]{2,80})["\']~', $bTxt, $bm)) {
+            foreach (array_unique($bm[1]) as $candEp) {
+                if (stripos($candEp, '_next') !== false || stripos($candEp, 'node_modules') !== false) continue;
+                $bundleEndpoints[$sc][] = $candEp;
+                if (count($bundleEndpoints[$sc]) >= 25) break;
+            }
+        }
+    }
+    $apiProbes = [];
+    foreach ([
+        'v2_num' => ['GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', null],
+        'v2_snp' => ['GET', 'https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', null],
+        'v1_num' => ['GET', 'https://apix.snappshop.ir/products/v1/' . $pid . '?lat=35.77331&lng=51.418591', null],
+        'v3_num' => ['GET', 'https://apix.snappshop.ir/products/v3/' . $pid . '?lat=35.77331&lng=51.418591', null],
+        'v2_post' => ['POST', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', '{}'],
+        'landing_product' => ['POST', 'https://apix.snappshop.ir/landing/v2?lat=35.77331&lng=51.418591', json_encode(['page_type' => 'product', 'slug' => 'snp-' . $pid, 'render' => 4, 'skip' => 0])],
+    ] as $pkName => [$mth, $au, $bd]) {
+        $h = $snHdrs;
+        if ($bd !== null) $h[] = 'Content-Type: application/json';
+        $pr = $quickCurl($mth, $au, $h, $bd);
+        unset($pr['raw']);
+        $apiProbes[$pkName] = $pr;
+    }
+    echo json_encode([
+        'ok' => true,
+        'version' => APP_VERSION,
+        'pdp_web' => $webRes,
+        'meta_tags' => $metaTags,
+        'ld_json' => $ldMatches,
+        'scripts' => $scripts,
+        'bundle_endpoints' => $bundleEndpoints,
+        'api_probes' => $apiProbes,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
 $_fbKind = strtolower($kind);
 $_fbSnapp = in_array($_fbKind, ['snappshop','snapp','snappshop.ir'], true);
@@ -50726,6 +50841,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $add('10.455', 'تشخیص مسیر زندهٔ PDP اسنپ‌شاپ، تطبیق کلیدهای content/variants در snappshopDetailFromSeoHtml و بازیافت PID اسلات با kill سیستم‌عامل',
+         function_exists('snappshopDetailFromSeoHtml')
+      && strpos($selfSrc, "strtolower(\$kind) === 'snappshop_pdp_probe'") !== false
+      && strpos($selfSrc, "kill -TERM ") !== false
+      && strpos($selfSrc, "{v:'10." . "455'") !== false
+      && version_compare(APP_VERSION, '10.455', '>='));
     $_snSeoHtml454 = snappshopDetailFromSeoHtml(
         '<!doctype html><html><head>'
         . '<meta property="og:image" content="/products/seo-og.webp">'
@@ -85814,6 +85935,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.455', t:'🔍 تکمیل سازگاری SEO/JSON-LD اسنپ‌شاپ، بازیافت PID اسلات بدون وابستگی به posix_kill و پروب تشخیصی PDP', items:[
+    'ساختار خروجی snappshopDetailFromSeoHtml با کلیدهای content.title_fa و variants[*].vendor در snappshopDetailSyntheticHtml هم‌تراز شد تا هم عنوان، هم قیمت .text-bold و هم گالری ۳+ عکسی در تست خودکار و fallback به‌طور دقیق ساخته شوند.',
+    'در هاست‌هایی که افزونهٔ posix_kill غیرفعال است، بازیافت پردازش‌های استخراج قدیمی روی قفل .extract.lock از دستور سیستم‌عامل kill -TERM استفاده می‌کند و اندپوینت تشخیصی snappshop_pdp_probe به s4_feedback افزوده شد.'
+  ]},
   {v:'10.454', t:'🛡️ مکث تطبیقی ضد ۴۲۹، پشتیبان SEO/JSON-LD صفحات محصول اسنپ‌شاپ و بازیافت خودکار اسلات‌های استخراج نسخهٔ قدیم', items:[
     'هنگامی که سطل نرخ apix.snappshop.ir موقتاً پاسخ HTTP 429 برگرداند، تابع snappshopDetailFromSeoHtml از سطل جداگانهٔ snappshop.ir متادیتای JSON-LD (@type=Product) و تگ‌های OpenGraph را می‌خواند و فقط در صورت وجود دادهٔ معتبر محصول، صفحهٔ سنتزی کامل (شامل گالری، قیمت و موجودی) می‌سازد و هرگز پوستهٔ خالی برنمی‌گرداند.',
     'مکث تطبیقی (_s4SnappApixGapBoostSec) و backoff پلکانی روی درخواست‌های products/v2 اسنپ‌شاپ اضافه شد تا سرعت فاز ۲ زیر آستانهٔ فایروال ArvanCloud بماند.',
