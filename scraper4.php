@@ -17157,6 +17157,68 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         echo json_encode(['ok' => true, 'sub' => 'js', 'js_contexts' => $jsContexts], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
+    if ($sub === 'deep') {
+        $respHdrs429 = [];
+        $ch4 = curl_init('https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591');
+        curl_setopt_array($ch4, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT        => 6,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => $snHdrs,
+            CURLOPT_HEADERFUNCTION => static function($c, $hl) use (&$respHdrs429) {
+                $t = trim($hl);
+                if ($t !== '') $respHdrs429[] = $t;
+                return strlen($hl);
+            },
+        ]);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($ch4, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        $raw429 = (string)(curl_exec($ch4) ?: '');
+        curl_close($ch4);
+        $body429NoStyle = preg_replace('~<style\b[^>]*>.*?</style>~isu', '', $raw429);
+        $body429Safe = str_replace(['<', '>'], ['[lt]', '[gt]'], $body429NoStyle);
+
+        $appJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js')['raw'];
+        $c6666 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js')['raw'];
+        $pdpJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js')['raw'];
+        $snips = [];
+        foreach (['s-device', 'x-origin', 'Bearer', 'clientGetGuestToken', 'apix.snappshop'] as $kw) {
+            $p = strpos($appJs, $kw);
+            if ($p !== false) $snips['_app:' . $kw] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($appJs, max(0, $p - 250), 650));
+        }
+        $p6 = strpos($c6666, 'products/v2/');
+        if ($p6 !== false) $snips['c6666:products_v2_full'] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($c6666, max(0, $p6 - 700), 1100));
+        $snips['pdp_js_len'] = strlen($pdpJs);
+        $snips['pdp_js_head'] = str_replace(['<', '>'], ['[lt]', '[gt]'], substr($pdpJs, 0, 1800));
+
+        $gRes = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
+        $tok = '';
+        if (preg_match('~"token"\s*:\s*"([^"]+)"~', $gRes['raw'], $tm)) $tok = $tm[1];
+        $authVariants = [];
+        if ($tok !== '') {
+            foreach ([
+                'bearer_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok])],
+                'raw_tok_num' => ['https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: ' . $tok])],
+                'raw_tok_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: ' . $tok])],
+                'cookie_snp' => ['https://apix.snappshop.ir/products/v2/snp-' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok, 'Cookie: access-token=' . $tok])],
+                'v1_vendors' => ['https://apix.snappshop.ir/products/v1/' . $pid . '/vendors?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok])],
+            ] as $vk => [$vu, $vh]) {
+                $vr = $quickGet('GET', $vu, $vh);
+                $authVariants[$vk] = ['code' => $vr['code'], 'bytes' => $vr['bytes'], 'sample' => substr($vr['sample'], 0, 220)];
+            }
+        }
+        echo json_encode([
+            'ok' => true,
+            'resp_hdrs_429' => $respHdrs429,
+            'body_429_no_style' => $body429Safe,
+            'auth_variants' => $authVariants,
+            'snips' => $snips,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
     $guestGet = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
     $guestGetRaw = $guestGet['raw']; unset($guestGet['raw']);
     $guestPost = $quickGet('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
