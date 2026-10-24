@@ -18541,8 +18541,9 @@ function digikalaDetailSyntheticHtml(array $payloadData, string $sourceUrl): str
             $appendSpecRow($sk, $sv);
         }
     }
-    if ($weightVal === '' && !empty($prod['dimension']['weight']) && (int)$prod['dimension']['weight'] > 0) {
-        $weightVal = ((int)$prod['dimension']['weight']) . ' گرم';
+    $_dkRawWeight = (int)($prod['dimension']['weight'] ?? ($prod['properties']['weight'] ?? 0));
+    if ($weightVal === '' && $_dkRawWeight > 0) {
+        $weightVal = $_dkRawWeight . ' گرم';
         $appendSpecRow('وزن', $weightVal);
     }
     if (!empty($warrantyNames)) {
@@ -56195,18 +56196,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && function_exists('extractLoadListStaging')
       && function_exists('extractClearListStaging')
       && function_exists('syncPipelineReconcileActiveRows')
+      && function_exists('digikalaParseTargetRoute')
       && function_exists('digikalaBuildApiEndpoint')
-      && function_exists('digikalaRenderPlpSyntheticHtml')
-      && function_exists('digikalaRenderProductDetailHtml')
+      && function_exists('digikalaProductsFromApiPayload')
+      && function_exists('digikalaSyntheticListHtml')
+      && function_exists('digikalaDetailSyntheticHtml')
       && extractionEngineAllowed('digikala_api') === 'digikala_api'
       && (function () {
              /* ۱) تست موتور API دیجی‌کالا: تبدیل آدرس دسته، ریال به تومان، صفحه‌بندی و رندر جزئیات محصول */
-             $ep = digikalaBuildApiEndpoint('https://www.digikala.com/search/category-diaper/', 2);
-             if (($ep['type'] ?? '') !== 'plp') return false;
-             if (strpos((string)($ep['url'] ?? ''), 'api.digikala.com/v1/categories/diaper/search/') === false) return false;
-             if (strpos((string)($ep['url'] ?? ''), 'page=2') === false) return false;
-             if (digikalaExtractProductId('https://www.digikala.com/product/dkp-16228541/%D9%BE%D9%88%D8%B4%DA%A9/') !== 16228541) return false;
-             $plpHtml = digikalaRenderPlpSyntheticHtml([
+             $rt = digikalaParseTargetRoute('https://www.digikala.com/search/category-diaper/?page=2');
+             if (($rt['kind'] ?? '') !== 'category' || ($rt['category_slug'] ?? '') !== 'diaper') return false;
+             $ep = digikalaBuildApiEndpoint($rt);
+             if (strpos($ep, 'v1/categories/diaper/search/') === false || strpos($ep, 'page=2') === false) return false;
+             $rtP = digikalaParseTargetRoute('https://www.digikala.com/product/dkp-16228541/%D9%BE%D9%88%D8%B4%DA%A9/');
+             if (($rtP['kind'] ?? '') !== 'product' || ($rtP['product_id'] ?? '') !== '16228541') return false;
+             $metaOut = [];
+             $dkProds = digikalaProductsFromApiPayload([
                  'status' => 200,
                  'data' => [
                      'pager' => ['current_page' => 1, 'total_pages' => 3],
@@ -56215,41 +56220,38 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
                          'title_fa' => 'پوشک کودک مولفیکس سایز ۴ بسته ۳۴ عددی',
                          'status' => 'marketable',
                          'url' => ['uri' => '/product/dkp-16228541/پوشک-مولفیکس/'],
-                         'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/test.jpg']]],
+                         'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/test.jpg?x-oss-process=image/resize,w_300']]],
                          'default_variant' => ['price' => ['selling_price' => 2850000, 'rrp_price' => 3100000]],
                      ]],
                  ],
-             ], 'https://www.digikala.com/search/category-diaper/', 1);
-             $parsed = parse_list_by_engine('digikala_api', $plpHtml, 'https://www.digikala.com/search/category-diaper/', ['inStockOnly' => true]);
-             $items = $parsed['items'] ?? [];
-             if (count($items) !== 1 || ($items[0]['price'] ?? '') !== '285000') return false;
-             if (strpos($plpHtml, 'page=2') === false) return false;
-             $pdpHtml = digikalaRenderProductDetailHtml([
-                 'status' => 200,
-                 'data' => [
-                     'product' => [
-                         'id' => 16228541,
-                         'title_fa' => 'پوشک کودک مولفیکس سایز ۴',
-                         'status' => 'marketable',
-                         'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/main.jpg']]],
-                         'default_variant' => ['price' => ['selling_price' => 2850000]],
-                         'properties' => ['weight' => 1200],
-                         'specifications' => [['title' => 'مشخصات', 'attributes' => [['title' => 'سایز', 'values' => ['۴']]]]],
-                     ],
+             ], 'https://www.digikala.com/search/category-diaper/', 1, $metaOut);
+             $plpHtml = digikalaSyntheticListHtml($dkProds, 'https://www.digikala.com/search/category-diaper/', '', $metaOut);
+             $parsed = parse_digikala_api_html($plpHtml, 'https://www.digikala.com/search/category-diaper/');
+             $items = array_values($parsed);
+             if (count($items) !== 1 || ($items[0]['price'] ?? '') !== '285,000 تومان' || ($items[0]['oldPrice'] ?? '') !== '310,000 تومان') return false;
+             if (($metaOut['total_pages'] ?? 0) !== 3 || strpos((string)($items[0]['image'] ?? ''), 'x-oss-process') !== false) return false;
+             $pdpHtml = digikalaDetailSyntheticHtml([
+                 'product' => [
+                     'id' => 16228541,
+                     'title_fa' => 'پوشک کودک مولفیکس سایز ۴',
+                     'status' => 'marketable',
+                     'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/main.jpg']]],
+                     'default_variant' => ['price' => ['selling_price' => 2850000]],
+                     'dimension' => ['weight' => 1200],
+                     'specifications' => [['title' => 'مشخصات', 'attributes' => [['title' => 'سایز', 'values' => ['۴']]]]],
                  ],
-             ], 16228541);
-             if (strpos($pdpHtml, 's4-digikala-pdp') === false || strpos($pdpHtml, '1200 گرم') === false) return false;
+             ], 'https://www.digikala.com/product/dkp-16228541/');
+             if (strpos($pdpHtml, 'data-digikala-api-detail="1"') === false || strpos($pdpHtml, '1200 گرم') === false) return false;
              /* ۲) تست فایل staging مجزا برای جلوگیری از دست‌زدن به محصولات نهایی پیش از پایان صفحهٔ آخر */
              $tmpKey = '__selftest_stage_10471_' . getmypid();
              extractClearListStaging($tmpKey);
-             $okSave = extractSaveListStaging($tmpKey, [['title' => 'تست ۱', 'link' => 'https://example.com/1'], ['title' => 'تست ۲', 'link' => 'https://example.com/2']], 2, ['url' => 'https://example.com']);
+             extractSaveListStaging($tmpKey, [
+                 'k1' => ['title' => 'تست ۱', 'link' => 'https://example.com/1'],
+                 'k2' => ['title' => 'تست ۲', 'link' => 'https://example.com/2'],
+             ]);
              $loaded = extractLoadListStaging($tmpKey);
              extractClearListStaging($tmpKey);
-             return $okSave
-                 && is_array($loaded)
-                 && count((array)($loaded['products'] ?? [])) === 2
-                 && (int)($loaded['resume_page'] ?? 0) === 3
-                 && extractLoadListStaging($tmpKey) === null;
+             return count($loaded) === 2 && count(extractLoadListStaging($tmpKey)) === 0;
          })()
       && strpos($selfSrc, "'products_saved' => false") !== false
       && strpos($selfSrc, 'stagedStreamProducts') !== false
