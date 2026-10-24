@@ -1949,34 +1949,43 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
 }
 
 function s4CliPhpBinary(): string {
+    static $resolved = null;
+    if ($resolved !== null) return $resolved;
     $env = trim((string)getenv('SCRAPER_PHP'));
-    if ($env !== '') return $env;
+    if ($env !== '') return $resolved = $env;
     $rawBin = defined('PHP_BINARY') ? trim((string)PHP_BINARY) : '';
-    /* v10.458: روی LiteSpeed/cPanel متغیر PHP_BINARY به lsphp اشاره می‌کند که وقتی
-       از داخل درخواست HTTP با exec احضار شود متغیرهای CGI را به ارث می‌برد و فوراً
-       خارج می‌شود. ابتدا باینری واقعی php-cli کنار همان نسخه (ea-php / alt-php) را می‌یابیم. */
+    $cands = [];
     if ($rawBin !== '') {
-        $base = strtolower(basename($rawBin));
-        if (str_contains($base, 'lsphp') || str_contains($base, 'php-fpm') || str_contains($base, 'php-cgi')) {
-            $dir = dirname($rawBin);
-            $cands = [
-                $dir . '/php',
-                dirname($dir) . '/bin/php',
-                defined('PHP_BINDIR') && PHP_BINDIR ? (rtrim((string)PHP_BINDIR, '/') . '/php') : '',
-                '/usr/local/bin/php',
-                '/usr/bin/php',
-            ];
-            foreach ($cands as $cand) {
-                if ($cand !== '' && @is_file($cand) && @is_executable($cand)) return $cand;
-            }
+        $dir = dirname($rawBin);
+        $cands[] = $dir . '/php';
+        $cands[] = dirname($dir) . '/bin/php';
+    }
+    if (defined('PHP_BINDIR') && PHP_BINDIR) {
+        $cands[] = rtrim((string)PHP_BINDIR, '/') . '/php';
+    }
+    $cands[] = '/usr/local/bin/php';
+    if ($rawBin !== '' && stripos(basename($rawBin), 'php-fpm') === false && stripos(basename($rawBin), 'lsphp') === false && stripos(basename($rawBin), 'cgi') === false) {
+        $cands[] = $rawBin;
+    }
+    $cands[] = '/usr/bin/php';
+    if (function_exists('exec') && strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
+        $seen = [];
+        foreach ($cands as $cand) {
+            if ($cand === '' || isset($seen[$cand])) continue;
+            $seen[$cand] = true;
+            if (!@is_file($cand) || !@is_executable($cand)) continue;
+            $out = []; $rc = 0;
+            @exec('env -u REQUEST_METHOD -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u QUERY_STRING ' . escapeshellarg($cand) . ' -r ' . escapeshellarg('echo PHP_SAPI;') . ' 2>/dev/null', $out, $rc);
+            $sapi = strtolower(trim(implode('', $out)));
+            if ($rc === 0 && $sapi === 'cli') return $resolved = $cand;
         }
-        if (stripos($rawBin, 'php-fpm') === false) return $rawBin;
+    } else {
+        foreach ($cands as $cand) {
+            if ($cand !== '' && @is_file($cand) && @is_executable($cand)) return $resolved = $cand;
+        }
     }
-    if (defined('PHP_BINDIR') && PHP_BINDIR && is_file(PHP_BINDIR . '/php')) return PHP_BINDIR . '/php';
-    foreach (['/usr/local/bin/php', '/usr/bin/php'] as $fbPhp) {
-        if (@is_file($fbPhp) && @is_executable($fbPhp)) return $fbPhp;
-    }
-    return 'php';
+    if ($rawBin !== '' && stripos($rawBin, 'php-fpm') === false) return $resolved = $rawBin;
+    return $resolved = 'php';
 }
 /** LiteSpeed در PHP_BINARY معمولاً lsphp می‌دهد؛ این binary با -d وارد LSAPI
  * mode و فقط Usage چاپ می‌کند، و اگر متغیرهای محیطی HTTP (مثل REQUEST_METHOD)
@@ -2157,7 +2166,7 @@ function s4SpawnPersistentWorker(): array {
     if(!function_exists('exec'))return ['ok'=>false,'error'=>'exec_disabled'];
     if(strtoupper(substr(PHP_OS,0,3))==='WIN')return ['ok'=>false,'error'=>'windows_detach_unsupported'];
     if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
-    $php=s4CliPhpBinary();$probe=[];$prc=0;@exec(escapeshellarg($php).' -v 2>&1',$probe,$prc);if($prc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable'];
+    $php=s4CliPhpBinary();$probe=[];$prc=0;@exec('env -u REQUEST_METHOD -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u QUERY_STRING '.escapeshellarg($php).' -v 2>&1',$probe,$prc);if($prc!==0)return ['ok'=>false,'error'=>'php_cli_unavailable','php'=>$php];
     $mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';$log=__DIR__.'/logs/worker.log';
     $cmd='nohup '.s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' worker --tick=60 >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
     $out=[];$rc=0;@exec($cmd,$out,$rc);$pid=0;foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
@@ -2175,7 +2184,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
     if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
     $php = s4CliPhpBinary();
     $probeOut = []; $probeRc = 0;
-    @exec(escapeshellarg($php) . ' -v 2>&1', $probeOut, $probeRc);
+    @exec('env -u REQUEST_METHOD -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u QUERY_STRING ' . escapeshellarg($php) . ' -v 2>&1', $probeOut, $probeRc);
     if ($probeRc !== 0) return ['ok' => false, 'error' => 'php_cli_unavailable', 'php' => $php, 'tail' => mb_substr(trim(implode("\n", $probeOut)), -500)];
     $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
     $log = __DIR__ . '/logs/backend-extract.log';
@@ -11733,7 +11742,8 @@ function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaul
     return $rows;
 }
 
-function wooBuildVariationPayloadRows(array $p, int $parentPriceNum, int $defaultStock, array $w = []): array {
+function wooBuildVariationPayloadRows(array $p, int $parentPriceNum = 0, int $defaultStock = 1, array $w = []): array {
+    if ($parentPriceNum <= 0) $parentPriceNum = (int)preg_replace('/\D+/', '', (string)($p['final_price'] ?? $p['price'] ?? '0'));
     if ($parentPriceNum <= 0) return [];
     $matrix = s4BuildProductVariationMatrix($p, $parentPriceNum, $defaultStock, false);
     if (!$matrix) return [];
@@ -11803,7 +11813,8 @@ function wooSyncProductVariations(array $w, int $productId, array $varRows): arr
     return ['ok' => !empty($br['ok']), 'synced' => $createdN + $updatedN, 'created' => $createdN, 'updated' => $updatedN, 'code' => (int)($br['code'] ?? 0)];
 }
 
-function bslBuildVariantsPayload(array $p, int $defaultPriceRial, int $defaultStock): array {
+function bslBuildVariantsPayload(array $p, int $defaultPriceRial = 0, int $defaultStock = 1): array {
+    if ($defaultPriceRial <= 0) $defaultPriceRial = ((int)preg_replace('/\D+/', '', (string)($p['final_price'] ?? $p['price'] ?? '0'))) * 10;
     if ($defaultPriceRial <= 0) return [];
     $matrix = s4BuildProductVariationMatrix($p, $defaultPriceRial, $defaultStock, true);
     if (count($matrix) < 1) return [];
@@ -38899,6 +38910,7 @@ if(isset($_GET['internal_matrix_feedback'])){
    ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
 if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     header('Content-Type: application/json; charset=UTF-8');$now=time();$repair=!empty($_GET['repair']??$_POST['repair']??null);
+    try {
     $actions=[];
     if($repair&&function_exists('s4ReclaimPluginQuotaBloat'))$actions['quota_reclaim']=s4ReclaimPluginQuotaBloat(true);
     $profilesCount=count(loadProfiles());
@@ -38912,8 +38924,14 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     if(!empty($staleWorkerLock['recovered']))$actions['stale_worker_lock']=$staleWorkerLock;
     /* daemon قدیمی پس از deploy همان کد قبلی را تا ابد در RAM دارد. در repair
        فقط با PID و version ثبت‌شدهٔ خودش پایانش می‌دهیم تا worker تازه بالا آید. */
-    if($repair&&$workerActive&&(string)($wst['version']??'')!==APP_VERSION&&function_exists('posix_kill')){
-        $oldPid=(int)($wst['pid']??0);$actions['old_worker_restart']=['pid'=>$oldPid,'from'=>(string)($wst['version']??''),'to'=>APP_VERSION,'signalled'=>$oldPid>0?@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15):false];usleep(500000);$workerActive=s4WorkerIsActive(1);
+    if($repair&&$workerActive&&(string)($wst['version']??'')!==APP_VERSION){
+        $oldPid=(int)($wst['pid']??0);
+        $sigOk=false;
+        if($oldPid>0){
+            if(function_exists('posix_kill'))$sigOk=@posix_kill($oldPid,defined('SIGTERM')?SIGTERM:15);
+            elseif(function_exists('exec')){$_ko=[];$_kr=1;@exec('kill -TERM '.(int)$oldPid.' 2>/dev/null',$_ko,$_kr);$sigOk=($_kr===0);}
+        }
+        $actions['old_worker_restart']=['pid'=>$oldPid,'from'=>(string)($wst['version']??''),'to'=>APP_VERSION,'signalled'=>$sigOk];usleep(500000);$workerActive=s4WorkerIsActive(1);
     }
     if($repair&&!$workerActive){$actions['worker']=s4SpawnPersistentWorker();usleep(350000);$workerActive=s4WorkerIsActive();$wst=s4WorkerStateLoad();$whb=(int)($wst['heartbeat']??0);}
     if($repair&&!empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120)){
@@ -38932,7 +38950,11 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
         'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log')],
         'code_update'=>['status'=>'?code_update_status=1','endpoint'=>'?code_update=1','method'=>'POST','source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH],
-        'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    } catch (Throwable $_opsErr) {
+        echo json_encode(['ok'=>false,'version'=>APP_VERSION,'error'=>$_opsErr->getMessage(),'line'=>$_opsErr->getLine()],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+    exit;
 }
 
 if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_matrix_status')) {
@@ -51883,8 +51905,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             ['attributes' => ['رنگ' => 'سفید'], 'price' => '270000', 'in_stock' => false],
         ],
     ];
-    $_wooVarRows458 = function_exists('wooBuildVariationPayloadRows') ? wooBuildVariationPayloadRows($_varSample458) : [];
-    $_bslVarRows458 = function_exists('bslBuildVariantsPayload') ? bslBuildVariantsPayload($_varSample458, 5) : [];
+    $_wooVarRows458 = function_exists('wooBuildVariationPayloadRows') ? wooBuildVariationPayloadRows($_varSample458, 250000, 5) : [];
+    $_bslVarRows458 = function_exists('bslBuildVariantsPayload') ? bslBuildVariantsPayload($_varSample458, 2500000, 5) : [];
     $_buTest458 = [];
     if (function_exists('bslApplyContent')) {
         bslApplyContent($_buTest458, ['long_desc' => 'متن کوتاه', 'specs' => $_tblSpecs458]);
