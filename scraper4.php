@@ -12473,21 +12473,25 @@ function bslBuildUnifiedDescription(array $p, string $fallbackTitle = ''): array
 
     /* ادغام مشخصات ساختاریافتهٔ محصول (specs / specifications / attributes_table) بدون تکرار */
     $specSource = $p['specs'] ?? ($p['specifications'] ?? ($p['attributes_table'] ?? ($p['attributes_html'] ?? '')));
-    $specRows = ($specSource !== '' && $specSource !== [] && $specSource !== null && function_exists('s4NormalizeSpecsInput'))
-        ? s4NormalizeSpecsInput($specSource)
-        : [];
-    if ($specRows) {
+    $specTblHtml = ($specSource !== '' && $specSource !== [] && $specSource !== null && function_exists('s4NormalizeSpecsToTableHtml'))
+        ? s4NormalizeSpecsToTableHtml($specSource)
+        : '';
+    if ($specTblHtml === '' && is_string($specSource) && trim($specSource) !== '') {
+        $specTblHtml = $specSource;
+    }
+    if ($specTblHtml !== '') {
+        $specPlain = s4HtmlToPlainTextForBsl($specTblHtml);
         $longFp = s4BslTextFingerprint($longPlain);
         $extraSpecLines = [];
-        foreach ($specRows as $sr) {
-            if (!is_array($sr)) continue;
-            $k = rtrim(s4HtmlToPlainTextForBsl((string)($sr['key'] ?? '')), ":： \t\n");
-            $v = trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl((string)($sr['value'] ?? ''))) ?? ''));
-            if ($k === '' || $v === '' || s4IsExternalSellerSpecLabel($k)) continue;
-            $line = '• ' . $k . ': ' . $v;
-            $pairFp = s4BslTextFingerprint($k . $v);
-            if ($pairFp !== '' && $longFp !== '' && mb_strpos($longFp, $pairFp) !== false) continue;
-            $extraSpecLines[] = $line;
+        foreach (explode("\n", $specPlain) as $spLn) {
+            $spLn = trim($spLn);
+            if ($spLn === '') continue;
+            $hdrChk = rtrim($spLn, ":： \t");
+            if (in_array($hdrChk, ['مشخصات فنی', 'مشخصات محصول', 'ویژگی‌های محصول', 'ویژگی ها'], true)) continue;
+            $lineFp = s4BslTextFingerprint($spLn);
+            if ($lineFp === '') continue;
+            if ($longFp !== '' && mb_strpos($longFp, $lineFp) !== false) continue;
+            $extraSpecLines[] = str_starts_with($spLn, '• ') ? $spLn : ('• ' . $spLn);
         }
         if ($extraSpecLines) {
             $hasSpecHeading = ($longPlain !== '' && (mb_strpos($longPlain, 'مشخصات فنی') !== false || mb_strpos($longPlain, 'مشخصات محصول') !== false));
