@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.455';
+const APP_VERSION = '10.456';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -17108,7 +17108,8 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         $err = curl_error($ch);
         curl_close($ch);
         $s = $raw === false ? '' : (string)$raw;
-        return ['code' => $code, 'bytes' => strlen($s), 'headers' => $respHdrs, 'err' => $err, 'sample' => mb_substr($s, 0, 500), 'raw' => $s];
+        $safeSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($s, 0, 400));
+        return ['code' => $code, 'bytes' => strlen($s), 'headers' => $respHdrs, 'err' => $err, 'sample' => $safeSample, 'raw' => $s];
     };
     $snHdrs = [
         'Accept: application/json, text/plain, */*',
@@ -17122,13 +17123,34 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
     $webRes = $quickCurl('GET', $pdpUrl, ['Accept: text/html,application/xhtml+xml,*/*']);
     $webHtml = (string)$webRes['raw'];
     unset($webRes['raw']);
+    $cdnUrlsInHtml = [];
+    if (preg_match_all('~https?:\\\\?/\\\\?/cdn\.snappshop\.ir\\\\?/[^\s"\'<>\\\\]+~i', $webHtml, $cm)) {
+        foreach ($cm[0] as $cu) {
+            $cuClean = str_replace('\\/', '/', $cu);
+            if (!in_array($cuClean, $cdnUrlsInHtml, true)) $cdnUrlsInHtml[] = $cuClean;
+        }
+    }
+    $nextFPushCount = preg_match_all('~__next_f\.push~', $webHtml);
+    $hasNextData = strpos($webHtml, '__NEXT_DATA__') !== false;
+    $nextDataSample = '';
+    if (preg_match('~<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>~isu', $webHtml, $ndm)) {
+        $nextDataSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($ndm[1], 0, 2500));
+    }
+    $nextFChunks = [];
+    if (preg_match_all('~self\.__next_f\.push\(\[(.*?)\]\)</script>~isu', $webHtml, $nfm)) {
+        foreach ($nfm[1] as $idxNf => $nfBody) {
+            if (strlen($nfBody) > 300) {
+                $nextFChunks['chunk_' . $idxNf . '_len_' . strlen($nfBody)] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr($nfBody, 0, 1500));
+            }
+        }
+    }
     $scripts = [];
     if (preg_match_all('~src=["\']([^"\']*?_next/static/[^"\']+\.js)["\']~i', $webHtml, $sm)) {
         $scripts = array_values(array_unique($sm[1]));
     }
     $ldMatches = [];
     if (preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~isu', $webHtml, $lm)) {
-        foreach ($lm[1] as $lb) $ldMatches[] = mb_substr(trim($lb), 0, 600);
+        foreach ($lm[1] as $lb) $ldMatches[] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(trim($lb), 0, 1200));
     }
     $metaTags = [];
     if (preg_match_all('~<meta[^>]+(?:property|name)=["\']([^"\']+)["\'][^>]+content=["\']([^"\']*)["\']~i', $webHtml, $mm, PREG_SET_ORDER)) {
@@ -17166,6 +17188,11 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         'ok' => true,
         'version' => APP_VERSION,
         'pdp_web' => $webRes,
+        'has_next_data' => $hasNextData,
+        'next_data_sample' => $nextDataSample,
+        'next_f_push_count' => $nextFPushCount,
+        'next_f_chunks' => $nextFChunks,
+        'cdn_urls_in_html' => $cdnUrlsInHtml,
         'meta_tags' => $metaTags,
         'ld_json' => $ldMatches,
         'scripts' => $scripts,
@@ -85935,6 +85962,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.456', t:'🔬 ارتقای پروب تشخیصی HTML-safe برای بررسی استریم RSC / __NEXT_DATA__ و باندل‌های صفحهٔ محصول اسنپ‌شاپ', items:[
+    'جلوگیری از حذف تگ‌های نمونه در خروجی JSON پروب تشخیصی اسنپ‌شاپ و استخراج مستقیم چانک‌های Next.js (__NEXT_DATA__ / __next_f) و آدرس‌های cdn.snappshop.ir از پاسخ ۵۸ کیلوبایتی snappshop.ir.'
+  ]},
   {v:'10.455', t:'🔍 تکمیل سازگاری SEO/JSON-LD اسنپ‌شاپ، بازیافت PID اسلات بدون وابستگی به posix_kill و پروب تشخیصی PDP', items:[
     'ساختار خروجی snappshopDetailFromSeoHtml با کلیدهای content.title_fa و variants[*].vendor در snappshopDetailSyntheticHtml هم‌تراز شد تا هم عنوان، هم قیمت .text-bold و هم گالری ۳+ عکسی در تست خودکار و fallback به‌طور دقیق ساخته شوند.',
     'در هاست‌هایی که افزونهٔ posix_kill غیرفعال است، بازیافت پردازش‌های استخراج قدیمی روی قفل .extract.lock از دستور سیستم‌عامل kill -TERM استفاده می‌کند و اندپوینت تشخیصی snappshop_pdp_probe به s4_feedback افزوده شد.'
