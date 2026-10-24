@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.463';
+const APP_VERSION = '10.464';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -11923,6 +11923,12 @@ function contentChanges(array $p, array $remote): array {
                 $out[] = 'توضیح بلند';
             }
         }
+        if (isset($remote['weight_g']) && (int)$remote['weight_g'] > 0 && function_exists('bslResolveProductWeights')) {
+            $wChk = bslResolveProductWeights($p, 500, 0);
+            if (!empty($wChk['overridden']) && (int)$wChk['weight'] > 0 && (int)$remote['weight_g'] !== (int)$wChk['weight']) {
+                $out[] = 'وزن (' . (int)$remote['weight_g'] . '→' . (int)$wChk['weight'] . ' گرم)';
+            }
+        }
     } else {
         $srcShort = contentNorm((string)($p['short_desc'] ?? ''));
         if ($srcShort !== '' && array_key_exists('short_desc', $remote)) {
@@ -12573,6 +12579,163 @@ function bslBuildUnifiedDescription(array $p, string $fallbackTitle = ''): array
     ];
 }
 
+/* =====================================================================
+ *  v10.464: استخراج هوشمند وزن محصول از صفحهٔ جزئیات و Override کردن وزن پیش‌فرض باسلام
+ * ===================================================================== */
+function s4ClassifyWeightSpecLabel(string $label): string {
+    $norm = str_replace(['ي', 'ك', 'ة', "\u{200c}", "\u{00a0}"], ['ی', 'ک', 'ه', ' ', ' '], $label);
+    $norm = trim((string)(preg_replace('~[\s:：•\-–—▪●*()/\\\\]+~u', ' ', $norm) ?? $norm));
+    $norm = mb_strtolower($norm, 'UTF-8');
+    if ($norm === '') return '';
+    foreach (['تحمل', 'ظرفیت', 'حداکثر', 'حداقل', 'دقت', 'محدوده', 'سنجش', 'اندازه گیری', 'نفرات', 'کاربر', 'پیشنهادی', 'مناسب برای', 'capacity', 'max', 'min', 'load', 'accuracy'] as $bad) {
+        if (mb_strpos($norm, $bad) !== false) return '';
+    }
+    if (mb_strpos($norm, 'وزن') !== false || preg_match('~\b(?:net\s*weight|gross\s*weight|package\s*weight|packaged\s*weight|shipping\s*weight|weight)\b~iu', $norm)) {
+        if (mb_strpos($norm, 'بسته') !== false && mb_strpos($norm, 'بدون بسته') === false) return 'package';
+        if (preg_match('~\b(?:gross|package|packaged|shipping)\b~iu', $norm) || mb_strpos($norm, 'ارسال') !== false || mb_strpos($norm, 'ناخالص') !== false) return 'package';
+        return 'net';
+    }
+    return '';
+}
+
+function s4ParseWeightGrams($raw): int {
+    if ($raw === null || $raw === false || is_array($raw)) return 0;
+    $s = trim(strip_tags((string)$raw));
+    if ($s === '') return 0;
+    $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $s = str_replace(
+        ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹','٠','١','٢','٣','٤','٥','٦','٧','٨','٩','ي','ك',"\u{200c}","\u{00a0}"],
+        ['0','1','2','3','4','5','6','7','8','9','0','1','2','3','4','5','6','7','8','9','ی','ک',' ',' '],
+        $s
+    );
+    $s = mb_strtolower(trim((string)(preg_replace('~\s+~u', ' ', $s) ?? $s)), 'UTF-8');
+    if ($s === '') return 0;
+
+    /* حذف تلورانس مثل ± 50 یا +- 50 تا با وزن اصلی اشتباه گرفته نشود */
+    $s = preg_replace('~(?:±|\+-|-\+)\s*\d+(?:[./٫]\d+)?~u', ' ', $s) ?? $s;
+    /* حذف جداکنندهٔ هزارگان (مثل 1,250 -> 1250) */
+    $s = preg_replace('~(?<=\d),(?=\d{3}(?:\D|$))~u', '', $s) ?? $s;
+    /* تبدیل ممیز فارسی/اسلش/کاما به نقطهٔ اعشار (مثل 1/5 کیلوگرم -> 1.5) */
+    $s = preg_replace('~(?<=\d)[/٫,](?=\d{1,3}(?:\D|$))~u', '.', $s) ?? $s;
+
+    /* حالت ترکیبی: ۱ کیلو و ۲۰۰ گرم */
+    if (preg_match('~(\d+(?:\.\d+)?)\s*(?:کیلو\s*گرم|کیلوگرم|کیلو|kg)\s*(?:و|\s)\s*(\d+(?:\.\d+)?)\s*(?:گرم|گرمی|gr|gm|g\b)~iu', $s, $mc)) {
+        $g = (int)round(((float)$mc[1]) * 1000.0 + (float)$mc[2]);
+        return ($g >= 1 && $g <= 500000) ? $g : 0;
+    }
+
+    if (preg_match('~(?:^|\s)نیم\s*کیلو~u', $s)) return 500;
+    if (preg_match('~(?:^|\s)یک\s*کیلو(?!\s*و)~u', $s) && !preg_match('~\d~', $s)) return 1000;
+
+    /* در بازه‌ها مثل «800 تا 1000 گرم»، سقف بازه مبنای امن پست است */
+    $sRng = preg_replace('~(\d+(?:\.\d+)?)\s*(?:تا|الی|-|–|~)\s*(\d+(?:\.\d+)?)~u', '$2', $s) ?? $s;
+
+    /* اول کیلوگرم بررسی شود (چون کیلوگرم حاوی گرم و kg حاوی g است) */
+    if (preg_match('~(\d+(?:\.\d+)?)\s*(?:کیلو\s*گرم|کیلوگرم|کیلو|ک\.گ|kilograms?|kilo|kg\b)~iu', $sRng, $mKg)) {
+        $g = (int)round(((float)$mKg[1]) * 1000.0);
+        return ($g >= 1 && $g <= 500000) ? $g : 0;
+    }
+    /* میلی‌گرم */
+    if (preg_match('~(\d+(?:\.\d+)?)\s*(?:میلی\s*گرم|میلیگرم|milligrams?|mg\b)~iu', $sRng, $mMg)) {
+        $v = (float)$mMg[1];
+        if ($v <= 0) return 0;
+        $g = max(1, (int)round($v / 1000.0));
+        return ($g >= 1 && $g <= 500000) ? $g : 0;
+    }
+    /* گرم */
+    if (preg_match('~(\d+(?:\.\d+)?)\s*(?:گرم|گرمی|grams?|gr\b|gm\b|g\b)~iu', $sRng, $mG)) {
+        $g = (int)round((float)$mG[1]);
+        return ($g >= 1 && $g <= 500000) ? $g : 0;
+    }
+    /* عدد خالص در فیلد وزن (بر حسب گرم) */
+    if (preg_match('~^(?:وزن(?:\s*(?:خالص|تقریبی|محصول|کالا|بسته(?:\s*بندی)?))?\s*[:：]?\s*)?(\d+(?:\.\d+)?)$~u', trim($sRng), $mBare)) {
+        $g = (int)round((float)$mBare[1]);
+        return ($g >= 1 && $g <= 500000) ? $g : 0;
+    }
+    return 0;
+}
+
+function s4ExtractWeightsFromSpecs($specSource): array {
+    $res = ['net_g' => 0, 'pkg_g' => 0, 'raw' => ''];
+    if ($specSource === null || $specSource === false || $specSource === '' || $specSource === []) return $res;
+    $tblHtml = function_exists('s4NormalizeSpecsToTableHtml') ? s4NormalizeSpecsToTableHtml($specSource) : '';
+    if ($tblHtml === '' && is_string($specSource)) $tblHtml = $specSource;
+    if ($tblHtml === '') return $res;
+    if (preg_match_all('~<tr\b[^>]*>([\s\S]*?)</tr>~iu', $tblHtml, $trs)) {
+        foreach ($trs[1] as $trInner) {
+            if (!preg_match_all('~<t[hd]\b[^>]*>([\s\S]*?)</t[hd]>~iu', $trInner, $cells) || count($cells[1]) < 2) continue;
+            $k = trim(strip_tags((string)$cells[1][0]));
+            $v = trim(strip_tags((string)$cells[1][1]));
+            $kind = s4ClassifyWeightSpecLabel($k);
+            if ($kind === '') continue;
+            $g = s4ParseWeightGrams($v);
+            if ($g <= 0) continue;
+            if ($kind === 'package') {
+                if ($res['pkg_g'] <= 0) $res['pkg_g'] = $g;
+            } else {
+                if ($res['net_g'] <= 0) {
+                    $res['net_g'] = $g;
+                    $res['raw'] = $v;
+                }
+            }
+        }
+    }
+    if ($res['raw'] === '' && $res['pkg_g'] > 0) $res['raw'] = $res['pkg_g'] . ' گرم';
+    return $res;
+}
+
+function bslResolveProductWeights(array $p, int $defaultWeight = 500, int $defaultPkgWeight = 0): array {
+    $defW  = $defaultWeight > 0 ? $defaultWeight : 500;
+    $defPW = $defaultPkgWeight >= $defW ? $defaultPkgWeight : ($defW + 100);
+    $overhead = ($defaultPkgWeight > $defaultWeight && $defaultWeight > 0) ? ($defaultPkgWeight - $defaultWeight) : 100;
+
+    $extNetG = 0;
+    $extPkgG = 0;
+    $rawFound = '';
+
+    $rawWeightField = $p['weight'] ?? ($p['net_weight'] ?? '');
+    if (is_scalar($rawWeightField) && trim((string)$rawWeightField) !== '') {
+        $parsedField = s4ParseWeightGrams((string)$rawWeightField);
+        if ($parsedField > 0) {
+            $extNetG = $parsedField;
+            $rawFound = trim((string)$rawWeightField);
+        }
+    }
+    $rawPkgField = $p['package_weight'] ?? ($p['packaged_weight'] ?? '');
+    if (is_scalar($rawPkgField) && trim((string)$rawPkgField) !== '') {
+        $parsedPkg = s4ParseWeightGrams((string)$rawPkgField);
+        if ($parsedPkg > 0) $extPkgG = $parsedPkg;
+    }
+
+    if ($extNetG <= 0 || $extPkgG <= 0) {
+        $specSrc = $p['specs'] ?? ($p['specifications'] ?? ($p['attributes_table'] ?? ($p['attributes_html'] ?? '')));
+        if ($specSrc !== '' && $specSrc !== [] && $specSrc !== null) {
+            $spW = s4ExtractWeightsFromSpecs($specSrc);
+            if ($extNetG <= 0 && $spW['net_g'] > 0) {
+                $extNetG = $spW['net_g'];
+                $rawFound = $spW['raw'];
+            }
+            if ($extPkgG <= 0 && $spW['pkg_g'] > 0) {
+                $extPkgG = $spW['pkg_g'];
+                if ($rawFound === '') $rawFound = $spW['raw'];
+            }
+        }
+    }
+
+    if ($extNetG <= 0 && $extPkgG > 0) {
+        $extNetG = $extPkgG;
+    }
+
+    if ($extNetG > 0) {
+        $finalW  = $extNetG;
+        $finalPW = $extPkgG >= $finalW ? $extPkgG : ($finalW + max(0, $overhead));
+        if ($finalPW < $finalW) $finalPW = $finalW;
+        return ['weight' => $finalW, 'package_weight' => $finalPW, 'overridden' => true, 'raw' => $rawFound];
+    }
+
+    return ['weight' => $defW, 'package_weight' => $defPW, 'overridden' => false, 'raw' => ''];
+}
+
 function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): array {
     $epClean = strtolower(ltrim(trim($endpoint), '/'));
     if ($epClean !== '' && !preg_match('~(?:^|/)(?:products|batch-updates)(?:/|$|\?)~', $epClean)) {
@@ -12588,6 +12751,13 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
         if (bslDescriptionHasHtmlArtifacts($payload['brief']) || str_contains($payload['brief'], "\n") || str_contains($payload['brief'], "\r")) {
             $cleanedBrief = trim((string)(preg_replace('~\s+~u', ' ', str_replace('• ', '', s4HtmlToPlainTextForBsl($payload['brief']))) ?? ''));
             if ($cleanedBrief !== '') $payload['brief'] = mb_substr($cleanedBrief, 0, 250, 'UTF-8');
+        }
+    }
+    if (isset($payload['weight']) && (int)$payload['weight'] > 0) {
+        $wInt = (int)$payload['weight'];
+        $pwInt = isset($payload['package_weight']) ? (int)$payload['package_weight'] : 0;
+        if ($pwInt < $wInt) {
+            $payload['package_weight'] = $wInt + 100;
         }
     }
     if (!empty($payload['data']) && is_array($payload['data'])) {
@@ -12611,6 +12781,14 @@ function bslApplyContent(array &$bu, array $p): void {
     if ($built['description'] !== '') $bu['description'] = $built['description'];
     $sku = trim((string)($p['sku'] ?? ''));
     if ($sku !== '') $bu['sku'] = $sku;
+    /* v10.464: اگر محصول وزن استخراج‌شده در صفحهٔ جزئیات دارد، وزن پیش‌فرض باسلام را override کند */
+    $defW  = (isset($bu['weight']) && (int)$bu['weight'] > 0) ? (int)$bu['weight'] : 500;
+    $defPW = (isset($bu['package_weight']) && (int)$bu['package_weight'] > 0) ? (int)$bu['package_weight'] : 0;
+    $wRes  = bslResolveProductWeights($p, $defW, $defPW);
+    if (!empty($wRes['overridden'])) {
+        $bu['weight']         = $wRes['weight'];
+        $bu['package_weight'] = $wRes['package_weight'];
+    }
 }
 
 /** شکل نرمال‌شدهٔ محصول باسلام برای contentChanges */
@@ -12622,6 +12800,7 @@ function bslRemoteContent(array $ex): array {
     if ($nPhotos === 0 && !empty($rev['photo'] ?? ($ex['photo'] ?? null))) $nPhotos = 1;
     $rawBrief = (string)($rev['brief'] ?? ($ex['brief'] ?? ''));
     $rawDesc  = (string)($rev['description'] ?? ($ex['description'] ?? ''));
+    $remWeight = (int)($rev['net_weight'] ?? ($rev['weight'] ?? ($ex['net_weight'] ?? ($ex['weight'] ?? 0))));
     $out = [
         'short_desc'   => $rawBrief,
         'long_desc'    => $rawDesc,
@@ -12629,6 +12808,7 @@ function bslRemoteContent(array $ex): array {
         'sku'          => (string)($rev['sku'] ?? ($ex['sku'] ?? '')),
         '__bsl_remote' => true,
     ];
+    if ($remWeight > 0) $out['weight_g'] = $remWeight;
     if ($rawDesc !== '' && bslDescriptionHasHtmlArtifacts($rawDesc)) {
         $out['__has_html_artifacts'] = true;
     }
@@ -16193,7 +16373,9 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
         $ak = normalize_text((string)($at['title'] ?? ''));
         $av = normalize_text((string)($at['value'] ?? ''));
         if ($ak === '' || $av === '') continue;
-        if ($weightVal === '' && mb_strpos($ak, 'وزن') !== false) $weightVal = $av;
+        $wKindAttr = function_exists('s4ClassifyWeightSpecLabel') ? s4ClassifyWeightSpecLabel($ak) : (mb_strpos($ak, 'وزن') !== false ? 'net' : '');
+        if ($wKindAttr === 'net' && $weightVal === '') $weightVal = $av;
+        elseif ($wKindAttr === 'package' && $weightVal === '') $weightVal = $av;
         $attrRows .= '<tr><th>' . h($ak) . '</th><td>' . h($av) . '</td></tr>';
         if ($idx < 6) $shortItems .= '<li>' . h($ak . ': ' . $av) . '</li>';
     }
@@ -23356,6 +23538,19 @@ if ($_streamSnappSynth && empty($extracted['specs'])) {
         if ($_snSpVal !== '') $extracted['specs'] = $_snSpVal;
     }
 }
+if ($_streamSnappSynth && empty($extracted['weight'])) {
+    $_snWtS = @$xp->query('//span[contains(@class,"product-weight")]');
+    if ($_snWtS && $_snWtS->length) {
+        $_snWtVal = normalize_text((string)$_snWtS->item(0)->textContent);
+        if ($_snWtVal !== '' && s4ParseWeightGrams($_snWtVal) > 0) $extracted['weight'] = $_snWtVal;
+    }
+}
+if (empty($extracted['weight']) && !empty($extracted['specs']) && function_exists('s4ExtractWeightsFromSpecs')) {
+    $_spWtS = s4ExtractWeightsFromSpecs($extracted['specs']);
+    if (!empty($_spWtS['raw']) && (($_spWtS['net_g'] ?? 0) > 0 || ($_spWtS['pkg_g'] ?? 0) > 0)) {
+        $extracted['weight'] = (string)$_spWtS['raw'];
+    }
+}
 
 if (!isset($extracted['image']) || $extracted['image'] === '') {
 $extraImg = extractImageFromHtml($res['html'], $productUrl);
@@ -25939,6 +26134,20 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
             if ($_snSpInl !== '') { $p['specs'] = $_snSpInl; $fields++; }
         }
     }
+    if ($_inlineSnappSynth && empty($p['weight'])) {
+        $_snWtInl = @$xpInl->query('//span[contains(@class,"product-weight")]');
+        if ($_snWtInl && $_snWtInl->length) {
+            $_snWtValInl = normalize_text((string)$_snWtInl->item(0)->textContent);
+            if ($_snWtValInl !== '' && s4ParseWeightGrams($_snWtValInl) > 0) { $p['weight'] = $_snWtValInl; $fields++; }
+        }
+    }
+    if (empty($p['weight']) && !empty($p['specs']) && function_exists('s4ExtractWeightsFromSpecs')) {
+        $_spWtInl = s4ExtractWeightsFromSpecs($p['specs']);
+        if (!empty($_spWtInl['raw']) && (($_spWtInl['net_g'] ?? 0) > 0 || ($_spWtInl['pkg_g'] ?? 0) > 0)) {
+            $p['weight'] = (string)$_spWtInl['raw'];
+            $fields++;
+        }
+    }
     if (empty($p['image'])) {
         $ogImg = @$xpInl->query("//meta[@property='og:image']/@content");
         if ($ogImg && $ogImg->length) {
@@ -27191,6 +27400,19 @@ $_snSpTwo=s4ExtractDetailNodeValue('specs',$_snTblTwo,(string)$dr['url']);
 if($_snSpTwo!==''){$allProducts[$key]['specs']=$_snSpTwo;$_gotFields++;}
 }
 }
+if($_isSnappSynth&&empty($allProducts[$key]['weight'])){
+$_snWtTwo=@$xp2->query('//span[contains(@class,"product-weight")]');
+if($_snWtTwo&&$_snWtTwo->length){
+$_snWtValTwo=normalize_text((string)$_snWtTwo->item(0)->textContent);
+if($_snWtValTwo!==''&&s4ParseWeightGrams($_snWtValTwo)>0){$allProducts[$key]['weight']=$_snWtValTwo;$_gotFields++;}
+}
+}
+if(empty($allProducts[$key]['weight'])&&!empty($allProducts[$key]['specs'])&&function_exists('s4ExtractWeightsFromSpecs')){
+$_spWtTwo=s4ExtractWeightsFromSpecs($allProducts[$key]['specs']);
+if(!empty($_spWtTwo['raw'])&&(($_spWtTwo['net_g']??0)>0||($_spWtTwo['pkg_g']??0)>0)){
+$allProducts[$key]['weight']=(string)$_spWtTwo['raw'];$_gotFields++;
+}
+}
 
 if(empty($allProducts[$key]['image'])){
 $ogImg=@$xp2->query("//meta[@property='og:image']/@content");
@@ -28196,6 +28418,12 @@ function bslShopMapRecord(array $p, array $shop, int $remoteId, string $title,
        نگه می‌داشت، برای همین هر اجرا مجبور بود کورکورانه PATCH بزند. */
     if ($priceRial > 0) $row['price_rial'] = $priceRial;
     if ($stock >= 0)    $row['stock'] = $stock;
+    if (function_exists('bslResolveProductWeights')) {
+        $_wRec = bslResolveProductWeights($p, 500, 0);
+        if (!empty($_wRec['overridden']) && (int)$_wRec['weight'] > 0) {
+            $row['weight_g'] = (int)$_wRec['weight'];
+        }
+    }
     remoteMapRecord('bsl', [$row]);
     /* v10.35 (۴۷ب): کشِ کاتالوگ هم همان لحظه به‌روز شود. بدونِ این، محصولی
        که همین حالا ساختیم تا پایانِ TTL در کش «نیست» می‌ماند و اگر در
@@ -28231,7 +28459,7 @@ const BSL_REVERIFY_SEC = 604800;   // ۷ روز
  * و از آخرین تأیید هم خیلی نگذشته باشد.
  */
 function bslSkipUnchanged(string $mapKey, int $exId, int $priceRial, int $stock,
-                          ?array $ledgerRow = null): bool {
+                          ?array $ledgerRow = null, int $wantWeightG = 0): bool {
     if ($mapKey === '' || $exId <= 0) return false;
     if (defined('BSL_FORCE_SYNC') && BSL_FORCE_SYNC) return false;
     if ($ledgerRow === null) $ledgerRow = (remoteMapLoad()['bsl'][$mapKey] ?? null);
@@ -28243,6 +28471,8 @@ function bslSkipUnchanged(string $mapKey, int $exId, int $priceRial, int $stock,
     /* v10.463: محصولات ارسال‌شدهٔ پیش از v10.463 ممکن است در باسلام توضیحات HTML خام/اسکیپ‌شده
        داشته باشند؛ یک‌بار پرش را لغو کن تا با متن ساده و خوانای جدید آپدیت شوند. */
     if (empty($ledgerRow['plain_desc_v1'])) return false;
+    /* v10.464: اگر محصول وزن استخراج‌شده در صفحهٔ جزئیات دارد و با وزن ثبت‌شده در دفترچه فرق دارد، آپدیت شود */
+    if ($wantWeightG > 0 && (int)($ledgerRow['weight_g'] ?? 0) !== $wantWeightG) return false;
     if ((int)$ledgerRow['price_rial'] !== $priceRial) return false;
     if (isset($ledgerRow['stock']) && (int)$ledgerRow['stock'] !== $stock) return false;
     $at = (int)($ledgerRow['at'] ?? 0);
@@ -28432,8 +28662,12 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
 
     $stock  = effectiveStock($p, (int)($opts['stock'] ?? 10));    // v10.21 (۳۴الف)
     $prepD  = (int)($opts['preparation_days'] ?? 3);
-    $weight = (int)($opts['weight'] ?? 500);
-    $pkgW   = (int)($opts['package_weight'] ?? ($weight + 100));
+    $_defWM = (int)($opts['weight'] ?? 500);
+    $_defPWM = (int)($opts['package_weight'] ?? ($_defWM + 100));
+    $_wResM = bslResolveProductWeights($p, $_defWM, $_defPWM);
+    $weight = (int)$_wResM['weight'];
+    $pkgW   = (int)$_wResM['package_weight'];
+    $_wantWG = !empty($_wResM['overridden']) ? $weight : 0;
     $catId  = (int)($opts['category_id'] ?? 0);
     $autoCat= !empty($opts['auto_category']);
     $flatCats = is_array($opts['flat_cats'] ?? null) ? $opts['flat_cats'] : [];
@@ -28453,7 +28687,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             if (!isset($live[$vid])) continue;
             $__mk = bslShopMapKey($pKey, $live[$vid]);
             if (bslSkipUnchanged($__mk, (int)$exId, (int)$prices[$vid], $stock,
-                                 $__bslMap[$__mk] ?? null)) {
+                                 $__bslMap[$__mk] ?? null, $_wantWG)) {
                 bslSkipCount(1);
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$exId,
                                    'action' => 'unchanged', 'skipped' => true];
@@ -28578,8 +28812,12 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                شوند. remoteMapRecord کلِ ردیف را جایگزین می‌کند، پس اگر
                اینجا بدونشان بنویسیم، چیزی که چند خط بالاتر ثبت شده پاک
                می‌شود و پرشِ دفعهٔ بعد هیچ‌وقت اتفاق نمی‌افتد. */
-            if ($mk !== '') $rows[] = ['key' => $mk, 'remote_id' => $rid, 'title' => $title,
-                                       'price_rial' => (int)($prices[$vid] ?? 0), 'stock' => $stock];
+            if ($mk !== '') {
+                $_lRowM = ['key' => $mk, 'remote_id' => $rid, 'title' => $title,
+                           'price_rial' => (int)($prices[$vid] ?? 0), 'stock' => $stock];
+                if ($_wantWG > 0) $_lRowM['weight_g'] = $_wantWG;
+                $rows[] = $_lRowM;
+            }
             bslCatalogNote((int)$vid, $title, (int)$rid);   // v10.35 (۴۷ب)
         }
         if ($rows) remoteMapRecord('bsl', $rows);
@@ -28613,9 +28851,13 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
 
     $stock   = effectiveStock($p, (int)($opts['stock'] ?? 10));   // v10.21 (۳۴الف)
     $prepD   = (int)($opts['preparation_days'] ?? 3);
-    $weight  = (int)($opts['weight'] ?? 500);
-    $pkgW    = (int)($opts['package_weight'] ?? ($weight + 100));
+    $_defWS  = (int)($opts['weight'] ?? 500);
+    $_defPWS = (int)($opts['package_weight'] ?? ($_defWS + 100));
+    $_wResS  = bslResolveProductWeights($p, $_defWS, $_defPWS);
+    $weight  = (int)$_wResS['weight'];
+    $pkgW    = (int)$_wResS['package_weight'];
     if ($pkgW <= 0) $pkgW = max(1, $weight + 100); // باسلام وزن بسته‌بندی صفر را با 422 رد می‌کند
+    $_wantShopWG = !empty($_wResS['overridden']) ? $weight : 0;
     $catId   = (int)($opts['category_id'] ?? 0);
     $fallback= is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
     $autoCat = !empty($opts['auto_category']);
@@ -28630,7 +28872,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if ($exId > 0) {
         /* v10.33 (۴۶): اگر قیمت و موجودی همانی است که خودمان آخرین بار
            فرستادیم، این PATCH هیچ کاری نمی‌کند جز مصرفِ یک درخواست. */
-        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock)) {
+        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, $_wantShopWG)) {
             bslSkipCount(1);
             return ['ok' => true, 'id' => $exId, 'action' => 'unchanged', 'skipped' => true];
         }
@@ -38164,7 +38406,9 @@ function matrixBslDuplicateRecoverOne(array $task): array {
     if($id<=0)throw new RuntimeException('محصول هم‌نام در همهٔ وضعیت‌های فعال و غیرفعال پیدا نشد');
     $b=(array)($cn['basalam']??[]);$raw=extractSourcePrice($p);$adj=extractPriceNum($raw)>0?bslShopPriceForProfile($profile,$raw,$shop,(int)($b['price_round']??0)):[];
     $price=$expect>0?$expect:(int)($adj['price']??0);if($price<=0)throw new RuntimeException('قیمت معتبر برای به‌روزرسانی محصول هم‌نام موجود نیست');
-    $stock=effectiveStock($p,(int)($b['stock']??10));$weight=(int)($b['weight']??500);$pkg=(int)($b['package_weight']??0);if($pkg<=0)$pkg=max(1,$weight+100);
+    $stock=effectiveStock($p,(int)($b['stock']??10));
+    $_wResDupRec=bslResolveProductWeights($p,(int)($b['weight']??500),(int)($b['package_weight']??0));
+    $weight=(int)$_wResDupRec['weight'];$pkg=(int)$_wResDupRec['package_weight'];
     $bu=['primary_price'=>$price*10,'stock'=>$stock,'status'=>2976,'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>$weight,'package_weight'=>$pkg];
     bslApplyContent($bu,$p);$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$id,$bu,false,null,false,1);
     if(empty($r['ok']))$r=bslReq($tk,'PATCH','products/'.$id,$bu,false,null,false,1);
@@ -53030,6 +53274,68 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_skipNewLedger463 = function_exists('bslSkipUnchanged')
         ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time(), 'plain_desc_v1' => 1])
         : false;
+    $_wResDirect464 = function_exists('bslResolveProductWeights')
+        ? bslResolveProductWeights(['weight' => '۱,۲۰۰ گرم'], 500, 650)
+        : [];
+    $_wResSpecs464 = function_exists('bslResolveProductWeights')
+        ? bslResolveProductWeights(['specs' => '<table><tr><th>تحمل وزن</th><td>120 کیلوگرم</td></tr><tr><th>وزن تقریبی</th><td>1000 گرم</td></tr></table>'], 500, 600)
+        : [];
+    $_wResFallback464 = function_exists('bslResolveProductWeights')
+        ? bslResolveProductWeights(['title' => 'بدون وزن'], 500, 600)
+        : [];
+    $_buWeight464 = ['primary_price' => 100000, 'weight' => 500, 'package_weight' => 600];
+    if (function_exists('bslApplyContent')) {
+        bslApplyContent($_buWeight464, ['weight' => '۱/۵ کیلوگرم']);
+    }
+    $_sanHeavy464 = function_exists('bslSanitizeProductWritePayload')
+        ? bslSanitizeProductWritePayload(['weight' => 2200, 'package_weight' => 600], 'products')
+        : [];
+    $_wProd464 = ['title' => 'سرویس قابلمه', 'long_desc' => 'تست وزن', 'weight' => '2.4 کیلوگرم'];
+    $_wDiff464 = (function_exists('contentChanges') && function_exists('bslRemoteContent'))
+        ? contentChanges($_wProd464, bslRemoteContent(['id' => 88, 'description' => 'تست وزن', 'net_weight' => 500]))
+        : [];
+    $_skipOldWeight464 = function_exists('bslSkipUnchanged')
+        ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time(), 'plain_desc_v1' => 1, 'weight_g' => 500], 2400)
+        : true;
+    $_skipSameWeight464 = function_exists('bslSkipUnchanged')
+        ? bslSkipUnchanged('k1@100', 55, 100000, 10, ['id' => 55, 'price_rial' => 100000, 'stock' => 10, 'at' => time(), 'plain_desc_v1' => 1, 'weight_g' => 2400], 2400)
+        : false;
+    $add('10.464', 'اولویت و Override وزن استخراج‌شده در صفحهٔ جزئیات محصول بر وزن پیش‌فرض تنظیمات باسلام در تمام مسیرهای ساخت و آپدیت + تنظیم خودکار وزن بسته‌بندی',
+         function_exists('s4ClassifyWeightSpecLabel')
+      && function_exists('s4ParseWeightGrams')
+      && function_exists('s4ExtractWeightsFromSpecs')
+      && function_exists('bslResolveProductWeights')
+      && s4ParseWeightGrams('1000 گرم') === 1000
+      && s4ParseWeightGrams('۱,۲۵۰ گرم') === 1250
+      && s4ParseWeightGrams('۱/۵ کیلوگرم') === 1500
+      && s4ParseWeightGrams('0.75 kg') === 750
+      && s4ParseWeightGrams('۱ کیلو و ۲۰۰ گرم') === 1200
+      && s4ParseWeightGrams('نیم کیلو') === 500
+      && s4ParseWeightGrams('1000 ± 50 گرم') === 1000
+      && s4ParseWeightGrams('800 تا 1000 گرم') === 1000
+      && s4ParseWeightGrams('850') === 850
+      && s4ParseWeightGrams('34 سانتی متر') === 0
+      && s4ClassifyWeightSpecLabel('وزن تقریبی') === 'net'
+      && s4ClassifyWeightSpecLabel('وزن با بسته‌بندی') === 'package'
+      && s4ClassifyWeightSpecLabel('تحمل وزن') === ''
+      && s4ClassifyWeightSpecLabel('حداکثر وزن قابل تحمل') === ''
+      && !empty($_wResDirect464['overridden'])
+      && (int)($_wResDirect464['weight'] ?? 0) === 1200
+      && (int)($_wResDirect464['package_weight'] ?? 0) === 1350
+      && !empty($_wResSpecs464['overridden'])
+      && (int)($_wResSpecs464['weight'] ?? 0) === 1000
+      && (int)($_wResSpecs464['package_weight'] ?? 0) === 1100
+      && empty($_wResFallback464['overridden'])
+      && (int)($_wResFallback464['weight'] ?? 0) === 500
+      && (int)($_wResFallback464['package_weight'] ?? 0) === 600
+      && (int)($_buWeight464['weight'] ?? 0) === 1500
+      && (int)($_buWeight464['package_weight'] ?? 0) === 1600
+      && (int)($_sanHeavy464['package_weight'] ?? 0) >= 2200
+      && !empty($_wDiff464)
+      && $_skipOldWeight464 === false
+      && $_skipSameWeight464 === true
+      && strpos($selfSrc, "{v:'10." . "464'") !== false
+      && version_compare(APP_VERSION, '10.464', '>='));
     $add('10.463', 'پاک‌سازی کامل تگ‌ها و entityهای HTML و ترکیب هوشمند توضیحات کوتاه، بلند، جدول مشخصات و تنوع‌ها به متن روان و خوانا در فیلد واحد توضیحات باسلام + اصلاح خودکار محصولات قبلی',
          function_exists('s4HtmlToPlainTextForBsl')
       && function_exists('bslDescriptionHasHtmlArtifacts')
@@ -60558,6 +60864,7 @@ function remoteMapRecord(string $target, array $rows, string $profileKey = ''): 
            هر دو اختیاری‌اند تا فراخوان‌های قدیمی دست‌نخورده کار کنند. */
         if (isset($r['price_rial']) && (int)$r['price_rial'] > 0) $add[$k]['price_rial'] = (int)$r['price_rial'];
         if (isset($r['stock']) && (int)$r['stock'] >= 0)          $add[$k]['stock']      = (int)$r['stock'];
+        if (isset($r['weight_g']) && (int)$r['weight_g'] > 0)     $add[$k]['weight_g']   = (int)$r['weight_g'];
         if ($target === 'bsl') $add[$k]['plain_desc_v1'] = 1;
     }
     if (!$add) return 0;
@@ -71723,10 +72030,14 @@ if(!empty($bslForceAllRun)){$__need=true;$__changes[]='ارسال کامل (گر
 if($__exPrice!=$__pn){$__need=true;$__changes[]='قیمت '.($__exPrice/10).'→'.($__pn/10).' تومان';}
 if($__exStock!=$__newStock){$__need=true;$__changes[]='موجودی '.$__exStock.'→'.$__newStock;}
 $__diff=contentSyncOn($cn)?contentChanges($__fp,bslRemoteContent($__ex)):[];
-if(contentSyncOn($cn)&&empty($__diff)){
+if(contentSyncOn($cn)){
     $__fastMapKey=bslShopMapKey((string)$__fk,$__defaultShop);
-    if($__fastMapKey!==''&&empty($__fastBslLedger[$__fastMapKey]['plain_desc_v1'])&&bslBuildUnifiedDescription($__fp)['description']!==''){
+    if(empty($__diff)&&$__fastMapKey!==''&&empty($__fastBslLedger[$__fastMapKey]['plain_desc_v1'])&&bslBuildUnifiedDescription($__fp)['description']!==''){
         $__diff[]='توضیح بلند';
+    }
+    $__wFast=bslResolveProductWeights($__fp,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
+    if(!empty($__wFast['overridden'])&&$__fastMapKey!==''&&(int)($__fastBslLedger[$__fastMapKey]['weight_g']??0)!==(int)$__wFast['weight']){
+        $__diff[]='وزن ('.(int)$__wFast['weight'].' گرم)';
     }
 }
 $__needsImg=false;foreach($__diff as $__d){if(mb_strpos((string)$__d,'گالری',0,'UTF-8')!==false||mb_stripos((string)$__d,'image',0,'UTF-8')!==false){$__needsImg=true;break;}}
@@ -71894,11 +72205,15 @@ if($exPrice!=$pn){$needUpdate=true;$updateChanges[]='قیمت '.($exPrice/10).'�
 if($exStock!=$newStock){$needUpdate=true;$updateChanges[]='موجودی';}
 // v8.69: محتوای تازه (توضیحات، گالری، تنوع، SKU) هم آپدیت می‌خواهد
 $bslContentDiff=contentSyncOn($cn)?contentChanges($p,bslRemoteContent($exBsl)):[];
-if(contentSyncOn($cn)&&empty($bslContentDiff)&&(!empty($exBsl['__from_catalog'])||!empty($exBsl['__from_ledger']))){
+if(contentSyncOn($cn)&&(!empty($exBsl['__from_catalog'])||!empty($exBsl['__from_ledger']))){
     $_defMk=bslShopMapKey((string)$pKey,['vendor_id'=>$vid]);
     $_defLedgerRow=$_defMk!==''?(remoteMapLoad()['bsl'][$_defMk]??null):null;
-    if(empty($_defLedgerRow['plain_desc_v1'])&&bslBuildUnifiedDescription($p)['description']!==''){
+    if(empty($bslContentDiff)&&empty($_defLedgerRow['plain_desc_v1'])&&bslBuildUnifiedDescription($p)['description']!==''){
         $bslContentDiff[]='توضیح بلند';
+    }
+    $_wSingleUpd=bslResolveProductWeights($p,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
+    if(!empty($_wSingleUpd['overridden'])&&(int)($_defLedgerRow['weight_g']??0)!==(int)$_wSingleUpd['weight']){
+        $bslContentDiff[]='وزن ('.(int)$_wSingleUpd['weight'].' گرم)';
     }
 }
 if($bslContentDiff){$needUpdate=true;foreach($bslContentDiff as $_cd)$updateChanges[]=$_cd;}
@@ -71956,7 +72271,8 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 $_builtNoImg=bslBuildUnifiedDescription($p,$pTitle);
 $bsBrief=$_builtNoImg['brief']!==''?$_builtNoImg['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
 $bsDesc=$_builtNoImg['description']!==''?$_builtNoImg['description']:$bsBrief;
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
+$_wNoImg=bslResolveProductWeights($p,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>effectiveStock($p,(int)($cn['basalam']['stock']??10)),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)$_wNoImg['weight'],'package_weight'=>(int)$_wNoImg['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
 if($r['ok']&&!empty($r['body']['id'])){
@@ -71994,7 +72310,8 @@ $_builtMainCreate=bslBuildUnifiedDescription($p,$pTitle);
 $bsBrief=$_builtMainCreate['brief']!==''?$_builtMainCreate['brief']:mb_substr(s4HtmlToPlainTextForBsl($pTitle),0,250,'UTF-8');
 $bsDesc=$_builtMainCreate['description']!==''?$_builtMainCreate['description']:$bsBrief;
 $_bslCurStk=effectiveStock($p,(int)($cn['basalam']['stock']??10));
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
+$_wMainCreate=bslResolveProductWeights($p,(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>$_bslCurStk,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)$_wMainCreate['weight'],'package_weight'=>(int)$_wMainCreate['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galIdsB)?$galIdsB:[$pid])];
 $_bslVarsNew=bslBuildVariantsPayload($p,$pn,$_bslCurStk);
 if($_bslVarsNew)$bp['variants']=$_bslVarsNew;
 if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;if(!empty($p['sku']))$bp['sku']=$p['sku'];
@@ -72618,10 +72935,11 @@ if(!$__skipImageRetry){
                 }));
                 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','⏭ ['.mb_substr($pRT,0,30).'] تکرار — Phase 3');
             }else{
+                $_wImgRetry=bslResolveProductWeights(is_array($pRetry)?$pRetry:[],(int)($cn['basalam']['weight']??500),(int)($cn['basalam']['package_weight']??0));
                 $bpR=['name'=>mb_substr($pRT,0,120),'brief'=>mb_substr($pRBrief,0,250),'description'=>$pRDesc,
                     'primary_price'=>$pRP,'stock'=>effectiveStock($pRetry,(int)($cn['basalam']['stock']??10)),
-                    'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),
-                    'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),
+                    'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)$_wImgRetry['weight'],
+                    'package_weight'=>(int)$_wImgRetry['package_weight'],
                     'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid3,'photos'=>[$pid3]];
                 $bpR['status']=mb_strlen($pRBrief)>=3&&mb_strlen($pRDesc)>=3?2976:3790;
                 if($pRSku)$bpR['sku']=$pRSku;
@@ -72962,8 +73280,9 @@ $bsDesc=$_builtSingleNoImg['description']!==''?$_builtSingleNoImg['description']
 $catId=(int)($bs['category_id']??0);
 if($catId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
+$_wSingleNoImg=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
 $cardCatId=$catId;$cardCatName=bslCatNameById($catId);
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wSingleNoImg['weight'],'package_weight'=>(int)$_wSingleNoImg['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
 if($r['ok']&&!empty($r['body']['id'])){
@@ -73006,9 +73325,10 @@ if($autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCat
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
 }
 
+$_wSingleMain=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
 $cardCatId=$catId;
 $cardCatName=bslCatNameById($catId);
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galS)?$galS:[$pid])];
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wSingleMain['weight'],'package_weight'=>(int)$_wSingleMain['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galS)?$galS:[$pid])];
 if(mb_strlen($bsBrief)>=3&&mb_strlen($bsDesc)>=3)$bp['status']=2976;else $bp['status']=3790;
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
@@ -73968,7 +74288,8 @@ $bsDesc=$_builtStreamNoImg['description']!==''?$_builtStreamNoImg['description']
 $catId=(int)($bs['category_id']??0);
 if($catId<=0&&$autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
 if($catId>0&&!empty($cData)&&is_array($cData)){$catId=findLeafCategory($catId,$cData);}
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
+$_wStreamNoImg=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wStreamNoImg['weight'],'package_weight'=>(int)$_wStreamNoImg['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'status'=>3790];
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 $r=bslReq($tk,'POST','vendors/'.$vid.'/products',$bp);
 if($r['ok']&&!empty($r['body']['id'])){
@@ -74003,7 +74324,8 @@ $catId=0;
 if($autoCat&&!empty($bslFlatCats)){$_ac=autoMatchBslCategory($pTitle,$bslFlatCats);if($_ac>0)$catId=$_ac;}
 }
 
-$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100)),'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galC)?$galC:[$pid]),'status'=>2976];
+$_wStreamMain=bslResolveProductWeights($p,(int)($bs['weight']??500),(int)($bs['package_weight']??0));
+$bp=['name'=>mb_substr($pTitle,0,120),'brief'=>mb_substr($bsBrief,0,250),'description'=>$bsDesc,'primary_price'=>$pn,'stock'=>(int)($bs['stock']??10),'preparation_days'=>(int)($bs['preparation_days']??3),'weight'=>(int)$_wStreamMain['weight'],'package_weight'=>(int)$_wStreamMain['package_weight'],'is_wholesale'=>false,'category_id'=>$catId,'photo'=>$pid,'photos'=>(!empty($galC)?$galC:[$pid]),'status'=>2976];
 if(!empty($p['sku']))$bp['sku']=$p['sku'];
 
 send_sse('send_info',['msg'=>'['.$n.'] ایجاد: '.mb_substr($pTitle,0,40)]);
@@ -79151,7 +79473,7 @@ endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) �
 <div class="crow"><label>Token:</label><input type="password" id="bsTk" dir="ltr"></div>
 <div class="crow"><label>غرفه:</label><input type="number" id="bsVid" dir="ltr"></div>
 <div class="crow"><label>آماده‌سازی:</label><input type="number" id="bsPD" value="3" style="max-width:100px"></div>
-<div class="crow"><label>وزن:</label><input type="number" id="bsW" value="500" style="max-width:120px"></div>
+<div class="crow"><label>وزن:</label><input type="number" id="bsW" value="500" style="max-width:120px"><small style="color:#67e8f9">گرم (پیش‌فرض — وزن استخراج‌شده در جزئیات اولویت دارد)</small></div>
 <div class="crow"><label>وزن بسته:</label><input type="number" id="bsPW" value="600" min="0" style="flex:1"><small>گرم</small></div>
 <div class="crow"><label>موجودی:</label><input type="number" id="bsSt" value="10" style="max-width:100px"></div>
 <!-- v9.80: سوییچ «اتصال غیرمستقیم» برای باسلام — وقتی IP هاست بلاک شده، تبادل از روش‌های غیرمستقیم انجام شود -->
@@ -89472,6 +89794,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.464', t:'⚖️ اولویت و Override وزن استخراج‌شده در صفحهٔ جزئیات محصول بر وزن پیش‌فرض تنظیمات باسلام + تنظیم خودکار وزن بسته‌بندی', items:[
+    'موتور هوشمند تحلیل و تبدیل وزن محصول به گرم (s4ParseWeightGrams + s4ClassifyWeightSpecLabel + bslResolveProductWeights): پشتیبانی از ارقام فارسی/عربی، گرم و کیلوگرم و میلی‌گرم، اعشار با نقطه/اسلش/ممیز («۱/۵ کیلوگرم»، «0.75 kg»)، جداکنندهٔ هزارگان («۱,۲۵۰ گرم»)، اوزان ترکیبی («۱ کیلو و ۲۰۰ گرم»)، «نیم کیلو»/«یک کیلو»، بازه‌ها («800 تا 1000 گرم») و حذف تلورانس («1000 ± 50 گرم»)؛ به همراه تشخیص دقیق ردیف‌های وزن واقعی از جدول مشخصات فنی (specs) و نادیده‌گیری برچسب‌های غیرمرتبط مثل «تحمل وزن»، «ظرفیت وزنی» و «دقت وزن».',
+    'Override کامل وزن پیش‌فرض باسلام در تمام مسیرهای ارسال و به‌روزرسانی: هرگاه محصول وزن استخراج‌شده در فیلد وزن یا مشخصات صفحهٔ جزئیات داشته باشد، جایگزین وزن پیش‌فرض تنظیمات باسلام می‌شود و فقط در نبود وزن معتبر، وزن پیش‌فرض باسلام به‌کار می‌رود؛ همچنین وزن با بسته‌بندی (package_weight) به‌طور خودکار با حفظ حاشیهٔ بسته‌بندی تنظیمات (یا حداقل >= weight در bslSanitizeProductWritePayload) محاسبه می‌شود تا خطای ۴۲۲ باسلام روی کالاهای سنگین‌تر از وزن پیش‌فرض رخ ندهد.',
+    'استخراج خودکار وزن در هر سه موتور فاز ۲ جزئیات (stream، inline و two_phase) و به‌روزرسانی خودکار محصولات موجود باسلام: ثبت آخرین وزن ارسال‌شده در دفترچه (weight_g) و تشخیص مغایرت وزن در bslRemoteContent / contentChanges / bslSkipUnchanged تا محصولات قبلی غرفه نیز به وزن واقعی استخراج‌شدهٔ خود آپدیت شوند.'
+  ]},
   {v:'10.463', t:'📝 اصلاح کامل نمایش توضیحات محصولات در باسلام: تبدیل تمام تگ‌ها، entityها و جداول HTML به متن فارسی روان و ترکیب در فیلد واحد توضیحات + پاک‌سازی خودکار محصولات قبلی', items:[
     'موتور اختصاصی پاک‌سازی و تبدیل HTML به متن فارسی روان برای باسلام (s4HtmlToPlainTextForBsl + bslBuildUnifiedDescription): رمزگشایی چندلایهٔ entityها (&amp;#13;، &#13;، &lt;، &gt;، &nbsp;)، حذف تگ‌های ناقص ابتدای متن (مثل div>)، تبدیل جداول مشخصات فنی (<table><tr><th><td> و <dl>) به فهرست خوانای «مشخصات فنی: • ویژگی: مقدار»، حفظ نیم‌فاصلهٔ فارسی و خط‌شکنی‌های طبیعی بدون ایجاد خطوط خالی اضافه روی <br>، و حذف خودکار ردیف نام فروشندگان مبدأ (فروشنده) در ارسال به باسلام در حالی که جداول HTML برای ووکامرس و تب نتایج کاملاً حفظ می‌شوند.',
     'ادغام هوشمند در فیلد واحد توضیحات باسلام بدون تکرار: با توجه به تک‌فیلدی بودن توضیحات در اپلیکیشن باسلام، نکات غیرتکراری توضیح کوتاه (short_desc)، توضیح بلند (long_desc)، جدول مشخصات فنی (specs) و «گزینه‌های موجود» بدون تکرار عنوان یا سطرهای تکراری در یک متن یکپارچه و مرتب ترکیب می‌شوند و از افزودن تگ‌های <p><strong> روی گزینه‌ها جلوگیری می‌شود.',
@@ -107570,7 +107897,7 @@ function sendImportToWoo(){
         final_price:p.final_price||String(extractNumber(p.price)),
         price_unit:(p.price||'').toString().includes('ریال')||(p.price||'').toString().includes('ر.ی')?'rial':'toman',
         image:p.image||'',sku:p.sku||'',
-        short_desc:p.shortDesc||'',long_desc:p.longDesc||'',weight:'',images:p.images||[],variations:p.variations||[],variation_groups:p.variation_groups||[],variations_text:p.variations_text||''
+        short_desc:p.shortDesc||'',long_desc:p.longDesc||'',specs:p.specs||'',weight:p.weight||'',images:p.images||[],variations:p.variations||[],variation_groups:p.variation_groups||[],variations_text:p.variations_text||''
     }));
     if(!ps.length){showToast('محصولی نیست',true);return;}
     switchMainTab('send');
@@ -107596,7 +107923,7 @@ function sendImportToBsl(){
         final_price:p.final_price||String(extractNumber(p.price)),
         price_unit:(p.price||'').toString().includes('ریال')||(p.price||'').toString().includes('ر.ی')?'rial':'toman',
         image:p.image||'',sku:p.sku||'',
-        short_desc:p.shortDesc||'',long_desc:p.longDesc||'',weight:'',images:p.images||[],variations:p.variations||[],variation_groups:p.variation_groups||[],variations_text:p.variations_text||''
+        short_desc:p.shortDesc||'',long_desc:p.longDesc||'',specs:p.specs||'',weight:p.weight||'',images:p.images||[],variations:p.variations||[],variation_groups:p.variation_groups||[],variations_text:p.variations_text||''
     }));
     if(!ps.length){showToast('\u0645\u062d\u0635\u0648\u0644\u06cc \u0646\u06cc\u0633\u062a',true);return;}
     // v7.56: Use client-driven queue instead of server-side stream (was stopping after some products)
