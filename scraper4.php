@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.452';
+const APP_VERSION = '10.453';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -13981,6 +13981,20 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
     $jinaModes = is_array($plan['modes'] ?? null) ? $plan['modes'] : ['direct'];
     $jinaNet = is_array($plan['net'] ?? null) ? $plan['net'] : s4JinaIndirectNet();
     $isSnappTarget = function_exists('isSnappshopUrl') && isSnappshopUrl($target);
+    if ($isSnappTarget && function_exists('snappshopParseTargetRoute')) {
+        $_snRouteJina = snappshopParseTargetRoute($target);
+        if (($_snRouteJina['kind'] ?? '') === 'product') {
+            $apiPdp = fetch_html_snappshop_api($target, $timeout, $prev);
+            if (!empty($apiPdp['ok'])) {
+                $apiPdp['jina_reader'] = 'snappshop-apix-direct-pdp';
+                $apiPdp['jina_reader_via'] = (string)($apiPdp['snappshop_api_via'] ?? 'apix');
+                $apiPdp['jina_reader_trace'] = [];
+                $apiPdp['jina_reader_modes'] = $jinaModes;
+                return $apiPdp;
+            }
+            return $apiPdp;
+        }
+    }
     $skipBlockedJina = $isSnappTarget && !empty($GLOBALS['_s4JinaSnappBlocked']);
     if ($skipBlockedJina) {
         $last['code'] = 451;
@@ -14246,6 +14260,18 @@ function snappshopBuildLandingPayload(array $route): array {
 
 function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonBody = null, int $timeout = 20): array {
     $timeout = max(6, min(45, $timeout));
+    $isProductDetailEndpoint = stripos(ltrim($endpoint, '/'), 'products/v2/') === 0;
+    $minGapSec = $isProductDetailEndpoint ? 0.34 : 0.16;
+    $inSelfTest = !empty($_GET['selftest']) || !empty($GLOBALS['_s4InSelfTest']);
+    $paceFn = static function(float $gapSec) use ($inSelfTest): void {
+        if ($inSelfTest || $gapSec <= 0) return;
+        $prevTs = (float)($GLOBALS['_s4SnappApixLastTs'] ?? 0.0);
+        $nowTs = microtime(true);
+        if ($prevTs > 0 && ($nowTs - $prevTs) < $gapSec) {
+            usleep((int)round(($gapSec - ($nowTs - $prevTs)) * 1000000));
+        }
+        $GLOBALS['_s4SnappApixLastTs'] = microtime(true);
+    };
     $sep = strpos($endpoint, '?') !== false ? '&' : '?';
     $apiUrl = 'https://apix.snappshop.ir/' . ltrim($endpoint, '/') . $sep . 'lat=35.77331&lng=51.418591';
     $method = strtoupper(trim($method));
@@ -14270,59 +14296,85 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
     }
     $lastErr = 'Empty';
     $lastCode = 0;
+    $directReachedIran = false;
+    $primaryErr = '';
+    $primaryCode = 0;
     foreach ($tryModes as $via) {
         if (!function_exists('curl_init')) break;
-        $reqUrl = $apiUrl;
-        $ch = curl_init($apiUrl);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 3,
-            CURLOPT_CONNECTTIMEOUT => 6,
-            CURLOPT_TIMEOUT        => $timeout,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_CUSTOMREQUEST  => $method,
-            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            CURLOPT_HTTPHEADER     => $hdrs,
-        ]);
-        if ($encodedBody !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedBody);
-        if ($via === 'doh' && function_exists('aiDohResolve')) {
-            $dr = aiDohResolve('apix.snappshop.ir', (string)($net['doh_url'] ?? ''), min(8, $timeout));
-            if (!empty($dr['ok']) && !empty($dr['ip'])) {
-                curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . (string)$dr['ip']]);
+        /* Cloudflare Worker همیشه خارج از ایران است و روی apix.snappshop.ir صفحهٔ
+           403 Please turn off your VPN برمی‌گرداند؛ وقتی سرور اصلی در ایران است و
+           فقط 429/5xx خورده، ارسال به worker بی‌فایده است و خطای واقعی را پنهان می‌کند. */
+        if ($via === 'worker' && $directReachedIran) continue;
+        $maxTries = (!$inSelfTest && in_array($via, ['direct', 'doh'], true)) ? 3 : 1;
+        for ($attempt = 0; $attempt < $maxTries; $attempt++) {
+            if ($attempt > 0 && !$inSelfTest) {
+                usleep($attempt === 1 ? 1200000 : 2500000);
             }
-        } elseif ($via === 'proxy' && trim((string)($net['proxy'] ?? '')) !== '') {
-            curl_setopt($ch, CURLOPT_PROXY, (string)$net['proxy']);
-            $map = ['http' => CURLPROXY_HTTP,
-                    'socks5' => defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5,
-                    'socks4' => defined('CURLPROXY_SOCKS4') ? CURLPROXY_SOCKS4 : CURLPROXY_HTTP];
-            curl_setopt($ch, CURLOPT_PROXYTYPE, $map[(string)($net['proxy_type'] ?? 'http')] ?? CURLPROXY_HTTP);
-            if (trim((string)($net['proxy_auth'] ?? '')) !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, (string)$net['proxy_auth']);
-        } elseif ($via === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
-            $w = rtrim((string)$net['worker_url'], '/');
-            $reqUrl = (strpos($w, '{url}') !== false) ? str_replace('{url}', rawurlencode($apiUrl), $w) : ($w . '/?url=' . rawurlencode($apiUrl));
-            curl_setopt($ch, CURLOPT_URL, $reqUrl);
+            $paceFn($minGapSec);
+            $reqUrl = $apiUrl;
+            $ch = curl_init($apiUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS      => 3,
+                CURLOPT_CONNECTTIMEOUT => 6,
+                CURLOPT_TIMEOUT        => $timeout,
+                CURLOPT_ENCODING       => '',
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_CUSTOMREQUEST  => $method,
+                CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                CURLOPT_HTTPHEADER     => $hdrs,
+            ]);
+            if ($encodedBody !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedBody);
+            if ($via === 'doh' && function_exists('aiDohResolve')) {
+                $dr = aiDohResolve('apix.snappshop.ir', (string)($net['doh_url'] ?? ''), min(8, $timeout));
+                if (!empty($dr['ok']) && !empty($dr['ip'])) {
+                    curl_setopt($ch, CURLOPT_RESOLVE, ['apix.snappshop.ir:443:' . (string)$dr['ip']]);
+                }
+            } elseif ($via === 'proxy' && trim((string)($net['proxy'] ?? '')) !== '') {
+                curl_setopt($ch, CURLOPT_PROXY, (string)$net['proxy']);
+                $map = ['http' => CURLPROXY_HTTP,
+                        'socks5' => defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5,
+                        'socks4' => defined('CURLPROXY_SOCKS4') ? CURLPROXY_SOCKS4 : CURLPROXY_HTTP];
+                curl_setopt($ch, CURLOPT_PROXYTYPE, $map[(string)($net['proxy_type'] ?? 'http')] ?? CURLPROXY_HTTP);
+                if (trim((string)($net['proxy_auth'] ?? '')) !== '') curl_setopt($ch, CURLOPT_PROXYUSERPWD, (string)$net['proxy_auth']);
+            } elseif ($via === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
+                $w = rtrim((string)$net['worker_url'], '/');
+                $reqUrl = (strpos($w, '{url}') !== false) ? str_replace('{url}', rawurlencode($apiUrl), $w) : ($w . '/?url=' . rawurlencode($apiUrl));
+                curl_setopt($ch, CURLOPT_URL, $reqUrl);
+            }
+            if (!empty($net['ipv4']) && defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            $raw = curl_exec($ch);
+            $err = curl_error($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            curl_close($ch);
+            $rawStr = $raw === false ? '' : (string)$raw;
+            $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
+            if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
+                return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
+            }
+            if ($code >= 200 && $code < 300 && is_array($decoded) && array_key_exists('status', $decoded) && empty($decoded['status'])) {
+                return ['ok' => false, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'json_status_false' => true, 'error' => s4JinaFormatHttpError($code, $err, $rawStr)];
+            }
+            $fmtErr = s4JinaFormatHttpError($code, $err, $rawStr);
+            if ($fmtErr === '' && $code > 0) $fmtErr = 'HTTP ' . $code;
+            $isVpnBlock = ($code === 403 && (stripos($rawStr, 'turn off your VPN') !== false || stripos($rawStr, 'Access Denied') !== false));
+            if (in_array($via, ['direct', 'doh'], true) && !$isVpnBlock && ($code === 429 || $code >= 500)) {
+                $directReachedIran = true;
+            }
+            if ($primaryErr === '' && $fmtErr !== '' && !($via === 'worker' && $isVpnBlock)) {
+                $primaryErr = $fmtErr;
+                $primaryCode = $code;
+            }
+            $lastCode = $code;
+            $lastErr = $fmtErr !== '' ? $fmtErr : $lastErr;
+            if ($code === 404 || $code === 400 || $code === 422) break 2;
+            if ($code === 429 || $code === 0 || $code >= 500) continue;
+            break;
         }
-        if (!empty($net['ipv4']) && defined('CURL_IPRESOLVE_V4')) curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-        $raw = curl_exec($ch);
-        $err = curl_error($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
-        $rawStr = $raw === false ? '' : (string)$raw;
-        $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
-        if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
-            return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
-        }
-        if ($code >= 200 && $code < 300 && is_array($decoded) && array_key_exists('status', $decoded) && empty($decoded['status'])) {
-            return ['ok' => false, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'json_status_false' => true, 'error' => s4JinaFormatHttpError($code, $err, $rawStr)];
-        }
-        $lastCode = $code;
-        $lastErr = s4JinaFormatHttpError($code, $err, $rawStr);
-        if ($code === 404 || $code === 400 || $code === 422) break;
     }
-    return ['ok' => false, 'code' => $lastCode, 'api_url' => $apiUrl, 'data' => [], 'error' => $lastErr];
+    return ['ok' => false, 'code' => $primaryCode > 0 ? $primaryCode : $lastCode, 'api_url' => $apiUrl, 'data' => [], 'error' => $primaryErr !== '' ? $primaryErr : $lastErr];
 }
 
 function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requestedPage = 1, ?array &$apiMeta = null): array {
@@ -14400,6 +14452,91 @@ function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requ
     return $products;
 }
 
+function snappshopCollectDetailImages(array $data): array {
+    $imgs = [];
+    $cdnBase = 'https://cdn.snappshop.ir';
+    $push = static function ($cand) use (&$imgs, $cdnBase, &$push): void {
+        if ($cand === null || $cand === false) return;
+        if (is_string($cand)) {
+            $u = trim($cand);
+            if ($u === '' || strpos($u, 'data:') === 0) return;
+            $u = make_absolute_url($u, $cdnBase);
+            if ($u === '' || isSnappshopPlaceholderImage($u)) return;
+            if (!url_is_image($u) && stripos($u, 'cdn.snappshop.ir/') === false) return;
+            if (!in_array($u, $imgs, true)) $imgs[] = $u;
+            return;
+        }
+        if (!is_array($cand)) return;
+        foreach (['original', 'large', 'main', 'src', 'url', 'file', 'path'] as $k) {
+            if (!empty($cand[$k]) && is_string($cand[$k])) {
+                $push($cand[$k]);
+                return;
+            }
+        }
+        if (isset($cand['image'])) {
+            $push($cand['image']);
+            return;
+        }
+        foreach ($cand as $sub) {
+            $push($sub);
+        }
+    };
+    $push($data['image'] ?? null);
+    $push($data['images'] ?? null);
+    if (is_array($data['content'] ?? null)) {
+        $push($data['content']['images'] ?? null);
+        $push($data['content']['gallery'] ?? null);
+    }
+    $push($data['gallery'] ?? null);
+    $push($data['media'] ?? null);
+    foreach ((array)($data['variants'] ?? []) as $vr) {
+        if (!is_array($vr)) continue;
+        $push($vr['image'] ?? null);
+        $push($vr['images'] ?? null);
+    }
+    foreach ((array)($data['page']['extra_meta'] ?? []) as $em) {
+        if (!is_array($em)) continue;
+        $prop = strtolower((string)($em['property'] ?? ($em['name'] ?? '')));
+        if ($prop === 'og:image' || $prop === 'twitter:image') {
+            $push($em['content'] ?? null);
+        }
+    }
+    return function_exists('galleryDedupe') ? galleryDedupe($imgs, defined('GALLERY_MAX_IMAGES') ? GALLERY_MAX_IMAGES : 25) : $imgs;
+}
+
+function queryFirstText(DOMXPath $xp, ?DOMNode $ctx, string $css): string {
+    $css = trim($css);
+    if ($css === '') return '';
+    if ($ctx !== null) {
+        $ns = queryInside($xp, $ctx, $css);
+        return ($ns && $ns->length) ? normalize_text((string)($ns->item(0)->textContent ?? '')) : '';
+    }
+    foreach ([true, false] as $strict) {
+        $q = cssToXpath($css, $strict);
+        if ($q === '') continue;
+        $ns = @$xp->query($q);
+        if ($ns && $ns->length) return normalize_text((string)($ns->item(0)->textContent ?? ''));
+    }
+    return '';
+}
+
+function snappshopFallbackSelectorForField(string $field): string {
+    switch ($field) {
+        case 'price':      return '.price ins .amount, .price .amount';
+        case 'oldPrice':   return '.price del.old-price, del.old-price';
+        case 'stock':      return 'p.stock';
+        case 'sku':        return '.product_meta .sku';
+        case 'brand':      return '.product_meta .product-brand';
+        case 'category':   return 'nav.woocommerce-breadcrumb, .product_meta .posted_in';
+        case 'tags':       return '.product_meta .tagged_as a';
+        case 'weight':     return '.product_meta .product-weight';
+        case 'shortDesc':  return '.product-short-description';
+        case 'longDesc':   return '#tab-description';
+        case 'variations': return '.snappshop-variation-group';
+        default:           return '';
+    }
+}
+
 function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     $content = is_array($data['content'] ?? null) ? $data['content'] : [];
     $pageMeta = is_array($data['page'] ?? null) ? $data['page'] : [];
@@ -14441,13 +14578,7 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
             }
         }
     }
-    $imgs = [];
-    foreach ((array)($data['images'] ?? []) as $im) {
-        $src = is_array($im) ? trim((string)($im['src'] ?? ($im['url'] ?? ''))) : trim((string)$im);
-        if ($src !== '' && !isSnappshopPlaceholderImage($src) && url_is_image($src) && !in_array($src, $imgs, true)) {
-            $imgs[] = $src;
-        }
-    }
+    $imgs = snappshopCollectDetailImages($data);
     $mainImg = $imgs[0] ?? '';
     $priceFormatted = $bestToman > 0 ? (number_format($bestToman) . ' تومان') : '';
     $sku = '';
@@ -14455,7 +14586,7 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     $galleryHtml = '';
     foreach ($imgs as $idx => $gUrl) {
         $cls = $idx === 0 ? 'product-image wp-post-image gallery-image' : 'gallery-image attachment-shop_single';
-        $galleryHtml .= '<img class="' . $cls . '" src="' . h($gUrl) . '" alt="' . h($title) . '">';
+        $galleryHtml .= '<div class="image-thumbnail gallery-item"><img class="' . $cls . '" src="' . h($gUrl) . '" data-large_image="' . h($gUrl) . '" alt="' . h($title) . '"></div>';
     }
     $attrRows = '';
     $shortItems = '';
@@ -14557,22 +14688,26 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
     $variationsHtml = '';
     if (!empty($attrMeta)) {
         $groupsHtml = '';
+        $listGroupsHtml = '';
         foreach ($attrMeta as $aid => $gInfo) {
             if (empty($gInfo['values'])) continue;
             $optsHtml = '';
+            $liHtml = '';
             foreach ($gInfo['values'] as $vid => $vInfo) {
                 $vp = (int)($vInfo['price'] ?? 0);
                 $pAttr = $vp > 0 ? (' data-price="' . $vp . '"') : '';
                 $optsHtml .= '<option value="' . h($vInfo['title']) . '"' . $pAttr . '>' . h($vInfo['title']) . '</option>';
+                $liHtml .= '<li data-value="' . h($vInfo['title']) . '"' . $pAttr . '>' . h($vInfo['title']) . '</li>';
             }
             $groupsHtml .= '<div class="variations snappshop-variation-group" data-name="' . h($gInfo['title']) . '" aria-label="' . h($gInfo['title']) . '">'
                 . '<label>' . h($gInfo['title']) . '</label>'
                 . '<select name="attribute_' . h($aid) . '" data-attribute_name="' . h($gInfo['title']) . '">' . $optsHtml . '</select>'
                 . '</div>';
+            $listGroupsHtml .= '<ul class="list-unstyled snappshop-variation-list" data-name="' . h($gInfo['title']) . '" aria-label="' . h($gInfo['title']) . '" style="display:none">' . $liHtml . '</ul>';
         }
         if ($groupsHtml !== '') {
             $varJsonAttr = $wcVariationsJson ? (' data-product_variations="' . h(json_encode($wcVariationsJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"') : '';
-            $variationsHtml = '<form class="variations_form cart"' . $varJsonAttr . '>' . $groupsHtml . '</form>';
+            $variationsHtml = '<form class="variations_form cart"' . $varJsonAttr . '>' . $groupsHtml . $listGroupsHtml . '</form>';
         }
     }
     $cats = [];
@@ -14627,17 +14762,17 @@ function snappshopDetailSyntheticHtml(array $data, string $sourceUrl): string {
         . '<style>body{font-family:tahoma,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:20px;line-height:1.9}.single-product{max-width:980px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:22px}.product-gallery{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.product-gallery img{width:150px;height:150px;object-fit:contain;border:1px solid #e2e8f0;border-radius:10px;background:#fff}.price{font-size:18px;font-weight:800;color:#16a34a;margin:10px 0}.old-price{color:#94a3b8;font-weight:400;margin-left:8px}.shop_attributes{width:100%;border-collapse:collapse;margin-top:14px}.shop_attributes th,.shop_attributes td{border:1px solid #e2e8f0;padding:8px 12px;text-align:right}.shop_attributes th{background:#f1f5f9;width:220px}.snappshop-variation-group{margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px}.product_meta span{display:inline-block;margin-left:12px;font-size:12px;color:#475569}</style>'
         . '<script type="application/ld+json">' . json_encode($ld, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>'
         . '</head><body data-snappshop-api-detail="1"><main class="product single-product"><div class="summary entry-summary">'
-        . ($cats ? '<nav class="woocommerce-breadcrumb breadcrumb">' . h(implode(' / ', $cats)) . '</nav>' : '')
+        . ($cats ? '<nav class="woocommerce-breadcrumb breadcrumb">' . h(implode(' / ', $cats)) . '</nav><div class="accordion-body snappshop-category-meta" style="display:none"><p>' . h(implode(' / ', $cats)) . '</p></div>' : '')
         . '<h1 class="product_title entry-title product-title">' . h($title) . '</h1>'
         . '<p class="price product-price">'
         . ($origToman > $bestToman ? '<del class="old-price">' . h(number_format($origToman) . ' تومان') . '</del> ' : '')
-        . ($priceFormatted !== '' ? '<ins><span class="amount">' . h($priceFormatted) . '</span></ins>' : '')
+        . ($priceFormatted !== '' ? '<ins><span class="amount text-bold">' . h($priceFormatted) . '</span></ins>' : '')
         . '</p>'
         . '<p class="stock ' . ($inStock ? 'in-stock' : 'out-of-stock') . '">' . ($inStock ? 'موجود' : 'ناموجود') . '</p>'
         . $variationsHtml
         . $shortHtml
         . $metaHtml
-        . '</div><div class="product-gallery gallery woocommerce-product-gallery">' . $galleryHtml . '</div>'
+        . '</div><div class="product-gallery gallery woocommerce-product-gallery images-box">' . $galleryHtml . '</div>'
         . $descHtml
         . '</main></body></html>';
 }
@@ -14814,6 +14949,23 @@ function fetch_html_snappshop_public_fallback(string $url, int $timeout = 25, ar
    بخورد (تایم‌اوت، اتصال، بلاک ۴۰۳/۴۲۹)، به ترتیبِ روش‌هایِ فعالِ دیگر هم
    امتحان می‌شود تا اولین موفق برگردد. */
 function fetch_html(string $url, int $timeout = 25): array {
+    /* v10.453: صفحات محصول اسنپ‌شاپ (snappshop.ir/product/snp-*) همیشه پوستهٔ خالی
+       Next.js CSR هستند و گالری/تنوع در HTML خام آن‌ها وجود ندارد؛ ارسال هزاران
+       درخواست بی‌فایده به snappshop.ir پیش از apix باعث فعال شدن WAF 429 می‌شود.
+       مستقیماً سراغ fetch_html_snappshop_api برویم. */
+    if (empty($GLOBALS['_s4SkipSnappApiInFetchHtml']) && function_exists('isSnappshopUrl') && isSnappshopUrl($url) && function_exists('snappshopParseTargetRoute')) {
+        $__snFastRoute = snappshopParseTargetRoute($url);
+        if (($__snFastRoute['kind'] ?? '') === 'product') {
+            $__snDirectPdp = fetch_html_snappshop_api($url, $timeout, []);
+            if (!empty($__snDirectPdp['ok'])) return $__snDirectPdp;
+            return ['ok' => false,
+                    'error' => trim((string)($__snDirectPdp['error'] ?? '')) !== '' ? (string)$__snDirectPdp['error'] : 'SnappShop apix PDP failed',
+                    'code' => (int)($__snDirectPdp['code'] ?? 0),
+                    'url' => $url,
+                    'html' => '',
+                    'mode' => 'snappshop-apix'];
+        }
+    }
     $__profileForcedDirect = array_key_exists('_srcNetProfileIndirect', $GLOBALS) && empty($GLOBALS['_srcNetProfileIndirect']);
     $__srcNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','gap_ms'=>0,'hosts'=>'','fallback'=>false];
     $parsed = parse_url($url); $__srcHost = strtolower((string)($parsed['host'] ?? ''));
@@ -14849,6 +15001,11 @@ function fetch_html(string $url, int $timeout = 25): array {
             $last['snappshop_empty_shell'] = true;
             $__snApi = fetch_html_snappshop_api($url, $timeout, is_array($last) ? $last : []);
             if (!empty($__snApi['ok'])) return $__snApi;
+            /* v10.453: هرگز پوستهٔ خالی CSR را با ok=true برنگردان؛ وگرنه فاز ۲
+               فکر می‌کند صفحهٔ محصول قیمت ندارد و کالا را به اشتباه ناموجود می‌کند! */
+            $last['ok'] = false;
+            $last['code'] = (int)($__snApi['code'] ?? ($last['code'] ?? 0));
+            $last['error'] = trim((string)($__snApi['error'] ?? '')) !== '' ? (string)$__snApi['error'] : 'SnappShop empty JS shell (apix unavailable)';
             return $last;
         }
         if ($emallsNoProducts) {
@@ -14917,6 +15074,7 @@ function fetch_html(string $url, int $timeout = 25): array {
     if (empty($GLOBALS['_s4SkipSnappApiInFetchHtml']) && function_exists('fetch_html_snappshop_api') && function_exists('isSnappshopUrl') && isSnappshopUrl($url)) {
         $__snApi = fetch_html_snappshop_api($url, $timeout, is_array($last) ? $last : []);
         if (!empty($__snApi['ok'])) return $__snApi;
+        if (is_array($__snApi) && trim((string)($__snApi['error'] ?? '')) !== '') $last = $__snApi;
     }
     return $last ?? ['ok' => false, 'error' => 'Empty', 'code' => 0, 'url' => $url, 'html' => '', 'mode' => ''];
 }
@@ -16838,6 +16996,30 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
     $jinaRows = function_exists('s4JinaProductsFromReaderText') ? s4JinaProductsFromReaderText($html, $baseUrl) : [];
     $first = [];
     foreach ($profileRows ?: ($auto ?: ($heu ?: ($em ?: ($snHtml ?: ($snReader ?: $jinaRows))))) as $p) { $first[] = $briefProduct(is_array($p) ? $p : []); if (count($first) >= 5) break; }
+    $detailPreview = null;
+    if ($_xp && (strpos($html, 'data-snappshop-api-detail="1"') !== false || (function_exists('snappshopParseTargetRoute') && ((snappshopParseTargetRoute($baseUrl)['kind'] ?? '') === 'product')))) {
+        $_fbGalCfg = function_exists('galleryEffectiveCfgForUrl')
+            ? galleryEffectiveCfgForUrl(galleryNormalizeCfg($profile['gallery'] ?? []), $baseUrl)
+            : galleryNormalizeCfg($profile['gallery'] ?? []);
+        if (empty($_fbGalCfg['enabled'])) { $_fbGalCfg['mode'] = 'auto'; $_fbGalCfg['enabled'] = true; if ($_fbGalCfg['box'] === '') $_fbGalCfg['box'] = 'div.image-thumbnail'; }
+        $_fbGal = galleryExtract($_xp, null, $baseUrl, $_fbGalCfg);
+        $_fbPriceSel = (string)(extractNormalizeDetailSelectors($profile['detailSelectors'] ?? [])['price'] ?? '.price ins .amount, .text-bold');
+        $_fbPrice = $_fbPriceSel !== '' ? queryFirstText($_xp, null, $_fbPriceSel) : '';
+        $_fbVarSel = (string)(extractNormalizeDetailSelectors($profile['detailSelectors'] ?? [])['variations'] ?? '.snappshop-variation-group');
+        $_fbVars = $_fbVarSel !== '' ? variationsExtract($_xp, null, $_fbVarSel, $baseUrl) : ['count' => 0, 'values' => []];
+        $detailPreview = [
+            'synthetic_detail' => strpos($html, 'data-snappshop-api-detail="1"') !== false,
+            'gallery_cfg' => ['mode' => $_fbGalCfg['mode'], 'enabled' => $_fbGalCfg['enabled'], 'box' => $_fbGalCfg['box']],
+            'gallery_count' => count($_fbGal['images'] ?? []),
+            'gallery_note' => (string)($_fbGal['note'] ?? ''),
+            'gallery_images' => array_slice((array)($_fbGal['images'] ?? []), 0, 8),
+            'price_sel' => $_fbPriceSel,
+            'price' => $_fbPrice,
+            'variations_sel' => $_fbVarSel,
+            'variations_count' => (int)($_fbVars['count'] ?? 0),
+            'variations_sample' => array_slice((array)($_fbVars['values'] ?? []), 0, 6),
+        ];
+    }
     return [
         'bytes' => strlen($html),
         'sha1' => substr(sha1($html), 0, 12),
@@ -16849,6 +17031,8 @@ $summarizeHtml = function(string $html, string $baseUrl, array $sel, string $eng
         'href_snapp_product_count' => $snappHrefCount,
         'synthetic_fallback' => strpos($html, 'data-emalls-fallback') !== false,
         'synthetic_snappshop_fallback' => strpos($html, 'data-snappshop-fallback') !== false,
+        'synthetic_snappshop_detail' => strpos($html, 'data-snappshop-api-detail="1"') !== false,
+        'detail_preview' => $detailPreview,
         'selector_container' => (string)($sel['container'] ?? ''),
         'selector_container_count' => $selContainerCount,
         'products' => [
@@ -17066,7 +17250,7 @@ if (!empty($_GET['gallery_test'])) {
     if (!filter_var($url, FILTER_VALIDATE_URL)) {
         echo json_encode(['ok' => false, 'error' => 'آدرس نامعتبر'], JSON_UNESCAPED_UNICODE); exit;
     }
-    $cfg = galleryNormalizeCfg($_GET['gallery'] ?? ($_POST['gallery'] ?? []));
+    $cfg = galleryEffectiveCfgForUrl(galleryNormalizeCfg($_GET['gallery'] ?? ($_POST['gallery'] ?? [])), $url);
     if (!$cfg['enabled']) {
         echo json_encode(['ok' => false, 'error' => 'حالت گالری خاموش است'], JSON_UNESCAPED_UNICODE); exit;
     }
@@ -17107,7 +17291,7 @@ if (!empty($_GET['gallery_suggest'])) {
     [$gd, $gx] = load_dom($res['html']);
     // نامزدهای رایج گالری در ووکامرس و قالب‌های ایرانی
     $cands = ['.woocommerce-product-gallery', '.flex-control-thumbs', '.product-gallery',
-              '.product-images', '.thumbnails', '.gallery', '.swiper-wrapper',
+              'div.image-thumbnail', '.product-images', '.thumbnails', '.gallery', '.swiper-wrapper',
               '.slick-track', '.owl-stage', '.product-thumbs', '.image-gallery',
               '.pro-gallery', '.product-photos', '.detail-gallery'];
     $out = [];
@@ -19605,78 +19789,176 @@ function gallerySplitSelectors(string $s): array {
 }
 
 /**
+ * v10.453: فعال‌سازی هوشمند گالری روی پروفایل‌های اسنپ‌شاپ وقتی کاربر کادر/سلکتور/الگوی
+ * گالری (مثل div.image-thumbnail) را پر کرده ولی autosave قدیمی حالت را روی off گذاشته است.
+ * تابع galleryNormalizeCfg دست‌نخورده می‌ماند تا رفتار خاموشِ صریح در سایر سایت‌ها و تست‌ها حفظ شود.
+ */
+function galleryEffectiveCfgForUrl(array $cfg, string $url): array {
+    $cfg = galleryNormalizeCfg($cfg);
+    if (!$cfg['enabled'] && $url !== '' && function_exists('isSnappshopUrl') && isSnappshopUrl($url)) {
+        if ($cfg['box'] !== '') {
+            $cfg['mode'] = 'auto';
+            $cfg['enabled'] = true;
+        } elseif ($cfg['selectors'] !== '') {
+            $cfg['mode'] = 'manual';
+            $cfg['enabled'] = true;
+        } elseif ($cfg['pattern'] !== '' && mb_strpos($cfg['pattern'], '{n}') !== false) {
+            $cfg['mode'] = 'number';
+            $cfg['enabled'] = true;
+        }
+    }
+    return $cfg;
+}
+
+/**
+ * v10.453: استخراج پشتیبان گالری اسنپ‌شاپ از ظرف‌های استاندارد صفحهٔ سنتزی apix
+ * و بلوک‌های JSON-LD (@type=Product -> image) با تبدیل مسیرهای نسبی به cdn.snappshop.ir.
+ */
+function gallerySnappshopDomAndJsonLdFallback(DOMXPath $xp, string $baseUrl): array {
+    $urls = [];
+    $cdnBase = 'https://cdn.snappshop.ir';
+    foreach (['.product-gallery', 'div.image-thumbnail', '.woocommerce-product-gallery'] as $fbSel) {
+        $xpq = cssToXpath($fbSel, false);
+        if ($xpq === '') continue;
+        $ns = @$xp->query($xpq);
+        if (!$ns || !$ns->length) continue;
+        foreach ($ns as $b) {
+            foreach (galleryImgsInside($xp, $b, $baseUrl !== '' ? $baseUrl : $cdnBase) as $u) {
+                if (!function_exists('isSnappshopPlaceholderImage') || !isSnappshopPlaceholderImage($u)) {
+                    $urls[] = $u;
+                }
+            }
+        }
+        if (count($urls) >= 2) break;
+    }
+    $ldNodes = @$xp->query("//script[translate(@type,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='application/ld+json']");
+    if ($ldNodes && $ldNodes->length) {
+        $pushLdImg = static function ($cand) use (&$urls, $cdnBase, &$pushLdImg): void {
+            if (is_string($cand)) {
+                $u = make_absolute_url(trim($cand), $cdnBase);
+                if ($u !== '' && (!function_exists('isSnappshopPlaceholderImage') || !isSnappshopPlaceholderImage($u)) && url_is_image($u)) {
+                    $urls[] = $u;
+                }
+                return;
+            }
+            if (is_array($cand)) {
+                foreach (['url', 'contentUrl', 'src'] as $k) {
+                    if (!empty($cand[$k]) && is_string($cand[$k])) { $pushLdImg($cand[$k]); return; }
+                }
+                foreach ($cand as $sub) $pushLdImg($sub);
+            }
+        };
+        foreach ($ldNodes as $ln) {
+            $raw = trim((string)($ln->textContent ?? ''));
+            if ($raw === '') continue;
+            $j = @json_decode($raw, true);
+            if (!is_array($j)) continue;
+            $items = isset($j['@graph']) && is_array($j['@graph']) ? $j['@graph'] : [$j];
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $tp = $it['@type'] ?? '';
+                $isProd = is_array($tp) ? in_array('Product', $tp, true) : (stripos((string)$tp, 'Product') !== false);
+                if ($isProd && isset($it['image'])) $pushLdImg($it['image']);
+            }
+        }
+    }
+    return $urls;
+}
+
+/**
  * تصاویر گالری یک صفحهٔ محصول را برمی‌گرداند.
  * $ctx اگر داده شود جست‌وجو داخل همان المان محدود می‌شود.
  * خروجی: ['images'=>[...], 'mode'=>..., 'tried'=>N, 'note'=>'...']
  */
 function galleryExtract(DOMXPath $xp, ?DOMNode $ctx, string $baseUrl, array $cfg): array {
-    $cfg = galleryNormalizeCfg($cfg);
+    $cfg = galleryEffectiveCfgForUrl(galleryNormalizeCfg($cfg), $baseUrl);
     $res = ['images' => [], 'mode' => $cfg['mode'], 'tried' => 0, 'note' => ''];
     if (!$cfg['enabled']) { $res['note'] = 'خاموش'; return $res; }
     $urls = [];
+    $isSnappGalCtx = ($baseUrl !== '' && function_exists('isSnappshopUrl') && isSnappshopUrl($baseUrl))
+        || (($snBodyNs = @$xp->query("//*[@data-snappshop-api-detail='1']")) && $snBodyNs->length > 0);
 
     if ($cfg['mode'] === 'auto') {
-        if ($cfg['box'] === '') { $res['note'] = 'سلکتور باکس عکس‌ها خالی است'; return $res; }
-        $boxes = $ctx !== null
-            ? queryInside($xp, $ctx, $cfg['box'])
-            : @$xp->query(cssToXpath($cfg['box'], true) ?: '//none');
-        if ((!$boxes || !$boxes->length) && $ctx === null) {
-            $boxes = @$xp->query(cssToXpath($cfg['box'], false) ?: '//none');
+        if ($cfg['box'] === '') {
+            if (!$isSnappGalCtx) { $res['note'] = 'سلکتور باکس عکس‌ها خالی است'; return $res; }
+        } else {
+            $boxes = $ctx !== null
+                ? queryInside($xp, $ctx, $cfg['box'])
+                : @$xp->query(cssToXpath($cfg['box'], true) ?: '//none');
+            if ((!$boxes || !$boxes->length) && $ctx === null) {
+                $boxes = @$xp->query(cssToXpath($cfg['box'], false) ?: '//none');
+            }
+            if (!$boxes || !$boxes->length) {
+                if (!$isSnappGalCtx) { $res['note'] = 'باکس عکس‌ها پیدا نشد'; return $res; }
+                $res['note'] = 'باکس عکس‌ها پیدا نشد';
+            } else {
+                $res['tried'] = $boxes->length;
+                foreach ($boxes as $b) {
+                    foreach (galleryImgsInside($xp, $b, $baseUrl) as $u) $urls[] = $u;
+                }
+                $res['note'] = 'باکس پیدا شد — ' . $boxes->length . ' ظرف';
+            }
         }
-        if (!$boxes || !$boxes->length) { $res['note'] = 'باکس عکس‌ها پیدا نشد'; return $res; }
-        $res['tried'] = $boxes->length;
-        foreach ($boxes as $b) {
-            foreach (galleryImgsInside($xp, $b, $baseUrl) as $u) $urls[] = $u;
-        }
-        $res['note'] = 'باکس پیدا شد — ' . $boxes->length . ' ظرف';
 
     } elseif ($cfg['mode'] === 'manual') {
         $sels = gallerySplitSelectors($cfg['selectors']);
-        if (!$sels) { $res['note'] = 'هیچ سلکتوری وارد نشده'; return $res; }
-        $res['tried'] = count($sels);
-        $hit = 0;
-        foreach ($sels as $s) {
-            $ns = $ctx !== null ? queryInside($xp, $ctx, $s)
-                                : @$xp->query(cssToXpath($s, true) ?: '//none');
-            if ((!$ns || !$ns->length) && $ctx === null) $ns = @$xp->query(cssToXpath($s, false) ?: '//none');
-            if (!$ns || !$ns->length) continue;
-            $hit++;
-            foreach ($ns as $n) {
-                $u = galleryImgFromNode($n, $baseUrl);
-                if ($u !== '') { $urls[] = $u; continue; }
-                foreach (galleryImgsInside($xp, $n, $baseUrl) as $u2) $urls[] = $u2;
+        if (!$sels) {
+            if (!$isSnappGalCtx) { $res['note'] = 'هیچ سلکتوری وارد نشده'; return $res; }
+        } else {
+            $res['tried'] = count($sels);
+            $hit = 0;
+            foreach ($sels as $s) {
+                $ns = $ctx !== null ? queryInside($xp, $ctx, $s)
+                                    : @$xp->query(cssToXpath($s, true) ?: '//none');
+                if ((!$ns || !$ns->length) && $ctx === null) $ns = @$xp->query(cssToXpath($s, false) ?: '//none');
+                if (!$ns || !$ns->length) continue;
+                $hit++;
+                foreach ($ns as $n) {
+                    $u = galleryImgFromNode($n, $baseUrl);
+                    if ($u !== '') { $urls[] = $u; continue; }
+                    foreach (galleryImgsInside($xp, $n, $baseUrl) as $u2) $urls[] = $u2;
+                }
             }
+            $res['note'] = $hit . ' از ' . count($sels) . ' سلکتور نتیجه داد';
         }
-        $res['note'] = $hit . ' از ' . count($sels) . ' سلکتور نتیجه داد';
 
     } elseif ($cfg['mode'] === 'number') {
         $pat = $cfg['pattern'];
         if ($pat === '' || mb_strpos($pat, '{n}') === false) {
-            $res['note'] = 'الگو باید {n} داشته باشد'; return $res;
-        }
-        $from = $cfg['from']; $to = max($from, $cfg['to']);
-        // سقف منطقی تا حلقه بی‌جهت طولانی نشود
-        if ($to - $from > GALLERY_MAX_IMAGES * 2) $to = $from + GALLERY_MAX_IMAGES * 2;
-        $miss = 0; $hit = 0;
-        for ($i = $from; $i <= $to; $i++) {
-            $res['tried']++;
-            $s = str_replace('{n}', (string)$i, $pat);
-            $ns = $ctx !== null ? queryInside($xp, $ctx, $s)
-                                : @$xp->query(cssToXpath($s, true) ?: '//none');
-            if ((!$ns || !$ns->length) && $ctx === null) $ns = @$xp->query(cssToXpath($s, false) ?: '//none');
-            if (!$ns || !$ns->length) {
-                // سه شمارهٔ پشت‌سرهم که پیدا نشد یعنی گالری تمام شده
-                if (++$miss >= 3 && $hit > 0) break;
-                continue;
+            if (!$isSnappGalCtx) { $res['note'] = 'الگو باید {n} داشته باشد'; return $res; }
+        } else {
+            $from = $cfg['from']; $to = max($from, $cfg['to']);
+            // سقف منطقی تا حلقه بی‌جهت طولانی نشود
+            if ($to - $from > GALLERY_MAX_IMAGES * 2) $to = $from + GALLERY_MAX_IMAGES * 2;
+            $miss = 0; $hit = 0;
+            for ($i = $from; $i <= $to; $i++) {
+                $res['tried']++;
+                $s = str_replace('{n}', (string)$i, $pat);
+                $ns = $ctx !== null ? queryInside($xp, $ctx, $s)
+                                    : @$xp->query(cssToXpath($s, true) ?: '//none');
+                if ((!$ns || !$ns->length) && $ctx === null) $ns = @$xp->query(cssToXpath($s, false) ?: '//none');
+                if (!$ns || !$ns->length) {
+                    // سه شمارهٔ پشت‌سرهم که پیدا نشد یعنی گالری تمام شده
+                    if (++$miss >= 3 && $hit > 0) break;
+                    continue;
+                }
+                $miss = 0; $hit++;
+                foreach ($ns as $n) {
+                    $u = galleryImgFromNode($n, $baseUrl);
+                    if ($u !== '') { $urls[] = $u; continue; }
+                    foreach (galleryImgsInside($xp, $n, $baseUrl) as $u2) $urls[] = $u2;
+                }
             }
-            $miss = 0; $hit++;
-            foreach ($ns as $n) {
-                $u = galleryImgFromNode($n, $baseUrl);
-                if ($u !== '') { $urls[] = $u; continue; }
-                foreach (galleryImgsInside($xp, $n, $baseUrl) as $u2) $urls[] = $u2;
-            }
+            $res['note'] = $hit . ' شماره از ' . $res['tried'] . ' امتحان‌شده نتیجه داد';
         }
-        $res['note'] = $hit . ' شماره از ' . $res['tried'] . ' امتحان‌شده نتیجه داد';
+    }
+
+    if ($isSnappGalCtx && $ctx === null && count($urls) <= 1) {
+        $snFallbackUrls = gallerySnappshopDomAndJsonLdFallback($xp, $baseUrl);
+        if (count($snFallbackUrls) > count($urls)) {
+            foreach ($snFallbackUrls as $sfu) $urls[] = $sfu;
+            $res['note'] = ($res['note'] !== '' ? ($res['note'] . ' · ') : '') . 'گالری apix/JSON-LD اسنپ‌شاپ';
+        }
     }
 
     $imgs = galleryDedupe($urls, $cfg['max']);
@@ -20981,8 +21263,10 @@ while (@ob_get_level()) @ob_end_clean();
 
 $keys = isset($_GET['keys']) ? array_filter(explode(',', $_GET['keys'])) : [];
 $detailSelectors = isset($_GET['detailSelectors']) ? json_decode($_GET['detailSelectors'], true) : [];
-// v8.64: تنظیمات گالری هم از همین‌جا می‌آید
-$galCfg = galleryNormalizeCfg($_POST['gallery'] ?? ($_GET['gallery'] ?? []));
+$urlMap = isset($_POST['urlMap']) ? json_decode($_POST['urlMap'], true) : [];
+$_firstStreamUrl = is_array($urlMap) && !empty($urlMap) ? (string)reset($urlMap) : '';
+// v8.64 / v10.453: تنظیمات گالری + فعال‌سازی هوشمند اسنپ‌شاپ
+$galCfg = galleryEffectiveCfgForUrl(galleryNormalizeCfg($_POST['gallery'] ?? ($_GET['gallery'] ?? [])), $_firstStreamUrl);
 
 if (empty($keys) || (empty($detailSelectors) && !$galCfg['enabled'])) {
 send_sse('error', ['message' => 'Invalid parameters']);
@@ -20990,7 +21274,6 @@ send_sse('done', []);
 exit;
 }
 
-$urlMap = isset($_POST['urlMap']) ? json_decode($_POST['urlMap'], true) : [];
 if (empty($urlMap)) {
 send_sse('error', ['message' => 'No URL map']);
 send_sse('done', []);
@@ -21021,6 +21304,7 @@ break;
 }
 
 [$dom, $xp] = load_dom($res['html']);
+$_streamSnappSynth = strpos($res['html'], 'data-snappshop-api-detail="1"') !== false;
 
 foreach ($detailSelectors as $field => $config) {
 if (empty($config['enabled']) || empty($config['selector'])) continue;
@@ -21031,6 +21315,10 @@ if (isset($extracted[$field]) && $extracted[$field] !== '') continue;
 if ($field === 'variations') {
 /* v10.116: تنوع + تصاویر سواچ → گالری */
 $vr = variationsExtract($xp, null, (string)$config['selector'], (string)($res['url'] ?? $productUrl));
+if (empty($vr['values']) && $_streamSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
+    $_fbVarS = snappshopFallbackSelectorForField('variations');
+    if ($_fbVarS !== '') $vr = variationsExtract($xp, null, $_fbVarS, (string)($res['url'] ?? $productUrl));
+}
 if (!empty($vr['values'])) {
 $extracted['variations'] = $vr['values'];
 $extracted['variation_groups'] = $vr['groups'];
@@ -21061,9 +21349,15 @@ continue;
 }
 
 $xpath = cssToXpath($config['selector']);
-if (!$xpath) continue;
-
-$nodes = @$xp->query($xpath);
+$nodes = $xpath ? @$xp->query($xpath) : null;
+if ((!$nodes || !$nodes->length) && $_streamSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
+    $_fbFieldS = snappshopFallbackSelectorForField((string)$field);
+    if ($_fbFieldS !== '') {
+        $_fbXp = cssToXpath($_fbFieldS);
+        if ($_fbXp) $nodes = @$xp->query($_fbXp);
+    }
+}
+if (!$nodes && !$xpath) continue;
 if ($nodes && $nodes->length) {
 $node = $nodes->item(0);
 if (in_array($field, ['longDesc', 'shortDesc'])) {
@@ -21107,9 +21401,10 @@ $extraImg = extractImageFromHtml($res['html'], $productUrl);
 if ($extraImg) $extracted['image'] = $extraImg;
 }
 
-// v8.64: گالری — بقیهٔ عکس‌های صفحهٔ محصول
-if ($galCfg['enabled']) {
-$gal = galleryExtract($xp, null, $res['url'], $galCfg);
+// v8.64 / v10.453: گالری — بقیهٔ عکس‌های صفحهٔ محصول
+$_effStreamGalCfg = galleryEffectiveCfgForUrl($galCfg, (string)$productUrl);
+if ($_effStreamGalCfg['enabled']) {
+$gal = galleryExtract($xp, null, $res['url'], $_effStreamGalCfg);
 if (!empty($gal['images'])) {
 $tmp = ['image' => (string)($extracted['image'] ?? '')];
 galleryApplyToProduct($tmp, $gal['images']);
@@ -23603,12 +23898,18 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     }
     $out['ok'] = true;
     [$dom2, $xp2] = load_dom($dr['html']);
+    $_inlineSnappSynth = strpos($dr['html'], 'data-snappshop-api-detail="1"') !== false;
+    $galleryCfg = galleryEffectiveCfgForUrl($galleryCfg, (string)($p['link'] ?? ''));
     $fields = 0; $imgs = 0; $vars = 0;
     foreach ($detailSelectors as $field => $selStr) {
         if (empty($selStr)) continue;
         if ($field === 'variations') {
             /* v10.116: baseUrl برای مطلق‌کردن تصاویر سواچ */
             $vr = variationsExtract($xp2, null, $selStr, (string)($dr['url'] ?? ''));
+            if (empty($vr['values']) && $_inlineSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
+                $_fbVarInl = snappshopFallbackSelectorForField('variations');
+                if ($_fbVarInl !== '') $vr = variationsExtract($xp2, null, $_fbVarInl, (string)($dr['url'] ?? ''));
+            }
             if (!empty($vr['values'])) {
                 $p['variations'] = $vr['values'];
                 $p['variation_groups'] = $vr['groups'];
@@ -23631,7 +23932,14 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
             continue;
         }
         $xPath = cssToXpath($selStr);
-        $ns = @$xp2->query($xPath);
+        $ns = $xPath ? @$xp2->query($xPath) : null;
+        if ((!$ns || !$ns->length) && $_inlineSnappSynth && function_exists('snappshopFallbackSelectorForField')) {
+            $_fbInl = snappshopFallbackSelectorForField((string)$field);
+            if ($_fbInl !== '') {
+                $_fbXpInl = cssToXpath($_fbInl);
+                if ($_fbXpInl) $ns = @$xp2->query($_fbXpInl);
+            }
+        }
         if ($ns && $ns->length) {
             $val = '';
             if ($field === 'image') {
@@ -24005,7 +24313,7 @@ if($phase==='detail'){
    نوبتی جدا و بعداً اجرا شود که ممکن است هرگز به آن نرسد. اینجا هر محصول
    به‌محض گرفتن از فهرست، صفحهٔ خودش هم باز و کامل می‌شود (فقط اگر ناقص باشد —
    دامنهٔ «فقط ناقص‌ها»). */
-$galleryCfg=galleryNormalizeCfg($profile['gallery']??[]);
+$galleryCfg=galleryEffectiveCfgForUrl(galleryNormalizeCfg($profile['gallery']??[]),$url);
 $_wantKeys=[];
 foreach($detailSelectors as $_f=>$_sv){ if(!empty($_sv))$_wantKeys[]=$_f; }
 $_inlineDetailDone=0;   // شمارندهٔ جزئیاتِ درجایِ همین اجرا (برای چک‌پوینت)
@@ -24566,10 +24874,32 @@ if ($phase !== 'detail' && $phase !== 'list' && $_detailExtractMode === 'two_sta
     ], $_stageProgressMeta, extractLiveCompare($allProducts, $livePrevMap)));
 }
 
-// v8.64: اگر گالری روشن است، صفحهٔ همهٔ محصولات باید باز شود — نه فقط
-// آن‌هایی که عکس یا قیمت ندارند. وگرنه محصولی که یک عکس دارد هرگز
+// v8.64 / v10.453: اگر گالری روشن است (یا کادر گالری اسنپ‌شاپ پر شده)، صفحهٔ همهٔ محصولات
+// باید باز شود — نه فقط آن‌هایی که عکس یا قیمت ندارند. وگرنه محصولی که یک عکس دارد هرگز
 // بقیهٔ عکس‌هایش را نمی‌گیرد.
-$galleryCfg=galleryNormalizeCfg($profile['gallery']??[]);
+$galleryCfg=galleryEffectiveCfgForUrl(galleryNormalizeCfg($profile['gallery']??[]),$url);
+if($phase!=='list'&&function_exists('isSnappshopUrl')&&isSnappshopUrl($url)&&!empty($allProducts)){
+    $_snHealed453=0;
+    foreach($allProducts as $_hk=>$_hp){
+        if(!is_array($_hp)||empty($_hp['link']))continue;
+        $_falseOut=(($_hp['in_stock']??null)===false&&($_hp['stock_src']??'')==='detail_price'&&!empty($_hp['price'])&&(trim((string)($_hp['stock']??''))==='موجود'||empty($_hp['longDesc'])));
+        $_missedGal=($galleryCfg['enabled']&&(string)($_hp['_detail_cycle']??'')===$_detailCycle&&empty($_hp['_snapp_gal_v453'])&&count((array)($_hp['images']??[]))<=1);
+        if($_falseOut){
+            $allProducts[$_hk]['in_stock']=true;
+            $allProducts[$_hk]['stock_src']='snappshop_heal_453';
+            unset($allProducts[$_hk]['_detail_cycle']);
+            $allProducts[$_hk]['_detail_new_pending']=1;
+            $_snHealed453++;
+        }elseif($_missedGal){
+            unset($allProducts[$_hk]['_detail_cycle']);
+            $allProducts[$_hk]['_detail_new_pending']=1;
+            $_snHealed453++;
+        }
+    }
+    if($_snHealed453>0){
+        extractCheckpoint($pkFinal,$allProducts,['_extract_detail_cycle'=>$_detailCycle]);
+    }
+}
 /* v9.02: انتخاب محصولاتی که باید صفحه‌شان باز شود.
 
    باگی که کاربر گزارش کرد: وقتی گالری خاموش بود ولی سلکتورهای جزئیات
@@ -24766,6 +25096,7 @@ $dr=fetch_html($p['link'],10);
 if($dr['ok']){
 $detailOk++;
 [$dom2,$xp2]=load_dom($dr['html']);
+$_isSnappSynth=(strpos($dr['html'],'data-snappshop-api-detail="1"')!==false);
 
 foreach($detailSelectors as $field=>$selStr){
 if(empty($selStr))continue;
@@ -24773,6 +25104,10 @@ if(empty($selStr))continue;
 if($field==='variations'){
 /* v10.116: تنوع + تصاویر سواچ به‌عنوان گالری */
 $vr=variationsExtract($xp2,null,$selStr,(string)($dr['url']??''));
+if(empty($vr['values'])&&$_isSnappSynth&&function_exists('snappshopFallbackSelectorForField')){
+$_fbVarTwo=snappshopFallbackSelectorForField('variations');
+if($_fbVarTwo!=='')$vr=variationsExtract($xp2,null,$_fbVarTwo,(string)($dr['url']??''));
+}
 if(!empty($vr['values'])){
 $allProducts[$key]['variations']=$vr['values'];
 $allProducts[$key]['variation_groups']=$vr['groups'];
@@ -24796,7 +25131,14 @@ $allProducts[$key]['variation_images_count']=count($vr['images']);
 continue;
 }
 $xPath=cssToXpath($selStr);
-$ns=@$xp2->query($xPath);
+$ns=$xPath?@$xp2->query($xPath):null;
+if((!$ns||!$ns->length)&&$_isSnappSynth&&function_exists('snappshopFallbackSelectorForField')){
+$_fbTwo=snappshopFallbackSelectorForField((string)$field);
+if($_fbTwo!==''){
+$_fbXpTwo=cssToXpath($_fbTwo);
+if($_fbXpTwo)$ns=@$xp2->query($_fbXpTwo);
+}
+}
 if($ns&&$ns->length){
 $val='';
 if($field==='image'){
@@ -24837,6 +25179,7 @@ if($imgUrl&&url_is_image($imgUrl))$allProducts[$key]['image']=make_absolute_url(
 // v8.64: گالری — بقیهٔ عکس‌های همین صفحهٔ محصول
 if($galleryCfg['enabled']){
 $gal=galleryExtract($xp2,null,$dr['url'],$galleryCfg);
+if($_isSnappSynth)$allProducts[$key]['_snapp_gal_v453']=1;
 if(!empty($gal['images'])){
 $nImg=galleryApplyToProduct($allProducts[$key],$gal['images'],$_forceAll);
 $_gotImgs=$nImg;
@@ -24857,6 +25200,9 @@ $detailFields+=$_gotFields;
 if(!empty($detailSelectors['price'])){
     $_wasIn = !array_key_exists('in_stock',$allProducts[$key]) || !empty($allProducts[$key]['in_stock']);
     $_isIn  = detailStockFromPrice(['price'=>($_freshPrice===null?'':$_freshPrice)], true);
+    if($_isSnappSynth && $_isIn === false && strpos($dr['html'], '<meta property="product:availability" content="in stock">') !== false){
+        $_isIn = true;
+    }
     if($_isIn !== null){
         $allProducts[$key]['in_stock']    = $_isIn;
         $allProducts[$key]['stock_src']   = 'detail_price';
@@ -25191,7 +25537,7 @@ extractSaveReport($queueId, [
     'avg_ppm'       => max(0, (int)round(count($allProducts) * 60 / max(1, time() - $startedAt))),
 ]);
 
-foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']=$_finalComplete?'done':'paused';$qe['products_count']=count($allProducts);$qe['total']=$detailTotal;$qe['current']=$detailDone;$qe['resume_needed']=$_finalComplete?0:1;if($_finalComplete)$qe['done_at']=time();else unset($qe['done_at']);$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']=$_finalComplete?'done':'paused';$qe['products_count']=count($allProducts);$qe['total']=$detailTotal;$qe['current']=$detailDone;$qe['resume_needed']=$_finalComplete?0:1;if($_finalComplete)$qe['done_at']=time();else unset($qe['done_at']);$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_enabled']=!empty($galleryCfg['enabled']);$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
 extractWriteQueue($queue);
 
 // v10.21 (۳۴الف): سینکِ «بدون استخراج» باید بداند چند صفحه واقعاً باز شد و
@@ -50247,6 +50593,46 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snSynth453 = snappshopDetailSyntheticHtml([
+        'title' => 'سرویس پخت‌وپز تست گالری اسنپ‌شاپ',
+        'brand' => ['title' => 'تفال'],
+        'images' => [
+            ['src' => '/products/main-1.webp'],
+            ['url' => 'https://cdn.snappshop.ir/products/side-2.jpg'],
+        ],
+        'content' => ['images' => ['/products/angle-3.png']],
+        'categories' => [['title' => 'اسنپ شاپ'], ['title' => 'لوازم آشپزخانه', 'href' => '/category/kitchen-appliances']],
+        'attributes' => [['title' => 'جنس بدنه', 'value' => 'چدن']],
+        'vendors' => [['title' => 'فروشگاه مرکزی', 'stock' => 4, 'price' => 310000, 'special_price' => 246400, 'is_available_in_shop' => true]],
+        'configurable_attribute' => [
+            ['id' => 'c1', 'title' => 'رنگ', 'value' => ['id' => 'v1', 'title' => 'مشکی']],
+            ['id' => 'c1', 'title' => 'رنگ', 'value' => ['id' => 'v2', 'title' => 'نقره‌ای']],
+        ],
+        'variants' => [
+            ['variation_id' => '11', 'attribute_ids' => [['attribute_id' => 'c1', 'attribute_value_id' => 'v1']], 'vendor' => [['stock' => 4, 'price' => 310000, 'special_price' => 246400, 'is_available_in_shop' => true]]],
+            ['variation_id' => '12', 'attribute_ids' => [['attribute_id' => 'c1', 'attribute_value_id' => 'v2']], 'vendor' => [['stock' => 2, 'price' => 320000, 'special_price' => 259000, 'is_available_in_shop' => true]]],
+        ],
+    ], 'https://snappshop.ir/product/snp-389034409');
+    [$_snDom453, $_snXp453] = load_dom($_snSynth453);
+    $_snGalOffBox453 = galleryExtract($_snXp453, null, 'https://snappshop.ir/product/snp-389034409', ['mode' => 'off', 'box' => 'div.image-thumbnail']);
+    $_snGalBadBox453 = galleryExtract($_snXp453, null, 'https://snappshop.ir/product/snp-389034409', ['mode' => 'auto', 'box' => 'div.nonexistent-csr-gallery']);
+    $_snEffOther453 = galleryEffectiveCfgForUrl(['mode' => 'off', 'box' => 'div.image-thumbnail'], 'https://example.org/p/1');
+    $_snPrice453 = extractPrice(queryFirstText($_snXp453, null, '.text-bold'));
+    $_snCat453 = queryFirstText($_snXp453, null, 'div.accordion-body p');
+    $_snVarUl453 = variationsExtract($_snXp453, null, 'ul.list-unstyled', 'https://snappshop.ir/product/snp-389034409');
+    $add('10.453', 'استخراج کامل گالری تصاویر در فاز ۲ اسنپ‌شاپ (سازگاری با div.image-thumbnail و JSON-LD، مسیر مستقیم apix با مهار 429، حفظ قیمت .text-bold و ترمیم ناموجودی کاذب)',
+         count($_snGalOffBox453['images'] ?? []) === 3
+      && ($_snGalOffBox453['images'][0] ?? '') === 'https://cdn.snappshop.ir/products/main-1.webp'
+      && ($_snGalOffBox453['images'][2] ?? '') === 'https://cdn.snappshop.ir/products/angle-3.png'
+      && count($_snGalBadBox453['images'] ?? []) === 3
+      && empty($_snEffOther453['enabled'])
+      && $_snPrice453 !== ''
+      && strpos($_snCat453, 'لوازم آشپزخانه') !== false
+      && (int)($_snVarUl453['count'] ?? 0) === 2
+      && (int)($_snVarUl453['prices']['مشکی'] ?? 0) === 246400
+      && strpos($selfSrc, "snappshop_heal_453") !== false
+      && strpos($selfSrc, "{v:'10." . "453'") !== false
+      && version_compare(APP_VERSION, '10.453', '>='));
     $_snCeil452 = fetch_html_snappshop_api('https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=501', 8);
     $add('10.452', 'سقف سخت ۵۰۰ صفحهٔ apix اسنپ‌شاپ و پاسخ HTTP 200 status=false در صفحهٔ ۲+ به‌صورت فوری پایان طبیعی لیست تشخیص داده می‌شوند و child قدیمی استخراج پس از آپدیت recycle می‌گردد',
          !empty($_snCeil452['ok'])
@@ -78335,7 +78721,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 </div>
             </details>
             <div class="row">
-                <input type="text" id="galBox" placeholder="مثال: .woocommerce-product-gallery" oninput="galChanged()">
+                <input type="text" id="galBox" placeholder="مثال: .woocommerce-product-gallery" oninput="if(($('galMode')||{}).value==='off'&&this.value.trim()!==''){$('galMode').value='auto';galModeChanged(true);}galChanged()">
             </div>
             <div class="row">
                 <button class="btn btn-purple" onclick="gallerySuggest()" style="flex:1">💡 پیشنهاد باکس</button>
@@ -80202,7 +80588,14 @@ function previewListImageEdit() {
 function galApply(cfg) {
     cfg = cfg || {};
     const set = (id, v) => { const e = $(id); if (e) e.value = v; };
-    set('galMode', cfg.mode || 'off');
+    let effMode = cfg.mode || 'off';
+    const curUrl = (($('targetUrl') || {}).value || '').trim();
+    if (effMode === 'off' && /snappshop\.ir/i.test(curUrl)) {
+        if (String(cfg.box || '').trim() !== '') effMode = 'auto';
+        else if (String(cfg.selectors || '').trim() !== '') effMode = 'manual';
+        else if (String(cfg.pattern || '').includes('{n}')) effMode = 'number';
+    }
+    set('galMode', effMode);
     set('galBox', cfg.box || '');
     set('galSelectors', cfg.selectors || '');
     set('galPattern', cfg.pattern || '');
@@ -80289,6 +80682,10 @@ function gallerySuggest() {
 }
 
 function galPick(sel) {
+    if ($('galMode') && $('galMode').value === 'off') {
+        $('galMode').value = 'auto';
+        galModeChanged(true);
+    }
     if ($('galBox')) $('galBox').value = sel;
     const b = $('galSuggest'); if (b) b.innerHTML = '';
     galChanged();
@@ -84446,7 +84843,9 @@ function renderPhase2Report(queueId){
             if(gprd>0)h+='🖼 '+toFa(imgs)+' تصویر از '+toFa(gprd)+' محصول جمع شد.<br>';
             /* v9.09: وقتی صفحه‌ها باز شده‌اند ولی عکسی نیامده، علت تقریباً
                همیشه سلکتور کادر گالری است — پس خودش را نشان بده. */
-            if(imgs===0&&pages>0){
+            if(imgs===0&&pages>0&&e.gallery_enabled===false){
+                h+='<span style="color:#94a3b8">ℹ️ استخراج گالری در این اجرا غیرفعال بود (روش گالری روی «خاموش» بود).</span><br>';
+            }else if(imgs===0&&pages>0){
                 h+='<span style="color:#f87171">⛔ '+toFa(pages)+' صفحهٔ محصول باز شد ولی'
                  +' هیچ تصویر گالری‌ای پیدا نشد.</span><br>';
                 h+='<span style="color:#fbbf24">کادر گالری: <code style="direction:ltr;display:inline-block">'
@@ -84454,7 +84853,7 @@ function renderPhase2Report(queueId){
                 h+='<span style="color:#94a3b8">یعنی این سلکتور با ساختار صفحهٔ محصول نمی‌خواند،'
                  +' یا عکس‌ها با جاوااسکریپت تزریق می‌شوند و در HTML خام نیستند.'
                  +' یک صفحهٔ محصول را در تب سلکتورها باز کنید و کادر گالری را دوباره انتخاب کنید.</span><br>';
-            }else if(imgs===0){
+            }else if(imgs===0&&e.gallery_enabled!==false){
                 h+='<span style="color:#fbbf24">⚠️ هیچ تصویر گالری‌ای جمع نشد — سلکتور «باکس گالری» یا دسترسی سرور به صفحهٔ محصول را بررسی کنید.</span><br>';
             }
             if(fail>0)h+='<span style="color:#f87171">⛔ '+toFa(fail)+' صفحه باز نشد — اگر ۴۰۳/۴۲۹ بود یعنی IP سرور بلاک شده.</span>';
@@ -85263,6 +85662,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.453', t:'🖼️ رفع ریشه‌ای عدم استخراج تصاویر گالری در فاز ۲ پروفایل‌های اسنپ‌شاپ + مهار خطای 429/Empty و ناموجودی کاذب جزئیات', items:[
+    'علت‌های ترکیبی صفر ماندن گالری اسنپ‌شاپ در فاز ۲ شناسایی و به‌صورت کامل برطرف شد: ۱) DOM سنتزی جزئیات اسنپ‌شاپ (snappshopDetailSyntheticHtml) اکنون هر تصویر را داخل ظرف <div class="image-thumbnail gallery-item"> و .product-gallery.images-box قرار می‌دهد، تمام کلیدهای تصویر (image، images، content.images، gallery، media، variants و og:image) را جمع‌آوری و مسیرهای نسبی را به https://cdn.snappshop.ir تبدیل می‌کند، و حتی در صورت عدم تطابق سلکتور کادر، از ساختار apix و JSON-LD (@type=Product) گالری کامل را بیرون می‌کشد.',
+    'فعال‌سازی هوشمند گالری در پروفایل‌های اسنپ‌شاپ (galleryEffectiveCfgForUrl) اضافه شد: اگر کاربر کادر/سلکتور گالری (مانند div.image-thumbnail) را تنظیم کرده باشد ولی ذخیره‌سازی قدیمی حالت را روی off نگه داشته باشد، در تمام مسیرهای فاز ۲ (دو مرحله‌ای، درجا، استریم و تست گالری) و فرم رابط کاربری به‌طور خودکار فعال می‌شود.',
+    'مسیر مستقیم apix برای صفحات تک‌محصول اسنپ‌شاپ (بدون ارسال هزاران درخواست سوخته به پوستهٔ خالی Next.js در snappshop.ir که باعث بلاک WAF 429 می‌شد)، مکث هوشمند ضد 429 و تلاش مجدد با backoff در snappshopApiHttpRequest، و جلوگیری از بازنویسی خطای مستقیم ایران با خطای 403 ورکر خارجی پیاده‌سازی شد.',
+    'جلوگیری از ناموجود شدن کاذب کالاهای اسنپ‌شاپ در فاز ۲: بازگشت ok:false روی پوستهٔ خالی CSR، افزودن کلاس .text-bold روی قیمت فروش و ul.list-unstyled و div.accordion-body p در HTML سنتزی، سلکتور پشتیبان خودکار برای فیلدهای جزئیات اسنپ‌شاپ، و ترمیم خودکار کالاهایی که در دور قبل به اشتباه ناموجود یا بدون گالری ثبت شده بودند (snappshop_heal_453).'
+  ]},
   {v:'10.452', t:'⚡ تشخیص فوری سقف ۵۰۰ صفحه و پاسخ status:false در API اسنپ‌شاپ + بازیافت خودکار پردازش استخراج قدیمی پس از آپدیت', items:[
     'در صفحهٔ ۵۰۱ به بعد اسنپ‌شاپ (سقف ۱۰,۰۰۰ کالای Elasticsearch در apix.snappshop.ir که پاسخ HTTP 200 با {"status":false} برمی‌گرداند)، اکنون بدون نیاز به ارسال درخواست اضافی یا سقوط به خطای HTTP 451 جینا، بلافاصله پایان طبیعی صفحه‌بندی (snappshop_end_of_pages) برگردانده می‌شود؛ همچنین پاسخ json_status_false در صفحات ۲+ دسته‌بندی‌های کوچک‌تر نیز پایان طبیعی لیست شناخته می‌شود.',
     'پردازش فرزند worker_extract_job اکنون در مرز هر قطعه اختلاف نسخهٔ کد روی دیسک با RAM را تشخیص داده و به کد جدید سوئیچ می‌کند؛ همچنین هنگام نصب آپدیت جدید، پردازش‌های قدیمیِ در حال انتظارِ retry به‌طور ایمن recycle می‌شوند تا ادامهٔ خودکار بلافاصله با نسخهٔ جدید اجرا شود.'
