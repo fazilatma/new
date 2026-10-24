@@ -76959,6 +76959,8 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
 
     $wantRids = null;
     $wantNorms = null;
+    $wantQTail = [];
+    $wantSkus = [];
     if (is_array($targetProducts)) {
         $wantRids = [];
         $wantNorms = [];
@@ -76966,14 +76968,24 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
             if (!is_array($tp)) continue;
             $tid = (int)($tp['id'] ?? 0);
             if ($tid > 0) $wantRids[$tid] = true;
+            $tsku = trim((string)($tp['sku'] ?? ($tp['revision']['data']['sku'] ?? '')));
+            if ($tsku !== '') {
+                $tskuClean = strtolower(trim((string)(preg_replace('~^sku\s*:\s*~i', '', $tsku) ?? $tsku)));
+                if ($tskuClean !== '') $wantSkus[$tskuClean] = true;
+            }
             $tt = trim((string)($tp['title'] ?? ($tp['name'] ?? ($tp['revision']['data']['title'] ?? ''))));
             if ($tt !== '') {
                 $tNorm = bslNormalizeTitle($tt);
                 if ($tNorm !== '') $wantNorms[$tNorm] = true;
-                $tBare = bslNormalizeTitle(stripProductCode($tt));
+                $tBareRaw = stripProductCode($tt);
+                $tBare = bslNormalizeTitle($tBareRaw);
                 if ($tBare !== '') $wantNorms[$tBare] = true;
                 $tClean = bslNormalizeTitle(bslSanitizeModerationTitle($tt, true));
                 if ($tClean !== '') $wantNorms[$tClean] = true;
+                if (strpos($tBareRaw, '?') === 0 && mb_strlen($tBareRaw, 'UTF-8') > 2) {
+                    $qt = bslNormalizeTitle(mb_substr($tBareRaw, 1, null, 'UTF-8'));
+                    if ($qt !== '') $wantQTail[$qt] = true;
+                }
             }
         }
     }
@@ -76998,6 +77010,8 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
 
     $slimKeep = ['key','title','price','final_price','stock','in_stock','availability','status','weight','barcode','shenase_kala','gtin','ean','sku','image','images','link','bsl_category_id','category_id','short_desc','variations_text'];
     $byKey = [];
+    $bySku = [];
+    $byQTail = [];
     foreach ($profiles as $profKey => $prof) {
         if (!is_array($prof)) continue;
         $prods = is_array($prof['products'] ?? null) ? $prof['products'] : [];
@@ -77009,11 +77023,18 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
             $pt = trim((string)($pr['title'] ?? ''));
             if ($pt === '') continue;
             $nt = bslNormalizeTitle($pt);
-            $bare = bslNormalizeTitle(stripProductCode($pt));
+            $bareRaw = stripProductCode($pt);
+            $bare = bslNormalizeTitle($bareRaw);
+            $psku = strtolower(trim((string)(preg_replace('~^sku\s*:\s*~i', '', (string)($pr['sku'] ?? '')) ?? '')));
+            $qTail = (!empty($wantQTail) && mb_strlen($bareRaw, 'UTF-8') > 2)
+                ? bslNormalizeTitle(mb_substr($bareRaw, 1, null, 'UTF-8'))
+                : '';
             if ($wantNorms !== null) {
                 $matched = ($itemKey !== '' && isset($wantKeys[$itemKey]))
+                    || ($psku !== '' && isset($wantSkus[$psku]))
                     || ($nt !== '' && isset($wantNorms[$nt]))
-                    || ($bare !== '' && isset($wantNorms[$bare]));
+                    || ($bare !== '' && isset($wantNorms[$bare]))
+                    || ($qTail !== '' && isset($wantQTail[$qTail]));
                 if (!$matched) continue;
             }
             $slimPr = [];
@@ -77028,8 +77049,10 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
             }
             $entry = ['product' => $slimPr, 'profile' => $profMeta, 'profile_key' => (string)$profKey, 'product_key' => $itemKey];
             if ($itemKey !== '' && !isset($byKey[$itemKey])) $byKey[$itemKey] = $entry;
+            if ($psku !== '' && !isset($bySku[$psku])) $bySku[$psku] = $entry;
             if ($nt !== '' && !isset($byNorm[$nt])) $byNorm[$nt] = $entry;
             if ($bare !== '' && !isset($byBare[$bare])) $byBare[$bare] = $entry;
+            if ($qTail !== '' && !isset($byQTail[$qTail])) $byQTail[$qTail] = $entry;
         }
     }
     foreach ($ledgerKeyByRid as $rid => $inf) {
@@ -77041,18 +77064,64 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
             if ($nt0 !== '' && isset($byNorm[$nt0])) $byRemote[$rid] = $byNorm[$nt0];
         }
     }
-    return ['by_remote' => $byRemote, 'by_norm' => $byNorm, 'by_bare' => $byBare];
+    return ['by_remote' => $byRemote, 'by_sku' => $bySku, 'by_norm' => $byNorm, 'by_bare' => $byBare, 'by_qtail' => $byQTail];
 }
 
-function bslFindLocalSourceProduct(int $remoteId, string $title, array $idx): ?array {
+function bslFindLocalSourceProduct(int $remoteId, string $title, array $idx, string $sku = ''): ?array {
     if ($remoteId > 0 && isset($idx['by_remote'][$remoteId])) return $idx['by_remote'][$remoteId];
+    if ($sku !== '') {
+        $skuClean = strtolower(trim((string)(preg_replace('~^sku\s*:\s*~i', '', $sku) ?? $sku)));
+        if ($skuClean !== '' && isset($idx['by_sku'][$skuClean])) return $idx['by_sku'][$skuClean];
+    }
     $nt = bslNormalizeTitle($title);
     if ($nt !== '' && isset($idx['by_norm'][$nt])) return $idx['by_norm'][$nt];
-    $bare = bslNormalizeTitle(stripProductCode($title));
+    $bareRaw = stripProductCode($title);
+    $bare = bslNormalizeTitle($bareRaw);
     if ($bare !== '' && isset($idx['by_bare'][$bare])) return $idx['by_bare'][$bare];
+    if (strpos($bareRaw, '?') === 0 && mb_strlen($bareRaw, 'UTF-8') > 2) {
+        $qt = bslNormalizeTitle(mb_substr($bareRaw, 1, null, 'UTF-8'));
+        if ($qt !== '' && isset($idx['by_qtail'][$qt])) return $idx['by_qtail'][$qt];
+    }
     $cleanT = bslNormalizeTitle(bslSanitizeModerationTitle($title, true));
     if ($cleanT !== '' && isset($idx['by_bare'][$cleanT])) return $idx['by_bare'][$cleanT];
     return null;
+}
+
+function bslHealCorruptedLeadingQuestionTitle(string $title, ?array $localMatch = null): string {
+    $t = trim($title);
+    if ($t === '' || strpos($t, '?') !== 0) return $t;
+    $localTitle = trim((string)($localMatch['product']['title'] ?? ''));
+    if ($localTitle !== '' && strpos($localTitle, '?') !== 0) {
+        $firstChar = mb_substr($localTitle, 0, 1, 'UTF-8');
+        if ($firstChar !== '') return $firstChar . mb_substr($t, 1, null, 'UTF-8');
+    }
+    static $prefixMap = [
+        '?ابه' => 'تابه', '?رویس' => 'سرویس', '?ماور' => 'سماور', '?رس ' => 'برس ',
+        '?تری' => 'بطری', '?شقاب' => 'بشقاب', '?ندل' => 'صندل', '?ومیز' => 'شومیز',
+        '?لوار' => 'شلوار', '?ال ' => 'شال ', '?امپو' => 'شامپو', '?ت ' => 'ست ',
+        '?بد ' => 'سبد ', '?طل ' => 'سطل ', '?ینی' => 'سینی', '?فره' => 'سفره',
+        '?بکش' => 'آبکش', '?بمیوه' => 'آبمیوه', '?ویز' => 'آویز', '?ینه' => 'آینه',
+        '?ستکان' => 'استکان', '?ستند' => 'استند', '?سفنج' => 'اسفنج', '?سپری' => 'اسپری',
+        '?دکلن' => 'ادکلن', '?بزار' => 'ابزار', '?تو ' => 'اتو ', '?جاق' => 'اجاق',
+        '?رام پز' => 'آرام پز', '?رخ کن' => 'سرخ کن', '?نبر' => 'انبر', '?ردوخوری' => 'اردوخوری',
+        '?الش' => 'بالش', '?اکس' => 'باکس', '?ند ' => 'بند ', '?لوز' => 'بلوز',
+        '?اپ ' => 'تاپ ', '?یشرت' => 'تیشرت', '?ونیک' => 'تونیک', '?رمه' => 'ترمه',
+        '?خته' => 'تخته', '?رازو' => 'ترازو', '?ارو' => 'جارو', '?اکلیدی' => 'جاکلیدی',
+        '?امایع' => 'جامایع', '?ادستمالی' => 'جادستمالی', '?اقاشقی' => 'جاقاشقی', '?اصابونی' => 'جاصابونی',
+        '?اکفشی' => 'جاکفشی', '?عبه' => 'جعبه', '?وراب' => 'جوراب', '?وله' => 'حوله',
+        '?ردکن' => 'خردکن', '?امن' => 'دامن', '?ستکش' => 'دستکش', '?ستمال' => 'دستمال',
+        '?یس ' => 'دیس ', '?یگ ' => 'دیگ ', '?نده' => 'رنده', '?ومیزی' => 'رومیزی',
+        '?ودپز' => 'زودپز', '?اعت' => 'ساعت', '?اک ' => 'ساک ', '?اندویچ' => 'ساندویچ',
+        '?شوار' => 'سشوار', '?وپ' => 'سوپ', '?ارژر' => 'شارژر', '?مع' => 'شمع',
+        '?یرینی' => 'شیرینی', '?یشه' => 'شیشه', '?ابون' => 'صابون', '?افی' => 'صافی',
+        '?رف ' => 'ظرف ', '?روف' => 'ظروف', '?طر ' => 'عطر ', '?ینک' => 'عینک',
+    ];
+    foreach ($prefixMap as $bad => $good) {
+        if (mb_strpos($t, $bad, 0, 'UTF-8') === 0) {
+            return $good . mb_substr($t, mb_strlen($bad, 'UTF-8'), null, 'UTF-8');
+        }
+    }
+    return $t;
 }
 
 /**
@@ -77149,6 +77218,7 @@ function bslApplyCategoryChangeOrRecreate(
 
     $rawOrigTitle = trim((string)($fullP['title'] ?? ($fullP['name'] ?? ($revData['title'] ?? ''))));
     $rawOrigTitle = trim((string)(preg_replace('/\s*\[بایگانی\s+\d+\]\s*$/u', '', $rawOrigTitle) ?? $rawOrigTitle));
+    $rawOrigTitle = bslHealCorruptedLeadingQuestionTitle($rawOrigTitle, $localMatch);
     if ($rawOrigTitle === '' && !empty($localProd['title'])) $rawOrigTitle = trim((string)$localProd['title']);
     if ($rawOrigTitle === '') return ['ok' => false, 'error' => 'عنوانِ محصول خالی است'];
 
@@ -77774,6 +77844,16 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         if ($doneToken !== '' && isset($cpDoneSet[$doneToken])) continue;
         $pName = trim((string)($p['title'] ?? ($p['name'] ?? '')));
         $rev   = $p['revision'] ?? [];
+        $pSku  = trim((string)($p['sku'] ?? ($rev['data']['sku'] ?? '')));
+        $localMatch = $isPendingCreate ? null : bslFindLocalSourceProduct($pId, $pName, $localIndex, $pSku);
+        if (!$isPendingCreate) {
+            $healedPName = bslHealCorruptedLeadingQuestionTitle($pName, $localMatch);
+            if ($healedPName !== $pName) {
+                $pName = $healedPName;
+                $p['title'] = $healedPName;
+                $p['name'] = $healedPName;
+            }
+        }
         $curCat = $isPendingCreate ? 0 : bslProductCatId($p);
         $pendingTried = $isPendingCreate
             ? array_values(array_filter(array_map('intval', (array)($p['tried_cat_ids'] ?? [])), static fn($x) => $x > 0))
@@ -77796,7 +77876,6 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             'learned_hits' => $learnedHits]);
 
         $cls = $isPendingCreate ? ['skip_modesty' => false, 'needs_category' => true, 'needs_image_refresh' => false] : bslClassifyRejectionReasons($p, $cats);
-        $localMatch = $isPendingCreate ? null : bslFindLocalSourceProduct($pId, $pName, $localIndex);
 
         if (!$isPendingCreate) {
             // ۱) استثنای صریحِ قوانین شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱، ۶۴۱۹): عبور بدون هیچ دستکاری
