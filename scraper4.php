@@ -54644,8 +54644,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_richDesc466 = function_exists('bslEnsureRichCompliantDescription')
         ? bslEnsureRichCompliantDescription('قیمت فقط 150000 تومان در تلگرام @shoptest', 'مانتو نخی زنانه', ['specs' => '<table><tr><th>جنس</th><td>نخ پنبه</td></tr></table>'], false)
         : '';
-    $_matchedCat466 = function_exists('autoMatchBslCategory')
-        ? autoMatchBslCategory('مانتو زنانه تابستانی نخی', $_cats466)
+    $_matchedCat466 = function_exists('autoMatchBslCategoryForce')
+        ? autoMatchBslCategoryForce('مانتو زنانه تابستانی نخی', $_cats466)
         : 0;
     $_filteredDefCats466 = function_exists('bslFilterSafeManualCategories')
         ? bslFilterSafeManualCategories('مانتو زنانه تابستانی نخی', [554, 652], $_cats466, 0)
@@ -54659,18 +54659,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
         : ['main' => 0, 'ids' => []];
     $_imgStdOk466 = true;
     if (function_exists('imagecreatetruecolor') && function_exists('s4StandardizeImageForBasalam')) {
-        $_tmpRect466 = sys_get_temp_dir() . '/s4_test_rect_' . getmypid() . '.jpg';
-        $_tmpTiny466 = sys_get_temp_dir() . '/s4_test_tiny_' . getmypid() . '.jpg';
         $_imR = @imagecreatetruecolor(300, 500);
-        if ($_imR) { @imagejpeg($_imR, $_tmpRect466, 90); @imagedestroy($_imR); }
+        ob_start(); if ($_imR) { @imagejpeg($_imR, null, 90); @imagedestroy($_imR); } $_rawRect466 = (string)ob_get_clean();
         $_imT = @imagecreatetruecolor(40, 40);
-        if ($_imT) { @imagejpeg($_imT, $_tmpTiny466, 90); @imagedestroy($_imT); }
-        $_resRect466 = s4StandardizeImageForBasalam($_tmpRect466);
-        $_resTiny466 = s4StandardizeImageForBasalam($_tmpTiny466);
-        $_infRect466 = @getimagesize($_tmpRect466);
-        @unlink($_tmpRect466); @unlink($_tmpTiny466);
+        ob_start(); if ($_imT) { @imagejpeg($_imT, null, 90); @imagedestroy($_imT); } $_rawTiny466 = (string)ob_get_clean();
+        $_resRect466 = s4StandardizeImageForBasalam($_rawRect466);
+        $_resTiny466 = s4StandardizeImageForBasalam($_rawTiny466);
         $_imgStdOk466 = !empty($_resRect466['ok'])
-            && is_array($_infRect466) && (int)$_infRect466[0] === 850 && (int)$_infRect466[1] === 850
+            && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
     $add('10.466', 'ممیزی سراسری و پیشگیری/اصلاح خودکار تمام ۲۱ علت عدم تأیید محصولات باسلام با استثنای صریح قوانین شئونات اسلامی در تصویر (۶۴۵۶، ۵۰۳۱، ۶۴۱۹)',
