@@ -42469,6 +42469,9 @@ if (isset($_GET['selftest'])) {
 
     // ۲) رفع خطای ۴۲۲ — نباید هیچ sort نامعتبری در کد مانده باشد
     $selfSrc = (string)@file_get_contents(__FILE__);
+    $__stVerFilter = trim((string)($_GET['ver'] ?? ''));
+    $__stModernOnly = !empty($_GET['fast']) || ($__stVerFilter !== '' && (bool)preg_match('/^10\.(?:4(?:3[7-9]|[4-9]\d)|[5-9]\d\d)$/', $__stVerFilter));
+    if (!$__stModernOnly) {
     // رشته را تکه‌تکه می‌سازیم تا خودِ همین خط در شمارش نیفتد و
     // «هشدار الکی» ندهد — خودآزمون نباید خودش را پیدا کند.
     $badSort = substr_count($selfSrc, 'sort=' . 'created_at');
@@ -42686,6 +42689,8 @@ if (isset($_GET['selftest'])) {
              remoteMapRecord('bogus', [['key' => 'x', 'remote_id' => 1]]) === 0);
         if ($bak !== null) @file_put_contents(REMOTEMAP_FILE, $bak, LOCK_EX);
         else @unlink(REMOTEMAP_FILE);
+        unset($bak, $byId);
+        if (function_exists('remoteMapCacheClear')) remoteMapCacheClear(true);
     }
     $add('8.65', 'هر سه فرستنده شناسه را ثبت می‌کنند',
          substr_count($selfSrc, 'remoteMap' . 'Record(') >= 4);
@@ -48077,7 +48082,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
              $other = retireOwnership('bsl', 'k51', 'other.example.com_x');
              if ($bak !== null) @file_put_contents(REMOTEMAP_FILE, $bak, LOCK_EX);
              else @unlink(REMOTEMAP_FILE);
-             remoteMapCacheClear();
+             remoteMapCacheClear(true);
              return !empty($same['known']) && !empty($same['owned']) && (int)$same['id'] === 777
                  && !empty($other['known']) && empty($other['owned']);
          })());
@@ -48086,13 +48091,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.38', 'دفترچه مالکیت را به شکلِ کلید ذخیره می‌کند نه URL',
          (function () {
              $bak = is_file(REMOTEMAP_FILE) ? @file_get_contents(REMOTEMAP_FILE) : null;
-             @unlink(REMOTEMAP_FILE); remoteMapCacheClear();
+             @unlink(REMOTEMAP_FILE); remoteMapCacheClear(true);
              remoteMapRecord('woo', [['key' => 'k51w', 'remote_id' => 42, 'title' => 'ت']],
                  'https://s51.example.com/p');
              $row = remoteMapLoad()['woo']['k51w'] ?? [];
              if ($bak !== null) @file_put_contents(REMOTEMAP_FILE, $bak, LOCK_EX);
              else @unlink(REMOTEMAP_FILE);
-             remoteMapCacheClear();
+             remoteMapCacheClear(true);
              return ($row['profile'] ?? '') === 's51.example.com_p';
          })());
 
@@ -53107,6 +53112,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,"btn.textContent='⏳ ساخت صف مستقیم…'")!==false
       && strpos($selfSrc,"{v:'10." . "436'")!==false
       && version_compare(APP_VERSION,'10.436','>='));
+    }
     $_snRoute437=function_exists('snappshopParseTargetRoute')?snappshopParseTargetRoute('https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=336'):[];
     $_snPay437=function_exists('snappshopBuildLandingPayload')?snappshopBuildLandingPayload($_snRoute437):[];
     $_snBrandRoute437=function_exists('snappshopParseTargetRoute')?snappshopParseTargetRoute('https://snappshop.ir/category/mobile/samsung?page=2'):[];
@@ -53992,6 +53998,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "'downgrade_skipped'=>true") !== false
       && strpos($selfSrc, "{v:'10." . "448'") !== false
       && version_compare(APP_VERSION, '10.448', '>='));
+    if (!$__stModernOnly) {
     $_detailProfile422=['detailSelectors'=>[
         'shortDesc'=>['enabled'=>true,'selector'=>'.summary'],
         'price'=>['enabled'=>false,'selector'=>'.price']],
@@ -55942,6 +55949,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
         $add('8.34', 'محافظ: استخراج خالی را رد می‌کند', !empty($gZero['blocked']));
         $add('8.34', 'محافظ: حذف انبوه را رد می‌کند',    !empty($gBig['blocked']));
         $add('8.34', 'محافظ: حذف کم را اجازه می‌دهد',    !empty($gOk['allow']));
+    }
     }
 
     // ۵) تنظیمات فعلی — برای اینکه بدانید چه چیزی روشن است
