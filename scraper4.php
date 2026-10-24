@@ -5998,6 +5998,14 @@ function aiProvidersLoad(): array {
         $d = json_decode((string)@file_get_contents(AI_PROVIDERS_FILE), true);
         if (is_array($d)) $p = $d;
     }
+    if ($p && function_exists('aiRepairProvidersConfig')) {
+        $stamp = DATA_DIR . '/ai_repair_v10469.flag';
+        if (!is_file($stamp)) {
+            @file_put_contents($stamp, (string)time());
+            aiRepairProvidersConfig($p, true);
+            @writeJsonFile(AI_PROVIDERS_FILE, $p);
+        }
+    }
     return $p;
 }
 /** فهرست ارائه‌دهنده‌ها را ذخیره می‌کند */
@@ -6163,9 +6171,26 @@ function aiKeyHealth(string $pid, string $kid, ?array $state = null): array {
     if (!is_array($row)) return $base;
     $kind = (string)($row['kind'] ?? '');
     $at   = (int)($row['at'] ?? 0);
+    $lbl  = (string)($row['label'] ?? '');
+    $msg  = (string)($row['msg'] ?? '');
+    /* v10.469: خطاهای سطحِ مدل (tier/plan/labs مثل Mistral tier_not_allowed) یا ۴۲۹ موقتی که لینک /billing داشته
+       نباید کل کلید را «اعتبار تمام» نگه دارند؛ در خواندنِ وضعیت هم خودکار آزادشان می‌کنیم. */
+    if ($kind === 'billing') {
+        $chkFalseBill = strtolower($lbl . ' ' . $msg);
+        if (strpos($chkFalseBill, 'subscription tier') !== false
+            || strpos($chkFalseBill, 'tier_not_allowed') !== false
+            || strpos($lbl, 'سطحِ اشتراک') !== false
+            || strpos($lbl, 'پلن رایگان') !== false
+            || strpos($lbl, 'مدل Labs') !== false
+            || strpos($chkFalseBill, 'labs_not_enabled') !== false
+            || strpos($chkFalseBill, 'retry in ') !== false
+            || strpos($chkFalseBill, 'too many ') !== false) {
+            return $base;
+        }
+    }
     $base['kind']  = $kind;
-    $base['label'] = (string)($row['label'] ?? '');
-    $base['msg']   = (string)($row['msg'] ?? '');
+    $base['label'] = $lbl;
+    $base['msg']   = $msg;
     $base['at']    = $at;
     $base['fails'] = (int)($row['fails'] ?? 0);
     $base['okAt']  = (int)($row['okAt'] ?? 0);
@@ -6193,7 +6218,14 @@ function aiKeyFailureKind(array $r): array {
         return ['kind' => '', 'label' => '', 'msg' => ''];
     }
     $bill = aiBillingFailure($r);
-    if ($bill['is']) return ['kind' => 'billing', 'label' => $bill['label'], 'msg' => (string)$bill['msg']];
+    /* v10.469: فقط اتمام واقعی اعتبار حساب (credit) مربوط به کل کلید است؛
+       خطاهای tier / plan / labs / trial مربوط به همان مدل خاص هستند، نه کل اکانت! */
+    if ($bill['is']) {
+        if (($bill['kind'] ?? '') === 'credit') {
+            return ['kind' => 'billing', 'label' => $bill['label'], 'msg' => (string)$bill['msg']];
+        }
+        return ['kind' => '', 'label' => '', 'msg' => ''];
+    }
     if ($code === 429) return ['kind' => 'rate',
         'label' => 'محدودیت نرخ (۴۲۹) — سهمیهٔ لحظه‌ای این کلید پر شده', 'msg' => ''];
     if ($code === 401) return ['kind' => 'auth',
@@ -6627,6 +6659,19 @@ function aiBillingFailure(array $r): array {
         $msg = $body;
     }
     $hay = strtolower($msg) . ' ' . $raw;
+    /* v10.469: خطاهای موقت نرخ (۴۲۹) که در متن راهنما لینک /billing دارند (مثل llm7 / mistral)
+       نباید «اعتبار تمام شده» برچسب بخورند. */
+    if ($code === 429) {
+        foreach (['too many ', 'rate limit', 'requests per ', 'tokens per ', 'retry in ', 'try again in ', 'service_tier_capacity_exceeded'] as $rlSig) {
+            if (strpos($hay, $rlSig) !== false
+                && strpos($hay, 'insufficient_quota') === false
+                && strpos($hay, 'insufficient credits') === false
+                && strpos($hay, 'no remaining credits') === false
+                && strpos($hay, 'out of credit') === false) {
+                return ['is' => false, 'kind' => '', 'label' => '', 'msg' => ''];
+            }
+        }
+    }
     // v9.99: ترتیبِ قانون‌ها مهم است — دسته‌های دقیق‌تر (پلن/اشتراک/Labs/آزمایشی)
     // پیش از دستهٔ عمومیِ «اعتبار» سنجیده می‌شوند، وگرنه واژه‌های عامی مثل
     // «billing» یا «payment required» همه را «credit» برچسب می‌زنند.
@@ -6643,7 +6688,8 @@ function aiBillingFailure(array $r): array {
                     'کلید آزمایشی سقف ماهانه دارد — کلید تولیدی لازم است'],
         ['credit',  ['depleted your monthly included credits', 'monthly included credits',
                      'insufficient credits', 'insufficient balance', 'insufficient_quota', 'exceeded your current quota',
-                     'no remaining credits', 'payment required', 'billing', 'add credits', 'out of credit', 'top up your balance'],
+                     'no remaining credits', 'payment required', 'billing hard limit', 'billing_not_active',
+                     'account is delinquent', 'add credits', 'out of credit', 'top up your balance'],
                     'اعتبار تمام شده — باید حساب را شارژ کنید (رفع‌شدنی با کد نیست)'],
     ];
     foreach ($rules as $ru) {
@@ -7803,6 +7849,14 @@ function aiNativeHttpModes(string $url, array $headers, array $body, array $net,
         $tried[] = ['mode' => $m, 'code' => $r['code'], 'error' => mb_substr(aiHttpErrorMessage($r), 0, 80)];
         if (!empty($r['ok'])) { $r['tried'] = $tried; return $r; }
         if (aiProxyLevelFailure($r, $m)) {
+            if (in_array($m, ['direct', 'doh', 'dns'], true)) {
+                foreach (['worker', 'proxy'] as $wm) {
+                    if (!in_array($wm, $modes, true)) {
+                        if ($wm === 'worker' && ($net['worker_url'] ?? '') !== '') $modes[] = $wm;
+                        if ($wm === 'proxy'  && ($net['proxy'] ?? '') !== '')      $modes[] = $wm;
+                    }
+                }
+            }
             $r['proxy_blocked'] = true; $r['proxy_mode'] = $m;
             if ($proxyBlocked === null) $proxyBlocked = $r;
             continue;
@@ -8127,6 +8181,19 @@ function aiOllamaNativeCall(array $p, array $ep, array $payload, array $net): ar
     return $r;
 }
 
+function aiShouldSuppressKeyPoison(array $p, string $pid, string $model, array $kf): bool {
+    $kind = (string)($kf['kind'] ?? '');
+    if ($kind === '') return false;
+    $dialect = aiDetectProviderDialect($p);
+    if (($pid === 'openrouter' || $dialect === 'openrouter') && $kind === 'billing' && stripos($model, ':free') === false) {
+        return true;
+    }
+    if (($pid === 'opencode' || $dialect === 'opencode') && ($kind === 'auth' || $kind === 'billing') && stripos($model, '-free') === false) {
+        return true;
+    }
+    return false;
+}
+
 function aiProviderCall(array $p, string $model, array $payload, ?array $net = null): array {
     if ($net === null) $net = aiNetCfg();
     $pid  = (string)($p['id'] ?? '');
@@ -8142,7 +8209,9 @@ function aiProviderCall(array $p, string $model, array $payload, ?array $net = n
             if (!empty($r['ok'])) aiKeyMarkOk($pid, $kid);
             else {
                 $kf = aiKeyFailureKind($r);
-                if ($kf['kind'] !== '') aiKeyMarkFail($pid, $kid, $kf['kind'], $kf['label'], $kf['msg']);
+                if ($kf['kind'] !== '' && !aiShouldSuppressKeyPoison($p, $pid, $model, $kf)) {
+                    aiKeyMarkFail($pid, $kid, $kf['kind'], $kf['label'], $kf['msg']);
+                }
             }
         }
         if ($kid !== '') $r['keyId'] = $kid;
@@ -8262,6 +8331,14 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
             return $r;
         }
         if (aiProxyLevelFailure($r, $m)) {
+            if (in_array($m, ['direct', 'doh', 'dns'], true)) {
+                foreach (['worker', 'proxy'] as $wm) {
+                    if (!in_array($wm, $modes, true)) {
+                        if ($wm === 'worker' && ($net['worker_url'] ?? '') !== '') $modes[] = $wm;
+                        if ($wm === 'proxy'  && ($net['proxy'] ?? '') !== '')      $modes[] = $wm;
+                    }
+                }
+            }
             $r['proxy_blocked'] = true;
             $r['proxy_mode'] = $m;
             if ($proxyBlocked === null) $proxyBlocked = $r;
@@ -8288,6 +8365,13 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
             continue;
         }
         if (in_array($r['code'], [400, 401, 402, 403, 404, 422, 429], true)) {
+            if ($dialect === 'gemini' && $apiKey !== '' && in_array((int)$r['code'], [400, 401, 403], true) && !aiTestStopRequested()) {
+                $gemRes = aiGeminiCall($p, ['url' => '', 'model' => $ep['model']], $payload, $net);
+                if (!empty($gemRes['ok'])) {
+                    $gemRes['tried'] = array_merge($tried, (array)($gemRes['tried'] ?? []));
+                    return $gemRes;
+                }
+            }
             $r['tried'] = $tried;
             return $r;
         }
@@ -10134,17 +10218,30 @@ function aiRepairProvidersConfig(array &$providers, bool $clearSuspectKeyBlocks 
 
         $cleanModels = [];
         $seenM = [];
+        $mistralAliasMap = [
+            'mistral-large-3'   => 'mistral-large-latest',
+            'mistral-medium-3-5'=> 'mistral-medium-latest',
+            'mistral-small-4-0' => 'mistral-small-latest',
+        ];
         foreach ((array)($p['models'] ?? []) as $m) {
             if (!is_array($m)) continue;
             $origId = trim((string)($m['id'] ?? ''));
             if ($origId === '') continue;
             $lowOrig = strtolower($origId);
             if (strpos($lowOrig, 'frequently-asked-questions') !== false || strpos($lowOrig, 'what-is-cerebras') !== false
+                || strpos($lowOrig, '-deprecated') !== false
                 || in_array($lowOrig, ['available-models','supported-models','rate-limits','pricing','quickstart','getting-started','api-reference','overview'], true)) {
                 $stats['junk_removed']++;
                 continue;
             }
             $newId = aiSanitizeModelId($origId, $dialect);
+            if ($dialect === 'mistral' && isset($mistralAliasMap[strtolower($newId)])) {
+                $newId = $mistralAliasMap[strtolower($newId)];
+                unset($m['tested'], $m['available'], $m['error'], $m['testDetails'], $m['billingIssue']);
+            } elseif ($dialect === 'cerebras' && strtolower($newId) === 'llama-3-1-8b-instant') {
+                $newId = 'llama3.1-8b';
+                unset($m['tested'], $m['available'], $m['error'], $m['testDetails'], $m['billingIssue']);
+            }
             if ($dialect === 'cloudflare' && stripos($newId, '@cf/') === 0) {
                 $afterCf = substr($newId, 4);
                 if ($afterCf !== '' && strpos($afterCf, '/') === false) {
@@ -10156,6 +10253,15 @@ function aiRepairProvidersConfig(array &$providers, bool $clearSuspectKeyBlocks 
                     }
                 }
             }
+            /* v10.469: مدل‌هایی که به خاطر لینک /billing در ۴۲۹ موقتی اشتباهاً billingIssue=credit خورده بودند را آزاد کن */
+            if (($m['billingIssue'] ?? '') === 'credit') {
+                $mErrLow = strtolower((string)($m['error'] ?? '') . ' ' . (string)($m['testDetails']['raw_error'] ?? ''));
+                if (strpos($mErrLow, 'retry in ') !== false || strpos($mErrLow, 'too many ') !== false) {
+                    unset($m['billingIssue']);
+                    $m['rateLimited'] = true;
+                    $m['tested'] = false;
+                }
+            }
             if ($newId !== $origId && $newId !== '') {
                 $m['id'] = $newId;
                 $stats['models_renamed']++;
@@ -10165,6 +10271,11 @@ function aiRepairProvidersConfig(array &$providers, bool $clearSuspectKeyBlocks 
             $seenM[$mKey] = true;
             $cleanModels[] = $m;
         }
+        /* v10.469: در Mistral مدل سبک و در دسترس پلن رایگان (ministral-8b-latest) را همیشه در فهرست نگه دار */
+        if ($dialect === 'mistral' && !isset($seenM['ministral-8b-latest'])) {
+            array_unshift($cleanModels, ['id' => 'ministral-8b-latest', 'name' => 'ministral-8b-latest', 'free' => true]);
+            $seenM['ministral-8b-latest'] = true;
+        }
         $p['models'] = $cleanModels;
     }
     unset($p);
@@ -10173,7 +10284,20 @@ function aiRepairProvidersConfig(array &$providers, bool $clearSuspectKeyBlocks 
         $st = aiKeyStateLoad();
         $changed = false;
         foreach ($st as $k => &$v) {
-            if (is_array($v) && (($v['kind'] ?? '') === 'auth' || ($v['kind'] ?? '') === 'rate')) {
+            if (!is_array($v)) continue;
+            $vk = (string)($v['kind'] ?? '');
+            $vMsgLow = strtolower((string)($v['label'] ?? '') . ' ' . (string)($v['msg'] ?? ''));
+            $isFalseBilling = ($vk === 'billing') && (
+                strpos($vMsgLow, 'subscription tier') !== false
+                || strpos($vMsgLow, 'tier_not_allowed') !== false
+                || strpos((string)($v['label'] ?? ''), 'سطحِ اشتراک') !== false
+                || strpos((string)($v['label'] ?? ''), 'پلن رایگان') !== false
+                || strpos((string)($v['label'] ?? ''), 'مدل Labs') !== false
+                || strpos($vMsgLow, 'retry in ') !== false
+                || strpos($vMsgLow, 'too many ') !== false
+                || strpos($k, 'openrouter|') === 0
+            );
+            if ($vk === 'auth' || $vk === 'rate' || $isFalseBilling) {
                 $v['kind'] = ''; $v['label'] = ''; $v['msg'] = ''; $v['fails'] = 0;
                 $stats['keys_unblocked']++;
                 $changed = true;
@@ -54705,6 +54829,46 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.469', 'رفع خطای کاذب ۴۰۳ سفارش‌های باسلام (bslFetchVendorParcels + تبدیل ریال به تومان) و رفع مسدودیت کاذب اعتبار کلیدهای Mistral/LLM7',
+         function_exists('bslFetchVendorParcels')
+      && function_exists('aiShouldSuppressKeyPoison')
+      && (function () {
+             $np = bslNormalizeParcel([
+                 'id' => 2832946569,
+                 'order' => ['id' => 111, 'customer' => ['recipient' => ['name' => 'زهرا']]],
+                 'total_items_price' => 0,
+                 'status' => ['value' => 3739, 'title' => 'سفارش جدید'],
+                 'items' => [['quantity' => 1, 'price' => 33530000, 'product' => ['title' => 'تیشرت نخی']]],
+             ], 'پوشاک نوشیکا', 710223);
+             $err403 = bslApiError(['code' => 403, 'body' => ['errors' => [['message' => 'به فیلتر آیدی غرفه ها دسترسی ندارید.']]]], 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read');
+             $kfMistralTier = aiKeyFailureKind(['ok' => false, 'code' => 403, 'mode' => 'direct',
+                 'body' => ['message' => 'This model is not available in your subscription tier', 'code' => 'tier_not_allowed']]);
+             $kfLlm7Rate = aiKeyFailureKind(['ok' => false, 'code' => 429, 'mode' => 'direct',
+                 'body' => ['error' => ['message' => 'Too many invalid requests from this IP address. Please verify at https://dash.llm7.io/#/billing, then retry in 1119 seconds.']]]);
+             $kfRealCredit = aiKeyFailureKind(['ok' => false, 'code' => 402, 'mode' => 'direct',
+                 'body' => ['error' => 'You have depleted your monthly included credits.']]);
+             $hHealed = aiKeyHealth('mistral', 'k_tier', [
+                 'mistral|k_tier' => ['kind' => 'billing', 'at' => time() - 60, 'fails' => 5,
+                     'label' => 'مدل در سطحِ اشتراکِ شما نیست', 'msg' => 'This model is not available in your subscription tier'],
+             ]);
+             $hReal = aiKeyHealth('hf', 'k_empty', [
+                 'hf|k_empty' => ['kind' => 'billing', 'at' => time() - 60, 'fails' => 2,
+                     'label' => 'اعتبار تمام شده', 'msg' => 'You have depleted your monthly included credits.'],
+             ]);
+             return $np['amount'] === 3353000
+                 && $np['unsent'] === true
+                 && $np['shop_name'] === 'پوشاک نوشیکا'
+                 && ($np['items'][0]['title'] ?? '') === 'تیشرت نخی'
+                 && strpos($err403, 'فیلتر آیدی غرفه') !== false
+                 && strpos($err403, 'vendor.parcel.read') === false
+                 && $kfMistralTier['kind'] === ''
+                 && $kfLlm7Rate['kind'] === 'rate'
+                 && $kfRealCredit['kind'] === 'billing'
+                 && $hHealed['blocked'] === false
+                 && $hReal['blocked'] === true;
+         })()
+      && strpos($selfSrc, "{v:'10." . "469'") !== false
+      && version_compare(APP_VERSION, '10.469', '>='));
     $add('10.468', 'حذف بارگذاری سه‌بارهٔ profiles.json در catfixRun + سقف بودجهٔ زمانی LSAPI و جهش هوشمند زنجیرهٔ پشتیبان AI روی خطای ۴۲۹/تایم‌اوت',
          strpos($selfSrc, "catProfileResolver('bsl', \$rawLoadedProfiles)") !== false
       && strpos($selfSrc, '$maxFbTries = 5') !== false
@@ -57961,6 +58125,7 @@ function notifPrereq(array $cn): ?string {
  */
 function bslApiError(array $r, string $what, string $endpoint, string $scope = ''): string {
     $c = (int)($r['code'] ?? 0);
+    $att = is_array($r['attempts'] ?? null) ? ' — روش‌های امتحان‌شده: ' . implode('، ', $r['attempts']) : '';
     // v9.84: «stopped» خطای شبکه نیست — سیگنال توقفِ ارسال است. قبلاً با
     // کد ۰ قاطی می‌شد و کاربر پیام گمراه‌کنندهٔ «ارتباط برقرار نشد» می‌دید،
     // در حالی که اینترنت و توکن سالم بودند.
@@ -57969,8 +58134,20 @@ function bslApiError(array $r, string $what, string $endpoint, string $scope = '
     }
     if ($c === 404) return $what . ' — مسیر یافت نشد (۴۰۴): ' . $endpoint;
     if ($c === 401) return $what . ' — توکن نامعتبر یا منقضی (۴۰۱)';
-    if ($c === 403) return $what . ' — توکن دسترسی لازم را ندارد (۴۰۳)'
-                         . ($scope !== '' ? ' · اسکوپ موردنیاز: ' . $scope : '');
+    if ($c === 403) {
+        $srvMsg = '';
+        if (is_array($r['body']['errors'][0] ?? null)) {
+            $srvMsg = trim((string)($r['body']['errors'][0]['message'] ?? ''));
+        }
+        if ($srvMsg === '' && is_string($r['body']['message'] ?? null)) {
+            $srvMsg = trim((string)$r['body']['message']);
+        }
+        if ($srvMsg !== '' && !in_array(strtolower($srvMsg), ['forbidden', 'unauthenticated', 'unauthorized'], true)) {
+            return $what . ' — خطای دسترسی (۴۰۳): ' . mb_substr($srvMsg, 0, 160);
+        }
+        return $what . ' — توکن دسترسی لازم را ندارد (۴۰۳)'
+             . ($scope !== '' ? ' · اسکوپ موردنیاز: ' . $scope : '');
+    }
     if ($c === 429) return $what . ' — تعداد درخواست بیش از حد (۴۲۹)، کمی بعد تلاش کنید';
     // v8.33: ۴۲۲ یعنی پارامتر ورودی نامعتبر است — جزئیات را از پاسخ بیرون می‌کشیم
     if ($c === 422) {
@@ -57981,12 +58158,60 @@ function bslApiError(array $r, string $what, string $endpoint, string $scope = '
             $m   = (string)($d['msg'] ?? '');
             if ($loc !== '' || $m !== '') $det[] = trim($loc . ' ' . $m);
         }
-        $att = is_array($r['attempts'] ?? null) ? ' — روش‌های امتحان‌شده: ' . implode('، ', $r['attempts']) : '';
         return $what . ' — پارامتر نامعتبر (۴۲۲)'
              . ($det ? ': ' . mb_substr(implode(' · ', $det), 0, 160) : ' در ' . $endpoint) . $att;
     }
     if ($c === 0)   return $what . ' — ارتباط با باسلام برقرار نشد';
     return $what . ' — خطای HTTP ' . $c . $att;
+}
+
+/**
+ * v10.469: دریافت استاندارد سفارش‌های غرفه بدون پارامتر ادمینی items.vendor_ids.
+ * در باسلام JWT غرفه‌دار خودکار روی همان غرفه اسکوپ می‌شود و ارسال
+ * bslReqRead($tk, 'vendor-parcels?items.vendor_ids=' . $vid . '&per_page=10')
+ * با خطای ۴۰۳ «به فیلتر آیدی غرفه ها دسترسی ندارید.» رد می‌شود!
+ * همچنین در صورت خطای گیت‌وی openapi، خودکار به order-processing.basalam.com/v3 فالبک می‌زند.
+ */
+function bslFetchVendorParcels(string $tk, int $vid = 0, int $perPage = 20, array $extraParams = [], ?array $net = null): array {
+    $tk = trim($tk);
+    if ($tk === '') return ['ok' => false, 'code' => 0, 'error' => 'توکن خالی است'];
+    $per = min(30, max(1, $perPage));
+    $qp = ['per_page=' . $per];
+    if (!empty($extraParams['statuses'])) {
+        $stParam = is_array($extraParams['statuses']) ? implode(',', array_map('intval', $extraParams['statuses'])) : trim((string)$extraParams['statuses']);
+        if ($stParam !== '') $qp[] = 'statuses=' . rawurlencode($stParam);
+    }
+    if (!empty($extraParams['cursor'])) {
+        $cur = trim((string)$extraParams['cursor']);
+        if ($cur !== '') $qp[] = 'cursor=' . rawurlencode($cur);
+    }
+    $ep = 'vendor-parcels?' . implode('&', $qp);
+    $r = bslReqRead($tk, $ep);
+    if (!empty($r['ok'])) return $r;
+    if ((string)($r['error'] ?? '') === 'stopped') return $r;
+
+    $c = (int)($r['code'] ?? 0);
+    if (in_array($c, [0, 403, 404, 500, 502, 503, 504], true)) {
+        if ($net === null) $net = bslNetCfg();
+        $fbUrl = 'https://order-processing.basalam.com/v3/' . $ep;
+        foreach (bslNetModes($net) as $m) {
+            $ch = curl_init();
+            curl_setopt_array($ch, bslCurlOpts($fbUrl, $tk, 'GET', null, false, $net, $m));
+            $raw = curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $cerr = curl_error($ch);
+            curl_close($ch);
+            if ($raw !== false && $code >= 200 && $code < 300) {
+                $dec = @json_decode((string)$raw, true);
+                if (is_array($dec) && isset($dec['data']) && is_array($dec['data'])) {
+                    return ['ok' => true, 'code' => $code, 'body' => $dec, 'via' => 'order-processing-v3:' . $m];
+                }
+            }
+            if ($code === 401) break;
+            if ($cerr === '' && $code >= 400 && $code < 500 && $code !== 403 && $code !== 404) break;
+        }
+    }
+    return $r;
 }
 
 /* =====================================================================
@@ -58027,21 +58252,39 @@ function bslParcelCustomerName(array $o): string {
 }
 
 /** یک ردیف vendor-parcels را به ساختار ساده و یک‌دست تبدیل می‌کند */
-function bslNormalizeParcel(array $o): array {
-    $stId  = (int)($o['status']['id'] ?? 0);
+function bslNormalizeParcel(array $o, string $shopName = '', int $vendorId = 0): array {
+    $stId  = (int)($o['status']['id'] ?? ($o['status']['value'] ?? 0));
     $names = bslParcelStatuses();
     $stTxt = trim((string)($o['status']['title'] ?? ''));
     if ($stTxt === '') $stTxt = $names[$stId] ?? '—';
     $items = [];
+    $sumItemsPrice = 0;
     foreach (($o['items'] ?? []) as $it) {
         if (!is_array($it)) continue;
-        $items[] = ['title' => (string)($it['title'] ?? ''), 'qty' => (int)($it['quantity'] ?? 1)];
+        $qty = max(1, (int)($it['quantity'] ?? 1));
+        $itTitle = trim((string)($it['title'] ?? ''));
+        if ($itTitle === '' && is_array($it['product'] ?? null)) {
+            $itTitle = trim((string)($it['product']['title'] ?? ($it['product']['name'] ?? '')));
+        }
+        $itPrice = (int)($it['price'] ?? 0);
+        if ($itPrice > 0) $sumItemsPrice += ($itPrice * $qty);
+        $items[] = ['title' => $itTitle, 'qty' => $qty];
+    }
+    $rawAmount = (int)($o['total_items_price'] ?? 0);
+    if ($rawAmount <= 0 && $sumItemsPrice > 0) $rawAmount = $sumItemsPrice;
+    /* v10.469: قیمت‌های API سفارش باسلام به ریال است ولی واحد نمایش برنامه «تومان» است */
+    $amount = ($rawAmount >= 10000 && ($rawAmount % 10) === 0) ? intdiv($rawAmount, 10) : $rawAmount;
+    if ($shopName === '' && is_array($o['vendor'] ?? null)) {
+        $shopName = trim((string)($o['vendor']['title'] ?? ($o['vendor']['name'] ?? '')));
+    }
+    if ($vendorId <= 0 && is_array($o['vendor'] ?? null)) {
+        $vendorId = (int)($o['vendor']['id'] ?? 0);
     }
     return [
         'parcel_id'   => (int)($o['id'] ?? 0),
         'order_id'    => (int)($o['order']['id'] ?? 0),
         'customer'    => bslParcelCustomerName($o),
-        'amount'      => (int)($o['total_items_price'] ?? 0),
+        'amount'      => $amount,
         'status_id'   => $stId,
         'status'      => $stTxt,
         'unsent'      => in_array($stId, bslUnsentStatuses(), true),
@@ -58049,6 +58292,8 @@ function bslNormalizeParcel(array $o): array {
         'send_before' => (string)($o['estimate_send_at'] ?? ''),
         'items'       => $items,
         'items_count' => count($items),
+        'shop_name'   => $shopName,
+        'vendor_id'   => $vendorId,
     ];
 }
 
@@ -59035,8 +59280,8 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
     foreach ($shops as $sh) {
         $tk = trim((string)$sh['token']); $vid = (int)$sh['vendor_id'];
         $isDef = !empty($sh['is_default']); $name = (string)$sh['shop_name'];
-        // v8.31: مسیر درست طبق مستندات رسمی — سفارش‌های غرفه‌دار
-        $r = bslReqRead($tk, 'vendor-parcels?items.vendor_ids=' . $vid . '&per_page=' . notifScanLimit($cn)); /* v10.86 (100) */
+        // v10.469: دریافت سفارش‌های غرفه‌دار بدون items.vendor_ids ادمینی (+ فالبک order-processing/v3)
+        $r = bslFetchVendorParcels($tk, $vid, notifScanLimit($cn), [], bslNetCfg($cn));
         if (!$r['ok']) {
             /* v10.45 (۵۹): خطا دیگر دور ریخته نمی‌شود؛ در 'errors' برمی‌گردد
                تا در گزارشِ آخرین اجرا و پینگِ بعدی دیده شود. */
@@ -59054,7 +59299,7 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
         $norm = [];
         foreach ($rows as $o) {
             if (!is_array($o)) continue;
-            $np = bslNormalizeParcel($o);
+            $np = bslNormalizeParcel($o, $name, $vid);
             if ($np['parcel_id'] <= 0) continue;
             $norm[] = ['np' => $np, 'key' => ($isDef ? 'order:' : 'order:' . $vid . ':') . $np['parcel_id'],
                        'sig' => (string)$np['status_id'],
@@ -66282,162 +66527,72 @@ if (isset($_GET['notif_test'])) {
  *  می‌گیرد چه چیزی به پیام‌رسان‌ها برود.
  * ===================================================================== */
 
-if (isset($_GET['s4_diag_orders_ai'])) {
-    header('Content-Type: application/json; charset=UTF-8');
-    @set_time_limit(60);
-    $cn = loadConnections();
-    $netBsl = function_exists('bslNetCfg') ? bslNetCfg($cn) : ['indirect' => false, 'mode' => 'direct', 'fallback' => false];
-    $shopsOut = [];
-    $allShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
-    foreach ($allShops as $idxS => $sh) {
-        $tk = trim((string)($sh['token'] ?? ''));
-        $vid = (int)($sh['vendor_id'] ?? 0);
-        if ($tk === '' || $vid <= 0) continue;
-        $jwtInfo = ['is_jwt' => false];
-        $parts = explode('.', $tk);
-        if (count($parts) === 3) {
-            $b64 = strtr($parts[1], '-_', '+/');
-            $pad = strlen($b64) % 4;
-            if ($pad > 0) $b64 .= str_repeat('=', 4 - $pad);
-            $pl = @json_decode((string)@base64_decode($b64), true);
-            if (is_array($pl)) {
-                $jwtInfo = [
-                    'is_jwt' => true,
-                    'scopes' => $pl['scopes'] ?? ($pl['scope'] ?? null),
-                    'aud'    => $pl['aud'] ?? null,
-                    'iss'    => $pl['iss'] ?? null,
-                    'sub'    => $pl['sub'] ?? null,
-                    'exp'    => $pl['exp'] ?? null,
-                    'keys'   => array_keys($pl),
-                ];
-            }
-        }
-        $probes = [];
-        if ($idxS === 0 || $vid === 1093225 || $vid === 710223) {
-            $candUrls = [
-                'openapi_v1_items_vid' => 'https://openapi.basalam.com/v1/vendor-parcels?items.vendor_ids=' . $vid . '&per_page=5',
-                'openapi_v1_plain'     => 'https://openapi.basalam.com/v1/vendor-parcels?per_page=5',
-                'openapi_v1_vid_param' => 'https://openapi.basalam.com/v1/vendor-parcels?vendor_id=' . $vid . '&per_page=5',
-                'openapi_v1_vendors_p' => 'https://openapi.basalam.com/v1/vendors/' . $vid . '/parcels?per_page=5',
-                'orderproc_v1_items'   => 'https://order-processing.basalam.com/v1/vendor-parcels?items.vendor_ids=' . $vid . '&per_page=5',
-                'orderproc_v1_plain'   => 'https://order-processing.basalam.com/v1/vendor-parcels?per_page=5',
-                'orderproc_v2_plain'   => 'https://order-processing.basalam.com/v2/vendor-parcels?per_page=5',
-                'orderproc_v3_plain'   => 'https://order-processing.basalam.com/v3/vendor-parcels?per_page=5',
-                'orderproc_data'       => 'https://order-processing.basalam.com/data/vendor-parcels?per_page=5',
-                'core_v1_parcels'      => 'https://core.basalam.com/api_v2/parcel/list?per_page=5',
-                'core_v3_parcels'      => 'https://core.basalam.com/v3/vendor-parcels?per_page=5',
-            ];
-            $mh = curl_multi_init();
-            $chs = [];
-            foreach ($candUrls as $kUrl => $uTest) {
-                $opt = bslCurlOpts($uTest, $tk, 'GET', null, false, $netBsl, 'direct');
-                $opt[CURLOPT_TIMEOUT] = 6;
-                $opt[CURLOPT_CONNECTTIMEOUT] = 4;
-                $ch = curl_init();
-                curl_setopt_array($ch, $opt);
-                curl_multi_add_handle($mh, $ch);
-                $chs[$kUrl] = $ch;
-            }
-            $runningMh = null;
-            do {
-                curl_multi_exec($mh, $runningMh);
-                if ($runningMh > 0) curl_multi_select($mh, 0.2);
-            } while ($runningMh > 0);
-            foreach ($chs as $kUrl => $ch) {
-                $rawB = (string)curl_multi_getcontent($ch);
-                $cCode = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-                $cErr = curl_error($ch);
-                curl_multi_remove_handle($mh, $ch);
-                curl_close($ch);
-                $decB = @json_decode($rawB, true);
-                $probes[$kUrl] = [
-                    'code' => $cCode,
-                    'err'  => $cErr,
-                    'cnt'  => is_array($decB['data'] ?? null) ? count($decB['data']) : null,
-                    'snip' => mb_substr(preg_replace('/\s+/u', ' ', $rawB), 0, 220, 'UTF-8'),
-                ];
-            }
-            curl_multi_close($mh);
-        }
-        $shopsOut[] = [
-            'vendor_id' => $vid,
-            'shop_name' => (string)($sh['shop_name'] ?? ''),
-            'jwt'       => $jwtInfo,
-            'probes'    => $probes,
-        ];
-    }
-    $aiProvs = aiProvidersLoad();
-    $keyState = aiKeyStateLoad();
-    $aiOut = [];
-    foreach ($aiProvs as $pid => $p) {
-        if (!is_array($p)) continue;
-        $sampleFails = [];
-        $okModels = [];
-        foreach ((array)($p['models'] ?? []) as $m) {
-            if (!is_array($m)) continue;
-            if (!empty($m['available'])) {
-                if (count($okModels) < 3) $okModels[] = (string)($m['id'] ?? '');
-            } elseif (!empty($m['tested']) && count($sampleFails) < 3) {
-                $td = is_array($m['testDetails'] ?? null) ? $m['testDetails'] : [];
-                $sampleFails[] = [
-                    'id'     => (string)($m['id'] ?? ''),
-                    'status' => (int)($td['status'] ?? 0),
-                    'via'    => (string)($td['via'] ?? ''),
-                    'err'    => mb_substr((string)($td['error'] ?? ''), 0, 160, 'UTF-8'),
-                    'bill'   => (string)($m['billingIssue'] ?? ''),
-                ];
-            }
-        }
-        $ksRows = [];
-        foreach (aiProviderKeys($p) as $kr) {
-            $kid = (string)($kr['id'] ?? '');
-            $ksRows[] = [
-                'id'      => $kid,
-                'preview' => aiKeyPreview((string)($kr['key'] ?? '')),
-                'enabled' => !empty($kr['enabled']),
-                'state'   => $keyState[$pid . '|' . $kid] ?? null,
-            ];
-        }
-        $aiOut[$pid] = [
-            'url'     => (string)($p['url'] ?? ''),
-            'enabled' => ($p['enabled'] ?? true) !== false,
-            'keys'    => $ksRows,
-            'ok_sample'   => $okModels,
-            'fail_sample' => $sampleFails,
-        ];
-    }
-    echo json_encode(['ok' => true, 'basalam_shops' => $shopsOut, 'ai_net' => aiNetPublic(aiNetCfg($cn)), 'ai_providers' => $aiOut], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-/** لیست سفارش‌های غرفه — برای مودال */
+/** لیست سفارش‌های غرفه — برای مودال (پشتیبانی از همهٔ غرفه‌های متصل) */
 if (isset($_GET['bsl_orders_list'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $cn = loadConnections();
-    $tk = trim((string)($cn['basalam']['token'] ?? ''));
-    $vid = (int)($cn['basalam']['vendor_id'] ?? 0);
-    if ($tk === '' || $vid <= 0) {
+    $shops = array_values(array_filter(bslAllShops($cn),
+        fn($s) => trim((string)($s['token'] ?? '')) !== '' && (int)($s['vendor_id'] ?? 0) > 0));
+    if (!$shops) {
         echo json_encode(['ok' => false, 'error' => 'تنظیمات باسلام ناقص است'], JSON_UNESCAPED_UNICODE); exit;
+    }
+    $wantShop = (int)($_GET['shop_id'] ?? 0);
+    if ($wantShop > 0) {
+        $shops = array_values(array_filter($shops, fn($s) => (int)($s['vendor_id'] ?? 0) === $wantShop));
+        if (!$shops) {
+            echo json_encode(['ok' => false, 'error' => 'غرفهٔ انتخاب‌شده یافت نشد'], JSON_UNESCAPED_UNICODE); exit;
+        }
     }
     $per = min(30, max(5, (int)($_GET['per_page'] ?? 20)));   // سقف مستندات: ۳۰
     $filter = (string)($_GET['filter'] ?? 'all');
-    $ep = 'vendor-parcels?items.vendor_ids=' . $vid . '&per_page=' . $per;
-    if ($filter === 'unsent') $ep .= '&statuses=' . implode(',', bslUnsentStatuses());
+    $extra = [];
+    if ($filter === 'unsent') $extra['statuses'] = bslUnsentStatuses();
     $cur = trim((string)($_GET['cursor'] ?? ''));
-    if ($cur !== '') $ep .= '&cursor=' . rawurlencode($cur);
+    if ($cur !== '') $extra['cursor'] = $cur;
 
-    $r = bslReqRead($tk, $ep);
-    if (!$r['ok']) {
+    $netBsl = bslNetCfg($cn);
+    $rows = [];
+    $seenParcels = [];
+    $shopErrors = [];
+    $okShops = 0;
+    $nextCursor = '';
+    foreach ($shops as $sh) {
+        $tk = trim((string)$sh['token']);
+        $vid = (int)$sh['vendor_id'];
+        $sName = trim((string)($sh['shop_name'] ?? ''));
+        $r = bslFetchVendorParcels($tk, $vid, $per, $extra, $netBsl);
+        if (empty($r['ok'])) {
+            $shopErrors[] = ($sName !== '' ? $sName . ': ' : '')
+                          . bslApiError($r, 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read');
+            continue;
+        }
+        $okShops++;
+        if (count($shops) === 1) $nextCursor = (string)($r['body']['next_cursor'] ?? '');
+        foreach (($r['body']['data'] ?? []) as $o) {
+            if (!is_array($o)) continue;
+            $np = bslNormalizeParcel($o, $sName, $vid);
+            $pid = (int)($np['parcel_id'] ?? 0);
+            if ($pid > 0) {
+                if (isset($seenParcels[$pid])) continue;
+                $seenParcels[$pid] = true;
+            }
+            $rows[] = $np;
+        }
+    }
+    if ($okShops === 0) {
         echo json_encode(['ok' => false,
-            'error' => bslApiError($r, 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read')],
+            'error' => $shopErrors ? implode(' | ', $shopErrors) : 'دریافت سفارش‌ها ناموفق'],
             JSON_UNESCAPED_UNICODE); exit;
     }
-    $rows = [];
-    foreach (($r['body']['data'] ?? []) as $o) { if (is_array($o)) $rows[] = bslNormalizeParcel($o); }
+    if (count($shops) > 1 && count($rows) > 1) {
+        usort($rows, fn($a, $b) => strcmp((string)($b['created_at'] ?? ''), (string)($a['created_at'] ?? ''))
+                                ?: ((int)($b['parcel_id'] ?? 0) <=> (int)($a['parcel_id'] ?? 0)));
+    }
     $unsent = 0;
     foreach ($rows as $n) { if ($n['unsent']) $unsent++; }
     echo json_encode(['ok' => true, 'rows' => $rows, 'total' => count($rows), 'unsent' => $unsent,
-        'filter' => $filter, 'next_cursor' => (string)($r['body']['next_cursor'] ?? '')],
+        'filter' => $filter, 'next_cursor' => $nextCursor,
+        'shops_queried' => count($shops), 'shops_ok' => $okShops, 'shop_errors' => $shopErrors],
         JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -66489,16 +66644,34 @@ if (isset($_GET['bsl_notify_selected'])) {
     $digest = !empty($_GET['digest']);   // یک پیام خلاصه به‌جای چند پیام جدا
 
     if ($kind === 'orders') {
-        $r = bslReq($tk, 'GET', 'vendor-parcels?items.vendor_ids=' . $vid . '&per_page=30');
-        if (!$r['ok']) { echo json_encode(['ok' => false,
-            'error' => bslApiError($r, 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read')],
-            JSON_UNESCAPED_UNICODE); exit; }
+        $shopsOrd = array_values(array_filter(bslAllShops($cn),
+            fn($s) => trim((string)($s['token'] ?? '')) !== '' && (int)($s['vendor_id'] ?? 0) > 0));
+        if (!$shopsOrd) $shopsOrd = [['token' => $tk, 'vendor_id' => $vid, 'shop_name' => '']];
+        $netBsl = bslNetCfg($cn);
         $picked = [];
-        foreach (($r['body']['data'] ?? []) as $o) {
-            if (!is_array($o)) continue;
-            $n = bslNormalizeParcel($o);
-            if ($want ? in_array($n['parcel_id'], $want, true) : $n['unsent']) $picked[] = $n;
+        $seenP = [];
+        $okAny = false;
+        $lastErr = '';
+        foreach ($shopsOrd as $shO) {
+            $r = bslFetchVendorParcels((string)$shO['token'], (int)$shO['vendor_id'], 30, [], $netBsl);
+            if (empty($r['ok'])) {
+                $lastErr = bslApiError($r, 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read');
+                continue;
+            }
+            $okAny = true;
+            $sNameO = trim((string)($shO['shop_name'] ?? ''));
+            foreach (($r['body']['data'] ?? []) as $o) {
+                if (!is_array($o)) continue;
+                $n = bslNormalizeParcel($o, $sNameO, (int)$shO['vendor_id']);
+                $pidO = (int)($n['parcel_id'] ?? 0);
+                if ($pidO > 0 && isset($seenP[$pidO])) continue;
+                if ($want ? in_array($pidO, $want, true) : $n['unsent']) {
+                    if ($pidO > 0) $seenP[$pidO] = true;
+                    $picked[] = $n;
+                }
+            }
         }
+        if (!$okAny) { echo json_encode(['ok' => false, 'error' => $lastErr ?: 'دریافت سفارش‌ها ناموفق'], JSON_UNESCAPED_UNICODE); exit; }
     } elseif ($kind === 'chats') {
         $r = bslReq($tk, 'GET', 'chats?limit=50&order_by=updated_at');
         if (!$r['ok']) { echo json_encode(['ok' => false,
@@ -67971,6 +68144,35 @@ $pk = aiApplyKeyAccount($pk, $hit);
 $t0 = microtime(true);
 $r  = aiProviderCallOnce($pk, $mid, ['messages'=>[['role'=>'user','content'=>'سلام']],
                                      'temperature'=>0.3, 'max_tokens'=>300], aiNetCfg());
+/* v10.469: اگر مدلِ پیش‌فرض/اول در سطح اشتراک رایگان نبود (مثلاً mistral-large-latest -> 403 tier_not_allowed
+   یا مدل پولی OpenRouter -> 402 یا مدل منسوخ -> 400/404)، همین کلید را با یک مدل در دسترس/پایهٔ همان ارائه‌دهنده بسنج
+   تا سلامتِ خودِ کلید دقیق مشخص شود. */
+if (empty($r['ok']) && (int)($r['code'] ?? 0) !== 401) {
+    $altMids = [];
+    if ($pid === 'mistral' || aiDetectProviderDialect($p) === 'mistral') {
+        $altMids = ['ministral-8b-latest', 'mistral-small-latest', 'ministral-14b-latest'];
+    }
+    foreach ((array)($p['models'] ?? []) as $_mRow) {
+        if (!is_array($_mRow)) continue;
+        $_cid = trim((string)($_mRow['id'] ?? ''));
+        if ($_cid === '' || $_cid === $mid || aiNonChatModel($_cid, $_mRow) !== '') continue;
+        if (!empty($_mRow['available']) || !empty($_mRow['free']) || stripos($_cid, ':free') !== false || stripos($_cid, '-free') !== false) {
+            if (!in_array($_cid, $altMids, true)) $altMids[] = $_cid;
+        }
+    }
+    foreach (array_slice($altMids, 0, 2) as $_altMid) {
+        if ($_altMid === $mid) continue;
+        $_tAlt = microtime(true);
+        $_rAlt = aiProviderCallOnce($pk, $_altMid, ['messages'=>[['role'=>'user','content'=>'سلام']],
+                                                    'temperature'=>0.3, 'max_tokens'=>300], aiNetCfg());
+        if ((int)($_rAlt['code'] ?? 0) === 200 && !empty($_rAlt['ok'])) {
+            $r = $_rAlt;
+            $mid = $_altMid;
+            $t0 = $_tAlt;
+            break;
+        }
+    }
+}
 $latency = (int)round((microtime(true) - $t0) * 1000);
 $code = (int)($r['code'] ?? 0);
 $ok   = $code === 200 && !empty($r['ok']);
@@ -78399,7 +78601,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                     $ok      = !empty($res['ok']);
                     $err     = (string)($res['error'] ?? '');
                     $winKeys = [$masterKey];
-                    if (!$ok && preg_match('/401|402|403|Unauthorized|invalid_api_key|insufficient_quota|billing/i', $err)) {
+                    if (!$ok && !in_array($masterProvId, ['openrouter', 'opencode'], true)
+                        && preg_match('/401|402|Unauthorized|invalid_api_key|insufficient_quota|insufficient credits|depleted/i', $err)) {
                         $deadProviders401[$masterProvId] = true;
                         catfixProgress(['log_add' => ['⚡ کلیدِ ارائه‌دهندهٔ «' . ($master['providerName'] ?? $masterProvId) . '» خطای احراز هویت داد — سوئیچ خودکار به کاندیدهای دیگر']]);
                     }
@@ -78425,7 +78628,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                         $asked++;
                         $fErr = (string)($fres['error'] ?? '');
                         if (empty($fres['ok'])) {
-                            if (preg_match('/401|402|403|Unauthorized|invalid_api_key|insufficient_quota|billing/i', $fErr)) {
+                            if (!in_array($fcProv, ['openrouter', 'opencode'], true)
+                                && preg_match('/401|402|Unauthorized|invalid_api_key|insufficient_quota|insufficient credits|depleted/i', $fErr)) {
                                 $deadProviders401[$fcProv] = true;
                             } elseif (preg_match('/429|rate|quota|timeout|timed out|502|503|504|connect/i', $fErr)) {
                                 $skipProvThisItem[$fcProv] = true;
@@ -92472,10 +92676,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
-  {v:'10.469', t:'🛒 رفع خطای کاذب ۴۰۳ اسکوپ سفارش‌های باسلام (چندمسیره + چندغرفه‌ای) و اصلاح تشخیص اعتبار/کلید در پروایدرهای هوش مصنوعی (Mistral و سایرین)', items:[
-    'رفع خطای کاذب «توکن دسترسی لازم را ندارد (۴۰۳) · اسکوپ موردنیاز: vendor.parcel.read» در استعلام سفارش‌ها و اعلان‌ها با پشتیبانی خودکار از مسیرهای مستقیم و چندغرفه‌ای سفارش‌های باسلام.',
-    'رفع برچسب کاذب «💳 اعتبار تمام» روی کلیدهای سالم (مانند Mistral در مدل‌های خارج از سطح اشتراک رایگان، مدل‌های Labs یا مدل‌های پولی OpenRouter): خطاهای سطح مدل (tier/plan/labs) دیگر کل کلید یا حساب را مسدود نمی‌کنند.',
-    'اصلاح ترتیب تشخیص بلاک جغرافیایی/WAF پیش از خروج حلقهٔ شبکه در aiProviderCallOnce و aiNativeHttpModes + انتخاب مدل سازگار هنگام تست تکی کلید (ai_keys_test) و پاک‌سازی خودکار قفل‌های کاذب قبلی.'
+  {v:'10.469', t:'🛒 رفع خطای کاذب ۴۰۳ اسکوپ سفارش‌های باسلام (حذف فیلتر ادمینی items.vendor_ids + چندغرفه‌ای + تبدیل ریال به تومان) و اصلاح تشخیص اعتبار/کلید در هوش مصنوعی (Mistral، LLM7، Gemini، OpenRouter)', items:[
+    'رفع قطعی خطای «توکن دسترسی لازم را ندارد (۴۰۳) · اسکوپ موردنیاز: vendor.parcel.read» در استعلام سفارش‌ها و اعلان‌ها: حذف پارامتر ادمینی items.vendor_ids که روی JWT غرفه‌دار با خطای «به فیلتر آیدی غرفه ها دسترسی ندارید» رد می‌شد + فالبک خودکار به order-processing.basalam.com/v3، تجمیع چندغرفه‌ای و تبدیل دقیق مبالغ ریالی باسلام به تومان.',
+    'رفع برچسب کاذب «💳 اعتبار تمام» روی کلیدهای سالم در Mistral، LLM7 و OpenRouter: خطاهای سطح مدل (tier/plan/labs مانند mistral-large-latest در اشتراک رایگان) و خطاهای موقت نرخ (۴۲۹) حاوی لینک /billing دیگر کل کلید را مسدود نمی‌کنند و قفل‌های کاذب قبلی خودکار آزاد می‌شوند.',
+    'اصلاح ترتیب عبور از بلاک جغرافیایی پیش از خروج حلقهٔ شبکه، فالبک نیتیو ?key= در Gemini هنگام حذف هدر در Worker، اصلاح اسلاگ‌های مدل Mistral (+ افزودن ministral-8b-latest) و انتخاب مدل سازگار هنگام تست تکی کلید (ai_keys_test).'
   ]},
   {v:'10.468', t:'🛡️ پایداری صددرصدی اصلاح پس‌زمینه در CloudLinux/LSAPI (حذف بارگذاری ۳بارهٔ پروفایل‌ها، بودجهٔ زمانی برش و جهش زنجیرهٔ AI)', items:[
     'حذف بارگذاری سه‌بارهٔ profiles.json در هر برش catfixRun (بازیافت بارگذاری واحد در catProfileResolver، suffixProfiles و ایندکس محلی + آزادسازی فوری RAM) برای جلوگیری از سرریز سقف حافظهٔ مشترک LVE.',
@@ -101113,7 +101317,8 @@ function inqReload(){
     const sm=document.getElementById('inqSummary');
     if(sm){
       sm.innerHTML=isOrd
-        ?(toFa(d.total||0)+' سفارش · <b style="color:#fbbf24">'+toFa(d.unsent||0)+'</b> ارسال‌نشده')
+        ?(toFa(d.total||0)+' سفارش · <b style="color:#fbbf24">'+toFa(d.unsent||0)+'</b> ارسال‌نشده'
+          +((d.shops_ok&&d.shops_ok>1)?' · <span style="color:#67e8f9">'+toFa(d.shops_ok)+' غرفه</span>':''))
         :(toFa(d.total||0)+' گفتگو · <b style="color:#fbbf24">'+toFa(d.unseen||0)+'</b> خوانده‌نشده');
     }
     ['all','unsent','unseen'].forEach(f=>{
@@ -101151,8 +101356,10 @@ function inqRenderBody(){
     h+='<td style="text-align:center"><input type="checkbox" id="inqCb_'+id+'" '+(on?'checked':'')
       +' onclick="inqToggle('+id+')" style="width:15px;height:15px;cursor:pointer"></td>';
     if(isOrd){
-      h+='<td style="font-family:ui-monospace,monospace;direction:ltr;text-align:right">#'+toFa(r.order_id||r.parcel_id)+'</td>';
-      h+='<td>'+esc(r.customer||'—')+(r.items_count>0?'<div style="font-size:9.5px;color:#64748b">'+toFa(r.items_count)+' قلم</div>':'')+'</td>';
+      const it0=(r.items&&r.items[0]&&r.items[0].title)?String(r.items[0].title):'';
+      h+='<td style="font-family:ui-monospace,monospace;direction:ltr;text-align:right">#'+toFa(r.order_id||r.parcel_id)
+        +(r.shop_name?'<div style="font-family:inherit;direction:rtl;font-size:9.5px;color:#38bdf8;margin-top:2px">'+esc(r.shop_name)+'</div>':'')+'</td>';
+      h+='<td>'+esc(r.customer||'—')+(r.items_count>0?'<div style="font-size:9.5px;color:#64748b">'+toFa(r.items_count)+' قلم'+(it0?' · '+esc(it0.slice(0,38)):'')+'</div>':'')+'</td>';
       h+='<td style="white-space:nowrap">'+inqMoney(r.amount)+'</td>';
       h+='<td><span style="font-size:10px;padding:2px 7px;border-radius:4px;background:'
         +(pend?'#7c2d12':'#14532d')+';color:'+(pend?'#fdba74':'#86efac')+'">'+esc(r.status||'—')+'</span></td>';
