@@ -28246,7 +28246,7 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'specs'       => (string)($p['specs'] ?? ''),
         'brand'       => (string)($p['brand'] ?? ''),
         'category'    => (string)($p['category'] ?? ''),
-        'bsl_category_id' => (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0),
+        'bsl_category_id' => (int)($p['bsl_category_id'] ?? $p['bslCategoryId'] ?? $p['category_id'] ?? 0),
         'stock'       => (string)($p['stock'] ?? ''),
         'in_stock'    => array_key_exists('in_stock', $p) ? (bool)$p['in_stock'] : null,
         'weight'      => (string)($p['weight'] ?? ''),
@@ -57125,8 +57125,8 @@ function s4QueueProfileMatchesKey(string $entryKey, string $targetKey, array $pr
     $targetKey = trim($targetKey);
     if ($entryKey === '' || $targetKey === '') return false;
     if ($entryKey === $targetKey) return true;
-    $re = profileResolveKey($entryKey, $profiles) ?: profileKey($entryKey);
-    $rt = profileResolveKey($targetKey, $profiles) ?: profileKey($targetKey);
+    $re = profileResolveKey($entryKey, $profiles) ?: (strpos($entryKey, '://') !== false ? profileKey($entryKey) : $entryKey);
+    $rt = profileResolveKey($targetKey, $profiles) ?: (strpos($targetKey, '://') !== false ? profileKey($targetKey) : $targetKey);
     return $re !== '' && $re === $rt;
 }
 function s4DispatchPendingSendQueue(string $which, string $preferredQueueId = ''): array {
