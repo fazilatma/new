@@ -39192,7 +39192,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         'worker'=>['active'=>$workerActive,'heartbeat_age'=>$whb>0?max(0,$now-$whb):null,'state'=>$wst,'active_jobs'=>$active],
         'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
-        'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log')],
+        'logs'=>['worker'=>$tailLog('worker.log'),'matrix'=>$tailLog('matrix-worker.log'),'queue_watchdog'=>$tailLog('queue-watchdog.log')],
         'code_update'=>['status'=>'?code_update_status=1','endpoint'=>'?code_update=1','method'=>'POST','source'=>S4_CODE_UPDATE_REPO.'@'.S4_CODE_UPDATE_BRANCH],
         'actions'=>$actions,'next'=>'worker داخلی فعال است؛ cron خارجی لازم نیست. رابط باز نیز هر ۵ دقیقه repair pulse می‌زند'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
     } catch (Throwable $_opsErr) {
@@ -56971,7 +56971,7 @@ function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
     if(!is_dir(__DIR__.'/logs'))@mkdir(__DIR__.'/logs',0755,true);
     $payload=['get'=>$get,'post'=>is_array($post)?$post:[]];
     $encoded=rtrim(strtr(base64_encode((string)json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)),'+/','-_'),'=');
-    $php=s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
+    $php=s4CliPhpBinary();$mem='1024M';
     $log=__DIR__.'/logs/queue-watchdog.log';
     $cmd='nohup '.s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__)
         .' queue_backend '.escapeshellarg($encoded).' >> '.escapeshellarg($log).' 2>&1 < /dev/null & echo $!';
@@ -57583,7 +57583,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
             $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop';return $chk;
         }
-        $rq = json_decode((string)@file_get_contents($which === 'bsl' ? BSL_QUEUE_FILE : WOO_QUEUE_FILE), true);
+        $rq = $which === 'bsl' ? bslReadQueue() : wooReadQueue();
         $rq = is_array($rq) ? $rq : ['entries' => []];
         if(!is_array($rq['entries']??null))$rq['entries']=[];
         $ridx = -1; $rentry = null;
@@ -66896,7 +66896,9 @@ set_time_limit(0); ignore_user_abort(true);
 
 $wooLockFile=__DIR__.'/woo_backend.lock';
 $wooLockFp=fopen($wooLockFile,'c');
-if(!flock($wooLockFp,LOCK_EX|LOCK_NB)){
+$_wooGotLock=false;
+for($_wooLi=0;$_wooLi<10;$_wooLi++){if(flock($wooLockFp,LOCK_EX|LOCK_NB)){$_wooGotLock=true;break;}usleep(50000);}
+if(!$_wooGotLock){
 fclose($wooLockFp);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'woo_backend already running','skipped'=>true],JSON_UNESCAPED_UNICODE);
@@ -67556,18 +67558,21 @@ header('Content-Type: application/json; charset=UTF-8');
 /* v10.59 (۷۳): همان بستنِ خودکارِ ردیفِ تمام‌شدهٔ بسته‌نشده برای ووکامرس. */
 try { $stW = loadConnections(); queueStallCheck('woo', max(120, (int)($stW['stall_after'] ?? 300))); } catch (Throwable $eW) {}
 $wooStatusFp = queueBackendLock('woo');
-if (is_resource($wooStatusFp)) register_shutdown_function(function() use ($wooStatusFp) { queueBackendUnlock($wooStatusFp); });
+$wooWorkerLive=!is_resource($wooStatusFp);
+if (is_resource($wooStatusFp)) { queueBackendUnlock($wooStatusFp); $wooStatusFp = null; }
 $queue=wooReadQueue();
 $progress=readProgress(WOO_PROGRESS_FILE);
+$_wooHasProg=!empty($progress['running'])||!empty($progress['done'])||!empty($progress['paused'])
+    ||trim((string)($progress['queue_id']??''))!==''||(int)($progress['started_at']??0)>0;
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??0;
-$e['updated']=$progress['updated']??0;
-$e['skipped']=$progress['skipped']??0;
-$e['failed']=$progress['failed']??0;
-$e['current']=$progress['current']??0;
-$e['total']=$progress['total']??$e['total']??0;
+if(($e['status']??'')==='running' && $_wooHasProg && queueProgressBelongsToRow($progress,$e,$runningRows)){
+$e['sent']=$progress['sent']??$e['sent']??0;
+$e['updated']=$progress['updated']??$e['updated']??0;
+$e['skipped']=$progress['skipped']??$e['skipped']??0;
+$e['failed']=$progress['failed']??$e['failed']??0;
+$e['current']=max((int)($e['current']??0),(int)($progress['current']??0));
+$e['total']=((int)($progress['total']??0)>0)?(int)$progress['total']:(int)($e['total']??0);
 $e['done']=$progress['done']??false;
 $progressIncomplete=!empty($progress['stopped']) || !empty($progress['partial'])
     || !empty($progress['cancelled']) || !empty($progress['stale']) || !empty($progress['failed_resume']);
@@ -67576,10 +67581,10 @@ else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 }
 unset($e);
-if (is_resource($wooStatusFp)) wooWriteQueue($queue);
+if (!$wooWorkerLive && $_wooHasProg) wooWriteQueue($queue);
 /* UI must distinguish a real lock-owning sender from stale rows still marked
    running. The shared progress queue_id identifies the exact profile owner. */
-$queue['active_send']=null;$wooWorkerLive=!is_resource($wooStatusFp);
+$queue['active_send']=null;
 foreach($queue['entries'] as &$e){
     $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
     $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$wooWorkerLive;
@@ -69218,19 +69223,22 @@ header('Content-Type: application/json; charset=UTF-8');
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
 try { queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $bslStatusFp = queueBackendLock('bsl');
-if (is_resource($bslStatusFp)) register_shutdown_function(function() use ($bslStatusFp) { queueBackendUnlock($bslStatusFp); });
+$bslWorkerLive=!is_resource($bslStatusFp);
+if (is_resource($bslStatusFp)) { queueBackendUnlock($bslStatusFp); $bslStatusFp = null; }
 $queue=bslReadQueue();
 
 $progress=readProgress(BSL_PROGRESS_FILE);
+$_bslHasProg=!empty($progress['running'])||!empty($progress['done'])||!empty($progress['paused'])
+    ||trim((string)($progress['queue_id']??''))!==''||(int)($progress['started_at']??0)>0;
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??0;
-$e['updated']=$progress['updated']??0;
-$e['skipped']=$progress['skipped']??0;
-$e['failed']=$progress['failed']??0;
-$e['current']=$progress['current']??0;
-$e['total']=$progress['total']??$e['total']??0;
+if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($progress,$e,$runningRows)){
+$e['sent']=$progress['sent']??$e['sent']??0;
+$e['updated']=$progress['updated']??$e['updated']??0;
+$e['skipped']=$progress['skipped']??$e['skipped']??0;
+$e['failed']=$progress['failed']??$e['failed']??0;
+$e['current']=max((int)($e['current']??0),(int)($progress['current']??0));
+$e['total']=((int)($progress['total']??0)>0)?(int)$progress['total']:(int)($e['total']??0);
 $e['done']=$progress['done']??false;
 foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$progress))$e[$__pk]=$progress[$__pk];}
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه‌ها زنده به صف می‌رسند */
@@ -69243,8 +69251,8 @@ else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 }
 unset($e);
-if (is_resource($bslStatusFp)) bslWriteQueue($queue);
-$queue['active_send']=null;$bslWorkerLive=!is_resource($bslStatusFp);
+if (!$bslWorkerLive && $_bslHasProg) bslWriteQueue($queue);
+$queue['active_send']=null;
 foreach($queue['entries'] as &$e){
     $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
     $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$bslWorkerLive;
@@ -69868,7 +69876,9 @@ if(isset($_GET['action']) && $_GET['action'] === 'bsl_backend'){
 // probe یا حذفِ زودهنگام نباید با workerِ موازی race بسازد.
 $bslLockFile=__DIR__.'/bsl_backend.lock';
 $bslLockFp=fopen($bslLockFile,'c');
-if(!flock($bslLockFp,LOCK_EX|LOCK_NB)){
+$_bslGotLock=false;
+for($_bslLi=0;$_bslLi<10;$_bslLi++){if(flock($bslLockFp,LOCK_EX|LOCK_NB)){$_bslGotLock=true;break;}usleep(50000);}
+if(!$_bslGotLock){
 
 fclose($bslLockFp);
 header('Content-Type: application/json; charset=UTF-8');
@@ -87654,7 +87664,8 @@ const CHANGELOG = [
   {v:'10.459', t:'⏱️ کاهش پله‌ای خودکار ۱ روزهٔ زمان آماده‌سازی (preparation_days) روی خطای ۴۲۲ باسلام تا زمان تایید', items:[
     'تشخیص دقیق خطاهای مدت زمان آماده‌سازی باسلام (bslIsPreparationDaysError) در تمام ساختارهای پاسخ ۴۲۲ و ۴۰۰ (از جمله fields:["preparation_days"]، کلیدهای آرایه‌ای data.*.preparation_days در آپدیت دسته‌ای، errors.preparation_days و پیام‌های فارسی/انگلیسی مشابه «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»).',
     'کاهش خودکار ۱ روزه در هر تلاش (bslStepDownPreparationDays / bslRunPreparationDaysRetryLoop) در تمام مسیرهای تک‌درخواستی (bslReq)، موازی چندغرفه‌ای (bslReqMulti)، ارسال با تنوع (bslReqWithVariantsFallback) و آپدیت دسته‌ای (batch-updates) تا زمانی که باسلام درخواست را تایید کند (تا کف ۰ روز)؛ حتی اگر در PATCH اولیه فیلد preparation_days ارسال نشده باشد.',
-    'رفع تداخل تشخیص خطای دسته‌بندی و حفظ جدول HTML مشخصات: ۱) در bslIsCategoryError پیام‌هایی که صریحاً روی فیلد غیر دسته‌بندی مثل preparation_days هستند دیگر به‌خاطر وجود عبارت «برای این دسته بندی» به‌اشتباه خطای دسته‌بندی تشخیص داده نمی‌شوند، و ۲) در bslRepairValidationPayload هنگام خطای فیلدهای غیرمتنی، تگ‌های جدول مشخصات فنی (<table>) از توضیحات حذف نمی‌شوند.'
+    'رفع تداخل تشخیص خطای دسته‌بندی و حفظ جدول HTML مشخصات: ۱) در bslIsCategoryError پیام‌هایی که صریحاً روی فیلد غیر دسته‌بندی مثل preparation_days هستند دیگر به‌خاطر وجود عبارت «برای این دسته بندی» به‌اشتباه خطای دسته‌بندی تشخیص داده نمی‌شوند، و ۲) در bslRepairValidationPayload هنگام خطای فیلدهای غیرمتنی، تگ‌های جدول مشخصات فنی (<table>) از توضیحات حذف نمی‌شوند.',
+    'حذف تداخل قفل پروب وضعیت صف (bsl_queue_status / woo_queue_status) با اسپاون پردازنده‌های پس‌زمینه و جلوگیری از صفر شدن total/current هنگام خالی بودن فایل progress.'
   ]},
   {v:'10.458', t:'🚀 سوئیچ چندنود Sotoon CDN برای شروع فوری جزئیات، پیش‌نمایش تصاویر ویرایش‌شده در تب نتایج، رفع توقف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها', items:[
     'شروع فوری و بدون قفل استخراج جزئیات (فاز ۲): ۱) اتصال مستقیم CURLOPT_RESOLVE به استخر ۶ نود سالم Sotoon CDN (185.143.232.5 تا 185.143.235.5 و 185.143.233.104/.234.104) با failover آنی روی خطای ۴۲۹/تایم‌اوت، ۲) رفع قفل ارث‌بری‌شدهٔ پردازش‌های فرزند در s4WorkerIsActive، و ۳) حذف ذخیرهٔ تکراری چندمگابایتی در startDetailExtractionServer.',
