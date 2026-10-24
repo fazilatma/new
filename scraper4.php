@@ -13411,7 +13411,7 @@ function bslSanitizeModerationTitle(string $title, bool $hasBarcode = false): st
     /* حذف قیمت احتمالی داخل عنوان (رفع ۶۳۸۰) */
     $t = preg_replace('~\b\d[\d,٫./]*(?:\s*(?:هزار|میلیون))?\s*(?:تومان|تومن|ریال)\b~u', ' ', $t) ?? $t;
     $t = trim((string)(preg_replace('~\s{2,}~u', ' ', $t) ?? $t));
-    $t = trim($t, " \t-–—|،,:");
+    $t = preg_replace('~^[\s\-–—|،,:]+|[\s\-–—|،,:]+$~u', '', $t) ?? $t;
 
     if ($codeSuffix !== '') {
         $maxBase = max(20, 120 - mb_strlen($codeSuffix, 'UTF-8'));
@@ -13449,6 +13449,7 @@ function bslSanitizeModerationText(string $text, bool $hasBarcode = false): stri
         '~(?:شماره\s*تماس|شماره\s*تلفن|تلفن\s*تماس|با\s*ما\s*تماس|تماس\s*بگیرید|به\s*پشتیبانی\s*پیام|پیام\s*به\s*پشتیبانی|در\s*چت\s*پیام\s*دهید)~iu',
         '~(?:فروش\s*عمده|خرید\s*عمده|سفارش\s*عمده|قیمت\s*عمده|پخش\s*عمده|همکاری\s*در\s*فروش)~iu',
         '~(?:مشاهده\s*سایر\s*محصولات|سایر\s*محصولات\s*غرفه|محصولات\s*دیگر\s*ما|از\s*سایت\s*ما\s*دیدن|وب\s*سایت\s*فروشگاه|آدرس\s*حضوری|نشانی\s*فروشگاه)~iu',
+        '~(?:در\s+اسنپ[\x{200c}\s]*شاپ|از\s+اسنپ[\x{200c}\s]*شاپ|در\s+دیجی[\x{200c}\s]*کالا|از\s+دیجی[\x{200c}\s]*کالا|در\s+ترب\b|در\s+ایمالز)~iu',
         '~^\s*[•\-*]?\s*قیمت(?:\s*(?:فروش|مصرف\s*کننده|اصلی|نهایی|واحد|هر\s*عدد))?\s*[:：]\s*$~iu',
     ];
     $cleanLines = [];
@@ -54676,6 +54677,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && !empty($_clsTech466['needs_category'])
       && !empty($_clsTech466['needs_image_refresh'])
       && !empty($_clsTech466['needs_price_check'])
+      && bslSanitizeModerationTitle('برس شستشو مدل 1424 (کد:10)', false) === 'برس شستشو مدل 1424 (کد:10)'
+      && mb_strpos(bslSanitizeModerationText("خرید اینترنتی برس شستشو در اسنپ شاپ\n• جنس: پلاستیک", false), 'اسنپ شاپ', 0, 'UTF-8') === false
       && strpos($_sanTitleNoBc466, '810-5 -') === false
       && mb_strpos($_sanTitleNoBc466, 'نیم ست', 0, 'UTF-8') === 0
       && mb_strpos($_sanTitleNoBc466, 'ولنتاین', 0, 'UTF-8') === false
@@ -71675,6 +71678,11 @@ if(empty($vStatFix['active'])){echo json_encode(['ok'=>false,'error'=>(string)$v
 $rGet=bslReq($tk,'GET','products/'.$productId);
 if(empty($rGet['ok'])||!is_array($rGet['body']??null)){echo json_encode(['ok'=>false,'error'=>'محصول از باسلام دریافت نشد: '.bslErrText($rGet)],JSON_UNESCAPED_UNICODE);exit;}
 $origP=$rGet['body'];
+$forceTitleFix=trim((string)($_GET['force_title']??''));
+if($forceTitleFix!==''){
+$origP['title']=$forceTitleFix;$origP['name']=$forceTitleFix;
+if(isset($origP['revision']['data'])&&is_array($origP['revision']['data']))$origP['revision']['data']['title']=$forceTitleFix;
+}
 $clsFix=bslClassifyRejectionReasons($origP);
 if(!empty($clsFix['skip_modesty'])){echo json_encode(['ok'=>false,'error'=>'این محصول به‌دلیل قوانین شئونات تصویری رد شده و نیازمند اصلاح تصویر توسط کاربر است'],JSON_UNESCAPED_UNICODE);exit;}
 $locIdxFix=bslBuildLocalProductIndex(null,[$origP]);
@@ -77233,6 +77241,10 @@ function bslApplyCategoryChangeOrRecreate(
             $bu['photos'] = !empty($photoIds) ? $photoIds : [$photoMain];
         }
         $rPatch = bslReq($tk, 'PATCH', 'products/' . $pId, $bu);
+        if (empty($rPatch['ok']) && bslIsDuplicateName($rPatch)) {
+            $bu['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
+            $rPatch = bslReq($tk, 'PATCH', 'products/' . $pId, $bu);
+        }
         if (!empty($rPatch['ok']) && !empty($rPatch['body']['id'])) {
             return [
                 'ok'          => true,
