@@ -3165,9 +3165,11 @@ function s4ExtractDetailNodeValue(string $field, DOMNodeList $ns, string $baseUr
     return trim($first->textContent);
 }
 
-function s4MergeSpecsTableIntoHtml(string $descHtml, array $p): string {
+function s4MergeSpecsTableIntoHtml(string $descHtml, $specsOrProduct = []): string {
     $desc = trim($descHtml);
-    $specRaw = $p['specs'] ?? ($p['specifications'] ?? ($p['attributes_table'] ?? ''));
+    $specRaw = is_array($specsOrProduct)
+        ? ($specsOrProduct['specs'] ?? ($specsOrProduct['specifications'] ?? ($specsOrProduct['attributes_table'] ?? '')))
+        : $specsOrProduct;
     $specTable = s4NormalizeSpecsToTableHtml($specRaw);
     if ($specTable === '' && $desc !== '' && stripos($desc, '<table') === false) {
         $fromDesc = s4NormalizeSpecsToTableHtml($desc);
