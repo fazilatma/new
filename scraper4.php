@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.451';
+const APP_VERSION = '10.452';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2278,7 +2278,8 @@ function s4WorkerRunJob(array $job): array {
             $needsResume = !empty($res['ok']) && empty($res['cancelled'])
                 && ($budgetResume || ($transientResume && $transientResumes <= $maxTransientResumes));
             if (!$needsResume) break;
-            if ($segments >= $maxSegments) {
+            $_diskVerChanged = function_exists('s4DiskCodeMeta') && ((string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) !== APP_VERSION);
+            if ($segments >= $maxSegments || $_diskVerChanged) {
                 $res['worker_paused_after_segments'] = true;
                 $res['resume_needed'] = true;
                 /* Return ownership to the durable queue. The daemon immediately
@@ -14314,6 +14315,9 @@ function snappshopApiHttpRequest(string $method, string $endpoint, ?array $jsonB
         if ($code >= 200 && $code < 300 && is_array($decoded) && !empty($decoded['status'])) {
             return ['ok' => true, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => ''];
         }
+        if ($code >= 200 && $code < 300 && is_array($decoded) && array_key_exists('status', $decoded) && empty($decoded['status'])) {
+            return ['ok' => false, 'code' => $code, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'json_status_false' => true, 'error' => s4JinaFormatHttpError($code, $err, $rawStr)];
+        }
         $lastCode = $code;
         $lastErr = s4JinaFormatHttpError($code, $err, $rawStr);
         if ($code === 404 || $code === 400 || $code === 422) break;
@@ -14657,6 +14661,16 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
         }
         return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop detail api failed'), 'code' => (int)($res['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix'];
     }
+    $reqPageEarly = max(1, (int)($route['page'] ?? 1));
+    if ($reqPageEarly > 500) {
+        return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $target,
+                'html' => snappshopSyntheticHtml([], $target, 'سقف ۵۰۰ صفحهٔ API اسنپ‌شاپ (۱۰,۰۰۰ کالا)'),
+                'mode' => 'snappshop-apix', 'snappshop_api' => 'https://apix.snappshop.ir/landing/v2',
+                'snappshop_api_via' => 'ceiling-guard',
+                'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                'snappshop_end_of_pages' => true, 'snappshop_total_pages' => 500,
+                'jina_product_count' => 0, 'source_error' => (string)($prev['error'] ?? '')];
+    }
     $endpoint = ($route['kind'] ?? '') === 'search' ? 'search/v1' : 'landing/v2';
     $payload = snappshopBuildLandingPayload($route);
     $res = snappshopApiHttpRequest('POST', $endpoint, $payload, $timeout);
@@ -14702,7 +14716,17 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
     /* v10.451: موتور جستجوی Elasticsearch اسنپ‌شاپ در apix سقف سخت ۵۰۰ صفحه (۱۰,۰۰۰ کالا، skip=500) دارد
        و در صفحهٔ ۵۰۱+ با خطای ۴۰۰/۴۲۲/۵۰۰ پاسخ می‌دهد؛ این حالت پس از ۵۰۰ صفحه، پایان طبیعی لیست است. */
     $resCode = (int)($res['code'] ?? 0);
-    if ($reqPage > 500 && in_array($resCode, [400, 404, 410, 422, 500], true)) {
+    if (($reqPage > 1 && !empty($res['json_status_false'])) || ($reqPage > 500 && ($resCode === 200 || in_array($resCode, [400, 404, 410, 422, 500], true)))) {
+        $endLim = $reqPage > 500 ? 500 : max(1, $reqPage - 1);
+        return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $target,
+                'html' => snappshopSyntheticHtml([], $target, 'پایان صفحه‌بندی API اسنپ‌شاپ در صفحهٔ ' . $endLim),
+                'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
+                'snappshop_api_via' => (string)($res['via'] ?? 'direct'),
+                'snappshop_route_kind' => (string)($route['kind'] ?? 'landing'),
+                'snappshop_end_of_pages' => true, 'snappshop_total_pages' => $endLim,
+                'jina_product_count' => 0, 'source_error' => (string)($prev['error'] ?? '')];
+    }
+    if (false && $reqPage > 500 && in_array($resCode, [400, 404, 410, 422, 500], true)) {
         return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $target,
                 'html' => snappshopSyntheticHtml([], $target, 'سقف ۵۰۰ صفحهٔ API اسنپ‌شاپ (۱۰,۰۰۰ کالا)'),
                 'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
@@ -15579,7 +15603,18 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
             $cfg['branch']=$sourceBranch;$cfg['pinned_branch']='';$cfg['pinned_at']=0;$cfg['pinned_max_unix']=0;vc_save($cfg);
         }
         s4SyncAutoUpdateStateToDisk($sourceBranch,false);
-        $worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد'];
+        $recycledExtractPids=[];
+        if(function_exists('posix_kill')&&function_exists('s4WorkerLoadQueue')){
+            $_pgUp=function_exists('readProgress')?readProgress(EXTRACT_PROGRESS_FILE):[];
+            if(!empty($_pgUp['error'])&&empty($_pgUp['done'])){
+                foreach((array)(s4WorkerLoadQueue()['entries']??[]) as $_weUp){
+                    if(!is_array($_weUp)||($_weUp['type']??'')!=='backend_extract'||($_weUp['status']??'')!=='running')continue;
+                    $_wpid=(int)($_weUp['worker_pid']??0);
+                    if($_wpid>0&&@posix_kill($_wpid,defined('SIGTERM')?SIGTERM:15))$recycledExtractPids[]=$_wpid;
+                }
+            }
+        }
+        $worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد','recycled_extract_pids'=>$recycledExtractPids];
         return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'disk_version'=>$remoteVersion,'disk_sha'=>substr($remoteSha,0,12),'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
             'source'=>S4_CODE_UPDATE_REPO.'@'.$sourceBranch.':'.S4_CODE_UPDATE_PATH,'branch'=>$sourceBranch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
@@ -50212,6 +50247,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_snCeil452 = fetch_html_snappshop_api('https://snappshop.ir/category/kitchen-appliances?is_available=true&sort=50aLgW&page=501', 8);
+    $add('10.452', 'سقف سخت ۵۰۰ صفحهٔ apix اسنپ‌شاپ و پاسخ HTTP 200 status=false در صفحهٔ ۲+ به‌صورت فوری پایان طبیعی لیست تشخیص داده می‌شوند و child قدیمی استخراج پس از آپدیت recycle می‌گردد',
+         !empty($_snCeil452['ok'])
+      && !empty($_snCeil452['snappshop_end_of_pages'])
+      && (int)($_snCeil452['snappshop_total_pages'] ?? 0) === 500
+      && (int)($_snCeil452['jina_product_count'] ?? -1) === 0
+      && strpos($selfSrc, "'json_status_false' => true") !== false
+      && strpos($selfSrc, '$_diskVerChanged = function_exists') !== false
+      && strpos($selfSrc, "{v:'10." . "452'") !== false
+      && version_compare(APP_VERSION, '10.452', '>='));
     $_snMeta451 = [];
     $_snRows451 = snappshopProductsFromApiPayload([
         'status' => true,
@@ -85218,6 +85263,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.452', t:'⚡ تشخیص فوری سقف ۵۰۰ صفحه و پاسخ status:false در API اسنپ‌شاپ + بازیافت خودکار پردازش استخراج قدیمی پس از آپدیت', items:[
+    'در صفحهٔ ۵۰۱ به بعد اسنپ‌شاپ (سقف ۱۰,۰۰۰ کالای Elasticsearch در apix.snappshop.ir که پاسخ HTTP 200 با {"status":false} برمی‌گرداند)، اکنون بدون نیاز به ارسال درخواست اضافی یا سقوط به خطای HTTP 451 جینا، بلافاصله پایان طبیعی صفحه‌بندی (snappshop_end_of_pages) برگردانده می‌شود؛ همچنین پاسخ json_status_false در صفحات ۲+ دسته‌بندی‌های کوچک‌تر نیز پایان طبیعی لیست شناخته می‌شود.',
+    'پردازش فرزند worker_extract_job اکنون در مرز هر قطعه اختلاف نسخهٔ کد روی دیسک با RAM را تشخیص داده و به کد جدید سوئیچ می‌کند؛ همچنین هنگام نصب آپدیت جدید، پردازش‌های قدیمیِ در حال انتظارِ retry به‌طور ایمن recycle می‌شوند تا ادامهٔ خودکار بلافاصله با نسخهٔ جدید اجرا شود.'
+  ]},
   {v:'10.451', t:'🏁 رفع توقف کاذب استخراج اسنپ‌شاپ با خطای HTTP 451 (Unavailable For Legal Reasons) در پایان صفحات لیست و ورود خودکار به فاز ۲', items:[
     'علت دقیق خطای HTTP 451 در صفحهٔ ۵۰۱ پروفایل اسنپ‌شاپ شناسایی و برطرف شد: سرویس آمریکایی r.jina.ai دامنه‌های .ir و آی‌پی‌های ایران را با کد قانونی HTTP 451 مسدود می‌کند؛ در صفحات ۱ تا ۵۰۰ fallback خودکار به apix.snappshop.ir کالاها را برمی‌گرداند، اما در صفحهٔ ۵۰۱ (عبور از سقف ۵۰۰ صفحه / ۱۰,۰۰۰ کالای Elasticsearch اسنپ‌شاپ) به دلیل صفر شدن خروجی apix، تابع fetch_html_jina_reader پاسخ apix را رد می‌کرد و خطای قدیمی HTTP 451 جینا را به‌عنوان خطای شبکهٔ صفحهٔ ۵۰۱ و ۵۰۲ ثبت و استخراج را متوقف می‌کرد.',
     'تشخیص هوشمند پایان صفحه‌بندی اسنپ‌شاپ (snappshop_end_of_pages + snappshop_total_pages) در snappshopProductsFromApiPayload، fetch_html_snappshop_api و حلقهٔ استخراج لیست اضافه شد: هم در رسیدن به آخرین صفحهٔ اعلامی (total_pages) و هم در عبور از مرز ۵۰۰ صفحهٔ API اسنپ‌شاپ، لیست بدون خطای کاذب ۴۵۱ پایان طبیعی اعلام شده، تمام محصولات در پروفایل ذخیره می‌شوند و استخراج بلافاصله وارد فاز ۲ (جزئیات) می‌شود.',
