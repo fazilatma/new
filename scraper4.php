@@ -71677,7 +71677,7 @@ if(empty($rGet['ok'])||!is_array($rGet['body']??null)){echo json_encode(['ok'=>f
 $origP=$rGet['body'];
 $clsFix=bslClassifyRejectionReasons($origP);
 if(!empty($clsFix['skip_modesty'])){echo json_encode(['ok'=>false,'error'=>'این محصول به‌دلیل قوانین شئونات تصویری رد شده و نیازمند اصلاح تصویر توسط کاربر است'],JSON_UNESCAPED_UNICODE);exit;}
-$locIdxFix=bslBuildLocalProductIndex();
+$locIdxFix=bslBuildLocalProductIndex(null,[$origP]);
 $origTitle=trim((string)($origP['title']??($origP['name']??($origP['revision']['data']['title']??''))));
 $localMatchFix=bslFindLocalSourceProduct($productId,$origTitle,$locIdxFix);
 $resFix=bslApplyCategoryChangeOrRecreate($tk,$vid,$origP,$newCatId,$cn,$localMatchFix,!empty($clsFix['needs_image_refresh']));
@@ -76945,21 +76945,51 @@ function bslClassifyRejectionReasons(array $p, array $flatCats = []): array {
  * v10.466: ایندکسِ حافظه‌ایِ محصولاتِ محلی (پروفایل‌ها + دفترچهٔ remote_map)
  * برای تطبیقِ سریعِ محصولاتِ ردشدهٔ باسلام با منبعِ اصلی (موجودی واقعی، تصاویر اصلی، مشخصات).
  */
-function bslBuildLocalProductIndex(?array $profiles = null): array {
+function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProducts = null): array {
     if ($profiles === null) $profiles = function_exists('loadProfiles') ? loadProfiles() : [];
     $byRemote = [];
     $byNorm = [];
     $byBare = [];
+
+    $wantRids = null;
+    $wantNorms = null;
+    if (is_array($targetProducts)) {
+        $wantRids = [];
+        $wantNorms = [];
+        foreach ($targetProducts as $tp) {
+            if (!is_array($tp)) continue;
+            $tid = (int)($tp['id'] ?? 0);
+            if ($tid > 0) $wantRids[$tid] = true;
+            $tt = trim((string)($tp['title'] ?? ($tp['name'] ?? ($tp['revision']['data']['title'] ?? ''))));
+            if ($tt !== '') {
+                $tNorm = bslNormalizeTitle($tt);
+                if ($tNorm !== '') $wantNorms[$tNorm] = true;
+                $tBare = bslNormalizeTitle(stripProductCode($tt));
+                if ($tBare !== '') $wantNorms[$tBare] = true;
+                $tClean = bslNormalizeTitle(bslSanitizeModerationTitle($tt, true));
+                if ($tClean !== '') $wantNorms[$tClean] = true;
+            }
+        }
+    }
+
     $rm = function_exists('remoteMapLoad') ? (array)(remoteMapLoad()['bsl'] ?? []) : [];
     $ledgerKeyByRid = [];
+    $wantKeys = ($wantRids !== null) ? [] : null;
     foreach ($rm as $mk => $row) {
         if (!is_array($row)) continue;
         $rid = (int)($row['id'] ?? 0);
         if ($rid <= 0) continue;
+        if ($wantRids !== null && !isset($wantRids[$rid])) continue;
         $rawPk = (strpos((string)$mk, '@') !== false) ? substr((string)$mk, 0, strpos((string)$mk, '@')) : (string)$mk;
         $ledgerKeyByRid[$rid] = ['product_key' => $rawPk, 'title' => trim((string)($row['title'] ?? ''))];
+        if ($wantKeys !== null && $rawPk !== '') $wantKeys[$rawPk] = true;
+        if ($wantNorms !== null && !empty($row['title'])) {
+            $lNorm = bslNormalizeTitle((string)$row['title']);
+            if ($lNorm !== '') $wantNorms[$lNorm] = true;
+        }
     }
     unset($rm);
+
     $slimKeep = ['key','title','price','final_price','stock','in_stock','availability','status','weight','barcode','shenase_kala','gtin','ean','sku','image','images','link','bsl_category_id','category_id','short_desc','variations_text'];
     $byKey = [];
     foreach ($profiles as $profKey => $prof) {
@@ -76972,6 +77002,14 @@ function bslBuildLocalProductIndex(?array $profiles = null): array {
             $itemKey = trim((string)($pr['key'] ?? (is_string($pk) ? $pk : '')));
             $pt = trim((string)($pr['title'] ?? ''));
             if ($pt === '') continue;
+            $nt = bslNormalizeTitle($pt);
+            $bare = bslNormalizeTitle(stripProductCode($pt));
+            if ($wantNorms !== null) {
+                $matched = ($itemKey !== '' && isset($wantKeys[$itemKey]))
+                    || ($nt !== '' && isset($wantNorms[$nt]))
+                    || ($bare !== '' && isset($wantNorms[$bare]));
+                if (!$matched) continue;
+            }
             $slimPr = [];
             foreach ($slimKeep as $sk) {
                 if (array_key_exists($sk, $pr)) $slimPr[$sk] = $pr[$sk];
@@ -76984,9 +77022,7 @@ function bslBuildLocalProductIndex(?array $profiles = null): array {
             }
             $entry = ['product' => $slimPr, 'profile' => $profMeta, 'profile_key' => (string)$profKey, 'product_key' => $itemKey];
             if ($itemKey !== '' && !isset($byKey[$itemKey])) $byKey[$itemKey] = $entry;
-            $nt = bslNormalizeTitle($pt);
             if ($nt !== '' && !isset($byNorm[$nt])) $byNorm[$nt] = $entry;
-            $bare = bslNormalizeTitle(stripProductCode($pt));
             if ($bare !== '' && !isset($byBare[$bare])) $byBare[$bare] = $entry;
         }
     }
@@ -77284,6 +77320,7 @@ function bslApplyCategoryChangeOrRecreate(
  * $opts: ['quorum'=>int, 'product_id'=>int (فقط همین یک محصول)]
  */
 function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null): array {
+    @ini_set('memory_limit', '512M');
     $t0 = microtime(true);
     $bs = $cn['basalam'] ?? [];
     if (empty($bs['token']) || empty($bs['vendor_id']))
@@ -77579,8 +77616,9 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         unset($_metaOnly['products'], $_metaOnly['logs'], $_metaOnly['history']);
         $allLoadedProfiles[$_pkM] = $_metaOnly;
     }
-    $localIndex = bslBuildLocalProductIndex($rawLoadedProfiles);
+    $localIndex = bslBuildLocalProductIndex($rawLoadedProfiles, $products);
     unset($rawLoadedProfiles);
+    if (function_exists('gc_collect_cycles')) gc_collect_cycles();
     $deadProviders401 = [];
     $cpSave = function () use (&$cpDoneIds, &$fixed, &$failed, &$noAi, &$noCat,
         &$skipSame, &$skipTried, &$asked, &$cacheHits, &$learnedHits, &$profHits,
