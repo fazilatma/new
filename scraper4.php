@@ -27475,7 +27475,8 @@ function bslEffectiveShopSendMode(?array $cn = null, ?array $overrideCfg = null)
  * workers also recheck the same predicate before every product. */
 function bslQueueApplyCurrentShopSelection(array &$queue,array $cn): array {
     $disabled=[];$defaultVid=(int)($cn['basalam']['vendor_id']??0);
-    foreach((array)($queue['entries']??[]) as &$e){
+    if(!isset($queue['entries'])||!is_array($queue['entries']))$queue['entries']=[];
+    foreach($queue['entries'] as &$e){
         if(!is_array($e)||!in_array((string)($e['status']??''),['running','waiting','paused'],true))continue;
         $parVids=array_values(array_filter(array_map('intval',(array)($e['config']['parallel_shop_vids']??$e['parallel_shop_vids']??[])),static fn($v)=>$v>0));
         if(!empty($parVids)){
