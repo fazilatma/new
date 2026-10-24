@@ -52259,6 +52259,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && (int)($_prepBatchStep459['payload']['data'][1]['preparation_days'] ?? -1) === 4
       && empty($_prepRepair459['changed'])
       && strpos((string)($_prepRepair459['payload']['description'] ?? ''), '<table class="s4-specs-table">') !== false
+      && !preg_match('~profileResolveKey\s*\(\s*\$[A-Za-z0-9_]+\s*\)~', $selfSrc)
       && strpos($selfSrc, "{v:'10." . "459'") !== false
       && version_compare(APP_VERSION, '10.459', '>='));
     $add('10.458', 'فیل‌اور چندنود Sotoon CDN، پیش‌نمایش عکس ویرایش‌شده در تب نتایج، رفع اسپاون CLI صف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها',
@@ -64058,7 +64059,8 @@ function bslClearAiCategoryFixPending(int $vendorId, string $productKey = '', st
 
 function bslSaveAiCategoryToProfile(string $profileKey, string $productKey, string $title, int $catId): bool {
     if ($catId <= 0 || $profileKey === '' || !function_exists('mutateProfile')) return false;
-    $resolvedKey = function_exists('profileResolveKey') ? profileResolveKey($profileKey) : $profileKey;
+    $_aiProfs = function_exists('loadProfiles') ? loadProfiles() : [];
+    $resolvedKey = function_exists('profileResolveKey') ? (profileResolveKey($profileKey, $_aiProfs) ?? $profileKey) : $profileKey;
     if ($resolvedKey === '') $resolvedKey = $profileKey;
     $normTitle = ($title !== '' && function_exists('normalizeTitle')) ? normalizeTitle($title) : mb_strtolower(trim($title), 'UTF-8');
     $saved = false;
@@ -70308,9 +70310,10 @@ $bslParallelAuto=(!isset($cn['basalam']['send_parallel_auto']) || !empty($cn['ba
 $bslFallbackCats=$cn['basalam']['fallback_cat_ids']??[];if(!is_array($bslFallbackCats))$bslFallbackCats=[];
 $__bslEntryProfKey=trim((string)($nextEntry['profile_key']??''));
 $__bslEntryProfAll=$__bslEntryProfKey!==''?loadProfiles():[];
+$__bslEntryResolvedKey=($__bslEntryProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__bslEntryProfKey,$__bslEntryProfAll):null;
 $__bslEntryProfile=($__bslEntryProfKey!==''&&isset($__bslEntryProfAll[$__bslEntryProfKey]))
     ?$__bslEntryProfAll[$__bslEntryProfKey]
-    :(($__bslEntryProfKey!==''&&function_exists('profileResolveKey')&&isset($__bslEntryProfAll[profileResolveKey($__bslEntryProfKey)]))?$__bslEntryProfAll[profileResolveKey($__bslEntryProfKey)]:null);
+    :(($__bslEntryResolvedKey!==null&&isset($__bslEntryProfAll[$__bslEntryResolvedKey]))?$__bslEntryProfAll[$__bslEntryResolvedKey]:null);
 $bslFallbackCats=bslCollectManualCategories(0,$__bslEntryProfile,$bslFallbackCats,$cn['basalam']??[]);
 
 $GLOBALS['_bslRetryDelayMs']=$bslRetryDelayMs;
@@ -70984,7 +70987,7 @@ if(!$__sendAllShops&&!$__isFanoutRow&&!bslStopRequestedForQueue())
 if($__scopeShop){
 $sShopName=$__scopeName!==''?$__scopeName:(string)$__scopeShop['shop_name'];
 if($sShopName==='')$sShopName='غرفهٔ '.$__scopeVid;
-$__scopeProfKey=trim((string)($nextEntry['profile_key']??''));$__scopeAllProfs=$__scopeProfKey!==''?loadProfiles():[];$__scopeProf=($__scopeProfKey!==''&&isset($__scopeAllProfs[$__scopeProfKey]))?$__scopeAllProfs[$__scopeProfKey]:(($__scopeProfKey!==''&&function_exists('profileResolveKey')&&isset($__scopeAllProfs[profileResolveKey($__scopeProfKey)]))?$__scopeAllProfs[profileResolveKey($__scopeProfKey)]:null);
+$__scopeProfKey=trim((string)($nextEntry['profile_key']??''));$__scopeAllProfs=$__scopeProfKey!==''?loadProfiles():[];$__scopeResKey=($__scopeProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__scopeProfKey,$__scopeAllProfs):null;$__scopeProf=($__scopeProfKey!==''&&isset($__scopeAllProfs[$__scopeProfKey]))?$__scopeAllProfs[$__scopeProfKey]:(($__scopeResKey!==null&&isset($__scopeAllProfs[$__scopeResKey]))?$__scopeAllProfs[$__scopeResKey]:null);
 $sOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>$__scopeProf,'profile_key'=>$__scopeProfKey,'basalam_cfg'=>($cn['basalam']??[]),'stock'=>(int)($cn['basalam']['stock']??10),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'category_id'=>(int)($cn['basalam']['category_id']??0),'auto_category'=>$autoCat,'fallback_cat_ids'=>bslCollectManualCategories(0,$__scopeProf,$bslFallbackCats,$cn['basalam']??[]),'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[]),
 /* v10.392: never block a 4k-product send row with a 20-page catalog scan.
    Targeted title/catalog/ledger lookup remains; deep duplicate recovery belongs to its worker. */
@@ -87683,7 +87686,7 @@ const CHANGELOG = [
     'تشخیص دقیق خطاهای مدت زمان آماده‌سازی باسلام (bslIsPreparationDaysError) در تمام ساختارهای پاسخ ۴۲۲ و ۴۰۰ (از جمله fields:["preparation_days"]، کلیدهای آرایه‌ای data.*.preparation_days در آپدیت دسته‌ای، errors.preparation_days و پیام‌های فارسی/انگلیسی مشابه «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»).',
     'کاهش خودکار ۱ روزه در هر تلاش (bslStepDownPreparationDays / bslRunPreparationDaysRetryLoop) در تمام مسیرهای تک‌درخواستی (bslReq)، موازی چندغرفه‌ای (bslReqMulti)، ارسال با تنوع (bslReqWithVariantsFallback) و آپدیت دسته‌ای (batch-updates) تا زمانی که باسلام درخواست را تایید کند (تا کف ۰ روز)؛ حتی اگر در PATCH اولیه فیلد preparation_days ارسال نشده باشد.',
     'رفع تداخل تشخیص خطای دسته‌بندی و حفظ جدول HTML مشخصات: ۱) در bslIsCategoryError پیام‌هایی که صریحاً روی فیلد غیر دسته‌بندی مثل preparation_days هستند دیگر به‌خاطر وجود عبارت «برای این دسته بندی» به‌اشتباه خطای دسته‌بندی تشخیص داده نمی‌شوند، و ۲) در bslRepairValidationPayload هنگام خطای فیلدهای غیرمتنی، تگ‌های جدول مشخصات فنی (<table>) از توضیحات حذف نمی‌شوند.',
-    'حذف تداخل قفل پروب وضعیت صف (bsl_queue_status / woo_queue_status) با اسپاون پردازنده‌های پس‌زمینه، جلوگیری از صفر شدن total/current هنگام خالی بودن فایل progress، و بازیابی آرگومان‌های CLI از register_argc_argv=1 و /proc/self/cmdline روی cPanel.'
+    'حذف تداخل قفل پروب وضعیت صف (bsl_queue_status / woo_queue_status) با اسپاون پردازنده‌های پس‌زمینه، جلوگیری از صفر شدن total/current هنگام خالی بودن فایل progress، بازیابی آرگومان‌های CLI از register_argc_argv=1 و /proc/self/cmdline روی cPanel، و رفع خطای فراخوانی تک‌آرگومانی profileResolveKey در شروع پردازندهٔ صف باسلام.'
   ]},
   {v:'10.458', t:'🚀 سوئیچ چندنود Sotoon CDN برای شروع فوری جزئیات، پیش‌نمایش تصاویر ویرایش‌شده در تب نتایج، رفع توقف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها', items:[
     'شروع فوری و بدون قفل استخراج جزئیات (فاز ۲): ۱) اتصال مستقیم CURLOPT_RESOLVE به استخر ۶ نود سالم Sotoon CDN (185.143.232.5 تا 185.143.235.5 و 185.143.233.104/.234.104) با failover آنی روی خطای ۴۲۹/تایم‌اوت، ۲) رفع قفل ارث‌بری‌شدهٔ پردازش‌های فرزند در s4WorkerIsActive، و ۳) حذف ذخیرهٔ تکراری چندمگابایتی در startDetailExtractionServer.',
