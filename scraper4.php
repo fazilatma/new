@@ -56201,7 +56201,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && function_exists('digikalaProductsFromApiPayload')
       && function_exists('digikalaSyntheticListHtml')
       && function_exists('digikalaDetailSyntheticHtml')
-      && extractionEngineAllowed('digikala_api') === 'digikala_api'
+      && normalizeExtractionEngine('digikala_api') === 'digikala_api'
+      && in_array('digikala_api', extractionEngineAllowed(), true)
       && (function () {
              /* ۱) تست موتور API دیجی‌کالا: تبدیل آدرس دسته، ریال به تومان، صفحه‌بندی و رندر جزئیات محصول */
              $rt = digikalaParseTargetRoute('https://www.digikala.com/search/category-diaper/?page=2');
