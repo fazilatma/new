@@ -17418,12 +17418,14 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
             CURLOPT_USERAGENT => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Snapp/8.5',
         ]);
         // 3) Alternate Sotoon CDN edge POP IPs
-        $candEdgeIps = array_values(array_unique(array_merge(
-            $dnsInfo['snappshop.ir'] ?? [],
-            $dnsInfo['statics.delivery.sotoon.ir'] ?? [],
-            ['185.143.233.5', '185.143.234.5', '185.143.232.5', '185.166.104.5']
-        )));
-        foreach (array_slice($candEdgeIps, 0, 5) as $eIp) {
+        $candEdgeIps = !empty($_GET['popscan'])
+            ? ['185.143.232.5', '185.143.233.5', '185.143.234.5', '185.143.235.5', '185.166.105.4', '185.166.106.4', '185.166.107.4', '185.143.233.104', '185.143.234.104']
+            : array_values(array_unique(array_merge(
+                $dnsInfo['snappshop.ir'] ?? [],
+                $dnsInfo['statics.delivery.sotoon.ir'] ?? [],
+                ['185.143.233.5', '185.143.234.5', '185.143.232.5', '185.166.104.5']
+            )));
+        foreach (array_slice($candEdgeIps, 0, 10) as $eIp) {
             if (strpos($eIp, ':') !== false) continue;
             $probes['edge_' . $eIp] = $tryReq($apiUrl, array_merge($baseH, ['s-device: DESKTOP', 's-device-source: shop']), [
                 CURLOPT_RESOLVE => ['apix.snappshop.ir:443:' . $eIp],
