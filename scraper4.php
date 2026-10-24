@@ -28,7 +28,26 @@ error_reporting(0);
 ob_start(); /* v10.90: جلوگیری از خروجی ناخواسته قبل از JSON */
 // عملیات همگام‌سازی طولانی است و نباید وسط کار توسط وب‌سرور قطع شود.
 set_time_limit(0);
-ini_set('memory_limit', '512M');
+/* v10.470: ارتقای امن سقف حافظه برای کاتالوگ‌های بزرگ (~۱۸۰ مگابایت profiles.json) با فالبک خودکار */
+(static function (): void {
+    $toBytes = static function (string $v): int {
+        $v = trim($v);
+        if ($v === '' || $v === '-1') return -1;
+        $n = (int)$v;
+        $u = strtolower(substr($v, -1));
+        if ($u === 'g') return $n * 1073741824;
+        if ($u === 'm') return $n * 1048576;
+        if ($u === 'k') return $n * 1024;
+        return $n;
+    };
+    $cur = $toBytes((string)@ini_get('memory_limit'));
+    if ($cur === -1 || $cur >= 1073741824) return;
+    foreach (['1024M', '768M', '512M'] as $cand) {
+        @ini_set('memory_limit', $cand);
+        $nowB = $toBytes((string)@ini_get('memory_limit'));
+        if ($nowB === -1 || $nowB >= $toBytes($cand)) break;
+    }
+})();
 ini_set('post_max_size', '256M');
 ini_set('upload_max_filesize', '256M');
 ini_set('max_input_vars', '10000');
@@ -368,10 +387,11 @@ const AUTO_RESUME_WINDOW   = 3600;
 const BACKUP_CFG_FILE  = __DIR__ . '/.backup-config.json';
 const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
+const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.469';
+const APP_VERSION = '10.470';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1226,33 +1246,56 @@ function s4SpawnParallelExtractJob(string $jobId): array {
 function s4DispatchParallelExtractJobs(): array {
     $limit=extractTaskConcurrency();
     if($limit<1||!s4ParallelExtractSupported())return ['ok'=>false,'skipped'=>'unsupported_or_single','limit'=>$limit];
+    /* v10.470: از خواندن بی‌موردِ ۱۸۰ مگابایت profiles.json وقتی نه orphan مرده‌ای هست و نه کارِ pending جلوگیری کن */
+    $qPeek=(array)(s4WorkerLoadQueue()['entries']??[]);
+    $hasDeadOrphan=false;$hasPendingExtract=false;
+    foreach($qPeek as $_pe){
+        if(!is_array($_pe))continue;
+        if(s4WorkerBackendExtractRowIsDeadOrphan($_pe)){$hasDeadOrphan=true;break;}
+        if((string)($_pe['type']??'')==='backend_extract'&&(string)($_pe['status']??'')==='pending')$hasPendingExtract=true;
+    }
+    unset($qPeek);
+    if(!$hasDeadOrphan&&!$hasPendingExtract)return ['ok'=>true,'limit'=>$limit,'running_before'=>0,'recovered'=>[],'started'=>[],'failed'=>[],'idle_fastpath'=>true];
     $profilesSnap=[];$extractRowsSnap=[];$progSnap=[];
-    try{$profilesSnap=loadProfiles();}catch(Throwable $_e){}
-    try{$extractRowsSnap=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
-    try{$progSnap=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
+    if($hasDeadOrphan){
+        try{$profilesSnap=loadProfiles();}catch(Throwable $_e){}
+        try{$extractRowsSnap=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
+        try{$progSnap=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
+    }
     $running=0;$claimed=[];$recoveredOrphans=[];
     s4WorkerQueueMutate(function(&$q)use($limit,&$running,&$claimed,&$recoveredOrphans,$profilesSnap,$extractRowsSnap,$progSnap){$now=time();
         foreach($q['entries']as &$re){
-            if(!is_array($re)||!s4WorkerBackendExtractRowIsDeadOrphan($re))continue;
+            if(!is_array($re)||!s4WorkerBackendExtractRowIsDeadOrphan($_re=$re))continue;
             $rpk=trim((string)($re['payload']['profile_key']??''));
             $rqid=trim((string)($re['payload']['extract_queue_id']??''));
             $userStop=$rqid!==''&&function_exists('extractQueueRowStoppedByUser')&&extractQueueRowStoppedByUser($rqid);
             $madeProducts=false;
+            $curSigParts=['0','0','0',''];
             if($rqid!==''){
                 foreach($extractRowsSnap as $_er){
                     if(!is_array($_er)||(string)($_er['id']??'')!==$rqid)continue;
                     if(!empty($_er['stopped_by_user'])||(string)($_er['paused_by']??'')==='user')$userStop=true;
-                    if(max((int)($_er['run_extracted']??0),(int)($_er['products_count']??0),(int)($_er['extracted']??0))>0)$madeProducts=true;
+                    $erProd=max((int)($_er['run_extracted']??0),(int)($_er['products_count']??0),(int)($_er['extracted']??0));
+                    if($erProd>0)$madeProducts=true;
+                    $curSigParts=[(string)$erProd,(string)((int)($_er['detail_current']??0)),(string)((int)($_er['current']??0)),(string)($_er['phase']??'')];
                     break;
                 }
             }
             if(!$madeProducts&&$rpk!==''&&(string)($progSnap['profile_key']??'')===$rpk&&($rqid===''||(string)($progSnap['queue_id']??'')===$rqid)&&(int)($progSnap['extracted']??0)>0)$madeProducts=true;
+            $curProgSig=implode(':',$curSigParts);
+            $prevProgSig=(string)($re['last_progress_sig']??'');
+            $prevVer=(string)($re['recovered_ver']??'');
+            $noProg=(int)($re['no_progress_recycles']??0);
+            if($prevVer!==APP_VERSION){$noProg=0;}
+            elseif($prevProgSig!==''&&$prevProgSig===$curProgSig){$noProg++;}
+            else{$noProg=0;}
             $attempts=(int)($re['attempts']??0);
-            if(!$userStop&&($madeProducts||$attempts<3)&&$rpk!==''&&isset($profilesSnap[$rpk])&&is_array($profilesSnap[$rpk])){
+            if(!$userStop&&$noProg<5&&($madeProducts||$attempts<3)&&$rpk!==''&&isset($profilesSnap[$rpk])&&is_array($profilesSnap[$rpk])){
                 $prSnap=$profilesSnap[$rpk];
                 $nextPh=function_exists('extractResumePhase')?extractResumePhase($prSnap):'list';
                 if($nextPh==='list'&&!empty($prSnap['_extract_want_detail']))$nextPh='all';
                 $re['status']='pending';$re['worker_pid']=0;$re['updated_at']=$now;$re['recovered_at']=$now;
+                $re['last_progress_sig']=$curProgSig;$re['no_progress_recycles']=$noProg;$re['recovered_ver']=APP_VERSION;
                 if($madeProducts){$re['attempts']=0;$re['recycles']=(int)($re['recycles']??0)+1;}
                 $re['payload']=is_array($re['payload']??null)?$re['payload']:[];
                 $re['payload']['resume']=true;$re['payload']['phase']=$nextPh;
@@ -1261,7 +1304,8 @@ function s4DispatchParallelExtractJobs(): array {
                 $recoveredOrphans[]=(string)($re['id']??'');
             }else{
                 $re['status']=$userStop?'cancelled':'failed';$re['worker_pid']=0;$re['updated_at']=$now;$re['done_at']=$now;
-                $re['error']=$userStop?'stopped_by_user':'dead_worker_orphan';
+                $re['no_progress_recycles']=$noProg;$re['last_progress_sig']=$curProgSig;$re['recovered_ver']=APP_VERSION;
+                $re['error']=$userStop?'stopped_by_user':($noProg>=5?'zero_progress_crash_loop':'dead_worker_orphan');
             }
         }unset($re);
         foreach($q['entries']as $e)if(is_array($e)&&(string)($e['type']??'')==='backend_extract'&&(string)($e['status']??'')==='running'){
@@ -1273,6 +1317,7 @@ function s4DispatchParallelExtractJobs(): array {
             $e['status']='running';$e['started_at']=$now;$e['updated_at']=$now;
             $e['attempts']=(int)($e['attempts']??0)+1;$e['worker_pid']=0;$claimed[]=(string)($e['id']??'');
         }unset($e);return['ok'=>true];});
+    unset($profilesSnap,$extractRowsSnap,$progSnap);
     $started=[];$failed=[];
     foreach($claimed as $jid){$sp=s4SpawnParallelExtractJob($jid);
         if(!empty($sp['ok'])){$pid=(int)$sp['pid'];$started[]=['job_id'=>$jid,'pid'=>$pid];
@@ -1424,7 +1469,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
     /* -1 means “not supplied”; zero is a real setting: discover the end. */
-    if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));}
+    if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));unset($pr0);}
     $pageTotal=$maxPages===0?0:$maxPages;
     $plannedQueueId=$resume&&function_exists('extractResumeQueueId')?extractResumeQueueId($profileKey,$preferredQueueId):'';
     /* A caller that names a row must never silently fall back to a fresh id. */
@@ -1499,12 +1544,23 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             extractClearStopSignalForQueue($visibleQueueId);
             $xq=extractReadQueue();
         }
-        $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];
+        $profilesNow=loadProfiles();$prNow=is_array($profilesNow[$profileKey]??null)?$profilesNow[$profileKey]:[];unset($profilesNow);
         $foundVisible=false;
         foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
             $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['max_pages']=$maxPages;$_xe['page_mode']=$maxPages===0?'auto':'fixed';$_xe['total']=$pageTotal;$_xe['resumable']=true;
-            $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at']);$foundVisible=true;break;
+            $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at'],$_xe['resuming'],$_xe['resume_requested_at']);$foundVisible=true;break;
         }unset($_xe);
+        if(!$resume){
+            foreach($xq['entries'] as &$_xeOld){
+                if(!is_array($_xeOld)||(string)($_xeOld['profile_key']??'')!==$profileKey||(string)($_xeOld['id']??'')===$visibleQueueId)continue;
+                $_oldSt=(string)($_xeOld['status']??'');
+                if(in_array($_oldSt,['waiting','paused'],true)||($_oldSt==='running'&&!extractLockHeldForQueue((string)($_xeOld['id']??'')))){
+                    $_xeOld['status']='failed';$_xeOld['done_at']=time();$_xeOld['updated_at']=time();
+                    $_xeOld['error']='اجرای تازهٔ کاربر جایگزین ردیف قبلی شد';
+                    unset($_xeOld['resuming'],$_xeOld['resume_requested_at']);
+                }
+            }unset($_xeOld);
+        }
         if(!$foundVisible)$xq['entries'][]=['id'=>$visibleQueueId,'status'=>'waiting','profile_key'=>$profileKey,
             'profile_name'=>(string)($prNow['name']??$profileKey),'url'=>(string)($prNow['url']??''),
             'started_at'=>time(),'updated_at'=>time(),'products_count'=>count((array)($prNow['products']??[])),
@@ -1999,11 +2055,11 @@ function s4CliPhpBinary(): string {
  * mode و فقط Usage چاپ می‌کند، و اگر متغیرهای محیطی HTTP (مثل REQUEST_METHOD)
  * از درخواست والد به ارث برسد بدون اجرای اسکریپت خارج می‌شود. env -u محیط را
  * کاملاً از متغیرهای CGI پاک می‌کند تا هم php-cli و هم lsphp -q پایدار اجرا شوند. */
-function s4CliPhpCommand(string $php,string $mem='512M'): string {
+function s4CliPhpCommand(string $php,string $mem='1024M'): string {
     $cleanEnv='env -u REQUEST_METHOD -u QUERY_STRING -u CONTENT_TYPE -u CONTENT_LENGTH -u GATEWAY_INTERFACE -u SCRIPT_FILENAME -u SCRIPT_NAME -u DOCUMENT_ROOT -u REDIRECT_STATUS -u SERVER_PROTOCOL -u HTTP_HOST S4_CLI_SPAWN=1 ';
     $base=strtolower(basename($php));
     if(str_contains($base,'lsphp'))return $cleanEnv.escapeshellarg($php).' -q';
-    return $cleanEnv.escapeshellarg($php).' -d register_argc_argv=1 -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'512M');
+    return $cleanEnv.escapeshellarg($php).' -d register_argc_argv=1 -d max_execution_time=0 -d memory_limit='.escapeshellarg($mem!==''?$mem:'1024M');
 }
 function s4CliFallbackArgv(array $argv = []): array {
     if ($argv) return $argv;
@@ -2305,6 +2361,7 @@ function s4WorkerRunJob(array $job): array {
                 $initialPhase = 'all';
                 $phase = 'all';
             }
+            unset($_prInit);
         }
         $segments = 0;
         $transientResumes = 0;
@@ -2317,7 +2374,7 @@ function s4WorkerRunJob(array $job): array {
             $reserved = (!$resumeNext&&$extractQueueId!=='')?$extractQueueId:'';
             $runPhase = $phase;
             if ($resumeNext) {
-                $prep = extractResumePrepare($pk, loadConnections(), $extractQueueId);
+                $prep = extractResumePrepare($pk, loadConnections(), $extractQueueId, !empty($payload['allow_user_stopped']) || $segments > 1);
                 if (empty($prep['ok'])) {
                     $res = ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? ''), 'worker_segments' => $segments];
                     break;
@@ -2381,7 +2438,14 @@ function s4WorkerRunJob(array $job): array {
 }
 
 function s4WorkerRecoverOrphanJobs(int $newPid): int {
-    $n=0;$extractCheckpoint=[];$extractProfiles=[];$extractRows=[];
+    $n=0;$hasDeadRunning=false;
+    foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_pe){
+        if(!is_array($_pe)||(string)($_pe['status']??'')!=='running')continue;
+        $_old=(int)($_pe['worker_pid']??0);
+        if($_old<=0||($_old!==$newPid&&!s4WorkerPidAlive($_old))){$hasDeadRunning=true;break;}
+    }
+    if(!$hasDeadRunning)return 0;
+    $extractCheckpoint=[];$extractProfiles=[];$extractRows=[];
     try{$extractCheckpoint=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
     try{$extractProfiles=loadProfiles();}catch(Throwable $_e){}
     try{$extractRows=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
@@ -2404,28 +2468,44 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
         $extractQueueId=trim((string)($e['payload']['extract_queue_id']??''));
         $extractProgressOwnsJob=$extractProgressCheckpoint
             &&($extractQueueId===''||(string)($extractCheckpoint['queue_id']??'')===$extractQueueId);
-        $extractRowProducts=0;
+        $extractRowProducts=0;$extractDetailCur=0;$extractRowCur=0;$extractRowPhase='';
         if($extractQueueId!=='')foreach($extractRows as$_extractRow){
             if(!is_array($_extractRow)||(string)($_extractRow['id']??'')!==$extractQueueId)continue;
             $extractRowProducts=max((int)($_extractRow['run_extracted']??0),
-                (int)($_extractRow['products_count']??0),(int)($_extractRow['extracted']??0));break;
+                (int)($_extractRow['products_count']??0),(int)($_extractRow['extracted']??0));
+            $extractDetailCur=(int)($_extractRow['detail_current']??0);
+            $extractRowCur=(int)($_extractRow['current']??0);
+            $extractRowPhase=(string)($_extractRow['phase']??'');
+            break;
         }
         $extractMadeProducts=$extractRowProducts>0
             ||($extractProgressOwnsJob&&(int)($extractCheckpoint['extracted']??0)>0);
+        $curProgSig=$extractRowProducts.':'.$extractDetailCur.':'.$extractRowCur.':'.$extractRowPhase;
+        $prevProgSig=(string)($e['last_progress_sig']??'');
+        $prevVer=(string)($e['recovered_ver']??'');
+        $noProg=(int)($e['no_progress_recycles']??0);
+        if($prevVer!==APP_VERSION){$noProg=0;}
+        elseif($type==='backend_extract'&&$prevProgSig!==''&&$prevProgSig===$curProgSig){$noProg++;}
+        else{$noProg=0;}
         /* A cursor/stage alone is not proof of useful work. Zero-product source
            failures retain the ordinary bounded worker-attempt cap, but never
            receive unlimited checkpoint recycling or an attempts reset. */
-        $isCheckpointExtract=$type==='backend_extract'&&$extractMadeProducts
+        $isCheckpointExtract=$type==='backend_extract'&&$extractMadeProducts&&$noProg<5
             &&($extractProfileCheckpoint||$extractProgressCheckpoint);
         /* A checkpoint-backed matrix build may span many hosting process lives.
            The generic four-attempt cap is appropriate for non-resumable jobs, but
            must never permanently fail a durable matrix continuation. */
-        $recover=$isCheckpointBuild||$attempts<4||$isCheckpointFix||$isCheckpointExtract;$e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
-        $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
+        $recover=($type!=='backend_extract'&&($isCheckpointBuild||$attempts<4||$isCheckpointFix))
+            ||($type==='backend_extract'&&$noProg<5&&($attempts<4||$isCheckpointExtract));
+        $e['status']=$recover?'pending':'failed';$e['updated_at']=$now;$e['recovered_at']=$now;
+        $e['last_progress_sig']=$curProgSig;$e['no_progress_recycles']=$noProg;$e['recovered_ver']=APP_VERSION;
+        $e['error']=$recover?'worker قبلی قطع شد؛ بازیابی خودکار از checkpoint در worker تازه':'worker چند بار بدون پیشرفت قطع شد؛ نیازمند بررسی';$e['worker_pid']=0;
         /* A fresh build becomes a resume after its first claim. Keeping resume=false
            on orphan recovery deleted its cursor and restarted Woo at page one. */
         if($recover&&($isCheckpointFix||$isCheckpointBuild||$isCheckpointExtract)){$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;if($isCheckpointExtract){$_saved=(string)($extractPr['_extract_resume_phase']??'');if(!in_array($_saved,['list','detail'],true))$_saved=in_array($extractStage,['detail','list_done'],true)?'detail':'list';$e['payload']['phase']=$_saved;}$e['recycles']=(int)($e['recycles']??0)+1;$e['attempts']=0;}$n++;
-    }unset($e);return['ok'=>true];});return$n;
+    }unset($e);return['ok'=>true];});
+    unset($extractProfiles,$extractRows,$extractCheckpoint);
+    return$n;
 }
 
 function s4WorkerLoopFromCli(): void {
@@ -26106,6 +26186,46 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     exit;
 }
 
+if (isset($_GET['extract_recover_stuck']) || isset($_POST['extract_recover_stuck'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $nowRec = time();
+    $fixedRows = [];
+    $exQRec = extractReadQueue();
+    $dirtyRec = false;
+    foreach ((array)($exQRec['entries'] ?? []) as $iRec => $rRec) {
+        if (!is_array($rRec)) continue;
+        $qidRec = trim((string)($rRec['id'] ?? ''));
+        $stRec  = (string)($rRec['status'] ?? '');
+        if (!empty($rRec['stopped_by_user']) || (string)($rRec['paused_by'] ?? '') === 'user') continue;
+        if (!empty($rRec['resuming']) && !extractLockHeldForQueue($qidRec)) {
+            unset($exQRec['entries'][$iRec]['resuming'], $exQRec['entries'][$iRec]['resume_requested_at']);
+            $dirtyRec = true;
+            $fixedRows[] = ['id' => $qidRec, 'fix' => 'cleared_stale_resuming'];
+        }
+        if ($stRec === 'running' && $qidRec !== '' && !extractLockHeldForQueue($qidRec)) {
+            $prodRec = max((int)($rRec['run_extracted'] ?? 0), (int)($rRec['products_count'] ?? 0), (int)($rRec['extracted'] ?? 0));
+            if ($prodRec > 0) {
+                $exQRec['entries'][$iRec]['status'] = 'paused';
+                $exQRec['entries'][$iRec]['resumable'] = true;
+                $exQRec['entries'][$iRec]['resume_needed'] = 1;
+                $exQRec['entries'][$iRec]['updated_at'] = $nowRec;
+                unset($exQRec['entries'][$iRec]['done_at'], $exQRec['entries'][$iRec]['resuming'], $exQRec['entries'][$iRec]['resume_requested_at']);
+                $dirtyRec = true;
+                $fixedRows[] = ['id' => $qidRec, 'fix' => 'paused_ownerless_running'];
+            }
+        }
+    }
+    if ($dirtyRec) extractWriteQueue($exQRec);
+    $arRec = s4AutoResumeInterruptedExtractions('manual_recover', false);
+    echo json_encode([
+        'ok' => true,
+        'memory_limit' => (string)@ini_get('memory_limit'),
+        'fixed_rows' => $fixedRows,
+        'auto_resume' => $arRec,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if(isset($_GET['poll_extract'])){
 header('Content-Type: application/json; charset=UTF-8');
 $_arPoll = s4AutoResumeInterruptedExtractions('poll_extract', true);
@@ -26277,17 +26397,12 @@ function extractInstallDetailFatalGuard(): void {
         if(!$e||!in_array((int)($e['type']??0),[E_ERROR,E_PARSE,E_CORE_ERROR,E_COMPILE_ERROR,E_USER_ERROR],true))return;
         $pk=(string)($ctx['profile_key']??'');$qid=(string)($ctx['queue_id']??'');$now=time();
         try{
-            $ps=loadProfiles();
-            if($pk!==''&&is_array($ps[$pk]??null)){
-                $ps[$pk]['_extract_stage']='detail';$ps[$pk]['_extract_stage_at']=$now;
-                $ps[$pk]['_extract_resume_phase']='detail';$ps[$pk]['_extract_resume_needed']=1;
-                if(!empty($ctx['detail_cycle']))$ps[$pk]['_extract_detail_cycle']=(string)$ctx['detail_cycle'];
-                saveProfiles($ps);
-            }
+            /* v10.470: اول فایل‌های سبک صف و پیشرفت را ذخیره کن تا حتی هنگام خطای کمبود حافظه (OOM)، ردیف روی running گیر نکند */
             $q=extractReadQueue();
             foreach($q['entries'] as &$qe){if((string)($qe['id']??'')!==$qid)continue;
-                $qe['status']='paused';$qe['resume_needed']=1;$qe['resume_phase']='detail';
-                $qe['updated_at']=$now;$qe['error']='detail_fatal: '.mb_substr((string)($e['message']??''),0,180);unset($qe['done_at']);break;
+                $qe['status']='paused';$qe['resumable']=true;$qe['resume_needed']=1;$qe['resume_phase']='detail';
+                $qe['updated_at']=$now;$qe['error']='detail_fatal: '.mb_substr((string)($e['message']??''),0,180);
+                unset($qe['done_at'],$qe['resuming'],$qe['resume_requested_at']);break;
             }unset($qe);extractWriteQueue($q);
             $pg=readProgress(EXTRACT_PROGRESS_FILE);
             if($qid===''||(string)($pg['queue_id']??'')===$qid){
@@ -26297,6 +26412,16 @@ function extractInstallDetailFatalGuard(): void {
                     ['♻️ پردازهٔ جزئیات قطع شد؛ کران از آخرین checkpoint ادامه می‌دهد']),-12);
                 writeProgress(EXTRACT_PROGRESS_FILE,$pg);
             }
+        }catch(Throwable $_fatalGuardQ){}
+        try{
+            $ps=loadProfiles();
+            if($pk!==''&&is_array($ps[$pk]??null)){
+                $ps[$pk]['_extract_stage']='detail';$ps[$pk]['_extract_stage_at']=$now;
+                $ps[$pk]['_extract_resume_phase']='detail';$ps[$pk]['_extract_resume_needed']=1;
+                if(!empty($ctx['detail_cycle']))$ps[$pk]['_extract_detail_cycle']=(string)$ctx['detail_cycle'];
+                saveProfiles($ps,true);
+            }
+            unset($ps);
         }catch(Throwable $_fatalGuard){}
     });
 }
@@ -26305,12 +26430,23 @@ function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = [
     if ($pkFinal === '') return;
     $productsData = [];
     foreach ($allProducts as $k => $p) $productsData[] = [$k, $p];
+    $lfp = @fopen(PROFILES_FILE . '.extract.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_EX);
+    try {
     $profilesNow = loadProfiles();
     if (!isset($profilesNow[$pkFinal]) || !is_array($profilesNow[$pkFinal])) return;
     $one=$profilesNow[$pkFinal];
     $one['products']=$productsData;$one['productsOrder']=array_keys($allProducts);$one['updatedAt']=time();
     foreach($extra as $k=>$v)$one[$k]=$v;
-    saveOneProfileAtomic($pkFinal,$one);
+    unset($productsData);
+    $profilesNow[$pkFinal]=$one;
+    unset($one);
+    saveProfiles($profilesNow,true);
+    unset($profilesNow);
+    } finally {
+        if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    }
+    if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 }
 
 /** v10.294: فقط استخراج واقعاً نیمه‌کاره باید از checkpoint صفحه ادامه یابد.
@@ -26759,6 +26895,9 @@ function extractQueuePauseStaleRow(string $queueId, int $staleAfter, bool $owner
         $idleInfo=queueRowIdle('extract',$row,$progress,$now,
             ['lock'=>extractLockBeatForQueue($queueId)],$runningRows);
         $idle=(int)($idleInfo['idle']??0);
+        /* v10.470: مهلتِ بوتِ ۴۰ ثانیه‌ای برای فرزندِ تازهٔ CLI پیش از اخذ قفل و دریافت صفحهٔ ۱ */
+        $recentBoot=max((int)($row['started_at']??0),(int)($row['resume_requested_at']??0),(int)($row['updated_at']??0));
+        if($ownerAbsent&&$idle<40&&$recentBoot>0&&($now-$recentBoot)<40)return null;
         if(!$ownerAbsent&&$idle<$staleAfter)return null;
         $progressForRow=$progressOwned?$progress:[];
         $phase=(string)($progressForRow['phase']??$row['resume_phase']??$row['phase']??'list');
@@ -26769,11 +26908,12 @@ function extractQueuePauseStaleRow(string $queueId, int $staleAfter, bool $owner
         if($productCount>0){
             $row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
             $row['resume_phase']=$phase;$row['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
-            unset($row['done_at'],$row['auto_resume_blocked'],$row['auto_resume_blocked_at']);
+            unset($row['done_at'],$row['auto_resume_blocked'],$row['auto_resume_blocked_at'],$row['resuming'],$row['resume_requested_at']);
         }else{
             $row['status']='failed';$row['resumable']=false;$row['resume_needed']=0;
             $row['done_at']=$now;$row['auto_resume_blocked']='zero_products';$row['auto_resume_blocked_at']=$now;
             $row['error']='استخراج بدون هیچ محصولی متوقف شد؛ ادامهٔ خودکار غیرفعال شد';
+            unset($row['resuming'],$row['resume_requested_at']);
         }
         $entries[$idx]=$row;$q['entries']=array_values($entries);
         $json=json_encode($q,JSON_UNESCAPED_UNICODE);
@@ -26815,13 +26955,17 @@ function extractResumeQueueId(string $profileKey, string $preferredQueueId = '')
     $q=extractReadQueue();$entries=is_array($q['entries']??null)?$q['entries']:[];
     if($preferredQueueId!=='')foreach($entries as $e){
         if(!is_array($e)||(string)($e['id']??'')!==$preferredQueueId)continue;
+        $_st=(string)($e['status']??'');
         if((string)($e['profile_key']??'')===$profileKey
-            &&in_array((string)($e['status']??''),['waiting','paused','failed'],true))return $preferredQueueId;
+            &&(in_array($_st,['waiting','paused','failed'],true)
+               ||($_st==='running'&&!extractLockHeldForQueue($preferredQueueId))))return $preferredQueueId;
         return '';
     }
     for($i=count($entries)-1;$i>=0;$i--){$e=$entries[$i]??null;
         if(!is_array($e)||(string)($e['profile_key']??'')!==$profileKey)continue;
-        if(in_array((string)($e['status']??''),['paused','failed'],true))return(string)($e['id']??'');
+        $_st=(string)($e['status']??'');$_eid=(string)($e['id']??'');
+        if(in_array($_st,['paused','failed'],true)
+           ||($_st==='running'&&$_eid!==''&&!extractLockHeldForQueue($_eid)))return $_eid;
     }
     return '';
 }
@@ -26843,6 +26987,7 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
     if ($profileKey === '') { $out['reason'] = 'no_key'; return $out; }
     $profiles = loadProfiles();
     $pr = is_array($profiles[$profileKey] ?? null) ? $profiles[$profileKey] : null;
+    unset($profiles);
     if ($pr === null) { $out['reason'] = 'no_profile'; return $out; }
     /* v10.136: probe و mutation پشتِ یک reservation واقعی.
        صرفاً probe کردن و بعداً flock گرفتن، بین دو resume پنجرهٔ race می‌ساخت. */
@@ -26872,7 +27017,6 @@ function extractResumePrepare(string $profileKey, array $cn, string $preferredQu
     /* A detail checkpoint must not be rewritten as an incomplete list. */
     $pr['_extract_list_incomplete'] = $phase === 'list';
     $pr['_extract_resume_phase'] = $phase === 'detail' ? 'detail' : 'list';
-    $profiles[$profileKey] = $pr;
     try {
         saveOneProfileAtomic($profileKey,$pr);
     } catch (Throwable $e) {
@@ -27100,15 +27244,24 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
         $lastPulse = (int)@filemtime($pulseLockFile);
         if ($throttled && $lastPulse > 0 && ($now - $lastPulse) < $minGap) return ['ok' => true, 'throttled' => true, 'source' => $source];
         @touch($pulseLockFile, $now);
-        $dispatch0 = s4ParallelExtractSupported() ? s4DispatchParallelExtractJobs() : [];
+        /* v10.470: اول ردیف‌های runningِ بی‌مالک/متوقف و پرچم‌های کهنهٔ resuming را سامان بده، سپس dispatch موازی را صدا بزن */
         $stallCfg = in_array($source, ['worker_loop', 'parallel_finish', 'cron'], true)
             ? 60 : max(75, min(180, (int)($cn['stall_after'] ?? 120)));
         $exQ = extractReadQueue();
         $exProg = readProgress(EXTRACT_PROGRESS_FILE);
         $runningRows = 0;
-        foreach ((array)($exQ['entries'] ?? []) as $_cntR) {
-            if (is_array($_cntR) && (string)($_cntR['status'] ?? '') === 'running') $runningRows++;
+        $staleResumingCleared = false;
+        foreach ((array)($exQ['entries'] ?? []) as $_iQ => $_cntR) {
+            if (!is_array($_cntR)) continue;
+            $_stQ = (string)($_cntR['status'] ?? '');
+            if ($_stQ === 'running') $runningRows++;
+            elseif (!empty($_cntR['resuming']) && ($now - (int)($_cntR['resume_requested_at'] ?? $_cntR['updated_at'] ?? 0)) > 40
+                && !extractLockHeldForQueue((string)($_cntR['id'] ?? ''))) {
+                unset($exQ['entries'][$_iQ]['resuming'], $exQ['entries'][$_iQ]['resume_requested_at']);
+                $staleResumingCleared = true;
+            }
         }
+        if ($staleResumingCleared) extractWriteQueue($exQ);
         $pausedKeys = [];
         foreach ((array)($exQ['entries'] ?? []) as $qe) {
             if (!is_array($qe) || (string)($qe['status'] ?? '') !== 'running') continue;
@@ -27129,6 +27282,8 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             $ownerPresent = $lockHeld || $workerAlive;
             $iw = queueRowIdle('extract', $qe, $exProg, $now, ['lock' => $lkBeat], max(1, $runningRows));
             $idle = (int)($iw['idle'] ?? 0);
+            $recentBoot = max((int)($qe['started_at'] ?? 0), (int)($qe['resume_requested_at'] ?? 0), (int)($qe['updated_at'] ?? 0));
+            if (!$ownerPresent && $idle < 40 && $recentBoot > 0 && ($now - $recentBoot) < 40) continue;
             if ($ownerPresent && $idle < $stallCfg) continue;
             if ($ownerPresent) {
                 $retire = extractCancelWorkerForQueueRow($qe, 'stalled_auto_recovery');
@@ -27142,16 +27297,21 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
                 $pausedKeys[] = $pk;
                 $ps = loadProfiles();
                 if (isset($ps[$pk]) && is_array($ps[$pk])) {
-                    $ps[$pk]['_extract_stage'] = 'stopped';
-                    $ps[$pk]['_extract_resume_phase'] = $exPhase;
-                    $ps[$pk]['_extract_list_incomplete'] = ($exPhase === 'list');
-                    if ($exPhase === 'list' && empty($ps[$pk]['_extract_resume_from'])) {
+                    $oneP = $ps[$pk];
+                    unset($ps);
+                    $oneP['_extract_stage'] = 'stopped';
+                    $oneP['_extract_resume_phase'] = $exPhase;
+                    $oneP['_extract_list_incomplete'] = ($exPhase === 'list');
+                    if ($exPhase === 'list' && empty($oneP['_extract_resume_from'])) {
                         $rp = max(1, (int)($paused['row']['resume_page'] ?? $paused['row']['current'] ?? 1));
                         if ($rp > 1) $rp = max(1, $rp - 1);
-                        $ps[$pk]['_extract_resume_from'] = $rp;
+                        $oneP['_extract_resume_from'] = $rp;
                     }
-                    $ps[$pk]['_extract_stage_at'] = time();
-                    saveOneProfileAtomic($pk, $ps[$pk]);
+                    $oneP['_extract_stage_at'] = time();
+                    saveOneProfileAtomic($pk, $oneP);
+                    unset($oneP);
+                } else {
+                    unset($ps);
                 }
                 if (!empty($paused['progress_owned'])) {
                     $latestPg = readProgress(EXTRACT_PROGRESS_FILE);
@@ -27167,9 +27327,32 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
                 }
             }
         }
-        $profiles = loadProfiles();
+        $dispatch0 = s4ParallelExtractSupported() ? s4DispatchParallelExtractJobs() : [];
         $queueNow = extractReadQueue();
+        $hasEligibleQueueRow = !empty($pausedKeys);
+        if (!$hasEligibleQueueRow) {
+            foreach ((array)($queueNow['entries'] ?? []) as $_qCand) {
+                if (!is_array($_qCand)) continue;
+                $_qSt = (string)($_qCand['status'] ?? '');
+                if (in_array($_qSt, ['paused', 'failed'], true) && empty($_qCand['auto_resume_blocked']) && empty($_qCand['stopped_by_user'])) {
+                    $hasEligibleQueueRow = true; break;
+                }
+                if ($_qSt === 'waiting' && !empty($_qCand['cron_resume_pending'])) {
+                    $hasEligibleQueueRow = true; break;
+                }
+            }
+        }
+        if (!$hasEligibleQueueRow) {
+            return ['ok' => true, 'source' => $source, 'paused_stalled' => [], 'resumed' => [], 'skipped' => [], 'browser_resume' => null, 'dispatch' => $dispatch0, 'fast_no_candidates' => true];
+        }
+        $profiles = loadProfiles();
         $candidates = cronExtractResumeCandidates($profiles, (array)($queueNow['entries'] ?? []), $pausedKeys);
+        $candProfiles = [];
+        foreach ($candidates as $_cItem) {
+            $_ck = trim((string)($_cItem['key'] ?? ''));
+            if ($_ck !== '' && isset($profiles[$_ck]) && is_array($profiles[$_ck])) $candProfiles[$_ck] = $profiles[$_ck];
+        }
+        unset($profiles);
         $manualStopPk = extractManualStopProfileKey();
         $tryLimit = max(1, min(10, (int)($cn['auto_resume_max'] ?? 3)));
         $resumed = [];$skipped = [];$browserResume = null;
@@ -27186,7 +27369,7 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             $samePgRow = $rqId === '' || (string)($pgChk['queue_id'] ?? '') === $rqId;
             if (tasksResumeExplicitlyStopped('extract', [], $samePgRow ? $pgChk : [])) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'explicit_user_stop']; continue; }
             if ($rqId !== '' && extractQueueRowStoppedByUser($rqId)) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'stopped_by_user']; continue; }
-            $prFresh = loadProfiles()[$rk] ?? null;
+            $prFresh = $candProfiles[$rk] ?? null;
             if (!is_array($prFresh)) continue;
             $qFresh = extractReadQueue();
             $alreadyActive = false;
@@ -27200,8 +27383,9 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             $rMeta = is_array($prFresh['_extract_resume_meta'] ?? null) ? $prFresh['_extract_resume_meta'] : [];
             $rPrevSig = (string)($rMeta['sig'] ?? '');
             $rPrevAt = (int)($rMeta['at'] ?? 0);
+            $rPrevVer = (string)($rMeta['ver'] ?? '');
             $rTries = (int)($rMeta['tries'] ?? 0);
-            if ($rPrevSig !== '' && $rPrevSig === $rSig && ($now - $rPrevAt) < AUTO_RESUME_WINDOW) $rTries++; else $rTries = 0;
+            if ($rPrevVer === APP_VERSION && $rPrevSig !== '' && $rPrevSig === $rSig && ($now - $rPrevAt) < AUTO_RESUME_WINDOW) $rTries++; else $rTries = 0;
             if ($rTries >= $tryLimit) {
                 $backoff = min(900, 30 * (2 ** min(5, max(0, $rTries - $tryLimit))));
                 if (($now - $rPrevAt) < $backoff) { $skipped[] = ['key' => $rk, 'queue_id' => $rqId, 'reason' => 'backoff', 'retry_after' => $backoff - ($now - $rPrevAt)]; continue; }
@@ -27210,7 +27394,7 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             $runPhase = ($rPhase === 'list' && !empty($prFresh['_extract_want_detail'])) ? 'all' : $rPhase;
             $dMode = normalizeDetailExtractMode($prFresh['detailExtractMode'] ?? 'two_stage');
             if ($workerActive || s4ParallelExtractSupported()) {
-                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries]);
+                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries, 'ver' => APP_VERSION]);
                 $enq = s4WorkerEnqueueBackendExtract($rk, $runPhase, false, true, -1, $rqId, false, $dMode);
                 if (!empty($enq['ok'])) {
                     $actualQid = (string)($enq['queue_id'] ?? $rqId);
@@ -27220,7 +27404,7 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
                 }
             }
             if (function_exists('s4SpawnBackendExtractChild')) {
-                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries]);
+                extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries, 'ver' => APP_VERSION]);
                 $sp = s4SpawnBackendExtractChild($rk, $runPhase, false, true, -1, $dMode, $rqId);
                 if (!empty($sp['ok'])) {
                     if ($rqId !== '') extractQueueSupersedeOlderPausedRows($rk, $rqId);
@@ -27381,6 +27565,9 @@ $releaseResumeReservation = function () use ($reservedLockQueueId): void {
 };
 
 $profile=isset($profiles[$profileKey])?$profiles[$profileKey]:null;
+/* v10.470: آزادسازی فوری ~۱۸۰ مگابایت کاتالوگ کامل profiles.json از RAM؛ از این نقطه فقط پروفایلِ هدف لازم است */
+unset($profiles);
+if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 // v9.67: اتصال غیرمستقیمِ به‌ازای هر پروفایل — آفلاینِ هر فراخوانیِ استخراج
 // مقدارِ پیش‌فرض «مستقیم» (غیرفعال) است مگر اینکه پروفایل صریحاً روشن کرده باشد.
 $GLOBALS['_srcNetProfileIndirect'] = netIndirectOn($profile['net_indirect'] ?? false);
@@ -27520,10 +27707,13 @@ if($dup!==null){
     $_dupMax=max(120,(int)(loadConnections()['stall_after']??300));
     /* v10.79/v10.80: دستی = آستانهٔ کوتاه؛ خودکار هم waiting/paused و running مرده را برمی‌دارد
        (قبلاً waiting با started_at=0 تا ابد جلوی enqueue می‌ایستاد). */
-    $_dupIsManual = in_array((string)$trigger, ['manual', 'manual_sync', 'manual_resume'], true);
-    $_dupIsAuto   = in_array((string)$trigger, ['auto', 'cron', 'periodic_sync', 'watchdog_resume'], true);
+    $_dupIsManual = in_array((string)$trigger, ['manual', 'manual_sync', 'manual_resume', 'worker', 'worker_child'], true);
+    $_dupIsAuto   = in_array((string)$trigger, ['auto', 'cron', 'periodic_sync', 'watchdog_resume', 'auto_resume', 'cron_resume'], true);
     $_dupSt = (string)($dup['status'] ?? '');
-    if ($_dupIsManual) {
+    $_dupQid = (string)($dup['id'] ?? '');
+    if ($_dupSt === 'running' && $_dupQid !== '' && !extractLockHeldForQueue($_dupQid)) {
+        $_dupIdle = PHP_INT_MAX;
+    } elseif ($_dupIsManual) {
         $_dupMax = min($_dupMax, 90);
         if ((string)$trigger === 'manual_resume'
             || $_dupSt === 'waiting' || $_dupSt === 'paused') {
@@ -28856,6 +29046,8 @@ foreach($allProducts as $key=>$p){$productsData[]=[$key,$p];}
 
    حالا فقط چیزی نوشته می‌شود که واقعاً حاصل این اجراست.
    v8.94: $pkFinal بالاتر — قبل از اولین نقطهٔ امن — تعیین شده است. */
+$_endLfp=@fopen(PROFILES_FILE.'.extract.lock','c');if($_endLfp)@flock($_endLfp,LOCK_EX);
+try{
 $profilesNow=loadProfiles();
 $profileOnDisk=is_array($profilesNow[$pkFinal]??null)?$profilesNow[$pkFinal]:$profile;
 $profileOnDisk['products']=$productsData;
@@ -28892,8 +29084,10 @@ if($phase==='detail'&&empty($_detailIncomplete)&&empty($_listRanOut)){
     unset($profileOnDisk['_sync_detail_scope_keys'],$profileOnDisk['_sync_detail_scope_meta']);
 }
 $profilesNow[$pkFinal]=$profileOnDisk;
-saveOneProfileAtomic($pkFinal,$profileOnDisk);
-$profiles=loadProfiles();$profile=$profiles[$pkFinal]??$profileOnDisk;
+saveProfiles($profilesNow,true);
+unset($profilesNow);
+}finally{if($_endLfp){@flock($_endLfp,LOCK_UN);@fclose($_endLfp);}}
+$profile=$profileOnDisk;
 if(isset($GLOBALS['_extractDetailFatalCtx']))$GLOBALS['_extractDetailFatalCtx']['active']=false;
 
 /* v10.83: اگر تیک «تولید خودکار توضیحات» روشن است، فقط روی محصولاتِ همین
@@ -28921,10 +29115,7 @@ try {
         }
         if ($_aiChanged) {
             $profileOnDisk['products'] = $_aiProds;
-            $profilesNow = loadProfiles();
-            $profilesNow[$pkFinal] = $profileOnDisk;
             saveOneProfileAtomic($pkFinal,$profileOnDisk);
-            $profiles = loadProfiles();
             $profile = $profileOnDisk;
             $GLOBALS['_aiContentFilled'] = $_aiFilled;
         }
@@ -29032,7 +29223,7 @@ $resumeQueueId = trim((string)($_GET['queue_id'] ?? $_POST['queue_id'] ?? ''));
    later; neither is allowed to fall back to an older 100-page value. */
 $_requestedPagesRaw=$_GET['pages']??$_POST['pages']??null;
 if($_requestedPagesRaw!==null)$requestedMaxPages=max(0,(int)$_requestedPagesRaw);
-else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages']??10));}
+else{$_pp=loadProfiles();$requestedMaxPages=max(0,(int)($_pp[$profileKey]['pages']??10));unset($_pp);}
 $_detailModeRaw = $_GET['detail_mode'] ?? $_POST['detail_mode'] ?? null;
 $detailModeIn = ($_detailModeRaw !== null && trim((string)$_detailModeRaw) !== '')
     ? normalizeDetailExtractMode($_detailModeRaw) : '';
@@ -29040,8 +29231,13 @@ if ($detailModeIn !== '' && $profileKey !== '') {
     $_ppMode = loadProfiles();
     if (isset($_ppMode[$profileKey]) && is_array($_ppMode[$profileKey])
         && normalizeDetailExtractMode($_ppMode[$profileKey]['detailExtractMode'] ?? 'two_stage') !== $detailModeIn) {
-        $_ppMode[$profileKey]['detailExtractMode'] = $detailModeIn;
-        saveOneProfileAtomic($profileKey, $_ppMode[$profileKey]);
+        $_oneMode = $_ppMode[$profileKey];
+        unset($_ppMode);
+        $_oneMode['detailExtractMode'] = $detailModeIn;
+        saveOneProfileAtomic($profileKey, $_oneMode);
+        unset($_oneMode);
+    } else {
+        unset($_ppMode);
     }
 }
 
@@ -29074,7 +29270,7 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && $_wkReallyAlive) {
    بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
 if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
     if (function_exists('s4SpawnPersistentWorker')) @s4SpawnPersistentWorker();
-    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn);
+    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn, $resumeQueueId);
     if (!empty($spawn['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'started'=>true,'worker_child'=>true,'profile_key'=>$profileKey,
@@ -29088,7 +29284,7 @@ $resumeLockQueueId = '';
 /* v10.136: resumeِ فرزند باید خودش، در همان process که worker را می‌سازد،
    lock بگیرد؛ parent فقط دیگر probe و mutation جداگانه انجام نمی‌دهد. */
 if ($resumeRequested) {
-    $resumePrep = extractResumePrepare($profileKey, loadConnections(), '', true);
+    $resumePrep = extractResumePrepare($profileKey, loadConnections(), $resumeQueueId, true);
     if (empty($resumePrep['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok' => false, 'locked' => ($resumePrep['reason'] ?? '') === 'lock_held',
@@ -32411,6 +32607,8 @@ if (isset($_GET['manual_sync'])) {
             $_msProf = $_msAll[$_msRes] ?? null;
         }
     }
+    unset($_msAll);
+    if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
     if ($_msKey === '' || !is_array($_msProf)) {
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
             'running' => false, 'done' => true, 'cancelled' => false,
@@ -32533,6 +32731,7 @@ if (isset($_GET['manual_sync'])) {
         /* پروفایل تازه بعد از extract */
         $_msAll = loadProfiles();
         $_msProf = $_msAll[$_msKey] ?? $_msProf;
+        unset($_msAll);
     } else {
         $_msErr = (string)($_msEx['error'] ?? 'استخراج ناموفق');
         if (!empty($_msEx['duplicate'])) $_msErr .= ' (ردیف فعال در صف)';
@@ -32558,7 +32757,7 @@ if (isset($_GET['manual_sync'])) {
     /* ── ۲) ذخیره و اعمال ضرایب ──
        profile تازهٔ ذخیره‌شده و connections دوباره خوانده می‌شوند؛ payload
        ارسال در مرحلهٔ بعد با prepareForSend همین ضرایب را واقعاً اعمال می‌کند. */
-    $_msAll=loadProfiles();$_msProf=$_msAll[$_msKey]??$_msProf;$_msCn=loadConnections();
+    $_msAll=loadProfiles();$_msProf=$_msAll[$_msKey]??$_msProf;unset($_msAll);$_msCn=loadConnections();
     $_msPricing=syncPricingSnapshot((array)$_msProf,$_msCn);
     manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_msPricing],
         '💰 ضرایب ذخیره‌شده بارگذاری و برای '.(int)$_msPricing['products'].' محصول فعال شد');
@@ -54830,6 +55029,52 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.470', 'رفع قطعی قفل/OOM و حلقهٔ معیوب استخراج، حذف تکرار اعلان پیام‌رسان وقتی یادآوری صفر است، و افزودن زیرمنوی جامع مدیریت سفارشات باسلام و ووکامرس',
+         function_exists('notifAutoDedupFingerprint')
+      && function_exists('notifShouldSuppressAutoDuplicate')
+      && function_exists('s4OrderMgrNormalizeBslFull')
+      && function_exists('s4OrderMgrNormalizeWoo')
+      && defined('ORDERS_MGR_NOTES_FILE')
+      && (function () {
+             $st = ['items' => []];
+             $now = 1800000000;
+             $cfgZero = ['after' => 0, 'every' => 1440, 'max' => 1];
+             /* ۱) آیتم تاریخی قدیمی‌تر از واترمارک، بی‌صدا seed شود و اعلان نزند */
+             $wOld = notifDecide($st, 'prod:735703:99', '2976', false, $cfgZero, $now, $now - 86400, $now - 60);
+             /* ۲) آیتم واقعاً تازه یک‌بار اعلان بزند و با یادآوری=۰ هرگز تکرار نشود */
+             $wNew1 = notifDecide($st, 'order:710223:555', '3739', true, $cfgZero, $now, $now - 10, $now - 60);
+             $wNew2 = notifDecide($st, 'order:710223:555', '3739', true, $cfgZero, $now + 3600, $now - 10, $now);
+             /* ۳) آیتمی که همچنان در اسکن زنده دیده می‌شود (seen تازه دارد) در هرس ۱۴روزه حذف نشود تا دوباره new تلقی نگردد */
+             $st['items']['prod:735703:100'] = ['sig' => '2976', 'first' => $now - 20 * 86400, 'last' => $now - 20 * 86400, 'seen' => $now - 10, 'n' => 1, 'pending' => false];
+             notifPrune($st, $now);
+             /* ۴) نرمال‌ساز سفارش ووکامرس (IRR -> تومان + وضعیت در انتظار ارسال) */
+             $wooNorm = s4OrderMgrNormalizeWoo([
+                 'id' => 4201,
+                 'number' => '4201',
+                 'status' => 'processing',
+                 'currency' => 'IRR',
+                 'total' => '18500000',
+                 'shipping_total' => '650000',
+                 'billing' => ['first_name' => 'مریم', 'last_name' => 'احمدی', 'phone' => '09120000000', 'city' => 'تهران', 'state' => 'تهران', 'address_1' => 'خیابان ولیعصر'],
+                 'line_items' => [['product_id' => 10, 'name' => 'کیف چرمی', 'quantity' => 2, 'total' => '17850000']],
+             ], 'https://sabashopping.ir', []);
+             $fp1 = notifAutoDedupFingerprint("🛒 سفارش جدید باسلام\nشماره: #123\nمبلغ: 500,000 تومان", 'order');
+             $fp2 = notifAutoDedupFingerprint("🔁 یادآوری #2 — 🛒 سفارش جدید باسلام\nشماره: #123\nمبلغ: 500,000 تومان", 'remind');
+             return $wOld === ''
+                 && isset($st['items']['prod:735703:99'])
+                 && $wNew1 === 'new'
+                 && $wNew2 === ''
+                 && isset($st['items']['prod:735703:100'])
+                 && $wooNorm['amount'] === 1850000
+                 && $wooNorm['shipping_cost'] === 65000
+                 && $wooNorm['unsent'] === true
+                 && ($wooNorm['items'][0]['unit_price'] ?? 0) === 892500
+                 && $fp1 === $fp2;
+         })()
+      && strpos($selfSrc, 'no_progress_recycles') !== false
+      && strpos($selfSrc, 'omSmenuRoot') !== false
+      && strpos($selfSrc, "{v:'10." . "470'") !== false
+      && version_compare(APP_VERSION, '10.470', '>='));
     $add('10.469', 'رفع خطای کاذب ۴۰۳ سفارش‌های باسلام (bslFetchVendorParcels + تبدیل ریال به تومان) و رفع مسدودیت کاذب اعتبار کلیدهای Mistral/LLM7',
          function_exists('bslFetchVendorParcels')
       && function_exists('aiShouldSuppressKeyPoison')
@@ -57375,12 +57620,44 @@ function notifPingSrc(array $results, bool $force): string {
 }
 function notifLoadState(): array {
     if (!is_file(NOTIF_STATE_FILE)) return [];
-    $d = json_decode((string)@file_get_contents(NOTIF_STATE_FILE), true);
+    $lfp = @fopen(NOTIF_STATE_FILE . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_SH);
+    $raw = (string)@file_get_contents(NOTIF_STATE_FILE);
+    $d = json_decode($raw, true);
+    if (!is_array($d) && $raw !== '') {
+        usleep(40000);
+        $raw = (string)@file_get_contents(NOTIF_STATE_FILE);
+        $d = json_decode($raw, true);
+    }
+    if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
     return is_array($d) ? $d : [];
 }
 
 function notifSaveState(array $st): void {
-    @file_put_contents(NOTIF_STATE_FILE, json_encode($st, JSON_UNESCAPED_UNICODE), LOCK_EX);
+    $lfp = @fopen(NOTIF_STATE_FILE . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_EX);
+    try {
+        if (empty($st['items']) && is_file(NOTIF_STATE_FILE) && @filesize(NOTIF_STATE_FILE) > 64) {
+            $prev = json_decode((string)@file_get_contents(NOTIF_STATE_FILE), true);
+            if (is_array($prev) && !empty($prev['items']) && is_array($prev['items'])) {
+                $st['items'] = $prev['items'];
+            }
+        }
+        $json = json_encode($st, JSON_UNESCAPED_UNICODE);
+        if ($json !== false) {
+            $tmp = NOTIF_STATE_FILE . '.tmp.' . (int)@getmypid();
+            if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
+                if (!@rename($tmp, NOTIF_STATE_FILE)) {
+                    @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
+                    @unlink($tmp);
+                }
+            } else {
+                @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
+            }
+        }
+    } finally {
+        if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    }
 }
 
 /* =====================================================================
@@ -57415,19 +57692,29 @@ function notifRemindCfg(array $cn): array {
  * خروجی: '' یعنی نفرست · 'new' · 'changed' · 'remind'
  */
 function notifDecide(array &$st, string $key, string $sig, bool $pending,
-                     array $cfg, int $now): string {
+                     array $cfg, int $now, int $itemTs = 0, int $watermark = 0): string {
     if (!isset($st['items']) || !is_array($st['items'])) $st['items'] = [];
     $prev = $st['items'][$key] ?? null;
 
     if (!is_array($prev)) {
+        /* v10.470: اگر این غرفه قبلاً پایش می‌شده ($watermark>0) ولی یک ردیفِ قدیمی
+           (مثلاً حذف‌شده توسط سقف قدیمی ۵۰۰تایی یا اسلاید در صفحهٔ اول API) با تاریخ
+           ایجادِ بیش از ۲ ساعت پیش از آخرین بررسی دیده شد، آن را بی‌صدا ثبت کن تا
+           مجدداً به‌عنوان رویدادِ «جدید» به پیام‌رسان‌ها شلیک نشود. */
+        if ($watermark > 0 && $itemTs > 0 && $itemTs < ($watermark - 7200)) {
+            $st['items'][$key] = ['sig' => $sig, 'first' => $itemTs, 'last' => $now,
+                                  'seen' => $now, 'n' => 1, 'pending' => $pending];
+            return '';
+        }
         $st['items'][$key] = ['sig' => $sig, 'first' => $now, 'last' => $now,
-                              'n' => 1, 'pending' => $pending];
+                              'seen' => $now, 'n' => 1, 'pending' => $pending];
         return 'new';
     }
+    $st['items'][$key]['seen'] = $now;
     if ((string)($prev['sig'] ?? '') !== $sig) {
         // امضا عوض شده — مثلاً پیام تازه رسیده یا وضعیت سفارش تغییر کرده
         $st['items'][$key] = ['sig' => $sig, 'first' => (int)($prev['first'] ?? $now),
-                              'last' => $now, 'n' => 1, 'pending' => $pending];
+                              'last' => $now, 'seen' => $now, 'n' => 1, 'pending' => $pending];
         return 'changed';
     }
     // همان وضعیت قبلی
@@ -57437,6 +57724,7 @@ function notifDecide(array &$st, string $key, string $sig, bool $pending,
     $n = (int)($prev['n'] ?? 1);
     if ($cfg['max'] > 0 && $n > $cfg['max']) return '';   // سقف یادآوری پر شده
     $st['items'][$key]['last'] = $now;
+    $st['items'][$key]['seen'] = $now;
     $st['items'][$key]['n'] = $n + 1;
     $st['items'][$key]['pending'] = true;
     return 'remind';
@@ -57444,20 +57732,24 @@ function notifDecide(array &$st, string $key, string $sig, bool $pending,
 
 /**
  * موارد قدیمی و تمام‌شده را پاک می‌کند تا فایل وضعیت بی‌نهایت بزرگ نشود.
- * موارد بی‌جواب نگه داشته می‌شوند چون هنوز باید یادآوری شوند.
+ * v10.470: معیارِ هرس «آخرین مشاهده در پاسخ API» (seen) است نه زمانِ ارسالِ
+ * اولیه (last)؛ بنابراین تا وقتی سفارشی/پیامی/محصولی هنوز در فهرستِ بازگشتی
+ * API باسلام حضور دارد، هرگز از حافظهٔ وضعیت پاک نمی‌شود و هر ۲۴ ساعت یا پس از
+ * عبور از ۵۰۰ آیتم دوباره به‌عنوان «جدید» تکرار نمی‌گردد.
  */
-function notifPrune(array &$st, int $now, int $maxAge = 604800): void {
+function notifPrune(array &$st, int $now, int $maxAge = 2592000): void {
     if (empty($st['items']) || !is_array($st['items'])) return;
     foreach ($st['items'] as $k => $v) {
         if (!is_array($v)) { unset($st['items'][$k]); continue; }
-        $age = $now - (int)($v['last'] ?? 0);
-        if (empty($v['pending']) && $age > 86400)   { unset($st['items'][$k]); continue; }
-        if ($age > $maxAge)                          { unset($st['items'][$k]); }
+        $activeAt = max((int)($v['seen'] ?? 0), (int)($v['last'] ?? 0));
+        $unseenAge = $now - $activeAt;
+        if (empty($v['pending']) && $unseenAge > 1209600) { unset($st['items'][$k]); continue; }
+        if ($unseenAge > $maxAge)                         { unset($st['items'][$k]); }
     }
-    // سقف سخت، برای وقتی غرفه خیلی شلوغ است
-    if (count($st['items']) > 500) {
-        uasort($st['items'], fn($a, $b) => (int)($b['last'] ?? 0) <=> (int)($a['last'] ?? 0));
-        $st['items'] = array_slice($st['items'], 0, 500, true);
+    // سقف ایمن بالا (۸۰۰۰ آیتم به‌جای ۵۰۰) بر پایهٔ آخرین مشاهده تا چندغرفهٔ شلوغ سرریز نکند
+    if (count($st['items']) > 8000) {
+        uasort($st['items'], fn($a, $b) => max((int)($b['seen'] ?? 0), (int)($b['last'] ?? 0)) <=> max((int)($a['seen'] ?? 0), (int)($a['last'] ?? 0)));
+        $st['items'] = array_slice($st['items'], 0, 8000, true);
     }
 }
 
@@ -57866,7 +58158,71 @@ function notifSourceIdentity(array $cn = []): array {
         'runtime'=>PHP_SAPI,'http_request'=>$host !== ''];
 }
 
+function notifAutoDedupFingerprint(string $coreMsg, ?string $feed): string {
+    $norm = trim($coreMsg);
+    if ($feed === 'error') {
+        $norm = (string)preg_replace('~\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}(:\d{2})?~u', '', $norm);
+        $norm = (string)preg_replace('~\b\d+\s*ثانیه~u', 'N ثانیه', $norm);
+    }
+    $norm = (string)preg_replace('~\s+~u', ' ', trim($norm));
+    return ($feed !== null && $feed !== '' ? $feed : 'auto') . ':' . sha1($norm);
+}
+
+function notifShouldSuppressAutoDuplicate(array $cn, string $coreMsg, ?string $feed): bool {
+    if (!empty($GLOBALS['_s4ManualNotifSend'])) return false;
+    if ($feed === 'ping' || $feed === 'digest') return false;
+    $trimMsg = trim($coreMsg);
+    if ($trimMsg === '' || strpos($trimMsg, '🧪') === 0 || strpos($trimMsg, '🔔 پیام آزمایشی') === 0 || strpos($trimMsg, '💓 ') === 0) return false;
+    $cfg = notifRemindCfg($cn);
+    $isRemindMsg = strpos($trimMsg, '⏰ یادآوری') !== false;
+    if ($isRemindMsg && (int)$cfg['after'] <= 0) return true;
+    if ($isRemindMsg && (int)$cfg['after'] > 0) $ttl = max(120, (int)$cfg['after'] - 20);
+    elseif ($feed === 'error') $ttl = 21600;
+    elseif ((int)$cfg['after'] <= 0) $ttl = 1209600;
+    else $ttl = 600;
+    $dedupFile = __DIR__ . '/notif_sent_dedup.json';
+    if (!is_file($dedupFile)) return false;
+    $lfp = @fopen($dedupFile . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_SH);
+    $d = json_decode((string)@file_get_contents($dedupFile), true);
+    if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    if (!is_array($d) || empty($d['hashes']) || !is_array($d['hashes'])) return false;
+    $fp = notifAutoDedupFingerprint($coreMsg, $feed);
+    $lastAt = (int)($d['hashes'][$fp] ?? 0);
+    return $lastAt > 0 && (time() - $lastAt) < $ttl;
+}
+
+function notifRecordAutoSent(string $coreMsg, ?string $feed): void {
+    if (!empty($GLOBALS['_s4ManualNotifSend']) || $feed === 'ping') return;
+    $trimMsg = trim($coreMsg);
+    if ($trimMsg === '' || strpos($trimMsg, '🧪') === 0 || strpos($trimMsg, '🔔 پیام آزمایشی') === 0) return;
+    $dedupFile = __DIR__ . '/notif_sent_dedup.json';
+    $lfp = @fopen($dedupFile . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_EX);
+    try {
+        $d = is_file($dedupFile) ? json_decode((string)@file_get_contents($dedupFile), true) : [];
+        $hashes = (is_array($d) && is_array($d['hashes'] ?? null)) ? $d['hashes'] : [];
+        $now = time();
+        foreach ($hashes as $k => $ts) {
+            if (($now - (int)$ts) > 1209600) unset($hashes[$k]);
+        }
+        $fp = notifAutoDedupFingerprint($coreMsg, $feed);
+        $hashes[$fp] = $now;
+        if (count($hashes) > 4000) {
+            arsort($hashes);
+            $hashes = array_slice($hashes, 0, 4000, true);
+        }
+        @file_put_contents($dedupFile, json_encode(['hashes' => $hashes], JSON_UNESCAPED_UNICODE), LOCK_EX);
+    } finally {
+        if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    }
+}
+
 function notifSend(array $cn, string $msg, ?string $feed = null, array $media = []): array {
+    $_coreMsgForDedup = $msg;
+    if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
+        return ['suppressed_duplicate' => 'sent_before'];
+    }
     /* Always identify the emitting installation. A user-supplied label alone
        was optional, so several copies sharing one bot/chat looked identical. */
     $_site = notifSourceIdentity($cn);
@@ -57887,6 +58243,9 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
     if ($sendRubika)  { $rr = bslSendToRubika($rt, $rc, $msg); $out['rubika'] = $rr['ok'] ? 'sent' : 'fail'; if (!$rr['ok'] && $rr['error'] !== '') $out['rubika_err'] = $rr['error']; if ($rr['ok'] && ($rr['message_id'] ?? '') !== '') { $out['rubika_msg_id'] = $rr['message_id']; msgrSaveMsg('rubika', $rr['message_id'], 0, 0); } }
     if ($sendTelegram)  { $tr = bslSendToTelegram($tt, $tc, $msg, $wantPreview); $out['telegram'] = $tr['ok'] ? 'sent' : 'fail'; if (!$tr['ok'] && $tr['error'] !== '') $out['telegram_err'] = $tr['error']; if ($tr['ok'] && ($tr['message_id'] ?? '') !== '') { $out['telegram_msg_id'] = $tr['message_id']; msgrSaveMsg('telegram', $tr['message_id'], 0, 0); } }
+    if (in_array('sent', [$out['baleh'] ?? '', $out['rubika'] ?? '', $out['telegram'] ?? ''], true)) {
+        notifRecordAutoSent($_coreMsgForDedup, $feed);
+    }
     /* v10.109: فوروارد چندرسانه‌ای (عکس/ویدیو/گیف/فایل/لینک) بعد از متن */
     if ($media) {
         $mediaSent = 0; $mediaFail = 0;
@@ -59326,7 +59685,7 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
             if (!isset($st['items']) || !is_array($st['items'])) $st['items'] = [];
             foreach ($norm as $f) {
                 $st['items'][$f['key']] = ['sig' => $f['sig'], 'first' => (int)$f['ts'],
-                    'last' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
+                    'last' => $now, 'seen' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
             }
             $st[$wmKey] = $now;
             $shopRows[] = ['vendor_id' => $vid, 'shop_name' => $name, 'ok' => true,
@@ -59337,9 +59696,12 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
         notifSeedIfNeeded($st, $isDef ? 'orders' : 'orders:' . $vid, $norm, $since);
         $suffix = $multi ? ' — ' . $name : '';
         $shopFound = 0; $shopRemind = 0;
+        $neOrd = is_array($cn['notif_events'] ?? null) ? $cn['notif_events'] : [];
         foreach ($norm as $f) {
-            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now);
+            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
             if ($why === '') continue;
+            if ($why === 'new' && !notifEventOn($neOrd, 'order_new')) continue;
+            if ($why === 'changed' && !notifEventOn($neOrd, 'order_status')) continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $base = $why === 'changed' ? '📦 تغییر وضعیت سفارش باسلام' : '🛒 سفارش جدید باسلام';
             $msg = bslParcelMsg($f['np'], notifHead($why, $base . $suffix, $n - 1));
@@ -59445,11 +59807,15 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             // v10.47 (۶۱): و اگر متن هم نیامد (تغییرِ ساختارِ API)، updated_at
             // آخرین نشانهٔ «پیام تازه» است — وگرنه امضا برای همیشه ثابت می‌ماند
             // و هیچ رویدادی دیگر دیده نمی‌شود (سکوتِ کاملِ بی‌صدا).
+            $_lmCreatedAt = trim((string)($c['last_message']['created_at'] ?? ''));
+            $_lmTextTrim = trim((string)$nc['text']);
             $sig = $lastId > 0 ? (string)$lastId
-                               : ('t' . substr(md5(((string)$nc['text']) . '|' . (string)$nc['updated_at']), 0, 12));
+                               : ('t' . substr(md5($_lmTextTrim !== '' && $_lmTextTrim !== '—'
+                                    ? ($_lmTextTrim . '|' . $_lmSid84 . '|' . $_lmCreatedAt)
+                                    : (((string)$nc['text']) . '|' . (string)$nc['updated_at'])), 0, 12));
             $norm[] = ['nc' => $nc, 'key' => ($isDef ? 'chat:' : 'chat:' . $vid . ':') . $nc['chat_id'],
                        'sig' => $sig,
-                       'ts' => strtotime($nc['updated_at'] ?: 'now') ?: $now,
+                       'ts' => ($_lmCreatedAt !== '' ? (strtotime($_lmCreatedAt) ?: 0) : 0) ?: (strtotime($nc['updated_at'] ?: '') ?: 0),
                        'pending' => $nc['unseen'] > 0];
         }
 
@@ -59489,7 +59855,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if (!isset($st['items']) || !is_array($st['items'])) $st['items'] = [];
             foreach ($norm as $f) {
                 $st['items'][$f['key']] = ['sig' => $f['sig'], 'first' => (int)$f['ts'],
-                    'last' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
+                    'last' => $now, 'seen' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
             }
             $st[$wmKey] = $now;
             $shopRows[] = ['vendor_id' => $vid, 'shop_name' => $name, 'ok' => true,
@@ -59500,22 +59866,24 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         /* v10.45 (۵۹): مهاجرتِ یک‌بارهٔ امضا — اگر برای ردیفی که قبلاً
            ثبت شده امضای جدید شکلِ دیگری گرفت، امضا را بی‌صدا به‌روز می‌کنیم
            تا یک سیلِ «تغییر وضعیت» نشود. */
-        if (empty($st['chat_sig2']) && isset($st['items']) && is_array($st['items'])) {
+        if (empty($st['chat_sig3']) && isset($st['items']) && is_array($st['items'])) {
             foreach ($norm as $f) {
                 $pk = $st['items'][$f['key']] ?? null;
                 if (is_array($pk) && (string)($pk['sig'] ?? '') !== $f['sig']) {
                     $pk['sig'] = $f['sig'];
+                    $pk['seen'] = $now;
                     $st['items'][$f['key']] = $pk;
                 }
             }
             $st['chat_sig2'] = $now;
+            $st['chat_sig3'] = $now;
         }
 
         notifSeedIfNeeded($st, $isDef ? 'chats' : 'chats:' . $vid, $norm, $since);
         $suffix = $multi ? ' — ' . $name : '';
         $shopFound = 0; $shopRemind = 0;
         foreach ($norm as $f) {
-            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now);
+            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
             if ($why === '') continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $body = $f['pending'] ? bslFetchChatMessages($tk, $f['nc']['chat_id'], min(10, max(1, $f['nc']['unseen']))) : [];
@@ -59529,7 +59897,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 $sentTo = notifSend($cn, $msg, null, $_media109);
                 /* v10.85 (99): message_id با context چت برای webhook */
                 $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
-                foreach (['bale_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
+                foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
                     if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
                 }
             }
@@ -59615,8 +59983,11 @@ function notifCheckProducts(array $cn, bool $test = false, bool $send = true): a
             elseif ($val === 4184)  { $txt = "📋 تغییر وضعیت محصول باسلام" . $sfx . "\nمحصول: " . $title . "\nوضعیت جدید: بایگانی 🗑️"; $pend = false; }
             elseif ($val === 2976)  { $txt = "➕ محصول جدید باسلام" . $sfx . "\nمحصول: " . $title . "\nوضعیت: فعال ✅"; $pend = false; }
             else continue;
+            $_pUpd = trim((string)($p['updated_at'] ?? ''));
+            $_pCr  = trim((string)($p['created_at'] ?? ''));
+            $_pTs  = ($_pUpd !== '' ? (strtotime($_pUpd) ?: 0) : 0) ?: ($_pCr !== '' ? (strtotime($_pCr) ?: 0) : 0);
             $norm[] = ['key' => ($isDef ? 'prod:' : 'prod:' . $vid . ':') . $pid, 'sig' => (string)$val, 'text' => $txt,
-                       'ts' => strtotime($p['created_at'] ?? 'now') ?: $now, 'pending' => $pend];
+                       'val' => $val, 'ts' => $_pTs, 'pending' => $pend];
         }
 
         $wmKey = $isDef ? 'last_product_check' : 'last_product_check:' . $vid;
@@ -59634,8 +60005,8 @@ function notifCheckProducts(array $cn, bool $test = false, bool $send = true): a
             /* v10.45 (۵۹): اولین مشاهدهٔ این غرفه خاموش است (توضیح در تابع سفارش‌ها). */
             if (!isset($st['items']) || !is_array($st['items'])) $st['items'] = [];
             foreach ($norm as $f) {
-                $st['items'][$f['key']] = ['sig' => $f['sig'], 'first' => (int)$f['ts'],
-                    'last' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
+                $st['items'][$f['key']] = ['sig' => $f['sig'], 'first' => (int)($f['ts'] ?: $now),
+                    'last' => $now, 'seen' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
             }
             $st[$wmKey] = $now;
             $shopRows[] = ['vendor_id' => $vid, 'shop_name' => $name, 'ok' => true,
@@ -59645,9 +60016,12 @@ function notifCheckProducts(array $cn, bool $test = false, bool $send = true): a
 
         notifSeedIfNeeded($st, $isDef ? 'products' : 'products:' . $vid, $norm, $since);
         $shopFound = 0; $shopRemind = 0;
+        $nePrd = is_array($cn['notif_events'] ?? null) ? $cn['notif_events'] : [];
         foreach ($norm as $f) {
-            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now);
+            $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
             if ($why === '') continue;
+            if ($why === 'new' && (int)($f['val'] ?? 0) === 2976 && !notifEventOn($nePrd, 'product_new')) continue;
+            if (($why === 'changed' || (int)($f['val'] ?? 0) !== 2976) && $why !== 'remind' && !notifEventOn($nePrd, 'product_status')) continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $msg = $why === 'remind'
                  ? notifHead($why, '', $n - 1) . "\n" . $f['text']
@@ -66450,6 +66824,7 @@ if (isset($_GET['msgr_log'])) {
 /* دکمه‌های تست — هر بررسی را جدا اجرا و نتیجه را گزارش می‌کند */
 if (isset($_GET['notif_test'])) {
     header('Content-Type: application/json; charset=UTF-8');
+    $GLOBALS['_s4ManualNotifSend'] = true;
     $kind = $_GET['kind'] ?? '';
     $cn = loadConnections();
     /* v10.45 (۵۹): پینگ و تستِ تغییراتِ مبدأ به باسلام کاری ندارند
@@ -66634,6 +67009,7 @@ if (isset($_GET['bsl_chats_list'])) {
  */
 if (isset($_GET['bsl_notify_selected'])) {
     header('Content-Type: application/json; charset=UTF-8');
+    $GLOBALS['_s4ManualNotifSend'] = true;
     $cn = loadConnections();
     $why = notifPrereq($cn);
     if ($why !== null) { echo json_encode(['ok' => false, 'error' => $why], JSON_UNESCAPED_UNICODE); exit; }
@@ -66737,6 +67113,817 @@ if (isset($_GET['bsl_notify_selected'])) {
     }
     echo json_encode(['ok' => true, 'sent' => $sent, 'picked' => count($picked),
         'delivery' => $delivery, 'digest' => $digest], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/* =====================================================================
+ *  v10.470: سامانهٔ یکپارچهٔ مدیریت سفارشات (باسلام چندغرفه + ووکامرس)
+ * ===================================================================== */
+
+function s4OrderMgrNotesLoad(): array {
+    if (!is_file(ORDERS_MGR_NOTES_FILE)) return [];
+    $lfp = @fopen(ORDERS_MGR_NOTES_FILE . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_SH);
+    $d = json_decode((string)@file_get_contents(ORDERS_MGR_NOTES_FILE), true);
+    if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    return is_array($d) ? $d : [];
+}
+
+function s4OrderMgrNotesSaveOne(string $key, array $patch): array {
+    $lfp = @fopen(ORDERS_MGR_NOTES_FILE . '.lock', 'c');
+    if ($lfp) @flock($lfp, LOCK_EX);
+    $entry = [];
+    try {
+        $all = is_file(ORDERS_MGR_NOTES_FILE) ? json_decode((string)@file_get_contents(ORDERS_MGR_NOTES_FILE), true) : [];
+        if (!is_array($all)) $all = [];
+        $cur = is_array($all[$key] ?? null) ? $all[$key] : [];
+        foreach ($patch as $k => $v) $cur[$k] = $v;
+        $cur['updated_at'] = time();
+        $all[$key] = $cur;
+        if (count($all) > 5000) {
+            uasort($all, fn($a, $b) => (int)($b['updated_at'] ?? 0) <=> (int)($a['updated_at'] ?? 0));
+            $all = array_slice($all, 0, 5000, true);
+        }
+        @file_put_contents(ORDERS_MGR_NOTES_FILE, json_encode($all, JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $entry = $cur;
+    } finally {
+        if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+    }
+    return $entry;
+}
+
+function s4OrderMgrWooStatuses(): array {
+    return [
+        'pending'    => 'در انتظار پرداخت',
+        'processing' => 'در حال انجام (آماده ارسال)',
+        'on-hold'    => 'در انتظار بررسی',
+        'completed'  => 'تکمیل شده',
+        'cancelled'  => 'لغو شده',
+        'refunded'   => 'مسترد شده',
+        'failed'     => 'ناموفق',
+    ];
+}
+
+function s4OrderMgrRialToToman(int $val): int {
+    if ($val <= 0) return 0;
+    return ($val >= 10000 && ($val % 10) === 0) ? intdiv($val, 10) : $val;
+}
+
+function s4OrderMgrNormalizeBslFull(array $o, string $shopName = '', int $vendorId = 0, array $notesMap = []): array {
+    $base = bslNormalizeParcel($o, $shopName, $vendorId);
+    $pid = (int)($base['parcel_id'] ?? 0);
+    $vid = (int)($base['vendor_id'] ?? $vendorId);
+    $cust = is_array($o['order']['customer'] ?? null) ? $o['order']['customer'] : (is_array($o['customer'] ?? null) ? $o['customer'] : []);
+    $rec  = is_array($cust['recipient'] ?? null) ? $cust['recipient'] : [];
+    $usr  = is_array($cust['user'] ?? null) ? $cust['user'] : [];
+    $cityObj = is_array($cust['city'] ?? null) ? $cust['city'] : (is_array($rec['city'] ?? null) ? $rec['city'] : []);
+    $provObj = is_array($cityObj['parent'] ?? null) ? $cityObj['parent'] : (is_array($cust['province'] ?? null) ? $cust['province'] : []);
+
+    $phone = '';
+    foreach ([$rec['mobile'] ?? '', $rec['phone'] ?? '', $usr['mobile'] ?? '', $cust['mobile'] ?? '', $cust['phone'] ?? '', $o['recipient_mobile'] ?? ''] as $candPh) {
+        if (is_scalar($candPh) && trim((string)$candPh) !== '') { $phone = trim((string)$candPh); break; }
+    }
+    $province = trim((string)($provObj['title'] ?? ($provObj['name'] ?? ($rec['province'] ?? ''))));
+    $city     = trim((string)($cityObj['title'] ?? ($cityObj['name'] ?? ($rec['city_title'] ?? ''))));
+    $address  = '';
+    foreach ([$rec['postal_address'] ?? '', $rec['address'] ?? '', $cust['postal_address'] ?? '', $cust['address'] ?? '', $o['address'] ?? ''] as $candAdr) {
+        if (is_scalar($candAdr) && trim((string)$candAdr) !== '') { $address = trim((string)$candAdr); break; }
+    }
+    $postalCode = '';
+    foreach ([$rec['postal_code'] ?? '', $cust['postal_code'] ?? '', $o['postal_code'] ?? ''] as $candZip) {
+        if (is_scalar($candZip) && trim((string)$candZip) !== '') { $postalCode = trim((string)$candZip); break; }
+    }
+    $shipMethod = '';
+    foreach ([
+        $o['shipping_method']['title'] ?? '',
+        $o['post_type']['title'] ?? '',
+        $o['delivery_method']['title'] ?? '',
+        is_string($o['shipping_method'] ?? null) ? $o['shipping_method'] : '',
+    ] as $candSh) {
+        if (is_scalar($candSh) && trim((string)$candSh) !== '') { $shipMethod = trim((string)$candSh); break; }
+    }
+    $tracking = '';
+    foreach ([
+        $o['post_receipt']['tracking_code'] ?? '',
+        $o['shipping']['tracking_code'] ?? '',
+        $o['tracking_code'] ?? '',
+        $o['barcode'] ?? '',
+    ] as $candTr) {
+        if (is_scalar($candTr) && trim((string)$candTr) !== '') { $tracking = trim((string)$candTr); break; }
+    }
+    $shipCostRaw = (int)($o['shipping_cost'] ?? ($o['send_price'] ?? 0));
+    $shipCost = s4OrderMgrRialToToman($shipCostRaw);
+
+    $richItems = [];
+    foreach (($o['items'] ?? []) as $it) {
+        if (!is_array($it)) continue;
+        $qty = max(1, (int)($it['quantity'] ?? 1));
+        $prd = is_array($it['product'] ?? null) ? $it['product'] : [];
+        $itTitle = trim((string)($it['title'] ?? ($prd['title'] ?? ($prd['name'] ?? ''))));
+        $itPriceRaw = (int)($it['price'] ?? 0);
+        $unitToman = s4OrderMgrRialToToman($itPriceRaw);
+        $img = '';
+        foreach ([
+            $prd['photo']['small'] ?? '',
+            $prd['photo']['medium'] ?? '',
+            $prd['photo']['original'] ?? '',
+            $prd['photos'][0]['small'] ?? '',
+            $it['photo']['small'] ?? '',
+            is_string($prd['photo'] ?? null) ? $prd['photo'] : '',
+        ] as $candImg) {
+            if (is_string($candImg) && strncmp($candImg, 'http', 4) === 0) { $img = $candImg; break; }
+        }
+        $varTitle = '';
+        if (is_array($it['variation'] ?? null)) {
+            $vp = [];
+            foreach (($it['variation']['properties'] ?? []) as $prp) {
+                if (is_array($prp)) {
+                    $pt = trim((string)($prp['property']['title'] ?? '') . ' ' . (string)($prp['value']['title'] ?? ($prp['value'] ?? '')));
+                    if ($pt !== '') $vp[] = $pt;
+                }
+            }
+            $varTitle = $vp ? implode(' · ', $vp) : trim((string)($it['variation']['title'] ?? ''));
+        }
+        $richItems[] = [
+            'product_id' => (int)($prd['id'] ?? ($it['product_id'] ?? 0)),
+            'title'      => $itTitle !== '' ? $itTitle : 'کالا',
+            'variant'    => $varTitle,
+            'sku'        => trim((string)($it['sku'] ?? ($prd['sku'] ?? ''))),
+            'qty'        => $qty,
+            'unit_price' => $unitToman,
+            'total'      => $unitToman * $qty,
+            'image'      => $img,
+        ];
+    }
+    $noteKey = 'bsl:' . $vid . ':' . $pid;
+    $localMeta = is_array($notesMap[$noteKey] ?? null) ? $notesMap[$noteKey] : [];
+    if ($tracking === '' && !empty($localMeta['tracking_code'])) $tracking = (string)$localMeta['tracking_code'];
+
+    return array_merge($base, [
+        'channel'         => 'bsl',
+        'uid'             => $noteKey,
+        'display_number'  => (string)($base['order_id'] ?: $pid),
+        'phone'           => $phone,
+        'province'        => $province,
+        'city'            => $city,
+        'address'         => $address,
+        'postal_code'     => $postalCode,
+        'shipping_method' => $shipMethod,
+        'shipping_cost'   => $shipCost,
+        'tracking_code'   => $tracking,
+        'carrier'         => (string)($localMeta['carrier'] ?? ''),
+        'customer_note'   => trim((string)($o['description'] ?? ($o['note'] ?? ($cust['description'] ?? '')))),
+        'admin_note'      => (string)($localMeta['admin_note'] ?? ''),
+        'buyer_user_id'   => (int)($usr['id'] ?? 0),
+        'items'           => $richItems ?: $base['items'],
+        'items_count'     => count($richItems ?: $base['items']),
+        'panel_url'       => $pid > 0 ? ('https://vendor.basalam.com/orders/' . $pid) : 'https://vendor.basalam.com/orders',
+    ]);
+}
+
+function s4OrderMgrMoneyFromWoo($raw, string $currency): int {
+    $num = (int)round((float)$raw);
+    if ($num <= 0) return 0;
+    $cur = strtoupper(trim($currency));
+    if ($cur === 'IRR' || $cur === 'RIAL') return intdiv($num, 10);
+    if ($cur === 'IRHT') return $num * 1000;
+    return $num;
+}
+
+function s4OrderMgrNormalizeWoo(array $o, string $storeUrl = '', array $notesMap = []): array {
+    $oid = (int)($o['id'] ?? 0);
+    $stSlug = strtolower(trim((string)($o['status'] ?? 'pending')));
+    if (strncmp($stSlug, 'wc-', 3) === 0) $stSlug = substr($stSlug, 3);
+    $stMap = s4OrderMgrWooStatuses();
+    $stLabel = $stMap[$stSlug] ?? $stSlug;
+    $cur = (string)($o['currency'] ?? 'IRT');
+
+    $bill = is_array($o['billing'] ?? null) ? $o['billing'] : [];
+    $ship = is_array($o['shipping'] ?? null) ? $o['shipping'] : [];
+    $custName = trim(trim((string)($bill['first_name'] ?? '')) . ' ' . trim((string)($bill['last_name'] ?? '')));
+    if ($custName === '') $custName = trim(trim((string)($ship['first_name'] ?? '')) . ' ' . trim((string)($ship['last_name'] ?? '')));
+    if ($custName === '') $custName = trim((string)($bill['company'] ?? '')) ?: 'مشتری مهمان';
+
+    $phone = trim((string)($bill['phone'] ?? ($ship['phone'] ?? '')));
+    $email = trim((string)($bill['email'] ?? ''));
+    $prov  = trim((string)($ship['state'] ?? ($bill['state'] ?? '')));
+    $city  = trim((string)($ship['city'] ?? ($bill['city'] ?? '')));
+    $addr1 = trim((string)($ship['address_1'] ?? ($bill['address_1'] ?? '')));
+    $addr2 = trim((string)($ship['address_2'] ?? ($bill['address_2'] ?? '')));
+    $address = trim($addr1 . ($addr2 !== '' ? '، ' . $addr2 : ''));
+    $postal  = trim((string)($ship['postcode'] ?? ($bill['postcode'] ?? '')));
+
+    $shipMethod = '';
+    if (!empty($o['shipping_lines']) && is_array($o['shipping_lines'])) {
+        $smParts = [];
+        foreach ($o['shipping_lines'] as $sl) {
+            if (is_array($sl) && trim((string)($sl['method_title'] ?? '')) !== '') $smParts[] = trim((string)$sl['method_title']);
+        }
+        $shipMethod = implode(' + ', $smParts);
+    }
+
+    $tracking = '';
+    $carrier = '';
+    if (!empty($o['meta_data']) && is_array($o['meta_data'])) {
+        foreach ($o['meta_data'] as $md) {
+            if (!is_array($md)) continue;
+            $mk = (string)($md['key'] ?? '');
+            $mv = $md['value'] ?? '';
+            if (in_array($mk, ['_tracking_number', '_shipping_tracking_code', 'tracking_code', '_post_barcode', 'post_tracking_code'], true) && is_scalar($mv) && trim((string)$mv) !== '') {
+                $tracking = trim((string)$mv);
+            } elseif ($mk === '_shipping_tracking_carrier' && is_scalar($mv) && trim((string)$mv) !== '') {
+                $carrier = trim((string)$mv);
+            } elseif ($mk === '_wc_shipment_tracking_items' && is_array($mv) && !empty($mv[0]['tracking_number'])) {
+                $tracking = trim((string)$mv[0]['tracking_number']);
+                if ($carrier === '' && !empty($mv[0]['tracking_provider'])) $carrier = trim((string)$mv[0]['tracking_provider']);
+            }
+        }
+    }
+
+    $items = [];
+    foreach (($o['line_items'] ?? []) as $li) {
+        if (!is_array($li)) continue;
+        $qty = max(1, (int)($li['quantity'] ?? 1));
+        $lineTotal = s4OrderMgrMoneyFromWoo($li['total'] ?? 0, $cur);
+        $unitPrice = $qty > 0 ? intdiv($lineTotal, $qty) : s4OrderMgrMoneyFromWoo($li['price'] ?? 0, $cur);
+        $img = '';
+        if (is_array($li['image'] ?? null) && !empty($li['image']['src']) && strncmp((string)$li['image']['src'], 'http', 4) === 0) {
+            $img = (string)$li['image']['src'];
+        }
+        $varParts = [];
+        foreach (($li['meta_data'] ?? []) as $lmd) {
+            if (!is_array($lmd)) continue;
+            $lk = trim((string)($lmd['display_key'] ?? ($lmd['key'] ?? '')));
+            $lv = is_scalar($lmd['display_value'] ?? ($lmd['value'] ?? null)) ? trim(strip_tags((string)($lmd['display_value'] ?? $lmd['value']))) : '';
+            if ($lk !== '' && $lv !== '' && $lk[0] !== '_') $varParts[] = $lk . ': ' . $lv;
+        }
+        $items[] = [
+            'product_id' => (int)($li['product_id'] ?? 0),
+            'variation_id' => (int)($li['variation_id'] ?? 0),
+            'title'      => trim((string)($li['name'] ?? 'کالا')),
+            'variant'    => implode(' · ', array_slice($varParts, 0, 4)),
+            'sku'        => trim((string)($li['sku'] ?? '')),
+            'qty'        => $qty,
+            'unit_price' => $unitPrice,
+            'total'      => $lineTotal,
+            'image'      => $img,
+        ];
+    }
+
+    $noteKey = 'woo:' . $oid;
+    $localMeta = is_array($notesMap[$noteKey] ?? null) ? $notesMap[$noteKey] : [];
+    if ($tracking === '' && !empty($localMeta['tracking_code'])) $tracking = (string)$localMeta['tracking_code'];
+    if ($carrier === '' && !empty($localMeta['carrier'])) $carrier = (string)$localMeta['carrier'];
+
+    $createdAt = trim((string)($o['date_created'] ?? ($o['date_created_gmt'] ?? '')));
+    $adminUrl = $storeUrl !== '' && $oid > 0 ? (rtrim($storeUrl, '/') . '/wp-admin/post.php?post=' . $oid . '&action=edit') : '';
+
+    return [
+        'channel'         => 'woo',
+        'uid'             => $noteKey,
+        'order_id'        => $oid,
+        'parcel_id'       => 0,
+        'display_number'  => trim((string)($o['number'] ?? (string)$oid)),
+        'customer'        => $custName,
+        'phone'           => $phone,
+        'email'           => $email,
+        'province'        => $prov,
+        'city'            => $city,
+        'address'         => $address,
+        'postal_code'     => $postal,
+        'amount'          => s4OrderMgrMoneyFromWoo($o['total'] ?? 0, $cur),
+        'shipping_cost'   => s4OrderMgrMoneyFromWoo($o['shipping_total'] ?? 0, $cur),
+        'discount_total'  => s4OrderMgrMoneyFromWoo($o['discount_total'] ?? 0, $cur),
+        'currency_raw'    => $cur,
+        'payment_method'  => trim((string)($o['payment_method_title'] ?? ($o['payment_method'] ?? ''))),
+        'shipping_method' => $shipMethod,
+        'tracking_code'   => $tracking,
+        'carrier'         => $carrier,
+        'status_id'       => $stSlug,
+        'status'          => $stLabel,
+        'unsent'          => in_array($stSlug, ['processing', 'on-hold'], true),
+        'created_at'      => $createdAt,
+        'send_before'     => '',
+        'customer_note'   => trim((string)($o['customer_note'] ?? '')),
+        'admin_note'      => (string)($localMeta['admin_note'] ?? ''),
+        'items'           => $items,
+        'items_count'     => count($items),
+        'shop_name'       => 'ووکامرس',
+        'vendor_id'       => 0,
+        'panel_url'       => $adminUrl,
+    ];
+}
+
+function s4OrderMgrFetchWooList(array $cn, int $page = 1, int $perPage = 20, string $status = 'any', string $search = '', array $notesMap = []): array {
+    $w = is_array($cn['woocommerce'] ?? null) ? $cn['woocommerce'] : [];
+    $storeUrl = rtrim(trim((string)($w['store_url'] ?? '')), '/');
+    $ck = trim((string)($w['consumer_key'] ?? ''));
+    $cs = trim((string)($w['consumer_secret'] ?? ''));
+    $per = min(50, max(5, $perPage));
+    $pg  = max(1, $page);
+    $stClean = strtolower(trim($status));
+    $validSt = array_keys(s4OrderMgrWooStatuses());
+    if ($stClean === '' || $stClean === 'all') $stClean = 'any';
+    elseif ($stClean === 'unsent') $stClean = 'processing,on-hold';
+    elseif (!in_array($stClean, $validSt, true)) $stClean = 'any';
+
+    if ($storeUrl !== '' && $ck !== '' && $cs !== '') {
+        $qp = ['per_page=' . $per, 'page=' . $pg, 'orderby=date', 'order=desc'];
+        if ($stClean !== 'any') $qp[] = 'status=' . rawurlencode($stClean);
+        else $qp[] = 'status=any';
+        if ($search !== '') $qp[] = 'search=' . rawurlencode($search);
+        $r = wooReq($storeUrl, $ck, $cs, 'GET', 'orders?' . implode('&', $qp), null, 30);
+        if (!empty($r['ok']) && is_array($r['body'])) {
+            $rows = [];
+            foreach ($r['body'] as $wo) {
+                if (is_array($wo)) $rows[] = s4OrderMgrNormalizeWoo($wo, $storeUrl, $notesMap);
+            }
+            return ['ok' => true, 'via' => 'api', 'rows' => $rows, 'has_more' => count($rows) >= $per, 'page' => $pg];
+        }
+        $apiErr = 'خطای API ووکامرس (' . (int)($r['code'] ?? 0) . ')'
+                . (!empty($r['body']['message']) ? ': ' . mb_substr((string)$r['body']['message'], 0, 140) : (!empty($r['error']) ? ': ' . $r['error'] : ''));
+        if (!function_exists('wc_get_orders')) {
+            return ['ok' => false, 'configured' => true, 'error' => $apiErr, 'rows' => []];
+        }
+    }
+
+    if (function_exists('wc_get_orders')) {
+        $args = ['limit' => $per, 'page' => $pg, 'orderby' => 'date', 'order' => 'DESC', 'type' => 'shop_order'];
+        if ($stClean !== 'any') $args['status'] = explode(',', $stClean);
+        if ($search !== '') $args['s'] = $search;
+        $objs = @wc_get_orders($args);
+        if (is_array($objs)) {
+            $rows = [];
+            foreach ($objs as $obj) {
+                if (!is_object($obj) || !method_exists($obj, 'get_data')) continue;
+                $d = $obj->get_data();
+                $d['number'] = method_exists($obj, 'get_order_number') ? (string)$obj->get_order_number() : (string)($d['id'] ?? '');
+                $d['date_created'] = isset($d['date_created']) && is_object($d['date_created']) && method_exists($d['date_created'], 'date')
+                    ? $d['date_created']->date('c') : '';
+                $d['line_items'] = [];
+                if (method_exists($obj, 'get_items')) {
+                    foreach ($obj->get_items() as $itemObj) {
+                        if (!is_object($itemObj) || !method_exists($itemObj, 'get_data')) continue;
+                        $idD = $itemObj->get_data();
+                        $d['line_items'][] = [
+                            'product_id'   => (int)($idD['product_id'] ?? 0),
+                            'variation_id' => (int)($idD['variation_id'] ?? 0),
+                            'name'         => (string)($idD['name'] ?? ''),
+                            'quantity'     => (int)($idD['quantity'] ?? 1),
+                            'total'        => (string)($idD['total'] ?? '0'),
+                        ];
+                    }
+                }
+                $rows[] = s4OrderMgrNormalizeWoo($d, $storeUrl, $notesMap);
+            }
+            return ['ok' => true, 'via' => 'direct', 'rows' => $rows, 'has_more' => count($rows) >= $per, 'page' => $pg];
+        }
+    }
+
+    return ['ok' => false, 'configured' => false, 'error' => 'اتصال ووکامرس تنظیم نشده است (آدرس فروشگاه و کلیدهای Consumer Key/Secret را در بخش ووکامرس وارد کنید)', 'rows' => []];
+}
+
+function s4OrderMgrFetchBslDetail(string $tk, int $parcelId, string $shopName, int $vid, array $notesMap, ?array $net = null): array {
+    if ($parcelId <= 0 || trim($tk) === '') return ['ok' => false, 'error' => 'پارامتر نامعتبر'];
+    $ep = 'vendor-parcels/' . $parcelId;
+    $r = bslReqRead($tk, $ep);
+    if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [0, 403, 404, 500, 502, 503, 504], true)) {
+        if ($net === null) $net = bslNetCfg();
+        $fbUrl = 'https://order-processing.basalam.com/v3/' . $ep;
+        foreach (bslNetModes($net) as $m) {
+            $ch = curl_init();
+            curl_setopt_array($ch, bslCurlOpts($fbUrl, $tk, 'GET', null, false, $net, $m));
+            $raw = curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err = curl_error($ch);
+            curl_close($ch);
+            if ($code >= 200 && $code < 300) {
+                $r = ['ok' => true, 'code' => $code, 'body' => json_decode((string)$raw, true), 'raw' => $raw, 'error' => ''];
+                break;
+            }
+        }
+    }
+    if (!empty($r['ok']) && is_array($r['body'])) {
+        $obj = is_array($r['body']['data'] ?? null) && isset($r['body']['data']['id']) ? $r['body']['data'] : $r['body'];
+        if (isset($obj['id'])) {
+            return ['ok' => true, 'order' => s4OrderMgrNormalizeBslFull($obj, $shopName, $vid, $notesMap)];
+        }
+    }
+    $listR = bslFetchVendorParcels($tk, $vid, 30, [], $net);
+    if (!empty($listR['ok'])) {
+        foreach (($listR['body']['data'] ?? []) as $cand) {
+            if (is_array($cand) && (int)($cand['id'] ?? 0) === $parcelId) {
+                return ['ok' => true, 'order' => s4OrderMgrNormalizeBslFull($cand, $shopName, $vid, $notesMap)];
+            }
+        }
+    }
+    return ['ok' => false, 'error' => bslApiError($r, 'دریافت جزئیات مرسوله ناموفق', $ep, 'vendor.parcel.read')];
+}
+
+if (isset($_GET['orders_mgr_api']) || isset($_POST['orders_mgr_api'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $actOm = trim((string)($_POST['orders_mgr_api'] ?? $_GET['orders_mgr_api'] ?? 'list'));
+    $cnOm = loadConnections();
+    $notesMapOm = s4OrderMgrNotesLoad();
+    $bslShopsOm = array_values(array_filter(bslAllShops($cnOm),
+        fn($s) => trim((string)($s['token'] ?? '')) !== '' && (int)($s['vendor_id'] ?? 0) > 0));
+    $wCfgOm = is_array($cnOm['woocommerce'] ?? null) ? $cnOm['woocommerce'] : [];
+    $hasWooCfgOm = (trim((string)($wCfgOm['store_url'] ?? '')) !== '' && trim((string)($wCfgOm['consumer_key'] ?? '')) !== '' && trim((string)($wCfgOm['consumer_secret'] ?? '')) !== '')
+                || function_exists('wc_get_orders');
+
+    if ($actOm === 'list') {
+        $chanOm   = strtolower(trim((string)($_GET['channel'] ?? 'all')));
+        if (!in_array($chanOm, ['all', 'bsl', 'woo'], true)) $chanOm = 'all';
+        $filterOm = trim((string)($_GET['status'] ?? 'all'));
+        $searchOm = trim((string)($_GET['q'] ?? ''));
+        $shopIdOm = (int)($_GET['shop_id'] ?? 0);
+        $perOm    = min(30, max(5, (int)($_GET['per_page'] ?? 20)));
+        $pageOm   = max(1, (int)($_GET['page'] ?? 1));
+        $cursorOm = trim((string)($_GET['cursor'] ?? ''));
+
+        $rowsOm = [];
+        $errorsOm = [];
+        $bslNextCurOm = '';
+        $wooHasMoreOm = false;
+        $bslCountOm = 0; $wooCountOm = 0; $bslUnsentOm = 0; $wooUnsentOm = 0;
+
+        if (($chanOm === 'all' || $chanOm === 'bsl') && $bslShopsOm) {
+            $qShops = $bslShopsOm;
+            if ($shopIdOm > 0) {
+                $qShops = array_values(array_filter($qShops, fn($s) => (int)($s['vendor_id'] ?? 0) === $shopIdOm));
+            }
+            $extraBsl = [];
+            if ($filterOm === 'unsent') $extraBsl['statuses'] = bslUnsentStatuses();
+            elseif (ctype_digit($filterOm) && (int)$filterOm > 0) $extraBsl['statuses'] = [(int)$filterOm];
+            if ($cursorOm !== '') $extraBsl['cursor'] = $cursorOm;
+            $netBslOm = bslNetCfg($cnOm);
+            $seenPidOm = [];
+            foreach ($qShops as $shOm) {
+                $rB = bslFetchVendorParcels((string)$shOm['token'], (int)$shOm['vendor_id'], $perOm, $extraBsl, $netBslOm);
+                if (empty($rB['ok'])) {
+                    $errorsOm[] = ((string)$shOm['shop_name'] !== '' ? $shOm['shop_name'] . ': ' : 'باسلام: ')
+                                . bslApiError($rB, 'دریافت سفارش‌ها ناموفق', 'vendor-parcels', 'vendor.parcel.read');
+                    continue;
+                }
+                if (count($qShops) === 1) $bslNextCurOm = (string)($rB['body']['next_cursor'] ?? '');
+                foreach (($rB['body']['data'] ?? []) as $rawP) {
+                    if (!is_array($rawP)) continue;
+                    $np = s4OrderMgrNormalizeBslFull($rawP, (string)($shOm['shop_name'] ?? ''), (int)$shOm['vendor_id'], $notesMapOm);
+                    $pid = (int)($np['parcel_id'] ?? 0);
+                    if ($pid > 0) {
+                        if (isset($seenPidOm[$pid])) continue;
+                        $seenPidOm[$pid] = true;
+                    }
+                    if ($filterOm === 'problem' && !in_array((int)$np['status_id'], [5017, 3572, 3740, 4633, 5075, 3233, 6440], true)) continue;
+                    if ($searchOm !== '') {
+                        $hay = implode(' ', [
+                            (string)$np['parcel_id'], (string)$np['order_id'], (string)$np['customer'],
+                            (string)$np['phone'], (string)$np['city'], (string)$np['shop_name'], (string)$np['tracking_code'],
+                            implode(' ', array_map(fn($x) => (string)($x['title'] ?? ''), (array)$np['items'])),
+                        ]);
+                        if (mb_stripos($hay, $searchOm) === false) continue;
+                    }
+                    $bslCountOm++;
+                    if (!empty($np['unsent'])) $bslUnsentOm++;
+                    $rowsOm[] = $np;
+                }
+            }
+        } elseif ($chanOm === 'bsl' && !$bslShopsOm) {
+            $errorsOm[] = 'هیچ غرفهٔ متصلی در باسلام یافت نشد.';
+        }
+
+        if ($chanOm === 'all' || $chanOm === 'woo') {
+            if ($hasWooCfgOm) {
+                $wooFilter = $chanOm === 'all' && ctype_digit($filterOm) ? 'any' : $filterOm;
+                $wRes = s4OrderMgrFetchWooList($cnOm, $pageOm, $perOm, $wooFilter, $searchOm, $notesMapOm);
+                if (!empty($wRes['ok'])) {
+                    $wooHasMoreOm = !empty($wRes['has_more']);
+                    foreach ($wRes['rows'] as $wr) {
+                        $wooCountOm++;
+                        if (!empty($wr['unsent'])) $wooUnsentOm++;
+                        $rowsOm[] = $wr;
+                    }
+                } else {
+                    $errorsOm[] = (string)($wRes['error'] ?? 'دریافت سفارش‌های ووکامرس ناموفق');
+                }
+            } elseif ($chanOm === 'woo') {
+                $errorsOm[] = 'اتصال ووکامرس تنظیم نشده است (آدرس سایت و کلیدهای API را در زیرمنوی ووکامرس وارد کنید).';
+            }
+        }
+
+        if (count($rowsOm) > 1) {
+            usort($rowsOm, function ($a, $b) {
+                $ta = strtotime((string)($a['created_at'] ?? '')) ?: 0;
+                $tb = strtotime((string)($b['created_at'] ?? '')) ?: 0;
+                if ($ta !== $tb) return $tb <=> $ta;
+                return strcmp((string)($b['display_number'] ?? ''), (string)($a['display_number'] ?? ''));
+            });
+        }
+
+        $sumToman = 0;
+        foreach ($rowsOm as $rw) $sumToman += (int)($rw['amount'] ?? 0);
+        $shopsMeta = array_map(fn($s) => [
+            'vendor_id' => (int)$s['vendor_id'],
+            'shop_name' => (string)$s['shop_name'],
+            'is_default' => !empty($s['is_default']),
+        ], $bslShopsOm);
+
+        echo json_encode([
+            'ok'              => true,
+            'channel'         => $chanOm,
+            'rows'            => $rowsOm,
+            'total'           => count($rowsOm),
+            'unsent'          => $bslUnsentOm + $wooUnsentOm,
+            'bsl_count'       => $bslCountOm,
+            'woo_count'       => $wooCountOm,
+            'bsl_unsent'      => $bslUnsentOm,
+            'woo_unsent'      => $wooUnsentOm,
+            'sum_toman'       => $sumToman,
+            'bsl_shops'       => $shopsMeta,
+            'woo_configured'  => $hasWooCfgOm,
+            'bsl_next_cursor' => $bslNextCurOm,
+            'woo_page'        => $pageOm,
+            'woo_has_more'    => $wooHasMoreOm,
+            'bsl_statuses'    => bslParcelStatuses(),
+            'woo_statuses'    => s4OrderMgrWooStatuses(),
+            'errors'          => $errorsOm,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($actOm === 'detail') {
+        $chDet = strtolower(trim((string)($_GET['channel'] ?? 'bsl')));
+        if ($chDet === 'woo') {
+            $oid = (int)($_GET['order_id'] ?? 0);
+            if ($oid <= 0) { echo json_encode(['ok' => false, 'error' => 'شناسهٔ سفارش نامعتبر است'], JSON_UNESCAPED_UNICODE); exit; }
+            $storeUrl = rtrim(trim((string)($wCfgOm['store_url'] ?? '')), '/');
+            $ck = trim((string)($wCfgOm['consumer_key'] ?? ''));
+            $cs = trim((string)($wCfgOm['consumer_secret'] ?? ''));
+            if ($storeUrl !== '' && $ck !== '' && $cs !== '') {
+                $rO = wooReq($storeUrl, $ck, $cs, 'GET', 'orders/' . $oid, null, 25);
+                if (empty($rO['ok']) || !is_array($rO['body'])) {
+                    echo json_encode(['ok' => false, 'error' => 'خطا در خواندن سفارش ووکامرس (' . (int)($rO['code'] ?? 0) . ')'], JSON_UNESCAPED_UNICODE); exit;
+                }
+                $ordNorm = s4OrderMgrNormalizeWoo($rO['body'], $storeUrl, $notesMapOm);
+                $rNotes = wooReq($storeUrl, $ck, $cs, 'GET', 'orders/' . $oid . '/notes?per_page=20', null, 15);
+                $notesArr = [];
+                if (!empty($rNotes['ok']) && is_array($rNotes['body'])) {
+                    foreach ($rNotes['body'] as $nt) {
+                        if (!is_array($nt)) continue;
+                        $notesArr[] = [
+                            'id'            => (int)($nt['id'] ?? 0),
+                            'note'          => trim(strip_tags((string)($nt['note'] ?? ''))),
+                            'customer_note' => !empty($nt['customer_note']),
+                            'author'        => trim((string)($nt['author'] ?? '')),
+                            'date'          => (string)($nt['date_created'] ?? ''),
+                        ];
+                    }
+                }
+                $ordNorm['woo_notes'] = $notesArr;
+                echo json_encode(['ok' => true, 'order' => $ordNorm], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if (function_exists('wc_get_order')) {
+                $obj = @wc_get_order($oid);
+                if (is_object($obj) && method_exists($obj, 'get_data')) {
+                    $d = $obj->get_data();
+                    $d['number'] = method_exists($obj, 'get_order_number') ? (string)$obj->get_order_number() : (string)$oid;
+                    $d['date_created'] = isset($d['date_created']) && is_object($d['date_created']) && method_exists($d['date_created'], 'date')
+                        ? $d['date_created']->date('c') : '';
+                    $d['line_items'] = [];
+                    if (method_exists($obj, 'get_items')) {
+                        foreach ($obj->get_items() as $itemObj) {
+                            if (!is_object($itemObj) || !method_exists($itemObj, 'get_data')) continue;
+                            $idD = $itemObj->get_data();
+                            $d['line_items'][] = [
+                                'product_id' => (int)($idD['product_id'] ?? 0),
+                                'variation_id' => (int)($idD['variation_id'] ?? 0),
+                                'name' => (string)($idD['name'] ?? ''),
+                                'quantity' => (int)($idD['quantity'] ?? 1),
+                                'total' => (string)($idD['total'] ?? '0'),
+                            ];
+                        }
+                    }
+                    $ordNorm = s4OrderMgrNormalizeWoo($d, $storeUrl, $notesMapOm);
+                    $ordNorm['woo_notes'] = [];
+                    echo json_encode(['ok' => true, 'order' => $ordNorm], JSON_UNESCAPED_UNICODE); exit;
+                }
+            }
+            echo json_encode(['ok' => false, 'error' => 'اتصال ووکامرس در دسترس نیست'], JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        $pid = (int)($_GET['parcel_id'] ?? 0);
+        $vid = (int)($_GET['vendor_id'] ?? 0);
+        $pickedShop = null;
+        foreach ($bslShopsOm as $sh) {
+            if ($vid > 0 && (int)$sh['vendor_id'] === $vid) { $pickedShop = $sh; break; }
+        }
+        if (!$pickedShop && $bslShopsOm) $pickedShop = $bslShopsOm[0];
+        if (!$pickedShop) { echo json_encode(['ok' => false, 'error' => 'غرفهٔ باسلام یافت نشد'], JSON_UNESCAPED_UNICODE); exit; }
+        $det = s4OrderMgrFetchBslDetail((string)$pickedShop['token'], $pid, (string)$pickedShop['shop_name'], (int)$pickedShop['vendor_id'], $notesMapOm, bslNetCfg($cnOm));
+        echo json_encode($det, JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($actOm === 'woo_action') {
+        $oid = (int)($_POST['order_id'] ?? 0);
+        $subAct = trim((string)($_POST['sub_action'] ?? ''));
+        if ($oid <= 0) { echo json_encode(['ok' => false, 'error' => 'شناسهٔ سفارش ووکامرس نامعتبر است'], JSON_UNESCAPED_UNICODE); exit; }
+        $storeUrl = rtrim(trim((string)($wCfgOm['store_url'] ?? '')), '/');
+        $ck = trim((string)($wCfgOm['consumer_key'] ?? ''));
+        $cs = trim((string)($wCfgOm['consumer_secret'] ?? ''));
+        $hasRest = ($storeUrl !== '' && $ck !== '' && $cs !== '');
+
+        if ($subAct === 'update_status') {
+            $newSt = strtolower(trim((string)($_POST['new_status'] ?? '')));
+            if (!isset(s4OrderMgrWooStatuses()[$newSt])) {
+                echo json_encode(['ok' => false, 'error' => 'وضعیت انتخابی نامعتبر است'], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if ($hasRest) {
+                $rUp = wooReq($storeUrl, $ck, $cs, 'PUT', 'orders/' . $oid, ['status' => $newSt], 25);
+                if (!empty($rUp['ok']) && is_array($rUp['body'])) {
+                    echo json_encode(['ok' => true, 'message' => 'وضعیت سفارش ووکامرس با موفقیت تغییر کرد', 'order' => s4OrderMgrNormalizeWoo($rUp['body'], $storeUrl, s4OrderMgrNotesLoad())], JSON_UNESCAPED_UNICODE); exit;
+                }
+                echo json_encode(['ok' => false, 'error' => 'خطا در تغییر وضعیت ووکامرس (' . (int)($rUp['code'] ?? 0) . ')'], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if (function_exists('wc_get_order')) {
+                $obj = @wc_get_order($oid);
+                if (is_object($obj) && method_exists($obj, 'update_status')) {
+                    $obj->update_status($newSt, 'تغییر وضعیت از پنل مدیریت سفارشات اسکرپر');
+                    echo json_encode(['ok' => true, 'message' => 'وضعیت سفارش ووکامرس تغییر کرد'], JSON_UNESCAPED_UNICODE); exit;
+                }
+            }
+            echo json_encode(['ok' => false, 'error' => 'اتصال ووکامرس تنظیم نشده است'], JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        if ($subAct === 'save_tracking') {
+            $trk = trim((string)($_POST['tracking_code'] ?? ''));
+            $car = trim((string)($_POST['carrier'] ?? 'پست'));
+            $adminNote = trim((string)($_POST['admin_note'] ?? ''));
+            $notifyCust = !empty($_POST['notify_customer']);
+            $markCompleted = !empty($_POST['mark_completed']);
+            s4OrderMgrNotesSaveOne('woo:' . $oid, [
+                'tracking_code' => $trk,
+                'carrier'       => $car,
+                'admin_note'    => $adminNote,
+            ]);
+            if ($hasRest) {
+                $payloadUp = [
+                    'meta_data' => [
+                        ['key' => '_tracking_number', 'value' => $trk],
+                        ['key' => '_shipping_tracking_code', 'value' => $trk],
+                        ['key' => '_shipping_tracking_carrier', 'value' => $car],
+                    ],
+                ];
+                if ($markCompleted) $payloadUp['status'] = 'completed';
+                $rUp = wooReq($storeUrl, $ck, $cs, 'PUT', 'orders/' . $oid, $payloadUp, 25);
+                if ($notifyCust && $trk !== '') {
+                    $noteTxt = '📦 سفارش شما ارسال شد.' . "\n" . ($car !== '' ? 'روش ارسال: ' . $car . "\n" : '') . 'کد رهگیری مرسوله: ' . $trk;
+                    wooReq($storeUrl, $ck, $cs, 'POST', 'orders/' . $oid . '/notes', ['note' => $noteTxt, 'customer_note' => true], 20);
+                }
+                echo json_encode(['ok' => true, 'api_synced' => !empty($rUp['ok']), 'message' => 'کد رهگیری و یادداشت با موفقیت ثبت شد'], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if (function_exists('wc_get_order')) {
+                $obj = @wc_get_order($oid);
+                if (is_object($obj)) {
+                    if (method_exists($obj, 'update_meta_data')) {
+                        $obj->update_meta_data('_tracking_number', $trk);
+                        $obj->update_meta_data('_shipping_tracking_code', $trk);
+                        $obj->update_meta_data('_shipping_tracking_carrier', $car);
+                    }
+                    if ($markCompleted && method_exists($obj, 'set_status')) $obj->set_status('completed');
+                    if (method_exists($obj, 'save')) $obj->save();
+                    if ($notifyCust && $trk !== '' && method_exists($obj, 'add_order_note')) {
+                        $obj->add_order_note('📦 کد رهگیری مرسوله: ' . $trk . ($car !== '' ? ' (' . $car . ')' : ''), 1);
+                    }
+                }
+            }
+            echo json_encode(['ok' => true, 'message' => 'کد رهگیری و یادداشت ذخیره شد'], JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        if ($subAct === 'add_note') {
+            $noteTxt = trim((string)($_POST['note'] ?? ''));
+            $isCust = !empty($_POST['customer_note']);
+            if ($noteTxt === '') { echo json_encode(['ok' => false, 'error' => 'متن یادداشت خالی است'], JSON_UNESCAPED_UNICODE); exit; }
+            if ($hasRest) {
+                $rNt = wooReq($storeUrl, $ck, $cs, 'POST', 'orders/' . $oid . '/notes', ['note' => $noteTxt, 'customer_note' => $isCust], 20);
+                if (!empty($rNt['ok'])) {
+                    echo json_encode(['ok' => true, 'message' => $isCust ? 'یادداشت برای مشتری ارسال و ثبت شد' : 'یادداشت خصوصی ثبت شد'], JSON_UNESCAPED_UNICODE); exit;
+                }
+                echo json_encode(['ok' => false, 'error' => 'ثبت یادداشت در ووکامرس ناموفق بود (' . (int)($rNt['code'] ?? 0) . ')'], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if (function_exists('wc_get_order')) {
+                $obj = @wc_get_order($oid);
+                if (is_object($obj) && method_exists($obj, 'add_order_note')) {
+                    $obj->add_order_note($noteTxt, $isCust ? 1 : 0);
+                    echo json_encode(['ok' => true, 'message' => 'یادداشت ثبت شد'], JSON_UNESCAPED_UNICODE); exit;
+                }
+            }
+            echo json_encode(['ok' => false, 'error' => 'اتصال ووکامرس تنظیم نشده است'], JSON_UNESCAPED_UNICODE); exit;
+        }
+        echo json_encode(['ok' => false, 'error' => 'عملیات ناشناخته'], JSON_UNESCAPED_UNICODE); exit;
+    }
+
+    if ($actOm === 'bsl_action') {
+        $pid = (int)($_POST['parcel_id'] ?? 0);
+        $vid = (int)($_POST['vendor_id'] ?? 0);
+        $subAct = trim((string)($_POST['sub_action'] ?? ''));
+        if ($pid <= 0) { echo json_encode(['ok' => false, 'error' => 'شناسهٔ مرسوله نامعتبر است'], JSON_UNESCAPED_UNICODE); exit; }
+        $pickedShop = null;
+        foreach ($bslShopsOm as $sh) {
+            if ($vid > 0 && (int)$sh['vendor_id'] === $vid) { $pickedShop = $sh; break; }
+        }
+        if (!$pickedShop && $bslShopsOm) $pickedShop = $bslShopsOm[0];
+        $vidActual = $pickedShop ? (int)$pickedShop['vendor_id'] : $vid;
+        $tkActual  = $pickedShop ? (string)$pickedShop['token'] : '';
+
+        if ($subAct === 'save_note') {
+            $trk = trim((string)($_POST['tracking_code'] ?? ''));
+            $car = trim((string)($_POST['carrier'] ?? ''));
+            $adm = trim((string)($_POST['admin_note'] ?? ''));
+            $saved = s4OrderMgrNotesSaveOne('bsl:' . $vidActual . ':' . $pid, [
+                'tracking_code' => $trk,
+                'carrier'       => $car,
+                'admin_note'    => $adm,
+            ]);
+            echo json_encode(['ok' => true, 'message' => 'یادداشت و کد رهگیری در پروندهٔ مرسوله ذخیره شد', 'meta' => $saved], JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        if ($subAct === 'set_preparation') {
+            if ($tkActual === '') { echo json_encode(['ok' => false, 'error' => 'توکن غرفه یافت نشد'], JSON_UNESCAPED_UNICODE); exit; }
+            $tried = [];
+            foreach ([
+                ['POST', 'vendor-parcels/' . $pid . '/set-preparation', []],
+                ['POST', 'vendor-parcels/' . $pid . '/confirm', []],
+                ['PATCH', 'vendor-parcels/' . $pid, ['status' => 3237]],
+            ] as [$mth, $epTry, $bdTry]) {
+                $rT = bslReq($tkActual, $mth, $epTry, $bdTry);
+                $tried[] = $epTry . ':' . (int)($rT['code'] ?? 0);
+                if (!empty($rT['ok'])) {
+                    echo json_encode(['ok' => true, 'message' => 'مرسوله وارد وضعیت «در حال آماده‌سازی» شد'], JSON_UNESCAPED_UNICODE); exit;
+                }
+            }
+            $lastErr = isset($rT) ? bslApiError($rT, 'تأیید آماده‌سازی ناموفق', 'vendor-parcels', 'vendor.parcel.write') : 'خطا در تغییر وضعیت';
+            echo json_encode(['ok' => false, 'error' => $lastErr, 'tried' => $tried], JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        if ($subAct === 'set_posted') {
+            $trk = trim((string)($_POST['tracking_code'] ?? ''));
+            $car = trim((string)($_POST['carrier'] ?? 'post'));
+            $adm = trim((string)($_POST['admin_note'] ?? ''));
+            if ($trk === '') { echo json_encode(['ok' => false, 'error' => 'کد رهگیری پستی الزامی است'], JSON_UNESCAPED_UNICODE); exit; }
+            s4OrderMgrNotesSaveOne('bsl:' . $vidActual . ':' . $pid, [
+                'tracking_code' => $trk,
+                'carrier'       => $car,
+                'admin_note'    => $adm,
+            ]);
+            if ($tkActual === '') {
+                echo json_encode(['ok' => false, 'saved_locally' => true, 'error' => 'توکن غرفه یافت نشد (کد رهگیری محلی ذخیره شد)'], JSON_UNESCAPED_UNICODE); exit;
+            }
+            $shippingMethodMap = ['post' => 3197, 'pishtaz' => 3197, 'sefareshi' => 3198, 'tipax' => 3259, 'chapar' => 6102, 'courier' => 3258];
+            $smCode = $shippingMethodMap[strtolower($car)] ?? 3197;
+            $tried = [];
+            foreach ([
+                ['POST', 'vendor-parcels/' . $pid . '/set-posted', ['tracking_code' => $trk, 'shipping_method' => $smCode]],
+                ['POST', 'vendor-parcels/' . $pid . '/post', ['tracking_code' => $trk, 'shipping_method' => $smCode]],
+                ['PATCH', 'vendor-parcels/' . $pid, ['status' => 3238, 'tracking_code' => $trk]],
+            ] as [$mth, $epTry, $bdTry]) {
+                $rT = bslReq($tkActual, $mth, $epTry, $bdTry);
+                $tried[] = $epTry . ':' . (int)($rT['code'] ?? 0);
+                if (!empty($rT['ok'])) {
+                    echo json_encode(['ok' => true, 'saved_locally' => true, 'message' => 'کد رهگیری در باسلام ثبت شد و مرسوله «ارسال‌شده» علامت خورد'], JSON_UNESCAPED_UNICODE); exit;
+                }
+            }
+            $apiErr = isset($rT) ? bslApiError($rT, 'ثبت ارسال در API باسلام ناموفق', 'vendor-parcels/set-posted', 'vendor.parcel.write') : 'خطا';
+            echo json_encode([
+                'ok' => false,
+                'saved_locally' => true,
+                'error' => $apiErr . ' (کد رهگیری در پروندهٔ داخلی ذخیره شد؛ در صورت کمبود دسترسی vendor.parcel.write توکن، از پنل غرفه‌دار ثبت نهایی کنید)',
+                'tried' => $tried,
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode(['ok' => false, 'error' => 'عملیات ناشناخته'], JSON_UNESCAPED_UNICODE); exit;
+    }
+
+    if ($actOm === 'forward_msgr') {
+        $GLOBALS['_s4ManualNotifSend'] = true;
+        $hasMsgr = notifMessengerConfigured($cnOm, 'baleh')
+                || notifMessengerConfigured($cnOm, 'rubika')
+                || notifMessengerConfigured($cnOm, 'telegram');
+        if (!$hasMsgr) {
+            echo json_encode(['ok' => false, 'error' => 'هیچ پیام‌رسانی (تلگرام / بله / روبیکا) تنظیم نشده است'], JSON_UNESCAPED_UNICODE); exit;
+        }
+        $msgFw = trim((string)($_POST['message'] ?? ''));
+        if ($msgFw === '') {
+            echo json_encode(['ok' => false, 'error' => 'متن پیام خالی است'], JSON_UNESCAPED_UNICODE); exit;
+        }
+        $dlv = notifSend($cnOm, $msgFw, 'order');
+        $anySent = in_array('sent', array_values($dlv), true);
+        echo json_encode(['ok' => $anySent, 'delivery' => $dlv, 'error' => $anySent ? '' : 'ارسال به پیام‌رسان ناموفق بود'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    echo json_encode(['ok' => false, 'error' => 'درخواست نامعتبر'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -82050,6 +83237,86 @@ html[data-skin="gloss"] .progress-bar{
 <div class="settings-panel-head"><h2>☰ تنظیمات عمومی</h2><span id="connSaveInd" style="font-size:13px;min-width:16px;text-align:center;transition:color .3s" title=""></span><div class="settings-panel-actions"><button class="panel-fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن"><span aria-hidden="true">⛶</span><span>تمام‌عرض</span></button><button class="btn btn-gray" onclick="toggleSettingsPanel()" style="font-size:14px;padding:4px 10px" title="بستن منو">✕</button></div></div>
 <div class="settings-panel-body" style="padding:0">
 
+<!-- v10.470: زیرمنوی جامع «مدیریت سفارشات» (باسلام چندغرفه + ووکامرس) -->
+<div class="smenu" id="omSmenuRoot">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#1d4ed8,#0f172a)" onclick="toggleSmenu(this);omEnsureLoaded()"><h3>📦 مدیریت سفارشات</h3><span class="cst off" id="omHdrBadge">باسلام + ووکامرس</span><span class="arrow">▼</span></div>
+<div class="smenu-body" style="padding:0">
+<style>
+.om-subnav{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px;background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:5px}
+.om-subbtn{flex:1 1 105px;border:1px solid #263449;background:#111c31;color:#cbd5e1;border-radius:8px;padding:7px 8px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:all .16s}
+.om-subbtn:hover{border-color:#3b82f6;color:#fff}
+.om-subbtn.active{background:linear-gradient(135deg,#1d4ed8,#0e7490);border-color:#38bdf8;color:#fff;box-shadow:0 2px 10px rgba(14,116,144,.35)}
+.om-subbtn .om-cnt{font-size:9.5px;background:#0f172a99;padding:1px 6px;border-radius:999px;color:#93c5fd}
+.om-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:6px;margin-bottom:9px}
+.om-kpi{background:#0f172a;border:1px solid #1e293b;border-radius:9px;padding:6px 8px;text-align:center}
+.om-kpi b{display:block;font-size:13px;color:#e2e8f0;margin-top:2px}
+.om-kpi span{font-size:9.5px;color:#94a3b8}
+.om-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px;align-items:center}
+.om-toolbar input,.om-toolbar select{background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:6px 9px;font-size:11px;outline:none}
+.om-toolbar input:focus,.om-toolbar select:focus{border-color:#38bdf8}
+.om-card{background:#0f172a;border:1px solid #263449;border-radius:10px;padding:9px 11px;margin-bottom:7px;transition:border-color .16s,background .16s}
+.om-card:hover{border-color:#3b82f6;background:#111c31}
+.om-card.unsent{border-right:3px solid #f59e0b}
+.om-card.done-ord{border-right:3px solid #10b981}
+.om-ch-bsl{background:#064e3b;color:#6ee7b7;border:1px solid #059669;font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:6px}
+.om-ch-woo{background:#3b0764;color:#d8b4fe;border:1px solid #7e22ce;font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:6px}
+.om-st{font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap}
+.om-st.pend{background:#78350f66;color:#fcd34d;border:1px solid #b45309}
+.om-st.ok{background:#064e3b88;color:#6ee7b7;border:1px solid #047857}
+.om-st.bad{background:#7f1d1d66;color:#fca5a5;border:1px solid #b91c1c}
+.om-st.muted{background:#1e293b;color:#94a3b8;border:1px solid #334155}
+.om-det-box{background:#0b1324;border:1px solid #38bdf888;border-radius:11px;padding:11px;margin-bottom:10px;box-shadow:0 6px 22px rgba(0,0,0,.4)}
+.om-field-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:7px;margin:8px 0}
+.om-fcell{background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:6px 8px;font-size:10.5px;line-height:1.65}
+.om-fcell small{display:block;color:#64748b;font-size:9.5px}
+.om-it-row{display:flex;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid #1e293b;font-size:11px}
+.om-it-row:last-child{border-bottom:0}
+.om-it-img{width:38px;height:38px;border-radius:7px;object-fit:cover;background:#1e293b;flex:0 0 38px;border:1px solid #334155}
+</style>
+
+<!-- زیرمنوهای کانال فروش -->
+<div class="om-subnav" role="tablist" aria-label="زیرمنوهای مدیریت سفارشات">
+  <button type="button" class="om-subbtn active" id="omTab_all" onclick="omSwitchChannel('all')">🌐 همهٔ سفارشات <span class="om-cnt" id="omCnt_all">۰</span></button>
+  <button type="button" class="om-subbtn" id="omTab_bsl" onclick="omSwitchChannel('bsl')">🛍 باسلام <span class="om-cnt" id="omCnt_bsl">۰</span></button>
+  <button type="button" class="om-subbtn" id="omTab_woo" onclick="omSwitchChannel('woo')">🟣 ووکامرس <span class="om-cnt" id="omCnt_woo">۰</span></button>
+</div>
+
+<!-- نوار شاخص‌های کلیدی -->
+<div class="om-kpis">
+  <div class="om-kpi"><span>کل نمایشی</span><b id="omKpiTotal">۰</b></div>
+  <div class="om-kpi"><span>منتظر ارسال</span><b id="omKpiUnsent" style="color:#fbbf24">۰</b></div>
+  <div class="om-kpi"><span>باسلام / ووکامرس</span><b id="omKpiSplit" style="font-size:11.5px;color:#67e8f9">۰ / ۰</b></div>
+  <div class="om-kpi"><span>جمع مبلغ (تومان)</span><b id="omKpiSum" style="color:#4ade80;font-size:11.5px">۰</b></div>
+</div>
+
+<!-- نوار ابزار جستجو، فیلتر و نمای گسترده -->
+<div class="om-toolbar">
+  <input type="text" id="omSearchInp" placeholder="🔎 شماره سفارش، مشتری، موبایل، شهر، کالا، رهگیری..." style="flex:1 1 170px;min-width:140px" onkeydown="if(event.key==='Enter'){event.preventDefault();omReload(true);}">
+  <select id="omShopSel" onchange="omReload(true)" style="flex:0 1 145px" title="انتخاب غرفه باسلام">
+    <option value="0">همهٔ غرفه‌های باسلام</option>
+  </select>
+  <select id="omStatusSel" onchange="omReload(true)" style="flex:0 1 145px" title="فیلتر وضعیت سفارش">
+    <option value="all">همهٔ وضعیت‌ها</option>
+    <option value="unsent">⏳ فقط در انتظار ارسال</option>
+  </select>
+  <button type="button" class="btn btn-cyan" onclick="omReload(true)" style="font-size:11px;padding:6px 10px" title="بروزرسانی فهرست سفارشات">🔄 بروزرسانی</button>
+  <button type="button" class="btn btn-gray" onclick="toggleFullSettings()" style="font-size:11px;padding:6px 9px" title="باز کردن نمای عریض برای مدیریت راحت‌تر">⛶ نمای عریض</button>
+</div>
+
+<div id="omWarnBar" class="hidden" style="background:#451a0366;border:1px solid #b45309;color:#fde68a;border-radius:8px;padding:6px 9px;font-size:10.5px;line-height:1.7;margin-bottom:8px"></div>
+
+<!-- پنل بازشوی جزئیات و عملیات روی سفارش انتخاب‌شده -->
+<div id="omDetailWrap" class="hidden"></div>
+
+<!-- فهرست کارت‌های سفارش -->
+<div id="omListWrap" style="max-height:62vh;overflow-y:auto;padding-left:2px">
+  <div style="padding:20px;text-align:center;color:#64748b;font-size:11.5px">برای بارگذاری سفارشات باسلام و ووکامرس روی سربرگ یا «بروزرسانی» کلیک کنید.</div>
+</div>
+
+<!-- صفحه‌بندی -->
+<div id="omPagerWrap" style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+</div></div>
+
 <!-- v9.59: ذخیره (دانلود) و بازیابی همهٔ تنظیمات — برای جابه‌جایی/نوسازی هاست یا PaaS -->
 <div class="smenu">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#134e4a,#0f172a)" onclick="toggleSmenu(this)"><h3>💾 ذخیره و بازیابی همهٔ تنظیمات</h3><span class="cst off" id="sxBadge">—</span><span class="arrow">▼</span></div>
@@ -92677,6 +93944,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.470', t:'🚀 احیای کامل موتور استخراج (ضد-OOM، ترمز حلقهٔ کرش و رفع بن‌بست ازسرگیری)، حذف قطعی تکرار اعلان‌های پیام‌رسان در یادآوری=۰، و افزودن زیرمنوی جامع «مدیریت سفارشات» (باسلام + ووکامرس)', items:[
+    'رفع قطعی توقف استخراج‌ها و عدم شروع/ادامه در کارگر پس‌زمینه: ارتقای پویا و چندمرحله‌ای memory_limit به ۱۰۲۴M/۷۶۸M، آزادسازی فوری تصویر ۶۲ مگابایتی profiles.json در تمام نقاط runBackendExtract، manual_sync، s4WorkerRunJob و s4AutoResumeInterruptedExtractions، ذخیره‌سازی تک‌کپی در extractCheckpoint، ثبت وضعیت صف پیش از loadProfiles در نگهبان خطای مرگبار (detail_fatal)، مهلت ۴۰ ثانیه‌ای بوت فرزند CLI، پاک‌سازی خودکار پرچم گیرکردهٔ resuming و ترمز هوشمند no_progress_recycles برای جلوگیری از مسدود ماندن کل صف توسط یک کار معیوب.',
+    'حذف کامل تکرار پیام‌های پیام‌رسان وقتی «یادآوری بعد از» روی ۰ است: قفل اتمی فایل notif_state.json در خواندن و نوشتن (جلوگیری از بازخوانی فایل نیمه‌نوشته و ارسال مجدد همهٔ رویدادها)، ثبت زمان آخرین مشاهده (seen) در هر اسکن تا اقلام قدیمی در چرخش فهرست یا هرس ۱۴روزه مجدداً «جدید» تلقی نشوند، فیلتر زمانی اقلام تاریخی نسبت به واترمارک، پایدارسازی امضای گفتگوها، و لایهٔ ضدتکرار محتوایی (notif_sent_dedup.json).',
+    'افزودن بخش جامع «📦 مدیریت سفارشات» به‌عنوان زیرمنوی منوی همبرگری اصلی با سه زیرمنوی «همهٔ سفارشات»، «باسلام (چندغرفه‌ای)» و «ووکامرس»: مشاهدهٔ یکپارچهٔ مرسوله‌ها، شاخص‌های آماری و مبلغ به تومان، فیلتر وضعیت و غرفه، پنل جزئیات کامل گیرنده و اقلام، تغییر وضعیت ووکامرس، تأیید آماده‌سازی و ثبت کد رهگیری پستی در باسلام و ووکامرس، یادداشت سفارش، ارسال کارت سفارش به پیام‌رسان و چاپ برچسب پستی/فاکتور.'
+  ]},
   {v:'10.469', t:'🛒 رفع خطای کاذب ۴۰۳ اسکوپ سفارش‌های باسلام (حذف فیلتر ادمینی items.vendor_ids + چندغرفه‌ای + تبدیل ریال به تومان) و اصلاح تشخیص اعتبار/کلید در هوش مصنوعی (Mistral، LLM7، Gemini، OpenRouter)', items:[
     'رفع قطعی خطای «توکن دسترسی لازم را ندارد (۴۰۳) · اسکوپ موردنیاز: vendor.parcel.read» در استعلام سفارش‌ها و اعلان‌ها: حذف پارامتر ادمینی items.vendor_ids که روی JWT غرفه‌دار با خطای «به فیلتر آیدی غرفه ها دسترسی ندارید» رد می‌شد + فالبک خودکار به order-processing.basalam.com/v3، تجمیع چندغرفه‌ای و تبدیل دقیق مبالغ ریالی باسلام به تومان.',
     'رفع برچسب کاذب «💳 اعتبار تمام» روی کلیدهای سالم در Mistral، LLM7 و OpenRouter: خطاهای سطح مدل (tier/plan/labs مانند mistral-large-latest در اشتراک رایگان) و خطاهای موقت نرخ (۴۲۹) حاوی لینک /billing دیگر کل کلید را مسدود نمی‌کنند و قفل‌های کاذب قبلی خودکار آزاد می‌شوند.',
@@ -101423,6 +102695,610 @@ function inqSend(digest){
       if(b2)b2.textContent=oldTxt;
       inqRenderFoot();showToast('خطا شبکه',1);
     });
+}
+
+/* ===== v10.470: سامانهٔ جامع مدیریت سفارشات (باسلام + ووکامرس) ===== */
+const omState={
+  inited:false,
+  loading:false,
+  channel:'all',
+  page:1,
+  cursor:'',
+  cursorStack:[],
+  rows:[],
+  bslShops:[],
+  wooConfigured:false,
+  bslStatuses:{},
+  wooStatuses:{},
+  activeUid:'',
+  activeOrder:null
+};
+
+function omEnsureLoaded(){
+  const root=document.getElementById('omSmenuRoot');
+  if(!root)return;
+  const body=root.querySelector('.smenu-body');
+  if(body&&!body.classList.contains('open'))return;
+  if(!omState.inited){
+    omState.inited=true;
+    omRebuildStatusOptions();
+    omReload(true);
+  }
+}
+
+function omMoney(v){
+  const n=Math.max(0,parseInt(v||0,10)||0);
+  return n>0?(toFa(n.toLocaleString('en-US'))+' تومان'):'—';
+}
+
+function omFmtDate(iso){
+  if(!iso)return '—';
+  const d=new Date(iso);
+  if(isNaN(d.getTime()))return String(iso).slice(0,16);
+  try{
+    return d.toLocaleDateString('fa-IR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  }catch(_){return String(iso).slice(0,16);}
+}
+
+function omStatusClass(r){
+  if(r.unsent)return 'pend';
+  const st=String(r.status_id||'');
+  if(['2979','3238','completed'].includes(st))return 'ok';
+  if(['3067','3573','4633','5075','5017','3572','cancelled','failed','refunded'].includes(st))return 'bad';
+  return 'muted';
+}
+
+function omRebuildStatusOptions(){
+  const sel=document.getElementById('omStatusSel');
+  if(!sel)return;
+  const prev=sel.value||'all';
+  let h='<option value="all">همهٔ وضعیت‌ها</option>';
+  h+='<option value="unsent">⏳ در انتظار ارسال / اقدام</option>';
+  if(omState.channel==='bsl'){
+    h+='<option value="problem">⚠️ مشکل‌دار / تأخیر / انصراف</option>';
+    const bs=omState.bslStatuses||{3739:'جدید (در انتظار تأیید)',3237:'در حال آماده‌سازی',3238:'ارسال شده',2979:'تحویل شده',3067:'لغو شده'};
+    Object.keys(bs).forEach(k=>{h+='<option value="'+esc(k)+'">باسلام: '+esc(bs[k])+'</option>';});
+  }else if(omState.channel==='woo'){
+    const ws=omState.wooStatuses||{processing:'در حال انجام (آماده ارسال)','on-hold':'در انتظار بررسی',pending:'در انتظار پرداخت',completed:'تکمیل شده',cancelled:'لغو شده',refunded:'مسترد شده',failed:'ناموفق'};
+    Object.keys(ws).forEach(k=>{h+='<option value="'+esc(k)+'">ووکامرس: '+esc(ws[k])+'</option>';});
+  }
+  sel.innerHTML=h;
+  if([...sel.options].some(o=>o.value===prev))sel.value=prev;
+  const shopSel=document.getElementById('omShopSel');
+  if(shopSel){
+    shopSel.style.display=(omState.channel==='woo')?'none':'';
+  }
+}
+
+function omPopulateShops(shops){
+  const sel=document.getElementById('omShopSel');
+  if(!sel||!Array.isArray(shops))return;
+  const prev=sel.value||'0';
+  let h='<option value="0">همهٔ غرفه‌های باسلام ('+toFa(shops.length)+')</option>';
+  shops.forEach(s=>{
+    h+='<option value="'+esc(String(s.vendor_id))+'">🛍 '+esc(s.shop_name||('غرفه '+s.vendor_id))+'</option>';
+  });
+  sel.innerHTML=h;
+  if([...sel.options].some(o=>o.value===prev))sel.value=prev;
+}
+
+function omSwitchChannel(ch){
+  if(!['all','bsl','woo'].includes(ch))ch='all';
+  omState.channel=ch;
+  omState.page=1;
+  omState.cursor='';
+  omState.cursorStack=[];
+  ['all','bsl','woo'].forEach(k=>{
+    const b=document.getElementById('omTab_'+k);
+    if(b)b.classList.toggle('active',k===ch);
+  });
+  omRebuildStatusOptions();
+  omCloseDetail();
+  omReload(true);
+}
+
+function omReload(resetPage){
+  if(resetPage){
+    omState.page=1;
+    omState.cursor='';
+    omState.cursorStack=[];
+  }
+  const listEl=document.getElementById('omListWrap');
+  const warnEl=document.getElementById('omWarnBar');
+  if(listEl)listEl.innerHTML='<div style="padding:26px;text-align:center;color:#93c5fd;font-size:12px">⏳ در حال دریافت سفارشات...</div>';
+  if(warnEl)warnEl.classList.add('hidden');
+  omState.loading=true;
+
+  const q=(document.getElementById('omSearchInp')||{}).value||'';
+  const st=(document.getElementById('omStatusSel')||{}).value||'all';
+  const sh=(document.getElementById('omShopSel')||{}).value||'0';
+  const url='?orders_mgr_api=list'
+    +'&channel='+encodeURIComponent(omState.channel)
+    +'&status='+encodeURIComponent(st)
+    +'&shop_id='+encodeURIComponent(sh)
+    +'&q='+encodeURIComponent(q.trim())
+    +'&page='+encodeURIComponent(String(omState.page))
+    +'&cursor='+encodeURIComponent(omState.cursor)
+    +'&per_page=20';
+
+  fetch(url).then(r=>r.json()).then(d=>{
+    omState.loading=false;
+    if(!d||!d.ok){
+      if(listEl)listEl.innerHTML='<div style="padding:18px;color:#fca5a5;background:#7f1d1d22;border:1px solid #991b1b;border-radius:9px;font-size:11.5px">✗ '+esc((d&&d.error)?d.error:'خطا در دریافت سفارشات')+'</div>';
+      return;
+    }
+    omState.rows=Array.isArray(d.rows)?d.rows:[];
+    omState.bslShops=Array.isArray(d.bsl_shops)?d.bsl_shops:[];
+    omState.wooConfigured=!!d.woo_configured;
+    if(d.bsl_statuses)omState.bslStatuses=d.bsl_statuses;
+    if(d.woo_statuses)omState.wooStatuses=d.woo_statuses;
+    omPopulateShops(omState.bslShops);
+
+    const kTot=document.getElementById('omKpiTotal');
+    const kUns=document.getElementById('omKpiUnsent');
+    const kSpl=document.getElementById('omKpiSplit');
+    const kSum=document.getElementById('omKpiSum');
+    if(kTot)kTot.textContent=toFa(d.total||0);
+    if(kUns)kUns.textContent=toFa(d.unsent||0);
+    if(kSpl)kSpl.textContent=toFa(d.bsl_count||0)+' / '+toFa(d.woo_count||0);
+    if(kSum)kSum.textContent=d.sum_toman?toFa(Number(d.sum_toman).toLocaleString('en-US')):'۰';
+
+    if(omState.channel==='all'){
+      const ca=document.getElementById('omCnt_all');if(ca)ca.textContent=toFa(d.total||0);
+      const cb=document.getElementById('omCnt_bsl');if(cb)cb.textContent=toFa(d.bsl_count||0);
+      const cw=document.getElementById('omCnt_woo');if(cw)cw.textContent=toFa(d.woo_count||0);
+    }else if(omState.channel==='bsl'){
+      const cb=document.getElementById('omCnt_bsl');if(cb)cb.textContent=toFa(d.bsl_count||0);
+    }else if(omState.channel==='woo'){
+      const cw=document.getElementById('omCnt_woo');if(cw)cw.textContent=toFa(d.woo_count||0);
+    }
+
+    const hdrB=document.getElementById('omHdrBadge');
+    if(hdrB){
+      const u=parseInt(d.unsent||0,10)||0;
+      hdrB.textContent=u>0?(toFa(u)+' منتظر ارسال'):(toFa(d.total||0)+' سفارش');
+      hdrB.className='cst '+(u>0?'warn':'on');
+    }
+
+    if(warnEl){
+      const errs=Array.isArray(d.errors)?d.errors:[];
+      if(errs.length){
+        warnEl.innerHTML='⚠️ '+errs.map(e=>esc(e)).join('<br>⚠️ ');
+        warnEl.classList.remove('hidden');
+      }else{
+        warnEl.classList.add('hidden');
+      }
+    }
+
+    omRenderList();
+    omRenderPager(d);
+  }).catch(e=>{
+    omState.loading=false;
+    if(listEl)listEl.innerHTML='<div style="padding:18px;color:#fca5a5;font-size:11.5px">✗ خطای شبکه: '+esc(e.message||'')+'</div>';
+  });
+}
+
+function omRenderList(){
+  const listEl=document.getElementById('omListWrap');
+  if(!listEl)return;
+  const rows=omState.rows||[];
+  if(!rows.length){
+    let emptyMsg='هیچ سفارشی با فیلتر فعلی یافت نشد.';
+    if(omState.channel==='woo'&&!omState.wooConfigured){
+      emptyMsg='اتصال ووکامرس هنوز تنظیم نشده است. از زیرمنوی «🟣 ووکامرس» در همین منو، آدرس فروشگاه و کلیدهای Consumer Key / Secret را ثبت کنید.';
+    }
+    listEl.innerHTML='<div style="padding:26px 14px;text-align:center;color:#94a3b8;background:#0f172a;border:1px dashed #334155;border-radius:10px;font-size:11.5px;line-height:1.8">'+esc(emptyMsg)+'</div>';
+    return;
+  }
+  let h='';
+  rows.forEach((r,idx)=>{
+    const isBsl=r.channel==='bsl';
+    const stCls=omStatusClass(r);
+    const items=Array.isArray(r.items)?r.items:[];
+    const firstTitle=items[0]&&items[0].title?String(items[0].title):'';
+    const moreCnt=items.length>1?(' و '+toFa(items.length-1)+' قلم دیگر'):'';
+    const loc=[r.province,r.city].filter(Boolean).join(' · ');
+    const cardCls='om-card'+(r.unsent?' unsent':(stCls==='ok'?' done-ord':''));
+    h+='<div class="'+cardCls+'" id="omCard_'+idx+'">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px">';
+    h+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+    if(isBsl){
+      h+='<span class="om-ch-bsl">🛍 باسلام'+(r.shop_name?' · '+esc(r.shop_name):'')+'</span>';
+    }else{
+      h+='<span class="om-ch-woo">🟣 ووکامرس</span>';
+    }
+    h+='<b style="font-family:ui-monospace,monospace;font-size:12px;color:#f8fafc;direction:ltr">#'+esc(String(r.display_number||r.order_id||r.parcel_id||''))+'</b>';
+    h+='<span class="om-st '+stCls+'">'+esc(r.status||'—')+'</span>';
+    h+='</div>';
+    h+='<div style="font-size:11.5px;font-weight:800;color:#4ade80">'+omMoney(r.amount)+'</div>';
+    h+='</div>';
+
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:#cbd5e1;margin-bottom:5px">';
+    h+='<div>👤 <b>'+esc(r.customer||'—')+'</b>'
+      +(loc?' <span style="color:#94a3b8;font-size:10px">('+esc(loc)+')</span>':'')
+      +(r.phone?' · <span style="font-family:ui-monospace,monospace;direction:ltr;display:inline-block;color:#67e8f9;cursor:pointer" title="کلیک برای کپی موبایل" onclick="omCopyText(\''+esc(String(r.phone))+'\')">📞 '+esc(String(r.phone))+'</span>':'')
+      +'</div>';
+    h+='<div style="font-size:10px;color:#94a3b8">🕒 '+esc(omFmtDate(r.created_at))
+      +(r.send_before?' · <span style="color:#fbbf24">مهلت: '+esc(omFmtDate(r.send_before))+'</span>':'')
+      +'</div>';
+    h+='</div>';
+
+    if(firstTitle){
+      h+='<div style="font-size:10.5px;color:#94a3b8;background:#0b1220;border:1px solid #1e293b;border-radius:7px;padding:4px 8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">';
+      h+='<span>📦 '+esc(firstTitle.slice(0,65))+(items[0]&&items[0].qty>1?' ×'+toFa(items[0].qty):'')+esc(moreCnt)+'</span>';
+      if(r.tracking_code){
+        h+='<span style="font-family:ui-monospace,monospace;font-size:10px;color:#86efac;background:#064e3b66;padding:1px 6px;border-radius:5px;cursor:pointer" onclick="omCopyText(\''+esc(String(r.tracking_code))+'\')" title="کپی کد رهگیری">📮 '+esc(String(r.tracking_code))+'</span>';
+      }
+      h+='</div>';
+    }
+
+    h+='<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">';
+    h+='<button type="button" class="btn btn-cyan" style="font-size:10.5px;padding:4px 9px" onclick="omOpenDetail('+idx+')">🔍 جزئیات و مدیریت</button>';
+    h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:4px 8px" onclick="omPrintByIdx('+idx+')">🖨 برچسب پستی</button>';
+    h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:4px 8px" onclick="omForwardIdx('+idx+')">📤 پیام‌رسان</button>';
+    if(r.panel_url){
+      h+='<a href="'+esc(r.panel_url)+'" target="_blank" rel="noopener" class="btn btn-gray" style="font-size:10px;padding:4px 8px;text-decoration:none">↗ پنل اصلی</a>';
+    }
+    h+='</div>';
+    h+='</div>';
+  });
+  listEl.innerHTML=h;
+}
+
+function omRenderPager(d){
+  const pgEl=document.getElementById('omPagerWrap');
+  if(!pgEl)return;
+  let h='<div style="font-size:10px;color:#64748b">نمایش '+toFa((d.rows||[]).length)+' سفارش</div>';
+  h+='<div style="display:flex;gap:5px;align-items:center">';
+  if(omState.channel==='woo'||omState.channel==='all'){
+    if(omState.page>1){
+      h+='<button type="button" class="btn btn-gray" style="font-size:10px;padding:4px 9px" onclick="omState.page--;omReload(false)">→ صفحه قبل</button>';
+    }
+    if(d.woo_has_more){
+      h+='<button type="button" class="btn btn-gray" style="font-size:10px;padding:4px 9px" onclick="omState.page++;omReload(false)">صفحه بعد ('+toFa(omState.page+1)+') ←</button>';
+    }
+  }
+  if(omState.channel==='bsl'){
+    if(omState.cursorStack.length>0){
+      h+='<button type="button" class="btn btn-gray" style="font-size:10px;padding:4px 9px" onclick="omState.cursor=omState.cursorStack.pop()||\'\';omReload(false)">→ صفحه قبل باسلام</button>';
+    }
+    if(d.bsl_next_cursor){
+      h+='<button type="button" class="btn btn-gray" style="font-size:10px;padding:4px 9px" onclick="omState.cursorStack.push(omState.cursor);omState.cursor=\''+esc(String(d.bsl_next_cursor))+'\';omReload(false)">مرسوله‌های بعدی ←</button>';
+    }
+  }
+  h+='</div>';
+  pgEl.innerHTML=h;
+}
+
+function omCopyText(txt){
+  if(!txt)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(()=>showToast('✓ کپی شد: '+txt)).catch(()=>showToast(txt));
+  }else{
+    showToast(txt);
+  }
+}
+
+function omCloseDetail(){
+  omState.activeUid='';
+  omState.activeOrder=null;
+  const w=document.getElementById('omDetailWrap');
+  if(w){w.classList.add('hidden');w.innerHTML='';}
+}
+
+function omOpenDetail(idx){
+  const base=omState.rows[idx];
+  if(!base)return;
+  omState.activeUid=base.uid||'';
+  omState.activeOrder=base;
+  omRenderDetail(base,true);
+  const w=document.getElementById('omDetailWrap');
+  if(w)w.scrollIntoView({behavior:'smooth',block:'nearest'});
+
+  const detUrl=base.channel==='woo'
+    ?('?orders_mgr_api=detail&channel=woo&order_id='+encodeURIComponent(String(base.order_id)))
+    :('?orders_mgr_api=detail&channel=bsl&parcel_id='+encodeURIComponent(String(base.parcel_id))+'&vendor_id='+encodeURIComponent(String(base.vendor_id||0)));
+  fetch(detUrl).then(r=>r.json()).then(d=>{
+    if(d&&d.ok&&d.order&&omState.activeUid===(base.uid||'')){
+      omState.activeOrder=d.order;
+      omState.rows[idx]=d.order;
+      omRenderDetail(d.order,false);
+      omRenderList();
+    }else if(omState.activeUid===(base.uid||'')){
+      omRenderDetail(base,false);
+    }
+  }).catch(()=>{
+    if(omState.activeUid===(base.uid||''))omRenderDetail(base,false);
+  });
+}
+
+function omRenderDetail(o,fetchingMore){
+  const w=document.getElementById('omDetailWrap');
+  if(!w||!o)return;
+  w.classList.remove('hidden');
+  const isBsl=o.channel==='bsl';
+  const items=Array.isArray(o.items)?o.items:[];
+  const fullAddr=[o.province,o.city,o.address].filter(Boolean).join(' — ');
+
+  let h='<div class="om-det-box">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #1e293b;padding-bottom:8px;margin-bottom:8px">';
+  h+='<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">';
+  h+=isBsl
+    ?('<span class="om-ch-bsl">🛍 مرسوله باسلام'+(o.shop_name?' · '+esc(o.shop_name):'')+'</span>')
+    :'<span class="om-ch-woo">🟣 سفارش ووکامرس</span>';
+  h+='<b style="font-size:13px;color:#fff;direction:ltr">#'+esc(String(o.display_number||o.order_id||o.parcel_id))+'</b>';
+  h+='<span class="om-st '+omStatusClass(o)+'">'+esc(o.status||'—')+'</span>';
+  if(fetchingMore)h+='<span style="font-size:10px;color:#38bdf8">⏳ تکمیل اطلاعات...</span>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:5px;align-items:center">';
+  h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:4px 8px" onclick="omPrintOrder(omState.activeOrder)">🖨 چاپ برگه ارسال</button>';
+  h+='<button type="button" class="btn btn-gray" style="font-size:11px;padding:3px 9px" onclick="omCloseDetail()">✕ بستن</button>';
+  h+='</div></div>';
+
+  /* مشخصات گیرنده و پرداخت */
+  h+='<div class="om-field-grid">';
+  h+='<div class="om-fcell"><small>👤 خریدار / گیرنده</small><b>'+esc(o.customer||'—')+'</b>'
+    +(o.phone?'<div style="margin-top:2px"><span style="color:#67e8f9;direction:ltr;display:inline-block;cursor:pointer" onclick="omCopyText(\''+esc(String(o.phone))+'\')">📞 '+esc(String(o.phone))+' 📋</span></div>':'')
+    +(o.email?'<div style="font-size:10px;color:#94a3b8;direction:ltr">'+esc(o.email)+'</div>':'')
+    +'</div>';
+  h+='<div class="om-fcell"><small>💳 مبلغ کل و ارسال</small><b style="color:#4ade80">'+omMoney(o.amount)+'</b>'
+    +'<div style="font-size:10px;color:#94a3b8">هزینه ارسال: '+omMoney(o.shipping_cost)+(o.payment_method?' · '+esc(o.payment_method):'')+'</div>'
+    +(o.shipping_method?'<div style="font-size:10px;color:#cbd5e1">روش ارسال: '+esc(o.shipping_method)+'</div>':'')
+    +'</div>';
+  h+='<div class="om-fcell" style="grid-column:1/-1"><small>📍 نشانی و کدپستی گیرنده '
+    +(fullAddr?'<button type="button" class="btn btn-gray" style="font-size:9px;padding:1px 6px;margin-right:5px" onclick="omCopyText(\''+esc(fullAddr+(o.postal_code?' - کدپستی: '+o.postal_code:''))+'\')">کپی آدرس کامل</button>':'')
+    +'</small>'
+    +'<div style="color:#e2e8f0">'+(fullAddr?esc(fullAddr):'<span style="color:#64748b">آدرسی در پاسخ ثبت نشده است</span>')+'</div>'
+    +(o.postal_code?'<div style="font-size:10px;color:#93c5fd;margin-top:2px;cursor:pointer" onclick="omCopyText(\''+esc(String(o.postal_code))+'\')">کدپستی: <b style="font-family:ui-monospace,monospace;direction:ltr">'+esc(String(o.postal_code))+'</b> 📋</div>':'')
+    +(o.customer_note?'<div style="margin-top:4px;padding:4px 7px;background:#42200666;border:1px solid #b45309;border-radius:6px;color:#fde68a;font-size:10px">📝 توضیح مشتری: '+esc(o.customer_note)+'</div>':'')
+    +'</div>';
+  h+='</div>';
+
+  /* اقلام سفارش */
+  h+='<div style="background:#0f172a;border:1px solid #1e293b;border-radius:9px;margin:8px 0;overflow:hidden">';
+  h+='<div style="padding:5px 9px;background:#111c31;font-size:10.5px;font-weight:700;color:#93c5fd;border-bottom:1px solid #1e293b">📦 اقلام سفارش ('+toFa(items.length)+' ردیف)</div>';
+  items.forEach(it=>{
+    h+='<div class="om-it-row">';
+    if(it.image){
+      h+='<img src="'+esc(it.image)+'" class="om-it-img" loading="lazy" alt="">';
+    }else{
+      h+='<div class="om-it-img" style="display:flex;align-items:center;justify-content:center;font-size:15px">📦</div>';
+    }
+    h+='<div style="flex:1 1 auto;min-width:0">';
+    h+='<div style="font-weight:700;color:#f1f5f9;word-break:break-word">'+esc(it.title||'کالا')+'</div>';
+    const metaBits=[];
+    if(it.variant)metaBits.push(it.variant);
+    if(it.sku)metaBits.push('SKU: '+it.sku);
+    if(it.product_id)metaBits.push('#'+it.product_id);
+    if(metaBits.length)h+='<div style="font-size:9.5px;color:#94a3b8">'+esc(metaBits.join(' · '))+'</div>';
+    h+='</div>';
+    h+='<div style="text-align:left;white-space:nowrap;font-size:10.5px">';
+    h+='<span style="background:#1e293b;color:#67e8f9;padding:1px 7px;border-radius:999px;font-weight:700">×'+toFa(it.qty||1)+'</span>';
+    if(it.total>0)h+='<div style="color:#4ade80;font-weight:700;margin-top:2px">'+omMoney(it.total)+'</div>';
+    h+='</div></div>';
+  });
+  h+='</div>';
+
+  /* پنل مدیریت اختصاصی کانال */
+  if(isBsl){
+    h+='<div style="background:#0f172a;border:1px solid #1e3a5f;border-radius:9px;padding:9px;margin-top:8px">';
+    h+='<div style="font-size:11px;font-weight:700;color:#6ee7b7;margin-bottom:7px">⚙️ عملیات مرسوله باسلام</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px">';
+    if(parseInt(o.status_id||0,10)===3739){
+      h+='<button type="button" class="btn btn-green" style="font-size:10.5px;padding:5px 10px" onclick="omBslAction(\'set_preparation\')">✅ تأیید و شروع آماده‌سازی</button>';
+    }
+    h+='<select id="omDetCarrier" style="background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:10.5px">'
+      +'<option value="pishtaz" '+(o.carrier==='pishtaz'?'selected':'')+'>پست پیشتاز</option>'
+      +'<option value="sefareshi" '+(o.carrier==='sefareshi'?'selected':'')+'>پست سفارشی</option>'
+      +'<option value="tipax" '+(o.carrier==='tipax'?'selected':'')+'>تیپاکس</option>'
+      +'<option value="chapar" '+(o.carrier==='chapar'?'selected':'')+'>چاپار</option>'
+      +'<option value="courier" '+(o.carrier==='courier'?'selected':'')+'>پیک / باربری</option>'
+      +'</select>';
+    h+='<input type="text" id="omDetTracking" value="'+esc(o.tracking_code||'')+'" placeholder="کد رهگیری ۲۴ رقمی پست / بارکد..." style="flex:1 1 170px;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:11px;direction:ltr">';
+    h+='<button type="button" class="btn btn-cyan" style="font-size:10.5px;padding:5px 10px" onclick="omBslAction(\'set_posted\')">📮 ثبت ارسال در باسلام</button>';
+    h+='</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
+    h+='<input type="text" id="omDetAdminNote" value="'+esc(o.admin_note||'')+'" placeholder="یادداشت داخلی فروشنده برای این مرسوله..." style="flex:1 1 200px;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:10.5px">';
+    h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:5px 10px" onclick="omBslAction(\'save_note\')">💾 ذخیره یادداشت / رهگیری</button>';
+    h+='</div></div>';
+  }else{
+    const ws=omState.wooStatuses||{pending:'در انتظار پرداخت',processing:'در حال انجام (آماده ارسال)','on-hold':'در انتظار بررسی',completed:'تکمیل شده',cancelled:'لغو شده',refunded:'مسترد شده',failed:'ناموفق'};
+    h+='<div style="background:#0f172a;border:1px solid #581c87;border-radius:9px;padding:9px;margin-top:8px">';
+    h+='<div style="font-size:11px;font-weight:700;color:#d8b4fe;margin-bottom:7px">⚙️ مدیریت سفارش ووکامرس</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">';
+    h+='<select id="omWooNewStatus" style="background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:11px">';
+    Object.keys(ws).forEach(k=>{
+      h+='<option value="'+esc(k)+'" '+(String(o.status_id)===k?'selected':'')+'>'+esc(ws[k])+'</option>';
+    });
+    h+='</select>';
+    h+='<button type="button" class="btn btn-cyan" style="font-size:10.5px;padding:5px 10px" onclick="omWooUpdateStatus()">🔄 تغییر وضعیت سفارش</button>';
+    h+='</div>';
+
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">';
+    h+='<input type="text" id="omDetCarrier" value="'+esc(o.carrier||'پست پیشتاز')+'" placeholder="شرکت حمل (پست/تیپاکس)" style="width:115px;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:10.5px">';
+    h+='<input type="text" id="omDetTracking" value="'+esc(o.tracking_code||'')+'" placeholder="کد رهگیری مرسوله..." style="flex:1 1 160px;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:11px;direction:ltr">';
+    h+='<button type="button" class="btn btn-green" style="font-size:10.5px;padding:5px 10px" onclick="omWooSaveTracking()">📮 ثبت رهگیری</button>';
+    h+='</div>';
+    h+='<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#cbd5e1;margin-bottom:8px">';
+    h+='<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="omWooNotifyCust" checked> ارسال یادداشت کد رهگیری برای مشتری</label>';
+    h+='<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="omWooMarkComp" '+(o.status_id!=='completed'?'checked':'')+'> تغییر وضعیت به «تکمیل‌شده»</label>';
+    h+='</div>';
+    h+='<input type="text" id="omDetAdminNote" value="'+esc(o.admin_note||'')+'" placeholder="یادداشت داخلی..." style="width:100%;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:10.5px;margin-bottom:8px">';
+
+    /* افزودن یادداشت رسمی ووکامرس + تاریخچه یادداشت‌ها */
+    h+='<div style="border-top:1px solid #1e293b;padding-top:7px;margin-top:4px">';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
+    h+='<input type="text" id="omWooNoteTxt" placeholder="افزودن یادداشت جدید در پرونده سفارش ووکامرس..." style="flex:1 1 190px;background:#0b1220;border:1px solid #334155;color:#e2e8f0;border-radius:7px;padding:5px 8px;font-size:10.5px">';
+    h+='<label style="font-size:10px;color:#cbd5e1;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="omWooNoteCust"> قابل مشاهده برای مشتری</label>';
+    h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:5px 9px" onclick="omWooAddNote()">📝 ثبت یادداشت</button>';
+    h+='</div>';
+    if(Array.isArray(o.woo_notes)&&o.woo_notes.length){
+      h+='<div style="max-height:110px;overflow-y:auto;margin-top:6px;padding:5px;background:#0b1220;border-radius:7px;font-size:10px;color:#94a3b8">';
+      o.woo_notes.forEach(n=>{
+        h+='<div style="padding:3px 4px;border-bottom:1px solid #1e293b">'
+          +(n.customer_note?'<span style="color:#38bdf8">[مشتری]</span> ':'<span style="color:#a78bfa">[خصوصی]</span> ')
+          +esc(n.note||'')+' <span style="color:#64748b">('+esc(omFmtDate(n.date))+')</span></div>';
+      });
+      h+='</div>';
+    }
+    h+='</div></div>';
+  }
+  h+='</div>';
+  w.innerHTML=h;
+}
+
+function omPostAction(params,cb){
+  const fd=new URLSearchParams();
+  Object.keys(params).forEach(k=>fd.append(k,params[k]==null?'':String(params[k])));
+  fetch('',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:fd.toString()})
+    .then(r=>r.json()).then(d=>cb(null,d)).catch(e=>cb(e,null));
+}
+
+function omBslAction(sub){
+  const o=omState.activeOrder;
+  if(!o)return;
+  const trk=(document.getElementById('omDetTracking')||{}).value||'';
+  const car=(document.getElementById('omDetCarrier')||{}).value||'pishtaz';
+  const adm=(document.getElementById('omDetAdminNote')||{}).value||'';
+  omPostAction({
+    orders_mgr_api:'bsl_action',
+    sub_action:sub,
+    parcel_id:o.parcel_id,
+    vendor_id:o.vendor_id||0,
+    tracking_code:trk.trim(),
+    carrier:car,
+    admin_note:adm.trim()
+  },(err,d)=>{
+    if(err||!d){showToast('خطا در ارتباط با سرور',1);return;}
+    if(!d.ok){
+      showToast(d.error||'عملیات ناموفق بود',1);
+      if(d.saved_locally){o.tracking_code=trk.trim();o.admin_note=adm.trim();omRenderList();}
+      return;
+    }
+    showToast('✓ '+(d.message||'انجام شد'));
+    omReload(false);
+  });
+}
+
+function omWooUpdateStatus(){
+  const o=omState.activeOrder;
+  if(!o)return;
+  const ns=(document.getElementById('omWooNewStatus')||{}).value||'';
+  omPostAction({orders_mgr_api:'woo_action',sub_action:'update_status',order_id:o.order_id,new_status:ns},(err,d)=>{
+    if(err||!d||!d.ok){showToast((d&&d.error)?d.error:'خطا در تغییر وضعیت',1);return;}
+    showToast('✓ '+(d.message||'وضعیت بروزرسانی شد'));
+    if(d.order){omState.activeOrder=d.order;omRenderDetail(d.order,false);}
+    omReload(false);
+  });
+}
+
+function omWooSaveTracking(){
+  const o=omState.activeOrder;
+  if(!o)return;
+  const trk=(document.getElementById('omDetTracking')||{}).value||'';
+  const car=(document.getElementById('omDetCarrier')||{}).value||'';
+  const adm=(document.getElementById('omDetAdminNote')||{}).value||'';
+  const nc=(document.getElementById('omWooNotifyCust')||{}).checked?1:0;
+  const mc=(document.getElementById('omWooMarkComp')||{}).checked?1:0;
+  omPostAction({
+    orders_mgr_api:'woo_action',
+    sub_action:'save_tracking',
+    order_id:o.order_id,
+    tracking_code:trk.trim(),
+    carrier:car.trim(),
+    admin_note:adm.trim(),
+    notify_customer:nc,
+    mark_completed:mc
+  },(err,d)=>{
+    if(err||!d||!d.ok){showToast((d&&d.error)?d.error:'خطا در ذخیره کد رهگیری',1);return;}
+    showToast('✓ '+(d.message||'کد رهگیری ثبت شد'));
+    o.tracking_code=trk.trim();o.carrier=car.trim();o.admin_note=adm.trim();
+    omReload(false);
+  });
+}
+
+function omWooAddNote(){
+  const o=omState.activeOrder;
+  if(!o)return;
+  const inp=document.getElementById('omWooNoteTxt');
+  const txt=inp?inp.value.trim():'';
+  if(!txt){showToast('متن یادداشت را بنویسید',1);return;}
+  const isCust=(document.getElementById('omWooNoteCust')||{}).checked?1:0;
+  omPostAction({orders_mgr_api:'woo_action',sub_action:'add_note',order_id:o.order_id,note:txt,customer_note:isCust},(err,d)=>{
+    if(err||!d||!d.ok){showToast((d&&d.error)?d.error:'ثبت یادداشت ناموفق بود',1);return;}
+    if(inp)inp.value='';
+    showToast('✓ '+(d.message||'یادداشت ثبت شد'));
+    const idx=omState.rows.findIndex(x=>x.uid===o.uid);
+    if(idx>=0)omOpenDetail(idx);
+  });
+}
+
+function omBuildForwardMessage(o){
+  const chTitle=o.channel==='bsl'?('🛍 سفارش باسلام'+(o.shop_name?' ('+o.shop_name+')':'')):'🟣 سفارش ووکامرس';
+  const lines=[chTitle+' — #'+String(o.display_number||o.order_id||o.parcel_id)];
+  lines.push('وضعیت: '+(o.status||'—'));
+  lines.push('مشتری: '+(o.customer||'—')+(o.phone?' · '+o.phone:''));
+  const addr=[o.province,o.city,o.address].filter(Boolean).join('، ');
+  if(addr)lines.push('آدرس: '+addr+(o.postal_code?' (کدپستی: '+o.postal_code+')':''));
+  if(Array.isArray(o.items)&&o.items.length){
+    lines.push('اقلام:');
+    o.items.slice(0,10).forEach(it=>{
+      lines.push('• '+(it.title||'کالا')+(it.variant?' ['+it.variant+']':'')+' × '+(it.qty||1));
+    });
+  }
+  lines.push('مبلغ کل: '+omMoney(o.amount));
+  if(o.tracking_code)lines.push('کد رهگیری: '+o.tracking_code);
+  return lines.join('\n');
+}
+
+function omForwardIdx(idx){
+  const o=omState.rows[idx];
+  if(!o)return;
+  omPostAction({orders_mgr_api:'forward_msgr',message:omBuildForwardMessage(o)},(err,d)=>{
+    if(err||!d||!d.ok){showToast((d&&d.error)?d.error:'ارسال به پیام‌رسان ناموفق بود',1);return;}
+    showToast('✓ کارت سفارش به پیام‌رسان ارسال شد');
+  });
+}
+
+function omPrintByIdx(idx){
+  const o=omState.rows[idx];
+  if(o)omPrintOrder(o);
+}
+
+function omPrintOrder(o){
+  if(!o)return;
+  const win=window.open('','_blank','width=780,height=680');
+  if(!win){showToast('مرورگر پنجره چاپ را مسدود کرد',1);return;}
+  const chName=o.channel==='bsl'?('باسلام'+(o.shop_name?' — '+o.shop_name:'')):'فروشگاه ووکامرس';
+  const addr=[o.province,o.city,o.address].filter(Boolean).join('، ');
+  const items=Array.isArray(o.items)?o.items:[];
+  let rowsHtml='';
+  items.forEach((it,i)=>{
+    rowsHtml+='<tr><td>'+toFa(i+1)+'</td><td>'+esc(it.title||'کالا')+(it.variant?'<div style="font-size:11px;color:#555">'+esc(it.variant)+'</div>':'')+'</td>'
+      +'<td style="text-align:center">'+toFa(it.qty||1)+'</td>'
+      +'<td>'+omMoney(it.total||0)+'</td></tr>';
+  });
+  const doc='<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><title>برگه ارسال #'+esc(String(o.display_number||''))+'</title>'
+    +'<style>body{font-family:Tahoma,Arial,sans-serif;padding:18px;color:#111;line-height:1.7}'
+    +'.box{border:2px solid #111;border-radius:10px;padding:14px;margin-bottom:14px}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #333;padding:7px 9px;font-size:13px;text-align:right}'
+    +'th{background:#f1f5f9}@media print{.noprint{display:none}}</style></head><body>'
+    +'<div class="noprint" style="margin-bottom:12px"><button onclick="window.print()" style="padding:8px 18px;font-weight:bold;cursor:pointer">🖨 چاپ برچسب و فاکتور</button></div>'
+    +'<div class="box"><div style="display:flex;justify-content:space-between;border-bottom:1px dashed #666;padding-bottom:8px;margin-bottom:8px">'
+    +'<div><b>کانال فروش:</b> '+esc(chName)+'</div>'
+    +'<div><b>شماره سفارش:</b> <span dir="ltr">#'+esc(String(o.display_number||o.order_id||o.parcel_id))+'</span></div>'
+    +'<div><b>تاریخ:</b> '+esc(omFmtDate(o.created_at))+'</div></div>'
+    +'<div style="font-size:15px"><b>گیرنده:</b> '+esc(o.customer||'—')+(o.phone?' &nbsp;|&nbsp; <b>تلفن:</b> <span dir="ltr">'+esc(String(o.phone))+'</span>':'')+'</div>'
+    +'<div style="margin-top:6px;font-size:14px"><b>نشانی گیرنده:</b> '+esc(addr||'—')+'</div>'
+    +(o.postal_code?'<div style="margin-top:4px"><b>کدپستی:</b> <span dir="ltr" style="font-size:15px;font-weight:bold">'+esc(String(o.postal_code))+'</span></div>':'')
+    +(o.shipping_method?'<div><b>روش ارسال:</b> '+esc(o.shipping_method)+'</div>':'')
+    +(o.tracking_code?'<div><b>کد رهگیری:</b> <span dir="ltr">'+esc(String(o.tracking_code))+'</span></div>':'')
+    +(o.customer_note?'<div style="margin-top:6px;background:#fef9c3;padding:6px;border:1px solid #ca8a04"><b>توضیح مشتری:</b> '+esc(o.customer_note)+'</div>':'')
+    +'</div>'
+    +'<table><thead><tr><th style="width:38px">#</th><th>شرح کالا</th><th style="width:65px;text-align:center">تعداد</th><th style="width:130px">مبلغ</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>'
+    +'<div style="margin-top:10px;text-align:left;font-size:14px"><b>جمع کل سفارش: '+omMoney(o.amount)+'</b></div>'
+    +'</body></html>';
+  win.document.open();win.document.write(doc);win.document.close();
 }
 
 /* ===== v9.16: بکاپ و بازیابی ===== */
