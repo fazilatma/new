@@ -5998,10 +5998,11 @@ function aiProvidersLoad(): array {
         $d = json_decode((string)@file_get_contents(AI_PROVIDERS_FILE), true);
         if (is_array($d)) $p = $d;
     }
-    if ($p && function_exists('aiRepairProvidersConfig')) {
-        $stamp = DATA_DIR . '/ai_repair_v10469.flag';
-        if (!is_file($stamp)) {
-            @file_put_contents($stamp, (string)time());
+    if ($p && function_exists('aiRepairProvidersConfig') && function_exists('aiKeyStateLoad')) {
+        $kst = aiKeyStateLoad();
+        if (($kst['_repaired_ver'] ?? '') !== APP_VERSION) {
+            $kst['_repaired_ver'] = APP_VERSION;
+            aiKeyStateSave($kst);
             aiRepairProvidersConfig($p, true);
             @writeJsonFile(AI_PROVIDERS_FILE, $p);
         }
