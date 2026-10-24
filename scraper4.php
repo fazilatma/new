@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.448';
+const APP_VERSION = '10.449';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -3426,88 +3426,508 @@ function s4CleanupDeletedProfileArtifacts(string $key, string $url = ''): void {
     } catch (Throwable $_e) {}
 }
 
-function loadProfiles(): array {
-$GLOBALS['_profilesCorrupt'] = false;
-if (!file_exists(PROFILES_FILE)) return [];
-$json = @file_get_contents(PROFILES_FILE);
-if ($json === false || trim((string)$json) === '') {
-    // صفر بایت روی فایلی که قبلاً پشتیبان داشته = قربانیِ یک نوشتنِ نیمه‌کاره
-    $bk = PROFILES_FILE . '.bak';
-    if (is_file($bk)) {
-        $bd = @json_decode((string)@file_get_contents($bk), true);
-        if (is_array($bd) && $bd !== []) {
-            @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . " | فایل خالی بود — از نسخهٔ پشتیبان خوانده شد (" . count($bd) . " پروفایل)\n", FILE_APPEND);
-            return s4StripDeletedProfiles($bd);
+function s4TruncateFileTailInPlace(string $file, int $maxBytes = 262144, int $keepBytes = 49152): int {
+    if (!is_file($file)) return 0;
+    clearstatcache(true, $file);
+    $sz = (int)@filesize($file);
+    if ($sz <= $maxBytes || $keepBytes <= 0) return 0;
+    $fp = @fopen($file, 'r+b');
+    if (!$fp) return 0;
+    if (!@flock($fp, LOCK_EX | LOCK_NB)) { @fclose($fp); return 0; }
+    $freed = 0;
+    try {
+        $seek = max(0, $sz - $keepBytes);
+        @fseek($fp, $seek);
+        $tail = (string)@stream_get_contents($fp);
+        if ($seek > 0) {
+            $nl = strpos($tail, "\n");
+            if ($nl !== false && $nl < 4096) $tail = substr($tail, $nl + 1);
+        }
+        @rewind($fp);
+        $w = @fwrite($fp, $tail);
+        if ($w !== false) {
+            @ftruncate($fp, $w);
+            @fflush($fp);
+            $freed = max(0, $sz - (int)$w);
+        }
+    } finally {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+        clearstatcache(true, $file);
+    }
+    return $freed;
+}
+
+function s4StorageLogThrottled(string $path, string $msg, int $ttlSec = 60): void {
+    static $seen = [];
+    $now = time();
+    $sig = md5($path . '|' . $msg);
+    if (isset($seen[$sig]) && ($now - $seen[$sig]) < $ttlSec) return;
+    $seen[$sig] = $now;
+    $logFile = __DIR__ . '/storage_errors.log';
+    $stampFile = __DIR__ . '/.storage_err_throttle.json';
+    if ($ttlSec > 0 && is_file($stampFile)) {
+        $st = @json_decode((string)@file_get_contents($stampFile), true);
+        if (is_array($st) && ($now - (int)($st[$sig] ?? 0)) < $ttlSec) return;
+        if (!is_array($st) || count($st) > 60) $st = [];
+        $st[$sig] = $now;
+        @file_put_contents($stampFile, json_encode($st));
+    } elseif ($ttlSec > 0) {
+        @file_put_contents($stampFile, json_encode([$sig => $now]));
+    }
+    s4TruncateFileTailInPlace($logFile, 262144, 32768);
+    @file_put_contents($logFile, date('Y-m-d H:i:s') . ' | ' . $path . ' | ' . $msg . "\n", FILE_APPEND);
+}
+
+function s4AtomicCopyVerified(string $src, string $dst): bool {
+    if (!is_file($src)) return false;
+    clearstatcache(true, $src);
+    $need = (int)@filesize($src);
+    if ($need <= 2) return false;
+    $tmp = $dst . '.tmp.' . getmypid() . '.' . mt_rand(1000, 9999);
+    if (!@copy($src, $tmp)) { @unlink($tmp); return false; }
+    clearstatcache(true, $tmp);
+    if ((int)@filesize($tmp) !== $need) { @unlink($tmp); return false; }
+    if (is_file($dst)) {
+        $pm = @fileperms($dst);
+        if ($pm !== false) @chmod($tmp, $pm & 0777);
+    }
+    if (@rename($tmp, $dst)) {
+        clearstatcache(true, $dst);
+        return true;
+    }
+    @unlink($tmp);
+    return false;
+}
+
+function s4ReclaimPluginQuotaBloat(bool $aggressive = false): array {
+    static $running = false;
+    if ($running) return ['freed_bytes' => 0, 'files_removed' => 0, 'skipped' => true];
+    $now = time();
+    $stamp = __DIR__ . '/.quota_maint.stamp';
+    if (!$aggressive && is_file($stamp) && ($now - (int)@filemtime($stamp)) < 900) {
+        return ['freed_bytes' => 0, 'files_removed' => 0, 'skipped' => true];
+    }
+    $running = true;
+    $freed = 0;
+    $removed = 0;
+    try {
+        if (!$aggressive) @touch($stamp);
+        $bkProf = PROFILES_FILE . '.bak';
+        if (is_file($bkProf)) {
+            clearstatcache(true, $bkProf);
+            if ((int)@filesize($bkProf) === 0 && @unlink($bkProf)) $removed++;
+        }
+        if ($aggressive) {
+            $codeBak = __FILE__ . '.before-code-update';
+            if (is_file($codeBak)) {
+                $sz = (int)@filesize($codeBak);
+                if (@unlink($codeBak)) { $freed += $sz; $removed++; }
+            }
+        }
+        $activeSnap = [];
+        foreach ([__DIR__ . '/woo_queue.json', __DIR__ . '/bsl_queue.json'] as $qf) {
+            if (!is_file($qf)) continue;
+            $qd = @json_decode((string)@file_get_contents($qf), true);
+            if (!is_array($qd) || !is_array($qd['entries'] ?? null)) continue;
+            $entries = $qd['entries'];
+            $nonTerm = [];
+            $term = [];
+            foreach ($entries as $qe) {
+                if (!is_array($qe)) continue;
+                $st = strtolower(trim((string)($qe['status'] ?? '')));
+                $isTerm = in_array($st, ['done', 'failed', 'cancelled', 'stopped', 'superseded', 'completed'], true);
+                if (!$isTerm) {
+                    $pf = basename((string)($qe['products_file'] ?? ''));
+                    if ($pf !== '') $activeSnap[$pf] = true;
+                    $nonTerm[] = $qe;
+                } else {
+                    $term[] = $qe;
+                }
+            }
+            $qSz = (int)@filesize($qf);
+            if ($qSz > 524288 && count($term) > 40) {
+                $keepTerm = array_slice($term, -40);
+                $trimCut = max(0, count($keepTerm) - 10);
+                for ($ti = 0; $ti < $trimCut; $ti++) {
+                    unset($keepTerm[$ti]['sent_details'], $keepTerm[$ti]['updated_details'], $keepTerm[$ti]['skipped_details'], $keepTerm[$ti]['failed_details']);
+                }
+                $compactQ = json_encode(['entries' => array_values(array_merge($nonTerm, $keepTerm))], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if (is_string($compactQ) && strlen($compactQ) > 10 && strlen($compactQ) < $qSz) {
+                    $qfp = @fopen($qf, 'r+b');
+                    if ($qfp && @flock($qfp, LOCK_EX | LOCK_NB)) {
+                        @rewind($qfp);
+                        $qw = @fwrite($qfp, $compactQ);
+                        if ($qw === strlen($compactQ)) {
+                            @ftruncate($qfp, $qw);
+                            @fflush($qfp);
+                            $freed += ($qSz - $qw);
+                        }
+                        @flock($qfp, LOCK_UN);
+                    }
+                    if ($qfp) @fclose($qfp);
+                    clearstatcache(true, $qf);
+                }
+            }
+        }
+        $dh = @opendir(__DIR__);
+        if ($dh) {
+            $snapMaxAge = $aggressive ? 300 : 1800;
+            while (($fn = readdir($dh)) !== false) {
+                if ($fn === '.' || $fn === '..') continue;
+                $full = __DIR__ . '/' . $fn;
+                if (!is_file($full)) continue;
+                $age = $now - (int)@filemtime($full);
+                $del = false;
+                if ($age > 300 && (strpos($fn, '.tmp') !== false || strpos($fn, '.orphan.') !== false)) {
+                    $del = true;
+                } elseif ($aggressive && preg_match('/^scraper4\.php\.(?:bak|old)/i', $fn) && $age > 60) {
+                    $del = true;
+                } elseif ($age > $snapMaxAge && !isset($activeSnap[$fn]) && preg_match('/^(?:woo|bsl)_queue_(?:products_|.+_\d{8}_\d{6}).*\.json$/i', $fn)) {
+                    $del = true;
+                }
+                if ($del) {
+                    $sz = (int)@filesize($full);
+                    if (@unlink($full)) { $freed += $sz; $removed++; }
+                }
+            }
+            @closedir($dh);
+        }
+        if (defined('UPLOAD_DIR') && is_dir(UPLOAD_DIR)) {
+            $uh = @opendir(UPLOAD_DIR);
+            if ($uh) {
+                $imgMaxAge = $aggressive ? 600 : 21600;
+                $imgCap = $aggressive ? 25000 : 4000;
+                $scanned = 0;
+                while (($ufn = readdir($uh)) !== false) {
+                    if ($ufn === '.' || $ufn === '..') continue;
+                    if (++$scanned > $imgCap) break;
+                    $ufull = rtrim(UPLOAD_DIR, '/') . '/' . $ufn;
+                    if (!is_file($ufull)) continue;
+                    $uage = $now - (int)@filemtime($ufull);
+                    $udel = false;
+                    if (strncmp($ufn, 'img_', 4) === 0 && $uage > $imgMaxAge) $udel = true;
+                    elseif ((strncmp($ufn, 'import_', 7) === 0 || strncmp($ufn, 'github_', 7) === 0) && $uage > 86400) $udel = true;
+                    if ($udel) {
+                        $usz = (int)@filesize($ufull);
+                        if (@unlink($ufull)) { $freed += $usz; $removed++; }
+                    }
+                }
+                @closedir($uh);
+            }
+        }
+        $freed += s4TruncateFileTailInPlace(__DIR__ . '/storage_errors.log', $aggressive ? 65536 : 262144, 32768);
+        $logDir = __DIR__ . '/logs';
+        if (is_dir($logDir)) {
+            $lh = @opendir($logDir);
+            if ($lh) {
+                while (($lfn = readdir($lh)) !== false) {
+                    if (substr($lfn, -4) !== '.log') continue;
+                    $freed += s4TruncateFileTailInPlace($logDir . '/' . $lfn, $aggressive ? 262144 : 1048576, 65536);
+                }
+                @closedir($lh);
+            }
+        }
+    } finally {
+        $running = false;
+    }
+    return ['freed_bytes' => $freed, 'files_removed' => $removed, 'aggressive' => $aggressive];
+}
+
+function s4EnrichSalvagedProfilesMeta(array $profiles): array {
+    $metaByKey = [];
+    $eqFile = __DIR__ . '/extract_queue.json';
+    if (is_file($eqFile)) {
+        $eq = @json_decode((string)@file_get_contents($eqFile), true);
+        foreach ((array)($eq['entries'] ?? []) as $e) {
+            if (!is_array($e)) continue;
+            $pk = trim((string)($e['profile_key'] ?? ''));
+            if ($pk === '') continue;
+            if (!empty($e['url'])) $metaByKey[$pk]['url'] = (string)$e['url'];
+            if (!empty($e['profile_name'])) $metaByKey[$pk]['name'] = (string)$e['profile_name'];
+            if ((int)($e['max_pages'] ?? 0) > 0) $metaByKey[$pk]['pages'] = (int)$e['max_pages'];
+        }
+    }
+    $ssFile = __DIR__ . '/sync_state.json';
+    if (is_file($ssFile)) {
+        $ss = @json_decode((string)@file_get_contents($ssFile), true);
+        if (is_array($ss)) {
+            foreach ($ss as $pk => $st) {
+                if (!is_array($st) || empty($st['price_sig'])) continue;
+                $parts = explode('|', (string)$st['price_sig'], 4);
+                if (count($parts) === 4) {
+                    $metaByKey[(string)$pk]['priceMode'] = $parts[0];
+                    $metaByKey[(string)$pk]['priceVal'] = (float)$parts[1];
+                    $metaByKey[(string)$pk]['roundPrice'] = $parts[2];
+                    $metaByKey[(string)$pk]['titleSuffix'] = $parts[3];
+                }
+            }
+        }
+    }
+    $clean = [];
+    foreach ($profiles as $k => $prof) {
+        if (!is_string($k) || $k === '' || !is_array($prof)) continue;
+        $fb = $metaByKey[$k] ?? [];
+        if (empty($prof['url']) && !empty($fb['url'])) $prof['url'] = $fb['url'];
+        if (empty($prof['name']) && !empty($fb['name'])) $prof['name'] = $fb['name'];
+        if (!isset($prof['pages']) && isset($fb['pages'])) $prof['pages'] = $fb['pages'];
+        foreach (['priceMode', 'priceVal', 'roundPrice', 'titleSuffix'] as $mk) {
+            if (!array_key_exists($mk, $prof) && array_key_exists($mk, $fb)) $prof[$mk] = $fb[$mk];
+        }
+        if (isset($prof['products']) && is_array($prof['products'])) {
+            $validProds = [];
+            foreach ($prof['products'] as $pe) {
+                if (is_array($pe) && count($pe) >= 2 && is_string($pe[0]) && is_array($pe[1])) {
+                    if (!empty($pe[1]['title']) || !empty($pe[1]['link'])) $validProds[] = $pe;
+                } elseif (is_array($pe) && (!empty($pe['title']) || !empty($pe['link']))) {
+                    $validProds[] = $pe;
+                }
+            }
+            $prof['products'] = $validProds;
+        } else {
+            $prof['products'] = [];
+        }
+        if (empty($prof['url']) && empty($prof['name']) && empty($prof['selectors']) && empty($prof['products'])) continue;
+        if (empty($prof['name']) && !empty($prof['url'])) {
+            $prof['name'] = (string)(parse_url((string)$prof['url'], PHP_URL_HOST) ?: $k);
+        }
+        $clean[$k] = $prof;
+    }
+    return $clean;
+}
+
+function s4SalvageTruncatedProfilesJson(string $raw): array {
+    $len = strlen($raw);
+    if ($len < 4) return [];
+    $start = 0;
+    if ($len >= 3 && ord($raw[0]) === 0xEF && ord($raw[1]) === 0xBB && ord($raw[2]) === 0xBF) $start = 3;
+    while ($start < $len && ($raw[$start] === ' ' || $raw[$start] === "\t" || $raw[$start] === "\n" || $raw[$start] === "\r")) $start++;
+    if ($start >= $len || $raw[$start] !== '{') return [];
+
+    $inStr = false;
+    $esc = false;
+    $stack = [];
+    $topCut = 0;
+    $fineCut = 0;
+    $fineClose = '';
+
+    for ($i = $start; $i < $len; $i++) {
+        $ch = $raw[$i];
+        if ($inStr) {
+            if ($esc) { $esc = false; continue; }
+            if ($ch === '\\') { $esc = true; continue; }
+            if ($ch === '"') { $inStr = false; }
+            continue;
+        }
+        if ($ch === '"') { $inStr = true; continue; }
+        if ($ch === '{' || $ch === '[') {
+            $stack[] = $ch;
+            continue;
+        }
+        if ($ch === '}' || $ch === ']') {
+            $d = count($stack);
+            if ($d === 0) break;
+            $open = $stack[$d - 1];
+            if (($ch === '}' && $open !== '{') || ($ch === ']' && $open !== '[')) break;
+            array_pop($stack);
+            $nd = $d - 1;
+            if ($nd === 0) {
+                $topCut = $i + 1;
+                $fineCut = $i + 1;
+                $fineClose = '';
+                break;
+            }
+            if ($nd === 1 && $stack[0] === '{') {
+                $topCut = $i + 1;
+                $fineCut = $i + 1;
+                $fineClose = '}';
+            } elseif ($nd === 2 && $stack[0] === '{' && $stack[1] === '{') {
+                $fineCut = $i + 1;
+                $fineClose = '}}';
+            } elseif ($nd === 3 && $stack[0] === '{' && $stack[1] === '{' && $stack[2] === '[') {
+                $fineCut = $i + 1;
+                $fineClose = ']}}';
+            }
+            continue;
+        }
+        if ($ch === ',') {
+            $d = count($stack);
+            if ($d === 1 && $stack[0] === '{' && $topCut > 0) {
+                $topCut = $i;
+                $fineCut = $i;
+                $fineClose = '}';
+            } elseif ($d === 2 && $stack[0] === '{' && $stack[1] === '{') {
+                $fineCut = $i;
+                $fineClose = '}}';
+            } elseif ($d === 3 && $stack[0] === '{' && $stack[1] === '{' && $stack[2] === '[') {
+                $fineCut = $i;
+                $fineClose = ']}}';
+            }
+        }
+    }
+
+    $candidates = [];
+    if ($fineCut > $start) {
+        $candidates[] = substr($raw, $start, $fineCut - $start) . $fineClose;
+    }
+    if ($topCut > $start && $topCut !== $fineCut) {
+        $candidates[] = substr($raw, $start, $topCut - $start) . '}';
+    }
+    foreach ($candidates as $cand) {
+        $decoded = @json_decode($cand, true);
+        if (is_array($decoded) && $decoded !== []) {
+            $normalized = s4EnrichSalvagedProfilesMeta($decoded);
+            if ($normalized !== []) return $normalized;
         }
     }
     return [];
 }
-$data = @json_decode($json, true);
-if (is_array($data)) {
-    $data = s4StripDeletedProfiles($data);
-    /* نسخهٔ پشتیبان فقط از یک خوانشِ سالم و غیرخالی ساخته می‌شود، و فقط
-       وقتی محتوا واقعاً عوض شده — تا هزینهٔ نوشتن در هر بار خواندن نباشد. */
-    if ($data !== []) {
-        $bk = PROFILES_FILE . '.bak';
-        if (!is_file($bk) || (int)@filemtime($bk) < (int)@filemtime(PROFILES_FILE)) @copy(PROFILES_FILE, $bk);
-    }
-    return $data;
-}
-$GLOBALS['_profilesCorrupt'] = true;
-@copy(PROFILES_FILE, PROFILES_FILE . '.corrupt');
-@file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . ' | JSON خراب (' . strlen($json) . ' بایت) — کپی .corrupt نگه داشته شد' . "\n", FILE_APPEND);
+
+function loadProfiles(): array {
+$GLOBALS['_profilesCorrupt'] = false;
+s4ReclaimPluginQuotaBloat(false);
 $bk = PROFILES_FILE . '.bak';
-if (is_file($bk)) {
+$corruptFile = PROFILES_FILE . '.corrupt';
+if (!file_exists(PROFILES_FILE)) {
+    if (is_file($bk) && (int)@filesize($bk) > 2) {
+        $bd = @json_decode((string)@file_get_contents($bk), true);
+        if (is_array($bd) && $bd !== []) {
+            $bd = s4StripDeletedProfiles($bd);
+            writeJsonFile(PROFILES_FILE, $bd);
+            return $bd;
+        }
+    }
+    return [];
+}
+$json = @file_get_contents(PROFILES_FILE);
+if (is_string($json) && trim($json) !== '') {
+    $data = @json_decode($json, true);
+    if (is_array($data)) {
+        $data = s4StripDeletedProfiles($data);
+        if ($data !== []) {
+            if (!is_file($bk) || (int)@filesize($bk) <= 2 || (int)@filemtime($bk) < (int)@filemtime(PROFILES_FILE)) {
+                if (!s4AtomicCopyVerified(PROFILES_FILE, $bk) && !is_file($bk)) {
+                    @copy(PROFILES_FILE, $bk);
+                    if ((int)@filesize($bk) !== (int)@filesize(PROFILES_FILE)) @unlink($bk);
+                }
+            }
+        }
+        if (is_file($corruptFile)) @unlink($corruptFile);
+        return $data;
+    }
+}
+
+/* مسیر بازیابی ۱: نسخهٔ پشتیبان سالم (.bak) */
+if (is_file($bk) && (int)@filesize($bk) > 2) {
     $bd = @json_decode((string)@file_get_contents($bk), true);
     if (is_array($bd) && $bd !== []) {
         $bd = s4StripDeletedProfiles($bd);
-        /* v9.92: بازیابی موفق بود، پس دیگر «خراب» نیستیم. اگر پرچم را
-           روشن بگذاریم، saveProfiles تا ابد رد می‌شود و برنامه بی‌آنکه
-           کسی بفهمد فقط‌خواندنی می‌ماند. فایل اصلی را همین‌جا از روی
-           پشتیبان ترمیم می‌کنیم تا وضعیت واقعاً به حالت سالم برگردد. */
-        if (@copy($bk, PROFILES_FILE)) {
+        s4ReclaimPluginQuotaBloat(true);
+        if (writeJsonFile(PROFILES_FILE, $bd)['ok']) {
             $GLOBALS['_profilesCorrupt'] = false;
-            @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . ' | از پشتیبان ترمیم شد (' . count($bd) . " پروفایل)\n", FILE_APPEND);
+            if (is_file($corruptFile)) @unlink($corruptFile);
+            s4StorageLogThrottled(PROFILES_FILE, 'از پشتیبان ترمیم شد (' . count($bd) . ' پروفایل)', 5);
+        } elseif (!is_file(PROFILES_FILE) || (int)@filesize(PROFILES_FILE) === 0) {
+            if (@copy($bk, PROFILES_FILE)) {
+                if ((int)@filesize(PROFILES_FILE) === (int)@filesize($bk)) {
+                    $GLOBALS['_profilesCorrupt'] = false;
+                    s4StorageLogThrottled(PROFILES_FILE, 'از پشتیبان ترمیم شد (' . count($bd) . ' پروفایل)', 5);
+                } else {
+                    @unlink(PROFILES_FILE);
+                    $GLOBALS['_profilesCorrupt'] = true;
+                }
+            } else {
+                $GLOBALS['_profilesCorrupt'] = true;
+            }
+        } else {
+            $GLOBALS['_profilesCorrupt'] = true;
         }
         return $bd;
     }
 }
+
+/* مسیر بازیابی ۲ (v10.449): ترمیم خودکار JSON ناتمام (ناشی از Disk quota exceeded / قطع وسط نوشتن) */
+$bestSalvaged = [];
+$bestScore = [-1, -1];
+foreach ([is_string($json) ? $json : '', is_file($corruptFile) ? (string)@file_get_contents($corruptFile) : '', is_file($bk) ? (string)@file_get_contents($bk) : ''] as $candRaw) {
+    if ($candRaw === '' || strlen($candRaw) < 4) continue;
+    $sal = s4SalvageTruncatedProfilesJson($candRaw);
+    if ($sal === []) continue;
+    $pCnt = count($sal);
+    $prodCnt = 0;
+    foreach ($sal as $sp) $prodCnt += count((array)($sp['products'] ?? []));
+    if ($pCnt > $bestScore[0] || ($pCnt === $bestScore[0] && $prodCnt > $bestScore[1])) {
+        $bestSalvaged = $sal;
+        $bestScore = [$pCnt, $prodCnt];
+    }
+}
+if ($bestSalvaged !== []) {
+    $bestSalvaged = s4StripDeletedProfiles($bestSalvaged);
+    s4ReclaimPluginQuotaBloat(true);
+    if (is_file($corruptFile) && is_file(PROFILES_FILE) && (int)@filesize(PROFILES_FILE) >= (int)@filesize($corruptFile)) {
+        @unlink($corruptFile);
+    }
+    $wr = writeJsonFile(PROFILES_FILE, $bestSalvaged);
+    clearstatcache(true, PROFILES_FILE);
+    $verify = !empty($wr['ok']) ? @json_decode((string)@file_get_contents(PROFILES_FILE), true) : null;
+    if (is_array($verify) && count($verify) >= count($bestSalvaged)) {
+        $GLOBALS['_profilesCorrupt'] = false;
+        s4AtomicCopyVerified(PROFILES_FILE, $bk);
+        if (is_file($corruptFile)) @unlink($corruptFile);
+        s4StorageLogThrottled(PROFILES_FILE, 'ترمیم خودکار JSON ناتمام موفق شد: ' . count($bestSalvaged) . ' پروفایل و ' . $bestScore[1] . ' محصول بازیابی و ذخیرهٔ فشرده شد', 5);
+    } else {
+        $GLOBALS['_profilesCorrupt'] = true;
+        s4StorageLogThrottled(PROFILES_FILE, 'پروفایل‌ها از JSON ناتمام در حافظه بازیابی شدند (' . count($bestSalvaged) . ' پروفایل) اما ذخیرهٔ دائمی به دلیل پر بودن سهمیهٔ دیسک هاست منتظر آزادسازی فضاست', 120);
+    }
+    return $bestSalvaged;
+}
+
+if ($json === false || trim((string)$json) === '') {
+    return [];
+}
+$GLOBALS['_profilesCorrupt'] = true;
+if (!is_file($corruptFile) || (int)@filesize($corruptFile) !== strlen($json)) {
+    if (!s4AtomicCopyVerified(PROFILES_FILE, $corruptFile) && !is_file($corruptFile)) {
+        @copy(PROFILES_FILE, PROFILES_FILE . '.corrupt');
+        if ((int)@filesize($corruptFile) !== strlen($json)) @unlink($corruptFile);
+    }
+}
+s4StorageLogThrottled(PROFILES_FILE, 'JSON خراب (' . strlen($json) . ' بایت)', 120);
 return [];
 }
 
-/* v9.92: محافظِ آخر در برابرِ «همهٔ پروفایل‌ها رفتند و یکی ماند».
-
-   دو حالت اینجا متوقف می‌شوند:
-   ۱) خوانشِ قبلی خراب بوده ($_profilesCorrupt) — نوشتنِ روی آن یعنی
-      تثبیتِ فاجعه. رد می‌شود.
-   ۲) قرار است چند پروفایل با «یکی» جایگزین شود، درحالی‌که فایلِ روی
-      دیسک همین حالا بیشتر دارد. این هرگز یک عملیاتِ مشروع نیست مگر
-      حذفِ صریحِ کاربر، که مسیرِ خودش را دارد (delete_profile). چنین
-      نوشتنی با پروفایل‌های موجودِ روی دیسک ادغام می‌شود، نه جایگزینشان. */
 function saveProfiles(array $profiles, bool $allowDelete = false): bool {
 if (!empty($GLOBALS['_profilesCorrupt'])) {
-    @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . " | نوشتن رد شد: خوانشِ قبلی خراب بود\n", FILE_APPEND);
+    s4StorageLogThrottled(PROFILES_FILE, 'نوشتن رد شد: خوانشِ قبلی خراب بود', 60);
     return false;
 }
 if (!$allowDelete) {
     $profiles = s4StripDeletedProfiles($profiles);
 }
 if (!$allowDelete && is_file(PROFILES_FILE)) {
-    $onDisk = @json_decode((string)@file_get_contents(PROFILES_FILE), true);
+    $rawOnDisk = (string)@file_get_contents(PROFILES_FILE);
+    $onDisk = @json_decode($rawOnDisk, true);
+    if (!is_array($onDisk) && strlen($rawOnDisk) > 10) {
+        $onDisk = s4SalvageTruncatedProfilesJson($rawOnDisk);
+    }
     if (is_array($onDisk)) $onDisk = s4StripDeletedProfiles($onDisk);
+    if ($profiles === [] && is_array($onDisk) && count($onDisk) > 0) {
+        s4StorageLogThrottled(PROFILES_FILE, 'نوشتن آرایهٔ خالی بدون مجوز حذف رد شد (' . count($onDisk) . ' پروفایل حفظ شد)', 60);
+        return false;
+    }
     if (is_array($onDisk) && count($onDisk) > count($profiles) && count($profiles) > 0) {
         $lost = array_diff(array_keys($onDisk), array_keys($profiles));
         if ($lost) {
             foreach ($lost as $lk) $profiles[$lk] = $onDisk[$lk];
-            @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . PROFILES_FILE . ' | ' . count($lost) . " پروفایل از حذفِ ناخواسته نجات یافت: " . implode(',', $lost) . "\n", FILE_APPEND);
+            s4StorageLogThrottled(PROFILES_FILE, count($lost) . ' پروفایل از حذفِ ناخواسته نجات یافت: ' . implode(',', $lost), 10);
         }
     }
 }
 $ok = writeJsonFile(PROFILES_FILE, $profiles)['ok'];
-if ($ok && $allowDelete) {
+if ($ok) {
     $bk = PROFILES_FILE . '.bak';
-    if ($profiles !== []) @copy(PROFILES_FILE, $bk);
-    elseif (is_file($bk)) @unlink($bk);
+    if ($profiles !== []) s4AtomicCopyVerified(PROFILES_FILE, $bk);
+    elseif ($allowDelete && is_file($bk)) @unlink($bk);
 }
 return $ok;
 }
@@ -3711,53 +4131,68 @@ function localTaskDbRead(string $path): ?array {
 }
 
 function writeJsonFile(string $path, $data): array {
-    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    $base = basename($path);
+    $compactFiles = ['profiles.json', 'sync_matrix.json', 'sync_matrix_checkpoint.json', 'remote_map.json', 'woo_queue.json', 'bsl_queue.json'];
+    $flags = in_array($base, $compactFiles, true)
+        ? (JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        : (JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    $json = json_encode($data, $flags);
+    if (is_string($json) && ($flags & JSON_PRETTY_PRINT) && strlen($json) > 262144) {
+        $compact = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($compact)) $json = $compact;
+    }
     if ($json === false) {
         $msg = 'json_encode ناموفق: ' . json_last_error_msg();
-        @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . $path . ' | ' . $msg . "\n", FILE_APPEND);
+        s4StorageLogThrottled($path, $msg, 30);
         return ['ok' => false, 'error' => $msg];
     }
-    /* =================================================================
-       v9.92: نوشتن «اتمی» — علتِ واقعیِ «پروفایل‌ها پاک می‌شوند».
-
-       file_put_contents اول فایل را خالی (truncate) می‌کند و بعد
-       می‌نویسد. روی هاستی که وسطِ استخراج پردازه را می‌کشد (SIGKILL سرِ
-       سقفِ زمانی وب‌سرور) این پنجره واقعی است: profiles.json نصفه یا
-       صفر بایت روی دیسک می‌ماند. دفعهٔ بعد loadProfiles() آن JSON خرابْ
-       را نمی‌تواند بخواند و طبقِ کدش آرایهٔ خالی برمی‌گرداند. بعد
-       extractCheckpoint / پایانِ runBackendExtract همان آرایهٔ خالی را
-       می‌گیرند، فقط پروفایلِ در دستِ خودشان را رویش می‌گذارند و ذخیره
-       می‌کنند — و از آن لحظه فقط «یک» پروفایل باقی می‌ماند. دقیقاً همان
-       چیزی که کاربر گزارش کرد.
-
-       با نوشتن روی فایل موقت و rename اتمی، فایلِ مقصد یا نسخهٔ کاملِ
-       قبلی است یا نسخهٔ کاملِ جدید — هیچ‌وقت نصفه. rename روی همان
-       فایل‌سیستم در POSIX اتمی است.
-       ================================================================= */
-    $tmp = $path . '.tmp' . getmypid();
-    $w = @file_put_contents($tmp, $json, LOCK_EX);
-    if ($w !== false && $w === strlen($json)) {
-        // مجوزهای فایل قبلی حفظ شود تا rename دسترسی وب‌سرور را عوض نکند
-        if (is_file($path)) { $pm = @fileperms($path); if ($pm !== false) @chmod($tmp, $pm & 0777); }
-        if (@rename($tmp, $path)) { localTaskDbSave($path, $data); return ['ok' => true, 'error' => '']; }
-    }
-    @unlink($tmp);
-    // ۱) تلاش با قفل
-    $r = @file_put_contents($path, $json, LOCK_EX);
-    if ($r !== false) { localTaskDbSave($path, $data); return ['ok' => true, 'error' => '']; }
-    $errLock = error_get_last()['message'] ?? 'LOCK_EX';
-    // ۲) تلاش بدون قفل (حافظه‌های FUSE/استوریج اندروید)
-    $r = @file_put_contents($path, $json);
-    if ($r !== false) {
-        @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . $path . " | قفل پشتیبانی نشد، بدون قفل ذخیره شد: " . $errLock . "\n", FILE_APPEND);
+    $need = strlen($json);
+    $tryAtomicTmp = static function (bool $withLock) use ($path, $json, $need): bool {
+        $tmp = $path . '.tmp' . getmypid();
+        $w = $withLock ? @file_put_contents($tmp, $json, LOCK_EX) : @file_put_contents($tmp, $json);
+        if ($w === $need) {
+            clearstatcache(true, $tmp);
+            if ((int)@filesize($tmp) === $need) {
+                if (is_file($path)) { $pm = @fileperms($path); if ($pm !== false) @chmod($tmp, $pm & 0777); }
+                if (@rename($tmp, $path)) return true;
+            }
+        }
+        @unlink($tmp);
+        return false;
+    };
+    if ($tryAtomicTmp(true) || $tryAtomicTmp(false)) {
         localTaskDbSave($path, $data);
         return ['ok' => true, 'error' => ''];
     }
-    $errFinal = error_get_last()['message'] ?? 'خطای نامشخص';
+    $errFirst = (string)(error_get_last()['message'] ?? '');
+    if (function_exists('s4ReclaimPluginQuotaBloat')) {
+        s4ReclaimPluginQuotaBloat(true);
+        if ($tryAtomicTmp(true) || $tryAtomicTmp(false)) {
+            localTaskDbSave($path, $data);
+            return ['ok' => true, 'error' => ''];
+        }
+    }
+    $errFinal = (string)(error_get_last()['message'] ?? ($errFirst ?: 'خطای نامشخص'));
+    $existingNonEmpty = is_file($path) && (int)@filesize($path) > 0;
+    $isQuotaOrSpace = stripos($errFinal, 'quota') !== false || stripos($errFinal, 'space') !== false || stripos($errFinal, 'Only ') !== false
+        || stripos($errFirst, 'quota') !== false || stripos($errFirst, 'space') !== false || stripos($errFirst, 'Only ') !== false;
+    /* v10.449: اگر فایلِ قبلی روی دیسک داده دارد یا خطا از جنس پر بودن دیسک/سهمیه است،
+       هرگز مستقیماً روی فایل اصلی file_put_contents نزن؛ چون ابتدا فایل سالم را truncate
+       می‌کند و وسطِ نوشتن نصفه رها می‌شود (دقیقاً باگ ۸ مگابایتی profiles.json). */
+    if (!$existingNonEmpty && !$isQuotaOrSpace) {
+        $r = @file_put_contents($path, $json, LOCK_EX);
+        if ($r === false) $r = @file_put_contents($path, $json);
+        if ($r === $need) {
+            localTaskDbSave($path, $data);
+            return ['ok' => true, 'error' => ''];
+        }
+        if ($r !== false) @unlink($path);
+        $errFinal = (string)(error_get_last()['message'] ?? $errFinal);
+    }
     $dir = dirname($path);
     $writable = is_writable($dir) ? 'بله' : 'خیر';
     $msg = 'نوشتن ناموفق: ' . $errFinal . ' | پوشهٔ ' . $dir . ' قابل نوشتن: ' . $writable;
-    @file_put_contents(__DIR__ . '/storage_errors.log', date('Y-m-d H:i:s') . ' | ' . $path . ' | ' . $msg . "\n", FILE_APPEND);
+    s4StorageLogThrottled($path, $msg, 60);
     return ['ok' => false, 'error' => $msg];
 }
 
@@ -14968,7 +15403,11 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
             }
             return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion];
         }
-        $tmp=__FILE__.'.update.'.getmypid().'.tmp';if(@file_put_contents($tmp,$code,LOCK_EX)!==$size)return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];
+        $tmp=__FILE__.'.update.'.getmypid().'.tmp';
+        if(@file_put_contents($tmp,$code,LOCK_EX)!==$size){
+            @unlink($tmp);if(function_exists('s4ReclaimPluginQuotaBloat'))s4ReclaimPluginQuotaBloat(true);
+            if(@file_put_contents($tmp,$code,LOCK_EX)!==$size){@unlink($tmp);return ['ok'=>false,'http'=>500,'error'=>'temporary_write_failed'];}
+        }
         @chmod($tmp,(int)(@fileperms(__FILE__)&0777));
         if(function_exists('exec')){
             $lint=[];$rc=0;$lintPhp=function_exists('s4CliPhpBinary')?s4CliPhpBinary():(defined('PHP_BINARY')?(string)PHP_BINARY:'php');
@@ -14977,9 +15416,11 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
             @exec($lintBase.' -l '.escapeshellarg($tmp).' 2>&1',$lint,$rc);
             if($rc!==0)return ['ok'=>false,'http'=>422,'error'=>'php_lint_failed','binary'=>$lintPhp,'exit_code'=>$rc,'detail'=>implode("\n",array_slice($lint,-5))];
         }
-        $backup=__FILE__.'.before-code-update';@unlink($backup);if(!@copy(__FILE__,$backup))return ['ok'=>false,'http'=>500,'error'=>'backup_failed'];
+        $backup=__FILE__.'.before-code-update';@unlink($backup);
+        $hasBackup=@copy(__FILE__,$backup);
+        if(!$hasBackup){@unlink($backup);if(function_exists('s4ReclaimPluginQuotaBloat'))s4ReclaimPluginQuotaBloat(true);$hasBackup=@copy(__FILE__,$backup);if(!$hasBackup)@unlink($backup);}
         $installed=@rename($tmp,__FILE__);if(!$installed){$installed=@copy($tmp,__FILE__);if($installed)@unlink($tmp);}
-        if(!$installed){@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
+        if(!$installed){if(!empty($hasBackup)&&is_file($backup))@copy($backup,__FILE__);return ['ok'=>false,'http'=>500,'error'=>'atomic_replace_failed'];}
         clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);
         if($trustedAuto&&!empty($cfg['pinned_branch'])&&$cfg['pinned_branch']!==$sourceBranch){
             $cfg['branch']=$sourceBranch;$cfg['pinned_branch']='';$cfg['pinned_at']=0;$cfg['pinned_max_unix']=0;vc_save($cfg);
@@ -36623,14 +37064,17 @@ if(isset($_GET['internal_matrix_feedback'])){
    ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
 if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     header('Content-Type: application/json; charset=UTF-8');$now=time();$repair=!empty($_GET['repair']??$_POST['repair']??null);
+    $actions=[];
+    if($repair&&function_exists('s4ReclaimPluginQuotaBloat'))$actions['quota_reclaim']=s4ReclaimPluginQuotaBloat(true);
+    $profilesCount=count(loadProfiles());
     $staleWorkerLock=$repair?s4WorkerRecoverStaleLockPath():['recovered'=>false];
     $wst=s4WorkerStateLoad();$wq=s4WorkerLoadQueue();$whb=(int)($wst['heartbeat']??0);$workerActive=s4WorkerIsActive();
-    $mx=matrixProgressRead();$mxBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
+    $mx=matrixProgressRead(false);$mxBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
     $mxFp=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$mxLocked=false;if($mxFp){$free=@flock($mxFp,LOCK_EX|LOCK_NB);$mxLocked=!$free;if($free)@flock($mxFp,LOCK_UN);@fclose($mxFp);}
     $cronFile=__DIR__.'/cron_last_run.json';$cronAt=is_file($cronFile)?(int)@filemtime($cronFile):0;$cronAge=$cronAt>0?max(0,$now-$cronAt):null;
     $active=[];foreach((array)($wq['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['status']??''),['pending','running'],true))$active[]=['id'=>(string)($e['id']??''),'type'=>(string)($e['type']??''),'status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0)];
     $tailLog=static function(string $name):array{$f=__DIR__.'/logs/'.$name;if(!is_file($f))return[];$sz=(int)@filesize($f);$raw=(string)@file_get_contents($f,false,null,max(0,$sz-16000));$ls=preg_split('/\R/',$raw);return array_slice(array_values(array_filter($ls,static fn($x)=>trim((string)$x)!=='')),-15);};
-    $actions=[];if(!empty($staleWorkerLock['recovered']))$actions['stale_worker_lock']=$staleWorkerLock;
+    if(!empty($staleWorkerLock['recovered']))$actions['stale_worker_lock']=$staleWorkerLock;
     /* daemon قدیمی پس از deploy همان کد قبلی را تا ابد در RAM دارد. در repair
        فقط با PID و version ثبت‌شدهٔ خودش پایانش می‌دهیم تا worker تازه بالا آید. */
     if($repair&&$workerActive&&(string)($wst['version']??'')!==APP_VERSION&&function_exists('posix_kill')){
@@ -36647,6 +37091,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     }
     $healthy=$workerActive&&($cronAge===null||$cronAge<900)&&!( !empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120));
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'now'=>$now,'healthy'=>$healthy,'repair'=>$repair,
+        'profiles_count'=>$profilesCount,'profiles_corrupt'=>!empty($GLOBALS['_profilesCorrupt']),
         'worker'=>['active'=>$workerActive,'heartbeat_age'=>$whb>0?max(0,$now-$whb):null,'state'=>$wst,'active_jobs'=>$active],
         'cron'=>['last_at'=>$cronAt,'age'=>$cronAge,'stale'=>$cronAge===null||$cronAge>=900],
         'matrix'=>['running'=>!empty($mx['running']),'phase'=>(string)($mx['phase']??''),'heartbeat_age'=>$mxAge,'lock_held'=>$mxLocked,'checkpoint'=>is_array($mx['checkpoint']??null)],
@@ -49587,6 +50032,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_truncSample449 = "{\n  \"p_ok\": {\"url\": \"https://a.test/1\", \"name\": \"الف\", \"products\": [[\"k1\", {\"title\": \"کالا ۱\", \"price\": \"100\"}]]},\n  \"p_cut\": {\"url\": \"https://b.test/2\", \"name\": \"ب\", \"bslCategoryId\": 37, \"products\": [[\"k2\", {\"title\": \"کالا ۲\", \"price\": \"200\"}], [\"k3\", {\"title\": \"ناتم";
+    $_salvaged449 = s4SalvageTruncatedProfilesJson($_truncSample449);
+    $add('10.449', 'بازیابی خودکار پروفایل‌ها از JSON ناتمام ناشی از Disk quota exceeded، ذخیرهٔ اتمی ضدبرش و آزادسازی کش‌های موقت',
+         function_exists('s4SalvageTruncatedProfilesJson')
+      && function_exists('s4ReclaimPluginQuotaBloat')
+      && function_exists('s4AtomicCopyVerified')
+      && isset($_salvaged449['p_ok'], $_salvaged449['p_cut'])
+      && count((array)($_salvaged449['p_ok']['products'] ?? [])) === 1
+      && count((array)($_salvaged449['p_cut']['products'] ?? [])) === 1
+      && (int)($_salvaged449['p_cut']['bslCategoryId'] ?? 0) === 37
+      && strpos($selfSrc, 'if (!$existingNonEmpty && !$isQuotaOrSpace)') !== false
+      && strpos($selfSrc, '$mx=matrixProgressRead(false);') !== false
+      && strpos($selfSrc, "{v:'10." . "449'") !== false
+      && version_compare(APP_VERSION, '10.449', '>='));
     $add('10.448', 'هم‌ترازی شمارهٔ نسخه با برنچ‌های موازی و پرش تمیز از دانگرید ناخواسته در آپدیت خودکار پس‌زمینه',
          strpos($selfSrc, "'downgrade_skipped'=>true") !== false
       && strpos($selfSrc, "{v:'10." . "448'") !== false
@@ -84550,6 +85009,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.449', t:'🛡️ بازیابی خودکار پروفایل‌ها از JSON ناتمام (Disk Quota Exceeded)، حذف باگ برش ۸ مگابایتی writeJsonFile و پاک‌سازی هوشمند کش دیسک', items:[
+    'علت واقعی «پاک شدن ظاهری پروفایل‌ها» شناسایی و ریشه‌ای برطرف شد: هنگام پر شدن سهمیهٔ فضای هاست (errno=122 Disk quota exceeded)، نوشتن اتمی فایل موقت (.tmp) به‌درستی متوقف می‌شد، اما مسیر بازگشتی قدیمی در writeJsonFile مستقیماً روی profiles.json می‌نوشت که ابتدا فایل سالم ۱۳.۳ مگابایتی را صفر بایت (truncate) می‌کرد و در مرز ۸ مگابایت ناتمام رها می‌شد؛ همچنین کپی غیرمطمئن روی profiles.json.bak نیز پشتیبان را صفر بایت می‌کرد. اکنون writeJsonFile در صورت وجود فایل قبلی یا خطای سهمیهٔ دیسک هرگز فایل اصلی را truncate نمی‌کند و کپی .bak با s4AtomicCopyVerified اتمی و با بررسی اندازه انجام می‌شود.',
+    'موتور بازیابی خودکار JSON ناتمام (s4SalvageTruncatedProfilesJson + s4EnrichSalvagedProfilesMeta) به loadProfiles اضافه شد: تمام پروفایل‌های کاملِ پیش از نقطهٔ برش و نیز تنظیمات و محصولات کاملِ آخرین پروفایلِ در حال نوشتن را بدون از دست رفتن داده‌ها استخراج، با متادیتای کمکی (extract_queue / sync_state) تکمیل و به‌صورت خودکار به فایل سالم تبدیل می‌کند.',
+    'فشرده‌سازی JSON فایل‌های حجیم (حذف JSON_PRETTY_PRINT در profiles.json، sync_matrix.json، remote_map.json و صف‌ها با کاهش ۳۵ تا ۴۵ درصدی حجم) و پاک‌سازی خودکار فایل‌های موقت پرمصرف (s4ReclaimPluginQuotaBloat: کش عکس‌های موقت قدیمی در uploads/img_*، اسنپ‌شات‌های تمام‌شدهٔ woo_queue_products_* / bsl_queue_products_*، فایل‌های یتیم .tmp/.corrupt/.before-code-update و چرخش درجا با ftruncate روی لاگ‌های حجیم بدون نیاز به فضای خالی اضافه) پیاده‌سازی شد.',
+    'خطای HTTP 500 در ?ops_feedback=1 (ناشی از بارگذاری چک‌پوینت حجیم ماتریس در حافظه با matrixProgressRead(true)) به matrixProgressRead(false) اصلاح شد و گزارش تعداد پروفایل‌ها و آزادسازی دیسک به خروجی افزوده شد.'
+  ]},
   {v:'10.448', t:'🔄 هم‌ترازی شمارهٔ نسخه بین برنچ‌های موازی و پرش بی‌خطا از دانگرید خودکار در پس‌زمینه', items:[
     'شمارهٔ نسخه بالاتر از برنچ موازی تنظیم شد تا هاست‌هایی که روی 10.447 قرار داشتند بدون خطای downgrade_refused به‌صورت خودکار اصلاحات حلقهٔ رفرش و ویرایش تصویر را دریافت کنند.',
     'در حالت آپدیت خودکار پس‌زمینه (trustedAuto)، اگر برنچ تازه‌تر از نظر زمانی شمارهٔ نسخهٔ پایین‌تری از نسخهٔ فعلی دیسک داشته باشد، به‌جای ثبت خطای ۴۰۹ وضعیت، به‌صورت تمیز (downgrade_skipped) نسخهٔ فعلی دیسک را حفظ و همگام می‌کند؛ درحالی‌که کلیک دستی روی «⬇ آپدیت از این برنچ» همچنان امکان جابه‌جایی صریح به هر برنچ مجاز را دارد.'
