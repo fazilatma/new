@@ -181,7 +181,7 @@ const TASKS_ORDER_FILE = __DIR__ . '/tasks_order.json';
    به‌تنهایی اجرا شود و وضعیت/heartbeat/checkpoint را در همین پوشه نگه دارد.
    JSONها برای سازگاریِ UI و نسخه‌های قدیمی mirror می‌مانند، اما اگر JSON
    خراب یا حذف شده باشد، آخرین snapshot از SQLite بازیابی می‌شود. */
-const LOCAL_TASK_DB_FILE = __DIR__ . '/../scraper_tasks.sqlite3';
+const LOCAL_TASK_DB_FILE = __DIR__ . '/.scraper_tasks.sqlite3';
 const LOCAL_TASK_DB_BUSY_MS = 5000;
 
 // v10.04 (۱۸): انتقالِ رابطِ «ایجنتِ مدیریت محصولات» از تبِ ارسال به تبِ تازهٔ «🤖 ایجنت» در بخشِ هوش مصنوعی
@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.449';
+const APP_VERSION = '10.450';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -3616,6 +3616,7 @@ function s4ReclaimPluginQuotaBloat(bool $aggressive = false): array {
                 @closedir($uh);
             }
         }
+        if (function_exists('s4PurgeOrCompactTaskDb')) $freed += s4PurgeOrCompactTaskDb($aggressive);
         $freed += s4TruncateFileTailInPlace(__DIR__ . '/storage_errors.log', $aggressive ? 65536 : 262144, 32768);
         $logDir = __DIR__ . '/logs';
         if (is_dir($logDir)) {
@@ -3987,26 +3988,86 @@ function localTaskKeyForFile(string $path): string {
 }
 
 function localTaskDbFile(): string {
-    static $path = null;
-    if ($path !== null) return $path;
-    /* Prefer one directory above the web root. A public-directory fallback is
-       hidden and only used when the host refuses writes outside it. */
-    $outside = dirname(__DIR__) . '/scraper_tasks.sqlite3';
-    if (is_file($outside) ? is_writable($outside) : is_writable(dirname($outside))) {
-        $path = $outside;
-    } else {
-        $path = __DIR__ . '/.scraper_tasks.sqlite3';
+    return __DIR__ . '/.scraper_tasks.sqlite3';
+}
+
+function s4UnlinkOrZeroFile(string $f): int {
+    if (!is_file($f)) return 0;
+    clearstatcache(true, $f);
+    $sz = max(0, (int)@filesize($f));
+    if (@unlink($f)) {
+        clearstatcache(true, $f);
+        return $sz;
     }
-    return $path;
+    $fp = @fopen($f, 'r+b');
+    if ($fp) {
+        @ftruncate($fp, 0);
+        @fflush($fp);
+        @fclose($fp);
+        @unlink($f);
+        clearstatcache(true, $f);
+        return $sz;
+    }
+    return 0;
+}
+
+function localTaskDbClose(): void {
+    if (!empty($GLOBALS['_s4LocalTaskDb']) && is_array($GLOBALS['_s4LocalTaskDb'])) {
+        try {
+            if (($GLOBALS['_s4LocalTaskDb']['driver'] ?? '') === 'sqlite3' && is_object($GLOBALS['_s4LocalTaskDb']['db'] ?? null)) {
+                @$GLOBALS['_s4LocalTaskDb']['db']->close();
+            }
+        } catch (Throwable $e) {}
+    }
+    $GLOBALS['_s4LocalTaskDb'] = '__not_initialized__';
+}
+
+function s4PurgeOrCompactTaskDb(bool $aggressive = false): int {
+    $freed = 0;
+    /* ۱) حذف کامل فایل قدیمی و پرمصرف ../scraper_tasks.sqlite3 در پوشهٔ plugins وردپرس (که به ۴۰ گیگابایت می‌رسید) */
+    $legacyBase = dirname(__DIR__) . '/scraper_tasks.sqlite3';
+    foreach (['', '-wal', '-shm', '-journal'] as $sfx) {
+        $lf = $legacyBase . $sfx;
+        if (is_file($lf)) $freed += s4UnlinkOrZeroFile($lf);
+    }
+    /* ۲) سقف سخت ۴ مگابایت روی .scraper_tasks.sqlite3 داخل پوشهٔ افزونه (و حذف هرگونه فایل WAL قدیمی) */
+    $curBase = localTaskDbFile();
+    foreach (['-wal', '-shm'] as $wsfx) {
+        $wf = $curBase . $wsfx;
+        if (is_file($wf)) {
+            localTaskDbClose();
+            $freed += s4UnlinkOrZeroFile($wf);
+        }
+    }
+    $totalCur = 0;
+    foreach (['', '-journal'] as $csfx) {
+        $cf = $curBase . $csfx;
+        if (is_file($cf)) {
+            clearstatcache(true, $cf);
+            $totalCur += max(0, (int)@filesize($cf));
+        }
+    }
+    $maxAllowed = $aggressive ? 2097152 : 4194304;
+    if ($totalCur > $maxAllowed) {
+        localTaskDbClose();
+        foreach (['', '-wal', '-shm', '-journal'] as $csfx) {
+            $cf = $curBase . $csfx;
+            if (is_file($cf)) $freed += s4UnlinkOrZeroFile($cf);
+        }
+    }
+    return $freed;
 }
 
 function localTaskDbOpen() {
-    static $db = '__not_initialized__';
-    if ($db !== '__not_initialized__') return $db;
-    $db = null;
+    if (!array_key_exists('_s4LocalTaskDb', $GLOBALS)) $GLOBALS['_s4LocalTaskDb'] = '__not_initialized__';
+    if ($GLOBALS['_s4LocalTaskDb'] !== '__not_initialized__') return $GLOBALS['_s4LocalTaskDb'];
+    $GLOBALS['_s4LocalTaskDb'] = null;
+    s4PurgeOrCompactTaskDb(false);
     $dbFile = localTaskDbFile();
     $dir = dirname($dbFile);
     if (!is_dir($dir) || !is_writable($dir)) return null;
+    $isNew = !is_file($dbFile) || (int)@filesize($dbFile) === 0;
+    $db = null;
 
     if (class_exists('PDO')) {
         try {
@@ -4017,7 +4078,10 @@ function localTaskDbOpen() {
                     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 ]);
                 $pdo->exec('PRAGMA busy_timeout = ' . LOCAL_TASK_DB_BUSY_MS);
-                @$pdo->exec('PRAGMA journal_mode = WAL');
+                if ($isNew) @$pdo->exec('PRAGMA auto_vacuum = FULL');
+                @$pdo->exec('PRAGMA journal_mode = TRUNCATE');
+                @$pdo->exec('PRAGMA synchronous = NORMAL');
+                @$pdo->exec('PRAGMA max_page_count = 2048');
                 $db = ['driver' => 'pdo', 'db' => $pdo, 'ready' => false];
             }
         } catch (Throwable $e) { $db = null; }
@@ -4026,7 +4090,10 @@ function localTaskDbOpen() {
         try {
             $sql = new SQLite3($dbFile);
             $sql->busyTimeout(LOCAL_TASK_DB_BUSY_MS);
-            @$sql->exec('PRAGMA journal_mode = WAL');
+            if ($isNew) @$sql->exec('PRAGMA auto_vacuum = FULL');
+            @$sql->exec('PRAGMA journal_mode = TRUNCATE');
+            @$sql->exec('PRAGMA synchronous = NORMAL');
+            @$sql->exec('PRAGMA max_page_count = 2048');
             $db = ['driver' => 'sqlite3', 'db' => $sql, 'ready' => false];
         } catch (Throwable $e) { $db = null; }
     }
@@ -4049,7 +4116,8 @@ function localTaskDbOpen() {
         ];
         foreach ($schema as $statement) $db['db']->exec($statement);
         $db['ready'] = true;
-    } catch (Throwable $e) { $db = null; }
+        $GLOBALS['_s4LocalTaskDb'] = $db;
+    } catch (Throwable $e) { $db = null; $GLOBALS['_s4LocalTaskDb'] = null; }
     return $db;
 }
 
@@ -4065,28 +4133,53 @@ function localTaskStateStatus(array $state): string {
 }
 
 function localTaskStateCheckpoint(array $state): array {
-    $cp = is_array($state['checkpoint'] ?? null) ? $state['checkpoint'] : [];
-    /* Old workers do not all have a nested checkpoint yet. Keep the cursor
-       fields that are sufficient for the next dispatcher invocation. */
+    $cp = [];
+    $rawCp = is_array($state['checkpoint'] ?? null) ? $state['checkpoint'] : [];
     foreach (['phase', 'page', 'current', 'total', 'processed', 'tested', 'checked',
               'cur', 'cur_total', 'step', 'calls', 'sent', 'updated', 'skipped',
               'failed', 'groups', 'deleted', 'fixed', 'filled', 'edited', 'profile_key',
-              'queue_id', 'target', 'url', 'started_at'] as $key) {
-        if (!array_key_exists($key, $cp) && array_key_exists($key, $state)) $cp[$key] = $state[$key];
+              'queue_id', 'target', 'url', 'started_at', '_external'] as $key) {
+        if (array_key_exists($key, $rawCp) && (is_scalar($rawCp[$key]) || $rawCp[$key] === null)) {
+            $cp[$key] = $rawCp[$key];
+        } elseif (array_key_exists($key, $state) && (is_scalar($state[$key]) || $state[$key] === null)) {
+            $cp[$key] = $state[$key];
+        }
     }
     return $cp;
+}
+
+function localTaskDbCompactState(array $data): array {
+    $slim = $data;
+    foreach (['sent_details', 'updated_details', 'skipped_details', 'failed_details',
+              'items', 'rows', 'woo_rows', 'shop_rows', 'profile_rows', 'results'] as $heavyKey) {
+        unset($slim[$heavyKey]);
+    }
+    if (isset($slim['log']) && is_array($slim['log']) && count($slim['log']) > 20) {
+        $slim['log'] = array_slice($slim['log'], -20);
+    }
+    if (isset($slim['checkpoint']) && is_array($slim['checkpoint'])) {
+        $slim['checkpoint'] = localTaskStateCheckpoint($data);
+    }
+    return $slim;
 }
 
 function localTaskDbSave(string $path, $data): void {
     $key = localTaskKeyForFile($path);
     if ($key === '' || !is_array($data)) return;
-    $db = localTaskDbOpen();
-    if (!is_array($db) || empty($db['ready'])) return;
-    $json = json_encode($data, JSON_UNESCAPED_UNICODE);
-    $cpJson = json_encode(localTaskStateCheckpoint($data), JSON_UNESCAPED_UNICODE);
-    if ($json === false || $cpJson === false) return;
+    static $lastWrite = [];
     $status = localTaskStateStatus($data);
     $now = time();
+    if ($status === 'running' && isset($lastWrite[$key]) && ($now - $lastWrite[$key]) < 3) {
+        return;
+    }
+    $slim = localTaskDbCompactState($data);
+    $json = json_encode($slim, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json) || strlen($json) > 131072) return;
+    $cpJson = json_encode(localTaskStateCheckpoint($data), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($cpJson) || strlen($cpJson) > 32768) $cpJson = '{}';
+    $db = localTaskDbOpen();
+    if (!is_array($db) || empty($db['ready'])) return;
+    $lastWrite[$key] = $now;
     $heartbeat = (int)($data['last_progress_ts'] ?? $data['heartbeat_at'] ?? $data['ts'] ?? $now);
     $lease = (int)($data['lease_until'] ?? 0);
     if ($status === 'running' && $lease <= 0) $lease = $heartbeat + 300;
@@ -4106,12 +4199,15 @@ function localTaskDbSave(string $path, $data): void {
             $q->bindValue(':h', $heartbeat, SQLITE3_INTEGER); $q->bindValue(':l', $lease, SQLITE3_INTEGER);
             $q->bindValue(':u', $now, SQLITE3_INTEGER); @$q->execute();
         }
-    } catch (Throwable $e) { /* DB is an availability enhancement, not a reason to kill a task. */ }
+    } catch (Throwable $e) {
+        s4PurgeOrCompactTaskDb(true);
+    }
 }
 
 function localTaskDbRead(string $path): ?array {
     $key = localTaskKeyForFile($path);
     if ($key === '') return null;
+    if (!is_file(localTaskDbFile())) return null;
     $db = localTaskDbOpen();
     if (!is_array($db) || empty($db['ready'])) return null;
     try {
@@ -4226,14 +4322,13 @@ function localTaskDbForget(string $path): void {
 }
 
 function localTaskStateRead(string $file, array $default = []): array {
+    if (is_file($file)) {
+        $d = @json_decode((string)@file_get_contents($file), true);
+        if (is_array($d)) return $d;
+    }
     $dbRow = localTaskDbRead($file);
     $dbState = is_array($dbRow['state'] ?? null) ? $dbRow['state'] : null;
-    if (!file_exists($file)) return $dbState ?? $default;
-    $d = @json_decode(@file_get_contents($file) ?: '', true);
-    if (!is_array($d)) return $dbState ?? $default;
-    $fileAt = (int)@filemtime($file);
-    if ($dbState !== null && (int)($dbRow['updated_at'] ?? 0) > $fileAt + 1) return $dbState;
-    return $d;
+    return $dbState ?? $default;
 }
 
 function localTaskStateExists(string $file): bool {
@@ -50032,6 +50127,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 's4_code_reload_guard') !== false
       && strpos($selfSrc, "{v:'10." . "446'") !== false
       && version_compare(APP_VERSION, '10.446', '>='));
+    $_slimState450 = localTaskDbCompactState(['running'=>true,'sent'=>5,'sent_details'=>[['id'=>1]],'rows'=>[['id'=>2]],'log'=>range(1,40),'checkpoint'=>['page'=>7,'woo_rows'=>[['id'=>9]]]]);
+    $add('10.450', 'مهار قطعی تورم ۴۰ گیگابایتی scraper_tasks.sqlite3 با حذف مسیر ../scraper_tasks.sqlite3، سقف سخت max_page_count، حذف WAL و فشرده‌سازی state',
+         function_exists('s4PurgeOrCompactTaskDb')
+      && function_exists('localTaskDbCompactState')
+      && function_exists('localTaskDbClose')
+      && basename(localTaskDbFile()) === '.scraper_tasks.sqlite3'
+      && !isset($_slimState450['sent_details'], $_slimState450['rows'], $_slimState450['checkpoint']['woo_rows'])
+      && count((array)($_slimState450['log'] ?? [])) === 20
+      && (int)($_slimState450['checkpoint']['page'] ?? 0) === 7
+      && strpos($selfSrc, 'PRAGMA journal_mode = TRUNCATE') !== false
+      && strpos($selfSrc, 'PRAGMA max_page_count = 2048') !== false
+      && strpos($selfSrc, "{v:'10." . "450'") !== false
+      && version_compare(APP_VERSION, '10.450', '>='));
     $_truncSample449 = "{\n  \"p_ok\": {\"url\": \"https://a.test/1\", \"name\": \"الف\", \"products\": [[\"k1\", {\"title\": \"کالا ۱\", \"price\": \"100\"}]]},\n  \"p_cut\": {\"url\": \"https://b.test/2\", \"name\": \"ب\", \"bslCategoryId\": 37, \"products\": [[\"k2\", {\"title\": \"کالا ۲\", \"price\": \"200\"}], [\"k3\", {\"title\": \"ناتم";
     $_salvaged449 = s4SalvageTruncatedProfilesJson($_truncSample449);
     $add('10.449', 'بازیابی خودکار پروفایل‌ها از JSON ناتمام ناشی از Disk quota exceeded، ذخیرهٔ اتمی ضدبرش و آزادسازی کش‌های موقت',
@@ -85009,6 +85117,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.450', t:'🗄️ رفع ریشه‌ای تورم ۴۰ گیگابایتی دیتابیس scraper_tasks.sqlite3 در پوشهٔ plugins و پاک‌سازی خودکار آن', items:[
+    'علت اصلی پر شدن ۴۰ گیگابایتی هاست برطرف شد: تابع localTaskDbOpen فایل scraper_tasks.sqlite3 را در پوشهٔ بالاتر (wp-content/plugins/scraper_tasks.sqlite3) با حالت WAL و بدون auto_vacuum و بدون سقف صفحه ایجاد می‌کرد؛ همزمان باز ماندن اتصال در worker دائمی و خوانش SQLite در هر درخواست وضعیت باعث قفل شدن checkpoint فایل WAL و ذخیرهٔ مکرر آرایه‌های حجیم جزئیات/ردیف‌ها تا سقف ده‌ها گیگابایت می‌شد.',
+    'حذف خودکار و فوری فایل قدیمی wp-content/plugins/scraper_tasks.sqlite3 (به‌همراه پسوندهای -wal، -shm و -journal) در s4PurgeOrCompactTaskDb اضافه شد تا بدون نیاز به فضای خالی اضافه (برخلاف VACUUM)، تمام فضای اشغال‌شده بلافاصله آزاد شود.',
+    'معماری دیتابیس کمکی به مسیر مخفی داخل خود پوشهٔ افزونه (.scraper_tasks.sqlite3) منتقل و با ۴ لایه مهار شد: ۱) PRAGMA journal_mode = TRUNCATE (حذف کامل فایل‌های سرکش WAL)؛ ۲) PRAGMA auto_vacuum = FULL؛ ۳) سقف سخت هستهٔ SQLite روی ۸ مگابایت (PRAGMA max_page_count = 2048) و بازسازی خودکار بالای ۴ مگابایت؛ ۴) حذف آرایه‌های سنگین نمایشی در localTaskDbCompactState، نرخ‌محدودسازی نوشتن در حلقه و حذف خوانش غیرضروری SQLite زمانی که فایل JSON سالم روی دیسک موجود است.'
+  ]},
   {v:'10.449', t:'🛡️ بازیابی خودکار پروفایل‌ها از JSON ناتمام (Disk Quota Exceeded)، حذف باگ برش ۸ مگابایتی writeJsonFile و پاک‌سازی هوشمند کش دیسک', items:[
     'علت واقعی «پاک شدن ظاهری پروفایل‌ها» شناسایی و ریشه‌ای برطرف شد: هنگام پر شدن سهمیهٔ فضای هاست (errno=122 Disk quota exceeded)، نوشتن اتمی فایل موقت (.tmp) به‌درستی متوقف می‌شد، اما مسیر بازگشتی قدیمی در writeJsonFile مستقیماً روی profiles.json می‌نوشت که ابتدا فایل سالم ۱۳.۳ مگابایتی را صفر بایت (truncate) می‌کرد و در مرز ۸ مگابایت ناتمام رها می‌شد؛ همچنین کپی غیرمطمئن روی profiles.json.bak نیز پشتیبان را صفر بایت می‌کرد. اکنون writeJsonFile در صورت وجود فایل قبلی یا خطای سهمیهٔ دیسک هرگز فایل اصلی را truncate نمی‌کند و کپی .bak با s4AtomicCopyVerified اتمی و با بررسی اندازه انجام می‌شود.',
     'موتور بازیابی خودکار JSON ناتمام (s4SalvageTruncatedProfilesJson + s4EnrichSalvagedProfilesMeta) به loadProfiles اضافه شد: تمام پروفایل‌های کاملِ پیش از نقطهٔ برش و نیز تنظیمات و محصولات کاملِ آخرین پروفایلِ در حال نوشتن را بدون از دست رفتن داده‌ها استخراج، با متادیتای کمکی (extract_queue / sync_state) تکمیل و به‌صورت خودکار به فایل سالم تبدیل می‌کند.',
