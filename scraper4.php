@@ -40562,8 +40562,13 @@ if (isset($_GET['bsl_rejection_audit'])) {
                     }
                 }
                 $rejTotal = 0;
+                $livePerPage = max(1, min(100, (int)($_GET['per_page'] ?? 20)));
+                $vInfo = bslReqRead($sTk, 'vendors/' . $sVid);
+                $vBody = is_array($vInfo['body'] ?? null) ? ($vInfo['body']['data'] ?? $vInfo['body']) : [];
+                $vStVal = is_array($vBody['status'] ?? null) ? (int)($vBody['status']['value'] ?? 0) : (int)($vBody['status'] ?? 0);
+                $vStName = is_array($vBody['status'] ?? null) ? (string)($vBody['status']['name'] ?? '') : '';
                 for ($pg = 1; $pg <= $maxPages; $pg++) {
-                    $r = bslReqRead($sTk, 'vendors/' . $sVid . '/products?page=' . $pg . '&per_page=100&statuses=3567');
+                    $r = bslReqRead($sTk, 'vendors/' . $sVid . '/products?page=' . $pg . '&per_page=' . $livePerPage . '&statuses=3567');
                     if (empty($r['ok'])) break;
                     if ($pg === 1) $rejTotal = bslMetaInt($r['body'], 'total_count', 0);
                     $rows = bslRowsOf($r['body']);
@@ -40575,7 +40580,7 @@ if (isset($_GET['bsl_rejection_audit'])) {
                     unset($rows, $r);
                     if ($pg >= $tp) break;
                 }
-                $shopTotals[] = ['vendor_id' => $sVid, 'shop_name' => $sName, 'rejected_3567_total' => $rejTotal, 'status_counts' => $stCounts];
+                $shopTotals[] = ['vendor_id' => $sVid, 'shop_name' => $sName, 'vendor_status' => $vStVal, 'vendor_status_name' => $vStName, 'vendor_is_active' => $vBody['is_active'] ?? null, 'rejected_3567_total' => $rejTotal, 'status_counts' => $stCounts];
             }
         }
 
