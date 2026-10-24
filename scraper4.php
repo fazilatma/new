@@ -40429,6 +40429,176 @@ if(isset($_GET['internal_matrix_feedback'])){
     exit;
 }
 
+/* v10.466: ممیزی کم‌مصرف و جامع علل عدم تایید محصولات باسلام در همهٔ غرفه‌ها */
+if (isset($_GET['bsl_rejection_audit'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    @set_time_limit(120);
+    try {
+        $cn = loadConnections();
+        $shops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+        $srcMode = trim((string)($_GET['source'] ?? 'both'));
+        $onlyShop = (int)($_GET['shop_id'] ?? 0);
+        $maxPages = max(1, min(60, (int)($_GET['pages'] ?? 5)));
+        $singlePid = (int)($_GET['product_id'] ?? 0);
+
+        if ($singlePid > 0) {
+            $found = null; $foundShop = null;
+            foreach ($shops as $sh) {
+                $sTk = trim((string)($sh['token'] ?? '')); $sVid = (int)($sh['vendor_id'] ?? 0);
+                if ($sTk === '' || $sVid <= 0) continue;
+                if ($onlyShop > 0 && $sVid !== $onlyShop) continue;
+                $r1 = bslReqRead($sTk, 'products/' . $singlePid);
+                if (empty($r1['ok'])) $r1 = bslReqRead($sTk, 'vendors/' . $sVid . '/products/' . $singlePid);
+                if (!empty($r1['ok']) && is_array($r1['body'] ?? null)) {
+                    $found = $r1['body']['data'] ?? $r1['body'];
+                    $foundShop = ['vendor_id' => $sVid, 'shop_name' => (string)($sh['shop_name'] ?? '')];
+                    if (!empty($_GET['probe_cat']) && (int)$_GET['probe_cat'] > 0) {
+                        $probeCat = (int)$_GET['probe_cat'];
+                        $probeStatus = isset($_GET['probe_status']) ? (int)$_GET['probe_status'] : 0;
+                        $probeBody = ['category_id' => $probeCat];
+                        if ($probeStatus > 0) $probeBody['status'] = $probeStatus;
+                        $pr1 = bslReq($sTk, 'PATCH', 'products/' . $singlePid, $probeBody);
+                        $pr2 = ((int)($pr1['code'] ?? 0) !== 200)
+                            ? bslReq($sTk, 'PATCH', 'vendors/' . $sVid . '/products/' . $singlePid, $probeBody)
+                            : null;
+                        $found['_probe_patch'] = ['payload' => $probeBody, 'products_ep' => $pr1, 'vendors_ep' => $pr2];
+                    }
+                    break;
+                }
+            }
+            echo json_encode(['ok' => $found !== null, 'shop' => $foundShop, 'product' => $found], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            exit;
+        }
+
+        $reasonStats = [];
+        $metaPatterns = [];
+        $scannedRows = 0;
+        $recordItem = static function (array $p, int $vid, string $shopName) use (&$reasonStats, &$metaPatterns, &$scannedRows): void {
+            $scannedRows++;
+            $pid = (int)($p['id'] ?? 0);
+            $title = trim((string)($p['title'] ?? ($p['name'] ?? ($p['revision']['data']['title'] ?? ''))));
+            $rev = is_array($p['revision'] ?? null) ? $p['revision'] : [];
+            $revData = is_array($rev['data'] ?? null) ? $rev['data'] : [];
+            $catObj = $revData['category'] ?? ($p['category'] ?? null);
+            $catId = is_array($catObj) ? (int)($catObj['id'] ?? 0) : (int)($p['category_id'] ?? 0);
+            $catTitle = is_array($catObj) ? (string)($catObj['title'] ?? '') : '';
+            $metaDesc = trim((string)($rev['metadata']['description'] ?? ''));
+            $rejs = is_array($rev['rejection_reasons'] ?? null) ? $rev['rejection_reasons'] : [];
+            if (!$rejs) {
+                $stDesc = is_array($p['status'] ?? null) ? trim((string)($p['status']['description'] ?? '')) : '';
+                $revStDesc = is_array($rev['status'] ?? null) ? trim((string)($rev['status']['description'] ?? '')) : '';
+                $rejs = [['value' => 0, 'name' => '(بدون rejection_reasons)', 'description' => $revStDesc !== '' ? $revStDesc : $stDesc]];
+            }
+            foreach ($rejs as $rr) {
+                if (!is_array($rr)) continue;
+                $rv = (int)($rr['value'] ?? ($rr['id'] ?? 0));
+                $rn = trim((string)($rr['name'] ?? ($rr['title'] ?? '')));
+                $rd = trim((string)($rr['description'] ?? ''));
+                $rk = $rv . '|' . $rn;
+                if (!isset($reasonStats[$rk])) {
+                    $reasonStats[$rk] = ['value' => $rv, 'name' => $rn, 'count' => 0, 'by_shop' => [], 'desc_samples' => [], 'product_samples' => []];
+                }
+                $reasonStats[$rk]['count']++;
+                $reasonStats[$rk]['by_shop'][(string)$vid] = (int)($reasonStats[$rk]['by_shop'][(string)$vid] ?? 0) + 1;
+                if ($rd !== '' && count($reasonStats[$rk]['desc_samples']) < 8) {
+                    $shortRd = mb_substr($rd, 0, 260, 'UTF-8');
+                    if (!in_array($shortRd, $reasonStats[$rk]['desc_samples'], true)) {
+                        $reasonStats[$rk]['desc_samples'][] = $shortRd;
+                    }
+                }
+                if (count($reasonStats[$rk]['product_samples']) < 5) {
+                    $reasonStats[$rk]['product_samples'][] = [
+                        'id' => $pid, 'vid' => $vid, 'shop' => $shopName,
+                        'title' => mb_substr($title, 0, 100, 'UTF-8'),
+                        'cat_id' => $catId, 'cat_title' => $catTitle,
+                        'reason_desc' => mb_substr($rd, 0, 240, 'UTF-8'),
+                        'meta_desc' => mb_substr($metaDesc, 0, 240, 'UTF-8'),
+                    ];
+                }
+            }
+            if ($metaDesc !== '') {
+                $normMeta = preg_replace('~«[^»]{1,120}»|"[^"]{1,120}"|\d+~u', '#', mb_substr($metaDesc, 0, 180, 'UTF-8')) ?? $metaDesc;
+                if (!isset($metaPatterns[$normMeta])) {
+                    $metaPatterns[$normMeta] = ['count' => 0, 'example' => mb_substr($metaDesc, 0, 260, 'UTF-8'), 'sample_id' => $pid, 'sample_title' => mb_substr($title, 0, 90, 'UTF-8')];
+                }
+                $metaPatterns[$normMeta]['count']++;
+            }
+        };
+
+        $cursorCount = 0;
+        if (($srcMode === 'cursor' || $srcMode === 'both') && is_file(CATFIX_FETCH_CURSOR_FILE)) {
+            $fp = @fopen(CATFIX_FETCH_CURSOR_FILE, 'rb');
+            if (is_resource($fp)) {
+                while (($line = fgets($fp)) !== false) {
+                    $d = json_decode($line, true);
+                    unset($line);
+                    if (!is_array($d)) continue;
+                    $vidC = (int)($d['vid'] ?? 0);
+                    if ($onlyShop > 0 && $vidC !== $onlyShop) continue;
+                    foreach ((array)($d['rows'] ?? []) as $rowC) {
+                        if (!is_array($rowC)) continue;
+                        $cursorCount++;
+                        $recordItem($rowC, $vidC, 'cursor#' . $vidC);
+                    }
+                    unset($d);
+                }
+                @fclose($fp);
+            }
+        }
+
+        $shopTotals = [];
+        if ($srcMode === 'live' || ($srcMode === 'both' && $cursorCount === 0)) {
+            $statusList = [3567, 2977, 2978, 3248, 3568, 3790, 4184, 4221];
+            foreach ($shops as $sh) {
+                $sTk = trim((string)($sh['token'] ?? '')); $sVid = (int)($sh['vendor_id'] ?? 0);
+                $sName = (string)($sh['shop_name'] ?? ('#' . $sVid));
+                if ($sTk === '' || $sVid <= 0) continue;
+                if ($onlyShop > 0 && $sVid !== $onlyShop) continue;
+                $stCounts = [];
+                if (!empty($_GET['all_statuses'])) {
+                    foreach ($statusList as $stCode) {
+                        $rs = bslReqRead($sTk, 'vendors/' . $sVid . '/products?page=1&per_page=1&statuses=' . $stCode);
+                        $stCounts[(string)$stCode] = !empty($rs['ok']) ? bslMetaInt($rs['body'], 'total_count', count(bslRowsOf($rs['body']))) : -1;
+                    }
+                }
+                $rejTotal = 0;
+                for ($pg = 1; $pg <= $maxPages; $pg++) {
+                    $r = bslReqRead($sTk, 'vendors/' . $sVid . '/products?page=' . $pg . '&per_page=100&statuses=3567');
+                    if (empty($r['ok'])) break;
+                    if ($pg === 1) $rejTotal = bslMetaInt($r['body'], 'total_count', 0);
+                    $rows = bslRowsOf($r['body']);
+                    if (!$rows) break;
+                    foreach ($rows as $rowL) {
+                        if (is_array($rowL)) $recordItem($rowL, $sVid, $sName);
+                    }
+                    $tp = bslMetaInt($r['body'], 'total_page', 1);
+                    unset($rows, $r);
+                    if ($pg >= $tp) break;
+                }
+                $shopTotals[] = ['vendor_id' => $sVid, 'shop_name' => $sName, 'rejected_3567_total' => $rejTotal, 'status_counts' => $stCounts];
+            }
+        }
+
+        uasort($reasonStats, static fn($a, $b) => ($b['count'] <=> $a['count']));
+        uasort($metaPatterns, static fn($a, $b) => ($b['count'] <=> $a['count']));
+        $pendingAi = function_exists('bslAiCatPendingLoad') ? count(bslAiCatPendingLoad(null, false)) : 0;
+
+        echo json_encode([
+            'ok' => true,
+            'source' => $srcMode,
+            'scanned_rows' => $scannedRows,
+            'cursor_rows' => $cursorCount,
+            'pending_ai_create_count' => $pendingAi,
+            'shop_totals' => $shopTotals,
+            'reasons' => array_values($reasonStats),
+            'top_meta_patterns' => array_slice(array_values($metaPatterns), 0, 25),
+        ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage(), 'line' => $e->getLine()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 /* v10.263: فیدبک یکپارچهٔ عملیات + ترمیم. برای loop مانیتورینگ خارجی:
    ?ops_feedback=1&repair=1 — پاسخ کوتاه و idempotent است. */
 if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
