@@ -76765,19 +76765,37 @@ function catfixFlatCats(string $tk): array {
 /** فهرستِ محصولاتِ ردشده (وضعیت ۳۵۶۷) — با پرچمِ ناقص‌بودن، مثلِ dedup */
 function catfixCursorLoad(int $vid): array {
     if (!is_file(CATFIX_FETCH_CURSOR_FILE)) return ['rows' => [], 'page' => 0];
+    $sz = (int)@filesize(CATFIX_FETCH_CURSOR_FILE);
+    if ($sz <= 0 || $sz > 10 * 1024 * 1024) {
+        if ($sz > 10 * 1024 * 1024) @unlink(CATFIX_FETCH_CURSOR_FILE);
+        return ['rows' => [], 'page' => 0];
+    }
     $rows = []; $page = 0;
-    foreach ((array)@file(CATFIX_FETCH_CURSOR_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+    $fp = @fopen(CATFIX_FETCH_CURSOR_FILE, 'rb');
+    if (!is_resource($fp)) return ['rows' => [], 'page' => 0];
+    while (($line = fgets($fp)) !== false) {
         $d = json_decode($line, true);
+        unset($line);
         if (!is_array($d) || (int)($d['vid'] ?? 0) !== $vid) continue;
-        foreach ((array)($d['rows'] ?? []) as $r) if (is_array($r)) $rows[] = $r;
+        foreach ((array)($d['rows'] ?? []) as $r) {
+            if (is_array($r)) $rows[] = $r;
+        }
         $page = max($page, (int)($d['page'] ?? 0));
     }
+    @fclose($fp);
     return ['rows' => $rows, 'page' => $page];
 }
 function catfixCursorAppend(int $vid, int $page, array $rows): void {
     if (!$rows) return;
+    $slimRows = [];
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        unset($r['vendor'], $r['category_list']);
+        if (isset($r['revision']['data']['category_list'])) unset($r['revision']['data']['category_list']);
+        $slimRows[] = $r;
+    }
     @file_put_contents(CATFIX_FETCH_CURSOR_FILE,
-        json_encode(['vid' => $vid, 'page' => $page, 'rows' => $rows], JSON_UNESCAPED_UNICODE) . "\n",
+        json_encode(['vid' => $vid, 'page' => $page, 'rows' => $slimRows], JSON_UNESCAPED_UNICODE) . "\n",
         FILE_APPEND | LOCK_EX);
 }
 
@@ -76805,7 +76823,12 @@ function catfixFetchRejected(string $tk, int $vid, ?array &$partial = null, ?arr
         if (!$data) { $meta['complete'] = true; $meta['page'] = max(0, $pg - 1); break; }
         $tp = bslMetaInt($r['body'], 'total_page', 0);
         $pageRows = [];
-        foreach ($data as $item) if (is_array($item)) $pageRows[] = $item;
+        foreach ($data as $item) {
+            if (!is_array($item)) continue;
+            unset($item['vendor'], $item['category_list']);
+            if (isset($item['revision']['data']['category_list'])) unset($item['revision']['data']['category_list']);
+            $pageRows[] = $item;
+        }
         $all = array_merge($all, $pageRows);
         catfixCursorAppend($vid, $pg, $pageRows);
         $meta['page'] = $pg;
@@ -76936,16 +76959,30 @@ function bslBuildLocalProductIndex(?array $profiles = null): array {
         $rawPk = (strpos((string)$mk, '@') !== false) ? substr((string)$mk, 0, strpos((string)$mk, '@')) : (string)$mk;
         $ledgerKeyByRid[$rid] = ['product_key' => $rawPk, 'title' => trim((string)($row['title'] ?? ''))];
     }
+    unset($rm);
+    $slimKeep = ['key','title','price','final_price','stock','in_stock','availability','status','weight','barcode','shenase_kala','gtin','ean','sku','image','images','link','bsl_category_id','category_id','short_desc','variations_text'];
     $byKey = [];
     foreach ($profiles as $profKey => $prof) {
         if (!is_array($prof)) continue;
         $prods = is_array($prof['products'] ?? null) ? $prof['products'] : [];
+        $profMeta = $prof;
+        unset($profMeta['products'], $profMeta['logs'], $profMeta['history']);
         foreach ($prods as $pk => $pr) {
             if (!is_array($pr)) continue;
             $itemKey = trim((string)($pr['key'] ?? (is_string($pk) ? $pk : '')));
             $pt = trim((string)($pr['title'] ?? ''));
             if ($pt === '') continue;
-            $entry = ['product' => $pr, 'profile' => $prof, 'profile_key' => (string)$profKey, 'product_key' => $itemKey];
+            $slimPr = [];
+            foreach ($slimKeep as $sk) {
+                if (array_key_exists($sk, $pr)) $slimPr[$sk] = $pr[$sk];
+            }
+            if (!empty($pr['long_desc']) && is_string($pr['long_desc'])) {
+                $slimPr['long_desc'] = mb_substr($pr['long_desc'], 0, 1800, 'UTF-8');
+            }
+            if (!empty($pr['specs']) && is_string($pr['specs'])) {
+                $slimPr['specs'] = mb_substr($pr['specs'], 0, 1800, 'UTF-8');
+            }
+            $entry = ['product' => $slimPr, 'profile' => $profMeta, 'profile_key' => (string)$profKey, 'product_key' => $itemKey];
             if ($itemKey !== '' && !isset($byKey[$itemKey])) $byKey[$itemKey] = $entry;
             $nt = bslNormalizeTitle($pt);
             if ($nt !== '' && !isset($byNorm[$nt])) $byNorm[$nt] = $entry;
@@ -77534,8 +77571,16 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
     $cpDoneSet = [];
     foreach ($cpDoneIds as $dx) $cpDoneSet[(string)$dx] = true;
     $allKnownShops = function_exists('bslAllShops') ? bslAllShops($cn) : [];
-    $allLoadedProfiles = function_exists('loadProfiles') ? loadProfiles() : [];
-    $localIndex = bslBuildLocalProductIndex($allLoadedProfiles);
+    $rawLoadedProfiles = function_exists('loadProfiles') ? loadProfiles() : [];
+    $allLoadedProfiles = [];
+    foreach ($rawLoadedProfiles as $_pkM => $_prM) {
+        if (!is_array($_prM)) continue;
+        $_metaOnly = $_prM;
+        unset($_metaOnly['products'], $_metaOnly['logs'], $_metaOnly['history']);
+        $allLoadedProfiles[$_pkM] = $_metaOnly;
+    }
+    $localIndex = bslBuildLocalProductIndex($rawLoadedProfiles);
+    unset($rawLoadedProfiles);
     $deadProviders401 = [];
     $cpSave = function () use (&$cpDoneIds, &$fixed, &$failed, &$noAi, &$noCat,
         &$skipSame, &$skipTried, &$asked, &$cacheHits, &$learnedHits, &$profHits,
