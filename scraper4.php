@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.459';
+const APP_VERSION = '10.460';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -17747,11 +17747,14 @@ if(isset($_POST['start_profile_destination_equalize'])){
         'message'=>'برابر‌سازی مستقیم از پروفایل ذخیره‌شده؛ تازه‌سازی شمارش‌ها اختیاری است',
         'stage_details'=>['send'=>syncSendStageDetails(['queued'=>(int)($send['woo_total']??$send['bsl_total']??0),
             'message'=>'صف واقعی مقصد مستقل از شمارش جدول ساخته شد؛ پایداری و ادامه از تب ارسال'])]]);
+    $sendDispatch=function_exists('s4DispatchPendingSendQueue')
+        ?s4DispatchPendingSendQueue($destination==='woo'?'woo':'bsl',(string)($queueIds[0]??''))
+        :['ok'=>false,'reason'=>'helper_missing'];
     $spawn=s4WorkerIsActive()?['ok'=>true,'already_active'=>true]:s4SpawnPersistentWorker();
     echo json_encode(['ok'=>true,'queued'=>true,'profile_key'=>$pk,'destination'=>$destination,
         'build_job_id'=>(string)($build['job_id']??''),'fix_job_id'=>(string)($fix['job_id']??''),'matrix_refresh_optional'=>$matrixOptional,
-        'send_queue_ids'=>$queueIds,'send'=>$send,'worker'=>$spawn,
-        'message'=>'صف برابر‌سازی مستقیم ساخته شد؛ شمارش جدول شرط اجرا نیست'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+        'send_queue_ids'=>$queueIds,'send'=>$send,'send_dispatch'=>$sendDispatch,'worker'=>$spawn,
+        'message'=>'صف برابر‌سازی مستقیم ساخته شد؛ شمارش جدول شرط اجرا نیست'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 if (isset($_GET['start_product_stats'])) {
@@ -17809,9 +17812,9 @@ $url = s4NormalizeInputUrl((string)($_GET['load_profile'] ?? ''));
 $profiles = loadProfiles();
 $key = profileResolveKey($url, $profiles) ?: profileKey($url);
 if (isset($profiles[$key])) {
-echo json_encode(['ok' => true, 'key' => $key, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok' => true, 'key' => $key, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
-echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 }
 exit;
 }
@@ -23192,7 +23195,7 @@ if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true
     if (!in_array($_wFb, ['api_then_direct', 'direct_then_api', 'none'], true)) $_wFb = 'api_then_direct';
     $conn['woocommerce'] = ['enabled'=>!empty($w['enabled']),'store_url'=>trim($w['store_url']??''),'consumer_key'=>trim($w['consumer_key']??''),'consumer_secret'=>trim($w['consumer_secret']??''),'default_category'=>(int)($w['default_category']??0),'default_status'=>$w['default_status']??'draft','stock_quantity'=>(int)($w['stock_quantity']??10),'manage_stock'=>!empty($w['manage_stock']),'price_mode'=>in_array(($w['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$w['price_mode']:'none','price_val'=>(float)($w['price_val']??0),'price_round'=>max(0,(int)($w['price_round']??0)),'sync_mode'=>$_wMode,'sync_fallback'=>$_wFb]; }
 
-if (isset($_POST['basalam'])) { $b = json_decode($_POST['basalam'], true) ?: []; $fallbackCats=array_values(array_filter(array_map('intval',$b['fallback_cat_ids']??[]),function($v){return $v>0;})); $vendors=[]; if(!empty($b['vendors'])&&is_array($b['vendors'])){foreach($b['vendors'] as $v){$vid=(int)($v['vendor_id']??0);$vt=trim($v['token']??'');if($vid>0&&$vt!=='')$vendors[]=['vendor_id'=>$vid,'token'=>$vt,'name'=>trim($v['name']??''),'shop_name'=>trim($v['shop_name']??''),'price_mode'=>in_array(($v['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$v['price_mode']:'none','price_val'=>(float)($v['price_val']??0)];}} $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>is_array($b['send_shop_ids']??null)?array_values(array_unique(array_filter(array_map('intval',$b['send_shop_ids']),function($v){return $v>0;}))):null,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))]; }
+if (isset($_POST['basalam'])) { $b = json_decode($_POST['basalam'], true) ?: []; $_prevBslCfg = is_array($conn['basalam'] ?? null) ? $conn['basalam'] : []; $fallbackCats=array_values(array_filter(array_map('intval',$b['fallback_cat_ids']??[]),function($v){return $v>0;})); $vendors=[]; if(!empty($b['vendors'])&&is_array($b['vendors'])){foreach($b['vendors'] as $v){$vid=(int)($v['vendor_id']??0);$vt=trim($v['token']??'');if($vid>0&&$vt!=='')$vendors[]=['vendor_id'=>$vid,'token'=>$vt,'name'=>trim($v['name']??''),'shop_name'=>trim($v['shop_name']??''),'price_mode'=>in_array(($v['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$v['price_mode']:'none','price_val'=>(float)($v['price_val']??0)];}} $_newSendShopIds = is_array($b['send_shop_ids']??null)?array_values(array_unique(array_filter(array_map('intval',$b['send_shop_ids']),function($v){return $v>0;}))):null; $_oldSendShopIds = is_array($_prevBslCfg['send_shop_ids']??null)?array_values(array_unique(array_filter(array_map('intval',$_prevBslCfg['send_shop_ids']),function($v){return $v>0;}))):null; $_sendShopIdsAt = ($_newSendShopIds !== $_oldSendShopIds) ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0); $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))]; }
 
 
 if (isset($_POST['ai'])) { $a = json_decode($_POST['ai'], true) ?: []; $conn['ai'] = ['enabled'=>!empty($a['enabled']),'api_key'=>trim($a['api_key']??''),'base_url'=>trim($a['base_url']??'https://dashscope.aliyuncs.com/compatible-mode/v1'),'model'=>trim($a['model']??'qwen-plus'),'temperature'=>(float)($a['temperature']??0.1)]; }
@@ -27423,6 +27426,21 @@ function bslShopSelectedForSend(array $cn,int $vendorId): bool {
     if(!is_array($selected))return true; // legacy/null means all configured shops
     return in_array($vendorId,array_map('intval',$selected),true);
 }
+/** v10.460: rows explicitly targeted at a single shop (e.g. cell_equalize on
+ * Start table) should only be disabled if the user changed send_shop_ids AFTER
+ * the row was created; stale saved send_shop_ids must never silently cancel a
+ * brand-new explicit shop action before sending a single product. */
+function bslRowDisabledByShopPicker(array $row, array $cn, int $vid): bool {
+    if ($vid <= 0 || bslShopSelectedForSend($cn, $vid)) return false;
+    if (!empty($row['explicit_shop_target'])) {
+        $pickerChangedAt = (int)($cn['basalam']['send_shop_ids_at'] ?? 0);
+        $rowCreatedAt = (int)($row['created_at'] ?? $row['started_at'] ?? 0);
+        if ($pickerChangedAt <= 0 || ($rowCreatedAt > 0 && $pickerChangedAt < $rowCreatedAt)) {
+            return false;
+        }
+    }
+    return true;
+}
 /** Mark queued rows for newly disabled shops complete-without-sending. Running
  * workers also recheck the same predicate before every product. */
 function bslQueueApplyCurrentShopSelection(array &$queue,array $cn): array {
@@ -27431,7 +27449,7 @@ function bslQueueApplyCurrentShopSelection(array &$queue,array $cn): array {
         if(!is_array($e)||!in_array((string)($e['status']??''),['running','waiting','paused'],true))continue;
         $vid=(int)($e['shop_vendor_id']??$e['config']['shop_vendor_id']??0);
         if($vid<=0&&empty($e['config']['fanout']))$vid=$defaultVid;
-        if($vid<=0||bslShopSelectedForSend($cn,$vid))continue;
+        if($vid<=0||!bslRowDisabledByShopPicker($e,$cn,$vid))continue;
         $e['status']='done';$e['done_at']=time();$e['shop_disabled']=true;$e['disabled_at']=time();
         $e['status_reason']='غرفه در تب ارسال غیرفعال شد؛ ادامهٔ این ردیف متوقف شد';
         $disabled[]=['queue_id'=>(string)($e['id']??''),'vendor_id'=>$vid,'shop_name'=>(string)($e['shop_name']??'')];
@@ -28228,7 +28246,9 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'specs'       => (string)($p['specs'] ?? ''),
         'brand'       => (string)($p['brand'] ?? ''),
         'category'    => (string)($p['category'] ?? ''),
+        'bsl_category_id' => (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0),
         'stock'       => (string)($p['stock'] ?? ''),
+        'in_stock'    => array_key_exists('in_stock', $p) ? (bool)$p['in_stock'] : null,
         'weight'      => (string)($p['weight'] ?? ''),
         'link'        => (string)($p['link'] ?? ''),
         'orig_price'  => (string)($p['origPrice'] ?? ($p['originalPrice'] ?? '')),
@@ -28240,6 +28260,27 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'variations_text'  => (string)($p['variations_text']
                               ?? (is_array($p['variations'] ?? null) ? implode('، ', $p['variations']) : '')),
     ];
+}
+
+/**
+ * v10.460: ساخت مستقیم فهرست محصولات صف ارسال (باسلام و ووکامرس) روی سرور از روی
+ * پروفایل ذخیره‌شده بدون نیاز به آپلود چندمگابایتی JSON/HTML از مرورگر کاربر.
+ */
+function s4BuildQueueProductsFromProfile(array $profile, array $overrides = []): array {
+    $profCopy = $profile;
+    if (array_key_exists('title_suffix', $overrides) && $overrides['title_suffix'] !== null) {
+        $profCopy['titleSuffix'] = trim((string)$overrides['title_suffix']);
+    }
+    if (array_key_exists('price_mode', $overrides) && in_array((string)$overrides['price_mode'], ['none', 'percent', 'multiplier', 'fixed'], true)) {
+        $profCopy['priceMode'] = (string)$overrides['price_mode'];
+    }
+    if (array_key_exists('price_val', $overrides) && $overrides['price_val'] !== '' && $overrides['price_val'] !== null) {
+        $profCopy['priceVal'] = (float)$overrides['price_val'];
+    }
+    if (array_key_exists('round_price', $overrides) && $overrides['round_price'] !== '' && $overrides['round_price'] !== null) {
+        $profCopy['roundPrice'] = (string)$overrides['round_price'];
+    }
+    return array_values(profileOrderedProducts($profCopy, null, true));
 }
 
 /**
@@ -52238,6 +52279,59 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $_prepRepair459 = function_exists('bslRepairValidationPayload')
         ? bslRepairValidationPayload($_prepErr459, ['description' => '<table class="s4-specs-table"><tr><th>جنس</th><td>نخی</td></tr></table>', 'preparation_days' => 4])
         : ['changed' => true, 'payload' => ['description' => '']];
+    $_profSample460 = [
+        'name' => 'پروفایل تست ارسال',
+        'priceMode' => 'percent',
+        'priceVal' => 10,
+        'roundPrice' => 0,
+        'titleSuffix' => ' اصل',
+        'productsOrder' => ['k1', 'k2'],
+        'products' => [
+            ['k1', ['title' => 'کتری برقی', 'price' => '1,000,000 تومان', 'image' => 'https://example.com/1.jpg', 'bslCategoryId' => 4321, 'in_stock' => true, 'variation_groups' => [['name' => 'رنگ', 'values' => ['مشکی']]]]],
+            ['k2', ['title' => 'سماور گازی', 'price' => '25,000,000 ریال', 'image' => 'https://example.com/2.jpg', 'in_stock' => false]],
+        ],
+    ];
+    $_builtProf460 = function_exists('s4BuildQueueProductsFromProfile')
+        ? s4BuildQueueProductsFromProfile($_profSample460, ['price_mode' => 'percent', 'price_val' => '20', 'round_price' => '1000', 'title_suffix' => ' ویژه'])
+        : [];
+    $_cnPickerOld460 = ['basalam' => ['send_shop_ids' => [1093225, 710223], 'send_shop_ids_at' => 1000]];
+    $_cnPickerNew460 = ['basalam' => ['send_shop_ids' => [1093225, 710223], 'send_shop_ids_at' => 3000]];
+    $_eqRow460 = ['id' => 'eq_1', 'status' => 'waiting', 'shop_vendor_id' => 1211728, 'explicit_shop_target' => true, 'trigger' => 'cell_equalize', 'created_at' => 2000];
+    $_ordRow460 = ['id' => 'q_1', 'status' => 'waiting', 'shop_vendor_id' => 1211728, 'created_at' => 2000];
+    $_prevPostB64_460 = $_POST['products_b64'] ?? null;
+    $_POST['products_b64'] = base64_encode(json_encode([['key' => 'p1', 'title' => 'قابلمه گرانیتی', 'specs' => '<table class="s4-specs-table"><tr><th>سایز</th><td>۲۸</td></tr></table>']], JSON_UNESCAPED_UNICODE));
+    $_decodedB64_460 = function_exists('s4DecodePostedProductsPayload') ? s4DecodePostedProductsPayload() : [];
+    if ($_prevPostB64_460 === null) unset($_POST['products_b64']); else $_POST['products_b64'] = $_prevPostB64_460;
+    $add('10.460', 'رفع کامل عدم شروع ارسال‌های باسلام و ووکامرس: ساخت سرورساید از پروفایل بدون آپلود چندمگابایتی، حذف تداخل قفل HTTP/CLI، محافظت غرفهٔ هدف در یکسان‌سازی و زنجیره‌سازی صف ووکامرس',
+         function_exists('s4BuildQueueProductsFromProfile')
+      && function_exists('s4RecordCliQueueSpawn')
+      && function_exists('s4GetActiveCliQueueSpawn')
+      && function_exists('s4ClearCliQueueSpawn')
+      && function_exists('s4DecodePostedProductsPayload')
+      && function_exists('s4QueueProfileMatchesKey')
+      && function_exists('s4DispatchPendingSendQueue')
+      && function_exists('bslRowDisabledByShopPicker')
+      && count($_builtProf460) === 2
+      && ($_builtProf460[0]['title'] ?? '') === 'کتری برقی ویژه'
+      && ($_builtProf460[0]['final_price'] ?? '') === '1200000'
+      && ($_builtProf460[0]['price_unit'] ?? '') === 'toman'
+      && (int)($_builtProf460[0]['bsl_category_id'] ?? 0) === 4321
+      && ($_builtProf460[0]['in_stock'] ?? null) === true
+      && ($_builtProf460[1]['price_unit'] ?? '') === 'rial'
+      && ($_builtProf460[1]['in_stock'] ?? null) === false
+      && bslRowDisabledByShopPicker($_eqRow460, $_cnPickerOld460, 1211728) === false
+      && bslRowDisabledByShopPicker($_eqRow460, $_cnPickerNew460, 1211728) === true
+      && bslRowDisabledByShopPicker($_ordRow460, $_cnPickerOld460, 1211728) === true
+      && count($_decodedB64_460) === 1
+      && ($_decodedB64_460[0]['title'] ?? '') === 'قابلمه گرانیتی'
+      && s4QueueProfileMatchesKey('snappshop.ir_category_kitchen_appliances', 'https://snappshop.ir/category/kitchen-appliances', ['snappshop.ir_category_kitchen_appliances' => ['name' => 'تست']]) === true
+      && strpos($selfSrc, "delegated_to_cli") !== false
+      && strpos($selfSrc, "function getSelectedSendProfileKey()") !== false
+      && strpos($selfSrc, "function s4EncodeProductsChunkB64(chunk)") !== false
+      && strpos($selfSrc, "shop_picker_sync") !== false
+      && strpos($selfSrc, "if(!(d.worker_pid>0))") !== false
+      && strpos($selfSrc, "{v:'10." . "460'") !== false
+      && version_compare(APP_VERSION, '10.460', '>='));
     $add('10.459', 'کاهش خودکار پله‌ای ۱ روزهٔ preparation_days روی خطای ۴۲۲ باسلام تا زمان تایید، عدم اشتباه با خطای دسته‌بندی و حفظ جدول HTML توضیحات',
          function_exists('bslIsPreparationDaysError')
       && function_exists('bslStepDownPreparationDays')
@@ -56979,6 +57073,131 @@ function queueCronHandoffPrepare(): ?array {
 /* A CLI cron has no HTTP_HOST, so self-HTTP dispatch is impossible. Launch the
    same backend entry point as a detached CLI child instead of consuming the
    resume retry budget on a guaranteed-empty base URL. */
+function s4CliQueueSpawnFile(string $which): string {
+    return __DIR__ . '/.s4-cli-queue-spawn-' . ($which === 'bsl' ? 'bsl' : 'woo') . '.json';
+}
+function s4RecordCliQueueSpawn(string $which, int $pid, string $queueId = ''): void {
+    if ($pid <= 0) return;
+    @file_put_contents(s4CliQueueSpawnFile($which), json_encode([
+        'pid' => $pid, 'ts' => microtime(true), 'queue_id' => $queueId,
+    ], JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+function s4ClearCliQueueSpawn(string $which): void {
+    @unlink(s4CliQueueSpawnFile($which));
+}
+function s4GetActiveCliQueueSpawn(string $which, float $maxAgeSec = 10.0): ?array {
+    $file = s4CliQueueSpawnFile($which);
+    if (!is_file($file)) return null;
+    clearstatcache(true, $file);
+    $raw = json_decode((string)@file_get_contents($file), true);
+    if (!is_array($raw)) { @unlink($file); return null; }
+    $pid = (int)($raw['pid'] ?? 0);
+    $age = microtime(true) - (float)($raw['ts'] ?? 0);
+    if ($pid <= 0 || $age < -1.0 || $age > $maxAgeSec) {
+        if ($age > $maxAgeSec) @unlink($file);
+        return null;
+    }
+    if (function_exists('s4WorkerPidAlive') && !s4WorkerPidAlive($pid)) {
+        @unlink($file);
+        return null;
+    }
+    return ['pid' => $pid, 'age_ms' => (int)round($age * 1000), 'queue_id' => (string)($raw['queue_id'] ?? '')];
+}
+function s4DecodePostedProductsPayload(): array {
+    $b64 = trim((string)($_POST['products_b64'] ?? ''));
+    if ($b64 !== '') {
+        $raw = @base64_decode(strtr($b64, '-_ ', '+/+'), true);
+        if (!is_string($raw) || $raw === '') $raw = @base64_decode($b64);
+        if (is_string($raw) && $raw !== '') {
+            $arr = json_decode($raw, true);
+            if (is_array($arr)) return $arr;
+        }
+    }
+    $legacy = (string)($_POST['products'] ?? '');
+    if ($legacy !== '') {
+        $arr = json_decode($legacy, true);
+        if (is_array($arr)) return $arr;
+    }
+    return [];
+}
+function s4QueueProfileMatchesKey(string $entryKey, string $targetKey, array $profiles): bool {
+    $entryKey = trim($entryKey);
+    $targetKey = trim($targetKey);
+    if ($entryKey === '' || $targetKey === '') return false;
+    if ($entryKey === $targetKey) return true;
+    $re = profileResolveKey($entryKey, $profiles) ?: profileKey($entryKey);
+    $rt = profileResolveKey($targetKey, $profiles) ?: profileKey($targetKey);
+    return $re !== '' && $re === $rt;
+}
+function s4DispatchPendingSendQueue(string $which, string $preferredQueueId = ''): array {
+    $isBsl = ($which === 'bsl');
+    $fp = queueBackendLock($isBsl ? 'bsl' : 'woo');
+    if (!is_resource($fp)) {
+        return ['ok' => true, 'already_running' => true, 'which' => $which];
+    }
+    $queue = $isBsl ? bslReadQueue() : wooReadQueue();
+    if (!is_array($queue['entries'] ?? null)) $queue['entries'] = [];
+    $pickIdx = -1;
+    if ($preferredQueueId !== '') {
+        foreach ($queue['entries'] as $i => $row) {
+            if (!is_array($row) || (string)($row['id'] ?? '') !== $preferredQueueId) continue;
+            if (in_array((string)($row['status'] ?? ''), ['waiting', 'running', 'paused'], true)) { $pickIdx = $i; break; }
+        }
+    }
+    if ($pickIdx < 0) {
+        foreach ($queue['entries'] as $i => $row) {
+            if (!is_array($row)) continue;
+            if (in_array((string)($row['status'] ?? ''), ['running', 'waiting'], true)) { $pickIdx = $i; break; }
+        }
+    }
+    if ($pickIdx < 0) {
+        queueBackendUnlock($fp);
+        return ['ok' => false, 'empty' => true, 'which' => $which];
+    }
+    $now = time();
+    foreach ($queue['entries'] as $i => &$other) {
+        if ($i === $pickIdx || !is_array($other) || (string)($other['status'] ?? '') !== 'running') continue;
+        $other['status'] = 'waiting';
+        $other['resume_requested_at'] = 0;
+    }
+    unset($other);
+    $pFile = (string)($queue['entries'][$pickIdx]['products_file'] ?? '');
+    if ($pFile === '' || !is_file($pFile)) {
+        queueBackendUnlock($fp);
+        return ['ok' => false, 'error' => 'products_file_missing', 'which' => $which];
+    }
+    $sharedProductsFile = $isBsl ? BSL_PRODUCTS_FILE : WOO_PRODUCTS_FILE;
+    $sharedStopFile = $isBsl ? BSL_STOP_FILE : WOO_STOP_FILE;
+    @unlink($sharedProductsFile);
+    @copy($pFile, $sharedProductsFile);
+    if ((int)($queue['entries'][$pickIdx]['total'] ?? 0) <= 0) {
+        $_cnt = count(json_decode((string)@file_get_contents($pFile) ?: '[]', true) ?: []);
+        if ($_cnt > 0) $queue['entries'][$pickIdx]['total'] = $_cnt;
+    }
+    $targetQid = (string)($queue['entries'][$pickIdx]['id'] ?? '');
+    $startCur = max(0, (int)($queue['entries'][$pickIdx]['current'] ?? 0));
+    $queue['entries'][$pickIdx]['status'] = 'running';
+    $queue['entries'][$pickIdx]['started_at'] = $now;
+    $queue['entries'][$pickIdx]['resume_requested_at'] = $now;
+    unset($queue['entries'][$pickIdx]['paused_by'], $queue['entries'][$pickIdx]['stopped_by_user']);
+    if ($isBsl) {
+        if (bslStopRequestedForQueue($targetQid)) @unlink($sharedStopFile);
+        bslWriteQueue($queue);
+    } else {
+        @unlink($sharedStopFile);
+        wooWriteQueue($queue);
+    }
+    queueBackendUnlock($fp);
+    $action = $isBsl ? 'bsl_backend' : 'woo_backend';
+    $post = ['from_file' => '1', 'queue_id' => $targetQid, 'start_index' => (string)$startCur, 'resume' => '1'];
+    $ok = fireAndForget('action=' . $action, 1800, $post);
+    return [
+        'ok' => $ok, 'which' => $which, 'queue_id' => $targetQid,
+        'worker_pid' => (int)($GLOBALS['_queueDispatchPid'] ?? 0),
+        'dispatch_mode' => (string)($GLOBALS['_queueDispatchMode'] ?? ''),
+    ];
+}
+
 function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
     /* Queue recovery may originate from HTTP cron too. If detached PHP CLI is
        available, prefer it over a self-HTTP child that LiteSpeed can kill as
@@ -56999,6 +57218,7 @@ function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
     foreach($out as $line){$line=trim((string)$line);if(ctype_digit($line)){$pid=(int)$line;break;}}
     if($rc!==0||$pid<=0){$GLOBALS['_queueDispatchMode']='cli_spawn_failed';return false;}
     $GLOBALS['_queueDispatchMode']='cli_spawn';$GLOBALS['_queueDispatchPid']=$pid;
+    s4RecordCliQueueSpawn(((string)($get['action']??''))==='bsl_backend'?'bsl':'woo',$pid,(string)($post['queue_id']??''));
     return true;
 }
 
@@ -57900,7 +58120,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         try {
             $wooSend = array_values($wooProducts);
             $wooQFile = $qDir . '/woo_queue_' . $safeKey . '_' . $stamp . '.json';
-            $wooJson = json_encode($wooSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $wooJson = json_encode($wooSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
             if (!is_string($wooJson) || @file_put_contents($wooQFile, $wooJson, LOCK_EX) !== strlen($wooJson))
                 throw new RuntimeException('ذخیره فایل محصولات صف ووکامرس ناموفق بود');
             $wooQueue = wooReadQueue();
@@ -57943,7 +58163,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         try {
             $bslSend = array_values($bslProducts);
             $qFile = $qDir . '/bsl_queue_' . $safeKey . '_' . $stamp . '.json';
-            $bslJson = json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $bslJson = json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
             if (!is_string($bslJson) || @file_put_contents($qFile, $bslJson, LOCK_EX) !== strlen($bslJson))
                 throw new RuntimeException('ذخیره فایل محصولات صف باسلام ناموفق بود');
             $queue = bslReadQueue();
@@ -57967,14 +58187,16 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             $retryDelayMs = (int)($cn['basalam']['retry_delay_ms'] ?? 1500);
             $allFallbackCats = is_array($profile['bslFallbackCatIds'] ?? null) ? $profile['bslFallbackCatIds'] : [];
             $manualShops=is_array($cn['basalam']['send_shop_ids']??null)?bslFanoutShops($cn):[];$createdBslIds=[];
+            $_explicitShopTarget=($queueTrigger==='cell_equalize'&&isset($enqueueOpts['bsl_vendor_id'])&&(int)$enqueueOpts['bsl_vendor_id']>0)?1:0;
             if($manualShops){
                 foreach($manualShops as $_msi=>$_msh){
                     $_mvid=(int)$_msh['vendor_id'];$_mid=$_msi===0?$queueId:($queueId.'_s'.$_mvid);$createdBslIds[]=$_mid;
                     $queue['entries'][] = [
                         'id'=>$_mid,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
-                        'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'done_at'=>0,'paused_at'=>0,
+                        'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
                         'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
                         'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'shop_is_default'=>!empty($_msh['is_default']),
+                        'explicit_shop_target'=>$_explicitShopTarget,
                         'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
                         'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
                             'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>1,
@@ -57984,7 +58206,8 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             }else{
                 $createdBslIds[]=$queueId;$queue['entries'][] = [
                     'id'=>$queueId,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
-                    'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'done_at'=>0,'paused_at'=>0,
+                    'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
+                    'explicit_shop_target'=>$_explicitShopTarget,
                     'only_changed'=>false,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,
                         'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,
                         'send_all_shops'=>!empty($cn['basalam']['send_all_shops']),'force_all'=>true],
@@ -66914,6 +67137,14 @@ send_sse('send_complete',['sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,
 
 if(isset($_GET['action']) && $_GET['action'] === 'woo_backend'){
 set_time_limit(0); ignore_user_abort(true);
+if(!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
+$_wooCliHold=s4GetActiveCliQueueSpawn('woo',10.0);
+if(is_array($_wooCliHold)){
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode(['ok'=>true,'delegated_to_cli'=>true,'worker_pid'=>(int)$_wooCliHold['pid'],'msg'=>'woo_backend CLI worker booting'],JSON_UNESCAPED_UNICODE);
+exit;
+}
+}
 
 $wooLockFile=__DIR__.'/woo_backend.lock';
 $wooLockFp=fopen($wooLockFile,'c');
@@ -66925,6 +67156,7 @@ header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'woo_backend already running','skipped'=>true],JSON_UNESCAPED_UNICODE);
 exit;
 }
+if(isCliRun()&&function_exists('s4ClearCliQueueSpawn'))s4ClearCliQueueSpawn('woo');
 register_shutdown_function(function()use($wooLockFp,$wooLockFile){@flock($wooLockFp,LOCK_UN);@fclose($wooLockFp);});
 /* Owning the real flock proves that either self-curl worked or the next cron
    accepted the durable request. Only now is it safe to consume the handoff. */
@@ -67028,29 +67260,67 @@ wooBackendProgress(0,0,0,0,0,0,'','⚙️ حالت: '.implode(' → ', $_wooAtte
   .($_wooApiOk?' · API آماده':''));
 
 
+/* v10.460: ابتدا ردیفِ هدف (queue_id درخواستی یا اولین running/waiting صف) را از
+   woo_queue.json برگزین و فایلِ اختصاصیِ همان ردیف (products_file) را بخوان؛ وگرنه
+   WOO_PRODUCTS_FILEِ به‌جامانده از ارسالِ دیروز باعث می‌شد ردیفِ waiting جدید هرگز
+   برداشته نشود و ارسالِ قدیمی دوباره اجرا شود. */
+$wooTitleSuffix='';
+$wooQueueCatId=-1;
+$wooQueueProfileKey='';   // v8.65: برای ثبت در دفترچهٔ شناسه‌ها
+$wooForceAllRun=false;    // v10.34 (۴۸ج): ارسالِ کامل بدون مقایسه
+$wooContentSync=contentSyncOn($cn);   // v8.69: آپدیت محتوای تازه
+$wooQueue=wooReadQueue();
+$wooClaimIdx=-1;
+if($requestedWooQueueId!==''){
+foreach($wooQueue['entries'] as $__wi=>$__wqe){
+if(!is_array($__wqe)||(string)($__wqe['id']??'')!==$requestedWooQueueId)continue;
+if(in_array((string)($__wqe['status']??''),['running','waiting','paused'],true)){$wooClaimIdx=$__wi;break;}
+}
+}
+if($wooClaimIdx<0){
+foreach($wooQueue['entries'] as $__wi=>$__wqe){
+if(is_array($__wqe)&&($__wqe['status']??'')==='running'){$wooClaimIdx=$__wi;break;}
+}
+}
+if($wooClaimIdx<0){
+foreach($wooQueue['entries'] as $__wi=>$__wqe){
+if(is_array($__wqe)&&($__wqe['status']??'')==='waiting'){$wooClaimIdx=$__wi;break;}
+}
+}
+$pd=[];
+$wooRunId='';
+if($wooClaimIdx>=0){
+$__wqChanged=false;
+foreach($wooQueue['entries'] as $__wi=>&$__wOther){
+if($__wi!==$wooClaimIdx&&is_array($__wOther)&&($__wOther['status']??'')==='running'){
+$__wOther['status']='waiting';$__wOther['resume_requested_at']=0;$__wqChanged=true;
+}
+}
+unset($__wOther);
+$__wClaim=&$wooQueue['entries'][$wooClaimIdx];
+$wooRunId=(string)($__wClaim['id']??'');
+$__wf=(string)($__wClaim['products_file']??'');
+if($__wf===''||!is_file($__wf))$__wf=__DIR__.'/woo_queue_products_'.$wooRunId.'.json';
+if($__wf!==''&&is_file($__wf)){
+$pd=json_decode((string)@file_get_contents($__wf)?:'[]',true)?:[];
+if(!empty($pd)){@unlink(WOO_PRODUCTS_FILE);@copy($__wf,WOO_PRODUCTS_FILE);}
+}
+if(empty($pd)&&is_file(WOO_PRODUCTS_FILE)){
+$pd=json_decode((string)@file_get_contents(WOO_PRODUCTS_FILE)?:'[]',true)?:[];
+}
+if(!empty($pd)){
+if(($__wClaim['status']??'')!=='running'){$__wClaim['status']='running';$__wClaim['started_at']=time();$__wqChanged=true;}
+if((int)($__wClaim['total']??0)<=0){$__wClaim['total']=count($pd);$__wqChanged=true;}
+if(!empty($__wClaim['config']['title_suffix']))$wooTitleSuffix=trim((string)$__wClaim['config']['title_suffix']);
+if(isset($__wClaim['config']['category_id']))$wooQueueCatId=(int)$__wClaim['config']['category_id'];
+if(!empty($__wClaim['config']['force_all']))$wooForceAllRun=true;
+$wooQueueProfileKey=(string)($__wClaim['profile_key']??'');
+}
+unset($__wClaim);
+if($__wqChanged)wooWriteQueue($wooQueue);
+}else{
 $raw=@file_get_contents(WOO_PRODUCTS_FILE);
 $pd=json_decode($raw?:'[]',true)?:[];
-/* v10.56 (۷۰): اگر فایلِ مشترکِ محصولات گم شده باشد (مثلاً بعد از کشتنِ
-   فرایند)، از فایلِ اختصاصیِ ردیفِ در حالِ اجرا برگردان — وگرنه ادامه
-   بلافاصله با «بدونِ محصول» تمام می‌شد. */
-if(empty($pd)){
-$__wq0=wooReadQueue();$__wq0Changed=false;
-foreach($__wq0['entries'] as &$__qe0){
-if(($__qe0['status']??'')==='running'||($__qe0['status']??'')==='waiting'){
-$__wf=__DIR__.'/woo_queue_products_'.(string)($__qe0['id']??'').'.json';
-if(file_exists($__wf)){
-$pd=json_decode((string)@file_get_contents($__wf)?:'[]',true)?:[];
-if(!empty($pd)){
-@copy($__wf,WOO_PRODUCTS_FILE);
-if(($__qe0['status']??'')==='waiting'){$__qe0['status']='running';$__qe0['started_at']=time();$__wq0Changed=true;}
-if((int)($__qe0['total']??0)<=0){$__qe0['total']=count($pd);$__wq0Changed=true;}
-break;
-}
-}
-}
-}
-unset($__qe0);
-if($__wq0Changed)wooWriteQueue($__wq0);
 }
 if(empty($pd)){
 writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['❌ فایل محصولات خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
@@ -67059,25 +67329,6 @@ exit;
 
 $total=count($pd);$sent=0;$updated=0;$skipped=0;$fail=0;
 $bslDelayMs=max(0,(int)($cn['basalam']['delay_ms']??500));
-// v8.21: Read title_suffix from the running woo queue entry config
-// v8.56: دستهٔ همین صف هم از همان‌جا خوانده می‌شود تا هر پروفایل بتواند
-// دستهٔ ووکامرس خودش را داشته باشد.
-$wooTitleSuffix='';
-$wooQueueCatId=-1;
-$wooQueueProfileKey='';   // v8.65: برای ثبت در دفترچهٔ شناسه‌ها
-$wooForceAllRun=false;    // v10.34 (۴۸ج): ارسالِ کامل بدون مقایسه
-$wooContentSync=contentSyncOn($cn);   // v8.69: آپدیت محتوای تازه
-$wooQueue=wooReadQueue();
-$wooRunId='';
-foreach($wooQueue['entries'] as $qe){
-if(($qe['status']??'')!=='running')continue;
-if(!empty($qe['config']['title_suffix']))$wooTitleSuffix=trim($qe['config']['title_suffix']);
-if(isset($qe['config']['category_id']))$wooQueueCatId=(int)$qe['config']['category_id'];
-if(!empty($qe['config']['force_all']))$wooForceAllRun=true;
-$wooQueueProfileKey=(string)($qe['profile_key']??'');
-$wooRunId=(string)($qe['id']??'');
-break;
-}
 /* v10.56 (۷۰): برای مالکیتِ فایلِ پیشرفت (queue_id) در ضربان‌های بعد. */
 $GLOBALS['_wooQueueIdNow']=$wooRunId;
 if($wooTitleSuffix===''){$wooTitleSuffix=trim($cn['basalam']['title_suffix']??'');}
@@ -67385,14 +67636,22 @@ remoteMapRecord('woo',array_merge($wooSentList,$wooUpdatedList),(string)($wooQue
 writeProgress(WOO_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'current'=>$total,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>[$finalLog],'total_log_count'=>count($wooLog)+1,'sent_details'=>$wooSentList,'updated_details'=>$wooUpdatedList,'skipped_details'=>$wooSkippedList,'failed_details'=>$wooFailedList]);
 
 $queue=wooReadQueue();
+$_wooNextWaitingQid='';
 foreach($queue['entries'] as &$e){
-if($e['status']==='running'){
+if(($e['status']??'')==='running'&&($wooRunId===''||(string)($e['id']??'')===$wooRunId)){
 $e['status']='done';
-$e['sent']=$sent;$e['updated']=$updated;$e['skipped']=$skipped;$e['failed']=$fail;$e['done_at']=time();
+$e['sent']=$sent;$e['updated']=$updated;$e['skipped']=$skipped;$e['failed']=$fail;$e['current']=$total;$e['done_at']=time();
+}elseif($_wooNextWaitingQid===''&&($e['status']??'')==='waiting'){
+$_wooNextWaitingQid=(string)($e['id']??'');
 }
 }
 unset($e);
 wooWriteQueue($queue);
+@unlink(WOO_PRODUCTS_FILE);
+@flock($wooLockFp,LOCK_UN);@fclose($wooLockFp);
+if($_wooNextWaitingQid!==''&&!file_exists(WOO_STOP_FILE)&&function_exists('s4DispatchPendingSendQueue')){
+s4DispatchPendingSendQueue('woo',$_wooNextWaitingQid);
+}
 
 exit;
 }
@@ -67480,7 +67739,7 @@ $p['retired_details'] = $_retB['details'];
    خودکار ادامه می‌افتد و رابط با recovered=... یک توست نشان می‌دهد. */
 $_recB = sendAutoRecover('bsl');
 if ($_recB !== null) $p['recovered'] = $_recB;
-echo json_encode($p, JSON_UNESCAPED_UNICODE);
+echo json_encode($p, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -67533,7 +67792,7 @@ $p['retired_details'] = $_retW['details'];
 /* v10.59 (۷۳): همان موتورِ بازسازی برای صفِ ووکامرس (sendAutoRecover). */
 $_recW = sendAutoRecover('woo');
 if ($_recW !== null) $p['recovered'] = $_recW;
-echo json_encode($p, JSON_UNESCAPED_UNICODE);
+echo json_encode($p, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -67606,14 +67865,18 @@ if (!$wooWorkerLive && $_wooHasProg) wooWriteQueue($queue);
 /* UI must distinguish a real lock-owning sender from stale rows still marked
    running. The shared progress queue_id identifies the exact profile owner. */
 $queue['active_send']=null;
+$_wooStatusFull=!empty($_GET['full']);
 foreach($queue['entries'] as &$e){
     $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
     $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$wooWorkerLive;
     if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
         'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
         'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'woo'];
+    if(!$_wooStatusFull&&empty($e['retire_report'])&&($e['kind']??'')!=='retire'&&($e['trigger']??'')!=='retire'){
+        unset($e['sent_details'],$e['updated_details'],$e['skipped_details'],$e['failed_details'],$e['recent_log']);
+    }
 }unset($e);
-echo json_encode($queue,JSON_UNESCAPED_UNICODE);
+echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -67622,17 +67885,17 @@ header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_POST['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $qFile=__DIR__.'/woo_queue_products_'.$queueId.'.json';
-$pd=json_decode($_POST['products']??'[]',true)?:[];
+$pd=function_exists('s4DecodePostedProductsPayload')?s4DecodePostedProductsPayload():(json_decode($_POST['products']??'[]',true)?:[]);
 $chunkIndex=(int)($_POST['chunk_index']??0);
 if(empty($pd)){echo json_encode(['ok'=>false,'error'=>'محصولی دریافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 if($chunkIndex===0){
 @unlink($qFile);
-@file_put_contents($qFile,json_encode($pd,JSON_UNESCAPED_UNICODE),LOCK_EX);
+@file_put_contents($qFile,json_encode($pd,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
 $total=count($pd);
 }else{
 $existing=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
 $merged=array_merge($existing,$pd);
-@file_put_contents($qFile,json_encode($merged,JSON_UNESCAPED_UNICODE),LOCK_EX);
+@file_put_contents($qFile,json_encode($merged,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
 $total=count($merged);
 }
 echo json_encode(['ok'=>true,'saved'=>count($pd),'chunk'=>$chunkIndex,'total_saved'=>$total,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
@@ -67645,9 +67908,36 @@ $queueId=trim($_POST['queue_id']??'');
 $total=(int)($_POST['total']??0);
 $startImm=!empty($_POST['start_immediately']);
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$wooTitleSuffix=trim($_POST['title_suffix']??'');
+$pKeyIn=trim((string)($_POST['profile_key']??''));
+$pNameIn=trim((string)($_POST['profile_name']??''));
+$__pf=loadProfiles();
+$_wooResolvedKey=$pKeyIn!==''?(profileResolveKey($pKeyIn,$__pf)?:profileKey($pKeyIn)):'';
+if($_wooResolvedKey!==''&&isset($__pf[$_wooResolvedKey])){
+if($pNameIn==='')$pNameIn=(string)($__pf[$_wooResolvedKey]['name']??$_wooResolvedKey);
+}elseif($pKeyIn!==''&&$pNameIn===''){
+$pNameIn=(string)($__pf[$pKeyIn]['name']??$pKeyIn);
+}
 $qFile=__DIR__.'/woo_queue_products_'.$queueId.'.json';
-if(!file_exists($qFile)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+if((!file_exists($qFile)||!empty($_POST['from_profile']))&&$_wooResolvedKey!==''&&isset($__pf[$_wooResolvedKey])){
+$_wooProfBuilt=s4BuildQueueProductsFromProfile($__pf[$_wooResolvedKey],[
+    'title_suffix'=>array_key_exists('title_suffix',$_POST)?$wooTitleSuffix:null,
+    'price_mode'=>$_POST['price_mode']??null,
+    'price_val'=>$_POST['price_val']??null,
+    'round_price'=>$_POST['round_price']??null,
+]);
+if(!empty($_wooProfBuilt)){
+@file_put_contents($qFile,json_encode($_wooProfBuilt,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
+}
+}
+if(!file_exists($qFile)){
+echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_file_missing','error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+}
 $_wooActualItems=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
+if(empty($_wooActualItems)){
+@unlink($qFile);
+echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_empty','error'=>'محصولی برای ارسال در این پروفایل یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+}
 if($total<=0&&count($_wooActualItems)>0)$total=count($_wooActualItems);
 $queue=wooReadQueue();
 $_wooProbeFp=queueBackendLock('woo');
@@ -67658,6 +67948,29 @@ foreach($queue['entries'] as &$qeOrph){
 if(($qeOrph['status']??'')==='running'){$qeOrph['status']='waiting';$qeOrph['resume_requested_at']=0;}
 }
 unset($qeOrph);
+}
+// v10.460: ردیف‌های pausedِ قبلیِ همین پروفایل هنگام ارسالِ صریحِ جدید کاربر
+// جایگزین می‌شوند تا ارسالِ جدید پشتِ ردیفِ متوقف‌شدهٔ قدیمی مسدود نماند.
+if($pKeyIn!==''&&empty($_POST['force'])){
+foreach($queue['entries'] as &$qePausedW){
+if(!is_array($qePausedW)||($qePausedW['status']??'')!=='paused')continue;
+if(s4QueueProfileMatchesKey((string)($qePausedW['profile_key']??''),$pKeyIn,$__pf)){
+$qePausedW['status']='done';$qePausedW['done_at']=time();$qePausedW['superseded']=true;
+$qePausedW['status_reason']='جایگزین با ارسال جدید کاربر';
+}
+}
+unset($qePausedW);
+}
+if($pKeyIn!==''&&queueDedupOn()&&empty($_POST['force'])){
+$dupE=queueHasProfile($queue['entries'],$pKeyIn,queueDedupStale());
+if($dupE===null&&$_wooResolvedKey!==''&&$_wooResolvedKey!==$pKeyIn){
+$dupE=queueHasProfile($queue['entries'],$_wooResolvedKey,queueDedupStale());
+}
+if($dupE!==null){
+@unlink($qFile);
+echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
+'error'=>'این پروفایل هم‌اکنون در صف ووکامرس در حال اجرا یا انتظار است'],JSON_UNESCAPED_UNICODE);exit;
+}
 }
 // v8.56: اگر ردیف دیگری واقعاً در حال اجراست، این یکی باید منتظر بماند.
 $wooBusyNow=false;
@@ -67673,29 +67986,16 @@ if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل
 $verifyProducts=json_decode(@file_get_contents(WOO_PRODUCTS_FILE)?:'',true)?:[];
 if(empty($verifyProducts)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی است بعد از کپی'],JSON_UNESCAPED_UNICODE);exit;}
 }
-$wooTitleSuffix=trim($_POST['title_suffix']??'');
-// v8.36: پروفایل مبدأ را در صف ووکامرس هم ثبت کن
-$pKeyIn=trim((string)($_POST['profile_key']??''));
-$pNameIn=trim((string)($_POST['profile_name']??''));
-if($pKeyIn!==''&&$pNameIn===''){$__pf=loadProfiles();$pNameIn=(string)($__pf[$pKeyIn]['name']??$pKeyIn);}
-// v8.55: جلوگیری از ورودی تکراری همان پروفایل
-if($pKeyIn!==''&&queueDedupOn()&&empty($_POST['force'])){
-$dupE=queueHasProfile($queue['entries'],$pKeyIn,queueDedupStale());
-if($dupE!==null){
-@unlink($qFile);
-echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
-'error'=>'این پروفایل هم‌اکنون در صف ووکامرس است'],JSON_UNESCAPED_UNICODE);exit;
-}
-}
 // v8.56: دستهٔ ووکامرس مخصوص پروفایل — اولویت: درخواست، بعد خود پروفایل،
 // و در آخر دستهٔ پیش‌فرض تنظیمات عمومی. صفر یعنی «تعیین نشده».
 $wooCatIn=(int)($_POST['category_id']??0);
-if($wooCatIn<=0&&$pKeyIn!==''){
-$__pf2=$__pf??loadProfiles();
-$wooCatIn=(int)($__pf2[$pKeyIn]['wooCategoryId']??0);
+if($wooCatIn<=0&&$_wooResolvedKey!==''&&isset($__pf[$_wooResolvedKey])){
+$wooCatIn=(int)($__pf[$_wooResolvedKey]['wooCategoryId']??0);
+}elseif($wooCatIn<=0&&$pKeyIn!==''){
+$wooCatIn=(int)($__pf[$pKeyIn]['wooCategoryId']??0);
 }
 if($wooCatIn<=0)$wooCatIn=(int)(loadConnections()['woocommerce']['default_category']??0);
-$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?time():0,'done_at'=>0,'profile_key'=>$pKeyIn,'profile_name'=>$pNameIn,'config'=>['title_suffix'=>$wooTitleSuffix,'category_id'=>$wooCatIn]];
+$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?time():0,'created_at'=>time(),'done_at'=>0,'profile_key'=>$_wooResolvedKey?:$pKeyIn,'profile_name'=>$pNameIn,'config'=>['title_suffix'=>$wooTitleSuffix,'category_id'=>$wooCatIn]];
 $queue['entries'][]=$entry;
 wooWriteQueue($queue);
 $_wooSpawnedPid=0;
@@ -67746,7 +68046,9 @@ $queue['entries'][$nextIdx]['status']='running';
 $queue['entries'][$nextIdx]['started_at']=time();
 $nextEntry=$queue['entries'][$nextIdx];
 wooWriteQueue($queue);
-echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'msg'=>'شروع فرآیند بعدی از صف ووکامرس'],JSON_UNESCAPED_UNICODE);
+queueBackendUnlock($__queueRouteFp);
+$_wooNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_wooNextPid,'msg'=>'شروع فرآیند بعدی از صف ووکامرس'],JSON_UNESCAPED_UNICODE);
 }else{
 wooWriteQueue($queue);
 echo json_encode(['ok'=>true,'next_id'=>null,'msg'=>'صف خالی — فرآیند بعدی موجود نیست'],JSON_UNESCAPED_UNICODE);
@@ -67782,12 +68084,13 @@ if (!is_resource($__queueRouteFp)) { echo json_encode(['ok'=>false,'running'=>tr
 register_shutdown_function(function() use ($__queueRouteFp) { queueBackendUnlock($__queueRouteFp); });
 
 $queue=wooReadQueue();
-foreach($queue['entries'] as $i=>$e){
-if($e['status']==='done'){
-@unlink($e['products_file']);
-array_splice($queue['entries'],$i,1);
+$queue['entries']=array_values(array_filter((array)($queue['entries']??[]),function($e){
+if(is_array($e)&&($e['status']??'')==='done'){
+if(!empty($e['products_file']))@unlink((string)$e['products_file']);
+return false;
 }
-}
+return true;
+}));
 wooWriteQueue($queue);
 echo json_encode(['ok'=>true,'remaining'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
@@ -67802,33 +68105,40 @@ register_shutdown_function(function() use ($__queueRouteFp) { queueBackendUnlock
 $queueId=trim($_GET['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $queue=wooReadQueue();
-$entry=null;
-foreach($queue['entries'] as &$e){
-if($e['id']===$queueId){
-$entry=&$e;break;
+$entry=null;$entryIdx=-1;
+foreach($queue['entries'] as $_wi=>&$e){
+if(($e['id']??'')===$queueId){
+$entry=&$e;$entryIdx=$_wi;break;
 }
 }
 unset($e);
 if(!$entry){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-if($entry['status']!=='waiting'&&$entry['status']!=='running'){echo json_encode(['ok'=>false,'error'=>'وضعیت ورودی مناسب نیست: '.$entry['status']],JSON_UNESCAPED_UNICODE);exit;}
-
+if(!in_array((string)($entry['status']??''),['waiting','running','paused','failed'],true)){echo json_encode(['ok'=>false,'error'=>'وضعیت ورودی مناسب نیست: '.$entry['status']],JSON_UNESCAPED_UNICODE);exit;}
+foreach($queue['entries'] as $_wi=>&$wOther){
+if($_wi!==$entryIdx&&is_array($wOther)&&($wOther['status']??'')==='running'){$wOther['status']='waiting';$wOther['resume_requested_at']=0;}
+}
+unset($wOther);
+$_wSrcFile=(string)($entry['products_file']??'');
+if($_wSrcFile===''||!is_file($_wSrcFile))$_wSrcFile=__DIR__.'/woo_queue_products_'.$queueId.'.json';
 @unlink(WOO_STOP_FILE); /* شروعِ صریحِ کاربر، hold قبلی را مصرف می‌کند */
 @unlink(WOO_PRODUCTS_FILE);
-$copyOk=@copy($entry['products_file'],WOO_PRODUCTS_FILE);
+$copyOk=($_wSrcFile!==''&&is_file($_wSrcFile))?@copy($_wSrcFile,WOO_PRODUCTS_FILE):false;
 if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات'],JSON_UNESCAPED_UNICODE);exit;}
+$entry['products_file']=$_wSrcFile;
 if((int)($entry['total']??0)<=0){
 $_wProdsCnt=count(json_decode(@file_get_contents(WOO_PRODUCTS_FILE)?:'[]',true)?:[]);
 if($_wProdsCnt>0)$entry['total']=$_wProdsCnt;
 }
+$_wooStartCur=max(0,(int)($entry['current']??0));
 $entry['status']='running';
 $entry['started_at']=time();
 $entry['resume_requested_at']=0;
-unset($entry['paused_by'],$entry['stopped_by_user']);
+unset($entry['paused_by'],$entry['stopped_by_user'],$entry['fail_reason'],$entry['resume_exhausted'],$entry['done_at']);
 wooWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_wooSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_wooSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$_wooStartCur,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>(int)($entry['total']??0),'worker_pid'=>$_wooSrvPid,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>(int)($entry['total']??0),'current'=>$_wooStartCur,'worker_pid'=>$_wooSrvPid,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -67861,7 +68171,7 @@ $entry['recent_log']=$progress['recent_log']??$entry['recent_log']??[];
 }
 $products=@json_decode(@file_get_contents($entry['products_file']??'')?:'[]',true)?:[];
 $entry['products']=$products;
-echo json_encode(['ok'=>true,'entry'=>$entry],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>true,'entry'=>$entry],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -67873,13 +68183,18 @@ register_shutdown_function(function() use ($__queueRouteFp) { queueBackendUnlock
 
 $queueId=trim($_GET['queue_id']??'');
 $queue=wooReadQueue();
-$found=false;
+$found=false;$deletedWooPf='';
 foreach($queue['entries'] as $i=>$e){
-if($e['id']===$queueId){
-@unlink($e['products_file']);
+if(($e['id']??'')===$queueId){
+$deletedWooPf=(string)($e['products_file']??'');
 array_splice($queue['entries'],$i,1);
 $found=true;break;
 }
+}
+if($found&&$deletedWooPf!==''){
+$_wooPfStillUsed=false;
+foreach($queue['entries'] as $_remW){if(is_array($_remW)&&(string)($_remW['products_file']??'')===$deletedWooPf){$_wooPfStillUsed=true;break;}}
+if(!$_wooPfStillUsed)@unlink($deletedWooPf);
 }
 wooWriteQueue($queue);
 echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
@@ -69274,14 +69589,18 @@ else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
 unset($e);
 if (!$bslWorkerLive && $_bslHasProg) bslWriteQueue($queue);
 $queue['active_send']=null;
+$_bslStatusFull=!empty($_GET['full']);
 foreach($queue['entries'] as &$e){
     $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
     $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$bslWorkerLive;
     if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
         'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
         'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'bsl'];
+    if(!$_bslStatusFull&&empty($e['retire_report'])&&($e['kind']??'')!=='retire'&&($e['trigger']??'')!=='retire'){
+        unset($e['sent_details'],$e['updated_details'],$e['skipped_details'],$e['failed_details'],$e['recent_log']);
+    }
 }unset($e);
-echo json_encode($queue,JSON_UNESCAPED_UNICODE);
+echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -69290,17 +69609,17 @@ header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_POST['queue_id']??'');
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $qFile=__DIR__.'/bsl_queue_products_'.$queueId.'.json';
-$pd=json_decode($_POST['products']??'[]',true)?:[];
+$pd=function_exists('s4DecodePostedProductsPayload')?s4DecodePostedProductsPayload():(json_decode($_POST['products']??'[]',true)?:[]);
 $chunkIndex=(int)($_POST['chunk_index']??0);
 if(empty($pd)){echo json_encode(['ok'=>false,'error'=>'محصولی دریافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 if($chunkIndex===0){
 @unlink($qFile);
-@file_put_contents($qFile,json_encode($pd,JSON_UNESCAPED_UNICODE),LOCK_EX);
+@file_put_contents($qFile,json_encode($pd,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
 $total=count($pd);
 }else{
 $existing=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
 $merged=array_merge($existing,$pd);
-@file_put_contents($qFile,json_encode($merged,JSON_UNESCAPED_UNICODE),LOCK_EX);
+@file_put_contents($qFile,json_encode($merged,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
 $total=count($merged);
 }
 echo json_encode(['ok'=>true,'saved'=>count($pd),'chunk'=>$chunkIndex,'total_saved'=>$total,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
@@ -69322,9 +69641,50 @@ $parallelAuto=isset($_POST['send_parallel_auto'])
     ? ($_POST['send_parallel_auto']!=='0')
     : (!isset($cn['basalam']['send_parallel_auto']) || !empty($cn['basalam']['send_parallel_auto']));
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$pKeyIn=trim((string)($_POST['profile_key']??''));
+$pNameIn=trim((string)($_POST['profile_name']??''));
+$__pf=loadProfiles();
+$_bslResolvedKey=$pKeyIn!==''?(profileResolveKey($pKeyIn,$__pf)?:profileKey($pKeyIn)):'';
+if($_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey])){
+if($pNameIn==='')$pNameIn=(string)($__pf[$_bslResolvedKey]['name']??$_bslResolvedKey);
+}elseif($pKeyIn!==''&&$pNameIn===''){
+$pNameIn=(string)($__pf[$pKeyIn]['name']??$pKeyIn);
+}
+// v10.460: همگام‌سازی زندهٔ انتخاب غرفه‌های تب ارسال با connections.json
+// تا اگر تیک غرفه‌ای در مرورگر خورده ولی saveShopSelection هنوز کامل نشده یا
+// قدیمی بوده، bslQueueApplyCurrentShopSelection بلافاصله ردیف تازه را نَبُرد.
+$_selectedVidsRaw=json_decode($_POST['selected_shop_vids']??'null',true);
+if(!empty($_POST['shop_picker_sync'])&&is_array($_selectedVidsRaw)&&count($_selectedVidsRaw)>0){
+$_normSelVids=array_values(array_unique(array_filter(array_map('intval',$_selectedVidsRaw),static fn($v)=>$v>0)));
+$_curSelVids=is_array($cn['basalam']['send_shop_ids']??null)
+    ?array_values(array_unique(array_filter(array_map('intval',(array)$cn['basalam']['send_shop_ids']),static fn($v)=>$v>0))):[];
+$_s1=$_normSelVids;$_s2=$_curSelVids;sort($_s1);sort($_s2);
+if($_s1!==$_s2||!is_array($cn['basalam']['send_shop_ids']??null)){
+$cn['basalam']['send_shop_ids']=$_normSelVids;
+$cn['basalam']['send_shop_ids_at']=time();
+saveConnections($cn);
+}
+}
 $qFile=__DIR__.'/bsl_queue_products_'.$queueId.'.json';
-if(!file_exists($qFile)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+if((!file_exists($qFile)||!empty($_POST['from_profile']))&&$_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey])){
+$_bslProfBuilt=s4BuildQueueProductsFromProfile($__pf[$_bslResolvedKey],[
+    'title_suffix'=>array_key_exists('title_suffix',$_POST)?$titleSuffix:null,
+    'price_mode'=>$_POST['price_mode']??null,
+    'price_val'=>$_POST['price_val']??null,
+    'round_price'=>$_POST['round_price']??null,
+]);
+if(!empty($_bslProfBuilt)){
+@file_put_contents($qFile,json_encode($_bslProfBuilt,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
+}
+}
+if(!file_exists($qFile)){
+echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_file_missing','error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+}
 $_bslActualItems=json_decode(@file_get_contents($qFile)?:'[]',true)?:[];
+if(empty($_bslActualItems)){
+@unlink($qFile);
+echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_empty','error'=>'محصولی برای ارسال در این پروفایل یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+}
 if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
 $queue=bslReadQueue();
 $startImm=!empty($_POST['start_immediately']);
@@ -69344,6 +69704,38 @@ $qeOrphB['resume_requested_at']=0;
 }
 unset($qeOrphB);
 }
+// v10.460: ردیف‌های pausedِ قبلیِ همین پروفایل هنگام کلیکِ صریحِ کاربر روی «ارسال به باسلام»
+// جایگزین می‌شوند تا ارسالِ جدید پشتِ ردیفِ متوقف‌شدهٔ قدیمی گیر نکند؛ همچنین بررسیِ
+// تکراری قبل از پاک‌کردنِ فایل‌های progress/products انجام می‌شود تا worker زنده آسیب نبیند.
+$_supersededPausedIds=[];
+if($pKeyIn!==''&&empty($_POST['force'])){
+foreach($queue['entries'] as &$qePausedB){
+if(!is_array($qePausedB)||($qePausedB['status']??'')!=='paused')continue;
+if(s4QueueProfileMatchesKey((string)($qePausedB['profile_key']??''),$pKeyIn,$__pf)){
+$_supersededPausedIds[]=(string)($qePausedB['id']??'');
+$qePausedB['status']='done';$qePausedB['done_at']=time();$qePausedB['superseded']=true;
+$qePausedB['status_reason']='جایگزین با ارسال جدید کاربر';
+}
+}
+unset($qePausedB);
+}
+if(!empty($_supersededPausedIds)&&file_exists(BSL_STOP_FILE)){
+$_stopRawB=json_decode((string)@file_get_contents(BSL_STOP_FILE),true);
+$_stopQidB=trim((string)($_stopRawB['queue_id']??''));
+if($_stopQidB===''||in_array($_stopQidB,$_supersededPausedIds,true))@unlink(BSL_STOP_FILE);
+}
+// v8.55: همین پروفایل اگر واقعاً در حال اجرا یا انتظار در صف است، ورودی تازه ساخته نشود
+if($pKeyIn!==''&&queueDedupOn($cn)&&empty($_POST['force'])){
+$dupE=queueHasProfile($queue['entries'],$pKeyIn,queueDedupStale($cn));
+if($dupE===null&&$_bslResolvedKey!==''&&$_bslResolvedKey!==$pKeyIn){
+$dupE=queueHasProfile($queue['entries'],$_bslResolvedKey,queueDedupStale($cn));
+}
+if($dupE!==null){
+@unlink($qFile);
+echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
+'error'=>'این پروفایل هم‌اکنون در صف باسلام در حال اجرا یا انتظار است'],JSON_UNESCAPED_UNICODE);exit;
+}
+}
 // v8.57: اگر ارسال دیگری واقعاً در جریان است، این یکی باید در صف بماند.
 $bslBusy=false;
 foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'){$bslBusy=true;break;}}
@@ -69358,45 +69750,27 @@ if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل
 
 $verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
 if(empty($verifyProducts)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی است بعد از کپی'],JSON_UNESCAPED_UNICODE);exit;}
-// v8.57: تنظیمات این ارسال دیگر روی connections.json نوشته نمی‌شود.
-// قبلاً دستهٔ همین صف، دستهٔ پیش‌فرض کاربر را در تنظیمات عمومی بازنویسی
-// می‌کرد و بعد از یک ارسال، «دستهٔ اصلی» و «دسته خودکار» و پسوند عنوان
-// عوض شده بودند. ارسال‌کننده تنظیمات را از خود ردیف صف می‌خواند.
-}
-$cn=loadConnections();
-// v8.36: نام و کلید پروفایل را نگه می‌داریم تا در صف معلوم باشد چه چیزی می‌رود
-$pKeyIn=trim((string)($_POST['profile_key']??''));
-$pNameIn=trim((string)($_POST['profile_name']??''));
-if($pKeyIn!==''&&$pNameIn===''){$__pf=loadProfiles();$pNameIn=(string)($__pf[$pKeyIn]['name']??$pKeyIn);}
-// v8.55: همین پروفایل اگر در صف است، ورودی تازه ساخته نشود
-if($pKeyIn!==''&&queueDedupOn($cn)&&empty($_POST['force'])){
-$dupE=queueHasProfile($queue['entries'],$pKeyIn,queueDedupStale($cn));
-if($dupE!==null){
-@unlink($qFile);
-echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
-'error'=>'این پروفایل هم‌اکنون در صف باسلام است'],JSON_UNESCAPED_UNICODE);exit;
-}
 }
 // v8.57: دستهٔ پروفایل و دسته‌های جایگزینش هم در خود ردیف صف ذخیره شوند،
 // تا ارسال‌کننده لازم نباشد سراغ تنظیمات عمومی برود.
 $fbIn=json_decode((string)($_POST['fallback_cat_ids']??'[]'),true);
 if(!is_array($fbIn))$fbIn=[];
 $fbIn=array_values(array_filter(array_map('intval',$fbIn),function($v){return $v>0;}));
-if(empty($fbIn)&&$pKeyIn!==''){
-$__pf3=$__pf??loadProfiles();
-$fbIn=array_values(array_filter(array_map('intval',(array)($__pf3[$pKeyIn]['bslFallbackCatIds']??[])),function($v){return $v>0;}));
+$_profRefKey=($_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey]))?$_bslResolvedKey:$pKeyIn;
+if(empty($fbIn)&&$_profRefKey!==''){
+$fbIn=array_values(array_filter(array_map('intval',(array)($__pf[$_profRefKey]['bslFallbackCatIds']??[])),function($v){return $v>0;}));
 }
 if(empty($fbIn))$fbIn=array_values(array_filter(array_map('intval',(array)($cn['basalam']['fallback_cat_ids']??[])),function($v){return $v>0;}));
-if($catId<=0&&$pKeyIn!==''){
-$__pf4=$__pf3??($__pf??loadProfiles());
-$catId=(int)($__pf4[$pKeyIn]['bslCategoryId']??0);
+if($catId<=0&&$_profRefKey!==''){
+$catId=(int)($__pf[$_profRefKey]['bslCategoryId']??0);
 }
 if($catId<=0)$catId=(int)($cn['basalam']['category_id']??0);
-// v10.73 (87): «ارسال به همهٔ غرفه‌ها» دیگر داخلِ یک ردیفِ صف پنهان نمی‌شود —
-// هر غرفهٔ فعال یک وظیفهٔ مستقل در صف می‌گیرد (ردیف، پیشرفت و گزارشِ خودش)،
-// و رابط کاربری آن‌ها را زیرِ سربرگِ دستهٔ مشترک نشان می‌دهد.
-// v10.88: selected_shop_vids overrides send_all_shops
-$_selectedVids=json_decode($_POST['selected_shop_vids']??'null',true);
+if($catId<=0&&!$autoCat&&empty($fbIn)){
+$_anyProdCat=false;
+foreach($_bslActualItems as $_chkIt){if(is_array($_chkIt)&&(int)($_chkIt['bsl_category_id']??0)>0){$_anyProdCat=true;break;}}
+if(!$_anyProdCat){@unlink($qFile);echo json_encode(['ok'=>false,'error'=>'ابتدا دسته‌بندی باسلام را انتخاب کنید (دستهٔ پروفایل، دستهٔ پیش‌فرض، یا تشخیص خودکار)'],JSON_UNESCAPED_UNICODE);exit;}
+}
+$_selectedVids=$_selectedVidsRaw;
 if(is_array($_selectedVids)&&count($_selectedVids)===0){@unlink($qFile);echo json_encode(['ok'=>false,'error'=>'حداقل یک غرفه را انتخاب کنید'],JSON_UNESCAPED_UNICODE);exit;}
 if(is_array($_selectedVids)&&count($_selectedVids)>0){
     $fanoutShops=array_values(array_filter(bslAllShops($cn),function($sh)use($_selectedVids){
@@ -69405,17 +69779,18 @@ if(is_array($_selectedVids)&&count($_selectedVids)>0){
 } else {
     $fanoutShops=!empty($_POST['send_all_shops'])?bslFanoutShops($cn):[];
 }
-// v10.91: اگر کاربر غرفههای خاصی انتخاب کرده ولی هیچ غرفهای یافت نشد
 if(is_array($_selectedVids)&&count($_selectedVids)>0&&count($fanoutShops)===0){
     echo json_encode(['ok'=>false,'error'=>'غرفهٔ انتخابی، در تنظیمات پیدا نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
+$_storeProfileKey=$_bslResolvedKey?:$pKeyIn;
+$_nowCreatedB=time();
 if(count($fanoutShops)>=1){
 $fanStatus=$startImm?'running':'waiting';
 $fanFirst=true;
 foreach($fanoutShops as $__fs){
 $__fsVid=(int)$__fs['vendor_id'];
 $__fsId=$fanFirst?$queueId:$queueId.'_s'.$__fsVid;
-$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?time():0,'done_at'=>0,'paused_at'=>0,'profile_key'=>$pKeyIn,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
+$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
 $fanFirst=false;
 }
 bslWriteQueue($queue);
@@ -69423,7 +69798,7 @@ $_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAnd
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
-$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?time():0,'done_at'=>0,'paused_at'=>0,'profile_key'=>$pKeyIn,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
+$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
 $queue['entries'][]=$entry;
 bslWriteQueue($queue);
 $_bslAddPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
@@ -69433,6 +69808,9 @@ exit;
 
 if(isset($_GET['bsl_queue_start_next'])){
 header('Content-Type: application/json; charset=UTF-8');
+$__bslNextFp = queueBackendLock('bsl');
+if (!is_resource($__bslNextFp)) { echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف باسلام هم‌اکنون در حال اجراست'],JSON_UNESCAPED_UNICODE); exit; }
+register_shutdown_function(function() use ($__bslNextFp) { queueBackendUnlock($__bslNextFp); });
 $queue=bslReadQueue();
 
 $progress=readProgress(BSL_PROGRESS_FILE);
@@ -69449,9 +69827,6 @@ $e['done_at']=time();
 }
 unset($e);
 
-// v8.57: با اندیس کار کن نه با کپی. «$nextEntry=$e» یک رونوشت می‌ساخت و
-// تغییر وضعیت به running هیچ‌وقت ذخیره نمی‌شد؛ ردیف روی waiting می‌ماند و
-// ارسال‌کننده تنظیماتش را برنمی‌داشت.
 $nextIdx2=-1;
 foreach($queue['entries'] as $i=>$e){
 if($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0)){
@@ -69466,8 +69841,9 @@ $queue['entries'][$nextIdx2]['status']='running';
 $queue['entries'][$nextIdx2]['started_at']=time();
 $nextEntry=$queue['entries'][$nextIdx2];
 bslWriteQueue($queue);
-// v8.57: تنظیمات عمومی کاربر دیگر بازنویسی نمی‌شود
-echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی از صف'],JSON_UNESCAPED_UNICODE);
+queueBackendUnlock($__bslNextFp);
+$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_bslNextPid,'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی از صف'],JSON_UNESCAPED_UNICODE);
 }else{
 bslWriteQueue($queue);
 echo json_encode(['ok'=>true,'next_id'=>null,'msg'=>'صف خالی — فرآیند بعدی موجود نیست'],JSON_UNESCAPED_UNICODE);
@@ -69479,14 +69855,18 @@ if(isset($_GET['bsl_queue_cancel'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
 $queue=bslReadQueue();
-$found=false;
+$found=false;$cancelledPf='';
 foreach($queue['entries'] as $i=>$e){
-if($e['id']===$queueId&&$e['status']==='waiting'){
-
-@unlink($e['products_file']);
+if(($e['id']??'')===$queueId&&($e['status']??'')==='waiting'){
+$cancelledPf=(string)($e['products_file']??'');
 array_splice($queue['entries'],$i,1);
 $found=true;break;
 }
+}
+if($found&&$cancelledPf!==''){
+$_pfStillUsed=false;
+foreach($queue['entries'] as $_remE){if(is_array($_remE)&&(string)($_remE['products_file']??'')===$cancelledPf&&($_remE['status']??'')!=='done'){$_pfStillUsed=true;break;}}
+if(!$_pfStillUsed)@unlink($cancelledPf);
 }
 bslWriteQueue($queue);
 echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
@@ -69496,12 +69876,19 @@ exit;
 if(isset($_GET['bsl_queue_clear_done'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queue=bslReadQueue();
-foreach($queue['entries'] as $i=>$e){
-if($e['status']==='done'){
-@unlink($e['products_file']);
-array_splice($queue['entries'],$i,1);
+$_activePfs=[];
+foreach((array)($queue['entries']??[]) as $_ce){
+if(is_array($_ce)&&($_ce['status']??'')!=='done'&&!empty($_ce['products_file']))$_activePfs[(string)$_ce['products_file']]=true;
 }
+$_donePfs=[];
+$queue['entries']=array_values(array_filter((array)($queue['entries']??[]),function($e)use(&$_donePfs){
+if(is_array($e)&&($e['status']??'')==='done'){
+if(!empty($e['products_file']))$_donePfs[(string)$e['products_file']]=true;
+return false;
 }
+return true;
+}));
+foreach(array_keys($_donePfs) as $_dpf){if(!isset($_activePfs[$_dpf]))@unlink($_dpf);}
 bslWriteQueue($queue);
 echo json_encode(['ok'=>true,'remaining'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
@@ -69687,7 +70074,7 @@ $entry['products']=$products;
 // v8.58: نام دسته‌بندی‌های همین وظیفه را هم برگردان تا بالای مودال
 // نشان داده شود. شناسهٔ تنها برای کاربر معنایی ندارد.
 $entry['cat_info']=bslQueueCatInfo($entry['config']??[]);
-echo json_encode(['ok'=>true,'entry'=>$entry],JSON_UNESCAPED_UNICODE);
+echo json_encode(['ok'=>true,'entry'=>$entry],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
 
@@ -69892,6 +70279,14 @@ exit;
 }
 
 if(isset($_GET['action']) && $_GET['action'] === 'bsl_backend'){
+if(!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
+$_bslCliHold=s4GetActiveCliQueueSpawn('bsl',10.0);
+if(is_array($_bslCliHold)){
+header('Content-Type: application/json; charset=UTF-8');
+echo json_encode(['ok'=>true,'delegated_to_cli'=>true,'worker_pid'=>(int)$_bslCliHold['pid'],'msg'=>'bsl_backend CLI worker booting'],JSON_UNESCAPED_UNICODE);
+exit;
+}
+}
 
 // v8.57: سیگنالِ توقف فقط بعد از گرفتنِ lock بررسی/پاک می‌شود؛
 // probe یا حذفِ زودهنگام نباید با workerِ موازی race بسازد.
@@ -69906,6 +70301,7 @@ header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'bsl_backend already running','skipped'=>true],JSON_UNESCAPED_UNICODE);
 exit;
 }
+if(isCliRun()&&function_exists('s4ClearCliQueueSpawn'))s4ClearCliQueueSpawn('bsl');
 set_time_limit(0); ignore_user_abort(true);
 
 register_shutdown_function(function()use($bslLockFp,$bslLockFile){@flock($bslLockFp,LOCK_UN);@fclose($bslLockFp);});
@@ -70076,10 +70472,16 @@ if($runningCandidates){
             $progTs=tasksHeartbeat($progress);$entryStarted=(int)($candidate['started_at']??0);
             $staleSeconds=$progTs>0?($now-$progTs):($entryStarted>0?($now-$entryStarted):9999);
             if($staleSeconds>=BSL_SEND_STALL_SEC){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
+            elseif($_bslGotLock){$nextEntry=$candidate;$nextIdx=$ownerIdx;}
         }else{$nextEntry=$candidate;$nextIdx=$ownerIdx;}
     }elseif($runningRows===1){
         // The single row is stale/legacy; resume from its own checkpoint, not a foreign progress file.
         $nextIdx=(int)array_key_first($runningCandidates);$nextEntry=$runningCandidates[$nextIdx];
+    }else{
+        if($requestedBslQueueId!==''){
+            foreach($runningCandidates as $i=>$rc){if((string)($rc['id']??'')===$requestedBslQueueId){$nextIdx=$i;$nextEntry=$rc;break;}}
+        }
+        if($nextEntry===null){$nextIdx=(int)array_key_first($runningCandidates);$nextEntry=$runningCandidates[$nextIdx];}
     }
 }else{
     foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='waiting'){$nextEntry=$e;$nextIdx=$i;break;}}
@@ -70463,7 +70865,8 @@ if(count($__fastItems)>=2){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,0,'',['⚡ آپدیت گروهی باسلام: '.count($__fastItems).' محصول موجود (بدون آپلود تصویر)'],['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>0,'phase_total'=>count($__fastItems),'phase_pct'=>0]);
 /* A shop may be unchecked while the existing-product scan is preparing this
    batch. Revalidate immediately before the first network write. */
-if(!bslShopSelectedForSend(loadConnections(),(int)$vid))
+$__liveCnChk1=loadConnections();
+if(!bslShopSelectedForSend(loadConnections(),(int)$vid)&&bslRowDisabledByShopPicker($nextEntry,$__liveCnChk1,(int)$vid))
     bslFinishDisabledShopRow((string)$bslQueueId,(int)$vid,$bslDefaultShopName,max(0,$bslResumeStart-1),$total,$sent,$updated,$skipped,$fail);
 $__br=bslBatchUpdate($tk,$vid,$__fastItems,function($done,$failed,$chunk,$chunks,$stage)use(&$sent,&$updated,&$skipped,&$fail,$total,$bslResumeStart,$__fastItems){$pc=min(count($__fastItems),$done+$failed);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$bslResumeStart,'',null,['phase'=>'batch_update','phase_label'=>'آپدیت گروهی محصولات موجود','phase_current'=>$pc,'phase_total'=>count($__fastItems),'phase_pct'=>(int)floor($pc*100/max(1,count($__fastItems))),'batch_chunk'=>$chunk,'batch_chunks'=>$chunks,'batch_stage'=>$stage]);},false);
 if(!empty($__br['ok'])){
@@ -70493,7 +70896,8 @@ foreach($pd as $i=>$p){
 if(($i+1)<$bslResumeStart)continue;
 if(isset($bslFastDoneIdx[$i]))continue;
 /* Legacy single-shop rows also obey the live picker immediately. */
-if(!bslShopSelectedForSend(loadConnections(),(int)$vid))
+$__liveCnChk2=loadConnections();
+if(!bslShopSelectedForSend(loadConnections(),(int)$vid)&&bslRowDisabledByShopPicker($nextEntry,$__liveCnChk2,(int)$vid))
     bslFinishDisabledShopRow((string)$bslQueueId,(int)$vid,$bslDefaultShopName,$i,$total,$sent,$updated,$skipped,$fail);
 $GLOBALS['_bslPhaseState']=['phase'=>'send','phase_label'=>'ارسال محصولات','phase_current'=>$i,'phase_total'=>$total,'phase_pct'=>(int)floor($i*100/max(1,$total)),'batch_done_indices'=>array_values(array_map('intval',array_keys($bslFastDoneIdx)))];
 // v8.59: نتیجهٔ file_exists در PHP کش می‌شود؛ بدون پاک‌کردن کش ممکن است
@@ -71008,7 +71412,8 @@ foreach($pd as $si=>$p){
 if(($si+1)<$bslResumeStart)continue;
 /* v10.416: settings can change while this long worker is running. Re-read the
    picker before every product so unchecking this shop stops it immediately. */
-if(!bslShopSelectedForSend(loadConnections(),$__scopeVid))
+$__liveCnChk3=loadConnections();
+if(!bslShopSelectedForSend(loadConnections(),$__scopeVid)&&bslRowDisabledByShopPicker($nextEntry,$__liveCnChk3,$__scopeVid))
     bslFinishDisabledShopRow((string)$bslQueueId,$__scopeVid,$sShopName,$sDone,$total,$sent,$updated,$skipped,$fail);
 clearstatcache(true,BSL_STOP_FILE);
 if(bslStopRequestedForQueue()){$sStop=true;break;}
@@ -71295,6 +71700,10 @@ if($e2['status']==='waiting'){ $hasMore=true; break; }
 
 /* v10.53 (۶۷): ردیفِ «در انتظار» دیگری هست → همین‌جا ردیفِ بعد را به نوبت شروع کن. */
 if ($hasMore && $bslEntryRound + 1 < BSL_MAX_ENTRIES_PER_RUN) continue;
+if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('s4DispatchPendingSendQueue')) {
+    @flock($bslLockFp, LOCK_UN);
+    s4DispatchPendingSendQueue('bsl');
+}
 
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>true,'msg'=>$finalLog,'started'=>true,'processed'=>$bslEntriesDoneThisRun,'queue_id'=>$bslQueueId,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'has_more'=>$hasMore,'auto_sync'=>!empty($nextEntry['auto_sync'])],JSON_UNESCAPED_UNICODE);
@@ -87683,6 +88092,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.460', t:'🚀 رفع ریشه‌ای شروع نشدن ارسال‌های باسلام و ووکامرس (ساخت سرورساید آنی از پروفایل، حذف تداخل قفل HTTP/CLI، همگام‌سازی غرفه‌ها و زنجیره‌سازی صف ووکامرس)', items:[
+    'شروع آنی ارسال بدون آپلود چندمگابایتی از مرورگر (s4BuildQueueProductsFromProfile + from_profile=1): در پروفایل‌های سنگین (مثل پروفایل‌های ۴۳۰۰+ محصولی با جداول HTML مشخصات و گالری کامل ~۸.۵ مگابایت)، کلیک روی «ارسال به باسلام» یا «ارسال ووکامرس» دیگر معطل دانلود کامل load_profile یا آپلود ۱۵+ تکهٔ سنگین از مرورگر نمی‌ماند و مستقیماً روی سرور در کمتر از یک ثانیه لیست ارسال را با اعمال ضرایب قیمت و پسوند عنوان می‌سازد؛ در مسیر پشتیبان نیز تکه‌ها به ۸۰ محصول با کدگذاری Base64 (products_b64) تبدیل شدند تا توسط WAF/ModSecurity مسدود نشوند.',
+    'رفع مسابقهٔ قفل (flock race) بین درخواست HTTP مرورگر و پردازش پس‌زمینهٔ CLI: ۱) ثبت نشانگر اسپاون CLI (s4RecordCliQueueSpawn / s4GetActiveCliQueueSpawn) تا درخواست HTTP موازی قفل bsl_backend.lock یا woo_backend.lock را از پردازش پایدار CLI ندزدد، ۲) عدم ارسال درخواست اضافی مرورگر وقتی سرور worker_pid زنده برگردانده است، و ۳) رفع رها شدن ردیف‌های running در bsl_backend هنگامی که قفل انحصاری در اختیار پردازش فعلی است یا بیش از یک ردیف running یتیم وجود دارد.',
+    'رفع ابطال فوری ارسال غرفه‌ها و یکسان‌سازی سلولی (bslRowDisabledByShopPicker + shop_picker_sync): ۱) همگام‌سازی خودکار غرفه‌های تیک‌خوردهٔ تب ارسال با send_shop_ids هنگام ثبت صف باسلام، ۲) ثبت زمان تغییر انتخاب غرفه‌ها (send_shop_ids_at) تا ردیف‌های یکسان‌سازی هدفمند یک غرفهٔ خاص (cell_equalize با explicit_shop_target) به‌خاطر لیست قدیمی send_shop_ids بلافاصله با وضعیت shop_disabled متوقف نشوند، و ۳) اسپاون فوری پردازش ارسال پس از ساخت صف در start_profile_destination_equalize.',
+    'رفع مسدودیت ردیف‌های متوقف‌شده (paused) و رفع کامل باگ‌های شروع صف ووکامرس: ۱) جایگزینی خودکار ردیف‌های paused قبلی همان پروفایل هنگام کلیک صریح کاربر روی ارسال جدید و انجام بررسی تکراری قبل از پاک کردن فایل‌های progress/products، ۲) خواندن فایل اختصاصی products_file ردیف فعال در woo_backend به‌جای WOO_PRODUCTS_FILE قدیمی، ۳) زنجیره‌سازی خودکار ردیف‌های waiting بعدی در پایان woo_backend و پشتیبانی از شروع مجدد ردیف‌های paused در woo_queue_start_server، و ۴) کاهش ۹۹ درصدی حجم پاسخ woo_queue_status و bsl_queue_status با حذف آرایه‌های سنگین جزئیات تاریخچه‌ای (از ~۱.۵۵ مگابایت به چند کیلوبایت) به‌همراه محافظت از فایل محصولات مشترک در ارسال‌های چندغرفه‌ای.'
+  ]},
   {v:'10.459', t:'⏱️ کاهش پله‌ای خودکار ۱ روزهٔ زمان آماده‌سازی (preparation_days) روی خطای ۴۲۲ باسلام تا زمان تایید', items:[
     'تشخیص دقیق خطاهای مدت زمان آماده‌سازی باسلام (bslIsPreparationDaysError) در تمام ساختارهای پاسخ ۴۲۲ و ۴۰۰ (از جمله fields:["preparation_days"]، کلیدهای آرایه‌ای data.*.preparation_days در آپدیت دسته‌ای، errors.preparation_days و پیام‌های فارسی/انگلیسی مشابه «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»).',
     'کاهش خودکار ۱ روزه در هر تلاش (bslStepDownPreparationDays / bslRunPreparationDaysRetryLoop) در تمام مسیرهای تک‌درخواستی (bslReq)، موازی چندغرفه‌ای (bslReqMulti)، ارسال با تنوع (bslReqWithVariantsFallback) و آپدیت دسته‌ای (batch-updates) تا زمانی که باسلام درخواست را تایید کند (تا کف ۰ روز)؛ حتی اگر در PATCH اولیه فیلد preparation_days ارسال نشده باشد.',
@@ -102090,6 +102505,33 @@ function updateWooProfileCatHint(){
         h.style.color='#64748b';
     }
 }
+function getSelectedSendProfileKey(){
+    const sel=$('profileSelect');
+    if(sel&&sel.value&&String(sel.value).trim()!=='')return String(sel.value).trim();
+    if(typeof currentLoadedProfileKey==='string'&&currentLoadedProfileKey.trim()!=='')return currentLoadedProfileKey.trim();
+    return '';
+}
+function s4EncodeProductsChunkB64(chunk){
+    try{
+        const raw=JSON.stringify(chunk||[]);
+        if(typeof TextEncoder!=='undefined'){
+            const bytes=new TextEncoder().encode(raw);
+            let bin='';
+            for(let i=0;i<bytes.length;i+=8192){
+                bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+            }
+            return btoa(bin);
+        }
+        return btoa(unescape(encodeURIComponent(raw)));
+    }catch(_e){return '';}
+}
+function s4ExpandQueuePanel(dest){
+    const sec=$(dest==='woo'?'wooQueueSection':'bslQueueSection');
+    const body=$(dest==='woo'?'wooQueueBody':'bslQueueBody');
+    const arr=$(dest==='woo'?'wooQueueArrow':'bslQueueArrow');
+    if(sec)sec.style.display='block';
+    if(body&&body.style.display==='none'){body.style.display='block';if(arr)arr.textContent='▲';}
+}
 function getSendP(){
 const d=[];order.forEach(k=>{
     const p=products.get(k);if(!p)return;
@@ -102098,65 +102540,116 @@ const d=[];order.forEach(k=>{
     // v7.82: Detect price unit (Rial vs Toman) from original price string
     const priceStr=(p.price||'').toString();
     const priceUnit=priceStr.includes('ریال')||priceStr.includes('ر.ی')?'rial':'toman';
-    d.push({key:k,title:getFinalTitle(rawTitle),price:String(p.price||''),final_price:String(fp),price_unit:priceUnit,image:p.image||'',images:p.images||[],sku:p.sku||'',short_desc:p.shortDesc||'',long_desc:p.longDesc||'',specs:p.specs||'',brand:p.brand||'',category:p.category||'',stock:p.stock||'',weight:p.weight||'',link:p.link||'',orig_price:p.origPrice||p.originalPrice||'',variations:p.variations||[],variation_groups:p.variation_groups||[],variation_prices:p.variation_prices||{},variation_combinations:p.variation_combinations||[],variations_text:p.variations_text||''});
+    d.push({key:k,title:getFinalTitle(rawTitle),price:String(p.price||''),final_price:String(fp),price_unit:priceUnit,image:p.image||'',images:p.images||[],sku:p.sku||'',short_desc:p.shortDesc||'',long_desc:p.longDesc||'',specs:p.specs||'',brand:p.brand||'',category:p.category||'',bsl_category_id:p.bslCategoryId||p.bsl_category_id||0,in_stock:p.in_stock,stock:p.stock||'',weight:p.weight||'',link:p.link||'',orig_price:p.origPrice||p.originalPrice||'',variations:p.variations||[],variation_groups:p.variation_groups||[],variation_prices:p.variation_prices||{},variation_combinations:p.variation_combinations||[],variations_text:p.variations_text||''});
 });
 return d;
 }
 function pSSE(ev){if(!ev.trim())return null;let t='',d='';ev.split('\n').forEach(l=>{if(l.startsWith('event:'))t=l.substring(6).trim();else if(l.startsWith('data:'))d=l.substring(5).trim();});if(!t||!d)return null;try{return{t,d:JSON.parse(d)};}catch(e){return null;}}
-// v8.17: queueWooSend — same pattern as queueBslSend (server-side processing)
+// v8.17 / v10.460: queueWooSend — اولویت با ساخت سرورساید از پروفایل (۱ درخواست سبک بدون آپلود مگابایتی)
 function queueWooSend(ps){
     const qid='wq_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
-    $('wSS').textContent='ذخیره محصولات در صف...';
-    const CHUNK_SIZE=300;const chunks=[];
-    for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
-    let savedChunks=0,totalSaved=0;
-    function saveNextWooQueueChunk(){
-        if(savedChunks>=chunks.length){
-            const fd2=new FormData();
-            fd2.append('queue_id',qid);
-            fd2.append('total',String(totalSaved));
-            fd2.append('start_immediately','1');
-            fd2.append('profile_key',($('profileSelect')&&$('profileSelect').value)||'');
-            fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
-            fd2.append('title_suffix',$('titleSuffix')?$('titleSuffix').value.trim():'');
-            // v8.56: دستهٔ ووکامرس همین پروفایل؛ ۰ یعنی از پیش‌فرض عمومی استفاده کن
-            fd2.append('category_id',String(parseInt(($('wooProfileCatId')||{}).value||'0')||0));
-            fetch('?woo_queue_add=1',{method:'POST',body:fd2}).then(r=>r.json()).then(d=>{
-                if(!d.ok){showToast('خطا: '+d.error,1);return;}
-                showToast('✓ '+toFa(totalSaved)+' محصول در صف ووکامرس — سرورساید');
-                wSend=true;
-                wooReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
-                wooLastLogCount=0;wooLastCardCount=0;wooLastUpdateTime=0;
-                // v8.17: Keep send button visible so user can add more to queue
-                $('wSB').textContent='🚀 + افزودن به صف';
-                $('wST').classList.remove('hidden');
-                $('wP').classList.remove('hidden');$('wPB').style.width='0%';
-                $('wR').classList.remove('hidden');
-                $('wR').innerHTML='<div style="color:#a78bfa;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">✓ ارسال '+toFa(totalSaved)+' محصول ووکامرس (سرورساید — بسته مرورگر ادامه می‌دهد)</div>';
-                $('wSM').classList.remove('hidden');$('wO').textContent=toFa(0);$('wU').textContent=toFa(0);$('wK').textContent=toFa(0);$('wF').textContent=toFa(0);$('wX').textContent=toFa(0);$('wT').textContent=toFa(totalSaved);
-                $('wSS').textContent='✓ شروع ارسال...';
-                window._currentWooQueueId=qid;
-                checkWooQueue();
-                // Trigger woo_backend
-                fetch('?action=woo_backend').catch(()=>{});
-                $('wR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع — پیشرفت زنده نمایش می‌شود</div>';
-                setTimeout(pollWooProgress,1000);
-            }).catch(()=>{});
+    const profKey=getSelectedSendProfileKey();
+    const hasClientItems=Array.isArray(ps)&&ps.length>0;
+    $('wSS').textContent='ثبت در صف و شروع ارسال ووکامرس...';
+    s4ExpandQueuePanel('woo');
+    function finishWooQueueAdded(d,fallbackCount){
+        const totalFinal=parseInt(d.total)||fallbackCount||0;
+        if(d.status==='waiting'){
+            showToast('📋 ارسال دیگری در جریان است — در صف ووکامرس قرار گرفت ('+toFa(totalFinal)+' محصول)');
+            $('wSS').textContent='📋 در صف ووکامرس — پس از پایان ارسال جاری خودکار شروع می‌شود';
+            $('wSB').textContent='🚀 + افزودن به صف';
+            checkWooQueue();
             return;
         }
-        const chunk=chunks[savedChunks];
-        const fd=new FormData();
-        fd.append('products',JSON.stringify(chunk));fd.append('chunk_index',String(savedChunks));fd.append('queue_id',qid);
-        $('wSS').textContent='ذخیره '+toFa(totalSaved)+'/'+toFa(ps.length)+' محصول...';
-        fetch('?woo_queue_save_products=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-            if(!d.ok){showToast('خطا: '+d.error,1);return;}
-            totalSaved=d.total_saved;savedChunks++;saveNextWooQueueChunk();
-        }).catch(()=>{showToast('خطا شبکه',1);});
+        showToast('✓ '+toFa(totalFinal)+' محصول در صف ووکامرس — سرورساید');
+        wSend=true;
+        wooReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
+        wooLastLogCount=0;wooLastCardCount=0;wooLastUpdateTime=0;
+        $('wSB').textContent='🚀 + افزودن به صف';
+        $('wST').classList.remove('hidden');
+        $('wP').classList.remove('hidden');$('wPB').style.width='0%';
+        $('wR').classList.remove('hidden');
+        $('wR').innerHTML='<div style="color:#a78bfa;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">✓ ارسال '+toFa(totalFinal)+' محصول ووکامرس (سرورساید — بسته مرورگر ادامه می‌دهد)</div>';
+        $('wSM').classList.remove('hidden');$('wO').textContent=toFa(0);$('wU').textContent=toFa(0);$('wK').textContent=toFa(0);$('wF').textContent=toFa(0);$('wX').textContent=toFa(0);$('wT').textContent=toFa(totalFinal);
+        $('wSS').textContent='✓ شروع ارسال...';
+        window._currentWooQueueId=qid;
+        checkWooQueue();
+        if(!(d.worker_pid>0)){
+            fetch('?action=woo_backend').catch(()=>{});
+        }
+        $('wR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع شد — پیشرفت زنده نمایش می‌شود</div>';
+        setTimeout(pollWooProgress,1000);
     }
-    saveNextWooQueueChunk();
+    function buildWooAddFormData(totalCount,fromProfile){
+        const fd2=new FormData();
+        fd2.append('queue_id',qid);
+        fd2.append('total',String(totalCount||0));
+        fd2.append('start_immediately','1');
+        fd2.append('profile_key',profKey);
+        fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
+        if(hasClientItems||!fromProfile){
+            fd2.append('title_suffix',$('titleSuffix')?$('titleSuffix').value.trim():'');
+            if($('priceMode'))fd2.append('price_mode',$('priceMode').value||'none');
+            if($('priceVal'))fd2.append('price_val',$('priceVal').value||'0');
+            if($('roundPrice'))fd2.append('round_price',$('roundPrice').value||'0');
+        }
+        if(fromProfile)fd2.append('from_profile','1');
+        fd2.append('category_id',String(parseInt(($('wooProfileCatId')||{}).value||'0')||0));
+        return fd2;
+    }
+    function uploadChunksAndAddWoo(){
+        if(!hasClientItems){
+            $('wSS').textContent='⚠️ محصولی برای ارسال یافت نشد';
+            showToast('محصولی برای ارسال در این پروفایل یافت نشد',1);
+            return;
+        }
+        const CHUNK_SIZE=80;const chunks=[];
+        for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
+        let savedChunks=0,totalSaved=0;
+        function saveNextWooQueueChunk(){
+            if(savedChunks>=chunks.length){
+                const fd2=buildWooAddFormData(totalSaved,false);
+                fetch('?woo_queue_add=1',{method:'POST',body:fd2}).then(r=>r.json()).then(d=>{
+                    if(!d.ok){$('wSS').textContent='❌ '+(d.error||'خطا در ثبت صف');showToast('خطا: '+d.error,1);checkWooQueue();return;}
+                    finishWooQueueAdded(d,totalSaved);
+                }).catch(err=>{$('wSS').textContent='❌ خطا در ثبت صف ووکامرس';showToast('خطای ارتباط هنگام ثبت صف ووکامرس: '+(err&&err.message?err.message:'شبکه'),1);});
+                return;
+            }
+            const chunk=chunks[savedChunks];
+            const fd=new FormData();
+            const b64=s4EncodeProductsChunkB64(chunk);
+            if(b64)fd.append('products_b64',b64);else fd.append('products',JSON.stringify(chunk));
+            fd.append('chunk_index',String(savedChunks));fd.append('queue_id',qid);
+            $('wSS').textContent='ذخیره '+toFa(totalSaved)+'/'+toFa(ps.length)+' محصول...';
+            fetch('?woo_queue_save_products=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+                if(!d.ok){$('wSS').textContent='❌ '+(d.error||'خطا در ذخیره محصولات');showToast('خطا: '+d.error,1);return;}
+                totalSaved=d.total_saved;savedChunks++;saveNextWooQueueChunk();
+            }).catch(()=>{$('wSS').textContent='❌ خطا شبکه در ارسال محصولات به صف';showToast('خطا شبکه هنگام ذخیره محصولات در صف',1);});
+        }
+        saveNextWooQueueChunk();
+    }
+    if(profKey!==''){
+        fetch('?woo_queue_add=1',{method:'POST',body:buildWooAddFormData(hasClientItems?ps.length:0,true)}).then(r=>r.json()).then(d=>{
+            if(!d.ok){
+                if(d.code==='fallback_upload_needed'&&hasClientItems){uploadChunksAndAddWoo();return;}
+                $('wSS').textContent='❌ '+(d.error||'خطا در شروع ارسال');
+                showToast('خطا: '+(d.error||'ثبت صف ووکامرس ناموفق بود'),1);
+                checkWooQueue();
+                return;
+            }
+            finishWooQueueAdded(d,hasClientItems?ps.length:0);
+        }).catch(()=>{
+            if(hasClientItems)uploadChunksAndAddWoo();
+            else{$('wSS').textContent='❌ خطا شبکه';showToast('خطای شبکه هنگام شروع ارسال ووکامرس',1);}
+        });
+        return;
+    }
+    uploadChunksAndAddWoo();
 }
 function sendWoo(){
-const ps=getSendP();if(!ps.length){showToast('محصولی نیست',1);return;}
+const ps=getSendP();
+const profKey=getSelectedSendProfileKey();
+if(!ps.length&&!profKey){showToast('محصولی نیست — ابتدا یک پروفایل انتخاب یا استخراج کنید',1);return;}
 queueWooSend(ps);
 }
 function pollWooProgress(){
@@ -102273,7 +102766,9 @@ function pollWooProgress(){
                         $('wPB').style.width='0%';
                         $('wR').innerHTML='<div style="color:#a78bfa;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">📋 شروع فرآیند بعدی از صف — '+toFa(nd.total)+' محصول</div>';
                         $('wO').textContent=toFa(0);$('wU').textContent=toFa(0);$('wK').textContent=toFa(0);$('wF').textContent=toFa(0);$('wX').textContent=toFa(0);$('wT').textContent=toFa(nd.total);
-                        fetch('?action=woo_backend').catch(()=>{});
+                        if(!(nd.worker_pid>0)){
+                            fetch('?action=woo_backend').catch(()=>{});
+                        }
                         setTimeout(pollWooProgress,1500);
                     }
                 }).catch(()=>{});
@@ -102621,102 +103116,144 @@ function toggleCmpSection(el){
     s.display=s.display==='none'?'block':'none';
 }
 
-// v7.50: Queue a BSL send — ALWAYS used, even for first send
+// v7.50 / v10.460: Queue a BSL send — اولویت با ساخت سرورساید از پروفایل (۱ درخواست سبک بدون آپلود مگابایتی)
 function queueBslSend(ps,catId){
-    const autoCat=$('bsAutoCat')&&$('bsCat')&&$('bsAutoCat').checked;
-    const titleSuffix='';
+    const autoCat=Boolean($('bsAutoCat')&&$('bsAutoCat').checked);
+    const profKey=getSelectedSendProfileKey();
+    const hasClientItems=Array.isArray(ps)&&ps.length>0;
+    const titleSuffix=$('titleSuffix')?$('titleSuffix').value.trim():'';
     const qid='q_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
-    // v7.56: SERVER-SIDE background processing — PHP does the work, browser just displays
-    // 1. Save products to queue file (for persistence + cron resume)
-    // 2. bsl_queue_add with start_immediately=1 (copies products file, sets status='running')
-    // 3. Trigger bsl_backend (PHP background — continues after browser closes!)
-    // 4. Start polling to display live progress
-    $('bSS').textContent='\u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0631 \u0635\u0641 \u0648 \u0634\u0631\u0648\u0639 \u0627\u0631\u0633\u0627\u0644...';
-    const CHUNK_SIZE=300;const chunks=[];
-    for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
-    let savedChunks=0,totalSaved=0;
-    function saveNextQueueChunk(){
-        if(savedChunks>=chunks.length){
-            const fd2=new FormData();
-            fd2.append('queue_id',qid);
-            fd2.append('total',String(totalSaved));
-            fd2.append('category_id',String(catId));
-            fd2.append('auto_category',autoCat?'1':'0');
-            fd2.append('title_suffix',titleSuffix);
-            fd2.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
-            fd2.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
-            fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
-            fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
-            fd2.append('start_immediately','1');
-            fd2.append('profile_key',($('profileSelect')&&$('profileSelect').value)||'');
-            fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
-            // v8.57: دسته‌های جایگزین همین پروفایل هم همراه صف بروند
-            fd2.append('fallback_cat_ids',JSON.stringify(Array.isArray(bslProfileFallbackCats)?bslProfileFallbackCats:[]));
-            // v9.69 / v10.88: ارسال به غرفه‌های انتخابی
-            {const _sv=bslGetSelectedVids();
-             fd2.append('send_all_shops',_sv===null||_sv.length>1?'1':'0');
-             if(_sv!==null)fd2.append('selected_shop_vids',JSON.stringify(_sv));}
-            fetch('?bsl_queue_add=1',{method:'POST',body:fd2}).then(r=>r.json()).then(d=>{
-                if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);return;}
-                /* v10.73 (87): چندغرفه‌ای شد — هر غرفه وظیفهٔ جدا دارد */
-                if(d.shop_count>1){showToast('📦 '+toFa(d.shop_count)+' غرفه — هرکدام یک وظیفهٔ جدا در صف',true);}
-                // v8.57: اگر ارسال دیگری در جریان بود، سرور این یکی را در صف
-                // گذاشته. قبلاً رابط کاربری در هر حالت وانمود می‌کرد ارسال
-                // شروع شده و کاربر فکر می‌کرد پروفایلش دارد می‌رود.
-                if(d.status==='waiting'){
-                    showToast('📋 ارسال دیگری در جریان است — «'+(($('profileName')&&$('profileName').value)||'این پروفایل')+'» در صف قرار گرفت');
-                    $('bSS').textContent='📋 در صف — بعد از پایان ارسال فعلی خودکار شروع می‌شود';
-                    checkBslQueue();
-                    return;
-                }
-                showToast('\u2713 '+toFa(totalSaved)+' \u0645\u062d\u0635\u0648\u0644 \u062f\u0631 \u0635\u0641 \u2014 \u0633\u0631\u0648\u0631\u0633\u0627\u06cc\u062f');
-                // Initialize visual UI
-                bSend=true;
-                bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
-                bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
-                $('bSB').classList.add('hidden');$('bSBlegacy').classList.add('hidden');
-                $('bST').classList.remove('hidden');
-                $('bP').classList.remove('hidden');$('bPB').style.width='0%';
-                $('bR').classList.remove('hidden');
-                $('bR').innerHTML='<div style="color:#67e8f9;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">\u2713 \u0627\u0631\u0633\u0627\u0644 '+toFa(totalSaved)+' \u0645\u062d\u0635\u0648\u0644 (\u0633\u0631\u0648\u0631\u0633\u0627\u06cc\u062f \u2014 \u0628\u0633\u062a\u0647 \u0645\u0631\u0648\u0631\u06af\u0632 \u0628\u0627 \u0627\u062f\u0627\u0645\u0647 \u0645\u06cc\u062f\u0647\u062f)</div>';
-                $('bSM').classList.remove('hidden');$('bO').textContent=toFa(0);$('bU').textContent=toFa(0);$('bK').textContent=toFa(0);$('bF').textContent=toFa(0);$('bX').textContent=toFa(0);$('bT').textContent=toFa(totalSaved);
-                $('bSS').textContent='\u2713 \u0634\u0631\u0648\u0631 \u0627\u0631\u0633\u0627\u0644...';
-                // Track the exact queue row across polling/recovery.
-                window._currentBslQueueId=qid;
-                console.log('[BSL queue] starting '+qid+' with '+totalSaved+' products');
-                checkBslQueue();
-                const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);
-                fetch('?action=bsl_backend',{method:'POST',body:fd3}).catch(()=>{});
-                $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع — پیشرفت زنده نمایش می‌شود</div>';
-                setTimeout(pollBslProgress,1000);
-            }).catch(()=>{});
+    $('bSS').textContent='ثبت در صف و شروع ارسال باسلام...';
+    s4ExpandQueuePanel('bsl');
+    function finishBslQueueAdded(d,fallbackCount){
+        const totalFinal=parseInt(d.total)||fallbackCount||0;
+        if(d.shop_count>1){showToast('📦 '+toFa(d.shop_count)+' غرفه — هرکدام یک وظیفهٔ جدا در صف',true);}
+        if(d.status==='waiting'){
+            showToast('📋 ارسال دیگری در جریان است — «'+(($('profileName')&&$('profileName').value)||profKey||'این پروفایل')+'» در صف قرار گرفت');
+            $('bSS').textContent='📋 در صف باسلام — بعد از پایان ارسال فعلی خودکار شروع می‌شود';
+            $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');
+            checkBslQueue();
             return;
         }
-        const chunk=chunks[savedChunks];
-        const fd=new FormData();
-        fd.append('products',JSON.stringify(chunk));fd.append('chunk_index',String(savedChunks));fd.append('queue_id',qid);
-        $('bSS').textContent='\u0630\u062e\u06cc\u0631\u0647 '+toFa(totalSaved)+'/'+toFa(ps.length)+' \u0645\u062d\u0635\u0648\u0644...';
-        fetch('?bsl_queue_save_products=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-            if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);return;}
-            totalSaved=d.total_saved;savedChunks++;saveNextQueueChunk();
-        }).catch(()=>{showToast('\u062e\u0637\u0627 \u0634\u0628\u06a9\u0647',1);});
+        showToast('✓ '+toFa(totalFinal)+' محصول در صف باسلام — سرورساید');
+        bSend=true;
+        bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
+        bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
+        $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');
+        $('bSBlegacy').classList.add('hidden');
+        $('bST').classList.remove('hidden');
+        $('bP').classList.remove('hidden');$('bPB').style.width='0%';
+        $('bR').classList.remove('hidden');
+        $('bR').innerHTML='<div style="color:#67e8f9;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">✓ ارسال '+toFa(totalFinal)+' محصول باسلام (سرورساید — بسته مرورگر ادامه می‌دهد)</div>';
+        $('bSM').classList.remove('hidden');$('bO').textContent=toFa(0);$('bU').textContent=toFa(0);$('bK').textContent=toFa(0);$('bF').textContent=toFa(0);$('bX').textContent=toFa(0);$('bT').textContent=toFa(totalFinal);
+        $('bSS').textContent='✓ شروع ارسال...';
+        window._currentBslQueueId=qid;
+        console.log('[BSL queue] starting '+qid+' with '+totalFinal+' products (worker_pid='+(d.worker_pid||0)+')');
+        checkBslQueue();
+        if(!(d.worker_pid>0)){
+            const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);fd3.append('resume','1');
+            fetch('?action=bsl_backend',{method:'POST',body:fd3}).catch(()=>{});
+        }
+        $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع شد — پیشرفت زنده نمایش می‌شود</div>';
+        setTimeout(pollBslProgress,1000);
     }
-    saveNextQueueChunk();
+    function buildBslAddFormData(totalCount,fromProfile){
+        const fd2=new FormData();
+        fd2.append('queue_id',qid);
+        fd2.append('total',String(totalCount||0));
+        fd2.append('category_id',String(catId||0));
+        fd2.append('auto_category',autoCat?'1':'0');
+        fd2.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
+        fd2.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
+        fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
+        fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
+        fd2.append('start_immediately','1');
+        fd2.append('profile_key',profKey);
+        fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
+        fd2.append('fallback_cat_ids',JSON.stringify(Array.isArray(bslProfileFallbackCats)?bslProfileFallbackCats:[]));
+        if(hasClientItems||!fromProfile){
+            fd2.append('title_suffix',titleSuffix);
+            if($('priceMode'))fd2.append('price_mode',$('priceMode').value||'none');
+            if($('priceVal'))fd2.append('price_val',$('priceVal').value||'0');
+            if($('roundPrice'))fd2.append('round_price',$('roundPrice').value||'0');
+        }
+        if(fromProfile)fd2.append('from_profile','1');
+        const _sv=bslGetSelectedVids();
+        fd2.append('send_all_shops',_sv===null||_sv.length>1?'1':'0');
+        if(_sv!==null){
+            fd2.append('selected_shop_vids',JSON.stringify(_sv));
+            fd2.append('shop_picker_sync','1');
+        }
+        return fd2;
+    }
+    function uploadChunksAndAddBsl(){
+        if(!hasClientItems){
+            $('bSS').textContent='⚠️ محصولی برای ارسال یافت نشد';
+            showToast('محصولی برای ارسال در این پروفایل یافت نشد',1);
+            return;
+        }
+        const CHUNK_SIZE=80;const chunks=[];
+        for(let i=0;i<ps.length;i+=CHUNK_SIZE)chunks.push(ps.slice(i,i+CHUNK_SIZE));
+        let savedChunks=0,totalSaved=0;
+        function saveNextQueueChunk(){
+            if(savedChunks>=chunks.length){
+                const fd2=buildBslAddFormData(totalSaved,false);
+                fetch('?bsl_queue_add=1',{method:'POST',body:fd2}).then(r=>r.json()).then(d=>{
+                    if(!d.ok){$('bSS').textContent='❌ '+(d.error||'خطا در ثبت صف');showToast('خطا: '+d.error,1);checkBslQueue();return;}
+                    finishBslQueueAdded(d,totalSaved);
+                }).catch(err=>{$('bSS').textContent='❌ خطا در ثبت صف باسلام';showToast('خطای ارتباط هنگام ثبت صف باسلام: '+(err&&err.message?err.message:'شبکه'),1);});
+                return;
+            }
+            const chunk=chunks[savedChunks];
+            const fd=new FormData();
+            const b64=s4EncodeProductsChunkB64(chunk);
+            if(b64)fd.append('products_b64',b64);else fd.append('products',JSON.stringify(chunk));
+            fd.append('chunk_index',String(savedChunks));fd.append('queue_id',qid);
+            $('bSS').textContent='ذخیره '+toFa(totalSaved)+'/'+toFa(ps.length)+' محصول...';
+            fetch('?bsl_queue_save_products=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+                if(!d.ok){$('bSS').textContent='❌ '+(d.error||'خطا در ذخیره محصولات');showToast('خطا: '+d.error,1);return;}
+                totalSaved=d.total_saved;savedChunks++;saveNextQueueChunk();
+            }).catch(()=>{$('bSS').textContent='❌ خطا شبکه در ارسال محصولات به صف';showToast('خطا شبکه هنگام ذخیره محصولات در صف',1);});
+        }
+        saveNextQueueChunk();
+    }
+    if(profKey!==''){
+        fetch('?bsl_queue_add=1',{method:'POST',body:buildBslAddFormData(hasClientItems?ps.length:0,true)}).then(r=>r.json()).then(d=>{
+            if(!d.ok){
+                if(d.code==='fallback_upload_needed'&&hasClientItems){uploadChunksAndAddBsl();return;}
+                $('bSS').textContent='❌ '+(d.error||'خطا در شروع ارسال');
+                showToast('خطا: '+(d.error||'ثبت صف باسلام ناموفق بود'),1);
+                checkBslQueue();
+                return;
+            }
+            finishBslQueueAdded(d,hasClientItems?ps.length:0);
+        }).catch(()=>{
+            if(hasClientItems)uploadChunksAndAddBsl();
+            else{$('bSS').textContent='❌ خطا شبکه';showToast('خطای شبکه هنگام شروع ارسال باسلام',1);}
+        });
+        return;
+    }
+    uploadChunksAndAddBsl();
 }
-// v7.51: sendBsl ALWAYS queues — buttons stay visible, operation goes to queue
+// v7.51 / v10.460: sendBsl ALWAYS queues — supports auto-category & server-side profile build
 function sendBsl(){
-// v8.57: اول دستهٔ همین پروفایل، بعد دستهٔ پیش‌فرض عمومی.
-// قبلاً فقط دستهٔ عمومی خوانده می‌شد و دستهٔ پروفایل نادیده گرفته می‌شد.
 const profCat=parseInt(($('bslProfileCatId')||{}).value||'0')||bslProfileSelectedCatId||0;
 const globalCat=parseInt(($('bsCat')||{}).value||'0')||0;
 const catId=profCat>0?profCat:globalCat;
-if(catId<=0){showToast('ابتدا دسته‌بندی باسلام را انتخاب کنید (دستهٔ پروفایل یا دستهٔ پیش‌فرض)',1);return;}
+const autoCatOn=Boolean($('bsAutoCat')&&$('bsAutoCat').checked);
+const hasFallbacks=Array.isArray(bslProfileFallbackCats)&&bslProfileFallbackCats.length>0;
+const profKey=getSelectedSendProfileKey();
+const ps=getSendP();
+const anyItemCat=ps.some(p=>parseInt(p&&p.bsl_category_id||0)>0);
+if(catId<=0&&!autoCatOn&&!hasFallbacks&&!anyItemCat&&!profKey){
+    showToast('ابتدا دسته‌بندی باسلام را انتخاب کنید (دستهٔ پروفایل، دستهٔ پیش‌فرض، یا تشخیص خودکار)',1);
+    return;
+}
 
 const selectedShops=bslGetSelectedVids();
 if(Array.isArray(selectedShops)&&selectedShops.length===0){showToast('هیچ غرفه‌ای برای ارسال انتخاب نشده است',1);return;}
 
-const ps=getSendP();
-if(!ps.length){showToast('محصولی نیست',1);return;}
+if(!ps.length&&!profKey){showToast('محصولی نیست — ابتدا یک پروفایل انتخاب یا استخراج کنید',1);return;}
 queueBslSend(ps,catId);
 }
 // v7.50: Proper stop — sends stop signal to PHP and stops JS polling
@@ -103375,10 +103912,12 @@ function resumeBslQueue(qid){
         window._currentBslQueueId=qid;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
         bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
-        $('bSB').classList.add('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
+        $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
         $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
-        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
-        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        if(!(d.worker_pid>0)){
+            const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
+            fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        }
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
     }).catch(()=>{showToast('خطا شبکه',1);});
@@ -103389,7 +103928,7 @@ function startBslServer(qid){
     $('bSS').textContent='\u0634\u0631\u0648\u0631 \u0633\u0631\u0648\u0631\u0633\u0627\u06cc\u062f...';
     bSend=true;bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
     window._currentBslQueueId=qid; // v7.66: track queue ID
-    $('bSB').classList.add('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
+    $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
     $('bP').classList.remove('hidden');$('bPB').style.width='0%';
     $('bR').classList.remove('hidden');$('bR').innerHTML='';
     $('bSM').classList.remove('hidden');$('bO').textContent=toFa(0);$('bU').textContent=toFa(0);$('bK').textContent=toFa(0);$('bF').textContent=toFa(0);$('bX').textContent=toFa(0);
@@ -103400,14 +103939,14 @@ function startBslServer(qid){
         if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);bSend=false;return;}
         $('bT').textContent=toFa(d.total||0);
         $('bSS').textContent='\u2713 \u0634\u0631\u0648\u0631 \u0633\u0631\u0648\u0631...';
-        // Now trigger bsl_backend with from_file=1 and queue_id
-        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);
-        // Start the exact selected queue row; GET previously discarded fd2.
-        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        if(!(d.worker_pid>0)){
+            const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('resume','1');
+            fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        }
         $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع — پیشرفت زنده نمایش می‌شود</div>';
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
-    }).catch(()=>{});
+    }).catch(()=>{showToast('خطا شبکه',1);bSend=false;});
 }
 function restartBslServer(qid){
     // v7.56: Restart server-side processing for a stuck 'running' entry
@@ -103415,21 +103954,21 @@ function restartBslServer(qid){
     $('bSS').textContent='\u0634\u0631\u0648\u0631 \u0627\u062f\u0627\u0645\u0647 \u0633\u0631\u0648\u0631\u0633\u0627\u06cc\u062f...';
     bSend=true;bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
     window._currentBslQueueId=qid; // v7.66: track queue ID
-    $('bSB').classList.add('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
+    $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
     $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
     // Clear stale progress + trigger server restart
     fetch('?bsl_queue_restart_server=1&queue_id='+encodeURIComponent(qid)).then(r=>r.json()).then(d=>{
         if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);bSend=false;return;}
         $('bT').textContent=toFa(d.total||0);
         $('bO').textContent=toFa(d.sent||0);$('bU').textContent=toFa(d.updated||0);$('bK').textContent=toFa(d.skipped||0);$('bF').textContent=toFa(d.failed||0);
-        // Trigger bsl_backend with resume from current position
-        const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
-        // Resume the exact checkpoint; GET previously discarded all fields.
-        fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        if(!(d.worker_pid>0)){
+            const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
+            fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
+        }
         $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ادامه ارسال — پیشرفت زنده نمایش می‌شود</div>';
         checkBslQueue();
         setTimeout(pollBslProgress,1000);
-    }).catch(()=>{});
+    }).catch(()=>{showToast('خطا شبکه',1);bSend=false;});
 }
 function deleteBslQueue(qid){
     if(!confirm('آیا مطمئن هستید؟ عملیات حذف خواهد شد.'))return;
@@ -103486,9 +104025,10 @@ function renderWooQueue(q){
     const statusBg={waiting:'#42200630',running:'#7c3aed20',paused:'#7c2d1220',done:'#14532d20',failed:'#7f1d1d20'};
     let html='';
     entries.forEach(e=>{
-        let __acts='';
-        if(e.status==='running'||e.status==='waiting')__acts='<button class="btn btn-blue" onclick="startWooServer(\''+e.id+'\')">▶ شروع سرور</button><button class="btn btn-red" onclick="deleteWooQueue(\''+e.id+'\')">حذف</button>';
-        else __acts='<button class="btn btn-gray" onclick="deleteWooQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
+        let __acts='',__wCur=Math.max(0,parseInt(e.current)||0),__wTot=Math.max(0,parseInt(e.total)||0);
+        if(e.status==='running'||e.status==='waiting'||e.status==='paused'||(e.status==='failed'&&(__wTot===0||__wCur<__wTot))){
+            __acts='<button class="btn btn-blue" onclick="startWooServer(\''+e.id+'\')">▶ '+(e.status==='paused'||__wCur>0?'ادامه از '+toFa(__wCur+1):'شروع سرور')+'</button><button class="btn btn-red" onclick="deleteWooQueue(\''+e.id+'\')">حذف</button>';
+        }else __acts='<button class="btn btn-gray" onclick="deleteWooQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
         html+=sendQueueVisualCard(e,{accent:'#a78bfa',icon:'🌐',destination:'ووکامرس',retireLabel:'حذف/زباله‌دان',detailFn:'showWooQueueDetail',actions:__acts});
         return;
         let progText='';let progPercent=0;
@@ -103541,8 +104081,9 @@ function startWooServer(qid){
     fetch('?woo_queue_start_server=1&queue_id='+encodeURIComponent(qid)).then(r=>r.json()).then(d=>{
         if(d.ok){
             showToast('✓ شروع پردازش سرورساید');
-            // Trigger woo_backend
-            fetch('?action=woo_backend').catch(()=>{});
+            if(!(d.worker_pid>0)){
+                fetch('?action=woo_backend').catch(()=>{});
+            }
             wSend=true;
             $('wST').classList.remove('hidden');
             $('wP').classList.remove('hidden');$('wR').classList.remove('hidden');$('wSM').classList.remove('hidden');
@@ -103847,20 +104388,18 @@ function closeBslQueueDetail(){
 // No server-side PHP stream needed. No polling. No timeout issues.
 let bslQueueRunner=null; // track current running queue entry
 function startNextBslQueueEntry(){
-    // Resolve the next concrete row first; this keeps the UI bound to its queue_id
-    // and never lets a stale shared progress file impersonate the next send.
-    fetch('?bsl_queue_status=1').then(r=>r.json()).then(q=>{
-        const entries=Array.isArray(q&&q.entries)?q.entries:[];
-        if(entries.some(e=>e&&e.status==='running')){setTimeout(startNextBslQueueEntry,1500);return;}
-        const next=entries.find(e=>e&&e.status==='waiting');
-        if(!next){bSend=false;checkBslQueue();return;}
-        window._currentBslQueueId=String(next.id||'');
+    fetch('?bsl_queue_start_next=1').then(r=>r.json()).then(d=>{
+        if(!d||!d.ok){if(d&&d.running){setTimeout(pollBslProgress,1200);return;}bSend=false;checkBslQueue();return;}
+        if(!d.next_id){bSend=false;checkBslQueue();return;}
+        window._currentBslQueueId=String(d.next_id||'');
         bSend=true;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
         bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;bslLastCurrent=-1;bslLastPhaseSig='';
         $('bSM').classList.remove('hidden');$('bPB').style.width='0%';$('bR').classList.remove('hidden');$('bR').innerHTML='';
-        const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',window._currentBslQueueId);
-        fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});
+        if(!(d.worker_pid>0)){
+            const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',window._currentBslQueueId);fd.append('resume','1');
+            fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});
+        }
         setTimeout(pollBslProgress,1000);checkBslQueue();
     }).catch(()=>setTimeout(startNextBslQueueEntry,2000));
 }
