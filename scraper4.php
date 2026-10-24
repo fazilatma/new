@@ -77012,6 +77012,8 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
     $byKey = [];
     $bySku = [];
     $byQTail = [];
+    $hasWantSkus = !empty($wantSkus);
+    $hasWantQTail = !empty($wantQTail);
     foreach ($profiles as $profKey => $prof) {
         if (!is_array($prof)) continue;
         $prods = is_array($prof['products'] ?? null) ? $prof['products'] : [];
@@ -77024,11 +77026,19 @@ function bslBuildLocalProductIndex(?array $profiles = null, ?array $targetProduc
             if ($pt === '') continue;
             $nt = bslNormalizeTitle($pt);
             $bareRaw = stripProductCode($pt);
-            $bare = bslNormalizeTitle($bareRaw);
-            $psku = strtolower(trim((string)(preg_replace('~^sku\s*:\s*~i', '', (string)($pr['sku'] ?? '')) ?? '')));
-            $qTail = (!empty($wantQTail) && mb_strlen($bareRaw, 'UTF-8') > 2)
-                ? bslNormalizeTitle(mb_substr($bareRaw, 1, null, 'UTF-8'))
-                : '';
+            $bare = ($bareRaw === $pt) ? $nt : bslNormalizeTitle($bareRaw);
+            $psku = '';
+            if ($hasWantSkus && !empty($pr['sku'])) {
+                $rawS = trim((string)$pr['sku']);
+                if (stripos($rawS, 'sku:') === 0) $rawS = trim(substr($rawS, 4));
+                $psku = strtolower($rawS);
+            }
+            $qTail = '';
+            if ($hasWantQTail && strlen($bare) > 3) {
+                $b0 = ord($bare[0]);
+                $skipB = (($b0 & 0xE0) === 0xC0) ? 2 : ((($b0 & 0xF0) === 0xE0) ? 3 : ((($b0 & 0xF8) === 0xF0) ? 4 : 1));
+                $qTail = ltrim(substr($bare, $skipB));
+            }
             if ($wantNorms !== null) {
                 $matched = ($itemKey !== '' && isset($wantKeys[$itemKey]))
                     || ($psku !== '' && isset($wantSkus[$psku]))
