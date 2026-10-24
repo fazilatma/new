@@ -71537,7 +71537,7 @@ $cn=loadConnections();$bs=$cn['basalam']??[];
 if(empty($bs['token'])||empty($bs['vendor_id'])){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
 $tk=$bs['token'];$vid=(int)$bs['vendor_id'];
 $_delShopId=(int)($_GET['shop_id']??0);
-if($_delShopId>0&&function_exists('bslShopById')){$_delSh=bslShopById($cn,$_delShopId);if($_delSh&&!empty($_delSh['token'])){$tk=(string)$_delSh['token'];$vid=(int)$_delSh['vendor_id'];}}
+if($_delShopId>0&&function_exists('bslAllShops')){foreach(bslAllShops($cn)as $_delSh){if((int)($_delSh['vendor_id']??0)===$_delShopId&&!empty($_delSh['token'])){$tk=(string)$_delSh['token'];$vid=(int)$_delSh['vendor_id'];break;}}}
 $productId=(int)($_GET['product_id']??0);
 if($productId<=0){echo json_encode(['ok'=>false,'error'=>'شناسه محصول نامعتبر'],JSON_UNESCAPED_UNICODE);exit;}
 // v8.62: باسلام متد DELETE برای محصول ندارد. تا امروز این کد به اندپوینتی
