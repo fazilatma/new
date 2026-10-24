@@ -10467,7 +10467,7 @@ function bslIsPreparationDaysError(array $r): bool {
     $code = (int)($r['code'] ?? 0);
     if (!in_array($code, [400, 422], true)) return false;
     $b = is_array($r['body'] ?? null) ? $r['body'] : [];
-    $msgLists = [$b['messages'] ?? null, $b['data']['messages'] ?? null];
+    $msgLists = [$b['messages'] ?? null, $b['data']['messages'] ?? null, $b['openapi_raw_data'] ?? null];
     if (is_array($b['errors'] ?? null) && array_values($b['errors']) === $b['errors']) {
         $msgLists[] = $b['errors'];
     }
@@ -10478,7 +10478,8 @@ function bslIsPreparationDaysError(array $r): bool {
             foreach ((array)($item['fields'] ?? []) as $f) {
                 $fl = strtolower(trim((string)$f));
                 if ($fl === 'preparation_days' || $fl === 'preparation_day'
-                    || str_ends_with($fl, '.preparation_days') || str_ends_with($fl, '.preparation_day')) {
+                    || str_ends_with($fl, '.preparation_days') || str_ends_with($fl, '.preparation_day')
+                    || str_ends_with($fl, '>preparation_days') || str_ends_with($fl, '>preparation_day')) {
                     return true;
                 }
             }
@@ -10521,12 +10522,12 @@ function bslStepDownPreparationDays(array $r, array $payload, int $defaultPrepDa
     if (isset($payload['data']) && is_array($payload['data']) && !array_key_exists('preparation_days', $payload)) {
         $targetIdxs = [];
         $b = is_array($r['body'] ?? null) ? $r['body'] : [];
-        foreach ([$b['messages'] ?? null, $b['data']['messages'] ?? null] as $list) {
+        foreach ([$b['messages'] ?? null, $b['data']['messages'] ?? null, $b['openapi_raw_data'] ?? null] as $list) {
             if (!is_array($list)) continue;
             foreach ($list as $item) {
                 if (!is_array($item)) continue;
                 foreach ((array)($item['fields'] ?? []) as $f) {
-                    if (preg_match('~(?:^|\.)(?:data|items)\.(\d+)\.preparation_days?$~i', trim((string)$f), $mm)) {
+                    if (preg_match('~(?:^|[.>])(?:data|items)[.>](\d+)[.>]preparation_days?$~i', trim((string)$f), $mm)) {
                         $targetIdxs[(int)$mm[1]] = true;
                     }
                 }
@@ -12082,8 +12083,8 @@ function bslBuildVariantsPayload(array $p, int $defaultPriceRial = 0, int $defau
             if ($aOpt === '') continue;
             if ($aName === '') $aName = 'مدل';
             $props[] = [
-                'property' => ['title' => mb_substr($aName, 0, 50)],
-                'value'    => ['title' => mb_substr($aOpt, 0, 60), 'value' => mb_substr($aOpt, 0, 60)],
+                'property' => mb_substr($aName, 0, 50),
+                'value'    => mb_substr($aOpt, 0, 60),
             ];
         }
         if (!$props) continue;
@@ -12107,13 +12108,13 @@ function bslReqWithVariantsFallback(string $tk, string $method, string $ep, arra
     }
     if (!empty($r['ok']) || empty($payload['variants'])) return $r;
     $code = (int)($r['code'] ?? 0);
-    if ($code === 422 && !bslIsDuplicateName($r) && !bslIsCategoryError($r)) {
+    if (in_array($code, [400, 422], true) && !bslIsDuplicateName($r) && !bslIsCategoryError($r)) {
         unset($payload['variants']);
         $r2 = bslReq($tk, $method, $ep, $payload);
         if (isset($r2['preparation_days_adjusted'])) {
             $payload['preparation_days'] = (int)$r2['preparation_days_adjusted'];
         }
-        if (!empty($r2['ok']) || (int)($r2['code'] ?? 0) !== 422) return $r2;
+        if (!empty($r2['ok']) || !in_array((int)($r2['code'] ?? 0), [400, 422], true)) return $r2;
         return $r2;
     }
     return $r;
