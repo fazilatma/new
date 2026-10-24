@@ -13396,6 +13396,8 @@ function bslSanitizeModerationTitle(string $title, bool $hasBarcode = false): st
         '~(?<![\p{L}\p{N}])سیلور(?![\p{L}\p{N}])~u' => 'نقره‌ای',
         '~روکش\s*طلا~u' => 'رنگ طلایی',
         '~https?://\S+|www\.\S+|@[A-Za-z0-9_]{3,}~iu' => '',
+        '~(?:\+98|0098|\+۹۸|۰۰۹۸|0|۰)?9[0-9۰-۹]{2}[\s\-_.]*[0-9۰-۹]{3}[\s\-_.]*[0-9۰-۹]{4}~u' => '',
+        '~\b[a-z0-9][a-z0-9\-]{2,}\.(?:ir|com|net|org|shop|store|co|info|me)(?:/[^\s]*)?\b~iu' => '',
     ];
     foreach ($replacements as $rx => $rep) {
         $t = preg_replace($rx, $rep, $t) ?? $t;
@@ -13583,7 +13585,7 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
         $payload['name'] = bslSanitizeModerationTitle($payload['name'], $hasBarcode);
     }
     if (isset($payload['description']) && is_string($payload['description']) && $payload['description'] !== '') {
-        if (bslDescriptionHasHtmlArtifacts($payload['description']) || str_contains($payload['description'], "\r")) {
+        if (bslDescriptionHasHtmlArtifacts($payload['description']) || strpos($payload['description'], "\r") !== false) {
             $cleanedDesc = s4HtmlToPlainTextForBsl($payload['description']);
             if ($cleanedDesc !== '') $payload['description'] = $cleanedDesc;
         }
@@ -54678,20 +54680,21 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && !empty($_clsTech466['needs_category'])
       && !empty($_clsTech466['needs_image_refresh'])
       && !empty($_clsTech466['needs_price_check'])
-      && strpos($_sanTitleNoBc466, '810-5') === false
-      && mb_strpos($_sanTitleNoBc466, 'ولنتاین') === false
-      && mb_strpos($_sanTitleNoBc466, 'وارداتی') === false
+      && strpos($_sanTitleNoBc466, '810-5 -') === false
+      && mb_strpos($_sanTitleNoBc466, 'نیم ست', 0, 'UTF-8') === 0
+      && mb_strpos($_sanTitleNoBc466, 'ولنتاین', 0, 'UTF-8') === false
+      && mb_strpos($_sanTitleNoBc466, 'وارداتی', 0, 'UTF-8') === false
       && strpos($_sanTitleNoBc466, '0912') === false
-      && mb_strpos($_sanTitleNoBc466, 'نقره‌ای') !== false
+      && mb_strpos($_sanTitleNoBc466, 'نقره‌ای', 0, 'UTF-8') !== false
       && $_bcOk466 === '6260123456789'
-      && mb_strpos($_sanTitleWithBc466, 'وارداتی') !== false
+      && mb_strpos($_sanTitleWithBc466, 'وارداتی', 0, 'UTF-8') !== false
       && mb_strlen($_richDesc466, 'UTF-8') >= 45
-      && mb_strpos($_richDesc466, 'تلگرام') === false
+      && mb_strpos($_richDesc466, 'تلگرام', 0, 'UTF-8') === false
       && strpos($_richDesc466, '150000') === false
       && $_matchedCat466 === 901
       && $_filteredDefCats466 === []
       && bslTitlesAreSameProduct('کیف', 'کیفیت عالی کفش مردانه') === false
-      && bslTitlesAreSameProduct('مانتو نخی زنانه', 'مانتو نخی زنانه کد ۱۲') === true
+      && bslTitlesAreSameProduct('مانتو نخی زنانه', 'مانتو نخی زنانه (کد: ۱۲)') === true
       && bslIsRealisticPriceRial(10000) === false
       && bslIsRealisticPriceRial(150000) === true
       && (int)($_revPhotos466['main'] ?? 0) === 991122
