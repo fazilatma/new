@@ -61057,25 +61057,23 @@ function bslStatusStep(string $tk, int $vid, int $pid, int $newStatus, string $s
     $next = ($si === false || $si + 1 >= count($order)) ? null : $order[$si + 1];
     $r = null;
     if ($step === 'simple') {
-        $eps = [];
+        $eps = ['products/' . $pid];
         if ($vid > 0) $eps[] = 'vendors/' . $vid . '/products/' . $pid;
-        $eps[] = 'products/' . $pid;
         foreach ($eps as $ep) {
             $r = bslReq($tk, 'PATCH', $ep, ['status' => $newStatus], false, null, false, $maxAttempts);
             if (!empty($r['ok'])) { $r['status_strategy'] = 'simple'; return $r; }
-            if ((int)($r['code'] ?? 0) !== 404) break;   // ۴۰۴ = مسیر نیست؛ خطای دیگر = پایانِ گام
+            if (!in_array((int)($r['code'] ?? 0), [404, 405], true)) break;
         }
     } elseif ($step === 'full') {
         $row = bslGetProductRow($tk, $vid, $pid, $maxAttempts);
         $full = is_array($row) ? bslProductFullPatch($row, $newStatus) : null;
         if ($full !== null) {
-            $eps = [];
+            $eps = ['products/' . $pid];
             if ($vid > 0) $eps[] = 'vendors/' . $vid . '/products/' . $pid;
-            $eps[] = 'products/' . $pid;
             foreach ($eps as $ep) {
                 $r = bslReq($tk, 'PATCH', $ep, $full, false, null, false, $maxAttempts);
                 if (!empty($r['ok'])) { $r['status_strategy'] = 'full'; return $r; }
-                if ((int)($r['code'] ?? 0) !== 404) break;
+                if (!in_array((int)($r['code'] ?? 0), [404, 405], true)) break;
             }
         }
     } elseif ($step === 'archive') {
@@ -61085,18 +61083,17 @@ function bslStatusStep(string $tk, int $vid, int $pid, int $newStatus, string $s
         foreach ($eps as $ep) {
             $r = bslReq($tk, 'POST', $ep, [], false, null, false, $maxAttempts);
             if (!empty($r['ok'])) { $r['status_strategy'] = 'archive'; $r['archived'] = true; return $r; }
-            if ((int)($r['code'] ?? 0) !== 404) break;
+            if (!in_array((int)($r['code'] ?? 0), [404, 405], true)) break;
         }
     } elseif ($step === 'disable') {
         /* v10.53 (۶۷): بایگانی ممکن نبود → حداقل محصول غیرفعال (۳۷)
            شود تا در ویترین دیده نشود. */
-        $eps = [];
+        $eps = ['products/' . $pid];
         if ($vid > 0) $eps[] = 'vendors/' . $vid . '/products/' . $pid;
-        $eps[] = 'products/' . $pid;
         foreach ($eps as $ep) {
             $r = bslReq($tk, 'PATCH', $ep, ['status' => 3790], false, null, false, $maxAttempts);
             if (!empty($r['ok'])) { $r['status_strategy'] = 'disable'; return $r; }
-            if ((int)($r['code'] ?? 0) !== 404) break;
+            if (!in_array((int)($r['code'] ?? 0), [404, 405], true)) break;
         }
     } else { // 'hide'
         /* v10.53 (۶۷): آخرین راه — موجودی و قیمت را صفر کن تا محصول
@@ -61109,13 +61106,12 @@ function bslStatusStep(string $tk, int $vid, int $pid, int $newStatus, string $s
             if ($full !== null) {
                 $full['stock'] = 0;
                 $full['primary_price'] = 0;
-                $eps = [];
+                $eps = ['products/' . $pid];
                 if ($vid > 0) $eps[] = 'vendors/' . $vid . '/products/' . $pid;
-                $eps[] = 'products/' . $pid;
                 foreach ($eps as $ep) {
                     $r = bslReq($tk, 'PATCH', $ep, $full, false, null, false, $maxAttempts);
                     if (!empty($r['ok'])) { $r['status_strategy'] = 'hide'; return $r; }
-                    if ((int)($r['code'] ?? 0) !== 404) break;
+                    if (!in_array((int)($r['code'] ?? 0), [404, 405], true)) break;
                 }
             }
         }
@@ -77267,6 +77263,34 @@ function bslApplyCategoryChangeOrRecreate(
     }
     $origSku = trim((string)($localProd['sku'] ?? ($revData['sku'] ?? ($fullP['sku'] ?? ''))));
     if (strpos($origSku, 'ret-') === 0) $origSku = '';
+
+    // اگر نسخهٔ سالمِ همین عنوان از قبل در دستهٔ جدید (یا وضعیت غیر ۳۵۶۷) فعال است، دوباره نساز و فقط این نسخهٔ ردشده را بایگانی کن
+    if (function_exists('bslFindExisting')) {
+        $existingReplId = (int)bslFindExisting($tk, $vid, $cleanTitle, '');
+        if ($existingReplId > 0 && $existingReplId !== $pId) {
+            $rExRepl = bslReq($tk, 'GET', 'products/' . $existingReplId);
+            $exBody = is_array($rExRepl['body'] ?? null) ? $rExRepl['body'] : [];
+            $exCat = (int)($exBody['category']['id'] ?? ($exBody['category_id'] ?? 0));
+            $exSt = is_array($exBody['status'] ?? null) ? (int)($exBody['status']['value'] ?? 0) : (int)($exBody['status'] ?? 0);
+            if ($exCat === $newCatId || ($exSt > 0 && $exSt !== 3567 && $exSt !== 4184)) {
+                if (function_exists('bslSetProductStatus')) {
+                    bslSetProductStatus($tk, $vid, $pId, 4184, 'auto');
+                }
+                if (!empty($localProd)) {
+                    bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $existingReplId, $cleanTitle, $finalPriceRial, $finalStock, $finalW);
+                }
+                return [
+                    'ok'            => true,
+                    'id'            => $existingReplId,
+                    'replaced_from' => $pId,
+                    'action'        => 'already_replaced',
+                    'category_id'   => $exCat > 0 ? $exCat : $newCatId,
+                    'msg'           => 'نسخهٔ سالم #' . $existingReplId . ' از قبل فعال بود؛ نسخهٔ ردشده #' . $pId . ' بایگانی شد',
+                ];
+            }
+        }
+    }
+
     $retiredName = mb_substr($rawOrigTitle, 0, 92, 'UTF-8') . ' [بایگانی ' . $pId . ']';
     $retirePatch = [
         'name'   => $retiredName,
@@ -77295,25 +77319,28 @@ function bslApplyCategoryChangeOrRecreate(
     if ($origSku !== '') $bp['sku'] = mb_substr($origSku, 0, 60, 'UTF-8');
 
     $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
-    if (empty($rCreate['ok'])) {
+    for ($createAtt = 0; $createAtt < 3 && empty($rCreate['ok']); $createAtt++) {
+        $retriedThisRound = false;
         $errCreateTxt = bslErrText($rCreate);
-        if (stripos($errCreateTxt, 'sku') !== false || isset($rCreate['body']['messages']['sku'])) {
+        if (isset($bp['sku']) && (stripos($errCreateTxt, 'sku') !== false || isset($rCreate['body']['messages']['sku']))) {
             unset($bp['sku']);
-            $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
+            $retriedThisRound = true;
         }
-    }
-    if (empty($rCreate['ok']) && bslIsDuplicateName($rCreate)) {
-        $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
-        $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
-    }
-    if (empty($rCreate['ok']) && function_exists('bslIsPrepDaysError') && bslIsPrepDaysError($rCreate) && (int)$bp['preparation_days'] > 1) {
-        $bp['preparation_days'] = 1;
+        if (bslIsDuplicateName($rCreate) && strpos((string)$bp['name'], ' کد ' . ($pId % 10000)) === false) {
+            $bp['name'] = mb_substr($cleanTitle, 0, 108, 'UTF-8') . ' کد ' . ($pId % 10000);
+            $retriedThisRound = true;
+        }
+        if (function_exists('bslIsPrepDaysError') && bslIsPrepDaysError($rCreate) && (int)$bp['preparation_days'] > 1) {
+            $bp['preparation_days'] = 1;
+            $retriedThisRound = true;
+        }
+        if (!$retriedThisRound) break;
         $rCreate = bslReq($tk, 'POST', 'vendors/' . $vid . '/products', $bp);
     }
     if (!empty($rCreate['ok']) && !empty($rCreate['body']['id'])) {
         $newId = (int)$rCreate['body']['id'];
         if (function_exists('bslSetProductStatus')) {
-            bslSetProductStatus($tk, $vid, $pId, 4184, 'archive');
+            bslSetProductStatus($tk, $vid, $pId, 4184, 'auto');
         }
         if (!empty($localProd)) {
             bslShopMapRecord($localProd, ['vendor_id' => $vid, 'token' => $tk], $newId, (string)$bp['name'], $finalPriceRial, $finalStock, $finalW);
