@@ -17157,18 +17157,6 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         foreach (array_slice($mm, 0, 20) as $mr) $metaTags[$mr[1]] = mb_substr($mr[2], 0, 200);
     }
     $bundleEndpoints = [];
-    foreach ($scripts as $sc) {
-        if (stripos($sc, 'product') === false && stripos($sc, 'pages/_app') === false && count($bundleEndpoints) >= 8) continue;
-        $bRes = $quickCurl('GET', make_absolute_url($sc, 'https://snappshop.ir'));
-        $bTxt = (string)$bRes['raw'];
-        if (preg_match_all('~["\']([A-Za-z0-9_/-]*(?:product|pdp|detail|v1|v2|v3|v4)[A-Za-z0-9_/${}.?-]{2,80})["\']~', $bTxt, $bm)) {
-            foreach (array_unique($bm[1]) as $candEp) {
-                if (stripos($candEp, '_next') !== false || stripos($candEp, 'node_modules') !== false) continue;
-                $bundleEndpoints[$sc][] = $candEp;
-                if (count($bundleEndpoints[$sc]) >= 25) break;
-            }
-        }
-    }
     $apiProbes = [];
     foreach ([
         'v2_num' => ['GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', null],
@@ -17260,7 +17248,7 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         'token_try' => $tokenTry,
         'js_contexts' => $jsContexts,
         'api_probes' => $apiProbes,
-    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? ''));
