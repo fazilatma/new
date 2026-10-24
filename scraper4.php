@@ -15907,6 +15907,7 @@ function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): arr
     }
     return $recycled;
 }
+/** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
     $now=time();$disk=s4DiskCodeMeta();$diskVer=$disk['version'];$diskSha=$disk['sha'];
