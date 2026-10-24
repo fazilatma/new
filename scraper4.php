@@ -17349,6 +17349,105 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         $out['cooldown_reset'] = true;
         $out['cooldown_remaining_sec'] = 0;
     }
+    if (!empty($_GET['diag'])) {
+        $psLines = [];
+        if (function_exists('exec')) {
+            @exec('ps -eo pid,etime,args 2>/dev/null | grep -i php | grep -v grep', $psLines);
+        }
+        $dnsInfo = [];
+        foreach (['apix.snappshop.ir', 'snappshop.ir', 'statics.delivery.sotoon.ir'] as $dh) {
+            $recs = @dns_get_record($dh, DNS_A + DNS_AAAA);
+            $ips = [];
+            if (is_array($recs)) {
+                foreach ($recs as $rc) {
+                    $ip = (string)($rc['ip'] ?? ($rc['ipv6'] ?? ''));
+                    if ($ip !== '') $ips[] = $ip;
+                }
+            }
+            $dnsInfo[$dh] = $ips;
+        }
+        $tok = s4SnappApixEnsureGuestToken(6, false);
+        $baseH = [
+            'Accept: application/json, text/plain, */*',
+            'Origin: https://snappshop.ir',
+            'Referer: https://snappshop.ir/',
+            'X-Origin: https://snappshop.ir',
+            'x-origin: https://snappshop.ir',
+        ];
+        if ($tok !== '') $baseH[] = 'Authorization: Bearer ' . $tok;
+        $tryReq = static function(string $u, array $h, array $extraOpt = [], ?string $postJson = null): array {
+            $zrk = '';
+            $ch = curl_init($u);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT        => 5,
+                CURLOPT_ENCODING       => '',
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_HTTPHEADER     => $h,
+                CURLOPT_HEADERFUNCTION => static function($c, $hl) use (&$zrk) {
+                    if (stripos($hl, 'x-zrk-sn:') === 0) $zrk = trim(substr($hl, 9));
+                    return strlen($hl);
+                },
+            ] + $extraOpt);
+            if ($postJson !== null) {
+                curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $postJson);
+            }
+            $raw = curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $pIp = (string)curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+            $err = curl_error($ch);
+            curl_close($ch);
+            $s = $raw === false ? '' : (string)$raw;
+            return ['code' => $code, 'ip' => $pIp, 'zrk' => $zrk, 'bytes' => strlen($s), 'err' => $err, 'sample' => str_replace(['<', '>'], ['[lt]', '[gt]'], substr($s, 0, 220))];
+        };
+        $apiUrl = 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591';
+        $probes = [];
+        // 1) IPv6 test
+        if (defined('CURL_IPRESOLVE_V6')) {
+            $probes['ipv6'] = $tryReq($apiUrl, array_merge($baseH, ['s-device: DESKTOP', 's-device-source: shop']), [
+                CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V6,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36',
+            ]);
+        }
+        // 2) Mobile / Superapp UA + headers
+        $probes['mobile_superapp'] = $tryReq($apiUrl, array_merge($baseH, ['s-device: MOBILE', 's-device-source: snapp']), [
+            CURLOPT_IPRESOLVE => defined('CURL_IPRESOLVE_V4') ? CURL_IPRESOLVE_V4 : 1,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Snapp/8.5',
+        ]);
+        // 3) Alternate Sotoon CDN edge POP IPs
+        $candEdgeIps = array_values(array_unique(array_merge(
+            $dnsInfo['snappshop.ir'] ?? [],
+            $dnsInfo['statics.delivery.sotoon.ir'] ?? [],
+            ['185.143.233.5', '185.143.234.5', '185.143.232.5', '185.166.104.5']
+        )));
+        foreach (array_slice($candEdgeIps, 0, 5) as $eIp) {
+            if (strpos($eIp, ':') !== false) continue;
+            $probes['edge_' . $eIp] = $tryReq($apiUrl, array_merge($baseH, ['s-device: DESKTOP', 's-device-source: shop']), [
+                CURLOPT_RESOLVE => ['apix.snappshop.ir:443:' . $eIp],
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+            ]);
+        }
+        // 4) Search v1 POST (unaffected by products/v2 bucket!)
+        $probes['search_v1_post'] = $tryReq(
+            'https://apix.snappshop.ir/search/v1?lat=35.77331&lng=51.418591',
+            array_merge($baseH, ['s-device: DESKTOP', 's-device-source: shop', 'Content-Type: application/json']),
+            [CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'],
+            json_encode(['query' => 'snp-' . $pid, 'size' => 5, 'skip' => 0])
+        );
+        $cn = function_exists('srcNetCfg') ? srcNetCfg() : [];
+        $out['diag'] = [
+            'ps_php' => $psLines,
+            'dns' => $dnsInfo,
+            'net_mode' => $cn['mode'] ?? '',
+            'has_proxy' => trim((string)($cn['proxy'] ?? '')) !== '',
+            'has_doh' => trim((string)($cn['doh_url'] ?? '')) !== '',
+            'has_worker' => trim((string)($cn['worker_url'] ?? '')) !== '',
+            'probes' => $probes,
+        ];
+    }
     if (!empty($_GET['live'])) {
         $pdpUrl = 'https://snappshop.ir/product/snp-' . $pid;
         $r = fetch_html($pdpUrl, 15);
