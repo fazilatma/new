@@ -17184,19 +17184,81 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         unset($pr['raw']);
         $apiProbes[$pkName] = $pr;
     }
+    $jsContexts = [];
+    foreach ([
+        '_app' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js',
+        'c6666' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js',
+        'c516' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js',
+        'pdp' => 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js',
+    ] as $bKey => $bUrl) {
+        $bR = $quickCurl('GET', $bUrl);
+        $bT = (string)$bR['raw'];
+        foreach (['guest/v2/token', 'products/v2', 'products/v', 'productData', 's-device', 'Authorization'] as $needle) {
+            $pos = strpos($bT, $needle);
+            if ($pos !== false) {
+                $snip = substr($bT, max(0, $pos - 180), 420);
+                $jsContexts[$bKey . ':' . $needle] = str_replace(['<', '>'], ['[lt]', '[gt]'], $snip);
+            }
+        }
+    }
+    $botProbes = [];
+    foreach ([
+        'googlebot' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        'telegrambot' => 'TelegramBot (like TwitterBot)',
+    ] as $botName => $botUa) {
+        $chB = curl_init($pdpUrl);
+        curl_setopt_array($chB, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT      => $botUa,
+            CURLOPT_HTTPHEADER     => ['Accept: text/html,application/xhtml+xml,*/*'],
+        ]);
+        if (defined('CURL_IPRESOLVE_V4')) curl_setopt($chB, CURL_IPRESOLVE_V4);
+        $bRaw = (string)(curl_exec($chB) ?: '');
+        $bCode = (int)curl_getinfo($chB, CURLINFO_RESPONSE_CODE);
+        curl_close($chB);
+        $bNdKeys = [];
+        $bPagePropsSample = '';
+        if (preg_match('~<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>~isu', $bRaw, $bnd)) {
+            $bj = @json_decode($bnd[1], true);
+            $pp = is_array($bj['props']['pageProps'] ?? null) ? $bj['props']['pageProps'] : [];
+            $bNdKeys = array_keys($pp);
+            $bPagePropsSample = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(json_encode($pp, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 0, 1800));
+        }
+        $bLd = [];
+        if (preg_match_all('~<script[^>]*application/ld\+json[^>]*>(.*?)</script>~isu', $bRaw, $blm)) {
+            foreach ($blm[1] as $blb) $bLd[] = str_replace(['<', '>'], ['[lt]', '[gt]'], mb_substr(trim($blb), 0, 900));
+        }
+        $botProbes[$botName] = ['code' => $bCode, 'bytes' => strlen($bRaw), 'pageProps_keys' => $bNdKeys, 'ld_json' => $bLd, 'pageProps_sample' => $bPagePropsSample];
+    }
+    $guestGet = $quickCurl('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
+    unset($guestGet['raw']);
+    $guestPost = $quickCurl('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
+    $guestPostRaw = (string)($guestPost['sample'] ?? '');
+    unset($guestPost['raw']);
+    $tokenTry = null;
+    foreach ([$guestPost, $guestGet] as $gCand) {
+        if (preg_match('~"((?:access_)?token|jwt)"\s*:\s*"([^"]+)"~i', (string)($gCand['sample'] ?? ''), $tm)) {
+            $tok = $tm[2];
+            $tRes = $quickCurl('GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Authorization: Bearer ' . $tok]));
+            unset($tRes['raw']);
+            $tokenTry = ['token_field' => $tm[1], 'pdp_res' => $tRes];
+            break;
+        }
+    }
     echo json_encode([
         'ok' => true,
         'version' => APP_VERSION,
-        'pdp_web' => $webRes,
-        'has_next_data' => $hasNextData,
-        'next_data_sample' => $nextDataSample,
-        'next_f_push_count' => $nextFPushCount,
-        'next_f_chunks' => $nextFChunks,
-        'cdn_urls_in_html' => $cdnUrlsInHtml,
-        'meta_tags' => $metaTags,
-        'ld_json' => $ldMatches,
-        'scripts' => $scripts,
-        'bundle_endpoints' => $bundleEndpoints,
+        'bot_probes' => $botProbes,
+        'guest_get' => $guestGet,
+        'guest_post' => $guestPost,
+        'token_try' => $tokenTry,
+        'js_contexts' => $jsContexts,
         'api_probes' => $apiProbes,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
